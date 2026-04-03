@@ -1,0 +1,19 @@
+.{
+    .name = .dict,
+    .version = "0.1.0",
+    .fingerprint = 0xcbbec2a66a3b6496,
+    .minimum_zig_version = "0.16.0-dev.3013+abd131e33",
+    .dependencies = .{
+        .zxml = .{
+            .path = ".deps/zxml",
+        },
+    },
+    .paths = .{
+        "README.md",
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "web",
+        ".deps/zxml",
+    },
+}
