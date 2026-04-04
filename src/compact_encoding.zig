@@ -283,6 +283,33 @@ const pattern_start_table = blk: {
     break :blk table;
 };
 
+const pattern_start_bytes = blk: {
+    var seen = [_]bool{false} ** 256;
+    var count: usize = 0;
+
+    for (single_tokens) |token| {
+        if (!seen[token.pattern[0]]) {
+            seen[token.pattern[0]] = true;
+            count += 1;
+        }
+    }
+    for (escaped_patterns) |pattern| {
+        if (!seen[pattern[0]]) {
+            seen[pattern[0]] = true;
+            count += 1;
+        }
+    }
+
+    var bytes: [count]u8 = undefined;
+    var index: usize = 0;
+    for (seen, 0..) |present, byte| {
+        if (!present) continue;
+        bytes[index] = @intCast(byte);
+        index += 1;
+    }
+    break :blk bytes;
+};
+
 const Match = union(enum) {
     single: SingleToken,
     escaped: struct {
@@ -379,10 +406,17 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, input: []const u8) (std.mem.All
 
 fn matchLongest(input: []const u8, index: usize) ?Match {
     const first = input[index];
+    inline for (pattern_start_bytes) |candidate| {
+        if (first == candidate) return matchLongestForFirst(candidate, input, index);
+    }
+    return null;
+}
+
+fn matchLongestForFirst(comptime first: u8, input: []const u8, index: usize) ?Match {
     var best: ?Match = null;
     var best_len: usize = 0;
 
-    for (single_tokens) |token| {
+    inline for (single_tokens) |token| {
         if (token.pattern[0] != first) continue;
         if (token.pattern.len > best_len and index + token.pattern.len <= input.len and std.mem.eql(u8, input[index .. index + token.pattern.len], token.pattern)) {
             best = .{ .single = token };
@@ -390,7 +424,7 @@ fn matchLongest(input: []const u8, index: usize) ?Match {
         }
     }
 
-    for (escaped_patterns, 0..) |pattern, escaped_index| {
+    inline for (escaped_patterns, 0..) |pattern, escaped_index| {
         if (pattern[0] != first) continue;
         if (pattern.len > best_len and index + pattern.len <= input.len and std.mem.eql(u8, input[index .. index + pattern.len], pattern)) {
             best = .{
