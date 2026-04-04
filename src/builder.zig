@@ -46,64 +46,70 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     var page_arena = std.heap.ArenaAllocator.init(allocator);
     defer page_arena.deinit();
 
-    var read_buf = try allocator.alloc(u8, 4 * 1024 * 1024);
-    defer allocator.free(read_buf);
+    const stat = try input_file.stat(io);
+    if (stat.size != 0) {
+        const map_len = std.mem.alignForward(usize, @as(usize, @intCast(stat.size)), std.heap.page_size_min);
+        const mapped = try std.posix.mmap(
+            null,
+            map_len,
+            .{ .READ = true },
+            .{ .TYPE = .PRIVATE },
+            input_file.handle,
+            0,
+        );
+        defer std.posix.munmap(mapped);
 
-    var buffer: std.ArrayList(u8) = .empty;
-    defer buffer.deinit(allocator);
-
-    var read_offset: u64 = 0;
-    var consumed: usize = 0;
-    while (true) {
-        const read_n = try input_file.readPositionalAll(io, read_buf, read_offset);
-        read_offset += read_n;
-        if (read_n != 0) try buffer.appendSlice(allocator, read_buf[0..read_n]);
-
-        while (true) {
-            const search_from = consumed;
-            const start = std.mem.indexOfPos(u8, buffer.items, search_from, "<page>") orelse break;
-            const end_start = std.mem.indexOfPos(u8, buffer.items, start, "</page>") orelse {
-                if (start > 0) consumed = start;
-                break;
-            };
-            const page_end = end_start + "</page>".len;
-
-            const page_allocator = page_arena.allocator();
-            processPageFragment(page_allocator, &stream_parser, buffer.items[start..page_end], &output, &stats) catch |err| {
-                std.log.warn("skipping page after parse error: {}", .{err});
-            };
-            consumed = page_end;
-            _ = page_arena.reset(.retain_capacity);
-
-            if (options.limit_entries) |limit| {
-                if (output.entry_count >= limit) {
-                    try output.finish();
-                    stats.english_entries = output.entry_count;
-                    return stats;
-                }
-            }
-
-            if (stats.pages_seen != 0 and stats.pages_seen % 10_000 == 0) {
-                std.log.info(
-                    "pages={d} ns0={d} entries={d}",
-                    .{ stats.pages_seen, stats.namespace_zero_pages, output.entry_count },
-                );
-            }
-        }
-
-        if (consumed != 0 and (consumed > 8 * 1024 * 1024 or consumed == buffer.items.len or read_n == 0)) {
-            const remaining = buffer.items.len - consumed;
-            std.mem.copyForwards(u8, buffer.items[0..remaining], buffer.items[consumed..]);
-            buffer.items.len = remaining;
-            consumed = 0;
-        }
-
-        if (read_n == 0) break;
+        try processMappedInput(
+            allocator,
+            mapped[0..@as(usize, @intCast(stat.size))],
+            options.limit_entries,
+            &stream_parser,
+            &page_arena,
+            &output,
+            &stats,
+        );
     }
 
     try output.finish();
     stats.english_entries = output.entry_count;
     return stats;
+}
+
+fn processMappedInput(
+    allocator: std.mem.Allocator,
+    mapped: []const u8,
+    limit_entries: ?usize,
+    stream_parser: *StreamParser,
+    page_arena: *std.heap.ArenaAllocator,
+    output: *OutputWriter,
+    stats: *BuildStats,
+) !void {
+    var consumed: usize = 0;
+    while (true) {
+        const start = std.mem.indexOfPos(u8, mapped, consumed, "<page>") orelse break;
+        const end_start = std.mem.indexOfPos(u8, mapped, start, "</page>") orelse break;
+        const page_end = end_start + "</page>".len;
+
+        const page_allocator = page_arena.allocator();
+        processPageFragment(page_allocator, stream_parser, mapped[start..page_end], output, stats) catch |err| {
+            std.log.warn("skipping page after parse error: {}", .{err});
+        };
+        consumed = page_end;
+        _ = page_arena.reset(.retain_capacity);
+
+        if (limit_entries) |limit| {
+            if (output.entry_count >= limit) return;
+        }
+
+        if (stats.pages_seen != 0 and stats.pages_seen % 10_000 == 0) {
+            std.log.info(
+                "pages={d} ns0={d} entries={d}",
+                .{ stats.pages_seen, stats.namespace_zero_pages, output.entry_count },
+            );
+        }
+    }
+
+    _ = allocator;
 }
 
 const PageCapture = struct {
