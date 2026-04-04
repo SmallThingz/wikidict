@@ -1,5 +1,6 @@
 pub const format = @import("format.zig");
 pub const normalize = @import("normalize.zig");
+pub const section_encoding = @import("section_encoding.zig");
 pub const xml_decode = @import("xml_decode.zig");
 pub const wikitext = @import("wikitext.zig");
 

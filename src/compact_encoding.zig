@@ -1,10 +1,35 @@
 const std = @import("std");
 
-pub const escape_byte: u8 = 0x00;
+pub const escape_byte: u8 = 0x01;
+pub const raw_literal_code: u8 = 0xFF;
 
 pub const SingleToken = struct {
     byte: u8,
     pattern: []const u8,
+};
+
+pub const CharToken = struct {
+    byte: u8,
+    value: u8,
+};
+
+pub const char_tokens = [_]CharToken{
+    .{ .byte = 0x02, .value = '\n' },
+    .{ .byte = 0x03, .value = '{' },
+    .{ .byte = 0x04, .value = '}' },
+    .{ .byte = 0x05, .value = '[' },
+    .{ .byte = 0x06, .value = ']' },
+    .{ .byte = 0x07, .value = '|' },
+    .{ .byte = 0x08, .value = '=' },
+    .{ .byte = 0x09, .value = '#' },
+    .{ .byte = 0x0A, .value = '*' },
+    .{ .byte = 0x0B, .value = ':' },
+    .{ .byte = 0x0C, .value = ';' },
+    .{ .byte = 0x0D, .value = '<' },
+    .{ .byte = 0x0E, .value = '>' },
+    .{ .byte = 0x0F, .value = '\'' },
+    .{ .byte = 0x10, .value = '/' },
+    .{ .byte = 0x11, .value = '!' },
 };
 
 pub const single_tokens = [_]SingleToken{
@@ -265,6 +290,12 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
         if (input[i] == escape_byte) {
             try out.append(allocator, escape_byte);
             try out.append(allocator, 0);
+        } else if (tokenByteForChar(input[i])) |token_byte| {
+            try out.append(allocator, token_byte);
+        } else if (needsRawLiteralEscape(input[i])) {
+            try out.append(allocator, escape_byte);
+            try out.append(allocator, raw_literal_code);
+            try out.append(allocator, input[i]);
         } else {
             try out.append(allocator, input[i]);
         }
@@ -286,11 +317,25 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, input: []const u8) (std.mem.All
             const code = input[i + 1];
             if (code == 0) {
                 try out.append(allocator, 0);
+                i += 2;
+                continue;
+            }
+            if (code == raw_literal_code) {
+                if (i + 2 >= input.len) return error.InvalidEncoding;
+                try out.append(allocator, input[i + 2]);
+                i += 3;
+                continue;
             } else {
                 const pattern = patternForCode(code) orelse return error.InvalidEncoding;
                 try out.appendSlice(allocator, pattern);
             }
             i += 2;
+            continue;
+        }
+
+        if (charForTokenByte(byte)) |value| {
+            try out.append(allocator, value);
+            i += 1;
             continue;
         }
 
@@ -329,6 +374,27 @@ fn matchLongest(input: []const u8, index: usize) ?Match {
     }
 
     return best;
+}
+
+fn tokenByteForChar(value: u8) ?u8 {
+    for (char_tokens) |token| {
+        if (token.value == value) return token.byte;
+    }
+    return null;
+}
+
+fn charForTokenByte(byte: u8) ?u8 {
+    for (char_tokens) |token| {
+        if (token.byte == byte) return token.value;
+    }
+    return null;
+}
+
+fn needsRawLiteralEscape(byte: u8) bool {
+    if (byte == 0) return true;
+    if (singlePatternForByte(byte) != null) return true;
+    if (charForTokenByte(byte) != null) return true;
+    return false;
 }
 
 fn singlePatternForByte(byte: u8) ?[]const u8 {
@@ -380,4 +446,20 @@ test "compact encoding preserves nul bytes through escape" {
     defer std.testing.allocator.free(decoded);
 
     try std.testing.expectEqualSlices(u8, &sample, decoded);
+}
+
+test "compact encoding removes visible wiki punctuation from encoded bytes" {
+    const sample =
+        \\==English==
+        \\* {{alt|en|colour}}
+        \\# [[light]]
+        \\<!-- note -->
+    ;
+
+    const encoded = try encodeAlloc(std.testing.allocator, sample);
+    defer std.testing.allocator.free(encoded);
+
+    for ("{}\n[]|=#*:;<>/'!") |c| {
+        try std.testing.expect(std.mem.indexOfScalar(u8, encoded, c) == null);
+    }
 }

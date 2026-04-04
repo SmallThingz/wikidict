@@ -210,7 +210,9 @@ const OutputWriter = struct {
         payload: []const u8,
     ) !void {
         try self.writeByte(flags);
-        try self.writeSlice(title);
+        const encoded_title = try compact.encodeAlloc(allocator, title);
+        defer allocator.free(encoded_title);
+        try self.writeSlice(encoded_title);
 
         if ((flags & format.record_flag_has_raw) != 0) {
             const encoded = try compact.encodeAlloc(allocator, payload);
@@ -218,7 +220,9 @@ const OutputWriter = struct {
             try self.writeSlice(encoded);
             self.raw_entry_count += 1;
         } else {
-            try self.writeSlice(payload);
+            const encoded_target = try compact.encodeAlloc(allocator, payload);
+            defer allocator.free(encoded_target);
+            try self.writeSlice(encoded_target);
             self.redirect_count += 1;
         }
 

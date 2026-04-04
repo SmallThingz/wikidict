@@ -209,8 +209,9 @@ fn buildIndex(
         const flags = mapped[cursor];
         cursor += 1;
 
-        const title = try readLengthPrefixedSlice(mapped, &cursor, records_end);
+        const encoded_title = try readLengthPrefixedSlice(mapped, &cursor, records_end);
         const payload = try readLengthPrefixedSlice(mapped, &cursor, records_end);
+        const title = try compact.decodeAlloc(arena_allocator, encoded_title);
         const normalized = try normalize.normalizeAlloc(arena_allocator, title);
         var entry = EntryData{
             .word = title,
@@ -236,10 +237,11 @@ fn buildIndex(
             entry.summary = try wikitext.extractSummaryAlloc(arena_allocator, raw, 240);
             if (metadata.alias_only) entry.flags |= format.record_flag_alias_only;
         } else {
+            const target = try compact.decodeAlloc(arena_allocator, payload);
             const targets = try arena_allocator.alloc([]const u8, 1);
-            targets[0] = payload;
+            targets[0] = target;
             entry.canonical_targets = targets;
-            entry.summary = try std.fmt.allocPrint(arena_allocator, "Alias of {s}.", .{payload});
+            entry.summary = try std.fmt.allocPrint(arena_allocator, "Alias of {s}.", .{target});
             entry.flags |= format.record_flag_alias_only;
         }
 
