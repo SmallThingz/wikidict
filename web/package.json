@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "vite",
     "build": "vite build",
     "check": "tsc --noEmit && vite build",
-    "start": "bun run server/index.ts"
+    "start": "vite preview --host 0.0.0.0 --port 4173"
   },
   "dependencies": {
     "@solidjs/router": "^0.15.3",

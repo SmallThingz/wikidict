@@ -1,25 +1,10 @@
 export type ApiStats = {
   entries: number;
-  stringLists: number;
-  sections: number;
-  senses: number;
+  rawEntries: number;
+  redirects: number;
   lookups: number;
-  stringsBytes: number;
+  recordsBytes: number;
   path: string;
-};
-
-export type ApiSection = {
-  group: string;
-  title: string;
-  body: string;
-};
-
-export type ApiSense = {
-  group: string;
-  pos: string;
-  gloss: string;
-  examples: string;
-  depth: number;
 };
 
 export type ApiEntry = {
@@ -29,8 +14,7 @@ export type ApiEntry = {
   altForms: string[];
   canonicalTargets: string[];
   incomingAliases: string[];
-  sections: ApiSection[];
-  senses: ApiSense[];
+  raw: string;
   summary: string;
 };
 

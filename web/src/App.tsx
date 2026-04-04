@@ -12,7 +12,6 @@ import {
 import {
   type ApiEntry,
   type ApiLookupHit,
-  type ApiSense,
   type ApiStats,
   type ApiSuggestion,
   fetchLookup,
@@ -24,10 +23,11 @@ import {
 const RECENTS_KEY = "dict-recents";
 const FAVORITES_KEY = "dict-favorites";
 
-type SenseGroup = {
+type SourceBlock = {
   id: string;
-  label: string;
-  senses: ApiSense[];
+  title: string;
+  level: number;
+  body: string;
 };
 
 export default function App() {
@@ -55,11 +55,11 @@ function HomePage() {
   return (
     <main class="page">
       <section class="hero">
-        <div class="eyebrow">Binary English Wiktionary</div>
-        <h1>Fast dictionary lookup with alternate spellings, real entry structure, and direct dump parsing.</h1>
+        <div class="eyebrow">Lossless English Wiktionary</div>
+        <h1>Compact binary storage, raw formatting preserved, and lookup indices built at load time.</h1>
         <p class="hero-copy">
-          The backend reads a compact binary built from the live Wiktionary XML dump. Search exact titles,
-          alternative spellings, and alias pages without pushing raw XML into the browser.
+          The Zig backend stores each English entry as compact raw wikitext and rebuilds spelling metadata after
+          load. The browser never sees the XML dump, and the original entry formatting is still intact.
         </p>
         <SearchCard onCommit={(value) => navigate(`/entry/${encodeURIComponent(value)}`)} />
       </section>
@@ -156,10 +156,16 @@ function EntryPage() {
 }
 
 function EntryCard(props: { hit: ApiLookupHit; rank: number }) {
-  const groupedSenses = createMemo(() => groupSenses(props.hit.entry.senses));
+  const [view, setView] = createSignal<"blocks" | "raw">("blocks");
+  const blocks = createMemo(() => splitRawEntry(props.hit.entry));
   const matchIsAlias = createMemo(() => props.hit.matched !== props.hit.entry.word);
 
   onMount(() => pushRecent(props.hit.entry.word));
+
+  const copyRaw = async () => {
+    if (!props.hit.entry.raw || typeof navigator === "undefined" || !navigator.clipboard) return;
+    await navigator.clipboard.writeText(props.hit.entry.raw);
+  };
 
   return (
     <article class="entry-card panel">
@@ -177,7 +183,7 @@ function EntryCard(props: { hit: ApiLookupHit; rank: number }) {
             <div class="alias-flag">Alias-style entry</div>
           </Show>
         </div>
-        <div class="summary-pill">{props.hit.entry.summary || "No summary available"}</div>
+        <div class="summary-pill">{props.hit.entry.summary || "No summary extracted"}</div>
       </div>
 
       <div class="meta-grid">
@@ -186,48 +192,50 @@ function EntryCard(props: { hit: ApiLookupHit; rank: number }) {
         <MetaLine title="Incoming aliases" values={props.hit.entry.incomingAliases} />
       </div>
 
-      <Show when={props.hit.entry.sections.length > 0}>
-        <section class="section-grid">
-          <For each={props.hit.entry.sections}>
-            {(section) => (
-              <article class="section-card">
-                <div class="section-kicker">{section.group || "Entry"}</div>
-                <h3>{section.title}</h3>
-                <p>{section.body}</p>
-              </article>
-            )}
-          </For>
-        </section>
-      </Show>
+      <Show
+        when={props.hit.entry.raw}
+        fallback={
+          <div class="panel-note">
+            This entry is stored without a raw English section. It behaves as an alias or redirect entry.
+          </div>
+        }
+      >
+        <div class="entry-source-toolbar">
+          <div class="panel-note">Source formatting is preserved exactly in the binary.</div>
+          <div class="view-toggle">
+            <button
+              classList={{ "ghost-button": true, active: view() === "blocks" }}
+              type="button"
+              onClick={() => setView("blocks")}
+            >
+              Section View
+            </button>
+            <button
+              classList={{ "ghost-button": true, active: view() === "raw" }}
+              type="button"
+              onClick={() => setView("raw")}
+            >
+              Raw Source
+            </button>
+            <button class="ghost-button" type="button" onClick={copyRaw}>
+              Copy Source
+            </button>
+          </div>
+        </div>
 
-      <Show when={groupedSenses().length > 0}>
-        <section class="sense-groups">
-          <For each={groupedSenses()}>
-            {(group) => (
-              <article class="sense-group">
-                <div class="sense-group-label">{group.label}</div>
-                <div class="sense-list">
-                  <For each={group.senses}>
-                    {(sense) => (
-                      <div class="sense-card">
-                        <div class="sense-pos">{sense.pos}</div>
-                        <div class="sense-gloss">
-                          <Show when={sense.depth > 1}>
-                            <span class="sense-depth">Level {sense.depth}</span>
-                          </Show>
-                          {sense.gloss}
-                        </div>
-                        <Show when={sense.examples}>
-                          <div class="sense-example">{sense.examples}</div>
-                        </Show>
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </article>
-            )}
-          </For>
-        </section>
+        <Show when={view() === "blocks"} fallback={<pre class="source-pre raw-view">{props.hit.entry.raw}</pre>}>
+          <section class="source-block-grid">
+            <For each={blocks()}>
+              {(block) => (
+                <article class="source-block">
+                  <div class="section-kicker">Level {block.level}</div>
+                  <h3>{block.title}</h3>
+                  <pre class="source-pre">{block.body}</pre>
+                </article>
+              )}
+            </For>
+          </section>
+        </Show>
       </Show>
     </article>
   );
@@ -342,8 +350,8 @@ function StatsGrid(props: { stats: ApiStats }) {
   return (
     <div class="stats-grid">
       <StatTile label="Entries" value={formatNumber(props.stats.entries)} />
-      <StatTile label="Senses" value={formatNumber(props.stats.senses)} />
-      <StatTile label="Sections" value={formatNumber(props.stats.sections)} />
+      <StatTile label="Raw Entries" value={formatNumber(props.stats.rawEntries)} />
+      <StatTile label="Redirects" value={formatNumber(props.stats.redirects)} />
       <StatTile label="Lookups" value={formatNumber(props.stats.lookups)} />
     </div>
   );
@@ -391,23 +399,49 @@ function TokenList(props: {
   );
 }
 
-function groupSenses(senses: ApiSense[]): SenseGroup[] {
-  const groups = new Map<string, SenseGroup>();
-  for (const sense of senses) {
-    const label = sense.group || "Main entry";
-    const key = `${label}:${sense.pos}`;
-    const existing = groups.get(key);
-    if (existing) {
-      existing.senses.push(sense);
+function splitRawEntry(entry: ApiEntry): SourceBlock[] {
+  if (!entry.raw) return [];
+
+  const blocks: SourceBlock[] = [];
+  let current: SourceBlock | null = null;
+
+  for (const line of entry.raw.split("\n")) {
+    const heading = parseHeading(line);
+    if (heading) {
+      if (current) current.body = current.body.trimEnd();
+      current = {
+        id: `${heading.level}:${heading.title}:${blocks.length}`,
+        title: heading.title,
+        level: heading.level,
+        body: "",
+      };
+      blocks.push(current);
       continue;
     }
-    groups.set(key, {
-      id: key,
-      label,
-      senses: [sense],
-    });
+
+    if (!current) {
+      current = {
+        id: "lead",
+        title: entry.word,
+        level: 1,
+        body: "",
+      };
+      blocks.push(current);
+    }
+    current.body += current.body ? `\n${line}` : line;
   }
-  return [...groups.values()];
+
+  if (current) current.body = current.body.trimEnd();
+  return blocks.filter((block) => block.body || block.title);
+}
+
+function parseHeading(line: string): { level: number; title: string } | null {
+  const match = line.match(/^(={2,6})\s*(.*?)\s*\1$/);
+  if (!match) return null;
+  return {
+    level: match[1].length,
+    title: match[2],
+  };
 }
 
 function pushRecent(word: string) {

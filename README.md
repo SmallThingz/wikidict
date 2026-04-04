@@ -4,7 +4,7 @@ English Wiktionary parsed from the official XML dump into a compact binary forma
 
 - a Zig builder and lookup library
 - alias and alternate-spelling search
-- a Bun API server that reads the same binary directly
+- a Zig `zhttp` API server
 - a SolidJS web UI
 
 ## Build The Dictionary
@@ -61,17 +61,25 @@ Build the frontend:
 bun run build
 ```
 
-Run the Bun server against the full dictionary:
+Run the Zig server against the full dictionary:
 
 ```bash
-DICT_DB=../data/enwiktionary.bin bun run start
+zig build -Doptimize=ReleaseFast run -- serve --db data/enwiktionary.bin --port 3000
 ```
 
-The server exposes:
+For local frontend development, run Vite separately:
+
+```bash
+bun run dev
+```
+
+The Vite dev server proxies `/api/*` to `http://127.0.0.1:3000`.
+
+The Zig server exposes:
 
 - `/api/stats`
 - `/api/search?q=color&limit=10`
 - `/api/lookup/color`
 - `/api/random`
 
-The frontend is served from the same Bun process.
+The production frontend is served from the same Zig process. Raw English entry formatting is preserved exactly; derived lookup data is rebuilt in memory after load rather than stored on disk.

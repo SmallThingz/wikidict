@@ -1,8 +1,8 @@
 const std = @import("std");
 const zxml = @import("zxml");
 
+const compact = @import("compact_encoding.zig");
 const format = @import("format.zig");
-const normalize = @import("normalize.zig");
 const wikitext = @import("wikitext.zig");
 const xml_decode = @import("xml_decode.zig");
 
@@ -29,12 +29,14 @@ pub const BuildStats = struct {
 };
 
 pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !BuildStats {
-    var builder = try BuildState.init(allocator);
-    defer builder.deinit();
+    var input_file = try std.Io.Dir.cwd().openFile(io, options.input_path, .{});
+    defer input_file.close(io);
 
+    var output_file = try std.Io.Dir.cwd().createFile(io, options.output_path, .{ .truncate = true });
+    defer output_file.close(io);
+
+    var output = try OutputWriter.init(io, output_file);
     var stats: BuildStats = .{};
-    var file = try std.Io.Dir.cwd().openFile(io, options.input_path, .{});
-    defer file.close(io);
 
     var stream_parser = StreamParser.init(allocator);
     defer stream_parser.deinit();
@@ -51,7 +53,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     var read_offset: u64 = 0;
     var consumed: usize = 0;
     while (true) {
-        const read_n = try file.readPositionalAll(io, read_buf, read_offset);
+        const read_n = try input_file.readPositionalAll(io, read_buf, read_offset);
         read_offset += read_n;
         if (read_n != 0) try buffer.appendSlice(allocator, read_buf[0..read_n]);
 
@@ -65,16 +67,16 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
             const page_end = end_start + "</page>".len;
 
             const page_allocator = page_arena.allocator();
-            processPageFragment(page_allocator, &stream_parser, buffer.items[start..page_end], &builder, &stats) catch |err| {
+            processPageFragment(page_allocator, &stream_parser, buffer.items[start..page_end], &output, &stats) catch |err| {
                 std.log.warn("skipping page after parse error: {}", .{err});
             };
             consumed = page_end;
             _ = page_arena.reset(.retain_capacity);
 
             if (options.limit_entries) |limit| {
-                if (builder.entries.items.len >= limit) {
-                    try builder.finalizeAndWrite(io, options.output_path);
-                    stats.english_entries = builder.entries.items.len;
+                if (output.entry_count >= limit) {
+                    try output.finish();
+                    stats.english_entries = output.entry_count;
                     return stats;
                 }
             }
@@ -82,7 +84,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
             if (stats.pages_seen != 0 and stats.pages_seen % 10_000 == 0) {
                 std.log.info(
                     "pages={d} ns0={d} entries={d}",
-                    .{ stats.pages_seen, stats.namespace_zero_pages, builder.entries.items.len },
+                    .{ stats.pages_seen, stats.namespace_zero_pages, output.entry_count },
                 );
             }
         }
@@ -97,8 +99,8 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
         if (read_n == 0) break;
     }
 
-    try builder.finalizeAndWrite(io, options.output_path);
-    stats.english_entries = builder.entries.items.len;
+    try output.finish();
+    stats.english_entries = output.entry_count;
     return stats;
 }
 
@@ -131,7 +133,7 @@ fn processPageFragment(
     allocator: std.mem.Allocator,
     parser: *StreamParser,
     page_fragment: []const u8,
-    builder: *BuildState,
+    output: *OutputWriter,
     stats: *BuildStats,
 ) !void {
     var capture: PageCapture = .{};
@@ -144,309 +146,99 @@ fn processPageFragment(
     stats.namespace_zero_pages += 1;
 
     const title = try xml_decode.decodeAlloc(allocator, capture.title_raw orelse return);
-    const redirect_title = if (capture.redirect_title_raw) |raw| try xml_decode.decodeAlloc(allocator, raw) else null;
 
     if (capture.text_raw) |text_raw| {
         if (std.mem.indexOf(u8, text_raw, "==English==") != null) {
             const text = try xml_decode.decodeAlloc(allocator, text_raw);
-            if (try wikitext.parseEnglishEntry(allocator, title, text)) |entry| {
-                try builder.addEntry(allocator, entry);
+            if (wikitext.extractEnglishSection(text)) |english_section| {
+                try output.writeRecord(
+                    allocator,
+                    title,
+                    format.record_flag_has_raw,
+                    english_section,
+                );
                 return;
             }
         }
     }
 
-    if (redirect_title) |target| {
-        var entry: wikitext.ParsedEntry = .{
-            .word = try allocator.dupe(u8, title),
-            .alias_only = true,
-        };
-        try entry.canonical_targets.append(allocator, try allocator.dupe(u8, target));
-        try builder.addEntry(allocator, entry);
+    if (capture.redirect_title_raw) |raw| {
+        const target = try xml_decode.decodeAlloc(allocator, raw);
+        try output.writeRecord(
+            allocator,
+            title,
+            0,
+            target,
+        );
         stats.redirect_aliases += 1;
     }
 }
 
-const BuildState = struct {
-    allocator: std.mem.Allocator,
-    strings: std.ArrayList(u8) = .empty,
-    string_lists: std.ArrayList(format.StringRef) = .empty,
-    sections: std.ArrayList(format.SectionRecord) = .empty,
-    senses: std.ArrayList(format.SenseRecord) = .empty,
-    entries: std.ArrayList(format.EntryRecord) = .empty,
-    lookups: std.ArrayList(format.LookupRecord) = .empty,
+const OutputWriter = struct {
+    io: std.Io,
+    file: std.Io.File,
+    cursor: u64 = @sizeOf(format.Header),
+    entry_count: usize = 0,
+    raw_entry_count: usize = 0,
+    redirect_count: usize = 0,
 
-    fn init(allocator: std.mem.Allocator) !BuildState {
+    fn init(io: std.Io, file: std.Io.File) !OutputWriter {
+        const placeholder = format.Header.init(0, 0, 0, @sizeOf(format.Header), 0);
+        try file.writePositionalAll(io, std.mem.asBytes(&placeholder), 0);
         return .{
-            .allocator = allocator,
+            .io = io,
+            .file = file,
         };
     }
 
-    fn deinit(self: *BuildState) void {
-        self.strings.deinit(self.allocator);
-        self.string_lists.deinit(self.allocator);
-        self.sections.deinit(self.allocator);
-        self.senses.deinit(self.allocator);
-        self.entries.deinit(self.allocator);
-        self.lookups.deinit(self.allocator);
-    }
-
-    fn addEntry(self: *BuildState, scratch_allocator: std.mem.Allocator, entry: wikitext.ParsedEntry) !void {
-        const word_ref = try self.storeString(entry.word);
-        const normalized_value = try normalize.normalizeAlloc(scratch_allocator, entry.word);
-        const normalized_ref = try self.storeString(normalized_value);
-
-        const alt_forms = try self.storeStringList(entry.alt_forms.items);
-        const canonical_targets = try self.storeStringList(entry.canonical_targets.items);
-        const sections = try self.storeSections(entry.sections.items);
-        const senses = try self.storeSenses(entry.senses.items);
-
-        const flags: u32 = if (entry.alias_only) format.flag_alias_only else 0;
-        const entry_index: u32 = @intCast(self.entries.items.len);
-        try self.entries.append(self.allocator, .{
-            .word = word_ref,
-            .normalized = normalized_ref,
-            .alt_forms = alt_forms,
-            .canonical_targets = canonical_targets,
-            .incoming_aliases = .{},
-            .sections = sections,
-            .senses = senses,
-            .flags = flags,
-        });
-
-        try self.lookups.append(self.allocator, .{
-            .key = normalized_ref,
-            .display = word_ref,
-            .entry_index = entry_index,
-            .kind = format.lookup_kind_title,
-        });
-
-        for (entry.alt_forms.items) |alt_form| {
-            const alt_norm = try normalize.normalizeAlloc(scratch_allocator, alt_form);
-            try self.lookups.append(self.allocator, .{
-                .key = try self.storeString(alt_norm),
-                .display = try self.storeString(alt_form),
-                .entry_index = entry_index,
-                .kind = format.lookup_kind_alternative_form,
-            });
-        }
-    }
-
-    fn storeString(self: *BuildState, value: []const u8) !format.StringRef {
-        if (value.len == 0) return .{};
-        if (self.strings.items.len + value.len > std.math.maxInt(u32)) return error.StringPoolTooLarge;
-
-        const offset: u32 = @intCast(self.strings.items.len);
-        try self.strings.appendSlice(self.allocator, value);
-        return .{
-            .offset = offset,
-            .len = @intCast(value.len),
-        };
-    }
-
-    fn storeStringList(self: *BuildState, values: []const []const u8) !format.Range {
-        if (values.len == 0) return .{};
-        if (self.string_lists.items.len + values.len > std.math.maxInt(u32)) return error.TooManyStringRefs;
-
-        const start: u32 = @intCast(self.string_lists.items.len);
-        for (values) |value| {
-            try self.string_lists.append(self.allocator, try self.storeString(value));
-        }
-        return .{
-            .start = start,
-            .len = @intCast(values.len),
-        };
-    }
-
-    fn storeSections(self: *BuildState, values: []const wikitext.TempSection) !format.Range {
-        if (values.len == 0) return .{};
-        if (self.sections.items.len + values.len > std.math.maxInt(u32)) return error.TooManySections;
-
-        const start: u32 = @intCast(self.sections.items.len);
-        for (values) |section| {
-            try self.sections.append(self.allocator, .{
-                .group = try self.storeString(section.group),
-                .title = try self.storeString(section.title),
-                .body = try self.storeString(section.body),
-            });
-        }
-        return .{
-            .start = start,
-            .len = @intCast(values.len),
-        };
-    }
-
-    fn storeSenses(self: *BuildState, values: []const wikitext.TempSense) !format.Range {
-        if (values.len == 0) return .{};
-        if (self.senses.items.len + values.len > std.math.maxInt(u32)) return error.TooManySenses;
-
-        const start: u32 = @intCast(self.senses.items.len);
-        for (values) |sense| {
-            try self.senses.append(self.allocator, .{
-                .group = try self.storeString(sense.group),
-                .pos = try self.storeString(sense.pos),
-                .gloss = try self.storeString(sense.gloss),
-                .examples = try self.storeString(sense.examples),
-                .depth = sense.depth,
-            });
-        }
-        return .{
-            .start = start,
-            .len = @intCast(values.len),
-        };
-    }
-
-    fn stringSlice(self: *const BuildState, ref: format.StringRef) []const u8 {
-        if (ref.len == 0) return "";
-        return self.strings.items[ref.offset .. ref.offset + ref.len];
-    }
-
-    fn finalizeIncomingAliases(self: *BuildState) !void {
-        var title_map = std.StringHashMapUnmanaged(std.ArrayListUnmanaged(u32)).empty;
-        defer {
-            var it = title_map.iterator();
-            while (it.next()) |entry| entry.value_ptr.deinit(self.allocator);
-            title_map.deinit(self.allocator);
-        }
-
-        for (self.entries.items, 0..) |entry, idx| {
-            const normalized = self.stringSlice(entry.normalized);
-            const gop = try title_map.getOrPut(self.allocator, normalized);
-            if (!gop.found_existing) gop.value_ptr.* = .empty;
-            try gop.value_ptr.append(self.allocator, @intCast(idx));
-        }
-
-        const incoming = try self.allocator.alloc(std.ArrayListUnmanaged(format.StringRef), self.entries.items.len);
-        defer {
-            for (incoming) |*list| list.deinit(self.allocator);
-            self.allocator.free(incoming);
-        }
-        for (incoming) |*list| list.* = .empty;
-
-        var norm_buf: std.ArrayList(u8) = .empty;
-        defer norm_buf.deinit(self.allocator);
-
-        for (self.entries.items, 0..) |entry, source_idx| {
-            const source_word = self.entries.items[source_idx].word;
-            const targets = self.string_lists.items[entry.canonical_targets.start .. entry.canonical_targets.start + entry.canonical_targets.len];
-            for (targets) |target_ref| {
-                const target_word = self.stringSlice(target_ref);
-                const normalized_target = try normalize.normalizeToList(&norm_buf, self.allocator, target_word);
-                if (title_map.get(normalized_target)) |indices| {
-                    for (indices.items) |target_idx| {
-                        try incoming[target_idx].append(self.allocator, source_word);
-                    }
-                }
-            }
-        }
-
-        for (incoming, 0..) |list, idx| {
-            if (list.items.len == 0) continue;
-            const deduped = try self.storeIncomingAliasList(list.items);
-            self.entries.items[idx].incoming_aliases = deduped;
-        }
-    }
-
-    fn storeIncomingAliasList(self: *BuildState, refs: []const format.StringRef) !format.Range {
-        if (refs.len == 0) return .{};
-        const start: u32 = @intCast(self.string_lists.items.len);
-        for (refs) |candidate| {
-            var exists = false;
-            for (self.string_lists.items[start..]) |existing| {
-                if (std.mem.eql(u8, self.stringSlice(existing), self.stringSlice(candidate))) {
-                    exists = true;
-                    break;
-                }
-            }
-            if (!exists) try self.string_lists.append(self.allocator, candidate);
-        }
-        return .{
-            .start = start,
-            .len = @intCast(self.string_lists.items.len - start),
-        };
-    }
-
-    fn sortLookups(self: *BuildState) void {
-        std.mem.sort(format.LookupRecord, self.lookups.items, self, lessThanLookup);
-    }
-
-    fn lessThanLookup(self: *BuildState, lhs: format.LookupRecord, rhs: format.LookupRecord) bool {
-        const lhs_key = self.stringSlice(lhs.key);
-        const rhs_key = self.stringSlice(rhs.key);
-        switch (std.mem.order(u8, lhs_key, rhs_key)) {
-            .lt => return true,
-            .gt => return false,
-            .eq => {},
-        }
-        if (lhs.kind != rhs.kind) return lhs.kind < rhs.kind;
-        return std.mem.order(u8, self.stringSlice(lhs.display), self.stringSlice(rhs.display)) == .lt;
-    }
-
-    fn finalizeAndWrite(self: *BuildState, io: std.Io, output_path: []const u8) !void {
-        try self.finalizeIncomingAliases();
-        self.sortLookups();
-
-        var file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .truncate = true });
-        defer file.close(io);
-
-        const entries_offset = alignForward(@sizeOf(format.Header), 8);
-        const string_lists_offset = alignForward(entries_offset + self.entries.items.len * @sizeOf(format.EntryRecord), 8);
-        const sections_offset = alignForward(string_lists_offset + self.string_lists.items.len * @sizeOf(format.StringRef), 8);
-        const senses_offset = alignForward(sections_offset + self.sections.items.len * @sizeOf(format.SectionRecord), 8);
-        const lookups_offset = alignForward(senses_offset + self.senses.items.len * @sizeOf(format.SenseRecord), 8);
-        const strings_offset = alignForward(lookups_offset + self.lookups.items.len * @sizeOf(format.LookupRecord), 8);
-
+    fn finish(self: *OutputWriter) !void {
         const header = format.Header.init(
-            @intCast(self.entries.items.len),
-            @intCast(self.string_lists.items.len),
-            @intCast(self.sections.items.len),
-            @intCast(self.senses.items.len),
-            @intCast(self.lookups.items.len),
-            entries_offset,
-            string_lists_offset,
-            sections_offset,
-            senses_offset,
-            lookups_offset,
-            strings_offset,
-            self.strings.items.len,
+            @intCast(self.entry_count),
+            @intCast(self.raw_entry_count),
+            @intCast(self.redirect_count),
+            @sizeOf(format.Header),
+            self.cursor - @sizeOf(format.Header),
         );
+        try self.file.writePositionalAll(self.io, std.mem.asBytes(&header), 0);
+    }
 
-        var cursor: u64 = 0;
-        cursor += try writeAt(io, file, cursor, std.mem.asBytes(&header));
-        cursor += try writePadding(io, file, cursor, entries_offset - @sizeOf(format.Header));
-        cursor += try writeAt(io, file, cursor, std.mem.sliceAsBytes(self.entries.items));
-        cursor += try writePadding(io, file, cursor, string_lists_offset - (entries_offset + self.entries.items.len * @sizeOf(format.EntryRecord)));
-        cursor += try writeAt(io, file, cursor, std.mem.sliceAsBytes(self.string_lists.items));
-        cursor += try writePadding(io, file, cursor, sections_offset - (string_lists_offset + self.string_lists.items.len * @sizeOf(format.StringRef)));
-        cursor += try writeAt(io, file, cursor, std.mem.sliceAsBytes(self.sections.items));
-        cursor += try writePadding(io, file, cursor, senses_offset - (sections_offset + self.sections.items.len * @sizeOf(format.SectionRecord)));
-        cursor += try writeAt(io, file, cursor, std.mem.sliceAsBytes(self.senses.items));
-        cursor += try writePadding(io, file, cursor, lookups_offset - (senses_offset + self.senses.items.len * @sizeOf(format.SenseRecord)));
-        cursor += try writeAt(io, file, cursor, std.mem.sliceAsBytes(self.lookups.items));
-        cursor += try writePadding(io, file, cursor, strings_offset - (lookups_offset + self.lookups.items.len * @sizeOf(format.LookupRecord)));
-        _ = try writeAt(io, file, cursor, self.strings.items);
+    fn writeRecord(
+        self: *OutputWriter,
+        allocator: std.mem.Allocator,
+        title: []const u8,
+        flags: u8,
+        payload: []const u8,
+    ) !void {
+        try self.writeByte(flags);
+        try self.writeSlice(title);
+
+        if ((flags & format.record_flag_has_raw) != 0) {
+            const encoded = try compact.encodeAlloc(allocator, payload);
+            defer allocator.free(encoded);
+            try self.writeSlice(encoded);
+            self.raw_entry_count += 1;
+        } else {
+            try self.writeSlice(payload);
+            self.redirect_count += 1;
+        }
+
+        self.entry_count += 1;
+    }
+
+    fn writeSlice(self: *OutputWriter, value: []const u8) !void {
+        var len_buf: [10]u8 = undefined;
+        try self.writeBytes(format.encodeVarUInt(&len_buf, value.len));
+        try self.writeBytes(value);
+    }
+
+    fn writeByte(self: *OutputWriter, value: u8) !void {
+        var byte = [_]u8{value};
+        try self.writeBytes(&byte);
+    }
+
+    fn writeBytes(self: *OutputWriter, bytes: []const u8) !void {
+        if (bytes.len == 0) return;
+        try self.file.writePositionalAll(self.io, bytes, self.cursor);
+        self.cursor += bytes.len;
     }
 };
-
-fn alignForward(value: usize, alignment: usize) usize {
-    return std.mem.alignForward(usize, value, alignment);
-}
-
-fn writeAt(io: std.Io, file: std.Io.File, offset: u64, bytes: []const u8) !u64 {
-    try file.writePositionalAll(io, bytes, offset);
-    return bytes.len;
-}
-
-fn writePadding(io: std.Io, file: std.Io.File, offset: u64, count: usize) !u64 {
-    if (count == 0) return 0;
-    var zeros: [64]u8 = [_]u8{0} ** 64;
-    var remaining = count;
-    var cursor = offset;
-    while (remaining != 0) {
-        const chunk = @min(remaining, zeros.len);
-        try file.writePositionalAll(io, zeros[0..chunk], cursor);
-        cursor += chunk;
-        remaining -= chunk;
-    }
-    return @intCast(count);
-}

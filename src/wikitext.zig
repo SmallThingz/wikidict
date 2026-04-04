@@ -36,6 +36,17 @@ pub const ParsedEntry = struct {
     }
 };
 
+pub const EntryMetadata = struct {
+    alt_forms: std.ArrayListUnmanaged([]const u8) = .empty,
+    canonical_targets: std.ArrayListUnmanaged([]const u8) = .empty,
+    alias_only: bool = false,
+
+    pub fn deinit(self: *EntryMetadata, allocator: std.mem.Allocator) void {
+        self.alt_forms.deinit(allocator);
+        self.canonical_targets.deinit(allocator);
+    }
+};
+
 const Heading = struct {
     level: u8,
     title: []const u8,
@@ -265,6 +276,62 @@ pub fn parseEnglishEntry(allocator: std.mem.Allocator, title: []const u8, text: 
     }
 
     return entry;
+}
+
+pub fn extractEnglishSection(text: []const u8) ?[]const u8 {
+    var line_start: usize = 0;
+    var english_start: ?usize = null;
+
+    while (line_start <= text.len) {
+        const next_newline = std.mem.indexOfScalarPos(u8, text, line_start, '\n') orelse text.len;
+        const raw_line = std.mem.trimEnd(u8, text[line_start..next_newline], "\r");
+
+        if (parseHeading(raw_line)) |heading| {
+            if (heading.level == 2) {
+                if (std.mem.eql(u8, heading.title, "English")) {
+                    english_start = line_start;
+                } else if (english_start) |start| {
+                    return text[start..line_start];
+                }
+            }
+        }
+
+        if (next_newline == text.len) break;
+        line_start = next_newline + 1;
+    }
+
+    if (english_start) |start| return text[start..text.len];
+    return null;
+}
+
+pub fn extractEntryMetadata(allocator: std.mem.Allocator, title: []const u8, english_section: []const u8) !EntryMetadata {
+    var metadata: EntryMetadata = .{};
+    errdefer metadata.deinit(allocator);
+
+    var parsed = (try parseEnglishEntry(allocator, title, english_section)) orelse return metadata;
+    defer parsed.deinit(allocator);
+
+    metadata.alt_forms = parsed.alt_forms;
+    parsed.alt_forms = .empty;
+
+    metadata.canonical_targets = parsed.canonical_targets;
+    parsed.canonical_targets = .empty;
+
+    metadata.alias_only = parsed.alias_only;
+    return metadata;
+}
+
+pub fn extractSummaryAlloc(allocator: std.mem.Allocator, english_section: []const u8, max_len: usize) ![]const u8 {
+    var lines = std.mem.splitScalar(u8, english_section, '\n');
+    while (lines.next()) |raw_input| {
+        const raw_line = std.mem.trim(u8, std.mem.trimEnd(u8, raw_input, "\r"), " \t");
+        if (raw_line.len == 0) continue;
+        const parsed = parseDefinitionLine(raw_line) orelse continue;
+        if (parsed.kind != .sense) continue;
+        return renderWikitextToOwned(allocator, parsed.content, max_len);
+    }
+
+    return allocator.dupe(u8, "");
 }
 
 fn processLogicalLine(
@@ -997,4 +1064,24 @@ test "parse alternative spelling and noun gloss" {
     try std.testing.expectEqualStrings("(countable) light", parsed.senses.items[0].gloss);
     try std.testing.expectEqual(@as(usize, 1), parsed.canonical_targets.items.len);
     try std.testing.expectEqualStrings("color", parsed.canonical_targets.items[0]);
+}
+
+test "extract english section preserves raw bytes" {
+    const source =
+        \\==Translingual==
+        \\foo
+        \\==English==
+        \\===Noun===
+        \\# [[light]]
+        \\==French==
+        \\bar
+    ;
+
+    const english = extractEnglishSection(source).?;
+    try std.testing.expectEqualStrings(
+        \\==English==
+        \\===Noun===
+        \\# [[light]]
+        \\
+    , english);
 }

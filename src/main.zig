@@ -27,6 +27,10 @@ pub fn main(init: std.process.Init) !void {
         try cmdStats(init.io, args[2..]);
         return;
     }
+    if (std.mem.eql(u8, command, "serve")) {
+        try cmdServe(init, args[2..]);
+        return;
+    }
 
     printUsage();
 }
@@ -55,7 +59,7 @@ fn cmdLookup(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
         return;
     };
 
-    var db = try dict.Dictionary.open(io, db_path);
+    var db = try dict.Dictionary.open(allocator, io, db_path);
     defer db.deinit();
 
     const hits = try db.lookupExact(allocator, term);
@@ -78,32 +82,18 @@ fn cmdLookup(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
 
         if (entry.canonicalTargets().len != 0) {
             std.debug.print("canonical: ", .{});
-            printStringRefList(&db, entry.canonicalTargets());
+            printStringList(entry.canonicalTargets());
         }
         if (entry.altForms().len != 0) {
             std.debug.print("alternative forms: ", .{});
-            printStringRefList(&db, entry.altForms());
+            printStringList(entry.altForms());
         }
         if (entry.incomingAliases().len != 0) {
             std.debug.print("also spelled as: ", .{});
-            printStringRefList(&db, entry.incomingAliases());
+            printStringList(entry.incomingAliases());
         }
-        for (entry.sections()) |section| {
-            if (db.string(section.group).len != 0) {
-                std.debug.print("{s} / {s}: {s}\n", .{ db.string(section.group), db.string(section.title), db.string(section.body) });
-            } else {
-                std.debug.print("{s}: {s}\n", .{ db.string(section.title), db.string(section.body) });
-            }
-        }
-        for (entry.senses()) |sense| {
-            if (db.string(sense.group).len != 0) {
-                std.debug.print("{s} / {s}: {s}\n", .{ db.string(sense.group), db.string(sense.pos), db.string(sense.gloss) });
-            } else {
-                std.debug.print("{s}: {s}\n", .{ db.string(sense.pos), db.string(sense.gloss) });
-            }
-            if (db.string(sense.examples).len != 0) {
-                std.debug.print("  examples: {s}\n", .{db.string(sense.examples)});
-            }
+        if (try entry.rawEnglishAlloc(allocator)) |raw| {
+            std.debug.print("{s}\n", .{raw});
         }
     }
 }
@@ -116,7 +106,7 @@ fn cmdSuggest(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8
     };
     const limit = if (flagValue(args, "--limit")) |value| try std.fmt.parseInt(usize, value, 10) else 12;
 
-    var db = try dict.Dictionary.open(io, db_path);
+    var db = try dict.Dictionary.open(allocator, io, db_path);
     defer db.deinit();
 
     const hits = try db.suggest(allocator, prefix, limit);
@@ -128,26 +118,29 @@ fn cmdSuggest(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8
 
 fn cmdStats(io: std.Io, args: []const []const u8) !void {
     const db_path = flagValue(args, "--db") orelse "data/enwiktionary.bin";
-    var db = try dict.Dictionary.open(io, db_path);
+    var db = try dict.Dictionary.open(std.heap.page_allocator, io, db_path);
     defer db.deinit();
 
     std.debug.print(
-        "entries={d}\nstring_lists={d}\nsections={d}\nsenses={d}\nlookups={d}\nstrings={d}\n",
+        "entries={d}\nraw_entries={d}\nredirects={d}\nlookups={d}\nrecords={d}\n",
         .{
             db.header.entry_count,
-            db.header.string_list_count,
-            db.header.section_count,
-            db.header.sense_count,
-            db.header.lookup_count,
-            db.header.strings_len,
+            db.header.raw_entry_count,
+            db.header.redirect_count,
+            db.lookups.len,
+            db.header.records_len,
         },
     );
 }
 
-fn printStringRefList(db: *const dict.Dictionary, refs: []const dict.format.StringRef) void {
-    for (refs, 0..) |ref, idx| {
+fn cmdServe(init: std.process.Init, args: []const []const u8) !void {
+    try dict.serveDictionary(init.io, init.gpa, args);
+}
+
+fn printStringList(values: []const []const u8) void {
+    for (values, 0..) |value, idx| {
         if (idx != 0) std.debug.print(", ", .{});
-        std.debug.print("{s}", .{db.string(ref)});
+        std.debug.print("{s}", .{value});
     }
     std.debug.print("\n", .{});
 }
@@ -166,6 +159,7 @@ fn printUsage() void {
         \\dict lookup  --db data/enwiktionary.bin --word colour
         \\dict suggest --db data/enwiktionary.bin --prefix col [--limit 12]
         \\dict stats   --db data/enwiktionary.bin
+        \\dict serve   --db data/enwiktionary.bin [--port 3000]
         \\
     , .{});
 }

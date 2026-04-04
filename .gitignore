@@ -1,9 +1,10 @@
 .deps/
 .zig-cache/
 zig-out/
+zig-pkg
 
+web/bun.lock*
 web/node_modules/
 web/dist/
 
-data/*.bin
-bun.lock*
+data/

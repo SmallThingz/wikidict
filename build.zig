@@ -8,6 +8,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const zhttp_dep = b.dependency("zhttp", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     const dict_mod = b.addModule("dict", .{
         .root_source_file = b.path("src/root.zig"),
@@ -15,6 +19,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     dict_mod.addImport("zxml", zxml_dep.module("zxml"));
+    dict_mod.addImport("zhttp", zhttp_dep.module("zhttp"));
 
     const exe = b.addExecutable(.{
         .name = "dict",

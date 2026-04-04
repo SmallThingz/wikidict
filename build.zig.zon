@@ -7,6 +7,9 @@
         .zxml = .{
             .path = ".deps/zxml",
         },
+        .zhttp = .{
+            .path = ".deps/zhttp",
+        },
     },
     .paths = .{
         "README.md",
@@ -15,5 +18,6 @@
         "src",
         "web",
         ".deps/zxml",
+        ".deps/zhttp",
     },
 }
