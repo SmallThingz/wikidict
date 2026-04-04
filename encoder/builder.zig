@@ -4,6 +4,7 @@ const zxml = @import("zxml");
 
 const compact = @import("compact_encoding.zig");
 const format = @import("format.zig");
+const section_encoding = @import("section_encoding.zig");
 const wikitext = @import("wikitext.zig");
 const xml_decode = @import("xml_decode.zig");
 
@@ -16,7 +17,7 @@ const ztypes = zxml.Types(parse_opts);
 const StreamParser = ztypes.StreamParser;
 const StreamNode = ztypes.StreamNode;
 
-const english_heading = "==English==\n";
+const english_heading = "==English==";
 
 pub const BuildOptions = struct {
     input_path: []const u8,
@@ -29,6 +30,75 @@ pub const BuildStats = struct {
     namespace_zero_pages: usize = 0,
     english_entries: usize = 0,
     redirect_aliases: usize = 0,
+};
+
+const BuildProgress = struct {
+    const Phase = enum {
+        scanning,
+        writing,
+        done,
+    };
+
+    total_input_bytes: usize,
+    phase: Phase = .scanning,
+    last_percent: u8 = 255,
+
+    fn init(total_input_bytes: usize) BuildProgress {
+        return .{ .total_input_bytes = total_input_bytes };
+    }
+
+    fn scan(self: *BuildProgress, consumed_input_bytes: usize, pages: usize, entries: usize) void {
+        const percent = if (self.total_input_bytes == 0)
+            98
+        else
+            @as(u8, @intCast(@min(98, (consumed_input_bytes * 98) / self.total_input_bytes)));
+        self.render(.scanning, percent, pages, entries);
+    }
+
+    fn setWriting(self: *BuildProgress, entries: usize, redirects: usize) void {
+        self.render(.writing, 99, entries, redirects);
+    }
+
+    fn finish(self: *BuildProgress, pages: usize, entries: usize) void {
+        self.render(.done, 100, pages, entries);
+        if (!builtin.is_test) std.debug.print("\n", .{});
+    }
+
+    fn render(self: *BuildProgress, phase: Phase, percent: u8, primary: usize, secondary: usize) void {
+        if (builtin.is_test) return;
+        if (self.phase == phase and self.last_percent == percent) return;
+
+        self.phase = phase;
+        self.last_percent = percent;
+
+        var bar: [24]u8 = undefined;
+        @memset(&bar, '.');
+        const filled = @min(bar.len, (bar.len * percent) / 100);
+        @memset(bar[0..filled], '#');
+
+        switch (phase) {
+            .scanning => std.debug.print(
+                "\rbuild dict [{s}] {d:>3}% {s} (pages={d} entries={d})",
+                .{ &bar, percent, phaseLabel(phase), primary, secondary },
+            ),
+            .writing => std.debug.print(
+                "\rbuild dict [{s}] {d:>3}% {s} (entries={d} redirects={d})",
+                .{ &bar, percent, phaseLabel(phase), primary, secondary },
+            ),
+            .done => std.debug.print(
+                "\rbuild dict [{s}] {d:>3}% {s} (pages={d} entries={d})",
+                .{ &bar, percent, phaseLabel(phase), primary, secondary },
+            ),
+        }
+    }
+
+    fn phaseLabel(phase: Phase) []const u8 {
+        return switch (phase) {
+            .scanning => "scan xml",
+            .writing => "write output",
+            .done => "ready",
+        };
+    }
 };
 
 pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !BuildStats {
@@ -49,6 +119,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     defer page_arena.deinit();
 
     const stat = try input_file.stat(io);
+    var progress = BuildProgress.init(@intCast(stat.size));
     {
         var output_file = try std.Io.Dir.cwd().createFile(io, temp_output_path, .{ .truncate = true });
         defer output_file.close(io);
@@ -75,14 +146,17 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
                 &page_arena,
                 &output,
                 &stats,
+                &progress,
             );
         }
 
+        progress.setWriting(output.entry_count, output.redirect_count);
         try output.finish();
         stats.english_entries = output.entry_count;
     }
 
     try replaceFile(allocator, temp_output_path, options.output_path);
+    progress.finish(stats.pages_seen, stats.english_entries);
     return stats;
 }
 
@@ -115,6 +189,7 @@ fn processMappedInput(
     page_arena: *std.heap.ArenaAllocator,
     output: *OutputWriter,
     stats: *BuildStats,
+    progress: *BuildProgress,
 ) !void {
     var consumed: usize = 0;
     while (true) {
@@ -123,23 +198,17 @@ fn processMappedInput(
         const page_end = end_start + "</page>".len;
 
         const page_allocator = page_arena.allocator();
-        processPageFragment(page_allocator, stream_parser, mapped[start..page_end], output, stats) catch |err| {
-            std.log.warn("skipping page after parse error: {}", .{err});
-        };
+        try processPageFragment(page_allocator, stream_parser, mapped[start..page_end], output, stats);
         consumed = page_end;
         _ = page_arena.reset(.retain_capacity);
+        progress.scan(consumed, stats.pages_seen, output.entry_count);
 
         if (limit_entries) |limit| {
             if (output.entry_count >= limit) return;
         }
-
-        if (stats.pages_seen != 0 and stats.pages_seen % 10_000 == 0) {
-            std.log.info(
-                "pages={d} ns0={d} entries={d}",
-                .{ stats.pages_seen, stats.namespace_zero_pages, output.entry_count },
-            );
-        }
     }
+
+    progress.scan(mapped.len, stats.pages_seen, output.entry_count);
 }
 
 const PageCapture = struct {
@@ -266,11 +335,12 @@ const OutputWriter = struct {
         try self.writeSlice(encoded_title);
 
         if ((flags & format.record_flag_has_raw) != 0) {
-            const raw_payload = if (std.mem.startsWith(u8, payload, english_heading))
-                payload[english_heading.len..]
+            const english_payload = if (std.mem.startsWith(u8, payload, english_heading))
+                payload
             else
-                payload;
-            const encoded = try compact.encodeToList(&self.payload_buf, self.allocator, raw_payload);
+                return error.InvalidEnglishSection;
+            const encoded = try section_encoding.encodeEnglishAlloc(self.allocator, english_payload);
+            defer self.allocator.free(encoded);
             try self.writeSlice(encoded);
             self.raw_entry_count += 1;
         } else {
@@ -329,4 +399,21 @@ test "output writer buffers survive page arena resets" {
     try writer.finish();
 
     try std.testing.expectEqual(@as(usize, 2), writer.entry_count);
+}
+
+test "output writer accepts english section without trailing heading newline" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var file = try tmp.dir.createFile(std.testing.io, "dict.bin.tmp", .{ .truncate = true });
+    defer file.close(std.testing.io);
+
+    var writer = try OutputWriter.init(std.testing.io, std.testing.allocator, file);
+    defer writer.deinit(std.testing.allocator);
+
+    try writer.writeRecord("color", format.record_flag_has_raw, "==English==");
+    try writer.finish();
+
+    try std.testing.expectEqual(@as(usize, 1), writer.entry_count);
+    try std.testing.expectEqual(@as(usize, 1), writer.raw_entry_count);
 }

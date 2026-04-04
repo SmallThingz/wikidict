@@ -4,10 +4,10 @@ const std = @import("std");
 const encoder = @import("encoder");
 const compact = encoder.compact_encoding;
 const format = encoder.format;
+const section_encoding = encoder.section_encoding;
 const normalize = @import("normalize.zig");
 const wikitext = encoder.wikitext;
 
-const english_heading = "==English==\n";
 const cache_magic = "DCTIDX03";
 const cache_version: u32 = 3;
 const cache_alignment: u32 = 8;
@@ -33,7 +33,7 @@ const CachedEntry = extern struct {
     // Bitset of `format.record_flag_*`.
     flags: u8,
     reserved0: [7]u8 = [_]u8{0} ** 7,
-    // Byte range of the compact-encoded raw English section in the dictionary file.
+    // Byte range of the structured raw English section in the dictionary file.
     raw_offset: u64,
     raw_len: u32,
     reserved1: u32 = 0,
@@ -189,9 +189,17 @@ const CacheBuildProgress = struct {
         const filled = @min(bar.len, (bar.len * percent) / 100);
         @memset(bar[0..filled], '#');
 
+        if (phase == .done) {
+            std.debug.print(
+                "\rindex build [{s}] {d:>3}% {s} ({d} entries, {d} lookups)",
+                .{ &bar, percent, phaseLabel(phase), primary, secondary },
+            );
+            return;
+        }
+
         std.debug.print(
             "\rindex build [{s}] {d:>3}% {s} ({d}{s})",
-            .{ &bar, percent, phaseLabel(phase), primary, phaseSuffix(phase, secondary) },
+            .{ &bar, percent, phaseLabel(phase), primary, phaseSuffix(phase) },
         );
     }
 
@@ -206,14 +214,14 @@ const CacheBuildProgress = struct {
         };
     }
 
-    fn phaseSuffix(phase: Phase, secondary: usize) []const u8 {
+    fn phaseSuffix(phase: Phase) []const u8 {
         return switch (phase) {
             .reading => " entries",
             .aliases => " entries",
             .lookups => " lookups",
-            .materialize => " strings",
-            .writing => " bytes",
-            .done => if (secondary == 0) " entries" else " entries, lookups built",
+            .materialize => " entries",
+            .writing => " string bytes",
+            .done => unreachable,
         };
     }
 };
@@ -290,10 +298,7 @@ pub const EntryView = struct {
         const len = std.math.cast(usize, self.record().raw_len) orelse return error.InvalidDictionaryFile;
         if (start > self.dict.mapping.len or len > self.dict.mapping.len - start) return error.InvalidDictionaryFile;
 
-        const payload = try compact.decodeAlloc(allocator, self.dict.mapping[start .. start + len]);
-        defer allocator.free(payload);
-        const raw = try prependEnglishHeadingAlloc(allocator, payload);
-        return raw;
+        return try section_encoding.decodeEnglishAlloc(allocator, self.dict.mapping[start .. start + len]);
     }
 };
 
@@ -578,7 +583,7 @@ fn buildAndWriteCache(
     var cache_data = try materializeCacheData(allocator, build_payload);
     defer cache_data.deinit(allocator);
 
-    progress.setPhase(.writing, 97, cache_data.entries.len, cache_data.strings.len);
+    progress.setPhase(.writing, 97, cache_data.strings.len, 0);
     try writeCacheFile(allocator, io, cache_path, cache_key, cache_data);
     progress.finish(cache_data.entries.len, cache_data.lookups.len);
 }
@@ -779,9 +784,7 @@ fn buildIndex(
             entry.raw_offset = @intCast(@intFromPtr(payload.ptr) - @intFromPtr(mapped.ptr));
             entry.raw_len = std.math.cast(u32, payload.len) orelse return error.InvalidDictionaryFile;
 
-            const raw_payload = try compact.decodeAlloc(allocator, payload);
-            defer allocator.free(raw_payload);
-            const raw = try prependEnglishHeadingAlloc(allocator, raw_payload);
+            const raw = try section_encoding.decodeEnglishAlloc(allocator, payload);
             defer allocator.free(raw);
 
             var metadata = try wikitext.extractEntryMetadata(arena_allocator, title, raw);
@@ -871,16 +874,6 @@ fn readLengthPrefixedSlice(bytes: []const u8, cursor: *usize, limit: usize) ![]c
     const start = cursor.*;
     cursor.* += len;
     return bytes[start .. start + len];
-}
-
-fn prependEnglishHeadingAlloc(allocator: std.mem.Allocator, payload: []const u8) ![]u8 {
-    if (std.mem.startsWith(u8, payload, english_heading)) return allocator.dupe(u8, payload);
-
-    var out = try std.ArrayList(u8).initCapacity(allocator, english_heading.len + payload.len);
-    errdefer out.deinit(allocator);
-    out.appendSliceAssumeCapacity(english_heading);
-    out.appendSliceAssumeCapacity(payload);
-    return out.toOwnedSlice(allocator);
 }
 
 fn finalizeIncomingAliases(

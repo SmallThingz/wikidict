@@ -261,6 +261,7 @@ fn dictionaryLooksUsable(io: std.Io, allocator: std.mem.Allocator, path: []const
         error.InvalidDictionaryFile,
         error.UnsupportedDictionaryVersion,
         error.InvalidDictionaryCache,
+        error.InvalidEncoding,
         => return false,
         else => return err,
     };
@@ -329,6 +330,34 @@ test "dictionaryLooksUsable rejects placeholder header-only dictionary" {
     defer file.close(std.testing.io);
     const header = format.Header.init(0, 0, 0, @sizeOf(format.Header), 0);
     try file.writePositionalAll(std.testing.io, std.mem.asBytes(&header), 0);
+
+    try std.testing.expect(!(try dictionaryLooksUsable(std.testing.io, std.testing.allocator, rel_path)));
+}
+
+test "dictionaryLooksUsable rejects invalidly encoded dictionary" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const rel_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/broken.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(rel_path);
+
+    var file = try tmp.dir.createFile(std.testing.io, "broken.bin", .{ .truncate = true });
+    defer file.close(std.testing.io);
+
+    const encoded_title = try encoder.compact_encoding.encodeAlloc(std.testing.allocator, "broken");
+    defer std.testing.allocator.free(encoded_title);
+
+    var record: std.ArrayList(u8) = .empty;
+    defer record.deinit(std.testing.allocator);
+    try record.append(std.testing.allocator, format.record_flag_has_raw);
+    var len_buf: [10]u8 = undefined;
+    try record.appendSlice(std.testing.allocator, format.encodeVarUInt(&len_buf, encoded_title.len));
+    try record.appendSlice(std.testing.allocator, encoded_title);
+    try record.appendSlice(std.testing.allocator, format.encodeVarUInt(&len_buf, 0));
+
+    const header = format.Header.init(1, 1, 0, @sizeOf(format.Header), record.items.len);
+    try file.writePositionalAll(std.testing.io, std.mem.asBytes(&header), 0);
+    try file.writePositionalAll(std.testing.io, record.items, @sizeOf(format.Header));
 
     try std.testing.expect(!(try dictionaryLooksUsable(std.testing.io, std.testing.allocator, rel_path)));
 }
