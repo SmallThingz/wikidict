@@ -551,17 +551,8 @@ h4 {
   font-size: 1rem;
 }
 
-.masthead,
 .entry-header {
   padding: 0 0 0.75rem;
-}
-
-.masthead {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  text-align: left;
-  align-items: flex-start;
 }
 
 .eyebrow,
@@ -615,6 +606,10 @@ h4 {
 
 .search-input::placeholder {
   color: var(--muted);
+}
+
+.search-error {
+  margin-top: 0.45rem;
 }
 
 .search-action.solid {
@@ -736,12 +731,6 @@ h4 {
 
 .word-of-day-link:hover {
   color: var(--accent-strong);
-}
-
-.word-of-day-meta {
-  margin-top: 0.6rem;
-  color: var(--muted);
-  font-size: 0.95rem;
 }
 
 .plain-section h2 {
@@ -976,9 +965,12 @@ h4 {
 
 .article-note,
 .source-html,
-.strip-muted,
-.inline-error {
+.strip-muted {
   color: var(--muted);
+}
+
+.inline-error {
+  color: var(--accent-strong);
 }
 
 .article-note {

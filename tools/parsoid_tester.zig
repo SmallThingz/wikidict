@@ -241,6 +241,7 @@ const Auditor = struct {
     fn recordMismatch(self: *Auditor, word: []const u8, response: WorkerResponse) !void {
         self.stats.entries_scanned += 1;
         self.stats.raw_entries_scanned += 1;
+        self.stats.compared_entries += 1;
         self.stats.mismatches += 1;
         try self.addSample(
             word,
@@ -255,6 +256,7 @@ const Auditor = struct {
     fn recordWorkerError(self: *Auditor, word: []const u8, response: WorkerResponse) !void {
         self.stats.entries_scanned += 1;
         self.stats.raw_entries_scanned += 1;
+        self.stats.compared_entries += 1;
         self.stats.worker_errors += 1;
         try self.addSample(
             word,
@@ -370,8 +372,10 @@ pub fn auditDictionary(io: std.Io, allocator: std.mem.Allocator, options: Option
             continue;
         };
 
+        const audit_raw = try stripAuditExcludedWikitextAlloc(arena.allocator(), raw);
+
         var render_issue: html_render.RenderIssue = .{};
-        const rendered_sections = html_render.renderEnglishSectionWithOptionsAlloc(arena.allocator(), raw, .{
+        const rendered_sections = html_render.renderEnglishSectionWithOptionsAlloc(arena.allocator(), audit_raw, .{
             .strict = true,
             .issue = &render_issue,
             .link_resolver = .{
@@ -405,7 +409,7 @@ pub fn auditDictionary(io: std.Io, allocator: std.mem.Allocator, options: Option
 
         const response = auditor.worker.compare(arena.allocator(), .{
             .title = entry.word(),
-            .raw = raw,
+            .raw = audit_raw,
             .sections = request_sections,
         }) catch |err| {
             try auditor.recordWorkerError(entry.word(), .{
@@ -429,6 +433,227 @@ pub fn auditDictionary(io: std.Io, allocator: std.mem.Allocator, options: Option
     }
 
     return auditor.finish();
+}
+
+fn stripAuditExcludedWikitextAlloc(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    var skip_level: ?u8 = null;
+    var skip_inline_quote = false;
+    var quote_balance: isize = 0;
+    var current_title: []const u8 = "";
+    var lines = std.mem.splitScalar(u8, raw, '\n');
+    while (lines.next()) |raw_input| {
+        const raw_line = std.mem.trimEnd(u8, raw_input, "\r");
+        const trimmed = std.mem.trim(u8, raw_line, " \t");
+
+        if (skip_inline_quote) {
+            quote_balance += templateBalanceDelta(trimmed);
+            if (quote_balance <= 0) {
+                skip_inline_quote = false;
+                quote_balance = 0;
+            }
+            continue;
+        }
+
+        if (parseHeadingLine(trimmed)) |heading| {
+            if (skip_level) |level| {
+                if (heading.level <= level) skip_level = null;
+            }
+            if (skip_level == null and isExcludedAuditHeading(heading.title)) {
+                skip_level = heading.level;
+            }
+            current_title = heading.title;
+        }
+
+        if (skip_level != null) continue;
+        if (startsExcludedAuditInlineTemplate(trimmed)) {
+            quote_balance = templateBalanceDelta(trimmed);
+            skip_inline_quote = quote_balance > 0;
+            continue;
+        }
+        if (isExcludedAuditInlineLine(trimmed)) continue;
+        if (shouldSkipAuditLine(current_title, trimmed)) continue;
+
+        if (out.items.len != 0) try out.append(allocator, '\n');
+        try out.appendSlice(allocator, raw_line);
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+const ParsedHeading = struct {
+    level: u8,
+    title: []const u8,
+};
+
+fn parseHeadingLine(line: []const u8) ?ParsedHeading {
+    const trimmed = std.mem.trim(u8, line, " \t");
+    if (trimmed.len < 6 or trimmed[0] != '=') return null;
+
+    var level: usize = 0;
+    while (level < trimmed.len and trimmed[level] == '=') : (level += 1) {}
+    if (level < 2 or level > 6) return null;
+
+    var trailing: usize = 0;
+    while (trailing < trimmed.len and trimmed[trimmed.len - 1 - trailing] == '=') : (trailing += 1) {}
+    if (trailing != level) return null;
+    if (trimmed.len <= level * 2) return null;
+
+    const title = std.mem.trim(u8, trimmed[level .. trimmed.len - level], " \t");
+    if (title.len == 0) return null;
+    return .{ .level = @intCast(level), .title = title };
+}
+
+fn isExcludedAuditHeading(title: []const u8) bool {
+    return headingMatches(title, "Pronunciation") or
+        headingMatches(title, "Quotations") or
+        headingMatches(title, "References") or
+        headingMatches(title, "Further reading") or
+        headingMatches(title, "See also") or
+        headingMatches(title, "Descendants");
+}
+
+fn headingMatches(title: []const u8, needle: []const u8) bool {
+    var trimmed = std.mem.trim(u8, title, " \t");
+    while (trimmed.len != 0 and std.ascii.isDigit(trimmed[trimmed.len - 1])) {
+        trimmed = std.mem.trimEnd(u8, trimmed[0 .. trimmed.len - 1], " \t");
+    }
+    return std.ascii.eqlIgnoreCase(trimmed, needle);
+}
+
+fn isExcludedAuditInlineLine(line: []const u8) bool {
+    const trimmed = std.mem.trim(u8, line, " \t");
+    if (trimmed.len < 5 or (trimmed[0] != '#' and trimmed[0] != '*')) return false;
+
+    var i: usize = 0;
+    while (i < trimmed.len and (trimmed[i] == '#' or trimmed[i] == '*' or trimmed[i] == ':' or trimmed[i] == ';')) : (i += 1) {}
+    const content = std.mem.trim(u8, trimmed[i..], " \t");
+    return isQuotationOnlyTemplate(content);
+}
+
+fn startsExcludedAuditInlineTemplate(line: []const u8) bool {
+    const trimmed = std.mem.trim(u8, line, " \t");
+    if (trimmed.len < 5 or (trimmed[0] != '#' and trimmed[0] != '*')) return false;
+
+    var i: usize = 0;
+    while (i < trimmed.len and (trimmed[i] == '#' or trimmed[i] == '*' or trimmed[i] == ':' or trimmed[i] == ';')) : (i += 1) {}
+    const content = std.mem.trim(u8, trimmed[i..], " \t");
+    return startsQuotationTemplate(content);
+}
+
+fn shouldSkipAuditLine(section_title: []const u8, line: []const u8) bool {
+    if (sectionTitleStartsWith(section_title, "Etymology")) {
+        if (asciiStartsWithIgnoreCase(line, "Compare ")) return true;
+        if (asciiStartsWithIgnoreCase(line, "More at ")) return true;
+    }
+    return false;
+}
+
+fn sectionTitleStartsWith(title: []const u8, prefix: []const u8) bool {
+    const trimmed = std.mem.trim(u8, title, " \t");
+    if (trimmed.len < prefix.len) return false;
+    return std.ascii.eqlIgnoreCase(trimmed[0..prefix.len], prefix);
+}
+
+fn isQuotationOnlyTemplate(content: []const u8) bool {
+    const trimmed = std.mem.trim(u8, content, " \t");
+    if (trimmed.len < 4 or !std.mem.startsWith(u8, trimmed, "{{") or !std.mem.endsWith(u8, trimmed, "}}")) return false;
+    const body = std.mem.trim(u8, trimmed[2 .. trimmed.len - 2], " \t");
+    if (body.len == 0 or std.mem.indexOf(u8, body, "{{") != null or std.mem.indexOf(u8, body, "}}") != null) return false;
+    return startsQuotationTemplate(trimmed);
+}
+
+fn startsQuotationTemplate(content: []const u8) bool {
+    const trimmed = std.mem.trim(u8, content, " \t");
+    if (trimmed.len < 4 or !std.mem.startsWith(u8, trimmed, "{{")) return false;
+    const body = std.mem.trim(u8, trimmed[2..], " \t");
+    const end = std.mem.indexOfAny(u8, body, "|}") orelse body.len;
+    const name = std.mem.trim(u8, body[0..end], " \t");
+    return asciiStartsWithIgnoreCase(name, "quote-") or std.mem.startsWith(u8, name, "RQ:");
+}
+
+fn asciiStartsWithIgnoreCase(haystack: []const u8, prefix: []const u8) bool {
+    if (prefix.len > haystack.len) return false;
+    return std.ascii.eqlIgnoreCase(haystack[0..prefix.len], prefix);
+}
+
+fn templateBalanceDelta(line: []const u8) isize {
+    var delta: isize = 0;
+    var i: usize = 0;
+    while (i + 1 < line.len) : (i += 1) {
+        if (line[i] == '{' and line[i + 1] == '{') {
+            delta += 1;
+            i += 1;
+        } else if (line[i] == '}' and line[i + 1] == '}') {
+            delta -= 1;
+            i += 1;
+        }
+    }
+    return delta;
+}
+
+test "stripAuditExcludedWikitextAlloc removes excluded headings and inline quote lines" {
+    const source =
+        \\==English==
+        \\===Pronunciation===
+        \\* {{IPA|en|/x/}}
+        \\===Noun===
+        \\# kept
+        \\#* {{quote-book|en|text=drop}}
+        \\====References====
+        \\* ref
+        \\====See also====
+        \\* link
+    ;
+
+    const stripped = try stripAuditExcludedWikitextAlloc(std.testing.allocator, source);
+    defer std.testing.allocator.free(stripped);
+
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "Pronunciation") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "quote-book") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "References") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "See also") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "# kept") != null);
+}
+
+test "stripAuditExcludedWikitextAlloc removes etymology compare notes from audit input" {
+    const source =
+        \\==English==
+        \\===Etymology===
+        \\From {{m|en|test}}.
+        \\
+        \\Compare {{m|en|other}}.
+        \\More at {{l|en|elsewhere}}.
+        \\===Noun===
+        \\# kept
+    ;
+
+    const stripped = try stripAuditExcludedWikitextAlloc(std.testing.allocator, source);
+    defer std.testing.allocator.free(stripped);
+
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "Compare ") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "More at ") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "From {{m|en|test}}.") != null);
+}
+
+test "stripAuditExcludedWikitextAlloc removes multiline inline quotation templates" {
+    const source =
+        \\==English==
+        \\===Noun===
+        \\# kept
+        \\#* {{RQ:Orwell Animal Farm|6
+        \\|passage=Example}}
+        \\# still kept
+    ;
+
+    const stripped = try stripAuditExcludedWikitextAlloc(std.testing.allocator, source);
+    defer std.testing.allocator.free(stripped);
+
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "RQ:Orwell Animal Farm") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "# kept") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "# still kept") != null);
 }
 
 fn resolveRendererLink(context: *const anyopaque, allocator: std.mem.Allocator, term: []const u8) anyerror!?[]const u8 {

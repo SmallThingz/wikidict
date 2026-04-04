@@ -1301,6 +1301,19 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
         return;
     }
     if (templateMatches(name, "compound+")) {
+        try appendWithSpace(out, allocator, "Compound of ");
+        try appendAffixTerms(out, allocator, &parts);
+        return;
+    }
+    if (templateMatches(name, "prefix") or
+        templateMatches(name, "pre") or
+        templateMatches(name, "suffix") or
+        templateMatches(name, "suf") or
+        templateMatches(name, "af") or
+        templateMatches(name, "com") or
+        templateMatches(name, "affix") or
+        templateMatches(name, "confix"))
+    {
         try appendAffixTerms(out, allocator, &parts);
         return;
     }
@@ -1373,6 +1386,10 @@ fn renderSemanticOfTemplate(
     name: []const u8,
     parts: *const std.ArrayList([]const u8),
 ) std.mem.Allocator.Error!void {
+    if (templateMatches(name, "infl of") or templateMatches(name, "inflection of")) {
+        if (try renderInflectionTemplate(out, allocator, parts)) return;
+    }
+
     try appendWithSpace(out, allocator, std.mem.trim(u8, name, " \t"));
 
     const target_index = semanticTemplateTargetIndex(parts);
@@ -1400,14 +1417,57 @@ fn renderSemanticOfTemplate(
     if (wrote_extra) try appendWithSpace(out, allocator, ")");
 }
 
+fn renderInflectionTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+) std.mem.Allocator.Error!bool {
+    const target_index = semanticTemplateTargetIndex(parts);
+    const target = templatePositional(parts, target_index) orelse return false;
+
+    var tags: std.ArrayList([]const u8) = .empty;
+    defer tags.deinit(allocator);
+
+    var extra_index = target_index + 1;
+    while (extra_index < positionalCount(parts)) : (extra_index += 1) {
+        const extra = templatePositional(parts, extra_index) orelse continue;
+        const trimmed = std.mem.trim(u8, extra, " \t");
+        if (trimmed.len == 0 or (looksLikeLanguageCode(trimmed) and !isRecognizedInflectionTag(trimmed))) continue;
+        try tags.append(allocator, trimmed);
+    }
+
+    const phrase = formatInflectionTags(tags.items) orelse return false;
+    try appendWithSpace(out, allocator, phrase);
+    try appendWithSpace(out, allocator, " of ");
+    try renderInline(out, allocator, target);
+    return true;
+}
+
+fn formatInflectionTags(tags: []const []const u8) ?[]const u8 {
+    if (tags.len == 1) {
+        if (std.ascii.eqlIgnoreCase(tags[0], "s-verb-form")) return "third-person singular simple present indicative";
+        if (std.ascii.eqlIgnoreCase(tags[0], "spast")) return "simple past";
+    }
+    return null;
+}
+
+fn isRecognizedInflectionTag(tag: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(tag, "s-verb-form") or std.ascii.eqlIgnoreCase(tag, "spast");
+}
+
 fn renderUnaryTemplate(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     parts: *const std.ArrayList([]const u8),
     prefix: []const u8,
 ) std.mem.Allocator.Error!void {
+    const target = templateAliasTarget(parts);
+    if (target == null or looksLikeLanguageCode(std.mem.trim(u8, target.?, " \t"))) {
+        try appendWithSpace(out, allocator, if (std.ascii.eqlIgnoreCase(prefix, "clipping of")) "clipping" else prefix);
+        return;
+    }
     try appendWithSpace(out, allocator, prefix);
-    if (templateAliasTarget(parts)) |arg| {
+    if (target) |arg| {
         try appendWithSpace(out, allocator, " ");
         try renderInline(out, allocator, arg);
     }
@@ -2380,6 +2440,13 @@ test "extractSummaryAlloc uses dictionary-style head label when present" {
     try std.testing.expectEqualStrings("noun form: plural of Fresnel reflection", summary);
 }
 
+test "renderWikitextToOwned expands common inflection tags" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "{{infl of|en|pie||s-verb-form}}", 256);
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("third-person singular simple present indicative of pie", rendered);
+}
+
 test "extractSummaryAlloc falls back to part-of-speech heading label" {
     const source =
         \\==English==
@@ -2456,6 +2523,25 @@ test "extractSummaryAlloc does not prepend indefinite articles to determiner-led
 
     try std.testing.expect(std.mem.indexOf(u8, summary, "proper noun: The largest and") != null);
     try std.testing.expect(std.mem.indexOf(u8, summary, "proper noun: A The largest") == null);
+}
+
+test "renderWikitextToOwned prefixes compound-plus etymologies" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{compound+|en|trade|t1=course, path (of running)|pos1=from 14th c.|wind}}",
+        256,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Compound of trade") != null);
+}
+
+test "renderWikitextToOwned keeps standalone clipping templates targetless" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "Bookmaker sense by {{clipping|en|nocap=1}}.", 256);
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "clipping.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "clipping of") == null);
 }
 
 test "renderWikitextToOwned preserves possessive apostrophes around italic markup" {

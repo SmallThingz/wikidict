@@ -291,8 +291,11 @@ fn renderTemplate(
     {
         return;
     }
+    if (asciiStartsWithIgnoreCase(name, "list:")) {
+        if (try renderKnownListTemplate(out, allocator, name)) return;
+    }
+
     if (asciiStartsWithIgnoreCase(name, "R:") or
-        asciiStartsWithIgnoreCase(name, "list:") or
         asciiStartsWithIgnoreCase(name, "table:") or
         asciiStartsWithIgnoreCase(name, "U:") or
         asciiStartsWithIgnoreCase(name, "Wiktionary:"))
@@ -465,7 +468,8 @@ fn renderTemplate(
     }
     if (templateMatches(name, "alt") or templateMatches(name, "alter")) {
         if (templatePositional(&parts, 1)) |arg| try renderInline(out, allocator, arg);
-        var wrote_qualifier = false;
+        var tail_segments: [8][]const u8 = undefined;
+        var tail_len: usize = 0;
         var positional_index: usize = 0;
         for (parts.items[1..]) |segment| {
             if (templateArgHasName(segment)) continue;
@@ -474,8 +478,21 @@ fn renderTemplate(
                 continue;
             }
             positional_index += 1;
+            if (tail_len < tail_segments.len) {
+                tail_segments[tail_len] = trimWikiWhitespace(segment);
+                tail_len += 1;
+            }
+        }
 
-            const qualifier = trimWikiWhitespace(segment);
+        const split_index = alterQualifierSplitIndex(tail_segments[0..tail_len]);
+        for (tail_segments[0..split_index]) |term| {
+            if (term.len == 0) continue;
+            try appendWithSpace(out, allocator, ", ");
+            try renderInline(out, allocator, term);
+        }
+
+        var wrote_qualifier = false;
+        for (tail_segments[split_index..tail_len]) |qualifier| {
             if (qualifier.len == 0) continue;
             const rendered = try renderWikitextToOwned(allocator, qualifier, 128);
             defer allocator.free(rendered);
@@ -586,7 +603,7 @@ fn renderTemplate(
         return;
     }
     if (templateMatches(name, "compound+") or templateMatches(name, "compound")) {
-        try renderCompoundTemplate(out, allocator, &parts);
+        try renderCompoundTemplate(out, allocator, name, &parts);
         return;
     }
     if (templateMatches(name, "rhymes") or templateMatches(name, "rhyme")) {
@@ -598,6 +615,7 @@ fn renderTemplate(
         templateMatches(name, "pre") or
         templateMatches(name, "suffix") or
         templateMatches(name, "suf") or
+        templateMatches(name, "af") or
         templateMatches(name, "compound") or
         templateMatches(name, "com") or
         templateMatches(name, "affix"))
@@ -848,7 +866,7 @@ fn renderTemplate(
         return;
     }
     if (templateMatches(name, "com+")) {
-        try appendAffixTerms(out, allocator, &parts);
+        try renderCompoundTemplate(out, allocator, name, &parts);
         return;
     }
     if (templateMatches(name, "blend")) {
@@ -1071,6 +1089,57 @@ fn renderTemplate(
     }
 }
 
+fn renderKnownListTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+) std.mem.Allocator.Error!bool {
+    const trimmed = trimWikiWhitespace(name);
+    if (!asciiStartsWithIgnoreCase(trimmed, "list:")) return false;
+    const list_name = trimWikiWhitespace(trimmed["list:".len..]);
+
+    if (std.ascii.eqlIgnoreCase(list_name, "units of time/en")) {
+        try appendKnownList(out, allocator, &.{
+            "attosecond",
+            "century",
+            "day",
+            "decade",
+            "femtosecond",
+            "hour",
+            "instant",
+            "microsecond",
+            "millennium",
+            "millisecond",
+            "minute",
+            "moment",
+            "month",
+            "nanosecond",
+            "picosecond",
+            "second",
+            "week",
+            "year",
+            "yoctosecond",
+            "zeptosecond",
+        });
+        return true;
+    }
+
+    return false;
+}
+
+fn appendKnownList(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    values: []const []const u8,
+) std.mem.Allocator.Error!void {
+    var first = true;
+    for (values) |value| {
+        if (!first) try out.appendSlice(allocator, ", ");
+        first = false;
+        try out.appendSlice(allocator, value);
+    }
+}
+
 fn renderAnglePlaceholder(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -1189,14 +1258,22 @@ fn appendLexemeTemplate(
 
     const translit = templateNamed(parts, "tr");
     const gloss = templateNamed(parts, "t") orelse templateNamed(parts, "gloss") orelse templateLexemeGloss(parts);
-    if (translit == null and gloss == null) return;
+    const literal = templateNamed(parts, "lit");
+    if (translit == null and gloss == null and literal == null) return;
 
     try appendWithSpace(out, allocator, " (");
     if (translit) |value| {
         try renderInline(out, allocator, value);
-        if (gloss != null) try appendWithSpace(out, allocator, ", ");
+        if (gloss != null or literal != null) try appendWithSpace(out, allocator, ", ");
     }
     if (gloss) |value| try renderInline(out, allocator, value);
+    if (literal) |value| {
+        if (gloss != null) try appendWithSpace(out, allocator, ", ");
+        try appendWithSpace(out, allocator, "literally ");
+        try appendWithSpace(out, allocator, "\"");
+        try renderInline(out, allocator, value);
+        try appendWithSpace(out, allocator, "\"");
+    }
     try appendWithSpace(out, allocator, ")");
 }
 
@@ -1239,13 +1316,21 @@ fn renderEtymologyLexemeTemplate(
         templateNamed(parts, "gloss") orelse
         templateEtymologyGloss(parts) orelse
         templateTrailingGloss(parts, term);
-    if (translit != null or gloss != null) {
+    const literal = if (has_term) templateNamed(parts, "lit") else null;
+    if (translit != null or gloss != null or literal != null) {
         try appendWithSpace(out, allocator, " (");
         if (translit) |value| {
             try renderInline(out, allocator, value);
-            if (gloss != null) try appendWithSpace(out, allocator, ", ");
+            if (gloss != null or literal != null) try appendWithSpace(out, allocator, ", ");
         }
         if (gloss) |value| try renderInline(out, allocator, value);
+        if (literal) |value| {
+            if (gloss != null) try appendWithSpace(out, allocator, ", ");
+            try appendWithSpace(out, allocator, "literally ");
+            try appendWithSpace(out, allocator, "\"");
+            try renderInline(out, allocator, value);
+            try appendWithSpace(out, allocator, "\"");
+        }
         try appendWithSpace(out, allocator, ")");
     }
 }
@@ -1274,6 +1359,10 @@ fn renderSemanticOfTemplate(
     name: []const u8,
     parts: *const std.ArrayList([]const u8),
 ) std.mem.Allocator.Error!void {
+    if (templateMatches(name, "infl of") or templateMatches(name, "inflection of")) {
+        if (try renderInflectionTemplate(out, allocator, parts)) return;
+    }
+
     try appendWithSpace(out, allocator, trimWikiWhitespace(name));
 
     const target_index = semanticTemplateTargetIndex(parts);
@@ -1301,14 +1390,57 @@ fn renderSemanticOfTemplate(
     if (wrote_extra) try appendWithSpace(out, allocator, ")");
 }
 
+fn renderInflectionTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+) std.mem.Allocator.Error!bool {
+    const target_index = semanticTemplateTargetIndex(parts);
+    const target = templatePositional(parts, target_index) orelse return false;
+
+    var tags: std.ArrayList([]const u8) = .empty;
+    defer tags.deinit(allocator);
+
+    var extra_index = target_index + 1;
+    while (extra_index < positionalCount(parts)) : (extra_index += 1) {
+        const extra = templatePositional(parts, extra_index) orelse continue;
+        const trimmed = trimWikiWhitespace(extra);
+        if (trimmed.len == 0 or (looksLikeLanguageCode(trimmed) and !isRecognizedInflectionTag(trimmed))) continue;
+        try tags.append(allocator, trimmed);
+    }
+
+    const phrase = formatInflectionTags(tags.items) orelse return false;
+    try appendWithSpace(out, allocator, phrase);
+    try appendWithSpace(out, allocator, " of ");
+    try renderInline(out, allocator, target);
+    return true;
+}
+
+fn formatInflectionTags(tags: []const []const u8) ?[]const u8 {
+    if (tags.len == 1) {
+        if (std.ascii.eqlIgnoreCase(tags[0], "s-verb-form")) return "third-person singular simple present indicative";
+        if (std.ascii.eqlIgnoreCase(tags[0], "spast")) return "simple past";
+    }
+    return null;
+}
+
+fn isRecognizedInflectionTag(tag: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(tag, "s-verb-form") or std.ascii.eqlIgnoreCase(tag, "spast");
+}
+
 fn renderUnaryTemplate(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     parts: *const std.ArrayList([]const u8),
     prefix: []const u8,
 ) std.mem.Allocator.Error!void {
+    const target = templateAliasTarget(parts);
+    if (target == null or looksLikeLanguageCode(trimWikiWhitespace(target.?))) {
+        try appendWithSpace(out, allocator, standaloneUnaryPrefix(prefix));
+        return;
+    }
     try appendWithSpace(out, allocator, prefix);
-    if (templateAliasTarget(parts)) |arg| {
+    if (target) |arg| {
         try appendWithSpace(out, allocator, " ");
         try renderInline(out, allocator, arg);
     }
@@ -1367,6 +1499,56 @@ fn renderAlternativeFormsTemplate(
         }
         try renderInline(out, allocator, parsed.term);
     }
+}
+
+fn alterQualifierSplitIndex(segments: []const []const u8) usize {
+    for (segments, 0..) |segment, i| {
+        if (segment.len == 0) return i + 1;
+    }
+
+    var nonempty: usize = 0;
+    for (segments) |segment| {
+        if (segment.len != 0) nonempty += 1;
+    }
+    if (nonempty <= 1) return segments.len;
+
+    var trailing_qualifiers: usize = 0;
+    var i = segments.len;
+    while (i > 0) {
+        i -= 1;
+        const segment = segments[i];
+        if (segment.len == 0) continue;
+        if (!looksLikeAlterQualifier(segment)) break;
+        trailing_qualifiers += 1;
+    }
+    if (trailing_qualifiers == 0 or trailing_qualifiers >= nonempty) return segments.len;
+    return segments.len - trailing_qualifiers;
+}
+
+fn looksLikeAlterQualifier(value: []const u8) bool {
+    const trimmed = trimWikiWhitespace(value);
+    if (trimmed.len == 0) return false;
+    inline for ([_][]const u8{
+        "obsolete",
+        "archaic",
+        "rare",
+        "dated",
+        "dialectal",
+        "colloquial",
+        "informal",
+        "abbreviation",
+        "abbreviations",
+        "pronunciation spelling",
+        "alternative spelling",
+        "alternative form",
+        "chiefly UK",
+        "chiefly US",
+        "UK",
+        "US",
+    }) |entry| {
+        if (std.ascii.eqlIgnoreCase(trimmed, entry)) return true;
+    }
+    return false;
 }
 
 fn splitTrailingQualifier(raw: []const u8) TrailingQualifier {
@@ -1479,6 +1661,7 @@ fn normalizedLinkTarget(raw_target: []const u8) []const u8 {
     }
 
     if (isHiddenNamespaceTarget(target)) return "";
+    if (isVisibleNamespaceTarget(target)) return target;
     if (std.mem.lastIndexOfScalar(u8, target, ':')) |colon_index| {
         if (colon_index + 1 < target.len) target = target[colon_index + 1 ..];
     }
@@ -1492,6 +1675,16 @@ fn isHiddenNamespaceTarget(target: []const u8) bool {
         std.ascii.eqlIgnoreCase(namespace, "Image");
 }
 
+fn isVisibleNamespaceTarget(target: []const u8) bool {
+    const colon_index = std.mem.indexOfScalar(u8, target, ':') orelse return false;
+    const namespace = trimWikiWhitespace(target[0..colon_index]);
+    return std.ascii.eqlIgnoreCase(namespace, "Thesaurus") or
+        std.ascii.eqlIgnoreCase(namespace, "Appendix") or
+        std.ascii.eqlIgnoreCase(namespace, "Citations") or
+        std.ascii.eqlIgnoreCase(namespace, "Reconstruction") or
+        std.ascii.eqlIgnoreCase(namespace, "Wiktionary");
+}
+
 fn templateEtymologyTerm(parts: *const std.ArrayList([]const u8)) ?[]const u8 {
     return templatePositional(parts, 2) orelse
         templatePositional(parts, 1) orelse
@@ -1501,32 +1694,77 @@ fn templateEtymologyTerm(parts: *const std.ArrayList([]const u8)) ?[]const u8 {
 fn languageDisplay(code: []const u8) ?[]const u8 {
     const trimmed = trimWikiWhitespace(code);
     inline for ([_]struct { code: []const u8, display: []const u8 }{
+        .{ .code = "af", .display = "Afrikaans" },
         .{ .code = "ang", .display = "Old English" },
+        .{ .code = "arc", .display = "Aramaic" },
+        .{ .code = "ber-pro", .display = "Proto-Berber" },
+        .{ .code = "be", .display = "Belarusian" },
+        .{ .code = "br", .display = "Breton" },
         .{ .code = "cs", .display = "Czech" },
+        .{ .code = "csb", .display = "Kashubian" },
+        .{ .code = "cy", .display = "Welsh" },
         .{ .code = "da", .display = "Danish" },
         .{ .code = "de", .display = "German" },
         .{ .code = "en", .display = "English" },
         .{ .code = "enm", .display = "Middle English" },
+        .{ .code = "egy", .display = "Egyptian" },
+        .{ .code = "es", .display = "Spanish" },
+        .{ .code = "eu", .display = "Basque" },
+        .{ .code = "fa-cls", .display = "Classical Persian" },
+        .{ .code = "fi", .display = "Finnish" },
+        .{ .code = "fia", .display = "Nobiin" },
         .{ .code = "fr", .display = "French" },
         .{ .code = "frm", .display = "Middle French" },
         .{ .code = "fro", .display = "Old French" },
         .{ .code = "fy", .display = "West Frisian" },
+        .{ .code = "ga", .display = "Irish" },
+        .{ .code = "gd", .display = "Scottish Gaelic" },
         .{ .code = "gem-pro", .display = "Proto-Germanic" },
+        .{ .code = "gml", .display = "Middle Low German" },
+        .{ .code = "gmq", .display = "North Germanic" },
         .{ .code = "gmw-pro", .display = "Proto-West Germanic" },
+        .{ .code = "got", .display = "Gothic" },
         .{ .code = "grc", .display = "Ancient Greek" },
         .{ .code = "grc-koi", .display = "Koine Greek" },
+        .{ .code = "gsw", .display = "Swiss German" },
+        .{ .code = "hu", .display = "Hungarian" },
+        .{ .code = "hy", .display = "Armenian" },
         .{ .code = "ine-pro", .display = "Proto-Indo-European" },
+        .{ .code = "kw", .display = "Cornish" },
         .{ .code = "la", .display = "Latin" },
+        .{ .code = "LL.", .display = "Late Latin" },
+        .{ .code = "li", .display = "Limburgish" },
+        .{ .code = "lt", .display = "Lithuanian" },
         .{ .code = "ML.", .display = "Medieval Latin" },
+        .{ .code = "mi", .display = "Māori" },
         .{ .code = "nds", .display = "Low German" },
+        .{ .code = "nds-de", .display = "German Low German" },
+        .{ .code = "nds-nl", .display = "Dutch Low Saxon" },
         .{ .code = "NL.", .display = "New Latin" },
         .{ .code = "nl", .display = "Dutch" },
+        .{ .code = "nb", .display = "Norwegian Bokmål" },
         .{ .code = "no", .display = "Norwegian" },
         .{ .code = "non", .display = "Old Norse" },
+        .{ .code = "nn", .display = "Norwegian Nynorsk" },
+        .{ .code = "nrf", .display = "Norman" },
+        .{ .code = "onw", .display = "Old Nubian" },
+        .{ .code = "ofs", .display = "Old Frisian" },
+        .{ .code = "ota", .display = "Ottoman Turkish" },
+        .{ .code = "osx", .display = "Old Saxon" },
         .{ .code = "pl", .display = "Polish" },
+        .{ .code = "ru", .display = "Russian" },
+        .{ .code = "rup", .display = "Aromanian" },
         .{ .code = "sa", .display = "Sanskrit" },
+        .{ .code = "se", .display = "Northern Sami" },
         .{ .code = "sh", .display = "Serbo-Croatian" },
         .{ .code = "sv", .display = "Swedish" },
+        .{ .code = "stq", .display = "Saterland Frisian" },
+        .{ .code = "taq", .display = "Tamasheq" },
+        .{ .code = "tmh", .display = "Tamahaq" },
+        .{ .code = "tr", .display = "Turkish" },
+        .{ .code = "tpi", .display = "Tok Pisin" },
+        .{ .code = "uk", .display = "Ukrainian" },
+        .{ .code = "urj-pro", .display = "Proto-Uralic" },
     }) |entry| {
         if (std.ascii.eqlIgnoreCase(trimmed, entry.code)) return entry.display;
     }
@@ -1672,6 +1910,8 @@ fn appendAffixTerms(
     parts: *const std.ArrayList([]const u8),
 ) std.mem.Allocator.Error!void {
     var wrote_any = false;
+    var previous_lang: ?[]const u8 = null;
+    var term_slot: usize = 1;
     var positional_index: usize = 0;
     for (parts.items[1..]) |segment| {
         if (templateArgHasName(segment)) continue;
@@ -1680,8 +1920,19 @@ fn appendAffixTerms(
             continue;
         }
         if (wrote_any) try out.appendSlice(allocator, " + ");
-        try renderInline(out, allocator, segment);
+        if (templateIndexedNamed(parts, "lang", term_slot)) |code| {
+            const trimmed_code = trimWikiWhitespace(code);
+            if (trimmed_code.len != 0 and (previous_lang == null or !std.mem.eql(u8, previous_lang.?, trimmed_code))) {
+                if (languageDisplay(trimmed_code)) |display| {
+                    try appendWithSpace(out, allocator, display);
+                    try appendWithSpace(out, allocator, " ");
+                }
+                previous_lang = trimmed_code;
+            }
+        }
+        try appendCompoundTerm(out, allocator, parts, term_slot, trimWikiWhitespace(segment));
         wrote_any = true;
+        term_slot += 1;
         positional_index += 1;
     }
 }
@@ -1689,10 +1940,14 @@ fn appendAffixTerms(
 fn renderCompoundTemplate(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
+    name: []const u8,
     parts: *const std.ArrayList([]const u8),
 ) std.mem.Allocator.Error!void {
     const total = positionalCount(parts);
     if (total == 0) return;
+    if (templateMatches(name, "compound+") or templateMatches(name, "com+")) {
+        try appendWithSpace(out, allocator, "Compound of ");
+    }
 
     const first_term_index: usize = if (templatePositional(parts, 0)) |first|
         if (looksLikeLanguageCode(first)) 1 else 0
@@ -1719,6 +1974,17 @@ fn renderCompoundTemplate(
             try renderInline(out, allocator, trimmed);
         }
     }
+}
+
+fn standaloneUnaryPrefix(prefix: []const u8) []const u8 {
+    if (std.ascii.eqlIgnoreCase(prefix, "clipping of")) return "clipping";
+    return prefix;
+}
+
+fn templateIndexedNamed(parts: *const std.ArrayList([]const u8), prefix: []const u8, index: usize) ?[]const u8 {
+    var key_buf: [24]u8 = undefined;
+    const key = std.fmt.bufPrint(&key_buf, "{s}{d}", .{ prefix, index }) catch return null;
+    return templateNamed(parts, key);
 }
 
 fn appendCompoundTerm(
@@ -1903,12 +2169,66 @@ fn appendNominalTemplate(
     try out.append(allocator, ' ');
     try out.appendSlice(allocator, phrase.items);
     if (templateNamed(parts, "from")) |source| {
-        const trimmed = trimWikiWhitespace(source);
-        if (trimmed.len != 0) {
-            try out.appendSlice(allocator, " from ");
-            try renderInline(out, allocator, trimmed);
-        }
+        try appendNominalOrigin(out, allocator, source);
     }
+}
+
+fn appendNominalOrigin(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    raw_source: []const u8,
+) std.mem.Allocator.Error!void {
+    const trimmed = trimWikiWhitespace(raw_source);
+    if (trimmed.len == 0) return;
+
+    if (std.mem.indexOfScalar(u8, trimmed, '<')) |lt| {
+        const source_phrase = trimWikiWhitespace(trimmed[0..lt]);
+        const upstream = trimWikiWhitespace(trimmed[lt + 1 ..]);
+
+        try out.appendSlice(allocator, " transferred from ");
+        if (source_phrase.len != 0) {
+            const normalized_source = try normalizeNominalOriginPhraseAlloc(allocator, source_phrase);
+            defer allocator.free(normalized_source);
+            try renderInline(out, allocator, normalized_source);
+        }
+        if (upstream.len != 0) {
+            try out.appendSlice(allocator, " [in turn from ");
+            try renderInline(out, allocator, upstream);
+            try out.append(allocator, ']');
+        }
+        return;
+    }
+
+    try out.appendSlice(allocator, " from ");
+    try renderInline(out, allocator, trimmed);
+}
+
+fn normalizeNominalOriginPhraseAlloc(
+    allocator: std.mem.Allocator,
+    phrase: []const u8,
+) std.mem.Allocator.Error![]const u8 {
+    const trimmed = trimWikiWhitespace(phrase);
+    if (trimmed.len == 0) return allocator.dupe(u8, "");
+
+    const singular = if (asciiEndsWithIgnoreCase(trimmed, " names"))
+        trimmed[0 .. trimmed.len - 1]
+    else
+        trimmed;
+
+    inline for ([_][]const u8{
+        "a ",
+        "an ",
+        "the ",
+        "this ",
+        "that ",
+        "these ",
+        "those ",
+        "one ",
+    }) |prefix| {
+        if (asciiStartsWithIgnoreCase(trimmed, prefix)) return allocator.dupe(u8, singular);
+    }
+
+    return std.fmt.allocPrint(allocator, "the {s}", .{singular});
 }
 
 fn renderPlaceTypeTextAlloc(
@@ -2435,10 +2755,22 @@ test "renderWikitextToOwned preserves semantic form-of templates" {
     try std.testing.expectEqualStrings("plural of Fresnel reflection", rendered);
 }
 
+test "renderWikitextToOwned expands common inflection tags" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "{{infl of|en|pie||s-verb-form}}", 256);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("third-person singular simple present indicative of pie", rendered);
+}
+
 test "renderWikitextToOwned keeps alter qualifiers beyond the third slot" {
     const rendered = try renderWikitextToOwned(std.testing.allocator, "{{alter|en|encyclopaedia||UK}}", 256);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("encyclopaedia (UK)", rendered);
+}
+
+test "renderWikitextToOwned keeps extra alter terms before qualifiers" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "{{alter|en|heed|hed|obsolete}} {{alter|en|trade-wind|tradewind}}", 256);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("heed, hed (obsolete) trade-wind, tradewind", rendered);
 }
 
 test "renderWikitextToOwned labels pronunciation templates" {
@@ -2485,10 +2817,53 @@ test "renderWikitextToOwned expands compound metadata and literal glosses" {
     );
 }
 
+test "renderWikitextToOwned expands Ottoman Turkish and Classical Persian etymology languages" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "Borrowed from {{bor|en|ota|آبدست}} (modern {{cog|tr|abdest}}), from {{der|en|fa-cls|آبْدَسْت|tr=ābdast}}.",
+        512,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Ottoman Turkish") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Turkish") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Classical Persian") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ābdast") != null);
+}
+
+test "renderWikitextToOwned prefixes compound-plus etymologies" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{compound+|en|trade|t1=course, path (of running)|pos1=from 14th c.|wind}}",
+        512,
+    );
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Compound of trade") != null);
+}
+
+test "renderWikitextToOwned keeps standalone clipping templates targetless" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "Bookmaker sense by {{clipping|en|nocap=1}}.", 256);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "clipping.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "clipping of") == null);
+}
+
+test "renderWikitextToOwned prefixes affix components with explicit languages" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "From {{af|en|lang1=la|alphabēticus|-al}}.", 256);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Latin alphabēticus + -al") != null);
+}
+
 test "renderWikitextToOwned falls back from empty pipe-trick displays" {
     const rendered = try renderWikitextToOwned(std.testing.allocator, "[[Fresnel reflection|]]", 256);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("Fresnel reflection", rendered);
+}
+
+test "renderWikitextToOwned preserves visible wiktionary namespaces in pipe-trick links" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "[[Thesaurus:verb|]]", 256);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("Thesaurus:verb", rendered);
 }
 
 test "renderWikitextToOwned suppresses bare file links" {
@@ -2601,6 +2976,32 @@ test "renderWikitextToOwned does not prepend indefinite articles to determiner-l
         "The largest and most populous constituent country of the United Kingdom",
         rendered,
     );
+}
+
+test "renderWikitextToOwned expands nominal month-name origins semantically" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{given name|en|female|from=month names < English}}",
+        256,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "A female given name transferred from the month name [in turn from English]",
+        rendered,
+    );
+}
+
+test "renderWikitextToOwned expands known units-of-time list templates" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{list:units of time/en}}",
+        4096,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "attosecond") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "year") != null);
 }
 
 test "renderWikitextToOwned treats lone angle placeholders as inline text" {

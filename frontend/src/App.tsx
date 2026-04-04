@@ -325,17 +325,16 @@ function HomePage() {
 
   return (
     <main class="page home-page">
-      <section class="masthead">
-        <div class="eyebrow">English Wiktionary</div>
-        <h1>Dictionary</h1>
-      </section>
-
       <section class="word-of-day-strip" aria-labelledby="word-of-day-heading">
         <div class="word-of-day-copy">
           <div class="eyebrow" id="word-of-day-heading">Word of the Day</div>
           <Show
             when={wordOfDay()}
-            fallback={<div class="strip-muted">{wordOfDayError() ?? "Selecting today’s word…"}</div>}
+            fallback={
+              <Show when={wordOfDayError()} fallback={<div class="strip-muted">Selecting today’s word…</div>}>
+                {(message) => <div class="inline-error">{message()}</div>}
+              </Show>
+            }
           >
             {(daily) => (
               <>
@@ -346,7 +345,6 @@ function HomePage() {
                 >
                   {daily().word}
                 </button>
-                <div class="word-of-day-meta">Deterministic daily pick for {daily().day}</div>
               </>
             )}
           </Show>
@@ -771,6 +769,9 @@ function SearchCard(props: {
     () => deferred().trim(),
     (value) => fetchSuggestions(value),
   );
+  const suggestionsError = createMemo(() =>
+    resourceErrorMessage(suggestions.error, "Failed to fetch suggestions."),
+  );
 
   const handleCommit = (value: string) => {
     const next = value.trim();
@@ -853,6 +854,10 @@ function SearchCard(props: {
             )}
           </For>
         </div>
+      </Show>
+
+      <Show when={open() && query().trim().length > 0 && suggestionsError()}>
+        {(message) => <div class="search-error inline-error">{message()}</div>}
       </Show>
     </div>
   );
