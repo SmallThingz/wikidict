@@ -10,9 +10,7 @@
   },
   "dependencies": {
     "@solidjs/router": "^0.15.3",
-    "solid-js": "^1.9.9",
-    "wtf-plugin-html": "^1.0.0",
-    "wtf_wikipedia": "^10.4.1"
+    "solid-js": "^1.9.9"
   },
   "devDependencies": {
     "bun-types": "^1.3.10",

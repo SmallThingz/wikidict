@@ -14,7 +14,6 @@ import {
 import { Dynamic } from "solid-js/web";
 
 import {
-  type ApiEntry,
   type ApiLookupHit,
   type ApiStats,
   type ApiSuggestion,
@@ -23,7 +22,6 @@ import {
   fetchStats,
   fetchSuggestions,
 } from "./api";
-import { renderWikitextHtml } from "./wikitext";
 
 const RECENTS_KEY = "dict-recents";
 const FAVORITES_KEY = "dict-favorites";
@@ -37,13 +35,6 @@ type ThemeKey = (typeof THEME_KEYS)[number];
 type ThemeMode = ThemeKey | "auto";
 type ColorSchemeMode = "system" | "light" | "dark";
 type WidthMode = (typeof WIDTH_MODES)[number];
-
-type SourceBlock = {
-  id: string;
-  title: string;
-  level: number;
-  body: string;
-};
 
 export default function App(props: ParentProps) {
   const location = useLocation();
@@ -271,16 +262,8 @@ function EntryPage() {
 }
 
 function EntryArticle(props: { hit: ApiLookupHit }) {
-  const blocks = createMemo(() => splitRawEntry(props.hit.entry));
-  const renderedBlocks = createMemo(() =>
-    blocks()
-      .map((block) => ({
-        ...block,
-        html: renderWikitextHtml(block.body),
-      }))
-      .filter((block) => block.html),
-  );
   const matchIsAlias = createMemo(() => props.hit.matched !== props.hit.entry.word);
+  const renderedSections = createMemo(() => props.hit.entry.renderedSections ?? []);
 
   onMount(() => {
     const current = loadList(RECENTS_KEY).filter((item) => item !== props.hit.entry.word);
@@ -325,14 +308,14 @@ function EntryArticle(props: { hit: ApiLookupHit }) {
       </div>
 
       <Show
-        when={props.hit.entry.raw}
-        fallback={<div class="state-line narrow">This entry is stored without a raw English section.</div>}
+        when={renderedSections().length > 0}
+        fallback={<div class="state-line narrow">This entry is stored without a rendered English section.</div>}
       >
         <div class="render-stack">
-          <For each={renderedBlocks()}>
+          <For each={renderedSections()}>
             {(block) => (
-              <section class="render-section">
-                <Show when={block.id !== "lead"}>
+              <section class="render-section" id={block.id}>
+                <Show when={block.title}>
                   <div class="render-heading">
                     <Dynamic component={headingTag(block.level)}>{block.title}</Dynamic>
                   </div>
@@ -562,48 +545,6 @@ function MetaLine(props: { title: string; values: string[] }) {
       </div>
     </Show>
   );
-}
-
-function splitRawEntry(entry: ApiEntry): SourceBlock[] {
-  if (!entry.raw) return [];
-
-  const blocks: SourceBlock[] = [];
-  let current: SourceBlock | null = null;
-
-  for (const line of entry.raw.split("\n")) {
-    const match = line.match(/^(={2,6})\s*(.*?)\s*\1$/);
-    const heading = match
-      ? {
-          level: match[1].length,
-          title: match[2],
-        }
-      : null;
-    if (heading) {
-      if (current) current.body = current.body.trimEnd();
-      current = {
-        id: `${heading.level}:${heading.title}:${blocks.length}`,
-        title: heading.title,
-        level: heading.level,
-        body: "",
-      };
-      blocks.push(current);
-      continue;
-    }
-
-    if (!current) {
-      current = {
-        id: "lead",
-        title: entry.word,
-        level: 1,
-        body: "",
-      };
-      blocks.push(current);
-    }
-    current.body += current.body ? `\n${line}` : line;
-  }
-
-  if (current) current.body = current.body.trimEnd();
-  return blocks.filter((block) => block.body || block.title);
 }
 
 function loadList(key: string): string[] {

@@ -15,8 +15,16 @@ pub const ServeOptions = struct {
     port: u16 = 3000,
 };
 
-const json_headers: []const Header = &.{.{ .name = "content-type", .value = "application/json; charset=utf-8" }};
-const html_headers: []const Header = &.{.{ .name = "content-type", .value = "text/html; charset=utf-8" }};
+const json_headers: []const Header = &.{
+    .{ .name = "content-type", .value = "application/json; charset=utf-8" },
+    .{ .name = "cache-control", .value = "no-store, max-age=0" },
+    .{ .name = "pragma", .value = "no-cache" },
+};
+const html_headers: []const Header = &.{
+    .{ .name = "content-type", .value = "text/html; charset=utf-8" },
+    .{ .name = "cache-control", .value = "no-store, max-age=0" },
+    .{ .name = "pragma", .value = "no-cache" },
+};
 
 const AppContext = struct {
     allocator: std.mem.Allocator,
@@ -157,6 +165,13 @@ const SearchEndpoint = struct {
 const LookupEndpoint = struct {
     pub const Info: zhttp.router.EndpointInfo = .{};
 
+    const RenderedSectionJson = struct {
+        id: []const u8,
+        title: []const u8,
+        level: u8,
+        html: []const u8,
+    };
+
     const EntryJson = struct {
         word: []const u8,
         normalized: []const u8,
@@ -164,6 +179,7 @@ const LookupEndpoint = struct {
         altForms: []const []const u8,
         canonicalTargets: []const []const u8,
         incomingAliases: []const []const u8,
+        renderedSections: []const RenderedSectionJson,
         // Filtered raw English wikitext stored in the dictionary payload.
         raw: []const u8,
         summary: []const u8,
@@ -184,7 +200,12 @@ const LookupEndpoint = struct {
             const entry = req.ctx().db.entryAt(hit.entry_index);
             var derived = try entry.derivedAlloc(req.allocator());
             defer derived.deinit(req.allocator());
+            const summary = try req.allocator().dupe(u8, derived.summary);
             const raw = if (try entry.rawEnglishAlloc(req.allocator())) |value| value else "";
+            const rendered_sections = if (raw.len != 0)
+                try renderSectionJsonAlloc(req.allocator(), raw)
+            else
+                &.{};
             const alt_forms = try dupeSliceOfSlices(req.allocator(), derived.alt_forms.items);
             const canonical_targets = try dupeSliceOfSlices(req.allocator(), derived.canonical_targets.items);
             const incoming_aliases = try entry.incomingAliases().toOwnedSlice(req.allocator());
@@ -200,8 +221,9 @@ const LookupEndpoint = struct {
                     .altForms = alt_forms,
                     .canonicalTargets = canonical_targets,
                     .incomingAliases = incoming_aliases,
+                    .renderedSections = rendered_sections,
                     .raw = raw,
-                    .summary = derived.summary,
+                    .summary = summary,
                 },
             });
         }
@@ -254,7 +276,23 @@ fn lookupKindString(kind: u8) []const u8 {
 
 fn dupeSliceOfSlices(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
     const out = try allocator.alloc([]const u8, values.len);
-    @memcpy(out, values);
+    for (values, out) |value, *slot| {
+        slot.* = try allocator.dupe(u8, value);
+    }
+    return out;
+}
+
+fn renderSectionJsonAlloc(allocator: std.mem.Allocator, raw_english: []const u8) ![]const LookupEndpoint.RenderedSectionJson {
+    const rendered = try encoder.html_render.renderEnglishSectionAlloc(allocator, raw_english);
+    const out = try allocator.alloc(LookupEndpoint.RenderedSectionJson, rendered.len);
+    for (rendered, out) |section, *slot| {
+        slot.* = .{
+            .id = section.id,
+            .title = section.title,
+            .level = section.level,
+            .html = section.html,
+        };
+    }
     return out;
 }
 
@@ -407,4 +445,24 @@ test "ensureDictionary rebuilds placeholder dictionary from xml input" {
     const hits = try dict.lookupExact(std.testing.allocator, "color");
     defer std.testing.allocator.free(hits);
     try std.testing.expectEqual(@as(usize, 1), hits.len);
+}
+
+test "dupeSliceOfSlices makes owned string copies" {
+    var first = try std.testing.allocator.dupe(u8, "alpha");
+    defer std.testing.allocator.free(first);
+    var second = try std.testing.allocator.dupe(u8, "beta");
+    defer std.testing.allocator.free(second);
+
+    const source = [_][]const u8{ first, second };
+    const copied = try dupeSliceOfSlices(std.testing.allocator, &source);
+    defer {
+        for (copied) |value| std.testing.allocator.free(value);
+        std.testing.allocator.free(copied);
+    }
+
+    first[0] = 'z';
+    second[0] = 'y';
+
+    try std.testing.expectEqualStrings("alpha", copied[0]);
+    try std.testing.expectEqualStrings("beta", copied[1]);
 }

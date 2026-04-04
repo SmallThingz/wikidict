@@ -575,15 +575,26 @@ pub const Dictionary = struct {
 
         const start = lowerBoundLookup(self, normalized);
         const end = upperBoundLookup(self, normalized);
-        const hits = try allocator.alloc(LookupHit, end - start);
-        for (self.lookups[start..end], hits) |lookup, *hit| {
-            hit.* = .{
+        var hits: std.ArrayList(LookupHit) = .empty;
+        defer hits.deinit(allocator);
+        try hits.ensureTotalCapacityPrecise(allocator, end - start);
+
+        for (self.lookups[start..end]) |lookup| {
+            const candidate = LookupHit{
                 .entry_index = lookup.entry_index,
                 .matched = self.string(lookup.matched),
                 .kind = lookup.kind,
             };
+            var merged = false;
+            for (hits.items) |*existing| {
+                if (existing.entry_index != candidate.entry_index) continue;
+                if (preferExactLookupHit(term, candidate, existing.*)) existing.* = candidate;
+                merged = true;
+                break;
+            }
+            if (!merged) try hits.append(allocator, candidate);
         }
-        return hits;
+        return hits.toOwnedSlice(allocator);
     }
 
     pub fn suggest(self: *const Dictionary, allocator: std.mem.Allocator, prefix: []const u8, limit: usize) ![]LookupHit {
@@ -621,6 +632,14 @@ pub const Dictionary = struct {
         const start: usize = ref.offset;
         const len: usize = ref.len;
         return self.strings[start .. start + len];
+    }
+
+    fn preferExactLookupHit(query: []const u8, candidate: LookupHit, current: LookupHit) bool {
+        const candidate_exact = std.mem.eql(u8, candidate.matched, query);
+        const current_exact = std.mem.eql(u8, current.matched, query);
+        if (candidate_exact != current_exact) return candidate_exact;
+        if (candidate.kind != current.kind) return candidate.kind < current.kind;
+        return std.mem.order(u8, candidate.matched, current.matched) == .lt;
     }
 
     fn entryRecordStart(self: *const Dictionary, index: u32) usize {
@@ -1938,6 +1957,61 @@ test "dictionary cache rebuild reuses precomputed normalized alias metadata" {
     defer std.testing.allocator.free(redirect_hits);
     try std.testing.expectEqual(@as(usize, 1), redirect_hits.len);
     try std.testing.expectEqual(format.lookup_kind_title, redirect_hits[0].kind);
+}
+
+test "lookupExact collapses duplicate entry hits and prefers the exact raw match" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>hellfire</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Alternative forms===
+        \\* [[Hellfire]]
+        \\===Noun===
+        \\# [[fire]]
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
+    defer xml_file.close(std.testing.io);
+    try xml_file.writePositionalAll(std.testing.io, xml, 0);
+
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_path);
+    const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(xml_path);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_path,
+        .output_path = db_path,
+    });
+
+    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path, .{});
+    defer dict.deinit();
+
+    const lower_hits = try dict.lookupExact(std.testing.allocator, "hellfire");
+    defer std.testing.allocator.free(lower_hits);
+    try std.testing.expectEqual(@as(usize, 1), lower_hits.len);
+    try std.testing.expectEqual(format.lookup_kind_title, lower_hits[0].kind);
+    try std.testing.expectEqualStrings("hellfire", lower_hits[0].matched);
+
+    const capitalized_hits = try dict.lookupExact(std.testing.allocator, "Hellfire");
+    defer std.testing.allocator.free(capitalized_hits);
+    try std.testing.expectEqual(@as(usize, 1), capitalized_hits.len);
+    try std.testing.expectEqual(format.lookup_kind_alternative_form, capitalized_hits[0].kind);
+    try std.testing.expectEqualStrings("Hellfire", capitalized_hits[0].matched);
+
+    const upper_hits = try dict.lookupExact(std.testing.allocator, "HELLFIRE");
+    defer std.testing.allocator.free(upper_hits);
+    try std.testing.expectEqual(@as(usize, 1), upper_hits.len);
+    try std.testing.expectEqual(format.lookup_kind_title, upper_hits[0].kind);
+    try std.testing.expectEqualStrings("hellfire", upper_hits[0].matched);
 }
 
 test "replaceFile overwrites an existing cache target" {

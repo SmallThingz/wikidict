@@ -924,7 +924,7 @@ fn isMetaHeading(title: []const u8) bool {
         headingMatches(title, "Etymyology");
 }
 
-fn renderWikitextToOwned(allocator: std.mem.Allocator, input: []const u8, max_len: usize) std.mem.Allocator.Error![]const u8 {
+pub fn renderWikitextToOwned(allocator: std.mem.Allocator, input: []const u8, max_len: usize) std.mem.Allocator.Error![]const u8 {
     var rendered: std.ArrayList(u8) = .empty;
     defer rendered.deinit(allocator);
     try renderInline(&rendered, allocator, input);

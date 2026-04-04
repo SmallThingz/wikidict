@@ -1,4 +1,5 @@
 const API_TIMEOUT_MS = 5000;
+const API_SCHEMA_VERSION = "rendered-sections-v1";
 
 type LookupPayload = {
   hits: ApiLookupHit[];
@@ -12,12 +13,21 @@ type RandomPayload = {
   word: string;
 };
 
+type JsonRecord = Record<string, unknown>;
+
 async function fetchJson<T>(url: string, failureMessage: string): Promise<T> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, {
+      signal: controller.signal,
+      cache: "no-store",
+      headers: {
+        "cache-control": "no-cache",
+        pragma: "no-cache",
+      },
+    });
     if (!response.ok) {
       throw new Error(`${failureMessage} (${response.status})`);
     }
@@ -30,6 +40,18 @@ async function fetchJson<T>(url: string, failureMessage: string): Promise<T> {
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+function apiUrl(path: string, params?: Record<string, string | number>): string {
+  const search = new URLSearchParams();
+  search.set("v", API_SCHEMA_VERSION);
+  if (params) {
+    for (const [key, value] of Object.entries(params)) {
+      search.set(key, String(value));
+    }
+  }
+  const query = search.toString();
+  return query ? `${path}?${query}` : path;
 }
 
 export type ApiStats = {
@@ -49,8 +71,16 @@ export type ApiEntry = {
   altForms: string[];
   canonicalTargets: string[];
   incomingAliases: string[];
+  renderedSections: ApiRenderedSection[];
   raw: string;
   summary: string;
+};
+
+export type ApiRenderedSection = {
+  id: string;
+  title: string;
+  level: number;
+  html: string;
 };
 
 export type ApiLookupHit = {
@@ -67,22 +97,97 @@ export type ApiSuggestion = {
   summary: string;
 };
 
+function readString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function normalizeRenderedSections(value: unknown): ApiRenderedSection[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as JsonRecord;
+    return [
+      {
+        id: readString(record.id),
+        title: readString(record.title),
+        level: typeof record.level === "number" ? record.level : 0,
+        html: readString(record.html),
+      },
+    ];
+  });
+}
+
+function normalizeLookupHit(value: unknown): ApiLookupHit | null {
+  if (!value || typeof value !== "object") return null;
+  const hit = value as JsonRecord;
+  const entry = hit.entry;
+  if (!entry || typeof entry !== "object") return null;
+  const entryRecord = entry as JsonRecord;
+  return {
+    matched: readString(hit.matched),
+    kind: hit.kind === "alternative_form" ? "alternative_form" : "title",
+    entry: {
+      word: readString(entryRecord.word),
+      normalized: readString(entryRecord.normalized),
+      aliasOnly: entryRecord.aliasOnly === true,
+      altForms: readStringArray(entryRecord.altForms),
+      canonicalTargets: readStringArray(entryRecord.canonicalTargets),
+      incomingAliases: readStringArray(entryRecord.incomingAliases),
+      renderedSections: normalizeRenderedSections(entryRecord.renderedSections),
+      raw: readString(entryRecord.raw),
+      summary: readString(entryRecord.summary),
+    },
+  };
+}
+
+function payloadMissesRenderedSections(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const payload = value as JsonRecord;
+  if (!Array.isArray(payload.hits)) return false;
+  return payload.hits.some((hit) => {
+    if (!hit || typeof hit !== "object") return false;
+    const hitRecord = hit as JsonRecord;
+    if (!hitRecord.entry || typeof hitRecord.entry !== "object") return false;
+    const entry = hitRecord.entry as JsonRecord;
+    return typeof entry.raw === "string" && entry.raw.length > 0 && !("renderedSections" in entry);
+  });
+}
+
 export async function fetchStats(): Promise<ApiStats> {
-  return fetchJson<ApiStats>("/api/stats", "Failed to load dictionary stats");
+  return fetchJson<ApiStats>(apiUrl("/api/stats"), "Failed to load dictionary stats");
 }
 
 export async function fetchLookup(term: string): Promise<ApiLookupHit[]> {
-  const payload = await fetchJson<LookupPayload>(`/api/lookup/${encodeURIComponent(term)}`, "Failed to load dictionary entry");
-  return payload.hits as ApiLookupHit[];
+  const path = `/api/lookup/${encodeURIComponent(term)}`;
+  let payload = await fetchJson<LookupPayload>(apiUrl(path), "Failed to load dictionary entry");
+  if (payloadMissesRenderedSections(payload)) {
+    payload = await fetchJson<LookupPayload>(
+      apiUrl(path, { bust: Date.now() }),
+      "Failed to load dictionary entry",
+    );
+  }
+  if (!Array.isArray(payload.hits)) return [];
+  return payload.hits.flatMap((hit) => {
+    const normalized = normalizeLookupHit(hit);
+    return normalized ? [normalized] : [];
+  });
 }
 
 export async function fetchSuggestions(query: string, limit = 12): Promise<ApiSuggestion[]> {
   if (!query.trim()) return [];
-  const payload = await fetchJson<SuggestPayload>(`/api/search?q=${encodeURIComponent(query)}&limit=${limit}`, "Failed to fetch suggestions");
+  const payload = await fetchJson<SuggestPayload>(
+    apiUrl("/api/search", { q: query, limit }),
+    "Failed to fetch suggestions",
+  );
   return payload.suggestions as ApiSuggestion[];
 }
 
 export async function fetchRandomWord(): Promise<string> {
-  const payload = await fetchJson<RandomPayload>("/api/random", "Failed to load a random word");
+  const payload = await fetchJson<RandomPayload>(apiUrl("/api/random"), "Failed to load a random word");
   return payload.word as string;
 }

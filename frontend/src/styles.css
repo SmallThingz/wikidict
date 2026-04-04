@@ -621,6 +621,62 @@ code {
   padding-left: 1.45rem;
 }
 
+.source-html .render-note {
+  color: var(--muted);
+}
+
+.source-html .render-list,
+.source-html .render-gallery-list,
+.source-html .render-sense-list {
+  padding-left: 1.35rem;
+}
+
+.source-html .render-sense-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.source-html .render-sense {
+  padding-left: 0.1rem;
+}
+
+.source-html .render-sense.depth-2,
+.source-html .render-sense-example.depth-2 {
+  margin-left: 1rem;
+}
+
+.source-html .render-sense.depth-3,
+.source-html .render-sense-example.depth-3 {
+  margin-left: 2rem;
+}
+
+.source-html .render-sense.depth-4,
+.source-html .render-sense-example.depth-4 {
+  margin-left: 3rem;
+}
+
+.source-html .render-sense-gloss {
+  color: var(--ink);
+}
+
+.source-html .render-sense-example {
+  margin-top: 0.45rem;
+  color: var(--muted);
+  font-size: 0.96rem;
+}
+
+.source-html .render-term-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.45rem 1.1rem;
+  padding-left: 1.25rem;
+}
+
+.source-html .render-gallery-list {
+  color: var(--muted);
+}
+
 .source-html li {
   margin-bottom: 0.35rem;
 }
