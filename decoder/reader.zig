@@ -1116,26 +1116,79 @@ fn buildEntryFromRecord(allocator: std.mem.Allocator, descriptor: RecordDescript
     };
 
     if ((descriptor.flags & format.record_flag_has_raw) != 0) {
-        var metadata = try format.decodeRawRecordMetadataAlloc(allocator, descriptor.payload);
-        const alt_forms = try allocator.alloc(BuildAltForm, metadata.alt_forms.len);
-        for (metadata.alt_forms, 0..) |alt_form, idx| {
-            alt_forms[idx] = .{
-                .value = alt_form.value,
-                .normalized = alt_form.normalized,
-            };
-        }
-        allocator.free(metadata.alt_forms);
-        metadata.alt_forms = &.{};
-        entry.alt_forms = alt_forms;
+        const metadata = try decodeBuildRawMetadataAlloc(allocator, descriptor.payload);
+        entry.alt_forms = metadata.alt_forms;
         entry.normalized_targets = metadata.normalized_targets;
         return entry;
     }
 
-    const normalized_target = try format.decodeAliasRecordNormalizedTargetAlloc(allocator, descriptor.payload);
+    const normalized_target = try decodeAliasNormalizedTargetAlloc(allocator, descriptor.payload);
     const targets = try allocator.alloc([]const u8, 1);
     targets[0] = normalized_target;
     entry.normalized_targets = targets;
     return entry;
+}
+
+const BuildRawMetadata = struct {
+    alt_forms: []BuildAltForm,
+    normalized_targets: []const []const u8,
+};
+
+fn decodeBuildRawMetadataAlloc(allocator: std.mem.Allocator, payload: []const u8) !BuildRawMetadata {
+    var cursor: usize = 0;
+
+    const alt_form_count_u64 = format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidDictionaryFile;
+    const alt_form_count = std.math.cast(usize, alt_form_count_u64) orelse return error.InvalidDictionaryFile;
+    const alt_forms = try allocator.alloc(BuildAltForm, alt_form_count);
+    errdefer allocator.free(alt_forms);
+
+    var alt_index: usize = 0;
+    errdefer {
+        while (alt_index > 0) : (alt_index -= 1) {
+            allocator.free(alt_forms[alt_index - 1].value);
+            if (!std.mem.eql(u8, alt_forms[alt_index - 1].normalized, alt_forms[alt_index - 1].value)) {
+                allocator.free(alt_forms[alt_index - 1].normalized);
+            }
+        }
+    }
+    while (alt_index < alt_forms.len) : (alt_index += 1) {
+        const value_encoded = try readLengthPrefixedSlice(payload, &cursor, payload.len);
+        const normalized_encoded = try readLengthPrefixedSlice(payload, &cursor, payload.len);
+        const value = compact.decodeAlloc(allocator, value_encoded) catch return error.InvalidDictionaryFile;
+        errdefer allocator.free(value);
+        const normalized = if (std.mem.eql(u8, normalized_encoded, value_encoded))
+            value
+        else
+            compact.decodeAlloc(allocator, normalized_encoded) catch return error.InvalidDictionaryFile;
+        alt_forms[alt_index] = .{
+            .value = value,
+            .normalized = normalized,
+        };
+    }
+
+    const target_count_u64 = format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidDictionaryFile;
+    const target_count = std.math.cast(usize, target_count_u64) orelse return error.InvalidDictionaryFile;
+    const normalized_targets = try allocator.alloc([]const u8, target_count);
+    errdefer allocator.free(normalized_targets);
+
+    var target_index: usize = 0;
+    errdefer while (target_index > 0) : (target_index -= 1) allocator.free(normalized_targets[target_index - 1]);
+    while (target_index < normalized_targets.len) : (target_index += 1) {
+        const target_encoded = try readLengthPrefixedSlice(payload, &cursor, payload.len);
+        normalized_targets[target_index] = compact.decodeAlloc(allocator, target_encoded) catch return error.InvalidDictionaryFile;
+    }
+
+    return .{
+        .alt_forms = alt_forms,
+        .normalized_targets = normalized_targets,
+    };
+}
+
+fn decodeAliasNormalizedTargetAlloc(allocator: std.mem.Allocator, payload: []const u8) ![]u8 {
+    var cursor: usize = 0;
+    _ = try readLengthPrefixedSlice(payload, &cursor, payload.len);
+    const encoded = try readLengthPrefixedSlice(payload, &cursor, payload.len);
+    return compact.decodeAlloc(allocator, encoded) catch return error.InvalidDictionaryFile;
 }
 
 fn scanRecordChunk(descriptors: []const RecordDescriptor, chunk: *ScanChunkResult, progress: *CacheBuildProgress) void {
@@ -1666,6 +1719,55 @@ test "internEntryStrings reuses equivalent local refs" {
     try std.testing.expectEqualDeep(entry.word_ref, entry.alt_forms[0].value_ref);
     try std.testing.expectEqualDeep(entry.alt_forms[0].value_ref, entry.alt_forms[0].normalized_ref);
     try std.testing.expectEqualDeep(entry.normalized_ref, entry.alt_forms[1].normalized_ref);
+}
+
+test "decodeBuildRawMetadataAlloc matches format metadata decode" {
+    const payload = try format.encodeRawRecordPayloadAlloc(
+        std.testing.allocator,
+        &.{
+            .{ .value = "colour", .normalized = "colour" },
+            .{ .value = "Co lor", .normalized = "co lor" },
+        },
+        &.{ "color", "colour" },
+        "encoded-english",
+    );
+    defer std.testing.allocator.free(payload);
+
+    var expected = try format.decodeRawRecordMetadataAlloc(std.testing.allocator, payload);
+    defer expected.deinit(std.testing.allocator);
+
+    const actual = try decodeBuildRawMetadataAlloc(std.testing.allocator, payload);
+    defer {
+        for (actual.alt_forms) |alt_form| {
+            std.testing.allocator.free(alt_form.value);
+            if (!std.mem.eql(u8, alt_form.normalized, alt_form.value)) std.testing.allocator.free(alt_form.normalized);
+        }
+        std.testing.allocator.free(actual.alt_forms);
+        for (actual.normalized_targets) |target| std.testing.allocator.free(target);
+        std.testing.allocator.free(actual.normalized_targets);
+    }
+
+    try std.testing.expectEqual(expected.alt_forms.len, actual.alt_forms.len);
+    for (expected.alt_forms, actual.alt_forms) |lhs, rhs| {
+        try std.testing.expectEqualStrings(lhs.value, rhs.value);
+        try std.testing.expectEqualStrings(lhs.normalized, rhs.normalized);
+    }
+    try std.testing.expectEqual(expected.normalized_targets.len, actual.normalized_targets.len);
+    for (expected.normalized_targets, actual.normalized_targets) |lhs, rhs| {
+        try std.testing.expectEqualStrings(lhs, rhs);
+    }
+}
+
+test "decodeAliasNormalizedTargetAlloc matches format decode" {
+    const payload = try format.encodeAliasRecordPayloadAlloc(std.testing.allocator, "Color", "color");
+    defer std.testing.allocator.free(payload);
+
+    const expected = try format.decodeAliasRecordNormalizedTargetAlloc(std.testing.allocator, payload);
+    defer std.testing.allocator.free(expected);
+    const actual = try decodeAliasNormalizedTargetAlloc(std.testing.allocator, payload);
+    defer std.testing.allocator.free(actual);
+
+    try std.testing.expectEqualStrings(expected, actual);
 }
 
 test "tryOpenCache rejects stale cache versions" {
