@@ -1,13 +1,16 @@
 const std = @import("std");
+const compact = @import("compact_encoding.zig");
+const normalize = @import("normalize");
 
-pub const magic = "WIKDIC16";
-pub const version: u32 = 16;
+pub const magic = "WIKDIC20";
+pub const version: u32 = 20;
 
 pub const record_flag_has_raw: u8 = 1 << 0;
-pub const record_flag_alias_only: u8 = 1 << 1;
 
 pub const lookup_kind_title: u8 = 0;
 pub const lookup_kind_alternative_form: u8 = 1;
+
+pub const PayloadError = error{InvalidEncoding};
 
 pub const Header = extern struct {
     magic_bytes: [8]u8,
@@ -94,4 +97,64 @@ test "varuint round trips representative values" {
         try std.testing.expectEqual(value, decoded);
         try std.testing.expectEqual(encoded.len, cursor);
     }
+}
+
+pub fn encodeRawRecordPayloadAlloc(
+    allocator: std.mem.Allocator,
+    encoded_english: []const u8,
+) ![]u8 {
+    return allocator.dupe(u8, encoded_english);
+}
+
+pub fn rawRecordEnglishPayload(payload: []const u8) PayloadError![]const u8 {
+    if (payload.len == 0) return error.InvalidEncoding;
+    return payload;
+}
+
+pub fn encodeAliasRecordPayloadAlloc(
+    allocator: std.mem.Allocator,
+    target: []const u8,
+) ![]u8 {
+    return compact.encodeAlloc(allocator, target);
+}
+
+pub fn decodeAliasRecordTargetAlloc(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+) (std.mem.Allocator.Error || PayloadError)![]u8 {
+    return compact.decodeAlloc(allocator, payload) catch return error.InvalidEncoding;
+}
+
+pub fn decodeAliasRecordNormalizedTargetAlloc(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+) (std.mem.Allocator.Error || PayloadError)![]u8 {
+    const target = compact.decodeAlloc(allocator, payload) catch return error.InvalidEncoding;
+    defer allocator.free(target);
+    return normalize.normalizeAlloc(allocator, target);
+}
+
+test "raw record payload round trips english bytes" {
+    const allocator = std.testing.allocator;
+    const encoded = try encodeRawRecordPayloadAlloc(
+        allocator,
+        "encoded-english",
+    );
+    defer allocator.free(encoded);
+
+    try std.testing.expectEqualStrings("encoded-english", try rawRecordEnglishPayload(encoded));
+}
+
+test "alias record payload round trips target and derives normalized target" {
+    const allocator = std.testing.allocator;
+    const encoded = try encodeAliasRecordPayloadAlloc(allocator, "Color");
+    defer allocator.free(encoded);
+
+    const target = try decodeAliasRecordTargetAlloc(allocator, encoded);
+    defer allocator.free(target);
+    try std.testing.expectEqualStrings("Color", target);
+
+    const normalized_target = try decodeAliasRecordNormalizedTargetAlloc(allocator, encoded);
+    defer allocator.free(normalized_target);
+    try std.testing.expectEqualStrings("color", normalized_target);
 }

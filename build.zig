@@ -4,6 +4,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const structure_optimize: std.builtin.OptimizeMode = .ReleaseFast;
+    const keep_translations = b.option(bool, "keep-translations", "Keep Translations sections in the generated dictionary") orelse false;
+    const config_options = b.addOptions();
+    config_options.addOption(bool, "keep_translations", keep_translations);
     const generated_tables = addGeneratedStructureTableModules(b, target, optimize, structure_optimize);
 
     const zxml_dep = b.dependency("zxml", .{
@@ -18,12 +21,24 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const normalize_mod = b.createModule(.{
+        .root_source_file = b.path("decoder/normalize.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const normalize_mod_structure = b.createModule(.{
+        .root_source_file = b.path("decoder/normalize.zig"),
+        .target = target,
+        .optimize = structure_optimize,
+    });
 
     const encoder_mod = b.addModule("encoder", .{
         .root_source_file = b.path("encoder/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    encoder_mod.addOptions("config", config_options);
+    encoder_mod.addImport("normalize", normalize_mod);
     encoder_mod.addImport("zxml", zxml_dep.module("zxml"));
     encoder_mod.addImport("generated_structure_tables", generated_tables.regular);
     const encoder_mod_structure = b.addModule("encoder_structure", .{
@@ -31,6 +46,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = structure_optimize,
     });
+    encoder_mod_structure.addOptions("config", config_options);
+    encoder_mod_structure.addImport("normalize", normalize_mod_structure);
     encoder_mod_structure.addImport("zxml", zxml_dep_structure.module("zxml"));
     encoder_mod_structure.addImport("generated_structure_tables", generated_tables.structure);
 
@@ -39,6 +56,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    decoder_mod.addImport("normalize", normalize_mod);
     decoder_mod.addImport("encoder", encoder_mod);
 
     const backend_mod = b.addModule("backend", .{

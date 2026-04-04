@@ -2,7 +2,7 @@ pub const encoder = @import("encoder");
 pub const format = encoder.format;
 pub const compact_encoding = encoder.compact_encoding;
 
-pub const normalize = @import("normalize.zig");
+pub const normalize = @import("normalize");
 const reader = @import("reader.zig");
 
 pub const Dictionary = @import("reader.zig").Dictionary;

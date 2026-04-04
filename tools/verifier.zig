@@ -86,6 +86,7 @@ const Options = struct {
     report_path: []const u8 = "data/verification-report.txt",
     limit_entries: ?usize = null,
     thread_count: ?usize = null,
+    exclusions: wikitext.ExclusionPolicy = wikitext.ExclusionPolicy.defaultCompact(),
 };
 
 pub const VerifyStats = struct {
@@ -254,6 +255,17 @@ const Verifier = struct {
         } else {
             try verifier.report.writer.print("all\n\n", .{});
         }
+        try verifier.report.writer.print(
+            "excluded_sections: anagrams={any} citations={any} meta={any} statistics={any} further_reading={any} translations={any}\n\n",
+            .{
+                options.exclusions.exclude_anagrams,
+                options.exclusions.exclude_citations,
+                options.exclusions.exclude_meta,
+                options.exclusions.exclude_statistics,
+                options.exclusions.exclude_further_reading,
+                options.exclusions.exclude_translations,
+            },
+        );
 
         for (verifier.dict.entries, 0..) |_, idx| {
             const entry = verifier.dict.entryAt(@intCast(idx));
@@ -597,7 +609,11 @@ fn processPageFragment(
 
     const owned_title = try verifier.allocator.dupe(u8, title);
     errdefer verifier.allocator.free(owned_title);
-    const owned_english_section = try verifier.allocator.dupe(u8, english_section);
+    const owned_english_section = try wikitext.filterEnglishSectionAlloc(
+        verifier.allocator,
+        english_section,
+        verifier.options.exclusions,
+    );
     errdefer verifier.allocator.free(owned_english_section);
     try queue.push(.{
         .title = owned_title,
@@ -755,6 +771,9 @@ fn parseOptions(args: []const []const u8) !Options {
             options.thread_count = try std.fmt.parseInt(usize, args[i + 1], 10);
             if (options.thread_count.? == 0) return error.InvalidArgument;
             i += 1;
+        } else if (std.mem.eql(u8, arg, "--exclude") and i + 1 < args.len) {
+            options.exclusions = try parseExclusions(args[i + 1]);
+            i += 1;
         } else if (std.mem.eql(u8, arg, "--help")) {
             printUsage();
             std.process.exit(0);
@@ -769,9 +788,34 @@ fn printUsage() void {
     std.debug.print(
         \\dict-verify [--input enwiktionary.xml] [--db data/enwiktionary.bin]
         \\            [--report data/verification-report.txt] [--limit 10000]
-        \\            [--threads N]
+        \\            [--threads N] [--exclude anagrams,citations,meta,statistics,further_reading,translations]
         \\
     , .{});
+}
+
+fn parseExclusions(value: []const u8) !wikitext.ExclusionPolicy {
+    var policy: wikitext.ExclusionPolicy = .{};
+    var parts = std.mem.splitScalar(u8, value, ',');
+    while (parts.next()) |raw_part| {
+        const part = std.mem.trim(u8, raw_part, " \t");
+        if (part.len == 0) continue;
+        if (std.ascii.eqlIgnoreCase(part, "anagrams")) {
+            policy.exclude_anagrams = true;
+        } else if (std.ascii.eqlIgnoreCase(part, "citations")) {
+            policy.exclude_citations = true;
+        } else if (std.ascii.eqlIgnoreCase(part, "meta")) {
+            policy.exclude_meta = true;
+        } else if (std.ascii.eqlIgnoreCase(part, "statistics")) {
+            policy.exclude_statistics = true;
+        } else if (std.ascii.eqlIgnoreCase(part, "further_reading") or std.ascii.eqlIgnoreCase(part, "further-reading")) {
+            policy.exclude_further_reading = true;
+        } else if (std.ascii.eqlIgnoreCase(part, "translations")) {
+            policy.exclude_translations = true;
+        } else {
+            return error.InvalidArgument;
+        }
+    }
+    return policy;
 }
 
 fn writeTestFile(dir: std.Io.Dir, name: []const u8, contents: []const u8) !void {
@@ -1026,4 +1070,63 @@ test "verifyDictionary treats decoded unicode spacing entities as whitespace-onl
 
     try std.testing.expectEqual(@as(usize, 1), stats.whitespace_only_matches);
     try std.testing.expectEqual(@as(usize, 0), stats.failures());
+}
+
+test "verifyDictionary ignores excluded headings with matching blacklist" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>color</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# [[light]]
+        \\===References===
+        \\* {{R:OneLook}}
+        \\===Further reading===
+        \\* {{R:OneLook}}
+        \\===Translations===
+        \\* Finnish: testi
+        \\===Anagrams===
+        \\* crolo
+        \\===Statistics===
+        \\* stub
+        \\===Dialects===
+        \\* rare
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    try writeTestFile(tmp.dir, "build.xml", xml);
+
+    const build_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "build.xml");
+    defer std.testing.allocator.free(build_rel);
+    const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
+    defer std.testing.allocator.free(db_rel);
+    const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
+    defer std.testing.allocator.free(report_rel);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = build_rel,
+        .output_path = db_rel,
+    });
+
+    const stats = try verifyDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = build_rel,
+        .db_path = db_rel,
+        .report_path = report_rel,
+        .exclusions = .defaultCompact(),
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), stats.exact_matches + stats.whitespace_only_matches);
+    try std.testing.expectEqual(@as(usize, 0), stats.failures());
+}
+
+test "parseExclusions accepts translations" {
+    const exclusions = try parseExclusions("translations");
+    try std.testing.expect(exclusions.exclude_translations);
 }

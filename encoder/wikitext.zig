@@ -1,4 +1,5 @@
 const std = @import("std");
+const config = @import("config");
 const xml_decode = @import("xml_decode.zig");
 
 const max_gloss_bytes = 2048;
@@ -72,6 +73,26 @@ pub const EntryMetadata = struct {
 pub const ParsedHeading = struct {
     level: u8,
     title: []const u8,
+};
+
+pub const ExclusionPolicy = struct {
+    exclude_anagrams: bool = false,
+    exclude_citations: bool = false,
+    exclude_meta: bool = false,
+    exclude_statistics: bool = false,
+    exclude_further_reading: bool = false,
+    exclude_translations: bool = false,
+
+    pub fn defaultCompact() ExclusionPolicy {
+        return .{
+            .exclude_anagrams = true,
+            .exclude_citations = true,
+            .exclude_meta = true,
+            .exclude_statistics = true,
+            .exclude_further_reading = true,
+            .exclude_translations = !config.keep_translations,
+        };
+    }
 };
 
 pub const SectionParserKind = enum {
@@ -348,6 +369,50 @@ pub fn extractEnglishSection(text: []const u8) ?[]const u8 {
 
     if (english_start) |start| return text[start..text.len];
     return null;
+}
+
+pub fn filterEnglishSectionAlloc(allocator: std.mem.Allocator, english_section: []const u8, exclusions: ExclusionPolicy) ![]u8 {
+    if (!exclusions.exclude_anagrams and
+        !exclusions.exclude_citations and
+        !exclusions.exclude_meta and
+        !exclusions.exclude_statistics and
+        !exclusions.exclude_further_reading and
+        !exclusions.exclude_translations)
+    {
+        return allocator.dupe(u8, english_section);
+    }
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    var skip_level: ?u8 = null;
+    var line_start: usize = 0;
+    while (line_start <= english_section.len) {
+        const next_newline = std.mem.indexOfScalarPos(u8, english_section, line_start, '\n') orelse english_section.len;
+        const line = english_section[line_start..next_newline];
+        const raw_line = std.mem.trimEnd(u8, line, "\r");
+
+        if (parseHeadingLine(raw_line)) |heading| {
+            if (skip_level) |level| {
+                if (heading.level <= level) {
+                    skip_level = null;
+                }
+            }
+            if (skip_level == null and isExcludedHeading(heading.title, heading.level, exclusions)) {
+                skip_level = heading.level;
+            }
+        }
+
+        if (skip_level == null) {
+            if (out.items.len != 0) try out.append(allocator, '\n');
+            try out.appendSlice(allocator, line);
+        }
+
+        if (next_newline == english_section.len) break;
+        line_start = next_newline + 1;
+    }
+
+    return out.toOwnedSlice(allocator);
 }
 
 pub fn extractEntryMetadata(allocator: std.mem.Allocator, title: []const u8, english_section: []const u8) !EntryMetadata {
@@ -734,6 +799,20 @@ pub fn isRecognizedInfoSection(title: []const u8) bool {
         .inflection,
         .meta,
         => true,
+        else => false,
+    };
+}
+
+pub fn isExcludedHeading(title: []const u8, level: u8, exclusions: ExclusionPolicy) bool {
+    if (exclusions.exclude_anagrams and headingMatches(title, "Anagrams")) return true;
+    if (exclusions.exclude_statistics and headingMatches(title, "Statistics")) return true;
+    if (exclusions.exclude_further_reading and headingMatches(title, "Further reading")) return true;
+
+    const parser = sectionParserSpecForTitle(title, level) orelse return false;
+    return switch (parser.kind) {
+        .citations => exclusions.exclude_citations,
+        .meta => exclusions.exclude_meta,
+        .translations => exclusions.exclude_translations,
         else => false,
     };
 }
@@ -1619,4 +1698,43 @@ test "parse english entry dispatches section families through dedicated parsers"
     try std.testing.expect(saw_notes);
     try std.testing.expect(saw_navigation);
     try std.testing.expect(saw_meta);
+}
+
+test "filter english section honors compact exclusion policy" {
+    const english =
+        \\==English==
+        \\===Pronunciation===
+        \\* {{IPA|en|/tɛst/}}
+        \\===Translations===
+        \\* Finnish: testi
+        \\===Further reading===
+        \\* {{R:OneLook}}
+        \\===References===
+        \\* {{R:OneLook}}
+        \\===Anagrams===
+        \\* sett
+        \\===Statistics===
+        \\* stub
+        \\===Dialects===
+        \\* rare
+        \\===Noun===
+        \\# [[test]]
+        \\
+    ;
+
+    const filtered = try filterEnglishSectionAlloc(std.testing.allocator, english, .defaultCompact());
+    defer std.testing.allocator.free(filtered);
+
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "===Pronunciation===") != null);
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "===Noun===") != null);
+    if (config.keep_translations) {
+        try std.testing.expect(std.mem.indexOf(u8, filtered, "===Translations===") != null);
+    } else {
+        try std.testing.expect(std.mem.indexOf(u8, filtered, "===Translations===") == null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "===Further reading===") == null);
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "===References===") == null);
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "===Anagrams===") == null);
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "===Statistics===") == null);
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "===Dialects===") == null);
 }

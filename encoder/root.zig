@@ -6,6 +6,7 @@ pub const wikitext = @import("wikitext.zig");
 
 pub const BuildOptions = @import("builder.zig").BuildOptions;
 pub const BuildStats = @import("builder.zig").BuildStats;
+const builder = @import("builder.zig");
 
 pub fn buildDictionary(io: @import("std").Io, allocator: @import("std").mem.Allocator, options: BuildOptions) !BuildStats {
     return @import("builder.zig").build(io, allocator, options);
@@ -17,4 +18,5 @@ test "encoder root imports module tests" {
     _ = section_encoding;
     _ = xml_decode;
     _ = wikitext;
+    _ = builder;
 }

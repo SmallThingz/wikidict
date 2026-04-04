@@ -2,10 +2,10 @@ const builtin = @import("builtin");
 const std = @import("std");
 
 const encoder = @import("encoder");
+const normalize = @import("normalize");
 const compact = encoder.compact_encoding;
 const format = encoder.format;
 const section_encoding = encoder.section_encoding;
-const normalize = @import("normalize.zig");
 const wikitext = encoder.wikitext;
 
 const cache_magic = "DCTIDX04";
@@ -81,12 +81,17 @@ const CacheHeader = extern struct {
 
 const cache_header_size = std.mem.alignForward(u32, @sizeOf(CacheHeader), cache_alignment);
 
+const BuildAltForm = struct {
+    value: []const u8,
+    normalized: []const u8,
+};
+
 const BuildEntryData = struct {
     record_offset: u32,
     word: []const u8,
     normalized: []const u8,
-    alt_forms: []const []const u8 = &.{},
-    canonical_targets: []const []const u8 = &.{},
+    alt_forms: []const BuildAltForm = &.{},
+    normalized_targets: []const []const u8 = &.{},
     incoming_aliases: []const u32 = &.{},
 };
 
@@ -355,7 +360,8 @@ pub const EntryView = struct {
     pub fn derivedAlloc(self: EntryView, allocator: std.mem.Allocator) !EntryDerivedData {
         const entry_record = try self.dict.entryRecord(self.index);
         if ((entry_record.flags & format.record_flag_has_raw) != 0) {
-            const raw = try section_encoding.decodeEnglishAlloc(allocator, entry_record.payload);
+            const encoded_english = try format.rawRecordEnglishPayload(entry_record.payload);
+            const raw = try section_encoding.decodeEnglishAlloc(allocator, encoded_english);
             errdefer allocator.free(raw);
 
             var metadata = try wikitext.extractEntryMetadata(allocator, self.word(), raw);
@@ -372,7 +378,7 @@ pub const EntryView = struct {
             };
         }
 
-        const target = try compact.decodeAlloc(allocator, entry_record.payload);
+        const target = try format.decodeAliasRecordTargetAlloc(allocator, entry_record.payload);
         errdefer allocator.free(target);
 
         var canonical_targets: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -441,7 +447,8 @@ pub const EntryView = struct {
     pub fn rawEnglishAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
         const entry_record = try self.dict.entryRecord(self.index);
-        return try section_encoding.decodeEnglishAlloc(allocator, entry_record.payload);
+        const encoded_english = try format.rawRecordEnglishPayload(entry_record.payload);
+        return try section_encoding.decodeEnglishAlloc(allocator, encoded_english);
     }
 };
 
@@ -996,28 +1003,66 @@ fn buildEntryFromRecord(allocator: std.mem.Allocator, descriptor: RecordDescript
     };
 
     if ((descriptor.flags & format.record_flag_has_raw) != 0) {
-        const raw = try section_encoding.decodeEnglishAlloc(allocator, descriptor.payload);
-        var metadata = try wikitext.extractEntryMetadata(allocator, title, raw);
+        const encoded_english = try format.rawRecordEnglishPayload(descriptor.payload);
+        const raw = try section_encoding.decodeEnglishAlloc(allocator, encoded_english);
+        defer allocator.free(raw);
 
-        entry.alt_forms = metadata.alt_forms.items;
+        var metadata = try wikitext.extractEntryMetadata(allocator, title, raw);
+        defer metadata.deinit(allocator);
+
+        entry.alt_forms = try adoptAltForms(allocator, metadata.alt_forms.items);
         metadata.alt_forms = .empty;
-        entry.canonical_targets = metadata.canonical_targets.items;
-        metadata.canonical_targets = .empty;
+        entry.normalized_targets = try normalizeTargets(allocator, metadata.canonical_targets.items);
         return entry;
     }
 
-    const target = try compact.decodeAlloc(allocator, descriptor.payload);
+    const normalized_target = try format.decodeAliasRecordNormalizedTargetAlloc(allocator, descriptor.payload);
     const targets = try allocator.alloc([]const u8, 1);
-    targets[0] = target;
-    entry.canonical_targets = targets;
+    targets[0] = normalized_target;
+    entry.normalized_targets = targets;
     return entry;
 }
 
+fn adoptAltForms(allocator: std.mem.Allocator, values: []const []const u8) ![]const BuildAltForm {
+    const out = try allocator.alloc(BuildAltForm, values.len);
+    errdefer allocator.free(out);
+
+    var count: usize = 0;
+    errdefer while (count > 0) : (count -= 1) {
+        allocator.free(out[count - 1].normalized);
+    };
+
+    for (values, 0..) |value, idx| {
+        out[idx] = .{
+            .value = value,
+            .normalized = try normalize.normalizeAlloc(allocator, value),
+        };
+        count += 1;
+    }
+    return out;
+}
+
+fn normalizeTargets(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
+    const out = try allocator.alloc([]const u8, values.len);
+    errdefer allocator.free(out);
+
+    var count: usize = 0;
+    errdefer while (count > 0) : (count -= 1) {
+        allocator.free(out[count - 1]);
+    };
+
+    for (values, 0..) |value, idx| {
+        out[idx] = try normalize.normalizeAlloc(allocator, value);
+        count += 1;
+    }
+    return out;
+}
+
 fn cloneEntryData(allocator: std.mem.Allocator, source: BuildEntryData) !BuildEntryData {
-    const alt_forms = try cloneStringSlice(allocator, source.alt_forms);
-    errdefer freeStringSlice(allocator, alt_forms);
-    const canonical_targets = try cloneStringSlice(allocator, source.canonical_targets);
-    errdefer freeStringSlice(allocator, canonical_targets);
+    const alt_forms = try cloneAltForms(allocator, source.alt_forms);
+    errdefer freeAltForms(allocator, alt_forms);
+    const normalized_targets = try cloneStringSlice(allocator, source.normalized_targets);
+    errdefer freeStringSlice(allocator, normalized_targets);
     const word = try allocator.dupe(u8, source.word);
     errdefer allocator.free(word);
     const normalized = try allocator.dupe(u8, source.normalized);
@@ -1028,8 +1073,34 @@ fn cloneEntryData(allocator: std.mem.Allocator, source: BuildEntryData) !BuildEn
         .word = word,
         .normalized = normalized,
         .alt_forms = alt_forms,
-        .canonical_targets = canonical_targets,
+        .normalized_targets = normalized_targets,
     };
+}
+
+fn cloneAltForms(allocator: std.mem.Allocator, values: []const BuildAltForm) ![]const BuildAltForm {
+    const out = try allocator.alloc(BuildAltForm, values.len);
+    errdefer allocator.free(out);
+    var count: usize = 0;
+    errdefer while (count > 0) : (count -= 1) {
+        allocator.free(out[count - 1].value);
+        allocator.free(out[count - 1].normalized);
+    };
+    for (values, 0..) |value, idx| {
+        out[idx] = .{
+            .value = try allocator.dupe(u8, value.value),
+            .normalized = try allocator.dupe(u8, value.normalized),
+        };
+        count += 1;
+    }
+    return out;
+}
+
+fn freeAltForms(allocator: std.mem.Allocator, values: []const BuildAltForm) void {
+    for (values) |value| {
+        allocator.free(value.value);
+        allocator.free(value.normalized);
+    }
+    allocator.free(values);
 }
 
 fn cloneStringSlice(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
@@ -1175,12 +1246,8 @@ fn finalizeIncomingAliases(
     }
     for (incoming) |*list| list.* = .empty;
 
-    var norm_buf: std.ArrayList(u8) = .empty;
-    defer norm_buf.deinit(allocator);
-
     for (state.entries.items, 0..) |entry, source_idx| {
-        for (entry.canonical_targets) |target| {
-            const normalized_target = try normalize.normalizeToList(&norm_buf, allocator, target);
+        for (entry.normalized_targets) |normalized_target| {
             if (title_map.get(normalized_target)) |indices| {
                 for (indices.items) |target_idx| {
                     try appendUniqueIndex(allocator, &incoming[target_idx], @intCast(source_idx));
@@ -1219,8 +1286,8 @@ fn buildLookups(arena_allocator: std.mem.Allocator, state: *BuildState) !void {
 
         for (entry.alt_forms) |alt_form| {
             state.lookups.appendAssumeCapacity(.{
-                .key = try normalize.normalizeAlloc(arena_allocator, alt_form),
-                .matched = alt_form,
+                .key = alt_form.normalized,
+                .matched = alt_form.value,
                 .entry_index = @intCast(idx),
                 .kind = format.lookup_kind_alternative_form,
             });
@@ -1381,6 +1448,67 @@ test "dictionary open preserves raw etymology and pronunciation sections through
     const raw = (try dict.entryAt(hits[0].entry_index).rawEnglishAlloc(std.testing.allocator)).?;
     defer std.testing.allocator.free(raw);
     try std.testing.expectEqualStrings(raw_english, raw);
+}
+
+test "dictionary cache rebuild reuses precomputed normalized alias metadata" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>color</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Alternative forms===
+        \\* [[co lor]]
+        \\===Noun===
+        \\# [[light]]
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>colour</title>
+        \\<ns>0</ns>
+        \\<redirect title="Color"/>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
+    defer xml_file.close(std.testing.io);
+    try xml_file.writePositionalAll(std.testing.io, xml, 0);
+
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_path);
+    const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(xml_path);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_path,
+        .output_path = db_path,
+    });
+
+    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path);
+    defer dict.deinit();
+
+    const alt_hits = try dict.lookupExact(std.testing.allocator, "CO_LOR");
+    defer std.testing.allocator.free(alt_hits);
+    try std.testing.expectEqual(@as(usize, 1), alt_hits.len);
+    try std.testing.expectEqual(format.lookup_kind_alternative_form, alt_hits[0].kind);
+    try std.testing.expectEqualStrings("co lor", alt_hits[0].matched);
+
+    const color_hits = try dict.lookupExact(std.testing.allocator, "color");
+    defer std.testing.allocator.free(color_hits);
+    try std.testing.expectEqual(@as(usize, 1), color_hits.len);
+
+    const incoming = dict.entryAt(color_hits[0].entry_index).incomingAliases();
+    try std.testing.expectEqual(@as(usize, 1), incoming.len());
+    try std.testing.expectEqualStrings("colour", incoming.at(0));
+
+    const redirect_hits = try dict.lookupExact(std.testing.allocator, "colour");
+    defer std.testing.allocator.free(redirect_hits);
+    try std.testing.expectEqual(@as(usize, 1), redirect_hits.len);
+    try std.testing.expectEqual(format.lookup_kind_title, redirect_hits[0].kind);
 }
 
 test "replaceFile overwrites an existing cache target" {

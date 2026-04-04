@@ -17,8 +17,6 @@ const ztypes = zxml.Types(parse_opts);
 const StreamParser = ztypes.StreamParser;
 const StreamNode = ztypes.StreamNode;
 
-const english_heading = "==English==";
-
 pub const BuildOptions = struct {
     input_path: []const u8,
     output_path: []const u8,
@@ -248,10 +246,17 @@ fn processPageFragment(
             const text = try xml_decode.decodeAlloc(allocator, text_raw);
             if (wikitext.extractEnglishSection(text)) |english_section| {
                 const title = try xml_decode.decodeAlloc(allocator, title_raw);
-                try output.writeRecord(
-                    title,
-                    format.record_flag_has_raw,
+                const filtered_english = try wikitext.filterEnglishSectionAlloc(
+                    allocator,
                     english_section,
+                    .defaultCompact(),
+                );
+                defer allocator.free(filtered_english);
+                const raw_payload = try buildRawRecordPayloadAlloc(allocator, filtered_english);
+                defer allocator.free(raw_payload);
+                try output.writeRawRecord(
+                    title,
+                    raw_payload,
                 );
                 return;
             }
@@ -261,13 +266,25 @@ fn processPageFragment(
     if (capture.redirect_title_raw) |raw| {
         const title = try xml_decode.decodeAlloc(allocator, title_raw);
         const target = try xml_decode.decodeAlloc(allocator, raw);
-        try output.writeRecord(
+        try output.writeRedirectRecord(
             title,
-            0,
             target,
         );
         stats.redirect_aliases += 1;
     }
+}
+
+fn buildRawRecordPayloadAlloc(
+    allocator: std.mem.Allocator,
+    filtered_english: []const u8,
+) ![]u8 {
+    const encoded_english = try section_encoding.encodeEnglishAlloc(allocator, filtered_english);
+    defer allocator.free(encoded_english);
+
+    return format.encodeRawRecordPayloadAlloc(
+        allocator,
+        encoded_english,
+    );
 }
 
 const OutputWriter = struct {
@@ -283,7 +300,6 @@ const OutputWriter = struct {
     redirect_count: usize = 0,
     buffer: std.ArrayList(u8) = .empty,
     title_buf: std.ArrayList(u8) = .empty,
-    payload_buf: std.ArrayList(u8) = .empty,
 
     fn init(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File) !OutputWriter {
         const placeholder = format.Header.init(0, 0, 0, @sizeOf(format.Header), 0);
@@ -298,7 +314,6 @@ const OutputWriter = struct {
     fn deinit(self: *OutputWriter, allocator: std.mem.Allocator) void {
         self.buffer.deinit(allocator);
         self.title_buf.deinit(allocator);
-        self.payload_buf.deinit(allocator);
     }
 
     fn finish(self: *OutputWriter) !void {
@@ -313,31 +328,31 @@ const OutputWriter = struct {
         try self.file.writePositionalAll(self.io, std.mem.asBytes(&header), 0);
     }
 
-    fn writeRecord(
+    fn writeRawRecord(
         self: *OutputWriter,
         title: []const u8,
-        flags: u8,
         payload: []const u8,
     ) !void {
-        try self.writeBytes(&.{flags});
+        try self.writeBytes(&.{format.record_flag_has_raw});
         const encoded_title = try compact.encodeToList(&self.title_buf, self.allocator, title);
         try self.writeSlice(encoded_title);
+        try self.writeSlice(payload);
+        self.raw_entry_count += 1;
+        self.entry_count += 1;
+    }
 
-        if ((flags & format.record_flag_has_raw) != 0) {
-            const english_payload = if (std.mem.startsWith(u8, payload, english_heading))
-                payload
-            else
-                return error.InvalidEnglishSection;
-            const encoded = try section_encoding.encodeEnglishAlloc(self.allocator, english_payload);
-            defer self.allocator.free(encoded);
-            try self.writeSlice(encoded);
-            self.raw_entry_count += 1;
-        } else {
-            const encoded_target = try compact.encodeToList(&self.payload_buf, self.allocator, payload);
-            try self.writeSlice(encoded_target);
-            self.redirect_count += 1;
-        }
-
+    fn writeRedirectRecord(
+        self: *OutputWriter,
+        title: []const u8,
+        target: []const u8,
+    ) !void {
+        try self.writeBytes(&.{0});
+        const encoded_title = try compact.encodeToList(&self.title_buf, self.allocator, title);
+        try self.writeSlice(encoded_title);
+        const encoded_payload = try format.encodeAliasRecordPayloadAlloc(self.allocator, target);
+        defer self.allocator.free(encoded_payload);
+        try self.writeSlice(encoded_payload);
+        self.redirect_count += 1;
         self.entry_count += 1;
     }
 
@@ -377,14 +392,16 @@ test "output writer buffers survive page arena resets" {
     const first_alloc = page_arena.allocator();
     const first_title = try first_alloc.dupe(u8, "color");
     const first_payload = try first_alloc.dupe(u8, "==English==\n===Noun===\n# [[light]]\n");
-    try writer.writeRecord(first_title, format.record_flag_has_raw, first_payload);
+    const first_record_payload = try buildRawRecordPayloadAlloc(std.testing.allocator, first_payload);
+    defer std.testing.allocator.free(first_record_payload);
+    try writer.writeRawRecord(first_title, first_record_payload);
 
     _ = page_arena.reset(.retain_capacity);
 
     const second_alloc = page_arena.allocator();
     const second_title = try second_alloc.dupe(u8, "colour");
     const second_payload = try second_alloc.dupe(u8, "color");
-    try writer.writeRecord(second_title, 0, second_payload);
+    try writer.writeRedirectRecord(second_title, second_payload);
     try writer.finish();
 
     try std.testing.expectEqual(@as(usize, 2), writer.entry_count);
@@ -400,7 +417,9 @@ test "output writer accepts english section without trailing heading newline" {
     var writer = try OutputWriter.init(std.testing.io, std.testing.allocator, file);
     defer writer.deinit(std.testing.allocator);
 
-    try writer.writeRecord("color", format.record_flag_has_raw, "==English==");
+    const payload = try buildRawRecordPayloadAlloc(std.testing.allocator, "==English==");
+    defer std.testing.allocator.free(payload);
+    try writer.writeRawRecord("color", payload);
     try writer.finish();
 
     try std.testing.expectEqual(@as(usize, 1), writer.entry_count);

@@ -4,7 +4,7 @@ const compact = @import("compact_encoding.zig");
 const format = @import("format.zig");
 const generated = @import("generated_structure_tables");
 
-const trailing_newline_flag: u8 = 1 << 0;
+const first_level_trailing_newline_flag: u8 = 0x80;
 const extended_ref_marker: u8 = 0xFF;
 const max_inline_ref_code: u16 = 0xFE;
 
@@ -226,10 +226,12 @@ pub fn encodeEnglishAlloc(allocator: std.mem.Allocator, english_section: []const
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
-    try out.append(allocator, if (trailing_newline) trailing_newline_flag else 0);
-
-    for (sections) |section| {
-        try out.append(allocator, section.level);
+    for (sections, 0..) |section, section_index| {
+        const level = if (section_index == 0 and trailing_newline)
+            section.level | first_level_trailing_newline_flag
+        else
+            section.level;
+        try out.append(allocator, level);
 
         const heading_code = headingCodeForTitle(section.title, section.level);
         try appendTieredRef(&out, allocator, heading_code);
@@ -250,8 +252,8 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
     if (encoded.len == 0) return error.InvalidEncoding;
 
     var cursor: usize = 0;
-    const flags = encoded[cursor];
-    cursor += 1;
+    var trailing_newline = false;
+    var first_section = true;
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
@@ -260,8 +262,16 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
 
     while (cursor < encoded.len) {
         if (cursor >= encoded.len) return error.InvalidEncoding;
-        const level = encoded[cursor];
+        const level_byte = encoded[cursor];
         cursor += 1;
+        const level = if (first_section) blk: {
+            trailing_newline = (level_byte & first_level_trailing_newline_flag) != 0;
+            first_section = false;
+            break :blk level_byte & ~first_level_trailing_newline_flag;
+        } else blk: {
+            if ((level_byte & first_level_trailing_newline_flag) != 0) return error.InvalidEncoding;
+            break :blk level_byte;
+        };
         const heading_code = readTieredRef(encoded, &cursor, encoded.len) catch return error.InvalidEncoding;
 
         const title, const kind = if (heading_code == heading_generic) blk: {
@@ -324,7 +334,7 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
         }
     }
 
-    if ((flags & trailing_newline_flag) != 0) try out.append(allocator, '\n');
+    if (trailing_newline) try out.append(allocator, '\n');
     return out.toOwnedSlice(allocator);
 }
 
@@ -338,11 +348,7 @@ fn encodeSectionPayloadAlloc(allocator: std.mem.Allocator, lines: []const []cons
 }
 
 fn encodeJoinedBodyAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
-
-    var line_count_buf: [10]u8 = undefined;
-    try out.appendSlice(allocator, format.encodeVarUInt(&line_count_buf, lines.len));
+    if (lines.len == 0) return allocator.alloc(u8, 0);
 
     var joined: std.ArrayList(u8) = .empty;
     defer joined.deinit(allocator);
@@ -352,10 +358,11 @@ fn encodeJoinedBodyAlloc(allocator: std.mem.Allocator, lines: []const []const u8
         try joined.appendSlice(allocator, line);
     }
 
-    const encoded = try compact.encodeAlloc(allocator, joined.items);
-    defer allocator.free(encoded);
-    try out.appendSlice(allocator, encoded);
-    return out.toOwnedSlice(allocator);
+    if (joined.items.len == 0) {
+        return allocator.dupe(u8, &[_]u8{0});
+    }
+
+    return compact.encodeAlloc(allocator, joined.items);
 }
 
 fn encodeLineStreamAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
@@ -385,15 +392,27 @@ fn decodeLineStreamAlloc(allocator: std.mem.Allocator, payload: []const u8) (std
 }
 
 fn decodeJoinedBodyAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})!JoinedBody {
-    if (payload.len == 0) return error.InvalidEncoding;
+    if (payload.len == 0) {
+        return .{
+            .text = try allocator.alloc(u8, 0),
+            .line_count = 0,
+        };
+    }
+    if (payload.len == 1 and payload[0] == 0) {
+        return .{
+            .text = try allocator.alloc(u8, 0),
+            .line_count = 1,
+        };
+    }
 
-    var cursor: usize = 0;
-    const line_count_u64 = format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding;
-    const line_count = std.math.cast(usize, line_count_u64) orelse return error.InvalidEncoding;
-    const text = compact.decodeAlloc(allocator, payload[cursor..]) catch return error.InvalidEncoding;
+    const text = compact.decodeAlloc(allocator, payload) catch return error.InvalidEncoding;
     errdefer allocator.free(text);
+    if (text.len == 0) return error.InvalidEncoding;
 
-    if (line_count == 0 and text.len != 0) return error.InvalidEncoding;
+    var line_count: usize = 1;
+    for (text) |byte| {
+        if (byte == '\n') line_count += 1;
+    }
 
     return .{
         .text = text,
@@ -407,19 +426,8 @@ fn appendDecodedJoinedBody(
     body: JoinedBody,
 ) (std.mem.Allocator.Error || error{InvalidEncoding})!void {
     if (body.line_count == 0) return;
-
-    var line_start: usize = 0;
-    var remaining = body.line_count;
-    while (remaining > 1) : (remaining -= 1) {
-        const next_newline = std.mem.indexOfScalarPos(u8, body.text, line_start, '\n') orelse return error.InvalidEncoding;
-        try out.append(allocator, '\n');
-        try out.appendSlice(allocator, body.text[line_start..next_newline]);
-        line_start = next_newline + 1;
-    }
-
-    if (std.mem.indexOfScalarPos(u8, body.text, line_start, '\n') != null) return error.InvalidEncoding;
     try out.append(allocator, '\n');
-    try out.appendSlice(allocator, body.text[line_start..]);
+    try out.appendSlice(allocator, body.text);
 }
 
 fn encodeTermSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
