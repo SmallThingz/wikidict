@@ -4,9 +4,10 @@ zig-out/
 zig-pkg
 .worktrees/
 
-frontend/bun.lock*
-frontend/node_modules/
-frontend/dist/
+bun.lock*
+package-lock*
+node_modules/
+dist/
 
 data/
 enwiktionary.xml

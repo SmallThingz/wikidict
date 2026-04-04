@@ -122,6 +122,11 @@ pub fn build(b: *std.Build) void {
         .{ .name = "decoder", .module = decoder_mod },
         .{ .name = "renderer", .module = renderer_mod },
     });
+    const parsoid_tester_exe = addCliExecutable(b, "dict-parsoid-test", b.path("tools/parsoid_tester.zig"), target, optimize, &.{
+        .{ .name = "decoder", .module = decoder_mod },
+        .{ .name = "renderer", .module = renderer_mod },
+        .{ .name = "encoder", .module = encoder_mod },
+    });
 
     b.installArtifact(encoder_exe);
     b.installArtifact(decoder_exe);
@@ -129,6 +134,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(structure_exe);
     b.installArtifact(verifier_exe);
     b.installArtifact(render_tester_exe);
+    b.installArtifact(parsoid_tester_exe);
 
     addRunStep(b, "encode", "Run the encoder CLI", encoder_exe, &.{});
     addRunStep(b, "decode", "Run the decoder CLI", decoder_exe, &.{});
@@ -136,6 +142,15 @@ pub fn build(b: *std.Build) void {
     addRunStep(b, "structure", "Analyze Wiktionary structure", structure_exe, &.{});
     addRunStep(b, "verify", "Verify dictionary raw entries against the XML dump", verifier_exe, &.{});
     addRunStep(b, "render-test", "Strictly render all stored raw entries and report failures", render_tester_exe, &.{});
+
+    {
+        const cmd = b.addSystemCommand(&.{ "bash", "tools/parsoid-audit" });
+        cmd.addFileArg(parsoid_tester_exe.getEmittedBin());
+        if (b.args) |args| cmd.addArgs(args);
+
+        const step = b.step("parsoid-test", "Compare rendered sections against Parsoid output");
+        step.dependOn(&cmd.step);
+    }
 
     {
         const cmd = b.addSystemCommand(&.{ "bash", "tools/frontend" });
@@ -201,6 +216,19 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const parsoid_tester_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/parsoid_tester.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "decoder", .module = decoder_mod },
+                .{ .name = "renderer", .module = renderer_mod },
+                .{ .name = "encoder", .module = encoder_mod },
+            },
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
 
     const run_encoder_tests = b.addRunArtifact(encoder_tests);
     const run_decoder_tests = b.addRunArtifact(decoder_tests);
@@ -209,6 +237,7 @@ pub fn build(b: *std.Build) void {
     const run_structure_tests = b.addRunArtifact(structure_tests);
     const run_verifier_tests = b.addRunArtifact(verifier_tests);
     const run_render_tester_tests = b.addRunArtifact(render_tester_tests);
+    const run_parsoid_tester_tests = b.addRunArtifact(parsoid_tester_tests);
 
     const test_step = b.step("test", "Run encoder, decoder, and backend tests");
     test_step.dependOn(&run_encoder_tests.step);
@@ -218,6 +247,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_structure_tests.step);
     test_step.dependOn(&run_verifier_tests.step);
     test_step.dependOn(&run_render_tester_tests.step);
+    test_step.dependOn(&run_parsoid_tester_tests.step);
 }
 
 fn addCliExecutable(

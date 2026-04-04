@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+worker_dir="$repo_dir/tools/parsoid-worker"
+
+if [ $# -lt 1 ]; then
+  printf 'Usage: tools/parsoid-audit <compiled-zig-tool> [args...]\n' >&2
+  exit 1
+fi
+
+tool_bin="$1"
+shift
+tool_bin="$(realpath "$tool_bin")"
+
+cd "$worker_dir"
+bun i
+
+export DICT_PARSOID_WORKER="$worker_dir/worker.mjs"
+export DICT_PARSOID_CACHE_DIR="$repo_dir/data/parsoid-cache"
+
+cd "$repo_dir"
+exec "$tool_bin" --worker "$worker_dir/worker.mjs" "$@"

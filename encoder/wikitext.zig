@@ -443,16 +443,76 @@ pub fn extractEntryMetadata(allocator: std.mem.Allocator, title: []const u8, eng
 }
 
 pub fn extractSummaryAlloc(allocator: std.mem.Allocator, english_section: []const u8, max_len: usize) ![]const u8 {
+    var current_pos: []const u8 = "";
+    var current_head_label: ?[]const u8 = null;
+    defer if (current_head_label) |label| allocator.free(label);
+
     var lines = std.mem.splitScalar(u8, english_section, '\n');
     while (lines.next()) |raw_input| {
         const raw_line = std.mem.trim(u8, std.mem.trimEnd(u8, raw_input, "\r"), " \t");
         if (raw_line.len == 0) continue;
+
+        if (parseHeadingLine(raw_line)) |heading| {
+            if (heading.level >= 3 and isRecognizedPartOfSpeech(heading.title)) {
+                current_pos = heading.title;
+                if (current_head_label) |label| allocator.free(label);
+                current_head_label = null;
+            } else if (heading.level <= 3) {
+                current_pos = "";
+                if (current_head_label) |label| allocator.free(label);
+                current_head_label = null;
+            }
+            continue;
+        }
+
+        if (current_pos.len != 0 and current_head_label == null and looksLikeHeadSummaryLine(raw_line)) {
+            const rendered = try renderWikitextToOwned(allocator, raw_line, 96);
+            if (rendered.len == 0) {
+                allocator.free(rendered);
+            } else {
+                current_head_label = rendered;
+            }
+            continue;
+        }
+
         const parsed = parseDefinitionLine(raw_line) orelse continue;
         if (parsed.kind != .sense) continue;
-        return renderWikitextToOwned(allocator, parsed.content, max_len);
+
+        const prefix = current_head_label orelse current_pos;
+        if (prefix.len == 0) return renderWikitextToOwned(allocator, parsed.content, max_len);
+        return renderSummaryWithPrefixAlloc(allocator, prefix, parsed.content, max_len);
     }
 
     return allocator.dupe(u8, "");
+}
+
+fn looksLikeHeadSummaryLine(line: []const u8) bool {
+    const trimmed = std.mem.trim(u8, line, " \t");
+    return asciiStartsWithIgnoreCase(trimmed, "{{head|");
+}
+
+fn renderSummaryWithPrefixAlloc(
+    allocator: std.mem.Allocator,
+    prefix: []const u8,
+    content: []const u8,
+    max_len: usize,
+) ![]const u8 {
+    const normalized_prefix = try lowerAsciiAlloc(allocator, std.mem.trim(u8, prefix, " \t"));
+    defer allocator.free(normalized_prefix);
+    if (normalized_prefix.len == 0) return renderWikitextToOwned(allocator, content, max_len);
+
+    const gloss_limit = max_len -| normalized_prefix.len -| 2;
+    const rendered = try renderWikitextToOwned(allocator, content, gloss_limit);
+    if (rendered.len == 0) return rendered;
+    if (asciiStartsWithIgnoreCase(rendered, normalized_prefix)) return rendered;
+    defer allocator.free(rendered);
+    return std.fmt.allocPrint(allocator, "{s}: {s}", .{ normalized_prefix, rendered });
+}
+
+fn lowerAsciiAlloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    const out = try allocator.dupe(u8, value);
+    for (out) |*char| char.* = std.ascii.toLower(char.*);
+    return out;
 }
 
 fn processLogicalLine(
@@ -954,8 +1014,10 @@ fn renderInline(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []
         }
         if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "[[")) {
             const end = findBalanced(input, i, "[[", "]]") orelse break;
-            try renderLink(out, allocator, input[i + 2 .. end]);
-            i = end + 2;
+            var trail_end = end + 2;
+            while (trail_end < input.len and isWikiLinkTrailByte(input[trail_end])) : (trail_end += 1) {}
+            try renderLink(out, allocator, input[i + 2 .. end], input[end + 2 .. trail_end]);
+            i = trail_end;
             continue;
         }
         if (input[i] == '[') {
@@ -996,7 +1058,11 @@ fn renderInline(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []
             continue;
         }
         if (input[i] == '\'' and i + 1 < input.len and input[i + 1] == '\'') {
+            const run_start = i;
             while (i < input.len and input[i] == '\'') : (i += 1) {}
+            if (shouldKeepLiteralApostrophe(input, run_start, i - run_start)) {
+                try out.append(allocator, '\'');
+            }
             continue;
         }
         try out.append(allocator, input[i]);
@@ -1004,7 +1070,12 @@ fn renderInline(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []
     }
 }
 
-fn renderLink(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: []const u8) std.mem.Allocator.Error!void {
+fn renderLink(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    trail: []const u8,
+) std.mem.Allocator.Error!void {
     var parts = try splitTopLevel(allocator, body, '|');
     defer parts.deinit(allocator);
     if (parts.items.len == 0) return;
@@ -1013,12 +1084,31 @@ fn renderLink(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: []con
         std.mem.trim(u8, parts.items[parts.items.len - 1], " \t")
     else
         "";
-    const selected = if (display.len != 0)
+    const base_selected = if (display.len != 0)
         display
     else
         normalizedLinkTarget(parts.items[0]);
+    const selected = if (trail.len == 0)
+        base_selected
+    else
+        try std.fmt.allocPrint(allocator, "{s}{s}", .{ base_selected, trail });
+    defer if (trail.len != 0) allocator.free(selected);
     if (selected.len == 0) return;
     try renderInline(out, allocator, selected);
+}
+
+fn shouldKeepLiteralApostrophe(input: []const u8, run_start: usize, run_len: usize) bool {
+    if ((run_len & 1) == 0) return false;
+    if (run_start == 0 or run_start + run_len >= input.len) return false;
+    return isLiteralApostropheNeighbor(input[run_start - 1]) and isLiteralApostropheNeighbor(input[run_start + run_len]);
+}
+
+fn isLiteralApostropheNeighbor(byte: u8) bool {
+    return std.ascii.isAlphabetic(byte) or std.ascii.isDigit(byte);
+}
+
+fn isWikiLinkTrailByte(byte: u8) bool {
+    return std.ascii.isAlphabetic(byte);
 }
 
 fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: []const u8) std.mem.Allocator.Error!void {
@@ -1089,6 +1179,18 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
     }
     if (templateMatches(name, "lang")) {
         if (templatePositional(&parts, 1) orelse templatePositional(&parts, 0)) |arg| try renderInline(out, allocator, arg);
+        return;
+    }
+    if (templateMatches(name, "place")) {
+        try appendPlaceTerms(out, allocator, &parts);
+        return;
+    }
+    if (templateMatches(name, "given name")) {
+        try appendNominalTemplate(out, allocator, &parts, "given name");
+        return;
+    }
+    if (templateMatches(name, "surname")) {
+        try appendNominalTemplate(out, allocator, &parts, "surname");
         return;
     }
     if (isSemanticOfTemplate(name)) {
@@ -1268,6 +1370,86 @@ fn renderBlendTemplate(
     }
 }
 
+fn appendPlaceTerms(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+) std.mem.Allocator.Error!void {
+    const type_index = placeTypeIndex(parts);
+    const raw_type = templatePositional(parts, type_index) orelse return;
+    const place_type = normalizePlaceFragment(raw_type);
+    if (place_type.len == 0) return;
+
+    const rendered_type = try renderWikitextToOwned(allocator, place_type, 256);
+    defer allocator.free(rendered_type);
+
+    if (placeTypeNeedsArticle(rendered_type)) {
+        try out.appendSlice(allocator, chooseIndefiniteArticle(rendered_type, true));
+        try out.appendSlice(allocator, " ");
+    }
+    try out.appendSlice(allocator, rendered_type);
+
+    var wrote_location = false;
+    var positional_index: usize = 0;
+    for (parts.items[1..]) |segment| {
+        if (templateArgHasName(segment)) continue;
+        if (positional_index <= type_index) {
+            positional_index += 1;
+            continue;
+        }
+        const piece = std.mem.trim(u8, stripTraversalSegments(segment), " \t");
+        if (piece.len == 0) {
+            positional_index += 1;
+            continue;
+        }
+        if (!wrote_location) {
+            try out.appendSlice(allocator, if (placeTypeNeedsIn(rendered_type)) " in " else " ");
+            wrote_location = true;
+        } else {
+            try out.appendSlice(allocator, ", ");
+        }
+        try appendPlaceLocationFragment(out, allocator, piece);
+        positional_index += 1;
+    }
+
+    for ([_][]const u8{ "official", "capital", "located", "located in", "caplc" }) |key| {
+        if (templateNamed(parts, key)) |value| {
+            const piece = normalizePlaceFragment(value);
+            if (piece.len == 0) continue;
+            if (wrote_location) {
+                try out.appendSlice(allocator, "; ");
+            } else {
+                try out.appendSlice(allocator, " ");
+            }
+            try renderInline(out, allocator, piece);
+            wrote_location = true;
+        }
+    }
+}
+
+fn appendNominalTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    noun: []const u8,
+) std.mem.Allocator.Error!void {
+    var phrase: std.ArrayList(u8) = .empty;
+    defer phrase.deinit(allocator);
+
+    if (templatePositional(parts, 1)) |qualifier| {
+        const trimmed = std.mem.trim(u8, qualifier, " \t");
+        if (trimmed.len != 0 and !looksLikeLanguageCode(trimmed)) {
+            try renderInline(&phrase, allocator, trimmed);
+            if (phrase.items.len != 0) try phrase.append(allocator, ' ');
+        }
+    }
+    try phrase.appendSlice(allocator, noun);
+
+    try out.appendSlice(allocator, chooseIndefiniteArticle(phrase.items, true));
+    try out.append(allocator, ' ');
+    try out.appendSlice(allocator, phrase.items);
+}
+
 fn semanticTemplateTargetIndex(parts: *const std.ArrayList([]const u8)) usize {
     const count = positionalCount(parts);
     if (count <= 1) return 0;
@@ -1294,6 +1476,179 @@ fn looksLikeLanguageCode(value: []const u8) bool {
         return false;
     }
     return has_letter;
+}
+
+fn normalizePlaceFragment(input: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, stripTraversalSegments(input), " \t");
+    if (trimmed.len == 0) return trimmed;
+    if (std.mem.indexOfScalar(u8, trimmed, '/')) |slash| {
+        const prefix = std.mem.trim(u8, trimmed[0..slash], " \t");
+        if (prefix.len <= 8 and std.mem.indexOfScalar(u8, prefix, ' ') == null) {
+            return std.mem.trim(u8, trimmed[slash + 1 ..], " \t");
+        }
+    }
+    return trimmed;
+}
+
+fn appendPlaceLocationFragment(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    input: []const u8,
+) std.mem.Allocator.Error!void {
+    if (std.mem.indexOfScalar(u8, input, '/')) |slash| {
+        const prefix = std.mem.trim(u8, input[0..slash], " \t");
+        const value = std.mem.trim(u8, input[slash + 1 ..], " \t");
+        if (value.len == 0) return;
+        const display = placeHolonymDisplay(prefix);
+        switch (display.kind) {
+            .plain => try renderInline(out, allocator, value),
+            .prefix => {
+                try appendPlaceHolonymPrefix(out, allocator, display.label);
+                try renderInline(out, allocator, value);
+            },
+            .suffix => {
+                try renderInline(out, allocator, value);
+                try out.append(allocator, ' ');
+                try out.appendSlice(allocator, display.label);
+            },
+        }
+        return;
+    }
+    try renderInline(out, allocator, input);
+}
+
+const PlaceHolonymDisplayKind = enum {
+    plain,
+    prefix,
+    suffix,
+};
+
+const PlaceHolonymDisplay = struct {
+    kind: PlaceHolonymDisplayKind = .plain,
+    label: []const u8 = "",
+};
+
+fn placeHolonymDisplay(prefix: []const u8) PlaceHolonymDisplay {
+    const canonical = canonicalPlaceHolonymType(prefix) orelse return .{};
+
+    if (std.ascii.eqlIgnoreCase(canonical, "metropolitan borough") or
+        std.ascii.eqlIgnoreCase(canonical, "London borough") or
+        std.ascii.eqlIgnoreCase(canonical, "royal borough") or
+        std.ascii.eqlIgnoreCase(canonical, "metropolitan city"))
+    {
+        return .{ .kind = .prefix, .label = canonical };
+    }
+
+    if (std.ascii.eqlIgnoreCase(canonical, "borough") or
+        std.ascii.eqlIgnoreCase(canonical, "county borough") or
+        std.ascii.eqlIgnoreCase(canonical, "parish") or
+        std.ascii.eqlIgnoreCase(canonical, "civil parish") or
+        std.mem.endsWith(u8, canonical, " district") or
+        std.ascii.eqlIgnoreCase(canonical, "district"))
+    {
+        return .{ .kind = .suffix, .label = canonical };
+    }
+
+    return .{};
+}
+
+fn canonicalPlaceHolonymType(prefix: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, prefix, " \t");
+    inline for ([_]struct { alias: []const u8, canonical: []const u8 }{
+        .{ .alias = "bor", .canonical = "borough" },
+        .{ .alias = "borough", .canonical = "borough" },
+        .{ .alias = "cobor", .canonical = "county borough" },
+        .{ .alias = "county borough", .canonical = "county borough" },
+        .{ .alias = "cpar", .canonical = "civil parish" },
+        .{ .alias = "civil parish", .canonical = "civil parish" },
+        .{ .alias = "dist", .canonical = "district" },
+        .{ .alias = "district", .canonical = "district" },
+        .{ .alias = "lgd", .canonical = "local government district" },
+        .{ .alias = "lgdist", .canonical = "local government district" },
+        .{ .alias = "local government district", .canonical = "local government district" },
+        .{ .alias = "lbor", .canonical = "London borough" },
+        .{ .alias = "London borough", .canonical = "London borough" },
+        .{ .alias = "metbor", .canonical = "metropolitan borough" },
+        .{ .alias = "metropolitan borough", .canonical = "metropolitan borough" },
+        .{ .alias = "metcity", .canonical = "metropolitan city" },
+        .{ .alias = "metropolitan city", .canonical = "metropolitan city" },
+        .{ .alias = "par", .canonical = "parish" },
+        .{ .alias = "parish", .canonical = "parish" },
+        .{ .alias = "rdist", .canonical = "regional district" },
+        .{ .alias = "regional district", .canonical = "regional district" },
+        .{ .alias = "robor", .canonical = "royal borough" },
+        .{ .alias = "royal borough", .canonical = "royal borough" },
+        .{ .alias = "subdistrict", .canonical = "subdistrict" },
+        .{ .alias = "udist", .canonical = "unitary district" },
+        .{ .alias = "unitary district", .canonical = "unitary district" },
+    }) |entry| {
+        if (std.ascii.eqlIgnoreCase(trimmed, entry.alias)) return entry.canonical;
+    }
+    return null;
+}
+
+fn appendPlaceHolonymPrefix(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    label: []const u8,
+) std.mem.Allocator.Error!void {
+    const titled = try titleCaseAsciiAlloc(allocator, label);
+    defer allocator.free(titled);
+    try out.appendSlice(allocator, "the ");
+    try out.appendSlice(allocator, titled);
+    try out.appendSlice(allocator, " of ");
+}
+
+fn placeTypeIndex(parts: *const std.ArrayList([]const u8)) usize {
+    if (positionalCount(parts) <= 1) return 0;
+    const first = templatePositional(parts, 0) orelse return 0;
+    return if (looksLikeLanguageCode(first)) 1 else 0;
+}
+
+fn placeTypeNeedsIn(rendered_type: []const u8) bool {
+    const trimmed = std.mem.trim(u8, rendered_type, " \t");
+    return !asciiEndsWithIgnoreCase(trimmed, " in") and
+        !asciiEndsWithIgnoreCase(trimmed, " of") and
+        !asciiEndsWithIgnoreCase(trimmed, " on") and
+        !asciiEndsWithIgnoreCase(trimmed, " at");
+}
+
+fn placeTypeNeedsArticle(rendered_type: []const u8) bool {
+    const trimmed = std.mem.trim(u8, rendered_type, " \t");
+    if (trimmed.len == 0) return false;
+    inline for ([_][]const u8{
+        "a ",
+        "an ",
+        "the ",
+        "this ",
+        "that ",
+        "these ",
+        "those ",
+        "one ",
+    }) |prefix| {
+        if (asciiStartsWithIgnoreCase(trimmed, prefix)) return false;
+    }
+    return true;
+}
+
+fn chooseIndefiniteArticle(text: []const u8, capitalize: bool) []const u8 {
+    const article = if (startsWithVowelSound(text)) "an" else "a";
+    if (!capitalize) return article;
+    return if (article[0] == 'a' and article.len == 2) "An" else "A";
+}
+
+fn startsWithVowelSound(text: []const u8) bool {
+    const trimmed = std.mem.trim(u8, text, " \t");
+    if (trimmed.len == 0) return false;
+
+    var index: usize = 0;
+    while (index < trimmed.len and !std.ascii.isAlphabetic(trimmed[index])) : (index += 1) {}
+    if (index >= trimmed.len) return false;
+
+    return switch (std.ascii.toLower(trimmed[index])) {
+        'a', 'e', 'i', 'o', 'u' => true,
+        else => false,
+    };
 }
 
 fn normalizedLinkTarget(raw_target: []const u8) []const u8 {
@@ -1661,6 +2016,20 @@ fn asciiStartsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     return true;
 }
 
+fn titleCaseAsciiAlloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    const out = try allocator.dupe(u8, value);
+    var upper_next = true;
+    for (out) |*char| {
+        if (std.ascii.isAlphabetic(char.*)) {
+            char.* = if (upper_next) std.ascii.toUpper(char.*) else std.ascii.toLower(char.*);
+            upper_next = false;
+            continue;
+        }
+        upper_next = char.* == ' ' or char.* == '-' or char.* == '/' or char.* == '(';
+    }
+    return out;
+}
+
 fn asciiEndsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     if (haystack.len < needle.len) return false;
     return asciiStartsWithIgnoreCase(haystack[haystack.len - needle.len ..], needle);
@@ -1750,6 +2119,111 @@ test "parse noun form gloss preserves semantic template labels" {
 
     try std.testing.expectEqual(@as(usize, 1), parsed.senses.items.len);
     try std.testing.expectEqualStrings("plural of Fresnel reflection", parsed.senses.items[0].gloss);
+}
+
+test "extractSummaryAlloc uses dictionary-style head label when present" {
+    const source =
+        \\==English==
+        \\
+        \\===Noun===
+        \\{{head|en|noun form}}
+        \\
+        \\# {{plural of|en|Fresnel reflection}}
+    ;
+
+    const summary = try extractSummaryAlloc(std.testing.allocator, source, 240);
+    defer std.testing.allocator.free(summary);
+
+    try std.testing.expectEqualStrings("noun form: plural of Fresnel reflection", summary);
+}
+
+test "extractSummaryAlloc falls back to part-of-speech heading label" {
+    const source =
+        \\==English==
+        \\
+        \\===Verb===
+        \\# [[to]] [[move]] quickly
+    ;
+
+    const summary = try extractSummaryAlloc(std.testing.allocator, source, 240);
+    defer std.testing.allocator.free(summary);
+
+    try std.testing.expectEqualStrings("verb: to move quickly", summary);
+}
+
+test "renderWikitextToOwned formats place and surname templates as sentence fragments" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{place|en|hamlet|par/Ipplepen|dist/Teignbridge|co/Devon|cc/England}} {{q|[[OS]] grid ref SX8566}}. {{surname|en}}.",
+        512,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "A hamlet in Ipplepen parish, Teignbridge district, Devon, England (OS grid ref SX8566). A surname.",
+        rendered,
+    );
+}
+
+test "renderWikitextToOwned expands metropolitan borough place fragments" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{place|en|town|metbor/Knowsley|co/Merseyside|cc/England}} {{q|[[OS]] grid ref SJ4491}}.",
+        512,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "A town in the Metropolitan Borough of Knowsley, Merseyside, England (OS grid ref SJ4491).",
+        rendered,
+    );
+}
+
+test "extractSummaryAlloc formats place templates semantically for previews" {
+    const source =
+        \\==English==
+        \\{{wp}}
+        \\
+        \\===Proper noun===
+        \\{{en-proper noun}}
+        \\
+        \\# {{place|en|hamlet|par/Ipplepen|dist/Teignbridge|co/Devon|cc/England}} {{q|[[OS]] grid ref SX8566}}.
+        \\# {{surname|en}}.
+    ;
+
+    const summary = try extractSummaryAlloc(std.testing.allocator, source, 512);
+    defer std.testing.allocator.free(summary);
+
+    try std.testing.expectEqualStrings(
+        "proper noun: A hamlet in Ipplepen parish, Teignbridge district, Devon, England (OS grid ref SX8566).",
+        summary,
+    );
+}
+
+test "extractSummaryAlloc does not prepend indefinite articles to determiner-led place text" {
+    const source =
+        \\==English==
+        \\
+        \\===Proper noun===
+        \\# {{place|en|The largest and most populous <<constituent country>> of the <<c/United Kingdom>>}}
+    ;
+
+    const summary = try extractSummaryAlloc(std.testing.allocator, source, 512);
+    defer std.testing.allocator.free(summary);
+
+    try std.testing.expect(std.mem.indexOf(u8, summary, "proper noun: The largest and") != null);
+    try std.testing.expect(std.mem.indexOf(u8, summary, "proper noun: A The largest") == null);
+}
+
+test "renderWikitextToOwned preserves possessive apostrophes around italic markup" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "''Britannica'''s ''[[w:Macropædia|Macropædia]]''",
+        256,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Britannica's Macropædia", rendered);
 }
 
 test "renderWikitextToOwned preserves literal less-than text" {

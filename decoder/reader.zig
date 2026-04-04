@@ -628,6 +628,38 @@ pub const Dictionary = struct {
         return hits.toOwnedSlice(allocator);
     }
 
+    pub fn resolveLinkTargetAlloc(self: *const Dictionary, allocator: std.mem.Allocator, term: []const u8) !?[]const u8 {
+        var key_buf: std.ArrayList(u8) = .empty;
+        defer key_buf.deinit(allocator);
+        const normalized = try normalize.normalizeToList(&key_buf, allocator, term);
+        if (normalized.len == 0) return null;
+
+        const start = lowerBoundLookup(self, normalized);
+        const end = upperBoundLookup(self, normalized);
+        if (start == end) return null;
+
+        const Candidate = struct {
+            matched: []const u8,
+            word: []const u8,
+            kind: u8,
+        };
+
+        var best: ?Candidate = null;
+        for (self.lookups[start..end]) |lookup| {
+            const candidate: Candidate = .{
+                .matched = self.string(lookup.matched),
+                .word = self.entryAt(lookup.entry_index).word(),
+                .kind = lookup.kind,
+            };
+            if (best == null or preferLinkTarget(term, candidate, best.?)) {
+                best = candidate;
+            }
+        }
+
+        if (best) |value| return @as([]const u8, try allocator.dupe(u8, value.word));
+        return null;
+    }
+
     fn string(self: *const Dictionary, ref: StringRef) []const u8 {
         const start: usize = ref.offset;
         const len: usize = ref.len;
@@ -639,6 +671,16 @@ pub const Dictionary = struct {
         const current_exact = std.mem.eql(u8, current.matched, query);
         if (candidate_exact != current_exact) return candidate_exact;
         if (candidate.kind != current.kind) return candidate.kind < current.kind;
+        return std.mem.order(u8, candidate.matched, current.matched) == .lt;
+    }
+
+    fn preferLinkTarget(query: []const u8, candidate: anytype, current: @TypeOf(candidate)) bool {
+        const candidate_exact = std.mem.eql(u8, candidate.word, query) or std.mem.eql(u8, candidate.matched, query);
+        const current_exact = std.mem.eql(u8, current.word, query) or std.mem.eql(u8, current.matched, query);
+        if (candidate_exact != current_exact) return candidate_exact;
+        if (candidate.kind != current.kind) return candidate.kind < current.kind;
+        const word_order = std.mem.order(u8, candidate.word, current.word);
+        if (word_order != .eq) return word_order == .lt;
         return std.mem.order(u8, candidate.matched, current.matched) == .lt;
     }
 

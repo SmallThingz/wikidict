@@ -205,7 +205,7 @@ const LookupEndpoint = struct {
             const summary = try req.allocator().dupe(u8, derived.summary);
             const raw = if (try entry.rawEnglishAlloc(req.allocator())) |value| value else "";
             const rendered_sections = if (raw.len != 0)
-                try renderSectionJsonAlloc(req.allocator(), raw)
+                try renderSectionJsonAlloc(req.allocator(), &req.ctx().db, raw)
             else
                 &.{};
             const alt_forms = try dupeSliceOfSlices(req.allocator(), derived.alt_forms.items);
@@ -284,8 +284,17 @@ fn dupeSliceOfSlices(allocator: std.mem.Allocator, values: []const []const u8) !
     return out;
 }
 
-fn renderSectionJsonAlloc(allocator: std.mem.Allocator, raw_english: []const u8) ![]const LookupEndpoint.RenderedSectionJson {
-    const rendered = try renderer.html_render.renderEnglishSectionAlloc(allocator, raw_english);
+fn renderSectionJsonAlloc(
+    allocator: std.mem.Allocator,
+    dict: *const decoder.Dictionary,
+    raw_english: []const u8,
+) ![]const LookupEndpoint.RenderedSectionJson {
+    const rendered = try renderer.html_render.renderEnglishSectionWithOptionsAlloc(allocator, raw_english, .{
+        .link_resolver = .{
+            .context = @ptrCast(dict),
+            .resolve = resolveRendererLink,
+        },
+    });
     const out = try allocator.alloc(LookupEndpoint.RenderedSectionJson, rendered.len);
     for (rendered, out) |section, *slot| {
         slot.* = .{
@@ -296,6 +305,15 @@ fn renderSectionJsonAlloc(allocator: std.mem.Allocator, raw_english: []const u8)
         };
     }
     return out;
+}
+
+fn resolveRendererLink(
+    context: *const anyopaque,
+    allocator: std.mem.Allocator,
+    term: []const u8,
+) !?[]const u8 {
+    const dict: *const decoder.Dictionary = @ptrCast(@alignCast(context));
+    return dict.resolveLinkTargetAlloc(allocator, term);
 }
 
 fn ensureDictionary(io: std.Io, allocator: std.mem.Allocator, options: ServeOptions) !void {

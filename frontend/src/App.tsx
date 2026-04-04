@@ -12,6 +12,8 @@ import {
   onMount,
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
+import { get, set } from "idb-keyval";
+import { createVirtualizer } from "@tanstack/solid-virtual";
 
 import {
   type ApiLookupHit,
@@ -28,30 +30,64 @@ const FAVORITES_KEY = "dict-favorites";
 const THEME_MODE_KEY = "dict-theme-mode";
 const COLOR_SCHEME_KEY = "dict-color-scheme";
 const WIDTH_MODE_KEY = "dict-width-mode";
-const THEME_KEYS = ["linen", "reef", "ember", "graphite"] as const;
+const CUSTOM_PRIMARY_KEY = "dict-custom-primary";
+const CUSTOM_SECONDARY_KEY = "dict-custom-secondary";
+const HIST_LIMIT_KEY = "dict-hist-limit";
+const VIEW_MODE_KEY = "dict-view-mode";
+const SHOW_COPY_BTN_KEY = "dict-show-copy";
+
+const THEME_KEYS = ["linen", "reef", "ember", "graphite", "custom"] as const;
 const WIDTH_MODES = ["narrow", "standard", "wide"] as const;
 
 type ThemeKey = (typeof THEME_KEYS)[number];
-type ThemeMode = ThemeKey | "auto";
+type ThemeMode = ThemeKey;
 type ColorSchemeMode = "system" | "light" | "dark";
 type WidthMode = (typeof WIDTH_MODES)[number];
+type ViewMode = "infinite" | "paginated";
+type HistLimit = "1000" | "5000" | "10000" | "infinite";
+type ShowCopyBtnMode = "false" | "true";
+
+export const [showCopyBtn, setShowCopyBtn] = createSignal<ShowCopyBtnMode>("false");
 
 export default function App(props: ParentProps) {
   const location = useLocation();
-  const [themeMode, setThemeMode] = createSignal<ThemeMode>("auto");
+  const navigate = useNavigate();
+  const [themeMode, setThemeMode] = createSignal<ThemeMode>("linen");
   const [colorSchemeMode, setColorSchemeMode] = createSignal<ColorSchemeMode>("system");
   const [widthMode, setWidthMode] = createSignal<WidthMode>("standard");
+  const [histLimit, setHistLimit] = createSignal<HistLimit>("10000");
+  const [viewMode, setViewMode] = createSignal<ViewMode>("infinite");
   const [prefersDark, setPrefersDark] = createSignal(false);
+  const [isSettingsOpen, setIsSettingsOpen] = createSignal(false);
+  const [isMobileSearchOpen, setIsMobileSearchOpen] = createSignal(false);
+  const [primaryColor, setPrimaryColor] = createSignal<string>("#2563eb");
+  const [secondaryColor, setSecondaryColor] = createSignal<string>("#0f172a");
 
   onMount(() => {
-    const stored = readStoredThemeMode();
-    if (stored) setThemeMode(stored);
+    const storedTheme = readStored(THEME_MODE_KEY, ["linen", "reef", "ember", "graphite", "custom"]);
+    if (storedTheme) setThemeMode(storedTheme as ThemeMode);
 
-    const storedScheme = readStoredColorScheme();
-    if (storedScheme) setColorSchemeMode(storedScheme);
+    const storedScheme = readStored(COLOR_SCHEME_KEY, ["system", "light", "dark"]);
+    if (storedScheme) setColorSchemeMode(storedScheme as ColorSchemeMode);
 
-    const storedWidth = readStoredWidthMode();
-    if (storedWidth) setWidthMode(storedWidth);
+    const storedWidth = readStored(WIDTH_MODE_KEY, ["narrow", "standard", "wide"]);
+    if (storedWidth) setWidthMode(storedWidth as WidthMode);
+
+    const storedLimit = readStored(HIST_LIMIT_KEY, ["1000", "5000", "10000", "infinite"]);
+    if (storedLimit) setHistLimit(storedLimit as HistLimit);
+
+    const storedView = readStored(VIEW_MODE_KEY, ["infinite", "paginated"]);
+    if (storedView) setViewMode(storedView as ViewMode);
+
+    const storedCopyBtn = readStored(SHOW_COPY_BTN_KEY, ["false", "true"]);
+    if (storedCopyBtn) setShowCopyBtn(storedCopyBtn as ShowCopyBtnMode);
+
+    if (typeof localStorage !== "undefined") {
+      const pc = localStorage.getItem(CUSTOM_PRIMARY_KEY);
+      const sc = localStorage.getItem(CUSTOM_SECONDARY_KEY);
+      if (pc) setPrimaryColor(pc);
+      if (sc) setSecondaryColor(sc);
+    }
 
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -61,10 +97,10 @@ export default function App(props: ParentProps) {
     onCleanup(() => media.removeEventListener("change", updateScheme));
   });
 
-  const activeTheme = createMemo<ThemeKey>(() => {
-    const mode = themeMode();
-    return mode === "auto" ? deriveThemeFromPath(location.pathname) : mode;
-  });
+  const handleGlobalRandom = async () => {
+    const word = await fetchRandomWord();
+    if (word) navigate(`/entry/${encodeURIComponent(word)}`);
+  };
 
   const activeColorScheme = createMemo<"light" | "dark">(() => {
     const mode = colorSchemeMode();
@@ -72,69 +108,224 @@ export default function App(props: ParentProps) {
     return mode;
   });
 
-  const cycleTheme = () => {
-    const modes: ThemeMode[] = ["auto", ...THEME_KEYS];
-    const currentIndex = modes.indexOf(themeMode());
-    const next = modes[(currentIndex + 1) % modes.length];
-    setThemeMode(next);
-    if (typeof localStorage !== "undefined") localStorage.setItem(THEME_MODE_KEY, next);
+  const generateCustomStyles = () => {
+    if (themeMode() !== "custom") return "";
+    return `
+      [data-theme="custom"] {
+        --accent: ${primaryColor()};
+        --accent-strong: color-mix(in srgb, ${primaryColor()} 85%, black);
+        --accent-soft: color-mix(in srgb, ${primaryColor()} 15%, transparent);
+        
+        --ink: color-mix(in srgb, ${secondaryColor()} 15%, #0f172a);
+        --bg: color-mix(in srgb, ${secondaryColor()} 5%, white);
+        --page: #ffffff;
+        --panel: #ffffff;
+        --line: color-mix(in srgb, ${secondaryColor()} 15%, #e2e8f0);
+        --line-strong: color-mix(in srgb, ${secondaryColor()} 20%, #cbd5e1);
+        --muted: color-mix(in srgb, ${secondaryColor()} 40%, #44546b);
+        --glass-bg: rgba(255, 255, 255, 0.85);
+      }
+      [data-scheme="dark"][data-theme="custom"] {
+        --accent: color-mix(in srgb, ${primaryColor()} 85%, white);
+        --accent-strong: ${primaryColor()};
+        --accent-soft: color-mix(in srgb, ${primaryColor()} 25%, transparent);
+        
+        --ink: color-mix(in srgb, ${secondaryColor()} 5%, #f8fafc);
+        --bg: color-mix(in srgb, ${secondaryColor()} 10%, black);
+        --page: color-mix(in srgb, ${secondaryColor()} 15%, black);
+        --panel: color-mix(in srgb, ${secondaryColor()} 20%, black);
+        --line: color-mix(in srgb, ${secondaryColor()} 25%, #374151);
+        --line-strong: color-mix(in srgb, ${secondaryColor()} 25%, #4b5563);
+        --muted: color-mix(in srgb, ${secondaryColor()} 40%, #c0c8d4);
+        --glass-bg: color-mix(in srgb, color-mix(in srgb, ${secondaryColor()} 15%, black) 85%, transparent);
+      }
+    `;
   };
 
-  const themeLabel = createMemo(() => {
-    const mode = themeMode();
-    return mode === "auto" ? `Auto · ${titleCase(activeTheme())}` : titleCase(mode);
-  });
-
-  const cycleColorScheme = () => {
-    const modes: ColorSchemeMode[] = ["system", "light", "dark"];
-    const currentIndex = modes.indexOf(colorSchemeMode());
-    const next = modes[(currentIndex + 1) % modes.length];
-    setColorSchemeMode(next);
-    if (typeof localStorage !== "undefined") localStorage.setItem(COLOR_SCHEME_KEY, next);
+  const handlePrimaryChange = (e: Event) => {
+    const next = (e.target as HTMLInputElement).value;
+    setPrimaryColor(next);
+    localStorage.setItem(CUSTOM_PRIMARY_KEY, next);
   };
-
-  const colorSchemeLabel = createMemo(() => {
-    const mode = colorSchemeMode();
-    if (mode === "system") return `System · ${titleCase(activeColorScheme())}`;
-    return titleCase(mode);
-  });
-
-  const cycleWidth = () => {
-    const currentIndex = WIDTH_MODES.indexOf(widthMode());
-    const next = WIDTH_MODES[(currentIndex + 1) % WIDTH_MODES.length];
-    setWidthMode(next);
-    if (typeof localStorage !== "undefined") localStorage.setItem(WIDTH_MODE_KEY, next);
+  const handleSecondaryChange = (e: Event) => {
+    const next = (e.target as HTMLInputElement).value;
+    setSecondaryColor(next);
+    localStorage.setItem(CUSTOM_SECONDARY_KEY, next);
   };
-
-  const widthLabel = createMemo(() => titleCase(widthMode()));
 
   return (
-    <div class="app-shell" data-theme={activeTheme()} data-scheme={activeColorScheme()} data-width={widthMode()}>
+    <div class="app-shell" data-theme={themeMode()} data-scheme={activeColorScheme()} data-width={widthMode()}>
+      <style>{generateCustomStyles()}</style>
       <header class="site-header">
-        <div class="header-container">
-          <A class="wordmark" href="/">
+        <div classList={{ "header-container": true, "mobile-search-active": isMobileSearchOpen() }}>
+          <A class="wordmark" href="/" title="Home" aria-label="Home">
             <span>dict</span>
             <small>en.wiktionary</small>
           </A>
+
+          <div class="header-search-wrapper">
+            <SearchCard compact onCommit={(value) => { setIsMobileSearchOpen(false); navigate(`/entry/${encodeURIComponent(value)}`); }} />
+          </div>
+
           <div class="header-controls">
-            <button class="theme-toggle" type="button" onClick={cycleWidth}>
-              Width: {widthLabel()}
+            <button class="icon-button mobile-control-btn" type="button" aria-label="Random entry" title="Random entry" onClick={handleGlobalRandom}>
+              <ShuffleIcon />
             </button>
-            <button class="theme-toggle" type="button" onClick={cycleColorScheme}>
-              Appearance: {colorSchemeLabel()}
+            <button class="icon-button mobile-control-btn themed-search-icon" type="button" onClick={() => setIsMobileSearchOpen(true)} aria-label="Search">
+              <SearchIcon />
             </button>
-            <button class="theme-toggle" type="button" onClick={cycleTheme}>
-              Palette: {themeLabel()}
+            <button class="icon-button close-search-inline" type="button" onClick={() => setIsMobileSearchOpen(false)} aria-label="Close search">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+            <button class="icon-button settings-btn" type="button" onClick={() => setIsSettingsOpen(true)} title="Settings" aria-label="Settings">
+              <SettingsIcon />
             </button>
           </div>
         </div>
       </header>
+
+      <Show when={isSettingsOpen()}>
+        <div class="settings-overlay-backdrop" onClick={() => setIsSettingsOpen(false)}></div>
+        <dialog class="settings-dialog" data-theme={themeMode()} data-scheme={activeColorScheme()} open>
+          <div class="settings-dialog-header">
+            <h2>Settings</h2>
+            <button class="icon-button" type="button" onClick={() => setIsSettingsOpen(false)}>×</button>
+          </div>
+          <div class="settings-dialog-content">
+            <div class="setting-group">
+              <span class="setting-label">Theme Palette</span>
+              <div class="chip-row">
+                <For each={[
+                  { id: "linen", label: "Linen" },
+                  { id: "reef", label: "Reef" },
+                  { id: "ember", label: "Ember" },
+                  { id: "graphite", label: "Graphite" },
+                  { id: "custom", label: "Custom" },
+                ]}>
+                  {(opt) => (
+                    <button classList={{ "chip-button": true, active: themeMode() === opt.id }} type="button" onClick={() => {
+                      setThemeMode(opt.id as ThemeMode);
+                      localStorage.setItem(THEME_MODE_KEY, opt.id);
+                    }}>{opt.label}</button>
+                  )}
+                </For>
+              </div>
+            </div>
+
+            <Show when={themeMode() === "custom"}>
+              <div class="color-pickers">
+                <label class="picker-box">
+                  <span>Primary</span>
+                  <input type="color" value={primaryColor()} onChange={handlePrimaryChange} />
+                </label>
+                <label class="picker-box">
+                  <span>Secondary</span>
+                  <input type="color" value={secondaryColor()} onChange={handleSecondaryChange} />
+                </label>
+              </div>
+            </Show>
+
+            <div class="setting-group">
+              <span class="setting-label">Appearance</span>
+              <div class="segmented-control">
+                <For each={[
+                  { id: "system", label: "System" },
+                  { id: "light", label: "Light" },
+                  { id: "dark", label: "Dark" },
+                ]}>
+                  {(opt) => (
+                    <button classList={{ "segment-button": true, active: colorSchemeMode() === opt.id }} type="button" onClick={() => {
+                      setColorSchemeMode(opt.id as ColorSchemeMode);
+                      localStorage.setItem(COLOR_SCHEME_KEY, opt.id);
+                    }}>{opt.label}</button>
+                  )}
+                </For>
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <span class="setting-label">Layout Width</span>
+              <div class="segmented-control">
+                <For each={[
+                  { id: "narrow", label: "Narrow" },
+                  { id: "standard", label: "Standard" },
+                  { id: "wide", label: "Wide" },
+                ]}>
+                  {(opt) => (
+                    <button classList={{ "segment-button": true, active: widthMode() === opt.id }} type="button" onClick={() => {
+                      setWidthMode(opt.id as WidthMode);
+                      localStorage.setItem(WIDTH_MODE_KEY, opt.id);
+                    }}>{opt.label}</button>
+                  )}
+                </For>
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <span class="setting-label">History Retention</span>
+              <div class="segmented-control">
+                <For each={[
+                  { id: "1000", label: "1K" },
+                  { id: "5000", label: "5K" },
+                  { id: "10000", label: "10K" },
+                  { id: "infinite", label: "Infinite" },
+                ]}>
+                  {(opt) => (
+                    <button classList={{ "segment-button": true, active: histLimit() === opt.id }} type="button" onClick={() => {
+                      setHistLimit(opt.id as HistLimit);
+                      localStorage.setItem(HIST_LIMIT_KEY, opt.id);
+                    }}>{opt.label}</button>
+                  )}
+                </For>
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <span class="setting-label">List View Mode (History)</span>
+              <div class="segmented-control">
+                <For each={[
+                  { id: "infinite", label: "Infinite Scroll" },
+                  { id: "paginated", label: "Paginated (50)" },
+                ]}>
+                  {(opt) => (
+                    <button classList={{ "segment-button": true, active: viewMode() === opt.id }} type="button" onClick={() => {
+                      setViewMode(opt.id as ViewMode);
+                      localStorage.setItem(VIEW_MODE_KEY, opt.id);
+                    }}>{opt.label}</button>
+                  )}
+                </For>
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <span class="setting-label">Show Source Copy Button</span>
+              <div class="segmented-control">
+                <For each={[
+                  { id: "false", label: "Hidden" },
+                  { id: "true", label: "Visible" },
+                ]}>
+                  {(opt) => (
+                    <button classList={{ "segment-button": true, active: showCopyBtn() === opt.id }} type="button" onClick={() => {
+                      setShowCopyBtn(opt.id as ShowCopyBtnMode);
+                      localStorage.setItem(SHOW_COPY_BTN_KEY, opt.id);
+                    }}>{opt.label}</button>
+                  )}
+                </For>
+              </div>
+            </div>
+          </div>
+        </dialog>
+      </Show>
+
       <div class="page-frame">{props.children}</div>
     </div>
   );
 }
 
-export { EntryPage, HomePage };
+export { EntryPage, HomePage, HistoryPage, BookmarksPage };
 
 function HomePage() {
   const navigate = useNavigate();
@@ -144,8 +335,8 @@ function HomePage() {
   const statsError = createMemo(() => resourceErrorMessage(stats.error, "Failed to load dictionary stats."));
 
   onMount(() => {
-    setRecents(loadList(RECENTS_KEY));
-    setFavorites(loadList(FAVORITES_KEY));
+    loadListDb(RECENTS_KEY).then(setRecents);
+    loadListDb(FAVORITES_KEY).then(setFavorites);
   });
 
   return (
@@ -153,7 +344,6 @@ function HomePage() {
       <section class="masthead">
         <div class="eyebrow">English Wiktionary</div>
         <h1>Dictionary</h1>
-        <SearchCard onCommit={(value) => navigate(`/entry/${encodeURIComponent(value)}`)} />
       </section>
 
       <section class="stats-strip" aria-label="Dictionary stats">
@@ -171,57 +361,237 @@ function HomePage() {
 
       <section class="home-columns">
         <LedgerSection
-          title="Recent"
+          title="Recent Lookup History"
           empty="No recent lookups yet."
-          values={recents()}
+          values={recents().slice(0, 15)}
           onSelect={(value) => navigate(`/entry/${encodeURIComponent(value)}`)}
+          footer={<A href="/history" class="list-link view-all-link">View all history →</A>}
         />
         <LedgerSection
-          title="Saved"
+          title="Saved Words"
           empty="No saved words yet."
-          values={favorites()}
+          values={favorites().slice(0, 15)}
           onSelect={(value) => navigate(`/entry/${encodeURIComponent(value)}`)}
+          footer={<A href="/bookmarks" class="list-link view-all-link">View all bookmarks →</A>}
         />
       </section>
     </main>
   );
 }
 
-function EntryPage() {
+function HistoryPage() {
   const navigate = useNavigate();
+  const [history, setHistory] = createSignal<string[]>([]);
+  const [page, setPage] = createSignal(0);
+
+  onMount(() => {
+    loadListDb(RECENTS_KEY).then(setHistory);
+  });
+
+  const clearAll = async () => {
+    if (!confirm("Are you sure you want to clear your entire history?")) return;
+    await saveListDb(RECENTS_KEY, []);
+    setHistory([]);
+  };
+
+  const removeEntry = async (word: string) => {
+    const next = history().filter(item => item !== word);
+    await saveListDb(RECENTS_KEY, next);
+    setHistory(next);
+  };
+
+  const viewMode = readStored(VIEW_MODE_KEY, ["infinite", "paginated"]) ?? "infinite";
+  const itemsPerPage = 50;
+
+  const currentList = createMemo(() => {
+    if (viewMode === "infinite") return history();
+    const start = page() * itemsPerPage;
+    return history().slice(start, start + itemsPerPage);
+  });
+
+  return (
+    <main class="page list-page">
+      <header class="page-header list-header">
+        <h1>Your History</h1>
+        <Show when={history().length > 0}>
+          <button class="list-link view-all-link clear-button" type="button" onClick={clearAll}>Clear All</button>
+        </Show>
+      </header>
+      <section class="list-section">
+        <Show when={history().length > 0} fallback={<div class="strip-muted">No history stored.</div>}>
+          <Show when={viewMode === "paginated"}>
+            <div class="detailed-list">
+              <For each={currentList()}>
+                {(item) => (
+                  <div class="list-item-row">
+                    <button class="list-link inline-link" type="button" onClick={() => navigate(`/entry/${encodeURIComponent(item)}`)}>{item}</button>
+                    <button class="icon-button delete-icon-button" type="button" aria-label="Delete" title="Delete entry" onClick={() => removeEntry(item)}>
+                      <TrashIcon />
+                    </button>
+                  </div>
+                )}
+              </For>
+            </div>
+            <div class="pagination-bar">
+              <button class="icon-button" disabled={page() === 0} onClick={() => setPage(p => p - 1)}>Prev</button>
+              <span class="page-indicator">Page {page() + 1} of {Math.ceil(history().length / itemsPerPage)}</span>
+              <button class="icon-button" disabled={(page() + 1) * itemsPerPage >= history().length} onClick={() => setPage(p => p + 1)}>Next</button>
+            </div>
+          </Show>
+
+          <Show when={viewMode === "infinite"}>
+            <VirtualListView items={history()} onRemove={removeEntry} onNavigate={(w) => navigate(`/entry/${encodeURIComponent(w)}`)} />
+          </Show>
+        </Show>
+      </section>
+    </main>
+  );
+}
+
+function BookmarksPage() {
+  const navigate = useNavigate();
+  const [favorites, setFavorites] = createSignal<string[]>([]);
+  const [page, setPage] = createSignal(0);
+
+  onMount(() => {
+    loadListDb(FAVORITES_KEY).then(setFavorites);
+  });
+
+  const clearAll = async () => {
+    if (!confirm("Are you sure you want to completely clear your bookmarks?")) return;
+    await saveListDb(FAVORITES_KEY, []);
+    setFavorites([]);
+  };
+
+  const removeEntry = async (word: string) => {
+    const next = favorites().filter(item => item !== word);
+    await saveListDb(FAVORITES_KEY, next);
+    setFavorites(next);
+  };
+
+  const viewMode = readStored(VIEW_MODE_KEY, ["infinite", "paginated"]) ?? "infinite";
+  const itemsPerPage = 50;
+
+  const currentList = createMemo(() => {
+    if (viewMode === "infinite") return favorites();
+    const start = page() * itemsPerPage;
+    return favorites().slice(start, start + itemsPerPage);
+  });
+
+  return (
+    <main class="page list-page">
+      <header class="page-header list-header">
+        <h1>Bookmarks</h1>
+        <Show when={favorites().length > 0}>
+          <button class="list-link view-all-link clear-button" type="button" onClick={clearAll}>Clear All</button>
+        </Show>
+      </header>
+      <section class="list-section">
+        <Show when={favorites().length > 0} fallback={<div class="strip-muted">No bookmarks saved yet.</div>}>
+          <Show when={viewMode === "paginated"}>
+            <div class="detailed-list">
+              <For each={currentList()}>
+                {(item) => (
+                  <div class="list-item-row">
+                    <button class="list-link inline-link" type="button" onClick={() => navigate(`/entry/${encodeURIComponent(item)}`)}>{item}</button>
+                    <button class="icon-button delete-icon-button" type="button" aria-label="Delete" title="Remove bookmark" onClick={() => removeEntry(item)}>
+                      <TrashIcon />
+                    </button>
+                  </div>
+                )}
+              </For>
+            </div>
+            <div class="pagination-bar">
+              <button class="icon-button" disabled={page() === 0} onClick={() => setPage(p => p - 1)}>Prev</button>
+              <span class="page-indicator">Page {page() + 1} of {Math.ceil(favorites().length / itemsPerPage)}</span>
+              <button class="icon-button" disabled={(page() + 1) * itemsPerPage >= favorites().length} onClick={() => setPage(p => p + 1)}>Next</button>
+            </div>
+          </Show>
+
+          <Show when={viewMode === "infinite"}>
+            <VirtualListView items={favorites()} onRemove={removeEntry} onNavigate={(w) => navigate(`/entry/${encodeURIComponent(w)}`)} />
+          </Show>
+        </Show>
+      </section>
+    </main>
+  );
+}
+
+function VirtualListView(props: { items: string[]; onRemove: (word: string) => void; onNavigate: (word: string) => void }) {
+  let listRef!: HTMLDivElement;
+
+  const virtualizer = createVirtualizer({
+    get count() { return props.items.length; },
+    getScrollElement: () => document.documentElement,
+    estimateSize: () => 40,
+    overscan: 10,
+  });
+
+  return (
+    <div
+      ref={listRef}
+      style={{
+        height: `${virtualizer.getTotalSize()}px`,
+        width: "100%",
+        position: "relative",
+      }}
+    >
+      <For each={virtualizer.getVirtualItems()}>
+        {(virtualItem) => {
+          const item = props.items[virtualItem.index];
+          return (
+            <div
+              class="list-item-row virtual-row"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${virtualItem.start}px)`,
+              }}
+            >
+              <button class="list-link inline-link" type="button" onClick={() => props.onNavigate(item)}>{item}</button>
+              <button class="icon-button delete-icon-button" type="button" onClick={() => props.onRemove(item)}>
+                <TrashIcon />
+              </button>
+            </div>
+          );
+        }}
+      </For>
+    </div>
+  );
+}
+
+function EntryPage() {
   const params = useParams();
   const term = createMemo(() => decodeURIComponent(params.term ?? ""));
   const [hits] = createResource(term, fetchLookup);
   const [favorites, setFavorites] = createSignal<string[]>([]);
   const hitsError = createMemo(() => resourceErrorMessage(hits.error, `Failed to load “${term()}”.`));
 
-  onMount(() => setFavorites(loadList(FAVORITES_KEY)));
+  onMount(() => {
+    loadListDb(FAVORITES_KEY).then(setFavorites);
+  });
 
   const primaryWord = createMemo(() => hits()?.[0]?.entry.word ?? term());
 
-  const toggleFavorite = () => {
-    const current = loadList(FAVORITES_KEY);
+  const getLimitInt = () => {
+    const val = readStored(HIST_LIMIT_KEY, ["1000", "5000", "10000", "infinite"]) ?? "10000";
+    return val === "infinite" ? Infinity : parseInt(val);
+  };
+
+  const toggleFavorite = async () => {
+    const current = await loadListDb(FAVORITES_KEY);
     const next = current.includes(primaryWord())
       ? current.filter((item) => item !== primaryWord())
       : [primaryWord(), ...current.filter((item) => item !== primaryWord())];
-    const capped = next.slice(0, 12);
-    saveList(FAVORITES_KEY, capped);
+    const capped = next.slice(0, getLimitInt());
+    await saveListDb(FAVORITES_KEY, capped);
     setFavorites(capped);
   };
 
   return (
     <main class="page entry-page">
-      <section class="entry-searchbar">
-        <A class="back-link" href="/">
-          Index
-        </A>
-        <SearchCard
-          compact
-          initialValue={term()}
-          onCommit={(value) => navigate(`/entry/${encodeURIComponent(value)}`)}
-        />
-      </section>
-
       <Show
         when={hits()}
         fallback={
@@ -268,8 +638,13 @@ function EntryArticle(props: { hit: ApiLookupHit; primaryWord?: string }) {
   const renderedSections = createMemo(() => props.hit.entry.renderedSections ?? []);
 
   onMount(() => {
-    const current = loadList(RECENTS_KEY).filter((item) => item !== props.hit.entry.word);
-    saveList(RECENTS_KEY, [props.hit.entry.word, ...current].slice(0, 8));
+    loadListDb(RECENTS_KEY).then((current) => {
+      const val = readStored(HIST_LIMIT_KEY, ["1000", "5000", "10000", "infinite"]) ?? "10000";
+      const limit = val === "infinite" ? Infinity : parseInt(val);
+      const next = current.filter((item) => item !== props.hit.entry.word);
+      const capped = limit === Infinity ? [props.hit.entry.word, ...next] : [props.hit.entry.word, ...next].slice(0, limit);
+      saveListDb(RECENTS_KEY, capped);
+    });
   });
 
   const copyRaw = async () => {
@@ -277,48 +652,57 @@ function EntryArticle(props: { hit: ApiLookupHit; primaryWord?: string }) {
     await navigator.clipboard.writeText(props.hit.entry.raw);
   };
 
+  const showWordTitle = createMemo(() => props.hit.entry.word !== props.primaryWord);
+  const showHeadArea = createMemo(() => showWordTitle() || matchIsAlias() || props.hit.entry.aliasOnly || (props.hit.entry.raw && showCopyBtn() === "true"));
+
   return (
     <article class="entry-record">
-      <div class="article-head">
-        <div>
-          <Show when={props.hit.entry.word !== props.primaryWord}>
-            <h2>{props.hit.entry.word}</h2>
-          </Show>
-          <Show when={matchIsAlias()}>
-            <p class="article-note">
-              Matched through <strong>{props.hit.matched}</strong> as an{" "}
-              {props.hit.kind === "alternative_form" ? "alternative spelling" : "exact title"}.
-            </p>
-          </Show>
+      <Show when={showHeadArea()}>
+        <div class="article-head">
+          <div>
+            <Show when={showWordTitle()}>
+              <h2>{props.hit.entry.word}</h2>
+            </Show>
+            <Show when={matchIsAlias()}>
+              <p class="article-note">
+                Matched through <strong>{props.hit.matched}</strong> as an{" "}
+                {props.hit.kind === "alternative_form" ? "alternative spelling" : "exact title"}.
+              </p>
+            </Show>
+          </div>
+          <div class="article-actions">
+            <Show when={props.hit.entry.aliasOnly}>
+              <span class="alias-tag">Alias entry</span>
+            </Show>
+            <Show when={props.hit.entry.raw && showCopyBtn() === "true"}>
+              <button class="icon-button" type="button" aria-label="Copy source" title="Copy source" onClick={copyRaw}>
+                <CopyIcon />
+              </button>
+            </Show>
+          </div>
         </div>
-        <div class="article-actions">
-          <Show when={props.hit.entry.aliasOnly}>
-            <span class="alias-tag">Alias entry</span>
-          </Show>
-          <button class="icon-button" type="button" aria-label="Copy source" title="Copy source" onClick={copyRaw}>
-            <CopyIcon />
-          </button>
-        </div>
-      </div>
-
-      <Show when={props.hit.entry.summary}>
-        <p class="summary-line">{props.hit.entry.summary}</p>
       </Show>
 
-      <div class="meta-rail">
-        <MetaLine title="Canonical" values={props.hit.entry.canonicalTargets} />
-        <MetaLine title="Alternatives" values={props.hit.entry.altForms} />
-        <MetaLine title="Incoming" values={props.hit.entry.incomingAliases} />
-      </div>
+      <Show when={props.hit.entry.canonicalTargets.length > 0 || props.hit.entry.altForms.length > 0 || props.hit.entry.incomingAliases.length > 0}>
+        <div class="meta-rail">
+          <MetaLine title="Canonical" values={props.hit.entry.canonicalTargets} />
+          <MetaLine title="Alternatives" values={props.hit.entry.altForms} />
+          <MetaLine title="Incoming" values={props.hit.entry.incomingAliases} />
+        </div>
+      </Show>
 
       <Show
         when={renderedSections().length > 0}
-        fallback={<div class="state-line narrow">This entry is stored without a rendered English section.</div>}
+        fallback={
+          <Show when={props.hit.entry.raw && !props.hit.entry.aliasOnly}>
+            <div class="state-line narrow">This entry is stored without a rendered English section.</div>
+          </Show>
+        }
       >
         <div class="render-stack">
           <For each={renderedSections()}>
             {(block) => (
-              <section class="render-section" id={block.id}>
+              <section class="render-section" id={block.id} data-family={getHeadingFamily(block.title)}>
                 <Show when={block.title && block.title !== props.primaryWord}>
                   <div class="render-heading">
                     <Dynamic component={headingTag(block.level)}>{block.title}</Dynamic>
@@ -338,14 +722,22 @@ function SearchCard(props: {
   onCommit: (value: string) => void;
   initialValue?: string;
   compact?: boolean;
+  autoFocus?: boolean;
 }) {
   const navigate = useNavigate();
   const [query, setQuery] = createSignal(props.initialValue ?? "");
   const [open, setOpen] = createSignal(false);
   const [activeIndex, setActiveIndex] = createSignal(0);
+  let inputRef: HTMLInputElement | undefined;
 
   createEffect(() => {
     setQuery(props.initialValue ?? "");
+  });
+
+  onMount(() => {
+    if (props.autoFocus && inputRef) {
+      inputRef.focus();
+    }
   });
 
   const deferred = createDeferred(query);
@@ -359,6 +751,7 @@ function SearchCard(props: {
     if (!next) return;
     props.onCommit(next);
     setOpen(false);
+    (document.activeElement as HTMLElement)?.blur();
   };
 
   const handleRandom = async () => {
@@ -371,9 +764,10 @@ function SearchCard(props: {
     <div classList={{ "search-shell": true, compact: props.compact === true }}>
       <div class="search-row">
         <input
+          ref={inputRef}
           class="search-input"
           value={query()}
-          placeholder="Search a word or alternate spelling"
+          placeholder="Search Wiktionary"
           onInput={(event) => {
             setQuery(event.currentTarget.value);
             setOpen(true);
@@ -403,9 +797,6 @@ function SearchCard(props: {
             }
           }}
         />
-        <button class="search-action solid icon-button" type="button" aria-label="Search" title="Search" onClick={() => handleCommit(query())}>
-          <SearchIcon />
-        </button>
         <button class="search-action icon-button" type="button" aria-label="Random entry" title="Random entry" onClick={handleRandom}>
           <ShuffleIcon />
         </button>
@@ -426,14 +817,11 @@ function SearchCard(props: {
                 <div class="suggestion-head">
                   <span>{suggestion.matched}</span>
                   <span class="suggestion-kind">
-                    {suggestion.kind === "alternative_form" ? "alternate spelling" : "title"}
+                    {suggestion.kind === "alternative_form" ? "alternate" : "title"}
                   </span>
                 </div>
                 <div class="suggestion-summary">
                   <strong>{suggestion.word}</strong>
-                  <Show when={suggestion.summary}>
-                    <span>{suggestion.summary}</span>
-                  </Show>
                 </div>
               </button>
             )}
@@ -475,41 +863,56 @@ function headingTag(level: number) {
 
 function SearchIcon() {
   return (
-    <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8">
-      <circle cx="8.5" cy="8.5" r="4.75" />
-      <path d="M12 12l4.25 4.25" stroke-linecap="round" />
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
     </svg>
   );
 }
 
 function ShuffleIcon() {
   return (
-    <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8">
-      <path d="M3 5.5h3.2c1.2 0 2.3.5 3.1 1.3l4.4 5a4 4 0 003 1.4H17" stroke-linecap="round" />
-      <path d="M14 4l3 1.5-3 1.5" stroke-linecap="round" stroke-linejoin="round" />
-      <path d="M3 14.5h3.2c1.2 0 2.3-.5 3.1-1.3l4.4-5a4 4 0 013-1.4H17" stroke-linecap="round" />
-      <path d="M14 13l3 1.5-3 1.5" stroke-linecap="round" stroke-linejoin="round" />
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="16 3 21 3 21 8" />
+      <line x1="4" y1="20" x2="21" y2="3" />
+      <polyline points="21 16 21 21 16 21" />
+      <line x1="15" y1="15" x2="21" y2="21" />
+      <line x1="4" y1="4" x2="9" y2="9" />
     </svg>
   );
 }
 
 function CopyIcon() {
   return (
-    <svg viewBox="0 0 20 20" aria-hidden="true">
-      <path d="M6 2h9a2 2 0 012 2v10h-2V4H6V2zm-3 4h9a2 2 0 012 2v10H5a2 2 0 01-2-2V6zm2 2v8h7V8H5z" />
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </svg>
   );
 }
 
 function BookmarkIcon(props: { filled: boolean }) {
   return (
-    <svg viewBox="0 0 20 20" aria-hidden="true">
-      <path
-        d="M5 2h10v16l-5-3.2L5 18V2z"
-        fill={props.filled ? "currentColor" : "none"}
-        stroke="currentColor"
-        stroke-width="1.6"
-      />
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill={props.filled ? "currentColor" : "none"} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="3 6 5 6 21 6"></polyline>
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   );
 }
@@ -519,6 +922,7 @@ function LedgerSection(props: {
   values: string[];
   empty: string;
   onSelect: (value: string) => void;
+  footer?: import("solid-js").JSX.Element;
 }) {
   return (
     <section class="plain-section">
@@ -533,6 +937,7 @@ function LedgerSection(props: {
             )}
           </For>
         </div>
+        <Show when={props.footer}><div class="ledger-footer">{props.footer}</div></Show>
       </Show>
     </section>
   );
@@ -551,21 +956,25 @@ function MetaLine(props: { title: string; values: string[] }) {
   );
 }
 
-function loadList(key: string): string[] {
-  if (typeof localStorage === "undefined") return [];
-  const raw = localStorage.getItem(key);
-  if (!raw) return [];
+async function loadListDb(key: string): Promise<string[]> {
   try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    const data = await get(key);
+    return Array.isArray(data) ? data : [];
   } catch {
     return [];
   }
 }
 
-function saveList(key: string, values: string[]) {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(key, JSON.stringify(values));
+async function saveListDb(key: string, values: string[]) {
+  try {
+    await set(key, values);
+  } catch { }
+}
+
+function readStored(key: string, expectedKeys: string[]): string | null {
+  if (typeof localStorage === "undefined") return null;
+  const stored = localStorage.getItem(key);
+  return stored && expectedKeys.includes(stored) ? stored : null;
 }
 
 function resourceErrorMessage(error: unknown, fallback: string): string | null {
@@ -579,33 +988,55 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value);
 }
 
-function readStoredThemeMode(): ThemeMode | null {
-  if (typeof localStorage === "undefined") return null;
-  const stored = localStorage.getItem(THEME_MODE_KEY);
-  if (stored === "auto") return "auto";
-  return THEME_KEYS.includes(stored as ThemeKey) ? (stored as ThemeKey) : null;
-}
-
-function readStoredColorScheme(): ColorSchemeMode | null {
-  if (typeof localStorage === "undefined") return null;
-  const stored = localStorage.getItem(COLOR_SCHEME_KEY);
-  return stored === "system" || stored === "light" || stored === "dark" ? stored : null;
-}
-
-function readStoredWidthMode(): WidthMode | null {
-  if (typeof localStorage === "undefined") return null;
-  const stored = localStorage.getItem(WIDTH_MODE_KEY);
-  return WIDTH_MODES.includes(stored as WidthMode) ? (stored as WidthMode) : null;
-}
-
-function deriveThemeFromPath(pathname: string): ThemeKey {
-  const termMatch = pathname.match(/^\/entry\/(.+)$/);
-  const seed = termMatch ? decodeURIComponent(termMatch[1]) : pathname;
-  let hash = 0;
-  for (const char of seed) hash = (hash * 33 + char.charCodeAt(0)) >>> 0;
-  return THEME_KEYS[hash % THEME_KEYS.length] ?? "linen";
-}
-
 function titleCase(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function getHeadingFamily(title: string): string {
+  const t = title.toLowerCase();
+  switch (t) {
+    case "noun":
+    case "verb":
+    case "adjective":
+    case "adverb":
+    case "pronoun":
+    case "preposition":
+    case "conjunction":
+    case "interjection":
+    case "proper noun":
+    case "article":
+    case "prepositional phrase":
+    case "particle":
+    case "determiner":
+    case "numeral":
+    case "participle":
+      return "part-of-speech";
+    case "etymology":
+      return "etymology";
+    case "pronunciation":
+      return "pronunciation";
+    case "translations":
+      return "translations";
+    case "derived terms":
+    case "related terms":
+    case "synonyms":
+    case "antonyms":
+    case "hypernyms":
+    case "hyponyms":
+    case "coordinate terms":
+      return "relations";
+    case "alternative forms":
+      return "alternative-forms";
+    case "anagrams":
+    case "see also":
+      return "navigation";
+    case "references":
+    case "further reading":
+    case "notes":
+      return "citations";
+    case "english":
+      return "language-root";
+    default:
+      return "unknown";
+  }
 }
