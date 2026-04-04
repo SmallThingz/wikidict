@@ -8,8 +8,8 @@ const section_encoding = encoder.section_encoding;
 const normalize = @import("normalize.zig");
 const wikitext = encoder.wikitext;
 
-const cache_magic = "DCTIDX03";
-const cache_version: u32 = 3;
+const cache_magic = "DCTIDX04";
+const cache_version: u32 = 4;
 const cache_alignment: u32 = 8;
 
 const StringRef = extern struct {
@@ -24,19 +24,8 @@ const Range = extern struct {
 
 const CachedEntry = extern struct {
     word: StringRef,
-    normalized: StringRef,
-    summary: StringRef,
-    alt_forms: Range,
-    canonical_targets: Range,
-    // Reverse edges: entries that redirect or alias to this entry.
     incoming_aliases: Range,
-    // Bitset of `format.record_flag_*`.
-    flags: u8,
-    reserved0: [7]u8 = [_]u8{0} ** 7,
-    // Byte range of the structured raw English section in the dictionary file.
-    raw_offset: u64,
-    raw_len: u32,
-    reserved1: u32 = 0,
+    record_offset: u32,
 };
 
 const CachedLookup = extern struct {
@@ -53,11 +42,11 @@ const CacheHeader = extern struct {
     header_size: u32,
     cache_key: u64,
     entry_count: u32,
-    list_count: u32,
+    incoming_alias_count: u32,
     lookup_count: u32,
     reserved0: u32 = 0,
     entries_offset: u32,
-    lists_offset: u32,
+    incoming_aliases_offset: u32,
     lookups_offset: u32,
     strings_offset: u32,
     strings_len: u32,
@@ -65,10 +54,10 @@ const CacheHeader = extern struct {
     fn init(
         cache_key: u64,
         entry_count: u32,
-        list_count: u32,
+        incoming_alias_count: u32,
         lookup_count: u32,
         entries_offset: u32,
-        lists_offset: u32,
+        incoming_aliases_offset: u32,
         lookups_offset: u32,
         strings_offset: u32,
         strings_len: u32,
@@ -79,10 +68,10 @@ const CacheHeader = extern struct {
             .header_size = cache_header_size,
             .cache_key = cache_key,
             .entry_count = entry_count,
-            .list_count = list_count,
+            .incoming_alias_count = incoming_alias_count,
             .lookup_count = lookup_count,
             .entries_offset = entries_offset,
-            .lists_offset = lists_offset,
+            .incoming_aliases_offset = incoming_aliases_offset,
             .lookups_offset = lookups_offset,
             .strings_offset = strings_offset,
             .strings_len = strings_len,
@@ -93,15 +82,12 @@ const CacheHeader = extern struct {
 const cache_header_size = std.mem.alignForward(u32, @sizeOf(CacheHeader), cache_alignment);
 
 const BuildEntryData = struct {
+    record_offset: u32,
     word: []const u8,
     normalized: []const u8,
     alt_forms: []const []const u8 = &.{},
     canonical_targets: []const []const u8 = &.{},
-    incoming_aliases: []const []const u8 = &.{},
-    summary: []const u8 = "",
-    flags: u8 = 0,
-    raw_offset: u64 = 0,
-    raw_len: u32 = 0,
+    incoming_aliases: []const u32 = &.{},
 };
 
 const BuildLookupRecord = struct {
@@ -118,13 +104,13 @@ const BuildPayload = struct {
 
 const CacheBuildData = struct {
     entries: []const CachedEntry,
-    lists: []const StringRef,
+    incoming_aliases: []const u32,
     lookups: []const CachedLookup,
     strings: []const u8,
 
     fn deinit(self: *CacheBuildData, allocator: std.mem.Allocator) void {
         allocator.free(self.entries);
-        allocator.free(self.lists);
+        allocator.free(self.incoming_aliases);
         allocator.free(self.lookups);
         allocator.free(self.strings);
     }
@@ -135,9 +121,30 @@ const OpenCache = struct {
     mapping: []align(std.heap.page_size_min) const u8,
     header: *const CacheHeader,
     entries: []const CachedEntry,
-    lists: []const StringRef,
+    incoming_aliases: []const u32,
     lookups: []const CachedLookup,
     strings: []const u8,
+};
+
+const EntryRecordView = struct {
+    flags: u8,
+    encoded_title: []const u8,
+    payload: []const u8,
+};
+
+pub const EntryDerivedData = struct {
+    summary: []const u8,
+    alt_forms: std.ArrayListUnmanaged([]const u8) = .empty,
+    canonical_targets: std.ArrayListUnmanaged([]const u8) = .empty,
+    alias_only: bool,
+
+    pub fn deinit(self: *EntryDerivedData, allocator: std.mem.Allocator) void {
+        allocator.free(self.summary);
+        for (self.alt_forms.items) |value| allocator.free(value);
+        self.alt_forms.deinit(allocator);
+        for (self.canonical_targets.items) |value| allocator.free(value);
+        self.canonical_targets.deinit(allocator);
+    }
 };
 
 const CacheBuildProgress = struct {
@@ -241,7 +248,7 @@ pub const TermListView = struct {
     }
 
     pub fn at(self: TermListView, index: usize) []const u8 {
-        return self.dict.listItem(self.range, index);
+        return self.dict.incomingAliasItem(self.range, index);
     }
 
     pub fn toOwnedSlice(self: TermListView, allocator: std.mem.Allocator) ![]const []const u8 {
@@ -263,42 +270,104 @@ pub const EntryView = struct {
         return self.dict.string(self.record().word);
     }
 
-    pub fn normalized(self: EntryView) []const u8 {
-        return self.dict.string(self.record().normalized);
-    }
-
-    pub fn altForms(self: EntryView) TermListView {
-        return .{ .dict = self.dict, .range = self.record().alt_forms };
-    }
-
-    pub fn canonicalTargets(self: EntryView) TermListView {
-        return .{ .dict = self.dict, .range = self.record().canonical_targets };
+    pub fn normalizedAlloc(self: EntryView, allocator: std.mem.Allocator) ![]const u8 {
+        return normalize.normalizeAlloc(allocator, self.word());
     }
 
     pub fn incomingAliases(self: EntryView) TermListView {
         return .{ .dict = self.dict, .range = self.record().incoming_aliases };
     }
 
-    pub fn summary(self: EntryView) []const u8 {
-        return self.dict.string(self.record().summary);
+    pub fn derivedAlloc(self: EntryView, allocator: std.mem.Allocator) !EntryDerivedData {
+        const entry_record = try self.dict.entryRecord(self.index);
+        if ((entry_record.flags & format.record_flag_has_raw) != 0) {
+            const raw = try section_encoding.decodeEnglishAlloc(allocator, entry_record.payload);
+            errdefer allocator.free(raw);
+
+            var metadata = try wikitext.extractEntryMetadata(allocator, self.word(), raw);
+            errdefer metadata.deinit(allocator);
+
+            const summary = try wikitext.extractSummaryAlloc(allocator, raw, 240);
+            allocator.free(raw);
+
+            return .{
+                .summary = summary,
+                .alt_forms = metadata.alt_forms,
+                .canonical_targets = metadata.canonical_targets,
+                .alias_only = metadata.alias_only,
+            };
+        }
+
+        const target = try compact.decodeAlloc(allocator, entry_record.payload);
+        errdefer allocator.free(target);
+
+        var canonical_targets: std.ArrayListUnmanaged([]const u8) = .empty;
+        errdefer {
+            for (canonical_targets.items) |value| allocator.free(value);
+            canonical_targets.deinit(allocator);
+        }
+        try canonical_targets.append(allocator, target);
+
+        return .{
+            .summary = try std.fmt.allocPrint(allocator, "Alias of {s}.", .{target}),
+            .canonical_targets = canonical_targets,
+            .alias_only = true,
+        };
     }
 
     pub fn hasRaw(self: EntryView) bool {
-        return (self.record().flags & format.record_flag_has_raw) != 0;
+        const offset = self.dict.entryRecordStart(self.index);
+        return (self.dict.mapping[offset] & format.record_flag_has_raw) != 0;
     }
 
-    pub fn isAliasOnly(self: EntryView) bool {
-        return (self.record().flags & format.record_flag_alias_only) != 0;
+    pub fn isAliasOnlyAlloc(self: EntryView, allocator: std.mem.Allocator) !bool {
+        if (!self.hasRaw()) return true;
+        var derived = try self.derivedAlloc(allocator);
+        defer derived.deinit(allocator);
+        return derived.alias_only;
+    }
+
+    pub fn summaryAlloc(self: EntryView, allocator: std.mem.Allocator) ![]const u8 {
+        var derived = try self.derivedAlloc(allocator);
+        defer {
+            derived.summary = "";
+            derived.deinit(allocator);
+        }
+        return derived.summary;
+    }
+
+    pub fn altFormsAlloc(self: EntryView, allocator: std.mem.Allocator) ![]const []const u8 {
+        var derived = try self.derivedAlloc(allocator);
+        defer {
+            allocator.free(derived.summary);
+            for (derived.canonical_targets.items) |value| allocator.free(value);
+            derived.canonical_targets.deinit(allocator);
+            derived.alt_forms.deinit(allocator);
+        }
+        const owned = try allocator.alloc([]const u8, derived.alt_forms.items.len);
+        @memcpy(owned, derived.alt_forms.items);
+        derived.alt_forms = .empty;
+        return owned;
+    }
+
+    pub fn canonicalTargetsAlloc(self: EntryView, allocator: std.mem.Allocator) ![]const []const u8 {
+        var derived = try self.derivedAlloc(allocator);
+        defer {
+            allocator.free(derived.summary);
+            for (derived.alt_forms.items) |value| allocator.free(value);
+            derived.alt_forms.deinit(allocator);
+            derived.canonical_targets.deinit(allocator);
+        }
+        const owned = try allocator.alloc([]const u8, derived.canonical_targets.items.len);
+        @memcpy(owned, derived.canonical_targets.items);
+        derived.canonical_targets = .empty;
+        return owned;
     }
 
     pub fn rawEnglishAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
-
-        const start = std.math.cast(usize, self.record().raw_offset) orelse return error.InvalidDictionaryFile;
-        const len = std.math.cast(usize, self.record().raw_len) orelse return error.InvalidDictionaryFile;
-        if (start > self.dict.mapping.len or len > self.dict.mapping.len - start) return error.InvalidDictionaryFile;
-
-        return try section_encoding.decodeEnglishAlloc(allocator, self.dict.mapping[start .. start + len]);
+        const entry_record = try self.dict.entryRecord(self.index);
+        return try section_encoding.decodeEnglishAlloc(allocator, entry_record.payload);
     }
 };
 
@@ -311,7 +380,7 @@ pub const Dictionary = struct {
     header: *const format.Header,
     cache_header: *const CacheHeader,
     entries: []const CachedEntry,
-    list_refs: []const StringRef,
+    incoming_aliases: []const u32,
     lookups: []const CachedLookup,
     strings: []const u8,
 
@@ -346,7 +415,7 @@ pub const Dictionary = struct {
             .header = header,
             .cache_header = cache.header,
             .entries = cache.entries,
-            .list_refs = cache.lists,
+            .incoming_aliases = cache.incoming_aliases,
             .lookups = cache.lookups,
             .strings = cache.strings,
         };
@@ -419,14 +488,35 @@ pub const Dictionary = struct {
         return self.strings[start .. start + len];
     }
 
-    fn list(self: *const Dictionary, range: Range) []const StringRef {
-        const start: usize = range.start;
-        const len: usize = range.len;
-        return self.list_refs[start .. start + len];
+    fn entryRecordStart(self: *const Dictionary, index: u32) usize {
+        return @as(usize, @intCast(self.header.records_offset)) + self.entries[index].record_offset;
     }
 
-    fn listItem(self: *const Dictionary, range: Range, index: usize) []const u8 {
-        return self.string(self.list(range)[index]);
+    fn entryRecord(self: *const Dictionary, index: u32) !EntryRecordView {
+        var cursor = self.entryRecordStart(index);
+        const records_end = std.math.cast(usize, self.header.records_offset + self.header.records_len) orelse return error.InvalidDictionaryFile;
+        if (cursor >= records_end) return error.InvalidDictionaryFile;
+
+        const flags = self.mapping[cursor];
+        cursor += 1;
+
+        const encoded_title = try readLengthPrefixedSlice(self.mapping, &cursor, records_end);
+        const payload = try readLengthPrefixedSlice(self.mapping, &cursor, records_end);
+        return .{
+            .flags = flags,
+            .encoded_title = encoded_title,
+            .payload = payload,
+        };
+    }
+
+    fn incomingAliasList(self: *const Dictionary, range: Range) []const u32 {
+        const start: usize = range.start;
+        const len: usize = range.len;
+        return self.incoming_aliases[start .. start + len];
+    }
+
+    fn incomingAliasItem(self: *const Dictionary, range: Range, index: usize) []const u8 {
+        return self.string(self.entries[self.incomingAliasList(range)[index]].word);
     }
 
     fn lookupKey(self: *const Dictionary, lookup: CachedLookup) []const u8 {
@@ -539,7 +629,7 @@ fn tryOpenCache(io: std.Io, cache_path: []const u8, expected_key: u64) !?OpenCac
         file.close(io);
         return null;
     };
-    const lists = viewArray(StringRef, mapped, header.lists_offset, header.list_count) catch {
+    const incoming_aliases = viewArray(u32, mapped, header.incoming_aliases_offset, header.incoming_alias_count) catch {
         std.posix.munmap(mapped);
         file.close(io);
         return null;
@@ -560,7 +650,7 @@ fn tryOpenCache(io: std.Io, cache_path: []const u8, expected_key: u64) !?OpenCac
         .mapping = mapped,
         .header = header,
         .entries = entries,
-        .lists = lists,
+        .incoming_aliases = incoming_aliases,
         .lookups = lookups,
         .strings = strings,
     };
@@ -614,29 +704,21 @@ fn materializeCacheData(allocator: std.mem.Allocator, payload: BuildPayload) !Ca
     defer entries.deinit(allocator);
     try entries.ensureTotalCapacity(allocator, payload.entries.len);
 
-    var lists: std.ArrayList(StringRef) = .empty;
-    defer lists.deinit(allocator);
-    var list_items: usize = 0;
+    var incoming_aliases: std.ArrayList(u32) = .empty;
+    defer incoming_aliases.deinit(allocator);
+    var incoming_alias_count: usize = 0;
     for (payload.entries) |entry| {
-        list_items += entry.alt_forms.len + entry.canonical_targets.len + entry.incoming_aliases.len;
+        incoming_alias_count += entry.incoming_aliases.len;
     }
-    try lists.ensureTotalCapacity(allocator, list_items);
+    try incoming_aliases.ensureTotalCapacity(allocator, incoming_alias_count);
 
     for (payload.entries) |entry| {
-        const alt_forms = try appendStringList(allocator, &interner, &lists, entry.alt_forms);
-        const canonical_targets = try appendStringList(allocator, &interner, &lists, entry.canonical_targets);
-        const incoming_aliases = try appendStringList(allocator, &interner, &lists, entry.incoming_aliases);
+        const incoming_range = try appendIncomingAliasList(allocator, &incoming_aliases, entry.incoming_aliases);
 
         try entries.append(allocator, .{
             .word = try interner.intern(entry.word),
-            .normalized = try interner.intern(entry.normalized),
-            .summary = try interner.intern(entry.summary),
-            .alt_forms = alt_forms,
-            .canonical_targets = canonical_targets,
-            .incoming_aliases = incoming_aliases,
-            .flags = entry.flags,
-            .raw_offset = entry.raw_offset,
-            .raw_len = entry.raw_len,
+            .incoming_aliases = incoming_range,
+            .record_offset = entry.record_offset,
         });
     }
 
@@ -655,22 +737,21 @@ fn materializeCacheData(allocator: std.mem.Allocator, payload: BuildPayload) !Ca
 
     return .{
         .entries = try entries.toOwnedSlice(allocator),
-        .lists = try lists.toOwnedSlice(allocator),
+        .incoming_aliases = try incoming_aliases.toOwnedSlice(allocator),
         .lookups = try lookups.toOwnedSlice(allocator),
         .strings = try interner.intoOwnedBlob(),
     };
 }
 
-fn appendStringList(
+fn appendIncomingAliasList(
     allocator: std.mem.Allocator,
-    interner: *StringInterner,
-    lists: *std.ArrayList(StringRef),
-    values: []const []const u8,
+    indices: *std.ArrayList(u32),
+    values: []const u32,
 ) !Range {
-    const start = lists.items.len;
-    try lists.ensureUnusedCapacity(allocator, values.len);
+    const start = indices.items.len;
+    try indices.ensureUnusedCapacity(allocator, values.len);
     for (values) |value| {
-        lists.appendAssumeCapacity(try interner.intern(value));
+        indices.appendAssumeCapacity(value);
     }
     return .{
         .start = std.math.cast(u32, start) orelse return error.StringListTooLarge,
@@ -681,9 +762,9 @@ fn appendStringList(
 fn writeCacheFile(allocator: std.mem.Allocator, io: std.Io, cache_path: []const u8, cache_key: u64, cache: CacheBuildData) !void {
     const entries_offset = std.mem.alignForward(u32, cache_header_size, @alignOf(CachedEntry));
     const entries_len = std.math.cast(u32, std.math.mul(usize, cache.entries.len, @sizeOf(CachedEntry)) catch return error.FileTooBig) orelse return error.FileTooBig;
-    const lists_offset = std.mem.alignForward(u32, entries_offset + entries_len, @alignOf(StringRef));
-    const lists_len = std.math.cast(u32, std.math.mul(usize, cache.lists.len, @sizeOf(StringRef)) catch return error.FileTooBig) orelse return error.FileTooBig;
-    const lookups_offset = std.mem.alignForward(u32, lists_offset + lists_len, @alignOf(CachedLookup));
+    const incoming_aliases_offset = std.mem.alignForward(u32, entries_offset + entries_len, @alignOf(u32));
+    const incoming_aliases_len = std.math.cast(u32, std.math.mul(usize, cache.incoming_aliases.len, @sizeOf(u32)) catch return error.FileTooBig) orelse return error.FileTooBig;
+    const lookups_offset = std.mem.alignForward(u32, incoming_aliases_offset + incoming_aliases_len, @alignOf(CachedLookup));
     const lookups_len = std.math.cast(u32, std.math.mul(usize, cache.lookups.len, @sizeOf(CachedLookup)) catch return error.FileTooBig) orelse return error.FileTooBig;
     const strings_offset = lookups_offset + lookups_len;
     const strings_len = std.math.cast(u32, cache.strings.len) orelse return error.FileTooBig;
@@ -691,10 +772,10 @@ fn writeCacheFile(allocator: std.mem.Allocator, io: std.Io, cache_path: []const 
     const header = CacheHeader.init(
         cache_key,
         std.math.cast(u32, cache.entries.len) orelse return error.FileTooBig,
-        std.math.cast(u32, cache.lists.len) orelse return error.FileTooBig,
+        std.math.cast(u32, cache.incoming_aliases.len) orelse return error.FileTooBig,
         std.math.cast(u32, cache.lookups.len) orelse return error.FileTooBig,
         entries_offset,
-        lists_offset,
+        incoming_aliases_offset,
         lookups_offset,
         strings_offset,
         strings_len,
@@ -711,9 +792,9 @@ fn writeCacheFile(allocator: std.mem.Allocator, io: std.Io, cache_path: []const 
     try file.writePositionalAll(io, std.mem.asBytes(&header), 0);
     try writePadding(io, file, @sizeOf(CacheHeader), entries_offset);
     if (cache.entries.len != 0) try file.writePositionalAll(io, std.mem.sliceAsBytes(cache.entries), entries_offset);
-    try writePadding(io, file, entries_offset + entries_len, lists_offset);
-    if (cache.lists.len != 0) try file.writePositionalAll(io, std.mem.sliceAsBytes(cache.lists), lists_offset);
-    try writePadding(io, file, lists_offset + lists_len, lookups_offset);
+    try writePadding(io, file, entries_offset + entries_len, incoming_aliases_offset);
+    if (cache.incoming_aliases.len != 0) try file.writePositionalAll(io, std.mem.sliceAsBytes(cache.incoming_aliases), incoming_aliases_offset);
+    try writePadding(io, file, incoming_aliases_offset + incoming_aliases_len, lookups_offset);
     if (cache.lookups.len != 0) try file.writePositionalAll(io, std.mem.sliceAsBytes(cache.lookups), lookups_offset);
     try writePadding(io, file, lookups_offset + lookups_len, strings_offset);
     if (cache.strings.len != 0) try file.writePositionalAll(io, cache.strings, strings_offset);
@@ -767,6 +848,7 @@ fn buildIndex(
     var cursor: usize = @intCast(header.records_offset);
     const records_end: usize = @intCast(header.records_offset + header.records_len);
     while (cursor < records_end) {
+        const record_offset = cursor - @as(usize, @intCast(header.records_offset));
         const flags = mapped[cursor];
         cursor += 1;
 
@@ -775,15 +857,12 @@ fn buildIndex(
         const title = try compact.decodeAlloc(arena_allocator, encoded_title);
         const normalized = try normalize.normalizeAlloc(arena_allocator, title);
         var entry = BuildEntryData{
+            .record_offset = std.math.cast(u32, record_offset) orelse return error.InvalidDictionaryFile,
             .word = title,
             .normalized = normalized,
-            .flags = flags,
         };
 
         if ((flags & format.record_flag_has_raw) != 0) {
-            entry.raw_offset = @intCast(@intFromPtr(payload.ptr) - @intFromPtr(mapped.ptr));
-            entry.raw_len = std.math.cast(u32, payload.len) orelse return error.InvalidDictionaryFile;
-
             const raw = try section_encoding.decodeEnglishAlloc(allocator, payload);
             defer allocator.free(raw);
 
@@ -795,16 +874,11 @@ fn buildIndex(
 
             entry.canonical_targets = metadata.canonical_targets.items;
             metadata.canonical_targets = .empty;
-
-            entry.summary = try wikitext.extractSummaryAlloc(arena_allocator, raw, 240);
-            if (metadata.alias_only) entry.flags |= format.record_flag_alias_only;
         } else {
             const target = try compact.decodeAlloc(arena_allocator, payload);
             const targets = try arena_allocator.alloc([]const u8, 1);
             targets[0] = target;
             entry.canonical_targets = targets;
-            entry.summary = try std.fmt.allocPrint(arena_allocator, "Alias of {s}.", .{target});
-            entry.flags |= format.record_flag_alias_only;
         }
 
         try state.entries.append(arena_allocator, entry);
@@ -895,7 +969,7 @@ fn finalizeIncomingAliases(
         try gop.value_ptr.append(allocator, @intCast(idx));
     }
 
-    const incoming = try allocator.alloc(std.ArrayListUnmanaged([]const u8), state.entries.items.len);
+    const incoming = try allocator.alloc(std.ArrayListUnmanaged(u32), state.entries.items.len);
     defer {
         for (incoming) |*list| list.deinit(allocator);
         allocator.free(incoming);
@@ -910,7 +984,7 @@ fn finalizeIncomingAliases(
             const normalized_target = try normalize.normalizeToList(&norm_buf, allocator, target);
             if (title_map.get(normalized_target)) |indices| {
                 for (indices.items) |target_idx| {
-                    try appendUniqueSlice(allocator, &incoming[target_idx], state.entries.items[source_idx].word);
+                    try appendUniqueIndex(allocator, &incoming[target_idx], @intCast(source_idx));
                 }
             }
         }
@@ -918,15 +992,15 @@ fn finalizeIncomingAliases(
 
     for (incoming, 0..) |list, idx| {
         if (list.items.len == 0) continue;
-        const owned = try arena_allocator.alloc([]const u8, list.items.len);
+        const owned = try arena_allocator.alloc(u32, list.items.len);
         @memcpy(owned, list.items);
         state.entries.items[idx].incoming_aliases = owned;
     }
 }
 
-fn appendUniqueSlice(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged([]const u8), value: []const u8) !void {
+fn appendUniqueIndex(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged(u32), value: u32) !void {
     for (list.items) |existing| {
-        if (std.mem.eql(u8, existing, value)) return;
+        if (existing == value) return;
     }
     try list.append(allocator, value);
 }
@@ -999,5 +1073,70 @@ test "viewArray rejects misaligned offsets" {
 test "cache structs stay compact" {
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(StringRef));
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Range));
+    try std.testing.expectEqual(@as(usize, 20), @sizeOf(CachedEntry));
     try std.testing.expectEqual(@as(usize, 24), @sizeOf(CachedLookup));
+}
+
+test "dictionary open preserves raw etymology and pronunciation sections through cache rebuild" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const raw_english =
+        \\==English==
+        \\
+        \\===Pronunciation===
+        \\* {{enPR|rĭng|a=RP,GA}}; {{IPA|en|/ɹɪŋ/}}
+        \\** {{audio|en|en-us-ring.ogg|a=US}}
+        \\
+        \\===Etymology 1===
+        \\{{root|en|ine-pro|*(s)ker- (turn)}}
+        \\From {{inh|en|enm|ryng}}, from {{inh|en|ang|hring||ring, circle}}.
+        \\
+        \\{{col-top|2|cog}}
+        \\* {{cog|fy|ring}}
+        \\* {{cog|de|Ring}}
+        \\{{col-bottom}}
+        \\
+        \\====Noun====
+        \\{{en-noun}}
+        \\
+        \\# {{lb|en|physical}} A solid object in the shape of a circle.
+        \\
+    ;
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>ring</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">
+    ++ raw_english ++
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
+    defer xml_file.close(std.testing.io);
+    try xml_file.writeAll(std.testing.io, xml);
+
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_path);
+    const xml_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/sample.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(xml_path);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_path,
+        .output_path = db_path,
+    });
+
+    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path);
+    defer dict.deinit();
+
+    const hits = try dict.lookupExact(std.testing.allocator, "ring");
+    defer std.testing.allocator.free(hits);
+    try std.testing.expectEqual(@as(usize, 1), hits.len);
+
+    const raw = (try dict.entryAt(hits[0].entry_index).rawEnglishAlloc(std.testing.allocator)).?;
+    defer std.testing.allocator.free(raw);
+    try std.testing.expectEqualStrings(raw_english, raw);
 }

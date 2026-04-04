@@ -284,7 +284,9 @@ const Verifier = struct {
                 if (!entry.hasRaw() or self.seen_raw[idx]) continue;
 
                 self.stats.unexpected_raw_entries += 1;
-                try self.reportUnexpectedEntry(entry.word(), entry.summary());
+                const summary = try entry.summaryAlloc(self.allocator);
+                defer self.allocator.free(summary);
+                try self.reportUnexpectedEntry(entry.word(), summary);
             }
         }
 
@@ -625,6 +627,31 @@ fn verifierWorkerMain(verifier: *Verifier, queue: *WorkQueue) void {
 }
 
 fn normalizeForComparison(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    const view = std.unicode.Utf8View.init(text) catch return normalizeBytesForComparison(allocator, text);
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+
+    var pending_space = false;
+    var iter = view.iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        if (isComparisonWhitespace(codepoint)) {
+            pending_space = out.items.len != 0;
+            continue;
+        }
+        if (pending_space) {
+            try out.append(allocator, ' ');
+            pending_space = false;
+        }
+        var buf: [4]u8 = undefined;
+        const len = try std.unicode.utf8Encode(codepoint, &buf);
+        try out.appendSlice(allocator, buf[0..len]);
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn normalizeBytesForComparison(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
 
@@ -642,6 +669,41 @@ fn normalizeForComparison(allocator: std.mem.Allocator, text: []const u8) ![]u8 
     }
 
     return out.toOwnedSlice(allocator);
+}
+
+fn isComparisonWhitespace(codepoint: u21) bool {
+    return switch (codepoint) {
+        0x0009,
+        0x000A,
+        0x000B,
+        0x000C,
+        0x000D,
+        0x0020,
+        0x0085,
+        0x00A0,
+        0x1680,
+        0x2000,
+        0x2001,
+        0x2002,
+        0x2003,
+        0x2004,
+        0x2005,
+        0x2006,
+        0x2007,
+        0x2008,
+        0x2009,
+        0x200A,
+        0x200B,
+        0x2028,
+        0x2029,
+        0x202F,
+        0x205F,
+        0x2060,
+        0x3000,
+        0xFEFF,
+        => true,
+        else => false,
+    };
 }
 
 fn firstDiffIndex(left: []const u8, right: []const u8) usize {
@@ -852,4 +914,116 @@ test "verifyDictionary reports content mismatches" {
     try file_reader.interface.readSliceAll(report);
     try std.testing.expect(std.mem.indexOf(u8, report, "Content Mismatch") != null);
     try std.testing.expect(std.mem.indexOf(u8, report, "color") != null);
+}
+
+test "verifyDictionary decodes double-escaped symbols and builder stores decoded raw text" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const build_xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>copycat</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# [[symbol]] &amp;copy; &amp;emdash; &amp;amp;#91;
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    try writeTestFile(tmp.dir, "build.xml", build_xml);
+
+    const build_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "build.xml");
+    defer std.testing.allocator.free(build_rel);
+    const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
+    defer std.testing.allocator.free(db_rel);
+    const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
+    defer std.testing.allocator.free(report_rel);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = build_rel,
+        .output_path = db_rel,
+    });
+
+    var dict = try decoder.Dictionary.open(std.testing.allocator, std.testing.io, db_rel);
+    defer dict.deinit();
+
+    const hits = try dict.lookupExact(std.testing.allocator, "copycat");
+    defer std.testing.allocator.free(hits);
+    try std.testing.expectEqual(@as(usize, 1), hits.len);
+
+    const raw = (try dict.entryAt(hits[0].entry_index).rawEnglishAlloc(std.testing.allocator)).?;
+    defer std.testing.allocator.free(raw);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "©") != null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "—") != null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "&copy;") == null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "&emdash;") == null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "&amp#91;") == null);
+
+    const stats = try verifyDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = build_rel,
+        .db_path = db_rel,
+        .report_path = report_rel,
+    });
+    try std.testing.expectEqual(@as(usize, 1), stats.exact_matches);
+    try std.testing.expectEqual(@as(usize, 0), stats.failures());
+}
+
+test "verifyDictionary treats decoded unicode spacing entities as whitespace-only differences" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const build_xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>spacing</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# alpha beta
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+    const verify_xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>spacing</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# alpha&amp;nbsp;beta
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    try writeTestFile(tmp.dir, "build.xml", build_xml);
+    try writeTestFile(tmp.dir, "verify.xml", verify_xml);
+
+    const build_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "build.xml");
+    defer std.testing.allocator.free(build_rel);
+    const verify_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify.xml");
+    defer std.testing.allocator.free(verify_rel);
+    const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
+    defer std.testing.allocator.free(db_rel);
+    const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
+    defer std.testing.allocator.free(report_rel);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = build_rel,
+        .output_path = db_rel,
+    });
+
+    const stats = try verifyDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = verify_rel,
+        .db_path = db_rel,
+        .report_path = report_rel,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), stats.whitespace_only_matches);
+    try std.testing.expectEqual(@as(usize, 0), stats.failures());
 }

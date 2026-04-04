@@ -124,12 +124,14 @@ const SearchEndpoint = struct {
         var suggestions: std.ArrayList(SuggestionJson) = .empty;
         for (hits) |hit| {
             const entry = req.ctx().db.entryAt(hit.entry_index);
+            var derived = try entry.derivedAlloc(req.allocator());
+            defer derived.deinit(req.allocator());
             try suggestions.append(req.allocator(), .{
                 .matched = hit.matched,
                 .word = entry.word(),
                 .kind = lookupKindString(hit.kind),
-                .aliasOnly = entry.isAliasOnly(),
-                .summary = entry.summary(),
+                .aliasOnly = derived.alias_only,
+                .summary = derived.summary,
             });
         }
 
@@ -167,23 +169,26 @@ const LookupEndpoint = struct {
         var payload_hits: std.ArrayList(HitJson) = .empty;
         for (hits) |hit| {
             const entry = req.ctx().db.entryAt(hit.entry_index);
+            var derived = try entry.derivedAlloc(req.allocator());
+            defer derived.deinit(req.allocator());
             const raw = if (try entry.rawEnglishAlloc(req.allocator())) |value| value else "";
-            const alt_forms = try entry.altForms().toOwnedSlice(req.allocator());
-            const canonical_targets = try entry.canonicalTargets().toOwnedSlice(req.allocator());
+            const alt_forms = try dupeSliceOfSlices(req.allocator(), derived.alt_forms.items);
+            const canonical_targets = try dupeSliceOfSlices(req.allocator(), derived.canonical_targets.items);
             const incoming_aliases = try entry.incomingAliases().toOwnedSlice(req.allocator());
+            const normalized = try entry.normalizedAlloc(req.allocator());
 
             try payload_hits.append(req.allocator(), .{
                 .matched = hit.matched,
                 .kind = lookupKindString(hit.kind),
                 .entry = .{
                     .word = entry.word(),
-                    .normalized = entry.normalized(),
-                    .aliasOnly = entry.isAliasOnly(),
+                    .normalized = normalized,
+                    .aliasOnly = derived.alias_only,
                     .altForms = alt_forms,
                     .canonicalTargets = canonical_targets,
                     .incomingAliases = incoming_aliases,
                     .raw = raw,
-                    .summary = entry.summary(),
+                    .summary = derived.summary,
                 },
             });
         }
@@ -232,6 +237,12 @@ pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
 
 fn lookupKindString(kind: u8) []const u8 {
     return if (kind == format.lookup_kind_alternative_form) "alternative_form" else "title";
+}
+
+fn dupeSliceOfSlices(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
+    const out = try allocator.alloc([]const u8, values.len);
+    @memcpy(out, values);
+    return out;
 }
 
 fn ensureDictionary(io: std.Io, allocator: std.mem.Allocator, options: ServeOptions) !void {

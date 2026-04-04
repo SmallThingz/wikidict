@@ -155,7 +155,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
         stats.english_entries = output.entry_count;
     }
 
-    try replaceFile(allocator, temp_output_path, options.output_path);
+    try replaceFile(io, temp_output_path, options.output_path);
     progress.finish(stats.pages_seen, stats.english_entries);
     return stats;
 }
@@ -167,19 +167,8 @@ fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
     };
 }
 
-fn replaceFile(allocator: std.mem.Allocator, old_path: []const u8, new_path: []const u8) !void {
-    const old_z = try allocator.dupeZ(u8, old_path);
-    defer allocator.free(old_z);
-    const new_z = try allocator.dupeZ(u8, new_path);
-    defer allocator.free(new_z);
-
-    switch (builtin.os.tag) {
-        .linux => switch (std.posix.errno(std.os.linux.renameat(std.posix.AT.FDCWD, old_z.ptr, std.posix.AT.FDCWD, new_z.ptr))) {
-            .SUCCESS => {},
-            else => |err| return std.posix.unexpectedErrno(err),
-        },
-        else => @compileError("replaceFile is only implemented for linux in this project"),
-    }
+fn replaceFile(io: std.Io, old_path: []const u8, new_path: []const u8) !void {
+    try std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, io);
 }
 
 fn processMappedInput(

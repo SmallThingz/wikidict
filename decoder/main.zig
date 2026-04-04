@@ -95,14 +95,19 @@ fn printHit(
     hit: decoder.LookupHit,
     rank: usize,
 ) !void {
+    var derived = try entry.derivedAlloc(allocator);
+    defer derived.deinit(allocator);
+    const normalized = try entry.normalizedAlloc(allocator);
+    defer allocator.free(normalized);
+
     std.debug.print("========== Match {d} ==========\n", .{rank});
     std.debug.print("Word: {s}\n", .{entry.word()});
     std.debug.print("Matched: {s} ({s})\n", .{ hit.matched, lookupKindString(hit.kind) });
-    std.debug.print("Normalized: {s}\n", .{entry.normalized()});
-    if (entry.isAliasOnly()) std.debug.print("Entry type: alias-style\n", .{});
-    if (entry.summary().len != 0) std.debug.print("Summary: {s}\n", .{entry.summary()});
-    printList("Canonical", entry.canonicalTargets());
-    printList("Alternative forms", entry.altForms());
+    std.debug.print("Normalized: {s}\n", .{normalized});
+    if (derived.alias_only) std.debug.print("Entry type: alias-style\n", .{});
+    if (derived.summary.len != 0) std.debug.print("Summary: {s}\n", .{derived.summary});
+    printOwnedList("Canonical", derived.canonical_targets.items);
+    printOwnedList("Alternative forms", derived.alt_forms.items);
     printList("Incoming aliases", entry.incomingAliases());
 
     if (try entry.rawEnglishAlloc(allocator)) |raw| {
@@ -111,6 +116,16 @@ fn printHit(
     } else {
         std.debug.print("\nSource\n------\n<no raw English section stored>\n", .{});
     }
+}
+
+fn printOwnedList(label: []const u8, values: []const []const u8) void {
+    if (values.len == 0) return;
+    std.debug.print("{s}: ", .{label});
+    for (values, 0..) |value, idx| {
+        if (idx != 0) std.debug.print(", ", .{});
+        std.debug.print("{s}", .{value});
+    }
+    std.debug.print("\n", .{});
 }
 
 fn printList(label: []const u8, values: decoder.TermListView) void {

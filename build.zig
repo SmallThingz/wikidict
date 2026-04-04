@@ -187,6 +187,7 @@ const GeneratedStructureModules = struct {
 const StructureReport = struct {
     heading_profiles: []const HeadingProfile,
     translation_source_labels: ?[]const CountEntry = null,
+    translation_target_languages: ?[]const CountEntry = null,
     templates_by_heading: ?[]const HeadingTemplateEntry = null,
 };
 
@@ -220,6 +221,21 @@ const GeneratedLabel = struct {
 
 const GeneratedTemplate = struct {
     name: []const u8,
+    count: u64,
+};
+
+const GeneratedLineTemplate = struct {
+    name: []const u8,
+    count: u64,
+};
+
+const GeneratedCompactPattern = struct {
+    pattern: []const u8,
+    count: u64,
+};
+
+const GeneratedTargetLanguage = struct {
+    value: []const u8,
     count: u64,
 };
 
@@ -309,29 +325,117 @@ fn generateStructureTableSource(b: *std.Build) ![]const u8 {
     defer templates.deinit(allocator);
     var template_indexes = std.StringHashMapUnmanaged(usize).empty;
     defer template_indexes.deinit(allocator);
+    var line_templates: std.ArrayList(GeneratedLineTemplate) = .empty;
+    defer line_templates.deinit(allocator);
+    var line_template_indexes = std.StringHashMapUnmanaged(usize).empty;
+    defer line_template_indexes.deinit(allocator);
     if (parsed.value.templates_by_heading) |template_rows| {
         for (template_rows) |entry| {
-            if (!isTranslationHeading(entry.heading)) continue;
             const template_name = std.mem.trim(u8, entry.template, " \t\r\n");
             if (template_name.len == 0) continue;
-            const gop = try template_indexes.getOrPut(allocator, template_name);
+            if (isTranslationHeading(entry.heading)) {
+                const gop = try template_indexes.getOrPut(allocator, template_name);
+                if (!gop.found_existing) {
+                    gop.key_ptr.* = try allocator.dupe(u8, template_name);
+                    gop.value_ptr.* = templates.items.len;
+                    try templates.append(allocator, .{
+                        .name = gop.key_ptr.*,
+                        .count = entry.count,
+                    });
+                } else {
+                    templates.items[gop.value_ptr.*].count += entry.count;
+                }
+                continue;
+            }
+
+            const gop = try line_template_indexes.getOrPut(allocator, template_name);
             if (!gop.found_existing) {
                 gop.key_ptr.* = try allocator.dupe(u8, template_name);
-                gop.value_ptr.* = templates.items.len;
-                try templates.append(allocator, .{
+                gop.value_ptr.* = line_templates.items.len;
+                try line_templates.append(allocator, .{
                     .name = gop.key_ptr.*,
                     .count = entry.count,
                 });
             } else {
-                templates.items[gop.value_ptr.*].count += entry.count;
+                line_templates.items[gop.value_ptr.*].count += entry.count;
             }
         }
     }
     std.mem.sortUnstable(GeneratedTemplate, templates.items, {}, generatedTemplateLessThan);
+    std.mem.sortUnstable(GeneratedLineTemplate, line_templates.items, {}, generatedLineTemplateLessThan);
+    if (line_templates.items.len > 1024) {
+        line_templates.shrinkRetainingCapacity(1024);
+    }
+
+    var compact_patterns: std.ArrayList(GeneratedCompactPattern) = .empty;
+    defer compact_patterns.deinit(allocator);
+    var compact_patterns_ext: std.ArrayList(GeneratedCompactPattern) = .empty;
+    defer compact_patterns_ext.deinit(allocator);
+    var all_compact_patterns: std.ArrayList(GeneratedCompactPattern) = .empty;
+    defer all_compact_patterns.deinit(allocator);
+    var all_compact_pattern_indexes = std.StringHashMapUnmanaged(usize).empty;
+    defer all_compact_pattern_indexes.deinit(allocator);
+    for (line_templates.items) |template_entry| {
+        const pattern = compactPatternForTemplate(allocator, template_entry.name) orelse continue;
+        const gop = try all_compact_pattern_indexes.getOrPut(allocator, pattern);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try allocator.dupe(u8, pattern);
+            gop.value_ptr.* = all_compact_patterns.items.len;
+            try all_compact_patterns.append(allocator, .{
+                .pattern = gop.key_ptr.*,
+                .count = template_entry.count,
+            });
+        } else {
+            all_compact_patterns.items[gop.value_ptr.*].count += template_entry.count;
+        }
+    }
+    std.mem.sortUnstable(GeneratedCompactPattern, all_compact_patterns.items, {}, generatedCompactPatternLessThan);
+
+    var covered_compact_patterns = std.StringHashMapUnmanaged(void).empty;
+    defer covered_compact_patterns.deinit(allocator);
+    try seedCoveredCompactPatterns(allocator, b.pathFromRoot("encoder/compact_encoding.zig"), &covered_compact_patterns);
+
+    for (all_compact_patterns.items) |pattern_entry| {
+        const gop = try covered_compact_patterns.getOrPut(allocator, pattern_entry.pattern);
+        if (gop.found_existing) continue;
+        gop.key_ptr.* = try allocator.dupe(u8, pattern_entry.pattern);
+
+        if (compact_patterns.items.len < 50) {
+            try compact_patterns.append(allocator, pattern_entry);
+        } else if (compact_patterns_ext.items.len < 200) {
+            try compact_patterns_ext.append(allocator, pattern_entry);
+        } else {
+            break;
+        }
+    }
+
+    var target_languages: std.ArrayList(GeneratedTargetLanguage) = .empty;
+    defer target_languages.deinit(allocator);
+    var target_language_indexes = std.StringHashMapUnmanaged(usize).empty;
+    defer target_language_indexes.deinit(allocator);
+    if (parsed.value.translation_target_languages) |target_language_rows| {
+        for (target_language_rows) |entry| {
+            const value = std.mem.trim(u8, entry.key, " \t\r\n");
+            if (value.len == 0) continue;
+            const gop = try target_language_indexes.getOrPut(allocator, value);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = try allocator.dupe(u8, value);
+                gop.value_ptr.* = target_languages.items.len;
+                try target_languages.append(allocator, .{
+                    .value = gop.key_ptr.*,
+                    .count = entry.count,
+                });
+            } else {
+                target_languages.items[gop.value_ptr.*].count += entry.count;
+            }
+        }
+    }
+    std.mem.sortUnstable(GeneratedTargetLanguage, target_languages.items, {}, generatedTargetLanguageLessThan);
 
     if (headings.items.len + 1 > std.math.maxInt(u16)) return error.TooManyGeneratedHeadings;
     if (templates.items.len > std.math.maxInt(u16)) return error.TooManyGeneratedTemplates;
     if (labels.items.len > std.math.maxInt(u16)) return error.TooManyGeneratedLabels;
+    if (target_languages.items.len > std.math.maxInt(u16)) return error.TooManyGeneratedTargetLanguages;
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
@@ -339,6 +443,8 @@ fn generateStructureTableSource(b: *std.Build) ![]const u8 {
 
     try writer.writeAll(
         \\// Generated by build.zig from data/wiktionary-structure.json.
+        \\const std = @import("std");
+        \\
         \\pub const SectionKind = enum(u8) {
         \\    lines = 0,
         \\    pos_lines = 1,
@@ -368,6 +474,46 @@ fn generateStructureTableSource(b: *std.Build) ![]const u8 {
     try writer.writeAll(
         \\};
         \\
+        \\pub const LineTemplate = struct {
+        \\    code: u16,
+        \\    name: []const u8,
+        \\};
+        \\
+        \\pub const line_templates = [_]LineTemplate{
+        \\
+    );
+    for (line_templates.items, 0..) |template_entry, index| {
+        try writer.writeAll("    .{ .code = ");
+        try writer.print("{d}", .{index + 1});
+        try writer.writeAll(", .name = ");
+        try appendZigStringLiteral(writer, template_entry.name);
+        try writer.writeAll(" },\n");
+    }
+    try writer.writeAll(
+        \\};
+        \\
+        \\pub const compact_patterns = [_][]const u8{
+        \\
+    );
+    for (compact_patterns.items) |pattern_entry| {
+        try writer.writeAll("    ");
+        try appendZigStringLiteral(writer, pattern_entry.pattern);
+        try writer.writeAll(",\n");
+    }
+    try writer.writeAll(
+        \\};
+        \\
+        \\pub const compact_patterns_ext = [_][]const u8{
+        \\
+    );
+    for (compact_patterns_ext.items) |pattern_entry| {
+        try writer.writeAll("    ");
+        try appendZigStringLiteral(writer, pattern_entry.pattern);
+        try writer.writeAll(",\n");
+    }
+    try writer.writeAll(
+        \\};
+        \\
         \\pub const TranslationTemplate = struct {
         \\    code: u16,
         \\    name: []const u8,
@@ -381,6 +527,24 @@ fn generateStructureTableSource(b: *std.Build) ![]const u8 {
         try writer.print("{d}", .{index + 1});
         try writer.writeAll(", .name = ");
         try appendZigStringLiteral(writer, template_entry.name);
+        try writer.writeAll(" },\n");
+    }
+    try writer.writeAll(
+        \\};
+        \\
+        \\pub const TargetLanguage = struct {
+        \\    code: u16,
+        \\    value: []const u8,
+        \\};
+        \\
+        \\pub const target_languages = [_]TargetLanguage{
+        \\
+    );
+    for (target_languages.items, 0..) |lang_entry, index| {
+        try writer.writeAll("    .{ .code = ");
+        try writer.print("{d}", .{index + 1});
+        try writer.writeAll(", .value = ");
+        try appendZigStringLiteral(writer, lang_entry.value);
         try writer.writeAll(" },\n");
     }
     try writer.writeAll(
@@ -431,6 +595,9 @@ fn sectionKindNameForParser(parser_kind: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, parser_kind, "relations")) return "term_list";
     if (std.mem.eql(u8, parser_kind, "navigation")) return "term_list";
     if (std.mem.eql(u8, parser_kind, "translations")) return "translations";
+    // These section families are structurally loose and often contain free-form
+    // wikitext, comments, refs, or mixed templates that are not worth forcing
+    // through the line-stream codec. Keep them as raw joined bodies.
     if (std.mem.eql(u8, parser_kind, "citations")) return "lines";
     if (std.mem.eql(u8, parser_kind, "descendants")) return "lines";
     if (std.mem.eql(u8, parser_kind, "etymology")) return "lines";
@@ -459,6 +626,95 @@ fn generatedLabelLessThan(_: void, a: GeneratedLabel, b: GeneratedLabel) bool {
 fn generatedTemplateLessThan(_: void, a: GeneratedTemplate, b: GeneratedTemplate) bool {
     if (a.count != b.count) return a.count > b.count;
     return std.mem.lessThan(u8, a.name, b.name);
+}
+
+fn generatedLineTemplateLessThan(_: void, a: GeneratedLineTemplate, b: GeneratedLineTemplate) bool {
+    if (a.count != b.count) return a.count > b.count;
+    return std.mem.lessThan(u8, a.name, b.name);
+}
+
+fn generatedCompactPatternLessThan(_: void, a: GeneratedCompactPattern, b: GeneratedCompactPattern) bool {
+    if (a.count != b.count) return a.count > b.count;
+    return std.mem.lessThan(u8, a.pattern, b.pattern);
+}
+
+fn seedCoveredCompactPatterns(
+    allocator: std.mem.Allocator,
+    source_path: []const u8,
+    covered: *std.StringHashMapUnmanaged(void),
+) !void {
+    const source = try readFileAllocAbsolute(allocator, source_path, 512 * 1024);
+    defer allocator.free(source);
+
+    const marker = "pub const static_escaped_patterns = [_][]const u8{";
+    const start = std.mem.indexOf(u8, source, marker) orelse return error.InvalidCompactEncodingSource;
+
+    var cursor: usize = start + marker.len;
+    while (cursor < source.len) {
+        if (std.mem.startsWith(u8, source[cursor..], "};")) break;
+        if (source[cursor] != '"') {
+            cursor += 1;
+            continue;
+        }
+        cursor += 1;
+
+        var decoded: std.ArrayList(u8) = .empty;
+        defer decoded.deinit(allocator);
+
+        while (cursor < source.len) {
+            const byte = source[cursor];
+            if (byte == '\\') {
+                if (cursor + 1 >= source.len) return error.InvalidCompactEncodingSource;
+                const escaped = source[cursor + 1];
+                switch (escaped) {
+                    'n' => try decoded.append(allocator, '\n'),
+                    'r' => try decoded.append(allocator, '\r'),
+                    't' => try decoded.append(allocator, '\t'),
+                    '\\' => try decoded.append(allocator, '\\'),
+                    '"' => try decoded.append(allocator, '"'),
+                    else => try decoded.append(allocator, escaped),
+                }
+                cursor += 2;
+                continue;
+            }
+            if (byte == '"') {
+                cursor += 1;
+                break;
+            }
+            try decoded.append(allocator, byte);
+            cursor += 1;
+        }
+
+        if (!std.mem.startsWith(u8, decoded.items, "{{")) continue;
+        const body = decoded.items[2..];
+        var end: usize = 0;
+        while (end < body.len and body[end] != '|' and body[end] != '}' and body[end] != '\n') : (end += 1) {}
+        if (end == 0) continue;
+
+        const name = body[0..end];
+        const gop = try covered.getOrPut(allocator, name);
+        if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, name);
+    }
+}
+
+fn compactPatternForTemplate(allocator: std.mem.Allocator, name: []const u8) ?[]const u8 {
+    if (name.len == 0) return null;
+    if (std.mem.indexOfAny(u8, name, "\r\n")) |_| return null;
+
+    if (std.mem.startsWith(u8, name, "en-") or
+        std.mem.eql(u8, name, "enPR") or
+        std.mem.eql(u8, name, "...") or
+        std.mem.eql(u8, name, "nb..."))
+    {
+        return std.fmt.allocPrint(allocator, "{{{{{s}", .{name}) catch null;
+    }
+
+    return std.fmt.allocPrint(allocator, "{{{{{s}|", .{name}) catch null;
+}
+
+fn generatedTargetLanguageLessThan(_: void, a: GeneratedTargetLanguage, b: GeneratedTargetLanguage) bool {
+    if (a.count != b.count) return a.count > b.count;
+    return std.mem.lessThan(u8, a.value, b.value);
 }
 
 fn appendZigStringLiteral(writer: *std.Io.Writer, bytes: []const u8) !void {

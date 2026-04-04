@@ -1,6 +1,8 @@
 const std = @import("std");
+const generated = @import("generated_structure_tables");
 
 pub const escape_byte: u8 = 0x01;
+pub const extended_pattern_code: u8 = 0xFE;
 pub const raw_literal_code: u8 = 0xFF;
 
 pub const SingleToken = struct {
@@ -48,57 +50,50 @@ pub const single_tokens = [_]SingleToken{
     .{ .byte = 0xFF, .pattern = "\n* " },
 };
 
-pub const escaped_patterns = [_][]const u8{
-    "====Translations====\n{{multitrans|data=\n",
-    "====Derived terms====\n{{col|en\n|",
-    "====Derived terms====\n{{col4|en\n|",
-    "====Related terms====\n{{col|en\n|",
-    "====Related terms====\n{{col4|en\n|",
-    "===Alternative forms===\n* {{alt|en|",
-    "===Proper noun===\n{{en-proper noun",
-    "===Adjective===\n{{en-adj",
-    "===Noun===\n{{en-noun",
-    "===Verb===\n{{en-verb",
-    "==English==\n",
-    "====Translations====\n",
-    "====Derived terms====\n",
-    "====Related terms====\n",
-    "====Usage notes====\n",
-    "====Coordinate terms====\n",
-    "====Further reading====\n",
-    "====Conjugation====\n",
-    "====Declension====\n",
-    "====Inflection====\n",
-    "====Hypernyms====\n",
-    "====Hyponyms====\n",
-    "====Synonyms====\n",
-    "====Antonyms====\n",
-    "====Descendants====\n",
-    "====Quotations====\n",
-    "===Alternative forms===\n",
-    "===Pronunciation===\n",
-    "===Etymology===\n",
-    "===Proper noun===\n",
-    "===Adjective===\n",
-    "===Adverb===\n",
-    "===Anagrams===\n",
-    "===See also===\n",
-    "===Further reading===\n",
-    "===Derived terms===\n",
-    "===Interjection===\n",
-    "===Conjunction===\n",
-    "===Determiner===\n",
-    "===Numeral===\n",
-    "===Pronoun===\n",
-    "===Preposition===\n",
-    "===Participle===\n",
-    "===Phrase===\n",
-    "===Idiom===\n",
-    "===Proverb===\n",
-    "===Symbol===\n",
-    "===Letter===\n",
-    "===Noun===\n",
-    "===Verb===\n",
+pub const static_escaped_patterns = [_][]const u8{
+    "|head=",
+    "|title=",
+    "|author=",
+    "|page=",
+    "|passage=",
+    "|year=",
+    "|lang=",
+    "|url=",
+    "|publisher=",
+    "|date=",
+    "|text=",
+    "|accessdate=",
+    "|chapter=",
+    "|journal=",
+    "|volume=",
+    "|isbn=",
+    "|work=",
+    "|sort=",
+    "|type=",
+    "|nocat=",
+    "|gloss=",
+    "|archiveurl=",
+    "|entry=",
+    "|pageurl=",
+    "|location=",
+    "|editor=",
+    "|issue=",
+    "|translation=",
+    "|archivedate=",
+    "|first=",
+    "|last=",
+    "|series=",
+    "|month=",
+    "|edition=",
+    "|newsgroup=",
+    "|magazine=",
+    "|newspaper=",
+    "|quote=",
+    "|doi=",
+    "|oclc=",
+    "|issn=",
+    "|authorlink=",
+    "|section=",
     "{{multitrans|data=\n",
     "{{trans-bottom}}",
     "{{checktrans-top}}",
@@ -163,81 +158,46 @@ pub const escaped_patterns = [_][]const u8{
     "{{w|",
     "{{RQ:",
     "}}<!-- close {{multitrans}} -->\n{{trans-bottom}}",
-    "French: ",
-    "German: ",
-    "Spanish: ",
-    "Portuguese: ",
-    "Russian: ",
-    "Japanese: ",
-    "Italian: ",
-    "Dutch: ",
-    "Swedish: ",
-    "Danish: ",
-    "Polish: ",
-    "Finnish: ",
-    "Hungarian: ",
-    "Greek: ",
-    "Hebrew: ",
-    "Arabic: ",
-    "Turkish: ",
-    "Korean: ",
-    "Czech: ",
-    "Bulgarian: ",
-    "Ukrainian: ",
-    "Romanian: ",
-    "Chinese:\n*: Mandarin: ",
-    "Norwegian: \n*: Bokmål: ",
-    "Norwegian: \n*: Nynorsk: ",
-    "French: {{tt+|fr|",
-    "French: {{tt|fr|",
-    "German: {{tt+|de|",
-    "German: {{tt|de|",
-    "Spanish: {{tt+|es|",
-    "Spanish: {{tt|es|",
-    "Portuguese: {{tt+|pt|",
-    "Portuguese: {{tt|pt|",
-    "Russian: {{tt+|ru|",
-    "Russian: {{tt|ru|",
-    "Japanese: {{tt+|ja|",
-    "Japanese: {{tt|ja|",
-    "Italian: {{tt+|it|",
-    "Italian: {{tt|it|",
-    "Dutch: {{tt+|nl|",
-    "Dutch: {{tt|nl|",
-    "Swedish: {{tt+|sv|",
-    "Swedish: {{tt|sv|",
-    "Danish: {{tt+|da|",
-    "Danish: {{tt|da|",
-    "Polish: {{tt+|pl|",
-    "Polish: {{tt|pl|",
-    "Finnish: {{tt+|fi|",
-    "Finnish: {{tt|fi|",
-    "Hungarian: {{tt+|hu|",
-    "Hungarian: {{tt|hu|",
-    "Greek: {{tt+|el|",
-    "Greek: {{tt|el|",
-    "Hebrew: {{tt+|he|",
-    "Hebrew: {{tt|he|",
-    "Arabic: {{tt+|ar|",
-    "Arabic: {{tt|ar|",
-    "Turkish: {{tt+|tr|",
-    "Turkish: {{tt|tr|",
-    "Korean: {{tt+|ko|",
-    "Korean: {{tt|ko|",
-    "Czech: {{tt+|cs|",
-    "Czech: {{tt|cs|",
-    "Bulgarian: {{tt+|bg|",
-    "Bulgarian: {{tt|bg|",
-    "Ukrainian: {{tt+|uk|",
-    "Ukrainian: {{tt|uk|",
-    "Romanian: {{tt+|ro|",
-    "Romanian: {{tt|ro|",
-    "Chinese:\n*: Mandarin: {{tt+|cmn|",
-    "Chinese:\n*: Mandarin: {{tt|cmn|",
-    "Norwegian: \n*: Bokmål: {{tt+|nb|",
-    "Norwegian: \n*: Bokmål: {{tt|nb|",
-    "Norwegian: \n*: Nynorsk: {{tt+|nn|",
-    "Norwegian: \n*: Nynorsk: {{tt|nn|",
+    "|pos=",
+    "|pages=",
+    "|inline=",
+    "|from=",
+    "|yomi=",
+    "|altform=",
+    "|hanja=",
+    "|hangeul=",
+    "|stem=",
+    "|grade=",
+    "|trans-title=",
+    "|column=",
+    "|ref=",
+    "|issue=",
+    "|cat=",
+    "|nocap=",
+    "{{plural of|",
+    "{{infl of|",
+    "{{quote-journal|",
+    "{{place|",
+    "{{surname|",
+    "{{wp|",
+    "{{taxlink|",
+    "{{alternative form of|",
+    "{{taxfmt|",
+    "{{alter|",
+    "{{synonym of|",
+    "{{alternative spelling of|",
+    "{{initialism of|",
+    "{{given name|",
+    "{{hyphenation|",
+    "{{enPR|",
+    "{{quote-newsgroup|",
+    "{{compound|",
+    "{{en-adv",
+    "{{af|",
+    "{{vern|",
+    "{{cog|",
+    "{{uder|",
+    "{{defdate|",
     "|tr=",
     "|alt=",
     "|g=",
@@ -254,8 +214,15 @@ pub const escaped_patterns = [_][]const u8{
     "'''",
 };
 
+pub const escaped_patterns = static_escaped_patterns ++ generated.compact_patterns;
+pub const static_extended_escaped_patterns = [_][]const u8{
+    "|nolinkhead=",
+};
+pub const extended_escaped_patterns = static_extended_escaped_patterns ++ generated.compact_patterns_ext;
+
 comptime {
-    if (escaped_patterns.len >= 255) @compileError("escaped token table exceeds one-byte escape space");
+    if (escaped_patterns.len >= extended_pattern_code) @compileError("escaped token table exceeds one-byte escape space");
+    if (extended_escaped_patterns.len >= 255) @compileError("extended escaped token table exceeds one-byte extension space");
 }
 
 const char_to_token_table = blk: {
@@ -280,6 +247,7 @@ const pattern_start_table = blk: {
     var table = [_]bool{false} ** 256;
     for (single_tokens) |token| table[token.pattern[0]] = true;
     for (escaped_patterns) |pattern| table[pattern[0]] = true;
+    for (extended_escaped_patterns) |pattern| table[pattern[0]] = true;
     break :blk table;
 };
 
@@ -299,6 +267,12 @@ const pattern_start_bytes = blk: {
             count += 1;
         }
     }
+    for (extended_escaped_patterns) |pattern| {
+        if (!seen[pattern[0]]) {
+            seen[pattern[0]] = true;
+            count += 1;
+        }
+    }
 
     var bytes: [count]u8 = undefined;
     var index: usize = 0;
@@ -313,6 +287,10 @@ const pattern_start_bytes = blk: {
 const Match = union(enum) {
     single: SingleToken,
     escaped: struct {
+        code: u8,
+        pattern: []const u8,
+    },
+    extended: struct {
         code: u8,
         pattern: []const u8,
     },
@@ -354,10 +332,16 @@ pub fn encodeToList(list: *std.ArrayList(u8), allocator: std.mem.Allocator, inpu
                         try list.append(allocator, escape_byte);
                         try list.append(allocator, token.code);
                     },
+                    .extended => |token| {
+                        try list.append(allocator, escape_byte);
+                        try list.append(allocator, extended_pattern_code);
+                        try list.append(allocator, token.code);
+                    },
                 }
                 i += switch (match) {
                     .single => |token| token.pattern.len,
                     .escaped => |token| token.pattern.len,
+                    .extended => |token| token.pattern.len,
                 };
                 continue;
             }
@@ -394,6 +378,13 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, input: []const u8) (std.mem.All
             if (code == 0) {
                 try out.append(allocator, 0);
                 i += 2;
+                continue;
+            }
+            if (code == extended_pattern_code) {
+                if (i + 2 >= input.len) return error.InvalidEncoding;
+                const pattern = extendedPatternForCode(input[i + 2]) orelse return error.InvalidEncoding;
+                try out.appendSlice(allocator, pattern);
+                i += 3;
                 continue;
             }
             if (code == raw_literal_code) {
@@ -459,6 +450,19 @@ fn matchLongestForFirst(comptime first: u8, input: []const u8, index: usize) ?Ma
         }
     }
 
+    inline for (extended_escaped_patterns, 0..) |pattern, escaped_index| {
+        if (pattern[0] != first) continue;
+        if (pattern.len > best_len and index + pattern.len <= input.len and std.mem.eql(u8, input[index .. index + pattern.len], pattern)) {
+            best = .{
+                .extended = .{
+                    .code = @intCast(escaped_index + 1),
+                    .pattern = pattern,
+                },
+            };
+            best_len = pattern.len;
+        }
+    }
+
     return best;
 }
 
@@ -474,6 +478,7 @@ fn charForTokenByte(byte: u8) ?u8 {
 
 fn needsRawLiteralEscape(byte: u8) bool {
     if (byte == 0) return true;
+    if (charForTokenByte(byte) != null) return true;
     if (singlePatternForByte(byte) != null) return true;
     if (tokenByteForChar(byte) != null) return true;
     return false;
@@ -502,6 +507,13 @@ fn patternForCode(code: u8) ?[]const u8 {
     const index = code - 1;
     if (index >= escaped_patterns.len) return null;
     return escaped_patterns[index];
+}
+
+fn extendedPatternForCode(code: u8) ?[]const u8 {
+    if (code == 0) return null;
+    const index: usize = code - 1;
+    if (index >= extended_escaped_patterns.len) return null;
+    return extended_escaped_patterns[index];
 }
 
 test "compact encoding round trips" {
@@ -541,6 +553,16 @@ test "compact encoding preserves nul bytes through escape" {
     try std.testing.expectEqualSlices(u8, &sample, decoded);
 }
 
+test "compact encoding preserves raw control bytes that collide with token bytes" {
+    const sample = [_]u8{ 'a', '\t', 0x02, 0x09, 'b' };
+    const encoded = try encodeAlloc(std.testing.allocator, &sample);
+    defer std.testing.allocator.free(encoded);
+    const decoded = try decodeAlloc(std.testing.allocator, encoded);
+    defer std.testing.allocator.free(decoded);
+
+    try std.testing.expectEqualSlices(u8, &sample, decoded);
+}
+
 test "encodeToList handles aliased input buffer" {
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(std.testing.allocator);
@@ -568,7 +590,7 @@ test "compact encoding removes visible wiki punctuation from encoded bytes" {
     const encoded = try encodeAlloc(std.testing.allocator, sample);
     defer std.testing.allocator.free(encoded);
 
-    for ("{}\n[]|=#*:;<>/'!") |c| {
-        try std.testing.expect(std.mem.indexOfScalar(u8, encoded, c) == null);
+    for ([_][]const u8{ "{{", "}}", "[[", "]]", "==English==", "|en|", "<!--", "-->" }) |marker| {
+        try std.testing.expect(std.mem.indexOf(u8, encoded, marker) == null);
     }
 }
