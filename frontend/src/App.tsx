@@ -18,11 +18,9 @@ import { createVirtualizer } from "@tanstack/solid-virtual";
 import {
   type ApiSystemTheme,
   type ApiLookupHit,
-  type ApiStats,
   type ApiSuggestion,
   fetchLookup,
   fetchRandomWord,
-  fetchStats,
   fetchSuggestions,
   fetchSystemTheme,
   fetchWordOfDay,
@@ -315,11 +313,9 @@ export { EntryPage, HomePage, HistoryPage, BookmarksPage };
 
 function HomePage() {
   const navigate = useNavigate();
-  const [stats] = createResource(fetchStats);
   const [wordOfDay] = createResource(async () => fetchWordOfDay());
   const [recents, setRecents] = createSignal<string[]>([]);
   const [favorites, setFavorites] = createSignal<string[]>([]);
-  const statsError = createMemo(() => resourceErrorMessage(stats.error, "Failed to load dictionary stats."));
   const wordOfDayError = createMemo(() => resourceErrorMessage(wordOfDay.error, "Failed to load the word of the day."));
 
   onMount(() => {
@@ -353,15 +349,6 @@ function HomePage() {
                 <div class="word-of-day-meta">Deterministic daily pick for {daily().day}</div>
               </>
             )}
-          </Show>
-        </div>
-
-        <div class="stats-strip" aria-label="Dictionary statistics">
-          <Show
-            when={stats()}
-            fallback={<div class="strip-muted stats-placeholder">{statsError() ?? "Loading stats…"}</div>}
-          >
-            {(loadedStats) => <StatsStrip stats={loadedStats()} />}
           </Show>
         </div>
       </section>
@@ -686,7 +673,11 @@ function EntryArticle(props: { hit: ApiLookupHit; primaryWord?: string }) {
             <Show when={matchIsAlias()}>
               <p class="article-note">
                 Matched through <strong>{props.hit.matched}</strong> as an{" "}
-                {props.hit.kind === "alternative_form" ? "alternative spelling" : "exact title"}.
+                {props.hit.kind === "alternative_form"
+                  ? "alternative spelling"
+                  : props.hit.kind === "alias_expansion"
+                    ? "alias"
+                    : "exact title"}.
               </p>
             </Show>
           </div>
@@ -863,27 +854,6 @@ function SearchCard(props: {
           </For>
         </div>
       </Show>
-    </div>
-  );
-}
-
-function StatsStrip(props: { stats: ApiStats }) {
-  return (
-    <>
-      <StatDatum label="Entries" value={formatNumber(props.stats.entries)} />
-      <StatDatum label="Raw" value={formatNumber(props.stats.rawEntries)} />
-      <StatDatum label="Redirects" value={formatNumber(props.stats.redirects)} />
-      <StatDatum label="Lookups" value={formatNumber(props.stats.lookups)} />
-      <StatDatum label="Format" value={`v${props.stats.version}`} />
-    </>
-  );
-}
-
-function StatDatum(props: { label: string; value: string }) {
-  return (
-    <div class="stat-datum">
-      <span>{props.label}</span>
-      <strong>{props.value}</strong>
     </div>
   );
 }
@@ -1095,14 +1065,6 @@ function resourceErrorMessage(error: unknown, fallback: string): string | null {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string" && error) return error;
   return fallback;
-}
-
-function formatNumber(value: number) {
-  return new Intl.NumberFormat().format(value);
-}
-
-function titleCase(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function getHeadingFamily(title: string): string {

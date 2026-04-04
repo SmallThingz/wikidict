@@ -65,16 +65,6 @@ function apiUrl(path: string, params?: Record<string, string | number>): string 
   return `${API_BASE_URL}${fullPath}`;
 }
 
-export type ApiStats = {
-  entries: number;
-  rawEntries: number;
-  redirects: number;
-  lookups: number;
-  recordsBytes: number;
-  path: string;
-  version: number;
-};
-
 export type ApiSystemTheme = {
   source: string;
   name: string;
@@ -117,7 +107,7 @@ export type ApiRenderedSection = {
 
 export type ApiLookupHit = {
   matched: string;
-  kind: "title" | "alternative_form";
+  kind: "title" | "alternative_form" | "alias_expansion";
   entry: ApiEntry;
 };
 
@@ -167,7 +157,12 @@ function normalizeLookupHit(value: unknown): ApiLookupHit | null {
   const entryRecord = entry as JsonRecord;
   return {
     matched: readString(hit.matched),
-    kind: hit.kind === "alternative_form" ? "alternative_form" : "title",
+    kind:
+      hit.kind === "alternative_form"
+        ? "alternative_form"
+        : hit.kind === "alias_expansion"
+          ? "alias_expansion"
+          : "title",
     entry: {
       word: readString(entryRecord.word),
       normalized: readString(entryRecord.normalized),
@@ -194,10 +189,6 @@ function payloadMissesRenderedSections(value: unknown): boolean {
     const entry = hitRecord.entry as JsonRecord;
     return typeof entry.raw === "string" && entry.raw.length > 0 && !("renderedSections" in entry);
   });
-}
-
-export async function fetchStats(): Promise<ApiStats> {
-  return fetchJson<ApiStats>(apiUrl("/api/stats"), "Failed to load dictionary stats");
 }
 
 export async function fetchSystemTheme(): Promise<ApiSystemTheme> {
@@ -234,14 +225,12 @@ export async function fetchRandomWord(): Promise<string> {
   return payload.word as string;
 }
 
-function formatLocalDayKey(date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-export async function fetchWordOfDay(day = formatLocalDayKey()): Promise<ApiWordOfDay> {
+export async function fetchWordOfDay(
+  day = (() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  })(),
+): Promise<ApiWordOfDay> {
   const payload = await fetchJson<WordOfDayPayload>(
     apiUrl("/api/word-of-day", { day }),
     "Failed to load the word of the day",

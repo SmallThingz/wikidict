@@ -76,12 +76,8 @@ const AppContext = struct {
     }
 
     fn wordOfDay(self: *AppContext, day_number: u64) []const u8 {
-        const index = self.wordOfDayIndex(day_number) orelse return "";
+        const index = findSelectableIndex(self.db.entries.len, day_number, self) orelse return "";
         return self.db.entryAt(index).word();
-    }
-
-    fn wordOfDayIndex(self: *AppContext, day_number: u64) ?u32 {
-        return findSelectableIndex(self.db.entries.len, day_number, self);
     }
 
     fn isSelectableWord(self: *const AppContext, index: usize) bool {
@@ -330,7 +326,11 @@ pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
 }
 
 fn lookupKindString(kind: u8) []const u8 {
-    return if (kind == format.lookup_kind_alternative_form) "alternative_form" else "title";
+    return switch (kind) {
+        format.lookup_kind_alternative_form => "alternative_form",
+        2 => "alias_expansion",
+        else => "title",
+    };
 }
 
 fn dupeSliceOfSlices(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {

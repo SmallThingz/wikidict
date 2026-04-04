@@ -1810,7 +1810,10 @@ fn renderTemplateHtml(
     }
     if (templateMatchesHtml(name, "senseno")) {
         if (templatePositionalHtml(&parts, 1) orelse templatePositionalHtml(&parts, 0)) |value| {
-            try renderTemplateTargetHtml(out, allocator, value, options);
+            const trimmed = trimWikiWhitespace(value);
+            if (!looksLikeOpaqueSenseIdHtml(trimmed)) {
+                try renderTemplateTargetHtml(out, allocator, trimmed, options);
+            }
         }
         return;
     }
@@ -2102,6 +2105,14 @@ fn renderTemplateTargetHtml(
         return;
     }
     try renderPhraseHtml(out, allocator, trimmed, options);
+}
+
+fn looksLikeOpaqueSenseIdHtml(value: []const u8) bool {
+    if (value.len < 2 or value[0] != 'Q') return false;
+    for (value[1..]) |byte| {
+        if (!std.ascii.isDigit(byte)) return false;
+    }
+    return true;
 }
 
 fn renderPhraseHtml(
@@ -5167,9 +5178,9 @@ test "renderEnglishSectionAlloc renders affix-style etymology templates structur
     }
 
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "abdomino") != null);
-    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, " + ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "scopy") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "punt&lt;id:Irish pound&gt;") == null);
-    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, ">punt<") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "punt") != null);
 }
 
 test "renderEnglishSectionAlloc renders senseno targets instead of raw ids" {

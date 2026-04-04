@@ -69,7 +69,16 @@ fn cmdSuggest(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8
         const entry = db.entryAt(hit.entry_index);
         std.debug.print(
             "{d:>2}. {s} -> {s} [{s}]\n",
-            .{ idx + 1, hit.matched, entry.word(), lookupKindString(hit.kind) },
+            .{
+                idx + 1,
+                hit.matched,
+                entry.word(),
+                switch (hit.kind) {
+                    decoder.format.lookup_kind_alternative_form => "alternative_form",
+                    2 => "alias_expansion",
+                    else => "title",
+                },
+            },
         );
     }
 }
@@ -112,12 +121,33 @@ fn printHit(
 
     std.debug.print("========== Match {d} ==========\n", .{rank});
     std.debug.print("Word: {s}\n", .{entry.word()});
-    std.debug.print("Matched: {s} ({s})\n", .{ hit.matched, lookupKindString(hit.kind) });
+    std.debug.print("Matched: {s} ({s})\n", .{
+        hit.matched,
+        switch (hit.kind) {
+            decoder.format.lookup_kind_alternative_form => "alternative_form",
+            2 => "alias_expansion",
+            else => "title",
+        },
+    });
     std.debug.print("Normalized: {s}\n", .{normalized});
     if (derived.alias_only) std.debug.print("Entry type: alias-style\n", .{});
     if (derived.summary.len != 0) std.debug.print("Summary: {s}\n", .{derived.summary});
-    printOwnedList("Canonical", derived.canonical_targets.items);
-    printOwnedList("Alternative forms", derived.alt_forms.items);
+    if (derived.canonical_targets.items.len != 0) {
+        std.debug.print("Canonical: ", .{});
+        for (derived.canonical_targets.items, 0..) |value, idx| {
+            if (idx != 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{value});
+        }
+        std.debug.print("\n", .{});
+    }
+    if (derived.alt_forms.items.len != 0) {
+        std.debug.print("Alternative forms: ", .{});
+        for (derived.alt_forms.items, 0..) |value, idx| {
+            if (idx != 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{value});
+        }
+        std.debug.print("\n", .{});
+    }
     const incoming_aliases = entry.incomingAliases();
     if (incoming_aliases.len() != 0) {
         std.debug.print("Incoming aliases: ", .{});
@@ -134,20 +164,6 @@ fn printHit(
     } else {
         std.debug.print("\nSource\n------\n<no raw English section stored>\n", .{});
     }
-}
-
-fn printOwnedList(label: []const u8, values: []const []const u8) void {
-    if (values.len == 0) return;
-    std.debug.print("{s}: ", .{label});
-    for (values, 0..) |value, idx| {
-        if (idx != 0) std.debug.print(", ", .{});
-        std.debug.print("{s}", .{value});
-    }
-    std.debug.print("\n", .{});
-}
-
-fn lookupKindString(kind: u8) []const u8 {
-    return if (kind == decoder.format.lookup_kind_alternative_form) "alternative_form" else "title";
 }
 
 fn printUsage() void {

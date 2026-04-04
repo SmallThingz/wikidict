@@ -149,7 +149,7 @@ const WorkerClient = struct {
     io: std.Io,
     child: std.process.Child,
     stdin_buffer: [4096]u8 = undefined,
-    stdout_buffer: [64 * 1024]u8 = undefined,
+    stdout_buffer: [512 * 1024]u8 = undefined,
 
     fn init(allocator: std.mem.Allocator, io: std.Io, options: Options) !WorkerClient {
         var child = try std.process.spawn(io, .{

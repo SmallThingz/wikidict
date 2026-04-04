@@ -371,6 +371,8 @@ pub const LookupHit = struct {
     kind: u8,
 };
 
+const lookup_kind_alias_expansion: u8 = 2;
+
 pub const TermListView = struct {
     dict: *const Dictionary,
     range: Range,
@@ -591,14 +593,27 @@ pub const Dictionary = struct {
                 .matched = self.string(lookup.matched),
                 .kind = lookup.kind,
             };
-            var merged = false;
-            for (hits.items) |*existing| {
-                if (existing.entry_index != candidate.entry_index) continue;
-                if (preferExactLookupHit(term, candidate, existing.*)) existing.* = candidate;
-                merged = true;
-                break;
+            try appendMergedLookupHit(&hits, allocator, term, candidate);
+        }
+
+        const direct_hit_count = hits.items.len;
+        var alias_targets: std.ArrayList(u32) = .empty;
+        defer alias_targets.deinit(allocator);
+
+        for (hits.items[0..direct_hit_count]) |hit| {
+            var entry = self.entryAt(hit.entry_index);
+            if (!(try entry.isAliasOnlyAlloc(allocator))) continue;
+
+            try alias_targets.resize(allocator, 0);
+            try self.collectCanonicalEntryIndexesAlloc(allocator, hit.entry_index, &alias_targets);
+            for (alias_targets.items) |canonical_entry_index| {
+                if (canonical_entry_index == hit.entry_index or containsLookupHitForEntry(hits.items, canonical_entry_index)) continue;
+                try hits.append(allocator, .{
+                    .entry_index = canonical_entry_index,
+                    .matched = hit.matched,
+                    .kind = lookup_kind_alias_expansion,
+                });
             }
-            if (!merged) try hits.append(allocator, candidate);
         }
         return hits.toOwnedSlice(allocator);
     }
@@ -652,6 +667,13 @@ pub const Dictionary = struct {
         normalized: []const u8,
         visited: *std.AutoHashMapUnmanaged(u32, void),
     ) anyerror!?[]const u8 {
+        if (self.resolveBestEntryIndex(term, normalized)) |entry_index| {
+            return try self.resolveCanonicalLinkTargetAlloc(allocator, entry_index, visited);
+        }
+        return null;
+    }
+
+    fn resolveBestEntryIndex(self: *const Dictionary, term: []const u8, normalized: []const u8) ?u32 {
         const Candidate = struct {
             entry_index: u32,
             matched: []const u8,
@@ -676,8 +698,7 @@ pub const Dictionary = struct {
             }
         }
 
-        if (best) |value| return try self.resolveCanonicalLinkTargetAlloc(allocator, value.entry_index, visited);
-        return null;
+        return if (best) |value| value.entry_index else null;
     }
 
     fn resolveCanonicalLinkTargetAlloc(
@@ -725,6 +746,50 @@ pub const Dictionary = struct {
             return @as([]const u8, try allocator.dupe(u8, target));
         }
         return null;
+    }
+
+    fn collectCanonicalEntryIndexesAlloc(
+        self: *const Dictionary,
+        allocator: std.mem.Allocator,
+        entry_index: u32,
+        out: *std.ArrayList(u32),
+    ) !void {
+        var visited: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        defer visited.deinit(allocator);
+        try self.collectCanonicalEntryIndexes(allocator, entry_index, &visited, out);
+    }
+
+    fn collectCanonicalEntryIndexes(
+        self: *const Dictionary,
+        allocator: std.mem.Allocator,
+        entry_index: u32,
+        visited: *std.AutoHashMapUnmanaged(u32, void),
+        out: *std.ArrayList(u32),
+    ) anyerror!void {
+        if (visited.contains(entry_index)) return;
+
+        try visited.put(allocator, entry_index, {});
+        defer _ = visited.remove(entry_index);
+
+        const entry = self.entryAt(entry_index);
+        var derived = try entry.derivedAlloc(allocator);
+        defer derived.deinit(allocator);
+
+        if (!derived.alias_only or derived.canonical_targets.items.len == 0) {
+            if (!containsU32(out.items, entry_index)) try out.append(allocator, entry_index);
+            return;
+        }
+
+        for (derived.canonical_targets.items) |target| {
+            var key_buf: std.ArrayList(u8) = .empty;
+            defer key_buf.deinit(allocator);
+            const normalized = try normalize.normalizeToList(&key_buf, allocator, target);
+            if (normalized.len == 0) continue;
+
+            if (self.resolveBestEntryIndex(target, normalized)) |target_entry_index| {
+                try self.collectCanonicalEntryIndexes(allocator, target_entry_index, visited, out);
+            }
+        }
     }
 
     fn string(self: *const Dictionary, ref: StringRef) []const u8 {
@@ -786,6 +851,34 @@ pub const Dictionary = struct {
         return self.string(lookup.key);
     }
 };
+
+fn appendMergedLookupHit(
+    hits: *std.ArrayList(LookupHit),
+    allocator: std.mem.Allocator,
+    query: []const u8,
+    candidate: LookupHit,
+) !void {
+    for (hits.items) |*existing| {
+        if (existing.entry_index != candidate.entry_index) continue;
+        if (Dictionary.preferExactLookupHit(query, candidate, existing.*)) existing.* = candidate;
+        return;
+    }
+    try hits.append(allocator, candidate);
+}
+
+fn containsLookupHitForEntry(hits: []const LookupHit, entry_index: u32) bool {
+    for (hits) |hit| {
+        if (hit.entry_index == entry_index) return true;
+    }
+    return false;
+}
+
+fn containsU32(values: []const u32, needle: u32) bool {
+    for (values) |value| {
+        if (value == needle) return true;
+    }
+    return false;
+}
 
 const BuildState = struct {
     entries: std.ArrayList(BuildEntryData) = .empty,
@@ -2064,8 +2157,11 @@ test "dictionary cache rebuild reuses precomputed normalized alias metadata" {
 
     const redirect_hits = try dict.lookupExact(std.testing.allocator, "colour");
     defer std.testing.allocator.free(redirect_hits);
-    try std.testing.expectEqual(@as(usize, 1), redirect_hits.len);
+    try std.testing.expectEqual(@as(usize, 2), redirect_hits.len);
     try std.testing.expectEqual(format.lookup_kind_title, redirect_hits[0].kind);
+    try std.testing.expectEqualStrings("colour", dict.entryAt(redirect_hits[0].entry_index).word());
+    try std.testing.expectEqual(lookup_kind_alias_expansion, redirect_hits[1].kind);
+    try std.testing.expectEqualStrings("color", dict.entryAt(redirect_hits[1].entry_index).word());
 }
 
 test "build drops alias entries whose destination is not stored" {
@@ -2186,6 +2282,94 @@ test "lookupExact collapses duplicate entry hits and prefers the exact raw match
     try std.testing.expectEqual(@as(usize, 1), upper_hits.len);
     try std.testing.expectEqual(format.lookup_kind_title, upper_hits[0].kind);
     try std.testing.expectEqualStrings("hellfire", upper_hits[0].matched);
+}
+
+test "lookupExact appends canonical hits for alias-only entries and redirects" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>color</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# [[light]]
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>colour</title>
+        \\<ns>0</ns>
+        \\<redirect title="color"/>
+        \\</page>
+        \\<page>
+        \\<title>colours</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\{{head|en|noun form}}
+        \\# {{plural of|en|colour}}
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>alpha</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\{{head|en|noun form}}
+        \\# {{plural of|en|beta}}
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>beta</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\{{head|en|noun form}}
+        \\# {{singular of|en|alpha}}
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
+    defer xml_file.close(std.testing.io);
+    try xml_file.writePositionalAll(std.testing.io, xml, 0);
+
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_path);
+    const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(xml_path);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_path,
+        .output_path = db_path,
+    });
+
+    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path, .{});
+    defer dict.deinit();
+
+    const redirect_hits = try dict.lookupExact(std.testing.allocator, "colour");
+    defer std.testing.allocator.free(redirect_hits);
+    try std.testing.expectEqual(@as(usize, 2), redirect_hits.len);
+    try std.testing.expectEqualStrings("colour", dict.entryAt(redirect_hits[0].entry_index).word());
+    try std.testing.expectEqual(format.lookup_kind_title, redirect_hits[0].kind);
+    try std.testing.expectEqualStrings("color", dict.entryAt(redirect_hits[1].entry_index).word());
+    try std.testing.expectEqual(lookup_kind_alias_expansion, redirect_hits[1].kind);
+    try std.testing.expectEqualStrings("colour", redirect_hits[1].matched);
+
+    const plural_hits = try dict.lookupExact(std.testing.allocator, "colours");
+    defer std.testing.allocator.free(plural_hits);
+    try std.testing.expectEqual(@as(usize, 2), plural_hits.len);
+    try std.testing.expectEqualStrings("colours", dict.entryAt(plural_hits[0].entry_index).word());
+    try std.testing.expectEqualStrings("color", dict.entryAt(plural_hits[1].entry_index).word());
+    try std.testing.expectEqual(lookup_kind_alias_expansion, plural_hits[1].kind);
+    try std.testing.expectEqualStrings("colours", plural_hits[1].matched);
+
+    const cycle_hits = try dict.lookupExact(std.testing.allocator, "alpha");
+    defer std.testing.allocator.free(cycle_hits);
+    try std.testing.expectEqual(@as(usize, 0), cycle_hits.len);
 }
 
 test "resolveLinkTargetAlloc follows alias-only form chains and breaks cycles" {

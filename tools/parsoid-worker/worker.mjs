@@ -12,7 +12,7 @@ const userAgent =
   "dict-parsoid-audit/1.0 (local developer tool; purpose: renderer comparison)";
 const parsoidApiUrl =
   process.env.DICT_PARSOID_API_URL || "https://en.wiktionary.org/w/api.php";
-const cacheVersion = "v4";
+const cacheVersion = "v5";
 
 await fs.mkdir(cacheDir, { recursive: true });
 if (debugHtmlDir) {
@@ -345,7 +345,7 @@ function normalizeParsoidHtml(title, html) {
 }
 
 function shouldAuditSectionTitle(title) {
-  const normalized = normalizeText(title);
+  const normalized = normalizeText(String(title || "").replace(/\[\s*edit\s*\]/gi, ""));
   if (!normalized) return true;
   return !/^Pronunciation(?:\s+\d+)?$/i.test(normalized);
 }

@@ -720,7 +720,10 @@ fn renderTemplate(
         return;
     }
     if (templateMatches(name, "senseno")) {
-        if (templatePositional(&parts, 1) orelse templatePositional(&parts, 0)) |value| try renderInline(out, allocator, value);
+        if (templatePositional(&parts, 1) orelse templatePositional(&parts, 0)) |value| {
+            const trimmed = trimWikiWhitespace(value);
+            if (!looksLikeOpaqueSenseId(trimmed)) try renderInline(out, allocator, trimmed);
+        }
         return;
     }
     if (templateMatches(name, "section link")) {
@@ -2243,6 +2246,14 @@ fn templatePositional(parts: *const std.ArrayList([]const u8), target: usize) ?[
 
 fn trimWikiWhitespace(input: []const u8) []const u8 {
     return std.mem.trim(u8, input, " \t\r\n");
+}
+
+fn looksLikeOpaqueSenseId(value: []const u8) bool {
+    if (value.len < 2 or value[0] != 'Q') return false;
+    for (value[1..]) |byte| {
+        if (!std.ascii.isDigit(byte)) return false;
+    }
+    return true;
 }
 
 fn isPlaceholderTemplateTerm(term: []const u8) bool {
