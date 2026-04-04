@@ -84,27 +84,58 @@ const cache_header_size = std.mem.alignForward(u32, @sizeOf(CacheHeader), cache_
 const BuildAltForm = struct {
     value: []const u8,
     normalized: []const u8,
+    value_ref: StringRef = .{ .offset = 0, .len = 0 },
+    normalized_ref: StringRef = .{ .offset = 0, .len = 0 },
 };
 
 const BuildEntryData = struct {
     record_offset: u32,
     word: []const u8,
     normalized: []const u8,
-    alt_forms: []const BuildAltForm = &.{},
+    alt_forms: []BuildAltForm = &.{},
     normalized_targets: []const []const u8 = &.{},
     incoming_aliases: []const u32 = &.{},
+    word_ref: StringRef = .{ .offset = 0, .len = 0 },
+    normalized_ref: StringRef = .{ .offset = 0, .len = 0 },
 };
 
 const BuildLookupRecord = struct {
-    key: []const u8,
-    matched: []const u8,
     entry_index: u32,
+    alt_form_index: u32 = 0,
     kind: u8,
+    reserved: [3]u8 = [_]u8{0} ** 3,
 };
 
 const BuildPayload = struct {
-    entries: []const BuildEntryData,
+    entries: []BuildEntryData,
     lookups: []const BuildLookupRecord,
+    scan_chunks: []ScanChunkResult = &.{},
+
+    fn deinitTransient(self: *BuildPayload, allocator: std.mem.Allocator) void {
+        for (self.scan_chunks) |*chunk| chunk.deinit();
+        if (self.scan_chunks.len != 0) allocator.free(self.scan_chunks);
+        self.scan_chunks = &.{};
+    }
+};
+
+const LookupRefs = struct {
+    key: StringRef,
+    matched: StringRef,
+};
+
+const LookupSortContext = struct {
+    entries: []const BuildEntryData,
+};
+
+const IndexRangeBuilder = struct {
+    start: usize = 0,
+    len: usize = 0,
+    cursor: usize = 0,
+};
+
+const LookupRun = struct {
+    start: usize,
+    end: usize,
 };
 
 const CacheBuildData = struct {
@@ -137,6 +168,10 @@ const EntryRecordView = struct {
     payload: []const u8,
 };
 
+pub const OpenOptions = struct {
+    index_build_threads: ?usize = null,
+};
+
 pub const EntryDerivedData = struct {
     summary: []const u8,
     alt_forms: std.ArrayListUnmanaged([]const u8) = .empty,
@@ -153,6 +188,8 @@ pub const EntryDerivedData = struct {
 };
 
 const CacheBuildProgress = struct {
+    const refresh_interval_ns = std.time.ns_per_s / 20;
+
     const Phase = enum {
         reading,
         aliases,
@@ -171,6 +208,7 @@ const CacheBuildProgress = struct {
     last_percent: u8 = 255,
     last_primary: usize = std.math.maxInt(usize),
     last_secondary: usize = std.math.maxInt(usize),
+    last_render_ns: i96 = 0,
 
     fn init(total_record_bytes: usize) CacheBuildProgress {
         return .{
@@ -207,11 +245,14 @@ const CacheBuildProgress = struct {
         defer self.mutex.unlock(std.Options.debug_io);
 
         if (self.phase == phase and self.last_percent == percent and self.last_primary == primary and self.last_secondary == secondary) return;
+        const now_ns = std.Io.Timestamp.now(std.Options.debug_io, .awake).toNanoseconds();
+        if (!shouldRenderNow(self, phase, now_ns)) return;
 
         self.phase = phase;
         self.last_percent = percent;
         self.last_primary = primary;
         self.last_secondary = secondary;
+        self.last_render_ns = now_ns;
 
         var bar: [24]u8 = undefined;
         @memset(&bar, '.');
@@ -237,6 +278,11 @@ const CacheBuildProgress = struct {
             ),
             .done => unreachable,
         }
+    }
+
+    fn shouldRenderNow(self: *const CacheBuildProgress, phase: Phase, now_ns: i96) bool {
+        if (phase == .done or phase != self.phase) return true;
+        return now_ns - self.last_render_ns >= refresh_interval_ns;
     }
 
     fn phaseLabel(self: *const CacheBuildProgress, phase: Phase) []const u8 {
@@ -465,7 +511,7 @@ pub const Dictionary = struct {
     lookups: []const CachedLookup,
     strings: []const u8,
 
-    pub fn open(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Dictionary {
+    pub fn open(allocator: std.mem.Allocator, io: std.Io, path: []const u8, options: OpenOptions) !Dictionary {
         var file = try std.Io.Dir.cwd().openFile(io, path, .{});
         errdefer file.close(io);
 
@@ -481,7 +527,7 @@ pub const Dictionary = struct {
         const records_end = std.math.add(u64, header.records_offset, header.records_len) catch return error.InvalidDictionaryFile;
         if (records_end > stat.size) return error.InvalidDictionaryFile;
 
-        const cache = try openOrBuildCache(allocator, io, path, stat, mapped, header);
+        const cache = try openOrBuildCache(allocator, io, path, stat, mapped, header, options);
         errdefer {
             std.posix.munmap(cache.mapping);
             cache.file.close(io);
@@ -604,6 +650,7 @@ pub const Dictionary = struct {
 const BuildState = struct {
     entries: std.ArrayList(BuildEntryData) = .empty,
     lookups: std.ArrayList(BuildLookupRecord) = .empty,
+    scan_chunks: []ScanChunkResult = &.{},
 };
 
 const StringInterner = struct {
@@ -617,9 +664,12 @@ const StringInterner = struct {
         };
     }
 
+    fn reserve(self: *StringInterner, string_count: usize, total_bytes: usize) !void {
+        try self.map.ensureTotalCapacity(self.allocator, std.math.cast(u32, string_count) orelse return error.StringTooLarge);
+        try self.blob.ensureTotalCapacity(self.allocator, total_bytes);
+    }
+
     fn deinit(self: *StringInterner) void {
-        var it = self.map.iterator();
-        while (it.next()) |entry| self.allocator.free(entry.key_ptr.*);
         self.map.deinit(self.allocator);
         self.blob.deinit(self.allocator);
     }
@@ -634,18 +684,15 @@ const StringInterner = struct {
         if (value.len == 0) return .{ .offset = 0, .len = 0 };
         if (self.map.get(value)) |existing| return existing;
 
-        const key = try self.allocator.dupe(u8, value);
-        errdefer self.allocator.free(key);
-
         const start = self.blob.items.len;
-        try self.blob.appendSlice(self.allocator, value);
+        self.blob.appendSliceAssumeCapacity(value);
 
         const ref = StringRef{
             .offset = std.math.cast(u32, start) orelse return error.StringTooLarge,
             .len = std.math.cast(u32, value.len) orelse return error.StringTooLarge,
         };
 
-        try self.map.put(self.allocator, key, ref);
+        self.map.putAssumeCapacity(value, ref);
         return ref;
     }
 };
@@ -657,6 +704,7 @@ fn openOrBuildCache(
     db_stat: anytype,
     mapped: []align(std.heap.page_size_min) const u8,
     header: *const format.Header,
+    options: OpenOptions,
 ) !OpenCache {
     const cache_path = try std.fmt.allocPrint(allocator, "{s}.idx", .{db_path});
     defer allocator.free(cache_path);
@@ -665,7 +713,7 @@ fn openOrBuildCache(
     if (try tryOpenCache(io, cache_path, expected_key)) |cache| return cache;
 
     var progress = CacheBuildProgress.init(std.math.cast(usize, header.records_len) orelse return error.FileTooBig);
-    try buildAndWriteCache(allocator, io, cache_path, expected_key, mapped, header, &progress);
+    try buildAndWriteCache(allocator, io, cache_path, expected_key, mapped, header, options, &progress);
     return (try tryOpenCache(io, cache_path, expected_key)) orelse error.InvalidDictionaryCache;
 }
 
@@ -740,14 +788,16 @@ fn buildAndWriteCache(
     cache_key: u64,
     mapped: []align(std.heap.page_size_min) const u8,
     header: *const format.Header,
+    options: OpenOptions,
     progress: *CacheBuildProgress,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const build_payload = try buildCachePayload(allocator, arena.allocator(), mapped, header, progress);
+    var build_payload = try buildCachePayload(allocator, arena.allocator(), mapped, header, options, progress);
+    defer build_payload.deinitTransient(allocator);
     progress.setPhase(.materialize, 92, build_payload.entries.len, build_payload.lookups.len);
-    var cache_data = try materializeCacheData(allocator, build_payload);
+    var cache_data = try materializeCacheData(allocator, &build_payload);
     defer cache_data.deinit(allocator);
 
     progress.setPhase(.writing, 97, cache_data.strings.len, 0);
@@ -760,79 +810,105 @@ fn buildCachePayload(
     arena_allocator: std.mem.Allocator,
     mapped: []align(std.heap.page_size_min) const u8,
     header: *const format.Header,
+    options: OpenOptions,
     progress: *CacheBuildProgress,
 ) !BuildPayload {
-    var state = try buildIndex(allocator, arena_allocator, mapped, header, progress);
+    var state = try buildIndex(allocator, arena_allocator, mapped, header, options, progress);
     progress.setPhase(.aliases, 75, state.entries.items.len, 0);
     try finalizeIncomingAliases(allocator, arena_allocator, &state);
     progress.setPhase(.lookups, 84, state.entries.items.len, 0);
-    try buildLookups(arena_allocator, &state);
+    try buildLookups(allocator, arena_allocator, &state, indexBuildThreadCount(state.entries.items.len, options.index_build_threads));
     return .{
         .entries = try state.entries.toOwnedSlice(arena_allocator),
         .lookups = try state.lookups.toOwnedSlice(arena_allocator),
+        .scan_chunks = state.scan_chunks,
     };
 }
 
-fn materializeCacheData(allocator: std.mem.Allocator, payload: BuildPayload) !CacheBuildData {
+fn materializeCacheData(allocator: std.mem.Allocator, payload: *BuildPayload) !CacheBuildData {
     var interner = StringInterner.init(allocator);
     defer interner.deinit();
 
-    var entries: std.ArrayList(CachedEntry) = .empty;
-    defer entries.deinit(allocator);
-    try entries.ensureTotalCapacity(allocator, payload.entries.len);
+    var intern_call_count: usize = 0;
+    var total_string_bytes: usize = 0;
+    for (payload.entries) |entry| {
+        intern_call_count += 2 + (entry.alt_forms.len * 2);
+        total_string_bytes += entry.word.len + entry.normalized.len;
+        for (entry.alt_forms) |alt_form| {
+            total_string_bytes += alt_form.value.len + alt_form.normalized.len;
+        }
+    }
+    try interner.reserve(intern_call_count, total_string_bytes);
 
-    var incoming_aliases: std.ArrayList(u32) = .empty;
-    defer incoming_aliases.deinit(allocator);
     var incoming_alias_count: usize = 0;
     for (payload.entries) |entry| {
         incoming_alias_count += entry.incoming_aliases.len;
     }
-    try incoming_aliases.ensureTotalCapacity(allocator, incoming_alias_count);
 
-    for (payload.entries) |entry| {
-        const incoming_range = try appendIncomingAliasList(allocator, &incoming_aliases, entry.incoming_aliases);
+    const entries = try allocator.alloc(CachedEntry, payload.entries.len);
+    errdefer allocator.free(entries);
+    const incoming_aliases = try allocator.alloc(u32, incoming_alias_count);
+    errdefer allocator.free(incoming_aliases);
 
-        try entries.append(allocator, .{
-            .word = try interner.intern(entry.word),
-            .incoming_aliases = incoming_range,
+    var incoming_cursor: usize = 0;
+    for (payload.entries, 0..) |*entry, idx| {
+        entry.word_ref = try interner.intern(entry.word);
+        entry.normalized_ref = try interner.intern(entry.normalized);
+        for (entry.alt_forms) |*alt_form| {
+            alt_form.value_ref = try interner.intern(alt_form.value);
+            alt_form.normalized_ref = try interner.intern(alt_form.normalized);
+        }
+
+        const incoming_len = entry.incoming_aliases.len;
+        if (incoming_len != 0) {
+            @memcpy(
+                incoming_aliases[incoming_cursor .. incoming_cursor + incoming_len],
+                entry.incoming_aliases,
+            );
+        }
+        entries[idx] = .{
+            .word = entry.word_ref,
+            .incoming_aliases = .{
+                .start = std.math.cast(u32, incoming_cursor) orelse return error.StringListTooLarge,
+                .len = std.math.cast(u32, incoming_len) orelse return error.StringListTooLarge,
+            },
             .record_offset = entry.record_offset,
-        });
+        };
+        incoming_cursor += incoming_len;
     }
 
-    var lookups: std.ArrayList(CachedLookup) = .empty;
-    defer lookups.deinit(allocator);
-    try lookups.ensureTotalCapacity(allocator, payload.lookups.len);
+    const lookups = try allocator.alloc(CachedLookup, payload.lookups.len);
+    errdefer allocator.free(lookups);
 
-    for (payload.lookups) |lookup| {
-        try lookups.append(allocator, .{
-            .key = try interner.intern(lookup.key),
-            .matched = try interner.intern(lookup.matched),
+    for (payload.lookups, 0..) |lookup, idx| {
+        const entry = &payload.entries[lookup.entry_index];
+        const refs: LookupRefs = switch (lookup.kind) {
+            format.lookup_kind_title => .{
+                .key = entry.normalized_ref,
+                .matched = entry.word_ref,
+            },
+            format.lookup_kind_alternative_form => blk: {
+                const alt_form = &entry.alt_forms[lookup.alt_form_index];
+                break :blk .{
+                    .key = alt_form.normalized_ref,
+                    .matched = alt_form.value_ref,
+                };
+            },
+            else => return error.InvalidDictionaryCache,
+        };
+        lookups[idx] = .{
+            .key = refs.key,
+            .matched = refs.matched,
             .entry_index = lookup.entry_index,
             .kind = lookup.kind,
-        });
+        };
     }
 
     return .{
-        .entries = try entries.toOwnedSlice(allocator),
-        .incoming_aliases = try incoming_aliases.toOwnedSlice(allocator),
-        .lookups = try lookups.toOwnedSlice(allocator),
+        .entries = entries,
+        .incoming_aliases = incoming_aliases,
+        .lookups = lookups,
         .strings = try interner.intoOwnedBlob(),
-    };
-}
-
-fn appendIncomingAliasList(
-    allocator: std.mem.Allocator,
-    indices: *std.ArrayList(u32),
-    values: []const u32,
-) !Range {
-    const start = indices.items.len;
-    try indices.ensureUnusedCapacity(allocator, values.len);
-    for (values) |value| {
-        indices.appendAssumeCapacity(value);
-    }
-    return .{
-        .start = std.math.cast(u32, start) orelse return error.StringListTooLarge,
-        .len = std.math.cast(u32, values.len) orelse return error.StringListTooLarge,
     };
 }
 
@@ -906,6 +982,7 @@ fn buildIndex(
     arena_allocator: std.mem.Allocator,
     mapped: []align(std.heap.page_size_min) const u8,
     header: *const format.Header,
+    options: OpenOptions,
     progress: *CacheBuildProgress,
 ) !BuildState {
     const descriptors = try collectRecordDescriptors(arena_allocator, mapped, header);
@@ -913,7 +990,7 @@ fn buildIndex(
     var state: BuildState = .{};
     try state.entries.ensureTotalCapacity(arena_allocator, descriptors.len);
 
-    const thread_count = indexBuildThreadCount(descriptors.len);
+    const thread_count = indexBuildThreadCount(descriptors.len, options.index_build_threads);
     progress.setReadingParallel(thread_count > 1);
     if (thread_count == 1) {
         for (descriptors) |descriptor| {
@@ -927,14 +1004,14 @@ fn buildIndex(
     const threads = try allocator.alloc(std.Thread, thread_count);
     defer allocator.free(threads);
     const chunks = try allocator.alloc(ScanChunkResult, thread_count);
-    defer {
-        for (chunks) |*chunk| chunk.deinit();
-        allocator.free(chunks);
-    }
     for (chunks) |*chunk| chunk.* = ScanChunkResult.init();
 
     var started_threads: usize = 0;
-    errdefer for (threads[0..started_threads]) |thread| thread.join();
+    errdefer {
+        for (threads[0..started_threads]) |thread| thread.join();
+        for (chunks) |*chunk| chunk.deinit();
+        allocator.free(chunks);
+    }
     var start: usize = 0;
     for (chunks, threads, 0..) |*chunk, *thread, i| {
         const end = partitionEnd(descriptors.len, thread_count, i);
@@ -951,9 +1028,10 @@ fn buildIndex(
     for (chunks) |*chunk| {
         if (chunk.err) |err| return err;
         for (chunk.entries) |entry| {
-            state.entries.appendAssumeCapacity(try cloneEntryData(arena_allocator, entry));
+            state.entries.appendAssumeCapacity(entry);
         }
     }
+    state.scan_chunks = chunks;
 
     return state;
 }
@@ -1003,16 +1081,18 @@ fn buildEntryFromRecord(allocator: std.mem.Allocator, descriptor: RecordDescript
     };
 
     if ((descriptor.flags & format.record_flag_has_raw) != 0) {
-        const encoded_english = try format.rawRecordEnglishPayload(descriptor.payload);
-        const raw = try section_encoding.decodeEnglishAlloc(allocator, encoded_english);
-        defer allocator.free(raw);
-
-        var metadata = try wikitext.extractEntryMetadata(allocator, title, raw);
-        defer metadata.deinit(allocator);
-
-        entry.alt_forms = try adoptAltForms(allocator, metadata.alt_forms.items);
-        metadata.alt_forms = .empty;
-        entry.normalized_targets = try normalizeTargets(allocator, metadata.canonical_targets.items);
+        var metadata = try format.decodeRawRecordMetadataAlloc(allocator, descriptor.payload);
+        const alt_forms = try allocator.alloc(BuildAltForm, metadata.alt_forms.len);
+        for (metadata.alt_forms, 0..) |alt_form, idx| {
+            alt_forms[idx] = .{
+                .value = alt_form.value,
+                .normalized = alt_form.normalized,
+            };
+        }
+        allocator.free(metadata.alt_forms);
+        metadata.alt_forms = &.{};
+        entry.alt_forms = alt_forms;
+        entry.normalized_targets = metadata.normalized_targets;
         return entry;
     }
 
@@ -1021,100 +1101,6 @@ fn buildEntryFromRecord(allocator: std.mem.Allocator, descriptor: RecordDescript
     targets[0] = normalized_target;
     entry.normalized_targets = targets;
     return entry;
-}
-
-fn adoptAltForms(allocator: std.mem.Allocator, values: []const []const u8) ![]const BuildAltForm {
-    const out = try allocator.alloc(BuildAltForm, values.len);
-    errdefer allocator.free(out);
-
-    var count: usize = 0;
-    errdefer while (count > 0) : (count -= 1) {
-        allocator.free(out[count - 1].normalized);
-    };
-
-    for (values, 0..) |value, idx| {
-        out[idx] = .{
-            .value = value,
-            .normalized = try normalize.normalizeAlloc(allocator, value),
-        };
-        count += 1;
-    }
-    return out;
-}
-
-fn normalizeTargets(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
-    const out = try allocator.alloc([]const u8, values.len);
-    errdefer allocator.free(out);
-
-    var count: usize = 0;
-    errdefer while (count > 0) : (count -= 1) {
-        allocator.free(out[count - 1]);
-    };
-
-    for (values, 0..) |value, idx| {
-        out[idx] = try normalize.normalizeAlloc(allocator, value);
-        count += 1;
-    }
-    return out;
-}
-
-fn cloneEntryData(allocator: std.mem.Allocator, source: BuildEntryData) !BuildEntryData {
-    const alt_forms = try cloneAltForms(allocator, source.alt_forms);
-    errdefer freeAltForms(allocator, alt_forms);
-    const normalized_targets = try cloneStringSlice(allocator, source.normalized_targets);
-    errdefer freeStringSlice(allocator, normalized_targets);
-    const word = try allocator.dupe(u8, source.word);
-    errdefer allocator.free(word);
-    const normalized = try allocator.dupe(u8, source.normalized);
-    errdefer allocator.free(normalized);
-
-    return .{
-        .record_offset = source.record_offset,
-        .word = word,
-        .normalized = normalized,
-        .alt_forms = alt_forms,
-        .normalized_targets = normalized_targets,
-    };
-}
-
-fn cloneAltForms(allocator: std.mem.Allocator, values: []const BuildAltForm) ![]const BuildAltForm {
-    const out = try allocator.alloc(BuildAltForm, values.len);
-    errdefer allocator.free(out);
-    var count: usize = 0;
-    errdefer while (count > 0) : (count -= 1) {
-        allocator.free(out[count - 1].value);
-        allocator.free(out[count - 1].normalized);
-    };
-    for (values, 0..) |value, idx| {
-        out[idx] = .{
-            .value = try allocator.dupe(u8, value.value),
-            .normalized = try allocator.dupe(u8, value.normalized),
-        };
-        count += 1;
-    }
-    return out;
-}
-
-fn freeAltForms(allocator: std.mem.Allocator, values: []const BuildAltForm) void {
-    for (values) |value| {
-        allocator.free(value.value);
-        allocator.free(value.normalized);
-    }
-    allocator.free(values);
-}
-
-fn cloneStringSlice(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
-    const out = try allocator.alloc([]const u8, values.len);
-    errdefer allocator.free(out);
-    for (values, 0..) |value, idx| {
-        out[idx] = try allocator.dupe(u8, value);
-    }
-    return out;
-}
-
-fn freeStringSlice(allocator: std.mem.Allocator, values: []const []const u8) void {
-    for (values) |value| allocator.free(value);
-    allocator.free(values);
 }
 
 fn scanRecordChunk(descriptors: []const RecordDescriptor, chunk: *ScanChunkResult, progress: *CacheBuildProgress) void {
@@ -1153,8 +1139,9 @@ fn partitionEnd(total: usize, part_count: usize, part_index: usize) usize {
     return @divTrunc(total * (part_index + 1), part_count);
 }
 
-fn indexBuildThreadCount(entry_count: usize) usize {
+fn indexBuildThreadCount(entry_count: usize, thread_override: ?usize) usize {
     if (builtin.single_threaded or entry_count < 128) return 1;
+    if (thread_override) |requested| return @max(@as(usize, 1), requested);
     const cpu_count = std.Thread.getCpuCount() catch 1;
     return @max(@as(usize, 1), @min(cpu_count, entry_count / 64));
 }
@@ -1225,86 +1212,324 @@ fn finalizeIncomingAliases(
     arena_allocator: std.mem.Allocator,
     state: *BuildState,
 ) !void {
-    var title_map = std.StringHashMapUnmanaged(std.ArrayListUnmanaged(u32)).empty;
-    defer {
-        var it = title_map.iterator();
-        while (it.next()) |entry| entry.value_ptr.deinit(allocator);
-        title_map.deinit(allocator);
-    }
+    var title_map = std.StringHashMapUnmanaged(IndexRangeBuilder).empty;
+    defer title_map.deinit(allocator);
     try title_map.ensureTotalCapacity(allocator, std.math.cast(u32, state.entries.items.len) orelse return error.InvalidDictionaryFile);
 
-    for (state.entries.items, 0..) |entry, idx| {
+    for (state.entries.items) |entry| {
         const gop = try title_map.getOrPut(allocator, entry.normalized);
-        if (!gop.found_existing) gop.value_ptr.* = .empty;
-        try gop.value_ptr.append(allocator, @intCast(idx));
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        gop.value_ptr.len += 1;
     }
 
-    const incoming = try allocator.alloc(std.ArrayListUnmanaged(u32), state.entries.items.len);
-    defer {
-        for (incoming) |*list| list.deinit(allocator);
-        allocator.free(incoming);
+    var title_indices_cursor: usize = 0;
+    var title_it = title_map.iterator();
+    while (title_it.next()) |entry| {
+        entry.value_ptr.start = title_indices_cursor;
+        entry.value_ptr.cursor = 0;
+        title_indices_cursor += entry.value_ptr.len;
     }
-    for (incoming) |*list| list.* = .empty;
+
+    const title_indices = try allocator.alloc(u32, title_indices_cursor);
+    defer allocator.free(title_indices);
+
+    for (state.entries.items, 0..) |entry, idx| {
+        const range = title_map.getPtr(entry.normalized).?;
+        title_indices[range.start + range.cursor] = @intCast(idx);
+        range.cursor += 1;
+    }
+
+    const incoming_counts = try allocator.alloc(usize, state.entries.items.len);
+    defer allocator.free(incoming_counts);
+    @memset(incoming_counts, 0);
+
+    for (state.entries.items) |entry| {
+        for (entry.normalized_targets) |normalized_target| {
+            if (title_map.get(normalized_target)) |range| {
+                const target_indices = title_indices[range.start .. range.start + range.len];
+                for (target_indices) |target_idx| incoming_counts[target_idx] += 1;
+            }
+        }
+    }
+
+    const incoming_offsets = try allocator.alloc(usize, state.entries.items.len + 1);
+    defer allocator.free(incoming_offsets);
+    incoming_offsets[0] = 0;
+    for (incoming_counts, 0..) |count, idx| {
+        incoming_offsets[idx + 1] = incoming_offsets[idx] + count;
+    }
+
+    const incoming_refs = try allocator.alloc(u32, incoming_offsets[state.entries.items.len]);
+    defer allocator.free(incoming_refs);
+    const incoming_cursors = try allocator.alloc(usize, state.entries.items.len);
+    defer allocator.free(incoming_cursors);
+    @memcpy(incoming_cursors, incoming_offsets[0..state.entries.items.len]);
 
     for (state.entries.items, 0..) |entry, source_idx| {
         for (entry.normalized_targets) |normalized_target| {
-            if (title_map.get(normalized_target)) |indices| {
-                for (indices.items) |target_idx| {
-                    try appendUniqueIndex(allocator, &incoming[target_idx], @intCast(source_idx));
+            if (title_map.get(normalized_target)) |range| {
+                const target_indices = title_indices[range.start .. range.start + range.len];
+                for (target_indices) |target_idx| {
+                    const cursor = incoming_cursors[target_idx];
+                    incoming_refs[cursor] = @intCast(source_idx);
+                    incoming_cursors[target_idx] = cursor + 1;
                 }
             }
         }
     }
 
-    for (incoming, 0..) |list, idx| {
-        if (list.items.len == 0) continue;
-        const owned = try arena_allocator.alloc(u32, list.items.len);
-        @memcpy(owned, list.items);
-        state.entries.items[idx].incoming_aliases = owned;
+    for (state.entries.items, 0..) |*entry, idx| {
+        const start = incoming_offsets[idx];
+        const end = incoming_offsets[idx + 1];
+        if (start == end) continue;
+
+        const unique_slice = dedupeAdjacentIndices(incoming_refs[start..end]);
+        const owned = try arena_allocator.alloc(u32, unique_slice.len);
+        @memcpy(owned, unique_slice);
+        entry.incoming_aliases = owned;
     }
 }
 
-fn appendUniqueIndex(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged(u32), value: u32) !void {
-    for (list.items) |existing| {
-        if (existing == value) return;
+fn dedupeAdjacentIndices(values: []u32) []u32 {
+    if (values.len == 0) return values;
+    var out_len: usize = 1;
+    for (values[1..]) |value| {
+        if (value == values[out_len - 1]) continue;
+        values[out_len] = value;
+        out_len += 1;
     }
-    try list.append(allocator, value);
+    return values[0..out_len];
 }
 
-fn buildLookups(arena_allocator: std.mem.Allocator, state: *BuildState) !void {
-    var lookup_count: usize = state.entries.items.len;
-    for (state.entries.items) |entry| lookup_count += entry.alt_forms.len;
+fn buildLookups(
+    allocator: std.mem.Allocator,
+    arena_allocator: std.mem.Allocator,
+    state: *BuildState,
+    thread_count: usize,
+) !void {
+    const lookup_count = lookupCountForEntries(state.entries.items);
     try state.lookups.ensureTotalCapacity(arena_allocator, lookup_count);
+    state.lookups.items.len = lookup_count;
 
-    for (state.entries.items, 0..) |entry, idx| {
-        state.lookups.appendAssumeCapacity(.{
-            .key = entry.normalized,
-            .matched = entry.word,
-            .entry_index = @intCast(idx),
-            .kind = format.lookup_kind_title,
+    const worker_count = lookupBuildWorkerCount(state.entries.items.len, thread_count);
+    if (worker_count == 1) {
+        fillLookupChunk(state.entries.items, 0, state.lookups.items);
+        try sortLookups(allocator, state.entries.items, state.lookups.items, 1);
+        return;
+    }
+
+    const runs = try allocator.alloc(LookupRun, worker_count);
+    defer allocator.free(runs);
+
+    var entry_start: usize = 0;
+    var lookup_start: usize = 0;
+    for (runs, 0..) |*run, idx| {
+        const entry_end = partitionEnd(state.entries.items.len, worker_count, idx);
+        const chunk_entries = state.entries.items[entry_start..entry_end];
+        const chunk_lookup_count = lookupCountForEntries(chunk_entries);
+        run.* = .{
+            .start = lookup_start,
+            .end = lookup_start + chunk_lookup_count,
+        };
+        lookup_start += chunk_lookup_count;
+        entry_start = entry_end;
+    }
+
+    const threads = try allocator.alloc(std.Thread, worker_count - 1);
+    defer allocator.free(threads);
+
+    entry_start = 0;
+    var started_threads: usize = 0;
+    errdefer for (threads[0..started_threads]) |thread| thread.join();
+    for (runs[1..], threads, 1..) |run, *thread, idx| {
+        const entry_end = partitionEnd(state.entries.items.len, worker_count, idx);
+        thread.* = try std.Thread.spawn(.{}, fillAndSortLookupChunk, .{
+            state.entries.items,
+            state.entries.items[entry_start..entry_end],
+            entry_start,
+            state.lookups.items[run.start..run.end],
         });
+        started_threads += 1;
+        entry_start = entry_end;
+    }
 
-        for (entry.alt_forms) |alt_form| {
-            state.lookups.appendAssumeCapacity(.{
-                .key = alt_form.normalized,
-                .matched = alt_form.value,
-                .entry_index = @intCast(idx),
+    fillAndSortLookupChunk(
+        state.entries.items,
+        state.entries.items[0 .. partitionEnd(state.entries.items.len, worker_count, 0)],
+        0,
+        state.lookups.items[runs[0].start..runs[0].end],
+    );
+    for (threads[0..started_threads]) |thread| thread.join();
+
+    try mergeLookupRuns(allocator, state.entries.items, state.lookups.items, runs);
+}
+
+fn lookupCountForEntries(entries: []const BuildEntryData) usize {
+    var count: usize = entries.len;
+    for (entries) |entry| count += entry.alt_forms.len;
+    return count;
+}
+
+fn lookupBuildWorkerCount(entry_count: usize, thread_count: usize) usize {
+    if (thread_count < 2 or entry_count < 1024) return 1;
+    return @min(thread_count, @max(@as(usize, 1), entry_count / 1024));
+}
+
+fn fillAndSortLookupChunk(
+    all_entries: []const BuildEntryData,
+    entries: []const BuildEntryData,
+    base_entry_index: usize,
+    out: []BuildLookupRecord,
+) void {
+    fillLookupChunk(entries, base_entry_index, out);
+    std.mem.sort(BuildLookupRecord, out, LookupSortContext{ .entries = all_entries }, lessThanLookup);
+}
+
+fn fillLookupChunk(entries: []const BuildEntryData, base_entry_index: usize, out: []BuildLookupRecord) void {
+    var out_index: usize = 0;
+    for (entries, 0..) |entry, local_idx| {
+        out[out_index] = .{
+            .entry_index = @intCast(base_entry_index + local_idx),
+            .alt_form_index = 0,
+            .kind = format.lookup_kind_title,
+        };
+        out_index += 1;
+
+        for (entry.alt_forms, 0..) |_, alt_form_idx| {
+            out[out_index] = .{
+                .entry_index = @intCast(base_entry_index + local_idx),
+                .alt_form_index = @intCast(alt_form_idx),
                 .kind = format.lookup_kind_alternative_form,
-            });
+            };
+            out_index += 1;
         }
     }
-
-    std.mem.sort(BuildLookupRecord, state.lookups.items, {}, lessThanLookup);
+    std.debug.assert(out_index == out.len);
 }
 
-fn lessThanLookup(_: void, lhs: BuildLookupRecord, rhs: BuildLookupRecord) bool {
-    switch (std.mem.order(u8, lhs.key, rhs.key)) {
+fn lookupSortKey(ctx: LookupSortContext, lookup: BuildLookupRecord) []const u8 {
+    const entry = ctx.entries[lookup.entry_index];
+    return if (lookup.kind == format.lookup_kind_alternative_form)
+        entry.alt_forms[lookup.alt_form_index].normalized
+    else
+        entry.normalized;
+}
+
+fn lookupSortMatched(ctx: LookupSortContext, lookup: BuildLookupRecord) []const u8 {
+    const entry = ctx.entries[lookup.entry_index];
+    return if (lookup.kind == format.lookup_kind_alternative_form)
+        entry.alt_forms[lookup.alt_form_index].value
+    else
+        entry.word;
+}
+
+fn lessThanLookup(ctx: LookupSortContext, lhs: BuildLookupRecord, rhs: BuildLookupRecord) bool {
+    switch (std.mem.order(u8, lookupSortKey(ctx, lhs), lookupSortKey(ctx, rhs))) {
         .lt => return true,
         .gt => return false,
         .eq => {},
     }
     if (lhs.kind != rhs.kind) return lhs.kind < rhs.kind;
-    return std.mem.order(u8, lhs.matched, rhs.matched) == .lt;
+    return std.mem.order(u8, lookupSortMatched(ctx, lhs), lookupSortMatched(ctx, rhs)) == .lt;
+}
+
+fn sortLookups(
+    allocator: std.mem.Allocator,
+    entries: []const BuildEntryData,
+    lookups: []BuildLookupRecord,
+    thread_count: usize,
+) !void {
+    _ = allocator;
+    _ = thread_count;
+    const ctx = LookupSortContext{ .entries = entries };
+    std.mem.sort(BuildLookupRecord, lookups, ctx, lessThanLookup);
+}
+
+fn mergeLookupRuns(
+    allocator: std.mem.Allocator,
+    entries: []const BuildEntryData,
+    lookups: []BuildLookupRecord,
+    runs: []const LookupRun,
+) !void {
+    if (runs.len <= 1) return;
+
+    const temp = try allocator.alloc(BuildLookupRecord, lookups.len);
+    defer allocator.free(temp);
+    var src = lookups;
+    var dst = temp;
+
+    var current_runs = try allocator.alloc(LookupRun, runs.len);
+    defer allocator.free(current_runs);
+    @memcpy(current_runs, runs);
+    var next_runs = try allocator.alloc(LookupRun, runs.len);
+    defer allocator.free(next_runs);
+
+    var run_count = runs.len;
+    var src_is_primary = true;
+    while (run_count > 1) {
+        var next_count: usize = 0;
+        var run_index: usize = 0;
+        while (run_index < run_count) {
+            const left = current_runs[run_index];
+            if (run_index + 1 >= run_count) {
+                @memcpy(dst[left.start..left.end], src[left.start..left.end]);
+                next_runs[next_count] = left;
+                next_count += 1;
+                break;
+            }
+
+            const right = current_runs[run_index + 1];
+            mergeSortedLookups(entries, src[left.start..left.end], src[right.start..right.end], dst[left.start..right.end]);
+            next_runs[next_count] = .{
+                .start = left.start,
+                .end = right.end,
+            };
+            next_count += 1;
+            run_index += 2;
+        }
+
+        const tmp_slice = src;
+        src = dst;
+        dst = tmp_slice;
+        const tmp_runs = current_runs;
+        current_runs = next_runs;
+        next_runs = tmp_runs;
+        run_count = next_count;
+        src_is_primary = !src_is_primary;
+    }
+
+    if (!src_is_primary) @memcpy(lookups, src);
+}
+
+fn mergeSortedLookups(
+    entries: []const BuildEntryData,
+    left: []const BuildLookupRecord,
+    right: []const BuildLookupRecord,
+    out: []BuildLookupRecord,
+) void {
+    const ctx = LookupSortContext{ .entries = entries };
+    var left_index: usize = 0;
+    var right_index: usize = 0;
+    var out_index: usize = 0;
+
+    while (left_index < left.len and right_index < right.len) {
+        if (lessThanLookup(ctx, right[right_index], left[left_index])) {
+            out[out_index] = right[right_index];
+            right_index += 1;
+        } else {
+            out[out_index] = left[left_index];
+            left_index += 1;
+        }
+        out_index += 1;
+    }
+
+    if (left_index < left.len) {
+        @memcpy(out[out_index .. out_index + (left.len - left_index)], left[left_index..]);
+        out_index += left.len - left_index;
+    }
+    if (right_index < right.len) {
+        @memcpy(out[out_index .. out_index + (right.len - right_index)], right[right_index..]);
+    }
 }
 
 fn containsHit(items: []const LookupHit, candidate: LookupHit) bool {
@@ -1438,7 +1663,7 @@ test "dictionary open preserves raw etymology and pronunciation sections through
         .output_path = db_path,
     });
 
-    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path);
+    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path, .{});
     defer dict.deinit();
 
     const hits = try dict.lookupExact(std.testing.allocator, "ring");
@@ -1488,7 +1713,7 @@ test "dictionary cache rebuild reuses precomputed normalized alias metadata" {
         .output_path = db_path,
     });
 
-    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path);
+    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path, .{});
     defer dict.deinit();
 
     const alt_hits = try dict.lookupExact(std.testing.allocator, "CO_LOR");
@@ -1533,4 +1758,87 @@ test "replaceFile overwrites an existing cache target" {
     const contents = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, target_path, std.testing.allocator, .limited(32));
     defer std.testing.allocator.free(contents);
     try std.testing.expectEqualStrings("fresh", contents);
+}
+
+test "indexBuildThreadCount honors explicit overrides" {
+    try std.testing.expectEqual(@as(usize, 1), indexBuildThreadCount(1024, 1));
+    try std.testing.expectEqual(@as(usize, 2), indexBuildThreadCount(1024, 2));
+    try std.testing.expectEqual(@as(usize, 1), indexBuildThreadCount(1024, 0));
+}
+
+test "sortLookups matches serial ordering" {
+    var alpha_alt_forms = [_]BuildAltForm{.{ .value = "able", .normalized = "alpha" }};
+    var beta_alt_forms = [_]BuildAltForm{.{ .value = "able", .normalized = "beta" }};
+    const alt_forms = [_][]BuildAltForm{
+        &.{},
+        &.{},
+        alpha_alt_forms[0..],
+        &.{},
+        beta_alt_forms[0..],
+    };
+    const entries = [_]BuildEntryData{
+        .{ .record_offset = 0, .word = "beta", .normalized = "beta", .alt_forms = alt_forms[0] },
+        .{ .record_offset = 0, .word = "zeta", .normalized = "alpha", .alt_forms = alt_forms[1] },
+        .{ .record_offset = 0, .word = "entry3", .normalized = "unused", .alt_forms = alt_forms[2] },
+        .{ .record_offset = 0, .word = "alpha", .normalized = "alpha", .alt_forms = alt_forms[3] },
+        .{ .record_offset = 0, .word = "entry5", .normalized = "unused", .alt_forms = alt_forms[4] },
+    };
+    var parallel = [_]BuildLookupRecord{
+        .{ .entry_index = 0, .kind = format.lookup_kind_title, .alt_form_index = 0 },
+        .{ .entry_index = 1, .kind = format.lookup_kind_title, .alt_form_index = 0 },
+        .{ .entry_index = 2, .kind = format.lookup_kind_alternative_form, .alt_form_index = 0 },
+        .{ .entry_index = 3, .kind = format.lookup_kind_title, .alt_form_index = 0 },
+        .{ .entry_index = 4, .kind = format.lookup_kind_alternative_form, .alt_form_index = 0 },
+    };
+    var serial = parallel;
+    const ctx = LookupSortContext{ .entries = &entries };
+
+    try sortLookups(std.testing.allocator, &entries, &parallel, 2);
+    std.mem.sort(BuildLookupRecord, &serial, ctx, lessThanLookup);
+
+    for (parallel, serial) |lhs, rhs| {
+        try std.testing.expectEqualStrings(lookupSortKey(ctx, rhs), lookupSortKey(ctx, lhs));
+        try std.testing.expectEqualStrings(lookupSortMatched(ctx, rhs), lookupSortMatched(ctx, lhs));
+        try std.testing.expectEqual(rhs.entry_index, lhs.entry_index);
+        try std.testing.expectEqual(rhs.kind, lhs.kind);
+    }
+}
+
+test "mergeSortedLookups preserves lookup ordering" {
+    var beta_alt_forms = [_]BuildAltForm{.{ .value = "able", .normalized = "beta" }};
+    var alpha_alt_forms = [_]BuildAltForm{.{ .value = "able", .normalized = "alpha" }};
+    const alt_forms = [_][]BuildAltForm{
+        &.{},
+        beta_alt_forms[0..],
+        alpha_alt_forms[0..],
+        &.{},
+    };
+    const entries = [_]BuildEntryData{
+        .{ .record_offset = 0, .word = "alpha", .normalized = "alpha", .alt_forms = alt_forms[0] },
+        .{ .record_offset = 0, .word = "entry2", .normalized = "unused", .alt_forms = alt_forms[1] },
+        .{ .record_offset = 0, .word = "entry3", .normalized = "unused", .alt_forms = alt_forms[2] },
+        .{ .record_offset = 0, .word = "gamma", .normalized = "gamma", .alt_forms = alt_forms[3] },
+    };
+    const ctx = LookupSortContext{ .entries = &entries };
+    const left = [_]BuildLookupRecord{
+        .{ .entry_index = 0, .kind = format.lookup_kind_title, .alt_form_index = 0 },
+        .{ .entry_index = 1, .kind = format.lookup_kind_alternative_form, .alt_form_index = 0 },
+    };
+    const right = [_]BuildLookupRecord{
+        .{ .entry_index = 2, .kind = format.lookup_kind_alternative_form, .alt_form_index = 0 },
+        .{ .entry_index = 3, .kind = format.lookup_kind_title, .alt_form_index = 0 },
+    };
+    var merged: [left.len + right.len]BuildLookupRecord = undefined;
+    mergeSortedLookups(&entries, &left, &right, &merged);
+
+    const expected = [_][2][]const u8{
+        .{ "alpha", "alpha" },
+        .{ "alpha", "able" },
+        .{ "beta", "able" },
+        .{ "gamma", "gamma" },
+    };
+    for (merged, expected) |item, pair| {
+        try std.testing.expectEqualStrings(pair[0], lookupSortKey(ctx, item));
+        try std.testing.expectEqualStrings(pair[1], lookupSortMatched(ctx, item));
+    }
 }

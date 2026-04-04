@@ -991,7 +991,7 @@ test "verifyDictionary decodes double-escaped symbols and builder stores decoded
         .output_path = db_rel,
     });
 
-    var dict = try decoder.Dictionary.open(std.testing.allocator, std.testing.io, db_rel);
+    var dict = try decoder.Dictionary.open(std.testing.allocator, std.testing.io, db_rel, .{});
     defer dict.deinit();
 
     const hits = try dict.lookupExact(std.testing.allocator, "copycat");

@@ -33,8 +33,9 @@ fn cmdLookup(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
         printUsage();
         return;
     };
+    const open_options = try openOptionsFromArgs(args);
 
-    var db = try decoder.openDictionary(allocator, io, db_path);
+    var db = try decoder.openDictionaryWithOptions(allocator, io, db_path, open_options);
     defer db.deinit();
 
     const hits = try db.lookupExact(allocator, term);
@@ -57,8 +58,9 @@ fn cmdSuggest(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8
         return;
     };
     const limit = if (flagValue(args, "--limit")) |value| try std.fmt.parseInt(usize, value, 10) else 12;
+    const open_options = try openOptionsFromArgs(args);
 
-    var db = try decoder.openDictionary(allocator, io, db_path);
+    var db = try decoder.openDictionaryWithOptions(allocator, io, db_path, open_options);
     defer db.deinit();
 
     const hits = try db.suggest(allocator, prefix, limit);
@@ -73,7 +75,8 @@ fn cmdSuggest(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8
 
 fn cmdStats(io: std.Io, args: []const []const u8) !void {
     const db_path = flagValue(args, "--db") orelse "data/enwiktionary.bin";
-    var db = try decoder.openDictionary(std.heap.page_allocator, io, db_path);
+    const open_options = try openOptionsFromArgs(args);
+    var db = try decoder.openDictionaryWithOptions(std.heap.page_allocator, io, db_path, open_options);
     defer db.deinit();
 
     std.debug.print(
@@ -87,6 +90,15 @@ fn cmdStats(io: std.Io, args: []const []const u8) !void {
             db.header.records_len,
         },
     );
+}
+
+fn openOptionsFromArgs(args: []const []const u8) !decoder.OpenOptions {
+    return .{
+        .index_build_threads = if (flagValue(args, "--index-threads")) |value|
+            try std.fmt.parseInt(usize, value, 10)
+        else
+            null,
+    };
 }
 
 fn printHit(
@@ -152,9 +164,9 @@ fn flagValue(args: []const []const u8, name: []const u8) ?[]const u8 {
 
 fn printUsage() void {
     std.debug.print(
-        \\dict-decoder lookup  --db data/enwiktionary.bin --word colour
-        \\dict-decoder suggest --db data/enwiktionary.bin --prefix col [--limit 12]
-        \\dict-decoder stats   --db data/enwiktionary.bin
+        \\dict-decoder lookup  --db data/enwiktionary.bin --word colour [--index-threads 2]
+        \\dict-decoder suggest --db data/enwiktionary.bin --prefix col [--limit 12] [--index-threads 2]
+        \\dict-decoder stats   --db data/enwiktionary.bin [--index-threads 2]
         \\
     , .{});
 }
