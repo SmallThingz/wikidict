@@ -2,8 +2,8 @@ const std = @import("std");
 const compact = @import("compact_encoding.zig");
 const normalize = @import("normalize");
 
-pub const magic = "WIKDIC20";
-pub const version: u32 = 20;
+pub const magic = "WIKDIC21";
+pub const version: u32 = 21;
 
 pub const record_flag_has_raw: u8 = 1 << 0;
 

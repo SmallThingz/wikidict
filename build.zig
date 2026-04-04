@@ -204,6 +204,7 @@ const GeneratedStructureModules = struct {
 
 const StructureReport = struct {
     heading_profiles: []const HeadingProfile,
+    headings_by_level: ?[]const CountEntry = null,
     translation_source_labels: ?[]const CountEntry = null,
     translation_target_languages: ?[]const CountEntry = null,
     templates_by_heading: ?[]const HeadingTemplateEntry = null,
@@ -228,6 +229,13 @@ const HeadingTemplateEntry = struct {
 
 const GeneratedHeading = struct {
     title: []const u8,
+    kind_name: []const u8,
+    count: u64,
+};
+
+const GeneratedHeadingLevel = struct {
+    title: []const u8,
+    level: u8,
     kind_name: []const u8,
     count: u64,
 };
@@ -315,6 +323,23 @@ fn generateStructureTableSource(b: *std.Build) ![]const u8 {
         }
     }
     std.mem.sortUnstable(GeneratedHeading, headings.items, {}, generatedHeadingLessThan);
+
+    var heading_levels: std.ArrayList(GeneratedHeadingLevel) = .empty;
+    defer heading_levels.deinit(allocator);
+    if (parsed.value.headings_by_level) |heading_rows| {
+        for (heading_rows) |entry| {
+            const parsed_key = parseHeadingLevelKey(entry.key) orelse continue;
+            if (std.mem.eql(u8, parsed_key.title, "English")) continue;
+            const kind_name = headingKindNameForTitle(parsed.value.heading_profiles, parsed_key.title) orelse return error.InvalidStructureReport;
+            try heading_levels.append(allocator, .{
+                .title = try allocator.dupe(u8, parsed_key.title),
+                .level = parsed_key.level,
+                .kind_name = kind_name,
+                .count = entry.count,
+            });
+        }
+    }
+    std.mem.sortUnstable(GeneratedHeadingLevel, heading_levels.items, {}, generatedHeadingLevelLessThan);
 
     var labels: std.ArrayList(GeneratedLabel) = .empty;
     defer labels.deinit(allocator);
@@ -451,6 +476,7 @@ fn generateStructureTableSource(b: *std.Build) ![]const u8 {
     std.mem.sortUnstable(GeneratedTargetLanguage, target_languages.items, {}, generatedTargetLanguageLessThan);
 
     if (headings.items.len + 1 > std.math.maxInt(u16)) return error.TooManyGeneratedHeadings;
+    if (heading_levels.items.len + 1 > std.math.maxInt(u16)) return error.TooManyGeneratedHeadingLevels;
     if (templates.items.len > std.math.maxInt(u16)) return error.TooManyGeneratedTemplates;
     if (labels.items.len > std.math.maxInt(u16)) return error.TooManyGeneratedLabels;
     if (target_languages.items.len > std.math.maxInt(u16)) return error.TooManyGeneratedTargetLanguages;
@@ -474,6 +500,31 @@ fn generateStructureTableSource(b: *std.Build) ![]const u8 {
         \\    code: u16,
         \\    title: []const u8,
         \\    kind: SectionKind,
+        \\};
+        \\
+        \\pub const HeadingLevelSpec = struct {
+        \\    code: u16,
+        \\    level: u8,
+        \\    title: []const u8,
+        \\    kind: SectionKind,
+        \\};
+        \\
+        \\pub const heading_level_specs = [_]HeadingLevelSpec{
+        \\
+    );
+
+    for (heading_levels.items, 0..) |heading, index| {
+        try writer.writeAll("    .{ .code = ");
+        try writer.print("{d}", .{index + 2});
+        try writer.writeAll(", .level = ");
+        try writer.print("{d}", .{heading.level});
+        try writer.writeAll(", .title = ");
+        try appendZigStringLiteral(writer, heading.title);
+        try writer.writeAll(", .kind = .");
+        try writer.writeAll(heading.kind_name);
+        try writer.writeAll(" },\n");
+    }
+    try writer.writeAll(
         \\};
         \\
         \\pub const heading_specs = [_]HeadingSpec{
@@ -631,8 +682,39 @@ fn isTranslationHeading(heading: []const u8) bool {
     return std.mem.eql(u8, heading, "Translations") or std.mem.eql(u8, heading, "Translate");
 }
 
+const ParsedHeadingLevelKey = struct {
+    level: u8,
+    title: []const u8,
+};
+
+fn parseHeadingLevelKey(key: []const u8) ?ParsedHeadingLevelKey {
+    if (key.len < 4 or key[0] != 'L') return null;
+    const colon = std.mem.indexOfScalar(u8, key, ':') orelse return null;
+    if (colon <= 1 or colon + 1 >= key.len) return null;
+    const level = std.fmt.parseInt(u8, key[1..colon], 10) catch return null;
+    return .{
+        .level = level,
+        .title = key[colon + 1 ..],
+    };
+}
+
+fn headingKindNameForTitle(profiles: []const HeadingProfile, title: []const u8) ?[]const u8 {
+    for (profiles) |profile| {
+        if (std.mem.eql(u8, profile.title, title)) {
+            return sectionKindNameForParser(profile.parser_kind);
+        }
+    }
+    return null;
+}
+
 fn generatedHeadingLessThan(_: void, a: GeneratedHeading, b: GeneratedHeading) bool {
     if (a.count != b.count) return a.count > b.count;
+    return std.mem.lessThan(u8, a.title, b.title);
+}
+
+fn generatedHeadingLevelLessThan(_: void, a: GeneratedHeadingLevel, b: GeneratedHeadingLevel) bool {
+    if (a.count != b.count) return a.count > b.count;
+    if (a.level != b.level) return a.level < b.level;
     return std.mem.lessThan(u8, a.title, b.title);
 }
 

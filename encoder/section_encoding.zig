@@ -4,17 +4,19 @@ const compact = @import("compact_encoding.zig");
 const format = @import("format.zig");
 const generated = @import("generated_structure_tables");
 
-const first_level_trailing_newline_flag: u8 = 0x80;
+const trailing_newline_flag: u8 = 1 << 0;
 const extended_ref_marker: u8 = 0xFF;
 const max_inline_ref_code: u16 = 0xFE;
 
 const SectionKind = generated.SectionKind;
 
-const heading_generic: u16 = 0;
-const heading_preamble: u16 = 1;
+const heading_level_generic: u16 = 0;
+const heading_level_preamble: u16 = 1;
 
 const HeadingDef = generated.HeadingSpec;
 const heading_defs = generated.heading_specs;
+const HeadingLevelDef = generated.HeadingLevelSpec;
+const heading_level_defs = generated.heading_level_specs;
 
 const line_blank: u8 = 254;
 const line_raw: u8 = 255;
@@ -72,7 +74,7 @@ const special_line_prefixes = [_]LinePrefix{
     .{ .code = 28, .prefix = "<references/>" },
 };
 
-const record_raw_line: u8 = 0;
+const record_column_escape: u8 = 0;
 const record_column_inline_base: u8 = 1;
 const record_column_block_base: u8 = record_column_inline_base + (column_col5 - column_col + 1);
 
@@ -226,17 +228,14 @@ pub fn encodeEnglishAlloc(allocator: std.mem.Allocator, english_section: []const
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
-    for (sections, 0..) |section, section_index| {
-        const level = if (section_index == 0 and trailing_newline)
-            section.level | first_level_trailing_newline_flag
-        else
-            section.level;
-        try out.append(allocator, level);
+    try out.append(allocator, if (trailing_newline) trailing_newline_flag else 0);
 
-        const heading_code = headingCodeForTitle(section.title, section.level);
-        try appendTieredRef(&out, allocator, heading_code);
-        const kind = kindForHeadingCode(heading_code) orelse kindForTitle(section.title) orelse .lines;
-        if (heading_code == heading_generic) {
+    for (sections) |section| {
+        const heading_level_code = headingLevelCodeForTitle(section.title, section.level);
+        try appendTieredRef(&out, allocator, heading_level_code);
+        const kind = kindForHeadingLevelCode(heading_level_code) orelse kindForTitle(section.title) orelse .lines;
+        if (heading_level_code == heading_level_generic) {
+            try out.append(allocator, section.level);
             try appendCompactSlice(&out, allocator, section.title);
             try out.append(allocator, @intFromEnum(kindForTitle(section.title) orelse .lines));
         }
@@ -252,8 +251,8 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
     if (encoded.len == 0) return error.InvalidEncoding;
 
     var cursor: usize = 0;
-    var trailing_newline = false;
-    var first_section = true;
+    const flags = encoded[cursor];
+    cursor += 1;
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
@@ -261,36 +260,31 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
     try out.appendSlice(allocator, "==English==");
 
     while (cursor < encoded.len) {
-        if (cursor >= encoded.len) return error.InvalidEncoding;
-        const level_byte = encoded[cursor];
-        cursor += 1;
-        const level = if (first_section) blk: {
-            trailing_newline = (level_byte & first_level_trailing_newline_flag) != 0;
-            first_section = false;
-            break :blk level_byte & ~first_level_trailing_newline_flag;
-        } else blk: {
-            if ((level_byte & first_level_trailing_newline_flag) != 0) return error.InvalidEncoding;
-            break :blk level_byte;
-        };
-        const heading_code = readTieredRef(encoded, &cursor, encoded.len) catch return error.InvalidEncoding;
+        const heading_level_code = readTieredRef(encoded, &cursor, encoded.len) catch return error.InvalidEncoding;
 
-        const title, const kind = if (heading_code == heading_generic) blk: {
+        const level, const title, const kind = if (heading_level_code == heading_level_generic) blk: {
+            if (cursor >= encoded.len) return error.InvalidEncoding;
+            const generic_level = encoded[cursor];
+            cursor += 1;
             const generic_title = try readCompactSliceAlloc(allocator, encoded, &cursor, encoded.len);
             if (cursor >= encoded.len) return error.InvalidEncoding;
             const kind_int = encoded[cursor];
             cursor += 1;
             break :blk .{
+                generic_level,
                 generic_title,
                 sectionKindFromInt(kind_int) orelse return error.InvalidEncoding,
             };
-        } else if (heading_code == heading_preamble) blk: {
+        } else if (heading_level_code == heading_level_preamble) blk: {
             break :blk .{
+                @as(u8, 0),
                 try allocator.dupe(u8, ""),
                 SectionKind.lines,
             };
         } else blk: {
-            const def = headingDefForCode(heading_code) orelse return error.InvalidEncoding;
+            const def = headingLevelDefForCode(heading_level_code) orelse return error.InvalidEncoding;
             break :blk .{
+                def.level,
                 try allocator.dupe(u8, def.title),
                 def.kind,
             };
@@ -302,7 +296,7 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
             const body = try decodeJoinedBodyAlloc(allocator, payload);
             defer allocator.free(body.text);
 
-            if (level != 0 and heading_code != heading_preamble) {
+            if (level != 0 and heading_level_code != heading_level_preamble) {
                 try out.append(allocator, '\n');
                 try appendHeadingLine(&out, allocator, level, title);
             }
@@ -318,7 +312,7 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
         };
         defer allocator.free(body);
 
-        if (level == 0 or heading_code == heading_preamble) {
+        if (level == 0 or heading_level_code == heading_level_preamble) {
             if (body.len != 0) {
                 try out.append(allocator, '\n');
                 try out.appendSlice(allocator, body);
@@ -334,7 +328,7 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
         }
     }
 
-    if (trailing_newline) try out.append(allocator, '\n');
+    if ((flags & trailing_newline_flag) != 0) try out.append(allocator, '\n');
     return out.toOwnedSlice(allocator);
 }
 
@@ -437,6 +431,7 @@ fn encodeTermSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u
     var i: usize = 0;
     while (i < lines.len) {
         if (parseInlineColumnTemplate(allocator, lines[i])) |column_inline| {
+            try out.append(allocator, record_column_escape);
             try out.append(allocator, columnInlineRecordCode(column_inline.template_code) orelse return error.InvalidEncoding);
             try appendVarUInt(&out, allocator, column_inline.items.len);
             for (column_inline.items) |item| try appendCompactTerminated(&out, allocator, item);
@@ -445,6 +440,7 @@ fn encodeTermSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u
         }
 
         if (parseColumnBlock(allocator, lines[i..])) |block| {
+            try out.append(allocator, record_column_escape);
             try out.append(allocator, columnBlockRecordCode(block.template_code) orelse return error.InvalidEncoding);
             try appendVarUInt(&out, allocator, block.first_line_item_count);
             try appendVarUInt(&out, allocator, block.item_count);
@@ -453,7 +449,6 @@ fn encodeTermSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u
             continue;
         }
 
-        try out.append(allocator, record_raw_line);
         try appendEncodedLine(&out, allocator, lines[i]);
         i += 1;
     }
@@ -471,41 +466,41 @@ fn decodeTermSectionAlloc(allocator: std.mem.Allocator, payload: []const u8) (st
         if (!first) try out.append(allocator, '\n');
         if (cursor >= payload.len) return error.InvalidEncoding;
 
+        if (payload[cursor] != record_column_escape) {
+            const line = try decodeEncodedLineAlloc(allocator, payload, &cursor, payload.len);
+            defer allocator.free(line);
+            try out.appendSlice(allocator, line);
+            first = false;
+            continue;
+        }
+
+        cursor += 1;
+        if (cursor >= payload.len) return error.InvalidEncoding;
         const record_code = payload[cursor];
-        switch (record_code) {
-            record_raw_line => {
-                cursor += 1;
-                const line = try decodeEncodedLineAlloc(allocator, payload, &cursor, payload.len);
-                defer allocator.free(line);
-                try out.appendSlice(allocator, line);
-            },
-            else => {
-                const template_code = columnTemplateCodeForInlineRecord(record_code) orelse columnTemplateCodeForBlockRecord(record_code) orelse return error.InvalidEncoding;
-                const is_block = columnTemplateCodeForBlockRecord(record_code) != null;
-                cursor += 1;
-                const first_line_item_count = if (is_block)
-                    format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding
-                else
-                    0;
-                const item_count = format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding;
-                try out.appendSlice(allocator, columnTemplateStart(template_code) orelse return error.InvalidEncoding);
-                var item_index: usize = 0;
-                while (item_index < item_count) : (item_index += 1) {
-                    const item = try readCompactTerminatedAlloc(allocator, payload, &cursor, payload.len);
-                    defer allocator.free(item);
-                    if (!is_block or item_index < first_line_item_count) {
-                        try out.append(allocator, '|');
-                    } else {
-                        try out.appendSlice(allocator, "\n|");
-                    }
-                    try out.appendSlice(allocator, item);
-                }
-                if (is_block) {
-                    try out.appendSlice(allocator, "\n}}");
-                } else {
-                    try out.appendSlice(allocator, "}}");
-                }
-            },
+        const template_code = columnTemplateCodeForInlineRecord(record_code) orelse columnTemplateCodeForBlockRecord(record_code) orelse return error.InvalidEncoding;
+        const is_block = columnTemplateCodeForBlockRecord(record_code) != null;
+        cursor += 1;
+        const first_line_item_count = if (is_block)
+            format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding
+        else
+            0;
+        const item_count = format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding;
+        try out.appendSlice(allocator, columnTemplateStart(template_code) orelse return error.InvalidEncoding);
+        var item_index: usize = 0;
+        while (item_index < item_count) : (item_index += 1) {
+            const item = try readCompactTerminatedAlloc(allocator, payload, &cursor, payload.len);
+            defer allocator.free(item);
+            if (!is_block or item_index < first_line_item_count) {
+                try out.append(allocator, '|');
+            } else {
+                try out.appendSlice(allocator, "\n|");
+            }
+            try out.appendSlice(allocator, item);
+        }
+        if (is_block) {
+            try out.appendSlice(allocator, "\n}}");
+        } else {
+            try out.appendSlice(allocator, "}}");
         }
         first = false;
     }
@@ -1037,24 +1032,24 @@ fn readCompactTerminatedAlloc(allocator: std.mem.Allocator, bytes: []const u8, c
     return compact.decodeAlloc(allocator, encoded) catch return error.InvalidEncoding;
 }
 
-fn headingCodeForTitle(title: []const u8, level: u8) u16 {
-    if (level == 0 and title.len == 0) return heading_preamble;
-    for (heading_defs) |def| {
-        if (std.mem.eql(u8, def.title, title)) return def.code;
+fn headingLevelCodeForTitle(title: []const u8, level: u8) u16 {
+    if (level == 0 and title.len == 0) return heading_level_preamble;
+    for (heading_level_defs) |def| {
+        if (def.level == level and std.mem.eql(u8, def.title, title)) return def.code;
     }
-    return heading_generic;
+    return heading_level_generic;
 }
 
-fn headingDefForCode(code: u16) ?HeadingDef {
-    for (heading_defs) |def| {
+fn headingLevelDefForCode(code: u16) ?HeadingLevelDef {
+    for (heading_level_defs) |def| {
         if (def.code == code) return def;
     }
     return null;
 }
 
-fn kindForHeadingCode(code: u16) ?SectionKind {
-    if (code == heading_preamble) return .lines;
-    const def = headingDefForCode(code) orelse return null;
+fn kindForHeadingLevelCode(code: u16) ?SectionKind {
+    if (code == heading_level_preamble) return .lines;
+    const def = headingLevelDefForCode(code) orelse return null;
     return def.kind;
 }
 
