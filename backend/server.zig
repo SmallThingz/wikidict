@@ -1,14 +1,16 @@
 const std = @import("std");
 const zhttp = @import("zhttp");
 
-const dict = @import("root.zig");
-const format = @import("format.zig");
+const decoder = @import("decoder");
+const encoder = @import("encoder");
+const format = encoder.format;
 
 const ReqCtx = zhttp.ReqCtx;
 const Header = zhttp.response.Header;
 
 pub const ServeOptions = struct {
     db_path: []const u8 = "data/enwiktionary.bin",
+    input_path: []const u8 = "enwiktionary.xml",
     port: u16 = 3000,
 };
 
@@ -17,17 +19,18 @@ const html_headers: []const Header = &.{.{ .name = "content-type", .value = "tex
 
 const AppContext = struct {
     allocator: std.mem.Allocator,
-    db: dict.Dictionary,
+    db: decoder.Dictionary,
     db_path: []const u8,
     index_html: []const u8,
     random_counter: std.atomic.Value(u64),
 
     fn init(io: std.Io, allocator: std.mem.Allocator, options: ServeOptions) !AppContext {
+        try ensureDictionary(io, allocator, options);
         return .{
             .allocator = allocator,
-            .db = try dict.Dictionary.open(allocator, io, options.db_path),
+            .db = try decoder.openDictionary(allocator, io, options.db_path),
             .db_path = try allocator.dupe(u8, options.db_path),
-            .index_html = try readWholeFileAlloc(io, allocator, "web/dist/index.html"),
+            .index_html = try readWholeFileAlloc(io, allocator, "frontend/dist/index.html"),
             .random_counter = .init(0x9e3779b97f4a7c15),
         };
     }
@@ -47,7 +50,7 @@ const AppContext = struct {
 };
 
 const AssetsMw = zhttp.middleware.Static(.{
-    .dir = "web/dist/assets",
+    .dir = "frontend/dist/assets",
     .mount = "/assets",
 });
 
@@ -206,6 +209,7 @@ pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
     const options = ServeOptions{
         .db_path = flagValue(args, "--db") orelse "data/enwiktionary.bin",
         .port = if (flagValue(args, "--port")) |value| try std.fmt.parseInt(u16, value, 10) else 3000,
+        .input_path = flagValue(args, "--input") orelse "enwiktionary.xml",
     };
 
     var ctx = try AppContext.init(io, allocator, options);
@@ -224,6 +228,29 @@ pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
 
 fn lookupKindString(kind: u8) []const u8 {
     return if (kind == format.lookup_kind_alternative_form) "alternative_form" else "title";
+}
+
+fn ensureDictionary(io: std.Io, allocator: std.mem.Allocator, options: ServeOptions) !void {
+    if (try fileExists(io, options.db_path)) return;
+
+    std.debug.print(
+        "dictionary binary missing at {s}; building from {s}\n",
+        .{ options.db_path, options.input_path },
+    );
+
+    _ = try encoder.buildDictionary(io, allocator, .{
+        .input_path = options.input_path,
+        .output_path = options.db_path,
+    });
+}
+
+fn fileExists(io: std.Io, path: []const u8) !bool {
+    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer file.close(io);
+    return true;
 }
 
 fn htmlResponse(body: []const u8) zhttp.Res {

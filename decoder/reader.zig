@@ -1,9 +1,10 @@
 const std = @import("std");
 
-const compact = @import("compact_encoding.zig");
-const format = @import("format.zig");
+const encoder = @import("encoder");
+const compact = encoder.compact_encoding;
+const format = encoder.format;
 const normalize = @import("normalize.zig");
-const wikitext = @import("wikitext.zig");
+const wikitext = encoder.wikitext;
 
 const english_heading = "==English==\n";
 

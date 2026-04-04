@@ -2,10 +2,11 @@
 .zig-cache/
 zig-out/
 zig-pkg
+.worktrees/
 
-web/bun.lock*
-web/node_modules/
-web/dist/
+frontend/bun.lock*
+frontend/node_modules/
+frontend/dist/
 
 data/
 enwiktionary.xml

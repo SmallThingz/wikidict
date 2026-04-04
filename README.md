@@ -1,85 +1,117 @@
 # Dict
 
-English Wiktionary parsed from the official XML dump into a compact binary format, with:
+English Wiktionary parsed from the XML dump into a compact binary format, with:
 
-- a Zig builder and lookup library
-- alias and alternate-spelling search
-- a Zig `zhttp` API server
-- a SolidJS web UI
+- `encoder/`: package root with the encoding library and CLI
+- `decoder/`: package root with the loading, indexing, and query library and CLI
+- `backend/`: package root with the `zhttp` server that auto-builds the binary if it is missing
+- `frontend/`: SolidJS UI
 
-## Build The Dictionary
+## Layout
 
-Use the local XML dump:
+```text
+encoder/
+decoder/
+backend/
+frontend/
+data/
+build.zig
+```
+
+The Zig sources now live directly under each package root, for example `encoder/root.zig` and `backend/main.zig`.
+
+## Zig Commands
+
+Build the encoder, decoder, and backend executables:
 
 ```bash
-zig build -Doptimize=ReleaseFast run -- build \
+zig build
+```
+
+Encode the dictionary:
+
+```bash
+zig build -Doptimize=ReleaseFast encode -- \
   --input enwiktionary.xml \
   --output data/enwiktionary.bin
 ```
 
-Useful smaller test build:
+Build a smaller test binary:
 
 ```bash
-zig build run -- build \
+zig build encode -- \
   --input enwiktionary.xml \
   --output data/test.bin \
   --limit 500
 ```
 
-## Zig CLI
-
-Lookup:
+Lookup a word with the decoder CLI:
 
 ```bash
-zig build run -- lookup --db data/enwiktionary.bin --word color
+zig build lookup -- --db data/enwiktionary.bin --word color
 ```
 
 Suggestions:
 
 ```bash
-zig build run -- suggest --db data/enwiktionary.bin --prefix colo --limit 10
+zig build suggest -- --db data/enwiktionary.bin --prefix colo --limit 10
 ```
 
 Stats:
 
 ```bash
-zig build run -- stats --db data/enwiktionary.bin
+zig build stats -- --db data/enwiktionary.bin
 ```
 
-## Web UI
-
-Install dependencies:
+Run the backend server:
 
 ```bash
-cd web
-bun install
+zig build -Doptimize=ReleaseFast serve -- --db data/enwiktionary.bin --port 3000
+```
+
+If `data/enwiktionary.bin` does not exist, the backend will build it from `enwiktionary.xml` before serving requests.
+
+## Frontend Commands
+
+Install frontend dependencies:
+
+```bash
+zig build frontend-install
 ```
 
 Build the frontend:
 
 ```bash
-bun run build
+zig build frontend-build
 ```
 
-Run the Zig server against the full dictionary:
+Type-check and build the frontend:
 
 ```bash
-zig build -Doptimize=ReleaseFast run -- serve --db data/enwiktionary.bin --port 3000
+zig build frontend-check
 ```
 
-For local frontend development, run Vite separately:
+Run the Vite dev server:
 
 ```bash
-bun run dev
+zig build frontend-dev
+```
+
+Preview the built frontend:
+
+```bash
+zig build frontend-preview
 ```
 
 The Vite dev server proxies `/api/*` to `http://127.0.0.1:3000`.
 
-The Zig server exposes:
+## API
+
+The backend exposes:
 
 - `/api/stats`
 - `/api/search?q=color&limit=10`
 - `/api/lookup/color`
 - `/api/random`
 
-The production frontend is served from the same Zig process. Raw English entry formatting is preserved exactly; derived lookup data is rebuilt in memory after load rather than stored on disk.
+The production frontend is served from the same Zig process. Raw English entry formatting is preserved exactly, while lookup indices are rebuilt in memory after load.
