@@ -52,6 +52,11 @@ const line_prefixes = [_]LinePrefix{
     .{ .code = 16, .prefix = "; " },
 };
 
+const JoinedBody = struct {
+    text: []const u8,
+    line_count: usize,
+};
+
 const special_line_prefixes = [_]LinePrefix{
     .{ .code = 17, .prefix = "{{en-noun" },
     .{ .code = 18, .prefix = "{{en-verb" },
@@ -283,11 +288,23 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
         defer allocator.free(title);
 
         const payload = readLengthPrefixedSlice(encoded, &cursor, encoded.len) catch return error.InvalidEncoding;
+        if (kind == .lines) {
+            const body = try decodeJoinedBodyAlloc(allocator, payload);
+            defer allocator.free(body.text);
+
+            if (level != 0 and heading_code != heading_preamble) {
+                try out.append(allocator, '\n');
+                try appendHeadingLine(&out, allocator, level, title);
+            }
+            try appendDecodedJoinedBody(&out, allocator, body);
+            continue;
+        }
+
         const body = switch (kind) {
-            .lines => try decodeJoinedBodyAlloc(allocator, payload),
             .pos_lines => try decodeLineStreamAlloc(allocator, payload),
             .term_list => try decodeTermSectionAlloc(allocator, payload),
             .translations => try decodeTranslationSectionAlloc(allocator, payload),
+            .lines => unreachable,
         };
         defer allocator.free(body);
 
@@ -321,6 +338,12 @@ fn encodeSectionPayloadAlloc(allocator: std.mem.Allocator, lines: []const []cons
 }
 
 fn encodeJoinedBodyAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    var line_count_buf: [10]u8 = undefined;
+    try out.appendSlice(allocator, format.encodeVarUInt(&line_count_buf, lines.len));
+
     var joined: std.ArrayList(u8) = .empty;
     defer joined.deinit(allocator);
 
@@ -329,7 +352,10 @@ fn encodeJoinedBodyAlloc(allocator: std.mem.Allocator, lines: []const []const u8
         try joined.appendSlice(allocator, line);
     }
 
-    return compact.encodeAlloc(allocator, joined.items);
+    const encoded = try compact.encodeAlloc(allocator, joined.items);
+    defer allocator.free(encoded);
+    try out.appendSlice(allocator, encoded);
+    return out.toOwnedSlice(allocator);
 }
 
 fn encodeLineStreamAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
@@ -358,8 +384,42 @@ fn decodeLineStreamAlloc(allocator: std.mem.Allocator, payload: []const u8) (std
     return out.toOwnedSlice(allocator);
 }
 
-fn decodeJoinedBodyAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
-    return compact.decodeAlloc(allocator, payload) catch return error.InvalidEncoding;
+fn decodeJoinedBodyAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})!JoinedBody {
+    if (payload.len == 0) return error.InvalidEncoding;
+
+    var cursor: usize = 0;
+    const line_count_u64 = format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding;
+    const line_count = std.math.cast(usize, line_count_u64) orelse return error.InvalidEncoding;
+    const text = compact.decodeAlloc(allocator, payload[cursor..]) catch return error.InvalidEncoding;
+    errdefer allocator.free(text);
+
+    if (line_count == 0 and text.len != 0) return error.InvalidEncoding;
+
+    return .{
+        .text = text,
+        .line_count = line_count,
+    };
+}
+
+fn appendDecodedJoinedBody(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    body: JoinedBody,
+) (std.mem.Allocator.Error || error{InvalidEncoding})!void {
+    if (body.line_count == 0) return;
+
+    var line_start: usize = 0;
+    var remaining = body.line_count;
+    while (remaining > 1) : (remaining -= 1) {
+        const next_newline = std.mem.indexOfScalarPos(u8, body.text, line_start, '\n') orelse return error.InvalidEncoding;
+        try out.append(allocator, '\n');
+        try out.appendSlice(allocator, body.text[line_start..next_newline]);
+        line_start = next_newline + 1;
+    }
+
+    if (std.mem.indexOfScalarPos(u8, body.text, line_start, '\n') != null) return error.InvalidEncoding;
+    try out.append(allocator, '\n');
+    try out.appendSlice(allocator, body.text[line_start..]);
 }
 
 fn encodeTermSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
@@ -1920,6 +1980,24 @@ test "section encoding falls back when simple translation lists use unsupported 
         \\{{trans-top|test}}
         \\** French: {{t|fr|chat}}, {{t|fr|minou}}
         \\{{trans-bottom}}
+        \\
+    ;
+
+    const encoded = try encodeEnglishAlloc(std.testing.allocator, sample);
+    defer std.testing.allocator.free(encoded);
+
+    const decoded = try decodeEnglishAlloc(std.testing.allocator, encoded);
+    defer std.testing.allocator.free(decoded);
+
+    try std.testing.expectEqualStrings(sample, decoded);
+}
+
+test "section encoding preserves blank-only spacer bodies between headings" {
+    const sample =
+        \\==English==
+        \\
+        \\===Pronunciation===
+        \\* test
         \\
     ;
 

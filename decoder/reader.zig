@@ -158,8 +158,14 @@ const CacheBuildProgress = struct {
     };
 
     total_record_bytes: usize,
+    scanned_record_bytes: std.atomic.Value(usize) = .init(0),
+    scanned_entries: std.atomic.Value(usize) = .init(0),
+    mutex: std.Io.Mutex = .init,
     phase: Phase = .reading,
+    reading_parallel: bool = false,
     last_percent: u8 = 255,
+    last_primary: usize = std.math.maxInt(usize),
+    last_secondary: usize = std.math.maxInt(usize),
 
     fn init(total_record_bytes: usize) CacheBuildProgress {
         return .{
@@ -167,16 +173,22 @@ const CacheBuildProgress = struct {
         };
     }
 
-    fn scan(self: *CacheBuildProgress, consumed_record_bytes: usize, entries: usize) void {
+    fn scanAdvance(self: *CacheBuildProgress, record_bytes_delta: usize, entry_delta: usize) void {
+        const consumed_record_bytes = self.scanned_record_bytes.fetchAdd(record_bytes_delta, .monotonic) + record_bytes_delta;
+        const entries = self.scanned_entries.fetchAdd(entry_delta, .monotonic) + entry_delta;
         const percent = if (self.total_record_bytes == 0)
             70
         else
             @as(u8, @intCast(@min(70, (consumed_record_bytes * 70) / self.total_record_bytes)));
-        self.render(.reading, percent, entries, 0);
+        self.render(.reading, percent, entries, consumed_record_bytes);
     }
 
     fn setPhase(self: *CacheBuildProgress, phase: Phase, percent: u8, primary: usize, secondary: usize) void {
         self.render(phase, percent, primary, secondary);
+    }
+
+    fn setReadingParallel(self: *CacheBuildProgress, reading_parallel: bool) void {
+        self.reading_parallel = reading_parallel;
     }
 
     fn finish(self: *CacheBuildProgress, entries: usize, lookups: usize) void {
@@ -186,10 +198,15 @@ const CacheBuildProgress = struct {
 
     fn render(self: *CacheBuildProgress, phase: Phase, percent: u8, primary: usize, secondary: usize) void {
         if (builtin.is_test) return;
-        if (self.phase == phase and self.last_percent == percent) return;
+        self.mutex.lockUncancelable(std.Options.debug_io);
+        defer self.mutex.unlock(std.Options.debug_io);
+
+        if (self.phase == phase and self.last_percent == percent and self.last_primary == primary and self.last_secondary == secondary) return;
 
         self.phase = phase;
         self.last_percent = percent;
+        self.last_primary = primary;
+        self.last_secondary = secondary;
 
         var bar: [24]u8 = undefined;
         @memset(&bar, '.');
@@ -199,24 +216,31 @@ const CacheBuildProgress = struct {
         if (phase == .done) {
             std.debug.print(
                 "\rindex build [{s}] {d:>3}% {s} ({d} entries, {d} lookups)",
-                .{ &bar, percent, phaseLabel(phase), primary, secondary },
+                .{ &bar, percent, phaseLabel(self, phase), primary, secondary },
             );
             return;
         }
 
-        std.debug.print(
-            "\rindex build [{s}] {d:>3}% {s} ({d}{s})",
-            .{ &bar, percent, phaseLabel(phase), primary, phaseSuffix(phase) },
-        );
+        switch (phase) {
+            .reading => std.debug.print(
+                "\rindex build [{s}] {d:>3}% {s} ({d} entries, {s})",
+                .{ &bar, percent, phaseLabel(self, phase), primary, formatByteCount(secondary).slice() },
+            ),
+            .aliases, .lookups, .materialize, .writing => std.debug.print(
+                "\rindex build [{s}] {d:>3}% {s} ({d}{s})",
+                .{ &bar, percent, phaseLabel(self, phase), primary, phaseSuffix(phase) },
+            ),
+            .done => unreachable,
+        }
     }
 
-    fn phaseLabel(phase: Phase) []const u8 {
+    fn phaseLabel(self: *const CacheBuildProgress, phase: Phase) []const u8 {
         return switch (phase) {
-            .reading => "scan records",
-            .aliases => "link aliases",
-            .lookups => "sort lookups",
-            .materialize => "pack strings",
-            .writing => "write cache",
+            .reading => if (self.reading_parallel) "decode records and metadata in parallel" else "decode records and metadata",
+            .aliases => "resolve incoming aliases",
+            .lookups => "sort normalized lookup keys",
+            .materialize => "intern strings and pack cache",
+            .writing => "write cache file",
             .done => "ready",
         };
     }
@@ -230,6 +254,56 @@ const CacheBuildProgress = struct {
             .writing => " string bytes",
             .done => unreachable,
         };
+    }
+};
+
+const ByteCountLabel = struct {
+    buffer: [16]u8,
+    len: usize,
+
+    fn slice(self: *const ByteCountLabel) []const u8 {
+        return self.buffer[0..self.len];
+    }
+};
+
+fn formatByteCount(bytes: usize) ByteCountLabel {
+    var label: ByteCountLabel = .{
+        .buffer = undefined,
+        .len = 0,
+    };
+    if (bytes >= 1024 * 1024) {
+        label.len = (std.fmt.bufPrint(&label.buffer, "{d} MiB", .{bytes / (1024 * 1024)}) catch unreachable).len;
+        return label;
+    }
+    if (bytes >= 1024) {
+        label.len = (std.fmt.bufPrint(&label.buffer, "{d} KiB", .{bytes / 1024}) catch unreachable).len;
+        return label;
+    }
+    label.len = (std.fmt.bufPrint(&label.buffer, "{d} B", .{bytes}) catch unreachable).len;
+    return label;
+}
+
+const RecordDescriptor = struct {
+    record_offset: u32,
+    flags: u8,
+    encoded_title: []const u8,
+    payload: []const u8,
+    record_len: u32,
+};
+
+const ScanChunkResult = struct {
+    arena: std.heap.ArenaAllocator,
+    entries: []BuildEntryData = &.{},
+    err: ?anyerror = null,
+
+    fn init() ScanChunkResult {
+        return .{
+            .arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator),
+        };
+    }
+
+    fn deinit(self: *ScanChunkResult) void {
+        self.arena.deinit();
     }
 };
 
@@ -442,19 +516,16 @@ pub const Dictionary = struct {
         if (normalized.len == 0) return allocator.alloc(LookupHit, 0);
 
         const start = lowerBoundLookup(self, normalized);
-        var end = start;
-        while (end < self.lookups.len and std.mem.eql(u8, self.lookupKey(self.lookups[end]), normalized)) : (end += 1) {}
-
-        var hits: std.ArrayList(LookupHit) = .empty;
-        defer hits.deinit(allocator);
-        for (self.lookups[start..end]) |lookup| {
-            try hits.append(allocator, .{
+        const end = upperBoundLookup(self, normalized);
+        const hits = try allocator.alloc(LookupHit, end - start);
+        for (self.lookups[start..end], hits) |lookup, *hit| {
+            hit.* = .{
                 .entry_index = lookup.entry_index,
                 .matched = self.string(lookup.matched),
                 .kind = lookup.kind,
-            });
+            };
         }
-        return hits.toOwnedSlice(allocator);
+        return hits;
     }
 
     pub fn suggest(self: *const Dictionary, allocator: std.mem.Allocator, prefix: []const u8, limit: usize) ![]LookupHit {
@@ -464,14 +535,13 @@ pub const Dictionary = struct {
         if (normalized.len == 0) return allocator.alloc(LookupHit, 0);
 
         const start = lowerBoundLookup(self, normalized);
+        const end = upperBoundPrefixLookup(self, normalized);
         var hits: std.ArrayList(LookupHit) = .empty;
         defer hits.deinit(allocator);
 
         var i = start;
-        while (i < self.lookups.len and hits.items.len < limit) : (i += 1) {
+        while (i < end and hits.items.len < limit) : (i += 1) {
             const lookup = self.lookups[i];
-            if (!std.mem.startsWith(u8, self.lookupKey(lookup), normalized)) break;
-
             const candidate = LookupHit{
                 .entry_index = lookup.entry_index,
                 .matched = self.string(lookup.matched),
@@ -798,7 +868,7 @@ fn writeCacheFile(allocator: std.mem.Allocator, io: std.Io, cache_path: []const 
     if (cache.lookups.len != 0) try file.writePositionalAll(io, std.mem.sliceAsBytes(cache.lookups), lookups_offset);
     try writePadding(io, file, lookups_offset + lookups_len, strings_offset);
     if (cache.strings.len != 0) try file.writePositionalAll(io, cache.strings, strings_offset);
-    try replaceFile(allocator, temp_cache_path, cache_path);
+    try replaceFile(io, temp_cache_path, cache_path);
 }
 
 fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
@@ -808,19 +878,8 @@ fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
     };
 }
 
-fn replaceFile(allocator: std.mem.Allocator, old_path: []const u8, new_path: []const u8) !void {
-    const old_z = try allocator.dupeZ(u8, old_path);
-    defer allocator.free(old_z);
-    const new_z = try allocator.dupeZ(u8, new_path);
-    defer allocator.free(new_z);
-
-    switch (builtin.os.tag) {
-        .linux => switch (std.posix.errno(std.os.linux.renameat(std.posix.AT.FDCWD, old_z.ptr, std.posix.AT.FDCWD, new_z.ptr))) {
-            .SUCCESS => {},
-            else => |err| return std.posix.unexpectedErrno(err),
-        },
-        else => @compileError("replaceFile is only implemented for linux in this project"),
-    }
+fn replaceFile(io: std.Io, old_path: []const u8, new_path: []const u8) !void {
+    try std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, io);
 }
 
 fn writePadding(io: std.Io, file: std.Io.File, start: u64, end: u64) !void {
@@ -842,51 +901,191 @@ fn buildIndex(
     header: *const format.Header,
     progress: *CacheBuildProgress,
 ) !BuildState {
+    const descriptors = try collectRecordDescriptors(arena_allocator, mapped, header);
+
     var state: BuildState = .{};
-    try state.entries.ensureTotalCapacity(arena_allocator, header.entry_count);
+    try state.entries.ensureTotalCapacity(arena_allocator, descriptors.len);
+
+    const thread_count = indexBuildThreadCount(descriptors.len);
+    progress.setReadingParallel(thread_count > 1);
+    if (thread_count == 1) {
+        for (descriptors) |descriptor| {
+            const entry = try buildEntryFromRecord(arena_allocator, descriptor);
+            state.entries.appendAssumeCapacity(entry);
+            progress.scanAdvance(descriptor.record_len, 1);
+        }
+        return state;
+    }
+
+    const threads = try allocator.alloc(std.Thread, thread_count);
+    defer allocator.free(threads);
+    const chunks = try allocator.alloc(ScanChunkResult, thread_count);
+    defer {
+        for (chunks) |*chunk| chunk.deinit();
+        allocator.free(chunks);
+    }
+    for (chunks) |*chunk| chunk.* = ScanChunkResult.init();
+
+    var started_threads: usize = 0;
+    errdefer for (threads[0..started_threads]) |thread| thread.join();
+    var start: usize = 0;
+    for (chunks, threads, 0..) |*chunk, *thread, i| {
+        const end = partitionEnd(descriptors.len, thread_count, i);
+        thread.* = try std.Thread.spawn(.{}, scanRecordChunk, .{
+            descriptorSlice(descriptors, start, end),
+            chunk,
+            progress,
+        });
+        started_threads += 1;
+        start = end;
+    }
+    for (threads) |thread| thread.join();
+
+    for (chunks) |*chunk| {
+        if (chunk.err) |err| return err;
+        for (chunk.entries) |entry| {
+            state.entries.appendAssumeCapacity(try cloneEntryData(arena_allocator, entry));
+        }
+    }
+
+    return state;
+}
+
+fn collectRecordDescriptors(
+    allocator: std.mem.Allocator,
+    mapped: []align(std.heap.page_size_min) const u8,
+    header: *const format.Header,
+) ![]const RecordDescriptor {
+    const entry_count: usize = header.entry_count;
+    const descriptors = try allocator.alloc(RecordDescriptor, entry_count);
+    errdefer allocator.free(descriptors);
 
     var cursor: usize = @intCast(header.records_offset);
     const records_end: usize = @intCast(header.records_offset + header.records_len);
+    var count: usize = 0;
     while (cursor < records_end) {
+        if (count >= descriptors.len) return error.InvalidDictionaryFile;
+        const record_start = cursor;
         const record_offset = cursor - @as(usize, @intCast(header.records_offset));
         const flags = mapped[cursor];
         cursor += 1;
 
         const encoded_title = try readLengthPrefixedSlice(mapped, &cursor, records_end);
         const payload = try readLengthPrefixedSlice(mapped, &cursor, records_end);
-        const title = try compact.decodeAlloc(arena_allocator, encoded_title);
-        const normalized = try normalize.normalizeAlloc(arena_allocator, title);
-        var entry = BuildEntryData{
+        descriptors[count] = .{
             .record_offset = std.math.cast(u32, record_offset) orelse return error.InvalidDictionaryFile,
-            .word = title,
-            .normalized = normalized,
+            .flags = flags,
+            .encoded_title = encoded_title,
+            .payload = payload,
+            .record_len = std.math.cast(u32, cursor - record_start) orelse return error.InvalidDictionaryFile,
         };
-
-        if ((flags & format.record_flag_has_raw) != 0) {
-            const raw = try section_encoding.decodeEnglishAlloc(allocator, payload);
-            defer allocator.free(raw);
-
-            var metadata = try wikitext.extractEntryMetadata(arena_allocator, title, raw);
-            errdefer metadata.deinit(arena_allocator);
-
-            entry.alt_forms = metadata.alt_forms.items;
-            metadata.alt_forms = .empty;
-
-            entry.canonical_targets = metadata.canonical_targets.items;
-            metadata.canonical_targets = .empty;
-        } else {
-            const target = try compact.decodeAlloc(arena_allocator, payload);
-            const targets = try arena_allocator.alloc([]const u8, 1);
-            targets[0] = target;
-            entry.canonical_targets = targets;
-        }
-
-        try state.entries.append(arena_allocator, entry);
-        progress.scan(cursor - @as(usize, @intCast(header.records_offset)), state.entries.items.len);
+        count += 1;
     }
 
-    if (state.entries.items.len != header.entry_count) return error.InvalidDictionaryFile;
-    return state;
+    if (count != descriptors.len) return error.InvalidDictionaryFile;
+    return descriptors;
+}
+
+fn buildEntryFromRecord(allocator: std.mem.Allocator, descriptor: RecordDescriptor) !BuildEntryData {
+    const title = try compact.decodeAlloc(allocator, descriptor.encoded_title);
+    const normalized = try normalize.normalizeAlloc(allocator, title);
+    var entry = BuildEntryData{
+        .record_offset = descriptor.record_offset,
+        .word = title,
+        .normalized = normalized,
+    };
+
+    if ((descriptor.flags & format.record_flag_has_raw) != 0) {
+        const raw = try section_encoding.decodeEnglishAlloc(allocator, descriptor.payload);
+        var metadata = try wikitext.extractEntryMetadata(allocator, title, raw);
+
+        entry.alt_forms = metadata.alt_forms.items;
+        metadata.alt_forms = .empty;
+        entry.canonical_targets = metadata.canonical_targets.items;
+        metadata.canonical_targets = .empty;
+        return entry;
+    }
+
+    const target = try compact.decodeAlloc(allocator, descriptor.payload);
+    const targets = try allocator.alloc([]const u8, 1);
+    targets[0] = target;
+    entry.canonical_targets = targets;
+    return entry;
+}
+
+fn cloneEntryData(allocator: std.mem.Allocator, source: BuildEntryData) !BuildEntryData {
+    const alt_forms = try cloneStringSlice(allocator, source.alt_forms);
+    errdefer freeStringSlice(allocator, alt_forms);
+    const canonical_targets = try cloneStringSlice(allocator, source.canonical_targets);
+    errdefer freeStringSlice(allocator, canonical_targets);
+    const word = try allocator.dupe(u8, source.word);
+    errdefer allocator.free(word);
+    const normalized = try allocator.dupe(u8, source.normalized);
+    errdefer allocator.free(normalized);
+
+    return .{
+        .record_offset = source.record_offset,
+        .word = word,
+        .normalized = normalized,
+        .alt_forms = alt_forms,
+        .canonical_targets = canonical_targets,
+    };
+}
+
+fn cloneStringSlice(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
+    const out = try allocator.alloc([]const u8, values.len);
+    errdefer allocator.free(out);
+    for (values, 0..) |value, idx| {
+        out[idx] = try allocator.dupe(u8, value);
+    }
+    return out;
+}
+
+fn freeStringSlice(allocator: std.mem.Allocator, values: []const []const u8) void {
+    for (values) |value| allocator.free(value);
+    allocator.free(values);
+}
+
+fn scanRecordChunk(descriptors: []const RecordDescriptor, chunk: *ScanChunkResult, progress: *CacheBuildProgress) void {
+    const allocator = chunk.arena.allocator();
+    chunk.entries = allocator.alloc(BuildEntryData, descriptors.len) catch |err| {
+        chunk.err = err;
+        return;
+    };
+
+    var pending_entries: usize = 0;
+    var pending_bytes: usize = 0;
+    for (descriptors, 0..) |descriptor, idx| {
+        chunk.entries[idx] = buildEntryFromRecord(allocator, descriptor) catch |err| {
+            chunk.err = err;
+            return;
+        };
+        pending_entries += 1;
+        pending_bytes += descriptor.record_len;
+        if (pending_entries >= 16 or pending_bytes >= 128 * 1024) {
+            progress.scanAdvance(pending_bytes, pending_entries);
+            pending_entries = 0;
+            pending_bytes = 0;
+        }
+    }
+
+    if (pending_entries != 0 or pending_bytes != 0) {
+        progress.scanAdvance(pending_bytes, pending_entries);
+    }
+}
+
+fn descriptorSlice(descriptors: []const RecordDescriptor, start: usize, end: usize) []const RecordDescriptor {
+    return descriptors[start..end];
+}
+
+fn partitionEnd(total: usize, part_count: usize, part_index: usize) usize {
+    return @divTrunc(total * (part_index + 1), part_count);
+}
+
+fn indexBuildThreadCount(entry_count: usize) usize {
+    if (builtin.single_threaded or entry_count < 128) return 1;
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    return @max(@as(usize, 1), @min(cpu_count, entry_count / 64));
 }
 
 fn mapWholeFile(file: std.Io.File, size_u64: u64) ![]align(std.heap.page_size_min) const u8 {
@@ -1065,6 +1264,49 @@ fn lowerBoundLookup(self: *const Dictionary, key: []const u8) usize {
     return lo;
 }
 
+fn upperBoundLookup(self: *const Dictionary, key: []const u8) usize {
+    var lo: usize = 0;
+    var hi: usize = self.lookups.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const mid_key = self.lookupKey(self.lookups[mid]);
+        if (std.mem.order(u8, mid_key, key) == .gt) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    return lo;
+}
+
+fn upperBoundPrefixLookup(self: *const Dictionary, prefix: []const u8) usize {
+    var next_buf: [256]u8 = undefined;
+    const next = nextPrefixKey(prefix, &next_buf) orelse return self.lookups.len;
+    return lowerBoundLookup(self, next);
+}
+
+fn nextPrefixKey(prefix: []const u8, buffer: *[256]u8) ?[]const u8 {
+    if (prefix.len == 0 or prefix.len > 256) return null;
+
+    @memcpy(buffer[0..prefix.len], prefix);
+    var i = prefix.len;
+    while (i != 0) {
+        i -= 1;
+        if (buffer[i] != std.math.maxInt(u8)) {
+            buffer[i] += 1;
+            return buffer[0 .. i + 1];
+        }
+    }
+    return null;
+}
+
+test "nextPrefixKey computes the exclusive upper bound for ascii prefixes" {
+    var buffer: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("abd", nextPrefixKey("abc", &buffer).?);
+    try std.testing.expectEqualStrings("b", nextPrefixKey("a\xff", &buffer).?);
+    try std.testing.expect(nextPrefixKey("\xff\xff", &buffer) == null);
+}
+
 test "viewArray rejects misaligned offsets" {
     var bytes: [32]u8 align(std.heap.page_size_min) = [_]u8{0} ** 32;
     try std.testing.expectError(error.InvalidDictionaryCache, viewArray(u32, &bytes, 1, 1));
@@ -1117,11 +1359,11 @@ test "dictionary open preserves raw etymology and pronunciation sections through
 
     var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
     defer xml_file.close(std.testing.io);
-    try xml_file.writeAll(std.testing.io, xml);
+    try xml_file.writePositionalAll(std.testing.io, xml, 0);
 
-    const db_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/dict.bin", .{tmp.sub_path});
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
     defer std.testing.allocator.free(db_path);
-    const xml_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/sample.xml", .{tmp.sub_path});
+    const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
     defer std.testing.allocator.free(xml_path);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
@@ -1139,4 +1381,28 @@ test "dictionary open preserves raw etymology and pronunciation sections through
     const raw = (try dict.entryAt(hits[0].entry_index).rawEnglishAlloc(std.testing.allocator)).?;
     defer std.testing.allocator.free(raw);
     try std.testing.expectEqualStrings(raw_english, raw);
+}
+
+test "replaceFile overwrites an existing cache target" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var source = try tmp.dir.createFile(std.testing.io, "fresh.idx.tmp", .{ .truncate = true });
+    defer source.close(std.testing.io);
+    try source.writePositionalAll(std.testing.io, "fresh", 0);
+
+    var target = try tmp.dir.createFile(std.testing.io, "cache.idx", .{ .truncate = true });
+    defer target.close(std.testing.io);
+    try target.writePositionalAll(std.testing.io, "stale", 0);
+
+    const source_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/fresh.idx.tmp", .{tmp.sub_path});
+    defer std.testing.allocator.free(source_path);
+    const target_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/cache.idx", .{tmp.sub_path});
+    defer std.testing.allocator.free(target_path);
+
+    try replaceFile(std.testing.io, source_path, target_path);
+
+    const contents = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, target_path, std.testing.allocator, .limited(32));
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualStrings("fresh", contents);
 }

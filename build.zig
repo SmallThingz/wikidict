@@ -571,22 +571,22 @@ fn generateStructureTableSource(b: *std.Build) ![]const u8 {
 }
 
 fn readFileAllocAbsolute(allocator: std.mem.Allocator, path: []const u8, max_bytes: usize) ![]u8 {
-    const path_z = try allocator.dupeZ(u8, path);
-    defer allocator.free(path_z);
+    const io = std.Options.debug_io;
+    var file = try std.Io.Dir.openFileAbsolute(io, path, .{});
+    defer file.close(io);
 
-    const fd = try std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY }, 0);
+    const stat = try file.stat(io);
+    if (stat.size > max_bytes) return error.FileTooBig;
 
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(allocator);
+    const out = try allocator.alloc(u8, @intCast(stat.size));
+    errdefer allocator.free(out);
 
-    var buf: [4096]u8 = undefined;
-    while (true) {
-        const amt = try std.posix.read(fd, &buf);
-        if (amt == 0) break;
-        if (out.items.len + amt > max_bytes) return error.FileTooBig;
-        try out.appendSlice(allocator, buf[0..amt]);
-    }
-    return out.toOwnedSlice(allocator);
+    const read_len = try file.readPositionalAll(io, out, 0);
+    if (read_len == out.len) return out;
+
+    const shrunk = try allocator.dupe(u8, out[0..read_len]);
+    allocator.free(out);
+    return shrunk;
 }
 
 fn sectionKindNameForParser(parser_kind: []const u8) ?[]const u8 {

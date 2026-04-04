@@ -1,7 +1,7 @@
 const std = @import("std");
 
-pub const magic = "WIKDIC15";
-pub const version: u32 = 15;
+pub const magic = "WIKDIC16";
+pub const version: u32 = 16;
 
 pub const record_flag_has_raw: u8 = 1 << 0;
 pub const record_flag_alias_only: u8 = 1 << 1;

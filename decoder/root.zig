@@ -3,6 +3,7 @@ pub const format = encoder.format;
 pub const compact_encoding = encoder.compact_encoding;
 
 pub const normalize = @import("normalize.zig");
+const reader = @import("reader.zig");
 
 pub const Dictionary = @import("reader.zig").Dictionary;
 pub const LookupHit = @import("reader.zig").LookupHit;
@@ -15,4 +16,5 @@ pub fn openDictionary(allocator: @import("std").mem.Allocator, io: @import("std"
 
 test "decoder root imports module tests" {
     _ = normalize;
+    _ = reader;
 }
