@@ -1108,7 +1108,10 @@ fn collectRecordDescriptors(
 
 fn buildEntryFromRecord(allocator: std.mem.Allocator, descriptor: RecordDescriptor) !BuildEntryData {
     const title = try compact.decodeAlloc(allocator, descriptor.encoded_title);
-    const normalized = try normalize.normalizeAlloc(allocator, title);
+    const normalized = if (normalize.isIdentity(title))
+        title
+    else
+        try normalize.normalizeAlloc(allocator, title);
     var entry = BuildEntryData{
         .record_offset = descriptor.record_offset,
         .word = title,
@@ -1768,6 +1771,29 @@ test "decodeAliasNormalizedTargetAlloc matches format decode" {
     defer std.testing.allocator.free(actual);
 
     try std.testing.expectEqualStrings(expected, actual);
+}
+
+test "buildEntryFromRecord reuses title storage when normalization is identity" {
+    const encoded_title = try compact.encodeAlloc(std.testing.allocator, "color");
+    defer std.testing.allocator.free(encoded_title);
+    const payload = try format.encodeAliasRecordPayloadAlloc(std.testing.allocator, "color", "color");
+    defer std.testing.allocator.free(payload);
+
+    const entry = try buildEntryFromRecord(std.testing.allocator, .{
+        .record_offset = 0,
+        .flags = 0,
+        .encoded_title = encoded_title,
+        .payload = payload,
+        .record_len = 0,
+    });
+    defer {
+        std.testing.allocator.free(entry.word);
+        std.testing.allocator.free(entry.normalized_targets[0]);
+        std.testing.allocator.free(entry.normalized_targets);
+    }
+
+    try std.testing.expectEqualStrings("color", entry.word);
+    try std.testing.expectEqual(@intFromPtr(entry.word.ptr), @intFromPtr(entry.normalized.ptr));
 }
 
 test "tryOpenCache rejects stale cache versions" {
