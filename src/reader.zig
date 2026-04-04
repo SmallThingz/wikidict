@@ -5,6 +5,8 @@ const format = @import("format.zig");
 const normalize = @import("normalize.zig");
 const wikitext = @import("wikitext.zig");
 
+const english_heading = "==English==\n";
+
 const EntryData = struct {
     word: []const u8,
     normalized: []const u8,
@@ -71,8 +73,10 @@ pub const EntryView = struct {
 
     pub fn rawEnglishAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
-        const decoded = try compact.decodeAlloc(allocator, self.record().raw_encoded);
-        return decoded;
+        const payload = try compact.decodeAlloc(allocator, self.record().raw_encoded);
+        defer allocator.free(payload);
+        const raw = try prependEnglishHeadingAlloc(allocator, payload);
+        return raw;
     }
 };
 
@@ -222,7 +226,9 @@ fn buildIndex(
         if ((flags & format.record_flag_has_raw) != 0) {
             entry.raw_encoded = payload;
 
-            const raw = try compact.decodeAlloc(allocator, payload);
+            const raw_payload = try compact.decodeAlloc(allocator, payload);
+            defer allocator.free(raw_payload);
+            const raw = try prependEnglishHeadingAlloc(allocator, raw_payload);
             defer allocator.free(raw);
 
             var metadata = try wikitext.extractEntryMetadata(arena_allocator, title, raw);
@@ -259,6 +265,16 @@ fn readLengthPrefixedSlice(bytes: []const u8, cursor: *usize, limit: usize) ![]c
     const start = cursor.*;
     cursor.* += len;
     return bytes[start .. start + len];
+}
+
+fn prependEnglishHeadingAlloc(allocator: std.mem.Allocator, payload: []const u8) ![]u8 {
+    if (std.mem.startsWith(u8, payload, english_heading)) return allocator.dupe(u8, payload);
+
+    var out = try std.ArrayList(u8).initCapacity(allocator, english_heading.len + payload.len);
+    errdefer out.deinit(allocator);
+    out.appendSliceAssumeCapacity(english_heading);
+    out.appendSliceAssumeCapacity(payload);
+    return out.toOwnedSlice(allocator);
 }
 
 fn finalizeIncomingAliases(

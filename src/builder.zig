@@ -15,6 +15,8 @@ const ztypes = zxml.Types(parse_opts);
 const StreamParser = ztypes.StreamParser;
 const StreamNode = ztypes.StreamNode;
 
+const english_heading = "==English==\n";
+
 pub const BuildOptions = struct {
     input_path: []const u8,
     output_path: []const u8,
@@ -215,7 +217,11 @@ const OutputWriter = struct {
         try self.writeSlice(encoded_title);
 
         if ((flags & format.record_flag_has_raw) != 0) {
-            const encoded = try compact.encodeAlloc(allocator, payload);
+            const raw_payload = if (std.mem.startsWith(u8, payload, english_heading))
+                payload[english_heading.len..]
+            else
+                payload;
+            const encoded = try compact.encodeAlloc(allocator, raw_payload);
             defer allocator.free(encoded);
             try self.writeSlice(encoded);
             self.raw_entry_count += 1;
