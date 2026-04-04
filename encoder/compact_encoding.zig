@@ -375,8 +375,16 @@ pub fn encodeToList(list: *std.ArrayList(u8), allocator: std.mem.Allocator, inpu
 }
 
 pub fn decodeAlloc(allocator: std.mem.Allocator, input: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
+    const out_len = try decodedLen(input);
+    const out = try allocator.alloc(u8, out_len);
+    errdefer allocator.free(out);
+    const written = try decodeInto(out, input);
+    std.debug.assert(written == out.len);
+    return out;
+}
+
+fn decodedLen(input: []const u8) error{InvalidEncoding}!usize {
+    var out_len: usize = 0;
 
     var i: usize = 0;
     while (i < input.len) {
@@ -385,45 +393,103 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, input: []const u8) (std.mem.All
             if (i + 1 >= input.len) return error.InvalidEncoding;
             const code = input[i + 1];
             if (code == 0) {
-                try out.append(allocator, 0);
+                out_len += 1;
                 i += 2;
                 continue;
             }
             if (code == extended_pattern_code) {
                 if (i + 2 >= input.len) return error.InvalidEncoding;
                 const pattern = extendedPatternForCode(input[i + 2]) orelse return error.InvalidEncoding;
-                try out.appendSlice(allocator, pattern);
+                out_len += pattern.len;
                 i += 3;
                 continue;
             }
             if (code == raw_literal_code) {
                 if (i + 2 >= input.len) return error.InvalidEncoding;
-                try out.append(allocator, input[i + 2]);
+                out_len += 1;
                 i += 3;
                 continue;
             } else {
                 const pattern = patternForCode(code) orelse return error.InvalidEncoding;
-                try out.appendSlice(allocator, pattern);
+                out_len += pattern.len;
             }
             i += 2;
             continue;
         }
 
         if (charForTokenByte(byte)) |value| {
-            try out.append(allocator, value);
+            _ = value;
+            out_len += 1;
             i += 1;
             continue;
         }
 
         if (singlePatternForByte(byte)) |pattern| {
-            try out.appendSlice(allocator, pattern);
+            out_len += pattern.len;
         } else {
-            try out.append(allocator, byte);
+            out_len += 1;
         }
         i += 1;
     }
 
-    return out.toOwnedSlice(allocator);
+    return out_len;
+}
+
+fn decodeInto(out: []u8, input: []const u8) error{InvalidEncoding}!usize {
+    var out_index: usize = 0;
+    var i: usize = 0;
+    while (i < input.len) {
+        const byte = input[i];
+        if (byte == escape_byte) {
+            if (i + 1 >= input.len) return error.InvalidEncoding;
+            const code = input[i + 1];
+            if (code == 0) {
+                out[out_index] = 0;
+                out_index += 1;
+                i += 2;
+                continue;
+            }
+            if (code == extended_pattern_code) {
+                if (i + 2 >= input.len) return error.InvalidEncoding;
+                const pattern = extendedPatternForCode(input[i + 2]) orelse return error.InvalidEncoding;
+                @memcpy(out[out_index .. out_index + pattern.len], pattern);
+                out_index += pattern.len;
+                i += 3;
+                continue;
+            }
+            if (code == raw_literal_code) {
+                if (i + 2 >= input.len) return error.InvalidEncoding;
+                out[out_index] = input[i + 2];
+                out_index += 1;
+                i += 3;
+                continue;
+            }
+
+            const pattern = patternForCode(code) orelse return error.InvalidEncoding;
+            @memcpy(out[out_index .. out_index + pattern.len], pattern);
+            out_index += pattern.len;
+            i += 2;
+            continue;
+        }
+
+        if (charForTokenByte(byte)) |value| {
+            out[out_index] = value;
+            out_index += 1;
+            i += 1;
+            continue;
+        }
+
+        if (singlePatternForByte(byte)) |pattern| {
+            @memcpy(out[out_index .. out_index + pattern.len], pattern);
+            out_index += pattern.len;
+        } else {
+            out[out_index] = byte;
+            out_index += 1;
+        }
+        i += 1;
+    }
+
+    return out_index;
 }
 
 fn matchLongest(input: []const u8, index: usize) ?Match {
