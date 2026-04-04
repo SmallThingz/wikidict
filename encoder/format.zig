@@ -13,11 +13,13 @@ pub const PayloadError = error{InvalidEncoding};
 
 pub const RawAltForm = struct {
     value: []const u8,
+    // Precomputed normalized lookup key for the alternative form.
     normalized: []const u8,
 };
 
 pub const RawRecordMetadata = struct {
     alt_forms: []const RawAltForm,
+    // Canonical targets are stored normalized so the decoder can index redirects without re-normalizing.
     normalized_targets: []const []const u8,
 
     pub fn deinit(self: *RawRecordMetadata, allocator: std.mem.Allocator) void {

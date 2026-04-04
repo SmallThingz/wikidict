@@ -55,6 +55,7 @@ const line_prefixes = [_]LinePrefix{
 };
 
 const JoinedBody = struct {
+    // Keeps the exact blank-line shape of line-oriented sections even when the decoded text is empty.
     text: []const u8,
     line_count: usize,
 };
@@ -240,7 +241,12 @@ pub fn encodeEnglishAlloc(allocator: std.mem.Allocator, english_section: []const
             try out.append(allocator, @intFromEnum(kindForTitle(section.title) orelse .lines));
         }
 
-        const payload = try encodeSectionPayloadAlloc(temp_allocator, section.lines.items, kind);
+        const payload = switch (kind) {
+            .lines => try encodeJoinedBodyAlloc(temp_allocator, section.lines.items),
+            .pos_lines => try encodeLineStreamAlloc(temp_allocator, section.lines.items),
+            .term_list => try encodeTermSectionAlloc(temp_allocator, section.lines.items),
+            .translations => try encodeTranslationSectionAlloc(temp_allocator, section.lines.items),
+        };
         try appendBytesSlice(&out, allocator, payload);
     }
 
@@ -300,7 +306,10 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
                 try out.append(allocator, '\n');
                 try appendHeadingLine(&out, allocator, level, title);
             }
-            try appendDecodedJoinedBody(&out, allocator, body);
+            if (body.line_count != 0) {
+                try out.append(allocator, '\n');
+                try out.appendSlice(allocator, body.text);
+            }
             continue;
         }
 
@@ -330,15 +339,6 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
 
     if ((flags & trailing_newline_flag) != 0) try out.append(allocator, '\n');
     return out.toOwnedSlice(allocator);
-}
-
-fn encodeSectionPayloadAlloc(allocator: std.mem.Allocator, lines: []const []const u8, kind: SectionKind) ![]u8 {
-    return switch (kind) {
-        .lines => encodeJoinedBodyAlloc(allocator, lines),
-        .pos_lines => encodeLineStreamAlloc(allocator, lines),
-        .term_list => encodeTermSectionAlloc(allocator, lines),
-        .translations => encodeTranslationSectionAlloc(allocator, lines),
-    };
 }
 
 fn encodeJoinedBodyAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
@@ -412,16 +412,6 @@ fn decodeJoinedBodyAlloc(allocator: std.mem.Allocator, payload: []const u8) (std
         .text = text,
         .line_count = line_count,
     };
-}
-
-fn appendDecodedJoinedBody(
-    out: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
-    body: JoinedBody,
-) (std.mem.Allocator.Error || error{InvalidEncoding})!void {
-    if (body.line_count == 0) return;
-    try out.append(allocator, '\n');
-    try out.appendSlice(allocator, body.text);
 }
 
 fn encodeTermSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
@@ -1265,16 +1255,6 @@ fn parseInlineColumnTemplate(allocator: std.mem.Allocator, line: []const u8) ?Co
         .template_code = template_code,
         .items = parts.items[2..],
     };
-}
-
-fn columnTemplateCode(line: []const u8) ?u8 {
-    const trimmed = std.mem.trim(u8, line, " \t");
-    if (std.mem.eql(u8, trimmed, "{{col|en")) return column_col;
-    if (std.mem.eql(u8, trimmed, "{{col2|en")) return column_col2;
-    if (std.mem.eql(u8, trimmed, "{{col3|en")) return column_col3;
-    if (std.mem.eql(u8, trimmed, "{{col4|en")) return column_col4;
-    if (std.mem.eql(u8, trimmed, "{{col5|en")) return column_col5;
-    return null;
 }
 
 fn inlineColumnTemplateCode(name: []const u8) ?u8 {

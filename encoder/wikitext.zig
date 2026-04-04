@@ -123,6 +123,10 @@ const PosCapture = struct {
     level: u8,
 };
 
+const parser_name_capture = "SectionBuffer.appendRawLine";
+const parser_name_alt_forms = "extractTermsFromLine";
+const parser_name_pos = "consumePosLine";
+
 const SectionBuffer = struct {
     allocator: std.mem.Allocator,
     group: []const u8,
@@ -144,7 +148,13 @@ const SectionBuffer = struct {
     }
 
     fn appendRawLine(self: *SectionBuffer, raw_line: []const u8) !void {
-        const cleaned = try renderWikitextToOwned(self.allocator, trimListPrefix(raw_line), max_section_bytes);
+        var prefix_end: usize = 0;
+        while (prefix_end < raw_line.len and (raw_line[prefix_end] == '*' or raw_line[prefix_end] == ':' or raw_line[prefix_end] == ';' or raw_line[prefix_end] == '#')) : (prefix_end += 1) {}
+        const cleaned = try renderWikitextToOwned(
+            self.allocator,
+            std.mem.trimStart(u8, raw_line[prefix_end..], " \t"),
+            max_section_bytes,
+        );
         defer self.allocator.free(cleaned);
         if (cleaned.len == 0) return;
 
@@ -458,123 +468,56 @@ fn processLogicalLine(
 
     const parser_kind = active_parser_kind orelse return;
     switch (parser_kind) {
-        .alternative_forms => {
-            try parseAlternativeFormsLine(allocator, entry, trimmed);
-        },
+        .alternative_forms => try extractTermsFromLine(allocator, &entry.alt_forms, trimmed),
         .part_of_speech => {
             const capture = pos_capture orelse return;
-            try parsePartOfSpeechLine(allocator, entry, capture, trimmed);
+            try consumePosLine(allocator, entry, capture, trimmed);
         },
         .language_root => {
             const capture = section_capture orelse return;
-            try parseLanguageRootLine(capture, trimmed);
+            try capture.appendRawLine(trimmed);
         },
         .etymology => {
             const capture = section_capture orelse return;
-            try parseEtymologyLine(capture, trimmed);
+            try capture.appendRawLine(trimmed);
         },
         .pronunciation => {
             const capture = section_capture orelse return;
-            try parsePronunciationLine(capture, trimmed);
+            try capture.appendRawLine(trimmed);
         },
         .relations => {
             const capture = section_capture orelse return;
-            try parseRelationsLine(capture, trimmed);
+            try capture.appendRawLine(trimmed);
         },
         .translations => {
             const capture = section_capture orelse return;
-            try parseTranslationsLine(capture, trimmed);
+            try capture.appendRawLine(trimmed);
         },
         .citations => {
             const capture = section_capture orelse return;
-            try parseCitationsLine(capture, trimmed);
+            try capture.appendRawLine(trimmed);
         },
         .notes => {
             const capture = section_capture orelse return;
-            try parseNotesLine(capture, trimmed);
+            try capture.appendRawLine(trimmed);
         },
         .navigation => {
             const capture = section_capture orelse return;
-            try parseNavigationLine(capture, trimmed);
+            try capture.appendRawLine(trimmed);
         },
         .descendants => {
             const capture = section_capture orelse return;
-            try parseDescendantsLine(capture, trimmed);
+            try capture.appendRawLine(trimmed);
         },
         .inflection => {
             const capture = section_capture orelse return;
-            try parseInflectionLine(capture, trimmed);
+            try capture.appendRawLine(trimmed);
         },
         .meta => {
             const capture = section_capture orelse return;
-            try parseMetaLine(capture, trimmed);
+            try capture.appendRawLine(trimmed);
         },
     }
-}
-
-fn parseLanguageRootLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try parseFreeformSectionLine(capture, raw_line);
-}
-
-fn parseAlternativeFormsLine(
-    allocator: std.mem.Allocator,
-    entry: *ParsedEntry,
-    raw_line: []const u8,
-) !void {
-    try extractTermsFromLine(allocator, &entry.alt_forms, raw_line);
-}
-
-fn parsePartOfSpeechLine(
-    allocator: std.mem.Allocator,
-    entry: *ParsedEntry,
-    capture: PosCapture,
-    raw_line: []const u8,
-) !void {
-    try consumePosLine(allocator, entry, capture, raw_line);
-}
-
-fn parseEtymologyLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try parseFreeformSectionLine(capture, raw_line);
-}
-
-fn parsePronunciationLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try parseFreeformSectionLine(capture, raw_line);
-}
-
-fn parseRelationsLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try parseFreeformSectionLine(capture, raw_line);
-}
-
-fn parseTranslationsLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try parseFreeformSectionLine(capture, raw_line);
-}
-
-fn parseCitationsLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try parseFreeformSectionLine(capture, raw_line);
-}
-
-fn parseNotesLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try parseFreeformSectionLine(capture, raw_line);
-}
-
-fn parseNavigationLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try parseFreeformSectionLine(capture, raw_line);
-}
-
-fn parseDescendantsLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try parseFreeformSectionLine(capture, raw_line);
-}
-
-fn parseInflectionLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try parseFreeformSectionLine(capture, raw_line);
-}
-
-fn parseMetaLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try parseFreeformSectionLine(capture, raw_line);
-}
-
-fn parseFreeformSectionLine(capture: *SectionBuffer, raw_line: []const u8) !void {
-    try capture.appendRawLine(raw_line);
 }
 
 fn flushSectionCapture(allocator: std.mem.Allocator, entry: *ParsedEntry, capture: *SectionBuffer) !void {
@@ -661,91 +604,91 @@ pub fn sectionParserSpecForTitle(title: []const u8, level: u8) ?SectionParserSpe
     if (level == 2 and headingMatches(title, "English")) {
         return .{
             .kind = .language_root,
-            .parser_name = "parseLanguageRootLine",
+            .parser_name = parser_name_capture,
             .canonical_title = "English",
         };
     }
     if (isAlternativeFormsHeading(title)) {
         return .{
             .kind = .alternative_forms,
-            .parser_name = "parseAlternativeFormsLine",
+            .parser_name = parser_name_alt_forms,
             .canonical_title = "Alternative forms",
         };
     }
     if (isEtymologyHeading(title)) {
         return .{
             .kind = .etymology,
-            .parser_name = "parseEtymologyLine",
+            .parser_name = parser_name_capture,
             .canonical_title = "Etymology",
         };
     }
     if (isTranslationHeading(title)) {
         return .{
             .kind = .translations,
-            .parser_name = "parseTranslationsLine",
+            .parser_name = parser_name_capture,
             .canonical_title = "Translations",
         };
     }
     if (isDescendantHeading(title)) {
         return .{
             .kind = .descendants,
-            .parser_name = "parseDescendantsLine",
+            .parser_name = parser_name_capture,
             .canonical_title = "Descendants",
         };
     }
     if (isInflectionHeading(title)) {
         return .{
             .kind = .inflection,
-            .parser_name = "parseInflectionLine",
+            .parser_name = parser_name_capture,
             .canonical_title = title,
         };
     }
     if (isRelationHeading(title)) {
         return .{
             .kind = .relations,
-            .parser_name = "parseRelationsLine",
+            .parser_name = parser_name_capture,
             .canonical_title = title,
         };
     }
     if (isCitationHeading(title)) {
         return .{
             .kind = .citations,
-            .parser_name = "parseCitationsLine",
+            .parser_name = parser_name_capture,
             .canonical_title = title,
         };
     }
     if (isNotesHeading(title)) {
         return .{
             .kind = .notes,
-            .parser_name = "parseNotesLine",
+            .parser_name = parser_name_capture,
             .canonical_title = title,
         };
     }
     if (isPronunciationHeading(title)) {
         return .{
             .kind = .pronunciation,
-            .parser_name = "parsePronunciationLine",
+            .parser_name = parser_name_capture,
             .canonical_title = "Pronunciation",
         };
     }
     if (isNavigationHeading(title)) {
         return .{
             .kind = .navigation,
-            .parser_name = "parseNavigationLine",
+            .parser_name = parser_name_capture,
             .canonical_title = title,
         };
     }
     if (isPartOfSpeechHeading(title)) {
         return .{
             .kind = .part_of_speech,
-            .parser_name = "parsePartOfSpeechLine",
+            .parser_name = parser_name_pos,
             .canonical_title = title,
         };
     }
     if (isMetaHeading(title)) {
         return .{
             .kind = .meta,
-            .parser_name = "parseMetaLine",
+            .parser_name = parser_name_capture,
             .canonical_title = title,
         };
     }
@@ -770,12 +713,6 @@ fn parseDefinitionLine(line: []const u8) ?ParsedDefinitionLine {
         .kind = kind,
         .content = content,
     };
-}
-
-fn trimListPrefix(line: []const u8) []const u8 {
-    var i: usize = 0;
-    while (i < line.len and (line[i] == '*' or line[i] == ':' or line[i] == ';' or line[i] == '#')) : (i += 1) {}
-    return std.mem.trimStart(u8, line[i..], " \t");
 }
 
 pub fn isRecognizedEtymologyTitle(title: []const u8) bool {
@@ -815,10 +752,6 @@ pub fn isExcludedHeading(title: []const u8, level: u8, exclusions: ExclusionPoli
         .translations => exclusions.exclude_translations,
         else => false,
     };
-}
-
-fn isInterestingInfoSection(title: []const u8) bool {
-    return isRecognizedInfoSection(title);
 }
 
 pub fn isRecognizedPartOfSpeech(title: []const u8) bool {
@@ -1608,6 +1541,22 @@ test "current structure report headings all map to a section parser" {
         try std.testing.expect(parser != null);
         try std.testing.expect(parser.?.parser_name.len != 0);
     }
+}
+
+test "section parser specs advertise live shared parser implementations" {
+    try std.testing.expectEqualStrings(parser_name_capture, sectionParserSpecForTitle("English", 2).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_alt_forms, sectionParserSpecForTitle("Alternative forms", 3).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_capture, sectionParserSpecForTitle("Etymology", 3).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_capture, sectionParserSpecForTitle("Pronunciation", 3).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_pos, sectionParserSpecForTitle("Noun", 3).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_capture, sectionParserSpecForTitle("Derived terms", 4).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_capture, sectionParserSpecForTitle("Translations", 4).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_capture, sectionParserSpecForTitle("References", 4).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_capture, sectionParserSpecForTitle("Usage notes", 4).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_capture, sectionParserSpecForTitle("See also", 4).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_capture, sectionParserSpecForTitle("Descendants", 4).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_capture, sectionParserSpecForTitle("Conjugation", 4).?.parser_name);
+    try std.testing.expectEqualStrings(parser_name_capture, sectionParserSpecForTitle("Attestation", 4).?.parser_name);
 }
 
 test "parse english entry dispatches section families through dedicated parsers" {

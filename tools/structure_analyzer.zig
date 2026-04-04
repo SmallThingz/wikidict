@@ -829,10 +829,6 @@ fn currentHeadingLabel(active_titles: *const [7][]const u8) []const u8 {
     return if (level <= 2) "English" else active_titles[level];
 }
 
-fn currentHeadingFamily(active_titles: *const [7][]const u8) []const u8 {
-    return currentHeadingProfile(active_titles).family;
-}
-
 fn currentHeadingProfile(active_titles: *const [7][]const u8) HeadingProfile {
     const level = deepestHeadingLevel(active_titles.*);
     if (level <= 2) return classifyHeadingTitle("English", 2);

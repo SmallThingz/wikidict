@@ -304,10 +304,19 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 pub fn encodeToList(list: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
-    const stable_input = if (list.capacity != 0 and slicesOverlap(input, list.allocatedSlice()))
-        try allocator.dupe(u8, input)
-    else
-        null;
+    const stable_input = blk: {
+        if (list.capacity == 0 or input.len == 0) break :blk null;
+        const allocated = list.allocatedSlice();
+        if (allocated.len == 0) break :blk null;
+
+        const input_start = @intFromPtr(input.ptr);
+        const input_end = input_start + input.len;
+        const allocated_start = @intFromPtr(allocated.ptr);
+        const allocated_end = allocated_start + allocated.len;
+        if (input_start >= allocated_end or allocated_start >= input_end) break :blk null;
+
+        break :blk try allocator.dupe(u8, input);
+    };
     defer if (stable_input) |owned| allocator.free(owned);
 
     const source = stable_input orelse input;
@@ -487,15 +496,6 @@ fn needsRawLiteralEscape(byte: u8) bool {
 fn canCopyLiteralRun(byte: u8) bool {
     if (pattern_start_table[byte]) return false;
     return !needsRawLiteralEscape(byte);
-}
-
-fn slicesOverlap(a: []const u8, b: []const u8) bool {
-    if (a.len == 0 or b.len == 0) return false;
-    const a_start = @intFromPtr(a.ptr);
-    const a_end = a_start + a.len;
-    const b_start = @intFromPtr(b.ptr);
-    const b_end = b_start + b.len;
-    return a_start < b_end and b_start < a_end;
 }
 
 fn singlePatternForByte(byte: u8) ?[]const u8 {

@@ -106,8 +106,11 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
 
     const temp_output_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{options.output_path});
     defer allocator.free(temp_output_path);
-    try deleteFileIfExists(io, temp_output_path);
-    defer deleteFileIfExists(io, temp_output_path) catch {};
+    std.Io.Dir.cwd().deleteFile(io, temp_output_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+    defer std.Io.Dir.cwd().deleteFile(io, temp_output_path) catch {};
 
     var stats: BuildStats = .{};
 
@@ -154,20 +157,9 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
         stats.english_entries = output.entry_count;
     }
 
-    try replaceFile(io, temp_output_path, options.output_path);
+    try std.Io.Dir.cwd().rename(temp_output_path, std.Io.Dir.cwd(), options.output_path, io);
     progress.finish(stats.pages_seen, stats.english_entries);
     return stats;
-}
-
-fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
-    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => return err,
-    };
-}
-
-fn replaceFile(io: std.Io, old_path: []const u8, new_path: []const u8) !void {
-    try std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, io);
 }
 
 fn processMappedInput(
@@ -204,6 +196,7 @@ const PageCapture = struct {
     title_raw: ?[]const u8 = null,
     ns_raw: ?[]const u8 = null,
     text_raw: ?[]const u8 = null,
+    // Redirect pages encode the target as an attribute on the empty <redirect/> node.
     redirect_title_raw: ?[]const u8 = null,
 
     fn onNode(self: *@This(), node: StreamNode) bool {
@@ -333,6 +326,7 @@ const OutputWriter = struct {
     raw_entry_count: usize = 0,
     redirect_count: usize = 0,
     buffer: std.ArrayList(u8) = .empty,
+    // Scratch buffer reused for compact-encoding titles before length-prefixing them.
     title_buf: std.ArrayList(u8) = .empty,
 
     fn init(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File) !OutputWriter {

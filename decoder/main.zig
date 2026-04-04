@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const decoder = @import("decoder");
+const cli_args = @import("cli_args");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
@@ -28,8 +29,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn cmdLookup(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
-    const db_path = flagValue(args, "--db") orelse "data/enwiktionary.bin";
-    const term = flagValue(args, "--word") orelse {
+    const db_path = cli_args.flagValue(args, "--db") orelse "data/enwiktionary.bin";
+    const term = cli_args.flagValue(args, "--word") orelse {
         printUsage();
         return;
     };
@@ -52,12 +53,12 @@ fn cmdLookup(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
 }
 
 fn cmdSuggest(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
-    const db_path = flagValue(args, "--db") orelse "data/enwiktionary.bin";
-    const prefix = flagValue(args, "--prefix") orelse {
+    const db_path = cli_args.flagValue(args, "--db") orelse "data/enwiktionary.bin";
+    const prefix = cli_args.flagValue(args, "--prefix") orelse {
         printUsage();
         return;
     };
-    const limit = if (flagValue(args, "--limit")) |value| try std.fmt.parseInt(usize, value, 10) else 12;
+    const limit = (try cli_args.parseOptionalIntFlag(usize, args, "--limit")) orelse 12;
     const open_options = try openOptionsFromArgs(args);
 
     var db = try decoder.openDictionaryWithOptions(allocator, io, db_path, open_options);
@@ -74,7 +75,7 @@ fn cmdSuggest(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8
 }
 
 fn cmdStats(io: std.Io, args: []const []const u8) !void {
-    const db_path = flagValue(args, "--db") orelse "data/enwiktionary.bin";
+    const db_path = cli_args.flagValue(args, "--db") orelse "data/enwiktionary.bin";
     const open_options = try openOptionsFromArgs(args);
     var db = try decoder.openDictionaryWithOptions(std.heap.page_allocator, io, db_path, open_options);
     defer db.deinit();
@@ -94,10 +95,7 @@ fn cmdStats(io: std.Io, args: []const []const u8) !void {
 
 fn openOptionsFromArgs(args: []const []const u8) !decoder.OpenOptions {
     return .{
-        .index_build_threads = if (flagValue(args, "--index-threads")) |value|
-            try std.fmt.parseInt(usize, value, 10)
-        else
-            null,
+        .index_build_threads = try cli_args.parseOptionalIntFlag(usize, args, "--index-threads"),
     };
 }
 
@@ -120,7 +118,15 @@ fn printHit(
     if (derived.summary.len != 0) std.debug.print("Summary: {s}\n", .{derived.summary});
     printOwnedList("Canonical", derived.canonical_targets.items);
     printOwnedList("Alternative forms", derived.alt_forms.items);
-    printList("Incoming aliases", entry.incomingAliases());
+    const incoming_aliases = entry.incomingAliases();
+    if (incoming_aliases.len() != 0) {
+        std.debug.print("Incoming aliases: ", .{});
+        for (0..incoming_aliases.len()) |idx| {
+            if (idx != 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{incoming_aliases.at(idx)});
+        }
+        std.debug.print("\n", .{});
+    }
 
     if (try entry.rawEnglishAlloc(allocator)) |raw| {
         defer allocator.free(raw);
@@ -140,26 +146,8 @@ fn printOwnedList(label: []const u8, values: []const []const u8) void {
     std.debug.print("\n", .{});
 }
 
-fn printList(label: []const u8, values: decoder.TermListView) void {
-    if (values.len() == 0) return;
-    std.debug.print("{s}: ", .{label});
-    for (0..values.len()) |idx| {
-        if (idx != 0) std.debug.print(", ", .{});
-        std.debug.print("{s}", .{values.at(idx)});
-    }
-    std.debug.print("\n", .{});
-}
-
 fn lookupKindString(kind: u8) []const u8 {
     return if (kind == decoder.format.lookup_kind_alternative_form) "alternative_form" else "title";
-}
-
-fn flagValue(args: []const []const u8, name: []const u8) ?[]const u8 {
-    var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], name) and i + 1 < args.len) return args[i + 1];
-    }
-    return null;
 }
 
 fn printUsage() void {

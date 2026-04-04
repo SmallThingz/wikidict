@@ -8,6 +8,16 @@ pub fn build(b: *std.Build) void {
     const config_options = b.addOptions();
     config_options.addOption(bool, "keep_translations", keep_translations);
     const generated_tables = addGeneratedStructureTableModules(b, target, optimize, structure_optimize);
+    const cli_args_mod = b.createModule(.{
+        .root_source_file = b.path("tools/cli_args.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const cli_args_mod_structure = b.createModule(.{
+        .root_source_file = b.path("tools/cli_args.zig"),
+        .target = target,
+        .optimize = structure_optimize,
+    });
 
     const zxml_dep = b.dependency("zxml", .{
         .target = target,
@@ -41,6 +51,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("normalize", normalize_mod);
     encoder_mod.addImport("zxml", zxml_dep.module("zxml"));
     encoder_mod.addImport("generated_structure_tables", generated_tables.regular);
+    encoder_mod.addImport("cli_args", cli_args_mod);
     const encoder_mod_structure = b.addModule("encoder_structure", .{
         .root_source_file = b.path("encoder/root.zig"),
         .target = target,
@@ -50,6 +61,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod_structure.addImport("normalize", normalize_mod_structure);
     encoder_mod_structure.addImport("zxml", zxml_dep_structure.module("zxml"));
     encoder_mod_structure.addImport("generated_structure_tables", generated_tables.structure);
+    encoder_mod_structure.addImport("cli_args", cli_args_mod_structure);
 
     const decoder_mod = b.addModule("decoder", .{
         .root_source_file = b.path("decoder/root.zig"),
@@ -58,6 +70,7 @@ pub fn build(b: *std.Build) void {
     });
     decoder_mod.addImport("normalize", normalize_mod);
     decoder_mod.addImport("encoder", encoder_mod);
+    decoder_mod.addImport("cli_args", cli_args_mod);
 
     const backend_mod = b.addModule("backend", .{
         .root_source_file = b.path("backend/root.zig"),
@@ -67,15 +80,19 @@ pub fn build(b: *std.Build) void {
     backend_mod.addImport("encoder", encoder_mod);
     backend_mod.addImport("decoder", decoder_mod);
     backend_mod.addImport("zhttp", zhttp_dep.module("zhttp"));
+    backend_mod.addImport("cli_args", cli_args_mod);
 
     const encoder_exe = addCliExecutable(b, "dict-encoder", b.path("encoder/main.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
+        .{ .name = "cli_args", .module = cli_args_mod },
     });
     const decoder_exe = addCliExecutable(b, "dict-decoder", b.path("decoder/main.zig"), target, optimize, &.{
         .{ .name = "decoder", .module = decoder_mod },
+        .{ .name = "cli_args", .module = cli_args_mod },
     });
     const backend_exe = addCliExecutable(b, "dict-backend", b.path("backend/main.zig"), target, optimize, &.{
         .{ .name = "backend", .module = backend_mod },
+        .{ .name = "cli_args", .module = cli_args_mod },
     });
     const structure_exe = addCliExecutable(b, "dict-structure", b.path("tools/structure_analyzer.zig"), target, structure_optimize, &.{
         .{ .name = "encoder", .module = encoder_mod_structure },
@@ -99,7 +116,13 @@ pub fn build(b: *std.Build) void {
     addRunStep(b, "structure", "Analyze Wiktionary structure", structure_exe, &.{});
     addRunStep(b, "verify", "Verify dictionary raw entries against the XML dump", verifier_exe, &.{});
 
-    addFrontendStep(b);
+    {
+        const cmd = b.addSystemCommand(&.{ "bash", "tools/frontend" });
+        if (b.args) |args| cmd.addArgs(args);
+
+        const step = b.step("frontend", "Run the frontend CLI in tools/frontend");
+        step.dependOn(&cmd.step);
+    }
 
     const test_runner = b.path("tools/test_runner.zig");
 
@@ -187,14 +210,6 @@ fn addRunStep(
 
     const step = b.step(name, description);
     step.dependOn(&run_cmd.step);
-}
-
-fn addFrontendStep(b: *std.Build) void {
-    const cmd = b.addSystemCommand(&.{ "bash", "tools/frontend" });
-    if (b.args) |args| cmd.addArgs(args);
-
-    const step = b.step("frontend", "Run the frontend CLI in tools/frontend");
-    step.dependOn(&cmd.step);
 }
 
 const GeneratedStructureModules = struct {

@@ -101,10 +101,10 @@ pub fn main(init: std.process.Init) !void {
             filter = try init.gpa.dupe(u8, f_z[0..f_z.len]);
         } else if (std.mem.eql(u8, arg, "--jobs")) {
             const j_z = arg_it.next() orelse return error.MissingJobs;
-            jobs = try parseUsize(j_z[0..j_z.len]);
+            jobs = try std.fmt.parseUnsigned(usize, j_z[0..j_z.len], 10);
         } else if (std.mem.eql(u8, arg, "--seed")) {
             const s_z = arg_it.next() orelse return error.MissingSeed;
-            seed = try parseU32(s_z[0..s_z.len]);
+            seed = try std.fmt.parseUnsigned(u32, s_z[0..s_z.len], 10);
         } else if (std.mem.eql(u8, arg, "--help")) {
             printHelp();
             return;
@@ -132,14 +132,6 @@ fn panicHandler(msg: []const u8, first_trace_addr: ?usize) noreturn {
         std.process.exit(1);
     }
     std.debug.defaultPanic(msg, first_trace_addr);
-}
-
-fn parseUsize(s: []const u8) !usize {
-    return std.fmt.parseUnsigned(usize, s, 10);
-}
-
-fn parseU32(s: []const u8) !u32 {
-    return std.fmt.parseUnsigned(u32, s, 10);
 }
 
 fn printHelp() void {

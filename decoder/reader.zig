@@ -9,7 +9,7 @@ const section_encoding = encoder.section_encoding;
 const wikitext = encoder.wikitext;
 
 const cache_magic = "DCTIDX04";
-const cache_version: u32 = 4;
+const cache_version: u32 = 5;
 const cache_alignment: u32 = 8;
 
 const StringRef = extern struct {
@@ -84,6 +84,7 @@ const cache_header_size = std.mem.alignForward(u32, @sizeOf(CacheHeader), cache_
 const BuildAltForm = struct {
     value: []const u8,
     normalized: []const u8,
+    // Filled during cache materialization so repeated lookup refs can reuse a single interned string.
     value_ref: StringRef = .{ .offset = 0, .len = 0 },
     normalized_ref: StringRef = .{ .offset = 0, .len = 0 },
 };
@@ -109,6 +110,7 @@ const BuildLookupRecord = struct {
 const BuildPayload = struct {
     entries: []BuildEntryData,
     lookups: []const BuildLookupRecord,
+    // Parallel scan chunks own the per-thread arenas backing borrowed strings in `entries`.
     scan_chunks: []ScanChunkResult = &.{},
 
     fn deinitTransient(self: *BuildPayload, allocator: std.mem.Allocator) void {
@@ -130,6 +132,7 @@ const LookupSortContext = struct {
 const IndexRangeBuilder = struct {
     start: usize = 0,
     len: usize = 0,
+    // Reused as a write cursor while packing dense title->entry index ranges.
     cursor: usize = 0,
 };
 
@@ -600,7 +603,14 @@ pub const Dictionary = struct {
                 .matched = self.string(lookup.matched),
                 .kind = lookup.kind,
             };
-            if (!containsHit(hits.items, candidate)) try hits.append(allocator, candidate);
+            var seen = false;
+            for (hits.items) |item| {
+                if (item.entry_index == candidate.entry_index and std.mem.eql(u8, item.matched, candidate.matched) and item.kind == candidate.kind) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) try hits.append(allocator, candidate);
         }
         return hits.toOwnedSlice(allocator);
     }
@@ -764,7 +774,11 @@ fn tryOpenCache(io: std.Io, cache_path: []const u8, expected_key: u64) !?OpenCac
         file.close(io);
         return null;
     };
-    const strings = viewBytes(mapped, header.strings_offset, header.strings_len) catch {
+    const strings_offset: usize = header.strings_offset;
+    const strings_len: usize = header.strings_len;
+    const strings = if (strings_offset <= mapped.len and strings_len <= mapped.len - strings_offset)
+        mapped[strings_offset .. strings_offset + strings_len]
+    else {
         std.posix.munmap(mapped);
         file.close(io);
         return null;
@@ -1016,7 +1030,7 @@ fn buildIndex(
     for (chunks, threads, 0..) |*chunk, *thread, i| {
         const end = partitionEnd(descriptors.len, thread_count, i);
         thread.* = try std.Thread.spawn(.{}, scanRecordChunk, .{
-            descriptorSlice(descriptors, start, end),
+            descriptors[start..end],
             chunk,
             progress,
         });
@@ -1131,10 +1145,6 @@ fn scanRecordChunk(descriptors: []const RecordDescriptor, chunk: *ScanChunkResul
     }
 }
 
-fn descriptorSlice(descriptors: []const RecordDescriptor, start: usize, end: usize) []const RecordDescriptor {
-    return descriptors[start..end];
-}
-
 fn partitionEnd(total: usize, part_count: usize, part_index: usize) usize {
     return @divTrunc(total * (part_index + 1), part_count);
 }
@@ -1172,30 +1182,22 @@ fn viewArray(comptime T: type, mapped: []align(std.heap.page_size_min) const u8,
     return ptr[0..count];
 }
 
-fn viewBytes(mapped: []align(std.heap.page_size_min) const u8, offset_u32: u32, len_u32: u32) ![]const u8 {
-    const offset = std.math.cast(usize, offset_u32) orelse return error.InvalidDictionaryCache;
-    const len = std.math.cast(usize, len_u32) orelse return error.InvalidDictionaryCache;
-    if (offset > mapped.len or len > mapped.len - offset) return error.InvalidDictionaryCache;
-    return mapped[offset .. offset + len];
-}
-
 fn computeCacheKey(stat: anytype, header: *const format.Header) u64 {
     var hasher = std.hash.Wyhash.init(0);
-
-    addHashValue(&hasher, stat.size);
-    addHashValue(&hasher, stat.mtime.nanoseconds);
-    addHashValue(&hasher, header.version);
-    addHashValue(&hasher, header.entry_count);
-    addHashValue(&hasher, header.raw_entry_count);
-    addHashValue(&hasher, header.redirect_count);
-    addHashValue(&hasher, header.records_offset);
-    addHashValue(&hasher, header.records_len);
+    inline for (.{
+        stat.size,
+        stat.mtime.nanoseconds,
+        header.version,
+        header.entry_count,
+        header.raw_entry_count,
+        header.redirect_count,
+        header.records_offset,
+        header.records_len,
+    }) |value| {
+        const local = value;
+        hasher.update(std.mem.asBytes(&local));
+    }
     return hasher.final();
-}
-
-fn addHashValue(hasher: *std.hash.Wyhash, value: anytype) void {
-    const local = value;
-    hasher.update(std.mem.asBytes(&local));
 }
 
 fn readLengthPrefixedSlice(bytes: []const u8, cursor: *usize, limit: usize) ![]const u8 {
@@ -1283,22 +1285,18 @@ fn finalizeIncomingAliases(
         const end = incoming_offsets[idx + 1];
         if (start == end) continue;
 
-        const unique_slice = dedupeAdjacentIndices(incoming_refs[start..end]);
+        const refs = incoming_refs[start..end];
+        var out_len: usize = 1;
+        for (refs[1..]) |value| {
+            if (value == refs[out_len - 1]) continue;
+            refs[out_len] = value;
+            out_len += 1;
+        }
+        const unique_slice = refs[0..out_len];
         const owned = try arena_allocator.alloc(u32, unique_slice.len);
         @memcpy(owned, unique_slice);
         entry.incoming_aliases = owned;
     }
-}
-
-fn dedupeAdjacentIndices(values: []u32) []u32 {
-    if (values.len == 0) return values;
-    var out_len: usize = 1;
-    for (values[1..]) |value| {
-        if (value == values[out_len - 1]) continue;
-        values[out_len] = value;
-        out_len += 1;
-    }
-    return values[0..out_len];
 }
 
 fn buildLookups(
@@ -1311,7 +1309,10 @@ fn buildLookups(
     try state.lookups.ensureTotalCapacity(arena_allocator, lookup_count);
     state.lookups.items.len = lookup_count;
 
-    const worker_count = lookupBuildWorkerCount(state.entries.items.len, thread_count);
+    const worker_count = if (thread_count < 2 or state.entries.items.len < 1024)
+        1
+    else
+        @min(thread_count, @max(@as(usize, 1), state.entries.items.len / 1024));
     if (worker_count == 1) {
         fillLookupChunk(state.entries.items, 0, state.lookups.items);
         try sortLookups(allocator, state.entries.items, state.lookups.items, 1);
@@ -1338,7 +1339,7 @@ fn buildLookups(
     const threads = try allocator.alloc(std.Thread, worker_count - 1);
     defer allocator.free(threads);
 
-    entry_start = 0;
+    entry_start = partitionEnd(state.entries.items.len, worker_count, 0);
     var started_threads: usize = 0;
     errdefer for (threads[0..started_threads]) |thread| thread.join();
     for (runs[1..], threads, 1..) |run, *thread, idx| {
@@ -1368,11 +1369,6 @@ fn lookupCountForEntries(entries: []const BuildEntryData) usize {
     var count: usize = entries.len;
     for (entries) |entry| count += entry.alt_forms.len;
     return count;
-}
-
-fn lookupBuildWorkerCount(entry_count: usize, thread_count: usize) usize {
-    if (thread_count < 2 or entry_count < 1024) return 1;
-    return @min(thread_count, @max(@as(usize, 1), entry_count / 1024));
 }
 
 fn fillAndSortLookupChunk(
@@ -1532,15 +1528,6 @@ fn mergeSortedLookups(
     }
 }
 
-fn containsHit(items: []const LookupHit, candidate: LookupHit) bool {
-    for (items) |item| {
-        if (item.entry_index == candidate.entry_index and std.mem.eql(u8, item.matched, candidate.matched) and item.kind == candidate.kind) {
-            return true;
-        }
-    }
-    return false;
-}
-
 fn lowerBoundLookup(self: *const Dictionary, key: []const u8) usize {
     var lo: usize = 0;
     var hi: usize = self.lookups.len;
@@ -1609,6 +1596,25 @@ test "cache structs stay compact" {
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Range));
     try std.testing.expectEqual(@as(usize, 20), @sizeOf(CachedEntry));
     try std.testing.expectEqual(@as(usize, 24), @sizeOf(CachedLookup));
+}
+
+test "tryOpenCache rejects stale cache versions" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const cache_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin.idx", .{tmp.sub_path});
+    defer std.testing.allocator.free(cache_path);
+
+    var file = try std.Io.Dir.cwd().createFile(std.testing.io, cache_path, .{ .truncate = true });
+    defer file.close(std.testing.io);
+
+    var header = CacheHeader.init(1234, 0, 0, 0, 0, 0, 0, 0, 0);
+    header.version = cache_version - 1;
+    var bytes: [cache_header_size]u8 = [_]u8{0} ** cache_header_size;
+    @memcpy(bytes[0..@sizeOf(CacheHeader)], std.mem.asBytes(&header));
+    try file.writePositionalAll(std.testing.io, &bytes, 0);
+
+    try std.testing.expect((try tryOpenCache(std.testing.io, cache_path, 1234)) == null);
 }
 
 test "dictionary open preserves raw etymology and pronunciation sections through cache rebuild" {
@@ -1840,5 +1846,49 @@ test "mergeSortedLookups preserves lookup ordering" {
     for (merged, expected) |item, pair| {
         try std.testing.expectEqualStrings(pair[0], lookupSortKey(ctx, item));
         try std.testing.expectEqualStrings(pair[1], lookupSortMatched(ctx, item));
+    }
+}
+
+test "buildLookups partitions threaded workers without overlapping slices" {
+    const entries = try std.testing.allocator.alloc(BuildEntryData, 2048);
+    defer std.testing.allocator.free(entries);
+
+    for (entries, 0..) |*entry, idx| {
+        entry.* = .{
+            .record_offset = 0,
+            .word = try std.fmt.allocPrint(std.testing.allocator, "word-{d}", .{idx}),
+            .normalized = try std.fmt.allocPrint(std.testing.allocator, "word-{d}", .{idx}),
+            .alt_forms = &.{},
+            .normalized_targets = &.{},
+            .incoming_aliases = &.{},
+        };
+    }
+    defer for (entries) |entry| {
+        std.testing.allocator.free(entry.word);
+        std.testing.allocator.free(entry.normalized);
+    };
+
+    var state: BuildState = .{};
+    defer state.lookups.deinit(std.testing.allocator);
+    try state.entries.ensureTotalCapacity(std.testing.allocator, entries.len);
+    for (entries) |entry| try state.entries.append(std.testing.allocator, entry);
+    defer state.entries.deinit(std.testing.allocator);
+
+    try buildLookups(std.testing.allocator, std.testing.allocator, &state, 2);
+    try std.testing.expectEqual(@as(usize, entries.len), state.lookups.items.len);
+
+    const seen = try std.testing.allocator.alloc(bool, entries.len);
+    defer std.testing.allocator.free(seen);
+    @memset(seen, false);
+
+    for (state.lookups.items) |lookup| {
+        try std.testing.expectEqual(format.lookup_kind_title, lookup.kind);
+        try std.testing.expect(lookup.entry_index < entries.len);
+        try std.testing.expect(!seen[lookup.entry_index]);
+        seen[lookup.entry_index] = true;
+    }
+
+    for (seen) |was_seen| {
+        try std.testing.expect(was_seen);
     }
 }

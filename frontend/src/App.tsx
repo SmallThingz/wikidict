@@ -3,6 +3,7 @@ import {
   For,
   Show,
   type ParentProps,
+  createEffect,
   createDeferred,
   createMemo,
   createResource,
@@ -355,6 +356,10 @@ function SearchCard(props: {
   const [query, setQuery] = createSignal(props.initialValue ?? "");
   const [open, setOpen] = createSignal(false);
   const [activeIndex, setActiveIndex] = createSignal(0);
+
+  createEffect(() => {
+    setQuery(props.initialValue ?? "");
+  });
 
   const deferred = createDeferred(query);
   const [suggestions] = createResource(

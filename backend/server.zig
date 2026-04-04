@@ -4,6 +4,7 @@ const zhttp = @import("zhttp");
 const decoder = @import("decoder");
 const encoder = @import("encoder");
 const format = encoder.format;
+const cli_args = @import("cli_args");
 
 const ReqCtx = zhttp.ReqCtx;
 const Header = zhttp.response.Header;
@@ -21,6 +22,7 @@ const AppContext = struct {
     allocator: std.mem.Allocator,
     db: decoder.Dictionary,
     db_path: []const u8,
+    // Preloaded SPA shell returned for both `/` and `/entry/...`.
     index_html: []const u8,
     // Monotonic counter used to walk pseudo-randomly across entries without extra state.
     random_counter: std.atomic.Value(u64),
@@ -31,7 +33,17 @@ const AppContext = struct {
             .allocator = allocator,
             .db = try decoder.openDictionary(allocator, io, options.db_path),
             .db_path = try allocator.dupe(u8, options.db_path),
-            .index_html = try readWholeFileAlloc(io, allocator, "frontend/dist/index.html"),
+            .index_html = blk: {
+                var file = try std.Io.Dir.cwd().openFile(io, "frontend/dist/index.html", .{});
+                defer file.close(io);
+
+                const stat = try file.stat(io);
+                const len = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
+                const buffer = try allocator.alloc(u8, len);
+                errdefer allocator.free(buffer);
+                _ = try file.readPositionalAll(io, buffer, 0);
+                break :blk buffer;
+            },
             .random_counter = .init(0x9e3779b97f4a7c15),
         };
     }
@@ -152,6 +164,7 @@ const LookupEndpoint = struct {
         altForms: []const []const u8,
         canonicalTargets: []const []const u8,
         incomingAliases: []const []const u8,
+        // Filtered raw English wikitext stored in the dictionary payload.
         raw: []const u8,
         summary: []const u8,
     };
@@ -216,9 +229,9 @@ const App = zhttp.Server(.{
 
 pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
     const options = ServeOptions{
-        .db_path = flagValue(args, "--db") orelse "data/enwiktionary.bin",
-        .port = if (flagValue(args, "--port")) |value| try std.fmt.parseInt(u16, value, 10) else 3000,
-        .input_path = flagValue(args, "--input") orelse "enwiktionary.xml",
+        .db_path = cli_args.flagValue(args, "--db") orelse "data/enwiktionary.bin",
+        .port = (try cli_args.parseOptionalIntFlag(u16, args, "--port")) orelse 3000,
+        .input_path = cli_args.flagValue(args, "--input") orelse "enwiktionary.xml",
     };
 
     var ctx = try AppContext.init(io, allocator, options);
@@ -308,26 +321,6 @@ fn jsonResponse(allocator: std.mem.Allocator, value: anytype) !zhttp.Res {
         .headers = json_headers,
         .body = writer.written(),
     };
-}
-
-fn readWholeFileAlloc(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-
-    const stat = try file.stat(io);
-    const len = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
-    const buffer = try allocator.alloc(u8, len);
-    errdefer allocator.free(buffer);
-    _ = try file.readPositionalAll(io, buffer, 0);
-    return buffer;
-}
-
-fn flagValue(args: []const []const u8, name: []const u8) ?[]const u8 {
-    var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], name) and i + 1 < args.len) return args[i + 1];
-    }
-    return null;
 }
 
 test "dictionaryLooksUsable rejects placeholder header-only dictionary" {

@@ -57,13 +57,9 @@ function unwrapElement(element: Element) {
 }
 
 function resolveWikiHref(href: string): string | null {
-  if (href.startsWith("./")) return normalizeWikiTarget(href.slice(2));
-  if (href.startsWith("/wiki/")) return normalizeWikiTarget(href.slice("/wiki/".length));
+  if (href.startsWith("./")) return decodeURIComponent(href.slice(2)).replaceAll("_", " ").trim();
+  if (href.startsWith("/wiki/")) return decodeURIComponent(href.slice("/wiki/".length)).replaceAll("_", " ").trim();
   return null;
-}
-
-function normalizeWikiTarget(target: string): string {
-  return decodeURIComponent(target).replaceAll("_", " ").trim();
 }
 
 function normalizeList(list: Element, doc: Document) {

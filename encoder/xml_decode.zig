@@ -48,7 +48,7 @@ fn decodePass(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []co
         }
 
         var semi = i + 1;
-        while (semi < input.len and isEntityChar(input[semi])) : (semi += 1) {}
+        while (semi < input.len and (std.ascii.isAlphanumeric(input[semi]) or input[semi] == '#')) : (semi += 1) {}
         if (semi == i + 1 or semi >= input.len or input[semi] != ';') {
             try out.append(allocator, input[i]);
             i += 1;
@@ -72,10 +72,6 @@ fn decodePass(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []co
         i = semi + 1;
     }
     return changed;
-}
-
-fn isEntityChar(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '#';
 }
 
 fn decodeEntity(out: *std.ArrayList(u8), allocator: std.mem.Allocator, entity: []const u8) !bool {
@@ -103,6 +99,7 @@ fn decodeEntity(out: *std.ArrayList(u8), allocator: std.mem.Allocator, entity: [
 fn lookupNamedEntity(entity: []const u8) ?[]const u8 {
     if (html_entities.named_entities.get(entity)) |replacement| return replacement;
 
+    // The dump contains a small set of misspelled entity aliases that still need to round-trip cleanly.
     if (std.mem.eql(u8, entity, "emdash")) return "—";
     if (std.mem.eql(u8, entity, "endash")) return "–";
     if (std.mem.eql(u8, entity, "mdsash")) return "—";
