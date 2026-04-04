@@ -105,6 +105,8 @@ const BuildLookupRecord = struct {
     alt_form_index: u32 = 0,
     kind: u8,
     reserved: [3]u8 = [_]u8{0} ** 3,
+    key_head: u32 = 0,
+    matched_head: u32 = 0,
 };
 
 const BuildPayload = struct {
@@ -692,7 +694,8 @@ const StringInterner = struct {
 
     fn intern(self: *StringInterner, value: []const u8) !StringRef {
         if (value.len == 0) return .{ .offset = 0, .len = 0 };
-        if (self.map.get(value)) |existing| return existing;
+        const gop = self.map.getOrPutAssumeCapacity(value);
+        if (gop.found_existing) return gop.value_ptr.*;
 
         const start = self.blob.items.len;
         self.blob.appendSliceAssumeCapacity(value);
@@ -702,10 +705,33 @@ const StringInterner = struct {
             .len = std.math.cast(u32, value.len) orelse return error.StringTooLarge,
         };
 
-        self.map.putAssumeCapacity(value, ref);
+        gop.key_ptr.* = value;
+        gop.value_ptr.* = ref;
         return ref;
     }
 };
+
+fn internEntryStrings(interner: *StringInterner, entry: *BuildEntryData) !void {
+    entry.word_ref = try interner.intern(entry.word);
+    entry.normalized_ref = if (std.mem.eql(u8, entry.normalized, entry.word))
+        entry.word_ref
+    else
+        try interner.intern(entry.normalized);
+
+    for (entry.alt_forms) |*alt_form| {
+        alt_form.value_ref = if (std.mem.eql(u8, alt_form.value, entry.word))
+            entry.word_ref
+        else
+            try interner.intern(alt_form.value);
+
+        alt_form.normalized_ref = if (std.mem.eql(u8, alt_form.normalized, alt_form.value))
+            alt_form.value_ref
+        else if (std.mem.eql(u8, alt_form.normalized, entry.normalized))
+            entry.normalized_ref
+        else
+            try interner.intern(alt_form.normalized);
+    }
+}
 
 fn openOrBuildCache(
     allocator: std.mem.Allocator,
@@ -866,12 +892,7 @@ fn materializeCacheData(allocator: std.mem.Allocator, payload: *BuildPayload) !C
 
     var incoming_cursor: usize = 0;
     for (payload.entries, 0..) |*entry, idx| {
-        entry.word_ref = try interner.intern(entry.word);
-        entry.normalized_ref = try interner.intern(entry.normalized);
-        for (entry.alt_forms) |*alt_form| {
-            alt_form.value_ref = try interner.intern(alt_form.value);
-            alt_form.normalized_ref = try interner.intern(alt_form.normalized);
-        }
+        try internEntryStrings(&interner, entry);
 
         const incoming_len = entry.incoming_aliases.len;
         if (incoming_len != 0) {
@@ -1388,19 +1409,36 @@ fn fillLookupChunk(entries: []const BuildEntryData, base_entry_index: usize, out
             .entry_index = @intCast(base_entry_index + local_idx),
             .alt_form_index = 0,
             .kind = format.lookup_kind_title,
+            .key_head = packedSortPrefix(entry.normalized),
+            .matched_head = packedSortPrefix(entry.word),
         };
         out_index += 1;
 
-        for (entry.alt_forms, 0..) |_, alt_form_idx| {
+        for (entry.alt_forms, 0..) |alt_form, alt_form_idx| {
             out[out_index] = .{
                 .entry_index = @intCast(base_entry_index + local_idx),
                 .alt_form_index = @intCast(alt_form_idx),
                 .kind = format.lookup_kind_alternative_form,
+                .key_head = packedSortPrefix(alt_form.normalized),
+                .matched_head = packedSortPrefix(alt_form.value),
             };
             out_index += 1;
         }
     }
     std.debug.assert(out_index == out.len);
+}
+
+fn packedSortPrefix(value: []const u8) u32 {
+    var out: u32 = 0;
+    const len = @min(value.len, 4);
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        out = (out << 8) | value[i];
+    }
+    while (i < 4) : (i += 1) {
+        out <<= 8;
+    }
+    return out;
 }
 
 fn lookupSortKey(ctx: LookupSortContext, lookup: BuildLookupRecord) []const u8 {
@@ -1420,12 +1458,14 @@ fn lookupSortMatched(ctx: LookupSortContext, lookup: BuildLookupRecord) []const 
 }
 
 fn lessThanLookup(ctx: LookupSortContext, lhs: BuildLookupRecord, rhs: BuildLookupRecord) bool {
+    if (lhs.key_head != rhs.key_head) return lhs.key_head < rhs.key_head;
     switch (std.mem.order(u8, lookupSortKey(ctx, lhs), lookupSortKey(ctx, rhs))) {
         .lt => return true,
         .gt => return false,
         .eq => {},
     }
     if (lhs.kind != rhs.kind) return lhs.kind < rhs.kind;
+    if (lhs.matched_head != rhs.matched_head) return lhs.matched_head < rhs.matched_head;
     return std.mem.order(u8, lookupSortMatched(ctx, lhs), lookupSortMatched(ctx, rhs)) == .lt;
 }
 
@@ -1596,6 +1636,36 @@ test "cache structs stay compact" {
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Range));
     try std.testing.expectEqual(@as(usize, 20), @sizeOf(CachedEntry));
     try std.testing.expectEqual(@as(usize, 24), @sizeOf(CachedLookup));
+}
+
+test "packedSortPrefix preserves lexicographic order for short ascii prefixes" {
+    try std.testing.expect(packedSortPrefix("a") < packedSortPrefix("aa"));
+    try std.testing.expect(packedSortPrefix("ab") < packedSortPrefix("ac"));
+    try std.testing.expect(packedSortPrefix("abcd") < packedSortPrefix("abce"));
+}
+
+test "internEntryStrings reuses equivalent local refs" {
+    var interner = StringInterner.init(std.testing.allocator);
+    defer interner.deinit();
+    try interner.reserve(8, 64);
+
+    var alt_forms = [_]BuildAltForm{
+        .{ .value = "alpha", .normalized = "alpha" },
+        .{ .value = "Beta", .normalized = "alpha" },
+    };
+    var entry = BuildEntryData{
+        .record_offset = 0,
+        .word = "alpha",
+        .normalized = "alpha",
+        .alt_forms = &alt_forms,
+    };
+
+    try internEntryStrings(&interner, &entry);
+
+    try std.testing.expectEqualDeep(entry.word_ref, entry.normalized_ref);
+    try std.testing.expectEqualDeep(entry.word_ref, entry.alt_forms[0].value_ref);
+    try std.testing.expectEqualDeep(entry.alt_forms[0].value_ref, entry.alt_forms[0].normalized_ref);
+    try std.testing.expectEqualDeep(entry.normalized_ref, entry.alt_forms[1].normalized_ref);
 }
 
 test "tryOpenCache rejects stale cache versions" {
