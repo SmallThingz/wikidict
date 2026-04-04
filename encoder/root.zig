@@ -10,3 +10,11 @@ pub const BuildStats = @import("builder.zig").BuildStats;
 pub fn buildDictionary(io: @import("std").Io, allocator: @import("std").mem.Allocator, options: BuildOptions) !BuildStats {
     return @import("builder.zig").build(io, allocator, options);
 }
+
+test "encoder root imports module tests" {
+    _ = format;
+    _ = compact_encoding;
+    _ = section_encoding;
+    _ = xml_decode;
+    _ = wikitext;
+}

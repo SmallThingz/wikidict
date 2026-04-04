@@ -653,7 +653,7 @@ fn splitEnglishSections(allocator: std.mem.Allocator, english_section: []const u
 
     var current: *SectionSource = &sections.items[0];
     var line_start: usize = if (first_line_end == english_section.len) english_section.len else first_line_end + 1;
-    while (line_start <= english_section.len) {
+    while (line_start < english_section.len) {
         const next_newline = std.mem.indexOfScalarPos(u8, english_section, line_start, '\n') orelse english_section.len;
         const line = std.mem.trimEnd(u8, english_section[line_start..next_newline], "\r");
 
@@ -670,9 +670,7 @@ fn splitEnglishSections(allocator: std.mem.Allocator, english_section: []const u
         } else {
             try current.lines.append(allocator, line);
         }
-
-        if (next_newline == english_section.len) break;
-        line_start = next_newline + 1;
+        line_start = if (next_newline == english_section.len) english_section.len else next_newline + 1;
     }
 
     if (sections.items.len > 1 and sections.items[0].lines.items.len == 0) {

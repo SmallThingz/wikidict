@@ -12,3 +12,7 @@ pub const TermListView = @import("reader.zig").TermListView;
 pub fn openDictionary(allocator: @import("std").mem.Allocator, io: @import("std").Io, path: []const u8) !Dictionary {
     return Dictionary.open(allocator, io, path);
 }
+
+test "decoder root imports module tests" {
+    _ = normalize;
+}

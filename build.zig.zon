@@ -19,6 +19,7 @@
         "decoder",
         "backend",
         "frontend",
+        "tools",
         ".deps/zxml",
         ".deps/zhttp",
     },

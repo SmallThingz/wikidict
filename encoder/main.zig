@@ -7,20 +7,20 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(allocator);
 
     if (args.len >= 2 and std.mem.eql(u8, args[1], "help")) {
-        printUsage();
+        std.debug.print(
+            \\dict-encoder [build] --input enwiktionary.xml --output data/enwiktionary.bin [--limit 10000]
+            \\
+        , .{});
         return;
     }
 
     const offset: usize = if (args.len >= 2 and std.mem.eql(u8, args[1], "build")) 2 else 1;
-    try cmdBuild(init.io, allocator, args[offset..]);
-}
+    const cmd_args = args[offset..];
+    const input = flagValue(cmd_args, "--input") orelse "enwiktionary.xml";
+    const output = flagValue(cmd_args, "--output") orelse "data/enwiktionary.bin";
+    const limit = if (flagValue(cmd_args, "--limit")) |value| try std.fmt.parseInt(usize, value, 10) else null;
 
-fn cmdBuild(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
-    const input = flagValue(args, "--input") orelse "enwiktionary.xml";
-    const output = flagValue(args, "--output") orelse "data/enwiktionary.bin";
-    const limit = if (flagValue(args, "--limit")) |value| try std.fmt.parseInt(usize, value, 10) else null;
-
-    const stats = try encoder.buildDictionary(io, allocator, .{
+    const stats = try encoder.buildDictionary(init.io, allocator, .{
         .input_path = input,
         .output_path = output,
         .limit_entries = limit,
@@ -38,11 +38,4 @@ fn flagValue(args: []const []const u8, name: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, args[i], name) and i + 1 < args.len) return args[i + 1];
     }
     return null;
-}
-
-fn printUsage() void {
-    std.debug.print(
-        \\dict-encoder [build] --input enwiktionary.xml --output data/enwiktionary.bin [--limit 10000]
-        \\
-    , .{});
 }

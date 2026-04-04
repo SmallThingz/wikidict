@@ -1,7 +1,8 @@
-import { A, Route, useNavigate, useParams } from "@solidjs/router";
+import { A, useNavigate, useParams } from "@solidjs/router";
 import {
   For,
   Show,
+  type ParentProps,
   createDeferred,
   createMemo,
   createResource,
@@ -30,16 +31,17 @@ type SourceBlock = {
   body: string;
 };
 
-export default function App() {
+export default function App(props: ParentProps) {
   return (
     <div class="app-shell">
       <div class="background-wash" />
       <div class="background-grid" />
-      <Route path="/" component={HomePage} />
-      <Route path="/entry/:term" component={EntryPage} />
+      {props.children}
     </div>
   );
 }
+
+export { EntryPage, HomePage };
 
 function HomePage() {
   const navigate = useNavigate();
@@ -110,8 +112,9 @@ function EntryPage() {
     const next = current.includes(primaryWord())
       ? current.filter((item) => item !== primaryWord())
       : [...current, primaryWord()];
-    saveList(FAVORITES_KEY, next.slice(0, 12));
-    setFavorites(next);
+    const capped = next.slice(0, 12);
+    saveList(FAVORITES_KEY, capped);
+    setFavorites(capped);
   };
 
   return (
@@ -160,7 +163,10 @@ function EntryCard(props: { hit: ApiLookupHit; rank: number }) {
   const blocks = createMemo(() => splitRawEntry(props.hit.entry));
   const matchIsAlias = createMemo(() => props.hit.matched !== props.hit.entry.word);
 
-  onMount(() => pushRecent(props.hit.entry.word));
+  onMount(() => {
+    const current = loadList(RECENTS_KEY).filter((item) => item !== props.hit.entry.word);
+    saveList(RECENTS_KEY, [props.hit.entry.word, ...current].slice(0, 8));
+  });
 
   const copyRaw = async () => {
     if (!props.hit.entry.raw || typeof navigator === "undefined" || !navigator.clipboard) return;
@@ -266,6 +272,7 @@ function SearchCard(props: {
 
   const handleRandom = async () => {
     const word = await fetchRandomWord();
+    if (!word) return;
     navigate(`/entry/${encodeURIComponent(word)}`);
   };
 
@@ -406,7 +413,13 @@ function splitRawEntry(entry: ApiEntry): SourceBlock[] {
   let current: SourceBlock | null = null;
 
   for (const line of entry.raw.split("\n")) {
-    const heading = parseHeading(line);
+    const match = line.match(/^(={2,6})\s*(.*?)\s*\1$/);
+    const heading = match
+      ? {
+          level: match[1].length,
+          title: match[2],
+        }
+      : null;
     if (heading) {
       if (current) current.body = current.body.trimEnd();
       current = {
@@ -433,27 +446,6 @@ function splitRawEntry(entry: ApiEntry): SourceBlock[] {
 
   if (current) current.body = current.body.trimEnd();
   return blocks.filter((block) => block.body || block.title);
-}
-
-function parseHeading(line: string): { level: number; title: string } | null {
-  const match = line.match(/^(={2,6})\s*(.*?)\s*\1$/);
-  if (!match) return null;
-  return {
-    level: match[1].length,
-    title: match[2],
-  };
-}
-
-function pushRecent(word: string) {
-  const next = toggleListValue(RECENTS_KEY, word, true);
-  saveList(RECENTS_KEY, next.slice(0, 8));
-}
-
-function toggleListValue(key: string, value: string, prepend = false): string[] {
-  const current = loadList(key).filter((item) => item !== value);
-  const next = prepend ? [value, ...current] : [...current, value];
-  saveList(key, next.slice(0, 12));
-  return loadList(key);
 }
 
 function loadList(key: string): string[] {

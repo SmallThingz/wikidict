@@ -5,6 +5,7 @@ export type ApiStats = {
   lookups: number;
   recordsBytes: number;
   path: string;
+  version: number;
 };
 
 export type ApiEntry = {

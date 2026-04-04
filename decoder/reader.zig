@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 
 const encoder = @import("encoder");
@@ -7,14 +8,13 @@ const normalize = @import("normalize.zig");
 const wikitext = encoder.wikitext;
 
 const english_heading = "==English==\n";
-const cache_magic = "DCTIDX02";
-const cache_version: u32 = 2;
-const cache_alignment: u64 = 8;
+const cache_magic = "DCTIDX03";
+const cache_version: u32 = 3;
+const cache_alignment: u32 = 8;
 
 const StringRef = extern struct {
-    offset: u64,
+    offset: u32,
     len: u32,
-    reserved: u32 = 0,
 };
 
 const Range = extern struct {
@@ -28,9 +28,12 @@ const CachedEntry = extern struct {
     summary: StringRef,
     alt_forms: Range,
     canonical_targets: Range,
+    // Reverse edges: entries that redirect or alias to this entry.
     incoming_aliases: Range,
+    // Bitset of `format.record_flag_*`.
     flags: u8,
     reserved0: [7]u8 = [_]u8{0} ** 7,
+    // Byte range of the compact-encoded raw English section in the dictionary file.
     raw_offset: u64,
     raw_len: u32,
     reserved1: u32 = 0,
@@ -53,22 +56,22 @@ const CacheHeader = extern struct {
     list_count: u32,
     lookup_count: u32,
     reserved0: u32 = 0,
-    entries_offset: u64,
-    lists_offset: u64,
-    lookups_offset: u64,
-    strings_offset: u64,
-    strings_len: u64,
+    entries_offset: u32,
+    lists_offset: u32,
+    lookups_offset: u32,
+    strings_offset: u32,
+    strings_len: u32,
 
     fn init(
         cache_key: u64,
         entry_count: u32,
         list_count: u32,
         lookup_count: u32,
-        entries_offset: u64,
-        lists_offset: u64,
-        lookups_offset: u64,
-        strings_offset: u64,
-        strings_len: u64,
+        entries_offset: u32,
+        lists_offset: u32,
+        lookups_offset: u32,
+        strings_offset: u32,
+        strings_len: u32,
     ) CacheHeader {
         return .{
             .magic_bytes = cache_magic.*,
@@ -87,7 +90,7 @@ const CacheHeader = extern struct {
     }
 };
 
-const cache_header_size = std.mem.alignForward(u64, @sizeOf(CacheHeader), cache_alignment);
+const cache_header_size = std.mem.alignForward(u32, @sizeOf(CacheHeader), cache_alignment);
 
 const BuildEntryData = struct {
     word: []const u8,
@@ -135,6 +138,84 @@ const OpenCache = struct {
     lists: []const StringRef,
     lookups: []const CachedLookup,
     strings: []const u8,
+};
+
+const CacheBuildProgress = struct {
+    const Phase = enum {
+        reading,
+        aliases,
+        lookups,
+        materialize,
+        writing,
+        done,
+    };
+
+    total_record_bytes: usize,
+    phase: Phase = .reading,
+    last_percent: u8 = 255,
+
+    fn init(total_record_bytes: usize) CacheBuildProgress {
+        return .{
+            .total_record_bytes = total_record_bytes,
+        };
+    }
+
+    fn scan(self: *CacheBuildProgress, consumed_record_bytes: usize, entries: usize) void {
+        const percent = if (self.total_record_bytes == 0)
+            70
+        else
+            @as(u8, @intCast(@min(70, (consumed_record_bytes * 70) / self.total_record_bytes)));
+        self.render(.reading, percent, entries, 0);
+    }
+
+    fn setPhase(self: *CacheBuildProgress, phase: Phase, percent: u8, primary: usize, secondary: usize) void {
+        self.render(phase, percent, primary, secondary);
+    }
+
+    fn finish(self: *CacheBuildProgress, entries: usize, lookups: usize) void {
+        self.render(.done, 100, entries, lookups);
+        if (!builtin.is_test) std.debug.print("\n", .{});
+    }
+
+    fn render(self: *CacheBuildProgress, phase: Phase, percent: u8, primary: usize, secondary: usize) void {
+        if (builtin.is_test) return;
+        if (self.phase == phase and self.last_percent == percent) return;
+
+        self.phase = phase;
+        self.last_percent = percent;
+
+        var bar: [24]u8 = undefined;
+        @memset(&bar, '.');
+        const filled = @min(bar.len, (bar.len * percent) / 100);
+        @memset(bar[0..filled], '#');
+
+        std.debug.print(
+            "\rindex build [{s}] {d:>3}% {s} ({d}{s})",
+            .{ &bar, percent, phaseLabel(phase), primary, phaseSuffix(phase, secondary) },
+        );
+    }
+
+    fn phaseLabel(phase: Phase) []const u8 {
+        return switch (phase) {
+            .reading => "scan records",
+            .aliases => "link aliases",
+            .lookups => "sort lookups",
+            .materialize => "pack strings",
+            .writing => "write cache",
+            .done => "ready",
+        };
+    }
+
+    fn phaseSuffix(phase: Phase, secondary: usize) []const u8 {
+        return switch (phase) {
+            .reading => " entries",
+            .aliases => " entries",
+            .lookups => " lookups",
+            .materialize => " strings",
+            .writing => " bytes",
+            .done => if (secondary == 0) " entries" else " entries, lookups built",
+        };
+    }
 };
 
 pub const LookupHit = struct {
@@ -242,7 +323,7 @@ pub const Dictionary = struct {
         if (!std.mem.eql(u8, &header.magic_bytes, format.magic)) return error.InvalidDictionaryFile;
         if (header.version != format.version) return error.UnsupportedDictionaryVersion;
 
-        const records_end = header.records_offset + header.records_len;
+        const records_end = std.math.add(u64, header.records_offset, header.records_len) catch return error.InvalidDictionaryFile;
         if (records_end > stat.size) return error.InvalidDictionaryFile;
 
         const cache = try openOrBuildCache(allocator, io, path, stat, mapped, header);
@@ -328,14 +409,14 @@ pub const Dictionary = struct {
     }
 
     fn string(self: *const Dictionary, ref: StringRef) []const u8 {
-        const start = @as(usize, @intCast(ref.offset));
-        const len = ref.len;
+        const start: usize = ref.offset;
+        const len: usize = ref.len;
         return self.strings[start .. start + len];
     }
 
     fn list(self: *const Dictionary, range: Range) []const StringRef {
-        const start = range.start;
-        const len = range.len;
+        const start: usize = range.start;
+        const len: usize = range.len;
         return self.list_refs[start .. start + len];
     }
 
@@ -388,7 +469,7 @@ const StringInterner = struct {
         try self.blob.appendSlice(self.allocator, value);
 
         const ref = StringRef{
-            .offset = start,
+            .offset = std.math.cast(u32, start) orelse return error.StringTooLarge,
             .len = std.math.cast(u32, value.len) orelse return error.StringTooLarge,
         };
 
@@ -411,7 +492,8 @@ fn openOrBuildCache(
     const expected_key = computeCacheKey(db_stat, header);
     if (try tryOpenCache(io, cache_path, expected_key)) |cache| return cache;
 
-    try buildAndWriteCache(allocator, io, cache_path, expected_key, mapped, header);
+    var progress = CacheBuildProgress.init(std.math.cast(usize, header.records_len) orelse return error.FileTooBig);
+    try buildAndWriteCache(allocator, io, cache_path, expected_key, mapped, header, &progress);
     return (try tryOpenCache(io, cache_path, expected_key)) orelse error.InvalidDictionaryCache;
 }
 
@@ -486,15 +568,19 @@ fn buildAndWriteCache(
     cache_key: u64,
     mapped: []align(std.heap.page_size_min) const u8,
     header: *const format.Header,
+    progress: *CacheBuildProgress,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const build_payload = try buildCachePayload(allocator, arena.allocator(), mapped, header);
+    const build_payload = try buildCachePayload(allocator, arena.allocator(), mapped, header, progress);
+    progress.setPhase(.materialize, 92, build_payload.entries.len, build_payload.lookups.len);
     var cache_data = try materializeCacheData(allocator, build_payload);
     defer cache_data.deinit(allocator);
 
-    try writeCacheFile(io, cache_path, cache_key, cache_data);
+    progress.setPhase(.writing, 97, cache_data.entries.len, cache_data.strings.len);
+    try writeCacheFile(allocator, io, cache_path, cache_key, cache_data);
+    progress.finish(cache_data.entries.len, cache_data.lookups.len);
 }
 
 fn buildCachePayload(
@@ -502,9 +588,12 @@ fn buildCachePayload(
     arena_allocator: std.mem.Allocator,
     mapped: []align(std.heap.page_size_min) const u8,
     header: *const format.Header,
+    progress: *CacheBuildProgress,
 ) !BuildPayload {
-    var state = try buildIndex(allocator, arena_allocator, mapped, header);
+    var state = try buildIndex(allocator, arena_allocator, mapped, header, progress);
+    progress.setPhase(.aliases, 75, state.entries.items.len, 0);
     try finalizeIncomingAliases(allocator, arena_allocator, &state);
+    progress.setPhase(.lookups, 84, state.entries.items.len, 0);
     try buildLookups(arena_allocator, &state);
     return .{
         .entries = try state.entries.toOwnedSlice(arena_allocator),
@@ -522,6 +611,11 @@ fn materializeCacheData(allocator: std.mem.Allocator, payload: BuildPayload) !Ca
 
     var lists: std.ArrayList(StringRef) = .empty;
     defer lists.deinit(allocator);
+    var list_items: usize = 0;
+    for (payload.entries) |entry| {
+        list_items += entry.alt_forms.len + entry.canonical_targets.len + entry.incoming_aliases.len;
+    }
+    try lists.ensureTotalCapacity(allocator, list_items);
 
     for (payload.entries) |entry| {
         const alt_forms = try appendStringList(allocator, &interner, &lists, entry.alt_forms);
@@ -579,15 +673,15 @@ fn appendStringList(
     };
 }
 
-fn writeCacheFile(io: std.Io, cache_path: []const u8, cache_key: u64, cache: CacheBuildData) !void {
-    const entries_offset = std.mem.alignForward(u64, cache_header_size, @alignOf(CachedEntry));
-    const entries_len = bytesLen(CachedEntry, cache.entries.len) catch return error.FileTooBig;
-    const lists_offset = std.mem.alignForward(u64, entries_offset + entries_len, @alignOf(StringRef));
-    const lists_len = bytesLen(StringRef, cache.lists.len) catch return error.FileTooBig;
-    const lookups_offset = std.mem.alignForward(u64, lists_offset + lists_len, @alignOf(CachedLookup));
-    const lookups_len = bytesLen(CachedLookup, cache.lookups.len) catch return error.FileTooBig;
-    const strings_offset = std.mem.alignForward(u64, lookups_offset + lookups_len, 1);
-    const strings_len: u64 = cache.strings.len;
+fn writeCacheFile(allocator: std.mem.Allocator, io: std.Io, cache_path: []const u8, cache_key: u64, cache: CacheBuildData) !void {
+    const entries_offset = std.mem.alignForward(u32, cache_header_size, @alignOf(CachedEntry));
+    const entries_len = std.math.cast(u32, std.math.mul(usize, cache.entries.len, @sizeOf(CachedEntry)) catch return error.FileTooBig) orelse return error.FileTooBig;
+    const lists_offset = std.mem.alignForward(u32, entries_offset + entries_len, @alignOf(StringRef));
+    const lists_len = std.math.cast(u32, std.math.mul(usize, cache.lists.len, @sizeOf(StringRef)) catch return error.FileTooBig) orelse return error.FileTooBig;
+    const lookups_offset = std.mem.alignForward(u32, lists_offset + lists_len, @alignOf(CachedLookup));
+    const lookups_len = std.math.cast(u32, std.math.mul(usize, cache.lookups.len, @sizeOf(CachedLookup)) catch return error.FileTooBig) orelse return error.FileTooBig;
+    const strings_offset = lookups_offset + lookups_len;
+    const strings_len = std.math.cast(u32, cache.strings.len) orelse return error.FileTooBig;
 
     const header = CacheHeader.init(
         cache_key,
@@ -601,7 +695,12 @@ fn writeCacheFile(io: std.Io, cache_path: []const u8, cache_key: u64, cache: Cac
         strings_len,
     );
 
-    var file = try std.Io.Dir.cwd().createFile(io, cache_path, .{ .truncate = true });
+    const temp_cache_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{cache_path});
+    defer allocator.free(temp_cache_path);
+    try deleteFileIfExists(io, temp_cache_path);
+    defer deleteFileIfExists(io, temp_cache_path) catch {};
+
+    var file = try std.Io.Dir.cwd().createFile(io, temp_cache_path, .{ .truncate = true });
     defer file.close(io);
 
     try file.writePositionalAll(io, std.mem.asBytes(&header), 0);
@@ -613,11 +712,29 @@ fn writeCacheFile(io: std.Io, cache_path: []const u8, cache_key: u64, cache: Cac
     if (cache.lookups.len != 0) try file.writePositionalAll(io, std.mem.sliceAsBytes(cache.lookups), lookups_offset);
     try writePadding(io, file, lookups_offset + lookups_len, strings_offset);
     if (cache.strings.len != 0) try file.writePositionalAll(io, cache.strings, strings_offset);
+    try replaceFile(allocator, temp_cache_path, cache_path);
 }
 
-fn bytesLen(comptime T: type, count: usize) !u64 {
-    const byte_len = try std.math.mul(usize, count, @sizeOf(T));
-    return byte_len;
+fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
+fn replaceFile(allocator: std.mem.Allocator, old_path: []const u8, new_path: []const u8) !void {
+    const old_z = try allocator.dupeZ(u8, old_path);
+    defer allocator.free(old_z);
+    const new_z = try allocator.dupeZ(u8, new_path);
+    defer allocator.free(new_z);
+
+    switch (builtin.os.tag) {
+        .linux => switch (std.posix.errno(std.os.linux.renameat(std.posix.AT.FDCWD, old_z.ptr, std.posix.AT.FDCWD, new_z.ptr))) {
+            .SUCCESS => {},
+            else => |err| return std.posix.unexpectedErrno(err),
+        },
+        else => @compileError("replaceFile is only implemented for linux in this project"),
+    }
 }
 
 fn writePadding(io: std.Io, file: std.Io.File, start: u64, end: u64) !void {
@@ -637,8 +754,10 @@ fn buildIndex(
     arena_allocator: std.mem.Allocator,
     mapped: []align(std.heap.page_size_min) const u8,
     header: *const format.Header,
+    progress: *CacheBuildProgress,
 ) !BuildState {
     var state: BuildState = .{};
+    try state.entries.ensureTotalCapacity(arena_allocator, header.entry_count);
 
     var cursor: usize = @intCast(header.records_offset);
     const records_end: usize = @intCast(header.records_offset + header.records_len);
@@ -686,6 +805,7 @@ fn buildIndex(
         }
 
         try state.entries.append(arena_allocator, entry);
+        progress.scan(cursor - @as(usize, @intCast(header.records_offset)), state.entries.items.len);
     }
 
     if (state.entries.items.len != header.entry_count) return error.InvalidDictionaryFile;
@@ -706,9 +826,10 @@ fn mapWholeFile(file: std.Io.File, size_u64: u64) ![]align(std.heap.page_size_mi
     );
 }
 
-fn viewArray(comptime T: type, mapped: []align(std.heap.page_size_min) const u8, offset_u64: u64, count_u32: u32) ![]const T {
-    const offset = std.math.cast(usize, offset_u64) orelse return error.InvalidDictionaryCache;
+fn viewArray(comptime T: type, mapped: []align(std.heap.page_size_min) const u8, offset_u32: u32, count_u32: u32) ![]const T {
+    const offset = std.math.cast(usize, offset_u32) orelse return error.InvalidDictionaryCache;
     const count = std.math.cast(usize, count_u32) orelse return error.InvalidDictionaryCache;
+    if (offset % @alignOf(T) != 0) return error.InvalidDictionaryCache;
     const byte_len = try std.math.mul(usize, count, @sizeOf(T));
     if (offset > mapped.len or byte_len > mapped.len - offset) return error.InvalidDictionaryCache;
 
@@ -717,9 +838,9 @@ fn viewArray(comptime T: type, mapped: []align(std.heap.page_size_min) const u8,
     return ptr[0..count];
 }
 
-fn viewBytes(mapped: []align(std.heap.page_size_min) const u8, offset_u64: u64, len_u64: u64) ![]const u8 {
-    const offset = std.math.cast(usize, offset_u64) orelse return error.InvalidDictionaryCache;
-    const len = std.math.cast(usize, len_u64) orelse return error.InvalidDictionaryCache;
+fn viewBytes(mapped: []align(std.heap.page_size_min) const u8, offset_u32: u32, len_u32: u32) ![]const u8 {
+    const offset = std.math.cast(usize, offset_u32) orelse return error.InvalidDictionaryCache;
+    const len = std.math.cast(usize, len_u32) orelse return error.InvalidDictionaryCache;
     if (offset > mapped.len or len > mapped.len - offset) return error.InvalidDictionaryCache;
     return mapped[offset .. offset + len];
 }
@@ -773,6 +894,7 @@ fn finalizeIncomingAliases(
         while (it.next()) |entry| entry.value_ptr.deinit(allocator);
         title_map.deinit(allocator);
     }
+    try title_map.ensureTotalCapacity(allocator, std.math.cast(u32, state.entries.items.len) orelse return error.InvalidDictionaryFile);
 
     for (state.entries.items, 0..) |entry, idx| {
         const gop = try title_map.getOrPut(allocator, entry.normalized);
@@ -817,8 +939,12 @@ fn appendUniqueSlice(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged
 }
 
 fn buildLookups(arena_allocator: std.mem.Allocator, state: *BuildState) !void {
+    var lookup_count: usize = state.entries.items.len;
+    for (state.entries.items) |entry| lookup_count += entry.alt_forms.len;
+    try state.lookups.ensureTotalCapacity(arena_allocator, lookup_count);
+
     for (state.entries.items, 0..) |entry, idx| {
-        try state.lookups.append(arena_allocator, .{
+        state.lookups.appendAssumeCapacity(.{
             .key = entry.normalized,
             .matched = entry.word,
             .entry_index = @intCast(idx),
@@ -826,7 +952,7 @@ fn buildLookups(arena_allocator: std.mem.Allocator, state: *BuildState) !void {
         });
 
         for (entry.alt_forms) |alt_form| {
-            try state.lookups.append(arena_allocator, .{
+            state.lookups.appendAssumeCapacity(.{
                 .key = try normalize.normalizeAlloc(arena_allocator, alt_form),
                 .matched = alt_form,
                 .entry_index = @intCast(idx),
@@ -870,4 +996,15 @@ fn lowerBoundLookup(self: *const Dictionary, key: []const u8) usize {
         }
     }
     return lo;
+}
+
+test "viewArray rejects misaligned offsets" {
+    var bytes: [32]u8 align(std.heap.page_size_min) = [_]u8{0} ** 32;
+    try std.testing.expectError(error.InvalidDictionaryCache, viewArray(u32, &bytes, 1, 1));
+}
+
+test "cache structs stay compact" {
+    try std.testing.expectEqual(@as(usize, 8), @sizeOf(StringRef));
+    try std.testing.expectEqual(@as(usize, 8), @sizeOf(Range));
+    try std.testing.expectEqual(@as(usize, 24), @sizeOf(CachedLookup));
 }

@@ -47,7 +47,10 @@ fn decodeEntity(out: *std.ArrayList(u8), allocator: std.mem.Allocator, entity: [
             std.fmt.parseInt(u21, entity[2..], 16) catch return false
         else
             std.fmt.parseInt(u21, entity[1..], 10) catch return false;
-        return appendCodepoint(out, allocator, codepoint);
+        var buf: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(codepoint, &buf) catch return false;
+        try out.appendSlice(allocator, buf[0..len]);
+        return true;
     }
 
     const replacement = if (std.mem.eql(u8, entity, "amp"))
@@ -86,13 +89,6 @@ fn decodeEntity(out: *std.ArrayList(u8), allocator: std.mem.Allocator, entity: [
         return false;
 
     try out.appendSlice(allocator, replacement);
-    return true;
-}
-
-fn appendCodepoint(out: *std.ArrayList(u8), allocator: std.mem.Allocator, cp: u21) !bool {
-    var buf: [4]u8 = undefined;
-    const len = std.unicode.utf8Encode(cp, &buf) catch return false;
-    try out.appendSlice(allocator, buf[0..len]);
     return true;
 }
 

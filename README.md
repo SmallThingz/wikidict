@@ -48,22 +48,40 @@ zig build encode -- \
 Lookup a word with the decoder CLI:
 
 ```bash
-zig build lookup -- --db data/enwiktionary.bin --word color
+zig build decode -- lookup --db data/enwiktionary.bin --word color
 ```
 
 Suggestions:
 
 ```bash
-zig build suggest -- --db data/enwiktionary.bin --prefix colo --limit 10
+zig build decode -- suggest --db data/enwiktionary.bin --prefix colo --limit 10
 ```
 
 Stats:
 
 ```bash
-zig build stats -- --db data/enwiktionary.bin
+zig build decode -- stats --db data/enwiktionary.bin
 ```
 
 The first decoder open builds a sidecar cache at `data/enwiktionary.bin.idx`. Later opens mmap that cache and skip the expensive metadata rebuild.
+
+Analyze the full dump structure:
+
+```bash
+zig build structure -- \
+  --input enwiktionary.xml \
+  --output data/wiktionary-structure.json \
+  --top 100 \
+  --samples 100
+```
+
+The structure analyzer runs in `ReleaseFast` by default and emits structured JSON by default. The report includes:
+
+- exact heading profiles with canonical titles, heading families, and parser kinds
+- formatting signatures by heading and by family
+- template usage by heading and by family
+- translation source-label frequencies and target language-code frequencies
+- structural anomalies such as bad parentage, level jumps, and pre-heading content
 
 Run the backend server:
 
@@ -75,34 +93,14 @@ If `data/enwiktionary.bin` does not exist, the backend will build it from `enwik
 
 ## Frontend Commands
 
-Install frontend dependencies:
+The frontend now uses a single wrapper CLI at `tools/frontend`:
 
 ```bash
-zig build frontend-install
-```
-
-Build the frontend:
-
-```bash
-zig build frontend-build
-```
-
-Type-check and build the frontend:
-
-```bash
-zig build frontend-check
-```
-
-Run the Vite dev server:
-
-```bash
-zig build frontend-dev
-```
-
-Preview the built frontend:
-
-```bash
-zig build frontend-preview
+zig build frontend -- install
+zig build frontend -- build
+zig build frontend -- check
+zig build frontend -- dev
+zig build frontend -- preview
 ```
 
 The Vite dev server proxies `/api/*` to `http://127.0.0.1:3000`.

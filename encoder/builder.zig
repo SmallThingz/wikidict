@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const zxml = @import("zxml");
 
 const compact = @import("compact_encoding.zig");
@@ -34,11 +35,11 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     var input_file = try std.Io.Dir.cwd().openFile(io, options.input_path, .{});
     defer input_file.close(io);
 
-    var output_file = try std.Io.Dir.cwd().createFile(io, options.output_path, .{ .truncate = true });
-    defer output_file.close(io);
+    const temp_output_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{options.output_path});
+    defer allocator.free(temp_output_path);
+    try deleteFileIfExists(io, temp_output_path);
+    defer deleteFileIfExists(io, temp_output_path) catch {};
 
-    var output = try OutputWriter.init(io, allocator, output_file);
-    defer output.deinit(allocator);
     var stats: BuildStats = .{};
 
     var stream_parser = StreamParser.init(allocator);
@@ -48,36 +49,66 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     defer page_arena.deinit();
 
     const stat = try input_file.stat(io);
-    if (stat.size != 0) {
-        const map_len = std.mem.alignForward(usize, @as(usize, @intCast(stat.size)), std.heap.page_size_min);
-        const mapped = try std.posix.mmap(
-            null,
-            map_len,
-            .{ .READ = true },
-            .{ .TYPE = .PRIVATE },
-            input_file.handle,
-            0,
-        );
-        defer std.posix.munmap(mapped);
+    {
+        var output_file = try std.Io.Dir.cwd().createFile(io, temp_output_path, .{ .truncate = true });
+        defer output_file.close(io);
 
-        try processMappedInput(
-            allocator,
-            mapped[0..@as(usize, @intCast(stat.size))],
-            options.limit_entries,
-            &stream_parser,
-            &page_arena,
-            &output,
-            &stats,
-        );
+        var output = try OutputWriter.init(io, allocator, output_file);
+        defer output.deinit(allocator);
+
+        if (stat.size != 0) {
+            const map_len = std.mem.alignForward(usize, @as(usize, @intCast(stat.size)), std.heap.page_size_min);
+            const mapped = try std.posix.mmap(
+                null,
+                map_len,
+                .{ .READ = true },
+                .{ .TYPE = .PRIVATE },
+                input_file.handle,
+                0,
+            );
+            defer std.posix.munmap(mapped);
+
+            try processMappedInput(
+                mapped[0..@as(usize, @intCast(stat.size))],
+                options.limit_entries,
+                &stream_parser,
+                &page_arena,
+                &output,
+                &stats,
+            );
+        }
+
+        try output.finish();
+        stats.english_entries = output.entry_count;
     }
 
-    try output.finish();
-    stats.english_entries = output.entry_count;
+    try replaceFile(allocator, temp_output_path, options.output_path);
     return stats;
 }
 
+fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
+fn replaceFile(allocator: std.mem.Allocator, old_path: []const u8, new_path: []const u8) !void {
+    const old_z = try allocator.dupeZ(u8, old_path);
+    defer allocator.free(old_z);
+    const new_z = try allocator.dupeZ(u8, new_path);
+    defer allocator.free(new_z);
+
+    switch (builtin.os.tag) {
+        .linux => switch (std.posix.errno(std.os.linux.renameat(std.posix.AT.FDCWD, old_z.ptr, std.posix.AT.FDCWD, new_z.ptr))) {
+            .SUCCESS => {},
+            else => |err| return std.posix.unexpectedErrno(err),
+        },
+        else => @compileError("replaceFile is only implemented for linux in this project"),
+    }
+}
+
 fn processMappedInput(
-    allocator: std.mem.Allocator,
     mapped: []const u8,
     limit_entries: ?usize,
     stream_parser: *StreamParser,
@@ -109,8 +140,6 @@ fn processMappedInput(
             );
         }
     }
-
-    _ = allocator;
 }
 
 const PageCapture = struct {
@@ -162,7 +191,6 @@ fn processPageFragment(
             if (wikitext.extractEnglishSection(text)) |english_section| {
                 const title = try xml_decode.decodeAlloc(allocator, title_raw);
                 try output.writeRecord(
-                    allocator,
                     title,
                     format.record_flag_has_raw,
                     english_section,
@@ -176,7 +204,6 @@ fn processPageFragment(
         const title = try xml_decode.decodeAlloc(allocator, title_raw);
         const target = try xml_decode.decodeAlloc(allocator, raw);
         try output.writeRecord(
-            allocator,
             title,
             0,
             target,
@@ -191,6 +218,7 @@ const OutputWriter = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     file: std.Io.File,
+    // Bytes already persisted to disk, including the placeholder header.
     flushed_bytes: u64 = @sizeOf(format.Header),
     entry_count: usize = 0,
     raw_entry_count: usize = 0,
@@ -229,13 +257,12 @@ const OutputWriter = struct {
 
     fn writeRecord(
         self: *OutputWriter,
-        allocator: std.mem.Allocator,
         title: []const u8,
         flags: u8,
         payload: []const u8,
     ) !void {
-        try self.writeByte(flags);
-        const encoded_title = try compact.encodeToList(&self.title_buf, allocator, title);
+        try self.writeBytes(&.{flags});
+        const encoded_title = try compact.encodeToList(&self.title_buf, self.allocator, title);
         try self.writeSlice(encoded_title);
 
         if ((flags & format.record_flag_has_raw) != 0) {
@@ -243,11 +270,11 @@ const OutputWriter = struct {
                 payload[english_heading.len..]
             else
                 payload;
-            const encoded = try compact.encodeToList(&self.payload_buf, allocator, raw_payload);
+            const encoded = try compact.encodeToList(&self.payload_buf, self.allocator, raw_payload);
             try self.writeSlice(encoded);
             self.raw_entry_count += 1;
         } else {
-            const encoded_target = try compact.encodeToList(&self.payload_buf, allocator, payload);
+            const encoded_target = try compact.encodeToList(&self.payload_buf, self.allocator, payload);
             try self.writeSlice(encoded_target);
             self.redirect_count += 1;
         }
@@ -259,11 +286,6 @@ const OutputWriter = struct {
         var len_buf: [10]u8 = undefined;
         try self.writeBytes(format.encodeVarUInt(&len_buf, value.len));
         try self.writeBytes(value);
-    }
-
-    fn writeByte(self: *OutputWriter, value: u8) !void {
-        var byte = [_]u8{value};
-        try self.writeBytes(&byte);
     }
 
     fn writeBytes(self: *OutputWriter, bytes: []const u8) !void {
@@ -279,3 +301,32 @@ const OutputWriter = struct {
         self.buffer.items.len = 0;
     }
 };
+
+test "output writer buffers survive page arena resets" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var file = try tmp.dir.createFile(std.testing.io, "dict.bin.tmp", .{ .truncate = true });
+    defer file.close(std.testing.io);
+
+    var writer = try OutputWriter.init(std.testing.io, std.testing.allocator, file);
+    defer writer.deinit(std.testing.allocator);
+
+    var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer page_arena.deinit();
+
+    const first_alloc = page_arena.allocator();
+    const first_title = try first_alloc.dupe(u8, "color");
+    const first_payload = try first_alloc.dupe(u8, "==English==\n===Noun===\n# [[light]]\n");
+    try writer.writeRecord(first_title, format.record_flag_has_raw, first_payload);
+
+    _ = page_arena.reset(.retain_capacity);
+
+    const second_alloc = page_arena.allocator();
+    const second_title = try second_alloc.dupe(u8, "colour");
+    const second_payload = try second_alloc.dupe(u8, "color");
+    try writer.writeRecord(second_title, 0, second_payload);
+    try writer.finish();
+
+    try std.testing.expectEqual(@as(usize, 2), writer.entry_count);
+}

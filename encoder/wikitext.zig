@@ -6,17 +6,32 @@ const max_example_bytes = 1024;
 const max_section_bytes = 3072;
 
 pub const TempSense = struct {
+    // Etymology bucket such as "Etymology 2", or empty for the default group.
     group: []const u8,
     pos: []const u8,
     gloss: []const u8,
     examples: []const u8,
+    // Number of leading definition markers (`#`, `##`, ...).
     depth: u16,
+
+    fn deinit(self: *const TempSense, allocator: std.mem.Allocator) void {
+        allocator.free(self.group);
+        allocator.free(self.pos);
+        allocator.free(self.gloss);
+        if (self.examples.len != 0) allocator.free(self.examples);
+    }
 };
 
 pub const TempSection = struct {
     group: []const u8,
     title: []const u8,
     body: []const u8,
+
+    fn deinit(self: *const TempSection, allocator: std.mem.Allocator) void {
+        allocator.free(self.group);
+        allocator.free(self.title);
+        allocator.free(self.body);
+    }
 };
 
 pub const ParsedEntry = struct {
@@ -29,9 +44,14 @@ pub const ParsedEntry = struct {
     has_real_sense: bool = false,
 
     pub fn deinit(self: *ParsedEntry, allocator: std.mem.Allocator) void {
+        allocator.free(self.word);
+        for (self.alt_forms.items) |value| allocator.free(value);
         self.alt_forms.deinit(allocator);
+        for (self.canonical_targets.items) |value| allocator.free(value);
         self.canonical_targets.deinit(allocator);
+        for (self.sections.items) |*section| section.deinit(allocator);
         self.sections.deinit(allocator);
+        for (self.senses.items) |*sense| sense.deinit(allocator);
         self.senses.deinit(allocator);
     }
 };
@@ -42,14 +62,38 @@ pub const EntryMetadata = struct {
     alias_only: bool = false,
 
     pub fn deinit(self: *EntryMetadata, allocator: std.mem.Allocator) void {
+        for (self.alt_forms.items) |value| allocator.free(value);
         self.alt_forms.deinit(allocator);
+        for (self.canonical_targets.items) |value| allocator.free(value);
         self.canonical_targets.deinit(allocator);
     }
 };
 
-const Heading = struct {
+pub const ParsedHeading = struct {
     level: u8,
     title: []const u8,
+};
+
+pub const SectionParserKind = enum {
+    language_root,
+    alternative_forms,
+    etymology,
+    part_of_speech,
+    pronunciation,
+    relations,
+    translations,
+    citations,
+    notes,
+    navigation,
+    descendants,
+    inflection,
+    meta,
+};
+
+pub const SectionParserSpec = struct {
+    kind: SectionParserKind,
+    parser_name: []const u8,
+    canonical_title: []const u8,
 };
 
 const PosCapture = struct {
@@ -80,6 +124,7 @@ const SectionBuffer = struct {
 
     fn appendRawLine(self: *SectionBuffer, raw_line: []const u8) !void {
         const cleaned = try renderWikitextToOwned(self.allocator, trimListPrefix(raw_line), max_section_bytes);
+        defer self.allocator.free(cleaned);
         if (cleaned.len == 0) return;
 
         if (self.body.items.len != 0) try self.body.append(self.allocator, '\n');
@@ -152,7 +197,7 @@ pub fn parseEnglishEntry(allocator: std.mem.Allocator, title: []const u8, text: 
 
     var in_english = false;
     var current_group: []const u8 = "";
-    var alt_level: ?u8 = null;
+    var active_parser_kind: ?SectionParserKind = null;
     var pos_capture: ?PosCapture = null;
     var section_capture: ?SectionBuffer = null;
 
@@ -165,51 +210,52 @@ pub fn parseEnglishEntry(allocator: std.mem.Allocator, title: []const u8, text: 
         const raw_line = std.mem.trimEnd(u8, raw_input, "\r");
 
         if (pending.items.len == 0) {
-            if (parseHeading(raw_line)) |heading| {
+            if (parseHeadingLine(raw_line)) |heading| {
                 if (section_capture) |*capture| {
                     try flushSectionCapture(allocator, &entry, capture);
                     capture.deinit();
                 }
                 section_capture = null;
                 pos_capture = null;
-                alt_level = null;
+                active_parser_kind = null;
 
                 if (heading.level == 2) {
-                    if (in_english and !std.mem.eql(u8, heading.title, "English")) break;
-                    in_english = std.mem.eql(u8, heading.title, "English");
+                    if (in_english and !headingMatches(heading.title, "English")) break;
+                    in_english = headingMatches(heading.title, "English");
                     current_group = "";
+                    if (in_english) {
+                        section_capture = SectionBuffer.init(allocator, "", heading.title, heading.level);
+                        active_parser_kind = .language_root;
+                    }
                     continue;
                 }
                 if (!in_english) continue;
 
+                const parser = sectionParserSpecForHeading(heading) orelse continue;
+
                 if (heading.level == 3) {
-                    current_group = if (isNumberedEtymology(heading.title)) heading.title else "";
+                    current_group = if (parser.kind == .etymology and isNumberedEtymology(heading.title))
+                        heading.title
+                    else
+                        "";
                 }
 
-                if (std.mem.eql(u8, heading.title, "Alternative forms")) {
-                    alt_level = heading.level;
-                    continue;
-                }
-                if (isEtymologyTitle(heading.title)) {
-                    section_capture = SectionBuffer.init(
-                        allocator,
-                        if (isNumberedEtymology(heading.title)) heading.title else "",
-                        "Etymology",
-                        heading.level,
-                    );
-                    continue;
-                }
-                if (isPartOfSpeech(heading.title)) {
-                    pos_capture = .{
-                        .group = current_group,
-                        .pos = heading.title,
-                        .level = heading.level,
-                    };
-                    continue;
-                }
-                if (isInterestingInfoSection(heading.title)) {
-                    section_capture = SectionBuffer.init(allocator, current_group, heading.title, heading.level);
-                    continue;
+                active_parser_kind = parser.kind;
+                switch (parser.kind) {
+                    .language_root => {
+                        section_capture = SectionBuffer.init(allocator, "", heading.title, heading.level);
+                    },
+                    .alternative_forms => {},
+                    .part_of_speech => {
+                        pos_capture = .{
+                            .group = current_group,
+                            .pos = heading.title,
+                            .level = heading.level,
+                        };
+                    },
+                    else => {
+                        section_capture = SectionBuffer.init(allocator, current_group, heading.title, heading.level);
+                    },
                 }
                 continue;
             }
@@ -227,7 +273,7 @@ pub fn parseEnglishEntry(allocator: std.mem.Allocator, title: []const u8, text: 
                 allocator,
                 &entry,
                 pending.items,
-                alt_level != null,
+                active_parser_kind,
                 pos_capture,
                 if (section_capture) |*capture| capture else null,
             );
@@ -248,7 +294,7 @@ pub fn parseEnglishEntry(allocator: std.mem.Allocator, title: []const u8, text: 
             allocator,
             &entry,
             raw_line,
-            alt_level != null,
+            active_parser_kind,
             pos_capture,
             if (section_capture) |*capture| capture else null,
         );
@@ -259,7 +305,7 @@ pub fn parseEnglishEntry(allocator: std.mem.Allocator, title: []const u8, text: 
             allocator,
             &entry,
             pending.items,
-            alt_level != null,
+            active_parser_kind,
             pos_capture,
             if (section_capture) |*capture| capture else null,
         );
@@ -286,7 +332,7 @@ pub fn extractEnglishSection(text: []const u8) ?[]const u8 {
         const next_newline = std.mem.indexOfScalarPos(u8, text, line_start, '\n') orelse text.len;
         const raw_line = std.mem.trimEnd(u8, text[line_start..next_newline], "\r");
 
-        if (parseHeading(raw_line)) |heading| {
+        if (parseHeadingLine(raw_line)) |heading| {
             if (heading.level == 2) {
                 if (std.mem.eql(u8, heading.title, "English")) {
                     english_start = line_start;
@@ -338,24 +384,132 @@ fn processLogicalLine(
     allocator: std.mem.Allocator,
     entry: *ParsedEntry,
     raw_line: []const u8,
-    in_alt_section: bool,
+    active_parser_kind: ?SectionParserKind,
     pos_capture: ?PosCapture,
     section_capture: ?*SectionBuffer,
 ) !void {
     const trimmed = std.mem.trim(u8, raw_line, " \t");
     if (trimmed.len == 0) return;
 
-    if (in_alt_section) {
-        try extractTermsFromLine(allocator, &entry.alt_forms, trimmed);
-        return;
+    const parser_kind = active_parser_kind orelse return;
+    switch (parser_kind) {
+        .alternative_forms => {
+            try parseAlternativeFormsLine(allocator, entry, trimmed);
+        },
+        .part_of_speech => {
+            const capture = pos_capture orelse return;
+            try parsePartOfSpeechLine(allocator, entry, capture, trimmed);
+        },
+        .language_root => {
+            const capture = section_capture orelse return;
+            try parseLanguageRootLine(capture, trimmed);
+        },
+        .etymology => {
+            const capture = section_capture orelse return;
+            try parseEtymologyLine(capture, trimmed);
+        },
+        .pronunciation => {
+            const capture = section_capture orelse return;
+            try parsePronunciationLine(capture, trimmed);
+        },
+        .relations => {
+            const capture = section_capture orelse return;
+            try parseRelationsLine(capture, trimmed);
+        },
+        .translations => {
+            const capture = section_capture orelse return;
+            try parseTranslationsLine(capture, trimmed);
+        },
+        .citations => {
+            const capture = section_capture orelse return;
+            try parseCitationsLine(capture, trimmed);
+        },
+        .notes => {
+            const capture = section_capture orelse return;
+            try parseNotesLine(capture, trimmed);
+        },
+        .navigation => {
+            const capture = section_capture orelse return;
+            try parseNavigationLine(capture, trimmed);
+        },
+        .descendants => {
+            const capture = section_capture orelse return;
+            try parseDescendantsLine(capture, trimmed);
+        },
+        .inflection => {
+            const capture = section_capture orelse return;
+            try parseInflectionLine(capture, trimmed);
+        },
+        .meta => {
+            const capture = section_capture orelse return;
+            try parseMetaLine(capture, trimmed);
+        },
     }
-    if (pos_capture) |capture| {
-        try consumePosLine(allocator, entry, capture, trimmed);
-        return;
-    }
-    if (section_capture) |capture| {
-        try capture.appendRawLine(trimmed);
-    }
+}
+
+fn parseLanguageRootLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try parseFreeformSectionLine(capture, raw_line);
+}
+
+fn parseAlternativeFormsLine(
+    allocator: std.mem.Allocator,
+    entry: *ParsedEntry,
+    raw_line: []const u8,
+) !void {
+    try extractTermsFromLine(allocator, &entry.alt_forms, raw_line);
+}
+
+fn parsePartOfSpeechLine(
+    allocator: std.mem.Allocator,
+    entry: *ParsedEntry,
+    capture: PosCapture,
+    raw_line: []const u8,
+) !void {
+    try consumePosLine(allocator, entry, capture, raw_line);
+}
+
+fn parseEtymologyLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try parseFreeformSectionLine(capture, raw_line);
+}
+
+fn parsePronunciationLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try parseFreeformSectionLine(capture, raw_line);
+}
+
+fn parseRelationsLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try parseFreeformSectionLine(capture, raw_line);
+}
+
+fn parseTranslationsLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try parseFreeformSectionLine(capture, raw_line);
+}
+
+fn parseCitationsLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try parseFreeformSectionLine(capture, raw_line);
+}
+
+fn parseNotesLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try parseFreeformSectionLine(capture, raw_line);
+}
+
+fn parseNavigationLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try parseFreeformSectionLine(capture, raw_line);
+}
+
+fn parseDescendantsLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try parseFreeformSectionLine(capture, raw_line);
+}
+
+fn parseInflectionLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try parseFreeformSectionLine(capture, raw_line);
+}
+
+fn parseMetaLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try parseFreeformSectionLine(capture, raw_line);
+}
+
+fn parseFreeformSectionLine(capture: *SectionBuffer, raw_line: []const u8) !void {
+    try capture.appendRawLine(raw_line);
 }
 
 fn flushSectionCapture(allocator: std.mem.Allocator, entry: *ParsedEntry, capture: *SectionBuffer) !void {
@@ -391,9 +545,15 @@ fn consumePosLine(allocator: std.mem.Allocator, entry: *ParsedEntry, capture: Po
         return;
     }
 
-    if (entry.senses.items.len == 0) return;
+    if (entry.senses.items.len == 0) {
+        allocator.free(cleaned);
+        return;
+    }
     const sense = &entry.senses.items[entry.senses.items.len - 1];
-    sense.examples = try appendOwnedLine(allocator, sense.examples, cleaned, max_example_bytes);
+    const previous_examples = sense.examples;
+    sense.examples = try appendOwnedLine(allocator, previous_examples, cleaned, max_example_bytes);
+    if (previous_examples.len != 0) allocator.free(previous_examples);
+    allocator.free(cleaned);
 }
 
 fn appendOwnedLine(allocator: std.mem.Allocator, existing: []const u8, addition: []const u8, limit: usize) ![]const u8 {
@@ -411,7 +571,7 @@ fn appendOwnedLine(allocator: std.mem.Allocator, existing: []const u8, addition:
     return out.toOwnedSlice(allocator);
 }
 
-fn parseHeading(line: []const u8) ?Heading {
+pub fn parseHeadingLine(line: []const u8) ?ParsedHeading {
     const trimmed = std.mem.trim(u8, line, " \t");
     if (trimmed.len < 4 or trimmed[0] != '=') return null;
 
@@ -426,6 +586,105 @@ fn parseHeading(line: []const u8) ?Heading {
     const title = std.mem.trim(u8, trimmed[left..right], " \t");
     if (title.len == 0) return null;
     return .{ .level = @intCast(left), .title = title };
+}
+
+pub fn sectionParserSpecForHeading(heading: ParsedHeading) ?SectionParserSpec {
+    return sectionParserSpecForTitle(heading.title, heading.level);
+}
+
+pub fn sectionParserSpecForTitle(title: []const u8, level: u8) ?SectionParserSpec {
+    if (level == 2 and headingMatches(title, "English")) {
+        return .{
+            .kind = .language_root,
+            .parser_name = "parseLanguageRootLine",
+            .canonical_title = "English",
+        };
+    }
+    if (isAlternativeFormsHeading(title)) {
+        return .{
+            .kind = .alternative_forms,
+            .parser_name = "parseAlternativeFormsLine",
+            .canonical_title = "Alternative forms",
+        };
+    }
+    if (isEtymologyHeading(title)) {
+        return .{
+            .kind = .etymology,
+            .parser_name = "parseEtymologyLine",
+            .canonical_title = "Etymology",
+        };
+    }
+    if (isTranslationHeading(title)) {
+        return .{
+            .kind = .translations,
+            .parser_name = "parseTranslationsLine",
+            .canonical_title = "Translations",
+        };
+    }
+    if (isDescendantHeading(title)) {
+        return .{
+            .kind = .descendants,
+            .parser_name = "parseDescendantsLine",
+            .canonical_title = "Descendants",
+        };
+    }
+    if (isInflectionHeading(title)) {
+        return .{
+            .kind = .inflection,
+            .parser_name = "parseInflectionLine",
+            .canonical_title = title,
+        };
+    }
+    if (isRelationHeading(title)) {
+        return .{
+            .kind = .relations,
+            .parser_name = "parseRelationsLine",
+            .canonical_title = title,
+        };
+    }
+    if (isCitationHeading(title)) {
+        return .{
+            .kind = .citations,
+            .parser_name = "parseCitationsLine",
+            .canonical_title = title,
+        };
+    }
+    if (isNotesHeading(title)) {
+        return .{
+            .kind = .notes,
+            .parser_name = "parseNotesLine",
+            .canonical_title = title,
+        };
+    }
+    if (isPronunciationHeading(title)) {
+        return .{
+            .kind = .pronunciation,
+            .parser_name = "parsePronunciationLine",
+            .canonical_title = "Pronunciation",
+        };
+    }
+    if (isNavigationHeading(title)) {
+        return .{
+            .kind = .navigation,
+            .parser_name = "parseNavigationLine",
+            .canonical_title = title,
+        };
+    }
+    if (isPartOfSpeechHeading(title)) {
+        return .{
+            .kind = .part_of_speech,
+            .parser_name = "parsePartOfSpeechLine",
+            .canonical_title = title,
+        };
+    }
+    if (isMetaHeading(title)) {
+        return .{
+            .kind = .meta,
+            .parser_name = "parseMetaLine",
+            .canonical_title = title,
+        };
+    }
+    return null;
 }
 
 fn parseDefinitionLine(line: []const u8) ?ParsedDefinitionLine {
@@ -454,27 +713,162 @@ fn trimListPrefix(line: []const u8) []const u8 {
     return std.mem.trimStart(u8, line[i..], " \t");
 }
 
-fn isEtymologyTitle(title: []const u8) bool {
-    return std.mem.eql(u8, title, "Etymology") or isNumberedEtymology(title);
+pub fn isRecognizedEtymologyTitle(title: []const u8) bool {
+    return isEtymologyHeading(title);
 }
 
 fn isNumberedEtymology(title: []const u8) bool {
-    return std.mem.startsWith(u8, title, "Etymology ");
+    return headingStartsWith(title, "Etymology ");
+}
+
+pub fn isRecognizedInfoSection(title: []const u8) bool {
+    const parser = sectionParserSpecForTitle(title, 3) orelse return false;
+    return switch (parser.kind) {
+        .pronunciation,
+        .relations,
+        .citations,
+        .notes,
+        .navigation,
+        .descendants,
+        .translations,
+        .inflection,
+        .meta,
+        => true,
+        else => false,
+    };
 }
 
 fn isInterestingInfoSection(title: []const u8) bool {
-    return std.mem.eql(u8, title, "Pronunciation") or
-        std.mem.eql(u8, title, "Usage notes") or
-        std.mem.eql(u8, title, "Synonyms") or
-        std.mem.eql(u8, title, "Antonyms") or
-        std.mem.eql(u8, title, "Related terms") or
-        std.mem.eql(u8, title, "Coordinate terms") or
-        std.mem.eql(u8, title, "Hypernyms") or
-        std.mem.eql(u8, title, "Hyponyms") or
-        std.mem.eql(u8, title, "See also");
+    return isRecognizedInfoSection(title);
 }
 
-fn isPartOfSpeech(title: []const u8) bool {
+pub fn isRecognizedPartOfSpeech(title: []const u8) bool {
+    const parser = sectionParserSpecForTitle(title, 3) orelse return false;
+    return parser.kind == .part_of_speech;
+}
+
+fn headingMatches(title: []const u8, expected: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(std.mem.trim(u8, title, " \t"), expected);
+}
+
+fn headingStartsWith(title: []const u8, prefix: []const u8) bool {
+    const trimmed = std.mem.trim(u8, title, " \t");
+    return asciiStartsWithIgnoreCase(trimmed, prefix);
+}
+
+fn isAlternativeFormsHeading(title: []const u8) bool {
+    return headingMatches(title, "Alternative forms") or
+        headingMatches(title, "Alternate forms") or
+        headingMatches(title, "Alternative spelling") or
+        headingMatches(title, "Alternative spellings");
+}
+
+fn isEtymologyHeading(title: []const u8) bool {
+    return headingMatches(title, "Etymology") or
+        isNumberedEtymology(title) or
+        headingStartsWith(title, "Etymolog");
+}
+
+fn isPronunciationHeading(title: []const u8) bool {
+    return headingMatches(title, "Pronunciation") or
+        headingStartsWith(title, "Pronunciation ") or
+        headingMatches(title, "Homophones");
+}
+
+fn isTranslationHeading(title: []const u8) bool {
+    return headingMatches(title, "Translations") or
+        headingMatches(title, "Translate");
+}
+
+fn isDescendantHeading(title: []const u8) bool {
+    return headingMatches(title, "Descendants");
+}
+
+fn isInflectionHeading(title: []const u8) bool {
+    return headingMatches(title, "Conjugation") or
+        headingMatches(title, "Declension") or
+        headingMatches(title, "Inflection") or
+        headingMatches(title, "Mutation");
+}
+
+fn isRelationHeading(title: []const u8) bool {
+    return headingMatches(title, "Derived terms") or
+        headingMatches(title, "Derivations") or
+        headingMatches(title, "Related terms") or
+        headingMatches(title, "Related forms") or
+        headingMatches(title, "Related vocabulary") or
+        headingMatches(title, "Synonyms") or
+        headingMatches(title, "Near-synonyms") or
+        headingMatches(title, "Parasynonyms") or
+        headingMatches(title, "Synonyms and related terms") or
+        headingMatches(title, "Antonyms") or
+        headingMatches(title, "Hypernyms") or
+        headingMatches(title, "Hyponyms") or
+        headingMatches(title, "Meronyms") or
+        headingMatches(title, "Comeronyms") or
+        headingMatches(title, "Holonyms") or
+        headingMatches(title, "Troponyms") or
+        headingMatches(title, "Paronyms") or
+        headingMatches(title, "Coordinate terms") or
+        headingMatches(title, "Collocations");
+}
+
+fn isCitationHeading(title: []const u8) bool {
+    return headingMatches(title, "References") or
+        headingMatches(title, "Citations") or
+        headingMatches(title, "Sources") or
+        headingMatches(title, "Source") or
+        headingMatches(title, "Further reading") or
+        headingMatches(title, "Further information") or
+        headingMatches(title, "External links") or
+        headingMatches(title, "Links") or
+        headingMatches(title, "Quotations");
+}
+
+fn isNotesHeading(title: []const u8) bool {
+    return headingMatches(title, "Notes") or
+        headingMatches(title, "Note") or
+        headingMatches(title, "Additional notes") or
+        headingMatches(title, "Historical notes") or
+        headingMatches(title, "Usage notes") or
+        headingMatches(title, "Usage") or
+        headingMatches(title, "Pronunciation notes");
+}
+
+fn isNavigationHeading(title: []const u8) bool {
+    return headingMatches(title, "See also") or
+        headingMatches(title, "Anagrams") or
+        headingMatches(title, "Statistics") or
+        headingMatches(title, "Gallery") or
+        headingMatches(title, "Sense overview") or
+        headingMatches(title, "Description") or
+        headingMatches(title, "Examples") or
+        headingMatches(title, "Trivia");
+}
+
+fn isPartOfSpeechHeading(title: []const u8) bool {
+    return isCorePartOfSpeechHeading(title) or
+        headingMatches(title, "Prepositional phrase") or
+        headingMatches(title, "Verb phrase") or
+        headingMatches(title, "Proper adjective") or
+        headingMatches(title, "Proper nouns") or
+        headingStartsWith(title, "Proper noun ") or
+        headingMatches(title, "Multiple parts of speech") or
+        headingMatches(title, "Abbreviations") or
+        headingMatches(title, "Number") or
+        headingMatches(title, "Punctuation mark") or
+        headingMatches(title, "Diacritical mark") or
+        headingMatches(title, "Symbols") or
+        headingMatches(title, "Combining form") or
+        headingMatches(title, "Verb form") or
+        headingMatches(title, "Adverbial phrase") or
+        headingMatches(title, "Common nouns") or
+        headingMatches(title, "Initialisms") or
+        headingMatches(title, "Adjectives") or
+        headingMatches(title, "Proper");
+}
+
+fn isCorePartOfSpeechHeading(title: []const u8) bool {
     inline for ([_][]const u8{
         "Noun",
         "Proper noun",
@@ -505,9 +899,17 @@ fn isPartOfSpeech(title: []const u8) bool {
         "Idiom",
         "Proper Noun",
     }) |candidate| {
-        if (std.mem.eql(u8, title, candidate)) return true;
+        if (headingMatches(title, candidate)) return true;
     }
     return false;
+}
+
+fn isMetaHeading(title: []const u8) bool {
+    return headingMatches(title, "Interfix") or
+        headingMatches(title, "Attestation") or
+        headingMatches(title, "Dialects") or
+        headingMatches(title, "Other names") or
+        headingMatches(title, "Etymyology");
 }
 
 fn renderWikitextToOwned(allocator: std.mem.Allocator, input: []const u8, max_len: usize) std.mem.Allocator.Error![]const u8 {
@@ -610,7 +1012,7 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
     }
 
     if (templateMatches(name, "lb") or templateMatches(name, "lbl") or templateMatches(name, "label")) {
-        try appendLabeledList(out, allocator, &parts, "(", ")");
+        try appendPositional(out, allocator, &parts, 1, "(", ")", ", ");
         return;
     }
     if (templateMatches(name, "qualifier") or templateMatches(name, "q")) {
@@ -625,7 +1027,7 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
         if (templatePositional(&parts, 1) orelse templatePositional(&parts, 0)) |arg| try renderInline(out, allocator, arg);
         return;
     }
-    if (std.mem.startsWith(u8, asciiLowerAlloc(allocator, name) catch name, "quote-") or std.mem.startsWith(u8, name, "RQ:")) {
+    if (asciiStartsWithIgnoreCase(name, "quote-") or std.mem.startsWith(u8, name, "RQ:")) {
         if (templateNamed(&parts, "passage") orelse templateNamed(&parts, "text")) |arg| try renderInline(out, allocator, arg);
         return;
     }
@@ -643,6 +1045,7 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
         if (templatePositional(&parts, 1)) |arg| try renderInline(out, allocator, arg);
         if (templatePositional(&parts, 2)) |qualifier| {
             const rendered = try renderWikitextToOwned(allocator, qualifier, 128);
+            defer allocator.free(rendered);
             if (rendered.len != 0) {
                 try appendWithSpace(out, allocator, " (");
                 try appendWithSpace(out, allocator, rendered);
@@ -652,7 +1055,7 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
         return;
     }
     if (templateMatches(name, "standard spelling of") or templateMatches(name, "standard form of") or templateMatches(name, "alternative spelling of") or templateMatches(name, "alternative form of") or templateMatches(name, "alt form") or templateMatches(name, "alt spelling of") or templateMatches(name, "dated spelling of") or templateMatches(name, "obsolete spelling of") or templateMatches(name, "nonstandard spelling of") or templateMatches(name, "misspelling of") or templateMatches(name, "pronunciation spelling of") or templateMatches(name, "pronunciation variant of")) {
-        try appendWithSpace(out, allocator, templateDisplayName(name));
+        try appendWithSpace(out, allocator, std.mem.trim(u8, name, " \t"));
         if (templateAliasTarget(&parts)) |arg| {
             try appendWithSpace(out, allocator, " ");
             try renderInline(out, allocator, arg);
@@ -732,6 +1135,7 @@ fn extractCanonicalTargetsFromDefinition(
         if (parts.items.len != 0 and isAliasTemplate(parts.items[0])) {
             if (templateAliasTarget(&parts)) |target_raw| {
                 const target = try renderWikitextToOwned(allocator, target_raw, 256);
+                defer allocator.free(target);
                 try addUniqueTerm(out, allocator, target);
                 found = true;
             }
@@ -758,6 +1162,7 @@ fn extractTermsFromLine(
                 if (templateMatches(name, "alt") or templateMatches(name, "alter") or templateMatches(name, "l") or templateMatches(name, "m") or templateMatches(name, "m+") or templateMatches(name, "link")) {
                     if (templateLexeme(&parts)) |raw| {
                         const rendered = try renderWikitextToOwned(allocator, raw, 256);
+                        defer allocator.free(rendered);
                         try pushRenderedTerms(out, allocator, rendered);
                     }
                 } else if (isColumnTemplate(name)) {
@@ -766,6 +1171,7 @@ fn extractTermsFromLine(
                     while (pos_index < count) : (pos_index += 1) {
                         if (templatePositional(&parts, pos_index)) |raw| {
                             const rendered = try renderWikitextToOwned(allocator, raw, 256);
+                            defer allocator.free(rendered);
                             try pushRenderedTerms(out, allocator, rendered);
                         }
                     }
@@ -782,6 +1188,7 @@ fn extractTermsFromLine(
                 continue;
             }
             const rendered = try renderWikitextToOwned(allocator, body, 256);
+            defer allocator.free(rendered);
             try pushRenderedTerms(out, allocator, rendered);
             i = end + 2;
             continue;
@@ -917,22 +1324,8 @@ fn appendPositional(
     if (suffix.len != 0 and wrote_any) try out.appendSlice(allocator, suffix);
 }
 
-fn appendLabeledList(
-    out: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
-    parts: *const std.ArrayList([]const u8),
-    prefix: []const u8,
-    suffix: []const u8,
-) std.mem.Allocator.Error!void {
-    try appendPositional(out, allocator, parts, 1, prefix, suffix, ", ");
-}
-
 fn templateMatches(name: []const u8, expected: []const u8) bool {
     return std.ascii.eqlIgnoreCase(std.mem.trim(u8, name, " \t"), expected);
-}
-
-fn templateDisplayName(name: []const u8) []const u8 {
-    return std.mem.trim(u8, name, " \t");
 }
 
 fn templateArgHasName(segment: []const u8) bool {
@@ -1035,10 +1428,48 @@ fn asciiStartsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     return true;
 }
 
-fn asciiLowerAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    var out = try allocator.alloc(u8, input.len);
-    for (input, 0..) |c, i| out[i] = std.ascii.toLower(c);
-    return out;
+const StructureHeadingTitles = struct {
+    json: []u8,
+    titles: std.ArrayList([]const u8),
+
+    fn deinit(self: *StructureHeadingTitles, allocator: std.mem.Allocator) void {
+        self.titles.deinit(allocator);
+        allocator.free(self.json);
+    }
+};
+
+fn loadStructureHeadingTitlesForTest(allocator: std.mem.Allocator) !StructureHeadingTitles {
+    var file = try std.Io.Dir.cwd().openFile(std.testing.io, "data/wiktionary-structure.json", .{});
+    defer file.close(std.testing.io);
+
+    const stat = try file.stat(std.testing.io);
+    const len = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
+    const json = try allocator.alloc(u8, len);
+    errdefer allocator.free(json);
+    _ = try file.readPositionalAll(std.testing.io, json, 0);
+
+    const profiles_marker = "\"heading_profiles\": [";
+    const levels_marker = "\"headings_by_level\": [";
+    const profiles_start = std.mem.indexOf(u8, json, profiles_marker) orelse return error.InvalidStructureReport;
+    const levels_start = std.mem.indexOfPos(u8, json, profiles_start, levels_marker) orelse return error.InvalidStructureReport;
+    const slice = json[profiles_start..levels_start];
+
+    var titles: std.ArrayList([]const u8) = .empty;
+    errdefer titles.deinit(allocator);
+
+    const title_marker = "\"title\": \"";
+    var cursor: usize = 0;
+    while (std.mem.indexOfPos(u8, slice, cursor, title_marker)) |match| {
+        const value_start = match + title_marker.len;
+        const value_end = std.mem.indexOfScalarPos(u8, slice, value_start, '"') orelse return error.InvalidStructureReport;
+        try titles.append(allocator, slice[value_start..value_end]);
+        cursor = value_end + 1;
+    }
+
+    return .{
+        .json = json,
+        .titles = titles,
+    };
 }
 
 test "parse alternative spelling and noun gloss" {
@@ -1084,4 +1515,108 @@ test "extract english section preserves raw bytes" {
         \\# [[light]]
         \\
     , english);
+}
+
+test "current structure report headings all map to a section parser" {
+    var titles = try loadStructureHeadingTitlesForTest(std.testing.allocator);
+    defer titles.deinit(std.testing.allocator);
+
+    try std.testing.expect(titles.titles.items.len != 0);
+
+    for (titles.titles.items) |title| {
+        const level: u8 = if (headingMatches(title, "English")) 2 else 3;
+        const parser = sectionParserSpecForTitle(title, level);
+        try std.testing.expect(parser != null);
+        try std.testing.expect(parser.?.parser_name.len != 0);
+    }
+}
+
+test "parse english entry dispatches section families through dedicated parsers" {
+    const source =
+        \\==English==
+        \\[[File:Color wheel.svg|thumb|A color wheel.]]
+        \\General overview.
+        \\
+        \\===Alternative spelling===
+        \\* [[colour]]
+        \\
+        \\===Pronunciation===
+        \\* {{IPA|en|/kʌlə(ɹ)/}}
+        \\
+        \\===Etymology===
+        \\From [[Latin]].
+        \\
+        \\===Noun===
+        \\# [[light]]
+        \\
+        \\===Translations===
+        \\* Finnish: {{t|fi|vari}}
+        \\
+        \\===Derived terms===
+        \\* {{l|en|colorize}}
+        \\
+        \\===Descendants===
+        \\* {{desc|fr|couleur}}
+        \\
+        \\===Conjugation===
+        \\* third-person singular: colors
+        \\
+        \\===References===
+        \\* Reference note.
+        \\
+        \\===Usage Notes===
+        \\* chiefly US
+        \\
+        \\===See Also===
+        \\* [[shade]]
+        \\
+        \\===Dialects===
+        \\* regional variants
+    ;
+
+    var parsed = (try parseEnglishEntry(std.testing.allocator, "color", source)).?;
+    defer parsed.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.alt_forms.items.len);
+    try std.testing.expectEqualStrings("colour", parsed.alt_forms.items[0]);
+    try std.testing.expectEqual(@as(usize, 1), parsed.senses.items.len);
+    try std.testing.expectEqualStrings("light", parsed.senses.items[0].gloss);
+
+    var saw_root = false;
+    var saw_pronunciation = false;
+    var saw_etymology = false;
+    var saw_translations = false;
+    var saw_relations = false;
+    var saw_descendants = false;
+    var saw_inflection = false;
+    var saw_citations = false;
+    var saw_notes = false;
+    var saw_navigation = false;
+    var saw_meta = false;
+
+    for (parsed.sections.items) |section| {
+        if (headingMatches(section.title, "English")) saw_root = true;
+        if (headingMatches(section.title, "Pronunciation")) saw_pronunciation = true;
+        if (headingMatches(section.title, "Etymology")) saw_etymology = true;
+        if (headingMatches(section.title, "Translations")) saw_translations = true;
+        if (headingMatches(section.title, "Derived terms")) saw_relations = true;
+        if (headingMatches(section.title, "Descendants")) saw_descendants = true;
+        if (headingMatches(section.title, "Conjugation")) saw_inflection = true;
+        if (headingMatches(section.title, "References")) saw_citations = true;
+        if (headingMatches(section.title, "Usage Notes")) saw_notes = true;
+        if (headingMatches(section.title, "See Also")) saw_navigation = true;
+        if (headingMatches(section.title, "Dialects")) saw_meta = true;
+    }
+
+    try std.testing.expect(saw_root);
+    try std.testing.expect(saw_pronunciation);
+    try std.testing.expect(saw_etymology);
+    try std.testing.expect(saw_translations);
+    try std.testing.expect(saw_relations);
+    try std.testing.expect(saw_descendants);
+    try std.testing.expect(saw_inflection);
+    try std.testing.expect(saw_citations);
+    try std.testing.expect(saw_notes);
+    try std.testing.expect(saw_navigation);
+    try std.testing.expect(saw_meta);
 }

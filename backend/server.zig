@@ -22,6 +22,7 @@ const AppContext = struct {
     db: decoder.Dictionary,
     db_path: []const u8,
     index_html: []const u8,
+    // Monotonic counter used to walk pseudo-randomly across entries without extra state.
     random_counter: std.atomic.Value(u64),
 
     fn init(io: std.Io, allocator: std.mem.Allocator, options: ServeOptions) !AppContext {
@@ -234,10 +235,17 @@ fn lookupKindString(kind: u8) []const u8 {
 }
 
 fn ensureDictionary(io: std.Io, allocator: std.mem.Allocator, options: ServeOptions) !void {
-    if (try fileExists(io, options.db_path)) return;
+    if (try dictionaryLooksUsable(io, allocator, options.db_path)) {
+        return;
+    }
+
+    try deleteFileIfExists(io, options.db_path);
+    const cache_path = try std.fmt.allocPrint(allocator, "{s}.idx", .{options.db_path});
+    defer allocator.free(cache_path);
+    try deleteFileIfExists(io, cache_path);
 
     std.debug.print(
-        "dictionary binary missing at {s}; building from {s}\n",
+        "building dictionary binary at {s} from {s}\n",
         .{ options.db_path, options.input_path },
     );
 
@@ -247,13 +255,25 @@ fn ensureDictionary(io: std.Io, allocator: std.mem.Allocator, options: ServeOpti
     });
 }
 
-fn fileExists(io: std.Io, path: []const u8) !bool {
-    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return false,
+fn dictionaryLooksUsable(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !bool {
+    var dict = decoder.openDictionary(allocator, io, path) catch |err| switch (err) {
+        error.FileNotFound,
+        error.InvalidDictionaryFile,
+        error.UnsupportedDictionaryVersion,
+        error.InvalidDictionaryCache,
+        => return false,
         else => return err,
     };
-    defer file.close(io);
-    return true;
+    defer dict.deinit();
+
+    return dict.header.entry_count != 0 or dict.header.records_len != 0;
+}
+
+fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
 }
 
 fn htmlResponse(body: []const u8) zhttp.Res {
@@ -296,4 +316,62 @@ fn flagValue(args: []const []const u8, name: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, args[i], name) and i + 1 < args.len) return args[i + 1];
     }
     return null;
+}
+
+test "dictionaryLooksUsable rejects placeholder header-only dictionary" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const rel_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/placeholder.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(rel_path);
+
+    var file = try tmp.dir.createFile(std.testing.io, "placeholder.bin", .{ .truncate = true });
+    defer file.close(std.testing.io);
+    const header = format.Header.init(0, 0, 0, @sizeOf(format.Header), 0);
+    try file.writePositionalAll(std.testing.io, std.mem.asBytes(&header), 0);
+
+    try std.testing.expect(!(try dictionaryLooksUsable(std.testing.io, std.testing.allocator, rel_path)));
+}
+
+test "ensureDictionary rebuilds placeholder dictionary from xml input" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml_rel = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(xml_rel);
+    const db_rel = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_rel);
+
+    var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
+    defer xml_file.close(std.testing.io);
+    try xml_file.writePositionalAll(std.testing.io,
+        \\<mediawiki>
+        \\<page>
+        \\<title>color</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# [[light]]
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    , 0);
+
+    var placeholder = try tmp.dir.createFile(std.testing.io, "dict.bin", .{ .truncate = true });
+    defer placeholder.close(std.testing.io);
+    const header = format.Header.init(0, 0, 0, @sizeOf(format.Header), 0);
+    try placeholder.writePositionalAll(std.testing.io, std.mem.asBytes(&header), 0);
+
+    try ensureDictionary(std.testing.io, std.testing.allocator, .{
+        .db_path = db_rel,
+        .input_path = xml_rel,
+    });
+
+    var dict = try decoder.openDictionary(std.testing.allocator, std.testing.io, db_rel);
+    defer dict.deinit();
+    try std.testing.expect(dict.header.entry_count != 0);
+
+    const hits = try dict.lookupExact(std.testing.allocator, "color");
+    defer std.testing.allocator.free(hits);
+    try std.testing.expectEqual(@as(usize, 1), hits.len);
 }

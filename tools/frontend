@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+frontend_dir="$repo_dir/frontend"
+
+usage() {
+  cat <<'EOF'
+Usage: zig build frontend -- <command>
+
+Commands:
+  install   Install frontend dependencies
+  build     Build the frontend
+  check     Type-check and build the frontend
+  dev       Run the frontend dev server
+  preview   Preview the built frontend
+EOF
+}
+
+if [ $# -lt 1 ]; then
+  usage
+  exit 1
+fi
+
+cd "$frontend_dir"
+
+case "$1" in
+  install)
+    exec bun install
+    ;;
+  build)
+    bun install
+    exec bun run build
+    ;;
+  check)
+    bun install
+    exec bun run check
+    ;;
+  dev)
+    bun install
+    exec bun run dev
+    ;;
+  preview)
+    bun install
+    exec bun run start
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    printf 'unknown frontend command: %s\n\n' "$1" >&2
+    usage >&2
+    exit 1
+    ;;
+esac

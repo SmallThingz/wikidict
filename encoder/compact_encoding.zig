@@ -22,7 +22,7 @@ pub const char_tokens = [_]CharToken{
     .{ .byte = 0x07, .value = '|' },
     .{ .byte = 0x08, .value = '=' },
     .{ .byte = 0x09, .value = '#' },
-    .{ .byte = 0x0A, .value = '*' },
+    .{ .byte = 0x12, .value = '*' },
     .{ .byte = 0x0B, .value = ':' },
     .{ .byte = 0x0C, .value = ';' },
     .{ .byte = 0x0D, .value = '<' },
@@ -326,21 +326,28 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 pub fn encodeToList(list: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    const stable_input = if (list.capacity != 0 and slicesOverlap(input, list.allocatedSlice()))
+        try allocator.dupe(u8, input)
+    else
+        null;
+    defer if (stable_input) |owned| allocator.free(owned);
+
+    const source = stable_input orelse input;
     list.items.len = 0;
-    try list.ensureTotalCapacity(allocator, input.len);
+    try list.ensureTotalCapacity(allocator, source.len);
 
     var i: usize = 0;
-    while (i < input.len) {
-        if (canCopyLiteralRun(input[i])) {
+    while (i < source.len) {
+        if (canCopyLiteralRun(source[i])) {
             const start = i;
             i += 1;
-            while (i < input.len and canCopyLiteralRun(input[i])) : (i += 1) {}
-            try list.appendSlice(allocator, input[start..i]);
+            while (i < source.len and canCopyLiteralRun(source[i])) : (i += 1) {}
+            try list.appendSlice(allocator, source[start..i]);
             continue;
         }
 
-        if (pattern_start_table[input[i]]) {
-            if (matchLongest(input, i)) |match| {
+        if (pattern_start_table[source[i]]) {
+            if (matchLongest(source, i)) |match| {
                 switch (match) {
                     .single => |token| try list.append(allocator, token.byte),
                     .escaped => |token| {
@@ -356,17 +363,17 @@ pub fn encodeToList(list: *std.ArrayList(u8), allocator: std.mem.Allocator, inpu
             }
         }
 
-        if (input[i] == escape_byte) {
+        if (source[i] == escape_byte) {
             try list.append(allocator, escape_byte);
             try list.append(allocator, 0);
-        } else if (tokenByteForChar(input[i])) |token_byte| {
+        } else if (tokenByteForChar(source[i])) |token_byte| {
             try list.append(allocator, token_byte);
-        } else if (needsRawLiteralEscape(input[i])) {
+        } else if (needsRawLiteralEscape(source[i])) {
             try list.append(allocator, escape_byte);
             try list.append(allocator, raw_literal_code);
-            try list.append(allocator, input[i]);
+            try list.append(allocator, source[i]);
         } else {
-            try list.append(allocator, input[i]);
+            try list.append(allocator, source[i]);
         }
         i += 1;
     }
@@ -468,13 +475,22 @@ fn charForTokenByte(byte: u8) ?u8 {
 fn needsRawLiteralEscape(byte: u8) bool {
     if (byte == 0) return true;
     if (singlePatternForByte(byte) != null) return true;
-    if (charForTokenByte(byte) != null) return true;
+    if (tokenByteForChar(byte) != null) return true;
     return false;
 }
 
 fn canCopyLiteralRun(byte: u8) bool {
     if (pattern_start_table[byte]) return false;
     return !needsRawLiteralEscape(byte);
+}
+
+fn slicesOverlap(a: []const u8, b: []const u8) bool {
+    if (a.len == 0 or b.len == 0) return false;
+    const a_start = @intFromPtr(a.ptr);
+    const a_end = a_start + a.len;
+    const b_start = @intFromPtr(b.ptr);
+    const b_end = b_start + b.len;
+    return a_start < b_end and b_start < a_end;
 }
 
 fn singlePatternForByte(byte: u8) ?[]const u8 {
@@ -523,6 +539,22 @@ test "compact encoding preserves nul bytes through escape" {
     defer std.testing.allocator.free(decoded);
 
     try std.testing.expectEqualSlices(u8, &sample, decoded);
+}
+
+test "encodeToList handles aliased input buffer" {
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(std.testing.allocator);
+
+    try buf.appendSlice(std.testing.allocator,
+        \\plain text with no tokens at all
+    );
+
+    const aliased_input = buf.items;
+    const encoded = try encodeToList(&buf, std.testing.allocator, aliased_input);
+    const decoded = try decodeAlloc(std.testing.allocator, encoded);
+    defer std.testing.allocator.free(decoded);
+
+    try std.testing.expectEqualStrings(aliased_input, decoded);
 }
 
 test "compact encoding removes visible wiki punctuation from encoded bytes" {
