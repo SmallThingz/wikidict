@@ -258,6 +258,31 @@ comptime {
     if (escaped_patterns.len >= 255) @compileError("escaped token table exceeds one-byte escape space");
 }
 
+const char_to_token_table = blk: {
+    var table = [_]u8{0} ** 256;
+    for (char_tokens) |token| table[token.value] = token.byte;
+    break :blk table;
+};
+
+const token_to_char_table = blk: {
+    var table = [_]u8{0} ** 256;
+    for (char_tokens) |token| table[token.byte] = token.value;
+    break :blk table;
+};
+
+const single_pattern_table = blk: {
+    var table = [_]?[]const u8{null} ** 256;
+    for (single_tokens) |token| table[token.byte] = token.pattern;
+    break :blk table;
+};
+
+const pattern_start_table = blk: {
+    var table = [_]bool{false} ** 256;
+    for (single_tokens) |token| table[token.pattern[0]] = true;
+    for (escaped_patterns) |pattern| table[pattern[0]] = true;
+    break :blk table;
+};
+
 const Match = union(enum) {
     single: SingleToken,
     escaped: struct {
@@ -272,19 +297,21 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 
     var i: usize = 0;
     while (i < input.len) {
-        if (matchLongest(input, i)) |match| {
-            switch (match) {
-                .single => |token| try out.append(allocator, token.byte),
-                .escaped => |token| {
-                    try out.append(allocator, escape_byte);
-                    try out.append(allocator, token.code);
-                },
+        if (pattern_start_table[input[i]]) {
+            if (matchLongest(input, i)) |match| {
+                switch (match) {
+                    .single => |token| try out.append(allocator, token.byte),
+                    .escaped => |token| {
+                        try out.append(allocator, escape_byte);
+                        try out.append(allocator, token.code);
+                    },
+                }
+                i += switch (match) {
+                    .single => |token| token.pattern.len,
+                    .escaped => |token| token.pattern.len,
+                };
+                continue;
             }
-            i += switch (match) {
-                .single => |token| token.pattern.len,
-                .escaped => |token| token.pattern.len,
-            };
-            continue;
         }
 
         if (input[i] == escape_byte) {
@@ -351,10 +378,12 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, input: []const u8) (std.mem.All
 }
 
 fn matchLongest(input: []const u8, index: usize) ?Match {
+    const first = input[index];
     var best: ?Match = null;
     var best_len: usize = 0;
 
     for (single_tokens) |token| {
+        if (token.pattern[0] != first) continue;
         if (token.pattern.len > best_len and index + token.pattern.len <= input.len and std.mem.eql(u8, input[index .. index + token.pattern.len], token.pattern)) {
             best = .{ .single = token };
             best_len = token.pattern.len;
@@ -362,6 +391,7 @@ fn matchLongest(input: []const u8, index: usize) ?Match {
     }
 
     for (escaped_patterns, 0..) |pattern, escaped_index| {
+        if (pattern[0] != first) continue;
         if (pattern.len > best_len and index + pattern.len <= input.len and std.mem.eql(u8, input[index .. index + pattern.len], pattern)) {
             best = .{
                 .escaped = .{
@@ -377,17 +407,13 @@ fn matchLongest(input: []const u8, index: usize) ?Match {
 }
 
 fn tokenByteForChar(value: u8) ?u8 {
-    for (char_tokens) |token| {
-        if (token.value == value) return token.byte;
-    }
-    return null;
+    const token_byte = char_to_token_table[value];
+    return if (token_byte == 0) null else token_byte;
 }
 
 fn charForTokenByte(byte: u8) ?u8 {
-    for (char_tokens) |token| {
-        if (token.byte == byte) return token.value;
-    }
-    return null;
+    const value = token_to_char_table[byte];
+    return if (value == 0) null else value;
 }
 
 fn needsRawLiteralEscape(byte: u8) bool {
@@ -398,10 +424,7 @@ fn needsRawLiteralEscape(byte: u8) bool {
 }
 
 fn singlePatternForByte(byte: u8) ?[]const u8 {
-    for (single_tokens) |token| {
-        if (token.byte == byte) return token.pattern;
-    }
-    return null;
+    return single_pattern_table[byte];
 }
 
 fn patternForCode(code: u8) ?[]const u8 {
