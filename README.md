@@ -63,6 +63,8 @@ Stats:
 zig build stats -- --db data/enwiktionary.bin
 ```
 
+The first decoder open builds a sidecar cache at `data/enwiktionary.bin.idx`. Later opens mmap that cache and skip the expensive metadata rebuild.
+
 Run the backend server:
 
 ```bash

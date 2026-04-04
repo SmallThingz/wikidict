@@ -167,6 +167,9 @@ const LookupEndpoint = struct {
         for (hits) |hit| {
             const entry = req.ctx().db.entryAt(hit.entry_index);
             const raw = if (try entry.rawEnglishAlloc(req.allocator())) |value| value else "";
+            const alt_forms = try entry.altForms().toOwnedSlice(req.allocator());
+            const canonical_targets = try entry.canonicalTargets().toOwnedSlice(req.allocator());
+            const incoming_aliases = try entry.incomingAliases().toOwnedSlice(req.allocator());
 
             try payload_hits.append(req.allocator(), .{
                 .matched = hit.matched,
@@ -175,9 +178,9 @@ const LookupEndpoint = struct {
                     .word = entry.word(),
                     .normalized = entry.normalized(),
                     .aliasOnly = entry.isAliasOnly(),
-                    .altForms = entry.altForms(),
-                    .canonicalTargets = entry.canonicalTargets(),
-                    .incomingAliases = entry.incomingAliases(),
+                    .altForms = alt_forms,
+                    .canonicalTargets = canonical_targets,
+                    .incomingAliases = incoming_aliases,
                     .raw = raw,
                     .summary = entry.summary(),
                 },

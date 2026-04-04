@@ -113,12 +113,12 @@ fn printHit(
     }
 }
 
-fn printList(label: []const u8, values: []const []const u8) void {
-    if (values.len == 0) return;
+fn printList(label: []const u8, values: decoder.TermListView) void {
+    if (values.len() == 0) return;
     std.debug.print("{s}: ", .{label});
-    for (values, 0..) |value, idx| {
+    for (0..values.len()) |idx| {
         if (idx != 0) std.debug.print(", ", .{});
-        std.debug.print("{s}", .{value});
+        std.debug.print("{s}", .{values.at(idx)});
     }
     std.debug.print("\n", .{});
 }

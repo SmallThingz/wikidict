@@ -37,7 +37,8 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     var output_file = try std.Io.Dir.cwd().createFile(io, options.output_path, .{ .truncate = true });
     defer output_file.close(io);
 
-    var output = try OutputWriter.init(io, output_file);
+    var output = try OutputWriter.init(io, allocator, output_file);
+    defer output.deinit(allocator);
     var stats: BuildStats = .{};
 
     var stream_parser = StreamParser.init(allocator);
@@ -153,12 +154,13 @@ fn processPageFragment(
     if (ns != 0) return;
     stats.namespace_zero_pages += 1;
 
-    const title = try xml_decode.decodeAlloc(allocator, capture.title_raw orelse return);
+    const title_raw = capture.title_raw orelse return;
 
     if (capture.text_raw) |text_raw| {
         if (std.mem.indexOf(u8, text_raw, "==English==") != null) {
             const text = try xml_decode.decodeAlloc(allocator, text_raw);
             if (wikitext.extractEnglishSection(text)) |english_section| {
+                const title = try xml_decode.decodeAlloc(allocator, title_raw);
                 try output.writeRecord(
                     allocator,
                     title,
@@ -171,6 +173,7 @@ fn processPageFragment(
     }
 
     if (capture.redirect_title_raw) |raw| {
+        const title = try xml_decode.decodeAlloc(allocator, title_raw);
         const target = try xml_decode.decodeAlloc(allocator, raw);
         try output.writeRecord(
             allocator,
@@ -183,29 +186,43 @@ fn processPageFragment(
 }
 
 const OutputWriter = struct {
+    const flush_threshold = 1 << 20;
+
+    allocator: std.mem.Allocator,
     io: std.Io,
     file: std.Io.File,
-    cursor: u64 = @sizeOf(format.Header),
+    flushed_bytes: u64 = @sizeOf(format.Header),
     entry_count: usize = 0,
     raw_entry_count: usize = 0,
     redirect_count: usize = 0,
+    buffer: std.ArrayList(u8) = .empty,
+    title_buf: std.ArrayList(u8) = .empty,
+    payload_buf: std.ArrayList(u8) = .empty,
 
-    fn init(io: std.Io, file: std.Io.File) !OutputWriter {
+    fn init(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File) !OutputWriter {
         const placeholder = format.Header.init(0, 0, 0, @sizeOf(format.Header), 0);
         try file.writePositionalAll(io, std.mem.asBytes(&placeholder), 0);
         return .{
+            .allocator = allocator,
             .io = io,
             .file = file,
         };
     }
 
+    fn deinit(self: *OutputWriter, allocator: std.mem.Allocator) void {
+        self.buffer.deinit(allocator);
+        self.title_buf.deinit(allocator);
+        self.payload_buf.deinit(allocator);
+    }
+
     fn finish(self: *OutputWriter) !void {
+        try self.flushBuffer();
         const header = format.Header.init(
             @intCast(self.entry_count),
             @intCast(self.raw_entry_count),
             @intCast(self.redirect_count),
             @sizeOf(format.Header),
-            self.cursor - @sizeOf(format.Header),
+            self.flushed_bytes - @sizeOf(format.Header),
         );
         try self.file.writePositionalAll(self.io, std.mem.asBytes(&header), 0);
     }
@@ -218,8 +235,7 @@ const OutputWriter = struct {
         payload: []const u8,
     ) !void {
         try self.writeByte(flags);
-        const encoded_title = try compact.encodeAlloc(allocator, title);
-        defer allocator.free(encoded_title);
+        const encoded_title = try compact.encodeToList(&self.title_buf, allocator, title);
         try self.writeSlice(encoded_title);
 
         if ((flags & format.record_flag_has_raw) != 0) {
@@ -227,13 +243,11 @@ const OutputWriter = struct {
                 payload[english_heading.len..]
             else
                 payload;
-            const encoded = try compact.encodeAlloc(allocator, raw_payload);
-            defer allocator.free(encoded);
+            const encoded = try compact.encodeToList(&self.payload_buf, allocator, raw_payload);
             try self.writeSlice(encoded);
             self.raw_entry_count += 1;
         } else {
-            const encoded_target = try compact.encodeAlloc(allocator, payload);
-            defer allocator.free(encoded_target);
+            const encoded_target = try compact.encodeToList(&self.payload_buf, allocator, payload);
             try self.writeSlice(encoded_target);
             self.redirect_count += 1;
         }
@@ -254,7 +268,14 @@ const OutputWriter = struct {
 
     fn writeBytes(self: *OutputWriter, bytes: []const u8) !void {
         if (bytes.len == 0) return;
-        try self.file.writePositionalAll(self.io, bytes, self.cursor);
-        self.cursor += bytes.len;
+        try self.buffer.appendSlice(self.allocator, bytes);
+        if (self.buffer.items.len >= flush_threshold) try self.flushBuffer();
+    }
+
+    fn flushBuffer(self: *OutputWriter) !void {
+        if (self.buffer.items.len == 0) return;
+        try self.file.writePositionalAll(self.io, self.buffer.items, self.flushed_bytes);
+        self.flushed_bytes += self.buffer.items.len;
+        self.buffer.items.len = 0;
     }
 };

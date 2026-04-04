@@ -321,16 +321,31 @@ const Match = union(enum) {
 pub fn encodeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
+    _ = try encodeToList(&out, allocator, input);
+    return out.toOwnedSlice(allocator);
+}
+
+pub fn encodeToList(list: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    list.items.len = 0;
+    try list.ensureTotalCapacity(allocator, input.len);
 
     var i: usize = 0;
     while (i < input.len) {
+        if (canCopyLiteralRun(input[i])) {
+            const start = i;
+            i += 1;
+            while (i < input.len and canCopyLiteralRun(input[i])) : (i += 1) {}
+            try list.appendSlice(allocator, input[start..i]);
+            continue;
+        }
+
         if (pattern_start_table[input[i]]) {
             if (matchLongest(input, i)) |match| {
                 switch (match) {
-                    .single => |token| try out.append(allocator, token.byte),
+                    .single => |token| try list.append(allocator, token.byte),
                     .escaped => |token| {
-                        try out.append(allocator, escape_byte);
-                        try out.append(allocator, token.code);
+                        try list.append(allocator, escape_byte);
+                        try list.append(allocator, token.code);
                     },
                 }
                 i += switch (match) {
@@ -342,21 +357,21 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
         }
 
         if (input[i] == escape_byte) {
-            try out.append(allocator, escape_byte);
-            try out.append(allocator, 0);
+            try list.append(allocator, escape_byte);
+            try list.append(allocator, 0);
         } else if (tokenByteForChar(input[i])) |token_byte| {
-            try out.append(allocator, token_byte);
+            try list.append(allocator, token_byte);
         } else if (needsRawLiteralEscape(input[i])) {
-            try out.append(allocator, escape_byte);
-            try out.append(allocator, raw_literal_code);
-            try out.append(allocator, input[i]);
+            try list.append(allocator, escape_byte);
+            try list.append(allocator, raw_literal_code);
+            try list.append(allocator, input[i]);
         } else {
-            try out.append(allocator, input[i]);
+            try list.append(allocator, input[i]);
         }
         i += 1;
     }
 
-    return out.toOwnedSlice(allocator);
+    return list.items;
 }
 
 pub fn decodeAlloc(allocator: std.mem.Allocator, input: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
@@ -455,6 +470,11 @@ fn needsRawLiteralEscape(byte: u8) bool {
     if (singlePatternForByte(byte) != null) return true;
     if (charForTokenByte(byte) != null) return true;
     return false;
+}
+
+fn canCopyLiteralRun(byte: u8) bool {
+    if (pattern_start_table[byte]) return false;
+    return !needsRawLiteralEscape(byte);
 }
 
 fn singlePatternForByte(byte: u8) ?[]const u8 {
