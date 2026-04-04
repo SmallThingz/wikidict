@@ -120,6 +120,9 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     var page_arena = std.heap.ArenaAllocator.init(allocator);
     defer page_arena.deinit();
 
+    var valid_titles: ?ValidTitleSet = null;
+    defer if (valid_titles) |*set| deinitValidTitleSet(allocator, set);
+
     const stat = try input_file.stat(io);
     var progress = BuildProgress.init(@intCast(stat.size));
     {
@@ -141,6 +144,15 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
             );
             defer std.posix.munmap(mapped);
 
+            if (options.limit_entries == null) {
+                valid_titles = try collectValidAliasTitleSet(
+                    allocator,
+                    mapped[0..@as(usize, @intCast(stat.size))],
+                    &stream_parser,
+                    &page_arena,
+                );
+            }
+
             try processMappedInput(
                 mapped[0..@as(usize, @intCast(stat.size))],
                 options.limit_entries,
@@ -149,6 +161,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
                 &output,
                 &stats,
                 &progress,
+                if (valid_titles) |*set| set else null,
             );
         }
 
@@ -170,6 +183,7 @@ fn processMappedInput(
     output: *OutputWriter,
     stats: *BuildStats,
     progress: *BuildProgress,
+    valid_titles: ?*const ValidTitleSet,
 ) !void {
     var consumed: usize = 0;
     while (true) {
@@ -178,7 +192,7 @@ fn processMappedInput(
         const page_end = end_start + "</page>".len;
 
         const page_allocator = page_arena.allocator();
-        try processPageFragment(page_allocator, stream_parser, mapped[start..page_end], output, stats);
+        try processPageFragment(page_allocator, stream_parser, mapped[start..page_end], output, stats, valid_titles);
         consumed = page_end;
         _ = page_arena.reset(.retain_capacity);
         progress.scan(consumed, stats.pages_seen, output.entry_count);
@@ -217,12 +231,28 @@ const PageCapture = struct {
     }
 };
 
+const AliasCandidate = struct {
+    normalized_title: []const u8,
+    normalized_targets: []const []const u8,
+    base_valid: bool,
+    valid: bool = false,
+
+    fn deinit(self: *AliasCandidate, allocator: std.mem.Allocator) void {
+        allocator.free(self.normalized_title);
+        for (self.normalized_targets) |target| allocator.free(target);
+        allocator.free(self.normalized_targets);
+    }
+};
+
+const ValidTitleSet = std.StringHashMap(void);
+
 fn processPageFragment(
     allocator: std.mem.Allocator,
     parser: *StreamParser,
     page_fragment: []const u8,
     output: *OutputWriter,
     stats: *BuildStats,
+    valid_titles: ?*const ValidTitleSet,
 ) !void {
     var capture: PageCapture = .{};
     try parser.parse(page_fragment, &capture, PageCapture.onNode);
@@ -248,6 +278,11 @@ fn processPageFragment(
                 defer allocator.free(filtered_english);
                 var metadata = try wikitext.extractEntryMetadata(allocator, title, filtered_english);
                 defer metadata.deinit(allocator);
+                if (valid_titles) |set| {
+                    const was_alias_only = metadata.alias_only;
+                    try filterMetadataCanonicalTargets(allocator, &metadata, set);
+                    if (was_alias_only and metadata.canonical_targets.items.len == 0) return;
+                }
                 const raw_payload = try buildRawRecordPayloadAlloc(allocator, filtered_english, metadata);
                 defer allocator.free(raw_payload);
                 try output.writeRawRecord(
@@ -264,12 +299,182 @@ fn processPageFragment(
         const target = try xml_decode.decodeAlloc(allocator, raw);
         const normalized_target = try normalize.normalizeAlloc(allocator, target);
         defer allocator.free(normalized_target);
+        if (valid_titles) |set| {
+            if (!set.contains(normalized_target)) return;
+        }
         try output.writeRedirectRecord(
             title,
             target,
             normalized_target,
         );
         stats.redirect_aliases += 1;
+    }
+}
+
+fn collectValidAliasTitleSet(
+    allocator: std.mem.Allocator,
+    mapped: []const u8,
+    stream_parser: *StreamParser,
+    page_arena: *std.heap.ArenaAllocator,
+) !ValidTitleSet {
+    var candidates: std.ArrayList(AliasCandidate) = .empty;
+    defer {
+        for (candidates.items) |*candidate| candidate.deinit(allocator);
+        candidates.deinit(allocator);
+    }
+
+    var consumed: usize = 0;
+    while (true) {
+        const start = std.mem.indexOfPos(u8, mapped, consumed, "<page>") orelse break;
+        const end_start = std.mem.indexOfPos(u8, mapped, start, "</page>") orelse break;
+        const page_end = end_start + "</page>".len;
+
+        const page_allocator = page_arena.allocator();
+        try collectPageAliasCandidate(page_allocator, allocator, stream_parser, mapped[start..page_end], &candidates);
+        consumed = page_end;
+        _ = page_arena.reset(.retain_capacity);
+    }
+
+    var valid_titles = ValidTitleSet.init(allocator);
+    errdefer deinitValidTitleSet(allocator, &valid_titles);
+
+    for (candidates.items) |*candidate| {
+        if (!candidate.base_valid) continue;
+        candidate.valid = true;
+        if (!valid_titles.contains(candidate.normalized_title)) {
+            try valid_titles.put(try allocator.dupe(u8, candidate.normalized_title), {});
+        }
+    }
+
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (candidates.items) |*candidate| {
+            if (candidate.valid) continue;
+            for (candidate.normalized_targets) |target| {
+                if (!valid_titles.contains(target)) continue;
+                candidate.valid = true;
+                if (!valid_titles.contains(candidate.normalized_title)) {
+                    try valid_titles.put(try allocator.dupe(u8, candidate.normalized_title), {});
+                }
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    return valid_titles;
+}
+
+fn collectPageAliasCandidate(
+    page_allocator: std.mem.Allocator,
+    allocator: std.mem.Allocator,
+    parser: *StreamParser,
+    page_fragment: []const u8,
+    candidates: *std.ArrayList(AliasCandidate),
+) !void {
+    var capture: PageCapture = .{};
+    try parser.parse(page_fragment, &capture, PageCapture.onNode);
+
+    const ns_raw = capture.ns_raw orelse return;
+    const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch return;
+    if (ns != 0) return;
+
+    const title_raw = capture.title_raw orelse return;
+
+    if (capture.text_raw) |text_raw| {
+        if (std.mem.indexOf(u8, text_raw, "==English==") != null) {
+            const text = try xml_decode.decodeAlloc(page_allocator, text_raw);
+            if (wikitext.extractEnglishSection(text)) |english_section| {
+                const title = try xml_decode.decodeAlloc(page_allocator, title_raw);
+                const filtered_english = try wikitext.filterEnglishSectionAlloc(
+                    page_allocator,
+                    english_section,
+                    .defaultCompact(),
+                );
+                var metadata = try wikitext.extractEntryMetadata(page_allocator, title, filtered_english);
+                defer metadata.deinit(page_allocator);
+                const normalized_title = try normalize.normalizeAlloc(allocator, title);
+                errdefer allocator.free(normalized_title);
+                const normalized_targets = try normalizeTargetsAlloc(allocator, metadata.canonical_targets.items);
+                errdefer freeOwnedStringSlice(allocator, normalized_targets);
+                try candidates.append(allocator, .{
+                    .normalized_title = normalized_title,
+                    .normalized_targets = normalized_targets,
+                    .base_valid = !metadata.alias_only,
+                });
+                return;
+            }
+        }
+    }
+
+    if (capture.redirect_title_raw) |raw| {
+        const title = try xml_decode.decodeAlloc(page_allocator, title_raw);
+        const target = try xml_decode.decodeAlloc(page_allocator, raw);
+        const normalized_title = try normalize.normalizeAlloc(allocator, title);
+        errdefer allocator.free(normalized_title);
+        const normalized_target = try normalize.normalizeAlloc(allocator, target);
+        errdefer allocator.free(normalized_target);
+        const targets = try allocator.alloc([]const u8, 1);
+        targets[0] = normalized_target;
+        errdefer allocator.free(targets);
+        try candidates.append(allocator, .{
+            .normalized_title = normalized_title,
+            .normalized_targets = targets,
+            .base_valid = false,
+        });
+    }
+}
+
+fn normalizeTargetsAlloc(allocator: std.mem.Allocator, targets: []const []const u8) ![]const []const u8 {
+    const normalized_targets = try allocator.alloc([]const u8, targets.len);
+    var count: usize = 0;
+    errdefer {
+        while (count > 0) : (count -= 1) allocator.free(normalized_targets[count - 1]);
+        allocator.free(normalized_targets);
+    }
+    for (targets, 0..) |target, idx| {
+        normalized_targets[idx] = try normalize.normalizeAlloc(allocator, target);
+        count += 1;
+    }
+    return normalized_targets;
+}
+
+fn freeOwnedStringSlice(allocator: std.mem.Allocator, values: []const []const u8) void {
+    for (values) |value| allocator.free(value);
+    allocator.free(values);
+}
+
+fn deinitValidTitleSet(allocator: std.mem.Allocator, valid_titles: *ValidTitleSet) void {
+    var iter = valid_titles.keyIterator();
+    while (iter.next()) |key_ptr| allocator.free(key_ptr.*);
+    valid_titles.deinit();
+}
+
+fn filterMetadataCanonicalTargets(
+    allocator: std.mem.Allocator,
+    metadata: *wikitext.EntryMetadata,
+    valid_titles: *const ValidTitleSet,
+) !void {
+    var kept: usize = 0;
+    for (metadata.canonical_targets.items) |target| {
+        const normalized = try normalize.normalizeAlloc(allocator, target);
+        defer allocator.free(normalized);
+        if (!valid_titles.contains(normalized)) {
+            allocator.free(target);
+            continue;
+        }
+        metadata.canonical_targets.items[kept] = target;
+        kept += 1;
+    }
+    metadata.canonical_targets.items.len = kept;
+
+    if (kept == 0) {
+        metadata.alias_only = false;
+        if (metadata.alias_hint_label.len != 0) {
+            allocator.free(metadata.alias_hint_label);
+            metadata.alias_hint_label = "";
+        }
     }
 }
 

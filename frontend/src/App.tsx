@@ -164,7 +164,7 @@ export default function App(props: ParentProps) {
           </A>
 
           <div class="header-search-wrapper">
-            <SearchCard compact onCommit={(value) => { setIsMobileSearchOpen(false); navigate(`/entry/${encodeURIComponent(value)}`); }} />
+            <SearchCard compact onCommit={(value) => { setIsMobileSearchOpen(false); navigate(`/entry/${encodeURIComponent(value)}`); }} focusTrigger={isMobileSearchOpen} />
           </div>
 
           <div class="header-controls">
@@ -344,19 +344,6 @@ function HomePage() {
       <section class="masthead">
         <div class="eyebrow">English Wiktionary</div>
         <h1>Dictionary</h1>
-      </section>
-
-      <section class="stats-strip" aria-label="Dictionary stats">
-        <Show
-          when={stats()}
-          fallback={
-            <Show when={statsError()} fallback={<span class="strip-muted">Loading dictionary stats…</span>}>
-              {(message) => <div class="inline-error">{message()}</div>}
-            </Show>
-          }
-        >
-          {(data) => <StatsStrip stats={data()} />}
-        </Show>
       </section>
 
       <section class="home-columns">
@@ -636,6 +623,13 @@ function EntryPage() {
 function EntryArticle(props: { hit: ApiLookupHit; primaryWord?: string }) {
   const matchIsAlias = createMemo(() => props.hit.matched !== props.hit.entry.word);
   const renderedSections = createMemo(() => props.hit.entry.renderedSections ?? []);
+  const aliasHintTarget = createMemo(() =>
+    props.hit.entry.aliasOnly && props.hit.entry.aliasHintLabel && props.hit.entry.canonicalTargets.length === 1
+      ? props.hit.entry.canonicalTargets[0]
+      : "",
+  );
+  const showAliasHint = createMemo(() => aliasHintTarget().length > 0);
+  const canonicalMetaTargets = createMemo(() => (showAliasHint() ? [] : props.hit.entry.canonicalTargets));
 
   onMount(() => {
     loadListDb(RECENTS_KEY).then((current) => {
@@ -683,9 +677,16 @@ function EntryArticle(props: { hit: ApiLookupHit; primaryWord?: string }) {
         </div>
       </Show>
 
-      <Show when={props.hit.entry.canonicalTargets.length > 0 || props.hit.entry.altForms.length > 0 || props.hit.entry.incomingAliases.length > 0}>
+      <Show when={showAliasHint()}>
+        <p class="article-note">
+          {props.hit.entry.aliasHintLabel}{" "}
+          <A href={`/entry/${encodeURIComponent(aliasHintTarget())}`}>{aliasHintTarget()}</A>.
+        </p>
+      </Show>
+
+      <Show when={canonicalMetaTargets().length > 0 || props.hit.entry.altForms.length > 0 || props.hit.entry.incomingAliases.length > 0}>
         <div class="meta-rail">
-          <MetaLine title="Canonical" values={props.hit.entry.canonicalTargets} />
+          <MetaLine title="Canonical" values={canonicalMetaTargets()} />
           <MetaLine title="Alternatives" values={props.hit.entry.altForms} />
           <MetaLine title="Incoming" values={props.hit.entry.incomingAliases} />
         </div>
@@ -723,6 +724,7 @@ function SearchCard(props: {
   initialValue?: string;
   compact?: boolean;
   autoFocus?: boolean;
+  focusTrigger?: () => boolean;
 }) {
   const navigate = useNavigate();
   const [query, setQuery] = createSignal(props.initialValue ?? "");
@@ -732,6 +734,13 @@ function SearchCard(props: {
 
   createEffect(() => {
     setQuery(props.initialValue ?? "");
+  });
+
+  createEffect(() => {
+    if (props.focusTrigger?.()) {
+      // wait one frame for the CSS width transition to begin
+      requestAnimationFrame(() => inputRef?.focus());
+    }
   });
 
   onMount(() => {

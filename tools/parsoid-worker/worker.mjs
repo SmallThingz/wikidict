@@ -12,7 +12,7 @@ const userAgent =
   "dict-parsoid-audit/1.0 (local developer tool; purpose: renderer comparison)";
 const parsoidApiUrl =
   process.env.DICT_PARSOID_API_URL || "https://en.wiktionary.org/w/api.php";
-const cacheVersion = "v3";
+const cacheVersion = "v4";
 
 await fs.mkdir(cacheDir, { recursive: true });
 if (debugHtmlDir) {
@@ -75,7 +75,8 @@ for await (const line of rl) {
 }
 
 async function loadParsoidSections(title, raw) {
-  const key = crypto.createHash("sha1").update(cacheVersion).update("\0").update(title).update("\0").update(raw).digest("hex");
+  const filteredRaw = stripAuditExcludedWikitext(raw);
+  const key = crypto.createHash("sha1").update(cacheVersion).update("\0").update(title).update("\0").update(filteredRaw).digest("hex");
   const cachePath = path.join(cacheDir, `${key}.json`);
 
   try {
@@ -83,7 +84,7 @@ async function loadParsoidSections(title, raw) {
     if (Array.isArray(cached)) return cached;
   } catch {}
 
-  const html = await fetchParsoidHtml(title, raw);
+  const html = await fetchParsoidHtml(title, filteredRaw);
 
   if (debugHtmlDir) {
     await fs.writeFile(path.join(debugHtmlDir, `${key}.html`), html, "utf8");
@@ -92,6 +93,66 @@ async function loadParsoidSections(title, raw) {
   const normalized = normalizeParsoidHtml(title, html);
   await fs.writeFile(cachePath, JSON.stringify(normalized), "utf8");
   return normalized;
+}
+
+function stripAuditExcludedWikitext(raw) {
+  const lines = String(raw || "").split("\n");
+  const out = [];
+  let skipLevel = null;
+
+  for (const line of lines) {
+    const rawLine = line.replace(/\r$/, "");
+    const trimmed = rawLine.trim();
+    const heading = parseHeadingLine(trimmed);
+    if (heading) {
+      if (skipLevel !== null && heading.level <= skipLevel) {
+        skipLevel = null;
+      }
+      if (skipLevel === null && isExcludedAuditHeading(heading.title)) {
+        skipLevel = heading.level;
+      }
+    }
+
+    if (skipLevel !== null) {
+      continue;
+    }
+    if (isExcludedAuditInlineLine(trimmed)) {
+      continue;
+    }
+    out.push(line);
+  }
+
+  return out.join("\n");
+}
+
+function parseHeadingLine(line) {
+  const trimmed = String(line || "").trim();
+  const match = /^(={2,6})\s*(.*?)\s*\1$/.exec(trimmed);
+  if (!match) return null;
+  const title = match[2].trim();
+  if (!title) return null;
+  return { level: match[1].length, title };
+}
+
+function isExcludedAuditHeading(title) {
+  const normalized = String(title || "").trim().toLowerCase();
+  return normalized === "quotations" || normalized === "references" || normalized === "further reading";
+}
+
+function isExcludedAuditInlineLine(line) {
+  const match = /^(#+)([:*]+)\s*(.*)$/.exec(String(line || "").trim());
+  if (!match) return false;
+  return isQuotationOnlyTemplate(match[3]);
+}
+
+function isQuotationOnlyTemplate(content) {
+  const trimmed = String(content || "").trim();
+  if (!trimmed.startsWith("{{") || !trimmed.endsWith("}}")) return false;
+  const body = trimmed.slice(2, -2).trim();
+  if (!body || body.includes("{{") || body.includes("}}")) return false;
+  const name = body.split("|", 1)[0].trim();
+  const lower = name.toLowerCase();
+  return lower.startsWith("quote-") || name.startsWith("RQ:");
 }
 
 async function fetchParsoidHtml(title, raw) {
@@ -160,6 +221,9 @@ function compareSections(ourSections, parsoidSections) {
         parsoid: summarizeSection(theirs),
       };
     }
+    if (normalizeComparableLine(joinSectionLines(ours)) === normalizeComparableLine(joinSectionLines(theirs))) {
+      continue;
+    }
     if (ours.lines.length !== theirs.lines.length) {
       return {
         summary: `section ${JSON.stringify(ours.title)} block count differs: ours=${ours.lines.length} parsoid=${theirs.lines.length}`,
@@ -187,6 +251,10 @@ function summarizeSections(sections) {
 
 function summarizeSection(section) {
   return `${section.title || "<lead>"} => ${section.lines.join(" || ")}`;
+}
+
+function joinSectionLines(section) {
+  return Array.isArray(section?.lines) ? section.lines.join(" ") : "";
 }
 
 function normalizeComparableLine(line) {

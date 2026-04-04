@@ -1,5 +1,5 @@
 const API_TIMEOUT_MS = 5000;
-const API_SCHEMA_VERSION = "rendered-sections-v1";
+const API_SCHEMA_VERSION = "rendered-sections-v2";
 const API_BASE_URL = resolveApiBaseUrl();
 
 type LookupPayload = {
@@ -72,6 +72,7 @@ export type ApiEntry = {
   word: string;
   normalized: string;
   aliasOnly: boolean;
+  aliasHintLabel: string;
   altForms: string[];
   canonicalTargets: string[];
   incomingAliases: string[];
@@ -139,6 +140,7 @@ function normalizeLookupHit(value: unknown): ApiLookupHit | null {
       word: readString(entryRecord.word),
       normalized: readString(entryRecord.normalized),
       aliasOnly: entryRecord.aliasOnly === true,
+      aliasHintLabel: readString(entryRecord.aliasHintLabel),
       altForms: readStringArray(entryRecord.altForms),
       canonicalTargets: readStringArray(entryRecord.canonicalTargets),
       incomingAliases: readStringArray(entryRecord.incomingAliases),

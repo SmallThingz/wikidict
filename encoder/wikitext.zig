@@ -41,8 +41,11 @@ pub const ParsedEntry = struct {
     canonical_targets: std.ArrayListUnmanaged([]const u8) = .empty,
     sections: std.ArrayListUnmanaged(TempSection) = .empty,
     senses: std.ArrayListUnmanaged(TempSense) = .empty,
+    // Human-readable alias hint such as "Plural Form Of" for single-sense alias-style entries.
+    alias_hint_label: []const u8 = "",
     alias_only: bool = false,
     has_real_sense: bool = false,
+    alias_like_sense_count: usize = 0,
 
     pub fn deinit(self: *ParsedEntry, allocator: std.mem.Allocator) void {
         allocator.free(self.word);
@@ -50,6 +53,7 @@ pub const ParsedEntry = struct {
         self.alt_forms.deinit(allocator);
         for (self.canonical_targets.items) |value| allocator.free(value);
         self.canonical_targets.deinit(allocator);
+        if (self.alias_hint_label.len != 0) allocator.free(self.alias_hint_label);
         for (self.sections.items) |*section| section.deinit(allocator);
         self.sections.deinit(allocator);
         for (self.senses.items) |*sense| sense.deinit(allocator);
@@ -60,6 +64,8 @@ pub const ParsedEntry = struct {
 pub const EntryMetadata = struct {
     alt_forms: std.ArrayListUnmanaged([]const u8) = .empty,
     canonical_targets: std.ArrayListUnmanaged([]const u8) = .empty,
+    // Only set when the entry is a single-sense alias/form-of entry.
+    alias_hint_label: []const u8 = "",
     alias_only: bool = false,
 
     pub fn deinit(self: *EntryMetadata, allocator: std.mem.Allocator) void {
@@ -67,6 +73,7 @@ pub const EntryMetadata = struct {
         self.alt_forms.deinit(allocator);
         for (self.canonical_targets.items) |value| allocator.free(value);
         self.canonical_targets.deinit(allocator);
+        if (self.alias_hint_label.len != 0) allocator.free(self.alias_hint_label);
     }
 };
 
@@ -220,6 +227,15 @@ const ParsedDefinitionLine = struct {
     content: []const u8,
 };
 
+const CanonicalTargetMatch = struct {
+    found: bool = false,
+    hint_label: ?[]u8 = null,
+
+    fn deinit(self: *CanonicalTargetMatch, allocator: std.mem.Allocator) void {
+        if (self.hint_label) |value| allocator.free(value);
+    }
+};
+
 pub fn parseEnglishEntry(allocator: std.mem.Allocator, title: []const u8, text: []const u8) !?ParsedEntry {
     var entry: ParsedEntry = .{
         .word = try allocator.dupe(u8, title),
@@ -347,6 +363,12 @@ pub fn parseEnglishEntry(allocator: std.mem.Allocator, title: []const u8, text: 
     }
 
     entry.alias_only = entry.canonical_targets.items.len != 0 and !entry.has_real_sense;
+    if (!(entry.alias_only and entry.senses.items.len == 1 and entry.alias_like_sense_count == 1 and entry.canonical_targets.items.len == 1)) {
+        if (entry.alias_hint_label.len != 0) {
+            allocator.free(entry.alias_hint_label);
+            entry.alias_hint_label = "";
+        }
+    }
     if (entry.alt_forms.items.len == 0 and entry.canonical_targets.items.len == 0 and entry.sections.items.len == 0 and entry.senses.items.len == 0) {
         entry.deinit(allocator);
         return null;
@@ -401,6 +423,7 @@ pub fn filterEnglishSectionAlloc(allocator: std.mem.Allocator, english_section: 
         const next_newline = std.mem.indexOfScalarPos(u8, english_section, line_start, '\n') orelse english_section.len;
         const line = english_section[line_start..next_newline];
         const raw_line = std.mem.trimEnd(u8, line, "\r");
+        const trimmed = std.mem.trim(u8, raw_line, " \t");
 
         if (parseHeadingLine(raw_line)) |heading| {
             if (skip_level) |level| {
@@ -414,6 +437,11 @@ pub fn filterEnglishSectionAlloc(allocator: std.mem.Allocator, english_section: 
         }
 
         if (skip_level == null) {
+            if (shouldExcludeInlineLine(trimmed, exclusions)) {
+                if (next_newline == english_section.len) break;
+                line_start = next_newline + 1;
+                continue;
+            }
             if (out.items.len != 0) try out.append(allocator, '\n');
             try out.appendSlice(allocator, line);
         }
@@ -423,6 +451,28 @@ pub fn filterEnglishSectionAlloc(allocator: std.mem.Allocator, english_section: 
     }
 
     return out.toOwnedSlice(allocator);
+}
+
+fn shouldExcludeInlineLine(line: []const u8, exclusions: ExclusionPolicy) bool {
+    if (!exclusions.exclude_citations) return false;
+    const parsed = parseDefinitionLine(line) orelse return false;
+    if (parsed.kind != .example) return false;
+    return isQuotationOnlyContent(parsed.content);
+}
+
+fn isQuotationOnlyContent(content: []const u8) bool {
+    const body = singleTemplateBody(content) orelse return false;
+    const pipe_index = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
+    const name = std.mem.trim(u8, body[0..pipe_index], " \t");
+    return asciiStartsWithIgnoreCase(name, "quote-") or std.mem.startsWith(u8, name, "RQ:");
+}
+
+fn singleTemplateBody(content: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, content, " \t");
+    if (!std.mem.startsWith(u8, trimmed, "{{") or !std.mem.endsWith(u8, trimmed, "}}")) return null;
+    const end = findBalanced(trimmed, 0, "{{", "}}") orelse return null;
+    if (end + 2 != trimmed.len) return null;
+    return trimmed[2..end];
 }
 
 pub fn extractEntryMetadata(allocator: std.mem.Allocator, title: []const u8, english_section: []const u8) !EntryMetadata {
@@ -437,6 +487,9 @@ pub fn extractEntryMetadata(allocator: std.mem.Allocator, title: []const u8, eng
 
     metadata.canonical_targets = parsed.canonical_targets;
     parsed.canonical_targets = .empty;
+
+    metadata.alias_hint_label = parsed.alias_hint_label;
+    parsed.alias_hint_label = "";
 
     metadata.alias_only = parsed.alias_only;
     return metadata;
@@ -600,8 +653,19 @@ fn consumePosLine(allocator: std.mem.Allocator, entry: *ParsedEntry, capture: Po
     if (cleaned.len == 0) return;
 
     if (parsed.kind == .sense) {
-        const is_alias = try extractCanonicalTargetsFromDefinition(allocator, &entry.canonical_targets, parsed.content);
-        if (!is_alias) entry.has_real_sense = true;
+        var alias_match = try extractCanonicalTargetsFromDefinition(allocator, &entry.canonical_targets, parsed.content);
+        defer alias_match.deinit(allocator);
+        if (alias_match.found) {
+            entry.alias_like_sense_count += 1;
+            if (entry.alias_hint_label.len == 0) {
+                if (alias_match.hint_label) |label| {
+                    entry.alias_hint_label = label;
+                    alias_match.hint_label = null;
+                }
+            }
+        } else {
+            entry.has_real_sense = true;
+        }
 
         try entry.senses.append(allocator, .{
             .group = try allocator.dupe(u8, capture.group),
@@ -1684,13 +1748,36 @@ fn stripTraversalSegments(input: []const u8) []const u8 {
     return trimmed;
 }
 
+fn isCanonicalTargetTemplate(name: []const u8) bool {
+    if (isAliasTemplate(name)) return true;
+
+    const trimmed = std.mem.trim(u8, name, " \t");
+    if (trimmed.len == 0) return false;
+
+    if (templateMatches(trimmed, "inflection of") or templateMatches(trimmed, "infl of")) return true;
+    if (asciiEndsWithIgnoreCase(trimmed, " form of") or
+        asciiEndsWithIgnoreCase(trimmed, " spelling of") or
+        asciiEndsWithIgnoreCase(trimmed, " variant of") or
+        asciiEndsWithIgnoreCase(trimmed, " romanization of") or
+        asciiEndsWithIgnoreCase(trimmed, " typography of") or
+        asciiEndsWithIgnoreCase(trimmed, " orthography of"))
+    {
+        return true;
+    }
+    if (!asciiEndsWithIgnoreCase(trimmed, " of")) return false;
+
+    const stem = std.mem.trim(u8, trimmed[0 .. trimmed.len - " of".len], " \t");
+    return canonicalStemNeedsFormSuffix(stem) or canonicalStemIsDirectVariant(stem);
+}
+
 fn extractCanonicalTargetsFromDefinition(
     allocator: std.mem.Allocator,
     out: *std.ArrayListUnmanaged([]const u8),
     definition: []const u8,
-) !bool {
+) !CanonicalTargetMatch {
     var i: usize = 0;
-    var found = false;
+    var match: CanonicalTargetMatch = .{};
+    errdefer match.deinit(allocator);
     while (i + 2 <= definition.len) {
         if (!std.mem.eql(u8, definition[i .. i + 2], "{{")) {
             i += 1;
@@ -1700,17 +1787,20 @@ fn extractCanonicalTargetsFromDefinition(
         const body = definition[i + 2 .. end];
         var parts = try splitTopLevel(allocator, body, '|');
         defer parts.deinit(allocator);
-        if (parts.items.len != 0 and isAliasTemplate(parts.items[0])) {
+        if (parts.items.len != 0 and isCanonicalTargetTemplate(parts.items[0])) {
             if (templateAliasTarget(&parts)) |target_raw| {
                 const target = try renderWikitextToOwned(allocator, target_raw, 256);
                 defer allocator.free(target);
                 try addUniqueTerm(out, allocator, target);
-                found = true;
+                match.found = true;
+                if (match.hint_label == null) {
+                    match.hint_label = try canonicalHintLabelAlloc(allocator, parts.items[0]);
+                }
             }
         }
         i = end + 2;
     }
-    return found;
+    return match;
 }
 
 fn extractTermsFromLine(
@@ -2000,6 +2090,115 @@ fn isAliasTemplate(name: []const u8) bool {
         templateMatches(name, "pronunciation variant of");
 }
 
+fn canonicalHintLabelAlloc(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
+    const trimmed = std.mem.trim(u8, name, " \t");
+    if (trimmed.len == 0 or !isCanonicalTargetTemplate(trimmed)) return null;
+
+    inline for ([_]struct { name: []const u8, label: []const u8 }{
+        .{ .name = "alt form", .label = "alternative form of" },
+        .{ .name = "alt form of", .label = "alternative form of" },
+        .{ .name = "altform", .label = "alternative form of" },
+        .{ .name = "alternative form of", .label = "alternative form of" },
+        .{ .name = "alt sp", .label = "alternative spelling of" },
+        .{ .name = "alt sp of", .label = "alternative spelling of" },
+        .{ .name = "alt spell", .label = "alternative spelling of" },
+        .{ .name = "alt spelling of", .label = "alternative spelling of" },
+        .{ .name = "alternative spelling of", .label = "alternative spelling of" },
+        .{ .name = "alt case", .label = "alternative case form of" },
+        .{ .name = "alternative case form of", .label = "alternative case form of" },
+        .{ .name = "abbr", .label = "abbreviation of" },
+        .{ .name = "abbr of", .label = "abbreviation of" },
+        .{ .name = "abbrev", .label = "abbreviation of" },
+        .{ .name = "abbrev of", .label = "abbreviation of" },
+        .{ .name = "abbreviation of", .label = "abbreviation of" },
+        .{ .name = "acronym of", .label = "acronym of" },
+        .{ .name = "init of", .label = "initialism of" },
+        .{ .name = "clipping", .label = "clipping of" },
+        .{ .name = "clip", .label = "clipping of" },
+        .{ .name = "clip of", .label = "clipping of" },
+        .{ .name = "clipping of", .label = "clipping of" },
+        .{ .name = "contraction of", .label = "contraction of" },
+        .{ .name = "back-form", .label = "back-formation of" },
+        .{ .name = "back-formation", .label = "back-formation of" },
+        .{ .name = "inflection of", .label = "inflection of" },
+        .{ .name = "infl of", .label = "inflection of" },
+    }) |candidate| {
+        if (templateMatches(trimmed, candidate.name)) return try sentenceCaseAsciiAlloc(allocator, candidate.label);
+    }
+
+    if (!asciiEndsWithIgnoreCase(trimmed, " of")) return null;
+    const stem = std.mem.trim(u8, trimmed[0 .. trimmed.len - " of".len], " \t");
+    const phrase = if (canonicalStemNeedsFormSuffix(stem))
+        try std.fmt.allocPrint(allocator, "{s} form of", .{stem})
+    else
+        try allocator.dupe(u8, trimmed);
+    defer allocator.free(phrase);
+    return try sentenceCaseAsciiAlloc(allocator, phrase);
+}
+
+fn canonicalStemNeedsFormSuffix(stem: []const u8) bool {
+    inline for ([_][]const u8{
+        "plural",
+        "singular",
+        "participle",
+        "gerund",
+        "comparative",
+        "superlative",
+        "feminine",
+        "masculine",
+        "neuter",
+        "verb",
+        "noun",
+        "adj",
+        "adjective",
+        "adverb",
+        "past",
+        "present",
+        "future",
+        "imperative",
+        "indicative",
+        "subjunctive",
+        "infinitive",
+        "possessive",
+        "attributive",
+    }) |needle| {
+        if (asciiContainsIgnoreCase(stem, needle)) return true;
+    }
+    return false;
+}
+
+fn canonicalStemIsDirectVariant(stem: []const u8) bool {
+    inline for ([_][]const u8{
+        "form",
+        "spelling",
+        "variant",
+        "romanization",
+        "pronunciation",
+        "typography",
+        "orthography",
+        "mutation",
+        "lenition",
+        "eclipsis",
+        "prothesis",
+        "abbreviation",
+        "acronym",
+        "initialism",
+        "contraction",
+        "clipping",
+        "ellipsis",
+        "aphetic",
+        "apheretic",
+        "apocopic",
+        "procopic",
+        "syncopic",
+        "combining form",
+        "combining stem",
+    }) |needle| {
+        if (asciiContainsIgnoreCase(stem, needle)) return true;
+    }
+    return false;
+}
+
 fn templateAliasTarget(parts: *const std.ArrayList([]const u8)) ?[]const u8 {
     const count = positionalCount(parts);
     if (count == 0) return null;
@@ -2030,9 +2229,30 @@ fn titleCaseAsciiAlloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
     return out;
 }
 
+fn sentenceCaseAsciiAlloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    const out = try allocator.dupe(u8, value);
+    var saw_alpha = false;
+    for (out) |*char| {
+        if (!std.ascii.isAlphabetic(char.*)) continue;
+        char.* = if (saw_alpha) std.ascii.toLower(char.*) else std.ascii.toUpper(char.*);
+        saw_alpha = true;
+    }
+    return out;
+}
+
 fn asciiEndsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     if (haystack.len < needle.len) return false;
     return asciiStartsWithIgnoreCase(haystack[haystack.len - needle.len ..], needle);
+}
+
+fn asciiContainsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (haystack.len < needle.len) return false;
+    var start: usize = 0;
+    while (start + needle.len <= haystack.len) : (start += 1) {
+        if (asciiStartsWithIgnoreCase(haystack[start..], needle)) return true;
+    }
+    return false;
 }
 
 const StructureHeadingTitles = struct {
@@ -2117,8 +2337,31 @@ test "parse noun form gloss preserves semantic template labels" {
     var parsed = (try parseEnglishEntry(std.testing.allocator, "Fresnel reflections", source)).?;
     defer parsed.deinit(std.testing.allocator);
 
+    try std.testing.expect(parsed.alias_only);
     try std.testing.expectEqual(@as(usize, 1), parsed.senses.items.len);
+    try std.testing.expectEqual(@as(usize, 1), parsed.canonical_targets.items.len);
+    try std.testing.expectEqualStrings("Fresnel reflection", parsed.canonical_targets.items[0]);
+    try std.testing.expectEqualStrings("Plural form of", parsed.alias_hint_label);
     try std.testing.expectEqualStrings("plural of Fresnel reflection", parsed.senses.items[0].gloss);
+}
+
+test "parse singular form entries also emit canonical alias hints" {
+    const source =
+        \\==English==
+        \\
+        \\===Noun===
+        \\{{head|en|noun form}}
+        \\
+        \\# {{singular of|en|scissors}}
+    ;
+
+    var parsed = (try parseEnglishEntry(std.testing.allocator, "scissor", source)).?;
+    defer parsed.deinit(std.testing.allocator);
+
+    try std.testing.expect(parsed.alias_only);
+    try std.testing.expectEqual(@as(usize, 1), parsed.canonical_targets.items.len);
+    try std.testing.expectEqualStrings("scissors", parsed.canonical_targets.items[0]);
+    try std.testing.expectEqualStrings("Singular form of", parsed.alias_hint_label);
 }
 
 test "extractSummaryAlloc uses dictionary-style head label when present" {
@@ -2409,4 +2652,23 @@ test "filter english section honors compact exclusion policy" {
     try std.testing.expect(std.mem.indexOf(u8, filtered, "===Anagrams===") == null);
     try std.testing.expect(std.mem.indexOf(u8, filtered, "===Statistics===") == null);
     try std.testing.expect(std.mem.indexOf(u8, filtered, "===Dialects===") == null);
+}
+
+test "filter english section strips inline quotation examples in compact mode" {
+    const english =
+        \\==English==
+        \\===Noun===
+        \\# A travelling case.
+        \\#: {{RQ:Dickens Haunted House|chapter=The Mortals in the House|page=7|column=2|passage=...}}
+        \\#* {{quote-book|en|year=1859|author=Charles Dickens|title=A Tale of Two Cities|passage=...}}
+        \\#: {{ux|en|A portmanteau lay open on the bed.}}
+        \\
+    ;
+
+    const filtered = try filterEnglishSectionAlloc(std.testing.allocator, english, .defaultCompact());
+    defer std.testing.allocator.free(filtered);
+
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "{{RQ:Dickens Haunted House|") == null);
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "{{quote-book|en|") == null);
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "{{ux|en|A portmanteau lay open on the bed.}}") != null);
 }

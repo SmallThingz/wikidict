@@ -178,6 +178,7 @@ const LookupEndpoint = struct {
         word: []const u8,
         normalized: []const u8,
         aliasOnly: bool,
+        aliasHintLabel: []const u8,
         altForms: []const []const u8,
         canonicalTargets: []const []const u8,
         incomingAliases: []const []const u8,
@@ -208,6 +209,10 @@ const LookupEndpoint = struct {
                 try renderSectionJsonAlloc(req.allocator(), &req.ctx().db, raw)
             else
                 &.{};
+            const alias_hint_label = if (derived.alias_hint_label.len != 0)
+                try req.allocator().dupe(u8, derived.alias_hint_label)
+            else
+                "";
             const alt_forms = try dupeSliceOfSlices(req.allocator(), derived.alt_forms.items);
             const canonical_targets = try dupeSliceOfSlices(req.allocator(), derived.canonical_targets.items);
             const incoming_aliases = try entry.incomingAliases().toOwnedSlice(req.allocator());
@@ -220,6 +225,7 @@ const LookupEndpoint = struct {
                     .word = entry.word(),
                     .normalized = normalized,
                     .aliasOnly = derived.alias_only,
+                    .aliasHintLabel = alias_hint_label,
                     .altForms = alt_forms,
                     .canonicalTargets = canonical_targets,
                     .incomingAliases = incoming_aliases,

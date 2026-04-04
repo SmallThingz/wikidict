@@ -370,14 +370,26 @@ pub fn auditDictionary(io: std.Io, allocator: std.mem.Allocator, options: Option
             continue;
         };
 
+        var render_issue: html_render.RenderIssue = .{};
         const rendered_sections = html_render.renderEnglishSectionWithOptionsAlloc(arena.allocator(), raw, .{
             .strict = true,
+            .issue = &render_issue,
             .link_resolver = .{
                 .context = @ptrCast(&auditor.dict),
                 .resolve = resolveRendererLink,
             },
         }) catch |err| {
-            try auditor.recordRendererError(entry.word(), @errorName(err));
+            if (err == error.StrictRenderFailure) {
+                const summary = try std.fmt.allocPrint(arena.allocator(), "{s} section={s} line={d} detail={s}", .{
+                    @errorName(err),
+                    render_issue.section_title,
+                    render_issue.line_number,
+                    render_issue.detail,
+                });
+                try auditor.recordRendererError(entry.word(), summary);
+            } else {
+                try auditor.recordRendererError(entry.word(), @errorName(err));
+            }
             _ = arena.reset(.retain_capacity);
             continue;
         };
@@ -518,7 +530,7 @@ test "auditDictionary records mismatches from fake worker" {
         \\<ns>0</ns>
         \\<revision><text xml:space="preserve">==English==
         \\===Noun===
-        \\# {{plural of|en|ring}}
+        \\# [[loop]]
         \\</text></revision>
         \\</page>
         \\</mediawiki>

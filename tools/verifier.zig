@@ -409,6 +409,7 @@ const Verifier = struct {
         self.noteEnglishEntry();
 
         const entry_ref = self.raw_by_word.get(title) orelse {
+            if (try self.shouldSkipMissingEntry(temp_allocator, title, expected_raw)) return;
             try self.recordMissingEntry(title, expected_raw);
             return;
         };
@@ -436,6 +437,15 @@ const Verifier = struct {
         }
 
         try self.recordContentMismatch(entry_ref.entry_index, title, expected_raw, actual_raw, expected_norm, actual_norm);
+    }
+
+    fn shouldSkipMissingEntry(_: *Verifier, allocator: std.mem.Allocator, title: []const u8, expected_raw: []const u8) !bool {
+        if (std.mem.trim(u8, expected_raw, " \t\r\n").len == 0) return true;
+
+        var metadata = try wikitext.extractEntryMetadata(allocator, title, expected_raw);
+        defer metadata.deinit(allocator);
+        if (!metadata.alias_only) return false;
+        return metadata.canonical_targets.items.len != 0;
     }
 
     fn reportMissingEntry(self: *Verifier, title: []const u8, expected_raw: []const u8) !void {
@@ -1122,6 +1132,58 @@ test "verifyDictionary ignores excluded headings with matching blacklist" {
         .exclusions = .defaultCompact(),
     });
 
+    try std.testing.expectEqual(@as(usize, 1), stats.exact_matches + stats.whitespace_only_matches);
+    try std.testing.expectEqual(@as(usize, 0), stats.failures());
+}
+
+test "verifyDictionary ignores dropped alias-only entries with invalid destinations" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>color</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# [[color]]
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>colour</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Adjective===
+        \\# {{alternative spelling of|en|Missing target}}
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    try writeTestFile(tmp.dir, "sample.xml", xml);
+
+    const xml_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "sample.xml");
+    defer std.testing.allocator.free(xml_rel);
+    const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
+    defer std.testing.allocator.free(db_rel);
+    const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-report.txt");
+    defer std.testing.allocator.free(report_rel);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .output_path = db_rel,
+    });
+
+    const stats = try verifyDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .db_path = db_rel,
+        .report_path = report_rel,
+        .thread_count = 1,
+    });
+
+    try std.testing.expectEqual(@as(usize, 2), stats.english_entries);
+    try std.testing.expectEqual(@as(usize, 1), stats.compared_entries);
     try std.testing.expectEqual(@as(usize, 1), stats.exact_matches + stats.whitespace_only_matches);
     try std.testing.expectEqual(@as(usize, 0), stats.failures());
 }

@@ -181,6 +181,7 @@ pub const EntryDerivedData = struct {
     summary: []const u8,
     alt_forms: std.ArrayListUnmanaged([]const u8) = .empty,
     canonical_targets: std.ArrayListUnmanaged([]const u8) = .empty,
+    alias_hint_label: []const u8 = "",
     alias_only: bool,
 
     pub fn deinit(self: *EntryDerivedData, allocator: std.mem.Allocator) void {
@@ -189,6 +190,7 @@ pub const EntryDerivedData = struct {
         self.alt_forms.deinit(allocator);
         for (self.canonical_targets.items) |value| allocator.free(value);
         self.canonical_targets.deinit(allocator);
+        if (self.alias_hint_label.len != 0) allocator.free(self.alias_hint_label);
     }
 };
 
@@ -425,6 +427,7 @@ pub const EntryView = struct {
                 .summary = summary,
                 .alt_forms = metadata.alt_forms,
                 .canonical_targets = metadata.canonical_targets,
+                .alias_hint_label = metadata.alias_hint_label,
                 .alias_only = metadata.alias_only,
             };
         }
@@ -442,6 +445,7 @@ pub const EntryView = struct {
         return .{
             .summary = try std.fmt.allocPrint(allocator, "Alias of {s}.", .{target}),
             .canonical_targets = canonical_targets,
+            .alias_hint_label = try allocator.dupe(u8, "Alias of"),
             .alias_only = true,
         };
     }
@@ -474,6 +478,7 @@ pub const EntryView = struct {
             for (derived.canonical_targets.items) |value| allocator.free(value);
             derived.canonical_targets.deinit(allocator);
             derived.alt_forms.deinit(allocator);
+            if (derived.alias_hint_label.len != 0) allocator.free(derived.alias_hint_label);
         }
         const owned = try allocator.alloc([]const u8, derived.alt_forms.items.len);
         @memcpy(owned, derived.alt_forms.items);
@@ -488,6 +493,7 @@ pub const EntryView = struct {
             for (derived.alt_forms.items) |value| allocator.free(value);
             derived.alt_forms.deinit(allocator);
             derived.canonical_targets.deinit(allocator);
+            if (derived.alias_hint_label.len != 0) allocator.free(derived.alias_hint_label);
         }
         const owned = try allocator.alloc([]const u8, derived.canonical_targets.items.len);
         @memcpy(owned, derived.canonical_targets.items);
@@ -634,19 +640,33 @@ pub const Dictionary = struct {
         const normalized = try normalize.normalizeToList(&key_buf, allocator, term);
         if (normalized.len == 0) return null;
 
-        const start = lowerBoundLookup(self, normalized);
-        const end = upperBoundLookup(self, normalized);
-        if (start == end) return null;
+        var visited: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        defer visited.deinit(allocator);
+        return try self.resolveNormalizedLinkTargetAlloc(allocator, term, normalized, &visited);
+    }
 
+    fn resolveNormalizedLinkTargetAlloc(
+        self: *const Dictionary,
+        allocator: std.mem.Allocator,
+        term: []const u8,
+        normalized: []const u8,
+        visited: *std.AutoHashMapUnmanaged(u32, void),
+    ) anyerror!?[]const u8 {
         const Candidate = struct {
+            entry_index: u32,
             matched: []const u8,
             word: []const u8,
             kind: u8,
         };
 
+        const start = lowerBoundLookup(self, normalized);
+        const end = upperBoundLookup(self, normalized);
+        if (start == end) return null;
+
         var best: ?Candidate = null;
         for (self.lookups[start..end]) |lookup| {
             const candidate: Candidate = .{
+                .entry_index = lookup.entry_index,
                 .matched = self.string(lookup.matched),
                 .word = self.entryAt(lookup.entry_index).word(),
                 .kind = lookup.kind,
@@ -656,7 +676,54 @@ pub const Dictionary = struct {
             }
         }
 
-        if (best) |value| return @as([]const u8, try allocator.dupe(u8, value.word));
+        if (best) |value| return try self.resolveCanonicalLinkTargetAlloc(allocator, value.entry_index, visited);
+        return null;
+    }
+
+    fn resolveCanonicalLinkTargetAlloc(
+        self: *const Dictionary,
+        allocator: std.mem.Allocator,
+        entry_index: u32,
+        visited: *std.AutoHashMapUnmanaged(u32, void),
+    ) anyerror![]const u8 {
+        if (visited.contains(entry_index)) {
+            return @as([]const u8, try allocator.dupe(u8, self.entryAt(entry_index).word()));
+        }
+
+        try visited.put(allocator, entry_index, {});
+        defer _ = visited.remove(entry_index);
+
+        const entry = self.entryAt(entry_index);
+        var derived = try entry.derivedAlloc(allocator);
+        defer derived.deinit(allocator);
+
+        if (!derived.alias_only or derived.canonical_targets.items.len == 0) {
+            return @as([]const u8, try allocator.dupe(u8, entry.word()));
+        }
+
+        if (try self.resolveCanonicalTargetsAlloc(allocator, derived.canonical_targets.items, visited)) |resolved| {
+            return resolved;
+        }
+        return @as([]const u8, try allocator.dupe(u8, entry.word()));
+    }
+
+    fn resolveCanonicalTargetsAlloc(
+        self: *const Dictionary,
+        allocator: std.mem.Allocator,
+        targets: []const []const u8,
+        visited: *std.AutoHashMapUnmanaged(u32, void),
+    ) anyerror!?[]const u8 {
+        for (targets) |target| {
+            var key_buf: std.ArrayList(u8) = .empty;
+            defer key_buf.deinit(allocator);
+            const normalized = try normalize.normalizeToList(&key_buf, allocator, target);
+            if (normalized.len == 0) continue;
+
+            if (try self.resolveNormalizedLinkTargetAlloc(allocator, target, normalized, visited)) |resolved| {
+                return resolved;
+            }
+            return @as([]const u8, try allocator.dupe(u8, target));
+        }
         return null;
     }
 
@@ -2001,6 +2068,71 @@ test "dictionary cache rebuild reuses precomputed normalized alias metadata" {
     try std.testing.expectEqual(format.lookup_kind_title, redirect_hits[0].kind);
 }
 
+test "build drops alias entries whose destination is not stored" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>color</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# [[light]]
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>colour</title>
+        \\<ns>0</ns>
+        \\<redirect title="Missing target"/>
+        \\</page>
+        \\<page>
+        \\<title>Fresnel reflections</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\{{head|en|noun form}}
+        \\
+        \\# {{plural of|en|Missing target}}
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
+    defer xml_file.close(std.testing.io);
+    try xml_file.writePositionalAll(std.testing.io, xml, 0);
+
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_path);
+    const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(xml_path);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_path,
+        .output_path = db_path,
+    });
+
+    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path, .{});
+    defer dict.deinit();
+
+    try std.testing.expectEqual(@as(u32, 1), dict.header.entry_count);
+    try std.testing.expectEqual(@as(u32, 0), dict.header.redirect_count);
+
+    const valid_hits = try dict.lookupExact(std.testing.allocator, "color");
+    defer std.testing.allocator.free(valid_hits);
+    try std.testing.expectEqual(@as(usize, 1), valid_hits.len);
+
+    const redirect_hits = try dict.lookupExact(std.testing.allocator, "colour");
+    defer std.testing.allocator.free(redirect_hits);
+    try std.testing.expectEqual(@as(usize, 0), redirect_hits.len);
+
+    const alias_hits = try dict.lookupExact(std.testing.allocator, "Fresnel reflections");
+    defer std.testing.allocator.free(alias_hits);
+    try std.testing.expectEqual(@as(usize, 0), alias_hits.len);
+}
+
 test "lookupExact collapses duplicate entry hits and prefers the exact raw match" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2054,6 +2186,84 @@ test "lookupExact collapses duplicate entry hits and prefers the exact raw match
     try std.testing.expectEqual(@as(usize, 1), upper_hits.len);
     try std.testing.expectEqual(format.lookup_kind_title, upper_hits[0].kind);
     try std.testing.expectEqualStrings("hellfire", upper_hits[0].matched);
+}
+
+test "resolveLinkTargetAlloc follows alias-only form chains and breaks cycles" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>color</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# [[light]]
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>colour</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\{{head|en|noun form}}
+        \\# {{alternative spelling of|en|color}}
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>colours</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\{{head|en|noun form}}
+        \\# {{plural of|en|colour}}
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>alpha</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\{{head|en|noun form}}
+        \\# {{plural of|en|beta}}
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>beta</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\{{head|en|noun form}}
+        \\# {{singular of|en|alpha}}
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
+    defer xml_file.close(std.testing.io);
+    try xml_file.writePositionalAll(std.testing.io, xml, 0);
+
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_path);
+    const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(xml_path);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_path,
+        .output_path = db_path,
+    });
+
+    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path, .{});
+    defer dict.deinit();
+
+    const chained = (try dict.resolveLinkTargetAlloc(std.testing.allocator, "colours")).?;
+    defer std.testing.allocator.free(chained);
+    try std.testing.expectEqualStrings("color", chained);
+
+    try std.testing.expectEqual(@as(?[]const u8, null), try dict.resolveLinkTargetAlloc(std.testing.allocator, "alpha"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try dict.resolveLinkTargetAlloc(std.testing.allocator, "beta"));
 }
 
 test "replaceFile overwrites an existing cache target" {
