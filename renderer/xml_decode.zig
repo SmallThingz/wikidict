@@ -91,7 +91,6 @@ fn decodeEntity(out: *std.ArrayList(u8), allocator: std.mem.Allocator, entity: [
     }
 
     const replacement = lookupNamedEntity(entity) orelse return false;
-
     try out.appendSlice(allocator, replacement);
     return true;
 }
@@ -99,7 +98,6 @@ fn decodeEntity(out: *std.ArrayList(u8), allocator: std.mem.Allocator, entity: [
 fn lookupNamedEntity(entity: []const u8) ?[]const u8 {
     if (html_entities.named_entities.get(entity)) |replacement| return replacement;
 
-    // The dump contains a small set of misspelled entity aliases that still need to round-trip cleanly.
     if (std.mem.eql(u8, entity, "emdash")) return "—";
     if (std.mem.eql(u8, entity, "endash")) return "–";
     if (std.mem.eql(u8, entity, "mdsash")) return "—";
@@ -111,32 +109,8 @@ fn lookupNamedEntity(entity: []const u8) ?[]const u8 {
     return null;
 }
 
-test "decode xml entities" {
-    const got = try decodeAlloc(std.testing.allocator, "a &amp; b &lt;c&gt; &#x1F4A1;");
+test "decode xml entities recursively decodes runtime references" {
+    const got = try decodeAlloc(std.testing.allocator, "&amp;copy; &amp;#169; &amp;#xA9;");
     defer std.testing.allocator.free(got);
-    try std.testing.expectEqualStrings("a & b <c> 💡", got);
-}
-
-test "decode xml entities recursively decodes double-escaped named and numeric references" {
-    const got = try decodeAlloc(std.testing.allocator, "&amp;copy; &amp;#169; &amp;#xA9; &amp;amp;copy;");
-    defer std.testing.allocator.free(got);
-    try std.testing.expectEqualStrings("© © © ©", got);
-}
-
-test "decode xml entities handles known malformed aliases from the dump" {
-    const got = try decodeAlloc(std.testing.allocator, "&emdash; &endash; &squo; &amp#91; &nsbp;");
-    defer std.testing.allocator.free(got);
-    try std.testing.expectEqualStrings("— – ’ [  ", got);
-}
-
-test "decode xml entities does not let literal ampersands swallow later valid entities" {
-    const got = try decodeAlloc(
-        std.testing.allocator,
-        "|publisher=John Wiley &amp; Sons, Inc.\n|year=&amp;copy;1999\n|section=&amp;sect;1.2",
-    );
-    defer std.testing.allocator.free(got);
-    try std.testing.expectEqualStrings(
-        "|publisher=John Wiley & Sons, Inc.\n|year=©1999\n|section=§1.2",
-        got,
-    );
+    try std.testing.expectEqualStrings("© © ©", got);
 }

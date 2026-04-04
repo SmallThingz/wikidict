@@ -41,6 +41,17 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = structure_optimize,
     });
+    const shared_html_entities_mod = b.createModule(.{
+        .root_source_file = b.path("shared/html_entities.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const renderer_mod = b.addModule("renderer", .{
+        .root_source_file = b.path("renderer/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    renderer_mod.addImport("shared_html_entities", shared_html_entities_mod);
 
     const encoder_mod = b.addModule("encoder", .{
         .root_source_file = b.path("encoder/root.zig"),
@@ -52,6 +63,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("zxml", zxml_dep.module("zxml"));
     encoder_mod.addImport("generated_structure_tables", generated_tables.regular);
     encoder_mod.addImport("cli_args", cli_args_mod);
+    encoder_mod.addImport("shared_html_entities", shared_html_entities_mod);
     const encoder_mod_structure = b.addModule("encoder_structure", .{
         .root_source_file = b.path("encoder/root.zig"),
         .target = target,
@@ -62,6 +74,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod_structure.addImport("zxml", zxml_dep_structure.module("zxml"));
     encoder_mod_structure.addImport("generated_structure_tables", generated_tables.structure);
     encoder_mod_structure.addImport("cli_args", cli_args_mod_structure);
+    encoder_mod_structure.addImport("shared_html_entities", shared_html_entities_mod);
 
     const decoder_mod = b.addModule("decoder", .{
         .root_source_file = b.path("decoder/root.zig"),
@@ -81,6 +94,8 @@ pub fn build(b: *std.Build) void {
     backend_mod.addImport("decoder", decoder_mod);
     backend_mod.addImport("zhttp", zhttp_dep.module("zhttp"));
     backend_mod.addImport("cli_args", cli_args_mod);
+    backend_mod.addImport("shared_html_entities", shared_html_entities_mod);
+    backend_mod.addImport("renderer", renderer_mod);
 
     const encoder_exe = addCliExecutable(b, "dict-encoder", b.path("encoder/main.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
@@ -103,18 +118,24 @@ pub fn build(b: *std.Build) void {
         .{ .name = "decoder", .module = decoder_mod },
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
     });
+    const render_tester_exe = addCliExecutable(b, "dict-render-test", b.path("tools/render_tester.zig"), target, structure_optimize, &.{
+        .{ .name = "decoder", .module = decoder_mod },
+        .{ .name = "renderer", .module = renderer_mod },
+    });
 
     b.installArtifact(encoder_exe);
     b.installArtifact(decoder_exe);
     b.installArtifact(backend_exe);
     b.installArtifact(structure_exe);
     b.installArtifact(verifier_exe);
+    b.installArtifact(render_tester_exe);
 
     addRunStep(b, "encode", "Run the encoder CLI", encoder_exe, &.{});
     addRunStep(b, "decode", "Run the decoder CLI", decoder_exe, &.{});
     addRunStep(b, "serve", "Run the backend server", backend_exe, &.{});
     addRunStep(b, "structure", "Analyze Wiktionary structure", structure_exe, &.{});
     addRunStep(b, "verify", "Verify dictionary raw entries against the XML dump", verifier_exe, &.{});
+    addRunStep(b, "render-test", "Strictly render all stored raw entries and report failures", render_tester_exe, &.{});
 
     {
         const cmd = b.addSystemCommand(&.{ "bash", "tools/frontend" });
@@ -136,6 +157,10 @@ pub fn build(b: *std.Build) void {
     });
     const backend_tests = b.addTest(.{
         .root_module = backend_mod,
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const renderer_tests = b.addTest(.{
+        .root_module = renderer_mod,
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const structure_tests = b.addTest(.{
@@ -163,19 +188,36 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const render_tester_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/render_tester.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "decoder", .module = decoder_mod },
+                .{ .name = "renderer", .module = renderer_mod },
+                .{ .name = "encoder", .module = encoder_mod },
+            },
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
 
     const run_encoder_tests = b.addRunArtifact(encoder_tests);
     const run_decoder_tests = b.addRunArtifact(decoder_tests);
     const run_backend_tests = b.addRunArtifact(backend_tests);
+    const run_renderer_tests = b.addRunArtifact(renderer_tests);
     const run_structure_tests = b.addRunArtifact(structure_tests);
     const run_verifier_tests = b.addRunArtifact(verifier_tests);
+    const run_render_tester_tests = b.addRunArtifact(render_tester_tests);
 
     const test_step = b.step("test", "Run encoder, decoder, and backend tests");
     test_step.dependOn(&run_encoder_tests.step);
     test_step.dependOn(&run_decoder_tests.step);
     test_step.dependOn(&run_backend_tests.step);
+    test_step.dependOn(&run_renderer_tests.step);
     test_step.dependOn(&run_structure_tests.step);
     test_step.dependOn(&run_verifier_tests.step);
+    test_step.dependOn(&run_render_tester_tests.step);
 }
 
 fn addCliExecutable(

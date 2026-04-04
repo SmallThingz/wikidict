@@ -142,6 +142,12 @@ const Analyzer = struct {
     template_counts: std.StringHashMapUnmanaged(u64) = .empty,
     section_template_counts: std.StringHashMapUnmanaged(u64) = .empty,
     family_template_counts: std.StringHashMapUnmanaged(u64) = .empty,
+    template_shape_counts: std.StringHashMapUnmanaged(u64) = .empty,
+    section_template_shape_counts: std.StringHashMapUnmanaged(u64) = .empty,
+    family_template_shape_counts: std.StringHashMapUnmanaged(u64) = .empty,
+    link_shape_counts: std.StringHashMapUnmanaged(u64) = .empty,
+    section_link_shape_counts: std.StringHashMapUnmanaged(u64) = .empty,
+    family_link_shape_counts: std.StringHashMapUnmanaged(u64) = .empty,
     translation_source_label_counts: std.StringHashMapUnmanaged(u64) = .empty,
     translation_target_lang_counts: std.StringHashMapUnmanaged(u64) = .empty,
     anomaly_kind_counts: std.StringHashMapUnmanaged(u64) = .empty,
@@ -169,6 +175,12 @@ const Analyzer = struct {
         self.template_counts.deinit(self.gpa);
         self.section_template_counts.deinit(self.gpa);
         self.family_template_counts.deinit(self.gpa);
+        self.template_shape_counts.deinit(self.gpa);
+        self.section_template_shape_counts.deinit(self.gpa);
+        self.family_template_shape_counts.deinit(self.gpa);
+        self.link_shape_counts.deinit(self.gpa);
+        self.section_link_shape_counts.deinit(self.gpa);
+        self.family_link_shape_counts.deinit(self.gpa);
         self.translation_source_label_counts.deinit(self.gpa);
         self.translation_target_lang_counts.deinit(self.gpa);
         self.anomaly_kind_counts.deinit(self.gpa);
@@ -249,6 +261,7 @@ const Analyzer = struct {
             try self.bumpComposite(&self.section_signature_counts, scope, sig, "\t");
             try self.bumpComposite(&self.family_signature_counts, family, sig, "\t");
             try self.extractTemplates(scope, family, trimmed);
+            try self.extractLinks(scope, family, trimmed);
             try self.analyzeStructuredLine(profile, trimmed);
 
             if (!seen_subheading and trimmed.len != 0) {
@@ -364,19 +377,63 @@ const Analyzer = struct {
 
     fn extractTemplates(self: *Analyzer, scope: []const u8, family: []const u8, line: []const u8) !void {
         var pos: usize = 0;
-        while (std.mem.indexOfPos(u8, line, pos, "{{")) |open| {
-            var start = open + 2;
-            while (start < line.len and (line[start] == ' ' or line[start] == '\t')) : (start += 1) {}
+        while (true) {
+            const open = std.mem.indexOfPos(u8, line, pos, "{{") orelse break;
+            const end = findBalancedMarkup(line, open, "{{", "}}") orelse {
+                pos = open + 2;
+                continue;
+            };
 
-            var end = start;
-            while (end < line.len and line[end] != '|' and line[end] != '}' and line[end] != '\n' and line[end] != '\r') : (end += 1) {}
-            const name = std.mem.trim(u8, line[start..end], " \t");
+            const body = line[open + 2 .. end];
+            const name = templateNameFromBody(body);
             if (name.len != 0 and name.len <= 80) {
                 try self.bump(&self.template_counts, name);
                 try self.bumpComposite(&self.section_template_counts, scope, name, "\t");
                 try self.bumpComposite(&self.family_template_counts, family, name, "\t");
+
+                const shape = try templateShapeAlloc(self.gpa, body);
+                defer self.gpa.free(shape);
+                try self.bump(&self.template_shape_counts, shape);
+                try self.bumpComposite(&self.section_template_shape_counts, scope, shape, "\t");
+                try self.bumpComposite(&self.family_template_shape_counts, family, shape, "\t");
             }
+
             pos = open + 2;
+        }
+    }
+
+    fn extractLinks(self: *Analyzer, scope: []const u8, family: []const u8, line: []const u8) !void {
+        var pos: usize = 0;
+        while (pos < line.len) {
+            if (pos + 2 <= line.len and std.mem.eql(u8, line[pos .. pos + 2], "[[")) {
+                const end = findBalancedMarkup(line, pos, "[[", "]]") orelse {
+                    pos += 2;
+                    continue;
+                };
+                const shape = try internalLinkShapeAlloc(self.gpa, line[pos + 2 .. end]);
+                defer self.gpa.free(shape);
+                try self.bump(&self.link_shape_counts, shape);
+                try self.bumpComposite(&self.section_link_shape_counts, scope, shape, "\t");
+                try self.bumpComposite(&self.family_link_shape_counts, family, shape, "\t");
+                pos += 2;
+                continue;
+            }
+
+            if (line[pos] == '[' and (pos + 1 >= line.len or line[pos + 1] != '[')) {
+                const end = std.mem.indexOfScalarPos(u8, line, pos + 1, ']') orelse {
+                    pos += 1;
+                    continue;
+                };
+                const body = std.mem.trim(u8, line[pos + 1 .. end], " \t");
+                if (std.mem.startsWith(u8, body, "http://") or std.mem.startsWith(u8, body, "https://")) {
+                    const shape = try externalLinkShapeAlloc(self.gpa, body);
+                    defer self.gpa.free(shape);
+                    try self.bump(&self.link_shape_counts, shape);
+                    try self.bumpComposite(&self.section_link_shape_counts, scope, shape, "\t");
+                    try self.bumpComposite(&self.family_link_shape_counts, family, shape, "\t");
+                }
+            }
+            pos += 1;
         }
     }
 };
@@ -556,6 +613,18 @@ fn writeTextReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer
     try writeSortedMap(&out.writer, allocator, analyzer.section_template_counts, analyzer.options.top_n);
     try out.writer.print("\n## Templates By Heading Family\n\n", .{});
     try writeSortedMap(&out.writer, allocator, analyzer.family_template_counts, analyzer.options.top_n);
+    try out.writer.print("\n## Template Shapes\n\n", .{});
+    try writeSortedMap(&out.writer, allocator, analyzer.template_shape_counts, analyzer.options.top_n);
+    try out.writer.print("\n## Template Shapes By Active Heading\n\n", .{});
+    try writeSortedMap(&out.writer, allocator, analyzer.section_template_shape_counts, analyzer.options.top_n);
+    try out.writer.print("\n## Template Shapes By Heading Family\n\n", .{});
+    try writeSortedMap(&out.writer, allocator, analyzer.family_template_shape_counts, analyzer.options.top_n);
+    try out.writer.print("\n## Link Shapes\n\n", .{});
+    try writeSortedMap(&out.writer, allocator, analyzer.link_shape_counts, analyzer.options.top_n);
+    try out.writer.print("\n## Link Shapes By Active Heading\n\n", .{});
+    try writeSortedMap(&out.writer, allocator, analyzer.section_link_shape_counts, analyzer.options.top_n);
+    try out.writer.print("\n## Link Shapes By Heading Family\n\n", .{});
+    try writeSortedMap(&out.writer, allocator, analyzer.family_link_shape_counts, analyzer.options.top_n);
     try out.writer.print("\n## Translation Source Labels\n\n", .{});
     try writeSortedMap(&out.writer, allocator, analyzer.translation_source_label_counts, analyzer.options.top_n);
     try out.writer.print("\n## Translation Target Languages\n\n", .{});
@@ -617,6 +686,18 @@ fn writeJsonReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer
     try writeJsonCompositeField(&out.writer, allocator, "templates_by_heading", analyzer.section_template_counts, "heading", "template");
     try out.writer.print(",\n", .{});
     try writeJsonCompositeField(&out.writer, allocator, "templates_by_family", analyzer.family_template_counts, "family", "template");
+    try out.writer.print(",\n", .{});
+    try writeJsonMapField(&out.writer, allocator, "template_shapes", analyzer.template_shape_counts);
+    try out.writer.print(",\n", .{});
+    try writeJsonCompositeField(&out.writer, allocator, "template_shapes_by_heading", analyzer.section_template_shape_counts, "heading", "shape");
+    try out.writer.print(",\n", .{});
+    try writeJsonCompositeField(&out.writer, allocator, "template_shapes_by_family", analyzer.family_template_shape_counts, "family", "shape");
+    try out.writer.print(",\n", .{});
+    try writeJsonMapField(&out.writer, allocator, "link_shapes", analyzer.link_shape_counts);
+    try out.writer.print(",\n", .{});
+    try writeJsonCompositeField(&out.writer, allocator, "link_shapes_by_heading", analyzer.section_link_shape_counts, "heading", "shape");
+    try out.writer.print(",\n", .{});
+    try writeJsonCompositeField(&out.writer, allocator, "link_shapes_by_family", analyzer.family_link_shape_counts, "family", "shape");
     try out.writer.print(",\n", .{});
     try writeJsonMapField(&out.writer, allocator, "translation_source_labels", analyzer.translation_source_label_counts);
     try out.writer.print(",\n", .{});
@@ -1124,6 +1205,253 @@ fn scanTemplates(line: []const u8, ctx: anytype, comptime onTemplate: fn (@TypeO
     }
 }
 
+fn findBalancedMarkup(input: []const u8, start: usize, open: []const u8, close: []const u8) ?usize {
+    var depth: usize = 0;
+    var i = start;
+    while (i < input.len) : (i += 1) {
+        if (i + open.len <= input.len and std.mem.eql(u8, input[i .. i + open.len], open)) {
+            depth += 1;
+            i += open.len - 1;
+            continue;
+        }
+        if (i + close.len <= input.len and std.mem.eql(u8, input[i .. i + close.len], close)) {
+            if (depth == 0) return null;
+            depth -= 1;
+            if (depth == 0) return i;
+            i += close.len - 1;
+        }
+    }
+    return null;
+}
+
+fn templateNameFromBody(body: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, body, " \t");
+    const sep = std.mem.indexOfScalar(u8, trimmed, '|') orelse trimmed.len;
+    return std.mem.trim(u8, trimmed[0..sep], " \t");
+}
+
+fn templateShapeAlloc(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+    var parts = try splitTopLevelLocal(allocator, body, '|');
+    defer parts.deinit(allocator);
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    if (parts.items.len == 0) return allocator.dupe(u8, "template|empty");
+    try out.appendSlice(allocator, templateNameFromBody(body));
+
+    try out.appendSlice(allocator, "|pos:");
+    var positional_index: usize = 0;
+    var wrote_positional = false;
+    for (parts.items[1..]) |segment| {
+        if (templateArgHasName(segment)) continue;
+        if (wrote_positional) try out.append(allocator, ',');
+        try out.appendSlice(allocator, fragmentShape(std.mem.trim(u8, segment, " \t")));
+        wrote_positional = true;
+        positional_index += 1;
+        if (positional_index == 4) break;
+    }
+    if (!wrote_positional) try out.appendSlice(allocator, "-");
+    if (positional_index < positionalCountFromParts(parts.items) and positional_index != 0) {
+        const extra = try std.fmt.allocPrint(allocator, "+{d}", .{positionalCountFromParts(parts.items) - positional_index});
+        defer allocator.free(extra);
+        try out.appendSlice(allocator, extra);
+    }
+
+    try out.appendSlice(allocator, "|named:");
+    var named_count: usize = 0;
+    var wrote_named = false;
+    for (parts.items[1..]) |segment| {
+        const equals = topLevelEquals(segment) orelse continue;
+        const key = std.mem.trim(u8, segment[0..equals], " \t");
+        if (key.len == 0) continue;
+        if (wrote_named) try out.append(allocator, ',');
+        try out.appendSlice(allocator, key);
+        wrote_named = true;
+        named_count += 1;
+        if (named_count == 4) break;
+    }
+    if (!wrote_named) try out.appendSlice(allocator, "-");
+    if (named_count < namedCountFromParts(parts.items) and named_count != 0) {
+        const extra = try std.fmt.allocPrint(allocator, "+{d}", .{namedCountFromParts(parts.items) - named_count});
+        defer allocator.free(extra);
+        try out.appendSlice(allocator, extra);
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn internalLinkShapeAlloc(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+    var parts = try splitTopLevelLocal(allocator, body, '|');
+    defer parts.deinit(allocator);
+    if (parts.items.len == 0) return allocator.dupe(u8, "wikilink|empty");
+
+    var target = std.mem.trim(u8, parts.items[0], " \t");
+    if (target.len != 0 and target[0] == ':') target = std.mem.trim(u8, target[1..], " \t");
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    try out.appendSlice(allocator, "wikilink");
+
+    if (linkNamespaceKind(target)) |namespace_kind| {
+        try out.appendSlice(allocator, "|ns:");
+        try out.appendSlice(allocator, namespace_kind);
+    } else {
+        try out.appendSlice(allocator, "|ns:-");
+    }
+
+    if (std.mem.indexOfScalar(u8, target, '#') != null) {
+        try out.appendSlice(allocator, "|anchor");
+    }
+
+    if (parts.items.len >= 2) {
+        const display = std.mem.trim(u8, parts.items[parts.items.len - 1], " \t");
+        try out.appendSlice(allocator, if (display.len == 0) "|pipe-trick" else "|display");
+    } else {
+        try out.appendSlice(allocator, "|plain");
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn externalLinkShapeAlloc(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+    const has_label = std.mem.indexOfScalar(u8, body, ' ') != null;
+    return allocator.dupe(u8, if (has_label) "extlink|label" else "extlink|bare");
+}
+
+fn linkNamespaceKind(target: []const u8) ?[]const u8 {
+    const colon = std.mem.indexOfScalar(u8, target, ':') orelse return null;
+    const namespace = std.mem.trim(u8, target[0..colon], " \t");
+    if (namespace.len == 0) return null;
+    if (std.ascii.eqlIgnoreCase(namespace, "File") or std.ascii.eqlIgnoreCase(namespace, "Image")) return "file";
+    if (std.ascii.eqlIgnoreCase(namespace, "Category")) return "category";
+    if (std.ascii.eqlIgnoreCase(namespace, "Appendix")) return "appendix";
+    if (std.ascii.eqlIgnoreCase(namespace, "Reconstruction")) return "reconstruction";
+    if (namespace.len <= 12) return "namespace";
+    return "namespace";
+}
+
+fn fragmentShape(fragment: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, fragment, " \t");
+    if (trimmed.len == 0) return "empty";
+    if (std.mem.indexOf(u8, trimmed, "{{") != null) return "template";
+    if (std.mem.indexOf(u8, trimmed, "[[") != null) return "wikilink";
+    if (std.mem.indexOf(u8, trimmed, "[http") != null or std.mem.indexOf(u8, trimmed, "[https") != null) return "extlink";
+    if (std.mem.indexOfScalar(u8, trimmed, '<') != null) return "html";
+    if (looksLikeLanguageCode(trimmed)) return "lang";
+    if (looksLikeNumericToken(trimmed)) return "number";
+    return "text";
+}
+
+fn splitTopLevelLocal(allocator: std.mem.Allocator, input: []const u8, sep: u8) !std.ArrayList([]const u8) {
+    var out: std.ArrayList([]const u8) = .empty;
+    var start: usize = 0;
+    var templates: usize = 0;
+    var links: usize = 0;
+    var i: usize = 0;
+    while (i < input.len) : (i += 1) {
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "{{")) {
+            templates += 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "}}")) {
+            if (templates != 0) templates -= 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "[[")) {
+            links += 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "]]")) {
+            if (links != 0) links -= 1;
+            i += 1;
+            continue;
+        }
+        if (input[i] == sep and templates == 0 and links == 0) {
+            try out.append(allocator, std.mem.trim(u8, input[start..i], " \t"));
+            start = i + 1;
+        }
+    }
+    try out.append(allocator, std.mem.trim(u8, input[start..], " \t"));
+    return out;
+}
+
+fn templateArgHasName(segment: []const u8) bool {
+    return topLevelEquals(segment) != null;
+}
+
+fn topLevelEquals(segment: []const u8) ?usize {
+    var templates: usize = 0;
+    var links: usize = 0;
+    var i: usize = 0;
+    while (i < segment.len) : (i += 1) {
+        if (i + 2 <= segment.len and std.mem.eql(u8, segment[i .. i + 2], "{{")) {
+            templates += 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= segment.len and std.mem.eql(u8, segment[i .. i + 2], "}}")) {
+            if (templates != 0) templates -= 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= segment.len and std.mem.eql(u8, segment[i .. i + 2], "[[")) {
+            links += 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= segment.len and std.mem.eql(u8, segment[i .. i + 2], "]]")) {
+            if (links != 0) links -= 1;
+            i += 1;
+            continue;
+        }
+        if (segment[i] == '=' and templates == 0 and links == 0) return i;
+    }
+    return null;
+}
+
+fn positionalCountFromParts(parts: []const []const u8) usize {
+    var count: usize = 0;
+    for (parts[1..]) |segment| {
+        if (!templateArgHasName(segment)) count += 1;
+    }
+    return count;
+}
+
+fn namedCountFromParts(parts: []const []const u8) usize {
+    var count: usize = 0;
+    for (parts[1..]) |segment| {
+        if (templateArgHasName(segment)) count += 1;
+    }
+    return count;
+}
+
+fn looksLikeLanguageCode(value: []const u8) bool {
+    if (value.len < 2 or value.len > 12) return false;
+    var has_letter = false;
+    for (value) |char| {
+        if (std.ascii.isAlphabetic(char)) {
+            has_letter = true;
+            continue;
+        }
+        if (std.ascii.isDigit(char) or char == '-' or char == '_') continue;
+        return false;
+    }
+    return has_letter;
+}
+
+fn looksLikeNumericToken(value: []const u8) bool {
+    if (value.len == 0) return false;
+    for (value) |char| {
+        if (std.ascii.isDigit(char) or char == '.' or char == '-' or char == '+' or char == '/') continue;
+        return false;
+    }
+    return true;
+}
+
 fn parseOptions(args: []const []const u8) !Options {
     var options: Options = .{};
     var i: usize = 0;
@@ -1204,4 +1532,18 @@ test "structure expectations model core heading grammar" {
     try std.testing.expect(!isExpectedHeadingParent("translations", "language-root"));
     try std.testing.expect(isExpectedHeadingLevel("etymology", 3));
     try std.testing.expect(!isExpectedHeadingLevel("etymology", 4));
+}
+
+test "templateShapeAlloc records positional and named argument shapes" {
+    const shape = try templateShapeAlloc(std.testing.allocator, "plural of|en|Fresnel reflection|t=gloss");
+    defer std.testing.allocator.free(shape);
+
+    try std.testing.expectEqualStrings("plural of|pos:lang,text|named:t", shape);
+}
+
+test "internalLinkShapeAlloc records namespaces and pipe tricks" {
+    const shape = try internalLinkShapeAlloc(std.testing.allocator, "File:Example.png|");
+    defer std.testing.allocator.free(shape);
+
+    try std.testing.expectEqualStrings("wikilink|ns:file|pipe-trick", shape);
 }

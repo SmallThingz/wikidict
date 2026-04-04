@@ -6,4 +6,5 @@ pub fn serveDictionary(io: @import("std").Io, allocator: @import("std").mem.Allo
 
 test "backend module compiles" {
     _ = ServeOptions;
+    _ = @import("renderer").html_render;
 }

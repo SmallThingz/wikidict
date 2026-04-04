@@ -3,7 +3,6 @@ pub const compact_encoding = @import("compact_encoding.zig");
 pub const section_encoding = @import("section_encoding.zig");
 pub const xml_decode = @import("xml_decode.zig");
 pub const wikitext = @import("wikitext.zig");
-pub const html_render = @import("html_render.zig");
 pub const cli_args = @import("cli_args");
 
 pub const BuildOptions = @import("builder.zig").BuildOptions;
@@ -20,7 +19,6 @@ test "encoder root imports module tests" {
     _ = section_encoding;
     _ = xml_decode;
     _ = wikitext;
-    _ = html_render;
     _ = cli_args;
     _ = builder;
 }

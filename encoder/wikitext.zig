@@ -924,7 +924,7 @@ fn isMetaHeading(title: []const u8) bool {
         headingMatches(title, "Etymyology");
 }
 
-pub fn renderWikitextToOwned(allocator: std.mem.Allocator, input: []const u8, max_len: usize) std.mem.Allocator.Error![]const u8 {
+fn renderWikitextToOwned(allocator: std.mem.Allocator, input: []const u8, max_len: usize) std.mem.Allocator.Error![]const u8 {
     var rendered: std.ArrayList(u8) = .empty;
     defer rendered.deinit(allocator);
     try renderInline(&rendered, allocator, input);
@@ -971,6 +971,11 @@ fn renderInline(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []
             }
         }
         if (input[i] == '<') {
+            if (!looksLikeInlineTagStart(input[i..])) {
+                try out.append(allocator, input[i]);
+                i += 1;
+                continue;
+            }
             if (asciiStartsWithIgnoreCase(input[i..], "<br") or asciiStartsWithIgnoreCase(input[i..], "<hr")) {
                 try appendWithSpace(out, allocator, " ");
                 i = (std.mem.indexOfScalarPos(u8, input, i, '>') orelse input.len) + 1;
@@ -982,7 +987,12 @@ fn renderInline(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []
                     continue;
                 }
             }
-            i = (std.mem.indexOfScalarPos(u8, input, i, '>') orelse input.len) + 1;
+            if (std.mem.indexOfScalarPos(u8, input, i, '>')) |end| {
+                i = end + 1;
+                continue;
+            }
+            try out.append(allocator, input[i]);
+            i += 1;
             continue;
         }
         if (input[i] == '\'' and i + 1 < input.len and input[i + 1] == '\'') {
@@ -999,16 +1009,15 @@ fn renderLink(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: []con
     defer parts.deinit(allocator);
     if (parts.items.len == 0) return;
 
-    const selected = if (parts.items.len >= 2)
-        parts.items[parts.items.len - 1]
-    else blk: {
-        var target = parts.items[0];
-        if (std.mem.indexOfScalar(u8, target, '#')) |hash_index| target = target[0..hash_index];
-        if (std.mem.lastIndexOfScalar(u8, target, ':')) |colon_index| {
-            if (colon_index + 1 < target.len) target = target[colon_index + 1 ..];
-        }
-        break :blk target;
-    };
+    const display = if (parts.items.len >= 2)
+        std.mem.trim(u8, parts.items[parts.items.len - 1], " \t")
+    else
+        "";
+    const selected = if (display.len != 0)
+        display
+    else
+        normalizedLinkTarget(parts.items[0]);
+    if (selected.len == 0) return;
     try renderInline(out, allocator, selected);
 }
 
@@ -1029,6 +1038,18 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
     }
     if (templateMatches(name, "qualifier") or templateMatches(name, "q")) {
         try appendPositional(out, allocator, &parts, 0, "(", ")", ", ");
+        return;
+    }
+    if (templateMatches(name, "i")) {
+        try appendPositional(out, allocator, &parts, 0, "(", ")", ", ");
+        return;
+    }
+    if (templateMatches(name, "small")) {
+        try appendPositional(out, allocator, &parts, 0, "", "", " ");
+        return;
+    }
+    if (templateMatches(name, "nbsp")) {
+        try appendWithSpace(out, allocator, " ");
         return;
     }
     if (templateMatches(name, "gloss")) {
@@ -1066,10 +1087,16 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
         }
         return;
     }
-    if (templateMatches(name, "standard spelling of") or templateMatches(name, "standard form of") or templateMatches(name, "alternative spelling of") or templateMatches(name, "alternative form of") or templateMatches(name, "alt form") or templateMatches(name, "alt spelling of") or templateMatches(name, "dated spelling of") or templateMatches(name, "obsolete spelling of") or templateMatches(name, "nonstandard spelling of") or templateMatches(name, "misspelling of") or templateMatches(name, "pronunciation spelling of") or templateMatches(name, "pronunciation variant of")) {
-        try appendWithSpace(out, allocator, std.mem.trim(u8, name, " \t"));
-        if (templateAliasTarget(&parts)) |arg| {
-            try appendWithSpace(out, allocator, " ");
+    if (templateMatches(name, "lang")) {
+        if (templatePositional(&parts, 1) orelse templatePositional(&parts, 0)) |arg| try renderInline(out, allocator, arg);
+        return;
+    }
+    if (isSemanticOfTemplate(name)) {
+        try renderSemanticOfTemplate(out, allocator, name, &parts);
+        return;
+    }
+    if (templateMatches(name, "head")) {
+        if (templatePositional(&parts, 1) orelse templatePositional(&parts, 0)) |arg| {
             try renderInline(out, allocator, arg);
         }
         return;
@@ -1107,6 +1134,26 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
         try appendPositional(out, allocator, &parts, 1, "", "", ", ");
         return;
     }
+    if (templateMatches(name, "compound+")) {
+        try appendAffixTerms(out, allocator, &parts);
+        return;
+    }
+    if (templateMatches(name, "blend")) {
+        try renderBlendTemplate(out, allocator, &parts);
+        return;
+    }
+    if (templateMatches(name, "clipping")) {
+        try renderUnaryTemplate(out, allocator, &parts, "clipping of");
+        return;
+    }
+    if (templateMatches(name, "back-form")) {
+        try renderUnaryTemplate(out, allocator, &parts, "back-formation from");
+        return;
+    }
+    if (templateMatches(name, "B.C.E.") or templateMatches(name, "C.E.")) {
+        try appendWithSpace(out, allocator, name);
+        return;
+    }
     if (isLexicalTemplate(name)) {
         if (templateLexeme(&parts)) |arg| try renderInline(out, allocator, arg);
         return;
@@ -1119,13 +1166,167 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
         try renderInline(out, allocator, arg);
         return;
     }
+    if (templateMatches(name, "alt form")) {
+        try appendWithSpace(out, allocator, "alternative form of ");
+        if (templateAliasTarget(&parts)) |arg| try renderInline(out, allocator, arg);
+        return;
+    }
+    if (templateMatches(name, "hol")) {
+        if (templatePositional(&parts, positionalCount(&parts) -| 1)) |arg| try renderInline(out, allocator, stripTraversalSegments(arg));
+        return;
+    }
+    if (templateMatches(name, "ng")) {
+        if (templatePositional(&parts, 0)) |arg| try renderInline(out, allocator, arg);
+        return;
+    }
+    if (templateMatches(name, "circa2")) {
+        if (templatePositional(&parts, 0)) |year| {
+            try appendWithSpace(out, allocator, "c. ");
+            try renderInline(out, allocator, year);
+        }
+        return;
+    }
     if (templatePositional(&parts, positionalCount(&parts) -| 1)) |fallback| {
         try renderInline(out, allocator, fallback);
     }
 }
 
+fn looksLikeInlineTagStart(input: []const u8) bool {
+    if (input.len < 2 or input[0] != '<') return false;
+    const next = input[1];
+    return next == '!' or next == '/' or std.ascii.isAlphabetic(next);
+}
+
 fn templateLexeme(parts: *const std.ArrayList([]const u8)) ?[]const u8 {
     return templatePositional(parts, if (positionalCount(parts) >= 2) 1 else 0);
+}
+
+fn renderSemanticOfTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    parts: *const std.ArrayList([]const u8),
+) std.mem.Allocator.Error!void {
+    try appendWithSpace(out, allocator, std.mem.trim(u8, name, " \t"));
+
+    const target_index = semanticTemplateTargetIndex(parts);
+    if (templatePositional(parts, target_index)) |arg| {
+        try appendWithSpace(out, allocator, " ");
+        try renderInline(out, allocator, arg);
+    }
+
+    const positional_total = positionalCount(parts);
+    var extra_index = target_index + 1;
+    var wrote_extra = false;
+    while (extra_index < positional_total) : (extra_index += 1) {
+        const extra = templatePositional(parts, extra_index) orelse continue;
+        const trimmed = std.mem.trim(u8, extra, " \t");
+        if (trimmed.len == 0 or looksLikeLanguageCode(trimmed)) continue;
+
+        if (!wrote_extra) {
+            try appendWithSpace(out, allocator, " (");
+            wrote_extra = true;
+        } else {
+            try appendWithSpace(out, allocator, ", ");
+        }
+        try renderInline(out, allocator, trimmed);
+    }
+    if (wrote_extra) try appendWithSpace(out, allocator, ")");
+}
+
+fn renderUnaryTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    prefix: []const u8,
+) std.mem.Allocator.Error!void {
+    try appendWithSpace(out, allocator, prefix);
+    if (templateAliasTarget(parts)) |arg| {
+        try appendWithSpace(out, allocator, " ");
+        try renderInline(out, allocator, arg);
+    }
+}
+
+fn renderBlendTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+) std.mem.Allocator.Error!void {
+    try appendWithSpace(out, allocator, "blend of ");
+    var wrote_any = false;
+    var positional_index: usize = 0;
+    for (parts.items[1..]) |segment| {
+        if (templateArgHasName(segment)) continue;
+        if (positional_index == 0) {
+            positional_index += 1;
+            continue;
+        }
+        if (wrote_any) try out.appendSlice(allocator, " and ");
+        try renderInline(out, allocator, segment);
+        wrote_any = true;
+        positional_index += 1;
+    }
+}
+
+fn semanticTemplateTargetIndex(parts: *const std.ArrayList([]const u8)) usize {
+    const count = positionalCount(parts);
+    if (count <= 1) return 0;
+    const first = templatePositional(parts, 0) orelse return 0;
+    return if (looksLikeLanguageCode(first)) 1 else 0;
+}
+
+fn isSemanticOfTemplate(name: []const u8) bool {
+    const trimmed = std.mem.trim(u8, name, " \t");
+    return trimmed.len != 0 and asciiEndsWithIgnoreCase(trimmed, " of");
+}
+
+fn looksLikeLanguageCode(value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, " \t");
+    if (trimmed.len < 2 or trimmed.len > 12) return false;
+
+    var has_letter = false;
+    for (trimmed) |char| {
+        if (std.ascii.isAlphabetic(char)) {
+            has_letter = true;
+            continue;
+        }
+        if (std.ascii.isDigit(char) or char == '-' or char == '_') continue;
+        return false;
+    }
+    return has_letter;
+}
+
+fn normalizedLinkTarget(raw_target: []const u8) []const u8 {
+    var target = std.mem.trim(u8, raw_target, " \t");
+    if (target.len != 0 and target[0] == ':') target = std.mem.trim(u8, target[1..], " \t");
+
+    if (std.mem.indexOfScalar(u8, target, '#')) |hash_index| {
+        target = if (hash_index == 0)
+            target[1..]
+        else
+            target[0..hash_index];
+    }
+
+    if (isHiddenNamespaceTarget(target)) return "";
+    if (std.mem.lastIndexOfScalar(u8, target, ':')) |colon_index| {
+        if (colon_index + 1 < target.len) target = target[colon_index + 1 ..];
+    }
+    return std.mem.trim(u8, target, " \t");
+}
+
+fn isHiddenNamespaceTarget(target: []const u8) bool {
+    const colon_index = std.mem.indexOfScalar(u8, target, ':') orelse return false;
+    const namespace = std.mem.trim(u8, target[0..colon_index], " \t");
+    return std.ascii.eqlIgnoreCase(namespace, "File") or
+        std.ascii.eqlIgnoreCase(namespace, "Image");
+}
+
+fn stripTraversalSegments(input: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, input, " \t");
+    if (std.mem.lastIndexOfScalar(u8, trimmed, '>')) |marker| {
+        if (marker + 1 < trimmed.len) return std.mem.trim(u8, trimmed[marker + 1 ..], " \t");
+    }
+    return trimmed;
 }
 
 fn extractCanonicalTargetsFromDefinition(
@@ -1336,6 +1537,26 @@ fn appendPositional(
     if (suffix.len != 0 and wrote_any) try out.appendSlice(allocator, suffix);
 }
 
+fn appendAffixTerms(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+) std.mem.Allocator.Error!void {
+    var wrote_any = false;
+    var positional_index: usize = 0;
+    for (parts.items[1..]) |segment| {
+        if (templateArgHasName(segment)) continue;
+        if (positional_index == 0) {
+            positional_index += 1;
+            continue;
+        }
+        if (wrote_any) try out.appendSlice(allocator, " + ");
+        try renderInline(out, allocator, segment);
+        wrote_any = true;
+        positional_index += 1;
+    }
+}
+
 fn templateMatches(name: []const u8, expected: []const u8) bool {
     return std.ascii.eqlIgnoreCase(std.mem.trim(u8, name, " \t"), expected);
 }
@@ -1440,6 +1661,11 @@ fn asciiStartsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     return true;
 }
 
+fn asciiEndsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (haystack.len < needle.len) return false;
+    return asciiStartsWithIgnoreCase(haystack[haystack.len - needle.len ..], needle);
+}
+
 const StructureHeadingTitles = struct {
     json: []u8,
     titles: std.ArrayList([]const u8),
@@ -1507,6 +1733,29 @@ test "parse alternative spelling and noun gloss" {
     try std.testing.expectEqualStrings("(countable) light", parsed.senses.items[0].gloss);
     try std.testing.expectEqual(@as(usize, 1), parsed.canonical_targets.items.len);
     try std.testing.expectEqualStrings("color", parsed.canonical_targets.items[0]);
+}
+
+test "parse noun form gloss preserves semantic template labels" {
+    const source =
+        \\==English==
+        \\
+        \\===Noun===
+        \\{{head|en|noun form}}
+        \\
+        \\# {{plural of|en|Fresnel reflection}}
+    ;
+
+    var parsed = (try parseEnglishEntry(std.testing.allocator, "Fresnel reflections", source)).?;
+    defer parsed.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.senses.items.len);
+    try std.testing.expectEqualStrings("plural of Fresnel reflection", parsed.senses.items[0].gloss);
+}
+
+test "renderWikitextToOwned preserves literal less-than text" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "month names < English", 256);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("month names < English", rendered);
 }
 
 test "extract english section preserves raw bytes" {

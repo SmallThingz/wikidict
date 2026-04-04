@@ -1,5 +1,6 @@
 const API_TIMEOUT_MS = 5000;
 const API_SCHEMA_VERSION = "rendered-sections-v1";
+const API_BASE_URL = resolveApiBaseUrl();
 
 type LookupPayload = {
   hits: ApiLookupHit[];
@@ -23,10 +24,6 @@ async function fetchJson<T>(url: string, failureMessage: string): Promise<T> {
     const response = await fetch(url, {
       signal: controller.signal,
       cache: "no-store",
-      headers: {
-        "cache-control": "no-cache",
-        pragma: "no-cache",
-      },
     });
     if (!response.ok) {
       throw new Error(`${failureMessage} (${response.status})`);
@@ -42,6 +39,12 @@ async function fetchJson<T>(url: string, failureMessage: string): Promise<T> {
   }
 }
 
+function resolveApiBaseUrl(): string {
+  const configured = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+  return "";
+}
+
 function apiUrl(path: string, params?: Record<string, string | number>): string {
   const search = new URLSearchParams();
   search.set("v", API_SCHEMA_VERSION);
@@ -51,7 +54,8 @@ function apiUrl(path: string, params?: Record<string, string | number>): string 
     }
   }
   const query = search.toString();
-  return query ? `${path}?${query}` : path;
+  const fullPath = query ? `${path}?${query}` : path;
+  return `${API_BASE_URL}${fullPath}`;
 }
 
 export type ApiStats = {

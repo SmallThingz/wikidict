@@ -111,20 +111,22 @@ export default function App(props: ParentProps) {
   return (
     <div class="app-shell" data-theme={activeTheme()} data-scheme={activeColorScheme()} data-width={widthMode()}>
       <header class="site-header">
-        <A class="wordmark" href="/">
-          <span>dict</span>
-          <small>en.wiktionary</small>
-        </A>
-        <div class="header-controls">
-          <button class="theme-toggle" type="button" onClick={cycleWidth}>
-            Width: {widthLabel()}
-          </button>
-          <button class="theme-toggle" type="button" onClick={cycleColorScheme}>
-            Appearance: {colorSchemeLabel()}
-          </button>
-          <button class="theme-toggle" type="button" onClick={cycleTheme}>
-            Palette: {themeLabel()}
-          </button>
+        <div class="header-container">
+          <A class="wordmark" href="/">
+            <span>dict</span>
+            <small>en.wiktionary</small>
+          </A>
+          <div class="header-controls">
+            <button class="theme-toggle" type="button" onClick={cycleWidth}>
+              Width: {widthLabel()}
+            </button>
+            <button class="theme-toggle" type="button" onClick={cycleColorScheme}>
+              Appearance: {colorSchemeLabel()}
+            </button>
+            <button class="theme-toggle" type="button" onClick={cycleTheme}>
+              Palette: {themeLabel()}
+            </button>
+          </div>
         </div>
       </header>
       <div class="page-frame">{props.children}</div>
@@ -251,7 +253,7 @@ function EntryPage() {
               </header>
 
               <section class="entry-layout">
-                <For each={data()}>{(hit) => <EntryArticle hit={hit} />}</For>
+                <For each={data()}>{(hit) => <EntryArticle hit={hit} primaryWord={primaryWord()} />}</For>
               </section>
             </>
           </Show>
@@ -261,7 +263,7 @@ function EntryPage() {
   );
 }
 
-function EntryArticle(props: { hit: ApiLookupHit }) {
+function EntryArticle(props: { hit: ApiLookupHit; primaryWord?: string }) {
   const matchIsAlias = createMemo(() => props.hit.matched !== props.hit.entry.word);
   const renderedSections = createMemo(() => props.hit.entry.renderedSections ?? []);
 
@@ -279,7 +281,9 @@ function EntryArticle(props: { hit: ApiLookupHit }) {
     <article class="entry-record">
       <div class="article-head">
         <div>
-          <h2>{props.hit.entry.word}</h2>
+          <Show when={props.hit.entry.word !== props.primaryWord}>
+            <h2>{props.hit.entry.word}</h2>
+          </Show>
           <Show when={matchIsAlias()}>
             <p class="article-note">
               Matched through <strong>{props.hit.matched}</strong> as an{" "}
@@ -315,7 +319,7 @@ function EntryArticle(props: { hit: ApiLookupHit }) {
           <For each={renderedSections()}>
             {(block) => (
               <section class="render-section" id={block.id}>
-                <Show when={block.title}>
+                <Show when={block.title && block.title !== props.primaryWord}>
                   <div class="render-heading">
                     <Dynamic component={headingTag(block.level)}>{block.title}</Dynamic>
                   </div>

@@ -3,6 +3,7 @@ const zhttp = @import("zhttp");
 
 const decoder = @import("decoder");
 const encoder = @import("encoder");
+const renderer = @import("renderer");
 const format = encoder.format;
 const cli_args = @import("cli_args");
 
@@ -19,6 +20,7 @@ const json_headers: []const Header = &.{
     .{ .name = "content-type", .value = "application/json; charset=utf-8" },
     .{ .name = "cache-control", .value = "no-store, max-age=0" },
     .{ .name = "pragma", .value = "no-cache" },
+    .{ .name = "access-control-allow-origin", .value = "*" },
 };
 const html_headers: []const Header = &.{
     .{ .name = "content-type", .value = "text/html; charset=utf-8" },
@@ -283,7 +285,7 @@ fn dupeSliceOfSlices(allocator: std.mem.Allocator, values: []const []const u8) !
 }
 
 fn renderSectionJsonAlloc(allocator: std.mem.Allocator, raw_english: []const u8) ![]const LookupEndpoint.RenderedSectionJson {
-    const rendered = try encoder.html_render.renderEnglishSectionAlloc(allocator, raw_english);
+    const rendered = try renderer.html_render.renderEnglishSectionAlloc(allocator, raw_english);
     const out = try allocator.alloc(LookupEndpoint.RenderedSectionJson, rendered.len);
     for (rendered, out) |section, *slot| {
         slot.* = .{
