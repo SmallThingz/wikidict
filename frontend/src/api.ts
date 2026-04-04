@@ -14,6 +14,13 @@ type RandomPayload = {
   word: string;
 };
 
+type WordOfDayPayload = {
+  day: string;
+  word: string;
+};
+
+type SystemThemePayload = ApiSystemTheme;
+
 type JsonRecord = Record<string, unknown>;
 
 async function fetchJson<T>(url: string, failureMessage: string): Promise<T> {
@@ -68,6 +75,26 @@ export type ApiStats = {
   version: number;
 };
 
+export type ApiSystemTheme = {
+  source: string;
+  name: string;
+  scheme: "light" | "dark";
+  colors: {
+    bg: string;
+    page: string;
+    panel: string;
+    line: string;
+    lineStrong: string;
+    ink: string;
+    muted: string;
+    accent: string;
+    accentStrong: string;
+    accentSoft: string;
+    glassBg: string;
+    glassBorder: string;
+  };
+};
+
 export type ApiEntry = {
   word: string;
   normalized: string;
@@ -100,6 +127,11 @@ export type ApiSuggestion = {
   kind: "title" | "alternative_form";
   aliasOnly: boolean;
   summary: string;
+};
+
+export type ApiWordOfDay = {
+  day: string;
+  word: string;
 };
 
 function readString(value: unknown, fallback = ""): string {
@@ -168,6 +200,10 @@ export async function fetchStats(): Promise<ApiStats> {
   return fetchJson<ApiStats>(apiUrl("/api/stats"), "Failed to load dictionary stats");
 }
 
+export async function fetchSystemTheme(): Promise<ApiSystemTheme> {
+  return fetchJson<SystemThemePayload>(apiUrl("/api/theme/system"), "Failed to load system theme");
+}
+
 export async function fetchLookup(term: string): Promise<ApiLookupHit[]> {
   const path = `/api/lookup/${encodeURIComponent(term)}`;
   let payload = await fetchJson<LookupPayload>(apiUrl(path), "Failed to load dictionary entry");
@@ -196,4 +232,22 @@ export async function fetchSuggestions(query: string, limit = 12): Promise<ApiSu
 export async function fetchRandomWord(): Promise<string> {
   const payload = await fetchJson<RandomPayload>(apiUrl("/api/random"), "Failed to load a random word");
   return payload.word as string;
+}
+
+function formatLocalDayKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export async function fetchWordOfDay(day = formatLocalDayKey()): Promise<ApiWordOfDay> {
+  const payload = await fetchJson<WordOfDayPayload>(
+    apiUrl("/api/word-of-day", { day }),
+    "Failed to load the word of the day",
+  );
+  return {
+    day: readString(payload.day, day),
+    word: readString(payload.word),
+  };
 }

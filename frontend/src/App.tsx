@@ -1,4 +1,4 @@
-import { A, useLocation, useNavigate, useParams } from "@solidjs/router";
+import { A, useNavigate, useParams } from "@solidjs/router";
 import {
   For,
   Show,
@@ -16,6 +16,7 @@ import { get, set } from "idb-keyval";
 import { createVirtualizer } from "@tanstack/solid-virtual";
 
 import {
+  type ApiSystemTheme,
   type ApiLookupHit,
   type ApiStats,
   type ApiSuggestion,
@@ -23,52 +24,107 @@ import {
   fetchRandomWord,
   fetchStats,
   fetchSuggestions,
+  fetchSystemTheme,
+  fetchWordOfDay,
 } from "./api";
 
 const RECENTS_KEY = "dict-recents";
 const FAVORITES_KEY = "dict-favorites";
 const THEME_MODE_KEY = "dict-theme-mode";
-const COLOR_SCHEME_KEY = "dict-color-scheme";
 const WIDTH_MODE_KEY = "dict-width-mode";
-const CUSTOM_PRIMARY_KEY = "dict-custom-primary";
-const CUSTOM_SECONDARY_KEY = "dict-custom-secondary";
 const HIST_LIMIT_KEY = "dict-hist-limit";
 const VIEW_MODE_KEY = "dict-view-mode";
 const SHOW_COPY_BTN_KEY = "dict-show-copy";
 
-const THEME_KEYS = ["linen", "reef", "ember", "graphite", "custom"] as const;
+const THEME_KEYS = ["system", "linen", "graphite"] as const;
 const WIDTH_MODES = ["narrow", "standard", "wide"] as const;
 
 type ThemeKey = (typeof THEME_KEYS)[number];
 type ThemeMode = ThemeKey;
-type ColorSchemeMode = "system" | "light" | "dark";
 type WidthMode = (typeof WIDTH_MODES)[number];
 type ViewMode = "infinite" | "paginated";
 type HistLimit = "1000" | "5000" | "10000" | "infinite";
 type ShowCopyBtnMode = "false" | "true";
+type ThemeVars = Record<string, string>;
 
 export const [showCopyBtn, setShowCopyBtn] = createSignal<ShowCopyBtnMode>("false");
 
+const FALLBACK_SYSTEM_THEME: Record<"light" | "dark", ApiSystemTheme> = {
+  light: {
+    source: "fallback",
+    name: "System",
+    scheme: "light",
+    colors: {
+      bg: "#f5f5f2",
+      page: "#fffdf8",
+      panel: "#fffbf5",
+      line: "#d4d2cb",
+      lineStrong: "#b8b4aa",
+      ink: "#1e222a",
+      muted: "#6d706f",
+      accent: "#3d7291",
+      accentStrong: "#294e63",
+      accentSoft: "rgba(61, 114, 145, 0.12)",
+      glassBg: "rgba(255, 251, 245, 0.84)",
+      glassBorder: "rgba(61, 114, 145, 0.09)",
+    },
+  },
+  dark: {
+    source: "fallback",
+    name: "System",
+    scheme: "dark",
+    colors: {
+      bg: "#0f1115",
+      page: "#15191f",
+      panel: "#1a1f26",
+      line: "#3a434f",
+      lineStrong: "#4b5765",
+      ink: "#f2f4f8",
+      muted: "#a4adb7",
+      accent: "#7fbad6",
+      accentStrong: "#abd6e8",
+      accentSoft: "rgba(127, 186, 214, 0.18)",
+      glassBg: "rgba(26, 31, 38, 0.82)",
+      glassBorder: "rgba(127, 186, 214, 0.12)",
+    },
+  },
+};
+
+function fallbackSystemTheme(scheme: "light" | "dark"): ApiSystemTheme {
+  return FALLBACK_SYSTEM_THEME[scheme];
+}
+
+function themeVarsFor(colors: ApiSystemTheme["colors"]): ThemeVars {
+  return {
+    "--bg": colors.bg,
+    "--page": colors.page,
+    "--panel": colors.panel,
+    "--line": colors.line,
+    "--line-strong": colors.lineStrong,
+    "--ink": colors.ink,
+    "--muted": colors.muted,
+    "--accent": colors.accent,
+    "--accent-strong": colors.accentStrong,
+    "--accent-soft": colors.accentSoft,
+    "--glass-bg": colors.glassBg,
+    "--glass-border": colors.glassBorder,
+  };
+}
+
 export default function App(props: ParentProps) {
-  const location = useLocation();
   const navigate = useNavigate();
-  const [themeMode, setThemeMode] = createSignal<ThemeMode>("linen");
-  const [colorSchemeMode, setColorSchemeMode] = createSignal<ColorSchemeMode>("system");
+  const [themeMode, setThemeMode] = createSignal<ThemeMode>("system");
   const [widthMode, setWidthMode] = createSignal<WidthMode>("standard");
   const [histLimit, setHistLimit] = createSignal<HistLimit>("10000");
   const [viewMode, setViewMode] = createSignal<ViewMode>("infinite");
   const [prefersDark, setPrefersDark] = createSignal(false);
   const [isSettingsOpen, setIsSettingsOpen] = createSignal(false);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = createSignal(false);
-  const [primaryColor, setPrimaryColor] = createSignal<string>("#2563eb");
-  const [secondaryColor, setSecondaryColor] = createSignal<string>("#0f172a");
+  const [systemTheme] = createResource(fetchSystemTheme);
 
   onMount(() => {
-    const storedTheme = readStored(THEME_MODE_KEY, ["linen", "reef", "ember", "graphite", "custom"]);
+    const storedTheme = readStored(THEME_MODE_KEY, ["system", "linen", "graphite"]);
     if (storedTheme) setThemeMode(storedTheme as ThemeMode);
-
-    const storedScheme = readStored(COLOR_SCHEME_KEY, ["system", "light", "dark"]);
-    if (storedScheme) setColorSchemeMode(storedScheme as ColorSchemeMode);
 
     const storedWidth = readStored(WIDTH_MODE_KEY, ["narrow", "standard", "wide"]);
     if (storedWidth) setWidthMode(storedWidth as WidthMode);
@@ -81,13 +137,6 @@ export default function App(props: ParentProps) {
 
     const storedCopyBtn = readStored(SHOW_COPY_BTN_KEY, ["false", "true"]);
     if (storedCopyBtn) setShowCopyBtn(storedCopyBtn as ShowCopyBtnMode);
-
-    if (typeof localStorage !== "undefined") {
-      const pc = localStorage.getItem(CUSTOM_PRIMARY_KEY);
-      const sc = localStorage.getItem(CUSTOM_SECONDARY_KEY);
-      if (pc) setPrimaryColor(pc);
-      if (sc) setSecondaryColor(sc);
-    }
 
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -102,60 +151,18 @@ export default function App(props: ParentProps) {
     if (word) navigate(`/entry/${encodeURIComponent(word)}`);
   };
 
+  const fallbackScheme = createMemo<"light" | "dark">(() => (prefersDark() ? "dark" : "light"));
+  const activeSystemTheme = createMemo<ApiSystemTheme>(() => systemTheme() ?? fallbackSystemTheme(fallbackScheme()));
   const activeColorScheme = createMemo<"light" | "dark">(() => {
-    const mode = colorSchemeMode();
-    if (mode === "system") return prefersDark() ? "dark" : "light";
-    return mode;
+    if (themeMode() === "system") return activeSystemTheme().scheme;
+    return fallbackScheme();
   });
-
-  const generateCustomStyles = () => {
-    if (themeMode() !== "custom") return "";
-    return `
-      [data-theme="custom"] {
-        --accent: ${primaryColor()};
-        --accent-strong: color-mix(in srgb, ${primaryColor()} 85%, black);
-        --accent-soft: color-mix(in srgb, ${primaryColor()} 15%, transparent);
-        
-        --ink: color-mix(in srgb, ${secondaryColor()} 15%, #0f172a);
-        --bg: color-mix(in srgb, ${secondaryColor()} 5%, white);
-        --page: #ffffff;
-        --panel: #ffffff;
-        --line: color-mix(in srgb, ${secondaryColor()} 15%, #e2e8f0);
-        --line-strong: color-mix(in srgb, ${secondaryColor()} 20%, #cbd5e1);
-        --muted: color-mix(in srgb, ${secondaryColor()} 40%, #44546b);
-        --glass-bg: rgba(255, 255, 255, 0.85);
-      }
-      [data-scheme="dark"][data-theme="custom"] {
-        --accent: color-mix(in srgb, ${primaryColor()} 85%, white);
-        --accent-strong: ${primaryColor()};
-        --accent-soft: color-mix(in srgb, ${primaryColor()} 25%, transparent);
-        
-        --ink: color-mix(in srgb, ${secondaryColor()} 5%, #f8fafc);
-        --bg: color-mix(in srgb, ${secondaryColor()} 10%, black);
-        --page: color-mix(in srgb, ${secondaryColor()} 15%, black);
-        --panel: color-mix(in srgb, ${secondaryColor()} 20%, black);
-        --line: color-mix(in srgb, ${secondaryColor()} 25%, #374151);
-        --line-strong: color-mix(in srgb, ${secondaryColor()} 25%, #4b5563);
-        --muted: color-mix(in srgb, ${secondaryColor()} 40%, #c0c8d4);
-        --glass-bg: color-mix(in srgb, color-mix(in srgb, ${secondaryColor()} 15%, black) 85%, transparent);
-      }
-    `;
-  };
-
-  const handlePrimaryChange = (e: Event) => {
-    const next = (e.target as HTMLInputElement).value;
-    setPrimaryColor(next);
-    localStorage.setItem(CUSTOM_PRIMARY_KEY, next);
-  };
-  const handleSecondaryChange = (e: Event) => {
-    const next = (e.target as HTMLInputElement).value;
-    setSecondaryColor(next);
-    localStorage.setItem(CUSTOM_SECONDARY_KEY, next);
-  };
+  const systemThemeVars = createMemo<ThemeVars | undefined>(() =>
+    themeMode() === "system" ? themeVarsFor(activeSystemTheme().colors) : undefined,
+  );
 
   return (
-    <div class="app-shell" data-theme={themeMode()} data-scheme={activeColorScheme()} data-width={widthMode()}>
-      <style>{generateCustomStyles()}</style>
+    <div class="app-shell" data-theme={themeMode()} data-scheme={activeColorScheme()} data-width={widthMode()} style={systemThemeVars()}>
       <header class="site-header">
         <div classList={{ "header-container": true, "mobile-search-active": isMobileSearchOpen() }}>
           <A class="wordmark" href="/" title="Home" aria-label="Home">
@@ -189,7 +196,7 @@ export default function App(props: ParentProps) {
 
       <Show when={isSettingsOpen()}>
         <div class="settings-overlay-backdrop" onClick={() => setIsSettingsOpen(false)}></div>
-        <dialog class="settings-dialog" data-theme={themeMode()} data-scheme={activeColorScheme()} open>
+        <dialog class="settings-dialog" data-theme={themeMode()} data-scheme={activeColorScheme()} style={systemThemeVars()} open>
           <div class="settings-dialog-header">
             <h2>Settings</h2>
             <button class="icon-button" type="button" onClick={() => setIsSettingsOpen(false)}>×</button>
@@ -199,11 +206,9 @@ export default function App(props: ParentProps) {
               <span class="setting-label">Theme Palette</span>
               <div class="chip-row">
                 <For each={[
+                  { id: "system", label: "System" },
                   { id: "linen", label: "Linen" },
-                  { id: "reef", label: "Reef" },
-                  { id: "ember", label: "Ember" },
                   { id: "graphite", label: "Graphite" },
-                  { id: "custom", label: "Custom" },
                 ]}>
                   {(opt) => (
                     <button classList={{ "chip-button": true, active: themeMode() === opt.id }} type="button" onClick={() => {
@@ -213,37 +218,18 @@ export default function App(props: ParentProps) {
                   )}
                 </For>
               </div>
-            </div>
-
-            <Show when={themeMode() === "custom"}>
-              <div class="color-pickers">
-                <label class="picker-box">
-                  <span>Primary</span>
-                  <input type="color" value={primaryColor()} onChange={handlePrimaryChange} />
-                </label>
-                <label class="picker-box">
-                  <span>Secondary</span>
-                  <input type="color" value={secondaryColor()} onChange={handleSecondaryChange} />
-                </label>
-              </div>
-            </Show>
-
-            <div class="setting-group">
-              <span class="setting-label">Appearance</span>
-              <div class="segmented-control">
-                <For each={[
-                  { id: "system", label: "System" },
-                  { id: "light", label: "Light" },
-                  { id: "dark", label: "Dark" },
-                ]}>
-                  {(opt) => (
-                    <button classList={{ "segment-button": true, active: colorSchemeMode() === opt.id }} type="button" onClick={() => {
-                      setColorSchemeMode(opt.id as ColorSchemeMode);
-                      localStorage.setItem(COLOR_SCHEME_KEY, opt.id);
-                    }}>{opt.label}</button>
-                  )}
-                </For>
-              </div>
+              <Show when={themeMode() === "system"}>
+                <div class="system-theme-note">
+                  <strong>{activeSystemTheme().name}</strong>
+                  <span>
+                    {systemTheme.loading
+                      ? "Detecting desktop colors…"
+                      : systemTheme.error
+                        ? "Backend theme detection failed; using a normalized fallback palette."
+                        : `Backend palette source: ${activeSystemTheme().source}.`}
+                  </span>
+                </div>
+              </Show>
             </div>
 
             <div class="setting-group">
@@ -330,9 +316,11 @@ export { EntryPage, HomePage, HistoryPage, BookmarksPage };
 function HomePage() {
   const navigate = useNavigate();
   const [stats] = createResource(fetchStats);
+  const [wordOfDay] = createResource(async () => fetchWordOfDay());
   const [recents, setRecents] = createSignal<string[]>([]);
   const [favorites, setFavorites] = createSignal<string[]>([]);
   const statsError = createMemo(() => resourceErrorMessage(stats.error, "Failed to load dictionary stats."));
+  const wordOfDayError = createMemo(() => resourceErrorMessage(wordOfDay.error, "Failed to load the word of the day."));
 
   onMount(() => {
     loadListDb(RECENTS_KEY).then(setRecents);
@@ -344,6 +332,38 @@ function HomePage() {
       <section class="masthead">
         <div class="eyebrow">English Wiktionary</div>
         <h1>Dictionary</h1>
+      </section>
+
+      <section class="word-of-day-strip" aria-labelledby="word-of-day-heading">
+        <div class="word-of-day-copy">
+          <div class="eyebrow" id="word-of-day-heading">Word of the Day</div>
+          <Show
+            when={wordOfDay()}
+            fallback={<div class="strip-muted">{wordOfDayError() ?? "Selecting today’s word…"}</div>}
+          >
+            {(daily) => (
+              <>
+                <button
+                  class="word-of-day-link"
+                  type="button"
+                  onClick={() => navigate(`/entry/${encodeURIComponent(daily().word)}`)}
+                >
+                  {daily().word}
+                </button>
+                <div class="word-of-day-meta">Deterministic daily pick for {daily().day}</div>
+              </>
+            )}
+          </Show>
+        </div>
+
+        <div class="stats-strip" aria-label="Dictionary statistics">
+          <Show
+            when={stats()}
+            fallback={<div class="strip-muted stats-placeholder">{statsError() ?? "Loading stats…"}</div>}
+          >
+            {(loadedStats) => <StatsStrip stats={loadedStats()} />}
+          </Show>
+        </div>
       </section>
 
       <section class="home-columns">
@@ -594,7 +614,10 @@ function EntryPage() {
             <>
               <header class="entry-header">
                 <div class="entry-title-row">
-                  <h1>{primaryWord()}</h1>
+                  <div class="title-with-audio">
+                    <h1>{primaryWord()}</h1>
+                    <PronounceButton word={primaryWord()} />
+                  </div>
                   <div class="entry-tools">
                     <button
                       class="icon-button"
@@ -655,7 +678,10 @@ function EntryArticle(props: { hit: ApiLookupHit; primaryWord?: string }) {
         <div class="article-head">
           <div>
             <Show when={showWordTitle()}>
-              <h2>{props.hit.entry.word}</h2>
+              <div class="title-with-audio title-with-audio-secondary">
+                <h2>{props.hit.entry.word}</h2>
+                <PronounceButton word={props.hit.entry.word} />
+              </div>
             </Show>
             <Show when={matchIsAlias()}>
               <p class="article-note">
@@ -879,6 +905,16 @@ function SearchIcon() {
   );
 }
 
+function SpeakerIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M11 5 6.8 8.5H3.8A1.8 1.8 0 0 0 2 10.3v3.4a1.8 1.8 0 0 0 1.8 1.8h3L11 19z" />
+      <path d="M15.5 8.5a5.2 5.2 0 0 1 0 7" />
+      <path d="M18.3 6a8.5 8.5 0 0 1 0 12" />
+    </svg>
+  );
+}
+
 function ShuffleIcon() {
   return (
     <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -923,6 +959,74 @@ function SettingsIcon() {
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
+  );
+}
+
+function PronounceButton(props: { word: string }) {
+  const [speaking, setSpeaking] = createSignal(false);
+  const supported = createMemo(() =>
+    typeof window !== "undefined" &&
+    "speechSynthesis" in window &&
+    "SpeechSynthesisUtterance" in window,
+  );
+
+  let utterance: SpeechSynthesisUtterance | undefined;
+
+  const stop = () => {
+    if (!supported()) return;
+    window.speechSynthesis.cancel();
+    utterance = undefined;
+    setSpeaking(false);
+  };
+
+  onCleanup(stop);
+
+  const handleClick = () => {
+    if (!supported() || !props.word.trim()) return;
+    if (speaking()) {
+      stop();
+      return;
+    }
+
+    const synth = window.speechSynthesis;
+    synth.cancel();
+
+    utterance = new SpeechSynthesisUtterance(props.word);
+    utterance.lang = "en";
+    utterance.rate = 0.9;
+    utterance.pitch = 1;
+
+    const voices = synth.getVoices();
+    const preferredVoice =
+      voices.find((voice) => /^en-(AU|GB|US)\b/i.test(voice.lang)) ??
+      voices.find((voice) => voice.lang.toLowerCase().startsWith("en")) ??
+      null;
+    if (preferredVoice) utterance.voice = preferredVoice;
+
+    utterance.onend = () => {
+      utterance = undefined;
+      setSpeaking(false);
+    };
+    utterance.onerror = () => {
+      utterance = undefined;
+      setSpeaking(false);
+    };
+
+    setSpeaking(true);
+    synth.speak(utterance);
+  };
+
+  return (
+    <button
+      classList={{ "icon-button": true, "pronounce-button": true, "is-active": speaking() }}
+      type="button"
+      onClick={handleClick}
+      disabled={!supported()}
+      aria-label={speaking() ? `Stop pronunciation for ${props.word}` : `Pronounce ${props.word}`}
+      title={supported() ? (speaking() ? "Stop pronunciation" : "Pronounce") : "Browser pronunciation unavailable"}
+    >
+      <SpeakerIcon />
+    </button>
   );
 }
 

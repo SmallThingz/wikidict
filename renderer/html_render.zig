@@ -1724,6 +1724,18 @@ fn renderTemplateHtml(
         try renderHyphenationTemplateHtml(out, allocator, &parts, options);
         return;
     }
+    if (templateMatchesHtml(name, "prefix") or
+        templateMatchesHtml(name, "pre") or
+        templateMatchesHtml(name, "suffix") or
+        templateMatchesHtml(name, "suf") or
+        templateMatchesHtml(name, "affix") or
+        templateMatchesHtml(name, "af") or
+        templateMatchesHtml(name, "com") or
+        templateMatchesHtml(name, "confix"))
+    {
+        try renderAffixTemplateHtml(out, allocator, &parts, options);
+        return;
+    }
     if (templateMatchesHtml(name, "alter") or templateMatchesHtml(name, "alt")) {
         try renderAlterTemplateHtml(out, allocator, &parts, options);
         return;
@@ -1794,6 +1806,12 @@ fn renderTemplateHtml(
     }
     if (templateMatchesHtml(name, "defdate")) {
         try renderDefdateTemplateHtml(out, allocator, &parts, options);
+        return;
+    }
+    if (templateMatchesHtml(name, "senseno")) {
+        if (templatePositionalHtml(&parts, 1) orelse templatePositionalHtml(&parts, 0)) |value| {
+            try renderTemplateTargetHtml(out, allocator, value, options);
+        }
         return;
     }
 
@@ -2070,9 +2088,16 @@ fn renderTemplateTargetHtml(
     raw_target: []const u8,
     options: RenderOptions,
 ) anyerror!void {
-    const trimmed = trimWikiWhitespace(raw_target);
+    const sanitized = try sanitizeTemplateTargetAlloc(allocator, raw_target);
+    defer allocator.free(sanitized);
+
+    const trimmed = trimWikiWhitespace(sanitized);
     if (trimmed.len == 0) return;
     if (looksLikeStructuredInline(trimmed)) {
+        try renderInlineHtml(out, allocator, trimmed, options);
+        return;
+    }
+    if (std.mem.indexOf(u8, trimmed, "<!--") != null) {
         try renderInlineHtml(out, allocator, trimmed, options);
         return;
     }
@@ -2280,6 +2305,34 @@ fn renderCompoundTemplateHtml(
             try out.appendSlice(allocator, ", literally ");
             try appendQuotedTemplateTargetHtml(out, allocator, trimmed, options);
         }
+    }
+}
+
+fn renderAffixTemplateHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    options: RenderOptions,
+) anyerror!void {
+    const total = positionalCountHtml(parts);
+    if (total == 0) return;
+
+    const first_term_index: usize = if (templatePositionalHtml(parts, 0)) |first|
+        if (looksLikeLanguageCodeHtml(first)) 1 else 0
+    else
+        0;
+
+    var term_slot: usize = 1;
+    var positional_index = first_term_index;
+    var wrote_any = false;
+    while (positional_index < total) : (positional_index += 1) {
+        const term = templatePositionalHtml(parts, positional_index) orelse continue;
+        const trimmed = trimWikiWhitespace(term);
+        if (trimmed.len == 0) continue;
+        if (wrote_any) try out.appendSlice(allocator, " + ");
+        try renderCompoundTermHtml(out, allocator, parts, term_slot, trimmed, options);
+        wrote_any = true;
+        term_slot += 1;
     }
 }
 
@@ -2819,7 +2872,7 @@ fn renderSynonymsTemplateHtml(
     parts: *const std.ArrayList([]const u8),
     options: RenderOptions,
 ) anyerror!void {
-    const term_count = countRenderablePositionalTermsHtml(parts, 1);
+    const term_count = countSynonymTermsHtml(parts, 1);
     if (term_count == 0) return;
 
     const first_term = templatePositionalHtml(parts, 1) orelse "";
@@ -2827,7 +2880,7 @@ fn renderSynonymsTemplateHtml(
     try appendEscapedHtmlSlice(out, allocator, if (term_count == 1 and !thesaurus_only) "Synonym" else "Synonyms");
     try appendEscapedHtmlSlice(out, allocator, ": ");
     if (thesaurus_only) try appendEscapedHtmlSlice(out, allocator, "see ");
-    try appendPositionalTemplateTargetsHtml(out, allocator, parts, 1, ", ", options);
+    try appendSynonymTargetsHtml(out, allocator, parts, 1, options);
 }
 
 fn renderLabelTemplateHtml(
@@ -2984,6 +3037,26 @@ const TrailingQualifierHtml = struct {
     term: []const u8,
     qualifier: ?[]const u8 = null,
 };
+
+fn sanitizeTemplateTargetAlloc(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const trimmed = trimWikiWhitespace(raw);
+    var end = trimmed.len;
+    while (end != 0 and trimmed[end - 1] == '>') {
+        const start = std.mem.lastIndexOfScalar(u8, trimmed[0..end], '<') orelse break;
+        const tag = trimWikiWhitespace(trimmed[start + 1 .. end - 1]);
+        if (tag.len == 0) break;
+        const colon = std.mem.indexOfScalar(u8, tag, ':') orelse break;
+        const prefix = trimWikiWhitespace(tag[0..colon]);
+        if (!std.ascii.eqlIgnoreCase(prefix, "id") and
+            !std.ascii.eqlIgnoreCase(prefix, "q") and
+            !std.ascii.eqlIgnoreCase(prefix, "qq"))
+        {
+            break;
+        }
+        end = start;
+    }
+    return allocator.dupe(u8, trimWikiWhitespace(trimmed[0..end]));
+}
 
 fn renderAlternativeFormsTemplateHtml(
     out: *std.ArrayList(u8),
@@ -3774,6 +3847,58 @@ fn countNonEmptyPositionalTermsHtml(parts: *const std.ArrayList([]const u8), sta
     return count;
 }
 
+fn countSynonymTermsHtml(parts: *const std.ArrayList([]const u8), start_index: usize) usize {
+    var positional_index: usize = 0;
+    var count: usize = 0;
+    for (parts.items[1..]) |segment| {
+        if (templateArgHasName(segment)) continue;
+        if (positional_index < start_index) {
+            positional_index += 1;
+            continue;
+        }
+        positional_index += 1;
+
+        const trimmed = trimWikiWhitespace(segment);
+        if (trimmed.len == 0 or looksLikeLanguageCodeHtml(trimmed) or std.mem.eql(u8, trimmed, ";")) continue;
+        count += 1;
+    }
+    return count;
+}
+
+fn appendSynonymTargetsHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    start_index: usize,
+    options: RenderOptions,
+) anyerror!void {
+    var positional_index: usize = 0;
+    var wrote_any = false;
+    var pending_semicolon = false;
+    for (parts.items[1..]) |segment| {
+        if (templateArgHasName(segment)) continue;
+        if (positional_index < start_index) {
+            positional_index += 1;
+            continue;
+        }
+        positional_index += 1;
+
+        const trimmed = trimWikiWhitespace(segment);
+        if (trimmed.len == 0 or looksLikeLanguageCodeHtml(trimmed)) continue;
+        if (std.mem.eql(u8, trimmed, ";")) {
+            if (wrote_any) pending_semicolon = true;
+            continue;
+        }
+
+        if (wrote_any) {
+            try out.appendSlice(allocator, if (pending_semicolon) "; " else ", ");
+        }
+        pending_semicolon = false;
+        wrote_any = true;
+        try renderTemplateTargetHtml(out, allocator, trimmed, options);
+    }
+}
+
 fn quoteDateValueAlloc(allocator: std.mem.Allocator, parts: *const std.ArrayList([]const u8)) !?[]u8 {
     if (templateNamedHtml(parts, "date")) |value| {
         const trimmed = trimWikiWhitespace(value);
@@ -3833,6 +3958,41 @@ fn normalizeHumanDateAlloc(allocator: std.mem.Allocator, value: []const u8) !?[]
         if (monthNameFromWord(parts[1])) |month| {
             if (isYearToken(parts[2])) {
                 return @as(?[]u8, try std.fmt.allocPrint(allocator, "{s} {s} {s}", .{ parts[2], month, trimLeadingZeroDigits(parts[0]) }));
+            }
+        }
+    }
+    return null;
+}
+
+fn normalizeHumanDateDisplayAlloc(allocator: std.mem.Allocator, value: []const u8) !?[]u8 {
+    var normalized_buf: [128]u8 = undefined;
+    const normalized = normalizeDateSeparators(value, &normalized_buf);
+    var parts: [4][]const u8 = undefined;
+    var count: usize = 0;
+    var iter = std.mem.tokenizeScalar(u8, normalized, ' ');
+    while (iter.next()) |part| {
+        if (count == parts.len) return null;
+        parts[count] = part;
+        count += 1;
+    }
+
+    if (count == 2) {
+        if (monthNameFromWord(parts[0])) |month| {
+            if (isYearToken(parts[1])) return @as(?[]u8, try std.fmt.allocPrint(allocator, "{s} {s}", .{ month, parts[1] }));
+        }
+        return null;
+    }
+    if (count != 3) return null;
+
+    if (monthNameFromWord(parts[0])) |month| {
+        if (isDayToken(parts[1]) and isYearToken(parts[2])) {
+            return @as(?[]u8, try std.fmt.allocPrint(allocator, "{s} {s} {s}", .{ trimLeadingZeroDigits(parts[1]), month, parts[2] }));
+        }
+    }
+    if (isDayToken(parts[0])) {
+        if (monthNameFromWord(parts[1])) |month| {
+            if (isYearToken(parts[2])) {
+                return @as(?[]u8, try std.fmt.allocPrint(allocator, "{s} {s} {s}", .{ trimLeadingZeroDigits(parts[0]), month, parts[2] }));
             }
         }
     }
@@ -3959,7 +4119,7 @@ fn quoteArchiveMetaAlloc(allocator: std.mem.Allocator, parts: *const std.ArrayLi
     const archived = templateNamedHtml(parts, "archivedate") orelse return null;
     const trimmed = trimWikiWhitespace(archived);
     if (trimmed.len == 0) return null;
-    const normalized = (try normalizeHumanDateAlloc(allocator, trimmed)) orelse try allocator.dupe(u8, trimmed);
+    const normalized = (try normalizeHumanDateDisplayAlloc(allocator, trimmed)) orelse try allocator.dupe(u8, trimmed);
     defer allocator.free(normalized);
     return try std.fmt.allocPrint(allocator, "archived from the original on {s}", .{normalized});
 }
@@ -4022,7 +4182,7 @@ fn quoteSecondaryPublicationAlloc(allocator: std.mem.Allocator, parts: *const st
     if (date2) |value| {
         const trimmed = trimWikiWhitespace(value);
         if (trimmed.len != 0) {
-            const normalized = (try normalizeHumanDateAlloc(allocator, trimmed)) orelse try allocator.dupe(u8, trimmed);
+            const normalized = (try normalizeHumanDateDisplayAlloc(allocator, trimmed)) orelse try allocator.dupe(u8, trimmed);
             defer allocator.free(normalized);
             if (wrote_any) try rendered.appendSlice(allocator, ", ");
             try rendered.appendSlice(allocator, normalized);
@@ -4993,6 +5153,59 @@ test "renderEnglishSectionAlloc treats hmp like homophones" {
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "qat") != null);
 }
 
+test "renderEnglishSectionAlloc renders affix-style etymology templates structurally" {
+    const source =
+        \\==English==
+        \\===Etymology===
+        \\From {{confix|en|abdomino|scopy}}. {{surf|en|diction|-ary}}. {{doublet|en|funt|pfund|pood|punt<id:Irish pound>}}.
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{});
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "abdomino") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, " + ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "punt&lt;id:Irish pound&gt;") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, ">punt<") != null);
+}
+
+test "renderEnglishSectionAlloc renders senseno targets instead of raw ids" {
+    const source =
+        \\==English==
+        \\===Noun===
+        \\# {{lb|en|computing}} An array ({{senseno|en|Q23622}}).
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{});
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Q23622") == null);
+}
+
+test "renderEnglishSectionAlloc preserves synonym semicolon grouping and strips comment residue" {
+    const source =
+        \\==English==
+        \\===Noun===
+        \\# Test.
+        \\#: {{syn|en|blend<!-- synonym 1 -->|frankenword<!-- synonym 2 -->|;|free as in beer}}
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{});
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "<!--") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "blend, frankenword; free as in beer") != null);
+}
+
 test "renderEnglishSectionAlloc keeps quote archive and quotee metadata" {
     const source =
         \\==English==
@@ -5006,7 +5219,7 @@ test "renderEnglishSectionAlloc keeps quote archive and quotee metadata" {
         std.testing.allocator.free(sections);
     }
 
-    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "archived from the original on 2012 July 13") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "archived from the original on 13 July 2012") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "quoting Jason Hilton") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Slippery Rock University") != null);
 }
@@ -5028,7 +5241,7 @@ test "renderEnglishSectionAlloc keeps quote secondary publication metadata" {
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Preliminary Discourse") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "The Encyclopedia of Diderot") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Ann Arbor") != null);
-    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "2009 April 18") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "18 April 2009") != null);
 }
 
 test "renderEnglishSectionAlloc preserves defdate and thesaurus synonym links" {

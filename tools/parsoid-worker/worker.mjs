@@ -267,6 +267,7 @@ function normalizeOurSections(sections) {
       title: section.title || "<lead>",
       lines: extractOurLines(section.html || ""),
     }))
+    .filter((section) => shouldAuditSectionTitle(section.title))
     .filter((section) => section.lines.length > 0);
 }
 
@@ -334,9 +335,19 @@ function normalizeParsoidHtml(title, html) {
   };
   walkParsoidContent(english, state);
   for (const section of state.sections) {
+    if (!shouldAuditSectionTitle(section.title)) {
+      section.lines = [];
+      continue;
+    }
     section.lines = stripHeadwordLine(section.lines, title).filter(shouldKeepParsoidLine);
   }
   return state.sections.filter((section) => section.lines.length > 0);
+}
+
+function shouldAuditSectionTitle(title) {
+  const normalized = normalizeText(title);
+  if (!normalized) return true;
+  return !/^Pronunciation(?:\s+\d+)?$/i.test(normalized);
 }
 
 function findEnglishSection(root) {
