@@ -403,7 +403,74 @@ pub fn extractEnglishSection(text: []const u8) ?[]const u8 {
     return null;
 }
 
+pub fn extractConfiguredLanguageSectionsAlloc(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    exclusions: ExclusionPolicy,
+) !?[]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    var line_start: usize = 0;
+    var active_start: ?usize = null;
+
+    while (line_start <= text.len) {
+        const next_newline = std.mem.indexOfScalarPos(u8, text, line_start, '\n') orelse text.len;
+        const raw_line = std.mem.trimEnd(u8, text[line_start..next_newline], "\r");
+
+        if (parseHeadingLine(raw_line)) |heading| {
+            if (heading.level == 2) {
+                if (active_start) |start| {
+                    try appendFilteredLanguageSection(allocator, &out, text[start..line_start], exclusions);
+                }
+                active_start = if (shouldStoreLanguage(heading.title)) line_start else null;
+            }
+        }
+
+        if (next_newline == text.len) break;
+        line_start = next_newline + 1;
+    }
+
+    if (active_start) |start| {
+        try appendFilteredLanguageSection(allocator, &out, text[start..text.len], exclusions);
+    }
+
+    if (out.items.len == 0) return null;
+    const owned = try out.toOwnedSlice(allocator);
+    return owned;
+}
+
+fn appendFilteredLanguageSection(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    language_section: []const u8,
+    exclusions: ExclusionPolicy,
+) !void {
+    const filtered = try filterLanguageSectionAlloc(allocator, language_section, exclusions);
+    defer allocator.free(filtered);
+    if (filtered.len == 0) return;
+    if (out.items.len != 0 and out.items[out.items.len - 1] != '\n') try out.append(allocator, '\n');
+    try out.appendSlice(allocator, filtered);
+}
+
+fn shouldStoreLanguage(title: []const u8) bool {
+    return languageMatchesFilterCsv(title, config.filter_languages_csv);
+}
+
+fn languageMatchesFilterCsv(title: []const u8, filter_csv: []const u8) bool {
+    if (std.mem.trim(u8, filter_csv, " \t").len == 0) return true;
+    var parts = std.mem.splitScalar(u8, filter_csv, ',');
+    while (parts.next()) |part| {
+        if (std.mem.eql(u8, std.mem.trim(u8, part, " \t"), title)) return true;
+    }
+    return false;
+}
+
 pub fn filterEnglishSectionAlloc(allocator: std.mem.Allocator, english_section: []const u8, exclusions: ExclusionPolicy) ![]u8 {
+    return filterLanguageSectionAlloc(allocator, english_section, exclusions);
+}
+
+pub fn filterLanguageSectionAlloc(allocator: std.mem.Allocator, language_section: []const u8, exclusions: ExclusionPolicy) ![]u8 {
     if (!exclusions.exclude_anagrams and
         !exclusions.exclude_citations and
         !exclusions.exclude_meta and
@@ -411,7 +478,7 @@ pub fn filterEnglishSectionAlloc(allocator: std.mem.Allocator, english_section: 
         !exclusions.exclude_further_reading and
         !exclusions.exclude_translations)
     {
-        return allocator.dupe(u8, english_section);
+        return allocator.dupe(u8, language_section);
     }
 
     var out: std.ArrayList(u8) = .empty;
@@ -419,9 +486,9 @@ pub fn filterEnglishSectionAlloc(allocator: std.mem.Allocator, english_section: 
 
     var skip_level: ?u8 = null;
     var line_start: usize = 0;
-    while (line_start <= english_section.len) {
-        const next_newline = std.mem.indexOfScalarPos(u8, english_section, line_start, '\n') orelse english_section.len;
-        const line = english_section[line_start..next_newline];
+    while (line_start <= language_section.len) {
+        const next_newline = std.mem.indexOfScalarPos(u8, language_section, line_start, '\n') orelse language_section.len;
+        const line = language_section[line_start..next_newline];
         const raw_line = std.mem.trimEnd(u8, line, "\r");
         const trimmed = std.mem.trim(u8, raw_line, " \t");
 
@@ -438,7 +505,7 @@ pub fn filterEnglishSectionAlloc(allocator: std.mem.Allocator, english_section: 
 
         if (skip_level == null) {
             if (shouldExcludeInlineLine(trimmed, exclusions)) {
-                if (next_newline == english_section.len) break;
+                if (next_newline == language_section.len) break;
                 line_start = next_newline + 1;
                 continue;
             }
@@ -446,7 +513,7 @@ pub fn filterEnglishSectionAlloc(allocator: std.mem.Allocator, english_section: 
             try out.appendSlice(allocator, line);
         }
 
-        if (next_newline == english_section.len) break;
+        if (next_newline == language_section.len) break;
         line_start = next_newline + 1;
     }
 
@@ -3200,6 +3267,33 @@ test "extract english section preserves raw bytes" {
         \\# [[light]]
         \\
     , english);
+}
+
+test "extractConfiguredLanguageSectionsAlloc keeps all language sections by default" {
+    const source =
+        \\{{also|foo}}
+        \\==English==
+        \\===Noun===
+        \\# [[light]]
+        \\
+        \\==Hindi==
+        \\===Noun===
+        \\# [[cunt]]
+    ;
+
+    const sections = (try extractConfiguredLanguageSectionsAlloc(std.testing.allocator, source, .{})).?;
+    defer std.testing.allocator.free(sections);
+
+    try std.testing.expect(std.mem.indexOf(u8, sections, "==English==") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections, "==Hindi==") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections, "{{also|foo}}") == null);
+}
+
+test "languageMatchesFilterCsv matches trimmed names" {
+    try std.testing.expect(languageMatchesFilterCsv("English", "English, Chinese"));
+    try std.testing.expect(languageMatchesFilterCsv("Chinese", "English, Chinese"));
+    try std.testing.expect(!languageMatchesFilterCsv("Hindi", "English, Chinese"));
+    try std.testing.expect(languageMatchesFilterCsv("Hindi", ""));
 }
 
 test "current structure report headings all map to a section parser" {

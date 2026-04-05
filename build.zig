@@ -5,8 +5,13 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const structure_optimize: std.builtin.OptimizeMode = .ReleaseFast;
     const keep_translations = b.option(bool, "keep-translations", "Keep Translations sections in the generated dictionary") orelse false;
+    const filter_languages_csv =
+        b.option([]const u8, "filter-language", "Comma-separated language headings to store, e.g. English,Chinese") orelse
+        b.option([]const u8, "fileter-language", "Deprecated misspelling of -Dfilter-language") orelse
+        "";
     const config_options = b.addOptions();
     config_options.addOption(bool, "keep_translations", keep_translations);
+    config_options.addOption([]const u8, "filter_languages_csv", filter_languages_csv);
     const generated_tables = addGeneratedStructureTableModules(b, target, optimize, structure_optimize);
     const cli_args_mod = b.createModule(.{
         .root_source_file = b.path("tools/cli_args.zig"),

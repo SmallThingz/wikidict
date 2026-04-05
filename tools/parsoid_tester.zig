@@ -964,7 +964,7 @@ fn scanEntryEnd(dict: *const decoder.Dictionary, options: Options) usize {
 
 fn parseOptions(_: std.mem.Allocator, args: []const []const u8) !Options {
     var options = Options{
-        .worker_path = "tools/parsoid-worker/worker.mjs",
+        .worker_path = "tools/parsoid-audit-worker/worker.mjs",
     };
 
     var i: usize = 0;
@@ -1018,7 +1018,7 @@ fn printUsage() void {
         \\                  [--word entry]
         \\                  [--prime-cache]
         \\                  [--node node]
-        \\                  [--worker tools/parsoid-worker/worker.mjs]
+        \\                  [--worker tools/parsoid-audit-worker/worker.mjs]
         \\
     , .{});
 }

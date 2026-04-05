@@ -5,7 +5,6 @@ const normalize = @import("normalize");
 
 const compact = @import("compact_encoding.zig");
 const format = @import("format.zig");
-const section_encoding = @import("section_encoding.zig");
 const wikitext = @import("wikitext.zig");
 const xml_decode = @import("xml_decode.zig");
 
@@ -266,31 +265,24 @@ fn processPageFragment(
     const title_raw = capture.title_raw orelse return;
 
     if (capture.text_raw) |text_raw| {
-        if (std.mem.indexOf(u8, text_raw, "==English==") != null) {
-            const text = try xml_decode.decodeAlloc(allocator, text_raw);
-            if (wikitext.extractEnglishSection(text)) |english_section| {
-                const title = try xml_decode.decodeAlloc(allocator, title_raw);
-                const filtered_english = try wikitext.filterEnglishSectionAlloc(
-                    allocator,
-                    english_section,
-                    .defaultCompact(),
-                );
-                defer allocator.free(filtered_english);
-                var metadata = try wikitext.extractEntryMetadata(allocator, title, filtered_english);
-                defer metadata.deinit(allocator);
+        const text = try xml_decode.decodeAlloc(allocator, text_raw);
+        if (try wikitext.extractConfiguredLanguageSectionsAlloc(allocator, text, .defaultCompact())) |stored_sections| {
+            defer allocator.free(stored_sections);
+            const title = try xml_decode.decodeAlloc(allocator, title_raw);
+            var metadata: wikitext.EntryMetadata = .{};
+            defer metadata.deinit(allocator);
+            if (wikitext.extractEnglishSection(stored_sections)) |english_section| {
+                metadata = try wikitext.extractEntryMetadata(allocator, title, english_section);
                 if (valid_titles) |set| {
                     const was_alias_only = metadata.alias_only;
                     try filterMetadataCanonicalTargets(allocator, &metadata, set);
                     if (was_alias_only and metadata.canonical_targets.items.len == 0) return;
                 }
-                const raw_payload = try buildRawRecordPayloadAlloc(allocator, filtered_english, metadata);
-                defer allocator.free(raw_payload);
-                try output.writeRawRecord(
-                    title,
-                    raw_payload,
-                );
-                return;
             }
+            const raw_payload = try buildRawRecordPayloadAlloc(allocator, stored_sections, metadata);
+            defer allocator.free(raw_payload);
+            try output.writeRawRecord(title, raw_payload);
+            return;
         }
     }
 
@@ -382,28 +374,28 @@ fn collectPageAliasCandidate(
     const title_raw = capture.title_raw orelse return;
 
     if (capture.text_raw) |text_raw| {
-        if (std.mem.indexOf(u8, text_raw, "==English==") != null) {
-            const text = try xml_decode.decodeAlloc(page_allocator, text_raw);
-            if (wikitext.extractEnglishSection(text)) |english_section| {
-                const title = try xml_decode.decodeAlloc(page_allocator, title_raw);
-                const filtered_english = try wikitext.filterEnglishSectionAlloc(
-                    page_allocator,
-                    english_section,
-                    .defaultCompact(),
-                );
-                var metadata = try wikitext.extractEntryMetadata(page_allocator, title, filtered_english);
+        const text = try xml_decode.decodeAlloc(page_allocator, text_raw);
+        if (try wikitext.extractConfiguredLanguageSectionsAlloc(page_allocator, text, .defaultCompact())) |stored_sections| {
+            const title = try xml_decode.decodeAlloc(page_allocator, title_raw);
+            var normalized_targets: []const []const u8 = try allocator.alloc([]const u8, 0);
+            errdefer allocator.free(normalized_targets);
+            var base_valid = true;
+            if (wikitext.extractEnglishSection(stored_sections)) |english_section| {
+                var metadata = try wikitext.extractEntryMetadata(page_allocator, title, english_section);
                 defer metadata.deinit(page_allocator);
-                const normalized_title = try normalize.normalizeAlloc(allocator, title);
-                errdefer allocator.free(normalized_title);
-                const normalized_targets = try normalizeTargetsAlloc(allocator, metadata.canonical_targets.items);
+                allocator.free(normalized_targets);
+                normalized_targets = try normalizeTargetsAlloc(allocator, metadata.canonical_targets.items);
                 errdefer freeOwnedStringSlice(allocator, normalized_targets);
-                try candidates.append(allocator, .{
-                    .normalized_title = normalized_title,
-                    .normalized_targets = normalized_targets,
-                    .base_valid = !metadata.alias_only,
-                });
-                return;
+                base_valid = !metadata.alias_only;
             }
+            const normalized_title = try normalize.normalizeAlloc(allocator, title);
+            errdefer allocator.free(normalized_title);
+            try candidates.append(allocator, .{
+                .normalized_title = normalized_title,
+                .normalized_targets = normalized_targets,
+                .base_valid = base_valid,
+            });
+            return;
         }
     }
 
@@ -425,7 +417,7 @@ fn collectPageAliasCandidate(
     }
 }
 
-fn normalizeTargetsAlloc(allocator: std.mem.Allocator, targets: []const []const u8) ![]const []const u8 {
+fn normalizeTargetsAlloc(allocator: std.mem.Allocator, targets: []const []const u8) ![][]const u8 {
     const normalized_targets = try allocator.alloc([]const u8, targets.len);
     var count: usize = 0;
     errdefer {
@@ -479,17 +471,17 @@ fn filterMetadataCanonicalTargets(
 
 fn buildRawRecordPayloadAlloc(
     allocator: std.mem.Allocator,
-    filtered_english: []const u8,
+    stored_sections: []const u8,
     metadata: wikitext.EntryMetadata,
 ) ![]u8 {
-    const encoded_english = try section_encoding.encodeEnglishAlloc(allocator, filtered_english);
-    defer allocator.free(encoded_english);
+    const encoded_raw = try compact.encodeAlloc(allocator, stored_sections);
+    defer allocator.free(encoded_raw);
 
     return format.encodeRawRecordPayloadAlloc(
         allocator,
         metadata.alt_forms.items,
         metadata.canonical_targets.items,
-        encoded_english,
+        encoded_raw,
     );
 }
 

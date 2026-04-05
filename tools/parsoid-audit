@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-worker_dir="$repo_dir/tools/parsoid-worker"
+worker_dir="$repo_dir/tools/parsoid-audit-worker"
 php_dir="$repo_dir/tools/parsoid-php"
 
 if [ $# -lt 1 ]; then
@@ -21,7 +21,11 @@ fi
 
 if [ ! -f "$php_dir/vendor/autoload.php" ]; then
   cd "$php_dir"
-  php composer.phar install --no-interaction
+  if [ -f composer.phar ]; then
+    php composer.phar install --no-interaction
+  else
+    composer install --no-interaction
+  fi
   cd "$worker_dir"
 fi
 

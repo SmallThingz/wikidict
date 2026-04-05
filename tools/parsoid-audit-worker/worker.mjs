@@ -16,7 +16,7 @@ const userAgent =
 const parsoidApiUrl = process.env.DICT_PARSOID_API_URL || "https://en.wiktionary.org/w/api.php";
 const phpCmd = process.env.DICT_PARSOID_PHP_CMD || "php";
 const phpWorkerPath =
-  process.env.DICT_PARSOID_PHP_WORKER || path.resolve("tools/parsoid-worker/php_worker.php");
+  process.env.DICT_PARSOID_PHP_WORKER || path.resolve("tools/parsoid-audit-worker/php_worker.php");
 const cacheVersion = "parsoid-php-v0.22.2-v1";
 const minParsoidIntervalMs = parseIntegerEnv("DICT_PARSOID_MIN_INTERVAL_MS", 1000);
 const parsoidRetryBaseMs = parseIntegerEnv("DICT_PARSOID_RETRY_BASE_MS", 2000);

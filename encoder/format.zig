@@ -1,8 +1,11 @@
 const std = @import("std");
 const compact = @import("compact_encoding.zig");
 
-pub const magic = "WIKDIC23";
-pub const version: u32 = 23;
+pub const magic = "WIKDIC24";
+pub const version: u32 = 24;
+pub const legacy_magic_v23 = "WIKDIC23";
+pub const legacy_version_v23: u32 = 23;
+pub const legacy_magic_v22 = "WIKDIC22";
 pub const legacy_version_v22: u32 = 22;
 
 pub const record_flag_has_raw: u8 = 1 << 0;
@@ -115,7 +118,7 @@ pub fn encodeRawRecordPayloadAlloc(
     allocator: std.mem.Allocator,
     alt_forms: []const []const u8,
     canonical_targets: []const []const u8,
-    encoded_english: []const u8,
+    encoded_raw_content: []const u8,
 ) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
@@ -131,7 +134,7 @@ pub fn encodeRawRecordPayloadAlloc(
         try appendCompactSlice(&out, allocator, target);
     }
 
-    try appendBytesSlice(&out, allocator, encoded_english);
+    try appendBytesSlice(&out, allocator, encoded_raw_content);
     return out.toOwnedSlice(allocator);
 }
 
@@ -149,6 +152,7 @@ pub fn decodeRawRecordMetadataAllocVersion(
 ) (std.mem.Allocator.Error || PayloadError)!RawRecordMetadata {
     return switch (dictionary_version) {
         version => decodeRawRecordMetadataAllocCurrent(allocator, payload),
+        legacy_version_v23 => decodeRawRecordMetadataAllocCurrent(allocator, payload),
         legacy_version_v22 => decodeRawRecordMetadataAllocV22(allocator, payload),
         else => error.InvalidEncoding,
     };
@@ -182,26 +186,35 @@ fn decodeRawRecordMetadataAllocCurrent(
         canonical_targets[target_index] = try readCompactSliceAlloc(allocator, payload, &cursor, payload.len);
     }
 
-    _ = try rawRecordEnglishPayload(payload);
+    _ = try rawRecordContentPayload(payload);
     return .{
         .alt_forms = alt_forms,
         .canonical_targets = canonical_targets,
     };
 }
 
-pub fn rawRecordEnglishPayload(payload: []const u8) PayloadError![]const u8 {
-    return rawRecordEnglishPayloadVersion(payload, version);
+pub fn rawRecordContentPayload(payload: []const u8) PayloadError![]const u8 {
+    return rawRecordContentPayloadVersion(payload, version);
 }
 
-pub fn rawRecordEnglishPayloadVersion(payload: []const u8, dictionary_version: u32) PayloadError![]const u8 {
+pub fn rawRecordContentPayloadVersion(payload: []const u8, dictionary_version: u32) PayloadError![]const u8 {
     return switch (dictionary_version) {
-        version => rawRecordEnglishPayloadCurrent(payload),
+        version => rawRecordContentPayloadCurrent(payload),
+        legacy_version_v23 => rawRecordContentPayloadCurrent(payload),
         legacy_version_v22 => rawRecordEnglishPayloadV22(payload),
         else => error.InvalidEncoding,
     };
 }
 
-fn rawRecordEnglishPayloadCurrent(payload: []const u8) PayloadError![]const u8 {
+pub fn rawRecordEnglishPayload(payload: []const u8) PayloadError![]const u8 {
+    return rawRecordContentPayload(payload);
+}
+
+pub fn rawRecordEnglishPayloadVersion(payload: []const u8, dictionary_version: u32) PayloadError![]const u8 {
+    return rawRecordContentPayloadVersion(payload, dictionary_version);
+}
+
+fn rawRecordContentPayloadCurrent(payload: []const u8) PayloadError![]const u8 {
     var cursor: usize = 0;
 
     const alt_form_count_u64 = readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding;
@@ -243,6 +256,7 @@ pub fn decodeAliasRecordTargetAllocVersion(
 ) (std.mem.Allocator.Error || PayloadError)![]u8 {
     return switch (dictionary_version) {
         version => decodeAliasRecordTargetAllocCurrent(allocator, payload),
+        legacy_version_v23 => decodeAliasRecordTargetAllocCurrent(allocator, payload),
         legacy_version_v22 => decodeAliasRecordTargetAllocV22(allocator, payload),
         else => error.InvalidEncoding,
     };

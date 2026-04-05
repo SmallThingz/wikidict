@@ -13,7 +13,12 @@ const cache_version: u32 = 5;
 const cache_alignment: u32 = 8;
 
 fn isSupportedDictionaryVersion(dict_version: u32) bool {
-    return dict_version == format.version or dict_version == format.legacy_version_v22;
+    return dict_version == format.version or dict_version == format.legacy_version_v23 or dict_version == format.legacy_version_v22;
+}
+
+fn hasSupportedDictionaryMagic(header: *const format.Header) bool {
+    return std.mem.eql(u8, &header.magic_bytes, format.magic) or
+        std.mem.eql(u8, &header.magic_bytes, format.legacy_magic_v22);
 }
 
 const StringRef = extern struct {
@@ -419,15 +424,17 @@ pub const EntryView = struct {
     pub fn derivedAlloc(self: EntryView, allocator: std.mem.Allocator) !EntryDerivedData {
         const entry_record = try self.dict.entryRecord(self.index);
         if ((entry_record.flags & format.record_flag_has_raw) != 0) {
-            const encoded_english = try format.rawRecordEnglishPayloadVersion(entry_record.payload, self.dict.header.version);
-            const raw = try section_encoding.decodeEnglishAlloc(allocator, encoded_english);
-            errdefer allocator.free(raw);
+            const stored = (try self.rawStoredTextAlloc(allocator)).?;
+            defer allocator.free(stored);
+            const raw = wikitext.extractEnglishSection(stored) orelse "";
+            const raw_owned = try allocator.dupe(u8, raw);
+            errdefer allocator.free(raw_owned);
 
-            var metadata = try wikitext.extractEntryMetadata(allocator, self.word(), raw);
+            var metadata = try wikitext.extractEntryMetadata(allocator, self.word(), raw_owned);
             errdefer metadata.deinit(allocator);
 
-            const summary = try wikitext.extractSummaryAlloc(allocator, raw, 240);
-            allocator.free(raw);
+            const summary = try wikitext.extractSummaryAlloc(allocator, raw_owned, 240);
+            allocator.free(raw_owned);
 
             return .{
                 .summary = summary,
@@ -508,10 +515,27 @@ pub const EntryView = struct {
     }
 
     pub fn rawEnglishAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
+        const stored = (try self.rawStoredTextAlloc(allocator)) orelse return null;
+        errdefer allocator.free(stored);
+        const english = wikitext.extractEnglishSection(stored) orelse {
+            allocator.free(stored);
+            return null;
+        };
+        const owned = try allocator.dupe(u8, english);
+        allocator.free(stored);
+        return owned;
+    }
+
+    fn rawStoredTextAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
         const entry_record = try self.dict.entryRecord(self.index);
-        const encoded_english = try format.rawRecordEnglishPayloadVersion(entry_record.payload, self.dict.header.version);
-        return try section_encoding.decodeEnglishAlloc(allocator, encoded_english);
+        const encoded = try format.rawRecordContentPayloadVersion(entry_record.payload, self.dict.header.version);
+        const decoded = try switch (self.dict.header.version) {
+            format.version => compact.decodeAlloc(allocator, encoded),
+            format.legacy_version_v23, format.legacy_version_v22 => section_encoding.decodeEnglishAlloc(allocator, encoded),
+            else => error.InvalidDictionaryFile,
+        };
+        return decoded;
     }
 };
 
@@ -538,7 +562,7 @@ pub const Dictionary = struct {
 
         if (stat.size < @sizeOf(format.Header)) return error.InvalidDictionaryFile;
         const header: *const format.Header = @ptrCast(@alignCast(mapped.ptr));
-        if (!std.mem.eql(u8, &header.magic_bytes, format.magic)) return error.InvalidDictionaryFile;
+        if (!hasSupportedDictionaryMagic(header)) return error.InvalidDictionaryFile;
         if (!isSupportedDictionaryVersion(header.version)) return error.UnsupportedDictionaryVersion;
 
         const records_end = std.math.add(u64, header.records_offset, header.records_len) catch return error.InvalidDictionaryFile;
@@ -1059,10 +1083,16 @@ fn buildAndWriteCache(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    var build_payload = try buildCachePayload(allocator, arena.allocator(), mapped, header, options, progress);
+    var build_payload = buildCachePayload(allocator, arena.allocator(), mapped, header, options, progress) catch |err| {
+        std.log.err("failed to build dictionary cache payload: {s}", .{@errorName(err)});
+        return err;
+    };
     defer build_payload.deinitTransient(allocator);
     progress.setPhase(.materialize, 92, build_payload.entries.len, build_payload.lookups.len);
-    var cache_data = try materializeCacheData(allocator, &build_payload);
+    var cache_data = materializeCacheData(allocator, &build_payload) catch |err| {
+        std.log.err("failed to materialize dictionary cache: {s}", .{@errorName(err)});
+        return err;
+    };
     defer cache_data.deinit(allocator);
 
     progress.setPhase(.writing, 97, cache_data.strings.len, 0);
@@ -1078,11 +1108,20 @@ fn buildCachePayload(
     options: OpenOptions,
     progress: *CacheBuildProgress,
 ) !BuildPayload {
-    var state = try buildIndex(allocator, arena_allocator, mapped, header, options, progress);
+    var state = buildIndex(allocator, arena_allocator, mapped, header, options, progress) catch |err| {
+        std.log.err("failed during record scan/index build: {s}", .{@errorName(err)});
+        return err;
+    };
     progress.setPhase(.aliases, 75, state.entries.items.len, 0);
-    try finalizeIncomingAliases(allocator, arena_allocator, &state);
+    finalizeIncomingAliases(allocator, arena_allocator, &state) catch |err| {
+        std.log.err("failed while resolving incoming aliases: {s}", .{@errorName(err)});
+        return err;
+    };
     progress.setPhase(.lookups, 84, state.entries.items.len, 0);
-    try buildLookups(allocator, arena_allocator, &state, indexBuildThreadCount(state.entries.items.len, options.index_build_threads));
+    buildLookups(allocator, arena_allocator, &state, indexBuildThreadCount(state.entries.items.len, options.index_build_threads)) catch |err| {
+        std.log.err("failed while sorting/building lookups: {s}", .{@errorName(err)});
+        return err;
+    };
     return .{
         .entries = try state.entries.toOwnedSlice(arena_allocator),
         .lookups = try state.lookups.toOwnedSlice(arena_allocator),
@@ -2084,6 +2123,48 @@ test "dictionary open preserves raw etymology and pronunciation sections through
     const raw = (try dict.entryAt(hits[0].entry_index).rawEnglishAlloc(std.testing.allocator)).?;
     defer std.testing.allocator.free(raw);
     try std.testing.expectEqualStrings(raw_english, raw);
+}
+
+test "dictionary build keeps non-English entries even without an English section" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>चूत</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==Hindi==
+        \\===Noun===
+        \\# [[cunt]]
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
+    defer xml_file.close(std.testing.io);
+    try xml_file.writePositionalAll(std.testing.io, xml, 0);
+
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_path);
+    const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(xml_path);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_path,
+        .output_path = db_path,
+    });
+
+    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path, .{});
+    defer dict.deinit();
+
+    const hits = try dict.lookupExact(std.testing.allocator, "चूत");
+    defer std.testing.allocator.free(hits);
+    try std.testing.expectEqual(@as(usize, 1), hits.len);
+    try std.testing.expectEqual(format.lookup_kind_title, hits[0].kind);
+    try std.testing.expectEqualStrings("चूत", dict.entryAt(hits[0].entry_index).word());
+    try std.testing.expect((try dict.entryAt(hits[0].entry_index).rawEnglishAlloc(std.testing.allocator)) == null);
 }
 
 test "dictionary cache rebuild recomputes normalized alias metadata" {
