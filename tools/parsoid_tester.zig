@@ -26,6 +26,7 @@ pub fn main(init: std.process.Init) !void {
             "raw_entries_scanned={d}\n" ++
             "compared_entries={d}\n" ++
             "alias_entries_skipped={d}\n" ++
+            "cache_misses={d}\n" ++
             "renderer_errors={d}\n" ++
             "mismatches={d}\n" ++
             "worker_errors={d}\n",
@@ -36,6 +37,7 @@ pub fn main(init: std.process.Init) !void {
             stats.raw_entries_scanned,
             stats.compared_entries,
             stats.alias_entries_skipped,
+            stats.cache_misses,
             stats.renderer_errors,
             stats.mismatches,
             stats.worker_errors,
@@ -62,6 +64,7 @@ pub const AuditStats = struct {
     raw_entries_scanned: usize = 0,
     compared_entries: usize = 0,
     alias_entries_skipped: usize = 0,
+    cache_misses: usize = 0,
     renderer_errors: usize = 0,
     mismatches: usize = 0,
     worker_errors: usize = 0,
@@ -223,6 +226,7 @@ const Auditor = struct {
     entries_scanned: std.atomic.Value(usize) = .init(0),
     raw_entries_scanned: std.atomic.Value(usize) = .init(0),
     compared_entries: std.atomic.Value(usize) = .init(0),
+    cache_misses: std.atomic.Value(usize) = .init(0),
     renderer_errors: std.atomic.Value(usize) = .init(0),
     mismatches: std.atomic.Value(usize) = .init(0),
     worker_errors: std.atomic.Value(usize) = .init(0),
@@ -300,6 +304,13 @@ const Auditor = struct {
         self.progress.maybeRender(self, processed);
     }
 
+    fn recordCacheMiss(self: *Auditor) void {
+        _ = self.raw_entries_scanned.fetchAdd(1, .monotonic);
+        _ = self.cache_misses.fetchAdd(1, .monotonic);
+        const processed = self.entries_scanned.fetchAdd(1, .monotonic) + 1;
+        self.progress.maybeRender(self, processed);
+    }
+
     fn addSample(self: *Auditor, word: []const u8, kind: []const u8, summary: []const u8, our: []const u8, parsoid: []const u8) !void {
         self.state_mutex.lockUncancelable(self.io);
         defer self.state_mutex.unlock(self.io);
@@ -340,6 +351,7 @@ const Auditor = struct {
             .raw_entries_scanned = raw_entries_scanned,
             .compared_entries = self.compared_entries.load(.monotonic),
             .alias_entries_skipped = entries_scanned - raw_entries_scanned,
+            .cache_misses = self.cache_misses.load(.monotonic),
             .renderer_errors = self.renderer_errors.load(.monotonic),
             .mismatches = self.mismatches.load(.monotonic),
             .worker_errors = self.worker_errors.load(.monotonic),
@@ -368,6 +380,7 @@ const Auditor = struct {
                 "raw_entries_scanned: {d}\n" ++
                 "compared_entries: {d}\n" ++
                 "alias_entries_skipped: {d}\n" ++
+                "cache_misses: {d}\n" ++
                 "renderer_errors: {d}\n" ++
                 "mismatches: {d}\n" ++
                 "worker_errors: {d}\n\n",
@@ -379,6 +392,7 @@ const Auditor = struct {
                 stats.raw_entries_scanned,
                 stats.compared_entries,
                 stats.alias_entries_skipped,
+                stats.cache_misses,
                 stats.renderer_errors,
                 stats.mismatches,
                 stats.worker_errors,
@@ -544,6 +558,8 @@ fn auditWorkerMain(args: WorkerArgs) void {
 
         if (response.ok) {
             args.auditor.recordCompared();
+        } else if (response.kind != null and std.mem.eql(u8, response.kind.?, "cache_miss")) {
+            args.auditor.recordCacheMiss();
         } else if (response.kind != null and std.mem.eql(u8, response.kind.?, "mismatch")) {
             args.auditor.recordMismatch(entry.word(), response) catch |fatal| args.auditor.noteFatal(fatal);
         } else {

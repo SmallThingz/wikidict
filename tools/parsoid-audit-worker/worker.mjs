@@ -18,6 +18,7 @@ const phpCmd = process.env.DICT_PARSOID_PHP_CMD || "php";
 const phpWorkerPath =
   process.env.DICT_PARSOID_PHP_WORKER || path.resolve("tools/parsoid-audit-worker/php_worker.php");
 const cacheVersion = "parsoid-php-v0.22.2-v1";
+const onlyCached = parseBooleanEnv("DICT_PARSOID_ONLY_CACHED", false);
 const minParsoidIntervalMs = parseIntegerEnv("DICT_PARSOID_MIN_INTERVAL_MS", 1000);
 const parsoidRetryBaseMs = parseIntegerEnv("DICT_PARSOID_RETRY_BASE_MS", 2000);
 const maxParsoidRetries = parseIntegerEnv("DICT_PARSOID_MAX_RETRIES", 6);
@@ -92,6 +93,10 @@ async function loadParsoidSections(title, raw) {
       nowMs,
     );
     return legacySections;
+  }
+
+  if (onlyCached) {
+    throw new CacheMissError(title);
   }
 
   const html = await renderParsoidHtml(title, filteredRaw);
@@ -274,8 +279,8 @@ for await (const line of rl) {
     process.stdout.write(
       JSON.stringify({
         ok: false,
-        kind: "parsoid_error",
-        summary: formatError(error),
+        kind: error instanceof CacheMissError ? "cache_miss" : "parsoid_error",
+        summary: error instanceof CacheMissError ? error.message : formatError(error),
         our: "",
         parsoid: "",
       }) + "\n",
@@ -340,6 +345,26 @@ function parseIntegerEnv(name, fallback) {
   if (!raw) return fallback;
   const value = Number.parseInt(raw, 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function parseBooleanEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw == null) return fallback;
+  const normalized = String(raw).trim().toLowerCase();
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  return fallback;
+}
+
+class CacheMissError extends Error {
+  constructor(title) {
+    super(`cache miss for ${title}`);
+    this.name = "CacheMissError";
+  }
 }
 
 function reAuditCachedSections(sections) {
