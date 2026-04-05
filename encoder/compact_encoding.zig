@@ -2,7 +2,7 @@ const std = @import("std");
 const generated = @import("generated_structure_tables");
 const compact_pattern_seed = @import("compact_pattern_seed");
 
-pub const escape_byte: u8 = 0x01;
+pub const escape_byte: u8 = 0xFF;
 pub const extended_pattern_code: u8 = 0xFE;
 pub const raw_literal_code: u8 = 0xFF;
 
@@ -11,44 +11,26 @@ pub const SingleToken = struct {
     pattern: []const u8,
 };
 
-pub const CharToken = struct {
-    byte: u8,
-    value: u8,
-};
-
-pub const char_tokens = [_]CharToken{
-    .{ .byte = 0x02, .value = '\n' },
-    .{ .byte = 0x03, .value = '{' },
-    .{ .byte = 0x04, .value = '}' },
-    .{ .byte = 0x05, .value = '[' },
-    .{ .byte = 0x06, .value = ']' },
-    .{ .byte = 0x07, .value = '|' },
-    .{ .byte = 0x08, .value = '=' },
-    .{ .byte = 0x09, .value = '#' },
-    .{ .byte = 0x12, .value = '*' },
-    .{ .byte = 0x0B, .value = ':' },
-    .{ .byte = 0x0C, .value = ';' },
-    .{ .byte = 0x0D, .value = '<' },
-    .{ .byte = 0x0E, .value = '>' },
-    .{ .byte = 0x0F, .value = '\'' },
-    .{ .byte = 0x10, .value = '/' },
-    .{ .byte = 0x11, .value = '!' },
-};
-
-pub const single_tokens = [_]SingleToken{
-    .{ .byte = 0xC0, .pattern = "{{" },
-    .{ .byte = 0xC1, .pattern = "}}" },
-    .{ .byte = 0xF5, .pattern = "[[" },
-    .{ .byte = 0xF6, .pattern = "]]" },
-    .{ .byte = 0xF7, .pattern = "==" },
-    .{ .byte = 0xF8, .pattern = "===" },
-    .{ .byte = 0xF9, .pattern = "====" },
-    .{ .byte = 0xFA, .pattern = "\n# " },
-    .{ .byte = 0xFB, .pattern = "\n## " },
-    .{ .byte = 0xFC, .pattern = "\n#: " },
-    .{ .byte = 0xFD, .pattern = "\n#* " },
-    .{ .byte = 0xFE, .pattern = "|en|" },
-    .{ .byte = 0xFF, .pattern = "\n* " },
+// Do not add 1-byte-to-1-byte mappings here. They do not reduce payload size and only
+// waste opcode space. Keep this table for genuine contractions that replace longer text.
+pub const static_direct_patterns = compact_pattern_seed.static_direct_patterns;
+const generated_direct_patterns = if (@hasDecl(generated, "compact_direct_patterns"))
+    generated.compact_direct_patterns
+else
+    [_][]const u8{};
+pub const direct_patterns = static_direct_patterns ++ generated_direct_patterns;
+pub const single_tokens = blk: {
+    if (direct_patterns.len > compact_pattern_seed.max_direct_pattern_count) {
+        @compileError("direct token table exceeds one-byte opcode space");
+    }
+    var tokens: [direct_patterns.len]SingleToken = undefined;
+    for (direct_patterns, 0..) |pattern, idx| {
+        tokens[idx] = .{
+            .byte = @as(u8, @intCast(0xE0 + idx)),
+            .pattern = pattern,
+        };
+    }
+    break :blk tokens;
 };
 
 pub const static_escaped_patterns = compact_pattern_seed.static_escaped_patterns;
@@ -61,18 +43,6 @@ comptime {
     if (escaped_patterns.len >= extended_pattern_code) @compileError("escaped token table exceeds one-byte escape space");
     if (extended_escaped_patterns.len >= 255) @compileError("extended escaped token table exceeds one-byte extension space");
 }
-
-const char_to_token_table = blk: {
-    var table = [_]u8{0} ** 256;
-    for (char_tokens) |token| table[token.value] = token.byte;
-    break :blk table;
-};
-
-const token_to_char_table = blk: {
-    var table = [_]u8{0} ** 256;
-    for (char_tokens) |token| table[token.byte] = token.value;
-    break :blk table;
-};
 
 const single_pattern_table = blk: {
     var table = [_]?[]const u8{null} ** 256;
@@ -133,14 +103,14 @@ const Match = union(enum) {
     },
 };
 
-pub fn encodeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+pub fn encodeAlloc(allocator: std.mem.Allocator, input: []const u8) (std.mem.Allocator.Error || error{InvalidUtf8})![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
     _ = try encodeToList(&out, allocator, input);
     return out.toOwnedSlice(allocator);
 }
 
-pub fn encodeToList(list: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+pub fn encodeToList(list: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) (std.mem.Allocator.Error || error{InvalidUtf8})![]const u8 {
     const stable_input = blk: {
         if (list.capacity == 0 or input.len == 0) break :blk null;
         const allocated = list.allocatedSlice();
@@ -193,17 +163,11 @@ pub fn encodeToList(list: *std.ArrayList(u8), allocator: std.mem.Allocator, inpu
             }
         }
 
-        if (source[i] == escape_byte) {
-            try list.append(allocator, escape_byte);
-            try list.append(allocator, 0);
-        } else if (tokenByteForChar(source[i])) |token_byte| {
+        if (tokenByteForChar(source[i])) |token_byte| {
             try list.append(allocator, token_byte);
-        } else if (needsRawLiteralEscape(source[i])) {
-            try list.append(allocator, escape_byte);
-            try list.append(allocator, raw_literal_code);
-            try list.append(allocator, source[i]);
         } else {
-            try list.append(allocator, source[i]);
+            i += try appendLiteralCodepoint(list, allocator, source[i..]);
+            continue;
         }
         i += 1;
     }
@@ -226,6 +190,25 @@ fn decodedLen(input: []const u8) error{InvalidEncoding}!usize {
     var i: usize = 0;
     while (i < input.len) {
         const byte = input[i];
+        if (byte < 0x80) {
+            out_len += 1;
+            i += 1;
+            continue;
+        }
+        if (byte < 0xC0) {
+            if (i + 1 >= input.len) return error.InvalidEncoding;
+            const codepoint = decodePacked2(byte, input[i + 1]) catch return error.InvalidEncoding;
+            out_len += std.unicode.utf8CodepointSequenceLength(codepoint) catch return error.InvalidEncoding;
+            i += 2;
+            continue;
+        }
+        if (byte < 0xE0) {
+            if (i + 2 >= input.len) return error.InvalidEncoding;
+            const codepoint = decodePacked3(byte, input[i + 1], input[i + 2]) catch return error.InvalidEncoding;
+            out_len += std.unicode.utf8CodepointSequenceLength(codepoint) catch return error.InvalidEncoding;
+            i += 3;
+            continue;
+        }
         if (byte == escape_byte) {
             if (i + 1 >= input.len) return error.InvalidEncoding;
             const code = input[i + 1];
@@ -261,10 +244,12 @@ fn decodedLen(input: []const u8) error{InvalidEncoding}!usize {
             continue;
         }
 
-        if (singlePatternForByte(byte)) |pattern| {
+        if (charForTokenByte(byte) != null) {
+            out_len += 1;
+        } else if (singlePatternForByte(byte)) |pattern| {
             out_len += pattern.len;
         } else {
-            out_len += 1;
+            return error.InvalidEncoding;
         }
         i += 1;
     }
@@ -277,6 +262,28 @@ fn decodeInto(out: []u8, input: []const u8) error{InvalidEncoding}!usize {
     var i: usize = 0;
     while (i < input.len) {
         const byte = input[i];
+        if (byte < 0x80) {
+            out[out_index] = byte;
+            out_index += 1;
+            i += 1;
+            continue;
+        }
+        if (byte < 0xC0) {
+            if (i + 1 >= input.len) return error.InvalidEncoding;
+            const codepoint = decodePacked2(byte, input[i + 1]) catch return error.InvalidEncoding;
+            const written = std.unicode.utf8Encode(codepoint, out[out_index..]) catch return error.InvalidEncoding;
+            out_index += written;
+            i += 2;
+            continue;
+        }
+        if (byte < 0xE0) {
+            if (i + 2 >= input.len) return error.InvalidEncoding;
+            const codepoint = decodePacked3(byte, input[i + 1], input[i + 2]) catch return error.InvalidEncoding;
+            const written = std.unicode.utf8Encode(codepoint, out[out_index..]) catch return error.InvalidEncoding;
+            out_index += written;
+            i += 3;
+            continue;
+        }
         if (byte == escape_byte) {
             if (i + 1 >= input.len) return error.InvalidEncoding;
             const code = input[i + 1];
@@ -320,8 +327,7 @@ fn decodeInto(out: []u8, input: []const u8) error{InvalidEncoding}!usize {
             @memcpy(out[out_index .. out_index + pattern.len], pattern);
             out_index += pattern.len;
         } else {
-            out[out_index] = byte;
-            out_index += 1;
+            return error.InvalidEncoding;
         }
         i += 1;
     }
@@ -379,26 +385,61 @@ fn matchLongestForFirst(comptime first: u8, input: []const u8, index: usize) ?Ma
 }
 
 fn tokenByteForChar(value: u8) ?u8 {
-    const token_byte = char_to_token_table[value];
-    return if (token_byte == 0) null else token_byte;
+    _ = value;
+    return null;
 }
 
 fn charForTokenByte(byte: u8) ?u8 {
-    const value = token_to_char_table[byte];
-    return if (value == 0) null else value;
+    _ = byte;
+    return null;
 }
 
 fn needsRawLiteralEscape(byte: u8) bool {
-    if (byte == 0) return true;
-    if (charForTokenByte(byte) != null) return true;
+    if (byte >= 0x80) return true;
     if (singlePatternForByte(byte) != null) return true;
     if (tokenByteForChar(byte) != null) return true;
     return false;
 }
 
 fn canCopyLiteralRun(byte: u8) bool {
+    if (byte >= 0x80) return false;
     if (pattern_start_table[byte]) return false;
     return !needsRawLiteralEscape(byte);
+}
+
+fn appendLiteralCodepoint(list: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) (std.mem.Allocator.Error || error{InvalidUtf8})!usize {
+    const len = std.unicode.utf8ByteSequenceLength(input[0]) catch return error.InvalidUtf8;
+    if (input.len < len) return error.InvalidUtf8;
+    const codepoint = std.unicode.utf8Decode(input[0..len]) catch return error.InvalidUtf8;
+    const used_bits = bitLen(codepoint);
+
+    if (used_bits <= 7) {
+        try list.append(allocator, @intCast(codepoint));
+    } else if (used_bits <= 14) {
+        try list.append(allocator, 0x80 | @as(u8, @intCast(codepoint >> 8)));
+        try list.append(allocator, @as(u8, @intCast(codepoint & 0xFF)));
+    } else {
+        try list.append(allocator, 0xC0 | @as(u8, @intCast(codepoint >> 16)));
+        try list.append(allocator, @as(u8, @intCast((codepoint >> 8) & 0xFF)));
+        try list.append(allocator, @as(u8, @intCast(codepoint & 0xFF)));
+    }
+    return len;
+}
+
+fn decodePacked2(first: u8, second: u8) error{InvalidEncoding}!u21 {
+    const codepoint: u21 = (@as(u21, first & 0x3F) << 8) | second;
+    if (codepoint < 0x80 or !std.unicode.utf8ValidCodepoint(codepoint)) return error.InvalidEncoding;
+    return codepoint;
+}
+
+fn decodePacked3(first: u8, second: u8, third: u8) error{InvalidEncoding}!u21 {
+    const codepoint: u21 = (@as(u21, first & 0x1F) << 16) | (@as(u21, second) << 8) | third;
+    if (codepoint < 0x4000 or !std.unicode.utf8ValidCodepoint(codepoint)) return error.InvalidEncoding;
+    return codepoint;
+}
+
+fn bitLen(value: u21) u6 {
+    return if (value == 0) 0 else @as(u6, @intCast(@bitSizeOf(u21) - @clz(value)));
 }
 
 fn singlePatternForByte(byte: u8) ?[]const u8 {
@@ -482,7 +523,7 @@ test "encodeToList handles aliased input buffer" {
     try std.testing.expectEqualStrings(aliased_input, decoded);
 }
 
-test "compact encoding removes visible wiki punctuation from encoded bytes" {
+test "compact encoding removes contracted wiki markers from encoded bytes" {
     const sample =
         \\==English==
         \\* {{alt|en|colour}}
@@ -493,7 +534,19 @@ test "compact encoding removes visible wiki punctuation from encoded bytes" {
     const encoded = try encodeAlloc(std.testing.allocator, sample);
     defer std.testing.allocator.free(encoded);
 
-    for ([_][]const u8{ "{{", "}}", "[[", "]]", "==English==", "|en|", "<!--", "-->" }) |marker| {
+    for ([_][]const u8{ "{{", "}}", "[[", "]]", "==English==", "|en|" }) |marker| {
         try std.testing.expect(std.mem.indexOf(u8, encoded, marker) == null);
     }
+}
+
+test "compact encoding re-encodes non-ascii utf literals into packed forms" {
+    const sample = "caf\u{00E9} \u{1F642}";
+    const encoded = try encodeAlloc(std.testing.allocator, sample);
+    defer std.testing.allocator.free(encoded);
+    const decoded = try decodeAlloc(std.testing.allocator, encoded);
+    defer std.testing.allocator.free(decoded);
+
+    try std.testing.expectEqualStrings(sample, decoded);
+    try std.testing.expect(std.mem.indexOf(u8, encoded, "\xC3\xA9") == null);
+    try std.testing.expect(std.mem.indexOf(u8, encoded, "\xF0\x9F\x99\x82") == null);
 }

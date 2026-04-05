@@ -37,6 +37,8 @@ pub const LanguageLabel = struct {
 };
 
 pub const BuildData = struct {
+    // Highest-frequency exact patterns emitted as direct 1-byte opcodes.
+    compact_direct_patterns: []const []const u8 = &.{},
     // Heading encodings that do not depend on heading depth.
     heading_specs: []const HeadingSpec,
     // Heading encodings that are only valid at a specific wiktionary depth.
@@ -53,6 +55,8 @@ pub const BuildData = struct {
     structure_fingerprint: u32,
 
     pub fn deinit(self: *BuildData, allocator: std.mem.Allocator) void {
+        for (self.compact_direct_patterns) |entry| allocator.free(entry);
+        allocator.free(self.compact_direct_patterns);
         for (self.heading_specs) |entry| allocator.free(entry.title);
         allocator.free(self.heading_specs);
         for (self.heading_level_specs) |entry| allocator.free(entry.title);
@@ -297,13 +301,60 @@ pub fn buildDataFromLegacyAlloc(
     defer deinitOwnedStringMap(allocator, void, &covered_template_names);
     try compact_pattern_seed.seedCoveredTemplateNames(allocator, &covered_template_names);
 
+    var covered_patterns: std.StringHashMapUnmanaged(void) = .empty;
+    defer deinitOwnedStringMap(allocator, void, &covered_patterns);
+    try compact_pattern_seed.seedCoveredPatterns(allocator, &covered_patterns);
+
     var compact_patterns_all: std.ArrayList(GeneratedCompactPattern) = .empty;
     defer compact_patterns_all.deinit(allocator);
     var compact_pattern_indexes = std.StringHashMapUnmanaged(usize).empty;
     defer deinitOwnedStringMap(allocator, usize, &compact_pattern_indexes);
+    for (heading_levels.items) |heading_entry| {
+        const pattern = compactPatternForHeading(allocator, heading_entry.level, heading_entry.title) orelse continue;
+        if (covered_patterns.contains(pattern)) {
+            allocator.free(pattern);
+            continue;
+        }
+        const gop = try compact_pattern_indexes.getOrPut(allocator, pattern);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = pattern;
+            gop.value_ptr.* = compact_patterns_all.items.len;
+            try compact_patterns_all.append(allocator, .{
+                .pattern = gop.key_ptr.*,
+                .count = heading_entry.count,
+            });
+        } else {
+            allocator.free(pattern);
+            compact_patterns_all.items[gop.value_ptr.*].count += heading_entry.count;
+        }
+    }
     for (line_templates.items) |template_entry| {
         if (covered_template_names.contains(template_entry.name)) continue;
         const pattern = compactPatternForTemplate(allocator, template_entry.name) orelse continue;
+        if (covered_patterns.contains(pattern)) {
+            allocator.free(pattern);
+            continue;
+        }
+        const gop = try compact_pattern_indexes.getOrPut(allocator, pattern);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = pattern;
+            gop.value_ptr.* = compact_patterns_all.items.len;
+            try compact_patterns_all.append(allocator, .{
+                .pattern = gop.key_ptr.*,
+                .count = template_entry.count,
+            });
+        } else {
+            allocator.free(pattern);
+            compact_patterns_all.items[gop.value_ptr.*].count += template_entry.count;
+        }
+    }
+    for (templates.items) |template_entry| {
+        if (covered_template_names.contains(template_entry.name)) continue;
+        const pattern = compactPatternForTemplate(allocator, template_entry.name) orelse continue;
+        if (covered_patterns.contains(pattern)) {
+            allocator.free(pattern);
+            continue;
+        }
         const gop = try compact_pattern_indexes.getOrPut(allocator, pattern);
         if (!gop.found_existing) {
             gop.key_ptr.* = pattern;
@@ -318,6 +369,11 @@ pub fn buildDataFromLegacyAlloc(
         }
     }
     std.mem.sortUnstable(GeneratedCompactPattern, compact_patterns_all.items, {}, generatedCompactPatternLessThan);
+
+    const direct_capacity: usize = compact_pattern_seed.max_direct_pattern_count - compact_pattern_seed.static_direct_patterns.len;
+    const direct_end: usize = @min(compact_patterns_all.items.len, direct_capacity);
+    const escaped_end: usize = @min(compact_patterns_all.items.len, direct_end + @as(usize, 50));
+    const extended_end: usize = @min(compact_patterns_all.items.len, direct_end + @as(usize, 250));
 
     var target_languages: std.ArrayList(GeneratedTargetLanguage) = .empty;
     defer target_languages.deinit(allocator);
@@ -341,11 +397,12 @@ pub fn buildDataFromLegacyAlloc(
     std.mem.sortUnstable(GeneratedTargetLanguage, target_languages.items, {}, generatedTargetLanguageLessThan);
 
     const build = BuildData{
+        .compact_direct_patterns = try dupCompactPatternSliceAlloc(allocator, compact_patterns_all.items[0..direct_end]),
         .heading_specs = try dupHeadingSpecsAlloc(allocator, headings.items),
         .heading_level_specs = try dupHeadingLevelSpecsAlloc(allocator, heading_levels.items),
         .line_templates = try dupTemplateSpecsAlloc(allocator, line_templates.items),
-        .compact_patterns = try dupCompactPatternSliceAlloc(allocator, compact_patterns_all.items[0..@min(compact_patterns_all.items.len, 50)]),
-        .compact_patterns_ext = try dupCompactPatternSliceAlloc(allocator, compact_patterns_all.items[@min(compact_patterns_all.items.len, 50)..@min(compact_patterns_all.items.len, 250)]),
+        .compact_patterns = try dupCompactPatternSliceAlloc(allocator, compact_patterns_all.items[direct_end..escaped_end]),
+        .compact_patterns_ext = try dupCompactPatternSliceAlloc(allocator, compact_patterns_all.items[escaped_end..extended_end]),
         .translation_templates = try dupTemplateSpecsAlloc(allocator, templates.items),
         .target_languages = try dupTargetLanguageSpecsAlloc(allocator, target_languages.items),
         .language_labels = try dupLanguageLabelSpecsAlloc(allocator, labels.items),
@@ -359,6 +416,7 @@ pub fn buildDataFromLegacyAlloc(
 pub fn computeStructureFingerprint(build: BuildData) u32 {
     var hasher = std.hash.Wyhash.init(0x8f3c2d17c4a9b651);
 
+    for (build.compact_direct_patterns) |entry| fingerprintUpdateString(&hasher, entry);
     for (build.heading_level_specs) |entry| {
         var code_buf: [2]u8 = undefined;
         std.mem.writeInt(u16, &code_buf, entry.code, .little);
@@ -437,6 +495,17 @@ pub fn generateStructureTableSourceAlloc(
         \\    level: u8,
         \\    title: []const u8,
         \\    kind: SectionKind,
+        \\};
+        \\
+        \\pub const compact_direct_patterns = [_][]const u8{
+        \\
+    );
+    for (build.compact_direct_patterns) |entry| {
+        try writer.writeAll("    ");
+        try appendZigStringLiteral(writer, entry);
+        try writer.writeAll(",\n");
+    }
+    try writer.writeAll(
         \\};
         \\
         \\pub const heading_level_specs = [_]HeadingLevelSpec{
@@ -558,6 +627,8 @@ pub fn generateStructureTableSourceAlloc(
         \\    @setEvalBranchQuota(1_000_000);
         \\    var hasher = std.hash.Wyhash.init(0x8f3c2d17c4a9b651);
         \\
+        \\    for (compact_direct_patterns) |entry| fingerprintUpdateString(&hasher, entry);
+        \\
         \\    for (heading_level_specs) |entry| {
         \\        var code_buf: [2]u8 = undefined;
         \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
@@ -637,6 +708,7 @@ pub fn generateStructureTableSourceFromLegacyJsonAlloc(
 }
 
 fn validateBuildData(build: BuildData) !void {
+    if (build.compact_direct_patterns.len + compact_pattern_seed.static_direct_patterns.len > compact_pattern_seed.max_direct_pattern_count) return error.TooManyGeneratedCompactPatterns;
     if (build.heading_specs.len + 1 > std.math.maxInt(u16)) return error.TooManyGeneratedHeadings;
     if (build.heading_level_specs.len + 1 > std.math.maxInt(u16)) return error.TooManyGeneratedHeadingLevels;
     if (build.line_templates.len > std.math.maxInt(u16)) return error.TooManyGeneratedTemplates;
@@ -720,6 +792,19 @@ fn compactPatternForTemplate(allocator: std.mem.Allocator, name: []const u8) ?[]
     }
 
     return std.fmt.allocPrint(allocator, "{{{{{s}|", .{name}) catch null;
+}
+
+fn compactPatternForHeading(allocator: std.mem.Allocator, level: u8, title: []const u8) ?[]u8 {
+    if (level == 0 or title.len == 0) return null;
+    if (level > 8) return null;
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    for (0..level) |_| out.append(allocator, '=') catch return null;
+    out.appendSlice(allocator, title) catch return null;
+    for (0..level) |_| out.append(allocator, '=') catch return null;
+    return out.toOwnedSlice(allocator) catch null;
 }
 
 fn dupHeadingSpecsAlloc(allocator: std.mem.Allocator, items: []const GeneratedHeading) ![]const HeadingSpec {
@@ -821,8 +906,24 @@ test "buildDataFromLegacyAlloc excludes templates already covered by static seed
     });
     defer build.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(usize, 1), build.compact_patterns.len);
-    try std.testing.expectEqualStrings("{{custom form of|", build.compact_patterns[0]);
+    try std.testing.expectEqual(@as(usize, 1), build.compact_direct_patterns.len);
+    try std.testing.expectEqual(@as(usize, 0), build.compact_patterns.len);
+    try std.testing.expectEqualStrings("{{custom form of|", build.compact_direct_patterns[0]);
+}
+
+test "buildDataFromLegacyAlloc promotes exact heading lines into compact direct patterns" {
+    var build = try buildDataFromLegacyAlloc(std.testing.allocator, .{
+        .heading_profiles = &.{
+            .{ .title = "Noun", .parser_kind = "part-of-speech", .count = 10 },
+        },
+        .headings_by_level = &.{
+            .{ .key = "L3:Noun", .count = 10 },
+        },
+    });
+    defer build.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), build.compact_direct_patterns.len);
+    try std.testing.expectEqualStrings("===Noun===", build.compact_direct_patterns[0]);
 }
 
 test "generateStructureTableSourceFromExactJsonAlloc validates the embedded fingerprint" {

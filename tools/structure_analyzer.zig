@@ -2104,6 +2104,7 @@ test "json report includes exact build payload and omits exploratory sections" {
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"build\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"anomalies\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"compact_direct_patterns\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"heading_specs\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"template_shapes_by_heading\"") == null);
 }

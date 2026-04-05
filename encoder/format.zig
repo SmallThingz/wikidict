@@ -2,8 +2,8 @@ const std = @import("std");
 const compact = @import("compact_encoding.zig");
 const generated = @import("generated_structure_tables");
 
-pub const magic = "WIKDIC27";
-pub const version: u32 = 27;
+pub const magic = "WIKDIC28";
+pub const version: u32 = 28;
 pub const max_serialized_payload_len: u32 = 0x00ff_ffff;
 pub const legacy_magic_v25 = "WIKDIC25";
 pub const legacy_version_v25: u32 = 25;

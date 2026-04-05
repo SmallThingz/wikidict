@@ -1,5 +1,21 @@
 const std = @import("std");
 
+pub const static_direct_patterns = [_][]const u8{
+    "{{",
+    "}}",
+    "[[",
+    "]]",
+    "==",
+    "===",
+    "====",
+    "\n# ",
+    "\n## ",
+    "\n#: ",
+    "\n#* ",
+    "|en|",
+    "\n* ",
+};
+
 pub const static_escaped_patterns = [_][]const u8{
     "|head=",
     "|title=",
@@ -168,6 +184,8 @@ pub const static_extended_escaped_patterns = [_][]const u8{
     "|nolinkhead=",
 };
 
+pub const max_direct_pattern_count: usize = 0xFD - 0xE0 + 1;
+
 pub fn seedCoveredTemplateNames(
     allocator: std.mem.Allocator,
     covered: *std.StringHashMapUnmanaged(void),
@@ -177,6 +195,24 @@ pub fn seedCoveredTemplateNames(
         const gop = try covered.getOrPut(allocator, name);
         if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, name);
     }
+}
+
+pub fn seedCoveredPatterns(
+    allocator: std.mem.Allocator,
+    covered: *std.StringHashMapUnmanaged(void),
+) !void {
+    for (static_direct_patterns) |pattern| try seedCoveredPattern(allocator, covered, pattern);
+    for (static_escaped_patterns) |pattern| try seedCoveredPattern(allocator, covered, pattern);
+    for (static_extended_escaped_patterns) |pattern| try seedCoveredPattern(allocator, covered, pattern);
+}
+
+fn seedCoveredPattern(
+    allocator: std.mem.Allocator,
+    covered: *std.StringHashMapUnmanaged(void),
+    pattern: []const u8,
+) !void {
+    const gop = try covered.getOrPut(allocator, pattern);
+    if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, pattern);
 }
 
 fn templateNameFromPattern(pattern: []const u8) ?[]const u8 {
@@ -201,4 +237,17 @@ test "seedCoveredTemplateNames extracts template identifiers" {
     try std.testing.expect(covered.contains("plural of"));
     try std.testing.expect(covered.contains("quote-book"));
     try std.testing.expect(!covered.contains("|head="));
+}
+
+test "seedCoveredPatterns includes static direct patterns" {
+    var covered: std.StringHashMapUnmanaged(void) = .empty;
+    defer {
+        var it = covered.iterator();
+        while (it.next()) |entry| std.testing.allocator.free(entry.key_ptr.*);
+        covered.deinit(std.testing.allocator);
+    }
+
+    try seedCoveredPatterns(std.testing.allocator, &covered);
+    try std.testing.expect(covered.contains("{{"));
+    try std.testing.expect(covered.contains("==="));
 }
