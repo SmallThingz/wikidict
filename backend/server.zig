@@ -5,7 +5,6 @@ const decoder = @import("decoder");
 const renderer = @import("renderer");
 const system_theme = @import("theme.zig");
 const format = decoder.format;
-const compact_encoding = decoder.compact_encoding;
 const cli_args = @import("cli_args");
 
 const ReqCtx = zhttp.ReqCtx;
@@ -82,6 +81,52 @@ const AppContext = struct {
         return self.db.entryAt(@intCast(index)).hasRaw();
     }
 };
+
+fn truncateFd(fd: std.posix.fd_t, length: usize) !void {
+    const signed_length = std.math.cast(i64, length) orelse return error.FileTooBig;
+    switch (@import("builtin").os.tag) {
+        .linux => switch (std.posix.errno(std.os.linux.ftruncate(fd, signed_length))) {
+            .SUCCESS => {},
+            .INTR => return truncateFd(fd, length),
+            .ACCES => return error.AccessDenied,
+            .BADF => return error.FileNotFound,
+            .FBIG => return error.FileTooBig,
+            .INVAL => return error.InvalidArgument,
+            .IO => return error.InputOutput,
+            .NOSPC => return error.NoSpaceLeft,
+            .PERM => return error.AccessDenied,
+            .TXTBSY => return error.FileBusy,
+            else => |err| return std.posix.unexpectedErrno(err),
+        },
+        else => @compileError("truncateFd is only implemented for Linux"),
+    }
+}
+
+fn writeMappedFile(path: []const u8, contents: []const u8) !void {
+    const map_len = @max(contents.len, 1);
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .RDWR,
+        .CREAT = true,
+        .TRUNC = true,
+        .CLOEXEC = true,
+    }, 0o666);
+    errdefer _ = std.os.linux.close(fd);
+    try truncateFd(fd, map_len);
+
+    const mapping = try std.posix.mmap(
+        null,
+        map_len,
+        .{ .READ = true, .WRITE = true },
+        .{ .TYPE = .SHARED },
+        fd,
+        0,
+    );
+    defer std.posix.munmap(mapping);
+
+    @memcpy(mapping[0..contents.len], contents);
+    try truncateFd(fd, contents.len);
+    _ = std.os.linux.close(fd);
+}
 
 const AssetsMw = zhttp.middleware.Static(.{
     .dir = "frontend/dist/assets",
@@ -286,19 +331,19 @@ const LookupEndpoint = struct {
 const App = blk: {
     @setEvalBranchQuota(12_000);
     break :blk zhttp.Server(.{
-    .Context = AppContext,
-    .middlewares = .{AssetsMw},
-    .operations = .{zhttp.operations.Static},
-    .routes = .{
-        zhttp.get("/", IndexPage),
-        zhttp.get("/entry/{*path}", EntryPage),
-        zhttp.get("/api/stats", StatsEndpoint),
-        zhttp.get("/api/word-of-day", WordOfDayEndpoint),
-        zhttp.get("/api/theme/system", SystemThemeEndpoint),
-        zhttp.get("/api/random", RandomEndpoint),
-        zhttp.get("/api/search", SearchEndpoint),
-        zhttp.get("/api/lookup/{term}", LookupEndpoint),
-    },
+        .Context = AppContext,
+        .middlewares = .{AssetsMw},
+        .operations = .{zhttp.operations.Static},
+        .routes = .{
+            zhttp.get("/", IndexPage),
+            zhttp.get("/entry/{*path}", EntryPage),
+            zhttp.get("/api/stats", StatsEndpoint),
+            zhttp.get("/api/word-of-day", WordOfDayEndpoint),
+            zhttp.get("/api/theme/system", SystemThemeEndpoint),
+            zhttp.get("/api/random", RandomEndpoint),
+            zhttp.get("/api/search", SearchEndpoint),
+            zhttp.get("/api/lookup/{term}", LookupEndpoint),
+        },
     });
 };
 
@@ -307,6 +352,9 @@ pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
         .db_path = cli_args.flagValue(args, "--db") orelse "data/wiktionary.bin",
         .port = (try cli_args.parseOptionalIntFlag(u16, args, "--port")) orelse 3000,
     };
+    ensurePathExistsOrExit(io, options.db_path, "dictionary");
+    ensurePathExistsOrExit(io, "frontend/dist/index.html", "frontend shell");
+    ensurePathExistsOrExit(io, "frontend/dist/assets", "frontend assets");
 
     var ctx = try AppContext.init(io, allocator, options);
     defer ctx.deinit();
@@ -320,6 +368,19 @@ pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
         .address = addr,
         .ctx = &ctx,
     });
+}
+
+fn ensurePathExistsOrExit(io: std.Io, path: []const u8, label: []const u8) void {
+    _ = std.Io.Dir.cwd().statFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.debug.print("{s} not found: {s}\n", .{ label, path });
+            std.process.exit(1);
+        },
+        else => {
+            std.debug.print("failed to access {s} at {s}: {s}\n", .{ label, path, @errorName(err) });
+            std.process.exit(1);
+        },
+    };
 }
 
 fn lookupKindString(kind: u8) []const u8 {
@@ -535,23 +596,12 @@ test "backend rejects invalidly encoded dictionary" {
     const rel_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/broken.bin", .{tmp.sub_path});
     defer std.testing.allocator.free(rel_path);
 
-    var file = try tmp.dir.createFile(std.testing.io, "broken.bin", .{ .truncate = true });
-    defer file.close(std.testing.io);
-
-    const encoded_title = try compact_encoding.encodeAlloc(std.testing.allocator, "broken");
-    defer std.testing.allocator.free(encoded_title);
-
-    var record: std.ArrayList(u8) = .empty;
-    defer record.deinit(std.testing.allocator);
-    try record.append(std.testing.allocator, format.record_flag_has_raw);
-    var len_buf: [10]u8 = undefined;
-    try record.appendSlice(std.testing.allocator, format.encodeVarUInt(&len_buf, encoded_title.len));
-    try record.appendSlice(std.testing.allocator, encoded_title);
-    try record.appendSlice(std.testing.allocator, format.encodeVarUInt(&len_buf, 0));
-
-    const header = format.Header.init(1, 1, 0, @sizeOf(format.Header), record.items.len);
-    try file.writePositionalAll(std.testing.io, std.mem.asBytes(&header), 0);
-    try file.writePositionalAll(std.testing.io, record.items, @sizeOf(format.Header));
+    var bytes: std.ArrayList(u8) = .empty;
+    defer bytes.deinit(std.testing.allocator);
+    try bytes.appendSlice(std.testing.allocator, &.{ 1, 0, 0, 0 });
+    try bytes.appendSlice(std.testing.allocator, &.{ 1, 0, 0 });
+    try bytes.append(std.testing.allocator, 'x');
+    try writeMappedFile(rel_path, bytes.items);
 
     try std.testing.expectError(error.InvalidDictionaryFile, AppContext.init(std.testing.io, std.testing.allocator, .{
         .db_path = rel_path,

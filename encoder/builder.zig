@@ -160,8 +160,8 @@ const BuildProgress = struct {
 };
 
 pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !BuildStats {
-    var input_file = try std.Io.Dir.cwd().openFile(io, options.input_path, .{});
-    defer input_file.close(io);
+    var input = try mmapReadOnlyPath(io, options.input_path);
+    defer input.deinit();
 
     const temp_output_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{options.output_path});
     defer allocator.free(temp_output_path);
@@ -173,29 +173,15 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
 
     var stats: BuildStats = .{};
 
-    const stat = try input_file.stat(io);
+    const stat = input.stat;
     var progress = BuildProgress.init(@intCast(stat.size));
     {
-        var output_file = try std.Io.Dir.cwd().createFile(io, temp_output_path, .{ .truncate = true });
-        defer output_file.close(io);
-
-        var output = try OutputWriter.init(io, allocator, output_file);
+        var output = try OutputWriter.init(io, allocator, temp_output_path);
         defer output.deinit(allocator);
 
         if (stat.size != 0) {
-            const map_len = std.mem.alignForward(usize, @as(usize, @intCast(stat.size)), std.heap.page_size_min);
-            const mapped = try std.posix.mmap(
-                null,
-                map_len,
-                .{ .READ = true },
-                .{ .TYPE = .PRIVATE },
-                input_file.handle,
-                0,
-            );
-            defer std.posix.munmap(mapped);
-
-            const input = mapped[0..@as(usize, @intCast(stat.size))];
-            const worker_count = encodeThreadCount(input.len, options.limit_entries, options.worker_threads);
+            const input_bytes = input.bytes();
+            const worker_count = encodeThreadCount(input_bytes.len, options.limit_entries, options.worker_threads);
             progress.setScanningParallel(worker_count > 1);
             if (worker_count == 1) {
                 var stream_parser = StreamParser.init(allocator);
@@ -205,7 +191,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
                 defer page_arena.deinit();
 
                 try processMappedInputSequential(
-                    input,
+                    input_bytes,
                     options.limit_entries,
                     &stream_parser,
                     &page_arena,
@@ -217,7 +203,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
                 try processMappedInputParallel(
                     io,
                     allocator,
-                    input,
+                    input_bytes,
                     worker_count,
                     temp_output_path,
                     &output,
@@ -230,6 +216,8 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
         progress.finishScanning();
         progress.setWriting(output.entry_count, output.redirect_count);
         try output.finish();
+        stats.english_entries = output.entry_count;
+        stats.redirect_aliases = output.redirect_count;
     }
 
     if (options.limit_entries == null) {
@@ -246,11 +234,6 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
         stats.redirect_aliases = filtered.redirect_count;
         try std.Io.Dir.cwd().rename(filtered_output_path, std.Io.Dir.cwd(), options.output_path, io);
     } else {
-        var built_file = try std.Io.Dir.cwd().openFile(io, temp_output_path, .{});
-        defer built_file.close(io);
-        const built_header = try readDictionaryHeader(io, built_file);
-        stats.english_entries = built_header.entry_count;
-        stats.redirect_aliases = built_header.redirect_count;
         try std.Io.Dir.cwd().rename(temp_output_path, std.Io.Dir.cwd(), options.output_path, io);
     }
     progress.finish(stats.pages_seen, stats.english_entries);
@@ -426,10 +409,7 @@ fn processEncodeChunkFallible(job: *EncodeChunkJob) !void {
     var page_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer page_arena.deinit();
 
-    var temp_file = try std.Io.Dir.cwd().createFile(job.io, job.temp_output_path, .{ .truncate = true });
-    defer temp_file.close(job.io);
-
-    var output = try OutputWriter.init(job.io, std.heap.smp_allocator, temp_file);
+    var output = try OutputWriter.init(job.io, std.heap.smp_allocator, job.temp_output_path);
     defer output.deinit(std.heap.smp_allocator);
 
     var stats: BuildStats = .{};
@@ -459,20 +439,24 @@ fn processEncodeChunkFallible(job: *EncodeChunkJob) !void {
 }
 
 fn appendChunkFileToOutput(io: std.Io, chunk_path: []const u8, output: *OutputWriter) !void {
-    var chunk_file = try std.Io.Dir.cwd().openFile(io, chunk_path, .{});
-    defer chunk_file.close(io);
+    var chunk = try mmapReadOnlyPath(io, chunk_path);
+    defer chunk.deinit();
 
-    const stat = try chunk_file.stat(io);
-    const mapped = try mapWholeFile(chunk_file, stat.size);
-    defer std.posix.munmap(mapped);
+    const mapped = chunk.bytes();
+    const inspected = try validateDictionaryHeader(mapped, chunk.stat.size);
+    const lengths_start: usize = @intCast(inspected.layout.lengths_offset);
+    const lengths_end: usize = @intCast(inspected.layout.lengths_offset + inspected.layout.lengths_len);
+    const titles_start: usize = @intCast(inspected.layout.titles_offset);
+    const titles_end: usize = @intCast(inspected.layout.titles_offset + inspected.layout.titles_len);
+    const payloads_start: usize = @intCast(inspected.layout.records_offset);
+    const payloads_end: usize = @intCast(inspected.layout.records_offset + inspected.layout.records_len);
 
-    const header = try validateDictionaryHeader(mapped, stat.size);
-    const records_start: usize = @intCast(header.records_offset);
-    const records_end: usize = @intCast(header.records_offset + header.records_len);
-    try output.writeBytes(mapped[records_start..records_end]);
-    output.entry_count += header.entry_count;
-    output.raw_entry_count += header.raw_entry_count;
-    output.redirect_count += header.redirect_count;
+    try output.writeLengthBytes(mapped[lengths_start..lengths_end]);
+    try output.writeTitleBytes(mapped[titles_start..titles_end]);
+    try output.writePayloadBytes(mapped[payloads_start..payloads_end]);
+    output.entry_count += inspected.header.entry_count;
+    output.raw_entry_count += inspected.header.raw_entry_count;
+    output.redirect_count += inspected.header.redirect_count;
 }
 
 const PageCapture = struct {
@@ -535,36 +519,58 @@ fn processPageFragment(
     const title_raw = capture.title_raw orelse return;
 
     if (capture.text_raw) |text_raw| {
-        const text = try xml_decode.decodeAlloc(allocator, text_raw);
-        if (try wikitext.extractConfiguredLanguageSectionsAlloc(allocator, text, .defaultCompact())) |stored_sections| {
+        var text = try decodeXmlViewAlloc(allocator, text_raw);
+        defer text.deinit(allocator);
+        if (try wikitext.extractConfiguredLanguageSectionsAlloc(allocator, text.value, .defaultCompact())) |stored_sections| {
             defer allocator.free(stored_sections);
-            const title = try xml_decode.decodeAlloc(allocator, title_raw);
+            var title = try decodeXmlViewAlloc(allocator, title_raw);
+            defer title.deinit(allocator);
             var metadata: wikitext.EntryMetadata = .{};
             defer metadata.deinit(allocator);
             if (wikitext.extractEnglishSection(stored_sections)) |english_section| {
-                metadata = try wikitext.extractEntryMetadata(allocator, title, english_section);
+                metadata = try wikitext.extractEntryMetadata(allocator, title.value, english_section);
             }
-            const raw_payload = try buildRawRecordPayloadAlloc(allocator, stored_sections, metadata);
-            defer allocator.free(raw_payload);
-            try output.writeRawRecord(title, raw_payload);
+            try output.writeRawRecord(title.value, stored_sections, metadata);
             return;
         }
     }
 
     if (capture.redirect_title_raw) |raw| {
-        const title = try xml_decode.decodeAlloc(allocator, title_raw);
-        const target = try xml_decode.decodeAlloc(allocator, raw);
+        var title = try decodeXmlViewAlloc(allocator, title_raw);
+        defer title.deinit(allocator);
+        var target = try decodeXmlViewAlloc(allocator, raw);
+        defer target.deinit(allocator);
         try output.writeRedirectRecord(
-            title,
-            target,
+            title.value,
+            target.value,
         );
         stats.redirect_aliases += 1;
     }
 }
 
+const DecodedXmlView = struct {
+    value: []const u8,
+    owned: ?[]u8 = null,
+
+    fn deinit(self: *DecodedXmlView, allocator: std.mem.Allocator) void {
+        if (self.owned) |owned| allocator.free(owned);
+    }
+};
+
+fn decodeXmlViewAlloc(allocator: std.mem.Allocator, raw: []const u8) !DecodedXmlView {
+    if (std.mem.indexOfScalar(u8, raw, '&') == null) {
+        return .{ .value = raw };
+    }
+    const owned = try xml_decode.decodeAlloc(allocator, raw);
+    return .{
+        .value = owned,
+        .owned = owned,
+    };
+}
+
 const BinaryRecord = struct {
     flags: u8,
-    encoded_title: []const u8,
+    title: []const u8,
     payload: []const u8,
 };
 
@@ -619,15 +625,12 @@ fn filterAliasRecordsFromBinary(
     thread_override: ?usize,
     progress: *BuildProgress,
 ) !FilterResult {
-    var source_file = try std.Io.Dir.cwd().openFile(io, source_path, .{});
-    defer source_file.close(io);
+    var source = try mmapReadOnlyPath(io, source_path);
+    defer source.deinit();
 
-    const stat = try source_file.stat(io);
-    const mapped = try mapWholeFile(source_file, stat.size);
-    defer std.posix.munmap(mapped);
-
-    const header = try validateDictionaryHeader(mapped, stat.size);
-    const records = try collectBinaryRecords(allocator, mapped, header);
+    const mapped = source.bytes();
+    const inspected = try validateDictionaryHeader(mapped, source.stat.size);
+    const records = try collectBinaryRecords(allocator, mapped, inspected);
     defer allocator.free(records);
 
     const worker_count = filterThreadCount(records.len, thread_override);
@@ -752,21 +755,33 @@ fn resolveValidTitlesFromCandidateChunks(chunks: []const CandidateChunkResult) !
 
 fn collectBinaryRecords(
     allocator: std.mem.Allocator,
-    mapped: []align(std.heap.page_size_min) const u8,
-    header: *const format.Header,
+    mapped: []const u8,
+    inspected: format.InspectedDictionary,
 ) ![]BinaryRecord {
-    const records = try allocator.alloc(BinaryRecord, header.entry_count);
+    const records = try allocator.alloc(BinaryRecord, inspected.header.entry_count);
     errdefer allocator.free(records);
 
-    var cursor: usize = @intCast(header.records_offset);
-    const records_end: usize = @intCast(header.records_offset + header.records_len);
-    var count: usize = 0;
-    while (try nextBinaryRecord(mapped, &cursor, records_end)) |record| {
-        if (count >= records.len) return error.InvalidDictionaryFile;
-        records[count] = record;
-        count += 1;
+    const titles_end: usize = @intCast(inspected.layout.titles_offset + inspected.layout.titles_len);
+    const payloads_start: usize = @intCast(inspected.layout.records_offset);
+    const payloads_end: usize = @intCast(inspected.layout.records_offset + inspected.layout.records_len);
+    const length_bytes = mapped[@as(usize, @intCast(inspected.layout.lengths_offset))..@as(usize, @intCast(inspected.layout.lengths_offset + inspected.layout.lengths_len))];
+
+    var title_cursor: usize = @intCast(inspected.layout.titles_offset);
+    var payload_cursor: usize = payloads_start;
+    for (records, 0..) |*record, idx| {
+        const title = try readNullTerminatedSlice(mapped, &title_cursor, titles_end);
+        const payload_len = try format.payloadLengthAt(length_bytes, idx);
+        if (payload_len == 0 or payload_len > payloads_end - payload_cursor) return error.InvalidDictionaryFile;
+
+        const full_payload = mapped[payload_cursor .. payload_cursor + payload_len];
+        payload_cursor += payload_len;
+        record.* = .{
+            .flags = full_payload[0],
+            .title = title,
+            .payload = full_payload[1..],
+        };
     }
-    if (count != records.len) return error.InvalidDictionaryFile;
+    if (title_cursor != titles_end or payload_cursor != payloads_end) return error.InvalidDictionaryFile;
     return records;
 }
 
@@ -778,10 +793,7 @@ fn filterAliasRecordsSequential(
     valid_titles: *const ValidTitleSet,
     progress: *BuildProgress,
 ) !FilterResult {
-    var dest_file = try std.Io.Dir.cwd().createFile(io, dest_path, .{ .truncate = true });
-    defer dest_file.close(io);
-
-    var output = try OutputWriter.init(io, allocator, dest_file);
+    var output = try OutputWriter.init(io, allocator, dest_path);
     defer output.deinit(allocator);
 
     var scratch = std.heap.ArenaAllocator.init(allocator);
@@ -856,10 +868,7 @@ fn filterAliasRecordsParallel(
         if (result.err) |err| return err;
     }
 
-    var dest_file = try std.Io.Dir.cwd().createFile(io, dest_path, .{ .truncate = true });
-    defer dest_file.close(io);
-
-    var output = try OutputWriter.init(io, allocator, dest_file);
+    var output = try OutputWriter.init(io, allocator, dest_path);
     defer output.deinit(allocator);
 
     for (results) |result| {
@@ -884,10 +893,7 @@ fn filterChunkWorkerFallible(job: *FilterChunkJob) !void {
     var scratch = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer scratch.deinit();
 
-    var temp_file = try std.Io.Dir.cwd().createFile(job.io, job.temp_output_path, .{ .truncate = true });
-    defer temp_file.close(job.io);
-
-    var output = try OutputWriter.init(job.io, std.heap.smp_allocator, temp_file);
+    var output = try OutputWriter.init(job.io, std.heap.smp_allocator, job.temp_output_path);
     defer output.deinit(std.heap.smp_allocator);
 
     for (job.records) |record| {
@@ -909,33 +915,23 @@ fn filterSingleBinaryRecord(
     scratch_allocator: std.mem.Allocator,
 ) !bool {
     _ = io;
+    _ = allocator;
     if ((record.flags & format.record_flag_has_raw) != 0) {
         const raw_metadata = try format.decodeRawRecordMetadataAlloc(scratch_allocator, record.payload);
         const filtered_targets = try filterCanonicalTargetsAlloc(scratch_allocator, raw_metadata.canonical_targets, valid_titles);
-        var keep = true;
-        if (raw_metadata.canonical_targets.len != 0) {
-            const title = try compact.decodeAlloc(scratch_allocator, record.encoded_title);
-            const encoded_raw = try format.rawRecordContentPayload(record.payload);
-            const stored_sections = try compact.decodeAlloc(scratch_allocator, encoded_raw);
-            if (wikitext.extractEnglishSection(stored_sections)) |english_section| {
-                const metadata = try wikitext.extractEntryMetadata(scratch_allocator, title, english_section);
-                keep = !(metadata.alias_only and filtered_targets.len == 0);
-            }
-        }
-        if (!keep) return false;
+        if (raw_metadata.alias_only and raw_metadata.canonical_targets.len != 0 and filtered_targets.len == 0) return false;
 
         if (filtered_targets.len == raw_metadata.canonical_targets.len) {
-            try output.writeEncodedRawRecord(record.encoded_title, record.payload);
+            try output.writeExistingRecord(record.title, record.flags, record.payload);
         } else {
             const encoded_raw = try format.rawRecordContentPayload(record.payload);
-            const payload = try format.encodeRawRecordPayloadAlloc(
-                allocator,
+            try output.writeRepackedRawRecord(
+                record.title,
                 raw_metadata.alt_forms,
                 filtered_targets,
+                raw_metadata.alias_only,
                 encoded_raw,
             );
-            defer allocator.free(payload);
-            try output.writeEncodedRawRecord(record.encoded_title, payload);
         }
         return true;
     }
@@ -943,7 +939,7 @@ fn filterSingleBinaryRecord(
     const target = try format.decodeAliasRecordTargetAlloc(scratch_allocator, record.payload);
     const normalized_target = try normalizeViewAlloc(scratch_allocator, target);
     if (!valid_titles.contains(normalized_target)) return false;
-    try output.writeEncodedRedirectRecord(record.encoded_title, record.payload);
+    try output.writeExistingRecord(record.title, record.flags, record.payload);
     return true;
 }
 
@@ -952,27 +948,17 @@ fn buildAliasCandidateFromBinaryRecord(
     scratch_allocator: std.mem.Allocator,
     record: BinaryRecord,
 ) !AliasCandidate {
-    const title = try compact.decodeAlloc(scratch_allocator, record.encoded_title);
-    const normalized_title = try normalizeOwnedAlloc(allocator, title);
+    const normalized_title = try normalizeOwnedAlloc(allocator, record.title);
     errdefer allocator.free(normalized_title);
 
     if ((record.flags & format.record_flag_has_raw) != 0) {
         const raw_metadata = try format.decodeRawRecordMetadataAlloc(scratch_allocator, record.payload);
         const normalized_targets = try normalizeTargetsAlloc(allocator, raw_metadata.canonical_targets);
         errdefer freeOwnedStringSlice(allocator, normalized_targets);
-        var base_valid = true;
-        if (raw_metadata.canonical_targets.len != 0) {
-            const encoded_raw = try format.rawRecordContentPayload(record.payload);
-            const stored_sections = try compact.decodeAlloc(scratch_allocator, encoded_raw);
-            if (wikitext.extractEnglishSection(stored_sections)) |english_section| {
-                const metadata = try wikitext.extractEntryMetadata(scratch_allocator, title, english_section);
-                base_valid = !metadata.alias_only;
-            }
-        }
         return .{
             .normalized_title = normalized_title,
             .normalized_targets = normalized_targets,
-            .base_valid = base_valid,
+            .base_valid = !raw_metadata.alias_only,
         };
     }
 
@@ -999,19 +985,9 @@ fn normalizeViewAlloc(allocator: std.mem.Allocator, value: []const u8) ![]const 
     return normalize.normalizeAlloc(allocator, value);
 }
 
-fn readDictionaryHeader(io: std.Io, file: std.Io.File) !format.Header {
-    var header: format.Header = undefined;
-    const bytes = std.mem.asBytes(&header);
-    const read_len = try file.readPositionalAll(io, bytes, 0);
-    if (read_len != bytes.len) return error.InvalidDictionaryFile;
-    if (!std.mem.eql(u8, &header.magic_bytes, format.magic)) return error.InvalidDictionaryFile;
-    if (header.version != format.version) return error.InvalidDictionaryFile;
-    return header;
-}
-
 fn mapWholeFile(file: std.Io.File, size_u64: u64) ![]align(std.heap.page_size_min) const u8 {
     const size = std.math.cast(usize, size_u64) orelse return error.FileTooBig;
-    if (size < @sizeOf(format.Header)) return error.InvalidDictionaryFile;
+    if (size < 4) return error.InvalidDictionaryFile;
 
     return try std.posix.mmap(
         null,
@@ -1023,28 +999,72 @@ fn mapWholeFile(file: std.Io.File, size_u64: u64) ![]align(std.heap.page_size_mi
     );
 }
 
-fn validateDictionaryHeader(mapped: []align(std.heap.page_size_min) const u8, size_u64: u64) !*const format.Header {
-    const size = std.math.cast(usize, size_u64) orelse return error.FileTooBig;
-    if (size < @sizeOf(format.Header)) return error.InvalidDictionaryFile;
-    const header: *const format.Header = @ptrCast(@alignCast(mapped.ptr));
-    if (!std.mem.eql(u8, &header.magic_bytes, format.magic)) return error.InvalidDictionaryFile;
-    if (header.version != format.version) return error.InvalidDictionaryFile;
-    if (header.header_size != @sizeOf(format.Header)) return error.InvalidDictionaryFile;
-    const records_end = std.math.add(u64, header.records_offset, header.records_len) catch return error.InvalidDictionaryFile;
-    if (header.records_offset < @sizeOf(format.Header) or records_end > size) return error.InvalidDictionaryFile;
-    return header;
+fn mmapReadOnlyPath(io: std.Io, path: []const u8) !MappedReadOnlyFile {
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    }, 0);
+    var file: std.Io.File = .{
+        .handle = fd,
+        .flags = .{ .nonblocking = false },
+    };
+    defer file.close(io);
+
+    const stat = try file.stat(io);
+    if (stat.size == 0) {
+        return .{
+            .stat = stat,
+            .mapping = null,
+        };
+    }
+
+    return .{
+        .stat = stat,
+        .mapping = try mapWholeFile(file, stat.size),
+    };
 }
 
-fn nextBinaryRecord(bytes: []const u8, cursor: *usize, limit: usize) !?BinaryRecord {
-    if (cursor.* >= limit) return null;
-    const flags = bytes[cursor.*];
-    cursor.* += 1;
-    const encoded_title = try readLengthPrefixedSlice(bytes, cursor, limit);
-    const payload = try readLengthPrefixedSlice(bytes, cursor, limit);
-    return .{
-        .flags = flags,
-        .encoded_title = encoded_title,
-        .payload = payload,
+fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
+fn truncateFd(fd: std.posix.fd_t, length: usize) !void {
+    const signed_length = std.math.cast(i64, length) orelse return error.FileTooBig;
+    switch (builtin.os.tag) {
+        .linux => switch (std.posix.errno(std.os.linux.ftruncate(fd, signed_length))) {
+            .SUCCESS => {},
+            .INTR => return truncateFd(fd, length),
+            .ACCES => return error.AccessDenied,
+            .BADF => return error.FileNotFound,
+            .FBIG => return error.FileTooBig,
+            .INVAL => return error.InvalidArgument,
+            .IO => return error.InputOutput,
+            .NOSPC => return error.NoSpaceLeft,
+            .PERM => return error.PermissionDenied,
+            .TXTBSY => return error.FileBusy,
+            else => |err| return std.posix.unexpectedErrno(err),
+        },
+        else => @compileError("truncateFd is only implemented for Linux"),
+    }
+}
+
+fn writeMappedFile(path: []const u8, bytes: []const u8) !void {
+    var mapped_file = try MappedWritableFile.create(std.testing.io, path, @max(bytes.len, 1));
+    defer mapped_file.deinit();
+
+    @memcpy(mapped_file.bytes()[0..bytes.len], bytes);
+    try mapped_file.finish(bytes.len);
+}
+
+fn validateDictionaryHeader(mapped: []const u8, size_u64: u64) !format.InspectedDictionary {
+    const size = std.math.cast(usize, size_u64) orelse return error.FileTooBig;
+    if (size != mapped.len) return error.InvalidDictionaryFile;
+    return format.inspectDictionary(mapped) catch |err| switch (err) {
+        error.InvalidDictionaryFile => error.InvalidDictionaryFile,
+        error.FileTooBig => error.FileTooBig,
     };
 }
 
@@ -1090,96 +1110,143 @@ fn filterCanonicalTargetsAlloc(
     return filtered[0..kept];
 }
 
-fn buildRawRecordPayloadAlloc(
-    allocator: std.mem.Allocator,
-    stored_sections: []const u8,
-    metadata: wikitext.EntryMetadata,
-) ![]u8 {
-    const encoded_raw = try compact.encodeAlloc(allocator, stored_sections);
-    defer allocator.free(encoded_raw);
-
-    return format.encodeRawRecordPayloadAlloc(
-        allocator,
-        metadata.alt_forms.items,
-        metadata.canonical_targets.items,
-        encoded_raw,
-    );
-}
-
-fn readLengthPrefixedSlice(bytes: []const u8, cursor: *usize, limit: usize) ![]const u8 {
-    const len_u64 = format.readVarUInt(bytes, cursor, limit) catch return error.InvalidDictionaryFile;
-    const len = std.math.cast(usize, len_u64) orelse return error.InvalidDictionaryFile;
-    if (cursor.* > limit or len > limit - cursor.*) return error.InvalidDictionaryFile;
-    const start = cursor.*;
-    cursor.* += len;
-    return bytes[start .. start + len];
+fn readNullTerminatedSlice(bytes: []const u8, cursor: *usize, limit: usize) ![]const u8 {
+    if (cursor.* >= limit) return error.InvalidDictionaryFile;
+    const terminator = std.mem.indexOfScalarPos(u8, bytes, cursor.*, 0) orelse return error.InvalidDictionaryFile;
+    if (terminator >= limit) return error.InvalidDictionaryFile;
+    const out = bytes[cursor.*..terminator];
+    cursor.* = terminator + 1;
+    return out;
 }
 
 const OutputWriter = struct {
     const flush_threshold = 1 << 20;
+    const initial_capacity = 8 << 20;
 
-    allocator: std.mem.Allocator,
     io: std.Io,
-    file: std.Io.File,
-    // Bytes already persisted to disk, including the placeholder header.
-    flushed_bytes: u64 = @sizeOf(format.Header),
+    allocator: std.mem.Allocator,
+    final_path: []const u8,
+    titles_path: []const u8,
+    payloads_path: []const u8,
+    titles_file: MappedWritableFile,
+    payloads_file: MappedWritableFile,
+    flushed_title_bytes: u64 = 0,
+    flushed_payload_bytes: u64 = 0,
     entry_count: usize = 0,
     raw_entry_count: usize = 0,
     redirect_count: usize = 0,
-    buffer: std.ArrayList(u8) = .empty,
-    // Scratch buffer reused for compact-encoding titles before length-prefixing them.
-    title_buf: std.ArrayList(u8) = .empty,
+    length_bytes: std.ArrayList(u8) = .empty,
+    title_buffer: std.ArrayList(u8) = .empty,
+    payload_buffer: std.ArrayList(u8) = .empty,
+    // Scratch buffer reused for compact-encoding titles, fields, and raw section payloads.
+    encode_buf: std.ArrayList(u8) = .empty,
+    // Scratch buffer reused for whole record payload bodies before the leading flag byte is added.
+    record_buf: std.ArrayList(u8) = .empty,
 
-    fn init(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File) !OutputWriter {
-        const placeholder = format.Header.init(0, 0, 0, @sizeOf(format.Header), 0);
-        try file.writePositionalAll(io, std.mem.asBytes(&placeholder), 0);
+    fn init(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !OutputWriter {
+        const titles_path = try std.fmt.allocPrint(allocator, "{s}.titles", .{path});
+        errdefer allocator.free(titles_path);
+        const payloads_path = try std.fmt.allocPrint(allocator, "{s}.payloads", .{path});
+        errdefer allocator.free(payloads_path);
+
+        deleteFileIfExists(io, titles_path) catch {};
+        deleteFileIfExists(io, payloads_path) catch {};
+
+        var titles_file = try MappedWritableFile.create(io, titles_path, initial_capacity);
+        errdefer titles_file.deinit();
+        var payloads_file = try MappedWritableFile.create(io, payloads_path, initial_capacity);
+        errdefer payloads_file.deinit();
         return .{
-            .allocator = allocator,
             .io = io,
-            .file = file,
+            .allocator = allocator,
+            .final_path = path,
+            .titles_path = titles_path,
+            .payloads_path = payloads_path,
+            .titles_file = titles_file,
+            .payloads_file = payloads_file,
         };
     }
 
     fn deinit(self: *OutputWriter, allocator: std.mem.Allocator) void {
-        self.buffer.deinit(allocator);
-        self.title_buf.deinit(allocator);
+        self.length_bytes.deinit(allocator);
+        self.title_buffer.deinit(allocator);
+        self.payload_buffer.deinit(allocator);
+        self.encode_buf.deinit(allocator);
+        self.record_buf.deinit(allocator);
+        self.titles_file.deinit();
+        self.payloads_file.deinit();
+        if (self.titles_path.len != 0) {
+            deleteFileIfExists(self.io, self.titles_path) catch {};
+            allocator.free(self.titles_path);
+            self.titles_path = "";
+        }
+        if (self.payloads_path.len != 0) {
+            deleteFileIfExists(self.io, self.payloads_path) catch {};
+            allocator.free(self.payloads_path);
+            self.payloads_path = "";
+        }
     }
 
     fn finish(self: *OutputWriter) !void {
-        try self.flushBuffer();
-        const header = format.Header.init(
-            @intCast(self.entry_count),
-            @intCast(self.raw_entry_count),
-            @intCast(self.redirect_count),
-            @sizeOf(format.Header),
-            self.flushed_bytes - @sizeOf(format.Header),
-        );
-        try self.file.writePositionalAll(self.io, std.mem.asBytes(&header), 0);
+        try self.flushTitleBuffer();
+        try self.flushPayloadBuffer();
+        try self.titles_file.finish(@intCast(self.flushed_title_bytes));
+        try self.payloads_file.finish(@intCast(self.flushed_payload_bytes));
+
+        var titles = try mmapReadOnlyPath(self.io, self.titles_path);
+        defer titles.deinit();
+        var payloads = try mmapReadOnlyPath(self.io, self.payloads_path);
+        defer payloads.deinit();
+
+        const length_bytes_len = self.length_bytes.items.len;
+        const total_len = try std.math.add(usize, 4, length_bytes_len);
+        const total_with_titles = try std.math.add(usize, total_len, titles.bytes().len);
+        const final_len = try std.math.add(usize, total_with_titles, payloads.bytes().len);
+
+        var out_file = try MappedWritableFile.create(self.io, self.final_path, @max(final_len, 1));
+        defer out_file.deinit();
+
+        const out = out_file.bytes();
+        std.mem.writeInt(u32, out[0..4], std.math.cast(u32, self.entry_count) orelse return error.FileTooBig, .little);
+
+        var cursor: usize = 4;
+        if (length_bytes_len != 0) {
+            @memcpy(out[cursor .. cursor + length_bytes_len], self.length_bytes.items);
+            cursor += length_bytes_len;
+        }
+        if (titles.bytes().len != 0) {
+            @memcpy(out[cursor .. cursor + titles.bytes().len], titles.bytes());
+            cursor += titles.bytes().len;
+        }
+        if (payloads.bytes().len != 0) {
+            @memcpy(out[cursor .. cursor + payloads.bytes().len], payloads.bytes());
+            cursor += payloads.bytes().len;
+        }
+        try out_file.finish(final_len);
+
+        deleteFileIfExists(self.io, self.titles_path) catch {};
+        self.allocator.free(self.titles_path);
+        self.titles_path = "";
+        deleteFileIfExists(self.io, self.payloads_path) catch {};
+        self.allocator.free(self.payloads_path);
+        self.payloads_path = "";
     }
 
     fn writeRawRecord(
         self: *OutputWriter,
         title: []const u8,
-        payload: []const u8,
+        stored_sections: []const u8,
+        metadata: wikitext.EntryMetadata,
     ) !void {
-        try self.writeBytes(&.{format.record_flag_has_raw});
-        const encoded_title = try compact.encodeToList(&self.title_buf, self.allocator, title);
-        try self.writeSlice(encoded_title);
-        try self.writeSlice(payload);
-        self.raw_entry_count += 1;
-        self.entry_count += 1;
-    }
-
-    fn writeEncodedRawRecord(
-        self: *OutputWriter,
-        encoded_title: []const u8,
-        payload: []const u8,
-    ) !void {
-        try self.writeBytes(&.{format.record_flag_has_raw});
-        try self.writeSlice(encoded_title);
-        try self.writeSlice(payload);
-        self.raw_entry_count += 1;
-        self.entry_count += 1;
+        self.record_buf.items.len = 0;
+        try self.record_buf.append(self.allocator, format.record_flag_has_raw);
+        try self.appendRawPayload(
+            metadata.alt_forms.items,
+            metadata.canonical_targets.items,
+            metadata.alias_only,
+            stored_sections,
+        );
+        try self.writeRecord(title, self.record_buf.items);
     }
 
     fn writeRedirectRecord(
@@ -1187,45 +1254,209 @@ const OutputWriter = struct {
         title: []const u8,
         target: []const u8,
     ) !void {
-        try self.writeBytes(&.{0});
-        const encoded_title = try compact.encodeToList(&self.title_buf, self.allocator, title);
-        try self.writeSlice(encoded_title);
-        const encoded_payload = try format.encodeAliasRecordPayloadAlloc(self.allocator, target);
-        defer self.allocator.free(encoded_payload);
-        try self.writeSlice(encoded_payload);
-        self.redirect_count += 1;
-        self.entry_count += 1;
+        self.record_buf.items.len = 0;
+        try self.record_buf.append(self.allocator, 0);
+        try self.appendCompactSlice(&self.record_buf, target);
+        try self.writeRecord(title, self.record_buf.items);
     }
 
-    fn writeEncodedRedirectRecord(
-        self: *OutputWriter,
-        encoded_title: []const u8,
-        payload: []const u8,
-    ) !void {
-        try self.writeBytes(&.{0});
-        try self.writeSlice(encoded_title);
-        try self.writeSlice(payload);
-        self.redirect_count += 1;
-        self.entry_count += 1;
+    fn writeExistingRecord(self: *OutputWriter, title: []const u8, flags: u8, payload: []const u8) !void {
+        self.record_buf.items.len = 0;
+        try self.record_buf.append(self.allocator, flags);
+        try self.record_buf.appendSlice(self.allocator, payload);
+        try self.writeRecord(title, self.record_buf.items);
     }
 
-    fn writeSlice(self: *OutputWriter, value: []const u8) !void {
+    fn appendCompactSlice(self: *OutputWriter, out: *std.ArrayList(u8), value: []const u8) !void {
+        const encoded = try compact.encodeToList(&self.encode_buf, self.allocator, value);
         var len_buf: [10]u8 = undefined;
-        try self.writeBytes(format.encodeVarUInt(&len_buf, value.len));
-        try self.writeBytes(value);
+        try out.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, encoded.len));
+        try out.appendSlice(self.allocator, encoded);
     }
 
-    fn writeBytes(self: *OutputWriter, bytes: []const u8) !void {
+    fn appendRawPayload(
+        self: *OutputWriter,
+        alt_forms: []const []const u8,
+        canonical_targets: []const []const u8,
+        alias_only: bool,
+        stored_sections: []const u8,
+    ) !void {
+        var len_buf: [10]u8 = undefined;
+        try self.record_buf.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, alt_forms.len));
+        for (alt_forms) |alt_form| try self.appendCompactSlice(&self.record_buf, alt_form);
+
+        try self.record_buf.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, canonical_targets.len));
+        for (canonical_targets) |target| try self.appendCompactSlice(&self.record_buf, target);
+
+        try self.record_buf.append(self.allocator, if (alias_only) 1 else 0);
+        try self.appendCompactSlice(&self.record_buf, stored_sections);
+    }
+
+    fn writeRepackedRawRecord(
+        self: *OutputWriter,
+        title: []const u8,
+        alt_forms: []const []const u8,
+        canonical_targets: []const []const u8,
+        alias_only: bool,
+        encoded_raw: []const u8,
+    ) !void {
+        self.record_buf.items.len = 0;
+        try self.record_buf.append(self.allocator, format.record_flag_has_raw);
+        var len_buf: [10]u8 = undefined;
+        try self.record_buf.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, alt_forms.len));
+        for (alt_forms) |alt_form| try self.appendCompactSlice(&self.record_buf, alt_form);
+
+        try self.record_buf.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, canonical_targets.len));
+        for (canonical_targets) |target| try self.appendCompactSlice(&self.record_buf, target);
+
+        try self.record_buf.append(self.allocator, if (alias_only) 1 else 0);
+        try self.record_buf.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, encoded_raw.len));
+        try self.record_buf.appendSlice(self.allocator, encoded_raw);
+        try self.writeRecord(title, self.record_buf.items);
+    }
+
+    fn writeRecord(self: *OutputWriter, title: []const u8, full_payload: []const u8) !void {
+        if (std.mem.indexOfScalar(u8, title, 0) != null) return error.InvalidDictionaryFile;
+        var len_buf: [3]u8 = undefined;
+        try self.length_bytes.appendSlice(self.allocator, try format.writeU24(&len_buf, full_payload.len));
+        try self.writeTitleBytes(title);
+        try self.writeTitleBytes(&.{0});
+        try self.writePayloadBytes(full_payload);
+
+        self.entry_count += 1;
+        if (full_payload[0] == format.record_flag_has_raw) {
+            self.raw_entry_count += 1;
+        } else {
+            self.redirect_count += 1;
+        }
+    }
+
+    fn writeLengthBytes(self: *OutputWriter, bytes: []const u8) !void {
         if (bytes.len == 0) return;
-        try self.buffer.appendSlice(self.allocator, bytes);
-        if (self.buffer.items.len >= flush_threshold) try self.flushBuffer();
+        try self.length_bytes.appendSlice(self.allocator, bytes);
     }
 
-    fn flushBuffer(self: *OutputWriter) !void {
-        if (self.buffer.items.len == 0) return;
-        try self.file.writePositionalAll(self.io, self.buffer.items, self.flushed_bytes);
-        self.flushed_bytes += self.buffer.items.len;
-        self.buffer.items.len = 0;
+    fn writeTitleBytes(self: *OutputWriter, bytes: []const u8) !void {
+        if (bytes.len == 0) return;
+        try self.title_buffer.appendSlice(self.allocator, bytes);
+        if (self.title_buffer.items.len >= flush_threshold) try self.flushTitleBuffer();
+    }
+
+    fn writePayloadBytes(self: *OutputWriter, bytes: []const u8) !void {
+        if (bytes.len == 0) return;
+        try self.payload_buffer.appendSlice(self.allocator, bytes);
+        if (self.payload_buffer.items.len >= flush_threshold) try self.flushPayloadBuffer();
+    }
+
+    fn flushTitleBuffer(self: *OutputWriter) !void {
+        if (self.title_buffer.items.len == 0) return;
+        const start: usize = @intCast(self.flushed_title_bytes);
+        const end = start + self.title_buffer.items.len;
+        try self.titles_file.ensureCapacity(end);
+        @memcpy(self.titles_file.bytes()[start..end], self.title_buffer.items);
+        self.flushed_title_bytes += self.title_buffer.items.len;
+        self.title_buffer.items.len = 0;
+    }
+
+    fn flushPayloadBuffer(self: *OutputWriter) !void {
+        if (self.payload_buffer.items.len == 0) return;
+        const start: usize = @intCast(self.flushed_payload_bytes);
+        const end = start + self.payload_buffer.items.len;
+        try self.payloads_file.ensureCapacity(end);
+        @memcpy(self.payloads_file.bytes()[start..end], self.payload_buffer.items);
+        self.flushed_payload_bytes += self.payload_buffer.items.len;
+        self.payload_buffer.items.len = 0;
+    }
+};
+
+const MappedReadOnlyFile = struct {
+    stat: std.Io.File.Stat,
+    mapping: ?[]align(std.heap.page_size_min) const u8,
+
+    fn bytes(self: MappedReadOnlyFile) []const u8 {
+        return if (self.mapping) |mapping|
+            mapping[0..@as(usize, @intCast(self.stat.size))]
+        else
+            &.{};
+    }
+
+    fn deinit(self: *MappedReadOnlyFile) void {
+        if (self.mapping) |mapping| std.posix.munmap(mapping);
+        self.mapping = null;
+    }
+};
+
+const MappedWritableFile = struct {
+    fd: std.posix.fd_t,
+    mapping: []align(std.heap.page_size_min) u8,
+    capacity: usize,
+    finished: bool = false,
+
+    fn create(io: std.Io, path: []const u8, initial_capacity: usize) !MappedWritableFile {
+        const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
+            .ACCMODE = .RDWR,
+            .CREAT = true,
+            .TRUNC = true,
+            .CLOEXEC = true,
+        }, 0o666);
+        errdefer _ = std.os.linux.close(fd);
+
+        const capacity = std.mem.alignForward(usize, @max(initial_capacity, 1), std.heap.page_size_min);
+        try truncateFd(fd, capacity);
+        const mapping = try std.posix.mmap(
+            null,
+            capacity,
+            .{ .READ = true, .WRITE = true },
+            .{ .TYPE = .SHARED },
+            fd,
+            0,
+        );
+        _ = io;
+        return .{
+            .fd = fd,
+            .mapping = mapping,
+            .capacity = capacity,
+        };
+    }
+
+    fn bytes(self: *MappedWritableFile) []u8 {
+        return self.mapping[0..self.capacity];
+    }
+
+    fn ensureCapacity(self: *MappedWritableFile, needed: usize) !void {
+        if (needed <= self.capacity) return;
+
+        var new_capacity = self.capacity;
+        while (new_capacity < needed) new_capacity *= 2;
+        new_capacity = std.mem.alignForward(usize, new_capacity, std.heap.page_size_min);
+
+        std.posix.munmap(self.mapping);
+        try truncateFd(self.fd, new_capacity);
+        self.mapping = try std.posix.mmap(
+            null,
+            new_capacity,
+            .{ .READ = true, .WRITE = true },
+            .{ .TYPE = .SHARED },
+            self.fd,
+            0,
+        );
+        self.capacity = new_capacity;
+    }
+
+    fn finish(self: *MappedWritableFile, final_len: usize) !void {
+        if (self.finished) return;
+        std.posix.munmap(self.mapping);
+        self.mapping = undefined;
+        try truncateFd(self.fd, final_len);
+        _ = std.os.linux.close(self.fd);
+        self.finished = true;
+    }
+
+    fn deinit(self: *MappedWritableFile) void {
+        if (self.finished) return;
+        std.posix.munmap(self.mapping);
+        _ = std.os.linux.close(self.fd);
+        self.finished = true;
     }
 };
 
@@ -1233,10 +1464,10 @@ test "output writer buffers survive page arena resets" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var file = try tmp.dir.createFile(std.testing.io, "dict.bin.tmp", .{ .truncate = true });
-    defer file.close(std.testing.io);
+    const output_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin.tmp", .{tmp.sub_path});
+    defer std.testing.allocator.free(output_path);
 
-    var writer = try OutputWriter.init(std.testing.io, std.testing.allocator, file);
+    var writer = try OutputWriter.init(std.testing.io, std.testing.allocator, output_path);
     defer writer.deinit(std.testing.allocator);
 
     var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -1247,9 +1478,7 @@ test "output writer buffers survive page arena resets" {
     const first_payload = try first_alloc.dupe(u8, "==English==\n===Noun===\n# [[light]]\n");
     var metadata = try wikitext.extractEntryMetadata(std.testing.allocator, first_title, first_payload);
     defer metadata.deinit(std.testing.allocator);
-    const first_record_payload = try buildRawRecordPayloadAlloc(std.testing.allocator, first_payload, metadata);
-    defer std.testing.allocator.free(first_record_payload);
-    try writer.writeRawRecord(first_title, first_record_payload);
+    try writer.writeRawRecord(first_title, first_payload, metadata);
 
     _ = page_arena.reset(.retain_capacity);
 
@@ -1266,17 +1495,15 @@ test "output writer accepts english section without trailing heading newline" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var file = try tmp.dir.createFile(std.testing.io, "dict.bin.tmp", .{ .truncate = true });
-    defer file.close(std.testing.io);
+    const output_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin.tmp", .{tmp.sub_path});
+    defer std.testing.allocator.free(output_path);
 
-    var writer = try OutputWriter.init(std.testing.io, std.testing.allocator, file);
+    var writer = try OutputWriter.init(std.testing.io, std.testing.allocator, output_path);
     defer writer.deinit(std.testing.allocator);
 
     var metadata = try wikitext.extractEntryMetadata(std.testing.allocator, "color", "==English==");
     defer metadata.deinit(std.testing.allocator);
-    const payload = try buildRawRecordPayloadAlloc(std.testing.allocator, "==English==", metadata);
-    defer std.testing.allocator.free(payload);
-    try writer.writeRawRecord("color", payload);
+    try writer.writeRawRecord("color", "==English==", metadata);
     try writer.finish();
 
     try std.testing.expectEqual(@as(usize, 1), writer.entry_count);
@@ -1323,14 +1550,11 @@ test "full build filters unresolved alias records in binary second pass" {
         \\</mediawiki>
     ;
 
-    var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
-    defer xml_file.close(std.testing.io);
-    try xml_file.writePositionalAll(std.testing.io, xml, 0);
-
     const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
     defer std.testing.allocator.free(db_path);
     const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
     defer std.testing.allocator.free(xml_path);
+    try writeMappedFile(xml_path, xml);
 
     const stats = try build(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
@@ -1339,29 +1563,26 @@ test "full build filters unresolved alias records in binary second pass" {
     try std.testing.expectEqual(@as(usize, 3), stats.english_entries);
     try std.testing.expectEqual(@as(usize, 1), stats.redirect_aliases);
 
-    var db_file = try std.Io.Dir.cwd().openFile(std.testing.io, db_path, .{});
-    defer db_file.close(std.testing.io);
-    const stat = try db_file.stat(std.testing.io);
-    const mapped = try mapWholeFile(db_file, stat.size);
-    defer std.posix.munmap(mapped);
-    const header = try validateDictionaryHeader(mapped, stat.size);
-    try std.testing.expectEqual(@as(u32, 3), header.entry_count);
-    try std.testing.expectEqual(@as(u32, 2), header.raw_entry_count);
-    try std.testing.expectEqual(@as(u32, 1), header.redirect_count);
+    var mapped_db = try mmapReadOnlyPath(std.testing.io, db_path);
+    defer mapped_db.deinit();
+    const mapped = mapped_db.bytes();
+    const inspected = try validateDictionaryHeader(mapped, mapped.len);
+    try std.testing.expectEqual(@as(u32, 3), inspected.header.entry_count);
+    try std.testing.expectEqual(@as(u32, 2), inspected.header.raw_entry_count);
+    try std.testing.expectEqual(@as(u32, 1), inspected.header.redirect_count);
+
+    const records = try collectBinaryRecords(std.testing.allocator, mapped, inspected);
+    defer std.testing.allocator.free(records);
 
     var saw_color = false;
     var saw_colour = false;
     var saw_colours = false;
     var saw_broken = false;
-    var cursor: usize = @intCast(header.records_offset);
-    const records_end: usize = @intCast(header.records_offset + header.records_len);
-    while (try nextBinaryRecord(mapped, &cursor, records_end)) |record| {
-        const title = try compact.decodeAlloc(std.testing.allocator, record.encoded_title);
-        defer std.testing.allocator.free(title);
-        if (std.mem.eql(u8, title, "color")) saw_color = true;
-        if (std.mem.eql(u8, title, "colour")) saw_colour = true;
-        if (std.mem.eql(u8, title, "colours")) saw_colours = true;
-        if (std.mem.eql(u8, title, "broken")) saw_broken = true;
+    for (records) |record| {
+        if (std.mem.eql(u8, record.title, "color")) saw_color = true;
+        if (std.mem.eql(u8, record.title, "colour")) saw_colour = true;
+        if (std.mem.eql(u8, record.title, "colours")) saw_colours = true;
+        if (std.mem.eql(u8, record.title, "broken")) saw_broken = true;
     }
 
     try std.testing.expect(saw_color);

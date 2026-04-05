@@ -4,7 +4,7 @@ English Wiktionary parsed from the XML dump into a compact binary format, with:
 
 - `encoder/`: package root with the encoding library and CLI
 - `decoder/`: package root with the loading, indexing, and query library and CLI
-- `backend/`: package root with the `zhttp` server that auto-builds the binary if it is missing
+- `backend/`: package root with the `zhttp` server
 - `frontend/`: SolidJS UI
 
 ## Layout
@@ -21,6 +21,10 @@ build.zig
 The Zig sources now live directly under each package root, for example `encoder/root.zig` and `backend/main.zig`.
 
 ## Zig Commands
+
+All `zig build <command>` entrypoints now fail fast if a required input file is missing. The only exception is the decoder sidecar index file (`.idx`), which is still rebuilt on demand.
+
+`data/wiktionary-structure.json` is now the single source of truth for the virtual `generated/structure_tables.zig` module used by `encode`, `decode`, `serve`, and `verify`. Run `zig build structure` to refresh it explicitly when the dump changes.
 
 Build the encoder, decoder, and backend executables:
 
@@ -77,19 +81,16 @@ zig build structure -- \
 
 The structure analyzer runs in `ReleaseFast` by default and emits structured JSON by default. The report includes:
 
-- exact heading profiles with canonical titles, heading families, and parser kinds
-- formatting signatures by heading and by family
-- template usage by heading and by family
-- translation source-label frequencies and target language-code frequencies
-- structural anomalies such as bad parentage, level jumps, and pre-heading content
+- `input`: source metadata
+- `summary`: high-level structure counts
+- `anomalies`: bounded anomaly counts and samples
+- `build`: the exact tables and fingerprint used to synthesize the virtual `generated/structure_tables.zig`
 
 Run the backend server:
 
 ```bash
 zig build -Doptimize=ReleaseFast serve -- --db data/wiktionary.bin --port 3000
 ```
-
-If `data/wiktionary.bin` does not exist, the backend will build it from `data/wiktionary.xml` before serving requests.
 
 ## Frontend Commands
 
@@ -102,6 +103,8 @@ zig build frontend -- check
 zig build frontend -- dev
 zig build frontend -- preview
 ```
+
+`build`, `check`, `dev`, and `preview` require existing frontend dependencies. Use `zig build frontend -- install` explicitly when you want to install them.
 
 The Vite dev server proxies `/api/*` to `http://127.0.0.1:3000`.
 

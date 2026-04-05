@@ -5,6 +5,8 @@ const zxml = @import("zxml");
 const encoder = @import("encoder");
 const wikitext = encoder.wikitext;
 const xml_decode = encoder.xml_decode;
+const required_path = @import("required_path.zig");
+const structure_tables_support = @import("structure_tables_support.zig");
 
 const parse_opts: zxml.ParseOptions = .{
     .mode = .strict,
@@ -30,6 +32,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const options = try parseOptions(args[1..]);
+    required_path.ensureExistsOrExit(init.io, options.input_path, "structure input");
     const stats = try analyzeDump(init.io, init.gpa, options);
 
     try printStdOut(
@@ -163,6 +166,7 @@ const Analyzer = struct {
     anomaly_kind_counts: std.StringHashMapUnmanaged(u64) = .empty,
     anomaly_samples: std.ArrayListUnmanaged(AnomalySample) = .empty,
     key_scratch: std.ArrayList(u8) = .empty,
+    shape_scratch: std.ArrayList(u8) = .empty,
 
     fn init(gpa: std.mem.Allocator, options: Options) Analyzer {
         return .{
@@ -196,6 +200,7 @@ const Analyzer = struct {
         self.anomaly_kind_counts.deinit(self.gpa);
         self.anomaly_samples.deinit(self.gpa);
         self.key_scratch.deinit(self.gpa);
+        self.shape_scratch.deinit(self.gpa);
         self.arena.deinit();
     }
 
@@ -343,9 +348,7 @@ const Analyzer = struct {
     fn recordHeading(self: *Analyzer, title: []const u8, heading: wikitext.ParsedHeading, active_titles: *[7][]const u8, language_title: []const u8) !void {
         try self.bump(&self.heading_title_counts, heading.title);
         self.key_scratch.items.len = 0;
-        const level_key = try std.fmt.allocPrint(self.gpa, "L{d}:{s}", .{ heading.level, heading.title });
-        defer self.gpa.free(level_key);
-        try self.key_scratch.appendSlice(self.gpa, level_key);
+        try appendHeadingLabel(&self.key_scratch, self.gpa, heading.level, heading.title);
         try self.bump(&self.heading_level_counts, self.key_scratch.items);
 
         const profile = classifyHeadingTitle(heading.title, heading.level);
@@ -360,9 +363,12 @@ const Analyzer = struct {
         if (heading.level > deepest_before + 1) {
             self.heading_jumps += 1;
             self.key_scratch.items.len = 0;
-            const jump_detail = try std.fmt.allocPrint(self.gpa, "jump from L{d} to L{d}: {s}", .{ deepest_before, heading.level, heading.title });
-            defer self.gpa.free(jump_detail);
-            try self.key_scratch.appendSlice(self.gpa, jump_detail);
+            try self.key_scratch.appendSlice(self.gpa, "jump from L");
+            try appendUnsignedDecimal(&self.key_scratch, self.gpa, deepest_before);
+            try self.key_scratch.appendSlice(self.gpa, " to L");
+            try appendUnsignedDecimal(&self.key_scratch, self.gpa, heading.level);
+            try self.key_scratch.appendSlice(self.gpa, ": ");
+            try self.key_scratch.appendSlice(self.gpa, heading.title);
             try self.addAnomaly(title, "heading-level-jump", self.key_scratch.items);
         }
 
@@ -427,15 +433,19 @@ const Analyzer = struct {
             classifyHeadingTitle(if (parent_level == 2) language_title else parent_title, parent_level).family;
 
         if (!isExpectedHeadingLevel(profile.family, heading.level)) {
-            const detail = try std.fmt.allocPrint(self.gpa, "{s} at L{d}", .{ heading.title, heading.level });
-            defer self.gpa.free(detail);
-            try self.addAnomaly(title, "unexpected-heading-level", detail);
+            self.key_scratch.items.len = 0;
+            try self.key_scratch.appendSlice(self.gpa, heading.title);
+            try self.key_scratch.appendSlice(self.gpa, " at L");
+            try appendUnsignedDecimal(&self.key_scratch, self.gpa, heading.level);
+            try self.addAnomaly(title, "unexpected-heading-level", self.key_scratch.items);
         }
 
         if (!isExpectedHeadingParent(profile.family, parent_kind)) {
-            const detail = try std.fmt.allocPrint(self.gpa, "{s} under {s}", .{ heading.title, parent_title });
-            defer self.gpa.free(detail);
-            try self.addAnomaly(title, "unexpected-heading-parent", detail);
+            self.key_scratch.items.len = 0;
+            try self.key_scratch.appendSlice(self.gpa, heading.title);
+            try self.key_scratch.appendSlice(self.gpa, " under ");
+            try self.key_scratch.appendSlice(self.gpa, parent_title);
+            try self.addAnomaly(title, "unexpected-heading-parent", self.key_scratch.items);
         }
     }
 
@@ -490,8 +500,7 @@ const Analyzer = struct {
                 };
                 const body = std.mem.trim(u8, line[pos + 1 .. end], " \t");
                 if (std.mem.startsWith(u8, body, "http://") or std.mem.startsWith(u8, body, "https://")) {
-                    const shape = try externalLinkShapeAlloc(self.gpa, body);
-                    defer self.gpa.free(shape);
+                    const shape = externalLinkShape(body);
                     try self.bump(&self.link_shape_counts, shape);
                     try self.bumpComposite(&self.section_link_shape_counts, scope, shape, "\t");
                     try self.bumpComposite(&self.family_link_shape_counts, family, shape, "\t");
@@ -538,11 +547,113 @@ const AnalyzeChunkJob = struct {
     mapped: []const u8,
     chunk: AnalyzeChunk,
     result: *AnalyzeChunkResult,
+    progress: *StructureProgress,
+};
+
+const StructureProgress = struct {
+    const refresh_interval_ns = std.time.ns_per_s / 20;
+
+    const Phase = enum {
+        scanning,
+        writing,
+        done,
+    };
+
+    total_input_bytes: usize,
+    scanned_input_bytes: std.atomic.Value(usize) = .init(0),
+    scanned_pages: std.atomic.Value(usize) = .init(0),
+    scanned_language_entries: std.atomic.Value(usize) = .init(0),
+    mutex: std.Io.Mutex = .init,
+    phase: Phase = .scanning,
+    scanning_parallel: bool = false,
+    last_percent: u8 = 255,
+    last_primary: usize = std.math.maxInt(usize),
+    last_secondary: usize = std.math.maxInt(usize),
+    last_render_ns: i96 = 0,
+
+    fn init(total_input_bytes: usize) StructureProgress {
+        return .{ .total_input_bytes = total_input_bytes };
+    }
+
+    fn setScanningParallel(self: *StructureProgress, scanning_parallel: bool) void {
+        self.scanning_parallel = scanning_parallel;
+    }
+
+    fn scanAdvance(self: *StructureProgress, input_bytes_delta: usize, page_delta: usize, language_entry_delta: usize) void {
+        const consumed_input_bytes = self.scanned_input_bytes.fetchAdd(input_bytes_delta, .monotonic) + input_bytes_delta;
+        const pages = self.scanned_pages.fetchAdd(page_delta, .monotonic) + page_delta;
+        const language_entries = self.scanned_language_entries.fetchAdd(language_entry_delta, .monotonic) + language_entry_delta;
+        const percent = if (self.total_input_bytes == 0)
+            97
+        else
+            @as(u8, @intCast(@min(97, (consumed_input_bytes * 97) / self.total_input_bytes)));
+        self.render(.scanning, percent, pages, language_entries);
+    }
+
+    fn finishScanning(self: *StructureProgress) void {
+        const pages = self.scanned_pages.load(.monotonic);
+        const language_entries = self.scanned_language_entries.load(.monotonic);
+        self.render(.scanning, 97, pages, language_entries);
+    }
+
+    fn setWriting(self: *StructureProgress, pages: usize, language_entries: usize) void {
+        self.render(.writing, 98, pages, language_entries);
+    }
+
+    fn finish(self: *StructureProgress, pages: usize, language_entries: usize) void {
+        self.render(.done, 100, pages, language_entries);
+        if (!builtin.is_test) std.debug.print("\n", .{});
+    }
+
+    fn render(self: *StructureProgress, phase: Phase, percent: u8, primary: usize, secondary: usize) void {
+        if (builtin.is_test) return;
+        self.mutex.lockUncancelable(std.Options.debug_io);
+        defer self.mutex.unlock(std.Options.debug_io);
+
+        if (self.phase == phase and self.last_percent == percent and self.last_primary == primary and self.last_secondary == secondary) return;
+        const now_ns = std.Io.Timestamp.now(std.Options.debug_io, .awake).toNanoseconds();
+        if (!shouldRenderNow(self, phase, now_ns)) return;
+
+        self.phase = phase;
+        self.last_percent = percent;
+        self.last_primary = primary;
+        self.last_secondary = secondary;
+        self.last_render_ns = now_ns;
+
+        var bar: [24]u8 = undefined;
+        @memset(&bar, '.');
+        const filled = @min(bar.len, (bar.len * percent) / 100);
+        @memset(bar[0..filled], '#');
+
+        switch (phase) {
+            .scanning, .done => std.debug.print(
+                "\rscan struct [{s}] {d:>3}% {s} (pages={d} language_entries={d})",
+                .{ &bar, percent, phaseLabel(self, phase), primary, secondary },
+            ),
+            .writing => std.debug.print(
+                "\rscan struct [{s}] {d:>3}% {s} (pages={d} language_entries={d})",
+                .{ &bar, percent, phaseLabel(self, phase), primary, secondary },
+            ),
+        }
+    }
+
+    fn phaseLabel(self: *const StructureProgress, phase: Phase) []const u8 {
+        return switch (phase) {
+            .scanning => if (self.scanning_parallel) "scan xml in parallel" else "scan xml",
+            .writing => "write report",
+            .done => "ready",
+        };
+    }
+
+    fn shouldRenderNow(self: *const StructureProgress, phase: Phase, now_ns: i96) bool {
+        if (phase == .done or phase != self.phase) return true;
+        return now_ns - self.last_render_ns >= refresh_interval_ns;
+    }
 };
 
 fn analyzeDump(io: std.Io, allocator: std.mem.Allocator, options: Options) !AnalyzeStats {
-    var input_file = try std.Io.Dir.cwd().openFile(io, options.input_path, .{});
-    defer input_file.close(io);
+    var input = try mmapReadOnlyPath(io, options.input_path);
+    defer input.deinit();
 
     var analyzer = Analyzer.init(allocator, options);
     defer analyzer.deinit();
@@ -553,40 +664,87 @@ fn analyzeDump(io: std.Io, allocator: std.mem.Allocator, options: Options) !Anal
     var page_arena = std.heap.ArenaAllocator.init(allocator);
     defer page_arena.deinit();
 
-    const stat = try input_file.stat(io);
+    const stat = input.stat;
     if (stat.size == 0) return analyzer.stats();
 
-    const map_len = std.mem.alignForward(usize, @as(usize, @intCast(stat.size)), std.heap.page_size_min);
-    const mapped = try std.posix.mmap(
-        null,
-        map_len,
-        .{ .READ = true },
-        .{ .TYPE = .PRIVATE },
-        input_file.handle,
-        0,
-    );
-    defer std.posix.munmap(mapped);
-
-    const input = mapped[0..@as(usize, @intCast(stat.size))];
-    const worker_count = analyzeThreadCount(input.len, options.limit_entries, options.worker_threads);
+    const input_bytes = input.bytes();
+    var progress = StructureProgress.init(@intCast(stat.size));
+    const worker_count = analyzeThreadCount(input_bytes.len, options.limit_entries, options.worker_threads);
+    progress.setScanningParallel(worker_count > 1);
     if (worker_count == 1) {
         try processMappedInputSequential(
-            input,
+            input_bytes,
             &stream_parser,
             &page_arena,
             &analyzer,
+            &progress,
         );
     } else {
         try processMappedInputParallel(
             allocator,
-            input,
+            input_bytes,
             options,
             worker_count,
             &analyzer,
+            &progress,
         );
     }
+    progress.finishScanning();
+    progress.setWriting(analyzer.pages_seen, analyzer.language_entries);
     try writeReport(io, allocator, &analyzer);
+    progress.finish(analyzer.pages_seen, analyzer.language_entries);
     return analyzer.stats();
+}
+
+const MappedReadOnlyFile = struct {
+    stat: std.Io.File.Stat,
+    mapping: ?[]align(std.heap.page_size_min) const u8,
+
+    fn bytes(self: MappedReadOnlyFile) []const u8 {
+        return if (self.mapping) |mapping|
+            mapping[0..@as(usize, @intCast(self.stat.size))]
+        else
+            &.{};
+    }
+
+    fn deinit(self: *MappedReadOnlyFile) void {
+        if (self.mapping) |mapping| std.posix.munmap(mapping);
+        self.mapping = null;
+    }
+};
+
+fn mmapReadOnlyPath(io: std.Io, path: []const u8) !MappedReadOnlyFile {
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    }, 0);
+    var file: std.Io.File = .{
+        .handle = fd,
+        .flags = .{ .nonblocking = false },
+    };
+    defer file.close(io);
+
+    const stat = try file.stat(io);
+    if (stat.size == 0) {
+        return .{
+            .stat = stat,
+            .mapping = null,
+        };
+    }
+
+    const size = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
+    const mapping = try std.posix.mmap(
+        null,
+        size,
+        .{ .READ = true },
+        .{ .TYPE = .PRIVATE },
+        file.handle,
+        0,
+    );
+    return .{
+        .stat = stat,
+        .mapping = mapping,
+    };
 }
 
 fn analyzeThreadCount(total_input_bytes: usize, limit_entries: ?usize, thread_override: ?usize) usize {
@@ -626,6 +784,7 @@ fn processMappedInputParallel(
     options: Options,
     worker_count: usize,
     analyzer: *Analyzer,
+    progress: *StructureProgress,
 ) !void {
     const chunks = try collectAnalyzeChunksAlloc(allocator, mapped, worker_count);
     defer allocator.free(chunks);
@@ -648,6 +807,7 @@ fn processMappedInputParallel(
             .mapped = mapped,
             .chunk = chunk,
             .result = result,
+            .progress = progress,
         };
     }
 
@@ -691,9 +851,11 @@ fn processAnalyzeChunkFallible(job: *AnalyzeChunkJob) !void {
         if (page_end > job.chunk.end) break;
 
         const page_allocator = page_arena.allocator();
+        const language_entries_before = job.result.analyzer.language_entries;
         processPageFragment(page_allocator, &parser, job.mapped[start..page_end], &job.result.analyzer) catch |err| {
             std.log.warn("skipping page after parse error: {}", .{err});
         };
+        job.progress.scanAdvance(page_end - start, 1, job.result.analyzer.language_entries - language_entries_before);
         consumed = page_end;
         _ = page_arena.reset(.retain_capacity);
     }
@@ -704,6 +866,7 @@ fn processMappedInputSequential(
     stream_parser: *StreamParser,
     page_arena: *std.heap.ArenaAllocator,
     analyzer: *Analyzer,
+    progress: *StructureProgress,
 ) !void {
     var consumed: usize = 0;
     while (true) {
@@ -712,21 +875,16 @@ fn processMappedInputSequential(
         const page_end = end_start + "</page>".len;
 
         const page_allocator = page_arena.allocator();
+        const language_entries_before = analyzer.language_entries;
         processPageFragment(page_allocator, stream_parser, mapped[start..page_end], analyzer) catch |err| {
             std.log.warn("skipping page after parse error: {}", .{err});
         };
+        progress.scanAdvance(page_end - start, 1, analyzer.language_entries - language_entries_before);
         consumed = page_end;
         _ = page_arena.reset(.retain_capacity);
 
         if (analyzer.options.limit_entries) |limit| {
             if (analyzer.language_entries >= limit) break;
-        }
-        if (analyzer.pages_seen != 0 and analyzer.pages_seen % 10_000 == 0) {
-            std.log.info("pages={d} ns0={d} language_entries={d}", .{
-                analyzer.pages_seen,
-                analyzer.namespace_zero_pages,
-                analyzer.language_entries,
-            });
         }
     }
 }
@@ -747,8 +905,14 @@ fn processPageFragment(
     analyzer.namespace_zero_pages += 1;
 
     const text_raw = capture.text_raw orelse return;
-    const text = try xml_decode.decodeAlloc(allocator, text_raw);
-    const title = try xml_decode.decodeAlloc(allocator, capture.title_raw orelse return);
+    var decoded_text = try decodeXmlBorrowOrAlloc(allocator, text_raw);
+    defer decoded_text.deinit(allocator);
+    const text = decoded_text.slice();
+
+    var decoded_title = try decodeXmlBorrowOrAlloc(allocator, capture.title_raw orelse return);
+    defer decoded_title.deinit(allocator);
+    const title = decoded_title.slice();
+
     const stored_sections = (try wikitext.extractConfiguredLanguageSectionsAlloc(allocator, text, .defaultCompact())) orelse return;
 
     var section_start: ?usize = null;
@@ -770,20 +934,64 @@ fn processPageFragment(
     if (section_start) |start| try analyzer.analyzeEntry(title, section_title, stored_sections[start..stored_sections.len]);
 }
 
+const DecodedXmlText = union(enum) {
+    borrowed: []const u8,
+    owned: []u8,
+
+    fn slice(self: DecodedXmlText) []const u8 {
+        return switch (self) {
+            .borrowed => |value| value,
+            .owned => |value| value,
+        };
+    }
+
+    fn deinit(self: *DecodedXmlText, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .borrowed => {},
+            .owned => |value| allocator.free(value),
+        }
+    }
+};
+
+fn decodeXmlBorrowOrAlloc(allocator: std.mem.Allocator, input: []const u8) !DecodedXmlText {
+    if (std.mem.indexOfScalar(u8, input, '&') == null) {
+        return .{ .borrowed = input };
+    }
+    return .{ .owned = try xml_decode.decodeAlloc(allocator, input) };
+}
+
 fn writeReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
-    if (analyzer.options.format == .json) {
-        try writeJsonReport(io, allocator, analyzer);
+    if (std.mem.eql(u8, analyzer.options.output_path, "-")) {
+        var stdout_buffer: [4096]u8 = undefined;
+        var stdout_writer = std.Io.File.stdout().writerStreaming(io, &stdout_buffer);
+        defer stdout_writer.flush() catch {};
+
+        if (analyzer.options.format == .json) {
+            try writeJsonReportToWriter(&stdout_writer.interface, allocator, analyzer);
+            return;
+        }
+
+        try writeTextReportToWriter(&stdout_writer.interface, allocator, analyzer);
         return;
     }
 
-    try writeTextReport(io, allocator, analyzer);
+    var file = try std.Io.Dir.cwd().createFile(io, analyzer.options.output_path, .{ .truncate = true });
+    defer file.close(io);
+
+    var buffer: [4096]u8 = undefined;
+    var writer = file.writerStreaming(io, &buffer);
+    defer writer.flush() catch {};
+
+    if (analyzer.options.format == .json) {
+        try writeJsonReportToWriter(&writer.interface, allocator, analyzer);
+        return;
+    }
+
+    try writeTextReportToWriter(&writer.interface, allocator, analyzer);
 }
 
-fn writeTextReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
-    var out: std.Io.Writer.Allocating = .init(allocator);
-    defer out.deinit();
-
-    try out.writer.print(
+fn writeTextReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
+    try writer.print(
         \\# Wiktionary Structure Report
         \\
         \\Input: {s}
@@ -806,141 +1014,51 @@ fn writeTextReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer
         analyzer.unbalanced_sections,
     });
 
-    try writeSortedMap(&out.writer, allocator, analyzer.heading_kind_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Parser Kinds\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.parser_kind_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Heading Titles\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.heading_title_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Headings By Level\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.heading_level_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Unclassified Headings\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.unclassified_heading_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Heading Transitions\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.heading_edge_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Global Formatting Signatures\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.line_signature_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Formatting By Active Heading\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.section_signature_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Formatting By Heading Family\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.family_signature_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Template Names\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.template_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Templates By Active Heading\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.section_template_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Templates By Heading Family\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.family_template_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Template Shapes\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.template_shape_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Template Shapes By Active Heading\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.section_template_shape_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Template Shapes By Heading Family\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.family_template_shape_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Link Shapes\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.link_shape_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Link Shapes By Active Heading\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.section_link_shape_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Link Shapes By Heading Family\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.family_link_shape_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Translation Source Labels\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.translation_source_label_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Translation Target Languages\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.translation_target_lang_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Structural Anomaly Kinds\n\n", .{});
-    try writeSortedMap(&out.writer, allocator, analyzer.anomaly_kind_counts, analyzer.options.top_n);
-    try out.writer.print("\n## Structural Anomaly Samples\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.heading_kind_counts, analyzer.options.top_n);
+    try writer.print("\n## Parser Kinds\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.parser_kind_counts, analyzer.options.top_n);
+    try writer.print("\n## Heading Titles\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.heading_title_counts, analyzer.options.top_n);
+    try writer.print("\n## Headings By Level\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.heading_level_counts, analyzer.options.top_n);
+    try writer.print("\n## Unclassified Headings\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.unclassified_heading_counts, analyzer.options.top_n);
+    try writer.print("\n## Heading Transitions\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.heading_edge_counts, analyzer.options.top_n);
+    try writer.print("\n## Global Formatting Signatures\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.line_signature_counts, analyzer.options.top_n);
+    try writer.print("\n## Formatting By Active Heading\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.section_signature_counts, analyzer.options.top_n);
+    try writer.print("\n## Formatting By Heading Family\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.family_signature_counts, analyzer.options.top_n);
+    try writer.print("\n## Template Names\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.template_counts, analyzer.options.top_n);
+    try writer.print("\n## Templates By Active Heading\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.section_template_counts, analyzer.options.top_n);
+    try writer.print("\n## Templates By Heading Family\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.family_template_counts, analyzer.options.top_n);
+    try writer.print("\n## Template Shapes\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.template_shape_counts, analyzer.options.top_n);
+    try writer.print("\n## Template Shapes By Active Heading\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.section_template_shape_counts, analyzer.options.top_n);
+    try writer.print("\n## Template Shapes By Heading Family\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.family_template_shape_counts, analyzer.options.top_n);
+    try writer.print("\n## Link Shapes\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.link_shape_counts, analyzer.options.top_n);
+    try writer.print("\n## Link Shapes By Active Heading\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.section_link_shape_counts, analyzer.options.top_n);
+    try writer.print("\n## Link Shapes By Heading Family\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.family_link_shape_counts, analyzer.options.top_n);
+    try writer.print("\n## Translation Source Labels\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.translation_source_label_counts, analyzer.options.top_n);
+    try writer.print("\n## Translation Target Languages\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.translation_target_lang_counts, analyzer.options.top_n);
+    try writer.print("\n## Structural Anomaly Kinds\n\n", .{});
+    try writeSortedMap(writer, allocator, analyzer.anomaly_kind_counts, analyzer.options.top_n);
+    try writer.print("\n## Structural Anomaly Samples\n\n", .{});
     for (analyzer.anomaly_samples.items) |sample| {
-        try out.writer.print("- [{s}] {s}: {s}\n", .{ sample.kind, sample.title, sample.detail });
+        try writer.print("- [{s}] {s}: {s}\n", .{ sample.kind, sample.title, sample.detail });
     }
-
-    if (std.mem.eql(u8, analyzer.options.output_path, "-")) {
-        try std.Io.File.stdout().writeStreamingAll(io, out.written());
-        return;
-    }
-
-    var file = try std.Io.Dir.cwd().createFile(io, analyzer.options.output_path, .{ .truncate = true });
-    defer file.close(io);
-    try file.writePositionalAll(io, out.written(), 0);
-}
-
-fn writeJsonReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
-    var out: std.Io.Writer.Allocating = .init(allocator);
-    defer out.deinit();
-
-    try out.writer.print("{{\n", .{});
-    try out.writer.print("  \"input\": ", .{});
-    try writeJsonString(&out.writer, analyzer.options.input_path);
-    try out.writer.print(",\n  \"summary\": {{\"pages_scanned\": {d}, \"namespace_zero_pages\": {d}, \"language_entries\": {d}, \"heading_level_jumps\": {d}, \"content_before_subheading\": {d}, \"unbalanced_sections\": {d}, \"unclassified_heading_titles\": {d}}},\n", .{
-        analyzer.pages_seen,
-        analyzer.namespace_zero_pages,
-        analyzer.language_entries,
-        analyzer.heading_jumps,
-        analyzer.content_before_subheading,
-        analyzer.unbalanced_sections,
-        analyzer.unclassified_heading_counts.count(),
-    });
-
-    try writeJsonMapField(&out.writer, allocator, "heading_families", analyzer.heading_kind_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonMapField(&out.writer, allocator, "parser_kinds", analyzer.parser_kind_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonHeadingProfilesField(&out.writer, allocator, analyzer.heading_title_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonMapField(&out.writer, allocator, "headings_by_level", analyzer.heading_level_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonMapField(&out.writer, allocator, "unclassified_headings", analyzer.unclassified_heading_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonMapField(&out.writer, allocator, "heading_transitions", analyzer.heading_edge_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonMapField(&out.writer, allocator, "formatting_signatures", analyzer.line_signature_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonCompositeField(&out.writer, allocator, "formatting_by_heading", analyzer.section_signature_counts, "heading", "signature");
-    try out.writer.print(",\n", .{});
-    try writeJsonCompositeField(&out.writer, allocator, "formatting_by_family", analyzer.family_signature_counts, "family", "signature");
-    try out.writer.print(",\n", .{});
-    try writeJsonMapField(&out.writer, allocator, "template_names", analyzer.template_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonCompositeField(&out.writer, allocator, "templates_by_heading", analyzer.section_template_counts, "heading", "template");
-    try out.writer.print(",\n", .{});
-    try writeJsonCompositeField(&out.writer, allocator, "templates_by_family", analyzer.family_template_counts, "family", "template");
-    try out.writer.print(",\n", .{});
-    try writeJsonMapField(&out.writer, allocator, "template_shapes", analyzer.template_shape_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonCompositeField(&out.writer, allocator, "template_shapes_by_heading", analyzer.section_template_shape_counts, "heading", "shape");
-    try out.writer.print(",\n", .{});
-    try writeJsonCompositeField(&out.writer, allocator, "template_shapes_by_family", analyzer.family_template_shape_counts, "family", "shape");
-    try out.writer.print(",\n", .{});
-    try writeJsonMapField(&out.writer, allocator, "link_shapes", analyzer.link_shape_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonCompositeField(&out.writer, allocator, "link_shapes_by_heading", analyzer.section_link_shape_counts, "heading", "shape");
-    try out.writer.print(",\n", .{});
-    try writeJsonCompositeField(&out.writer, allocator, "link_shapes_by_family", analyzer.family_link_shape_counts, "family", "shape");
-    try out.writer.print(",\n", .{});
-    try writeJsonMapField(&out.writer, allocator, "translation_source_labels", analyzer.translation_source_label_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonMapField(&out.writer, allocator, "translation_target_languages", analyzer.translation_target_lang_counts);
-    try out.writer.print(",\n", .{});
-    try writeJsonMapField(&out.writer, allocator, "anomaly_kinds", analyzer.anomaly_kind_counts);
-    try out.writer.print(",\n  \"anomaly_samples\": [\n", .{});
-    for (analyzer.anomaly_samples.items, 0..) |sample, idx| {
-        if (idx != 0) try out.writer.print(",\n", .{});
-        try out.writer.print("    {{\"title\": ", .{});
-        try writeJsonString(&out.writer, sample.title);
-        try out.writer.print(", \"kind\": ", .{});
-        try writeJsonString(&out.writer, sample.kind);
-        try out.writer.print(", \"detail\": ", .{});
-        try writeJsonString(&out.writer, sample.detail);
-        try out.writer.print("}}", .{});
-    }
-    try out.writer.print("\n  ]\n}}\n", .{});
-
-    if (std.mem.eql(u8, analyzer.options.output_path, "-")) {
-        try std.Io.File.stdout().writeStreamingAll(io, out.written());
-        return;
-    }
-
-    var file = try std.Io.Dir.cwd().createFile(io, analyzer.options.output_path, .{ .truncate = true });
-    defer file.close(io);
-    try file.writePositionalAll(io, out.written(), 0);
 }
 
 const SortedCount = struct {
@@ -955,7 +1073,7 @@ const SortedCompositeCount = struct {
 };
 
 fn writeSortedMap(
-    writer: *std.Io.Writer,
+    writer: anytype,
     allocator: std.mem.Allocator,
     map: std.StringHashMapUnmanaged(u64),
     limit: usize,
@@ -1002,6 +1120,156 @@ fn sortedCounts(allocator: std.mem.Allocator, map: std.StringHashMapUnmanaged(u6
         }
     }.lessThan);
     return items;
+}
+
+fn sortedCompositeCounts(allocator: std.mem.Allocator, map: std.StringHashMapUnmanaged(u64)) ![]SortedCompositeCount {
+    var items = try allocator.alloc(SortedCompositeCount, map.count());
+    errdefer allocator.free(items);
+
+    var it = map.iterator();
+    var idx: usize = 0;
+    while (it.next()) |entry| : (idx += 1) {
+        const key = entry.key_ptr.*;
+        const tab = std.mem.indexOfScalar(u8, key, '\t') orelse key.len;
+        items[idx] = .{
+            .left = key[0..tab],
+            .right = if (tab < key.len) key[tab + 1 ..] else "",
+            .count = entry.value_ptr.*,
+        };
+    }
+
+    std.mem.sort(SortedCompositeCount, items, {}, struct {
+        fn lessThan(_: void, lhs: SortedCompositeCount, rhs: SortedCompositeCount) bool {
+            if (lhs.count != rhs.count) return lhs.count > rhs.count;
+            const left_order = std.mem.order(u8, lhs.left, rhs.left);
+            if (left_order != .eq) return left_order == .lt;
+            return std.mem.order(u8, lhs.right, rhs.right) == .lt;
+        }
+    }.lessThan);
+    return items;
+}
+
+fn jsonReportAlloc(allocator: std.mem.Allocator, analyzer: *Analyzer) ![]u8 {
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+
+    try writeJsonReportToWriter(&writer.writer, allocator, analyzer);
+    return allocator.dupe(u8, writer.written());
+}
+
+fn writeJsonReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    const legacy_inputs = try legacyBuildInputsAlloc(arena_allocator, analyzer);
+    const build = try structure_tables_support.buildDataFromLegacyAlloc(arena_allocator, legacy_inputs);
+    const anomaly_kinds = try countEntriesAlloc(arena_allocator, analyzer.anomaly_kind_counts);
+    const anomaly_samples = try anomalySamplesAlloc(arena_allocator, analyzer.anomaly_samples.items);
+
+    const report = structure_tables_support.ExactStructureReport{
+        .input = analyzer.options.input_path,
+        .summary = .{
+            .pages_scanned = analyzer.pages_seen,
+            .namespace_zero_pages = analyzer.namespace_zero_pages,
+            .language_entries = analyzer.language_entries,
+            .heading_level_jumps = analyzer.heading_jumps,
+            .content_before_subheading = analyzer.content_before_subheading,
+            .unbalanced_sections = analyzer.unbalanced_sections,
+            .unclassified_heading_titles = analyzer.unclassified_heading_counts.count(),
+        },
+        .anomalies = .{
+            .kinds = anomaly_kinds,
+            .samples = anomaly_samples,
+        },
+        .build = build,
+    };
+
+    const io_writer = asIoWriter(writer);
+    var json_stream: std.json.Stringify = .{
+        .writer = io_writer,
+        .options = .{ .whitespace = .indent_2 },
+    };
+    try json_stream.write(report);
+    try io_writer.writeByte('\n');
+}
+
+fn asIoWriter(writer: anytype) *std.Io.Writer {
+    const WriterType = @TypeOf(writer);
+    if (WriterType == *std.Io.Writer) return writer;
+    if (@hasField(@TypeOf(writer.*), "interface")) {
+        return &writer.interface;
+    }
+    @compileError("unsupported writer type");
+}
+
+fn legacyBuildInputsAlloc(
+    allocator: std.mem.Allocator,
+    analyzer: *Analyzer,
+) !structure_tables_support.LegacyBuildInputs {
+    const heading_items = try sortedCounts(allocator, analyzer.heading_title_counts);
+    const heading_profiles = try allocator.alloc(structure_tables_support.LegacyHeadingProfile, heading_items.len);
+    for (heading_items, heading_profiles) |item, *slot| {
+        const level = if (looksLikeLanguageHeading(item.key)) @as(u8, 2) else 3;
+        const profile = classifyHeadingTitle(item.key, level);
+        slot.* = .{
+            .title = item.key,
+            .parser_kind = profile.parser_kind,
+            .count = item.count,
+        };
+    }
+
+    const heading_levels = try countEntriesAlloc(allocator, analyzer.heading_level_counts);
+    const translation_source_labels = try countEntriesAlloc(allocator, analyzer.translation_source_label_counts);
+    const translation_target_languages = try countEntriesAlloc(allocator, analyzer.translation_target_lang_counts);
+
+    const template_items = try sortedCompositeCounts(allocator, analyzer.section_template_counts);
+    const templates_by_heading = try allocator.alloc(structure_tables_support.LegacyHeadingTemplateEntry, template_items.len);
+    for (template_items, templates_by_heading) |item, *slot| {
+        slot.* = .{
+            .heading = item.left,
+            .template = item.right,
+            .count = item.count,
+        };
+    }
+
+    return .{
+        .heading_profiles = heading_profiles,
+        .headings_by_level = heading_levels,
+        .translation_source_labels = translation_source_labels,
+        .translation_target_languages = translation_target_languages,
+        .templates_by_heading = templates_by_heading,
+    };
+}
+
+fn countEntriesAlloc(
+    allocator: std.mem.Allocator,
+    map: std.StringHashMapUnmanaged(u64),
+) ![]structure_tables_support.CountEntry {
+    const items = try sortedCounts(allocator, map);
+    const out = try allocator.alloc(structure_tables_support.CountEntry, items.len);
+    for (items, out) |item, *slot| {
+        slot.* = .{
+            .key = item.key,
+            .count = item.count,
+        };
+    }
+    return out;
+}
+
+fn anomalySamplesAlloc(
+    allocator: std.mem.Allocator,
+    samples: []const AnomalySample,
+) ![]structure_tables_support.AnomalySample {
+    const out = try allocator.alloc(structure_tables_support.AnomalySample, samples.len);
+    for (samples, out) |sample, *slot| {
+        slot.* = .{
+            .title = sample.title,
+            .kind = sample.kind,
+            .detail = sample.detail,
+        };
+    }
+    return out;
 }
 
 fn writeJsonMapField(writer: *std.Io.Writer, allocator: std.mem.Allocator, field_name: []const u8, map: std.StringHashMapUnmanaged(u64)) !void {
@@ -1152,14 +1420,21 @@ fn currentHeadingProfile(active_titles: *const [7][]const u8, language_title: []
     return classifyHeadingTitle(active_titles[level], level);
 }
 
+fn appendUnsignedDecimal(list: *std.ArrayList(u8), allocator: std.mem.Allocator, value: anytype) !void {
+    var buf: [32]u8 = undefined;
+    const text = try std.fmt.bufPrint(&buf, "{d}", .{value});
+    try list.appendSlice(allocator, text);
+}
+
 fn appendHeadingLabel(list: *std.ArrayList(u8), allocator: std.mem.Allocator, level: u8, title: []const u8) !void {
     if (level == 0) {
         try list.appendSlice(allocator, "ROOT");
         return;
     }
-    const label = try std.fmt.allocPrint(allocator, "L{d}:{s}", .{ level, title });
-    defer allocator.free(label);
-    try list.appendSlice(allocator, label);
+    try list.appendSlice(allocator, "L");
+    try appendUnsignedDecimal(list, allocator, level);
+    try list.append(allocator, ':');
+    try list.appendSlice(allocator, title);
 }
 
 fn classifyHeadingTitle(title: []const u8, level: u8) HeadingProfile {
@@ -1467,67 +1742,91 @@ fn templateNameFromBody(body: []const u8) []const u8 {
 }
 
 fn templateShapeAlloc(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
-    var parts = try splitTopLevelLocal(allocator, body, '|');
-    defer parts.deinit(allocator);
-
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
-
-    if (parts.items.len == 0) return allocator.dupe(u8, "template|empty");
-    try out.appendSlice(allocator, templateNameFromBody(body));
-
-    try out.appendSlice(allocator, "|pos:");
-    var positional_index: usize = 0;
-    var wrote_positional = false;
-    for (parts.items[1..]) |segment| {
-        if (templateArgHasName(segment)) continue;
-        if (wrote_positional) try out.append(allocator, ',');
-        try out.appendSlice(allocator, fragmentShape(std.mem.trim(u8, segment, " \t")));
-        wrote_positional = true;
-        positional_index += 1;
-        if (positional_index == 4) break;
-    }
-    if (!wrote_positional) try out.appendSlice(allocator, "-");
-    if (positional_index < positionalCountFromParts(parts.items) and positional_index != 0) {
-        const extra = try std.fmt.allocPrint(allocator, "+{d}", .{positionalCountFromParts(parts.items) - positional_index});
-        defer allocator.free(extra);
-        try out.appendSlice(allocator, extra);
-    }
-
-    try out.appendSlice(allocator, "|named:");
-    var named_count: usize = 0;
-    var wrote_named = false;
-    for (parts.items[1..]) |segment| {
-        const equals = topLevelEquals(segment) orelse continue;
-        const key = std.mem.trim(u8, segment[0..equals], " \t");
-        if (key.len == 0) continue;
-        if (wrote_named) try out.append(allocator, ',');
-        try out.appendSlice(allocator, key);
-        wrote_named = true;
-        named_count += 1;
-        if (named_count == 4) break;
-    }
-    if (!wrote_named) try out.appendSlice(allocator, "-");
-    if (named_count < namedCountFromParts(parts.items) and named_count != 0) {
-        const extra = try std.fmt.allocPrint(allocator, "+{d}", .{namedCountFromParts(parts.items) - named_count});
-        defer allocator.free(extra);
-        try out.appendSlice(allocator, extra);
-    }
-
+    _ = try templateShapeScratch(&out, allocator, body);
     return out.toOwnedSlice(allocator);
 }
 
+fn templateShapeScratch(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: []const u8) ![]const u8 {
+    out.items.len = 0;
+
+    var cursor: usize = 0;
+    const first = nextTopLevelSegment(body, '|', &cursor) orelse {
+        try out.appendSlice(allocator, "|pos:-|named:-");
+        return out.items;
+    };
+    try out.appendSlice(allocator, first);
+
+    var positional_shapes: [4][]const u8 = undefined;
+    var named_keys: [4][]const u8 = undefined;
+    var positional_total: usize = 0;
+    var named_total: usize = 0;
+
+    while (nextTopLevelSegment(body, '|', &cursor)) |segment| {
+        const equals = topLevelEquals(segment);
+        if (equals) |idx| {
+            const key = std.mem.trim(u8, segment[0..idx], " \t");
+            if (key.len == 0) continue;
+            if (named_total < named_keys.len) named_keys[named_total] = key;
+            named_total += 1;
+            continue;
+        }
+
+        if (positional_total < positional_shapes.len) {
+            positional_shapes[positional_total] = fragmentShape(segment);
+        }
+        positional_total += 1;
+    }
+
+    try out.appendSlice(allocator, "|pos:");
+    if (positional_total == 0) {
+        try out.appendSlice(allocator, "-");
+    } else {
+        const positional_written = @min(positional_total, positional_shapes.len);
+        for (positional_shapes[0..positional_written], 0..) |shape, idx| {
+            if (idx != 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, shape);
+        }
+        if (positional_total > positional_written) {
+            try out.append(allocator, '+');
+            try appendUnsignedDecimal(out, allocator, positional_total - positional_written);
+        }
+    }
+
+    try out.appendSlice(allocator, "|named:");
+    if (named_total == 0) {
+        try out.appendSlice(allocator, "-");
+    } else {
+        const named_written = @min(named_total, named_keys.len);
+        for (named_keys[0..named_written], 0..) |key, idx| {
+            if (idx != 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, key);
+        }
+        if (named_total > named_written) {
+            try out.append(allocator, '+');
+            try appendUnsignedDecimal(out, allocator, named_total - named_written);
+        }
+    }
+
+    return out.items;
+}
+
 fn internalLinkShapeAlloc(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
-    var parts = try splitTopLevelLocal(allocator, body, '|');
-    defer parts.deinit(allocator);
-    if (parts.items.len == 0) return allocator.dupe(u8, "wikilink|empty");
-
-    var target = std.mem.trim(u8, parts.items[0], " \t");
-    if (target.len != 0 and target[0] == ':') target = std.mem.trim(u8, target[1..], " \t");
-
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
+    _ = try internalLinkShapeScratch(&out, allocator, body);
+    return out.toOwnedSlice(allocator);
+}
+
+fn internalLinkShapeScratch(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: []const u8) ![]const u8 {
+    out.items.len = 0;
     try out.appendSlice(allocator, "wikilink");
+
+    var cursor: usize = 0;
+    const first = nextTopLevelSegment(body, '|', &cursor) orelse "";
+    var target = first;
+    if (target.len != 0 and target[0] == ':') target = std.mem.trim(u8, target[1..], " \t");
 
     if (linkNamespaceKind(target)) |namespace_kind| {
         try out.appendSlice(allocator, "|ns:");
@@ -1540,19 +1839,25 @@ fn internalLinkShapeAlloc(allocator: std.mem.Allocator, body: []const u8) ![]u8 
         try out.appendSlice(allocator, "|anchor");
     }
 
-    if (parts.items.len >= 2) {
-        const display = std.mem.trim(u8, parts.items[parts.items.len - 1], " \t");
-        try out.appendSlice(allocator, if (display.len == 0) "|pipe-trick" else "|display");
+    var last_segment = first;
+    var segment_count: usize = 1;
+    while (nextTopLevelSegment(body, '|', &cursor)) |segment| {
+        last_segment = segment;
+        segment_count += 1;
+    }
+
+    if (segment_count >= 2) {
+        try out.appendSlice(allocator, if (last_segment.len == 0) "|pipe-trick" else "|display");
     } else {
         try out.appendSlice(allocator, "|plain");
     }
 
-    return out.toOwnedSlice(allocator);
+    return out.items;
 }
 
-fn externalLinkShapeAlloc(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+fn externalLinkShape(body: []const u8) []const u8 {
     const has_label = std.mem.indexOfScalar(u8, body, ' ') != null;
-    return allocator.dupe(u8, if (has_label) "extlink|label" else "extlink|bare");
+    return if (has_label) "extlink|label" else "extlink|bare";
 }
 
 fn linkNamespaceKind(target: []const u8) ?[]const u8 {
@@ -1579,12 +1884,13 @@ fn fragmentShape(fragment: []const u8) []const u8 {
     return "text";
 }
 
-fn splitTopLevelLocal(allocator: std.mem.Allocator, input: []const u8, sep: u8) !std.ArrayList([]const u8) {
-    var out: std.ArrayList([]const u8) = .empty;
-    var start: usize = 0;
+fn nextTopLevelSegment(input: []const u8, sep: u8, cursor: *usize) ?[]const u8 {
+    if (cursor.* > input.len) return null;
+
+    const start = cursor.*;
     var templates: usize = 0;
     var links: usize = 0;
-    var i: usize = 0;
+    var i: usize = start;
     while (i < input.len) : (i += 1) {
         if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "{{")) {
             templates += 1;
@@ -1607,12 +1913,12 @@ fn splitTopLevelLocal(allocator: std.mem.Allocator, input: []const u8, sep: u8) 
             continue;
         }
         if (input[i] == sep and templates == 0 and links == 0) {
-            try out.append(allocator, std.mem.trim(u8, input[start..i], " \t"));
-            start = i + 1;
+            cursor.* = i + 1;
+            return std.mem.trim(u8, input[start..i], " \t");
         }
     }
-    try out.append(allocator, std.mem.trim(u8, input[start..], " \t"));
-    return out;
+    cursor.* = input.len + 1;
+    return std.mem.trim(u8, input[start..], " \t");
 }
 
 fn templateArgHasName(segment: []const u8) bool {
@@ -1647,22 +1953,6 @@ fn topLevelEquals(segment: []const u8) ?usize {
         if (segment[i] == '=' and templates == 0 and links == 0) return i;
     }
     return null;
-}
-
-fn positionalCountFromParts(parts: []const []const u8) usize {
-    var count: usize = 0;
-    for (parts[1..]) |segment| {
-        if (!templateArgHasName(segment)) count += 1;
-    }
-    return count;
-}
-
-fn namedCountFromParts(parts: []const []const u8) usize {
-    var count: usize = 0;
-    for (parts[1..]) |segment| {
-        if (templateArgHasName(segment)) count += 1;
-    }
-    return count;
 }
 
 fn looksLikeLanguageCode(value: []const u8) bool {
@@ -1724,9 +2014,7 @@ fn parseOptions(args: []const []const u8) !Options {
 }
 
 fn printUsage(io: std.Io, allocator: std.mem.Allocator) !void {
-    try printStdOut(
-        io,
-        allocator,
+    try printStdOut(io, allocator,
         \\dict-structure [--input data/wiktionary.xml] [--output data/wiktionary-structure.json]
         \\               [--format json|text] [--limit 10000] [--threads 4] [--top 50] [--samples 64]
         \\
@@ -1790,4 +2078,32 @@ test "internalLinkShapeAlloc records namespaces and pipe tricks" {
     defer std.testing.allocator.free(shape);
 
     try std.testing.expectEqualStrings("wikilink|ns:file|pipe-trick", shape);
+}
+
+test "json report includes exact build payload and omits exploratory sections" {
+    var analyzer = Analyzer.init(std.testing.allocator, .{});
+    defer analyzer.deinit();
+
+    analyzer.pages_seen = 3;
+    analyzer.namespace_zero_pages = 2;
+    analyzer.language_entries = 2;
+    analyzer.heading_jumps = 1;
+    analyzer.content_before_subheading = 0;
+    analyzer.unbalanced_sections = 0;
+    try analyzer.bump(&analyzer.heading_title_counts, "English");
+    try analyzer.bump(&analyzer.heading_title_counts, "Noun");
+    try analyzer.bump(&analyzer.heading_level_counts, "L3:Noun");
+    try analyzer.bumpComposite(&analyzer.section_template_counts, "Noun", "custom form of", "\t");
+    try analyzer.bumpComposite(&analyzer.section_template_counts, "Translations", "t", "\t");
+    try analyzer.bump(&analyzer.translation_source_label_counts, "gloss");
+    try analyzer.bump(&analyzer.translation_target_lang_counts, "French");
+    try analyzer.addAnomaly("entry", "heading-jump", "bad nesting");
+
+    const json = try jsonReportAlloc(std.testing.allocator, &analyzer);
+    defer std.testing.allocator.free(json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"build\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"anomalies\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"heading_specs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"template_shapes_by_heading\"") == null);
 }

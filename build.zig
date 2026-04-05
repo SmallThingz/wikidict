@@ -1,22 +1,36 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    b.graph.incremental = false;
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const structure_optimize: std.builtin.OptimizeMode = .ReleaseFast;
-    const default_xml_path = b.path("data/wiktionary.xml");
     const default_skip_headings = "anagrams,citations,meta,statistics,further_reading,translations";
     const skip_headings_csv = b.option([]const u8, "skip-headings", "Comma-separated headings or heading families to exclude, e.g. Anagrams,Translations") orelse default_skip_headings;
-    const filter_languages_csv = b.option([]const u8, "filter-language", "Comma-separated language headings to store, e.g. English,Chinese") orelse "";
+    const filter_languages_csv = b.option([]const u8, "language", "Language headings to store; defaults to English, use all for every language, or a comma-separated list such as English,Chinese") orelse "English";
     const config_options = b.addOptions();
     config_options.addOption([]const u8, "skip_headings_csv", skip_headings_csv);
     config_options.addOption([]const u8, "filter_languages_csv", filter_languages_csv);
+    const zxml_config_path = addZxmlConfigModule(b);
     const bootstrap_generated_tables = addBootstrapStructureTableModules(b, target, optimize, structure_optimize);
+    const structure_codegen_bin = addDirectStructureTablesCodegenBinary(b);
     const cli_args_mod = b.createModule(.{
         .root_source_file = b.path("tools/cli_args.zig"),
         .target = target,
         .optimize = optimize,
     });
+    const required_path_mod = b.createModule(.{
+        .root_source_file = b.path("tools/required_path.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const encoder_tool_paths_options = b.addOptions();
+    const decoder_tool_paths_options = b.addOptions();
+    const verifier_tool_paths_options = b.addOptions();
+    const encoder_tool_paths_mod = encoder_tool_paths_options.createModule();
+    const decoder_tool_paths_mod = decoder_tool_paths_options.createModule();
+    const verifier_tool_paths_mod = verifier_tool_paths_options.createModule();
     const cli_args_mod_structure = b.createModule(.{
         .root_source_file = b.path("tools/cli_args.zig"),
         .target = target,
@@ -55,6 +69,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const compact_pattern_seed_mod = b.createModule(.{
+        .root_source_file = b.path("shared/compact_pattern_seed.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const renderer_mod = b.addModule("renderer", .{
         .root_source_file = b.path("renderer/root.zig"),
         .target = target,
@@ -74,22 +93,32 @@ pub fn build(b: *std.Build) void {
     encoder_mod_bootstrap.addImport("cli_args", cli_args_mod_structure);
     encoder_mod_bootstrap.addImport("shared_html_entities", shared_html_entities_mod);
     encoder_mod_bootstrap.addImport("shared_xml_decode", shared_xml_decode_mod);
+    encoder_mod_bootstrap.addImport("compact_pattern_seed", compact_pattern_seed_mod);
 
-    const structure_exe = addCliExecutable(b, "dict-structure", b.path("tools/structure_analyzer.zig"), target, structure_optimize, &.{
-        .{ .name = "encoder", .module = encoder_mod_bootstrap },
-        .{ .name = "zxml", .module = zxml_dep_structure.module("zxml") },
-    });
-    const structure_codegen_exe = addCliExecutable(b, "dict-structure-tables-codegen", b.path("tools/structure_tables_codegen.zig"), target, optimize, &.{});
-    const generated_tables = addGeneratedStructureTableModules(
+    const structure_bin = addDirectStructureBinary(
         b,
-        target,
-        optimize,
-        structure_optimize,
-        structure_exe,
-        structure_codegen_exe,
-        default_xml_path,
+        config_options.getOutput(),
+        zxml_config_path,
+        bootstrap_generated_tables.structure_source,
     );
-
+    const generated_tables = if (existingBuildPath(b, "data/wiktionary-structure.json")) |existing_structure_report|
+        addGeneratedStructureTableModules(
+            b,
+            target,
+            optimize,
+            structure_optimize,
+            structure_codegen_bin,
+            existing_structure_report,
+        )
+    else
+        bootstrap_generated_tables;
+    const verifier_bin = addDirectVerifierBinary(
+        b,
+        config_options.getOutput(),
+        zxml_config_path,
+        generated_tables.regular_source,
+        verifier_tool_paths_options.getOutput(),
+    );
     const encoder_mod = b.addModule("encoder", .{
         .root_source_file = b.path("encoder/root.zig"),
         .target = target,
@@ -102,6 +131,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("cli_args", cli_args_mod);
     encoder_mod.addImport("shared_html_entities", shared_html_entities_mod);
     encoder_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
+    encoder_mod.addImport("compact_pattern_seed", compact_pattern_seed_mod);
 
     const encoder_mod_test = b.addModule("encoder_test", .{
         .root_source_file = b.path("encoder/root.zig"),
@@ -115,6 +145,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod_test.addImport("cli_args", cli_args_mod);
     encoder_mod_test.addImport("shared_html_entities", shared_html_entities_mod);
     encoder_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod);
+    encoder_mod_test.addImport("compact_pattern_seed", compact_pattern_seed_mod);
 
     const decoder_mod = b.addModule("decoder", .{
         .root_source_file = b.path("decoder/root.zig"),
@@ -159,10 +190,14 @@ pub fn build(b: *std.Build) void {
     const encoder_exe = addCliExecutable(b, "dict-encoder", b.path("encoder/main.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "cli_args", .module = cli_args_mod },
+        .{ .name = "required_path", .module = required_path_mod },
+        .{ .name = "tool_paths", .module = encoder_tool_paths_mod },
     });
     const decoder_exe = addCliExecutable(b, "dict-decoder", b.path("decoder/main.zig"), target, optimize, &.{
         .{ .name = "decoder", .module = decoder_mod },
         .{ .name = "cli_args", .module = cli_args_mod },
+        .{ .name = "required_path", .module = required_path_mod },
+        .{ .name = "tool_paths", .module = decoder_tool_paths_mod },
     });
     const backend_exe = addCliExecutable(b, "dict-backend", b.path("backend/main.zig"), target, optimize, &.{
         .{ .name = "backend", .module = backend_mod },
@@ -172,25 +207,43 @@ pub fn build(b: *std.Build) void {
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "decoder", .module = decoder_mod },
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
+        .{ .name = "tool_paths", .module = verifier_tool_paths_mod },
     });
     const frontend_exe = addCliExecutable(b, "dict-frontend", b.path("tools/frontend.zig"), target, optimize, &.{});
-    const generated_dict = addGeneratedDictionaryFile(b, encoder_exe, default_xml_path);
-    const generated_index_step = addGeneratedIndexStep(b, decoder_exe, generated_dict);
-    b.installArtifact(encoder_exe);
-    b.installArtifact(decoder_exe);
-    b.installArtifact(backend_exe);
-    b.installArtifact(structure_exe);
-    b.installArtifact(verifier_exe);
-    b.installArtifact(structure_codegen_exe);
-    b.installArtifact(frontend_exe);
+    encoder_tool_paths_options.addOptionPath("structure_bin_path", structure_bin);
+    decoder_tool_paths_options.addOptionPath("encoder_bin_path", encoder_exe.getEmittedBin());
+    verifier_tool_paths_options.addOptionPath("decoder_bin_path", decoder_exe.getEmittedBin());
 
-    addRunStep(b, "encode", "Run the encoder CLI", encoder_exe, &.{});
-    addRunStep(b, "structure", "Analyze Wiktionary structure", structure_exe, &.{});
-    addGeneratedDecodeStep(b, decoder_exe, generated_dict, generated_index_step);
-    addGeneratedServeStep(b, backend_exe, generated_dict);
-    addGeneratedVerifyStep(b, verifier_exe, default_xml_path, generated_dict, generated_index_step);
+    const structure_install = b.addInstallBinFile(structure_bin, "dict-structure");
+    const encoder_install = b.addInstallArtifact(encoder_exe, .{});
+    const decoder_install = b.addInstallArtifact(decoder_exe, .{});
+    const backend_install = b.addInstallArtifact(backend_exe, .{});
+    const verifier_install = b.addInstallArtifact(verifier_exe, .{});
+    const frontend_install = b.addInstallArtifact(frontend_exe, .{});
+    b.getInstallStep().dependOn(&structure_install.step);
+    b.getInstallStep().dependOn(&encoder_install.step);
+    b.getInstallStep().dependOn(&decoder_install.step);
+    b.getInstallStep().dependOn(&backend_install.step);
+    b.getInstallStep().dependOn(&verifier_install.step);
+    b.getInstallStep().dependOn(&frontend_install.step);
 
-    addRunStep(b, "frontend", "Run the frontend CLI", frontend_exe, &.{});
+    const structure_run = addDirectToolRunCommand(b, structure_bin, &.{}, b.args);
+    addPublicRunStep(b, "structure", "Analyze Wiktionary structure", structure_run, &.{});
+
+    const encode_run = addRunArtifactCommand(b, encoder_exe, &.{}, b.args);
+    addPublicRunStep(b, "encode", "Run the encoder CLI", encode_run, &.{structure_bin.generated.file.step});
+
+    const decode_run = addRunArtifactCommand(b, decoder_exe, &.{}, b.args);
+    addPublicRunStep(b, "decode", "Run the decoder CLI", decode_run, &.{ structure_bin.generated.file.step, &encoder_exe.step });
+
+    const serve_run = addRunArtifactCommand(b, backend_exe, &.{}, b.args);
+    addPublicRunStep(b, "serve", "Run the backend server", serve_run, &.{});
+
+    const verify_run = addDirectToolRunCommand(b, verifier_bin, &.{}, b.args);
+    addPublicRunStep(b, "verify", "Verify dictionary raw entries against the XML dump", verify_run, &.{ structure_bin.generated.file.step, &encoder_exe.step, &decoder_exe.step });
+
+    const frontend_run = addRunArtifactCommand(b, frontend_exe, &.{}, b.args);
+    addPublicRunStep(b, "frontend", "Run the frontend CLI", frontend_run, &.{});
 
     const test_runner = b.path("tools/test_runner.zig");
 
@@ -218,6 +271,18 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "encoder", .module = encoder_mod_test },
                 .{ .name = "zxml", .module = zxml_dep.module("zxml") },
+                .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod },
+            },
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const structure_tables_support_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/structure_tables_support.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -231,6 +296,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "encoder", .module = encoder_mod_test },
                 .{ .name = "decoder", .module = decoder_mod_test },
                 .{ .name = "zxml", .module = zxml_dep.module("zxml") },
+                .{ .name = "tool_paths", .module = verifier_tool_paths_mod },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -240,6 +306,7 @@ pub fn build(b: *std.Build) void {
     const run_backend_tests = b.addRunArtifact(backend_tests);
     const run_renderer_tests = b.addRunArtifact(renderer_tests);
     const run_structure_tests = b.addRunArtifact(structure_tests);
+    const run_structure_tables_support_tests = b.addRunArtifact(structure_tables_support_tests);
     const run_verifier_tests = b.addRunArtifact(verifier_tests);
 
     const test_step = b.step("test", "Run encoder, decoder, and backend tests");
@@ -248,6 +315,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_backend_tests.step);
     test_step.dependOn(&run_renderer_tests.step);
     test_step.dependOn(&run_structure_tests.step);
+    test_step.dependOn(&run_structure_tables_support_tests.step);
     test_step.dependOn(&run_verifier_tests.step);
 }
 
@@ -270,136 +338,53 @@ fn addCliExecutable(
     });
 }
 
-fn addRunStep(
+fn addRunArtifactCommand(
+    b: *std.Build,
+    exe: *std.Build.Step.Compile,
+    fixed_args: []const []const u8,
+    passthrough_args: ?[]const []const u8,
+) *std.Build.Step.Run {
+    const run_cmd = b.addRunArtifact(exe);
+    for (fixed_args) |arg| run_cmd.addArg(arg);
+    if (passthrough_args) |args| run_cmd.addArgs(args);
+    return run_cmd;
+}
+
+fn addDirectToolRunCommand(
+    b: *std.Build,
+    binary_path: std.Build.LazyPath,
+    fixed_args: []const []const u8,
+    passthrough_args: ?[]const []const u8,
+) *std.Build.Step.Run {
+    const run_cmd = b.addSystemCommand(&.{"/usr/bin/env"});
+    run_cmd.addFileArg(binary_path);
+    for (fixed_args) |arg| run_cmd.addArg(arg);
+    if (passthrough_args) |args| run_cmd.addArgs(args);
+    return run_cmd;
+}
+
+fn addPublicRunStep(
     b: *std.Build,
     name: []const u8,
     description: []const u8,
-    exe: *std.Build.Step.Compile,
-    fixed_args: []const []const u8,
+    run_cmd: *std.Build.Step.Run,
+    deps: []const *std.Build.Step,
 ) void {
-    const run_cmd = b.addRunArtifact(exe);
-    for (fixed_args) |arg| run_cmd.addArg(arg);
-    if (b.args) |args| run_cmd.addArgs(args);
-
     const step = b.step(name, description);
+    for (deps) |dep| step.dependOn(dep);
     step.dependOn(&run_cmd.step);
 }
 
-fn addGeneratedDecodeStep(
-    b: *std.Build,
-    exe: *std.Build.Step.Compile,
-    db_path: std.Build.LazyPath,
-    index_step: *std.Build.Step,
-) void {
-    const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |args| run_cmd.addArgs(args);
-    if (!argsRequestHelp(b.args) and !argsContainFlag(b.args, "--db")) {
-        run_cmd.addArg("--db");
-        run_cmd.addFileArg(db_path);
-        run_cmd.step.dependOn(index_step);
-    }
-
-    const step = b.step("decode", "Run the decoder CLI");
-    step.dependOn(&run_cmd.step);
-}
-
-fn addGeneratedServeStep(
-    b: *std.Build,
-    exe: *std.Build.Step.Compile,
-    db_path: std.Build.LazyPath,
-) void {
-    const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |args| run_cmd.addArgs(args);
-    if (!argsRequestHelp(b.args) and !argsContainFlag(b.args, "--db")) {
-        run_cmd.addArg("--db");
-        run_cmd.addFileArg(db_path);
-    }
-
-    const step = b.step("serve", "Run the backend server");
-    step.dependOn(&run_cmd.step);
-}
-
-fn addGeneratedVerifyStep(
-    b: *std.Build,
-    exe: *std.Build.Step.Compile,
-    xml_path: std.Build.LazyPath,
-    db_path: std.Build.LazyPath,
-    index_step: *std.Build.Step,
-) void {
-    const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |args| run_cmd.addArgs(args);
-    if (argsRequestHelp(b.args)) {
-        const step = b.step("verify", "Verify dictionary raw entries against the XML dump");
-        step.dependOn(&run_cmd.step);
-        return;
-    }
-    if (!argsContainFlag(b.args, "--input")) {
-        run_cmd.addArg("--input");
-        run_cmd.addFileArg(xml_path);
-    }
-    if (!argsContainFlag(b.args, "--db")) {
-        run_cmd.addArg("--db");
-        run_cmd.addFileArg(db_path);
-        run_cmd.step.dependOn(index_step);
-    }
-
-    const step = b.step("verify", "Verify dictionary raw entries against the XML dump");
-    step.dependOn(&run_cmd.step);
-}
-
-fn addGeneratedDictionaryFile(
-    b: *std.Build,
-    encoder_exe: *std.Build.Step.Compile,
-    xml_path: std.Build.LazyPath,
-) std.Build.LazyPath {
-    const run_cmd = b.addRunArtifact(encoder_exe);
-    run_cmd.addArg("--input");
-    run_cmd.addFileArg(xml_path);
-    run_cmd.addArg("--output");
-    const output_path = run_cmd.addOutputFileArg("wiktionary.bin");
-    run_cmd.expectExitCode(0);
-    _ = run_cmd.captureStdErr(.{ .basename = "wiktionary-build.stderr" });
-    return output_path;
-}
-
-fn addGeneratedIndexStep(
-    b: *std.Build,
-    decoder_exe: *std.Build.Step.Compile,
-    db_path: std.Build.LazyPath,
-) *std.Build.Step {
-    const run_cmd = b.addRunArtifact(decoder_exe);
-    run_cmd.addArgs(&.{ "stats", "--db" });
-    run_cmd.addFileArg(db_path);
-    run_cmd.expectExitCode(0);
-    _ = run_cmd.captureStdOut(.{ .basename = "wiktionary-index-prime.stdout" });
-    _ = run_cmd.captureStdErr(.{ .basename = "wiktionary-index-prime.stderr" });
-    return &run_cmd.step;
-}
-
-fn argsContainFlag(maybe_args: ?[]const []const u8, flag: []const u8) bool {
-    const args = maybe_args orelse return false;
-    for (args) |arg| {
-        if (std.mem.eql(u8, arg, flag)) return true;
-    }
-    return false;
-}
-
-fn argsRequestHelp(maybe_args: ?[]const []const u8) bool {
-    const args = maybe_args orelse return false;
-    for (args) |arg| {
-        if (std.mem.eql(u8, arg, "help") or
-            std.mem.eql(u8, arg, "--help") or
-            std.mem.eql(u8, arg, "-h"))
-        {
-            return true;
-        }
-    }
-    return false;
+fn existingBuildPath(b: *std.Build, relative_path: []const u8) ?std.Build.LazyPath {
+    _ = std.Io.Dir.cwd().statFile(b.graph.io, relative_path, .{}) catch return null;
+    return b.path(relative_path);
 }
 
 const GeneratedStructureModules = struct {
     regular: *std.Build.Module,
     structure: *std.Build.Module,
+    regular_source: std.Build.LazyPath,
+    structure_source: std.Build.LazyPath,
 };
 
 const StructureReport = struct {
@@ -488,6 +473,8 @@ fn addBootstrapStructureTableModules(
             .target = target,
             .optimize = structure_optimize,
         }),
+        .regular_source = generated_path,
+        .structure_source = generated_path,
     };
 }
 
@@ -496,23 +483,13 @@ fn addGeneratedStructureTableModules(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     structure_optimize: std.builtin.OptimizeMode,
-    structure_exe: *std.Build.Step.Compile,
-    codegen_exe: *std.Build.Step.Compile,
-    xml_path: std.Build.LazyPath,
+    codegen_bin: std.Build.LazyPath,
+    json_path: std.Build.LazyPath,
 ) GeneratedStructureModules {
-    const structure_run = b.addRunArtifact(structure_exe);
-    structure_run.addArg("--input");
-    structure_run.addFileArg(xml_path);
-    structure_run.addArg("--output");
-    const report_path = structure_run.addOutputFileArg("wiktionary-structure.json");
-    structure_run.expectExitCode(0);
-    _ = structure_run.captureStdErr(.{ .basename = "wiktionary-structure.stderr" });
-
-    const codegen_run = b.addRunArtifact(codegen_exe);
+    const codegen_run = b.addSystemCommand(&.{"/usr/bin/env"});
+    codegen_run.addFileArg(codegen_bin);
     codegen_run.addArg("--input");
-    codegen_run.addFileArg(report_path);
-    codegen_run.addArg("--compact-source");
-    codegen_run.addFileArg(b.path("encoder/compact_encoding.zig"));
+    codegen_run.addFileArg(json_path);
     codegen_run.addArg("--output");
     const generated_source = codegen_run.addOutputFileArg("structure_tables.zig");
     codegen_run.expectExitCode(0);
@@ -529,14 +506,138 @@ fn addGeneratedStructureTableModules(
             .target = target,
             .optimize = structure_optimize,
         }),
+        .regular_source = generated_source,
+        .structure_source = generated_source,
     };
+}
+
+fn addDirectStructureTablesCodegenBinary(b: *std.Build) std.Build.LazyPath {
+    const compile = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-OReleaseFast" });
+    compile.addArgs(&.{ "--dep", "compact_pattern_seed" });
+    compile.addPrefixedFileArg("-Mroot=", b.path("tools/structure_tables_codegen.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("shared/compact_pattern_seed.zig"));
+    const output = compile.addPrefixedOutputFileArg("-femit-bin=", "dict-structure-tables-codegen");
+    return output;
+}
+
+fn addDirectStructureBinary(
+    b: *std.Build,
+    config_path: std.Build.LazyPath,
+    config0_path: std.Build.LazyPath,
+    bootstrap_tables_path: std.Build.LazyPath,
+) std.Build.LazyPath {
+    const compile = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-OReleaseFast" });
+    compile.addArgs(&.{ "--dep", "encoder", "--dep", "zxml", "--dep", "compact_pattern_seed" });
+    compile.addPrefixedFileArg("-Mroot=", b.path("tools/structure_analyzer.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addArgs(&.{
+        "--dep",
+        "config",
+        "--dep",
+        "normalize",
+        "--dep",
+        "zxml",
+        "--dep",
+        "generated_structure_tables",
+        "--dep",
+        "cli_args",
+        "--dep",
+        "shared_html_entities",
+        "--dep",
+        "shared_xml_decode",
+        "--dep",
+        "compact_pattern_seed",
+    });
+    compile.addPrefixedFileArg("-Mencoder=", b.path("encoder/root.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addArgs(&.{ "--dep", "config=config0" });
+    compile.addPrefixedFileArg("-Mzxml=", b.path(".deps/zxml/src/root.zig"));
+    compile.addPrefixedFileArg("-Mconfig=", config_path);
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mnormalize=", b.path("decoder/normalize.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mgenerated_structure_tables=", bootstrap_tables_path);
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mcli_args=", b.path("tools/cli_args.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mshared_html_entities=", b.path("shared/html_entities.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mshared_xml_decode=", b.path("shared/xml_decode.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("shared/compact_pattern_seed.zig"));
+    compile.addPrefixedFileArg("-Mconfig0=", config0_path);
+    return compile.addPrefixedOutputFileArg("-femit-bin=", "dict-structure");
+}
+
+fn addDirectVerifierBinary(
+    b: *std.Build,
+    config_path: std.Build.LazyPath,
+    config0_path: std.Build.LazyPath,
+    regular_tables_path: std.Build.LazyPath,
+    tool_paths_path: std.Build.LazyPath,
+) std.Build.LazyPath {
+    const compile = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-OReleaseFast" });
+    compile.addArgs(&.{ "--dep", "encoder", "--dep", "decoder", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "tool_paths" });
+    compile.addPrefixedFileArg("-Mroot=", b.path("tools/verifier.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addArgs(&.{
+        "--dep",
+        "config",
+        "--dep",
+        "normalize",
+        "--dep",
+        "zxml",
+        "--dep",
+        "generated_structure_tables",
+        "--dep",
+        "cli_args",
+        "--dep",
+        "shared_html_entities",
+        "--dep",
+        "shared_xml_decode",
+        "--dep",
+        "compact_pattern_seed",
+    });
+    compile.addPrefixedFileArg("-Mencoder=", b.path("encoder/root.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addArgs(&.{ "--dep", "normalize", "--dep", "encoder", "--dep", "cli_args" });
+    compile.addPrefixedFileArg("-Mdecoder=", b.path("decoder/root.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addArgs(&.{ "--dep", "config=config0" });
+    compile.addPrefixedFileArg("-Mzxml=", b.path(".deps/zxml/src/root.zig"));
+    compile.addPrefixedFileArg("-Mconfig=", config_path);
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mnormalize=", b.path("decoder/normalize.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mgenerated_structure_tables=", regular_tables_path);
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mcli_args=", b.path("tools/cli_args.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mshared_html_entities=", b.path("shared/html_entities.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mshared_xml_decode=", b.path("shared/xml_decode.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("shared/compact_pattern_seed.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mtool_paths=", tool_paths_path);
+    compile.addPrefixedFileArg("-Mconfig0=", config0_path);
+    return compile.addPrefixedOutputFileArg("-femit-bin=", "dict-verify");
+}
+
+fn addZxmlConfigModule(b: *std.Build) std.Build.LazyPath {
+    const write_files = b.addWriteFiles();
+    return write_files.add("generated/zxml_config.zig",
+        \\pub const intlen: enum { u16, u32, u64, usize } = .u32;
+        \\
+    );
 }
 
 fn generateDefaultStructureTableSource(b: *std.Build) ![]const u8 {
     return generateStructureTableSourceFromJson(
         b.allocator,
         default_structure_report_json,
-        b.pathFromRoot("encoder/compact_encoding.zig"),
+        b.pathFromRoot("shared/compact_pattern_seed.zig"),
     );
 }
 

@@ -60,6 +60,8 @@ pub const Palette = struct {
     muted: Rgb,
     accent: Rgb,
     accent_strong: Rgb,
+    // Alpha-only overlays are shipped separately so the frontend can blend them over
+    // whichever solid theme colors it is currently animating between.
     accent_soft_alpha: f32,
     glass_bg_alpha: f32,
     glass_border_alpha: f32,
@@ -177,6 +179,8 @@ const ProbeSeed = struct {
     source: Source,
     scheme: Scheme,
     name: []const u8,
+    // Probe colors are raw desktop-theme samples before palette normalization clamps
+    // them into the UI-friendly luminance and saturation ranges.
     bg: Rgb,
     panel: Rgb,
     ink: Rgb,

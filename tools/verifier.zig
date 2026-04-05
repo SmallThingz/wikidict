@@ -4,8 +4,10 @@ const zxml = @import("zxml");
 
 const encoder = @import("encoder");
 const decoder = @import("decoder");
+const tool_paths = @import("tool_paths");
 const wikitext = encoder.wikitext;
 const xml_decode = encoder.xml_decode;
+const required_path = @import("required_path.zig");
 
 const parse_opts: zxml.ParseOptions = .{
     .mode = .strict,
@@ -75,7 +77,8 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const options = try parseOptions(args[1..]);
-    try ensureVerifierDictionary(init.io, init.gpa, options);
+    required_path.ensureExistsOrExit(init.io, options.input_path, "verifier input");
+    ensureDictionaryIndexExists(init.io, allocator, options);
     const stats = verifyDictionary(init.io, init.gpa, options) catch |err| switch (err) {
         error.UnsupportedDictionaryVersion => {
             std.debug.print(
@@ -108,47 +111,6 @@ pub fn main(init: std.process.Init) !void {
     );
 
     if (stats.failures() != 0) return error.VerificationFailed;
-}
-
-fn ensureVerifierDictionary(io: std.Io, allocator: std.mem.Allocator, options: Options) !void {
-    if (try verifierDictionaryLooksUsable(io, allocator, options.db_path)) return;
-
-    try deleteFileIfExists(io, options.db_path);
-    const cache_path = try std.fmt.allocPrint(allocator, "{s}.idx", .{options.db_path});
-    defer allocator.free(cache_path);
-    try deleteFileIfExists(io, cache_path);
-
-    std.debug.print(
-        "building dictionary binary at {s} from {s}\n",
-        .{ options.db_path, options.input_path },
-    );
-
-    _ = try encoder.buildDictionary(io, allocator, .{
-        .input_path = options.input_path,
-        .output_path = options.db_path,
-    });
-}
-
-fn verifierDictionaryLooksUsable(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !bool {
-    var dict = decoder.openDictionary(allocator, io, path) catch |err| switch (err) {
-        error.FileNotFound,
-        error.InvalidDictionaryFile,
-        error.UnsupportedDictionaryVersion,
-        error.InvalidDictionaryCache,
-        error.InvalidEncoding,
-        => return false,
-        else => return err,
-    };
-    defer dict.deinit();
-
-    return dict.header.entry_count != 0 or dict.header.records_len != 0;
-}
-
-fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
-    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => return err,
-    };
 }
 
 const Options = struct {
@@ -199,6 +161,8 @@ const WorkQueue = struct {
     condition: std.Io.Condition = .init,
     items: std.ArrayList(WorkItem) = .empty,
     closed: bool = false,
+    // Sticky terminal error propagated to all producers/consumers so worker failures stop
+    // the verifier quickly instead of deadlocking on the bounded queue.
     failure: ?anyerror = null,
 
     fn init(allocator: std.mem.Allocator, io: std.Io, capacity: usize) WorkQueue {
@@ -306,7 +270,7 @@ const Verifier = struct {
     stats: VerifyStats = .{},
 
     fn init(allocator: std.mem.Allocator, io: std.Io, options: Options) !Verifier {
-        var dict = try decoder.openDictionary(allocator, io, options.db_path);
+        var dict = try openOrBuildDictionary(allocator, io, options);
         errdefer dict.deinit();
 
         var verifier = Verifier{
@@ -586,6 +550,37 @@ const Verifier = struct {
     }
 };
 
+fn openOrBuildDictionary(allocator: std.mem.Allocator, io: std.Io, options: Options) !decoder.Dictionary {
+    return decoder.openDictionary(allocator, io, options.db_path);
+}
+
+fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options: Options) void {
+    const idx_path = std.fmt.allocPrint(allocator, "{s}.idx", .{options.db_path}) catch unreachable;
+    defer allocator.free(idx_path);
+
+    const found = required_path.exists(io, idx_path) catch |err| {
+        std.debug.print("failed to access dictionary index at {s}: {s}\n", .{ idx_path, @errorName(err) });
+        std.process.exit(1);
+    };
+    if (found) return;
+
+    std.debug.print("dictionary index not found: {s}; running {s} index\n", .{ idx_path, tool_paths.decoder_bin_path });
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+    argv.append(allocator, "index") catch unreachable;
+    argv.append(allocator, "--input") catch unreachable;
+    argv.append(allocator, options.input_path) catch unreachable;
+    argv.append(allocator, "--db") catch unreachable;
+    argv.append(allocator, options.db_path) catch unreachable;
+    if (options.limit_entries) |limit| {
+        const limit_text = std.fmt.allocPrint(allocator, "{d}", .{limit}) catch unreachable;
+        defer allocator.free(limit_text);
+        argv.append(allocator, "--limit") catch unreachable;
+        argv.append(allocator, limit_text) catch unreachable;
+    }
+    required_path.runToolOrExit(io, allocator, tool_paths.decoder_bin_path, "decoder binary", argv.items);
+}
+
 const VerifyChunk = struct {
     start: usize,
     end: usize,
@@ -604,10 +599,10 @@ pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Optio
     var verifier = try Verifier.init(allocator, io, options);
     defer verifier.deinit();
 
-    var input_file = try std.Io.Dir.cwd().openFile(io, options.input_path, .{});
-    defer input_file.close(io);
+    var input = try mmapReadOnlyPath(io, options.input_path);
+    defer input.deinit();
 
-    const stat = try input_file.stat(io);
+    const stat = input.stat;
     var progress = VerifyProgress.init(@intCast(stat.size));
     const cpu_count = std.Thread.getCpuCount() catch 1;
     const thread_count = @max(@as(usize, 1), options.thread_count orelse cpu_count);
@@ -630,19 +625,8 @@ pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Optio
     }
 
     if (stat.size != 0) {
-        const map_len = std.mem.alignForward(usize, @as(usize, @intCast(stat.size)), std.heap.page_size_min);
-        const mapped = try std.posix.mmap(
-            null,
-            map_len,
-            .{ .READ = true },
-            .{ .TYPE = .PRIVATE },
-            input_file.handle,
-            0,
-        );
-        defer std.posix.munmap(mapped);
-
-        const input = mapped[0..@as(usize, @intCast(stat.size))];
-        const scan_thread_count = verifyScanThreadCount(input.len, options.limit_entries, options.thread_count);
+        const input_bytes = input.bytes();
+        const scan_thread_count = verifyScanThreadCount(input_bytes.len, options.limit_entries, options.thread_count);
         if (scan_thread_count == 1) {
             var stream_parser = StreamParser.init(allocator);
             defer stream_parser.deinit();
@@ -652,7 +636,7 @@ pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Optio
 
             try processMappedInputSequential(
                 &verifier,
-                input,
+                input_bytes,
                 &stream_parser,
                 &page_arena,
                 &queue,
@@ -662,7 +646,7 @@ pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Optio
             try processMappedInputParallel(
                 allocator,
                 &verifier,
-                input,
+                input_bytes,
                 scan_thread_count,
                 &queue,
                 &progress,
@@ -678,6 +662,57 @@ pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Optio
     const final_counts = verifier.snapshotProgress();
     progress.finish(final_counts.pages, final_counts.compared, final_counts.failures);
     return verifier.finish();
+}
+
+const MappedReadOnlyFile = struct {
+    stat: std.Io.File.Stat,
+    mapping: ?[]align(std.heap.page_size_min) const u8,
+
+    fn bytes(self: MappedReadOnlyFile) []const u8 {
+        return if (self.mapping) |mapping|
+            mapping[0..@as(usize, @intCast(self.stat.size))]
+        else
+            &.{};
+    }
+
+    fn deinit(self: *MappedReadOnlyFile) void {
+        if (self.mapping) |mapping| std.posix.munmap(mapping);
+        self.mapping = null;
+    }
+};
+
+fn mmapReadOnlyPath(io: std.Io, path: []const u8) !MappedReadOnlyFile {
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    }, 0);
+    var file: std.Io.File = .{
+        .handle = fd,
+        .flags = .{ .nonblocking = false },
+    };
+    defer file.close(io);
+
+    const stat = try file.stat(io);
+    if (stat.size == 0) {
+        return .{
+            .stat = stat,
+            .mapping = null,
+        };
+    }
+
+    const size = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
+    const mapping = try std.posix.mmap(
+        null,
+        size,
+        .{ .READ = true },
+        .{ .TYPE = .PRIVATE },
+        file.handle,
+        0,
+    );
+    return .{
+        .stat = stat,
+        .mapping = mapping,
+    };
 }
 
 fn verifyScanThreadCount(total_input_bytes: usize, limit_entries: ?usize, thread_override: ?usize) usize {
@@ -978,6 +1013,52 @@ fn writeReport(io: std.Io, report_path: []const u8, bytes: []const u8) !void {
     try file.writePositionalAll(io, bytes, 0);
 }
 
+fn truncateFd(fd: std.posix.fd_t, length: usize) !void {
+    const signed_length = std.math.cast(i64, length) orelse return error.FileTooBig;
+    switch (builtin.os.tag) {
+        .linux => switch (std.posix.errno(std.os.linux.ftruncate(fd, signed_length))) {
+            .SUCCESS => {},
+            .INTR => return truncateFd(fd, length),
+            .ACCES => return error.AccessDenied,
+            .BADF => return error.FileNotFound,
+            .FBIG => return error.FileTooBig,
+            .INVAL => return error.InvalidArgument,
+            .IO => return error.InputOutput,
+            .NOSPC => return error.NoSpaceLeft,
+            .PERM => return error.AccessDenied,
+            .TXTBSY => return error.FileBusy,
+            else => |err| return std.posix.unexpectedErrno(err),
+        },
+        else => @compileError("truncateFd is only implemented for Linux"),
+    }
+}
+
+fn writeMappedFile(path: []const u8, contents: []const u8) !void {
+    const map_len = @max(contents.len, 1);
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .RDWR,
+        .CREAT = true,
+        .TRUNC = true,
+        .CLOEXEC = true,
+    }, 0o666);
+    errdefer _ = std.os.linux.close(fd);
+    try truncateFd(fd, map_len);
+
+    const mapping = try std.posix.mmap(
+        null,
+        map_len,
+        .{ .READ = true, .WRITE = true },
+        .{ .TYPE = .SHARED },
+        fd,
+        0,
+    );
+    defer std.posix.munmap(mapping);
+
+    @memcpy(mapping[0..contents.len], contents);
+    try truncateFd(fd, contents.len);
+    _ = std.os.linux.close(fd);
+}
+
 fn parseOptions(args: []const []const u8) !Options {
     var options: Options = .{};
     var i: usize = 0;
@@ -1019,17 +1100,6 @@ fn printUsage() void {
     , .{});
 }
 
-fn writeTestFile(dir: std.Io.Dir, name: []const u8, contents: []const u8) !void {
-    var file = try dir.createFile(std.testing.io, name, .{ .truncate = true });
-    defer file.close(std.testing.io);
-
-    var buf: [256]u8 = undefined;
-    var file_writer = file.writer(std.testing.io, &buf);
-    const writer = &file_writer.interface;
-    try writer.writeAll(contents);
-    try writer.flush();
-}
-
 fn tempPath(allocator: std.mem.Allocator, sub_path: []const u8, name: []const u8) ![]u8 {
     return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ sub_path, name });
 }
@@ -1065,9 +1135,6 @@ test "verifyDictionary accepts whitespace-only differences" {
         \\</mediawiki>
     ;
 
-    try writeTestFile(tmp.dir, "build.xml", build_xml);
-    try writeTestFile(tmp.dir, "verify.xml", verify_xml);
-
     const build_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "build.xml");
     defer std.testing.allocator.free(build_rel);
     const verify_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify.xml");
@@ -1076,6 +1143,8 @@ test "verifyDictionary accepts whitespace-only differences" {
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
+    try writeMappedFile(build_rel, build_xml);
+    try writeMappedFile(verify_rel, verify_xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = build_rel,
@@ -1122,9 +1191,6 @@ test "verifyDictionary reports content mismatches" {
         \\</mediawiki>
     ;
 
-    try writeTestFile(tmp.dir, "build.xml", build_xml);
-    try writeTestFile(tmp.dir, "verify.xml", verify_xml);
-
     const build_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "build.xml");
     defer std.testing.allocator.free(build_rel);
     const verify_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify.xml");
@@ -1133,6 +1199,8 @@ test "verifyDictionary reports content mismatches" {
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
+    try writeMappedFile(build_rel, build_xml);
+    try writeMappedFile(verify_rel, verify_xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = build_rel,
@@ -1178,14 +1246,13 @@ test "verifyDictionary decodes double-escaped symbols and builder stores decoded
         \\</mediawiki>
     ;
 
-    try writeTestFile(tmp.dir, "build.xml", build_xml);
-
     const build_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "build.xml");
     defer std.testing.allocator.free(build_rel);
     const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
+    try writeMappedFile(build_rel, build_xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = build_rel,
@@ -1246,9 +1313,6 @@ test "verifyDictionary treats decoded unicode spacing entities as whitespace-onl
         \\</mediawiki>
     ;
 
-    try writeTestFile(tmp.dir, "build.xml", build_xml);
-    try writeTestFile(tmp.dir, "verify.xml", verify_xml);
-
     const build_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "build.xml");
     defer std.testing.allocator.free(build_rel);
     const verify_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify.xml");
@@ -1257,6 +1321,8 @@ test "verifyDictionary treats decoded unicode spacing entities as whitespace-onl
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
+    try writeMappedFile(build_rel, build_xml);
+    try writeMappedFile(verify_rel, verify_xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = build_rel,
@@ -1302,14 +1368,13 @@ test "verifyDictionary ignores excluded headings with matching blacklist" {
         \\</mediawiki>
     ;
 
-    try writeTestFile(tmp.dir, "build.xml", xml);
-
     const build_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "build.xml");
     defer std.testing.allocator.free(build_rel);
     const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
+    try writeMappedFile(build_rel, xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = build_rel,
@@ -1352,14 +1417,13 @@ test "verifyDictionary ignores dropped alias-only entries with invalid destinati
         \\</mediawiki>
     ;
 
-    try writeTestFile(tmp.dir, "sample.xml", xml);
-
     const xml_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "sample.xml");
     defer std.testing.allocator.free(xml_rel);
     const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-report.txt");
     defer std.testing.allocator.free(report_rel);
+    try writeMappedFile(xml_rel, xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_rel,
@@ -1379,7 +1443,7 @@ test "verifyDictionary ignores dropped alias-only entries with invalid destinati
     try std.testing.expectEqual(@as(usize, 0), stats.failures());
 }
 
-test "verifyDictionary keeps non-English entries by default filter configuration" {
+test "verifyDictionary skips non-English entries by default" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1396,14 +1460,13 @@ test "verifyDictionary keeps non-English entries by default filter configuration
         \\</mediawiki>
     ;
 
-    try writeTestFile(tmp.dir, "sample.xml", xml);
-
     const xml_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "sample.xml");
     defer std.testing.allocator.free(xml_rel);
     const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-report.txt");
     defer std.testing.allocator.free(report_rel);
+    try writeMappedFile(xml_rel, xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_rel,
@@ -1417,9 +1480,9 @@ test "verifyDictionary keeps non-English entries by default filter configuration
         .thread_count = 2,
     });
 
-    try std.testing.expectEqual(@as(usize, 1), stats.language_entries);
-    try std.testing.expectEqual(@as(usize, 1), stats.compared_entries);
-    try std.testing.expectEqual(@as(usize, 1), stats.exact_matches);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_entries);
+    try std.testing.expectEqual(@as(usize, 0), stats.compared_entries);
+    try std.testing.expectEqual(@as(usize, 0), stats.exact_matches);
     try std.testing.expectEqual(@as(usize, 0), stats.failures());
 }
 

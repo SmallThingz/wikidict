@@ -510,10 +510,15 @@ fn shouldStoreLanguage(title: []const u8) bool {
 }
 
 fn languageMatchesFilterCsv(title: []const u8, filter_csv: []const u8) bool {
-    if (std.mem.trim(u8, filter_csv, " \t").len == 0) return true;
+    const trimmed_filter = std.mem.trim(u8, filter_csv, " \t");
+    if (trimmed_filter.len == 0) return true;
+    if (std.ascii.eqlIgnoreCase(trimmed_filter, "all")) return true;
     var parts = std.mem.splitScalar(u8, filter_csv, ',');
     while (parts.next()) |part| {
-        if (std.mem.eql(u8, std.mem.trim(u8, part, " \t"), title)) return true;
+        const trimmed_part = std.mem.trim(u8, part, " \t");
+        if (trimmed_part.len == 0) continue;
+        if (std.ascii.eqlIgnoreCase(trimmed_part, "all")) return true;
+        if (std.mem.eql(u8, trimmed_part, title)) return true;
     }
     return false;
 }
@@ -3285,7 +3290,7 @@ test "extract english section preserves raw bytes" {
     , english);
 }
 
-test "extractConfiguredLanguageSectionsAlloc keeps all language sections by default" {
+test "extractConfiguredLanguageSectionsAlloc keeps only English by default" {
     const source =
         \\{{also|foo}}
         \\==English==
@@ -3301,7 +3306,7 @@ test "extractConfiguredLanguageSectionsAlloc keeps all language sections by defa
     defer std.testing.allocator.free(sections);
 
     try std.testing.expect(std.mem.indexOf(u8, sections, "==English==") != null);
-    try std.testing.expect(std.mem.indexOf(u8, sections, "==Hindi==") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections, "==Hindi==") == null);
     try std.testing.expect(std.mem.indexOf(u8, sections, "{{also|foo}}") == null);
 }
 
@@ -3310,6 +3315,8 @@ test "languageMatchesFilterCsv matches trimmed names" {
     try std.testing.expect(languageMatchesFilterCsv("Chinese", "English, Chinese"));
     try std.testing.expect(!languageMatchesFilterCsv("Hindi", "English, Chinese"));
     try std.testing.expect(languageMatchesFilterCsv("Hindi", ""));
+    try std.testing.expect(languageMatchesFilterCsv("Hindi", "all"));
+    try std.testing.expect(languageMatchesFilterCsv("Hindi", "English, all"));
 }
 
 test "section parser specs advertise live shared parser implementations" {

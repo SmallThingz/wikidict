@@ -1,4 +1,5 @@
 const std = @import("std");
+const required_path = @import("required_path.zig");
 
 const Command = enum {
     install,
@@ -29,22 +30,27 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    required_path.ensureExistsOrExit(init.io, "frontend", "frontend directory");
+    required_path.ensureExistsOrExit(init.io, "frontend/package.json", "frontend package manifest");
+
     switch (command) {
         .install => try runCommand(init.io, "frontend", &.{ "bun", "install" }),
         .build => {
-            try runCommand(init.io, "frontend", &.{ "bun", "install" });
+            required_path.ensureExistsOrExit(init.io, "frontend/node_modules", "frontend dependencies");
             try runCommand(init.io, "frontend", &.{ "bun", "run", "build" });
         },
         .check => {
-            try runCommand(init.io, "frontend", &.{ "bun", "install" });
+            required_path.ensureExistsOrExit(init.io, "frontend/node_modules", "frontend dependencies");
             try runCommand(init.io, "frontend", &.{ "bun", "run", "check" });
         },
         .dev => {
-            try runCommand(init.io, "frontend", &.{ "bun", "install" });
+            required_path.ensureExistsOrExit(init.io, "frontend/node_modules", "frontend dependencies");
             try runCommand(init.io, "frontend", &.{ "bun", "run", "dev" });
         },
         .preview => {
-            try runCommand(init.io, "frontend", &.{ "bun", "install" });
+            required_path.ensureExistsOrExit(init.io, "frontend/node_modules", "frontend dependencies");
+            required_path.ensureExistsOrExit(init.io, "frontend/dist/index.html", "frontend preview build");
+            required_path.ensureExistsOrExit(init.io, "frontend/dist/assets", "frontend preview assets");
             try runCommand(init.io, "frontend", &.{ "bun", "run", "start" });
         },
         .help => unreachable,
