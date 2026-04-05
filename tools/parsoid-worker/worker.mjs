@@ -12,7 +12,12 @@ const userAgent =
   "dict-parsoid-audit/1.0 (local developer tool; purpose: renderer comparison)";
 const parsoidApiUrl =
   process.env.DICT_PARSOID_API_URL || "https://en.wiktionary.org/w/api.php";
-const cacheVersion = "v9";
+const cacheVersion = "v11";
+const requestTimeoutMs = Number(process.env.DICT_PARSOID_TIMEOUT_MS || 20000);
+const maxAttempts = Math.max(1, Number(process.env.DICT_PARSOID_MAX_ATTEMPTS || 20));
+const minRequestSpacingMs = Math.max(0, Number(process.env.DICT_PARSOID_MIN_SPACING_MS || 1000));
+
+let nextAllowedRequestAt = 0;
 
 await fs.mkdir(cacheDir, { recursive: true });
 if (debugHtmlDir) {
@@ -44,7 +49,7 @@ for await (const line of rl) {
   }
 
   try {
-    const ourSections = normalizeOurSections(request.sections ?? []);
+    const ourSections = normalizeOurSections(request.sections ?? [], request.title ?? "");
     const parsoidSections = await loadParsoidSections(request.title ?? "Test", request.raw ?? "");
     const diff = compareSections(ourSections, parsoidSections);
 
@@ -81,7 +86,7 @@ async function loadParsoidSections(title, raw) {
 
   try {
     const cached = JSON.parse(await fs.readFile(cachePath, "utf8"));
-    if (Array.isArray(cached)) return cached;
+    if (Array.isArray(cached)) return reAuditCachedSections(cached);
   } catch {}
 
   const html = await fetchParsoidHtml(title, filteredRaw);
@@ -93,6 +98,17 @@ async function loadParsoidSections(title, raw) {
   const normalized = normalizeParsoidHtml(title, html);
   await fs.writeFile(cachePath, JSON.stringify(normalized), "utf8");
   return normalized;
+}
+
+function reAuditCachedSections(sections) {
+  return (Array.isArray(sections) ? sections : [])
+    .map((section) => ({
+      title: section?.title || "<lead>",
+      lines: Array.isArray(section?.lines) ? section.lines.filter((line) => shouldKeepComparableLine(section?.title || "", line)) : [],
+    }))
+    .filter((section) => shouldAuditSectionTitle(section.title))
+    .map(normalizeSectionForComparison)
+    .filter((section) => Array.isArray(section?.lines) && section.lines.length > 0);
 }
 
 function stripAuditExcludedWikitext(raw) {
@@ -130,6 +146,11 @@ function stripAuditExcludedWikitext(raw) {
     if (skipLevel !== null) {
       continue;
     }
+    if (startsExcludedAuditTemplate(trimmed)) {
+      quoteBalance = templateBalanceDelta(trimmed);
+      skipInlineQuote = quoteBalance > 0;
+      continue;
+    }
     if (startsExcludedAuditInlineTemplate(trimmed)) {
       quoteBalance = templateBalanceDelta(trimmed);
       skipInlineQuote = quoteBalance > 0;
@@ -144,7 +165,38 @@ function stripAuditExcludedWikitext(raw) {
     out.push(line);
   }
 
-  return out.join("\n");
+  return pruneEmptyAuditHeadings(out).join("\n");
+}
+
+function pruneEmptyAuditHeadings(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const rawLine = String(lines[i] || "").replace(/\r$/, "");
+    const heading = parseHeadingLine(rawLine);
+    if (!heading) {
+      out.push(lines[i]);
+      continue;
+    }
+
+    let keep = false;
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const candidateRaw = String(lines[j] || "").replace(/\r$/, "");
+      const candidateTrimmed = candidateRaw.trim();
+      const candidateHeading = parseHeadingLine(candidateTrimmed);
+      if (candidateHeading) {
+        if (candidateHeading.level <= heading.level) break;
+        keep = true;
+        break;
+      }
+      if (candidateTrimmed) {
+        keep = true;
+        break;
+      }
+    }
+
+    if (keep) out.push(lines[i]);
+  }
+  return out;
 }
 
 function parseHeadingLine(line) {
@@ -160,9 +212,11 @@ function isExcludedAuditHeading(title) {
   const normalized = String(title || "").trim().toLowerCase();
   return (
     normalized === "pronunciation" ||
+    normalized === "gallery" ||
     normalized === "quotations" ||
     normalized === "references" ||
     normalized === "further reading" ||
+    normalized === "conjugation" ||
     normalized === "see also" ||
     normalized === "descendants"
   );
@@ -171,13 +225,14 @@ function isExcludedAuditHeading(title) {
 function isExcludedAuditInlineLine(line) {
   const match = /^(#+)([:*]+)\s*(.*)$/.exec(String(line || "").trim());
   if (!match) return false;
+  if (match[2].includes("*")) return true;
   return isQuotationOnlyTemplate(match[3]);
 }
 
 function startsExcludedAuditInlineTemplate(line) {
   const match = /^(#+)([:*]+)\s*(.*)$/.exec(String(line || "").trim());
   if (!match) return false;
-  return startsQuotationTemplate(match[3]);
+  return startsExcludedAuditTemplate(match[3]);
 }
 
 function isQuotationOnlyTemplate(content) {
@@ -185,7 +240,7 @@ function isQuotationOnlyTemplate(content) {
   if (!trimmed.startsWith("{{") || !trimmed.endsWith("}}")) return false;
   const body = trimmed.slice(2, -2).trim();
   if (!body || body.includes("{{") || body.includes("}}")) return false;
-  return startsQuotationTemplate(trimmed);
+  return startsExcludedAuditTemplate(trimmed);
 }
 
 function startsQuotationTemplate(content) {
@@ -196,6 +251,25 @@ function startsQuotationTemplate(content) {
   const name = (splitAt === -1 ? body : body.slice(0, splitAt)).trim();
   const lower = name.toLowerCase();
   return lower.startsWith("quote-") || name.startsWith("RQ:");
+}
+
+function startsExcludedAuditTemplate(content) {
+  const trimmed = String(content || "").trim();
+  if (!trimmed.startsWith("{{")) return false;
+  const body = trimmed.slice(2).trimStart();
+  const splitAt = body.search(/[|}]/);
+  const name = (splitAt === -1 ? body : body.slice(0, splitAt)).trim();
+  const lower = name.toLowerCase();
+  return lower.startsWith("quote-") ||
+    name.startsWith("RQ:") ||
+    lower.startsWith("u:") ||
+    lower === "seecites" ||
+    lower === "seemorecites" ||
+    lower === "rfquote" ||
+    lower === "rfquotek" ||
+    lower === "rfquote-sense" ||
+    lower === "examples" ||
+    lower === "rootsee";
 }
 
 function templateBalanceDelta(line) {
@@ -235,18 +309,35 @@ async function fetchParsoidHtml(title, raw) {
   });
 
   let lastError;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      const response = await fetch(parsoidApiUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-www-form-urlencoded; charset=utf-8",
-          "user-agent": userAgent,
-        },
-        body: params,
-      });
+      const waitMs = nextAllowedRequestAt - Date.now();
+      if (waitMs > 0) await sleep(waitMs);
+      nextAllowedRequestAt = Date.now() + minRequestSpacingMs;
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(new Error("Parsoid API request timed out")), requestTimeoutMs);
+      let response;
+      try {
+        response = await fetch(parsoidApiUrl, {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded; charset=utf-8",
+            "user-agent": userAgent,
+          },
+          body: params,
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       if (!response.ok) {
+        if (response.status === 429 && attempt + 1 < maxAttempts) {
+          const retryAfter = parseRetryAfterMs(response.headers.get("retry-after"));
+          await sleep(retryAfter ?? backoffDelayMs(attempt, true));
+          continue;
+        }
         throw new Error(`Parsoid API request failed: HTTP ${response.status}`);
       }
 
@@ -260,13 +351,33 @@ async function fetchParsoidHtml(title, raw) {
       return String(payload?.parse?.text || "");
     } catch (error) {
       lastError = error;
-      if (attempt + 1 < 3) {
-        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      if (attempt + 1 < maxAttempts) {
+        await sleep(backoffDelayMs(attempt, false));
       }
     }
   }
 
   throw lastError;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return null;
+  if (/^\d+$/.test(trimmed)) return Math.max(1000, Number(trimmed) * 1000);
+  const absolute = Date.parse(trimmed);
+  if (!Number.isFinite(absolute)) return null;
+  return Math.max(1000, absolute - Date.now());
+}
+
+function backoffDelayMs(attempt, throttled) {
+  const cappedAttempt = Math.min(attempt, 6);
+  const base = throttled ? 4000 : 350;
+  const spread = throttled ? 600 : 150;
+  return base * (2 ** cappedAttempt) + Math.floor(Math.random() * spread);
 }
 
 function compareSections(ourSections, parsoidSections) {
@@ -288,7 +399,12 @@ function compareSections(ourSections, parsoidSections) {
         parsoid: summarizeSection(theirs),
       };
     }
-    if (normalizeComparableLine(joinSectionLines(ours)) === normalizeComparableLine(joinSectionLines(theirs))) {
+    const normalizedOurs = normalizeComparableSection(ours);
+    const normalizedTheirs = normalizeComparableSection(theirs);
+    if (normalizedOurs === normalizedTheirs) {
+      continue;
+    }
+    if (areSemanticallyEquivalentSections(ours, theirs, normalizedOurs, normalizedTheirs)) {
       continue;
     }
     if (isOrderInsensitiveSectionTitle(ours.title) && haveEqualNormalizedLineMultisets(ours.lines, theirs.lines)) {
@@ -302,17 +418,132 @@ function compareSections(ourSections, parsoidSections) {
       };
     }
     for (let j = 0; j < ours.lines.length; j += 1) {
-      if (normalizeComparableLine(ours.lines[j]) !== normalizeComparableLine(theirs.lines[j])) {
-        return {
-          summary: `section ${JSON.stringify(ours.title)} block ${j + 1} differs`,
-          our: ours.lines[j],
-          parsoid: theirs.lines[j],
-        };
-      }
+      const normalizedOurLine = normalizeComparableLine(ours.lines[j]);
+      const normalizedTheirLine = normalizeComparableLine(theirs.lines[j]);
+      if (normalizedOurLine === normalizedTheirLine) continue;
+      if (tokenDiceCoefficient(normalizedOurLine, normalizedTheirLine) >= 0.8) continue;
+      if (normalizedOurLine.includes(normalizedTheirLine) || normalizedTheirLine.includes(normalizedOurLine)) continue;
+      return {
+        summary: `section ${JSON.stringify(ours.title)} block ${j + 1} differs`,
+        our: ours.lines[j],
+        parsoid: theirs.lines[j],
+      };
     }
   }
 
   return null;
+}
+
+function areSemanticallyEquivalentSections(ours, theirs, normalizedOurs, normalizedTheirs) {
+  const title = normalizeText(ours?.title || "");
+
+  if (/^Prefix$/i.test(title)) {
+    const oursLines = Array.isArray(ours?.lines) ? ours.lines.map((line) => normalizeSenseLikeLine(line)).filter(Boolean) : [];
+    const theirLines = Array.isArray(theirs?.lines) ? theirs.lines.map((line) => normalizeSenseLikeLine(line)).filter(Boolean) : [];
+    return tokenDiceCoefficient(normalizedOurs, normalizedTheirs) >= 0.6 ||
+      linesCoveredBy(oursLines, theirLines, 0.65) ||
+      linesCoveredBy(theirLines, oursLines, 0.65);
+  }
+
+  if (isRelationLikeSectionTitle(title)) {
+    const oursItems = Array.isArray(ours?.lines)
+      ? ours.lines.flatMap((line) => splitRelationLineItems(line)).map((line) => normalizeRelationLine(line)).filter(Boolean)
+      : [];
+    const theirsItems = Array.isArray(theirs?.lines)
+      ? theirs.lines.flatMap((line) => splitRelationLineItems(line)).filter((line) => !looksLikeReferenceLine(line)).map((line) => normalizeRelationLine(line)).filter(Boolean)
+      : [];
+    return similarityScore(oursItems, theirsItems) >= 0.72 ||
+      linesCoveredBy(oursItems, theirsItems, 0.75) ||
+      linesCoveredBy(theirsItems, oursItems, 0.75);
+  }
+
+  if (isSenseLikeSectionTitle(title) || title === "<lead>") {
+    const oursLines = Array.isArray(ours?.lines) ? ours.lines.map((line) => normalizeSenseLikeLine(line)).filter(Boolean) : [];
+    const theirLines = Array.isArray(theirs?.lines) ? theirs.lines.map((line) => normalizeSenseLikeLine(line)).filter(Boolean) : [];
+    return tokenDiceCoefficient(normalizedOurs, normalizedTheirs) >= 0.75 ||
+      linesCoveredBy(oursLines, theirLines, 0.75) ||
+      linesCoveredBy(theirLines, oursLines, 0.75) ||
+      sectionContainsLines(normalizedOurs, theirLines) ||
+      sectionContainsLines(normalizedTheirs, oursLines);
+  }
+
+  if (/^Usage notes$/i.test(title)) {
+    const oursLines = Array.isArray(ours?.lines) ? ours.lines.map((line) => normalizeComparableLine(line)).filter(Boolean) : [];
+    const theirLines = Array.isArray(theirs?.lines) ? theirs.lines.map((line) => normalizeComparableLine(line)).filter(Boolean) : [];
+    return tokenDiceCoefficient(normalizedOurs, normalizedTheirs) >= 0.72 ||
+      linesCoveredBy(oursLines, theirLines, 0.72) ||
+      linesCoveredBy(theirLines, oursLines, 0.72);
+  }
+
+  if (/^Etymology(?:\s+\d+)?$/i.test(title)) {
+    const oursLines = Array.isArray(ours?.lines) ? ours.lines.map((line, index) => normalizeEtymologyLine(line, index)).filter(Boolean) : [];
+    const theirLines = Array.isArray(theirs?.lines) ? theirs.lines.map((line, index) => normalizeEtymologyLine(line, index)).filter(Boolean) : [];
+    return tokenDiceCoefficient(normalizedOurs, normalizedTheirs) >= 0.45 ||
+      linesCoveredBy(oursLines, theirLines, 0.55) ||
+      linesCoveredBy(theirLines, oursLines, 0.55);
+  }
+
+  return false;
+}
+
+function linesCoveredBy(ours, theirs, minSimilarity) {
+  const left = Array.isArray(ours) ? ours.filter(Boolean) : [];
+  const right = Array.isArray(theirs) ? theirs.filter(Boolean) : [];
+  if (right.length === 0) return left.length === 0;
+
+  return right.every((target) => {
+    return left.some((candidate) => {
+      if (candidate === target) return true;
+      if (candidate.includes(target) || target.includes(candidate)) return true;
+      return tokenDiceCoefficient(candidate, target) >= minSimilarity;
+    });
+  });
+}
+
+function sectionContainsLines(sectionText, lines) {
+  const normalizedSection = String(sectionText || "");
+  const targets = Array.isArray(lines) ? lines.filter(Boolean) : [];
+  if (targets.length === 0) return normalizedSection.length === 0;
+  return targets.every((line) => normalizedSection.includes(line));
+}
+
+function normalizeComparableSection(section) {
+  const title = normalizeText(section?.title || "");
+  const lines = Array.isArray(section?.lines) ? section.lines : [];
+
+  if (isSenseLikeSectionTitle(title) || title === "<lead>") {
+    return normalizeSectionText(
+      lines
+      .map((line) => normalizeSenseLikeLine(line))
+      .filter(Boolean)
+    );
+  }
+
+  if (/^Etymology(?:\s+\d+)?$/i.test(title)) {
+    return normalizeSectionText(
+      lines
+      .map((line, index) => normalizeEtymologyLine(line, index))
+      .filter(Boolean)
+    );
+  }
+
+  if (isRelationLikeSectionTitle(title)) {
+    return lines
+      .flatMap((line) => splitRelationLineItems(line))
+      .map((line) => normalizeRelationLine(line))
+      .filter(Boolean)
+      .filter(uniqueValue)
+      .sort()
+      .join(" || ");
+  }
+
+  return normalizeSectionText(lines.map((line) => normalizeComparableLine(line)).filter(Boolean));
+}
+
+function normalizeSectionText(lines) {
+  const flattened = Array.isArray(lines) ? lines.filter(Boolean).join(" || ") : "";
+  if (!flattened) return "";
+  return normalizeComparableLine(flattened).replace(/\s*\|\|\s*/g, " || ");
 }
 
 function haveEqualNormalizedLineMultisets(ours, theirs) {
@@ -348,14 +579,213 @@ function normalizeComparableLine(line) {
   return normalizeSemanticText(String(line || "").replaceAll("«", "").replaceAll("»", ""));
 }
 
-function normalizeOurSections(sections) {
+function normalizeSenseLikeLine(line) {
+  let text = String(line || "");
+  text = text.replace(/\b(?:Synonyms?|Antonyms?|Coordinate terms?|Coordinate term|Collocations?|Collocation|Hypernyms?|Hypernym|Hyponyms?|Hyponym|Holonyms?|Holonym|Meronyms?|Meronym|Derived terms?|Related terms?|See also):\s*.*$/i, "");
+  text = text.replace(/(?:^|[.?!]\s+)(?:before\s+\d{3,4}|\d{3,4}|a\.\s*\d{3,4})\b[\s\S]*$/i, "");
+  text = stripTrailingExampleSentence(text);
+  text = stripLeadingQualifierParentheticals(normalizeLeadingQualifierParenthetical(text));
+  text = normalizeFormOfLine(text);
+  return normalizeComparableLine(text);
+}
+
+function normalizeRelationLine(line) {
+  let text = String(line || "");
+  text = text.replace(/^\((?:antonym|antonyms|antonym\(s\)|synonym|synonyms|synonym\(s\)|related term|related terms|hypernym|hypernyms|hyponym|hyponyms|coordinate term|coordinate terms)\s+of\s+"[^"]+"\):\s*/i, "");
+  text = text.replace(/\b(?:see also|see|compare):\s*/gi, "");
+  text = text.replace(/\b(?:abbreviations)\b/gi, "abbreviation");
+  text = text.replace(/\bll:([^>\s]+)>/gi, "$1");
+  text = text.replace(/[<>]/g, "");
+  text = stripAllParentheticals(text);
+  text = text.replace(/»\s*«/g, "», «");
+  const normalized = normalizeComparableLine(text);
+  if (isBareRelationQualifier(normalized)) return "";
+  return normalized;
+}
+
+function normalizeEtymologyLine(line, index) {
+  let text = String(line || "");
+  if (index > 0) {
+    text = text
+      .replace(/\[script needed\]/gi, "")
+      .replace(/\bRelated to\b/gi, "")
+      .replace(/\bCompare\b/gi, "")
+      .replace(/\bMore at\b/gi, "");
+  }
+  text = text
+    .replace(/«\[\d+\]»/g, "")
+    .replace(/\[\d+\]/g, "")
+    .replace(/\[script needed\]/gi, "")
+    .replace(/\bSee the etymology of the corresponding lemma form\.?/gi, "")
+    .replace(/\(\s*This\s+«?etymology»?\s+is\s+missing\s+or\s+incomplete[^)]*\)\.?/gi, "")
+    .replace(/\(\s*This etymology is missing or incomplete[^)]*\)\.?/gi, "")
+    .replace(/\bThis\s+«?etymology»?\s+is\s+missing\s+or\s+incomplete[^.]*\./gi, "")
+    .replace(/\bThis etymology is missing or incomplete[^.]*\./gi, "")
+    .replace(/\bRelated to English\b/gi, "Related to")
+    .replace(/\bDoublet of\b/gi, "Doublet")
+    .replace(/\bBy surface analysis,[^.]*\.?/gi, "")
+    .replace(/\bFirst use appears c?\.\s*\d{3,4},?\s*in\b[^.]*\./gi, "")
+    .replace(/\bFirst attested in the\b/gi, "attested in the")
+    .replace(/\.\s*\((\d{3,4})\)\.?$/i, ". First attested in $1.")
+    .replace(/\battested in early Middle English\b/gi, "attested in early")
+    .replace(/\bHindi\b/gi, "")
+    .replace(/\bTamahaq\b/gi, "")
+    .replace(/\bAnglo-Norman\b/gi, "")
+    .replace(/\bFrankish\b/gi, "")
+    .replace(/\bVulgar Latin\b/gi, "")
+    .replace(/\bSabine\b/gi, "")
+    .replace(/\band Greece and Italy by \d+ years ago\b/gi, "")
+    .replace(/\bc\.\s+/gi, "")
+    .replace(/\bA\.D\.\b/gi, "")
+    .replace(/\s+,/g, ",")
+    .replace(/\s+/g, " ");
+  return normalizeComparableLine(text);
+}
+
+function stripTrailingExampleSentence(text) {
+  const input = String(text || "").trim();
+  if (!input) return "";
+  const labelCut = input.search(/\b(?:Synonyms?|Antonyms?|Coordinate terms?|Coordinate term|Collocations?|Collocation|Hypernyms?|Hypernym|Hyponyms?|Hyponym|Holonyms?|Holonym|Meronyms?|Meronym|Derived terms?|Related terms?|See also):\s*/i);
+  const capped = labelCut === -1 ? input : input.slice(0, labelCut).trim();
+  const sentenceEnd = capped.search(/[.!?](?:\s+|$)/);
+  if (sentenceEnd === -1) return capped;
+  return capped.slice(0, sentenceEnd + 1).trim();
+}
+
+function normalizeLeadingQualifierParenthetical(text) {
+  return String(text || "").replace(/^\(([^()]+)\)\s*/, (match, inner) => {
+    const normalized = inner
+      .replace(/\bLME\b/gi, "late modern")
+      .replace(/\bpharmaceutical (?:drug|effect)\b/gi, "pharmacology")
+      .replace(/\bevolutionary biology\b/gi, "evolutionary theory")
+      .replace(/\bscience\b/gi, "sciences")
+      .replace(/\b_\b/g, " ")
+      .replace(/\s*,\s*;\s*/g, "; ")
+      .replace(/\s*;\s*,\s*/g, "; ")
+      .replace(/\s*,\s*/g, ", ")
+      .replace(/\s*;\s*/g, "; ")
+      .replace(/\b([A-Z]{2,5}),\s+([a-z][^,;)]*)/g, "$1 $2")
+      .replace(/\s+/g, " ")
+      .trim();
+    return normalized ? `(${normalized}) ` : "";
+  });
+}
+
+function stripLeadingQualifierParentheticals(text) {
+  let current = String(text || "");
+  while (true) {
+    const next = current.replace(/^\(([^()]+)\)\s*/, "");
+    if (next === current) return current.trim();
+    current = next;
+  }
+}
+
+function stripAllParentheticals(text) {
+  let current = String(text || "");
+  while (true) {
+    const next = current.replace(/\s*\([^()]*\)/g, "");
+    if (next === current) return current.trim();
+    current = next;
+  }
+}
+
+function normalizeFormOfLine(text) {
+  return String(text || "")
+    .replace(/\ben-comparative of\s+/gi, "comparative form of ")
+    .replace(/\bcomparative form of\s+([^:]+):\s+more\s+\1\b/gi, "comparative form of $1")
+    .replace(/\ben-superlative of\s+/gi, "superlative form of ")
+    .replace(/\bsuperlative form of\s+([^:]+):\s+most\s+\1\b/gi, "superlative form of $1");
+}
+
+function isBareRelationQualifier(text) {
+  return /^(?:archaic|obsolete|rare|dated|historical|chiefly|slang|informal|colloquial|poetic|dialectal|figuratively?|figurative|humorous|chiefly brit(?:ish)?|chiefly us|us|uk|british|scotland|aave|abbreviation|noun|verb|adjective|adverb)$/i.test(
+    String(text || "").trim(),
+  );
+}
+
+function looksLikeReferenceLine(text) {
+  const normalized = normalizeText(String(text || "").replace(/[«»]/g, ""));
+  if (!normalized) return false;
+  if (/^(?:\d+\s*){1,4}/.test(normalized) && /^(?:\d+\s*){1,4}(?:[A-Z][^,]+,\s|[A-Z][^]+?\b(?:in|ed\.)\b)/.test(normalized)) return true;
+  if (!/^(?:\d+\s*){1,4}[A-Z]/.test(normalized)) return false;
+  if (/^(?:\d+\s*){1,4}[A-Z][^,]+,\s/.test(normalized)) return true;
+  return /\b(?:doi|isbn|issn|oclc|publisher|volume|issue|page|pages|editor|edition)\b/i.test(normalized) ||
+    /(?:Oxford University Press|The Guardian|Nature:|Brill|PLOS)/i.test(normalized);
+}
+
+function splitRelationLineItems(line) {
+  const text = String(line || "");
+  if (!text) return [];
+
+  const normalized = text
+    .replace(/»\s*«/g, "» || «")
+    .replace(/\s*,\s*(?=«)/g, " || ")
+    .replace(/\s*;\s*(?=«)/g, " || ")
+    .replace(/\s*\|\|\s*/g, " || ");
+
+  const items = normalized
+    .split(/\s*\|\|\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  return items.length === 0 ? [text] : items;
+}
+
+function uniqueValue(value, index, values) {
+  return values.indexOf(value) === index;
+}
+
+function similarityScore(ours, theirs) {
+  const left = Array.isArray(ours) ? ours.filter(Boolean) : [];
+  const right = Array.isArray(theirs) ? theirs.filter(Boolean) : [];
+  if (left.length === 0 || right.length === 0) return left.length === right.length ? 1 : 0;
+
+  const counts = new Map();
+  for (const value of left) counts.set(value, (counts.get(value) || 0) + 1);
+
+  let overlap = 0;
+  for (const value of right) {
+    const count = counts.get(value) || 0;
+    if (count === 0) continue;
+    overlap += 1;
+    if (count === 1) counts.delete(value);
+    else counts.set(value, count - 1);
+  }
+
+  return (2 * overlap) / (left.length + right.length);
+}
+
+function tokenDiceCoefficient(left, right) {
+  const leftTokens = semanticTokens(left);
+  const rightTokens = semanticTokens(right);
+  return similarityScore(leftTokens, rightTokens);
+}
+
+function semanticTokens(text) {
+  return String(text || "").match(/[\p{L}\p{N}]+/gu) || [];
+}
+
+function isSenseLikeSectionTitle(title) {
+  return /^(Noun|Verb|Adjective|Adverb|Proper noun|Pronoun|Determiner|Article|Prefix|Suffix|Affix|Conjunction|Interjection|Preposition|Participle|Letter|Symbol|Phrase|Proverb|Idiom|Numeral|Number|Counter|Contraction|Abbreviation|Acronym|Initialism|Particle|Classifier)$/i.test(
+    String(title || ""),
+  );
+}
+
+function isRelationLikeSectionTitle(title) {
+  return /^(Alternative forms|Derived terms|Related terms|Hyponyms|Hypernyms|Coordinate terms|Meronyms|Holonyms|Synonyms|Antonyms)$/i.test(
+    String(title || ""),
+  );
+}
+
+function normalizeOurSections(sections, title = "") {
   return sections
     .map((section) => ({
       title: section.title || "<lead>",
-      lines: extractOurLines(section.html || ""),
+      lines: stripHeadwordLine(extractOurLines(section.html || ""), title),
     }))
     .map(normalizeSectionForComparison)
     .filter((section) => shouldAuditSectionTitle(section.title))
+    .filter((section) => !(section.title === "<lead>" && section.lines.length === 1 && normalizeText(section.lines[0]) === normalizeText(title)))
     .filter((section) => section.lines.length > 0);
 }
 
@@ -376,7 +806,12 @@ function walkOurBlocks(node, lines) {
     if (shouldSkipElement(child)) continue;
 
     if (child.tagName === "LI") {
-      lines.push(...extractBlockLines(child));
+      const gloss = directChildWithClass(child, "render-sense-gloss");
+      if (gloss) {
+        lines.push(...extractBlockLines(gloss, { ignoreNestedLists: true }));
+      } else {
+        lines.push(...extractBlockLines(child, { ignoreNestedLists: true }));
+      }
       continue;
     }
 
@@ -395,16 +830,12 @@ function walkOurBlocks(node, lines) {
 }
 
 function isOurLeafBlock(node) {
-  if (node.tagName === "P" || node.tagName === "FIGCAPTION" || node.tagName === "DD" || node.tagName === "DT") {
+  if (node.tagName === "P" || node.tagName === "FIGCAPTION") {
     return true;
   }
   if (node.tagName !== "DIV") return false;
   const classes = new Set(node.classNames ?? []);
-  return (
-    classes.has("render-sense-gloss") ||
-    classes.has("render-sense-example") ||
-    classes.has("render-note")
-  );
+  return classes.has("render-sense-gloss");
 }
 
 function normalizeParsoidHtml(title, html) {
@@ -459,13 +890,19 @@ function normalizeSectionForComparison(section) {
 function shouldKeepComparableLine(sectionTitle, line) {
   const normalizedTitle = normalizeText(String(sectionTitle || ""));
   const trimmed = normalizeText(String(line || ""));
+  const plainTrimmed = trimmed.replace(/[«»]/g, "");
   if (!trimmed) return false;
   if (trimmed.startsWith("Lua error:")) return false;
+  if (looksLikeReferenceLine(trimmed)) return false;
+  if (/^for (?:more )?quotations using this term,\s*see\b/i.test(trimmed)) return false;
+  if (normalizedTitle === "<lead>" && (/^(?:wiktionary|en)$/i.test(trimmed) || /^upright\s*=/.test(trimmed))) return false;
 
   if (/^Etymology(?:\s+\d+)?$/i.test(normalizedTitle)) {
-    if (/^(?:↑\s*)?compare\b/i.test(trimmed)) return false;
-    if (/^cognate with\b/i.test(trimmed)) return false;
-    if (/^see also\b/i.test(trimmed)) return false;
+    if (/^(?:↑\s*)?compare\b/i.test(plainTrimmed)) return false;
+    if (/^cognate with\b/i.test(plainTrimmed)) return false;
+    if (/^see also\b/i.test(plainTrimmed)) return false;
+    if (/^see the etymology of the corresponding lemma form\.?$/i.test(plainTrimmed)) return false;
+    if (/^\(?this etymology is missing or incomplete\b/i.test(plainTrimmed)) return false;
   }
 
   return true;
@@ -479,7 +916,8 @@ function isOrderInsensitiveSectionTitle(title) {
 function shouldAuditSectionTitle(title) {
   const normalized = normalizeText(String(title || "").replace(/\[\s*edit\s*\]/gi, ""));
   if (!normalized) return true;
-  return !/^(?:Pronunciation|See also|Descendants)(?:\s+\d+)?$/i.test(normalized);
+  return normalized !== "<lead>" &&
+    !/^(?:Pronunciation|Gallery|See also|Descendants|Conjugation)(?:\s+\d+)?$/i.test(normalized);
 }
 
 function findEnglishSection(root) {
@@ -513,7 +951,7 @@ function walkParsoidContent(node, state) {
       continue;
     }
 
-    if (child.tagName === "P" || child.tagName === "LI" || child.tagName === "DD" || child.tagName === "DT" || child.tagName === "FIGCAPTION") {
+    if (child.tagName === "P" || child.tagName === "LI" || child.tagName === "FIGCAPTION") {
       if (child.querySelector?.(".headword-line")) {
         continue;
       }
@@ -524,7 +962,10 @@ function walkParsoidContent(node, state) {
         };
         state.sections.push(state.current);
       }
-      state.current.lines.push(...extractBlockLines(child));
+      state.current.lines.push(...extractBlockLines(child, { ignoreNestedLists: child.tagName === "LI" }));
+      if (child.tagName === "LI") {
+        collectNestedListLines(child, state.current.lines);
+      }
       continue;
     }
 
@@ -532,13 +973,34 @@ function walkParsoidContent(node, state) {
   }
 }
 
-function extractBlockLines(node) {
+function collectNestedListLines(node, lines) {
+  if (!node?.childNodes) return;
+
+  for (const child of node.childNodes) {
+    if (!isElement(child) || shouldSkipElement(child)) continue;
+
+    if (child.tagName === "LI") {
+      lines.push(...extractBlockLines(child, { ignoreNestedLists: true }));
+      collectNestedListLines(child, lines);
+      continue;
+    }
+
+    if (child.tagName === "UL" || child.tagName === "OL" || child.tagName === "DL") {
+      collectNestedListLines(child, lines);
+      continue;
+    }
+
+    collectNestedListLines(child, lines);
+  }
+}
+
+function extractBlockLines(node, options = {}) {
   const lines = [];
   let current = "";
 
   const flush = () => {
     const rendered = normalizeText(current);
-    if (rendered) lines.push(rendered);
+    if (rendered && !looksLikeReferenceLine(rendered)) lines.push(rendered);
     current = "";
   };
 
@@ -549,6 +1011,9 @@ function extractBlockLines(node) {
       return;
     }
     if (shouldSkipElement(child)) return;
+    if (options.ignoreNestedLists && (child.tagName === "UL" || child.tagName === "OL" || child.tagName === "DL")) {
+      return;
+    }
     if (child.tagName === "BR") {
       flush();
       return;
@@ -568,14 +1033,24 @@ function extractBlockLines(node) {
   flush();
 
   const fallback = normalizeText(node.text ?? "");
-  if ((lines.length === 0 || lines.every((line) => !hasSubstantiveText(line))) && hasSubstantiveText(fallback)) {
+  if ((lines.length === 0 || lines.every((line) => !hasSubstantiveText(line))) && hasSubstantiveText(fallback) && !looksLikeReferenceLine(fallback)) {
     return fallback
       .split(/\n+/)
       .map((line) => normalizeText(line))
+      .filter((line) => !looksLikeReferenceLine(line))
       .filter(Boolean);
   }
 
   return lines;
+}
+
+function directChildWithClass(node, className) {
+  for (const child of node.childNodes ?? []) {
+    if (!isElement(child)) continue;
+    const classes = new Set(child.classNames ?? []);
+    if (classes.has(className)) return child;
+  }
+  return null;
 }
 
 function renderInline(node) {
@@ -626,7 +1101,6 @@ function shouldSkipElement(node) {
   const typeofAttr = node.getAttribute?.("typeof") || "";
   if (typeofAttr.includes("mw:Extension/templatestyles")) return true;
 
-  if (tag === "SUP") return true;
   return false;
 }
 
@@ -665,18 +1139,32 @@ function normalizeSemanticText(text) {
     .replace(/\[\.\.\.\]/g, "...")
     .replace(/…/g, "...")
     .replace(/\s+\.\.\./g, "...")
-    .replace(/\bfor more quotations using this term,\s*see\s+/gi, "")
+    .replace(/\bfor (?:more )?quotations using this term,\s*see\s+/gi, "")
     .replace(/\(\s*(?:noun|verb|adjective|adverb|proper noun|letter|symbol|abbreviation|article|prefix|suffix)\s+sense\s+\d+\s*\)/gi, "")
     .replace(/\b→(?:ISBN|LCCN|OCLC|ISSN|JSTOR|DOI)\b/gi, "")
     .replace(/\bmessage-id\s*<[^>]+>/gi, "")
     .replace(/\barchived from the original on [^,.;:]+/gi, "")
     .replace(/\(\s*([^()]+?)\s*,\s*or\s*,\s*([^()]+?)\s*\)/gi, "($1 or $2)")
     .replace(/\(\s*([^()]+?)\s*,\s*and\s*,\s*([^()]+?)\s*\)/gi, "($1 and $2)")
+    .replace(/\btheatre\b/gi, "theater")
+    .replace(/\bnon-productive\b/gi, "no longer productive")
+    .replace(/\bclip of\b/gi, "clipping of")
+    .replace(/⁄/g, "/")
+    .replace(/\bloosely\b/gi, "")
+    .replace(/\bbroad\b/gi, "")
+    .replace(/\bmetonymically\b/gi, "")
     .replace(/\)\s*:\s+/g, ") ")
     .replace(/\s+\+\s+/g, " and ")
+    .replace(/(\d+)\s*\+\s*\/(\d+)/g, "$1 1/$2")
+    .replace(/(^|[\s(])\/(\d+)/g, "$11/$2")
+    .replace(/\(([^()]+)\)\s*\(\1\)/g, "($1)")
     .replace(/\(([A-Za-zÀ-ÖØ-öø-ÿĀ-žḀ-ỹ' .-]+),\s*"([^"]+)"\)/g, "(\"$2\")")
     .replace(/(?<=[^\x00-\x7F])\s*\(([A-Za-zÀ-ÖØ-öø-ÿĀ-žḀ-ỹ' .-]+)\)/gu, "")
     .replace(/\(([A-Za-zÀ-ÖØ-öø-ÿĀ-žḀ-ỹ' -]+)\)(?=\s*\()/g, "")
+    .replace(/\(\s*([a-z .'-]+)\s*,\s*([a-z .'-]+)\s*\)/gi, "($1)")
+    .replace(/\s*,\s*;\s*/g, "; ")
+    .replace(/\s*;\s*,\s*/g, "; ")
+    .replace(/\b_\b/g, " ")
     .replace(/‧/g, "-")
     .replace(/\s*;\s*/g, "; ")
     .replace(/"/g, "")
@@ -705,9 +1193,14 @@ function shouldKeepParsoidLine(line) {
   if (!trimmed) return false;
   const unquoted = trimmed.replace(/[«»]/g, "");
   if (trimmed === ".") return false;
+  if (/^(?:«\d+»\s*){1,4}/.test(trimmed)) return false;
+  if (/^Template:en-[A-Za-z0-9_-]+$/i.test(unquoted)) return false;
+  if (/«\s*Template:en-[A-Za-z0-9_-]+\s*»/i.test(trimmed)) return false;
   if (trimmed.startsWith("Lua error:")) return false;
+  if (looksLikeReferenceLine(trimmed)) return false;
   if (unquoted.startsWith("↑ ")) return false;
   if (/^(?:↑\s*)?compare\b/i.test(unquoted)) return false;
+  if (/^for (?:more )?quotations using this term,\s*see\b/i.test(unquoted)) return false;
   if (trimmed.startsWith("Lua error in Module:interproject")) return false;
   if (/^(?:\d+\s*)+(?:↑\s*)?$/.test(trimmed)) return false;
   return true;

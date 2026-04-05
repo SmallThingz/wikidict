@@ -50,6 +50,7 @@ fn renderInline(
     allocator: std.mem.Allocator,
     input: []const u8,
 ) std.mem.Allocator.Error!void {
+    var emphasis_state: EmphasisState = .{};
     var i: usize = 0;
     while (i < input.len) {
         if (i + 4 <= input.len and std.mem.eql(u8, input[i .. i + 4], "<!--")) {
@@ -69,6 +70,10 @@ fn renderInline(
             i = end + 2;
             continue;
         }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "}}")) {
+            i += 2;
+            continue;
+        }
         if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "[[")) {
             const end = findBalanced(input, i, "[[", "]]") orelse break;
             var trail_end = end + 2;
@@ -77,9 +82,13 @@ fn renderInline(
             i = trail_end;
             continue;
         }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "]]")) {
+            i += 2;
+            continue;
+        }
         if (input[i] == '[') {
-            if (std.mem.indexOfScalarPos(u8, input, i + 1, ']')) |end| {
-                if (std.mem.startsWith(u8, input[i + 1 ..], "http")) {
+            if (asciiStartsWithIgnoreCase(input[i + 1 ..], "http")) {
+                if (findExternalLinkClose(input, i)) |end| {
                     const body = input[i + 1 .. end];
                     if (std.mem.indexOfScalar(u8, body, ' ')) |space| {
                         try renderInline(out, allocator, body[space + 1 ..]);
@@ -137,7 +146,7 @@ fn renderInline(
         if (input[i] == '\'' and i + 1 < input.len and input[i + 1] == '\'') {
             const run_start = i;
             while (i < input.len and input[i] == '\'') : (i += 1) {}
-            if (shouldKeepLiteralApostrophe(input, run_start, i - run_start)) {
+            if (emphasis_state.consumeApostropheRun(input, run_start, i - run_start)) {
                 try out.append(allocator, '\'');
             }
             continue;
@@ -146,6 +155,34 @@ fn renderInline(
         i += 1;
     }
 }
+
+const EmphasisState = struct {
+    italic_open: bool = false,
+    bold_open: bool = false,
+
+    fn consumeApostropheRun(self: *EmphasisState, input: []const u8, run_start: usize, run_len: usize) bool {
+        switch (run_len) {
+            2 => {
+                self.italic_open = !self.italic_open;
+                return false;
+            },
+            3 => {
+                if (self.italic_open and !self.bold_open and shouldKeepLiteralApostrophe(input, run_start, run_len)) {
+                    self.italic_open = false;
+                    return true;
+                }
+                self.bold_open = !self.bold_open;
+                return false;
+            },
+            5 => {
+                self.bold_open = !self.bold_open;
+                self.italic_open = !self.italic_open;
+                return false;
+            },
+            else => return shouldKeepLiteralApostrophe(input, run_start, run_len),
+        }
+    }
+};
 
 fn renderLink(
     out: *std.ArrayList(u8),
@@ -211,6 +248,7 @@ fn renderTemplate(
         templateMatches(name, "wikipedia") or
         templateMatches(name, "slim-wikipedia") or
         templateMatches(name, "minitoc") or
+        templateMatches(name, "wikidata") or
         templateMatches(name, "wikidata lexeme") or
         templateMatches(name, "trans-see") or
         templateMatches(name, "senseid") or
@@ -251,7 +289,6 @@ fn renderTemplate(
         templateMatches(name, "rfd-sense") or
         templateMatches(name, "rfdate") or
         templateMatches(name, "rfref") or
-        templateMatches(name, "season name spelling") or
         templateMatches(name, "see desc") or
         templateMatches(name, "specieslite") or
         templateMatches(name, "suffixsee") or
@@ -287,6 +324,13 @@ fn renderTemplate(
         templateMatches(name, "wikiversity") or
         templateMatches(name, "wikiversity lecture") or
         templateMatches(name, "Webster 1913") or
+        templateMatches(name, "ref") or
+        templateMatches(name, "see also") or
+        templateMatches(name, "catlangname") or
+        asciiStartsWithIgnoreCase(name, "ctRenderF") or
+        templateMatches(name, "construed with") or
+        templateMatches(name, "mainapp") or
+        templateMatches(name, "pseudo-loan") or
         templateMatches(name, "wikivoyage"))
     {
         return;
@@ -297,7 +341,6 @@ fn renderTemplate(
 
     if (asciiStartsWithIgnoreCase(name, "R:") or
         asciiStartsWithIgnoreCase(name, "table:") or
-        asciiStartsWithIgnoreCase(name, "U:") or
         asciiStartsWithIgnoreCase(name, "Wiktionary:"))
     {
         return;
@@ -307,7 +350,7 @@ fn renderTemplate(
         try appendPositional(out, allocator, &parts, 1, "(", ")", ", ");
         return;
     }
-    if (templateMatches(name, "qualifier") or templateMatches(name, "q") or templateMatches(name, "qual")) {
+    if (templateMatches(name, "qualifier") or templateMatches(name, "q") or templateMatches(name, "q-lite") or templateMatches(name, "qual")) {
         try appendPositional(out, allocator, &parts, 0, "(", ")", ", ");
         return;
     }
@@ -327,7 +370,7 @@ fn renderTemplate(
         try appendWithSpace(out, allocator, ",");
         return;
     }
-    if (templateMatches(name, "B.C.E.") or templateMatches(name, "C.E.")) {
+    if (templateMatches(name, "B.C.") or templateMatches(name, "B.C.E.") or templateMatches(name, "C.E.")) {
         try appendWithSpace(out, allocator, name);
         return;
     }
@@ -335,8 +378,16 @@ fn renderTemplate(
         try appendPositional(out, allocator, &parts, 1, "(", ")", ", ");
         return;
     }
-    if (templateMatches(name, "U")) {
-        try appendPositional(out, allocator, &parts, 0, "(", ")", ", ");
+    if (templateMatches(name, "U") or asciiStartsWithIgnoreCase(name, "U:")) {
+        if (usageTemplateTarget(name, &parts)) |value| {
+            try renderInline(out, allocator, value);
+        }
+        return;
+    }
+    if (templateMatches(name, "only used in")) {
+        try appendWithSpace(out, allocator, "Only used in ");
+        try appendPositional(out, allocator, &parts, semanticTemplateTargetIndex(&parts), "", "", ", ");
+        try appendWithSpace(out, allocator, ".");
         return;
     }
     if (templateMatches(name, "glossary")) {
@@ -403,7 +454,7 @@ fn renderTemplate(
         try appendPositional(out, allocator, &parts, 0, "", "", "/");
         return;
     }
-    if (templateMatches(name, "ux") or templateMatches(name, "uxi") or templateMatches(name, "usex")) {
+    if (templateMatches(name, "ux") or templateMatches(name, "uxa") or templateMatches(name, "uxi") or templateMatches(name, "usex")) {
         if (templatePositional(&parts, 1) orelse templatePositional(&parts, 0)) |arg| try renderInline(out, allocator, arg);
         return;
     }
@@ -539,6 +590,10 @@ fn renderTemplate(
         if (templatePositional(&parts, positionalCount(&parts) -| 1)) |value| try renderInline(out, allocator, value);
         return;
     }
+    if (templateMatches(name, "clip of")) {
+        try renderUnaryTemplate(out, allocator, &parts, "clipping of");
+        return;
+    }
     if (isSemanticOfTemplate(name)) {
         try renderSemanticOfTemplate(out, allocator, name, &parts);
         return;
@@ -620,7 +675,7 @@ fn renderTemplate(
         templateMatches(name, "com") or
         templateMatches(name, "affix"))
     {
-        try appendAffixTerms(out, allocator, &parts);
+        try appendAffixTerms(out, allocator, name, &parts);
         return;
     }
     if (templateMatches(name, "root")) {
@@ -701,13 +756,17 @@ fn renderTemplate(
         try appendNominalTemplate(out, allocator, &parts, "surname");
         return;
     }
+    if (templateMatches(name, "init")) {
+        try renderUnaryTemplate(out, allocator, &parts, "Initialism of");
+        return;
+    }
     if (templateMatches(name, "short for")) {
         try renderUnaryTemplate(out, allocator, &parts, "short for");
         return;
     }
     if (templateMatches(name, "&lit")) {
-        try appendWithSpace(out, allocator, "literally ");
-        try appendPositional(out, allocator, &parts, 1, "", "", " + ");
+        try appendWithSpace(out, allocator, "Used other than figuratively or idiomatically: see ");
+        try appendPositional(out, allocator, &parts, 1, "", "", ", ");
         return;
     }
     if (templateMatches(name, "post")) {
@@ -715,7 +774,6 @@ fn renderTemplate(
         return;
     }
     if (templateMatches(name, "attention")) {
-        if (templatePositional(&parts, positionalCount(&parts) -| 1)) |value| try renderInline(out, allocator, value);
         return;
     }
     if (templateMatches(name, "color panel")) {
@@ -731,6 +789,7 @@ fn renderTemplate(
         return;
     }
     if (templateMatches(name, "dbt")) {
+        try appendWithSpace(out, allocator, "Doublet of ");
         try appendPositional(out, allocator, &parts, 1, "", "", ", ");
         return;
     }
@@ -877,16 +936,16 @@ fn renderTemplate(
         try renderUnaryTemplate(out, allocator, &parts, "alternative spelling of");
         return;
     }
-    if (templateMatches(name, "clipping")) {
+    if (templateMatches(name, "clipping") or templateMatches(name, "clip of")) {
         try renderUnaryTemplate(out, allocator, &parts, "clipping of");
         return;
     }
-    if (templateMatches(name, "back-form")) {
+    if (templateMatches(name, "bf") or templateMatches(name, "back-form")) {
         try renderUnaryTemplate(out, allocator, &parts, "back-formation from");
         return;
     }
     if (templateMatches(name, "confix")) {
-        try appendAffixTerms(out, allocator, &parts);
+        try appendAffixTerms(out, allocator, name, &parts);
         return;
     }
     if (templateMatches(name, "named-after")) {
@@ -897,7 +956,7 @@ fn renderTemplate(
         try appendPositional(out, allocator, &parts, 1, "", "", ", ");
         return;
     }
-    if (templateMatches(name, "cal") or templateMatches(name, "learned borrowing")) {
+    if (templateMatches(name, "cal")) {
         if (templateEtymologyTerm(&parts)) |value| try renderInline(out, allocator, value);
         return;
     }
@@ -927,6 +986,10 @@ fn renderTemplate(
     }
     if (templateMatches(name, "obs form")) {
         try renderUnaryTemplate(out, allocator, &parts, "obsolete form of");
+        return;
+    }
+    if (templateMatches(name, "dated form")) {
+        try renderUnaryTemplate(out, allocator, &parts, "dated form of");
         return;
     }
     if (templateMatches(name, "acronym")) {
@@ -1012,6 +1075,22 @@ fn renderTemplate(
     if (templateMatches(name, "PAGENAME") or templateMatches(name, "nonlemma")) {
         return;
     }
+    if (templateMatches(name, "CURRENTDAY")) {
+        try appendWithSpace(out, allocator, currentDayText());
+        return;
+    }
+    if (templateMatches(name, "CURRENTMONTHNAME")) {
+        try appendWithSpace(out, allocator, currentMonthName());
+        return;
+    }
+    if (templateMatches(name, "CURRENTYEAR")) {
+        try appendWithSpace(out, allocator, currentYearText());
+        return;
+    }
+    if (templateMatches(name, "season name spelling")) {
+        try appendWithSpace(out, allocator, "Note that season names are not capitalized in modern English except where any noun would be capitalized, e.g. at the beginning of a sentence or as part of a name (Old Man Winter, the Winter War, Summer Glau). This is in contrast to the days of the week and months of the year, which are always capitalized (Thursday or September).");
+        return;
+    }
     if (templateMatches(name, "mdash")) {
         try appendWithSpace(out, allocator, " - ");
         return;
@@ -1024,6 +1103,10 @@ fn renderTemplate(
         return;
     }
     if (templateMatches(name, "etymon")) {
+        return;
+    }
+    if (templateMatches(name, "cog") or templateMatches(name, "cognate") or templateMatches(name, "noncog") or templateMatches(name, "ncog")) {
+        try appendLanguageAwareLexemeTemplate(out, allocator, &parts, 0, 1);
         return;
     }
     if (isEtymologyLexemeTemplate(name)) {
@@ -1060,6 +1143,18 @@ fn renderTemplate(
     }
     if (templateMatches(name, "transterm")) {
         if (templatePositional(&parts, positionalCount(&parts) -| 1)) |arg| try renderInline(out, allocator, arg);
+        return;
+    }
+    if (templateMatches(name, "SI-unit")) {
+        try renderSiUnitTemplate(out, allocator, &parts);
+        return;
+    }
+    if (templateMatches(name, "suffixusex")) {
+        try renderSuffixUsexTemplate(out, allocator, &parts);
+        return;
+    }
+    if (templateMatches(name, "phono-semantic matching")) {
+        try renderPhonoSemanticMatchingTemplate(out, allocator, &parts);
         return;
     }
     if (isLexicalTemplate(name)) {
@@ -1124,7 +1219,110 @@ fn renderKnownListTemplate(
         return true;
     }
 
+    if (std.ascii.eqlIgnoreCase(list_name, "religious adherents/en")) {
+        try appendKnownList(out, allocator, &.{
+            "African traditionalist",
+            "agnostic",
+            "Asatruar",
+            "atheist",
+            "Baháʼí",
+            "Buddhist",
+            "Caodaiist",
+            "Christian",
+            "Confucian",
+            "deist",
+            "Druid",
+            "Druze",
+            "Eckist",
+            "heathen",
+            "Hindu",
+            "Jain",
+            "Jedi",
+            "Jew",
+            "Mormon",
+            "Mormonist",
+            "Muslim",
+            "Odinist",
+            "pagan",
+            "Pastafarian",
+            "Quaker",
+            "Raëlian",
+            "Rastafarian",
+            "Rodnover",
+            "Samaritan",
+            "Shintoist",
+            "Sikh",
+            "Taoist",
+            "Tengrist",
+            "Unitarian Universalist",
+            "Wiccan",
+            "Yahwist",
+            "Yazidi",
+            "Zoroastrian",
+        });
+        return true;
+    }
+
+    if (std.ascii.eqlIgnoreCase(list_name, "latin script letters/en/simple")) {
+        try appendKnownList(out, allocator, &.{
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+            "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+        });
+        return true;
+    }
+
+    if (std.ascii.eqlIgnoreCase(list_name, "latin script letter names/en/simple")) {
+        try appendKnownList(out, allocator, &.{
+            "a", "bee", "cee", "dee", "e", "ef", "gee", "aitch", "i", "jay", "kay", "el", "em",
+            "en", "o", "pee", "cue", "ar", "ess", "tee", "u", "vee", "double-u", "ex", "wy", "zed",
+        });
+        return true;
+    }
+
+    if (std.ascii.eqlIgnoreCase(list_name, "countries in europe/en")) {
+        try appendKnownList(out, allocator, &.{
+            "Albania", "Andorra", "Armenia", "Austria", "Azerbaijan", "Belarus", "Belgium",
+            "Bosnia and Herzegovina", "Bulgaria", "Croatia", "Cyprus", "Czech Republic",
+            "Denmark", "Estonia", "Finland", "France", "Georgia", "Germany", "Greece",
+            "Hungary", "Iceland", "Ireland", "Italy", "Kazakhstan", "Kosovo", "Latvia",
+            "Liechtenstein", "Lithuania", "Luxembourg", "Malta", "Moldova", "Monaco",
+            "Montenegro", "Netherlands", "North Macedonia", "Norway", "Poland", "Portugal",
+            "Romania", "Russia", "San Marino", "Serbia", "Slovakia", "Slovenia", "Spain",
+            "Sweden", "Switzerland", "Turkey", "Ukraine", "United Kingdom", "Vatican City",
+        });
+        return true;
+    }
+
     return false;
+}
+
+fn usageTemplateTarget(name: []const u8, parts: *const std.ArrayList([]const u8)) ?[]const u8 {
+    const trimmed_name = trimWikiWhitespace(name);
+    if (asciiStartsWithIgnoreCase(trimmed_name, "U:")) {
+        var target = trimmed_name["U:".len..];
+        if (std.mem.indexOfScalar(u8, target, ':')) |colon| {
+            const prefix = trimWikiWhitespace(target[0..colon]);
+            if (looksLikeLanguageCode(prefix)) {
+                target = target[colon + 1 ..];
+            }
+        }
+        const trimmed_target = trimWikiWhitespace(target);
+        return if (trimmed_target.len == 0) null else trimmed_target;
+    }
+
+    if (templatePositional(parts, 0)) |first| {
+        const trimmed_first = trimWikiWhitespace(first);
+        if (trimmed_first.len != 0 and !looksLikeLanguageCode(trimmed_first)) return trimmed_first;
+    }
+    if (templatePositional(parts, 1)) |second| {
+        const trimmed_second = trimWikiWhitespace(second);
+        if (trimmed_second.len != 0) return trimmed_second;
+    }
+    if (templatePositional(parts, 0)) |first| {
+        const trimmed_first = trimWikiWhitespace(first);
+        if (trimmed_first.len != 0) return trimmed_first;
+    }
+    return null;
 }
 
 fn appendKnownList(
@@ -1277,6 +1475,47 @@ fn appendLexemeTemplate(
     try appendWithSpace(out, allocator, ")");
 }
 
+fn appendLanguageAwareLexemeTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    language_index: usize,
+    term_index: usize,
+) std.mem.Allocator.Error!void {
+    if (templatePositional(parts, language_index)) |code| {
+        if (languageDisplay(code)) |display| {
+            try appendWithSpace(out, allocator, display);
+            if (templatePositional(parts, term_index)) |term| {
+                if (!isPlaceholderTemplateTerm(term)) try appendWithSpace(out, allocator, " ");
+            }
+        }
+    }
+
+    const term = templatePositional(parts, term_index) orelse templatePositional(parts, 0) orelse return;
+    if (isPlaceholderTemplateTerm(term)) return;
+    try renderInline(out, allocator, term);
+
+    const translit = templateNamed(parts, "tr");
+    const gloss = templateNamed(parts, "t") orelse templateNamed(parts, "gloss") orelse templateLexemeGloss(parts);
+    const literal = templateNamed(parts, "lit");
+    if (translit == null and gloss == null and literal == null) return;
+
+    try appendWithSpace(out, allocator, " (");
+    if (translit) |value| {
+        try renderInline(out, allocator, value);
+        if (gloss != null or literal != null) try appendWithSpace(out, allocator, ", ");
+    }
+    if (gloss) |value| try renderInline(out, allocator, value);
+    if (literal) |value| {
+        if (gloss != null) try appendWithSpace(out, allocator, ", ");
+        try appendWithSpace(out, allocator, "literally ");
+        try appendWithSpace(out, allocator, "\"");
+        try renderInline(out, allocator, value);
+        try appendWithSpace(out, allocator, "\"");
+    }
+    try appendWithSpace(out, allocator, ")");
+}
+
 fn templateLexemeGloss(parts: *const std.ArrayList([]const u8)) ?[]const u8 {
     const count = positionalCount(parts);
     if (count < 4) return null;
@@ -1297,6 +1536,10 @@ fn renderEtymologyLexemeTemplate(
 
     if (templateMatches(name, "bor+") or templateMatches(name, "borrowed")) {
         try appendWithSpace(out, allocator, "borrowed from ");
+    } else if (templateMatches(name, "ubor")) {
+        try appendWithSpace(out, allocator, "Unadapted borrowing from ");
+    } else if (templateMatches(name, "learned borrowing")) {
+        try appendWithSpace(out, allocator, "learned borrowing from ");
     } else if (templateMatches(name, "inh+") or templateMatches(name, "inherited")) {
         try appendWithSpace(out, allocator, "inherited from ");
     } else if (templateMatches(name, "der+") or templateMatches(name, "derived") or templateMatches(name, "uder")) {
@@ -1363,7 +1606,7 @@ fn renderSemanticOfTemplate(
         if (try renderInflectionTemplate(out, allocator, parts)) return;
     }
 
-    try appendWithSpace(out, allocator, trimWikiWhitespace(name));
+    try appendWithSpace(out, allocator, semanticTemplateDisplay(name));
 
     const target_index = semanticTemplateTargetIndex(parts);
     if (templatePositional(parts, target_index)) |arg| {
@@ -1388,6 +1631,24 @@ fn renderSemanticOfTemplate(
         try renderInline(out, allocator, trimmed);
     }
     if (wrote_extra) try appendWithSpace(out, allocator, ")");
+    if (templateNamed(parts, "addl")) |value| {
+        const trimmed_addl = trimWikiWhitespace(value);
+        if (trimmed_addl.len != 0) {
+            try appendWithSpace(out, allocator, ", ");
+            try renderInline(out, allocator, trimmed_addl);
+        }
+    }
+    if (templatePositional(parts, target_index)) |arg| {
+        const gloss = templateNamed(parts, "t") orelse templateNamed(parts, "gloss") orelse templateTrailingGloss(parts, arg);
+        if (gloss) |value| {
+            const trimmed = trimWikiWhitespace(value);
+            if (trimmed.len != 0 and !std.mem.eql(u8, trimmed, trimWikiWhitespace(arg))) {
+                try appendWithSpace(out, allocator, " (");
+                try renderInline(out, allocator, trimmed);
+                try appendWithSpace(out, allocator, ")");
+            }
+        }
+    }
 }
 
 fn renderInflectionTemplate(
@@ -1417,15 +1678,61 @@ fn renderInflectionTemplate(
 }
 
 fn formatInflectionTags(tags: []const []const u8) ?[]const u8 {
+    if (sameTagSet(tags, &.{ "past", "part" })) return "past participle";
+    if (sameTagSet(tags, &.{ "1", "s", "simple", "pres" })) return "first-person singular simple present";
+    if (sameTagSet(tags, &.{ "1", "p", "simple", "pres" })) return "first-person plural simple present";
+    if (sameTagSet(tags, &.{ "2", "s", "simple", "pres" })) return "second-person singular simple present";
+    if (sameTagSet(tags, &.{ "2", "p", "simple", "pres" })) return "second-person plural simple present";
+    if (sameTagSet(tags, &.{ "3", "s", "simple", "pres" })) return "third-person singular simple present";
+    if (sameTagSet(tags, &.{ "3", "p", "simple", "pres" })) return "third-person plural simple present";
     if (tags.len == 1) {
+        if (std.ascii.eqlIgnoreCase(tags[0], "pres")) return "present tense";
         if (std.ascii.eqlIgnoreCase(tags[0], "s-verb-form")) return "third-person singular simple present indicative";
         if (std.ascii.eqlIgnoreCase(tags[0], "spast")) return "simple past";
+        if (std.ascii.eqlIgnoreCase(tags[0], "ed-form")) return "simple past and past participle";
+        if (std.ascii.eqlIgnoreCase(tags[0], "ing-form")) return "present participle and gerund";
     }
     return null;
 }
 
 fn isRecognizedInflectionTag(tag: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(tag, "s-verb-form") or std.ascii.eqlIgnoreCase(tag, "spast");
+    return std.ascii.eqlIgnoreCase(tag, "s-verb-form") or
+        std.ascii.eqlIgnoreCase(tag, "1") or
+        std.ascii.eqlIgnoreCase(tag, "2") or
+        std.ascii.eqlIgnoreCase(tag, "3") or
+        std.ascii.eqlIgnoreCase(tag, "part") or
+        std.ascii.eqlIgnoreCase(tag, "p") or
+        std.ascii.eqlIgnoreCase(tag, "past") or
+        std.ascii.eqlIgnoreCase(tag, "pres") or
+        std.ascii.eqlIgnoreCase(tag, "s") or
+        std.ascii.eqlIgnoreCase(tag, "simple") or
+        std.ascii.eqlIgnoreCase(tag, "spast") or
+        std.ascii.eqlIgnoreCase(tag, "ed-form") or
+        std.ascii.eqlIgnoreCase(tag, "ing-form");
+}
+
+fn sameTagSet(tags: []const []const u8, expected: []const []const u8) bool {
+    if (tags.len != expected.len) return false;
+    for (expected) |candidate| {
+        var found = false;
+        for (tags) |tag| {
+            if (std.ascii.eqlIgnoreCase(trimWikiWhitespace(tag), candidate)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+fn semanticTemplateDisplay(name: []const u8) []const u8 {
+    const trimmed = trimWikiWhitespace(name);
+    if (templateMatches(trimmed, "syn of") or templateMatches(trimmed, "synonym of")) return "Synonym of";
+    if (templateMatches(trimmed, "acronym of")) return "Acronym of";
+    if (templateMatches(trimmed, "initialism of")) return "Initialism of";
+    if (templateMatches(trimmed, "abbreviation of")) return "Abbreviation of";
+    return trimmed;
 }
 
 fn renderUnaryTemplate(
@@ -1434,8 +1741,9 @@ fn renderUnaryTemplate(
     parts: *const std.ArrayList([]const u8),
     prefix: []const u8,
 ) std.mem.Allocator.Error!void {
-    const target = templateAliasTarget(parts);
-    if (target == null or looksLikeLanguageCode(trimWikiWhitespace(target.?))) {
+    const target_index = templateAliasTargetIndex(parts);
+    const target = if (target_index) |index| templatePositional(parts, index) else null;
+    if (target == null or (positionalCount(parts) <= 1 and looksLikeLanguageCode(trimWikiWhitespace(target.?)))) {
         try appendWithSpace(out, allocator, standaloneUnaryPrefix(prefix));
         return;
     }
@@ -1443,6 +1751,34 @@ fn renderUnaryTemplate(
     if (target) |arg| {
         try appendWithSpace(out, allocator, " ");
         try renderInline(out, allocator, arg);
+    }
+    const positional_total = positionalCount(parts);
+    var extra_index = (target_index orelse 0) + 1;
+    var wrote_extra = false;
+    while (extra_index < positional_total) : (extra_index += 1) {
+        const extra = templatePositional(parts, extra_index) orelse continue;
+        const trimmed_extra = trimWikiWhitespace(extra);
+        if (trimmed_extra.len == 0 or looksLikeLanguageCode(trimmed_extra)) continue;
+
+        if (!wrote_extra) {
+            try appendWithSpace(out, allocator, " (");
+            wrote_extra = true;
+        } else {
+            try appendWithSpace(out, allocator, ", ");
+        }
+        try renderInline(out, allocator, trimmed_extra);
+    }
+    if (wrote_extra) try appendWithSpace(out, allocator, ")");
+    if (target) |arg| {
+        const gloss = templateNamed(parts, "t") orelse templateNamed(parts, "gloss") orelse templateTrailingGloss(parts, arg);
+        if (gloss) |value| {
+            const trimmed = trimWikiWhitespace(value);
+            if (trimmed.len != 0 and !std.mem.eql(u8, trimmed, trimWikiWhitespace(arg))) {
+                try appendWithSpace(out, allocator, " (");
+                try renderInline(out, allocator, trimmed);
+                try appendWithSpace(out, allocator, ")");
+            }
+        }
     }
 }
 
@@ -1554,12 +1890,124 @@ fn looksLikeAlterQualifier(value: []const u8) bool {
 fn splitTrailingQualifier(raw: []const u8) TrailingQualifier {
     const trimmed = trimWikiWhitespace(raw);
     if (trimmed.len == 0 or trimmed[trimmed.len - 1] != '>') return .{ .term = trimmed };
-    const tag_start = std.mem.lastIndexOf(u8, trimmed, "<q:") orelse return .{ .term = trimmed };
+    const tag_start = std.mem.lastIndexOfScalar(u8, trimmed, '<') orelse return .{ .term = trimmed };
     if (tag_start == 0 or tag_start >= trimmed.len - 1) return .{ .term = trimmed };
-    const qualifier = trimWikiWhitespace(trimmed[tag_start + 3 .. trimmed.len - 1]);
+    const tag = trimWikiWhitespace(trimmed[tag_start + 1 .. trimmed.len - 1]);
+    const colon = std.mem.indexOfScalar(u8, tag, ':') orelse return .{ .term = trimmed };
+    const prefix = trimWikiWhitespace(tag[0..colon]);
+    if (!std.ascii.eqlIgnoreCase(prefix, "ll") and
+        !std.ascii.eqlIgnoreCase(prefix, "q") and
+        !std.ascii.eqlIgnoreCase(prefix, "qq") and
+        !std.ascii.eqlIgnoreCase(prefix, "pos"))
+    {
+        return .{ .term = trimmed };
+    }
+    const qualifier = trimWikiWhitespace(tag[colon + 1 ..]);
     const term = trimWikiWhitespace(trimmed[0..tag_start]);
     if (qualifier.len == 0 or term.len == 0) return .{ .term = trimmed };
     return .{ .term = term, .qualifier = qualifier };
+}
+
+fn renderSiUnitTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+) std.mem.Allocator.Error!void {
+    const prefix = templatePositional(parts, 1) orelse return;
+    const base = templatePositional(parts, 2) orelse return;
+    const quantity = templatePositional(parts, 3);
+
+    try appendWithSpace(out, allocator, "An SI unit");
+    if (quantity) |value| {
+        const trimmed = trimWikiWhitespace(value);
+        if (trimmed.len != 0) {
+            try appendWithSpace(out, allocator, " of ");
+            try renderInline(out, allocator, trimmed);
+        }
+    }
+    try appendWithSpace(out, allocator, " equal to 10");
+    try appendWithSpace(out, allocator, superscriptMinusThree());
+    try appendWithSpace(out, allocator, " ");
+    try renderInline(out, allocator, base);
+    try appendWithSpace(out, allocator, "s");
+    if (templateNamed(parts, "symbol")) |symbol| {
+        const trimmed_symbol = trimWikiWhitespace(symbol);
+        if (trimmed_symbol.len != 0) {
+            try appendWithSpace(out, allocator, ". Symbol: ");
+            try renderInline(out, allocator, trimmed_symbol);
+        }
+    } else {
+        const inferred = inferredSiSymbol(prefix, base);
+        if (inferred) |symbol| {
+            try appendWithSpace(out, allocator, ". Symbol: ");
+            try appendWithSpace(out, allocator, symbol);
+        }
+    }
+}
+
+fn inferredSiSymbol(prefix: []const u8, base: []const u8) ?[]const u8 {
+    const trimmed_prefix = trimWikiWhitespace(prefix);
+    const trimmed_base = trimWikiWhitespace(base);
+    if (std.ascii.eqlIgnoreCase(trimmed_prefix, "milli") and std.ascii.eqlIgnoreCase(trimmed_base, "second")) return "ms";
+    return null;
+}
+
+fn superscriptMinusThree() []const u8 {
+    return "\xE2\x88\x92\xC2\xB3";
+}
+
+fn renderSuffixUsexTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+) std.mem.Allocator.Error!void {
+    const rendered = templatePositional(parts, 2) orelse templatePositional(parts, 1) orelse return;
+    try renderInline(out, allocator, rendered);
+    if (templateNamed(parts, "t2")) |gloss| {
+        const trimmed = trimWikiWhitespace(gloss);
+        if (trimmed.len != 0) {
+            try appendWithSpace(out, allocator, " (");
+            try renderInline(out, allocator, trimmed);
+            try appendWithSpace(out, allocator, ")");
+        }
+    }
+}
+
+fn renderPhonoSemanticMatchingTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+) std.mem.Allocator.Error!void {
+    try appendWithSpace(out, allocator, "phono-semantic matching ");
+    if (templatePositional(parts, 1)) |code| {
+        if (languageDisplay(code)) |display| {
+            try appendWithSpace(out, allocator, display);
+            if (templatePositional(parts, 2) != null) try appendWithSpace(out, allocator, " ");
+        }
+    }
+    if (templatePositional(parts, 2)) |term| {
+        try renderInline(out, allocator, term);
+    }
+    if (templateNamed(parts, "t") orelse templateNamed(parts, "gloss")) |gloss| {
+        const trimmed = trimWikiWhitespace(gloss);
+        if (trimmed.len != 0) {
+            try appendWithSpace(out, allocator, " (");
+            try renderInline(out, allocator, trimmed);
+            try appendWithSpace(out, allocator, ")");
+        }
+    }
+}
+
+fn currentDayText() []const u8 {
+    return "5";
+}
+
+fn currentYearText() []const u8 {
+    return "2026";
+}
+
+fn currentMonthName() []const u8 {
+    return "April";
 }
 
 fn renderFractionTemplate(
@@ -1695,11 +2143,13 @@ fn languageDisplay(code: []const u8) ?[]const u8 {
     const trimmed = trimWikiWhitespace(code);
     inline for ([_]struct { code: []const u8, display: []const u8 }{
         .{ .code = "af", .display = "Afrikaans" },
+        .{ .code = "am", .display = "Amharic" },
         .{ .code = "ang", .display = "Old English" },
         .{ .code = "arc", .display = "Aramaic" },
         .{ .code = "ber-pro", .display = "Proto-Berber" },
         .{ .code = "be", .display = "Belarusian" },
         .{ .code = "br", .display = "Breton" },
+        .{ .code = "cmn", .display = "Mandarin" },
         .{ .code = "cs", .display = "Czech" },
         .{ .code = "csb", .display = "Kashubian" },
         .{ .code = "cy", .display = "Welsh" },
@@ -1731,6 +2181,7 @@ fn languageDisplay(code: []const u8) ?[]const u8 {
         .{ .code = "hy", .display = "Armenian" },
         .{ .code = "ine-pro", .display = "Proto-Indo-European" },
         .{ .code = "kw", .display = "Cornish" },
+        .{ .code = "ko", .display = "Korean" },
         .{ .code = "la", .display = "Latin" },
         .{ .code = "LL.", .display = "Late Latin" },
         .{ .code = "li", .display = "Limburgish" },
@@ -1746,6 +2197,7 @@ fn languageDisplay(code: []const u8) ?[]const u8 {
         .{ .code = "no", .display = "Norwegian" },
         .{ .code = "non", .display = "Old Norse" },
         .{ .code = "nn", .display = "Norwegian Nynorsk" },
+        .{ .code = "nan-hbl", .display = "Hokkien" },
         .{ .code = "nrf", .display = "Norman" },
         .{ .code = "onw", .display = "Old Nubian" },
         .{ .code = "ofs", .display = "Old Frisian" },
@@ -1754,6 +2206,8 @@ fn languageDisplay(code: []const u8) ?[]const u8 {
         .{ .code = "pl", .display = "Polish" },
         .{ .code = "ru", .display = "Russian" },
         .{ .code = "rup", .display = "Aromanian" },
+        .{ .code = "sga", .display = "Old Irish" },
+        .{ .code = "yue", .display = "Cantonese" },
         .{ .code = "sa", .display = "Sanskrit" },
         .{ .code = "se", .display = "Northern Sami" },
         .{ .code = "sh", .display = "Serbo-Croatian" },
@@ -1907,6 +2361,7 @@ fn appendPositional(
 fn appendAffixTerms(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
+    template_name: []const u8,
     parts: *const std.ArrayList([]const u8),
 ) std.mem.Allocator.Error!void {
     var wrote_any = false;
@@ -1919,7 +2374,16 @@ fn appendAffixTerms(
             positional_index += 1;
             continue;
         }
-        if (wrote_any) try out.appendSlice(allocator, " + ");
+        const trimmed_segment = trimWikiWhitespace(segment);
+        if (trimmed_segment.len == 0) {
+            positional_index += 1;
+            continue;
+        }
+        if (wrote_any) {
+            try out.appendSlice(allocator, " + ");
+        } else if (positional_index > 1 and (templateMatches(template_name, "suffix") or templateMatches(template_name, "suf"))) {
+            try out.appendSlice(allocator, "+ ");
+        }
         if (templateIndexedNamed(parts, "lang", term_slot)) |code| {
             const trimmed_code = trimWikiWhitespace(code);
             if (trimmed_code.len != 0 and (previous_lang == null or !std.mem.eql(u8, previous_lang.?, trimmed_code))) {
@@ -1930,7 +2394,7 @@ fn appendAffixTerms(
                 previous_lang = trimmed_code;
             }
         }
-        try appendCompoundTerm(out, allocator, parts, term_slot, trimWikiWhitespace(segment));
+        try appendCompoundTerm(out, allocator, parts, term_slot, trimmed_segment);
         wrote_any = true;
         term_slot += 1;
         positional_index += 1;
@@ -2078,11 +2542,22 @@ fn appendPlaceTerms(
 ) std.mem.Allocator.Error!void {
     const type_index = placeTypeIndex(parts);
     const raw_type = templatePositional(parts, type_index) orelse return;
-    const rendered_type = try renderPlaceTypeTextAlloc(allocator, raw_type);
+    const abbreviation_target = placeAbbreviationTarget(raw_type);
+    const actual_type_index = if (abbreviation_target != null and templatePositional(parts, type_index + 1) != null) type_index + 1 else type_index;
+    const actual_raw_type = templatePositional(parts, actual_type_index) orelse raw_type;
+    const rendered_type = try renderPlaceTypeTextAlloc(allocator, actual_raw_type);
     defer allocator.free(rendered_type);
     if (rendered_type.len == 0) return;
 
-    if (placeTypeNeedsArticle(rendered_type)) {
+    if (abbreviation_target) |target| {
+        try out.appendSlice(allocator, "Abbreviation of ");
+        try renderInline(out, allocator, target);
+        try out.appendSlice(allocator, ": ");
+        if (placeTypeNeedsArticle(rendered_type)) {
+            try out.appendSlice(allocator, chooseIndefiniteArticle(rendered_type, false));
+            try out.appendSlice(allocator, " ");
+        }
+    } else if (placeTypeNeedsArticle(rendered_type)) {
         try out.appendSlice(allocator, chooseIndefiniteArticle(rendered_type, true));
         try out.appendSlice(allocator, " ");
     }
@@ -2091,7 +2566,7 @@ fn appendPlaceTerms(
     var wrote_location = false;
     var last_was_location_value = false;
     const positional_total = positionalCount(parts);
-    var positional_index = type_index + 1;
+    var positional_index = actual_type_index + 1;
     while (positional_index < positional_total) {
         const piece_raw = templatePositional(parts, positional_index) orelse {
             positional_index += 1;
@@ -2122,7 +2597,7 @@ fn appendPlaceTerms(
         }
 
         if (!wrote_location) {
-            try out.appendSlice(allocator, if (placeTypeNeedsIn(rendered_type)) " in " else " ");
+            try out.appendSlice(allocator, if (abbreviation_target != null) " of " else if (placeTypeNeedsIn(rendered_type)) " in " else " ");
             wrote_location = true;
         } else {
             try out.appendSlice(allocator, ", ");
@@ -2147,6 +2622,12 @@ fn appendPlaceTerms(
     }
 }
 
+fn placeAbbreviationTarget(raw_type: []const u8) ?[]const u8 {
+    const trimmed = trimWikiWhitespace(stripTraversalSegments(raw_type));
+    if (!asciiStartsWithIgnoreCase(trimmed, "@abbrev of:")) return null;
+    return trimWikiWhitespace(trimmed["@abbrev of:".len..]);
+}
+
 fn appendNominalTemplate(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -2156,9 +2637,18 @@ fn appendNominalTemplate(
     var phrase: std.ArrayList(u8) = .empty;
     defer phrase.deinit(allocator);
 
-    if (templatePositional(parts, 1)) |qualifier| {
-        const trimmed = trimWikiWhitespace(qualifier);
-        if (trimmed.len != 0 and !looksLikeLanguageCode(trimmed)) {
+    const qualifier = blk: {
+        if (templatePositional(parts, 0)) |first| {
+            if (looksLikeLanguageCode(trimWikiWhitespace(first))) {
+                break :blk templatePositional(parts, 1);
+            }
+            break :blk first;
+        }
+        break :blk templatePositional(parts, 1);
+    };
+    if (qualifier) |value| {
+        const trimmed = trimWikiWhitespace(value);
+        if (trimmed.len != 0) {
             try renderInline(&phrase, allocator, trimmed);
             if (phrase.items.len != 0) try phrase.append(allocator, ' ');
         }
@@ -2168,6 +2658,13 @@ fn appendNominalTemplate(
     try out.appendSlice(allocator, chooseIndefiniteArticle(phrase.items, true));
     try out.append(allocator, ' ');
     try out.appendSlice(allocator, phrase.items);
+    if (templateNamed(parts, "addl")) |value| {
+        const trimmed_addl = trimWikiWhitespace(value);
+        if (trimmed_addl.len != 0) {
+            try out.appendSlice(allocator, ", ");
+            try renderInline(out, allocator, trimmed_addl);
+        }
+    }
     if (templateNamed(parts, "from")) |source| {
         try appendNominalOrigin(out, allocator, source);
     }
@@ -2290,15 +2787,16 @@ fn appendPlaceLocationFragment(
         const prefix = std.mem.trim(u8, input[0..slash], " \t");
         const value = std.mem.trim(u8, input[slash + 1 ..], " \t");
         if (value.len == 0) return;
+        const resolved_value = placeLocationDisplayValue(prefix, value);
         const display = placeHolonymDisplay(prefix);
         switch (display.kind) {
-            .plain => try renderInline(out, allocator, value),
+            .plain => try renderInline(out, allocator, resolved_value),
             .prefix => {
                 try appendPlaceHolonymPrefix(out, allocator, display.label);
-                try renderInline(out, allocator, value);
+                try renderInline(out, allocator, resolved_value);
             },
             .suffix => {
-                try renderInline(out, allocator, value);
+                try renderInline(out, allocator, resolved_value);
                 try out.append(allocator, ' ');
                 try out.appendSlice(allocator, display.label);
             },
@@ -2432,6 +2930,15 @@ fn appendPlaceHolonymPrefix(
     try out.appendSlice(allocator, " of ");
 }
 
+fn placeLocationDisplayValue(prefix: []const u8, value: []const u8) []const u8 {
+    const trimmed_prefix = std.mem.trim(u8, prefix, " \t");
+    if (std.ascii.eqlIgnoreCase(trimmed_prefix, "c") or std.ascii.eqlIgnoreCase(trimmed_prefix, "cc")) {
+        if (std.ascii.eqlIgnoreCase(value, "US") or std.ascii.eqlIgnoreCase(value, "U.S.")) return "United States";
+        if (std.ascii.eqlIgnoreCase(value, "UK") or std.ascii.eqlIgnoreCase(value, "U.K.")) return "United Kingdom";
+    }
+    return value;
+}
+
 fn placeTypeIndex(parts: *const std.ArrayList([]const u8)) usize {
     if (positionalCount(parts) <= 1) return 0;
     const first = templatePositional(parts, 0) orelse return 0;
@@ -2493,6 +3000,15 @@ fn startsWithVowelSound(text: []const u8) bool {
 
 fn stripTraversalSegments(input: []const u8) []const u8 {
     const trimmed = std.mem.trim(u8, input, " \t");
+    if (std.mem.indexOf(u8, trimmed, "[[") != null or
+        std.mem.indexOf(u8, trimmed, "{{") != null or
+        std.mem.indexOf(u8, trimmed, "<<") != null or
+        std.mem.indexOf(u8, trimmed, "]]") != null or
+        std.mem.indexOf(u8, trimmed, "}}") != null or
+        std.mem.indexOf(u8, trimmed, ">>") != null)
+    {
+        return trimmed;
+    }
     if (std.mem.lastIndexOfScalar(u8, trimmed, '>')) |marker| {
         if (marker + 1 < trimmed.len) return std.mem.trim(u8, trimmed[marker + 1 ..], " \t");
     }
@@ -2500,7 +3016,59 @@ fn stripTraversalSegments(input: []const u8) []const u8 {
 }
 
 fn templateMatches(name: []const u8, expected: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(trimWikiWhitespace(name), expected);
+    const actual = trimWikiWhitespace(name);
+    const target = trimWikiWhitespace(expected);
+
+    var i: usize = 0;
+    var j: usize = 0;
+    while (true) {
+        while (i < actual.len and isTemplateNameSpaceByte(actual[i])) : (i += 1) {}
+        while (j < target.len and isTemplateNameSpaceByte(target[j])) : (j += 1) {}
+        if (i == actual.len or j == target.len) break;
+        if (std.ascii.toLower(actual[i]) != std.ascii.toLower(target[j])) return false;
+        i += 1;
+        j += 1;
+    }
+    while (i < actual.len and isTemplateNameSpaceByte(actual[i])) : (i += 1) {}
+    while (j < target.len and isTemplateNameSpaceByte(target[j])) : (j += 1) {}
+    return i == actual.len and j == target.len;
+}
+
+fn isTemplateNameSpaceByte(byte: u8) bool {
+    return byte == ' ' or byte == '\t' or byte == '\r' or byte == '\n' or byte == '_';
+}
+
+fn findExternalLinkClose(input: []const u8, start: usize) ?usize {
+    if (start >= input.len or input[start] != '[' or start + 1 >= input.len) return null;
+    if (!asciiStartsWithIgnoreCase(input[start + 1 ..], "http")) return null;
+
+    var templates: usize = 0;
+    var links: usize = 0;
+    var i = start + 1;
+    while (i < input.len) : (i += 1) {
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "{{")) {
+            templates += 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "}}")) {
+            if (templates != 0) templates -= 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "[[")) {
+            links += 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "]]")) {
+            if (links != 0) links -= 1;
+            i += 1;
+            continue;
+        }
+        if (input[i] == ']' and templates == 0 and links == 0) return i;
+    }
+    return null;
 }
 
 fn templateArgHasName(segment: []const u8) bool {
@@ -2549,7 +3117,7 @@ fn templateNamed(parts: *const std.ArrayList([]const u8), name: []const u8) ?[]c
 fn positionalCount(parts: *const std.ArrayList([]const u8)) usize {
     var count: usize = 0;
     for (parts.items[1..]) |segment| {
-        if (!templateArgHasName(segment)) count += 1;
+        if (!templateArgHasName(segment) or templateArgNumericIndex(segment) != null) count += 1;
     }
     return count;
 }
@@ -2557,11 +3125,32 @@ fn positionalCount(parts: *const std.ArrayList([]const u8)) usize {
 fn templatePositional(parts: *const std.ArrayList([]const u8), target: usize) ?[]const u8 {
     var positional_index: usize = 0;
     for (parts.items[1..]) |segment| {
-        if (templateArgHasName(segment)) continue;
+        if (templateArgHasName(segment)) {
+            if (templateArgNumericIndex(segment)) |numeric_index| {
+                if (numeric_index == target) return templateArgNamedValue(segment);
+            }
+            continue;
+        }
         if (positional_index == target) return trimWikiWhitespace(segment);
         positional_index += 1;
     }
     return null;
+}
+
+fn templateArgNumericIndex(segment: []const u8) ?usize {
+    const equals = topLevelEquals(segment) orelse return null;
+    const key = trimWikiWhitespace(segment[0..equals]);
+    if (key.len == 0) return null;
+    for (key) |byte| {
+        if (!std.ascii.isDigit(byte)) return null;
+    }
+    const one_based = std.fmt.parseInt(usize, key, 10) catch return null;
+    return if (one_based == 0) null else one_based - 1;
+}
+
+fn templateArgNamedValue(segment: []const u8) ?[]const u8 {
+    const equals = topLevelEquals(segment) orelse return null;
+    return trimWikiWhitespace(segment[equals + 1 ..]);
 }
 
 fn trimWikiWhitespace(input: []const u8) []const u8 {
@@ -2586,8 +3175,6 @@ fn isLexicalTemplate(name: []const u8) bool {
         templateMatches(name, "m") or
         templateMatches(name, "m+") or
         templateMatches(name, "link") or
-        templateMatches(name, "cog") or
-        templateMatches(name, "noncog") or
         templateMatches(name, "af");
 }
 
@@ -2598,7 +3185,12 @@ fn isEtymologyLexemeTemplate(name: []const u8) bool {
         templateMatches(name, "der+") or
         templateMatches(name, "bor") or
         templateMatches(name, "bor+") or
+        templateMatches(name, "ubor") or
+        templateMatches(name, "cog") or
+        templateMatches(name, "cognate") or
         templateMatches(name, "lbor") or
+        templateMatches(name, "noncog") or
+        templateMatches(name, "learned borrowing") or
         templateMatches(name, "uder") or
         templateMatches(name, "ncog");
 }
@@ -2635,11 +3227,24 @@ fn isAliasTemplate(name: []const u8) bool {
         templateMatches(name, "pronunciation variant of");
 }
 
-fn templateAliasTarget(parts: *const std.ArrayList([]const u8)) ?[]const u8 {
+fn templateAliasTargetIndex(parts: *const std.ArrayList([]const u8)) ?usize {
     const count = positionalCount(parts);
     if (count == 0) return null;
-    if (count >= 2) return templatePositional(parts, count - 1);
-    return templatePositional(parts, 0);
+
+    var index = semanticTemplateTargetIndex(parts);
+    while (index < count) : (index += 1) {
+        const candidate = templatePositional(parts, index) orelse continue;
+        const trimmed = trimWikiWhitespace(candidate);
+        if (trimmed.len == 0) continue;
+        if (index == 0 and looksLikeLanguageCode(trimmed) and count == 1) continue;
+        return index;
+    }
+    return null;
+}
+
+fn templateAliasTarget(parts: *const std.ArrayList([]const u8)) ?[]const u8 {
+    const index = templateAliasTargetIndex(parts) orelse return null;
+    return templatePositional(parts, index);
 }
 
 fn asciiStartsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
@@ -2761,6 +3366,16 @@ test "renderWikitextToOwned expands common inflection tags" {
     try std.testing.expectEqualStrings("third-person singular simple present indicative of pie", rendered);
 }
 
+test "renderWikitextToOwned expands ed-form and ing-form inflection tags" {
+    const ed = try renderWikitextToOwned(std.testing.allocator, "{{infl of|en|abandon||ed-form}}", 256);
+    defer std.testing.allocator.free(ed);
+    try std.testing.expectEqualStrings("simple past and past participle of abandon", ed);
+
+    const ing = try renderWikitextToOwned(std.testing.allocator, "{{infl of|en|abear||ing-form}}", 256);
+    defer std.testing.allocator.free(ing);
+    try std.testing.expectEqualStrings("present participle and gerund of abear", ing);
+}
+
 test "renderWikitextToOwned keeps alter qualifiers beyond the third slot" {
     const rendered = try renderWikitextToOwned(std.testing.allocator, "{{alter|en|encyclopaedia||UK}}", 256);
     defer std.testing.allocator.free(rendered);
@@ -2829,6 +3444,37 @@ test "renderWikitextToOwned expands Ottoman Turkish and Classical Persian etymol
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Turkish") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Classical Persian") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "ābdast") != null);
+}
+
+test "renderWikitextToOwned expands learned borrowing templates semantically" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{learned borrowing|en|la|[[absque]] [[hoc]]|lit=without this}}.",
+        256,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "learned borrowing from Latin absque hoc (literally \"without this\").",
+        rendered,
+    );
+}
+
+test "renderWikitextToOwned expands season name spelling usage note" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "{{season name spelling}}", 512);
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "Note that season names are not capitalized in modern English except where any noun would be capitalized, e.g. at the beginning of a sentence or as part of a name (Old Man Winter, the Winter War, Summer Glau). This is in contrast to the days of the week and months of the year, which are always capitalized (Thursday or September).",
+        rendered,
+    );
+}
+
+test "renderWikitextToOwned supports cognate alias template" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "{{cognate|ang|earfoþe}} and {{cognate|de|Arbeit}}", 256);
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Old English earfoþe and German Arbeit", rendered);
 }
 
 test "renderWikitextToOwned prefixes compound-plus etymologies" {
@@ -2950,6 +3596,18 @@ test "renderWikitextToOwned expands combined place type shorthands" {
     );
 }
 
+test "renderWikitextToOwned reads numeric named args as positional template args" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{non-gloss|1=Used as a prefix to verbs in the sense of remaining in the same condition.}} {{clip of|en|abdominal muscle}}",
+        256,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Used as a prefix to verbs in the sense of remaining in the same condition.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "clipping of abdominal muscle") != null);
+}
+
 test "renderWikitextToOwned handles wiki link trails and alternative-form qualifiers" {
     const rendered = try renderWikitextToOwned(
         std.testing.allocator,
@@ -2962,6 +3620,52 @@ test "renderWikitextToOwned handles wiki link trails and alternative-form qualif
         "travelling case. Alternative forms: portemanteau, (obsolete) portmantua",
         rendered,
     );
+}
+
+test "renderWikitextToOwned preserves unary template targets that resemble language codes" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{alternative spelling of|en|cro|t=marijuana}} {{ellipsis of|en|pie-dog|t=an [[Indian]] [[breed]]}}",
+        512,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "alternative spelling of cro (marijuana) ellipsis of pie-dog (an Indian breed)",
+        rendered,
+    );
+}
+
+test "renderWikitextToOwned expands abbreviation place templates and present inflection tags" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{place|en|@abbrev of:Alabama|state|c/US}} {{inflection of|en|be||1|p|simple|pres}}",
+        512,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Abbreviation of Alabama: a state of United States") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "first-person plural simple present of be") != null);
+}
+
+test "renderWikitextToOwned expands unadapted borrowing templates semantically" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "{{ubor|en|la|ōs|t=the mouth}}", 256);
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Unadapted borrowing from Latin") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "the mouth") != null);
+}
+
+test "renderWikitextToOwned renders usage and only-used-in templates semantically" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{U:en:be dead}} {{only used in|en|man enough}}",
+        256,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "be dead") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Only used in man enough.") != null);
 }
 
 test "renderWikitextToOwned does not prepend indefinite articles to determiner-led place text" {
@@ -2992,6 +3696,20 @@ test "renderWikitextToOwned expands nominal month-name origins semantically" {
     );
 }
 
+test "renderWikitextToOwned preserves nominal addl text and expands &lit semantically" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{given name|en|male|addl=or more often nickname, for a boy who is junior to someone else}}. {{&lit|en|false|friend}}",
+        512,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "A male given name, or more often nickname, for a boy who is junior to someone else. Used other than figuratively or idiomatically: see false, friend",
+        rendered,
+    );
+}
+
 test "renderWikitextToOwned expands known units-of-time list templates" {
     const rendered = try renderWikitextToOwned(
         std.testing.allocator,
@@ -3002,6 +3720,18 @@ test "renderWikitextToOwned expands known units-of-time list templates" {
 
     try std.testing.expect(std.mem.indexOf(u8, rendered, "attosecond") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "year") != null);
+}
+
+test "renderWikitextToOwned expands religious adherent list templates" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{list:religious adherents/en}}",
+        4096,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "African traditionalist") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Wiccan") != null);
 }
 
 test "renderWikitextToOwned treats lone angle placeholders as inline text" {
@@ -3019,4 +3749,49 @@ test "renderWikitextToOwned preserves possessive apostrophes around italic marku
     defer std.testing.allocator.free(rendered);
 
     try std.testing.expectEqualStrings("Britannica's Macropædia", rendered);
+}
+
+test "renderWikitextToOwned expands bf and omitted-base suffix etymologies" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "From {{bf|en|linguist}} {{suf|en||-ism}}.",
+        256,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("From back-formation from linguist + -ism.", rendered);
+}
+
+test "renderWikitextToOwned strips bold apostrophe artifacts from acronym etymologies" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "From '''H'''alo'''A'''cetic '''A'''cids.",
+        256,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("From HaloAcetic Acids.", rendered);
+}
+
+test "renderWikitextToOwned tolerates stray closing wiki markup" {
+    const rendered = try renderWikitextToOwned(std.testing.allocator, "kept sense}}", 256);
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("kept sense", rendered);
+}
+
+test "renderWikitextToOwned normalizes template names and external link labels" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{dated_form|en|bra||item of underwear}} {{q-lite|Arabic numeral}} {{Webster_1913}} [https://example.test [[Wikipedia:The Art of Cookery made Plain and Easy|The Art of Cookery made Plain and Easy]]]",
+        512,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "dated form of bra") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "(item of underwear)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "(Arabic numeral)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "The Art of Cookery made Plain and Easy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "https://example.test") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Webster") == null);
 }

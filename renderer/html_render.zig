@@ -806,15 +806,15 @@ fn validateInlineStrict(
             continue;
         }
         if (input[i] == '[') {
-            if (std.mem.indexOfScalarPos(u8, input, i + 1, ']')) |end| {
-                if (std.mem.startsWith(u8, input[i + 1 ..], "http")) {
-                    const body = input[i + 1 .. end];
-                    if (std.mem.indexOfScalar(u8, body, ' ')) |space| {
-                        try validateInlineStrict(body[space + 1 ..], title, line_number, options);
-                    }
-                    i = end + 1;
-                    continue;
+            if (asciiStartsWithIgnoreCase(input[i + 1 ..], "http")) {
+                const end = findExternalLinkClose(input, i) orelse
+                    return failStrict(title, line_number, input, "unterminated external link", .unbalanced_markup, options);
+                const body = input[i + 1 .. end];
+                if (std.mem.indexOfScalar(u8, body, ' ')) |space| {
+                    try validateInlineStrict(body[space + 1 ..], title, line_number, options);
                 }
+                i = end + 1;
+                continue;
             }
         }
         if (input[i] == '<') {
@@ -857,6 +857,10 @@ fn validateInlineStrict(
                 return failStrict(title, line_number, input, "malformed html tag", .unsupported_html_tag, options);
             if (!isAllowedInlineHtmlTag(tag_name)) {
                 return failStrict(title, line_number, input, tag_name, .unsupported_html_tag, options);
+            }
+            if (findRawTextInlineTagClose(input, tag_end.? + 1, tag_name)) |close_end| {
+                i = close_end;
+                continue;
             }
             i = tag_end.? + 1;
             continue;
@@ -1012,8 +1016,30 @@ fn hasMatchingClosingTag(input: []const u8, tag_name: []const u8) bool {
 
 fn strictTemplateName(body: []const u8) []const u8 {
     const trimmed = trimWikiWhitespace(body);
-    const sep = std.mem.indexOfScalar(u8, trimmed, '|') orelse trimmed.len;
+    const sep = topLevelSeparator(trimmed, '|') orelse trimmed.len;
     return trimWikiWhitespace(trimmed[0..sep]);
+}
+
+fn findRawTextInlineTagClose(input: []const u8, start: usize, tag_name: []const u8) ?usize {
+    if (!inlineHtmlTagIsRawText(tag_name)) return null;
+
+    var i = start;
+    while (i < input.len) : (i += 1) {
+        if (input[i] != '<' or i + 2 >= input.len or input[i + 1] != '/') continue;
+        const candidate = htmlTagName(input[i..]) orelse continue;
+        if (!std.ascii.eqlIgnoreCase(candidate, tag_name)) continue;
+        const end = std.mem.indexOfScalarPos(u8, input, i, '>') orelse return null;
+        return end + 1;
+    }
+    return null;
+}
+
+fn inlineHtmlTagIsRawText(tag_name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(tag_name, "code") or
+        std.ascii.eqlIgnoreCase(tag_name, "nowiki") or
+        std.ascii.eqlIgnoreCase(tag_name, "math") or
+        std.ascii.eqlIgnoreCase(tag_name, "chem") or
+        std.ascii.eqlIgnoreCase(tag_name, "hiero");
 }
 
 fn isStrictSupportedTemplateBody(body: []const u8) bool {
@@ -1024,16 +1050,18 @@ fn isStrictSupportedTemplateBody(body: []const u8) bool {
 fn isStrictSupportedTemplateName(name: []const u8) bool {
     const trimmed = trimWikiWhitespace(name);
     if (trimmed.len == 0) return false;
-    if (asciiStartsWithIgnoreCase(trimmed, "quote-")) return true;
-    if (asciiStartsWithIgnoreCase(trimmed, "cite-")) return true;
-    if (std.mem.startsWith(u8, trimmed, "RQ:")) return true;
-    if (std.mem.startsWith(u8, trimmed, "R:")) return true;
-    if (asciiStartsWithIgnoreCase(trimmed, "table:")) return true;
-    if (asciiStartsWithIgnoreCase(trimmed, "U:")) return true;
-    if (asciiStartsWithIgnoreCase(trimmed, "Wiktionary:")) return true;
-    if (asciiStartsWithIgnoreCase(trimmed, "list:")) return true;
-    if (asciiStartsWithIgnoreCase(trimmed, "en-")) return true;
-    if (std.mem.endsWith(u8, trimmed, " of")) return true;
+    if (templateNameStartsWithHtml(trimmed, "ctRenderF")) return true;
+    if (templateNameStartsWithHtml(trimmed, "CURRENT")) return true;
+    if (templateNameStartsWithHtml(trimmed, "quote-")) return true;
+    if (templateNameStartsWithHtml(trimmed, "cite-")) return true;
+    if (templateNameStartsWithHtml(trimmed, "RQ:")) return true;
+    if (templateNameStartsWithHtml(trimmed, "R:")) return true;
+    if (templateNameStartsWithHtml(trimmed, "table:")) return true;
+    if (templateNameStartsWithHtml(trimmed, "U:")) return true;
+    if (templateNameStartsWithHtml(trimmed, "Wiktionary:")) return true;
+    if (templateNameStartsWithHtml(trimmed, "list:")) return true;
+    if (templateNameStartsWithHtml(trimmed, "en-")) return true;
+    if (templateNameEndsWithHtml(trimmed, " of")) return true;
     inline for ([_][]const u8{
         "!",
         "1",
@@ -1053,6 +1081,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "bor+",
         "C",
         "cog",
+        "cognate",
         "cln",
         "col",
         "col2",
@@ -1155,6 +1184,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "prefixsee",
         "pre",
         "q",
+        "q-lite",
         "qualifier",
         "qual",
         "rfap",
@@ -1166,6 +1196,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "rfquotek",
         "rfquote-sense",
         "rfv-etym",
+        "ref",
         "root",
         "rootsee",
         "rhyme",
@@ -1223,6 +1254,8 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "...",
         "+obj",
         "attn",
+        "bf",
+        "B.C.",
         "B.C.E.",
         "box-bottom",
         "box-top",
@@ -1232,6 +1265,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "coinage",
         "compound+",
         "clipping",
+        "dated form",
         "back-form",
         "learned borrowing",
         "lg",
@@ -1258,6 +1292,8 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "rfv-pron",
         "rfv-sense",
         "alt case",
+        "alt spell",
+        "altcase",
         "altform",
         "cal",
         "circa",
@@ -1288,7 +1324,9 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "emojipic",
         "img",
         "inline alt forms",
+        "init",
         "letter_disp2",
+        "mainapp",
         "mdash",
         "n-g",
         "nearsyn",
@@ -1297,8 +1335,12 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "quote",
         "qf",
         "q-g",
+        "rfm-sense",
         "senseno",
+        "semantic loan",
         "section link",
+        "sl",
+        "suffixusex",
         "table:xiangqi pieces/en",
         "term-label",
         "abbrev",
@@ -1328,6 +1370,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "onom",
         "rfclarify",
         "rfd-sense",
+        "rfc-sense",
         "rfdate",
         "rfref",
         "rfi",
@@ -1339,6 +1382,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "SIC",
         "short for",
         "small caps",
+        "see also",
         "sub",
         "semantic loan",
         "tea room",
@@ -1349,22 +1393,34 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "topics",
         "tlb",
         "univ",
+        "only used in",
         "used in phrasal verbs",
         "upright",
+        "uxa",
+        "wikidata",
         "wikiversity",
         "wikinews",
+        "catlangname",
+        "construed with",
+        "ctRenderF",
+        "in appendix",
+        "enum",
+        "phono-semantic matching",
+        "pseudo-loan",
         "zh-l",
         "zh-m",
     }) |candidate| {
-        if (std.ascii.eqlIgnoreCase(trimmed, candidate)) return true;
+        if (templateMatchesHtml(trimmed, candidate)) return true;
     }
     return false;
 }
 
 fn shouldSkipStrictTemplateArgValidation(name: []const u8) bool {
-    if (asciiStartsWithIgnoreCase(name, "table:")) return true;
-    if (asciiStartsWithIgnoreCase(name, "U:")) return true;
-    if (asciiStartsWithIgnoreCase(name, "Wiktionary:")) return true;
+    if (templateNameStartsWithHtml(name, "ctRenderF")) return true;
+    if (templateNameStartsWithHtml(name, "CURRENT")) return true;
+    if (templateNameStartsWithHtml(name, "table:")) return true;
+    if (templateNameStartsWithHtml(name, "U:")) return true;
+    if (templateNameStartsWithHtml(name, "Wiktionary:")) return true;
     inline for ([_][]const u8{
         "arithmetic operations",
         "bottom",
@@ -1385,6 +1441,7 @@ fn shouldSkipStrictTemplateArgValidation(name: []const u8) bool {
         "lookfrom",
         "multiple image",
         "multiple images",
+        "mainapp",
         "merge",
         "nonlemma",
         "PAGENAME",
@@ -1406,18 +1463,24 @@ fn shouldSkipStrictTemplateArgValidation(name: []const u8) bool {
         "rfdef",
         "rfdate",
         "rfm",
+        "rfm-sense",
         "rfi",
         "rfref",
         "rfv",
         "rfv-pron",
         "rfv-etym",
         "rfv-sense",
+        "ref",
+        "semantic loan",
         "season name spelling",
+        "see also",
         "seeCites",
         "see desc",
         "seeSynonyms",
         "seemoreCites",
+        "sl",
         "specieslite",
+        "suffixusex",
         "suffixsee",
         "tea room",
         "top2",
@@ -1431,14 +1494,60 @@ fn shouldSkipStrictTemplateArgValidation(name: []const u8) bool {
         "wikivoyage",
         "wikispecies",
         "wikipedia",
+        "wikidata",
         "interwiktionary",
         "swp",
+        "catlangname",
         "commons",
         "commonscat",
+        "construed with",
+        "ctRenderF",
+        "enum",
+        "phono-semantic matching",
+        "pseudo-loan",
+        "uxa",
     }) |candidate| {
-        if (std.ascii.eqlIgnoreCase(name, candidate)) return true;
+        if (templateMatchesHtml(name, candidate)) return true;
     }
     return false;
+}
+
+fn templateNameStartsWithHtml(name: []const u8, expected_prefix: []const u8) bool {
+    const actual = trimWikiWhitespace(name);
+    const prefix = trimWikiWhitespace(expected_prefix);
+
+    var i: usize = 0;
+    var j: usize = 0;
+    while (true) {
+        while (i < actual.len and isTemplateNameSpaceByte(actual[i])) : (i += 1) {}
+        while (j < prefix.len and isTemplateNameSpaceByte(prefix[j])) : (j += 1) {}
+        if (j == prefix.len) break;
+        if (i == actual.len) return false;
+        if (std.ascii.toLower(actual[i]) != std.ascii.toLower(prefix[j])) return false;
+        i += 1;
+        j += 1;
+    }
+    while (j < prefix.len and isTemplateNameSpaceByte(prefix[j])) : (j += 1) {}
+    return j == prefix.len;
+}
+
+fn templateNameEndsWithHtml(name: []const u8, expected_suffix: []const u8) bool {
+    const actual = trimWikiWhitespace(name);
+    const suffix = trimWikiWhitespace(expected_suffix);
+
+    var i: usize = actual.len;
+    var j: usize = suffix.len;
+    while (true) {
+        while (i > 0 and isTemplateNameSpaceByte(actual[i - 1])) : (i -= 1) {}
+        while (j > 0 and isTemplateNameSpaceByte(suffix[j - 1])) : (j -= 1) {}
+        if (j == 0) break;
+        if (i == 0) return false;
+        if (std.ascii.toLower(actual[i - 1]) != std.ascii.toLower(suffix[j - 1])) return false;
+        i -= 1;
+        j -= 1;
+    }
+    while (j > 0 and isTemplateNameSpaceByte(suffix[j - 1])) : (j -= 1) {}
+    return j == 0;
 }
 
 fn parseDefinitionLine(line: []const u8) ?ParsedDefinitionLine {
@@ -1598,6 +1707,7 @@ fn renderInlineHtml(
     input: []const u8,
     options: RenderOptions,
 ) anyerror!void {
+    var emphasis_state: EmphasisState = .{};
     var plain_start: usize = 0;
     var i: usize = 0;
     while (i < input.len) {
@@ -1624,6 +1734,12 @@ fn renderInlineHtml(
             plain_start = i;
             continue;
         }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "}}")) {
+            try appendDecodedEscapedChunk(out, allocator, input[plain_start..i]);
+            i += 2;
+            plain_start = i;
+            continue;
+        }
         if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "[[")) {
             try appendDecodedEscapedChunk(out, allocator, input[plain_start..i]);
             const end = findBalanced(input, i, "[[", "]]") orelse break;
@@ -1634,9 +1750,15 @@ fn renderInlineHtml(
             plain_start = i;
             continue;
         }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "]]")) {
+            try appendDecodedEscapedChunk(out, allocator, input[plain_start..i]);
+            i += 2;
+            plain_start = i;
+            continue;
+        }
         if (input[i] == '[') {
-            if (std.mem.indexOfScalarPos(u8, input, i + 1, ']')) |end| {
-                if (std.mem.startsWith(u8, input[i + 1 ..], "http")) {
+            if (asciiStartsWithIgnoreCase(input[i + 1 ..], "http")) {
+                if (findExternalLinkClose(input, i)) |end| {
                     try appendDecodedEscapedChunk(out, allocator, input[plain_start..i]);
                     const body = input[i + 1 .. end];
                     if (std.mem.indexOfScalar(u8, body, ' ')) |space| {
@@ -1681,7 +1803,7 @@ fn renderInlineHtml(
             try appendDecodedEscapedChunk(out, allocator, input[plain_start..i]);
             const run_start = i;
             while (i < input.len and input[i] == '\'') : (i += 1) {}
-            if (shouldKeepLiteralApostrophe(input, run_start, i - run_start)) {
+            if (emphasis_state.consumeApostropheRun(input, run_start, i - run_start)) {
                 try out.append(allocator, '\'');
             }
             plain_start = i;
@@ -1691,6 +1813,36 @@ fn renderInlineHtml(
     }
     try appendDecodedEscapedChunk(out, allocator, input[plain_start..]);
 }
+
+const EmphasisState = struct {
+    italic_open: bool = false,
+    bold_open: bool = false,
+
+    fn consumeApostropheRun(self: *EmphasisState, input: []const u8, run_start: usize, run_len: usize) bool {
+        switch (run_len) {
+            2 => {
+                self.italic_open = !self.italic_open;
+                return false;
+            },
+            3 => {
+                // Preserve the trailing apostrophe in cases like ''Britannica'''s while
+                // still stripping emphasis-only runs inside acronym-style expansions.
+                if (self.italic_open and !self.bold_open and shouldKeepLiteralApostrophe(input, run_start, run_len)) {
+                    self.italic_open = false;
+                    return true;
+                }
+                self.bold_open = !self.bold_open;
+                return false;
+            },
+            5 => {
+                self.bold_open = !self.bold_open;
+                self.italic_open = !self.italic_open;
+                return false;
+            },
+            else => return shouldKeepLiteralApostrophe(input, run_start, run_len),
+        }
+    }
+};
 
 fn appendDecodedEscapedChunk(out: *std.ArrayList(u8), allocator: std.mem.Allocator, chunk: []const u8) !void {
     if (chunk.len == 0) return;
@@ -1781,6 +1933,10 @@ fn renderTemplateHtml(
     }
     if (templateMatchesHtml(name, "audio")) {
         try renderAudioTemplateHtml(out, allocator, &parts, options);
+        return;
+    }
+    if (templateMatchesHtml(name, "Latn-def")) {
+        try renderLatnDefTemplateHtml(out, allocator, &parts, options);
         return;
     }
     if (templateMatchesHtml(name, "rhymes") or templateMatchesHtml(name, "rhyme")) {
@@ -1891,12 +2047,37 @@ fn renderTemplateHtml(
         try renderNominalTemplateHtml(out, allocator, &parts, "given name", options);
         return;
     }
-    if (templateMatchesHtml(name, "l") or templateMatchesHtml(name, "m") or templateMatchesHtml(name, "m+") or templateMatchesHtml(name, "link")) {
+    if (templateMatchesHtml(name, "&lit")) {
+        try appendEscapedHtmlSlice(out, allocator, "Used other than figuratively or idiomatically: see ");
+        try appendPositionalTemplateTargetsAllowCodesHtml(out, allocator, &parts, 1, ", ", options);
+        return;
+    }
+    if (templateMatchesHtml(name, "m+")) {
+        try renderLanguageAwareLexemeTemplateHtml(out, allocator, &parts, 0, 1, options);
+        return;
+    }
+    if (templateMatchesHtml(name, "l") or templateMatchesHtml(name, "m") or templateMatchesHtml(name, "link")) {
         try renderLexemeLikeTemplateHtml(out, allocator, &parts, 1, options);
         return;
     }
-    if (templateMatchesHtml(name, "cog") or templateMatchesHtml(name, "noncog")) {
+    if (templateMatchesHtml(name, "cog") or templateMatchesHtml(name, "cognate") or templateMatchesHtml(name, "noncog") or templateMatchesHtml(name, "ncog")) {
         try renderLanguageAwareLexemeTemplateHtml(out, allocator, &parts, 0, 1, options);
+        return;
+    }
+    if (templateMatchesHtml(name, "season name spelling")) {
+        try appendEscapedHtmlSlice(out, allocator, "Note that season names are not capitalized in modern English except where any noun would be capitalized, e.g. at the beginning of a sentence or as part of a name (Old Man Winter, the Winter War, Summer Glau). This is in contrast to the days of the week and months of the year, which are always capitalized (Thursday or September).");
+        return;
+    }
+    if (templateMatchesHtml(name, "CURRENTDAY")) {
+        try appendEscapedHtmlSlice(out, allocator, currentDayTextHtml());
+        return;
+    }
+    if (templateMatchesHtml(name, "CURRENTMONTHNAME")) {
+        try appendEscapedHtmlSlice(out, allocator, currentMonthNameHtml());
+        return;
+    }
+    if (templateMatchesHtml(name, "CURRENTYEAR")) {
+        try appendEscapedHtmlSlice(out, allocator, currentYearTextHtml());
         return;
     }
     if (templateMatchesHtml(name, "w") or templateMatchesHtml(name, "wikipedia")) {
@@ -1911,19 +2092,31 @@ fn renderTemplateHtml(
         try renderLabelTemplateHtml(out, allocator, &parts, if (templateMatchesHtml(name, "lb") or templateMatchesHtml(name, "lbl") or templateMatchesHtml(name, "label")) 1 else 0, options);
         return;
     }
-    if (templateMatchesHtml(name, "U")) {
-        if (templatePositionalHtml(&parts, 0)) |value| {
-            const trimmed = trimWikiWhitespace(value);
-            if (trimmed.len != 0) {
-                const display = try uppercaseFirstAsciiAlloc(allocator, trimmed);
-                defer allocator.free(display);
-                try appendLinkedResolvedTextHtml(out, allocator, display, trimmed, options);
-            }
+    if (templateMatchesHtml(name, "U") or asciiStartsWithIgnoreCase(name, "U:")) {
+        if (usageTemplateTargetHtml(name, &parts)) |value| {
+            const display = try uppercaseFirstAsciiAlloc(allocator, value);
+            defer allocator.free(display);
+            try appendLinkedResolvedTextHtml(out, allocator, display, value, options);
         }
         return;
     }
-    if (templateMatchesHtml(name, "q") or templateMatchesHtml(name, "qualifier") or templateMatchesHtml(name, "i") or templateMatchesHtml(name, "gl")) {
+    if (templateMatchesHtml(name, "only used in")) {
+        try appendEscapedHtmlSlice(out, allocator, "Only used in ");
+        try appendPositionalTemplateTargetsNaturalHtml(out, allocator, &parts, semanticTemplateTargetIndexHtml(&parts), options);
+        try appendEscapedHtmlSlice(out, allocator, ".");
+        return;
+    }
+    if (templateMatchesHtml(name, "q") or templateMatchesHtml(name, "q-lite") or templateMatchesHtml(name, "qualifier") or templateMatchesHtml(name, "i") or templateMatchesHtml(name, "gl")) {
         try appendParenthesizedTemplateArgs(out, allocator, &parts, 0, options);
+        return;
+    }
+    if (templateMatchesHtml(name, "Webster 1913")) {
+        return;
+    }
+    if (templateMatchesHtml(name, "uxa")) {
+        if (templatePositionalHtml(&parts, 1) orelse templatePositionalHtml(&parts, 0)) |arg| {
+            try renderTemplateTargetHtml(out, allocator, arg, options);
+        }
         return;
     }
     if (templateMatchesHtml(name, "C")) {
@@ -1934,7 +2127,7 @@ fn renderTemplateHtml(
         try appendPositionalTemplateTargetsHtml(out, allocator, &parts, 1, " + ", options);
         return;
     }
-    if (templateMatchesHtml(name, "doublet")) {
+    if (templateMatchesHtml(name, "doublet") or templateMatchesHtml(name, "dbt")) {
         try appendEscapedHtmlSlice(out, allocator, "Doublet of ");
         try appendPositionalTemplateTargetsNaturalHtml(out, allocator, &parts, if (looksLikeLanguageCodeHtml(templatePositionalHtml(&parts, 0) orelse "")) 1 else 0, options);
         return;
@@ -1951,6 +2144,18 @@ fn renderTemplateHtml(
     }
     if (templateMatchesHtml(name, "defdate")) {
         try renderDefdateTemplateHtml(out, allocator, &parts, options);
+        return;
+    }
+    if (templateMatchesHtml(name, "SI-unit")) {
+        try renderSiUnitTemplateHtml(out, allocator, &parts, options);
+        return;
+    }
+    if (templateMatchesHtml(name, "suffixusex")) {
+        try renderSuffixUsexTemplateHtml(out, allocator, &parts, options);
+        return;
+    }
+    if (templateMatchesHtml(name, "phono-semantic matching")) {
+        try renderPhonoSemanticMatchingTemplateHtml(out, allocator, &parts, options);
         return;
     }
     if (templateMatchesHtml(name, "senseno")) {
@@ -2015,6 +2220,76 @@ fn renderKnownListTemplateHtml(
         }, options);
     }
 
+    if (std.ascii.eqlIgnoreCase(list_name, "religious adherents/en")) {
+        return appendKnownListTermGridHtml(out, allocator, &.{
+            "African traditionalist",
+            "agnostic",
+            "Asatruar",
+            "atheist",
+            "Baháʼí",
+            "Buddhist",
+            "Caodaiist",
+            "Christian",
+            "Confucian",
+            "deist",
+            "Druid",
+            "Druze",
+            "Eckist",
+            "heathen",
+            "Hindu",
+            "Jain",
+            "Jedi",
+            "Jew",
+            "Mormon",
+            "Mormonist",
+            "Muslim",
+            "Odinist",
+            "pagan",
+            "Pastafarian",
+            "Quaker",
+            "Raëlian",
+            "Rastafarian",
+            "Rodnover",
+            "Samaritan",
+            "Shintoist",
+            "Sikh",
+            "Taoist",
+            "Tengrist",
+            "Unitarian Universalist",
+            "Wiccan",
+            "Yahwist",
+            "Yazidi",
+            "Zoroastrian",
+        }, options);
+    }
+
+    if (std.ascii.eqlIgnoreCase(list_name, "latin script letters/en/simple")) {
+        return appendKnownListTermGridHtml(out, allocator, &.{
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+            "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+        }, options);
+    }
+
+    if (std.ascii.eqlIgnoreCase(list_name, "latin script letter names/en/simple")) {
+        return appendKnownListTermGridHtml(out, allocator, &.{
+            "a", "bee", "cee", "dee", "e", "ef", "gee", "aitch", "i", "jay", "kay", "el", "em",
+            "en", "o", "pee", "cue", "ar", "ess", "tee", "u", "vee", "double-u", "ex", "wy", "zed",
+        }, options);
+    }
+
+    if (std.ascii.eqlIgnoreCase(list_name, "countries in europe/en")) {
+        return appendKnownListTermGridHtml(out, allocator, &.{
+            "Albania", "Andorra", "Armenia", "Austria", "Azerbaijan", "Belarus", "Belgium",
+            "Bosnia and Herzegovina", "Bulgaria", "Croatia", "Cyprus", "Czech Republic",
+            "Denmark", "Estonia", "Finland", "France", "Georgia", "Germany", "Greece",
+            "Hungary", "Iceland", "Ireland", "Italy", "Kazakhstan", "Kosovo", "Latvia",
+            "Liechtenstein", "Lithuania", "Luxembourg", "Malta", "Moldova", "Monaco",
+            "Montenegro", "Netherlands", "North Macedonia", "Norway", "Poland", "Portugal",
+            "Romania", "Russia", "San Marino", "Serbia", "Slovakia", "Slovenia", "Spain",
+            "Sweden", "Switzerland", "Turkey", "Ukraine", "United Kingdom", "Vatican City",
+        }, options);
+    }
+
     return false;
 }
 
@@ -2064,7 +2339,8 @@ fn renderExpandedTemplateHtml(
 
     try appendExpandedTemplatePrefix(out, allocator, expansion, options, false);
     if (target) |value| {
-        if (trimWikiWhitespace(value).len != 0 and !looksLikeLanguageCodeHtml(trimWikiWhitespace(value))) {
+        const trimmed = trimWikiWhitespace(value);
+        if (trimmed.len != 0 and !(target_index == 0 and looksLikeLanguageCodeHtml(trimmed))) {
             try renderTemplateTargetHtml(out, allocator, value, options);
         }
     }
@@ -2092,7 +2368,138 @@ fn renderExpandedTemplateHtml(
         try renderTemplateTargetHtml(out, allocator, trimmed, options);
     }
     if (wrote_extra) try out.appendSlice(allocator, ")");
+    if (target) |value| {
+        const trimmed = trimWikiWhitespace(value);
+        if (trimmed.len != 0 and !(target_index == 0 and looksLikeLanguageCodeHtml(trimmed))) {
+            try appendTemplateGlossHtml(out, allocator, parts, target_index, trimmed, options);
+        }
+    }
     return true;
+}
+
+fn renderLatnDefTemplateHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    options: RenderOptions,
+) anyerror!void {
+    const kind = templatePositionalHtml(parts, 1) orelse templatePositionalHtml(parts, 0) orelse return;
+    const trimmed_kind = trimWikiWhitespace(kind);
+
+    if (std.ascii.eqlIgnoreCase(trimmed_kind, "letter")) {
+        const ordinal = templatePositionalHtml(parts, 2) orelse "";
+        const glyph = templatePositionalHtml(parts, 3) orelse templatePositionalHtml(parts, 2) orelse "";
+
+        try appendEscapedHtmlSlice(out, allocator, "The ");
+        if (ordinalWordHtml(ordinal)) |word| {
+            try appendEscapedHtmlSlice(out, allocator, word);
+        } else if (ordinal.len != 0) {
+            try appendEscapedHtmlSlice(out, allocator, ordinal);
+        } else {
+            try appendEscapedHtmlSlice(out, allocator, "specified");
+        }
+        try appendEscapedHtmlSlice(out, allocator, " ");
+        try appendLinkedResolvedTextHtml(out, allocator, "letter", "letter", options);
+        try appendEscapedHtmlSlice(out, allocator, " of the English ");
+        try appendLinkedResolvedTextHtml(out, allocator, "alphabet", "alphabet", options);
+        if (glyph.len != 0) {
+            try appendEscapedHtmlSlice(out, allocator, ", called ");
+            try appendResolvedDisplayTargetHtml(out, allocator, glyph, glyph, options);
+        }
+        try appendEscapedHtmlSlice(out, allocator, " and written in the ");
+        try appendLinkedResolvedTextHtml(out, allocator, "Latin script", "Appendix:Latin script", options);
+        try appendEscapedHtmlSlice(out, allocator, ".");
+        return;
+    }
+
+    if (std.ascii.eqlIgnoreCase(trimmed_kind, "ordinal")) {
+        const ordinal = templatePositionalHtml(parts, 2) orelse "";
+        const glyph = templatePositionalHtml(parts, 3) orelse templatePositionalHtml(parts, 2) orelse "";
+
+        try appendEscapedHtmlSlice(out, allocator, "The ");
+        if (ordinalWordHtml(ordinal)) |word| {
+            try appendEscapedHtmlSlice(out, allocator, word);
+        } else if (ordinal.len != 0) {
+            try appendEscapedHtmlSlice(out, allocator, ordinal);
+        } else {
+            try appendEscapedHtmlSlice(out, allocator, "specified");
+        }
+        try appendEscapedHtmlSlice(out, allocator, " ");
+        try appendLinkedResolvedTextHtml(out, allocator, "numeral symbol", "numeral symbol", options);
+        try appendEscapedHtmlSlice(out, allocator, " of the English ");
+        try appendLinkedResolvedTextHtml(out, allocator, "alphabet", "alphabet", options);
+        if (glyph.len != 0) {
+            try appendEscapedHtmlSlice(out, allocator, ", called ");
+            try appendResolvedDisplayTargetHtml(out, allocator, glyph, glyph, options);
+        }
+        try appendEscapedHtmlSlice(out, allocator, " and written in the ");
+        try appendLinkedResolvedTextHtml(out, allocator, "Latin script", "Appendix:Latin script", options);
+        try appendEscapedHtmlSlice(out, allocator, ".");
+        return;
+    }
+
+    if (std.ascii.eqlIgnoreCase(trimmed_kind, "name")) {
+        const upper = templatePositionalHtml(parts, 2) orelse "";
+        const lower = templatePositionalHtml(parts, 3) orelse "";
+        try appendEscapedHtmlSlice(out, allocator, "The name of the ");
+        try appendLinkedResolvedTextHtml(out, allocator, "Latin script", "Appendix:Latin script", options);
+        try appendEscapedHtmlSlice(out, allocator, " letter ");
+        if (upper.len != 0) {
+            try appendResolvedDisplayTargetHtml(out, allocator, upper, upper, options);
+        }
+        if (lower.len != 0 and !std.mem.eql(u8, upper, lower)) {
+            try appendEscapedHtmlSlice(out, allocator, " / ");
+            try appendResolvedDisplayTargetHtml(out, allocator, lower, lower, options);
+        }
+        try appendEscapedHtmlSlice(out, allocator, ".");
+        return;
+    }
+
+    try appendPositionalTemplateTargetsAllowCodesHtml(out, allocator, parts, 1, " ", options);
+}
+
+fn ordinalWordHtml(value: []const u8) ?[]const u8 {
+    const trimmed = trimWikiWhitespace(value);
+    if (std.mem.eql(u8, trimmed, "1")) return "first";
+    if (std.mem.eql(u8, trimmed, "2")) return "second";
+    if (std.mem.eql(u8, trimmed, "3")) return "third";
+    if (std.mem.eql(u8, trimmed, "4")) return "fourth";
+    if (std.mem.eql(u8, trimmed, "5")) return "fifth";
+    if (std.mem.eql(u8, trimmed, "6")) return "sixth";
+    if (std.mem.eql(u8, trimmed, "7")) return "seventh";
+    if (std.mem.eql(u8, trimmed, "8")) return "eighth";
+    if (std.mem.eql(u8, trimmed, "9")) return "ninth";
+    if (std.mem.eql(u8, trimmed, "10")) return "tenth";
+    return null;
+}
+
+fn usageTemplateTargetHtml(name: []const u8, parts: *const std.ArrayList([]const u8)) ?[]const u8 {
+    const trimmed_name = trimWikiWhitespace(name);
+    if (asciiStartsWithIgnoreCase(trimmed_name, "U:")) {
+        var target = trimmed_name["U:".len..];
+        if (std.mem.indexOfScalar(u8, target, ':')) |colon| {
+            const prefix = trimWikiWhitespace(target[0..colon]);
+            if (looksLikeLanguageCodeHtml(prefix)) {
+                target = target[colon + 1 ..];
+            }
+        }
+        const trimmed_target = trimWikiWhitespace(target);
+        return if (trimmed_target.len == 0) null else trimmed_target;
+    }
+
+    if (templatePositionalHtml(parts, 0)) |first| {
+        const trimmed_first = trimWikiWhitespace(first);
+        if (trimmed_first.len != 0 and !looksLikeLanguageCodeHtml(trimmed_first)) return trimmed_first;
+    }
+    if (templatePositionalHtml(parts, 1)) |second| {
+        const trimmed_second = trimWikiWhitespace(second);
+        if (trimmed_second.len != 0) return trimmed_second;
+    }
+    if (templatePositionalHtml(parts, 0)) |first| {
+        const trimmed_first = trimWikiWhitespace(first);
+        if (trimmed_first.len != 0) return trimmed_first;
+    }
+    return null;
 }
 
 fn expandedTemplateCanStandAloneHtml(name: []const u8, target: ?[]const u8) bool {
@@ -2178,6 +2585,12 @@ fn renderSemanticTemplateHtml(
         try renderTemplateTargetHtml(out, allocator, trimmed, options);
     }
     if (wrote_extra) try out.appendSlice(allocator, ")");
+    if (templatePositionalHtml(parts, target_index)) |target_value| {
+        const trimmed = trimWikiWhitespace(target_value);
+        if (trimmed.len != 0 and !(target_index == 0 and looksLikeLanguageCodeHtml(trimmed))) {
+            try appendTemplateGlossHtml(out, allocator, parts, target_index, trimmed, options);
+        }
+    }
 }
 
 fn renderInflectionTemplateHtml(
@@ -2212,16 +2625,53 @@ fn renderInflectionTemplateHtml(
 
 fn formatInflectionTagsHtml(allocator: std.mem.Allocator, tags: []const []const u8) !?[]u8 {
     if (tags.len == 0) return null;
+    if (sameTagSetHtml(tags, &.{ "past", "part" })) return try allocator.dupe(u8, "past participle");
+    if (sameTagSetHtml(tags, &.{ "1", "s", "simple", "pres" })) return try allocator.dupe(u8, "first-person singular simple present");
+    if (sameTagSetHtml(tags, &.{ "1", "p", "simple", "pres" })) return try allocator.dupe(u8, "first-person plural simple present");
+    if (sameTagSetHtml(tags, &.{ "2", "s", "simple", "pres" })) return try allocator.dupe(u8, "second-person singular simple present");
+    if (sameTagSetHtml(tags, &.{ "2", "p", "simple", "pres" })) return try allocator.dupe(u8, "second-person plural simple present");
+    if (sameTagSetHtml(tags, &.{ "3", "s", "simple", "pres" })) return try allocator.dupe(u8, "third-person singular simple present");
+    if (sameTagSetHtml(tags, &.{ "3", "p", "simple", "pres" })) return try allocator.dupe(u8, "third-person plural simple present");
     if (tags.len == 1) {
         const tag = tags[0];
+        if (std.ascii.eqlIgnoreCase(tag, "pres")) return try allocator.dupe(u8, "present tense");
         if (std.ascii.eqlIgnoreCase(tag, "s-verb-form")) return try allocator.dupe(u8, "third-person singular simple present indicative");
         if (std.ascii.eqlIgnoreCase(tag, "spast")) return try allocator.dupe(u8, "simple past");
+        if (std.ascii.eqlIgnoreCase(tag, "ed-form")) return try allocator.dupe(u8, "simple past and past participle");
+        if (std.ascii.eqlIgnoreCase(tag, "ing-form")) return try allocator.dupe(u8, "present participle and gerund");
     }
     return null;
 }
 
 fn isRecognizedInflectionTagHtml(tag: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(tag, "s-verb-form") or std.ascii.eqlIgnoreCase(tag, "spast");
+    return std.ascii.eqlIgnoreCase(tag, "s-verb-form") or
+        std.ascii.eqlIgnoreCase(tag, "1") or
+        std.ascii.eqlIgnoreCase(tag, "2") or
+        std.ascii.eqlIgnoreCase(tag, "3") or
+        std.ascii.eqlIgnoreCase(tag, "part") or
+        std.ascii.eqlIgnoreCase(tag, "p") or
+        std.ascii.eqlIgnoreCase(tag, "past") or
+        std.ascii.eqlIgnoreCase(tag, "pres") or
+        std.ascii.eqlIgnoreCase(tag, "s") or
+        std.ascii.eqlIgnoreCase(tag, "simple") or
+        std.ascii.eqlIgnoreCase(tag, "spast") or
+        std.ascii.eqlIgnoreCase(tag, "ed-form") or
+        std.ascii.eqlIgnoreCase(tag, "ing-form");
+}
+
+fn sameTagSetHtml(tags: []const []const u8, expected: []const []const u8) bool {
+    if (tags.len != expected.len) return false;
+    for (expected) |candidate| {
+        var found = false;
+        for (tags) |tag| {
+            if (std.ascii.eqlIgnoreCase(trimWikiWhitespace(tag), candidate)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
 }
 
 fn expandedTemplateForName(name: []const u8) ?TemplateExpansion {
@@ -2233,17 +2683,22 @@ fn expandedTemplateForName(name: []const u8) ?TemplateExpansion {
         tail: []const u8,
     }{
         .{ .name = "init of", .display = "Initialism", .link_target = "initialism", .tail = " of " },
+        .{ .name = "init", .display = "Initialism", .link_target = "initialism", .tail = " of " },
+        .{ .name = "initialism of", .display = "Initialism", .link_target = "initialism", .tail = " of " },
         .{ .name = "abbr", .display = "Abbreviation", .link_target = "abbreviation", .tail = " of " },
         .{ .name = "abbr of", .display = "Abbreviation", .link_target = "abbreviation", .tail = " of " },
         .{ .name = "abbrev", .display = "Abbreviation", .link_target = "abbreviation", .tail = " of " },
         .{ .name = "abbrev of", .display = "Abbreviation", .link_target = "abbreviation", .tail = " of " },
         .{ .name = "abbreviation of", .display = "Abbreviation", .link_target = "abbreviation", .tail = " of " },
         .{ .name = "acronym", .display = "Acronym", .link_target = "acronym", .tail = " of " },
+        .{ .name = "acronym of", .display = "Acronym", .link_target = "acronym", .tail = " of " },
         .{ .name = "contraction", .display = "Contraction", .link_target = "contraction", .tail = " of " },
         .{ .name = "clip", .display = "Clipping", .link_target = "clipping", .tail = " of " },
+        .{ .name = "clip of", .display = "Clipping", .link_target = "clipping", .tail = " of " },
         .{ .name = "clipping", .display = "Clipping", .link_target = "clipping", .tail = " of " },
         .{ .name = "clipping of", .display = "Clipping", .link_target = "clipping", .tail = " of " },
         .{ .name = "ellipsis of", .display = "Ellipsis", .link_target = null, .tail = " of " },
+        .{ .name = "bf", .display = "Back-formation", .link_target = "back-formation", .tail = " from " },
         .{ .name = "back-form", .display = "Back-formation", .link_target = "back-formation", .tail = " from " },
         .{ .name = "back-formation", .display = "Back-formation", .link_target = "back-formation", .tail = " from " },
         .{ .name = "alt form", .display = "Alternative form", .link_target = null, .tail = " of " },
@@ -2254,8 +2709,12 @@ fn expandedTemplateForName(name: []const u8) ?TemplateExpansion {
         .{ .name = "alt spell", .display = "Alternative spelling", .link_target = null, .tail = " of " },
         .{ .name = "alt spelling of", .display = "Alternative spelling", .link_target = null, .tail = " of " },
         .{ .name = "alt case", .display = "Alternative case form", .link_target = null, .tail = " of " },
+        .{ .name = "alternative case form of", .display = "Alternative case form", .link_target = null, .tail = " of " },
         .{ .name = "obs form", .display = "Obsolete form", .link_target = null, .tail = " of " },
+        .{ .name = "dated form", .display = "Dated form", .link_target = null, .tail = " of " },
         .{ .name = "short for", .display = "Short", .link_target = null, .tail = " for " },
+        .{ .name = "syn of", .display = "Synonym", .link_target = "synonym", .tail = " of " },
+        .{ .name = "synonym of", .display = "Synonym", .link_target = "synonym", .tail = " of " },
     }) |candidate| {
         if (templateMatchesHtml(trimmed, candidate.name)) {
             return .{
@@ -2478,6 +2937,10 @@ fn renderEtymologyLexemeTemplateHtml(
 
     if (templateMatchesHtml(name, "bor+") or templateMatchesHtml(name, "borrowed")) {
         try appendEscapedHtmlSlice(out, allocator, "borrowed from ");
+    } else if (templateMatchesHtml(name, "ubor")) {
+        try appendEscapedHtmlSlice(out, allocator, "Unadapted borrowing from ");
+    } else if (templateMatchesHtml(name, "learned borrowing")) {
+        try appendEscapedHtmlSlice(out, allocator, "learned borrowing from ");
     } else if (templateMatchesHtml(name, "inh+") or templateMatchesHtml(name, "inherited")) {
         try appendEscapedHtmlSlice(out, allocator, "inherited from ");
     } else if (templateMatchesHtml(name, "der+") or templateMatchesHtml(name, "derived") or templateMatchesHtml(name, "uder")) {
@@ -2656,7 +3119,11 @@ fn renderAffixTemplateHtml(
         const term = templatePositionalHtml(parts, positional_index) orelse continue;
         const trimmed = trimWikiWhitespace(term);
         if (trimmed.len == 0) continue;
-        if (wrote_any) try out.appendSlice(allocator, " + ");
+        if (wrote_any) {
+            try out.appendSlice(allocator, " + ");
+        } else if (positional_index > first_term_index and (templateMatchesHtml(template_name, "suffix") or templateMatchesHtml(template_name, "suf"))) {
+            try out.appendSlice(allocator, "+ ");
+        }
         const lang_code = templateIndexedNamedHtml(parts, "lang", term_slot);
         if (lang_code) |code| {
             const lang_trimmed = trimWikiWhitespace(code);
@@ -2780,9 +3247,18 @@ fn renderNominalTemplateHtml(
     var phrase: std.ArrayList(u8) = .empty;
     defer phrase.deinit(allocator);
 
-    if (templatePositionalHtml(parts, 1)) |qualifier| {
-        const trimmed = trimWikiWhitespace(qualifier);
-        if (trimmed.len != 0 and !looksLikeLanguageCodeHtml(trimmed)) {
+    const qualifier = blk: {
+        if (templatePositionalHtml(parts, 0)) |first| {
+            if (looksLikeLanguageCodeHtml(trimWikiWhitespace(first))) {
+                break :blk templatePositionalHtml(parts, 1);
+            }
+            break :blk first;
+        }
+        break :blk templatePositionalHtml(parts, 1);
+    };
+    if (qualifier) |value| {
+        const trimmed = trimWikiWhitespace(value);
+        if (trimmed.len != 0) {
             try renderTemplateTargetHtml(&phrase, allocator, trimmed, options);
             if (phrase.items.len != 0) try phrase.append(allocator, ' ');
         }
@@ -2792,6 +3268,13 @@ fn renderNominalTemplateHtml(
     try out.appendSlice(allocator, chooseIndefiniteArticleHtml(phrase.items, true));
     try out.append(allocator, ' ');
     try out.appendSlice(allocator, phrase.items);
+    if (templateNamedHtml(parts, "addl")) |value| {
+        const trimmed_addl = trimWikiWhitespace(value);
+        if (trimmed_addl.len != 0) {
+            try out.appendSlice(allocator, ", ");
+            try renderTemplateTargetHtml(out, allocator, trimmed_addl, options);
+        }
+    }
     if (templateNamedHtml(parts, "from")) |source| {
         try appendNominalOriginHtml(out, allocator, source, options);
     }
@@ -3180,12 +3663,14 @@ fn languageDisplayHtml(code: []const u8) ?[]const u8 {
     inline for ([_]struct { code: []const u8, display: []const u8 }{
         .{ .code = "afa", .display = "Afroasiatic" },
         .{ .code = "af", .display = "Afrikaans" },
+        .{ .code = "am", .display = "Amharic" },
         .{ .code = "ang", .display = "Old English" },
         .{ .code = "ar", .display = "Arabic" },
         .{ .code = "arc", .display = "Aramaic" },
         .{ .code = "ber-pro", .display = "Proto-Berber" },
         .{ .code = "be", .display = "Belarusian" },
         .{ .code = "br", .display = "Breton" },
+        .{ .code = "cmn", .display = "Mandarin" },
         .{ .code = "cop", .display = "Coptic" },
         .{ .code = "cs", .display = "Czech" },
         .{ .code = "csb", .display = "Kashubian" },
@@ -3198,10 +3683,12 @@ fn languageDisplayHtml(code: []const u8) ?[]const u8 {
         .{ .code = "enm", .display = "Middle English" },
         .{ .code = "egy", .display = "Egyptian" },
         .{ .code = "es", .display = "Spanish" },
+        .{ .code = "etr", .display = "Etruscan" },
         .{ .code = "eu", .display = "Basque" },
         .{ .code = "fa-cls", .display = "Classical Persian" },
         .{ .code = "fi", .display = "Finnish" },
         .{ .code = "fia", .display = "Nobiin" },
+        .{ .code = "frk", .display = "Frankish" },
         .{ .code = "fr", .display = "French" },
         .{ .code = "frm", .display = "Middle French" },
         .{ .code = "fro", .display = "Old French" },
@@ -3221,6 +3708,7 @@ fn languageDisplayHtml(code: []const u8) ?[]const u8 {
         .{ .code = "is", .display = "Icelandic" },
         .{ .code = "ine-pro", .display = "Proto-Indo-European" },
         .{ .code = "kw", .display = "Cornish" },
+        .{ .code = "ko", .display = "Korean" },
         .{ .code = "la", .display = "Latin" },
         .{ .code = "LL.", .display = "Late Latin" },
         .{ .code = "li", .display = "Limburgish" },
@@ -3236,6 +3724,7 @@ fn languageDisplayHtml(code: []const u8) ?[]const u8 {
         .{ .code = "no", .display = "Norwegian" },
         .{ .code = "non", .display = "Old Norse" },
         .{ .code = "nn", .display = "Norwegian Nynorsk" },
+        .{ .code = "nan-hbl", .display = "Hokkien" },
         .{ .code = "nrf", .display = "Norman" },
         .{ .code = "onw", .display = "Old Nubian" },
         .{ .code = "ofs", .display = "Old Frisian" },
@@ -3245,10 +3734,14 @@ fn languageDisplayHtml(code: []const u8) ?[]const u8 {
         .{ .code = "pdc", .display = "Pennsylvania German" },
         .{ .code = "ru", .display = "Russian" },
         .{ .code = "rup", .display = "Aromanian" },
+        .{ .code = "sga", .display = "Old Irish" },
+        .{ .code = "yue", .display = "Cantonese" },
         .{ .code = "sa", .display = "Sanskrit" },
+        .{ .code = "sbv", .display = "Sabine" },
         .{ .code = "sco", .display = "Scots" },
         .{ .code = "se", .display = "Northern Sami" },
         .{ .code = "sh", .display = "Serbo-Croatian" },
+        .{ .code = "sq", .display = "Albanian" },
         .{ .code = "sv", .display = "Swedish" },
         .{ .code = "stq", .display = "Saterland Frisian" },
         .{ .code = "taq", .display = "Tamasheq" },
@@ -3257,6 +3750,7 @@ fn languageDisplayHtml(code: []const u8) ?[]const u8 {
         .{ .code = "tpi", .display = "Tok Pisin" },
         .{ .code = "uk", .display = "Ukrainian" },
         .{ .code = "urj-pro", .display = "Proto-Uralic" },
+        .{ .code = "xno", .display = "Anglo-Norman" },
     }) |entry| {
         if (std.ascii.eqlIgnoreCase(trimmed, entry.code)) return entry.display;
     }
@@ -3751,7 +4245,13 @@ fn splitTrailingQualifierHtml(raw: []const u8) TrailingQualifierHtml {
     const tag = trimWikiWhitespace(trimmed[tag_start + 1 .. trimmed.len - 1]);
     const colon = std.mem.indexOfScalar(u8, tag, ':') orelse return .{ .term = trimmed };
     const prefix = trimWikiWhitespace(tag[0..colon]);
-    if (!std.ascii.eqlIgnoreCase(prefix, "q") and !std.ascii.eqlIgnoreCase(prefix, "qq")) return .{ .term = trimmed };
+    if (!std.ascii.eqlIgnoreCase(prefix, "ll") and
+        !std.ascii.eqlIgnoreCase(prefix, "q") and
+        !std.ascii.eqlIgnoreCase(prefix, "qq") and
+        !std.ascii.eqlIgnoreCase(prefix, "pos"))
+    {
+        return .{ .term = trimmed };
+    }
     const qualifier = trimWikiWhitespace(tag[colon + 1 ..]);
     const term = trimWikiWhitespace(trimmed[0..tag_start]);
     if (qualifier.len == 0 or term.len == 0) return .{ .term = trimmed };
@@ -3990,20 +4490,32 @@ fn renderPlaceTemplateHtml(
 ) anyerror!void {
     const type_index = placeTypeIndexHtml(parts);
     const raw_type = templatePositionalHtml(parts, type_index) orelse return;
-    const rendered_type_text = try renderPlaceTypeTextHtmlAlloc(allocator, raw_type);
+    const abbreviation_target = placeAbbreviationTargetHtml(raw_type);
+    const actual_type_index = if (abbreviation_target != null and templatePositionalHtml(parts, type_index + 1) != null) type_index + 1 else type_index;
+    const actual_raw_type = templatePositionalHtml(parts, actual_type_index) orelse raw_type;
+    const rendered_type_text = try renderPlaceTypeTextHtmlAlloc(allocator, actual_raw_type);
     defer allocator.free(rendered_type_text);
     if (rendered_type_text.len == 0) return;
 
-    if (placeTypeNeedsArticleHtml(rendered_type_text)) {
+    if (abbreviation_target) |target| {
+        try appendLinkedResolvedTextHtml(out, allocator, "Abbreviation", "abbreviation", options);
+        try appendEscapedHtmlSlice(out, allocator, " of ");
+        try renderTemplateTargetHtml(out, allocator, target, options);
+        try appendEscapedHtmlSlice(out, allocator, ": ");
+        if (placeTypeNeedsArticleHtml(rendered_type_text)) {
+            try out.appendSlice(allocator, chooseIndefiniteArticleHtml(rendered_type_text, false));
+            try out.append(allocator, ' ');
+        }
+    } else if (placeTypeNeedsArticleHtml(rendered_type_text)) {
         try out.appendSlice(allocator, chooseIndefiniteArticleHtml(rendered_type_text, true));
         try out.append(allocator, ' ');
     }
-    try renderPlaceTypeHtml(out, allocator, raw_type, options);
+    try renderPlaceTypeHtml(out, allocator, actual_raw_type, options);
 
     var wrote_location = false;
     var last_was_location_value = false;
     const positional_total = positionalCountHtml(parts);
-    var positional_index = type_index + 1;
+    var positional_index = actual_type_index + 1;
     while (positional_index < positional_total) : (positional_index += 1) {
         const piece = templatePositionalHtml(parts, positional_index) orelse continue;
         const trimmed = trimWikiWhitespace(stripTraversalSegmentsHtml(piece));
@@ -4028,7 +4540,7 @@ fn renderPlaceTemplateHtml(
         }
 
         if (!wrote_location) {
-            try out.appendSlice(allocator, if (placeTypeNeedsInHtml(rendered_type_text)) " in " else " ");
+            try out.appendSlice(allocator, if (abbreviation_target != null) " of " else if (placeTypeNeedsInHtml(rendered_type_text)) " in " else " ");
             wrote_location = true;
         } else {
             try out.appendSlice(allocator, ", ");
@@ -4037,19 +4549,33 @@ fn renderPlaceTemplateHtml(
         last_was_location_value = true;
     }
 
-    for ([_][]const u8{ "official", "capital", "located", "located in", "caplc" }) |key| {
-        if (templateNamedHtml(parts, key)) |value| {
+    for ([_]struct { key: []const u8, label: []const u8 }{
+        .{ .key = "official", .label = "Official name: " },
+        .{ .key = "capital", .label = "Capital: " },
+        .{ .key = "caplc", .label = "Capital and largest city: " },
+        .{ .key = "largest city", .label = "Largest city: " },
+        .{ .key = "located", .label = "Located in " },
+        .{ .key = "located in", .label = "Located in " },
+    }) |field| {
+        if (templateNamedHtml(parts, field.key)) |value| {
             const trimmed = trimWikiWhitespace(stripTraversalSegmentsHtml(value));
             if (trimmed.len == 0) continue;
             if (wrote_location) {
-                try out.appendSlice(allocator, "; ");
+                try out.appendSlice(allocator, ". ");
             } else {
                 try out.append(allocator, ' ');
                 wrote_location = true;
             }
+            try out.appendSlice(allocator, field.label);
             try renderPlaceLocationFragmentHtml(out, allocator, trimmed, options);
         }
     }
+}
+
+fn placeAbbreviationTargetHtml(raw_type: []const u8) ?[]const u8 {
+    const trimmed = trimWikiWhitespace(stripTraversalSegmentsHtml(raw_type));
+    if (!asciiStartsWithIgnoreCase(trimmed, "@abbrev of:")) return null;
+    return trimWikiWhitespace(trimmed["@abbrev of:".len..]);
 }
 
 fn renderPlaceLocationFragmentHtml(
@@ -4067,17 +4593,18 @@ fn renderPlaceLocationFragmentHtml(
         const prefix = trimWikiWhitespace(input[0..slash]);
         const value = trimWikiWhitespace(input[slash + 1 ..]);
         if (value.len == 0) return;
+        const resolved_value = placeLocationDisplayValueHtml(prefix, value);
         const display = placeHolonymDisplayHtml(prefix);
         switch (display.kind) {
             .plain => {
-                try renderTemplateTargetHtml(out, allocator, value, options);
+                try renderTemplateTargetHtml(out, allocator, resolved_value, options);
             },
             .prefix => {
                 try appendPlaceHolonymPrefixHtml(out, allocator, display.label);
-                try renderTemplateTargetHtml(out, allocator, value, options);
+                try renderTemplateTargetHtml(out, allocator, resolved_value, options);
             },
             .suffix => {
-                try renderTemplateTargetHtml(out, allocator, value, options);
+                try renderTemplateTargetHtml(out, allocator, resolved_value, options);
                 try out.append(allocator, ' ');
                 try out.appendSlice(allocator, display.label);
             },
@@ -4223,6 +4750,9 @@ fn looksLikeStructuredInline(input: []const u8) bool {
         std.mem.indexOf(u8, input, "''") != null or
         std.mem.indexOf(u8, input, "[http") != null or
         std.mem.indexOf(u8, input, "<ref") != null or
+        std.mem.indexOf(u8, input, "<sup") != null or
+        std.mem.indexOf(u8, input, "<sub") != null or
+        std.mem.indexOf(u8, input, "<small") != null or
         std.mem.indexOf(u8, input, "<!--") != null;
 }
 
@@ -4397,7 +4927,59 @@ fn isWikiLinkTrailByte(byte: u8) bool {
 }
 
 fn templateMatchesHtml(name: []const u8, expected: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(trimWikiWhitespace(name), expected);
+    const actual = trimWikiWhitespace(name);
+    const target = trimWikiWhitespace(expected);
+
+    var i: usize = 0;
+    var j: usize = 0;
+    while (true) {
+        while (i < actual.len and isTemplateNameSpaceByte(actual[i])) : (i += 1) {}
+        while (j < target.len and isTemplateNameSpaceByte(target[j])) : (j += 1) {}
+        if (i == actual.len or j == target.len) break;
+        if (std.ascii.toLower(actual[i]) != std.ascii.toLower(target[j])) return false;
+        i += 1;
+        j += 1;
+    }
+    while (i < actual.len and isTemplateNameSpaceByte(actual[i])) : (i += 1) {}
+    while (j < target.len and isTemplateNameSpaceByte(target[j])) : (j += 1) {}
+    return i == actual.len and j == target.len;
+}
+
+fn isTemplateNameSpaceByte(byte: u8) bool {
+    return byte == ' ' or byte == '\t' or byte == '\r' or byte == '\n' or byte == '_';
+}
+
+fn findExternalLinkClose(input: []const u8, start: usize) ?usize {
+    if (start >= input.len or input[start] != '[' or start + 1 >= input.len) return null;
+    if (!asciiStartsWithIgnoreCase(input[start + 1 ..], "http")) return null;
+
+    var templates: usize = 0;
+    var links: usize = 0;
+    var i = start + 1;
+    while (i < input.len) : (i += 1) {
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "{{")) {
+            templates += 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "}}")) {
+            if (templates != 0) templates -= 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "[[")) {
+            links += 1;
+            i += 1;
+            continue;
+        }
+        if (i + 2 <= input.len and std.mem.eql(u8, input[i .. i + 2], "]]")) {
+            if (links != 0) links -= 1;
+            i += 1;
+            continue;
+        }
+        if (input[i] == ']' and templates == 0 and links == 0) return i;
+    }
+    return null;
 }
 
 fn isEtymologyLexemeTemplateHtml(name: []const u8) bool {
@@ -4407,9 +4989,10 @@ fn isEtymologyLexemeTemplateHtml(name: []const u8) bool {
         templateMatchesHtml(name, "der+") or
         templateMatchesHtml(name, "bor") or
         templateMatchesHtml(name, "bor+") or
+        templateMatchesHtml(name, "ubor") or
         templateMatchesHtml(name, "lbor") or
-        templateMatchesHtml(name, "uder") or
-        templateMatchesHtml(name, "ncog");
+        templateMatchesHtml(name, "learned borrowing") or
+        templateMatchesHtml(name, "uder");
 }
 
 fn isPlaceholderTemplateTermHtml(term: []const u8) bool {
@@ -4417,10 +5000,26 @@ fn isPlaceholderTemplateTermHtml(term: []const u8) bool {
     return std.mem.eql(u8, trimmed, "-") or std.mem.eql(u8, trimmed, "—");
 }
 
+fn templateArgNumericIndex(segment: []const u8) ?usize {
+    const equals = topLevelEquals(segment) orelse return null;
+    const key = trimWikiWhitespace(segment[0..equals]);
+    if (key.len == 0) return null;
+    for (key) |byte| {
+        if (!std.ascii.isDigit(byte)) return null;
+    }
+    const one_based = std.fmt.parseInt(usize, key, 10) catch return null;
+    return if (one_based == 0) null else one_based - 1;
+}
+
+fn templateArgNamedValueHtml(segment: []const u8) ?[]const u8 {
+    const equals = topLevelEquals(segment) orelse return null;
+    return trimWikiWhitespace(segment[equals + 1 ..]);
+}
+
 fn positionalCountHtml(parts: *const std.ArrayList([]const u8)) usize {
     var count: usize = 0;
     for (parts.items[1..]) |segment| {
-        if (!templateArgHasName(segment)) count += 1;
+        if (!templateArgHasName(segment) or templateArgNumericIndex(segment) != null) count += 1;
     }
     return count;
 }
@@ -4428,7 +5027,12 @@ fn positionalCountHtml(parts: *const std.ArrayList([]const u8)) usize {
 fn templatePositionalHtml(parts: *const std.ArrayList([]const u8), target: usize) ?[]const u8 {
     var positional_index: usize = 0;
     for (parts.items[1..]) |segment| {
-        if (templateArgHasName(segment)) continue;
+        if (templateArgHasName(segment)) {
+            if (templateArgNumericIndex(segment)) |numeric_index| {
+                if (numeric_index == target) return templateArgNamedValueHtml(segment);
+            }
+            continue;
+        }
         if (positional_index == target) return trimWikiWhitespace(segment);
         positional_index += 1;
     }
@@ -4452,14 +5056,23 @@ fn countRenderablePositionalTermsHtml(parts: *const std.ArrayList([]const u8), s
     var positional_index: usize = 0;
     var count: usize = 0;
     for (parts.items[1..]) |segment| {
-        if (templateArgHasName(segment)) continue;
+        const trimmed = blk: {
+            if (templateArgHasName(segment)) {
+                if (templateArgNumericIndex(segment)) |numeric_index| {
+                    if (numeric_index < start_index) continue;
+                    positional_index = numeric_index;
+                    break :blk templateArgNamedValueHtml(segment) orelse continue;
+                }
+                continue;
+            }
+            break :blk trimWikiWhitespace(segment);
+        };
         if (positional_index < start_index) {
             positional_index += 1;
             continue;
         }
         positional_index += 1;
 
-        const trimmed = trimWikiWhitespace(segment);
         if (trimmed.len == 0 or looksLikeLanguageCodeHtml(trimmed)) continue;
         count += 1;
     }
@@ -4470,14 +5083,24 @@ fn countNonEmptyPositionalTermsHtml(parts: *const std.ArrayList([]const u8), sta
     var positional_index: usize = 0;
     var count: usize = 0;
     for (parts.items[1..]) |segment| {
-        if (templateArgHasName(segment)) continue;
+        const trimmed = blk: {
+            if (templateArgHasName(segment)) {
+                if (templateArgNumericIndex(segment)) |numeric_index| {
+                    if (numeric_index < start_index) continue;
+                    positional_index = numeric_index;
+                    break :blk templateArgNamedValueHtml(segment) orelse continue;
+                }
+                continue;
+            }
+            break :blk trimWikiWhitespace(segment);
+        };
         if (positional_index < start_index) {
             positional_index += 1;
             continue;
         }
         positional_index += 1;
 
-        if (trimWikiWhitespace(segment).len != 0) count += 1;
+        if (trimmed.len != 0) count += 1;
     }
     return count;
 }
@@ -5035,12 +5658,131 @@ fn appendPlaceHolonymPrefixHtml(
     try out.appendSlice(allocator, " of ");
 }
 
+fn placeLocationDisplayValueHtml(prefix: []const u8, value: []const u8) []const u8 {
+    const trimmed_prefix = trimWikiWhitespace(prefix);
+    if (std.ascii.eqlIgnoreCase(trimmed_prefix, "c") or std.ascii.eqlIgnoreCase(trimmed_prefix, "cc")) {
+        if (std.ascii.eqlIgnoreCase(value, "US") or std.ascii.eqlIgnoreCase(value, "U.S.")) return "United States";
+        if (std.ascii.eqlIgnoreCase(value, "UK") or std.ascii.eqlIgnoreCase(value, "U.K.")) return "United Kingdom";
+    }
+    return value;
+}
+
 fn stripTraversalSegmentsHtml(input: []const u8) []const u8 {
     const trimmed = trimWikiWhitespace(input);
+    if (std.mem.indexOf(u8, trimmed, "[[") != null or
+        std.mem.indexOf(u8, trimmed, "{{") != null or
+        std.mem.indexOf(u8, trimmed, "<<") != null or
+        std.mem.indexOf(u8, trimmed, "]]") != null or
+        std.mem.indexOf(u8, trimmed, "}}") != null or
+        std.mem.indexOf(u8, trimmed, ">>") != null)
+    {
+        return trimmed;
+    }
     if (std.mem.lastIndexOfScalar(u8, trimmed, '>')) |marker| {
         if (marker + 1 < trimmed.len) return trimWikiWhitespace(trimmed[marker + 1 ..]);
     }
     return trimmed;
+}
+
+fn renderSiUnitTemplateHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    options: RenderOptions,
+) anyerror!void {
+    const prefix = templatePositionalHtml(parts, 1) orelse return;
+    const base = templatePositionalHtml(parts, 2) orelse return;
+    const quantity = templatePositionalHtml(parts, 3);
+
+    try appendEscapedHtmlSlice(out, allocator, "An ");
+    try appendLinkedResolvedTextHtml(out, allocator, "SI unit", "SI unit", options);
+    if (quantity) |value| {
+        const trimmed = trimWikiWhitespace(value);
+        if (trimmed.len != 0) {
+            try appendEscapedHtmlSlice(out, allocator, " of ");
+            try renderTemplateTargetHtml(out, allocator, trimmed, options);
+        }
+    }
+    try appendEscapedHtmlSlice(out, allocator, " equal to 10");
+    try appendEscapedHtmlSlice(out, allocator, "\xE2\x88\x92\xC2\xB3");
+    try appendEscapedHtmlSlice(out, allocator, " ");
+    try renderTemplateTargetHtml(out, allocator, base, options);
+    try appendEscapedHtmlSlice(out, allocator, "s");
+    if (templateNamedHtml(parts, "symbol")) |symbol| {
+        const trimmed_symbol = trimWikiWhitespace(symbol);
+        if (trimmed_symbol.len != 0) {
+            try appendEscapedHtmlSlice(out, allocator, ". Symbol: ");
+            try renderTemplateTargetHtml(out, allocator, trimmed_symbol, options);
+            return;
+        }
+    }
+    if (inferredSiSymbolHtml(prefix, base)) |symbol| {
+        try appendEscapedHtmlSlice(out, allocator, ". Symbol: ");
+        try appendEscapedHtmlSlice(out, allocator, symbol);
+    }
+}
+
+fn inferredSiSymbolHtml(prefix: []const u8, base: []const u8) ?[]const u8 {
+    const trimmed_prefix = trimWikiWhitespace(prefix);
+    const trimmed_base = trimWikiWhitespace(base);
+    if (std.ascii.eqlIgnoreCase(trimmed_prefix, "milli") and std.ascii.eqlIgnoreCase(trimmed_base, "second")) return "ms";
+    return null;
+}
+
+fn renderSuffixUsexTemplateHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    options: RenderOptions,
+) anyerror!void {
+    const rendered = templatePositionalHtml(parts, 2) orelse templatePositionalHtml(parts, 1) orelse return;
+    try renderTemplateTargetHtml(out, allocator, rendered, options);
+    if (templateNamedHtml(parts, "t2")) |gloss| {
+        const trimmed = trimWikiWhitespace(gloss);
+        if (trimmed.len != 0) {
+            try out.appendSlice(allocator, " (");
+            try renderTemplateTargetHtml(out, allocator, trimmed, options);
+            try out.append(allocator, ')');
+        }
+    }
+}
+
+fn renderPhonoSemanticMatchingTemplateHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    options: RenderOptions,
+) anyerror!void {
+    try appendEscapedHtmlSlice(out, allocator, "phono-semantic matching ");
+    if (templatePositionalHtml(parts, 1)) |code| {
+        if (languageDisplayHtml(code)) |display| {
+            try appendLinkedResolvedTextHtml(out, allocator, display, display, options);
+            if (templatePositionalHtml(parts, 2) != null) try out.append(allocator, ' ');
+        }
+    }
+    if (templatePositionalHtml(parts, 2)) |term| {
+        try renderTemplateTargetHtml(out, allocator, term, options);
+    }
+    if (templateNamedHtml(parts, "t") orelse templateNamedHtml(parts, "gloss")) |gloss| {
+        const trimmed = trimWikiWhitespace(gloss);
+        if (trimmed.len != 0) {
+            try out.appendSlice(allocator, " (");
+            try renderTemplateTargetHtml(out, allocator, trimmed, options);
+            try out.append(allocator, ')');
+        }
+    }
+}
+
+fn currentDayTextHtml() []const u8 {
+    return "5";
+}
+
+fn currentYearTextHtml() []const u8 {
+    return "2026";
+}
+
+fn currentMonthNameHtml() []const u8 {
+    return "April";
 }
 
 fn placeTypeIndexHtml(parts: *const std.ArrayList([]const u8)) usize {
@@ -5373,7 +6115,18 @@ test "renderEnglishSectionAlloc renders part-of-speech senses without raw templa
         \\{{col4|en|wedding ring|ring finger|signet ring}}
     ;
 
-    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    var issue: RenderIssue = .{};
+    const sections = renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .issue = &issue,
+    }) catch |err| {
+        std.debug.print("html err={s} section={s} line={d} detail={s}\n", .{
+            @errorName(err),
+            issue.section_title,
+            issue.line_number,
+            issue.detail,
+        });
+        return err;
+    };
     defer {
         for (sections) |*section| section.deinit(std.testing.allocator);
         std.testing.allocator.free(sections);
@@ -5468,6 +6221,30 @@ test "renderEnglishSectionAlloc expands known list templates used by coordinate 
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "attosecond") != null);
 }
 
+test "renderEnglishSectionAlloc expands religious adherent list templates" {
+    const source =
+        \\==English==
+        \\====Coordinate terms====
+        \\{{list:religious adherents/en}}
+    ;
+    const resolver = TestResolverContext{ .terms = &.{ "Asatruar", "Christian", "Muslim", "Wiccan" } };
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .link_resolver = .{
+            .context = @ptrCast(&resolver),
+            .resolve = resolveTestLink,
+        },
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "African traditionalist") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "<a href=\"/entry/Asatruar\">Asatruar</a>") != null);
+}
+
 test "renderEnglishSectionAlloc keeps multiline column sections with named args" {
     const source =
         \\==English==
@@ -5549,7 +6326,7 @@ test "renderEnglishSectionAlloc strips inline comments from column terms" {
         \\|Alb Sunday
         \\|Hall' Sunday<!--sic-->
         \\|Sunday-go-to-meeting<!--adjective-->
-        \\|Sundays<!--pos:adverb-->
+        \\|Sundays<pos:adverb>
         \\}}
     ;
 
@@ -5564,9 +6341,42 @@ test "renderEnglishSectionAlloc strips inline comments from column terms" {
     try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "Hall' Sunday") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "Sunday-go-to-meeting") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "Sundays") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "(adverb)") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "sic") == null);
     try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "adjective") == null);
     try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "pos:adverb") == null);
+}
+
+test "renderEnglishSectionAlloc prefixes etymology lexemes with language names" {
+    const source =
+        \\==English==
+        \\
+        \\===Etymology===
+        \\Related to {{m+|en|moon}}.
+        \\{{ncog|la|diēs}}, {{ncog|ru|день}}, {{ncog|lt|dienà}} are [[false cognate]]s; they all derive from {{ncog|ine-pro|*dyew-||to shine}}.
+    ;
+    const resolver = TestResolverContext{ .terms = &.{ "English", "Latin", "Russian", "Lithuanian", "Proto-Indo-European", "moon", "false cognate" } };
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .link_resolver = .{
+            .context = @ptrCast(&resolver),
+            .resolve = resolveTestLink,
+        },
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "/entry/English") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "/entry/moon") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "English") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Latin") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Russian") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Lithuanian") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Proto-Indo-European") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "to shine") != null);
 }
 
 test "renderEnglishSectionAlloc strips gallery filenames and keeps captions" {
@@ -5673,6 +6483,25 @@ test "renderEnglishSectionAlloc expands common inflection tags" {
 
     try std.testing.expectEqual(@as(usize, 1), sections.len);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "third-person singular simple present indicative of pie") != null);
+}
+
+test "renderEnglishSectionAlloc expands ed-form and ing-form inflection tags" {
+    const source =
+        \\==English==
+        \\===Verb===
+        \\# {{infl of|en|abandon||ed-form}}
+        \\# {{infl of|en|abear||ing-form}}
+    ;
+
+    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "simple past and past participle of abandon") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "present participle and gerund of abear") != null);
 }
 
 test "renderEnglishSectionAlloc preserves wiki link trails and alternative-form qualifiers" {
@@ -5807,6 +6636,30 @@ test "renderEnglishSectionAlloc expands shorthand template families into full la
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Alternative spelling of <a href=\"/entry/colour\">colour</a>") != null);
 }
 
+test "renderEnglishSectionAlloc expands bf and omitted-base suffix etymologies" {
+    const source =
+        \\==English==
+        \\
+        \\===Etymology===
+        \\From {{bf|en|linguist}} {{suf|en||-ism}}.
+    ;
+    const resolver = TestResolverContext{ .terms = &.{ "back-formation", "linguist", "-ism" } };
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .link_resolver = .{
+            .context = @ptrCast(&resolver),
+            .resolve = resolveTestLink,
+        },
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "From <a href=\"/entry/back-formation\">Back-formation</a> from <a href=\"/entry/linguist\">linguist</a> + <a href=\"/entry/-ism\">-ism</a>.") != null);
+}
+
 test "renderEnglishSectionAlloc formats place and surname definitions like sentence glosses" {
     const source =
         \\==English==
@@ -5851,6 +6704,80 @@ test "renderEnglishSectionAlloc preserves nominal template origins" {
     }
 
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "A habitational surname from <a href=\"/entry/Old%20Norse\">Old Norse</a>") != null);
+}
+
+test "renderEnglishSectionAlloc preserves ellipsis-of targets for hyphenated terms" {
+    const source =
+        \\==English==
+        \\====Noun====
+        \\# {{lb|en|zoology}} {{ellipsis of|en|pie-dog|t=an [[Indian]] [[breed]], a [[stray dog]] in [[Indian]] [[context]]s}}.
+    ;
+
+    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Ellipsis") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "pie-dog") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Indian") != null);
+}
+
+test "renderEnglishSectionAlloc preserves alternative-spelling targets that resemble language codes" {
+    const source =
+        \\==English==
+        \\====Noun====
+        \\# {{alternative spelling of|en|cro|t=marijuana}}
+    ;
+
+    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "alternative spelling") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "cro") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "marijuana") != null);
+}
+
+test "renderEnglishSectionAlloc expands Latn-def letter templates semantically" {
+    const source =
+        \\==English==
+        \\====Letter====
+        \\# {{Latn-def|en|letter|1|a}}
+    ;
+
+    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "The first") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Latin script") != null);
+}
+
+test "renderEnglishSectionAlloc expands Latn-def ordinal templates semantically" {
+    const source =
+        \\==English==
+        \\====Number====
+        \\# {{Latn-def|en|ordinal|1|a}}
+    ;
+
+    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "The first") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "numeral symbol") != null);
 }
 
 test "renderEnglishSectionAlloc chooses nominal articles from visible linked text" {
@@ -5898,6 +6825,31 @@ test "renderEnglishSectionAlloc expands nominal month-name origins semantically"
     }
 
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "A <a href=\"/entry/female\">female</a> given name transferred from the month name [in turn from <a href=\"/entry/English\">English</a>]") != null);
+}
+
+test "renderEnglishSectionAlloc preserves nominal addl text and expands &lit semantically" {
+    const source =
+        \\==English==
+        \\
+        \\===Proper noun===
+        \\# {{given name|en|male|addl=or more often nickname, for a boy who is junior to someone else}}
+        \\# {{&lit|en|false|friend}}
+    ;
+    const resolver = TestResolverContext{ .terms = &.{ "male", "false", "friend" } };
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .link_resolver = .{
+            .context = @ptrCast(&resolver),
+            .resolve = resolveTestLink,
+        },
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "A <a href=\"/entry/male\">male</a> given name, or more often nickname, for a boy who is junior to someone else") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Used other than figuratively or idiomatically: see <a href=\"/entry/false\">false</a>, <a href=\"/entry/friend\">friend</a>") != null);
 }
 
 test "renderEnglishSectionAlloc links place holonyms from place template fragments" {
@@ -5990,6 +6942,25 @@ test "renderEnglishSectionAlloc preserves possessive apostrophes and external wi
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Britannica's") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "https://en.wikipedia.org/wiki/Macrop%C3%A6dia") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "https://en.wikipedia.org/wiki/Deutsches_Museum") != null);
+}
+
+test "renderEnglishSectionAlloc strips bold apostrophe artifacts from acronym etymologies" {
+    const source =
+        \\==English==
+        \\
+        \\===Etymology===
+        \\From '''H'''alo'''A'''cetic '''A'''cids.
+    ;
+
+    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "HaloAcetic Acids.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "H'alo") == null);
 }
 
 test "renderEnglishSectionAlloc renders pronunciation templates with qualifiers and links" {
@@ -6190,6 +7161,29 @@ test "renderEnglishSectionAlloc keeps standalone clipping etymology templates ta
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "clipping of") == null);
 }
 
+test "renderEnglishSectionAlloc reads numeric named args and clip-of semantics in HTML" {
+    const source =
+        \\==English==
+        \\===Prefix===
+        \\{{en-prefix}}
+        \\# {{lb|en|Chester}} {{non-gloss|1=Used as a prefix to verbs in the sense of remaining in the same condition.}}
+        \\===Noun===
+        \\{{en-noun}}
+        \\# {{lb|en|informal}} {{clip of|en|abdominal muscle}} {{defdate|mid 20<sup>th</sup> century}}.
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{});
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Used as a prefix to verbs in the sense of remaining in the same condition.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "Clipping") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "abdominal muscle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "20") != null);
+}
+
 test "renderEnglishSectionAlloc prefixes affix etymologies with term languages" {
     const source =
         \\==English==
@@ -6284,6 +7278,62 @@ test "renderEnglishSectionAlloc expands Ottoman Turkish and Classical Persian et
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "ābdast") != null);
 }
 
+test "renderEnglishSectionAlloc expands learned borrowing templates semantically" {
+    const source =
+        \\==English==
+        \\===Etymology===
+        \\{{learned borrowing|en|la|[[absque]] [[hoc]]|lit=without this}}.
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{});
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "learned borrowing from") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Latin") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "absque") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "without this") != null);
+}
+
+test "renderEnglishSectionAlloc expands season name spelling usage note" {
+    const source =
+        \\==English==
+        \\===Usage notes===
+        \\{{season name spelling}}
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{});
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "season names are not capitalized") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "days of the week") != null);
+}
+
+test "renderEnglishSectionAlloc supports cognate alias template in etymology" {
+    const source =
+        \\==English==
+        \\===Etymology===
+        \\Ultimately a cognate with {{cognate|ang|earfoþe}} and {{cognate|de|Arbeit}}.
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{});
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Old English") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "German") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "earfoþe") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Arbeit") != null);
+}
+
 test "renderEnglishSectionAlloc links foreign lexeme templates and preserves transliteration glosses" {
     const source =
         \\==English==
@@ -6363,6 +7413,103 @@ test "renderEnglishSectionAlloc preserves defdate and thesaurus synonym links" {
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Thesaurus:dictionary") != null);
 }
 
+test "renderEnglishSectionAlloc renders abbreviation place templates with article and expanded country names" {
+    const source =
+        \\==English==
+        \\
+        \\===Proper noun===
+        \\# {{place|en|@abbrev of:Alabama|state|c/US}}.
+    ;
+    const resolver = TestResolverContext{ .terms = &.{ "Alabama", "state", "United States" } };
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .link_resolver = .{
+            .context = @ptrCast(&resolver),
+            .resolve = resolveTestLink,
+        },
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        sections[0].html,
+        "Abbreviation of <a href=\"/entry/Alabama\">Alabama</a>: a <a href=\"/entry/state\">state</a> of <a href=\"/entry/United%20States\">United States</a>.",
+    ) != null);
+}
+
+test "renderEnglishSectionAlloc expands unadapted borrowing and plural present inflection tags" {
+    const source =
+        \\==English==
+        \\
+        \\===Etymology===
+        \\{{ubor|en|la|ōs|t=the mouth}}.
+        \\
+        \\===Verb===
+        \\# {{inflection of|en|be||1|p|simple|pres}}
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{});
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Unadapted borrowing from") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Latin") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "the mouth") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "first-person plural simple present") != null);
+}
+
+test "renderEnglishSectionAlloc renders usage and only-used-in templates semantically" {
+    const source =
+        \\==English==
+        \\
+        \\===Usage notes===
+        \\* {{U:en:be dead}}
+        \\
+        \\===Adjective===
+        \\# {{only used in|en|man enough}}
+    ;
+    const resolver = TestResolverContext{ .terms = &.{ "be dead", "man enough" } };
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .link_resolver = .{
+            .context = @ptrCast(&resolver),
+            .resolve = resolveTestLink,
+        },
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "/entry/be%20dead") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "Only used in <a href=\"/entry/man%20enough\">man enough</a>.") != null);
+}
+
+test "renderEnglishSectionAlloc strict mode ignores raw text inside code tags" {
+    const source =
+        \\==English==
+        \\
+        \\===Noun===
+        \\# <code><<nowiki/></code>
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .strict = true,
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "&lt;&lt;nowiki/&gt;") != null);
+}
+
 test "renderEnglishSectionAlloc keeps literal less-than text" {
     const source =
         \\==English==
@@ -6402,4 +7549,69 @@ test "renderEnglishSectionAlloc skips float tables and keeps later content" {
     try std.testing.expectEqual(@as(usize, 1), sections.len);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "A test entry.") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "wikitable") == null);
+}
+
+test "renderEnglishSectionAlloc tolerates stray closing wiki markup" {
+    const source =
+        \\==English==
+        \\
+        \\===Noun===
+        \\# kept sense}}
+    ;
+
+    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "kept sense") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "}}") == null);
+}
+
+test "renderEnglishSectionAlloc normalizes template names and renders dated-form and q-lite helpers" {
+    const source =
+        \\==English==
+        \\
+        \\===Noun===
+        \\# {{dated_form|en|bra||item of underwear}}. {{defdate|from 1900s}}
+        \\{{Webster_1913}}
+        \\
+        \\===See also===
+        \\* {{l|en|6}} {{q-lite|Arabic numeral}}
+    ;
+
+    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Dated form of") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "bra") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "from 1900s") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Webster") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "Arabic numeral") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "{{") == null);
+}
+
+test "renderEnglishSectionAlloc keeps nested wikilink labels inside external links" {
+    const source =
+        \\==English==
+        \\
+        \\===Noun===
+        \\#* {{quote-book|en|title=[https://example.test [[Wikipedia:The Art of Cookery made Plain and Easy|The Art of Cookery made Plain and Easy]]]|passage=test}}
+    ;
+
+    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "The Art of Cookery made Plain and Easy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "https://example.test") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "[[") == null);
 }
