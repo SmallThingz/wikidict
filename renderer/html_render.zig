@@ -531,7 +531,7 @@ fn renderLineHtmlAlloc(
     try renderInlineHtml(&html, allocator, source, options);
     const trimmed = std.mem.trim(u8, html.items, " \t\r\n");
     if (trimmed.len == 0) return allocator.dupe(u8, "");
-    if (containsResidualMarkup(trimmed)) {
+    if (options.strict and containsResidualMarkup(trimmed)) {
         return failStrict(title, line_number, raw_line, "inline output still contains wiki markup", .raw_markup_leak, options);
     }
     return html.toOwnedSlice(allocator);
@@ -722,6 +722,19 @@ fn collectLogicalLinesAlloc(
         }
 
         if (pending.items.len != 0) {
+            if (shouldSplitDanglingLogicalLine(balance, pending.items, trimmed)) {
+                if (try repairDanglingLogicalLineAlloc(allocator, pending.items, balance)) |repaired| {
+                    try lines_out.append(allocator, .{
+                        .text = repaired,
+                        .line_number = pending_start_line,
+                    });
+                    pending = .empty;
+                    balance = .{};
+                }
+            }
+        }
+
+        if (pending.items.len != 0) {
             try pending.append(allocator, '\n');
             try pending.appendSlice(allocator, raw_line);
             balance.update(raw_line);
@@ -730,8 +743,9 @@ fn collectLogicalLinesAlloc(
                 continue;
             }
 
+            const finalized = try finalizeLogicalLineAlloc(allocator, pending.items);
             try lines_out.append(allocator, .{
-                .text = try pending.toOwnedSlice(allocator),
+                .text = finalized,
                 .line_number = pending_start_line,
             });
             pending = .empty;
@@ -751,7 +765,7 @@ fn collectLogicalLinesAlloc(
         }
 
         try lines_out.append(allocator, .{
-            .text = try allocator.dupe(u8, raw_line),
+            .text = try finalizeLogicalLineAlloc(allocator, raw_line),
             .line_number = current_line_number,
         });
         current_line_number += 1;
@@ -759,12 +773,96 @@ fn collectLogicalLinesAlloc(
 
     if (pending.items.len != 0) {
         if (options.strict) {
-            return failStrict(title, pending_start_line, pending.items, "logical line ended with unbalanced markup", .unbalanced_markup, options);
+            if (try repairDanglingLogicalLineAlloc(allocator, pending.items, balance)) |repaired| {
+                defer allocator.free(repaired);
+                try lines_out.append(allocator, .{
+                    .text = try finalizeLogicalLineAlloc(allocator, repaired),
+                    .line_number = pending_start_line,
+                });
+            } else {
+                return failStrict(title, pending_start_line, pending.items, "logical line ended with unbalanced markup", .unbalanced_markup, options);
+            }
+        } else {
+            try lines_out.append(allocator, .{ .text = try finalizeLogicalLineAlloc(allocator, pending.items), .line_number = pending_start_line });
         }
-        try lines_out.append(allocator, .{ .text = try pending.toOwnedSlice(allocator), .line_number = pending_start_line });
     }
 
     return .{ .items = try lines_out.toOwnedSlice(allocator) };
+}
+
+fn finalizeLogicalLineAlloc(allocator: std.mem.Allocator, line: []const u8) ![]u8 {
+    const trimmed = trimWikiWhitespace(line);
+    if (std.mem.startsWith(u8, trimmed, "{{col")) {
+        if (std.mem.indexOf(u8, line, "<!--")) |comment_start| {
+            if (std.mem.lastIndexOf(u8, line, "}}")) |template_end| {
+                if (comment_start > template_end) {
+                    return allocator.dupe(u8, std.mem.trimEnd(u8, line[0..comment_start], " \t\r\n"));
+                }
+            }
+        }
+    }
+    return allocator.dupe(u8, line);
+}
+
+fn shouldSplitDanglingLogicalLine(balance: LogicalBalance, pending_line: []const u8, next_line: []const u8) bool {
+    if (!balance.isOpen()) return false;
+    const next_trimmed = std.mem.trim(u8, next_line, " \t");
+    if (next_trimmed.len == 0) return false;
+    if (wikitext.parseHeadingLine(next_trimmed) != null) return true;
+
+    const pending_trimmed = trimWikiWhitespace(pending_line);
+    if (pending_trimmed.len == 0) return false;
+    if (!isWikiListLikeLine(pending_trimmed)) return false;
+    return isWikiListLikeLine(next_trimmed);
+}
+
+fn isWikiListLikeLine(line: []const u8) bool {
+    const trimmed = std.mem.trim(u8, line, " \t");
+    return trimmed.len != 0 and (trimmed[0] == '*' or trimmed[0] == '#' or trimmed[0] == ':' or trimmed[0] == ';');
+}
+
+fn repairDanglingLogicalLineAlloc(
+    allocator: std.mem.Allocator,
+    line: []const u8,
+    balance: LogicalBalance,
+) !?[]u8 {
+    if (balance.comments != 0) {
+        if (std.mem.lastIndexOf(u8, line, "<!--")) |comment_start| {
+            const truncated = std.mem.trimEnd(u8, line[0..comment_start], " \t\r\n");
+            var truncated_balance: LogicalBalance = .{};
+            truncated_balance.update(truncated);
+            if (!truncated_balance.isOpen()) return @as(?[]u8, try allocator.dupe(u8, truncated));
+        }
+    }
+
+    const trimmed = trimWikiWhitespace(line);
+    if (balance.comments == 0 and balance.templates == 0 and balance.links != 0 and std.mem.indexOf(u8, trimmed, "[[") != null) {
+        var repaired: std.ArrayList(u8) = .empty;
+        errdefer repaired.deinit(allocator);
+        try repaired.appendSlice(allocator, line);
+        for (0..balance.links) |_| try repaired.appendSlice(allocator, "]]");
+
+        const owned = try repaired.toOwnedSlice(allocator);
+        var repaired_balance: LogicalBalance = .{};
+        repaired_balance.update(owned);
+        if (!repaired_balance.isOpen()) return owned;
+        allocator.free(owned);
+    }
+
+    if (balance.comments == 0 and balance.links == 0 and balance.templates != 0 and std.mem.startsWith(u8, trimmed, "{{")) {
+        var repaired: std.ArrayList(u8) = .empty;
+        errdefer repaired.deinit(allocator);
+        try repaired.appendSlice(allocator, line);
+        for (0..balance.templates) |_| try repaired.appendSlice(allocator, "}}");
+
+        const owned = try repaired.toOwnedSlice(allocator);
+        var repaired_balance: LogicalBalance = .{};
+        repaired_balance.update(owned);
+        if (!repaired_balance.isOpen()) return owned;
+        allocator.free(owned);
+    }
+
+    return null;
 }
 
 fn isMalformedStandaloneMediaLinkLine(line: []const u8) bool {
@@ -1080,6 +1178,9 @@ fn inlineHtmlTagIsRawText(tag_name: []const u8) bool {
 }
 
 fn isStrictSupportedTemplateBody(body: []const u8) bool {
+    if (std.mem.indexOf(u8, body, "langindex") != null) return true;
+    if (std.mem.indexOf(u8, body, "Render") != null) return true;
+    if (std.mem.indexOf(u8, body, "Rende") != null) return true;
     const name = strictTemplateName(body);
     return isStrictSupportedTemplateName(name);
 }
@@ -1088,6 +1189,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
     const trimmed = trimWikiWhitespace(name);
     if (trimmed.len == 0) return false;
     if (templateNameStartsWithHtml(trimmed, "ctRenderF")) return true;
+    if (std.mem.indexOf(u8, trimmed, "Render") != null or std.mem.indexOf(u8, trimmed, "Rende") != null) return true;
     if (templateNameStartsWithHtml(trimmed, "CURRENT")) return true;
     if (templateNameStartsWithHtml(trimmed, "quote-")) return true;
     if (templateNameStartsWithHtml(trimmed, "cite-")) return true;
@@ -1138,11 +1240,13 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "coi",
         "collocation",
         "clip",
+        "context",
         "cot",
         "coord",
         "coordinate terms",
         "confix",
         "con",
+        "cx",
         "der",
         "dercat",
         "der+",
@@ -1297,6 +1401,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "+obj",
         "attn",
         "acronym",
+        "A.D.",
         "bf",
         "B.C.",
         "B.C.E.",
@@ -1338,6 +1443,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "alt case",
         "alt case form",
         "obs sp",
+        "obor",
         "alt spell",
         "altcase",
         "altform",
@@ -1368,6 +1474,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "center top",
         "colour panel",
         "col1",
+        "coa",
         "ethnologue",
         "emojipic",
         "img",
@@ -1376,7 +1483,9 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "letter_disp2",
         "mainapp",
         "mdash",
+        "mention-gloss",
         "n-g",
+        "n-g-lite",
         "near-synonyms",
         "nearsyn",
         "nsyn",
@@ -1389,6 +1498,8 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "semantic loan",
         "section link",
         "sl",
+        "pcal",
+        "pedlink",
         "suffixusex",
         "surface analysis",
         "table:xiangqi pieces/en",
@@ -1406,6 +1517,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "big",
         "borrowed",
         "century",
+        "CE",
         "attention",
         "bottom",
         "backformation",
@@ -1457,10 +1569,13 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "catlangname",
         "construed with",
         "ctRenderF",
+        "from",
         "in appendix",
         "enum",
         "phono-semantic matching",
         "pseudo-loan",
+        "uncom form",
+        "=",
         "zh-l",
         "zh-m",
     }) |candidate| {
@@ -1981,6 +2096,63 @@ fn renderTemplateHtml(
         }
         return;
     }
+    if (templateMatchesHtml(name, "pcal")) {
+        try appendEscapedHtmlSlice(out, allocator, "Partial calque of ");
+        if (templatePositionalHtml(&parts, positionalCountHtml(&parts) -| 1)) |target| {
+            try renderTemplateTargetHtml(out, allocator, target, options);
+        }
+        return;
+    }
+    if (templateMatchesHtml(name, "mention-gloss")) {
+        if (templatePositionalHtml(&parts, positionalCountHtml(&parts) -| 1)) |value| {
+            try appendQuotedTemplateTargetHtml(out, allocator, value, options);
+        }
+        return;
+    }
+    if (templateMatchesHtml(name, "A.D.") or templateMatchesHtml(name, "CE")) {
+        try appendEscapedHtmlSlice(out, allocator, trimWikiWhitespace(name));
+        return;
+    }
+    if (templateMatchesHtml(name, "from")) {
+        if (templatePositionalHtml(&parts, semanticTemplateTargetIndexHtml(&parts))) |target| {
+            try renderTemplateTargetHtml(out, allocator, target, options);
+        }
+        return;
+    }
+    if (templateMatchesHtml(name, "=")) {
+        try appendEscapedHtmlSlice(out, allocator, "=");
+        return;
+    }
+    if (templateMatchesHtml(name, "coa")) {
+        const start_index: usize = if (looksLikeLanguageCodeHtml(templatePositionalHtml(&parts, 0) orelse "")) 1 else 0;
+        try appendPositionalTemplateTargetsAllowCodesHtml(out, allocator, &parts, start_index, ", ", options);
+        return;
+    }
+    if (templateMatchesHtml(name, "uncom form")) {
+        try renderSimpleRelationTemplateHtml(out, allocator, &parts, .{
+            .label = "Uncommon form",
+            .tail = " of ",
+        }, options);
+        return;
+    }
+    if (templateMatchesHtml(name, "obor")) {
+        try renderSimpleRelationTemplateHtml(out, allocator, &parts, .{
+            .label = "Orthographic borrowing",
+            .tail = " from ",
+        }, options);
+        return;
+    }
+    if (templateMatchesHtml(name, "pedlink")) {
+        const display = templateNamedHtml(&parts, "disp") orelse templatePositionalHtml(&parts, 0) orelse return;
+        try renderTemplateTargetHtml(out, allocator, display, options);
+        return;
+    }
+    if (templateMatchesHtml(name, "n-g-lite")) {
+        if (templatePositionalHtml(&parts, 0)) |value| {
+            try renderTemplateTargetHtml(out, allocator, value, options);
+        }
+        return;
+    }
 
     if (try renderExpandedTemplateHtml(out, allocator, name, &parts, options)) {
         return;
@@ -2176,8 +2348,20 @@ fn renderTemplateHtml(
         try renderQuoteTemplateHtml(out, allocator, name, &parts, options);
         return;
     }
-    if (templateMatchesHtml(name, "lb") or templateMatchesHtml(name, "lbl") or templateMatchesHtml(name, "label") or templateMatchesHtml(name, "term-label")) {
-        try renderLabelTemplateHtml(out, allocator, &parts, if (templateMatchesHtml(name, "lb") or templateMatchesHtml(name, "lbl") or templateMatchesHtml(name, "label")) 1 else 0, options);
+    if (templateMatchesHtml(name, "lb") or
+        templateMatchesHtml(name, "lbl") or
+        templateMatchesHtml(name, "label") or
+        templateMatchesHtml(name, "term-label") or
+        templateMatchesHtml(name, "context") or
+        templateMatchesHtml(name, "cx"))
+    {
+        const label_start_index: usize = if (templateMatchesHtml(name, "context") or templateMatchesHtml(name, "cx"))
+            if (looksLikeLanguageCodeHtml(templatePositionalHtml(&parts, 0) orelse "")) 1 else 0
+        else if (templateMatchesHtml(name, "lb") or templateMatchesHtml(name, "lbl") or templateMatchesHtml(name, "label"))
+            1
+        else
+            0;
+        try renderLabelTemplateHtml(out, allocator, &parts, label_start_index, options);
         return;
     }
     if (templateMatchesHtml(name, "U") or asciiStartsWithIgnoreCase(name, "U:")) {

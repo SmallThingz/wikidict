@@ -366,6 +366,25 @@ test "renderEnglishSectionAlloc preserves form-of template labels" {
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "plural of Fresnel reflection") != null);
 }
 
+test "renderEnglishSectionAlloc treats context like label in strict mode" {
+    const source =
+        \\==English==
+        \\
+        \\===Verb===
+        \\# {{context|transitive|lang=en}} To orbit.
+    ;
+
+    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "transitive") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "To orbit.") != null);
+}
+
 test "renderEnglishSectionAlloc expands common inflection tags" {
     const source =
         \\==English==
@@ -588,7 +607,7 @@ test "renderEnglishSectionAlloc preserves nominal template origins" {
         \\===Proper noun===
         \\# {{surname|en|habitational|from=Old Norse}}
     ;
-    const resolver = TestResolverContext{ .terms = &.{ "Old Norse" } };
+    const resolver = TestResolverContext{ .terms = &.{"Old Norse"} };
 
     const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
         .link_resolver = .{
@@ -1888,4 +1907,44 @@ test "renderEnglishSectionAlloc renders partial calques semantically" {
     try std.testing.expectEqual(@as(usize, 1), sections.len);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Partial calque") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "cap vert") != null);
+}
+
+test "renderEnglishSectionAlloc repairs dangling wikilinks before the next bullet in strict mode" {
+    const source =
+        \\==English==
+        \\====Derived terms====
+        \\* [[ groundsel bush
+        \\* [[groundsel tree]]
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .strict = true,
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "groundsel bush") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "groundsel tree") != null);
+}
+
+test "renderEnglishSectionAlloc keeps permissive rendering from failing on residual wiki markup" {
+    const source =
+        \\==English==
+        \\====Derived terms====
+        \\* [[ groundsel bush
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .strict = false,
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "groundsel bush") != null);
 }

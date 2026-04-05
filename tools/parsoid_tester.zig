@@ -183,6 +183,7 @@ const Auditor = struct {
     options: Options,
     dict: decoder.Dictionary,
     db_tag: []u8,
+    worker: WorkerClient,
     total_entries: usize,
     progress: Progress,
     state_mutex: std.Io.Mutex = .init,
@@ -204,6 +205,9 @@ const Auditor = struct {
         const db_tag = try computeDbTag(allocator, io, options.db_path);
         errdefer allocator.free(db_tag);
 
+        var worker = try WorkerClient.init(allocator, io, options, dict.entries.len);
+        errdefer worker.deinit();
+
         const total_entries = countTargetEntries(&dict, options);
         return .{
             .allocator = allocator,
@@ -211,6 +215,7 @@ const Auditor = struct {
             .options = options,
             .dict = dict,
             .db_tag = db_tag,
+            .worker = worker,
             .total_entries = total_entries,
             .report = .init(allocator),
             .progress = Progress.init(total_entries),
@@ -221,6 +226,7 @@ const Auditor = struct {
         for (self.samples.items) |*sample| sample.deinit(self.allocator);
         self.samples.deinit(self.allocator);
         self.report.deinit();
+        self.worker.deinit();
         self.allocator.free(self.db_tag);
         self.dict.deinit();
     }
@@ -362,7 +368,7 @@ const Auditor = struct {
                 "worker_errors: {d}\n\n",
             .{
                 self.options.word_filter orelse "<none>",
-                "local-zig",
+                "php-parsoid",
                 self.options.cache_only,
                 resolvedThreadCount(self.total_entries, self.options.thread_count, self.options.prime_cache),
                 stats.entries_scanned,
@@ -438,14 +444,8 @@ pub fn auditDictionary(io: std.Io, allocator: std.mem.Allocator, options: Option
 }
 
 fn auditWorkerMain(args: WorkerArgs) void {
-    var arena = std.heap.ArenaAllocator.init(args.auditor.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-
-    var worker = WorkerClient.init(args.auditor.allocator, args.auditor.io, args.auditor.options, args.auditor.dict.entries.len) catch |err| {
-        args.auditor.noteFatal(err);
-        return;
-    };
-    defer worker.deinit();
 
     for (args.start..args.end) |idx| {
         if (args.auditor.fatal() != null) return;
@@ -518,7 +518,7 @@ fn auditWorkerMain(args: WorkerArgs) void {
             break :blk sections;
         };
 
-        const response = worker.compare(arena.allocator(), .{
+        const response = args.auditor.worker.compare(arena.allocator(), .{
             .mode = if (args.auditor.options.prime_cache) "prime" else "compare",
             .db_tag = args.auditor.db_tag,
             .entry_index = idx,

@@ -149,7 +149,7 @@ pub fn build(b: *std.Build) void {
     addRunStep(b, "structure", "Analyze Wiktionary structure", structure_exe, &.{});
     addRunStep(b, "verify", "Verify dictionary raw entries against the XML dump", verifier_exe, &.{});
     addRunStep(b, "render-test", "Compare rendered sections against the local cached reference output", render_tester_exe, &.{});
-    addRunStep(b, "populate-db", "Populate the local rendered-reference cache database", render_tester_exe, &.{ "--prime-cache" });
+    addRunStep(b, "populate-db", "Populate the local rendered-reference cache database", render_tester_exe, &.{ "--prime-cache", "--report", "-" });
 
     {
         const cmd = b.addSystemCommand(&.{ "bash", "tools/frontend" });

@@ -575,7 +575,7 @@ pub fn auditDictionary(io: std.Io, allocator: std.mem.Allocator, options: Option
 }
 
 fn renderWorkerMain(args: WorkerArgs) void {
-    var arena = std.heap.ArenaAllocator.init(args.auditor.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
     for (args.start..args.end) |idx| {
