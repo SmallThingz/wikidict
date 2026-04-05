@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const zxml = @import("zxml");
 
 const encoder = @import("encoder");
@@ -26,12 +27,12 @@ pub fn main(init: std.process.Init) !void {
     const stats = try analyzeDump(init.io, init.gpa, options);
 
     std.debug.print(
-        "wrote {s}\npages={d}\nns0={d}\nenglish_entries={d}\nheading_titles={d}\nunclassified_headings={d}\nanomalies={d}\n",
+        "wrote {s}\npages={d}\nns0={d}\nlanguage_entries={d}\nheading_titles={d}\nunclassified_headings={d}\nanomalies={d}\n",
         .{
             options.output_path,
             stats.pages_seen,
             stats.namespace_zero_pages,
-            stats.english_entries,
+            stats.language_entries,
             stats.heading_title_keys,
             stats.unknown_heading_keys,
             stats.anomaly_samples,
@@ -44,6 +45,7 @@ const Options = struct {
     output_path: []const u8 = "data/wiktionary-structure.json",
     format: OutputFormat = .json,
     limit_entries: ?usize = null,
+    worker_threads: ?usize = null,
     top_n: usize = 50,
     sample_limit: usize = 64,
 };
@@ -51,7 +53,7 @@ const Options = struct {
 const AnalyzeStats = struct {
     pages_seen: usize,
     namespace_zero_pages: usize,
-    english_entries: usize,
+    language_entries: usize,
     heading_title_keys: usize,
     unknown_heading_keys: usize,
     anomaly_samples: usize,
@@ -126,7 +128,7 @@ const Analyzer = struct {
     options: Options,
     pages_seen: usize = 0,
     namespace_zero_pages: usize = 0,
-    english_entries: usize = 0,
+    language_entries: usize = 0,
     heading_jumps: usize = 0,
     content_before_subheading: usize = 0,
     unbalanced_sections: usize = 0,
@@ -193,7 +195,7 @@ const Analyzer = struct {
         return .{
             .pages_seen = self.pages_seen,
             .namespace_zero_pages = self.namespace_zero_pages,
-            .english_entries = self.english_entries,
+            .language_entries = self.language_entries,
             .heading_title_keys = self.heading_title_counts.count(),
             .unknown_heading_keys = self.unclassified_heading_counts.count(),
             .anomaly_samples = self.anomaly_samples.items.len,
@@ -232,28 +234,82 @@ const Analyzer = struct {
         });
     }
 
-    fn analyzeEntry(self: *Analyzer, title: []const u8, english_section: []const u8) !void {
-        self.english_entries += 1;
+    fn appendAnomalySample(self: *Analyzer, sample: AnomalySample) !void {
+        if (self.anomaly_samples.items.len >= self.options.sample_limit) return;
+        try self.anomaly_samples.append(self.gpa, .{
+            .title = try self.keyAllocator().dupe(u8, sample.title),
+            .kind = try self.keyAllocator().dupe(u8, sample.kind),
+            .detail = try self.keyAllocator().dupe(u8, sample.detail),
+        });
+    }
+
+    fn mergeCountMap(self: *Analyzer, dst: *std.StringHashMapUnmanaged(u64), src: std.StringHashMapUnmanaged(u64)) !void {
+        var it = src.iterator();
+        while (it.next()) |entry| {
+            if (dst.getPtr(entry.key_ptr.*)) |value| {
+                value.* += entry.value_ptr.*;
+                continue;
+            }
+            const owned = try self.keyAllocator().dupe(u8, entry.key_ptr.*);
+            try dst.put(self.gpa, owned, entry.value_ptr.*);
+        }
+    }
+
+    fn mergeFrom(self: *Analyzer, other: *const Analyzer) !void {
+        self.pages_seen += other.pages_seen;
+        self.namespace_zero_pages += other.namespace_zero_pages;
+        self.language_entries += other.language_entries;
+        self.heading_jumps += other.heading_jumps;
+        self.content_before_subheading += other.content_before_subheading;
+        self.unbalanced_sections += other.unbalanced_sections;
+
+        try self.mergeCountMap(&self.heading_title_counts, other.heading_title_counts);
+        try self.mergeCountMap(&self.heading_level_counts, other.heading_level_counts);
+        try self.mergeCountMap(&self.heading_kind_counts, other.heading_kind_counts);
+        try self.mergeCountMap(&self.parser_kind_counts, other.parser_kind_counts);
+        try self.mergeCountMap(&self.unclassified_heading_counts, other.unclassified_heading_counts);
+        try self.mergeCountMap(&self.heading_edge_counts, other.heading_edge_counts);
+        try self.mergeCountMap(&self.line_signature_counts, other.line_signature_counts);
+        try self.mergeCountMap(&self.section_signature_counts, other.section_signature_counts);
+        try self.mergeCountMap(&self.family_signature_counts, other.family_signature_counts);
+        try self.mergeCountMap(&self.template_counts, other.template_counts);
+        try self.mergeCountMap(&self.section_template_counts, other.section_template_counts);
+        try self.mergeCountMap(&self.family_template_counts, other.family_template_counts);
+        try self.mergeCountMap(&self.template_shape_counts, other.template_shape_counts);
+        try self.mergeCountMap(&self.section_template_shape_counts, other.section_template_shape_counts);
+        try self.mergeCountMap(&self.family_template_shape_counts, other.family_template_shape_counts);
+        try self.mergeCountMap(&self.link_shape_counts, other.link_shape_counts);
+        try self.mergeCountMap(&self.section_link_shape_counts, other.section_link_shape_counts);
+        try self.mergeCountMap(&self.family_link_shape_counts, other.family_link_shape_counts);
+        try self.mergeCountMap(&self.translation_source_label_counts, other.translation_source_label_counts);
+        try self.mergeCountMap(&self.translation_target_lang_counts, other.translation_target_lang_counts);
+        try self.mergeCountMap(&self.anomaly_kind_counts, other.anomaly_kind_counts);
+
+        for (other.anomaly_samples.items) |sample| try self.appendAnomalySample(sample);
+    }
+
+    fn analyzeEntry(self: *Analyzer, title: []const u8, language_title: []const u8, language_section: []const u8) !void {
+        self.language_entries += 1;
 
         var active_titles: [7][]const u8 = [_][]const u8{""} ** 7;
-        active_titles[2] = "English";
+        active_titles[2] = language_title;
         var seen_subheading = false;
         var balance: LogicalBalance = .{};
 
-        var lines = std.mem.splitScalar(u8, english_section, '\n');
+        var lines = std.mem.splitScalar(u8, language_section, '\n');
         while (lines.next()) |raw_input| {
             const raw_line = std.mem.trimEnd(u8, raw_input, "\r");
             balance.update(raw_line);
 
             if (wikitext.parseHeadingLine(raw_line)) |heading| {
-                try self.recordHeading(title, heading, &active_titles);
+                try self.recordHeading(title, heading, &active_titles, language_title);
                 if (heading.level >= 3) seen_subheading = true;
                 continue;
             }
 
             const trimmed = std.mem.trim(u8, raw_line, " \t");
-            const scope = currentHeadingLabel(&active_titles);
-            const profile = currentHeadingProfile(&active_titles);
+            const scope = currentHeadingLabel(&active_titles, language_title);
+            const profile = currentHeadingProfile(&active_titles, language_title);
             const family = profile.family;
             const sig = lineSignature(trimmed);
 
@@ -272,11 +328,11 @@ const Analyzer = struct {
 
         if (balance.isOpen()) {
             self.unbalanced_sections += 1;
-            try self.addAnomaly(title, "unbalanced-markup", "English section ended with open template/link/comment state");
+            try self.addAnomaly(title, "unbalanced-markup", "Language section ended with open template/link/comment state");
         }
     }
 
-    fn recordHeading(self: *Analyzer, title: []const u8, heading: wikitext.ParsedHeading, active_titles: *[7][]const u8) !void {
+    fn recordHeading(self: *Analyzer, title: []const u8, heading: wikitext.ParsedHeading, active_titles: *[7][]const u8, language_title: []const u8) !void {
         try self.bump(&self.heading_title_counts, heading.title);
         self.key_scratch.items.len = 0;
         const level_key = try std.fmt.allocPrint(self.gpa, "L{d}:{s}", .{ heading.level, heading.title });
@@ -302,7 +358,7 @@ const Analyzer = struct {
             try self.addAnomaly(title, "heading-level-jump", self.key_scratch.items);
         }
 
-        try self.validateHeadingPlacement(title, active_titles.*, heading, profile);
+        try self.validateHeadingPlacement(title, active_titles.*, heading, profile, language_title);
         try self.recordHeadingEdge(active_titles.*, heading);
 
         active_titles[heading.level] = heading.title;
@@ -354,13 +410,13 @@ const Analyzer = struct {
         }.onTemplate);
     }
 
-    fn validateHeadingPlacement(self: *Analyzer, title: []const u8, active_titles: [7][]const u8, heading: wikitext.ParsedHeading, profile: HeadingProfile) !void {
+    fn validateHeadingPlacement(self: *Analyzer, title: []const u8, active_titles: [7][]const u8, heading: wikitext.ParsedHeading, profile: HeadingProfile, language_title: []const u8) !void {
         const parent_level = parentHeadingLevel(active_titles, heading.level);
         const parent_title = if (parent_level == 0) "ROOT" else active_titles[parent_level];
         const parent_kind = if (parent_level == 0)
             "root"
         else
-            classifyHeadingTitle(parent_title, parent_level).family;
+            classifyHeadingTitle(if (parent_level == 2) language_title else parent_title, parent_level).family;
 
         if (!isExpectedHeadingLevel(profile.family, heading.level)) {
             const detail = try std.fmt.allocPrint(self.gpa, "{s} at L{d}", .{ heading.title, heading.level });
@@ -460,6 +516,22 @@ const PageCapture = struct {
     }
 };
 
+const AnalyzeChunk = struct {
+    start: usize,
+    end: usize,
+};
+
+const AnalyzeChunkResult = struct {
+    analyzer: Analyzer,
+    err: ?anyerror = null,
+};
+
+const AnalyzeChunkJob = struct {
+    mapped: []const u8,
+    chunk: AnalyzeChunk,
+    result: *AnalyzeChunkResult,
+};
+
 fn analyzeDump(io: std.Io, allocator: std.mem.Allocator, options: Options) !AnalyzeStats {
     var input_file = try std.Io.Dir.cwd().openFile(io, options.input_path, .{});
     defer input_file.close(io);
@@ -487,17 +559,139 @@ fn analyzeDump(io: std.Io, allocator: std.mem.Allocator, options: Options) !Anal
     );
     defer std.posix.munmap(mapped);
 
-    try processMappedInput(
-        mapped[0..@as(usize, @intCast(stat.size))],
-        &stream_parser,
-        &page_arena,
-        &analyzer,
-    );
+    const input = mapped[0..@as(usize, @intCast(stat.size))];
+    const worker_count = analyzeThreadCount(input.len, options.limit_entries, options.worker_threads);
+    if (worker_count == 1) {
+        try processMappedInputSequential(
+            input,
+            &stream_parser,
+            &page_arena,
+            &analyzer,
+        );
+    } else {
+        try processMappedInputParallel(
+            allocator,
+            input,
+            options,
+            worker_count,
+            &analyzer,
+        );
+    }
     try writeReport(io, allocator, &analyzer);
     return analyzer.stats();
 }
 
-fn processMappedInput(
+fn analyzeThreadCount(total_input_bytes: usize, limit_entries: ?usize, thread_override: ?usize) usize {
+    if (builtin.single_threaded or limit_entries != null) return 1;
+    if (thread_override) |requested| return @max(@as(usize, 1), requested);
+    if (total_input_bytes < (32 << 20)) return 1;
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    return @max(@as(usize, 1), cpu_count);
+}
+
+fn collectAnalyzeChunksAlloc(allocator: std.mem.Allocator, mapped: []const u8, desired_chunks: usize) ![]AnalyzeChunk {
+    var starts: std.ArrayList(usize) = .empty;
+    defer starts.deinit(allocator);
+    try starts.append(allocator, 0);
+
+    for (1..desired_chunks) |chunk_index| {
+        const approx = @divTrunc(mapped.len * chunk_index, desired_chunks);
+        const page_start = std.mem.indexOfPos(u8, mapped, approx, "<page>") orelse continue;
+        if (page_start <= starts.items[starts.items.len - 1]) continue;
+        try starts.append(allocator, page_start);
+    }
+    try starts.append(allocator, mapped.len);
+
+    const chunks = try allocator.alloc(AnalyzeChunk, starts.items.len - 1);
+    for (chunks, 0..) |*chunk, idx| {
+        chunk.* = .{
+            .start = starts.items[idx],
+            .end = starts.items[idx + 1],
+        };
+    }
+    return chunks;
+}
+
+fn processMappedInputParallel(
+    allocator: std.mem.Allocator,
+    mapped: []const u8,
+    options: Options,
+    worker_count: usize,
+    analyzer: *Analyzer,
+) !void {
+    const chunks = try collectAnalyzeChunksAlloc(allocator, mapped, worker_count);
+    defer allocator.free(chunks);
+
+    const results = try allocator.alloc(AnalyzeChunkResult, chunks.len);
+    defer {
+        for (results) |*result| result.analyzer.deinit();
+        allocator.free(results);
+    }
+    for (results) |*result| {
+        result.* = .{
+            .analyzer = Analyzer.init(std.heap.smp_allocator, options),
+        };
+    }
+
+    const jobs = try allocator.alloc(AnalyzeChunkJob, chunks.len);
+    defer allocator.free(jobs);
+    for (chunks, jobs, results) |chunk, *job, *result| {
+        job.* = .{
+            .mapped = mapped,
+            .chunk = chunk,
+            .result = result,
+        };
+    }
+
+    const threads = try allocator.alloc(std.Thread, chunks.len - 1);
+    defer allocator.free(threads);
+    var started_threads: usize = 0;
+    errdefer for (threads[0..started_threads]) |thread| thread.join();
+
+    for (jobs[1..], threads) |*job, *thread| {
+        thread.* = try std.Thread.spawn(.{}, processAnalyzeChunk, .{job});
+        started_threads += 1;
+    }
+    processAnalyzeChunk(&jobs[0]);
+    for (threads[0..started_threads]) |thread| thread.join();
+
+    for (results) |*result| {
+        if (result.err) |err| return err;
+        try analyzer.mergeFrom(&result.analyzer);
+    }
+}
+
+fn processAnalyzeChunk(job: *AnalyzeChunkJob) void {
+    processAnalyzeChunkFallible(job) catch |err| {
+        job.result.err = err;
+    };
+}
+
+fn processAnalyzeChunkFallible(job: *AnalyzeChunkJob) !void {
+    var parser = StreamParser.init(std.heap.smp_allocator);
+    defer parser.deinit();
+
+    var page_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer page_arena.deinit();
+
+    var consumed = job.chunk.start;
+    while (true) {
+        const start = std.mem.indexOfPos(u8, job.mapped, consumed, "<page>") orelse break;
+        if (start >= job.chunk.end) break;
+        const end_start = std.mem.indexOfPos(u8, job.mapped, start, "</page>") orelse break;
+        const page_end = end_start + "</page>".len;
+        if (page_end > job.chunk.end) break;
+
+        const page_allocator = page_arena.allocator();
+        processPageFragment(page_allocator, &parser, job.mapped[start..page_end], &job.result.analyzer) catch |err| {
+            std.log.warn("skipping page after parse error: {}", .{err});
+        };
+        consumed = page_end;
+        _ = page_arena.reset(.retain_capacity);
+    }
+}
+
+fn processMappedInputSequential(
     mapped: []const u8,
     stream_parser: *StreamParser,
     page_arena: *std.heap.ArenaAllocator,
@@ -517,13 +711,13 @@ fn processMappedInput(
         _ = page_arena.reset(.retain_capacity);
 
         if (analyzer.options.limit_entries) |limit| {
-            if (analyzer.english_entries >= limit) break;
+            if (analyzer.language_entries >= limit) break;
         }
         if (analyzer.pages_seen != 0 and analyzer.pages_seen % 10_000 == 0) {
-            std.log.info("pages={d} ns0={d} english_entries={d}", .{
+            std.log.info("pages={d} ns0={d} language_entries={d}", .{
                 analyzer.pages_seen,
                 analyzer.namespace_zero_pages,
-                analyzer.english_entries,
+                analyzer.language_entries,
             });
         }
     }
@@ -545,13 +739,27 @@ fn processPageFragment(
     analyzer.namespace_zero_pages += 1;
 
     const text_raw = capture.text_raw orelse return;
-    if (std.mem.indexOf(u8, text_raw, "==English==") == null) return;
-
     const text = try xml_decode.decodeAlloc(allocator, text_raw);
-    const english_section = wikitext.extractEnglishSection(text) orelse return;
     const title = try xml_decode.decodeAlloc(allocator, capture.title_raw orelse return);
+    const stored_sections = (try wikitext.extractConfiguredLanguageSectionsAlloc(allocator, text, .defaultCompact())) orelse return;
 
-    try analyzer.analyzeEntry(title, english_section);
+    var section_start: ?usize = null;
+    var section_title: []const u8 = "";
+    var line_start: usize = 0;
+    while (line_start <= stored_sections.len) {
+        const next_newline = std.mem.indexOfScalarPos(u8, stored_sections, line_start, '\n') orelse stored_sections.len;
+        const raw_line = std.mem.trimEnd(u8, stored_sections[line_start..next_newline], "\r");
+        if (wikitext.parseHeadingLine(raw_line)) |heading| {
+            if (heading.level == 2) {
+                if (section_start) |start| try analyzer.analyzeEntry(title, section_title, stored_sections[start..line_start]);
+                section_start = line_start;
+                section_title = heading.title;
+            }
+        }
+        if (next_newline == stored_sections.len) break;
+        line_start = next_newline + 1;
+    }
+    if (section_start) |start| try analyzer.analyzeEntry(title, section_title, stored_sections[start..stored_sections.len]);
 }
 
 fn writeReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
@@ -573,10 +781,10 @@ fn writeTextReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer
         \\Input: {s}
         \\Pages scanned: {d}
         \\Namespace 0 pages: {d}
-        \\English entries: {d}
+        \\Language entries: {d}
         \\Heading level jumps: {d}
         \\Content before first subheading: {d}
-        \\Unbalanced English sections: {d}
+        \\Unbalanced language sections: {d}
         \\
         \\## Heading Kinds
         \\
@@ -584,7 +792,7 @@ fn writeTextReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer
         analyzer.options.input_path,
         analyzer.pages_seen,
         analyzer.namespace_zero_pages,
-        analyzer.english_entries,
+        analyzer.language_entries,
         analyzer.heading_jumps,
         analyzer.content_before_subheading,
         analyzer.unbalanced_sections,
@@ -653,10 +861,10 @@ fn writeJsonReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer
     try out.writer.print("{{\n", .{});
     try out.writer.print("  \"input\": ", .{});
     try writeJsonString(&out.writer, analyzer.options.input_path);
-    try out.writer.print(",\n  \"summary\": {{\"pages_scanned\": {d}, \"namespace_zero_pages\": {d}, \"english_entries\": {d}, \"heading_level_jumps\": {d}, \"content_before_subheading\": {d}, \"unbalanced_sections\": {d}, \"unclassified_heading_titles\": {d}}},\n", .{
+    try out.writer.print(",\n  \"summary\": {{\"pages_scanned\": {d}, \"namespace_zero_pages\": {d}, \"language_entries\": {d}, \"heading_level_jumps\": {d}, \"content_before_subheading\": {d}, \"unbalanced_sections\": {d}, \"unclassified_heading_titles\": {d}}},\n", .{
         analyzer.pages_seen,
         analyzer.namespace_zero_pages,
-        analyzer.english_entries,
+        analyzer.language_entries,
         analyzer.heading_jumps,
         analyzer.content_before_subheading,
         analyzer.unbalanced_sections,
@@ -845,7 +1053,7 @@ fn writeJsonHeadingProfilesField(writer: *std.Io.Writer, allocator: std.mem.Allo
 
     try writer.print("  \"heading_profiles\": [\n", .{});
     for (items, 0..) |item, idx| {
-        const profile = classifyHeadingTitle(item.key, if (std.mem.eql(u8, item.key, "English")) 2 else 3);
+        const profile = classifyHeadingTitle(item.key, if (looksLikeLanguageHeading(item.key)) 2 else 3);
         if (idx != 0) try writer.print(",\n", .{});
         try writer.print("    {{\"title\": ", .{});
         try writeJsonString(writer, item.key);
@@ -858,6 +1066,26 @@ fn writeJsonHeadingProfilesField(writer: *std.Io.Writer, allocator: std.mem.Allo
         try writer.print("}}", .{});
     }
     try writer.print("\n  ]", .{});
+}
+
+fn looksLikeLanguageHeading(title: []const u8) bool {
+    if (title.len == 0) return false;
+    if (isAlternativeFormsHeading(title) or
+        isEtymologyHeading(title) or
+        isTranslationHeading(title) or
+        isDescendantHeading(title) or
+        isInflectionHeading(title) or
+        isRelationHeading(title) or
+        isCitationHeading(title) or
+        isNavigationHeading(title) or
+        isNotesHeading(title) or
+        isPronunciationHeading(title) or
+        isPartOfSpeechHeading(title) or
+        isMetaHeading(title))
+    {
+        return false;
+    }
+    return true;
 }
 
 fn writeJsonString(writer: *std.Io.Writer, value: []const u8) !void {
@@ -905,14 +1133,14 @@ fn parentHeadingTitle(active_titles: [7][]const u8, level: u8) []const u8 {
     return if (parent_level == 0) "ROOT" else active_titles[parent_level];
 }
 
-fn currentHeadingLabel(active_titles: *const [7][]const u8) []const u8 {
+fn currentHeadingLabel(active_titles: *const [7][]const u8, language_title: []const u8) []const u8 {
     const level = deepestHeadingLevel(active_titles.*);
-    return if (level <= 2) "English" else active_titles[level];
+    return if (level <= 2) language_title else active_titles[level];
 }
 
-fn currentHeadingProfile(active_titles: *const [7][]const u8) HeadingProfile {
+fn currentHeadingProfile(active_titles: *const [7][]const u8, language_title: []const u8) HeadingProfile {
     const level = deepestHeadingLevel(active_titles.*);
-    if (level <= 2) return classifyHeadingTitle("English", 2);
+    if (level <= 2) return classifyHeadingTitle(language_title, 2);
     return classifyHeadingTitle(active_titles[level], level);
 }
 
@@ -927,8 +1155,8 @@ fn appendHeadingLabel(list: *std.ArrayList(u8), allocator: std.mem.Allocator, le
 }
 
 fn classifyHeadingTitle(title: []const u8, level: u8) HeadingProfile {
-    if (level == 2 and std.mem.eql(u8, title, "English")) {
-        return .{ .family = "language-root", .parser_kind = "language-root", .canonical_title = "English" };
+    if (level == 2) {
+        return .{ .family = "language-root", .parser_kind = "language-root", .canonical_title = title };
     }
     if (isAlternativeFormsHeading(title)) {
         return .{ .family = "alternative-forms", .parser_kind = "alternative-forms", .canonical_title = "Alternative forms" };
@@ -1471,6 +1699,9 @@ fn parseOptions(args: []const []const u8) !Options {
         } else if (std.mem.eql(u8, arg, "--limit") and i + 1 < args.len) {
             options.limit_entries = try std.fmt.parseInt(usize, args[i + 1], 10);
             i += 1;
+        } else if (std.mem.eql(u8, arg, "--threads") and i + 1 < args.len) {
+            options.worker_threads = try std.fmt.parseInt(usize, args[i + 1], 10);
+            i += 1;
         } else if (std.mem.eql(u8, arg, "--top") and i + 1 < args.len) {
             options.top_n = try std.fmt.parseInt(usize, args[i + 1], 10);
             i += 1;
@@ -1490,7 +1721,7 @@ fn parseOptions(args: []const []const u8) !Options {
 fn printUsage() void {
     std.debug.print(
         \\dict-structure [--input enwiktionary.xml] [--output data/wiktionary-structure.json]
-        \\               [--format json|text] [--limit 10000] [--top 50] [--samples 64]
+        \\               [--format json|text] [--limit 10000] [--threads 4] [--top 50] [--samples 64]
         \\
     , .{});
 }
@@ -1506,6 +1737,7 @@ test "line signature classifies common prefixes" {
 test "heading kind recognizes parser-known titles" {
     try std.testing.expectEqualStrings("part-of-speech", classifyHeadingTitle("Noun", 3).family);
     try std.testing.expectEqualStrings("notes", classifyHeadingTitle("Usage notes", 4).family);
+    try std.testing.expectEqualStrings("language-root", classifyHeadingTitle("Hindi", 2).family);
 }
 
 test "heading kind recognizes common wiktionary structure families" {

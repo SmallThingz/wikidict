@@ -3,7 +3,7 @@ const std = @import("std");
 
 const decoder = @import("decoder");
 const renderer = @import("renderer");
-const encoder = if (builtin.is_test) @import("encoder") else struct {};
+const parsoid = @import("parsoid");
 
 const html_render = renderer.html_render;
 
@@ -50,13 +50,13 @@ pub fn main(init: std.process.Init) !void {
 const Options = struct {
     db_path: []const u8 = "data/enwiktionary.bin",
     report_path: []const u8 = "data/parsoid-audit-report.txt",
+    parsoid_db_path: []const u8 = "data/parsoid-render.db",
     limit_entries: ?usize = null,
     start_entry: usize = 0,
     thread_count: ?usize = null,
     word_filter: ?[]const u8 = null,
     prime_cache: bool = false,
-    node_cmd: []const u8 = "node",
-    worker_path: []const u8,
+    cache_only: bool = false,
 };
 
 pub const AuditStats = struct {
@@ -136,27 +136,9 @@ const Progress = struct {
     }
 };
 
-const RequestSection = struct {
-    title: []const u8,
-    level: u8,
-    html: []const u8,
-};
-
-const WorkerRequest = struct {
-    mode: []const u8 = "compare",
-    title: []const u8,
-    raw: []const u8,
-    sections: []const RequestSection,
-};
-
-const WorkerResponse = struct {
-    ok: bool,
-    cached: ?bool = null,
-    kind: ?[]const u8 = null,
-    summary: ?[]const u8 = null,
-    our: ?[]const u8 = null,
-    parsoid: ?[]const u8 = null,
-};
+const RequestSection = parsoid.RequestSection;
+const WorkerRequest = parsoid.WorkerRequest;
+const WorkerResponse = parsoid.WorkerResponse;
 
 const FailureSample = struct {
     word: []u8,
@@ -175,40 +157,23 @@ const FailureSample = struct {
 };
 
 const WorkerClient = struct {
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    child: std.process.Child,
-    stdin_buffer: [4096]u8 = undefined,
-    stdout_buffer: [512 * 1024]u8 = undefined,
+    local_worker: parsoid.LocalWorker,
 
-    fn init(allocator: std.mem.Allocator, io: std.Io, options: Options) !WorkerClient {
-        var child = try std.process.spawn(io, .{
-            .argv = &.{ options.node_cmd, options.worker_path },
-            .stdin = .pipe,
-            .stdout = .pipe,
-            .stderr = .ignore,
-        });
-        errdefer child.kill(io);
-
+    fn init(allocator: std.mem.Allocator, io: std.Io, options: Options, entry_count: usize) !WorkerClient {
         return .{
-            .allocator = allocator,
-            .io = io,
-            .child = child,
+            .local_worker = try parsoid.LocalWorker.init(allocator, io, entry_count, .{
+                .cache_path = options.parsoid_db_path,
+                .cache_only = options.cache_only,
+            }),
         };
     }
 
     fn deinit(self: *WorkerClient) void {
-        self.child.kill(self.io);
+        self.local_worker.deinit();
     }
 
     fn compare(self: *WorkerClient, allocator: std.mem.Allocator, request: WorkerRequest) !WorkerResponse {
-        var writer = self.child.stdin.?.writerStreaming(self.io, &self.stdin_buffer);
-        try writer.interface.print("{f}\n", .{std.json.fmt(request, .{})});
-        try writer.flush();
-
-        var reader = self.child.stdout.?.readerStreaming(self.io, &self.stdout_buffer);
-        const line = (try reader.interface.takeDelimiter('\n')) orelse return error.UnexpectedEndOfStream;
-        return try std.json.parseFromSliceLeaky(WorkerResponse, allocator, line, .{});
+        return self.local_worker.compare(allocator, request);
     }
 };
 
@@ -217,6 +182,7 @@ const Auditor = struct {
     io: std.Io,
     options: Options,
     dict: decoder.Dictionary,
+    db_tag: []u8,
     total_entries: usize,
     progress: Progress,
     state_mutex: std.Io.Mutex = .init,
@@ -235,12 +201,16 @@ const Auditor = struct {
         var dict = try decoder.openDictionary(allocator, io, options.db_path);
         errdefer dict.deinit();
 
+        const db_tag = try computeDbTag(allocator, io, options.db_path);
+        errdefer allocator.free(db_tag);
+
         const total_entries = countTargetEntries(&dict, options);
         return .{
             .allocator = allocator,
             .io = io,
             .options = options,
             .dict = dict,
+            .db_tag = db_tag,
             .total_entries = total_entries,
             .report = .init(allocator),
             .progress = Progress.init(total_entries),
@@ -251,6 +221,7 @@ const Auditor = struct {
         for (self.samples.items) |*sample| sample.deinit(self.allocator);
         self.samples.deinit(self.allocator);
         self.report.deinit();
+        self.allocator.free(self.db_tag);
         self.dict.deinit();
     }
 
@@ -311,7 +282,7 @@ const Auditor = struct {
         self.progress.maybeRender(self, processed);
     }
 
-    fn addSample(self: *Auditor, word: []const u8, kind: []const u8, summary: []const u8, our: []const u8, parsoid: []const u8) !void {
+    fn addSample(self: *Auditor, word: []const u8, kind: []const u8, summary: []const u8, our: []const u8, parsoid_text: []const u8) !void {
         self.state_mutex.lockUncancelable(self.io);
         defer self.state_mutex.unlock(self.io);
         try self.samples.append(self.allocator, .{
@@ -319,7 +290,7 @@ const Auditor = struct {
             .kind = try self.allocator.dupe(u8, kind),
             .summary = try self.allocator.dupe(u8, summary),
             .our = try self.allocator.dupe(u8, our),
-            .parsoid = try self.allocator.dupe(u8, parsoid),
+            .parsoid = try self.allocator.dupe(u8, parsoid_text),
         });
     }
 
@@ -362,8 +333,12 @@ const Auditor = struct {
         try self.report.writer.print(
             "Parsoid comparison audit report\n" ++
                 "db: {s}\n" ++
+                "parsoid_db: {s}\n" ++
                 "limit: ",
-            .{self.options.db_path},
+            .{
+                self.options.db_path,
+                self.options.parsoid_db_path,
+            },
         );
         if (self.options.limit_entries) |limit| {
             try self.report.writer.print("{d}\n", .{limit});
@@ -372,7 +347,8 @@ const Auditor = struct {
         }
         try self.report.writer.print(
             "word_filter: {s}\n" ++
-                "worker: {s}\n\n" ++
+                "worker: {s}\n" ++
+                "cache_only: {}\n\n" ++
                 "threads: {d}\n\n" ++
                 "Summary\n" ++
                 "-------\n" ++
@@ -386,7 +362,8 @@ const Auditor = struct {
                 "worker_errors: {d}\n\n",
             .{
                 self.options.word_filter orelse "<none>",
-                self.options.worker_path,
+                "local-zig",
+                self.options.cache_only,
                 resolvedThreadCount(self.total_entries, self.options.thread_count, self.options.prime_cache),
                 stats.entries_scanned,
                 stats.raw_entries_scanned,
@@ -464,7 +441,7 @@ fn auditWorkerMain(args: WorkerArgs) void {
     var arena = std.heap.ArenaAllocator.init(args.auditor.allocator);
     defer arena.deinit();
 
-    var worker = WorkerClient.init(args.auditor.allocator, args.auditor.io, args.auditor.options) catch |err| {
+    var worker = WorkerClient.init(args.auditor.allocator, args.auditor.io, args.auditor.options, args.auditor.dict.entries.len) catch |err| {
         args.auditor.noteFatal(err);
         return;
     };
@@ -543,6 +520,8 @@ fn auditWorkerMain(args: WorkerArgs) void {
 
         const response = worker.compare(arena.allocator(), .{
             .mode = if (args.auditor.options.prime_cache) "prime" else "compare",
+            .db_tag = args.auditor.db_tag,
+            .entry_index = idx,
             .title = entry.word(),
             .raw = audit_raw,
             .sections = request_sections,
@@ -575,10 +554,12 @@ fn partitionEnd(total: usize, part_count: usize, part_index: usize) usize {
 }
 
 fn resolvedThreadCount(total_entries: usize, thread_override: ?usize, prime_cache: bool) usize {
-    if (builtin.single_threaded or total_entries < 128) return 1;
-    if (thread_override) |requested| return @max(@as(usize, 1), @min(total_entries, requested));
     _ = prime_cache;
-    return 1;
+    if (builtin.single_threaded or total_entries == 0) return 1;
+    if (thread_override) |requested| return @max(@as(usize, 1), @min(total_entries, requested));
+
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    return @max(@as(usize, 1), @min(total_entries, cpu_count));
 }
 
 fn stripAuditExcludedWikitextAlloc(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
@@ -978,10 +959,17 @@ fn scanEntryEnd(dict: *const decoder.Dictionary, options: Options) usize {
     return start + @min(options.limit_entries orelse remaining, remaining);
 }
 
+fn computeDbTag(allocator: std.mem.Allocator, io: std.Io, db_path: []const u8) ![]u8 {
+    const stat = try std.Io.Dir.cwd().statFile(io, db_path, .{});
+    return std.fmt.allocPrint(allocator, "{s}|{d}|{d}", .{
+        db_path,
+        stat.size,
+        stat.mtime.nanoseconds,
+    });
+}
+
 fn parseOptions(_: std.mem.Allocator, args: []const []const u8) !Options {
-    var options = Options{
-        .worker_path = "tools/parsoid-audit-worker/worker.mjs",
-    };
+    var options = Options{};
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -991,6 +979,9 @@ fn parseOptions(_: std.mem.Allocator, args: []const []const u8) !Options {
             i += 1;
         } else if (std.mem.eql(u8, arg, "--report") and i + 1 < args.len) {
             options.report_path = args[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--parsoid-db") and i + 1 < args.len) {
+            options.parsoid_db_path = args[i + 1];
             i += 1;
         } else if (std.mem.eql(u8, arg, "--start") and i + 1 < args.len) {
             options.start_entry = try std.fmt.parseInt(usize, args[i + 1], 10);
@@ -1007,12 +998,8 @@ fn parseOptions(_: std.mem.Allocator, args: []const []const u8) !Options {
             i += 1;
         } else if (std.mem.eql(u8, arg, "--prime-cache")) {
             options.prime_cache = true;
-        } else if (std.mem.eql(u8, arg, "--node") and i + 1 < args.len) {
-            options.node_cmd = args[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, arg, "--worker") and i + 1 < args.len) {
-            options.worker_path = args[i + 1];
-            i += 1;
+        } else if (std.mem.eql(u8, arg, "--cache-only")) {
+            options.cache_only = true;
         } else if (std.mem.eql(u8, arg, "--help")) {
             printUsage();
             std.process.exit(0);
@@ -1026,15 +1013,15 @@ fn parseOptions(_: std.mem.Allocator, args: []const []const u8) !Options {
 
 fn printUsage() void {
     std.debug.print(
-        \\dict-parsoid-test [--db data/enwiktionary.bin]
-        \\                  [--report data/parsoid-audit-report.txt]
-        \\                  [--start 0]
-        \\                  [--limit 100]
-        \\                  [--threads N]
-        \\                  [--word entry]
-        \\                  [--prime-cache]
-        \\                  [--node node]
-        \\                  [--worker tools/parsoid-audit-worker/worker.mjs]
+        \\dict-render-test [--db data/enwiktionary.bin]
+        \\                 [--report data/parsoid-audit-report.txt]
+        \\                 [--parsoid-db data/parsoid-render.db]
+        \\                 [--start 0]
+        \\                 [--limit 100]
+        \\                 [--threads N]
+        \\                 [--word entry]
+        \\                 [--prime-cache]
+        \\                 [--cache-only]
         \\
     , .{});
 }
@@ -1050,93 +1037,25 @@ fn writeReportFile(io: std.Io, report_path: []const u8, bytes: []const u8) !void
     try file.writePositionalAll(io, bytes, 0);
 }
 
-fn writeTestFile(dir: std.Io.Dir, name: []const u8, contents: []const u8) !void {
-    var file = try dir.createFile(std.testing.io, name, .{ .truncate = true });
-    defer file.close(std.testing.io);
-    try file.writePositionalAll(std.testing.io, contents, 0);
-}
-
-fn tempPath(allocator: std.mem.Allocator, sub_path: []const u8, name: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ sub_path, name });
-}
-
-test "parseOptions parses worker and word flags" {
-    const args = [_][]const u8{ "--db", "dict.bin", "--word", "ring", "--worker", "worker.mjs", "--start", "12", "--threads", "3" };
+test "parseOptions parses word and thread flags" {
+    const args = [_][]const u8{ "--db", "dict.bin", "--word", "ring", "--start", "12", "--threads", "3" };
     const options = try parseOptions(std.testing.allocator, &args);
     try std.testing.expectEqualStrings("dict.bin", options.db_path);
     try std.testing.expectEqualStrings("ring", options.word_filter.?);
-    try std.testing.expectEqualStrings("worker.mjs", options.worker_path);
     try std.testing.expectEqual(@as(usize, 12), options.start_entry);
     try std.testing.expectEqual(@as(usize, 3), options.thread_count.?);
 }
 
 test "parseOptions parses prime-cache flag" {
-    const args = [_][]const u8{ "--prime-cache" };
+    const args = [_][]const u8{"--prime-cache"};
     const options = try parseOptions(std.testing.allocator, &args);
     try std.testing.expect(options.prime_cache);
 }
 
-test "resolvedThreadCount defaults to one worker for remote parsoid audits" {
-    try std.testing.expectEqual(@as(usize, 1), resolvedThreadCount(1000, null, false));
-    try std.testing.expectEqual(@as(usize, 1), resolvedThreadCount(1000, null, true));
+test "resolvedThreadCount defaults to max threads for parsoid audits" {
+    const expected = @max(@as(usize, 1), std.Thread.getCpuCount() catch 1);
+    try std.testing.expectEqual(@min(@as(usize, 1000), expected), resolvedThreadCount(1000, null, false));
+    try std.testing.expectEqual(@min(@as(usize, 1000), expected), resolvedThreadCount(1000, null, true));
+    try std.testing.expectEqual(@as(usize, 1), resolvedThreadCount(1, null, false));
     try std.testing.expectEqual(@as(usize, 4), resolvedThreadCount(1000, 4, false));
-}
-
-test "auditDictionary records mismatches from fake worker" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const xml =
-        \\<mediawiki>
-        \\<page>
-        \\<title>ring</title>
-        \\<ns>0</ns>
-        \\<revision><text xml:space="preserve">==English==
-        \\===Noun===
-        \\# [[loop]]
-        \\</text></revision>
-        \\</page>
-        \\</mediawiki>
-    ;
-    const worker_script =
-        \\import readline from "node:readline";
-        \\const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-        \\for await (const line of rl) {
-        \\  const req = JSON.parse(line);
-        \\  if (req.title === "ring") {
-        \\    process.stdout.write(JSON.stringify({ ok: false, kind: "mismatch", summary: "forced mismatch", our: "ours", parsoid: "theirs" }) + "\n");
-        \\  } else {
-        \\    process.stdout.write(JSON.stringify({ ok: true }) + "\n");
-        \\  }
-        \\}
-    ;
-
-    try writeTestFile(tmp.dir, "sample.xml", xml);
-    try writeTestFile(tmp.dir, "fake-worker.mjs", worker_script);
-
-    const xml_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "sample.xml");
-    defer std.testing.allocator.free(xml_rel);
-    const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
-    defer std.testing.allocator.free(db_rel);
-    const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "parsoid-report.txt");
-    defer std.testing.allocator.free(report_rel);
-    const worker_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "fake-worker.mjs");
-    defer std.testing.allocator.free(worker_rel);
-
-    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
-        .input_path = xml_rel,
-        .output_path = db_rel,
-    });
-
-    const stats = try auditDictionary(std.testing.io, std.testing.allocator, .{
-        .db_path = db_rel,
-        .report_path = report_rel,
-        .limit_entries = 1,
-        .node_cmd = "node",
-        .worker_path = worker_rel,
-    });
-
-    try std.testing.expectEqual(@as(usize, 1), stats.entries_scanned);
-    try std.testing.expectEqual(@as(usize, 1), stats.mismatches);
-    try std.testing.expectEqual(@as(usize, 0), stats.worker_errors);
 }

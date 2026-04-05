@@ -9,7 +9,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (args.len >= 2 and std.mem.eql(u8, args[1], "help")) {
         std.debug.print(
-            \\dict-encoder [build] --input enwiktionary.xml --output data/enwiktionary.bin [--limit 10000]
+            \\dict-encoder [build] --input enwiktionary.xml --output data/enwiktionary.bin [--limit 10000] [--threads 4]
             \\
         , .{});
         return;
@@ -20,11 +20,13 @@ pub fn main(init: std.process.Init) !void {
     const input = cli_args.flagValue(cmd_args, "--input") orelse "enwiktionary.xml";
     const output = cli_args.flagValue(cmd_args, "--output") orelse "data/enwiktionary.bin";
     const limit = try cli_args.parseOptionalIntFlag(usize, cmd_args, "--limit");
+    const worker_threads = try cli_args.parseOptionalIntFlag(usize, cmd_args, "--threads");
 
     const stats = try encoder.buildDictionary(init.io, allocator, .{
         .input_path = input,
         .output_path = output,
         .limit_entries = limit,
+        .worker_threads = worker_threads,
     });
 
     std.debug.print(

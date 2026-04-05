@@ -90,6 +90,7 @@ const LogicalBalance = struct {
                 i += 2;
                 continue;
             }
+            if (self.comments != 0) continue;
             if (i + 2 <= line.len and std.mem.eql(u8, line[i .. i + 2], "{{")) {
                 self.templates += 1;
                 i += 1;
@@ -1136,6 +1137,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "coefficient",
         "coi",
         "collocation",
+        "clip",
         "cot",
         "coord",
         "coordinate terms",
@@ -1160,12 +1162,14 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "etymon",
         "etymid",
         "examples",
+        "ellipsis",
         "good",
         "frac",
         "gloss",
         "glossary",
         "gbooks",
         "given name",
+        "deverbal",
         "head",
         "hmp",
         "homophone",
@@ -1292,6 +1296,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "...",
         "+obj",
         "attn",
+        "acronym",
         "bf",
         "B.C.",
         "B.C.E.",
@@ -1314,6 +1319,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "mero",
         "meronyms",
         "comeronyms",
+        "name translit",
         "holonyms",
         "holo",
         "named-after",
@@ -1331,9 +1337,11 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "rfv-sense",
         "alt case",
         "alt case form",
+        "obs sp",
         "alt spell",
         "altcase",
         "altform",
+        "apocopic form",
         "aphetic form",
         "cal",
         "circa",
@@ -1382,6 +1390,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "section link",
         "sl",
         "suffixusex",
+        "surface analysis",
         "table:xiangqi pieces/en",
         "term-label",
         "abbrev",
@@ -1399,10 +1408,12 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "century",
         "attention",
         "bottom",
+        "backformation",
         "col-bottom",
         "col-top",
         "inherited",
         "ll",
+        "unknown",
         "long s",
         "lena",
         "ltc-l",
@@ -2093,6 +2104,13 @@ fn renderTemplateHtml(
         try renderAlternativeFormsTemplateHtml(out, allocator, &parts, options);
         return;
     }
+    if (templateMatchesHtml(name, "deverbal")) {
+        try renderSimpleRelationTemplateHtml(out, allocator, &parts, .{
+            .label = "Deverbal",
+            .tail = " from ",
+        }, options);
+        return;
+    }
     if (isEtymologyLexemeTemplateHtml(name)) {
         try renderEtymologyLexemeTemplateHtml(out, allocator, name, &parts, options);
         return;
@@ -2107,6 +2125,10 @@ fn renderTemplateHtml(
     }
     if (templateMatchesHtml(name, "given name")) {
         try renderNominalTemplateHtml(out, allocator, &parts, "given name", options);
+        return;
+    }
+    if (templateMatchesHtml(name, "name translit")) {
+        try renderNameTranslitTemplateHtml(out, allocator, &parts, options);
         return;
     }
     if (templateMatchesHtml(name, "onom") or templateMatchesHtml(name, "onomatopoeic")) {
@@ -2204,6 +2226,14 @@ fn renderTemplateHtml(
         try appendPositionalTemplateTargetsHtml(out, allocator, &parts, 1, " + ", options);
         return;
     }
+    if (templateMatchesHtml(name, "surface analysis")) {
+        try renderSimpleRelationTemplateHtml(out, allocator, &parts, .{
+            .label = "Surface analysis",
+            .tail = " of ",
+            .separator = " + ",
+        }, options);
+        return;
+    }
     if (templateMatchesHtml(name, "doublet") or templateMatchesHtml(name, "dbt")) {
         try appendEscapedHtmlSlice(out, allocator, "Doublet of ");
         try appendPositionalTemplateTargetsNaturalHtml(out, allocator, &parts, if (looksLikeLanguageCodeHtml(templatePositionalHtml(&parts, 0) orelse "")) 1 else 0, options);
@@ -2211,6 +2241,10 @@ fn renderTemplateHtml(
     }
     if (templateMatchesHtml(name, "unk")) {
         try appendEscapedHtmlSlice(out, allocator, "Unknown");
+        return;
+    }
+    if (templateMatchesHtml(name, "unknown")) {
+        try renderUnknownTemplateHtml(out, allocator, &parts);
         return;
     }
     if (templateMatchesHtml(name, "glossary")) {
@@ -2685,10 +2719,12 @@ fn expandedTemplateForName(name: []const u8) ?TemplateExpansion {
         .{ .name = "clip of", .display = "Clipping", .link_target = "clipping", .tail = " of " },
         .{ .name = "clipping", .display = "Clipping", .link_target = "clipping", .tail = " of " },
         .{ .name = "clipping of", .display = "Clipping", .link_target = "clipping", .tail = " of " },
+        .{ .name = "ellipsis", .display = "Ellipsis", .link_target = null, .tail = " of " },
         .{ .name = "ellipsis of", .display = "Ellipsis", .link_target = null, .tail = " of " },
         .{ .name = "bf", .display = "Back-formation", .link_target = "back-formation", .tail = " from " },
         .{ .name = "back-form", .display = "Back-formation", .link_target = "back-formation", .tail = " from " },
         .{ .name = "back-formation", .display = "Back-formation", .link_target = "back-formation", .tail = " from " },
+        .{ .name = "backformation", .display = "Back-formation", .link_target = "back-formation", .tail = " from " },
         .{ .name = "alt form", .display = "Alternative form", .link_target = null, .tail = " of " },
         .{ .name = "alt form of", .display = "Alternative form", .link_target = null, .tail = " of " },
         .{ .name = "altform", .display = "Alternative form", .link_target = null, .tail = " of " },
@@ -2699,8 +2735,10 @@ fn expandedTemplateForName(name: []const u8) ?TemplateExpansion {
         .{ .name = "alt case", .display = "Alternative case form", .link_target = null, .tail = " of " },
         .{ .name = "alt case form", .display = "Alternative case form", .link_target = null, .tail = " of " },
         .{ .name = "alternative case form of", .display = "Alternative case form", .link_target = null, .tail = " of " },
+        .{ .name = "apocopic form", .display = "Apocopic form", .link_target = null, .tail = " of " },
         .{ .name = "aphetic form", .display = "Aphetic form", .link_target = null, .tail = " of " },
         .{ .name = "obs form", .display = "Obsolete form", .link_target = null, .tail = " of " },
+        .{ .name = "obs sp", .display = "Obsolete spelling", .link_target = null, .tail = " of " },
         .{ .name = "dated form", .display = "Dated form", .link_target = null, .tail = " of " },
         .{ .name = "partial calque", .display = "Partial calque", .link_target = null, .tail = " of " },
         .{ .name = "short for", .display = "Short", .link_target = null, .tail = " for " },
@@ -3271,6 +3309,82 @@ fn renderNominalTemplateHtml(
     }
 }
 
+const SimpleRelationTemplateHtml = struct {
+    label: []const u8,
+    tail: []const u8,
+    separator: []const u8 = ", ",
+};
+
+fn renderSimpleRelationTemplateHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    spec: SimpleRelationTemplateHtml,
+    options: RenderOptions,
+) anyerror!void {
+    const start_index: usize = if (looksLikeLanguageCodeHtml(templatePositionalHtml(parts, 0) orelse "")) 1 else 0;
+    const capitalize = !templateFlagEnabledHtml(parts, "nocap");
+
+    const label = if (capitalize)
+        spec.label
+    else
+        try lowercaseFirstAsciiAlloc(allocator, spec.label);
+    defer if (!capitalize) allocator.free(label);
+
+    try appendEscapedHtmlSlice(out, allocator, label);
+    try appendEscapedHtmlSlice(out, allocator, spec.tail);
+    try appendPositionalTemplateTargetsHtml(out, allocator, parts, start_index, spec.separator, options);
+}
+
+fn renderUnknownTemplateHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+) !void {
+    const base = templateNamedHtml(parts, "title") orelse
+        templateNamedHtml(parts, "t") orelse
+        templateNamedHtml(parts, "gloss") orelse
+        "Origin unknown";
+    const capitalize = !templateFlagEnabledHtml(parts, "nocap");
+
+    const rendered = if (capitalize)
+        trimWikiWhitespace(base)
+    else
+        try lowercaseFirstAsciiAlloc(allocator, trimWikiWhitespace(base));
+    defer if (!capitalize) allocator.free(rendered);
+
+    try appendEscapedHtmlSlice(out, allocator, rendered);
+}
+
+fn renderNameTranslitTemplateHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    options: RenderOptions,
+) anyerror!void {
+    const source_language = templatePositionalHtml(parts, 1) orelse templatePositionalHtml(parts, 0);
+    const raw_term = templatePositionalHtml(parts, 2) orelse templatePositionalHtml(parts, 1) orelse return;
+    const type_value = trimWikiWhitespace(templateNamedHtml(parts, "type") orelse "name");
+
+    var phrase: std.ArrayList(u8) = .empty;
+    defer phrase.deinit(allocator);
+    try appendEscapedHtmlSlice(&phrase, allocator, "transliteration of ");
+    if (source_language) |code| {
+        if (languageDisplayHtml(code)) |display| {
+            try appendEscapedHtmlSlice(&phrase, allocator, "the ");
+            try appendEscapedHtmlSlice(&phrase, allocator, display);
+            try phrase.append(allocator, ' ');
+        }
+    }
+    try appendEscapedHtmlSlice(&phrase, allocator, if (type_value.len != 0) type_value else "name");
+
+    try appendEscapedHtmlSlice(out, allocator, chooseIndefiniteArticleHtml(phrase.items, true));
+    try out.append(allocator, ' ');
+    try out.appendSlice(allocator, phrase.items);
+    try out.append(allocator, ' ');
+    try renderTemplateTargetHtml(out, allocator, raw_term, options);
+}
+
 fn appendNominalOriginHtml(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -3300,6 +3414,16 @@ fn appendNominalOriginHtml(
 
     try out.appendSlice(allocator, " from ");
     try renderTemplateTargetHtml(out, allocator, trimmed, options);
+}
+
+fn templateFlagEnabledHtml(parts: *const std.ArrayList([]const u8), name: []const u8) bool {
+    const value = templateNamedHtml(parts, name) orelse return false;
+    const trimmed = trimWikiWhitespace(value);
+    if (trimmed.len == 0) return true;
+    return !(std.ascii.eqlIgnoreCase(trimmed, "0") or
+        std.ascii.eqlIgnoreCase(trimmed, "false") or
+        std.ascii.eqlIgnoreCase(trimmed, "no") or
+        std.ascii.eqlIgnoreCase(trimmed, "off"));
 }
 
 fn normalizeNominalOriginPhraseAlloc(

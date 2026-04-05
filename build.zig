@@ -57,6 +57,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     renderer_mod.addImport("shared_html_entities", shared_html_entities_mod);
+    const parsoid_mod = b.addModule("parsoid", .{
+        .root_source_file = b.path("parsoid/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    parsoid_mod.addImport("renderer", renderer_mod);
 
     const encoder_mod = b.addModule("encoder", .{
         .root_source_file = b.path("encoder/root.zig"),
@@ -123,14 +129,11 @@ pub fn build(b: *std.Build) void {
         .{ .name = "decoder", .module = decoder_mod },
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
     });
-    const render_tester_exe = addCliExecutable(b, "dict-render-test", b.path("tools/render_tester.zig"), target, structure_optimize, &.{
-        .{ .name = "decoder", .module = decoder_mod },
-        .{ .name = "renderer", .module = renderer_mod },
-    });
-    const parsoid_tester_exe = addCliExecutable(b, "dict-parsoid-test", b.path("tools/parsoid_tester.zig"), target, optimize, &.{
+    const render_tester_exe = addCliExecutable(b, "dict-render-test", b.path("tools/parsoid_tester.zig"), target, optimize, &.{
         .{ .name = "decoder", .module = decoder_mod },
         .{ .name = "renderer", .module = renderer_mod },
         .{ .name = "encoder", .module = encoder_mod },
+        .{ .name = "parsoid", .module = parsoid_mod },
     });
 
     b.installArtifact(encoder_exe);
@@ -139,33 +142,14 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(structure_exe);
     b.installArtifact(verifier_exe);
     b.installArtifact(render_tester_exe);
-    b.installArtifact(parsoid_tester_exe);
 
     addRunStep(b, "encode", "Run the encoder CLI", encoder_exe, &.{});
     addRunStep(b, "decode", "Run the decoder CLI", decoder_exe, &.{});
     addRunStep(b, "serve", "Run the backend server", backend_exe, &.{});
     addRunStep(b, "structure", "Analyze Wiktionary structure", structure_exe, &.{});
     addRunStep(b, "verify", "Verify dictionary raw entries against the XML dump", verifier_exe, &.{});
-    addRunStep(b, "render-test", "Strictly render all stored raw entries and report failures", render_tester_exe, &.{});
-
-    {
-        const cmd = b.addSystemCommand(&.{ "bash", "tools/parsoid-audit" });
-        cmd.addFileArg(parsoid_tester_exe.getEmittedBin());
-        if (b.args) |args| cmd.addArgs(args);
-
-        const step = b.step("parsoid-test", "Compare rendered sections against Parsoid output");
-        step.dependOn(&cmd.step);
-    }
-
-    {
-        const cmd = b.addSystemCommand(&.{ "bash", "tools/parsoid-audit" });
-        cmd.addFileArg(parsoid_tester_exe.getEmittedBin());
-        cmd.addArgs(&.{ "--prime-cache", "--threads", "4" });
-        if (b.args) |args| cmd.addArgs(args);
-
-        const step = b.step("parsoid-runner", "Populate the local Parsoid cache database");
-        step.dependOn(&cmd.step);
-    }
+    addRunStep(b, "render-test", "Compare rendered sections against the local cached reference output", render_tester_exe, &.{});
+    addRunStep(b, "populate-db", "Populate the local rendered-reference cache database", render_tester_exe, &.{ "--prime-cache" });
 
     {
         const cmd = b.addSystemCommand(&.{ "bash", "tools/frontend" });
@@ -240,6 +224,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "decoder", .module = decoder_mod },
                 .{ .name = "renderer", .module = renderer_mod },
                 .{ .name = "encoder", .module = encoder_mod },
+                .{ .name = "parsoid", .module = parsoid_mod },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -396,7 +381,10 @@ fn addGeneratedStructureTableModules(
 fn generateStructureTableSource(b: *std.Build) ![]const u8 {
     const allocator = b.allocator;
     const report_path = b.pathFromRoot("data/wiktionary-structure.json");
-    const json_bytes = try readFileAllocAbsolute(allocator, report_path, 64 * 1024 * 1024);
+    const json_bytes = readFileAllocAbsolute(allocator, report_path, 64 * 1024 * 1024) catch |err| switch (err) {
+        error.FileNotFound => try allocator.dupe(u8, default_structure_report_json),
+        else => return err,
+    };
     defer allocator.free(json_bytes);
 
     var parsed = try std.json.parseFromSlice(StructureReport, allocator, json_bytes, .{
@@ -736,10 +724,102 @@ fn generateStructureTableSource(b: *std.Build) ![]const u8 {
         try appendZigStringLiteral(writer, label_entry.label);
         try writer.writeAll(" },\n");
     }
-    try writer.writeAll("};\n");
+    try writer.writeAll(
+        \\};
+        \\
+        \\fn fingerprintUpdateString(hasher: *std.hash.Wyhash, value: []const u8) void {
+        \\    var len_buf: [8]u8 = undefined;
+        \\    std.mem.writeInt(u64, &len_buf, value.len, .little);
+        \\    hasher.update(&len_buf);
+        \\    hasher.update(value);
+        \\}
+        \\
+        \\pub const structure_fingerprint: u32 = blk: {
+        \\    @setEvalBranchQuota(1_000_000);
+        \\    var hasher = std.hash.Wyhash.init(0x8f3c2d17c4a9b651);
+        \\
+        \\    for (heading_level_specs) |entry| {
+        \\        var code_buf: [2]u8 = undefined;
+        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
+        \\        hasher.update(&code_buf);
+        \\        hasher.update(&[_]u8{entry.level});
+        \\        fingerprintUpdateString(&hasher, entry.title);
+        \\        hasher.update(&[_]u8{@intFromEnum(entry.kind)});
+        \\    }
+        \\    for (heading_specs) |entry| {
+        \\        var code_buf: [2]u8 = undefined;
+        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
+        \\        hasher.update(&code_buf);
+        \\        fingerprintUpdateString(&hasher, entry.title);
+        \\        hasher.update(&[_]u8{@intFromEnum(entry.kind)});
+        \\    }
+        \\    for (line_templates) |entry| {
+        \\        var code_buf: [2]u8 = undefined;
+        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
+        \\        hasher.update(&code_buf);
+        \\        fingerprintUpdateString(&hasher, entry.name);
+        \\    }
+        \\    for (compact_patterns) |entry| {
+        \\        fingerprintUpdateString(&hasher, entry);
+        \\    }
+        \\    for (compact_patterns_ext) |entry| {
+        \\        fingerprintUpdateString(&hasher, entry);
+        \\    }
+        \\    for (translation_templates) |entry| {
+        \\        var code_buf: [2]u8 = undefined;
+        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
+        \\        hasher.update(&code_buf);
+        \\        fingerprintUpdateString(&hasher, entry.name);
+        \\    }
+        \\    for (target_languages) |entry| {
+        \\        var code_buf: [2]u8 = undefined;
+        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
+        \\        hasher.update(&code_buf);
+        \\        fingerprintUpdateString(&hasher, entry.value);
+        \\    }
+        \\    for (language_labels) |entry| {
+        \\        var code_buf: [2]u8 = undefined;
+        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
+        \\        hasher.update(&code_buf);
+        \\        fingerprintUpdateString(&hasher, entry.label);
+        \\    }
+        \\
+        \\    break :blk @as(u32, @truncate(hasher.final()));
+        \\};
+        \\
+    );
 
     return allocator.dupe(u8, out.written());
 }
+
+const default_structure_report_json =
+    \\{
+    \\  "heading_profiles": [
+    \\    { "title": "English", "parser_kind": "language-root", "count": 1 },
+    \\    { "title": "Noun", "parser_kind": "part-of-speech", "count": 1 },
+    \\    { "title": "Verb", "parser_kind": "part-of-speech", "count": 1 },
+    \\    { "title": "Adjective", "parser_kind": "part-of-speech", "count": 1 },
+    \\    { "title": "Proper noun", "parser_kind": "part-of-speech", "count": 1 },
+    \\    { "title": "Etymology", "parser_kind": "etymology", "count": 1 },
+    \\    { "title": "Pronunciation", "parser_kind": "pronunciation", "count": 1 },
+    \\    { "title": "Alternative forms", "parser_kind": "alternative-forms", "count": 1 },
+    \\    { "title": "Translations", "parser_kind": "translations", "count": 1 },
+    \\    { "title": "Derived terms", "parser_kind": "relations", "count": 1 },
+    \\    { "title": "Synonyms", "parser_kind": "relations", "count": 1 },
+    \\    { "title": "Usage notes", "parser_kind": "notes", "count": 1 },
+    \\    { "title": "Conjugation", "parser_kind": "inflection", "count": 1 },
+    \\    { "title": "Descendants", "parser_kind": "descendants", "count": 1 },
+    \\    { "title": "See also", "parser_kind": "navigation", "count": 1 },
+    \\    { "title": "References", "parser_kind": "citations", "count": 1 },
+    \\    { "title": "Further reading", "parser_kind": "citations", "count": 1 },
+    \\    { "title": "Quotations", "parser_kind": "citations", "count": 1 }
+    \\  ],
+    \\  "headings_by_level": [],
+    \\  "translation_source_labels": [],
+    \\  "translation_target_languages": [],
+    \\  "templates_by_heading": []
+    \\}
+;
 
 fn readFileAllocAbsolute(allocator: std.mem.Allocator, path: []const u8, max_bytes: usize) ![]u8 {
     const io = std.Options.debug_io;

@@ -46,6 +46,7 @@ pub fn main(init: std.process.Init) !void {
 const Options = struct {
     db_path: []const u8 = "data/enwiktionary.bin",
     report_path: []const u8 = "data/render-report.txt",
+    start_entry: usize = 0,
     limit_entries: ?usize = null,
     thread_count: ?usize = null,
     sample_limit: usize = 4,
@@ -193,7 +194,9 @@ const Auditor = struct {
         var dict = try decoder.openDictionary(allocator, io, options.db_path);
         errdefer dict.deinit();
 
-        const total_entries = @min(options.limit_entries orelse dict.entries.len, dict.entries.len);
+        const start = @min(options.start_entry, dict.entries.len);
+        const remaining = dict.entries.len - start;
+        const total_entries = @min(options.limit_entries orelse remaining, remaining);
         return .{
             .allocator = allocator,
             .io = io,
@@ -367,9 +370,11 @@ const Auditor = struct {
         try self.report.writer.print(
             "Strict render audit report\n" ++
                 "db: {s}\n" ++
+                "start: {d}\n" ++
                 "limit: ",
             .{
                 self.options.db_path,
+                self.options.start_entry,
             },
         );
         if (self.options.limit_entries) |limit| {
@@ -540,14 +545,18 @@ pub fn auditDictionary(io: std.Io, allocator: std.mem.Allocator, options: Option
 
     const thread_count = resolvedThreadCount(auditor.total_entries, options.thread_count);
     if (thread_count == 1) {
-        renderWorkerMain(.{ .auditor = &auditor, .start = 0, .end = auditor.total_entries });
+        renderWorkerMain(.{
+            .auditor = &auditor,
+            .start = options.start_entry,
+            .end = options.start_entry + auditor.total_entries,
+        });
     } else {
         const workers = try allocator.alloc(std.Thread, thread_count);
         defer allocator.free(workers);
 
-        var start: usize = 0;
+        var start: usize = options.start_entry;
         for (workers, 0..) |*worker, idx| {
-            const end = partitionEnd(auditor.total_entries, thread_count, idx);
+            const end = options.start_entry + partitionEnd(auditor.total_entries, thread_count, idx);
             worker.* = try std.Thread.spawn(.{}, renderWorkerMain, .{
                 WorkerArgs{
                     .auditor = &auditor,
@@ -673,6 +682,9 @@ fn parseOptions(args: []const []const u8) !Options {
         } else if (std.mem.eql(u8, arg, "--report") and i + 1 < args.len) {
             options.report_path = args[i + 1];
             i += 1;
+        } else if (std.mem.eql(u8, arg, "--start") and i + 1 < args.len) {
+            options.start_entry = try std.fmt.parseInt(usize, args[i + 1], 10);
+            i += 1;
         } else if (std.mem.eql(u8, arg, "--limit") and i + 1 < args.len) {
             options.limit_entries = try std.fmt.parseInt(usize, args[i + 1], 10);
             i += 1;
@@ -697,6 +709,7 @@ fn printUsage() void {
     std.debug.print(
         \\dict-render-test [--db data/enwiktionary.bin]
         \\                 [--report data/render-report.txt]
+        \\                 [--start 0]
         \\                 [--limit 10000]
         \\                 [--threads N]
         \\                 [--samples 4]
@@ -799,7 +812,6 @@ test "auditDictionary reports strict renderer failures with detail" {
 
     try std.testing.expectEqual(@as(usize, 1), stats.strict_failures);
     try std.testing.expectEqual(@as(usize, 0), stats.unexpected_errors);
-
 }
 
 test "parseOptions parses explicit thread and sample flags" {

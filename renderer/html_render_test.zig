@@ -642,6 +642,64 @@ test "renderEnglishSectionAlloc preserves alternative-spelling targets that rese
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "marijuana") != null);
 }
 
+test "renderEnglishSectionAlloc supports common etymology helper templates in strict mode" {
+    const source =
+        \\==English==
+        \\
+        \\===Etymology===
+        \\{{deverbal|en|hand out}}.
+        \\{{ellipsis|en|United Nations Organization}}.
+        \\{{unknown|en|title=Origin unknown}}.
+        \\{{surface analysis|en|ether|-ial|nocap=1}}.
+        \\{{clip|en|technology}}.
+        \\{{acronym|en|[[radio|'''ra'''dio]] [[detection|'''d'''etection]] [[and|'''a'''nd]] [[ranging|'''r'''anging]]|nocap=1}}.
+    ;
+    const resolver = TestResolverContext{ .terms = &.{ "hand out", "United Nations Organization", "ether", "-ial", "technology", "acronym" } };
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .strict = true,
+        .link_resolver = .{
+            .context = @ptrCast(&resolver),
+            .resolve = resolveTestLink,
+        },
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(sections[0].html.len != 0);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Deverbal") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Ellipsis") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Origin unknown.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "surface analysis") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Clipping") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "acronym") != null);
+}
+
+test "renderEnglishSectionAlloc supports name translit and obsolete spelling templates in strict mode" {
+    const source =
+        \\==English==
+        \\
+        \\===Proper noun===
+        \\# {{name translit|en|el|Αγγελόπουλος|type=surname}}.
+        \\# {{obs sp|en|ail}}.
+    ;
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .strict = true,
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "A transliteration of the Greek surname Αγγελόπουλος.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Obsolete spelling of ail.") != null);
+}
+
 test "renderEnglishSectionAlloc expands Latn-def letter templates semantically" {
     const source =
         \\==English==

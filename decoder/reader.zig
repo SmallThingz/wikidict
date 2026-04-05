@@ -18,7 +18,14 @@ fn isSupportedDictionaryVersion(dict_version: u32) bool {
 
 fn hasSupportedDictionaryMagic(header: *const format.Header) bool {
     return std.mem.eql(u8, &header.magic_bytes, format.magic) or
+        std.mem.eql(u8, &header.magic_bytes, format.legacy_magic_v24) or
+        std.mem.eql(u8, &header.magic_bytes, format.legacy_magic_v23) or
         std.mem.eql(u8, &header.magic_bytes, format.legacy_magic_v22);
+}
+
+fn hasCompatibleDictionaryFingerprint(header: *const format.Header) bool {
+    if (header.version != format.version) return true;
+    return header.reserved0 == format.structure_fingerprint;
 }
 
 const StringRef = extern struct {
@@ -526,6 +533,10 @@ pub const EntryView = struct {
         return owned;
     }
 
+    pub fn rawStoredAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
+        return self.rawStoredTextAlloc(allocator);
+    }
+
     fn rawStoredTextAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
         const entry_record = try self.dict.entryRecord(self.index);
@@ -564,6 +575,7 @@ pub const Dictionary = struct {
         const header: *const format.Header = @ptrCast(@alignCast(mapped.ptr));
         if (!hasSupportedDictionaryMagic(header)) return error.InvalidDictionaryFile;
         if (!isSupportedDictionaryVersion(header.version)) return error.UnsupportedDictionaryVersion;
+        if (!hasCompatibleDictionaryFingerprint(header)) return error.UnsupportedDictionaryVersion;
 
         const records_end = std.math.add(u64, header.records_offset, header.records_len) catch return error.InvalidDictionaryFile;
         if (records_end > stat.size) return error.InvalidDictionaryFile;
@@ -1521,6 +1533,7 @@ fn computeCacheKey(stat: anytype, header: *const format.Header) u64 {
         stat.size,
         stat.mtime.nanoseconds,
         header.version,
+        header.reserved0,
         header.entry_count,
         header.raw_entry_count,
         header.redirect_count,
@@ -1689,7 +1702,7 @@ fn buildLookups(
 
     fillAndSortLookupChunk(
         state.entries.items,
-        state.entries.items[0 .. partitionEnd(state.entries.items.len, worker_count, 0)],
+        state.entries.items[0..partitionEnd(state.entries.items.len, worker_count, 0)],
         0,
         state.lookups.items[runs[0].start..runs[0].end],
     );

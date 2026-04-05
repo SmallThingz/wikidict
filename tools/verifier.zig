@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const zxml = @import("zxml");
 
 const encoder = @import("encoder");
@@ -16,22 +17,42 @@ const StreamParser = ztypes.StreamParser;
 const StreamNode = ztypes.StreamNode;
 
 const VerifyProgress = struct {
+    const refresh_interval_ns = std.time.ns_per_s / 20;
+
     total_input_bytes: usize,
+    scanned_input_bytes: std.atomic.Value(usize) = .init(0),
+    mutex: std.Io.Mutex = .init,
     last_percent: u8 = 255,
+    last_render_ns: i96 = 0,
 
     fn init(total_input_bytes: usize) VerifyProgress {
         return .{ .total_input_bytes = total_input_bytes };
     }
 
-    fn scan(self: *VerifyProgress, consumed_input_bytes: usize, pages: usize, compared: usize, failures: usize) void {
-        if (@import("builtin").is_test) return;
+    fn scanAdvance(self: *VerifyProgress, input_bytes_delta: usize, pages: usize, compared: usize, failures: usize) void {
+        const consumed_input_bytes = self.scanned_input_bytes.fetchAdd(input_bytes_delta, .monotonic) + input_bytes_delta;
+        self.render(consumed_input_bytes, pages, compared, failures);
+    }
+
+    fn finish(self: *VerifyProgress, pages: usize, compared: usize, failures: usize) void {
+        self.render(self.total_input_bytes, pages, compared, failures);
+        if (!builtin.is_test) std.debug.print("\n", .{});
+    }
+
+    fn render(self: *VerifyProgress, consumed_input_bytes: usize, pages: usize, compared: usize, failures: usize) void {
+        if (builtin.is_test) return;
+        self.mutex.lockUncancelable(std.Options.debug_io);
+        defer self.mutex.unlock(std.Options.debug_io);
 
         const percent = if (self.total_input_bytes == 0)
             100
         else
             @as(u8, @intCast(@min(100, (consumed_input_bytes * 100) / self.total_input_bytes)));
         if (percent == self.last_percent) return;
+        const now_ns = std.Io.Timestamp.now(std.Options.debug_io, .awake).toNanoseconds();
+        if (now_ns - self.last_render_ns < refresh_interval_ns and percent != 100) return;
         self.last_percent = percent;
+        self.last_render_ns = now_ns;
 
         var bar: [24]u8 = undefined;
         @memset(&bar, '.');
@@ -42,8 +63,6 @@ const VerifyProgress = struct {
             "\rverify dict [{s}] {d:>3}% scan xml (pages={d} compared={d} failures={d})",
             .{ &bar, percent, pages, compared, failures },
         );
-
-        if (percent == 100) std.debug.print("\n", .{});
     }
 };
 
@@ -56,16 +75,26 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const options = try parseOptions(args[1..]);
-    const stats = try verifyDictionary(init.io, init.gpa, options);
+    try ensureVerifierDictionary(init.io, init.gpa, options);
+    const stats = verifyDictionary(init.io, init.gpa, options) catch |err| switch (err) {
+        error.UnsupportedDictionaryVersion => {
+            std.debug.print(
+                "dictionary binary {s} is stale or incompatible with the current encoder tables; rebuild it with `zig build encode -Doptimize=ReleaseFast` and then re-run verify\n",
+                .{options.db_path},
+            );
+            return err;
+        },
+        else => return err,
+    };
 
     std.debug.print(
-        "verified {s} against {s}\npages={d}\nns0={d}\nenglish_entries={d}\ncompared={d}\nexact_matches={d}\nwhitespace_only_matches={d}\nmissing_raw_entries={d}\nduplicate_raw_titles={d}\ncontent_mismatches={d}\nunexpected_raw_entries={d}\nreport={s}\n",
+        "verified {s} against {s}\npages={d}\nns0={d}\nlanguage_entries={d}\ncompared={d}\nexact_matches={d}\nwhitespace_only_matches={d}\nmissing_raw_entries={d}\nduplicate_raw_titles={d}\ncontent_mismatches={d}\nunexpected_raw_entries={d}\nskipped_parse_errors={d}\nreport={s}\n",
         .{
             options.db_path,
             options.input_path,
             stats.pages_seen,
             stats.namespace_zero_pages,
-            stats.english_entries,
+            stats.language_entries,
             stats.compared_entries,
             stats.exact_matches,
             stats.whitespace_only_matches,
@@ -73,11 +102,53 @@ pub fn main(init: std.process.Init) !void {
             stats.duplicate_raw_titles,
             stats.content_mismatches,
             stats.unexpected_raw_entries,
+            stats.skipped_parse_errors,
             options.report_path,
         },
     );
 
     if (stats.failures() != 0) return error.VerificationFailed;
+}
+
+fn ensureVerifierDictionary(io: std.Io, allocator: std.mem.Allocator, options: Options) !void {
+    if (try verifierDictionaryLooksUsable(io, allocator, options.db_path)) return;
+
+    try deleteFileIfExists(io, options.db_path);
+    const cache_path = try std.fmt.allocPrint(allocator, "{s}.idx", .{options.db_path});
+    defer allocator.free(cache_path);
+    try deleteFileIfExists(io, cache_path);
+
+    std.debug.print(
+        "building dictionary binary at {s} from {s}\n",
+        .{ options.db_path, options.input_path },
+    );
+
+    _ = try encoder.buildDictionary(io, allocator, .{
+        .input_path = options.input_path,
+        .output_path = options.db_path,
+    });
+}
+
+fn verifierDictionaryLooksUsable(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !bool {
+    var dict = decoder.openDictionary(allocator, io, path) catch |err| switch (err) {
+        error.FileNotFound,
+        error.InvalidDictionaryFile,
+        error.UnsupportedDictionaryVersion,
+        error.InvalidDictionaryCache,
+        error.InvalidEncoding,
+        => return false,
+        else => return err,
+    };
+    defer dict.deinit();
+
+    return dict.header.entry_count != 0 or dict.header.records_len != 0;
+}
+
+fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
 }
 
 const Options = struct {
@@ -92,7 +163,7 @@ const Options = struct {
 pub const VerifyStats = struct {
     pages_seen: usize = 0,
     namespace_zero_pages: usize = 0,
-    english_entries: usize = 0,
+    language_entries: usize = 0,
     compared_entries: usize = 0,
     exact_matches: usize = 0,
     whitespace_only_matches: usize = 0,
@@ -100,6 +171,7 @@ pub const VerifyStats = struct {
     duplicate_raw_titles: usize = 0,
     content_mismatches: usize = 0,
     unexpected_raw_entries: usize = 0,
+    skipped_parse_errors: usize = 0,
 
     fn failures(self: VerifyStats) usize {
         return self.missing_raw_entries +
@@ -145,7 +217,7 @@ const WorkQueue = struct {
         self.items.deinit(self.allocator);
     }
 
-    fn push(self: *WorkQueue, item: WorkItem) !void {
+    fn push(self: *WorkQueue, title: []const u8, expected_raw: []const u8) !void {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
 
@@ -156,7 +228,15 @@ const WorkQueue = struct {
         if (self.failure) |err| return err;
         if (self.closed) return error.ClosedWorkQueue;
 
-        try self.items.append(self.allocator, item);
+        const owned_title = try self.allocator.dupe(u8, title);
+        errdefer self.allocator.free(owned_title);
+        const owned_expected_raw = try self.allocator.dupe(u8, expected_raw);
+        errdefer self.allocator.free(owned_expected_raw);
+
+        try self.items.append(self.allocator, .{
+            .title = owned_title,
+            .expected_raw = owned_expected_raw,
+        });
         self.condition.signal(self.io);
     }
 
@@ -303,11 +383,11 @@ const Verifier = struct {
         }
 
         try self.report.writer.print(
-            "Summary\n-------\npages: {d}\nnamespace_zero_pages: {d}\nenglish_entries: {d}\ncompared_entries: {d}\nexact_matches: {d}\nwhitespace_only_matches: {d}\nmissing_raw_entries: {d}\nduplicate_raw_titles: {d}\ncontent_mismatches: {d}\nunexpected_raw_entries: {d}\nfailures: {d}\n",
+            "Summary\n-------\npages: {d}\nnamespace_zero_pages: {d}\nlanguage_entries: {d}\ncompared_entries: {d}\nexact_matches: {d}\nwhitespace_only_matches: {d}\nmissing_raw_entries: {d}\nduplicate_raw_titles: {d}\ncontent_mismatches: {d}\nunexpected_raw_entries: {d}\nskipped_parse_errors: {d}\nfailures: {d}\n",
             .{
                 self.stats.pages_seen,
                 self.stats.namespace_zero_pages,
-                self.stats.english_entries,
+                self.stats.language_entries,
                 self.stats.compared_entries,
                 self.stats.exact_matches,
                 self.stats.whitespace_only_matches,
@@ -315,6 +395,7 @@ const Verifier = struct {
                 self.stats.duplicate_raw_titles,
                 self.stats.content_mismatches,
                 self.stats.unexpected_raw_entries,
+                self.stats.skipped_parse_errors,
                 self.stats.failures(),
             },
         );
@@ -352,10 +433,16 @@ const Verifier = struct {
         self.allocator.free(item.expected_raw);
     }
 
-    fn noteEnglishEntry(self: *Verifier) void {
+    fn noteLanguageEntry(self: *Verifier) void {
         self.state_mutex.lockUncancelable(self.io);
         defer self.state_mutex.unlock(self.io);
-        self.stats.english_entries += 1;
+        self.stats.language_entries += 1;
+    }
+
+    fn noteParseSkip(self: *Verifier) void {
+        self.state_mutex.lockUncancelable(self.io);
+        defer self.state_mutex.unlock(self.io);
+        self.stats.skipped_parse_errors += 1;
     }
 
     fn recordMissingEntry(self: *Verifier, title: []const u8, expected_raw: []const u8) !void {
@@ -406,7 +493,7 @@ const Verifier = struct {
     }
 
     fn compareEntry(self: *Verifier, temp_allocator: std.mem.Allocator, title: []const u8, expected_raw: []const u8) !void {
-        self.noteEnglishEntry();
+        self.noteLanguageEntry();
 
         const entry_ref = self.raw_by_word.get(title) orelse {
             if (try self.shouldSkipMissingEntry(temp_allocator, title, expected_raw)) return;
@@ -419,7 +506,7 @@ const Verifier = struct {
         }
 
         const entry = self.dict.entryAt(entry_ref.entry_index);
-        const actual_raw = (try entry.rawEnglishAlloc(temp_allocator)) orelse {
+        const actual_raw = (try entry.rawStoredAlloc(temp_allocator)) orelse {
             try self.recordMissingEntry(title, expected_raw);
             return;
         };
@@ -442,7 +529,8 @@ const Verifier = struct {
     fn shouldSkipMissingEntry(_: *Verifier, allocator: std.mem.Allocator, title: []const u8, expected_raw: []const u8) !bool {
         if (std.mem.trim(u8, expected_raw, " \t\r\n").len == 0) return true;
 
-        var metadata = try wikitext.extractEntryMetadata(allocator, title, expected_raw);
+        const english_section = wikitext.extractEnglishSection(expected_raw) orelse return false;
+        var metadata = try wikitext.extractEntryMetadata(allocator, title, english_section);
         defer metadata.deinit(allocator);
         if (!metadata.alias_only) return false;
         return metadata.canonical_targets.items.len != 0;
@@ -498,18 +586,26 @@ const Verifier = struct {
     }
 };
 
+const VerifyChunk = struct {
+    start: usize,
+    end: usize,
+};
+
+const VerifyChunkJob = struct {
+    mapped: []const u8,
+    chunk: VerifyChunk,
+    verifier: *Verifier,
+    queue: *WorkQueue,
+    progress: *VerifyProgress,
+    err: ?anyerror = null,
+};
+
 pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Options) !VerifyStats {
     var verifier = try Verifier.init(allocator, io, options);
     defer verifier.deinit();
 
     var input_file = try std.Io.Dir.cwd().openFile(io, options.input_path, .{});
     defer input_file.close(io);
-
-    var stream_parser = StreamParser.init(allocator);
-    defer stream_parser.deinit();
-
-    var page_arena = std.heap.ArenaAllocator.init(allocator);
-    defer page_arena.deinit();
 
     const stat = try input_file.stat(io);
     var progress = VerifyProgress.init(@intCast(stat.size));
@@ -545,14 +641,33 @@ pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Optio
         );
         defer std.posix.munmap(mapped);
 
-        try processMappedInput(
-            &verifier,
-            mapped[0..@as(usize, @intCast(stat.size))],
-            &stream_parser,
-            &page_arena,
-            &queue,
-            &progress,
-        );
+        const input = mapped[0..@as(usize, @intCast(stat.size))];
+        const scan_thread_count = verifyScanThreadCount(input.len, options.limit_entries, options.thread_count);
+        if (scan_thread_count == 1) {
+            var stream_parser = StreamParser.init(allocator);
+            defer stream_parser.deinit();
+
+            var page_arena = std.heap.ArenaAllocator.init(allocator);
+            defer page_arena.deinit();
+
+            try processMappedInputSequential(
+                &verifier,
+                input,
+                &stream_parser,
+                &page_arena,
+                &queue,
+                &progress,
+            );
+        } else {
+            try processMappedInputParallel(
+                allocator,
+                &verifier,
+                input,
+                scan_thread_count,
+                &queue,
+                &progress,
+            );
+        }
     }
 
     queue.finish();
@@ -561,11 +676,118 @@ pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Optio
     if (queue.failure) |err| return err;
 
     const final_counts = verifier.snapshotProgress();
-    progress.scan(stat.size, final_counts.pages, final_counts.compared, final_counts.failures);
+    progress.finish(final_counts.pages, final_counts.compared, final_counts.failures);
     return verifier.finish();
 }
 
-fn processMappedInput(
+fn verifyScanThreadCount(total_input_bytes: usize, limit_entries: ?usize, thread_override: ?usize) usize {
+    if (builtin.single_threaded or limit_entries != null) return 1;
+    if (thread_override) |requested| return @max(@as(usize, 1), requested);
+    if (total_input_bytes < (32 << 20)) return 1;
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    return @max(@as(usize, 1), cpu_count);
+}
+
+fn collectVerifyChunksAlloc(allocator: std.mem.Allocator, mapped: []const u8, desired_chunks: usize) ![]VerifyChunk {
+    var starts: std.ArrayList(usize) = .empty;
+    defer starts.deinit(allocator);
+    try starts.append(allocator, 0);
+
+    for (1..desired_chunks) |chunk_index| {
+        const approx = @divTrunc(mapped.len * chunk_index, desired_chunks);
+        const page_start = std.mem.indexOfPos(u8, mapped, approx, "<page>") orelse continue;
+        if (page_start <= starts.items[starts.items.len - 1]) continue;
+        try starts.append(allocator, page_start);
+    }
+    try starts.append(allocator, mapped.len);
+
+    const chunks = try allocator.alloc(VerifyChunk, starts.items.len - 1);
+    for (chunks, 0..) |*chunk, idx| {
+        chunk.* = .{
+            .start = starts.items[idx],
+            .end = starts.items[idx + 1],
+        };
+    }
+    return chunks;
+}
+
+fn processMappedInputParallel(
+    allocator: std.mem.Allocator,
+    verifier: *Verifier,
+    mapped: []const u8,
+    scan_thread_count: usize,
+    queue: *WorkQueue,
+    progress: *VerifyProgress,
+) !void {
+    const chunks = try collectVerifyChunksAlloc(allocator, mapped, scan_thread_count);
+    defer allocator.free(chunks);
+
+    const jobs = try allocator.alloc(VerifyChunkJob, chunks.len);
+    defer allocator.free(jobs);
+    for (chunks, jobs) |chunk, *job| {
+        job.* = .{
+            .mapped = mapped,
+            .chunk = chunk,
+            .verifier = verifier,
+            .queue = queue,
+            .progress = progress,
+        };
+    }
+
+    const threads = try allocator.alloc(std.Thread, chunks.len - 1);
+    defer allocator.free(threads);
+    var started_threads: usize = 0;
+    errdefer for (threads[0..started_threads]) |thread| thread.join();
+
+    for (jobs[1..], threads) |*job, *thread| {
+        thread.* = try std.Thread.spawn(.{}, processVerifyChunkThread, .{job});
+        started_threads += 1;
+    }
+    processVerifyChunkThread(&jobs[0]);
+    for (threads[0..started_threads]) |thread| thread.join();
+
+    for (jobs) |job| if (job.err) |err| return err;
+}
+
+fn processVerifyChunkThread(job: *VerifyChunkJob) void {
+    processVerifyChunk(job) catch |err| {
+        job.err = err;
+        job.queue.fail(err);
+    };
+}
+
+fn processVerifyChunk(job: *VerifyChunkJob) !void {
+    var stream_parser = StreamParser.init(std.heap.smp_allocator);
+    defer stream_parser.deinit();
+
+    var page_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer page_arena.deinit();
+
+    var consumed: usize = job.chunk.start;
+    while (true) {
+        const start = std.mem.indexOfPos(u8, job.mapped, consumed, "<page>") orelse break;
+        if (start >= job.chunk.end) break;
+        const end_start = std.mem.indexOfPos(u8, job.mapped, start, "</page>") orelse break;
+        const page_end = end_start + "</page>".len;
+        if (page_end > job.chunk.end) break;
+
+        const page_allocator = page_arena.allocator();
+        _ = processPageFragment(page_allocator, &stream_parser, job.mapped[start..page_end], job.verifier, job.queue) catch |err| switch (err) {
+            error.OutOfMemory, error.ClosedWorkQueue => return err,
+            else => blk: {
+                job.verifier.noteParseSkip();
+                break :blk false;
+            },
+        };
+        consumed = page_end;
+        _ = page_arena.reset(.retain_capacity);
+
+        const counts = job.verifier.snapshotProgress();
+        job.progress.scanAdvance(page_end - start, counts.pages, counts.compared, counts.failures);
+    }
+}
+
+fn processMappedInputSequential(
     verifier: *Verifier,
     mapped: []const u8,
     stream_parser: *StreamParser,
@@ -574,23 +796,30 @@ fn processMappedInput(
     progress: *VerifyProgress,
 ) !void {
     var consumed: usize = 0;
-    var queued_english_entries: usize = 0;
+    var queued_language_entries: usize = 0;
     while (true) {
         const start = std.mem.indexOfPos(u8, mapped, consumed, "<page>") orelse break;
         const end_start = std.mem.indexOfPos(u8, mapped, start, "</page>") orelse break;
         const page_end = end_start + "</page>".len;
 
         const page_allocator = page_arena.allocator();
-        if (try processPageFragment(page_allocator, stream_parser, mapped[start..page_end], verifier, queue)) {
-            queued_english_entries += 1;
+        const queued = processPageFragment(page_allocator, stream_parser, mapped[start..page_end], verifier, queue) catch |err| switch (err) {
+            error.OutOfMemory, error.ClosedWorkQueue => return err,
+            else => blk: {
+                verifier.noteParseSkip();
+                break :blk false;
+            },
+        };
+        if (queued) {
+            queued_language_entries += 1;
         }
         consumed = page_end;
         _ = page_arena.reset(.retain_capacity);
         const counts = verifier.snapshotProgress();
-        progress.scan(consumed, counts.pages, counts.compared, counts.failures);
+        progress.scanAdvance(page_end - start, counts.pages, counts.compared, counts.failures);
 
         if (verifier.options.limit_entries) |limit| {
-            if (queued_english_entries >= limit) return;
+            if (queued_language_entries >= limit) return;
         }
     }
 }
@@ -615,20 +844,9 @@ fn processPageFragment(
 
     const title = try xml_decode.decodeAlloc(allocator, title_raw);
     const text = try xml_decode.decodeAlloc(allocator, text_raw);
-    const english_section = wikitext.extractEnglishSection(text) orelse return false;
+    const stored_sections = (try wikitext.extractConfiguredLanguageSectionsAlloc(allocator, text, verifier.options.exclusions)) orelse return false;
 
-    const owned_title = try verifier.allocator.dupe(u8, title);
-    errdefer verifier.allocator.free(owned_title);
-    const owned_english_section = try wikitext.filterEnglishSectionAlloc(
-        verifier.allocator,
-        english_section,
-        verifier.options.exclusions,
-    );
-    errdefer verifier.allocator.free(owned_english_section);
-    try queue.push(.{
-        .title = owned_title,
-        .expected_raw = owned_english_section,
-    });
+    try queue.push(title, stored_sections);
     return true;
 }
 
@@ -1182,9 +1400,53 @@ test "verifyDictionary ignores dropped alias-only entries with invalid destinati
         .thread_count = 1,
     });
 
-    try std.testing.expectEqual(@as(usize, 2), stats.english_entries);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_entries);
     try std.testing.expectEqual(@as(usize, 1), stats.compared_entries);
     try std.testing.expectEqual(@as(usize, 1), stats.exact_matches + stats.whitespace_only_matches);
+    try std.testing.expectEqual(@as(usize, 0), stats.failures());
+}
+
+test "verifyDictionary keeps non-English entries by default filter configuration" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>चूत</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==Hindi==
+        \\===Noun===
+        \\# [[cunt]]
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    try writeTestFile(tmp.dir, "sample.xml", xml);
+
+    const xml_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "sample.xml");
+    defer std.testing.allocator.free(xml_rel);
+    const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
+    defer std.testing.allocator.free(db_rel);
+    const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-report.txt");
+    defer std.testing.allocator.free(report_rel);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .output_path = db_rel,
+    });
+
+    const stats = try verifyDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .db_path = db_rel,
+        .report_path = report_rel,
+        .thread_count = 2,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), stats.language_entries);
+    try std.testing.expectEqual(@as(usize, 1), stats.compared_entries);
+    try std.testing.expectEqual(@as(usize, 1), stats.exact_matches);
     try std.testing.expectEqual(@as(usize, 0), stats.failures());
 }
 

@@ -1,12 +1,16 @@
 const std = @import("std");
 const compact = @import("compact_encoding.zig");
+const generated = @import("generated_structure_tables");
 
-pub const magic = "WIKDIC24";
-pub const version: u32 = 24;
+pub const magic = "WIKDIC25";
+pub const version: u32 = 25;
+pub const legacy_magic_v24 = "WIKDIC24";
+pub const legacy_version_v24: u32 = 24;
 pub const legacy_magic_v23 = "WIKDIC23";
 pub const legacy_version_v23: u32 = 23;
 pub const legacy_magic_v22 = "WIKDIC22";
 pub const legacy_version_v22: u32 = 22;
+pub const structure_fingerprint: u32 = generated.structure_fingerprint;
 
 pub const record_flag_has_raw: u8 = 1 << 0;
 
@@ -34,7 +38,7 @@ pub const Header = extern struct {
     entry_count: u32,
     raw_entry_count: u32,
     redirect_count: u32,
-    reserved0: u32 = 0,
+    reserved0: u32 = structure_fingerprint,
     records_offset: u64,
     records_len: u64,
 
@@ -52,6 +56,7 @@ pub const Header = extern struct {
             .entry_count = entry_count,
             .raw_entry_count = raw_entry_count,
             .redirect_count = redirect_count,
+            .reserved0 = structure_fingerprint,
             .records_offset = records_offset,
             .records_len = records_len,
         };
@@ -60,6 +65,10 @@ pub const Header = extern struct {
 
 test "header magic is stable" {
     try std.testing.expectEqualStrings(magic, &Header.init(0, 0, 0, 0, 0).magic_bytes);
+}
+
+test "header stores structure fingerprint" {
+    try std.testing.expectEqual(structure_fingerprint, Header.init(0, 0, 0, 0, 0).reserved0);
 }
 
 pub const VarUIntError = error{InvalidVarUInt};
