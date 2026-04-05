@@ -379,7 +379,7 @@ fn renderTemplate(
         return;
     }
     if (templateMatches(name, "U") or asciiStartsWithIgnoreCase(name, "U:")) {
-        if (usageTemplateTarget(name, &parts)) |value| {
+        if (usageTemplateDisplayValue(name, &parts)) |value| {
             try renderInline(out, allocator, value);
         }
         return;
@@ -502,7 +502,7 @@ fn renderTemplate(
         try appendPositional(out, allocator, &parts, 1, "", "", ", ");
         return;
     }
-    if (templateMatches(name, "nearsyn")) {
+    if (templateMatches(name, "nearsyn") or templateMatches(name, "near-synonyms")) {
         try appendWithSpace(out, allocator, "Near synonyms: ");
         try appendPositional(out, allocator, &parts, 1, "", "", ", ");
         return;
@@ -960,6 +960,16 @@ fn renderTemplate(
         if (templateEtymologyTerm(&parts)) |value| try renderInline(out, allocator, value);
         return;
     }
+    if (templateMatches(name, "partial calque")) {
+        const target_index = if (positionalCount(&parts) > 2 and
+            looksLikeLanguageCode(trimWikiWhitespace(templatePositional(&parts, 0) orelse "")) and
+            looksLikeLanguageCode(trimWikiWhitespace(templatePositional(&parts, 1) orelse "")))
+            2
+        else
+            semanticTemplateTargetIndex(&parts);
+        try renderUnaryTemplateAtIndex(out, allocator, &parts, "partial calque of", target_index);
+        return;
+    }
     if (templateMatches(name, "clq") or templateMatches(name, "pcal") or templateMatches(name, "semantic loan") or templateMatches(name, "sl")) {
         if (templatePositional(&parts, positionalCount(&parts) -| 1)) |value| try renderInline(out, allocator, value);
         return;
@@ -976,8 +986,8 @@ fn renderTemplate(
         if (templatePositional(&parts, positionalCount(&parts) -| 1)) |value| try renderInline(out, allocator, value);
         return;
     }
-    if (templateMatches(name, "onomatopoeic")) {
-        try appendWithSpace(out, allocator, "onomatopoeic");
+    if (templateMatches(name, "onomatopoeic") or templateMatches(name, "onom")) {
+        try appendWithSpace(out, allocator, "Onomatopoeic");
         return;
     }
     if (templateMatches(name, "demonym-noun")) {
@@ -992,6 +1002,10 @@ fn renderTemplate(
         try renderUnaryTemplate(out, allocator, &parts, "dated form of");
         return;
     }
+    if (templateMatches(name, "initialism")) {
+        try renderUnaryTemplate(out, allocator, &parts, "initialism of");
+        return;
+    }
     if (templateMatches(name, "acronym")) {
         try renderUnaryTemplate(out, allocator, &parts, "acronym of");
         return;
@@ -1004,12 +1018,20 @@ fn renderTemplate(
         try renderUnaryTemplate(out, allocator, &parts, "alternative spelling of");
         return;
     }
+    if (templateMatches(name, "alt case form")) {
+        try renderUnaryTemplate(out, allocator, &parts, "alternative case form of");
+        return;
+    }
     if (templateMatches(name, "contraction")) {
         try renderUnaryTemplate(out, allocator, &parts, "contraction of");
         return;
     }
     if (templateMatches(name, "back-formation")) {
         try renderUnaryTemplate(out, allocator, &parts, "back-formation from");
+        return;
+    }
+    if (templateMatches(name, "aphetic form")) {
+        try renderUnaryTemplate(out, allocator, &parts, "aphetic form of");
         return;
     }
     if (templateMatches(name, "clip")) {
@@ -1184,17 +1206,13 @@ fn renderTemplate(
     }
 }
 
-fn renderKnownListTemplate(
-    out: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
-    name: []const u8,
-) std.mem.Allocator.Error!bool {
+pub fn knownListTerms(name: []const u8) ?[]const []const u8 {
     const trimmed = trimWikiWhitespace(name);
-    if (!asciiStartsWithIgnoreCase(trimmed, "list:")) return false;
+    if (!asciiStartsWithIgnoreCase(trimmed, "list:")) return null;
     const list_name = trimWikiWhitespace(trimmed["list:".len..]);
 
     if (std.ascii.eqlIgnoreCase(list_name, "units of time/en")) {
-        try appendKnownList(out, allocator, &.{
+        return &.{
             "attosecond",
             "century",
             "day",
@@ -1215,12 +1233,11 @@ fn renderKnownListTemplate(
             "year",
             "yoctosecond",
             "zeptosecond",
-        });
-        return true;
+        };
     }
 
     if (std.ascii.eqlIgnoreCase(list_name, "religious adherents/en")) {
-        try appendKnownList(out, allocator, &.{
+        return &.{
             "African traditionalist",
             "agnostic",
             "Asatruar",
@@ -1259,28 +1276,25 @@ fn renderKnownListTemplate(
             "Yahwist",
             "Yazidi",
             "Zoroastrian",
-        });
-        return true;
+        };
     }
 
     if (std.ascii.eqlIgnoreCase(list_name, "latin script letters/en/simple")) {
-        try appendKnownList(out, allocator, &.{
+        return &.{
             "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
             "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
-        });
-        return true;
+        };
     }
 
     if (std.ascii.eqlIgnoreCase(list_name, "latin script letter names/en/simple")) {
-        try appendKnownList(out, allocator, &.{
+        return &.{
             "a", "bee", "cee", "dee", "e", "ef", "gee", "aitch", "i", "jay", "kay", "el", "em",
             "en", "o", "pee", "cue", "ar", "ess", "tee", "u", "vee", "double-u", "ex", "wy", "zed",
-        });
-        return true;
+        };
     }
 
     if (std.ascii.eqlIgnoreCase(list_name, "countries in europe/en")) {
-        try appendKnownList(out, allocator, &.{
+        return &.{
             "Albania", "Andorra", "Armenia", "Austria", "Azerbaijan", "Belarus", "Belgium",
             "Bosnia and Herzegovina", "Bulgaria", "Croatia", "Cyprus", "Czech Republic",
             "Denmark", "Estonia", "Finland", "France", "Georgia", "Germany", "Greece",
@@ -1289,11 +1303,58 @@ fn renderKnownListTemplate(
             "Montenegro", "Netherlands", "North Macedonia", "Norway", "Poland", "Portugal",
             "Romania", "Russia", "San Marino", "Serbia", "Slovakia", "Slovenia", "Spain",
             "Sweden", "Switzerland", "Turkey", "Ukraine", "United Kingdom", "Vatican City",
-        });
-        return true;
+        };
     }
 
-    return false;
+    if (std.ascii.eqlIgnoreCase(list_name, "countries in south america/en")) {
+        return &.{
+            "Argentina", "Bolivia", "Brazil", "Chile", "Colombia", "Ecuador",
+            "Guyana", "Paraguay", "Peru", "Suriname", "Uruguay", "Venezuela",
+        };
+    }
+
+    if (std.ascii.eqlIgnoreCase(list_name, "countries in asia/en")) {
+        return &.{
+            "Afghanistan", "Armenia", "Azerbaijan", "Bahrain", "Bangladesh", "Bhutan",
+            "Brunei", "Cambodia", "China", "Cyprus", "Georgia", "India", "Indonesia",
+            "Iran", "Iraq", "Israel", "Japan", "Jordan", "Kazakhstan", "Kuwait",
+            "Kyrgyzstan", "Laos", "Lebanon", "Malaysia", "Maldives", "Mongolia",
+            "Myanmar", "Nepal", "North Korea", "Oman", "Pakistan", "Palestine",
+            "Philippines", "Qatar", "Saudi Arabia", "Singapore", "South Korea",
+            "Sri Lanka", "Syria", "Taiwan", "Tajikistan", "Thailand", "Timor-Leste",
+            "Turkey", "Turkmenistan", "United Arab Emirates", "Uzbekistan", "Vietnam",
+            "Yemen",
+        };
+    }
+
+    if (std.ascii.eqlIgnoreCase(list_name, "provinces of equatorial guinea/en")) {
+        return &.{
+            "Annobón", "Bioko Norte", "Bioko Sur", "Centro Sur",
+            "Djibloho", "Kié-Ntem", "Litoral", "Wele-Nzas",
+        };
+    }
+
+    if (std.ascii.eqlIgnoreCase(list_name, "provinces of china/en")) {
+        return &.{
+            "Anhui", "Beijing", "Chongqing", "Fujian", "Gansu", "Guangdong", "Guangxi",
+            "Guizhou", "Hainan", "Hebei", "Heilongjiang", "Henan", "Hong Kong", "Hubei",
+            "Hunan", "Inner Mongolia", "Jiangsu", "Jiangxi", "Jilin", "Liaoning", "Macau",
+            "Ningxia", "Qinghai", "Shaanxi", "Shandong", "Shanghai", "Shanxi", "Sichuan",
+            "Taiwan", "Tianjin", "Tibet", "Xinjiang", "Yunnan", "Zhejiang",
+        };
+    }
+
+    return null;
+}
+
+fn renderKnownListTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+) std.mem.Allocator.Error!bool {
+    const terms = knownListTerms(name) orelse return false;
+    try appendKnownList(out, allocator, terms);
+    return true;
 }
 
 fn usageTemplateTarget(name: []const u8, parts: *const std.ArrayList([]const u8)) ?[]const u8 {
@@ -1321,6 +1382,19 @@ fn usageTemplateTarget(name: []const u8, parts: *const std.ArrayList([]const u8)
     if (templatePositional(parts, 0)) |first| {
         const trimmed_first = trimWikiWhitespace(first);
         if (trimmed_first.len != 0) return trimmed_first;
+    }
+    return null;
+}
+
+fn usageTemplateDisplayValue(name: []const u8, parts: *const std.ArrayList([]const u8)) ?[]const u8 {
+    const target = usageTemplateTarget(name, parts) orelse return null;
+    return knownUsageTemplateExpansion(target) orelse target;
+}
+
+fn knownUsageTemplateExpansion(target: []const u8) ?[]const u8 {
+    const trimmed = trimWikiWhitespace(target);
+    if (std.ascii.eqlIgnoreCase(trimmed, "I-P")) {
+        return "The use of Israel to refer to the region between the Jordan River and the Mediterranean Sea in a non-historical sense is (since the latter half of the 20th century) politically charged; indeed, this is true of all terms for this region.";
     }
     return null;
 }
@@ -1741,8 +1815,17 @@ fn renderUnaryTemplate(
     parts: *const std.ArrayList([]const u8),
     prefix: []const u8,
 ) std.mem.Allocator.Error!void {
-    const target_index = templateAliasTargetIndex(parts);
-    const target = if (target_index) |index| templatePositional(parts, index) else null;
+    try renderUnaryTemplateAtIndex(out, allocator, parts, prefix, semanticTemplateTargetIndex(parts));
+}
+
+fn renderUnaryTemplateAtIndex(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: *const std.ArrayList([]const u8),
+    prefix: []const u8,
+    target_index: usize,
+) std.mem.Allocator.Error!void {
+    const target = templatePositional(parts, target_index);
     if (target == null or (positionalCount(parts) <= 1 and looksLikeLanguageCode(trimWikiWhitespace(target.?)))) {
         try appendWithSpace(out, allocator, standaloneUnaryPrefix(prefix));
         return;
@@ -1753,7 +1836,7 @@ fn renderUnaryTemplate(
         try renderInline(out, allocator, arg);
     }
     const positional_total = positionalCount(parts);
-    var extra_index = (target_index orelse 0) + 1;
+    var extra_index = target_index + 1;
     var wrote_extra = false;
     while (extra_index < positional_total) : (extra_index += 1) {
         const extra = templatePositional(parts, extra_index) orelse continue;
@@ -2597,7 +2680,7 @@ fn appendPlaceTerms(
         }
 
         if (!wrote_location) {
-            try out.appendSlice(allocator, if (abbreviation_target != null) " of " else if (placeTypeNeedsIn(rendered_type)) " in " else " ");
+            try out.appendSlice(allocator, if (abbreviation_target != null) " of " else if (asciiEndsWithIgnoreCase(rendered_type, " seat")) " of " else if (placeTypeNeedsIn(rendered_type)) " in " else " ");
             wrote_location = true;
         } else {
             try out.appendSlice(allocator, ", ");
@@ -2743,6 +2826,21 @@ fn renderPlaceTypeTextAlloc(
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
+
+    if (parts.items.len == 2) {
+        const first = trimWikiWhitespace(parts.items[0]);
+        const second = trimWikiWhitespace(parts.items[1]);
+        const canonical_second = canonicalPlaceHolonymType(second) orelse second;
+        if (std.ascii.eqlIgnoreCase(canonical_second, "capital city") or std.ascii.eqlIgnoreCase(canonical_second, "county seat")) {
+            const rendered_first = try renderWikitextToOwned(allocator, canonicalPlaceHolonymType(first) orelse first, std.math.maxInt(usize));
+            defer allocator.free(rendered_first);
+            const rendered_second = try renderWikitextToOwned(allocator, canonical_second, std.math.maxInt(usize));
+            defer allocator.free(rendered_second);
+            if (rendered_first.len != 0 and rendered_second.len != 0) {
+                return std.fmt.allocPrint(allocator, "{s}, the {s}", .{ rendered_first, rendered_second });
+            }
+        }
+    }
 
     var prev_was_connector = false;
     var wrote_any = false;
@@ -2933,7 +3031,7 @@ fn appendPlaceHolonymPrefix(
 fn placeLocationDisplayValue(prefix: []const u8, value: []const u8) []const u8 {
     const trimmed_prefix = std.mem.trim(u8, prefix, " \t");
     if (std.ascii.eqlIgnoreCase(trimmed_prefix, "c") or std.ascii.eqlIgnoreCase(trimmed_prefix, "cc")) {
-        if (std.ascii.eqlIgnoreCase(value, "US") or std.ascii.eqlIgnoreCase(value, "U.S.")) return "United States";
+        if (std.ascii.eqlIgnoreCase(value, "US") or std.ascii.eqlIgnoreCase(value, "U.S.") or std.ascii.eqlIgnoreCase(value, "USA") or std.ascii.eqlIgnoreCase(value, "U.S.A.")) return "United States";
         if (std.ascii.eqlIgnoreCase(value, "UK") or std.ascii.eqlIgnoreCase(value, "U.K.")) return "United Kingdom";
     }
     return value;
@@ -3773,6 +3871,17 @@ test "renderWikitextToOwned strips bold apostrophe artifacts from acronym etymol
     try std.testing.expectEqualStrings("From HaloAcetic Acids.", rendered);
 }
 
+test "renderWikitextToOwned expands standalone initialism etymologies" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "From {{initialism|en|[[resistant|'''R'''esistant]] [[to]] [[oil]] [[particles]] [[with]] [[ninety-five|'''95''']][[%]] [[filtration]] [[efficiency]]}} in {{w|lang=en|NIOSH air filtration rating}}s.",
+        512,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("From initialism of Resistant to oil particles with 95% filtration efficiency in NIOSH air filtration ratings.", rendered);
+}
+
 test "renderWikitextToOwned tolerates stray closing wiki markup" {
     const rendered = try renderWikitextToOwned(std.testing.allocator, "kept sense}}", 256);
     defer std.testing.allocator.free(rendered);
@@ -3794,4 +3903,34 @@ test "renderWikitextToOwned normalizes template names and external link labels" 
     try std.testing.expect(std.mem.indexOf(u8, rendered, "The Art of Cookery made Plain and Easy") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "https://example.test") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Webster") == null);
+}
+
+test "renderWikitextToOwned expands usage, etymology, and known list helpers" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{U:en:I-P}} {{onom|en}} {{aphetic form|en|escarp}} {{partial calque|en|fr|cap vert}} {{alt case form|en|china|id=chinaware}} {{list:countries in South America/en}}",
+        4096,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "The use of Israel to refer to the region") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Onomatopoeic") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "aphetic form of escarp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "partial calque of cap vert") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "alternative case form of china") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Argentina, Bolivia, Brazil") != null);
+}
+
+test "renderWikitextToOwned formats county-seat place templates with United States expansion" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{place|en|city/county seat|co/Clay County|s/Indiana|c/USA}}",
+        512,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "A city, the county seat of Clay County, Indiana, United States",
+        rendered,
+    );
 }

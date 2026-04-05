@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 worker_dir="$repo_dir/tools/parsoid-worker"
+php_dir="$repo_dir/tools/parsoid-php"
 
 if [ $# -lt 1 ]; then
   printf 'Usage: tools/parsoid-audit <compiled-zig-tool> [args...]\n' >&2
@@ -14,10 +15,29 @@ shift
 tool_bin="$(realpath "$tool_bin")"
 
 cd "$worker_dir"
-bun i
+if [ ! -d node_modules/node-html-parser ]; then
+  bun i
+fi
+
+if [ ! -f "$php_dir/vendor/autoload.php" ]; then
+  cd "$php_dir"
+  php composer.phar install --no-interaction
+  cd "$worker_dir"
+fi
 
 export DICT_PARSOID_WORKER="$worker_dir/worker.mjs"
-export DICT_PARSOID_CACHE_DIR="$repo_dir/data/parsoid-cache"
+export DICT_PARSOID_CACHE_DIR="${DICT_PARSOID_CACHE_DIR:-$repo_dir/data/parsoid-cache}"
+export DICT_PARSOID_DB_PATH="${DICT_PARSOID_DB_PATH:-$repo_dir/data/parsoid-cache.sqlite}"
+export DICT_PARSOID_API_CACHE_DIR="${DICT_PARSOID_API_CACHE_DIR:-$repo_dir/data/parsoid-api-cache}"
+export DICT_PARSOID_PHP_WORKER="${DICT_PARSOID_PHP_WORKER:-$worker_dir/php_worker.php}"
+export DICT_PARSOID_PHP_CMD="${DICT_PARSOID_PHP_CMD:-php}"
+export DICT_PARSOID_API_URL="${DICT_PARSOID_API_URL:-https://en.wiktionary.org/w/api.php}"
+export DICT_PARSOID_USER_AGENT="${DICT_PARSOID_USER_AGENT:-dict-parsoid-audit/1.0 (local developer tool; purpose: renderer comparison)}"
+export PARSOID_API_CACHE_DIR="${PARSOID_API_CACHE_DIR:-$DICT_PARSOID_API_CACHE_DIR}"
+export PARSOID_API_WRITE_CACHE="${PARSOID_API_WRITE_CACHE:-pretty}"
+
+mkdir -p "$DICT_PARSOID_CACHE_DIR"
+mkdir -p "$PARSOID_API_CACHE_DIR"
 
 cd "$repo_dir"
 exec "$tool_bin" --worker "$worker_dir/worker.mjs" "$@"

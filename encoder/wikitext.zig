@@ -1063,6 +1063,7 @@ fn renderWikitextToOwned(allocator: std.mem.Allocator, input: []const u8, max_le
 }
 
 fn renderInline(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error!void {
+    var emphasis_state: EmphasisState = .{};
     var i: usize = 0;
     while (i < input.len) {
         if (i + 4 <= input.len and std.mem.eql(u8, input[i .. i + 4], "<!--")) {
@@ -1132,7 +1133,7 @@ fn renderInline(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []
         if (input[i] == '\'' and i + 1 < input.len and input[i + 1] == '\'') {
             const run_start = i;
             while (i < input.len and input[i] == '\'') : (i += 1) {}
-            if (shouldKeepLiteralApostrophe(input, run_start, i - run_start)) {
+            if (emphasis_state.consumeApostropheRun(input, run_start, i - run_start)) {
                 try out.append(allocator, '\'');
             }
             continue;
@@ -1141,6 +1142,34 @@ fn renderInline(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []
         i += 1;
     }
 }
+
+const EmphasisState = struct {
+    italic_open: bool = false,
+    bold_open: bool = false,
+
+    fn consumeApostropheRun(self: *EmphasisState, input: []const u8, run_start: usize, run_len: usize) bool {
+        switch (run_len) {
+            2 => {
+                self.italic_open = !self.italic_open;
+                return false;
+            },
+            3 => {
+                if (self.italic_open and !self.bold_open and shouldKeepLiteralApostrophe(input, run_start, run_len)) {
+                    self.italic_open = false;
+                    return true;
+                }
+                self.bold_open = !self.bold_open;
+                return false;
+            },
+            5 => {
+                self.bold_open = !self.bold_open;
+                self.italic_open = !self.italic_open;
+                return false;
+            },
+            else => return shouldKeepLiteralApostrophe(input, run_start, run_len),
+        }
+    }
+};
 
 fn renderLink(
     out: *std.ArrayList(u8),
@@ -1368,7 +1397,7 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
         return;
     }
     if (templateMatches(name, "U") or asciiStartsWithIgnoreCase(name, "U:")) {
-        if (usageTemplateTarget(name, &parts)) |arg| try renderInline(out, allocator, arg);
+        if (usageTemplateDisplayValue(name, &parts)) |arg| try renderInline(out, allocator, arg);
         return;
     }
     if (templateMatches(name, "only used in")) {
@@ -1396,6 +1425,31 @@ fn renderTemplate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: [
     }
     if (templateMatches(name, "dated form")) {
         try renderUnaryTemplate(out, allocator, &parts, "dated form of");
+        return;
+    }
+    if (templateMatches(name, "alt case form")) {
+        try renderUnaryTemplate(out, allocator, &parts, "alternative case form of");
+        return;
+    }
+    if (templateMatches(name, "aphetic form")) {
+        try renderUnaryTemplate(out, allocator, &parts, "aphetic form of");
+        return;
+    }
+    if (templateMatches(name, "partial calque")) {
+        try renderUnaryTemplate(out, allocator, &parts, "partial calque of");
+        return;
+    }
+    if (templateMatches(name, "near-synonyms")) {
+        try appendWithSpace(out, allocator, "Near synonyms: ");
+        try appendPositional(out, allocator, &parts, 1, "", "", ", ");
+        return;
+    }
+    if (templateMatches(name, "onom") or templateMatches(name, "onomatopoeic")) {
+        try appendWithSpace(out, allocator, "Onomatopoeic");
+        return;
+    }
+    if (templateMatches(name, "initialism")) {
+        try renderUnaryTemplate(out, allocator, &parts, "initialism of");
         return;
     }
     if (templateMatches(name, "hol")) {
@@ -1453,6 +1507,19 @@ fn usageTemplateTarget(name: []const u8, parts: *const std.ArrayList([]const u8)
     if (templatePositional(parts, 0)) |first| {
         const trimmed_first = std.mem.trim(u8, first, " \t");
         if (trimmed_first.len != 0) return trimmed_first;
+    }
+    return null;
+}
+
+fn usageTemplateDisplayValue(name: []const u8, parts: *const std.ArrayList([]const u8)) ?[]const u8 {
+    const target = usageTemplateTarget(name, parts) orelse return null;
+    return knownUsageTemplateExpansion(target) orelse target;
+}
+
+fn knownUsageTemplateExpansion(target: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, target, " \t");
+    if (std.ascii.eqlIgnoreCase(trimmed, "I-P")) {
+        return "The use of Israel to refer to the region between the Jordan River and the Mediterranean Sea in a non-historical sense is (since the latter half of the 20th century) politically charged; indeed, this is true of all terms for this region.";
     }
     return null;
 }
@@ -1631,8 +1698,8 @@ fn renderUnaryTemplate(
     parts: *const std.ArrayList([]const u8),
     prefix: []const u8,
 ) std.mem.Allocator.Error!void {
-    const target_index = templateAliasTargetIndex(parts);
-    const target = if (target_index) |index| templatePositional(parts, index) else null;
+    const target_index = semanticTemplateTargetIndex(parts);
+    const target = templatePositional(parts, target_index);
     if (target == null or (positionalCount(parts) <= 1 and looksLikeLanguageCode(std.mem.trim(u8, target.?, " \t")))) {
         try appendWithSpace(out, allocator, if (std.ascii.eqlIgnoreCase(prefix, "clipping of")) "clipping" else prefix);
         return;
@@ -1643,7 +1710,7 @@ fn renderUnaryTemplate(
         try renderInline(out, allocator, arg);
     }
     const positional_total = positionalCount(parts);
-    var extra_index = (target_index orelse 0) + 1;
+    var extra_index = target_index + 1;
     var wrote_extra = false;
     while (extra_index < positional_total) : (extra_index += 1) {
         const extra = templatePositional(parts, extra_index) orelse continue;
@@ -1703,11 +1770,9 @@ fn appendPlaceTerms(
     const abbreviation_target = placeAbbreviationTarget(raw_type);
     const actual_type_index = if (abbreviation_target != null and templatePositional(parts, type_index + 1) != null) type_index + 1 else type_index;
     const actual_raw_type = templatePositional(parts, actual_type_index) orelse raw_type;
-    const place_type = normalizePlaceFragment(actual_raw_type);
-    if (place_type.len == 0) return;
-
-    const rendered_type = try renderWikitextToOwned(allocator, place_type, 256);
+    const rendered_type = try renderPlaceTypeTextAlloc(allocator, actual_raw_type);
     defer allocator.free(rendered_type);
+    if (rendered_type.len == 0) return;
 
     if (abbreviation_target) |target| {
         try out.appendSlice(allocator, "Abbreviation of ");
@@ -1737,7 +1802,7 @@ fn appendPlaceTerms(
             continue;
         }
         if (!wrote_location) {
-            try out.appendSlice(allocator, if (abbreviation_target != null) " of " else if (placeTypeNeedsIn(rendered_type)) " in " else " ");
+            try out.appendSlice(allocator, if (abbreviation_target != null) " of " else if (asciiEndsWithIgnoreCase(rendered_type, " seat")) " of " else if (placeTypeNeedsIn(rendered_type)) " in " else " ");
             wrote_location = true;
         } else {
             try out.appendSlice(allocator, ", ");
@@ -1874,6 +1939,59 @@ fn appendPlaceLocationFragment(
     try renderInline(out, allocator, input);
 }
 
+fn renderPlaceTypeTextAlloc(
+    allocator: std.mem.Allocator,
+    raw_type: []const u8,
+) std.mem.Allocator.Error![]const u8 {
+    const trimmed = std.mem.trim(u8, stripTraversalSegments(raw_type), " \t");
+    if (trimmed.len == 0) return allocator.dupe(u8, "");
+    if (std.mem.indexOfScalar(u8, trimmed, '/') == null) {
+        return renderWikitextToOwned(allocator, trimmed, std.math.maxInt(usize));
+    }
+
+    var parts = try splitTopLevel(allocator, trimmed, '/');
+    defer parts.deinit(allocator);
+
+    if (parts.items.len == 2) {
+        const first = std.mem.trim(u8, parts.items[0], " \t");
+        const second = std.mem.trim(u8, parts.items[1], " \t");
+        const canonical_second = canonicalPlaceHolonymType(second) orelse second;
+        if (std.ascii.eqlIgnoreCase(canonical_second, "capital city") or std.ascii.eqlIgnoreCase(canonical_second, "county seat")) {
+            const rendered_first = try renderWikitextToOwned(allocator, canonicalPlaceHolonymType(first) orelse first, std.math.maxInt(usize));
+            defer allocator.free(rendered_first);
+            const rendered_second = try renderWikitextToOwned(allocator, canonical_second, std.math.maxInt(usize));
+            defer allocator.free(rendered_second);
+            if (rendered_first.len != 0 and rendered_second.len != 0) {
+                return std.fmt.allocPrint(allocator, "{s}, the {s}", .{ rendered_first, rendered_second });
+            }
+        }
+    }
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    var prev_was_connector = false;
+    var wrote_any = false;
+    for (parts.items) |segment_raw| {
+        const segment = std.mem.trim(u8, segment_raw, " \t");
+        if (segment.len == 0) continue;
+
+        const token = canonicalPlaceHolonymType(segment) orelse segment;
+        const rendered = try renderWikitextToOwned(allocator, token, std.math.maxInt(usize));
+        defer allocator.free(rendered);
+        if (rendered.len == 0) continue;
+
+        const is_connector = isPlaceTypeConnector(rendered);
+        if (wrote_any) {
+            try out.appendSlice(allocator, if (prev_was_connector or is_connector) " " else " and ");
+        }
+        try out.appendSlice(allocator, rendered);
+        wrote_any = true;
+        prev_was_connector = is_connector;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 const PlaceHolonymDisplayKind = enum {
     plain,
     prefix,
@@ -1944,6 +2062,27 @@ fn canonicalPlaceHolonymType(prefix: []const u8) ?[]const u8 {
     return null;
 }
 
+fn isPlaceTypeConnector(value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, " \t");
+    inline for ([_][]const u8{
+        "and",
+        "or",
+        "of",
+        "for",
+        "in",
+        "on",
+        "near",
+        "with",
+        "without",
+        "from",
+        "to",
+        "the",
+    }) |candidate| {
+        if (std.ascii.eqlIgnoreCase(trimmed, candidate)) return true;
+    }
+    return false;
+}
+
 fn appendPlaceHolonymPrefix(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -1959,7 +2098,7 @@ fn appendPlaceHolonymPrefix(
 fn placeLocationDisplayValue(prefix: []const u8, value: []const u8) []const u8 {
     const trimmed_prefix = std.mem.trim(u8, prefix, " \t");
     if (std.ascii.eqlIgnoreCase(trimmed_prefix, "c") or std.ascii.eqlIgnoreCase(trimmed_prefix, "cc")) {
-        if (std.ascii.eqlIgnoreCase(value, "US") or std.ascii.eqlIgnoreCase(value, "U.S.")) return "United States";
+        if (std.ascii.eqlIgnoreCase(value, "US") or std.ascii.eqlIgnoreCase(value, "U.S.") or std.ascii.eqlIgnoreCase(value, "USA") or std.ascii.eqlIgnoreCase(value, "U.S.A.")) return "United States";
         if (std.ascii.eqlIgnoreCase(value, "UK") or std.ascii.eqlIgnoreCase(value, "U.K.")) return "United Kingdom";
     }
     return value;
@@ -3262,4 +3401,29 @@ test "renderWikitextToOwned normalizes template names and external link labels" 
     try std.testing.expect(std.mem.indexOf(u8, rendered, "The Art of Cookery made Plain and Easy") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "https://example.test") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Webster") == null);
+}
+
+test "renderWikitextToOwned expands standalone initialism etymologies" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "From {{initialism|en|[[resistant|'''R'''esistant]] [[to]] [[oil]] [[particles]] [[with]] [[ninety-five|'''95''']][[%]] [[filtration]] [[efficiency]]}} in {{w|lang=en|NIOSH air filtration rating}}s.",
+        512,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("From initialism of Resistant to oil particles with 95% filtration efficiency in NIOSH air filtration ratings.", rendered);
+}
+
+test "renderWikitextToOwned expands usage helpers and county-seat place templates" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{U:en:I-P}} {{place|en|city/county seat|co/Clay County|s/Indiana|c/USA}} {{onom|en}} {{aphetic form|en|escarp}}",
+        1024,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "The use of Israel to refer to the region") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "A city, the county seat of Clay County, Indiana, United States") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Onomatopoeic") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "aphetic form of escarp") != null);
 }

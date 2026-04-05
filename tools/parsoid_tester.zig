@@ -52,6 +52,7 @@ const Options = struct {
     start_entry: usize = 0,
     thread_count: ?usize = null,
     word_filter: ?[]const u8 = null,
+    prime_cache: bool = false,
     node_cmd: []const u8 = "node",
     worker_path: []const u8,
 };
@@ -139,6 +140,7 @@ const RequestSection = struct {
 };
 
 const WorkerRequest = struct {
+    mode: []const u8 = "compare",
     title: []const u8,
     raw: []const u8,
     sections: []const RequestSection,
@@ -146,6 +148,7 @@ const WorkerRequest = struct {
 
 const WorkerResponse = struct {
     ok: bool,
+    cached: ?bool = null,
     kind: ?[]const u8 = null,
     summary: ?[]const u8 = null,
     our: ?[]const u8 = null,
@@ -371,7 +374,7 @@ const Auditor = struct {
             .{
                 self.options.word_filter orelse "<none>",
                 self.options.worker_path,
-                resolvedThreadCount(self.total_entries, self.options.thread_count),
+                resolvedThreadCount(self.total_entries, self.options.thread_count, self.options.prime_cache),
                 stats.entries_scanned,
                 stats.raw_entries_scanned,
                 stats.compared_entries,
@@ -415,7 +418,7 @@ pub fn auditDictionary(io: std.Io, allocator: std.mem.Allocator, options: Option
     if (options.word_filter != null) {
         auditWorkerMain(.{ .auditor = &auditor, .start = options.start_entry, .end = scanEntryEnd(&auditor.dict, options) });
     } else {
-        const thread_count = resolvedThreadCount(auditor.total_entries, options.thread_count);
+        const thread_count = resolvedThreadCount(auditor.total_entries, options.thread_count, options.prime_cache);
         if (thread_count == 1) {
             auditWorkerMain(.{ .auditor = &auditor, .start = options.start_entry, .end = scanEntryEnd(&auditor.dict, options) });
         } else {
@@ -483,43 +486,49 @@ fn auditWorkerMain(args: WorkerArgs) void {
             continue;
         };
 
-        var render_issue: html_render.RenderIssue = .{};
-        const rendered_sections = html_render.renderEnglishSectionWithOptionsAlloc(arena.allocator(), audit_raw, .{
-            .strict = true,
-            .issue = &render_issue,
-            .link_resolver = .{
-                .context = @ptrCast(&args.auditor.dict),
-                .resolve = resolveRendererLink,
-            },
-        }) catch |err| {
-            if (err == error.StrictRenderFailure) {
-                const summary = std.fmt.allocPrint(arena.allocator(), "{s} section={s} line={d} detail={s}", .{
-                    @errorName(err),
-                    render_issue.section_title,
-                    render_issue.line_number,
-                    render_issue.detail,
-                }) catch @errorName(err);
-                args.auditor.recordRendererError(entry.word(), summary) catch |fatal| args.auditor.noteFatal(fatal);
-            } else {
-                args.auditor.recordRendererError(entry.word(), @errorName(err)) catch |fatal| args.auditor.noteFatal(fatal);
-            }
-            _ = arena.reset(.retain_capacity);
-            continue;
-        };
-
-        const request_sections = arena.allocator().alloc(RequestSection, rendered_sections.len) catch |err| {
-            args.auditor.noteFatal(err);
-            return;
-        };
-        for (rendered_sections, 0..) |section, i| {
-            request_sections[i] = .{
-                .title = section.title,
-                .level = section.level,
-                .html = section.html,
+        const request_sections = if (args.auditor.options.prime_cache) blk: {
+            break :blk &.{};
+        } else blk: {
+            var render_issue: html_render.RenderIssue = .{};
+            const rendered_sections = html_render.renderEnglishSectionWithOptionsAlloc(arena.allocator(), audit_raw, .{
+                .strict = true,
+                .issue = &render_issue,
+                .link_resolver = .{
+                    .context = @ptrCast(&args.auditor.dict),
+                    .resolve = resolveRendererLink,
+                },
+            }) catch |err| {
+                if (err == error.StrictRenderFailure) {
+                    const summary = std.fmt.allocPrint(arena.allocator(), "{s} section={s} line={d} detail={s}", .{
+                        @errorName(err),
+                        render_issue.section_title,
+                        render_issue.line_number,
+                        render_issue.detail,
+                    }) catch @errorName(err);
+                    args.auditor.recordRendererError(entry.word(), summary) catch |fatal| args.auditor.noteFatal(fatal);
+                } else {
+                    args.auditor.recordRendererError(entry.word(), @errorName(err)) catch |fatal| args.auditor.noteFatal(fatal);
+                }
+                _ = arena.reset(.retain_capacity);
+                continue;
             };
-        }
+
+            const sections = arena.allocator().alloc(RequestSection, rendered_sections.len) catch |err| {
+                args.auditor.noteFatal(err);
+                return;
+            };
+            for (rendered_sections, 0..) |section, i| {
+                sections[i] = .{
+                    .title = section.title,
+                    .level = section.level,
+                    .html = section.html,
+                };
+            }
+            break :blk sections;
+        };
 
         const response = worker.compare(arena.allocator(), .{
+            .mode = if (args.auditor.options.prime_cache) "prime" else "compare",
             .title = entry.word(),
             .raw = audit_raw,
             .sections = request_sections,
@@ -549,9 +558,10 @@ fn partitionEnd(total: usize, part_count: usize, part_index: usize) usize {
     return @divTrunc(total * (part_index + 1), part_count);
 }
 
-fn resolvedThreadCount(total_entries: usize, thread_override: ?usize) usize {
+fn resolvedThreadCount(total_entries: usize, thread_override: ?usize, prime_cache: bool) usize {
     if (builtin.single_threaded or total_entries < 128) return 1;
     if (thread_override) |requested| return @max(@as(usize, 1), @min(total_entries, requested));
+    _ = prime_cache;
     return 1;
 }
 
@@ -979,6 +989,8 @@ fn parseOptions(_: std.mem.Allocator, args: []const []const u8) !Options {
         } else if (std.mem.eql(u8, arg, "--word") and i + 1 < args.len) {
             options.word_filter = args[i + 1];
             i += 1;
+        } else if (std.mem.eql(u8, arg, "--prime-cache")) {
+            options.prime_cache = true;
         } else if (std.mem.eql(u8, arg, "--node") and i + 1 < args.len) {
             options.node_cmd = args[i + 1];
             i += 1;
@@ -1004,6 +1016,7 @@ fn printUsage() void {
         \\                  [--limit 100]
         \\                  [--threads N]
         \\                  [--word entry]
+        \\                  [--prime-cache]
         \\                  [--node node]
         \\                  [--worker tools/parsoid-worker/worker.mjs]
         \\
@@ -1041,9 +1054,16 @@ test "parseOptions parses worker and word flags" {
     try std.testing.expectEqual(@as(usize, 3), options.thread_count.?);
 }
 
+test "parseOptions parses prime-cache flag" {
+    const args = [_][]const u8{ "--prime-cache" };
+    const options = try parseOptions(std.testing.allocator, &args);
+    try std.testing.expect(options.prime_cache);
+}
+
 test "resolvedThreadCount defaults to one worker for remote parsoid audits" {
-    try std.testing.expectEqual(@as(usize, 1), resolvedThreadCount(1000, null));
-    try std.testing.expectEqual(@as(usize, 4), resolvedThreadCount(1000, 4));
+    try std.testing.expectEqual(@as(usize, 1), resolvedThreadCount(1000, null, false));
+    try std.testing.expectEqual(@as(usize, 1), resolvedThreadCount(1000, null, true));
+    try std.testing.expectEqual(@as(usize, 4), resolvedThreadCount(1000, 4, false));
 }
 
 test "auditDictionary records mismatches from fake worker" {

@@ -297,15 +297,14 @@ fn processPageFragment(
     if (capture.redirect_title_raw) |raw| {
         const title = try xml_decode.decodeAlloc(allocator, title_raw);
         const target = try xml_decode.decodeAlloc(allocator, raw);
-        const normalized_target = try normalize.normalizeAlloc(allocator, target);
-        defer allocator.free(normalized_target);
         if (valid_titles) |set| {
+            const normalized_target = try normalize.normalizeAlloc(allocator, target);
+            defer allocator.free(normalized_target);
             if (!set.contains(normalized_target)) return;
         }
         try output.writeRedirectRecord(
             title,
             target,
-            normalized_target,
         );
         stats.redirect_aliases += 1;
     }
@@ -486,35 +485,10 @@ fn buildRawRecordPayloadAlloc(
     const encoded_english = try section_encoding.encodeEnglishAlloc(allocator, filtered_english);
     defer allocator.free(encoded_english);
 
-    const alt_forms = try allocator.alloc(format.RawAltForm, metadata.alt_forms.items.len);
-    defer allocator.free(alt_forms);
-    var alt_count: usize = 0;
-    errdefer while (alt_count > 0) : (alt_count -= 1) allocator.free(alt_forms[alt_count - 1].normalized);
-    for (metadata.alt_forms.items, 0..) |value, idx| {
-        alt_forms[idx] = .{
-            .value = value,
-            .normalized = try normalize.normalizeAlloc(allocator, value),
-        };
-        alt_count += 1;
-    }
-
-    const normalized_targets = try allocator.alloc([]const u8, metadata.canonical_targets.items.len);
-    defer allocator.free(normalized_targets);
-    var target_count: usize = 0;
-    errdefer while (target_count > 0) : (target_count -= 1) allocator.free(normalized_targets[target_count - 1]);
-    for (metadata.canonical_targets.items, 0..) |target, idx| {
-        normalized_targets[idx] = try normalize.normalizeAlloc(allocator, target);
-        target_count += 1;
-    }
-    defer {
-        for (alt_forms) |alt_form| allocator.free(alt_form.normalized);
-        for (normalized_targets) |target| allocator.free(target);
-    }
-
     return format.encodeRawRecordPayloadAlloc(
         allocator,
-        alt_forms,
-        normalized_targets,
+        metadata.alt_forms.items,
+        metadata.canonical_targets.items,
         encoded_english,
     );
 }
@@ -578,12 +552,11 @@ const OutputWriter = struct {
         self: *OutputWriter,
         title: []const u8,
         target: []const u8,
-        normalized_target: []const u8,
     ) !void {
         try self.writeBytes(&.{0});
         const encoded_title = try compact.encodeToList(&self.title_buf, self.allocator, title);
         try self.writeSlice(encoded_title);
-        const encoded_payload = try format.encodeAliasRecordPayloadAlloc(self.allocator, target, normalized_target);
+        const encoded_payload = try format.encodeAliasRecordPayloadAlloc(self.allocator, target);
         defer self.allocator.free(encoded_payload);
         try self.writeSlice(encoded_payload);
         self.redirect_count += 1;
@@ -637,7 +610,7 @@ test "output writer buffers survive page arena resets" {
     const second_alloc = page_arena.allocator();
     const second_title = try second_alloc.dupe(u8, "colour");
     const second_payload = try second_alloc.dupe(u8, "color");
-    try writer.writeRedirectRecord(second_title, second_payload, "color");
+    try writer.writeRedirectRecord(second_title, second_payload);
     try writer.finish();
 
     try std.testing.expectEqual(@as(usize, 2), writer.entry_count);

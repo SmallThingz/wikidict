@@ -12,6 +12,10 @@ const cache_magic = "DCTIDX04";
 const cache_version: u32 = 5;
 const cache_alignment: u32 = 8;
 
+fn isSupportedDictionaryVersion(dict_version: u32) bool {
+    return dict_version == format.version or dict_version == format.legacy_version_v22;
+}
+
 const StringRef = extern struct {
     offset: u32,
     len: u32,
@@ -415,7 +419,7 @@ pub const EntryView = struct {
     pub fn derivedAlloc(self: EntryView, allocator: std.mem.Allocator) !EntryDerivedData {
         const entry_record = try self.dict.entryRecord(self.index);
         if ((entry_record.flags & format.record_flag_has_raw) != 0) {
-            const encoded_english = try format.rawRecordEnglishPayload(entry_record.payload);
+            const encoded_english = try format.rawRecordEnglishPayloadVersion(entry_record.payload, self.dict.header.version);
             const raw = try section_encoding.decodeEnglishAlloc(allocator, encoded_english);
             errdefer allocator.free(raw);
 
@@ -434,7 +438,7 @@ pub const EntryView = struct {
             };
         }
 
-        const target = try format.decodeAliasRecordTargetAlloc(allocator, entry_record.payload);
+        const target = try format.decodeAliasRecordTargetAllocVersion(allocator, entry_record.payload, self.dict.header.version);
         errdefer allocator.free(target);
 
         var canonical_targets: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -506,7 +510,7 @@ pub const EntryView = struct {
     pub fn rawEnglishAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
         const entry_record = try self.dict.entryRecord(self.index);
-        const encoded_english = try format.rawRecordEnglishPayload(entry_record.payload);
+        const encoded_english = try format.rawRecordEnglishPayloadVersion(entry_record.payload, self.dict.header.version);
         return try section_encoding.decodeEnglishAlloc(allocator, encoded_english);
     }
 };
@@ -535,7 +539,7 @@ pub const Dictionary = struct {
         if (stat.size < @sizeOf(format.Header)) return error.InvalidDictionaryFile;
         const header: *const format.Header = @ptrCast(@alignCast(mapped.ptr));
         if (!std.mem.eql(u8, &header.magic_bytes, format.magic)) return error.InvalidDictionaryFile;
-        if (header.version != format.version) return error.UnsupportedDictionaryVersion;
+        if (!isSupportedDictionaryVersion(header.version)) return error.UnsupportedDictionaryVersion;
 
         const records_end = std.math.add(u64, header.records_offset, header.records_len) catch return error.InvalidDictionaryFile;
         if (records_end > stat.size) return error.InvalidDictionaryFile;
@@ -1250,7 +1254,7 @@ fn buildIndex(
     progress.setReadingParallel(thread_count > 1);
     if (thread_count == 1) {
         for (descriptors) |descriptor| {
-            const entry = try buildEntryFromRecord(arena_allocator, descriptor);
+            const entry = try buildEntryFromRecord(arena_allocator, descriptor, header.version);
             state.entries.appendAssumeCapacity(entry);
             progress.scanAdvance(descriptor.record_len, 1);
         }
@@ -1275,6 +1279,7 @@ fn buildIndex(
             descriptors[start..end],
             chunk,
             progress,
+            header.version,
         });
         started_threads += 1;
         start = end;
@@ -1327,7 +1332,7 @@ fn collectRecordDescriptors(
     return descriptors;
 }
 
-fn buildEntryFromRecord(allocator: std.mem.Allocator, descriptor: RecordDescriptor) !BuildEntryData {
+fn buildEntryFromRecord(allocator: std.mem.Allocator, descriptor: RecordDescriptor, dictionary_version: u32) !BuildEntryData {
     const title = try compact.decodeAlloc(allocator, descriptor.encoded_title);
     const normalized = if (normalize.isIdentity(title))
         title
@@ -1340,13 +1345,19 @@ fn buildEntryFromRecord(allocator: std.mem.Allocator, descriptor: RecordDescript
     };
 
     if ((descriptor.flags & format.record_flag_has_raw) != 0) {
-        const metadata = try decodeBuildRawMetadataAlloc(allocator, descriptor.payload);
+        const metadata = try decodeBuildRawMetadataAlloc(allocator, descriptor.payload, dictionary_version);
         entry.alt_forms = metadata.alt_forms;
-        entry.normalized_targets = metadata.normalized_targets;
+        entry.normalized_targets = metadata.canonical_targets;
         return entry;
     }
 
-    const normalized_target = try decodeAliasNormalizedTargetAlloc(allocator, descriptor.payload);
+    const target = format.decodeAliasRecordTargetAllocVersion(allocator, descriptor.payload, dictionary_version) catch return error.InvalidDictionaryFile;
+    const normalized_target = if (normalize.isIdentity(target)) blk: {
+        break :blk target;
+    } else blk: {
+        defer allocator.free(target);
+        break :blk try normalize.normalizeAlloc(allocator, target);
+    };
     const targets = try allocator.alloc([]const u8, 1);
     targets[0] = normalized_target;
     entry.normalized_targets = targets;
@@ -1355,18 +1366,20 @@ fn buildEntryFromRecord(allocator: std.mem.Allocator, descriptor: RecordDescript
 
 const BuildRawMetadata = struct {
     alt_forms: []BuildAltForm,
-    normalized_targets: []const []const u8,
+    canonical_targets: []const []const u8,
 };
 
-fn decodeBuildRawMetadataAlloc(allocator: std.mem.Allocator, payload: []const u8) !BuildRawMetadata {
-    var cursor: usize = 0;
-
-    const alt_form_count_u64 = format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidDictionaryFile;
-    const alt_form_count = std.math.cast(usize, alt_form_count_u64) orelse return error.InvalidDictionaryFile;
-    const alt_forms = try allocator.alloc(BuildAltForm, alt_form_count);
+fn decodeBuildRawMetadataAlloc(allocator: std.mem.Allocator, payload: []const u8, dictionary_version: u32) !BuildRawMetadata {
+    const metadata = format.decodeRawRecordMetadataAllocVersion(allocator, payload, dictionary_version) catch return error.InvalidDictionaryFile;
+    const alt_forms = try allocator.alloc(BuildAltForm, metadata.alt_forms.len);
     errdefer allocator.free(alt_forms);
-
     var alt_index: usize = 0;
+    errdefer {
+        while (alt_index < metadata.alt_forms.len) : (alt_index += 1) allocator.free(metadata.alt_forms[alt_index]);
+        allocator.free(metadata.alt_forms);
+        for (metadata.canonical_targets) |target| allocator.free(target);
+        allocator.free(metadata.canonical_targets);
+    }
     errdefer {
         while (alt_index > 0) : (alt_index -= 1) {
             allocator.free(alt_forms[alt_index - 1].value);
@@ -1375,47 +1388,26 @@ fn decodeBuildRawMetadataAlloc(allocator: std.mem.Allocator, payload: []const u8
             }
         }
     }
-    while (alt_index < alt_forms.len) : (alt_index += 1) {
-        const value_encoded = try readLengthPrefixedSlice(payload, &cursor, payload.len);
-        const normalized_encoded = try readLengthPrefixedSlice(payload, &cursor, payload.len);
-        const value = compact.decodeAlloc(allocator, value_encoded) catch return error.InvalidDictionaryFile;
-        errdefer allocator.free(value);
-        const normalized = if (std.mem.eql(u8, normalized_encoded, value_encoded))
+    for (metadata.alt_forms, 0..) |value, idx| {
+        const normalized = if (normalize.isIdentity(value))
             value
         else
-            compact.decodeAlloc(allocator, normalized_encoded) catch return error.InvalidDictionaryFile;
-        alt_forms[alt_index] = .{
+            try normalize.normalizeAlloc(allocator, value);
+        alt_forms[idx] = .{
             .value = value,
             .normalized = normalized,
         };
+        alt_index += 1;
     }
-
-    const target_count_u64 = format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidDictionaryFile;
-    const target_count = std.math.cast(usize, target_count_u64) orelse return error.InvalidDictionaryFile;
-    const normalized_targets = try allocator.alloc([]const u8, target_count);
-    errdefer allocator.free(normalized_targets);
-
-    var target_index: usize = 0;
-    errdefer while (target_index > 0) : (target_index -= 1) allocator.free(normalized_targets[target_index - 1]);
-    while (target_index < normalized_targets.len) : (target_index += 1) {
-        const target_encoded = try readLengthPrefixedSlice(payload, &cursor, payload.len);
-        normalized_targets[target_index] = compact.decodeAlloc(allocator, target_encoded) catch return error.InvalidDictionaryFile;
-    }
+    allocator.free(metadata.alt_forms);
 
     return .{
         .alt_forms = alt_forms,
-        .normalized_targets = normalized_targets,
+        .canonical_targets = metadata.canonical_targets,
     };
 }
 
-fn decodeAliasNormalizedTargetAlloc(allocator: std.mem.Allocator, payload: []const u8) ![]u8 {
-    var cursor: usize = 0;
-    _ = try readLengthPrefixedSlice(payload, &cursor, payload.len);
-    const encoded = try readLengthPrefixedSlice(payload, &cursor, payload.len);
-    return compact.decodeAlloc(allocator, encoded) catch return error.InvalidDictionaryFile;
-}
-
-fn scanRecordChunk(descriptors: []const RecordDescriptor, chunk: *ScanChunkResult, progress: *CacheBuildProgress) void {
+fn scanRecordChunk(descriptors: []const RecordDescriptor, chunk: *ScanChunkResult, progress: *CacheBuildProgress, dictionary_version: u32) void {
     const allocator = chunk.arena.allocator();
     chunk.entries = allocator.alloc(BuildEntryData, descriptors.len) catch |err| {
         chunk.err = err;
@@ -1425,7 +1417,7 @@ fn scanRecordChunk(descriptors: []const RecordDescriptor, chunk: *ScanChunkResul
     var pending_entries: usize = 0;
     var pending_bytes: usize = 0;
     for (descriptors, 0..) |descriptor, idx| {
-        chunk.entries[idx] = buildEntryFromRecord(allocator, descriptor) catch |err| {
+        chunk.entries[idx] = buildEntryFromRecord(allocator, descriptor, dictionary_version) catch |err| {
             chunk.err = err;
             return;
         };
@@ -1949,56 +1941,45 @@ test "decodeBuildRawMetadataAlloc matches format metadata decode" {
     const payload = try format.encodeRawRecordPayloadAlloc(
         std.testing.allocator,
         &.{
-            .{ .value = "colour", .normalized = "colour" },
-            .{ .value = "Co lor", .normalized = "co lor" },
+            "colour",
+            "Co lor",
         },
         &.{ "color", "colour" },
         "encoded-english",
     );
     defer std.testing.allocator.free(payload);
 
-    var expected = try format.decodeRawRecordMetadataAlloc(std.testing.allocator, payload);
-    defer expected.deinit(std.testing.allocator);
-
-    const actual = try decodeBuildRawMetadataAlloc(std.testing.allocator, payload);
+    const actual = try decodeBuildRawMetadataAlloc(std.testing.allocator, payload, format.version);
     defer {
         for (actual.alt_forms) |alt_form| {
             std.testing.allocator.free(alt_form.value);
             if (!std.mem.eql(u8, alt_form.normalized, alt_form.value)) std.testing.allocator.free(alt_form.normalized);
         }
         std.testing.allocator.free(actual.alt_forms);
-        for (actual.normalized_targets) |target| std.testing.allocator.free(target);
-        std.testing.allocator.free(actual.normalized_targets);
+        for (actual.canonical_targets) |target| std.testing.allocator.free(target);
+        std.testing.allocator.free(actual.canonical_targets);
     }
 
-    try std.testing.expectEqual(expected.alt_forms.len, actual.alt_forms.len);
-    for (expected.alt_forms, actual.alt_forms) |lhs, rhs| {
-        try std.testing.expectEqualStrings(lhs.value, rhs.value);
-        try std.testing.expectEqualStrings(lhs.normalized, rhs.normalized);
+    try std.testing.expectEqual(@as(usize, 2), actual.alt_forms.len);
+    const expected_alt_forms = [_][]const u8{ "colour", "Co lor" };
+    for (expected_alt_forms, actual.alt_forms) |lhs, rhs| {
+        try std.testing.expectEqualStrings(lhs, rhs.value);
+        const normalized = try normalize.normalizeAlloc(std.testing.allocator, lhs);
+        defer std.testing.allocator.free(normalized);
+        try std.testing.expectEqualStrings(normalized, rhs.normalized);
     }
-    try std.testing.expectEqual(expected.normalized_targets.len, actual.normalized_targets.len);
-    for (expected.normalized_targets, actual.normalized_targets) |lhs, rhs| {
+    const expected_targets = [_][]const u8{ "color", "colour" };
+    try std.testing.expectEqual(expected_targets.len, actual.canonical_targets.len);
+    for (expected_targets, actual.canonical_targets) |lhs, rhs| {
         try std.testing.expectEqualStrings(lhs, rhs);
     }
 }
 
-test "decodeAliasNormalizedTargetAlloc matches format decode" {
-    const payload = try format.encodeAliasRecordPayloadAlloc(std.testing.allocator, "Color", "color");
+test "buildEntryFromRecord normalizes redirect targets during cache build" {
+    const payload = try format.encodeAliasRecordPayloadAlloc(std.testing.allocator, "Color");
     defer std.testing.allocator.free(payload);
-
-    const expected = try format.decodeAliasRecordNormalizedTargetAlloc(std.testing.allocator, payload);
-    defer std.testing.allocator.free(expected);
-    const actual = try decodeAliasNormalizedTargetAlloc(std.testing.allocator, payload);
-    defer std.testing.allocator.free(actual);
-
-    try std.testing.expectEqualStrings(expected, actual);
-}
-
-test "buildEntryFromRecord reuses title storage when normalization is identity" {
     const encoded_title = try compact.encodeAlloc(std.testing.allocator, "color");
     defer std.testing.allocator.free(encoded_title);
-    const payload = try format.encodeAliasRecordPayloadAlloc(std.testing.allocator, "color", "color");
-    defer std.testing.allocator.free(payload);
 
     const entry = try buildEntryFromRecord(std.testing.allocator, .{
         .record_offset = 0,
@@ -2006,7 +1987,7 @@ test "buildEntryFromRecord reuses title storage when normalization is identity" 
         .encoded_title = encoded_title,
         .payload = payload,
         .record_len = 0,
-    });
+    }, format.version);
     defer {
         std.testing.allocator.free(entry.word);
         std.testing.allocator.free(entry.normalized_targets[0]);
@@ -2015,6 +1996,7 @@ test "buildEntryFromRecord reuses title storage when normalization is identity" 
 
     try std.testing.expectEqualStrings("color", entry.word);
     try std.testing.expectEqual(@intFromPtr(entry.word.ptr), @intFromPtr(entry.normalized.ptr));
+    try std.testing.expectEqualStrings("color", entry.normalized_targets[0]);
 }
 
 test "tryOpenCache rejects stale cache versions" {
@@ -2100,7 +2082,7 @@ test "dictionary open preserves raw etymology and pronunciation sections through
     try std.testing.expectEqualStrings(raw_english, raw);
 }
 
-test "dictionary cache rebuild reuses precomputed normalized alias metadata" {
+test "dictionary cache rebuild recomputes normalized alias metadata" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 

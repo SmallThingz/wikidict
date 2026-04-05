@@ -153,6 +153,16 @@ pub fn build(b: *std.Build) void {
     }
 
     {
+        const cmd = b.addSystemCommand(&.{ "bash", "tools/parsoid-audit" });
+        cmd.addFileArg(parsoid_tester_exe.getEmittedBin());
+        cmd.addArgs(&.{ "--prime-cache", "--threads", "4" });
+        if (b.args) |args| cmd.addArgs(args);
+
+        const step = b.step("parsoid-runner", "Populate the local Parsoid cache database");
+        step.dependOn(&cmd.step);
+    }
+
+    {
         const cmd = b.addSystemCommand(&.{ "bash", "tools/frontend" });
         if (b.args) |args| cmd.addArgs(args);
 

@@ -1,28 +1,225 @@
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
+import { DatabaseSync } from "node:sqlite";
 
 import { parse } from "node-html-parser";
 
 const cacheDir = process.env.DICT_PARSOID_CACHE_DIR || "data/parsoid-cache";
+const cacheDbPath = process.env.DICT_PARSOID_DB_PATH || "data/parsoid-cache.sqlite";
 const debugHtmlDir = process.env.DICT_PARSOID_DEBUG_HTML_DIR || "";
 const userAgent =
   process.env.DICT_PARSOID_USER_AGENT ||
   "dict-parsoid-audit/1.0 (local developer tool; purpose: renderer comparison)";
-const parsoidApiUrl =
-  process.env.DICT_PARSOID_API_URL || "https://en.wiktionary.org/w/api.php";
-const cacheVersion = "v11";
-const requestTimeoutMs = Number(process.env.DICT_PARSOID_TIMEOUT_MS || 20000);
-const maxAttempts = Math.max(1, Number(process.env.DICT_PARSOID_MAX_ATTEMPTS || 20));
-const minRequestSpacingMs = Math.max(0, Number(process.env.DICT_PARSOID_MIN_SPACING_MS || 1000));
+const parsoidApiUrl = process.env.DICT_PARSOID_API_URL || "https://en.wiktionary.org/w/api.php";
+const phpCmd = process.env.DICT_PARSOID_PHP_CMD || "php";
+const phpWorkerPath =
+  process.env.DICT_PARSOID_PHP_WORKER || path.resolve("tools/parsoid-worker/php_worker.php");
+const cacheVersion = "parsoid-php-v0.22.2-v1";
+const minParsoidIntervalMs = parseIntegerEnv("DICT_PARSOID_MIN_INTERVAL_MS", 1000);
+const parsoidRetryBaseMs = parseIntegerEnv("DICT_PARSOID_RETRY_BASE_MS", 2000);
+const maxParsoidRetries = parseIntegerEnv("DICT_PARSOID_MAX_RETRIES", 6);
 
-let nextAllowedRequestAt = 0;
+let nextParsoidRequestAtMs = 0;
 
 await fs.mkdir(cacheDir, { recursive: true });
+await fs.mkdir(path.dirname(cacheDbPath), { recursive: true });
 if (debugHtmlDir) {
   await fs.mkdir(debugHtmlDir, { recursive: true });
 }
+
+const db = new DatabaseSync(cacheDbPath);
+db.exec(`
+  PRAGMA journal_mode = WAL;
+  PRAGMA synchronous = NORMAL;
+  PRAGMA busy_timeout = 5000;
+  CREATE TABLE IF NOT EXISTS parsoid_results (
+    cache_key TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    raw_sha1 TEXT NOT NULL,
+    cache_version TEXT NOT NULL,
+    sections_json TEXT NOT NULL,
+    html_text TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+  );
+`);
+const selectCachedResult = db.prepare(
+  "SELECT sections_json FROM parsoid_results WHERE cache_key = ? AND cache_version = ?",
+);
+const upsertCachedResult = db.prepare(`
+  INSERT INTO parsoid_results (
+    cache_key,
+    title,
+    raw_sha1,
+    cache_version,
+    sections_json,
+    html_text,
+    created_at_ms,
+    updated_at_ms
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(cache_key) DO UPDATE SET
+    title = excluded.title,
+    raw_sha1 = excluded.raw_sha1,
+    cache_version = excluded.cache_version,
+    sections_json = excluded.sections_json,
+    html_text = excluded.html_text,
+    updated_at_ms = excluded.updated_at_ms
+`);
+
+async function loadParsoidSections(title, raw) {
+  const filteredRaw = stripAuditExcludedWikitext(raw);
+  const key = crypto.createHash("sha1").update(cacheVersion).update("\0").update(title).update("\0").update(filteredRaw).digest("hex");
+  const rawSha1 = crypto.createHash("sha1").update(filteredRaw).digest("hex");
+  const cachedRow = selectCachedResult.get(key, cacheVersion);
+  if (cachedRow?.sections_json) {
+    return reAuditCachedSections(JSON.parse(cachedRow.sections_json));
+  }
+
+  const legacySections = await loadLegacyCachedSections(title, raw, filteredRaw);
+  if (legacySections) {
+    const nowMs = Date.now();
+    upsertCachedResult.run(
+      key,
+      title,
+      rawSha1,
+      cacheVersion,
+      JSON.stringify(legacySections),
+      "",
+      nowMs,
+      nowMs,
+    );
+    return legacySections;
+  }
+
+  const html = await renderParsoidHtml(title, filteredRaw);
+
+  if (debugHtmlDir) {
+    await fs.writeFile(path.join(debugHtmlDir, `${key}.html`), html, "utf8");
+  }
+
+  const normalized = normalizeParsoidHtml(title, html);
+  const nowMs = Date.now();
+  upsertCachedResult.run(
+    key,
+    title,
+    rawSha1,
+    cacheVersion,
+    JSON.stringify(normalized),
+    html,
+    nowMs,
+    nowMs,
+  );
+  return normalized;
+}
+
+async function loadLegacyCachedSections(title, raw, filteredRaw) {
+  for (const candidate of legacyCacheCandidates(title, raw, filteredRaw)) {
+    try {
+      const cached = JSON.parse(await fs.readFile(candidate.path, "utf8"));
+      if (Array.isArray(cached)) {
+        return reAuditCachedSections(cached);
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  return null;
+}
+
+function legacyCacheCandidates(title, raw, filteredRaw) {
+  return [
+    legacyCacheCandidate("v11", title, filteredRaw),
+    legacyCacheCandidate("v9", title, filteredRaw),
+    legacyCacheCandidate("v5", title, filteredRaw),
+    legacyCacheCandidate("v4", title, filteredRaw),
+    legacyCacheCandidate("v3", title, raw),
+  ];
+}
+
+function legacyCacheCandidate(version, title, raw) {
+  const key = crypto.createHash("sha1").update(version).update("\0").update(title).update("\0").update(raw).digest("hex");
+  return {
+    version,
+    key,
+    path: path.join(cacheDir, `${key}.json`),
+  };
+}
+
+class PhpWorkerClient {
+  constructor() {
+    this.pending = [];
+    this.failed = null;
+    this.child = spawn(phpCmd, [phpWorkerPath], {
+      stdio: ["pipe", "pipe", "inherit"],
+      env: {
+        ...process.env,
+        PARSOID_API_URL: parsoidApiUrl,
+        PARSOID_USER_AGENT: userAgent,
+      },
+    });
+    this.reader = readline.createInterface({
+      input: this.child.stdout,
+      crlfDelay: Infinity,
+    });
+    this.reader.on("line", (line) => this.handleLine(line));
+    this.child.on("exit", (code, signal) => {
+      const summary = `php worker exited unexpectedly: code=${code ?? "null"} signal=${signal ?? "null"}`;
+      this.failed = new Error(summary);
+      while (this.pending.length > 0) {
+        this.pending.shift().reject(this.failed);
+      }
+    });
+  }
+
+  handleLine(line) {
+    const pending = this.pending.shift();
+    if (!pending) return;
+
+    try {
+      const response = JSON.parse(line);
+      if (!response?.ok) {
+        pending.reject(new Error(response?.summary || "Parsoid PHP worker failed"));
+        return;
+      }
+      pending.resolve(String(response.html || ""));
+    } catch (error) {
+      pending.reject(error);
+    }
+  }
+
+  render(title, raw) {
+    if (this.failed) return Promise.reject(this.failed);
+    return new Promise((resolve, reject) => {
+      this.pending.push({ resolve, reject });
+      this.child.stdin.write(
+        JSON.stringify({
+          title,
+          raw,
+        }) + "\n",
+      );
+    });
+  }
+
+  async close() {
+    if (this.child.exitCode !== null) return;
+    this.reader.close();
+    this.child.stdin.end();
+    await new Promise((resolve) => {
+      this.child.once("exit", () => resolve());
+      setTimeout(() => {
+        this.child.kill();
+        resolve();
+      }, 1000).unref();
+    });
+  }
+}
+
+const phpWorker = new PhpWorkerClient();
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -49,8 +246,15 @@ for await (const line of rl) {
   }
 
   try {
-    const ourSections = normalizeOurSections(request.sections ?? [], request.title ?? "");
+    const mode = request.mode === "prime" ? "prime" : "compare";
     const parsoidSections = await loadParsoidSections(request.title ?? "Test", request.raw ?? "");
+
+    if (mode === "prime") {
+      process.stdout.write(JSON.stringify({ ok: true, cached: true }) + "\n");
+      continue;
+    }
+
+    const ourSections = normalizeOurSections(request.sections ?? [], request.title ?? "");
     const diff = compareSections(ourSections, parsoidSections);
 
     process.stdout.write(
@@ -79,25 +283,63 @@ for await (const line of rl) {
   }
 }
 
-async function loadParsoidSections(title, raw) {
-  const filteredRaw = stripAuditExcludedWikitext(raw);
-  const key = crypto.createHash("sha1").update(cacheVersion).update("\0").update(title).update("\0").update(filteredRaw).digest("hex");
-  const cachePath = path.join(cacheDir, `${key}.json`);
+await phpWorker.close();
+db.close();
 
-  try {
-    const cached = JSON.parse(await fs.readFile(cachePath, "utf8"));
-    if (Array.isArray(cached)) return reAuditCachedSections(cached);
-  } catch {}
-
-  const html = await fetchParsoidHtml(title, filteredRaw);
-
-  if (debugHtmlDir) {
-    await fs.writeFile(path.join(debugHtmlDir, `${key}.html`), html, "utf8");
+async function renderParsoidHtml(title, raw) {
+  let attempt = 0;
+  while (true) {
+    await waitForParsoidSlot();
+    try {
+      return await phpWorker.render(title, raw);
+    } catch (error) {
+      if (!isRetryableParsoidError(error) || attempt >= maxParsoidRetries) {
+        throw error;
+      }
+      const delayMs = computeRetryDelayMs(attempt);
+      await sleep(delayMs);
+      attempt += 1;
+    }
   }
+}
 
-  const normalized = normalizeParsoidHtml(title, html);
-  await fs.writeFile(cachePath, JSON.stringify(normalized), "utf8");
-  return normalized;
+async function waitForParsoidSlot() {
+  const now = Date.now();
+  const waitMs = Math.max(0, nextParsoidRequestAtMs - now);
+  nextParsoidRequestAtMs = Math.max(nextParsoidRequestAtMs, now) + minParsoidIntervalMs;
+  if (waitMs > 0) {
+    await sleep(waitMs);
+  }
+}
+
+function isRetryableParsoidError(error) {
+  const summary = formatError(error);
+  return summary.includes("HTTP code 429") ||
+    summary.includes("HTTP code 503") ||
+    summary.includes("HTTP code 504") ||
+    summary.includes("ETIMEDOUT") ||
+    summary.includes("ECONNRESET") ||
+    summary.includes("Broken pipe") ||
+    summary.includes("stream timeout");
+}
+
+function computeRetryDelayMs(attempt) {
+  const exponential = Math.min(parsoidRetryBaseMs * (2 ** attempt), 60000);
+  const jitter = Math.floor(Math.random() * 250);
+  return exponential + jitter;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms).unref();
+  });
+}
+
+function parseIntegerEnv(name, fallback) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function reAuditCachedSections(sections) {
@@ -294,90 +536,6 @@ function shouldSkipAuditLine(sectionTitle, line) {
     if (/^More at\s+/i.test(line)) return true;
   }
   return false;
-}
-
-async function fetchParsoidHtml(title, raw) {
-  const params = new URLSearchParams({
-    action: "parse",
-    format: "json",
-    formatversion: "2",
-    parser: "parsoid",
-    prop: "text",
-    contentmodel: "wikitext",
-    title: title || "Test",
-    text: raw,
-  });
-
-  let lastError;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    try {
-      const waitMs = nextAllowedRequestAt - Date.now();
-      if (waitMs > 0) await sleep(waitMs);
-      nextAllowedRequestAt = Date.now() + minRequestSpacingMs;
-
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(new Error("Parsoid API request timed out")), requestTimeoutMs);
-      let response;
-      try {
-        response = await fetch(parsoidApiUrl, {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded; charset=utf-8",
-            "user-agent": userAgent,
-          },
-          body: params,
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timeout);
-      }
-
-      if (!response.ok) {
-        if (response.status === 429 && attempt + 1 < maxAttempts) {
-          const retryAfter = parseRetryAfterMs(response.headers.get("retry-after"));
-          await sleep(retryAfter ?? backoffDelayMs(attempt, true));
-          continue;
-        }
-        throw new Error(`Parsoid API request failed: HTTP ${response.status}`);
-      }
-
-      const payload = await response.json();
-      if (payload?.error) {
-        throw new Error(
-          `Parsoid API error: ${payload.error.code || payload.error.info || JSON.stringify(payload.error)}`,
-        );
-      }
-
-      return String(payload?.parse?.text || "");
-    } catch (error) {
-      lastError = error;
-      if (attempt + 1 < maxAttempts) {
-        await sleep(backoffDelayMs(attempt, false));
-      }
-    }
-  }
-
-  throw lastError;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function parseRetryAfterMs(value) {
-  const trimmed = String(value || "").trim();
-  if (!trimmed) return null;
-  if (/^\d+$/.test(trimmed)) return Math.max(1000, Number(trimmed) * 1000);
-  const absolute = Date.parse(trimmed);
-  if (!Number.isFinite(absolute)) return null;
-  return Math.max(1000, absolute - Date.now());
-}
-
-function backoffDelayMs(attempt, throttled) {
-  const cappedAttempt = Math.min(attempt, 6);
-  const base = throttled ? 4000 : 350;
-  const spread = throttled ? 600 : 150;
-  return base * (2 ** cappedAttempt) + Math.floor(Math.random() * spread);
 }
 
 function compareSections(ourSections, parsoidSections) {
@@ -812,6 +970,7 @@ function walkOurBlocks(node, lines) {
       } else {
         lines.push(...extractBlockLines(child, { ignoreNestedLists: true }));
       }
+      appendNestedTermGridLines(child, lines);
       continue;
     }
 
@@ -826,6 +985,21 @@ function walkOurBlocks(node, lines) {
     }
 
     walkOurBlocks(child, lines);
+  }
+}
+
+function appendNestedTermGridLines(node, lines) {
+  if (!node?.childNodes) return;
+  for (const child of node.childNodes) {
+    if (!isElement(child)) continue;
+    if (shouldSkipElement(child)) continue;
+
+    if (hasClassName(child, "render-term-grid")) {
+      walkOurBlocks(child, lines);
+      continue;
+    }
+
+    appendNestedTermGridLines(child, lines);
   }
 }
 
@@ -844,7 +1018,7 @@ function normalizeParsoidHtml(title, html) {
     lowerCaseTagName: false,
   });
 
-  const english = findEnglishSection(root);
+  const english = findEnglishSection(root) || findEnglishHeadingContentRoot(root);
   if (!english) return [];
 
   const state = {
@@ -896,6 +1070,7 @@ function shouldKeepComparableLine(sectionTitle, line) {
   if (looksLikeReferenceLine(trimmed)) return false;
   if (/^for (?:more )?quotations using this term,\s*see\b/i.test(trimmed)) return false;
   if (normalizedTitle === "<lead>" && (/^(?:wiktionary|en)$/i.test(trimmed) || /^upright\s*=/.test(trimmed))) return false;
+  if (/^Collocations?$/i.test(normalizedTitle) && /^-\s+/.test(plainTrimmed)) return false;
 
   if (/^Etymology(?:\s+\d+)?$/i.test(normalizedTitle)) {
     if (/^(?:↑\s*)?compare\b/i.test(plainTrimmed)) return false;
@@ -926,6 +1101,34 @@ function findEnglishSection(root) {
     if (heading && normalizeText(heading.text) === "English") return section;
   }
   return null;
+}
+
+function findEnglishHeadingContentRoot(root) {
+  if (!root?.childNodes) return null;
+
+  const englishChildren = [];
+  let inEnglish = false;
+
+  for (const child of root.childNodes) {
+    if (!isElement(child)) continue;
+
+    if (child.tagName === "SECTION") continue;
+
+    if (child.tagName === "H2") {
+      const headingTitle = normalizeText(child.text);
+      if (inEnglish) break;
+      if (headingTitle === "English") {
+        inEnglish = true;
+      }
+      continue;
+    }
+
+    if (!inEnglish) continue;
+    englishChildren.push(child);
+  }
+
+  if (englishChildren.length === 0) return null;
+  return { childNodes: englishChildren };
 }
 
 function walkParsoidContent(node, state) {
@@ -1106,6 +1309,10 @@ function shouldSkipElement(node) {
 
 function isElement(node) {
   return Boolean(node?.tagName);
+}
+
+function hasClassName(node, className) {
+  return (node?.classNames ?? []).includes(className);
 }
 
 function normalizeText(text) {

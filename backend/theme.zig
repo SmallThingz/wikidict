@@ -116,18 +116,6 @@ pub fn detectSystemPalette(io: std.Io, allocator: std.mem.Allocator) !Palette {
         if (try probeGtk(io, allocator)) |palette| return palette;
         return fallbackPalette(allocator, .qt, .light, "KDE");
     }
-    if (containsIgnoreCase(desktop, "gnome") or
-        containsIgnoreCase(desktop, "gtk") or
-        containsIgnoreCase(desktop, "cinnamon") or
-        containsIgnoreCase(desktop, "mate") or
-        containsIgnoreCase(desktop, "pantheon") or
-        containsIgnoreCase(desktop, "xfce") or
-        containsIgnoreCase(desktop, "ubuntu"))
-    {
-        if (try probeGtk(io, allocator)) |palette| return palette;
-        if (try probeQt(io, allocator, envVar("HOME"))) |palette| return palette;
-        return fallbackPalette(allocator, .gtk, .light, "GTK");
-    }
 
     if (try probeQt(io, allocator, envVar("HOME"))) |palette| return palette;
     if (try probeGtk(io, allocator)) |palette| return palette;
