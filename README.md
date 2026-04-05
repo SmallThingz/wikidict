@@ -93,7 +93,7 @@ If `data/enwiktionary.bin` does not exist, the backend will build it from `enwik
 
 ## Frontend Commands
 
-The frontend now uses a single wrapper CLI at `tools/frontend`:
+The frontend now uses a Zig CLI wrapper:
 
 ```bash
 zig build frontend -- install

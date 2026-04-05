@@ -999,9 +999,6 @@ fn parseOptions(args: []const []const u8) !Options {
             options.thread_count = try std.fmt.parseInt(usize, args[i + 1], 10);
             if (options.thread_count.? == 0) return error.InvalidArgument;
             i += 1;
-        } else if (std.mem.eql(u8, arg, "--exclude") and i + 1 < args.len) {
-            options.exclusions = try parseExclusions(args[i + 1]);
-            i += 1;
         } else if (std.mem.eql(u8, arg, "--help")) {
             printUsage();
             std.process.exit(0);
@@ -1016,34 +1013,10 @@ fn printUsage() void {
     std.debug.print(
         \\dict-verify [--input enwiktionary.xml] [--db data/enwiktionary.bin]
         \\            [--report data/verification-report.txt] [--limit 10000]
-        \\            [--threads N] [--exclude anagrams,citations,meta,statistics,further_reading,translations]
+        \\            [--threads N]
+        \\build-time exclusions come from -Dskip-headings=...
         \\
     , .{});
-}
-
-fn parseExclusions(value: []const u8) !wikitext.ExclusionPolicy {
-    var policy: wikitext.ExclusionPolicy = .{};
-    var parts = std.mem.splitScalar(u8, value, ',');
-    while (parts.next()) |raw_part| {
-        const part = std.mem.trim(u8, raw_part, " \t");
-        if (part.len == 0) continue;
-        if (std.ascii.eqlIgnoreCase(part, "anagrams")) {
-            policy.exclude_anagrams = true;
-        } else if (std.ascii.eqlIgnoreCase(part, "citations")) {
-            policy.exclude_citations = true;
-        } else if (std.ascii.eqlIgnoreCase(part, "meta")) {
-            policy.exclude_meta = true;
-        } else if (std.ascii.eqlIgnoreCase(part, "statistics")) {
-            policy.exclude_statistics = true;
-        } else if (std.ascii.eqlIgnoreCase(part, "further_reading") or std.ascii.eqlIgnoreCase(part, "further-reading")) {
-            policy.exclude_further_reading = true;
-        } else if (std.ascii.eqlIgnoreCase(part, "translations")) {
-            policy.exclude_translations = true;
-        } else {
-            return error.InvalidArgument;
-        }
-    }
-    return policy;
 }
 
 fn writeTestFile(dir: std.Io.Dir, name: []const u8, contents: []const u8) !void {
@@ -1450,7 +1423,7 @@ test "verifyDictionary keeps non-English entries by default filter configuration
     try std.testing.expectEqual(@as(usize, 0), stats.failures());
 }
 
-test "parseExclusions accepts translations" {
-    const exclusions = try parseExclusions("translations");
+test "wikitext.parseExclusionPolicy accepts translations" {
+    const exclusions = try wikitext.parseExclusionPolicy("translations");
     try std.testing.expect(exclusions.exclude_translations);
 }

@@ -673,7 +673,7 @@ fn collectLogicalLinesAlloc(
                     .text = try pending.toOwnedSlice(allocator),
                     .line_number = pending_start_line,
                 });
-                pending = .empty;
+                pending.items.len = 0;
                 in_gallery = false;
             }
             current_line_number += 1;
@@ -694,7 +694,7 @@ fn collectLogicalLinesAlloc(
                     .text = try pending.toOwnedSlice(allocator),
                     .line_number = pending_start_line,
                 });
-                pending = .empty;
+                pending.items.len = 0;
             } else {
                 in_gallery = true;
             }
@@ -728,7 +728,7 @@ fn collectLogicalLinesAlloc(
                         .text = repaired,
                         .line_number = pending_start_line,
                     });
-                    pending = .empty;
+                    pending.items.len = 0;
                     balance = .{};
                 }
             }
@@ -748,7 +748,7 @@ fn collectLogicalLinesAlloc(
                 .text = finalized,
                 .line_number = pending_start_line,
             });
-            pending = .empty;
+            pending.items.len = 0;
             balance = .{};
             current_line_number += 1;
             continue;

@@ -1,3 +1,0 @@
-[submodule "tools/parsoid-php"]
-	path = tools/parsoid-php
-	url = https://github.com/wikimedia/mediawiki-services-parsoid.git

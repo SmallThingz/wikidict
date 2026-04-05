@@ -9,7 +9,7 @@ const section_encoding = encoder.section_encoding;
 const wikitext = encoder.wikitext;
 
 const cache_magic = "DCTIDX04";
-const cache_version: u32 = 5;
+const cache_version: u32 = 6;
 const cache_alignment: u32 = 8;
 
 fn isSupportedDictionaryVersion(dict_version: u32) bool {
@@ -174,13 +174,17 @@ const CacheBuildData = struct {
 };
 
 const OpenCache = struct {
-    file: std.Io.File,
     mapping: []align(std.heap.page_size_min) const u8,
     header: *const CacheHeader,
     entries: []const CachedEntry,
     incoming_aliases: []const u32,
     lookups: []const CachedLookup,
     strings: []const u8,
+};
+
+const MappedReadOnlyFile = struct {
+    stat: std.Io.File.Stat,
+    mapping: []align(std.heap.page_size_min) const u8,
 };
 
 const EntryRecordView = struct {
@@ -551,9 +555,6 @@ pub const EntryView = struct {
 };
 
 pub const Dictionary = struct {
-    io: std.Io,
-    file: std.Io.File,
-    cache_file: std.Io.File,
     mapping: []align(std.heap.page_size_min) const u8,
     cache_mapping: []align(std.heap.page_size_min) const u8,
     header: *const format.Header,
@@ -564,33 +565,23 @@ pub const Dictionary = struct {
     strings: []const u8,
 
     pub fn open(allocator: std.mem.Allocator, io: std.Io, path: []const u8, options: OpenOptions) !Dictionary {
-        var file = try std.Io.Dir.cwd().openFile(io, path, .{});
-        errdefer file.close(io);
+        const db = try mmapReadOnlyPath(io, path);
+        errdefer std.posix.munmap(db.mapping);
 
-        const stat = try file.stat(io);
-        const mapped = try mapWholeFile(file, stat.size);
-        errdefer std.posix.munmap(mapped);
-
-        if (stat.size < @sizeOf(format.Header)) return error.InvalidDictionaryFile;
-        const header: *const format.Header = @ptrCast(@alignCast(mapped.ptr));
+        if (db.stat.size < @sizeOf(format.Header)) return error.InvalidDictionaryFile;
+        const header: *const format.Header = @ptrCast(@alignCast(db.mapping.ptr));
         if (!hasSupportedDictionaryMagic(header)) return error.InvalidDictionaryFile;
         if (!isSupportedDictionaryVersion(header.version)) return error.UnsupportedDictionaryVersion;
         if (!hasCompatibleDictionaryFingerprint(header)) return error.UnsupportedDictionaryVersion;
 
         const records_end = std.math.add(u64, header.records_offset, header.records_len) catch return error.InvalidDictionaryFile;
-        if (records_end > stat.size) return error.InvalidDictionaryFile;
+        if (records_end > db.stat.size) return error.InvalidDictionaryFile;
 
-        const cache = try openOrBuildCache(allocator, io, path, stat, mapped, header, options);
-        errdefer {
-            std.posix.munmap(cache.mapping);
-            cache.file.close(io);
-        }
+        const cache = try openOrBuildCache(allocator, io, path, db.stat, db.mapping, header, options);
+        errdefer std.posix.munmap(cache.mapping);
 
         return .{
-            .io = io,
-            .file = file,
-            .cache_file = cache.file,
-            .mapping = mapped,
+            .mapping = db.mapping,
             .cache_mapping = cache.mapping,
             .header = header,
             .cache_header = cache.header,
@@ -603,9 +594,7 @@ pub const Dictionary = struct {
 
     pub fn deinit(self: *Dictionary) void {
         std.posix.munmap(self.cache_mapping);
-        self.cache_file.close(self.io);
         std.posix.munmap(self.mapping);
-        self.file.close(self.io);
     }
 
     pub fn entryAt(self: *const Dictionary, index: u32) EntryView {
@@ -1015,65 +1004,41 @@ fn openOrBuildCache(
 }
 
 fn tryOpenCache(io: std.Io, cache_path: []const u8, expected_key: u64) !?OpenCache {
-    var file = std.Io.Dir.cwd().openFile(io, cache_path, .{}) catch |err| switch (err) {
+    const cache = mmapReadOnlyPath(io, cache_path) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
+    errdefer std.posix.munmap(cache.mapping);
+    if (cache.stat.size < cache_header_size) return null;
 
-    const stat = file.stat(io) catch |err| {
-        file.close(io);
-        return err;
-    };
-    if (stat.size < cache_header_size) {
-        file.close(io);
-        return null;
-    }
-
-    const mapped = mapWholeFile(file, stat.size) catch |err| {
-        file.close(io);
-        return err;
-    };
-    errdefer std.posix.munmap(mapped);
-
-    const header: *const CacheHeader = @ptrCast(@alignCast(mapped.ptr));
+    const header: *const CacheHeader = @ptrCast(@alignCast(cache.mapping.ptr));
     if (!std.mem.eql(u8, &header.magic_bytes, cache_magic) or
         header.version != cache_version or
         header.header_size != cache_header_size or
         header.cache_key != expected_key)
     {
-        std.posix.munmap(mapped);
-        file.close(io);
         return null;
     }
 
-    const entries = viewArray(CachedEntry, mapped, header.entries_offset, header.entry_count) catch {
-        std.posix.munmap(mapped);
-        file.close(io);
+    const entries = viewArray(CachedEntry, cache.mapping, header.entries_offset, header.entry_count) catch {
         return null;
     };
-    const incoming_aliases = viewArray(u32, mapped, header.incoming_aliases_offset, header.incoming_alias_count) catch {
-        std.posix.munmap(mapped);
-        file.close(io);
+    const incoming_aliases = viewArray(u32, cache.mapping, header.incoming_aliases_offset, header.incoming_alias_count) catch {
         return null;
     };
-    const lookups = viewArray(CachedLookup, mapped, header.lookups_offset, header.lookup_count) catch {
-        std.posix.munmap(mapped);
-        file.close(io);
+    const lookups = viewArray(CachedLookup, cache.mapping, header.lookups_offset, header.lookup_count) catch {
         return null;
     };
     const strings_offset: usize = header.strings_offset;
     const strings_len: usize = header.strings_len;
-    const strings = if (strings_offset <= mapped.len and strings_len <= mapped.len - strings_offset)
-        mapped[strings_offset .. strings_offset + strings_len]
+    const strings = if (strings_offset <= cache.mapping.len and strings_len <= cache.mapping.len - strings_offset)
+        cache.mapping[strings_offset .. strings_offset + strings_len]
     else {
-        std.posix.munmap(mapped);
-        file.close(io);
         return null;
     };
 
     return .{
-        .file = file,
-        .mapping = mapped,
+        .mapping = cache.mapping,
         .header = header,
         .entries = entries,
         .incoming_aliases = incoming_aliases,
@@ -1507,12 +1472,31 @@ fn mapWholeFile(file: std.Io.File, size_u64: u64) ![]align(std.heap.page_size_mi
 
     return try std.posix.mmap(
         null,
-        std.mem.alignForward(usize, size, std.heap.page_size_min),
+        size,
         .{ .READ = true },
         .{ .TYPE = .PRIVATE },
         file.handle,
         0,
     );
+}
+
+fn mmapReadOnlyPath(io: std.Io, path: []const u8) !MappedReadOnlyFile {
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    }, 0);
+    var file: std.Io.File = .{
+        .handle = fd,
+        .flags = .{ .nonblocking = false },
+    };
+    defer file.close(io);
+
+    const stat = try file.stat(io);
+    const mapping = try mapWholeFile(file, stat.size);
+    return .{
+        .stat = stat,
+        .mapping = mapping,
+    };
 }
 
 fn viewArray(comptime T: type, mapped: []align(std.heap.page_size_min) const u8, offset_u32: u32, count_u32: u32) ![]const T {
@@ -1529,20 +1513,27 @@ fn viewArray(comptime T: type, mapped: []align(std.heap.page_size_min) const u8,
 
 fn computeCacheKey(stat: anytype, header: *const format.Header) u64 {
     var hasher = std.hash.Wyhash.init(0);
+    const size: u64 = @intCast(stat.size);
+    const mtime_ns: i128 = stat.mtime.nanoseconds;
+    const version: u32 = header.version;
+    const reserved0: u32 = header.reserved0;
+    const entry_count: u32 = header.entry_count;
+    const raw_entry_count: u32 = header.raw_entry_count;
+    const redirect_count: u32 = header.redirect_count;
+    const records_offset: u64 = header.records_offset;
+    const records_len: u64 = header.records_len;
+
     inline for (.{
-        stat.size,
-        stat.mtime.nanoseconds,
-        header.version,
-        header.reserved0,
-        header.entry_count,
-        header.raw_entry_count,
-        header.redirect_count,
-        header.records_offset,
-        header.records_len,
-    }) |value| {
-        const local = value;
-        hasher.update(std.mem.asBytes(&local));
-    }
+        size,
+        mtime_ns,
+        version,
+        reserved0,
+        entry_count,
+        raw_entry_count,
+        redirect_count,
+        records_offset,
+        records_len,
+    }) |value| hasher.update(std.mem.asBytes(&value));
     return hasher.final();
 }
 
@@ -2136,6 +2127,56 @@ test "dictionary open preserves raw etymology and pronunciation sections through
     const raw = (try dict.entryAt(hits[0].entry_index).rawEnglishAlloc(std.testing.allocator)).?;
     defer std.testing.allocator.free(raw);
     try std.testing.expectEqualStrings(raw_english, raw);
+}
+
+test "dictionary open reuses an up-to-date cache file" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>ring</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# [[circle]]
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
+    defer xml_file.close(std.testing.io);
+    try xml_file.writePositionalAll(std.testing.io, xml, 0);
+
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_path);
+    const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(xml_path);
+    const cache_path = try std.fmt.allocPrint(std.testing.allocator, "{s}.idx", .{db_path});
+    defer std.testing.allocator.free(cache_path);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_path,
+        .output_path = db_path,
+    });
+
+    {
+        var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path, .{});
+        defer dict.deinit();
+    }
+
+    const first_stat = try std.Io.Dir.cwd().statFile(std.testing.io, cache_path, .{});
+
+    {
+        var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path, .{});
+        defer dict.deinit();
+    }
+
+    const second_stat = try std.Io.Dir.cwd().statFile(std.testing.io, cache_path, .{});
+    try std.testing.expectEqual(first_stat.size, second_stat.size);
+    try std.testing.expectEqual(first_stat.mtime.nanoseconds, second_stat.mtime.nanoseconds);
 }
 
 test "dictionary build keeps non-English entries even without an English section" {

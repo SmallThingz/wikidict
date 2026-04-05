@@ -91,16 +91,68 @@ pub const ExclusionPolicy = struct {
     exclude_translations: bool = false,
 
     pub fn defaultCompact() ExclusionPolicy {
-        return .{
-            .exclude_anagrams = true,
-            .exclude_citations = true,
-            .exclude_meta = true,
-            .exclude_statistics = true,
-            .exclude_further_reading = true,
-            .exclude_translations = !config.keep_translations,
-        };
+        return parseExclusionPolicy(config.skip_headings_csv) catch @panic("invalid -Dskip-headings value");
     }
 };
+
+pub fn parseExclusionPolicy(value: []const u8) !ExclusionPolicy {
+    var policy: ExclusionPolicy = .{};
+    var parts = std.mem.splitScalar(u8, value, ',');
+    while (parts.next()) |raw_part| {
+        const part = std.mem.trim(u8, raw_part, " \t");
+        if (part.len == 0) continue;
+
+        if (std.ascii.eqlIgnoreCase(part, "anagrams") or headingMatches(part, "Anagrams")) {
+            policy.exclude_anagrams = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(part, "statistics") or headingMatches(part, "Statistics")) {
+            policy.exclude_statistics = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(part, "further_reading") or
+            std.ascii.eqlIgnoreCase(part, "further-reading") or
+            headingMatches(part, "Further reading"))
+        {
+            policy.exclude_further_reading = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(part, "translations") or headingMatches(part, "Translations") or headingMatches(part, "Translate")) {
+            policy.exclude_translations = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(part, "citations")) {
+            policy.exclude_citations = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(part, "meta")) {
+            policy.exclude_meta = true;
+            continue;
+        }
+
+        if (sectionParserSpecForTitle(part, 3)) |parser| {
+            switch (parser.kind) {
+                .citations => policy.exclude_citations = true,
+                .meta => policy.exclude_meta = true,
+                .translations => policy.exclude_translations = true,
+                else => return error.InvalidArgument,
+            }
+            continue;
+        }
+        if (sectionParserSpecForTitle(part, 4)) |parser| {
+            switch (parser.kind) {
+                .citations => policy.exclude_citations = true,
+                .meta => policy.exclude_meta = true,
+                .translations => policy.exclude_translations = true,
+                else => return error.InvalidArgument,
+            }
+            continue;
+        }
+
+        return error.InvalidArgument;
+    }
+    return policy;
+}
 
 pub const SectionParserKind = enum {
     language_root,
@@ -3443,7 +3495,7 @@ test "filter english section honors compact exclusion policy" {
 
     try std.testing.expect(std.mem.indexOf(u8, filtered, "===Pronunciation===") != null);
     try std.testing.expect(std.mem.indexOf(u8, filtered, "===Noun===") != null);
-    if (config.keep_translations) {
+    if (!ExclusionPolicy.defaultCompact().exclude_translations) {
         try std.testing.expect(std.mem.indexOf(u8, filtered, "===Translations===") != null);
     } else {
         try std.testing.expect(std.mem.indexOf(u8, filtered, "===Translations===") == null);
@@ -3453,6 +3505,15 @@ test "filter english section honors compact exclusion policy" {
     try std.testing.expect(std.mem.indexOf(u8, filtered, "===Anagrams===") == null);
     try std.testing.expect(std.mem.indexOf(u8, filtered, "===Statistics===") == null);
     try std.testing.expect(std.mem.indexOf(u8, filtered, "===Dialects===") == null);
+}
+
+test "parseExclusionPolicy accepts heading titles and policy names" {
+    const exclusions = try parseExclusionPolicy("Anagrams,Further reading,translations,References,meta");
+    try std.testing.expect(exclusions.exclude_anagrams);
+    try std.testing.expect(exclusions.exclude_further_reading);
+    try std.testing.expect(exclusions.exclude_translations);
+    try std.testing.expect(exclusions.exclude_citations);
+    try std.testing.expect(exclusions.exclude_meta);
 }
 
 test "filter english section strips inline quotation examples in compact mode" {
