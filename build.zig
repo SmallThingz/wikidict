@@ -58,11 +58,10 @@ pub fn build(b: *std.Build) void {
     });
     renderer_mod.addImport("shared_html_entities", shared_html_entities_mod);
     const parsoid_mod = b.addModule("parsoid", .{
-        .root_source_file = b.path("parsoid/root.zig"),
+        .root_source_file = b.path("tools/parsoid/root.zig"),
         .target = target,
         .optimize = optimize,
     });
-    parsoid_mod.addImport("renderer", renderer_mod);
 
     const encoder_mod = b.addModule("encoder", .{
         .root_source_file = b.path("encoder/root.zig"),
@@ -135,6 +134,10 @@ pub fn build(b: *std.Build) void {
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "parsoid", .module = parsoid_mod },
     });
+    const populate_db_exe = addCliExecutable(b, "dict-populate-db", b.path("tools/parsoid_populate_db.zig"), target, optimize, &.{
+        .{ .name = "decoder", .module = decoder_mod },
+        .{ .name = "parsoid", .module = parsoid_mod },
+    });
 
     b.installArtifact(encoder_exe);
     b.installArtifact(decoder_exe);
@@ -142,6 +145,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(structure_exe);
     b.installArtifact(verifier_exe);
     b.installArtifact(render_tester_exe);
+    b.installArtifact(populate_db_exe);
 
     addRunStep(b, "encode", "Run the encoder CLI", encoder_exe, &.{});
     addRunStep(b, "decode", "Run the decoder CLI", decoder_exe, &.{});
@@ -149,7 +153,7 @@ pub fn build(b: *std.Build) void {
     addRunStep(b, "structure", "Analyze Wiktionary structure", structure_exe, &.{});
     addRunStep(b, "verify", "Verify dictionary raw entries against the XML dump", verifier_exe, &.{});
     addRunStep(b, "render-test", "Compare rendered sections against the local cached reference output", render_tester_exe, &.{});
-    addRunStep(b, "populate-db", "Populate the local rendered-reference cache database", render_tester_exe, &.{ "--prime-cache", "--report", "-" });
+    addRunStep(b, "populate-db", "Populate the local rendered-reference cache database", populate_db_exe, &.{ "--report", "-" });
 
     {
         const cmd = b.addSystemCommand(&.{ "bash", "tools/frontend" });
