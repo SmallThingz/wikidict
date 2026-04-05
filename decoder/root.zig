@@ -1,7 +1,5 @@
-pub const encoder = @import("encoder");
-pub const format = encoder.format;
-pub const compact_encoding = encoder.compact_encoding;
-
+pub const format = @import("format.zig");
+pub const compact_encoding = @import("compact_runtime.zig");
 pub const normalize = @import("normalize");
 const reader = @import("reader.zig");
 

@@ -2,8 +2,8 @@ const std = @import("std");
 const compact = @import("compact_encoding.zig");
 const generated = @import("generated_structure_tables");
 
-pub const magic = "WIKDIC28";
-pub const version: u32 = 28;
+pub const magic = "WIKDIC29";
+pub const version: u32 = 29;
 pub const max_serialized_payload_len: u32 = 0x00ff_ffff;
 pub const legacy_magic_v25 = "WIKDIC25";
 pub const legacy_version_v25: u32 = 25;
@@ -14,6 +14,10 @@ pub const legacy_version_v23: u32 = 23;
 pub const legacy_magic_v22 = "WIKDIC22";
 pub const legacy_version_v22: u32 = 22;
 pub const structure_fingerprint: u32 = generated.structure_fingerprint;
+
+pub fn currentMappingFingerprint() u32 {
+    return compact.mappingFingerprint(compact.currentRuntimeMappings());
+}
 
 pub const record_flag_has_raw: u8 = 1 << 0;
 
@@ -41,6 +45,8 @@ pub const DictionaryLayout = struct {
     entry_count: u32,
     lengths_offset: u64,
     lengths_len: u64,
+    mappings_offset: u64,
+    mappings_len: u64,
     titles_offset: u64,
     titles_len: u64,
     records_offset: u64,
@@ -56,6 +62,8 @@ pub const Header = struct {
     reserved0: u32,
     lengths_offset: u64,
     lengths_len: u64,
+    mappings_offset: u64,
+    mappings_len: u64,
     titles_offset: u64,
     titles_len: u64,
     records_offset: u64,
@@ -65,8 +73,11 @@ pub const Header = struct {
         entry_count: u32,
         raw_entry_count: u32,
         redirect_count: u32,
+        mapping_fingerprint: u32,
         lengths_offset: u64,
         lengths_len: u64,
+        mappings_offset: u64,
+        mappings_len: u64,
         titles_offset: u64,
         titles_len: u64,
         records_offset: u64,
@@ -78,9 +89,11 @@ pub const Header = struct {
             .entry_count = entry_count,
             .raw_entry_count = raw_entry_count,
             .redirect_count = redirect_count,
-            .reserved0 = structure_fingerprint,
+            .reserved0 = mapping_fingerprint,
             .lengths_offset = lengths_offset,
             .lengths_len = lengths_len,
+            .mappings_offset = mappings_offset,
+            .mappings_len = mappings_len,
             .titles_offset = titles_offset,
             .titles_len = titles_len,
             .records_offset = records_offset,
@@ -95,11 +108,11 @@ pub const InspectedDictionary = struct {
 };
 
 test "header magic is stable" {
-    try std.testing.expectEqualStrings(magic, &Header.init(0, 0, 0, 4, 0, 4, 0, 4, 0).magic_bytes);
+    try std.testing.expectEqualStrings(magic, &Header.init(0, 0, 0, 1234, 8, 0, 16, 0, 16, 0, 16, 0).magic_bytes);
 }
 
-test "header stores structure fingerprint" {
-    try std.testing.expectEqual(structure_fingerprint, Header.init(0, 0, 0, 4, 0, 4, 0, 4, 0).reserved0);
+test "header stores mapping fingerprint" {
+    try std.testing.expectEqual(@as(u32, 1234), Header.init(0, 0, 0, 1234, 8, 0, 16, 0, 16, 0, 16, 0).reserved0);
 }
 
 pub fn writeU24(buffer: *[3]u8, value: usize) U24Error![]const u8 {
@@ -126,15 +139,19 @@ pub fn payloadLengthAt(length_bytes: []const u8, entry_index: usize) LayoutError
 }
 
 pub fn inspectDictionary(bytes: []const u8) LayoutError!InspectedDictionary {
-    if (bytes.len < 4) return error.InvalidDictionaryFile;
+    if (bytes.len < 8) return error.InvalidDictionaryFile;
 
     const entry_count = std.mem.readInt(u32, bytes[0..4], .little);
+    const mappings_len = std.mem.readInt(u32, bytes[4..8], .little);
     const lengths_len = std.math.mul(u64, entry_count, 3) catch return error.FileTooBig;
-    const titles_offset = std.math.add(u64, 4, lengths_len) catch return error.FileTooBig;
+    const mappings_offset = std.math.add(u64, 8, lengths_len) catch return error.FileTooBig;
+    const titles_offset = std.math.add(u64, mappings_offset, mappings_len) catch return error.FileTooBig;
     if (titles_offset > bytes.len) return error.InvalidDictionaryFile;
 
-    const lengths_offset: u64 = 4;
-    const length_bytes = bytes[@as(usize, @intCast(lengths_offset))..@as(usize, @intCast(titles_offset))];
+    const lengths_offset: u64 = 8;
+    const length_bytes = bytes[@as(usize, @intCast(lengths_offset))..@as(usize, @intCast(mappings_offset))];
+    const mapping_bytes = bytes[@as(usize, @intCast(mappings_offset))..@as(usize, @intCast(titles_offset))];
+    const mapping_fingerprint = try inspectMappingFingerprint(mapping_bytes);
 
     var payload_bytes_total: u64 = 0;
     for (0..entry_count) |idx| {
@@ -177,6 +194,8 @@ pub fn inspectDictionary(bytes: []const u8) LayoutError!InspectedDictionary {
         .entry_count = entry_count,
         .lengths_offset = lengths_offset,
         .lengths_len = lengths_len,
+        .mappings_offset = mappings_offset,
+        .mappings_len = mappings_len,
         .titles_offset = titles_offset,
         .titles_len = titles_len,
         .records_offset = records_offset,
@@ -187,8 +206,11 @@ pub fn inspectDictionary(bytes: []const u8) LayoutError!InspectedDictionary {
             entry_count,
             raw_entry_count,
             redirect_count,
+            mapping_fingerprint,
             layout.lengths_offset,
             layout.lengths_len,
+            layout.mappings_offset,
+            layout.mappings_len,
             layout.titles_offset,
             layout.titles_len,
             layout.records_offset,
@@ -196,6 +218,11 @@ pub fn inspectDictionary(bytes: []const u8) LayoutError!InspectedDictionary {
         ),
         .layout = layout,
     };
+}
+
+fn inspectMappingFingerprint(mapping_bytes: []const u8) LayoutError!u32 {
+    if (mapping_bytes.len < 4) return error.InvalidDictionaryFile;
+    return std.mem.readInt(u32, mapping_bytes[0..4], .little);
 }
 
 test "manual u24 serialization round trips" {
@@ -259,6 +286,159 @@ test "varuint round trips representative values" {
     }
 }
 
+pub fn encodeCurrentCompactMappingsAlloc(allocator: std.mem.Allocator) ![]u8 {
+    const mappings = compact.currentRuntimeMappings();
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    var u32_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &u32_buf, currentMappingFingerprint(), .little);
+    try out.appendSlice(allocator, &u32_buf);
+
+    inline for (.{
+        mappings.direct_patterns.len,
+        mappings.escaped_patterns.len,
+        mappings.extended_patterns.len,
+        mappings.line_templates.len,
+        mappings.translation_templates.len,
+        mappings.heading_levels.len,
+    }) |count| {
+        std.mem.writeInt(u32, &u32_buf, std.math.cast(u32, count) orelse return error.FileTooBig, .little);
+        try out.appendSlice(allocator, &u32_buf);
+    }
+
+    for (mappings.direct_patterns) |pattern| try appendBytesSlice(&out, allocator, pattern);
+    for (mappings.escaped_patterns) |pattern| try appendBytesSlice(&out, allocator, pattern);
+    for (mappings.extended_patterns) |pattern| try appendBytesSlice(&out, allocator, pattern);
+
+    var u16_buf: [2]u8 = undefined;
+    for (mappings.line_templates) |entry| {
+        std.mem.writeInt(u16, &u16_buf, entry.code, .little);
+        try out.appendSlice(allocator, &u16_buf);
+        try appendBytesSlice(&out, allocator, entry.name);
+    }
+    for (mappings.translation_templates) |entry| {
+        std.mem.writeInt(u16, &u16_buf, entry.code, .little);
+        try out.appendSlice(allocator, &u16_buf);
+        try appendBytesSlice(&out, allocator, entry.name);
+    }
+    for (mappings.heading_levels) |entry| {
+        std.mem.writeInt(u16, &u16_buf, entry.code, .little);
+        try out.appendSlice(allocator, &u16_buf);
+        try out.append(allocator, entry.level);
+        try out.append(allocator, @intFromEnum(entry.kind));
+        try appendBytesSlice(&out, allocator, entry.title);
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+pub fn parseCompactMappingsAlloc(
+    allocator: std.mem.Allocator,
+    blob: []const u8,
+) (std.mem.Allocator.Error || LayoutError)!compact.OwnedRuntimeMappings {
+    if (blob.len < 28) return error.InvalidDictionaryFile;
+
+    var cursor: usize = 0;
+    const fingerprint = try readFixedU32(blob, &cursor);
+    const direct_count = try readFixedU32(blob, &cursor);
+    const escaped_count = try readFixedU32(blob, &cursor);
+    const extended_count = try readFixedU32(blob, &cursor);
+    const line_template_count = try readFixedU32(blob, &cursor);
+    const translation_template_count = try readFixedU32(blob, &cursor);
+    const heading_level_count = try readFixedU32(blob, &cursor);
+
+    var owned: compact.OwnedRuntimeMappings = .{
+        .direct_patterns = try allocator.alloc([]const u8, std.math.cast(usize, direct_count) orelse return error.FileTooBig),
+        .escaped_patterns = try allocator.alloc([]const u8, std.math.cast(usize, escaped_count) orelse return error.FileTooBig),
+        .extended_patterns = try allocator.alloc([]const u8, std.math.cast(usize, extended_count) orelse return error.FileTooBig),
+        .line_templates = try allocator.alloc(compact.RuntimeLineTemplate, std.math.cast(usize, line_template_count) orelse return error.FileTooBig),
+        .translation_templates = try allocator.alloc(compact.RuntimeTranslationTemplate, std.math.cast(usize, translation_template_count) orelse return error.FileTooBig),
+        .heading_levels = try allocator.alloc(compact.RuntimeHeadingLevelSpec, std.math.cast(usize, heading_level_count) orelse return error.FileTooBig),
+    };
+    errdefer owned.deinit(allocator);
+
+    for (owned.direct_patterns) |*pattern| {
+        pattern.* = try readMappingString(blob, &cursor);
+    }
+    for (owned.escaped_patterns) |*pattern| {
+        pattern.* = try readMappingString(blob, &cursor);
+    }
+    for (owned.extended_patterns) |*pattern| {
+        pattern.* = try readMappingString(blob, &cursor);
+    }
+    for (owned.line_templates) |*entry| {
+        entry.* = .{
+            .code = try readFixedU16(blob, &cursor),
+            .name = try readMappingString(blob, &cursor),
+        };
+    }
+    for (owned.translation_templates) |*entry| {
+        entry.* = .{
+            .code = try readFixedU16(blob, &cursor),
+            .name = try readMappingString(blob, &cursor),
+        };
+    }
+    for (owned.heading_levels) |*entry| {
+        const code = try readFixedU16(blob, &cursor);
+        if (cursor + 2 > blob.len) return error.InvalidDictionaryFile;
+        const level = blob[cursor];
+        const kind_raw = blob[cursor + 1];
+        cursor += 2;
+        entry.* = .{
+            .code = code,
+            .level = level,
+            .title = try readMappingString(blob, &cursor),
+            .kind = switch (kind_raw) {
+                0 => .lines,
+                1 => .pos_lines,
+                2 => .term_list,
+                3 => .translations,
+                else => return error.InvalidDictionaryFile,
+            },
+        };
+    }
+
+    if (cursor != blob.len) return error.InvalidDictionaryFile;
+    if (compact.mappingFingerprint(owned.view()) != fingerprint) return error.InvalidDictionaryFile;
+    return owned;
+}
+
+fn readFixedU32(bytes: []const u8, cursor: *usize) LayoutError!u32 {
+    if (cursor.* + 4 > bytes.len) return error.InvalidDictionaryFile;
+    const value = @as(u32, bytes[cursor.*]) |
+        (@as(u32, bytes[cursor.* + 1]) << 8) |
+        (@as(u32, bytes[cursor.* + 2]) << 16) |
+        (@as(u32, bytes[cursor.* + 3]) << 24);
+    cursor.* += 4;
+    return value;
+}
+
+fn readFixedU16(bytes: []const u8, cursor: *usize) LayoutError!u16 {
+    if (cursor.* + 2 > bytes.len) return error.InvalidDictionaryFile;
+    const value = @as(u16, bytes[cursor.*]) |
+        (@as(u16, bytes[cursor.* + 1]) << 8);
+    cursor.* += 2;
+    return value;
+}
+
+fn readMappingString(bytes: []const u8, cursor: *usize) LayoutError![]const u8 {
+    return readLengthPrefixedSlice(bytes, cursor, bytes.len) catch return error.InvalidDictionaryFile;
+}
+
+test "compact mapping blob round trips" {
+    const blob = try encodeCurrentCompactMappingsAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(blob);
+
+    var parsed = try parseCompactMappingsAlloc(std.testing.allocator, blob);
+    defer parsed.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(currentMappingFingerprint(), compact.mappingFingerprint(parsed.view()));
+    try std.testing.expectEqual(compact.currentRuntimeMappings().direct_patterns.len, parsed.direct_patterns.len);
+    try std.testing.expectEqual(compact.currentRuntimeMappings().heading_levels.len, parsed.heading_levels.len);
+}
+
 pub fn encodeRawRecordPayloadAlloc(
     allocator: std.mem.Allocator,
     alt_forms: []const []const u8,
@@ -292,6 +472,14 @@ pub fn decodeRawRecordMetadataAlloc(
     return decodeRawRecordMetadataAllocVersion(allocator, payload, version);
 }
 
+pub fn decodeRawRecordMetadataAllocWithMappings(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+    mappings: compact.RuntimeMappings,
+) (std.mem.Allocator.Error || PayloadError)!RawRecordMetadata {
+    return decodeRawRecordMetadataAllocCurrentWithMappings(allocator, payload, mappings);
+}
+
 pub fn decodeRawRecordMetadataAllocVersion(
     allocator: std.mem.Allocator,
     payload: []const u8,
@@ -310,6 +498,14 @@ fn decodeRawRecordMetadataAllocCurrent(
     allocator: std.mem.Allocator,
     payload: []const u8,
 ) (std.mem.Allocator.Error || PayloadError)!RawRecordMetadata {
+    return decodeRawRecordMetadataAllocCurrentWithMappings(allocator, payload, compact.currentRuntimeMappings());
+}
+
+fn decodeRawRecordMetadataAllocCurrentWithMappings(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+    mappings: compact.RuntimeMappings,
+) (std.mem.Allocator.Error || PayloadError)!RawRecordMetadata {
     var cursor: usize = 0;
 
     const alt_form_count_u64 = readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding;
@@ -320,7 +516,7 @@ fn decodeRawRecordMetadataAllocCurrent(
     var alt_index: usize = 0;
     errdefer while (alt_index > 0) : (alt_index -= 1) allocator.free(alt_forms[alt_index - 1]);
     while (alt_index < alt_forms.len) : (alt_index += 1) {
-        alt_forms[alt_index] = try readCompactSliceAlloc(allocator, payload, &cursor, payload.len);
+        alt_forms[alt_index] = try readCompactSliceAllocWithMappings(allocator, payload, &cursor, payload.len, mappings);
     }
 
     const target_count_u64 = readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding;
@@ -331,7 +527,7 @@ fn decodeRawRecordMetadataAllocCurrent(
     var target_index: usize = 0;
     errdefer while (target_index > 0) : (target_index -= 1) allocator.free(canonical_targets[target_index - 1]);
     while (target_index < canonical_targets.len) : (target_index += 1) {
-        canonical_targets[target_index] = try readCompactSliceAlloc(allocator, payload, &cursor, payload.len);
+        canonical_targets[target_index] = try readCompactSliceAllocWithMappings(allocator, payload, &cursor, payload.len, mappings);
     }
 
     if (cursor >= payload.len) return error.InvalidEncoding;
@@ -467,6 +663,14 @@ pub fn decodeAliasRecordTargetAlloc(
     return decodeAliasRecordTargetAllocVersion(allocator, payload, version);
 }
 
+pub fn decodeAliasRecordTargetAllocWithMappings(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+    mappings: compact.RuntimeMappings,
+) (std.mem.Allocator.Error || PayloadError)![]u8 {
+    return decodeAliasRecordTargetAllocCurrentWithMappings(allocator, payload, mappings);
+}
+
 pub fn decodeAliasRecordTargetAllocVersion(
     allocator: std.mem.Allocator,
     payload: []const u8,
@@ -485,8 +689,16 @@ fn decodeAliasRecordTargetAllocCurrent(
     allocator: std.mem.Allocator,
     payload: []const u8,
 ) (std.mem.Allocator.Error || PayloadError)![]u8 {
+    return decodeAliasRecordTargetAllocCurrentWithMappings(allocator, payload, compact.currentRuntimeMappings());
+}
+
+fn decodeAliasRecordTargetAllocCurrentWithMappings(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+    mappings: compact.RuntimeMappings,
+) (std.mem.Allocator.Error || PayloadError)![]u8 {
     var cursor: usize = 0;
-    return readCompactSliceAlloc(allocator, payload, &cursor, payload.len);
+    return readCompactSliceAllocWithMappings(allocator, payload, &cursor, payload.len, mappings);
 }
 
 fn decodeRawRecordMetadataAllocV22(
@@ -575,8 +787,18 @@ fn readCompactSliceAlloc(
     cursor: *usize,
     limit: usize,
 ) (std.mem.Allocator.Error || PayloadError)![]u8 {
+    return readCompactSliceAllocWithMappings(allocator, bytes, cursor, limit, compact.currentRuntimeMappings());
+}
+
+fn readCompactSliceAllocWithMappings(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    cursor: *usize,
+    limit: usize,
+    mappings: compact.RuntimeMappings,
+) (std.mem.Allocator.Error || PayloadError)![]u8 {
     const encoded = readLengthPrefixedSlice(bytes, cursor, limit) catch return error.InvalidEncoding;
-    return compact.decodeAlloc(allocator, encoded) catch return error.InvalidEncoding;
+    return compact.decodeAllocWithMappings(allocator, encoded, mappings) catch return error.InvalidEncoding;
 }
 
 fn readLengthPrefixedSlice(bytes: []const u8, cursor: *usize, limit: usize) PayloadError![]const u8 {

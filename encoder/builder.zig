@@ -5,7 +5,7 @@ const normalize = @import("normalize");
 
 const compact = @import("compact_encoding.zig");
 const format = @import("format.zig");
-const wikitext = @import("wikitext.zig");
+const wikitext = @import("wikitext_source");
 const xml_decode = @import("shared_xml_decode");
 
 const parse_opts: zxml.ParseOptions = .{
@@ -1135,6 +1135,7 @@ const OutputWriter = struct {
     entry_count: usize = 0,
     raw_entry_count: usize = 0,
     redirect_count: usize = 0,
+    mapping_blob: []u8,
     length_bytes: std.ArrayList(u8) = .empty,
     title_buffer: std.ArrayList(u8) = .empty,
     payload_buffer: std.ArrayList(u8) = .empty,
@@ -1156,6 +1157,8 @@ const OutputWriter = struct {
         errdefer titles_file.deinit();
         var payloads_file = try MappedWritableFile.create(io, payloads_path, initial_capacity);
         errdefer payloads_file.deinit();
+        const mapping_blob = try format.encodeCurrentCompactMappingsAlloc(allocator);
+        errdefer allocator.free(mapping_blob);
         return .{
             .io = io,
             .allocator = allocator,
@@ -1164,10 +1167,12 @@ const OutputWriter = struct {
             .payloads_path = payloads_path,
             .titles_file = titles_file,
             .payloads_file = payloads_file,
+            .mapping_blob = mapping_blob,
         };
     }
 
     fn deinit(self: *OutputWriter, allocator: std.mem.Allocator) void {
+        allocator.free(self.mapping_blob);
         self.length_bytes.deinit(allocator);
         self.title_buffer.deinit(allocator);
         self.payload_buffer.deinit(allocator);
@@ -1199,8 +1204,10 @@ const OutputWriter = struct {
         defer payloads.deinit();
 
         const length_bytes_len = self.length_bytes.items.len;
-        const total_len = try std.math.add(usize, 4, length_bytes_len);
-        const total_with_titles = try std.math.add(usize, total_len, titles.bytes().len);
+        const mapping_blob_len = self.mapping_blob.len;
+        const total_len = try std.math.add(usize, 8, length_bytes_len);
+        const total_with_mappings = try std.math.add(usize, total_len, mapping_blob_len);
+        const total_with_titles = try std.math.add(usize, total_with_mappings, titles.bytes().len);
         const final_len = try std.math.add(usize, total_with_titles, payloads.bytes().len);
 
         var out_file = try MappedWritableFile.create(self.io, self.final_path, @max(final_len, 1));
@@ -1208,11 +1215,16 @@ const OutputWriter = struct {
 
         const out = out_file.bytes();
         std.mem.writeInt(u32, out[0..4], std.math.cast(u32, self.entry_count) orelse return error.FileTooBig, .little);
+        std.mem.writeInt(u32, out[4..8], std.math.cast(u32, mapping_blob_len) orelse return error.FileTooBig, .little);
 
-        var cursor: usize = 4;
+        var cursor: usize = 8;
         if (length_bytes_len != 0) {
             @memcpy(out[cursor .. cursor + length_bytes_len], self.length_bytes.items);
             cursor += length_bytes_len;
+        }
+        if (mapping_blob_len != 0) {
+            @memcpy(out[cursor .. cursor + mapping_blob_len], self.mapping_blob);
+            cursor += mapping_blob_len;
         }
         if (titles.bytes().len != 0) {
             @memcpy(out[cursor .. cursor + titles.bytes().len], titles.bytes());

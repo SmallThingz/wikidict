@@ -2,7 +2,7 @@ pub const format = @import("format.zig");
 pub const compact_encoding = @import("compact_encoding.zig");
 pub const section_encoding = @import("section_encoding.zig");
 pub const xml_decode = @import("shared_xml_decode");
-pub const wikitext = @import("wikitext.zig");
+pub const wikitext = @import("wikitext_source");
 pub const cli_args = @import("cli_args");
 
 pub const BuildOptions = @import("builder.zig").BuildOptions;

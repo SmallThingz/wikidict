@@ -74,6 +74,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const wikitext_source_mod = b.createModule(.{
+        .root_source_file = b.path("encoder/wikitext.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    wikitext_source_mod.addOptions("config", config_options);
+    wikitext_source_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
     const renderer_mod = b.addModule("renderer", .{
         .root_source_file = b.path("renderer/root.zig"),
         .target = target,
@@ -94,6 +101,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod_bootstrap.addImport("shared_html_entities", shared_html_entities_mod);
     encoder_mod_bootstrap.addImport("shared_xml_decode", shared_xml_decode_mod);
     encoder_mod_bootstrap.addImport("compact_pattern_seed", compact_pattern_seed_mod);
+    encoder_mod_bootstrap.addImport("wikitext_source", wikitext_source_mod);
 
     const structure_bin = addDirectStructureBinary(
         b,
@@ -132,6 +140,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("shared_html_entities", shared_html_entities_mod);
     encoder_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
     encoder_mod.addImport("compact_pattern_seed", compact_pattern_seed_mod);
+    encoder_mod.addImport("wikitext_source", wikitext_source_mod);
 
     const encoder_mod_test = b.addModule("encoder_test", .{
         .root_source_file = b.path("encoder/root.zig"),
@@ -146,14 +155,17 @@ pub fn build(b: *std.Build) void {
     encoder_mod_test.addImport("shared_html_entities", shared_html_entities_mod);
     encoder_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod);
     encoder_mod_test.addImport("compact_pattern_seed", compact_pattern_seed_mod);
+    encoder_mod_test.addImport("wikitext_source", wikitext_source_mod);
 
     const decoder_mod = b.addModule("decoder", .{
         .root_source_file = b.path("decoder/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    decoder_mod.addOptions("config", config_options);
     decoder_mod.addImport("normalize", normalize_mod);
-    decoder_mod.addImport("encoder", encoder_mod);
+    decoder_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
+    decoder_mod.addImport("wikitext_source", wikitext_source_mod);
     decoder_mod.addImport("cli_args", cli_args_mod);
 
     const decoder_mod_test = b.addModule("decoder_test", .{
@@ -161,8 +173,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    decoder_mod_test.addOptions("config", config_options);
     decoder_mod_test.addImport("normalize", normalize_mod);
     decoder_mod_test.addImport("encoder", encoder_mod_test);
+    decoder_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod);
+    decoder_mod_test.addImport("wikitext_source", wikitext_source_mod);
     decoder_mod_test.addImport("cli_args", cli_args_mod);
 
     const backend_mod = b.addModule("backend", .{
@@ -528,7 +543,7 @@ fn addDirectStructureBinary(
     bootstrap_tables_path: std.Build.LazyPath,
 ) std.Build.LazyPath {
     const compile = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-OReleaseFast" });
-    compile.addArgs(&.{ "--dep", "encoder", "--dep", "zxml", "--dep", "compact_pattern_seed" });
+    compile.addArgs(&.{ "--dep", "encoder", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "wikitext_source" });
     compile.addPrefixedFileArg("-Mroot=", b.path("tools/structure_analyzer.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{
@@ -548,6 +563,8 @@ fn addDirectStructureBinary(
         "shared_xml_decode",
         "--dep",
         "compact_pattern_seed",
+        "--dep",
+        "wikitext_source",
     });
     compile.addPrefixedFileArg("-Mencoder=", b.path("encoder/root.zig"));
     compile.addArg("-OReleaseFast");
@@ -566,6 +583,10 @@ fn addDirectStructureBinary(
     compile.addPrefixedFileArg("-Mshared_xml_decode=", b.path("shared/xml_decode.zig"));
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("shared/compact_pattern_seed.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addArgs(&.{ "--dep", "config=config1", "--dep", "shared_xml_decode" });
+    compile.addPrefixedFileArg("-Mwikitext_source=", b.path("encoder/wikitext.zig"));
+    compile.addPrefixedFileArg("-Mconfig1=", config_path);
     compile.addPrefixedFileArg("-Mconfig0=", config0_path);
     return compile.addPrefixedOutputFileArg("-femit-bin=", "dict-structure");
 }
@@ -578,7 +599,7 @@ fn addDirectVerifierBinary(
     tool_paths_path: std.Build.LazyPath,
 ) std.Build.LazyPath {
     const compile = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-OReleaseFast" });
-    compile.addArgs(&.{ "--dep", "encoder", "--dep", "decoder", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "tool_paths" });
+    compile.addArgs(&.{ "--dep", "encoder", "--dep", "decoder", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "tool_paths", "--dep", "wikitext_source" });
     compile.addPrefixedFileArg("-Mroot=", b.path("tools/verifier.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{
@@ -598,10 +619,12 @@ fn addDirectVerifierBinary(
         "shared_xml_decode",
         "--dep",
         "compact_pattern_seed",
+        "--dep",
+        "wikitext_source",
     });
     compile.addPrefixedFileArg("-Mencoder=", b.path("encoder/root.zig"));
     compile.addArg("-OReleaseFast");
-    compile.addArgs(&.{ "--dep", "normalize", "--dep", "encoder", "--dep", "cli_args" });
+    compile.addArgs(&.{ "--dep", "normalize", "--dep", "encoder", "--dep", "shared_xml_decode", "--dep", "wikitext_source", "--dep", "cli_args", "--dep", "config=config1" });
     compile.addPrefixedFileArg("-Mdecoder=", b.path("decoder/root.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{ "--dep", "config=config0" });
@@ -619,6 +642,10 @@ fn addDirectVerifierBinary(
     compile.addPrefixedFileArg("-Mshared_xml_decode=", b.path("shared/xml_decode.zig"));
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("shared/compact_pattern_seed.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addArgs(&.{ "--dep", "config=config1", "--dep", "shared_xml_decode" });
+    compile.addPrefixedFileArg("-Mwikitext_source=", b.path("encoder/wikitext.zig"));
+    compile.addPrefixedFileArg("-Mconfig1=", config_path);
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mtool_paths=", tool_paths_path);
     compile.addPrefixedFileArg("-Mconfig0=", config0_path);

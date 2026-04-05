@@ -295,7 +295,6 @@ pub fn buildDataFromLegacyAlloc(
     }
     std.mem.sortUnstable(GeneratedTemplate, templates.items, {}, generatedTemplateLessThan);
     std.mem.sortUnstable(GeneratedTemplate, line_templates.items, {}, generatedTemplateLessThan);
-    if (line_templates.items.len > 1024) line_templates.shrinkRetainingCapacity(1024);
 
     var covered_template_names: std.StringHashMapUnmanaged(void) = .empty;
     defer deinitOwnedStringMap(allocator, void, &covered_template_names);
