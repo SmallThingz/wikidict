@@ -1254,7 +1254,10 @@ fn buildIndex(
     progress.setReadingParallel(thread_count > 1);
     if (thread_count == 1) {
         for (descriptors) |descriptor| {
-            const entry = try buildEntryFromRecord(arena_allocator, descriptor, header.version);
+            const entry = buildEntryFromRecord(arena_allocator, descriptor, header.version) catch |err| {
+                std.log.err("failed to decode dictionary record at offset {d}: {s}", .{ descriptor.record_offset, @errorName(err) });
+                return err;
+            };
             state.entries.appendAssumeCapacity(entry);
             progress.scanAdvance(descriptor.record_len, 1);
         }
@@ -1418,6 +1421,7 @@ fn scanRecordChunk(descriptors: []const RecordDescriptor, chunk: *ScanChunkResul
     var pending_bytes: usize = 0;
     for (descriptors, 0..) |descriptor, idx| {
         chunk.entries[idx] = buildEntryFromRecord(allocator, descriptor, dictionary_version) catch |err| {
+            std.log.err("failed to decode dictionary record at offset {d}: {s}", .{ descriptor.record_offset, @errorName(err) });
             chunk.err = err;
             return;
         };
