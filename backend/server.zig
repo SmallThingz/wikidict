@@ -2,18 +2,17 @@ const std = @import("std");
 const zhttp = @import("zhttp");
 
 const decoder = @import("decoder");
-const encoder = @import("encoder");
 const renderer = @import("renderer");
 const system_theme = @import("theme.zig");
-const format = encoder.format;
+const format = decoder.format;
+const compact_encoding = decoder.compact_encoding;
 const cli_args = @import("cli_args");
 
 const ReqCtx = zhttp.ReqCtx;
 const Header = zhttp.response.Header;
 
 pub const ServeOptions = struct {
-    db_path: []const u8 = "data/enwiktionary.bin",
-    input_path: []const u8 = "enwiktionary.xml",
+    db_path: []const u8 = "data/wiktionary.bin",
     port: u16 = 3000,
 };
 
@@ -40,7 +39,6 @@ const AppContext = struct {
     random_counter: std.atomic.Value(u64),
 
     fn init(io: std.Io, allocator: std.mem.Allocator, options: ServeOptions) !AppContext {
-        try ensureDictionary(io, allocator, options);
         return .{
             .allocator = allocator,
             .db = try decoder.openDictionary(allocator, io, options.db_path),
@@ -306,9 +304,8 @@ const App = blk: {
 
 pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
     const options = ServeOptions{
-        .db_path = cli_args.flagValue(args, "--db") orelse "data/enwiktionary.bin",
+        .db_path = cli_args.flagValue(args, "--db") orelse "data/wiktionary.bin",
         .port = (try cli_args.parseOptionalIntFlag(u16, args, "--port")) orelse 3000,
-        .input_path = cli_args.flagValue(args, "--input") orelse "enwiktionary.xml",
     };
 
     var ctx = try AppContext.init(io, allocator, options);
@@ -371,49 +368,6 @@ fn resolveRendererLink(
 ) !?[]const u8 {
     const dict: *const decoder.Dictionary = @ptrCast(@alignCast(context));
     return dict.resolveLinkTargetAlloc(allocator, term);
-}
-
-fn ensureDictionary(io: std.Io, allocator: std.mem.Allocator, options: ServeOptions) !void {
-    if (try dictionaryLooksUsable(io, allocator, options.db_path)) {
-        return;
-    }
-
-    try deleteFileIfExists(io, options.db_path);
-    const cache_path = try std.fmt.allocPrint(allocator, "{s}.idx", .{options.db_path});
-    defer allocator.free(cache_path);
-    try deleteFileIfExists(io, cache_path);
-
-    std.debug.print(
-        "building dictionary binary at {s} from {s}\n",
-        .{ options.db_path, options.input_path },
-    );
-
-    _ = try encoder.buildDictionary(io, allocator, .{
-        .input_path = options.input_path,
-        .output_path = options.db_path,
-    });
-}
-
-fn dictionaryLooksUsable(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !bool {
-    var dict = decoder.openDictionary(allocator, io, path) catch |err| switch (err) {
-        error.FileNotFound,
-        error.InvalidDictionaryFile,
-        error.UnsupportedDictionaryVersion,
-        error.InvalidDictionaryCache,
-        error.InvalidEncoding,
-        => return false,
-        else => return err,
-    };
-    defer dict.deinit();
-
-    return dict.header.entry_count != 0 or dict.header.records_len != 0;
-}
-
-fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
-    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => return err,
-    };
 }
 
 fn htmlResponse(body: []const u8) zhttp.Res {
@@ -574,22 +528,7 @@ test "findSelectableIndex is deterministic and skips unselectable entries" {
     try std.testing.expect(ctx.selectable[next_day]);
 }
 
-test "dictionaryLooksUsable rejects placeholder header-only dictionary" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const rel_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/placeholder.bin", .{tmp.sub_path});
-    defer std.testing.allocator.free(rel_path);
-
-    var file = try tmp.dir.createFile(std.testing.io, "placeholder.bin", .{ .truncate = true });
-    defer file.close(std.testing.io);
-    const header = format.Header.init(0, 0, 0, @sizeOf(format.Header), 0);
-    try file.writePositionalAll(std.testing.io, std.mem.asBytes(&header), 0);
-
-    try std.testing.expect(!(try dictionaryLooksUsable(std.testing.io, std.testing.allocator, rel_path)));
-}
-
-test "dictionaryLooksUsable rejects invalidly encoded dictionary" {
+test "backend rejects invalidly encoded dictionary" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -599,7 +538,7 @@ test "dictionaryLooksUsable rejects invalidly encoded dictionary" {
     var file = try tmp.dir.createFile(std.testing.io, "broken.bin", .{ .truncate = true });
     defer file.close(std.testing.io);
 
-    const encoded_title = try encoder.compact_encoding.encodeAlloc(std.testing.allocator, "broken");
+    const encoded_title = try compact_encoding.encodeAlloc(std.testing.allocator, "broken");
     defer std.testing.allocator.free(encoded_title);
 
     var record: std.ArrayList(u8) = .empty;
@@ -614,50 +553,10 @@ test "dictionaryLooksUsable rejects invalidly encoded dictionary" {
     try file.writePositionalAll(std.testing.io, std.mem.asBytes(&header), 0);
     try file.writePositionalAll(std.testing.io, record.items, @sizeOf(format.Header));
 
-    try std.testing.expect(!(try dictionaryLooksUsable(std.testing.io, std.testing.allocator, rel_path)));
-}
-
-test "ensureDictionary rebuilds placeholder dictionary from xml input" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const xml_rel = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
-    defer std.testing.allocator.free(xml_rel);
-    const db_rel = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
-    defer std.testing.allocator.free(db_rel);
-
-    var xml_file = try tmp.dir.createFile(std.testing.io, "sample.xml", .{ .truncate = true });
-    defer xml_file.close(std.testing.io);
-    try xml_file.writePositionalAll(std.testing.io,
-        \\<mediawiki>
-        \\<page>
-        \\<title>color</title>
-        \\<ns>0</ns>
-        \\<revision><text xml:space="preserve">==English==
-        \\===Noun===
-        \\# [[light]]
-        \\</text></revision>
-        \\</page>
-        \\</mediawiki>
-    , 0);
-
-    var placeholder = try tmp.dir.createFile(std.testing.io, "dict.bin", .{ .truncate = true });
-    defer placeholder.close(std.testing.io);
-    const header = format.Header.init(0, 0, 0, @sizeOf(format.Header), 0);
-    try placeholder.writePositionalAll(std.testing.io, std.mem.asBytes(&header), 0);
-
-    try ensureDictionary(std.testing.io, std.testing.allocator, .{
-        .db_path = db_rel,
-        .input_path = xml_rel,
-    });
-
-    var dict = try decoder.openDictionary(std.testing.allocator, std.testing.io, db_rel);
-    defer dict.deinit();
-    try std.testing.expect(dict.header.entry_count != 0);
-
-    const hits = try dict.lookupExact(std.testing.allocator, "color");
-    defer std.testing.allocator.free(hits);
-    try std.testing.expectEqual(@as(usize, 1), hits.len);
+    try std.testing.expectError(error.InvalidDictionaryFile, AppContext.init(std.testing.io, std.testing.allocator, .{
+        .db_path = rel_path,
+        .port = 0,
+    }));
 }
 
 test "dupeSliceOfSlices makes owned string copies" {

@@ -8,8 +8,10 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(allocator);
 
     if (args.len >= 2 and std.mem.eql(u8, args[1], "help")) {
-        std.debug.print(
-            \\dict-encoder [build] --input enwiktionary.xml --output data/enwiktionary.bin [--limit 10000] [--threads 4]
+        try printStdOut(
+            init.io,
+            allocator,
+            \\dict-encoder [build] --input data/wiktionary.xml --output data/wiktionary.bin [--limit 10000] [--threads 4]
             \\
         , .{});
         return;
@@ -17,8 +19,8 @@ pub fn main(init: std.process.Init) !void {
 
     const offset: usize = if (args.len >= 2 and std.mem.eql(u8, args[1], "build")) 2 else 1;
     const cmd_args = args[offset..];
-    const input = cli_args.flagValue(cmd_args, "--input") orelse "enwiktionary.xml";
-    const output = cli_args.flagValue(cmd_args, "--output") orelse "data/enwiktionary.bin";
+    const input = cli_args.flagValue(cmd_args, "--input") orelse "data/wiktionary.xml";
+    const output = cli_args.flagValue(cmd_args, "--output") orelse "data/wiktionary.bin";
     const limit = try cli_args.parseOptionalIntFlag(usize, cmd_args, "--limit");
     const worker_threads = try cli_args.parseOptionalIntFlag(usize, cmd_args, "--threads");
 
@@ -29,8 +31,15 @@ pub fn main(init: std.process.Init) !void {
         .worker_threads = worker_threads,
     });
 
-    std.debug.print(
+    try printStdOut(
+        init.io,
+        allocator,
         "built {s}\npages={d}\nns0={d}\nentries={d}\nredirect_aliases={d}\n",
         .{ output, stats.pages_seen, stats.namespace_zero_pages, stats.english_entries, stats.redirect_aliases },
     );
+}
+
+fn printStdOut(io: std.Io, allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
+    const text = try std.fmt.allocPrint(allocator, fmt, args);
+    try std.Io.File.stdout().writeStreamingAll(io, text);
 }

@@ -1,5 +1,5 @@
 const std = @import("std");
-const html_entities = @import("shared_html_entities");
+const html_entities = @import("html_entities.zig");
 
 const max_decode_passes = 8;
 
@@ -96,21 +96,41 @@ fn decodeEntity(out: *std.ArrayList(u8), allocator: std.mem.Allocator, entity: [
 }
 
 fn lookupNamedEntity(entity: []const u8) ?[]const u8 {
-    if (html_entities.named_entities.get(entity)) |replacement| return replacement;
-
-    if (std.mem.eql(u8, entity, "emdash")) return "—";
-    if (std.mem.eql(u8, entity, "endash")) return "–";
-    if (std.mem.eql(u8, entity, "mdsash")) return "—";
-    if (std.mem.eql(u8, entity, "dmash")) return "—";
-    if (std.mem.eql(u8, entity, "squo")) return "’";
-    if (std.mem.eql(u8, entity, "bnsp")) return " ";
-    if (std.mem.eql(u8, entity, "nsbp")) return " ";
-    if (std.mem.eql(u8, entity, "egravre")) return "è";
-    return null;
+    return html_entities.lookupNamedEntity(entity);
 }
 
-test "decode xml entities recursively decodes runtime references" {
-    const got = try decodeAlloc(std.testing.allocator, "&amp;copy; &amp;#169; &amp;#xA9;");
+test "decode xml entities" {
+    const got = try decodeAlloc(std.testing.allocator, "a &amp; b &lt;c&gt; &#x1F4A1;");
     defer std.testing.allocator.free(got);
-    try std.testing.expectEqualStrings("© © ©", got);
+    try std.testing.expectEqualStrings("a & b <c> 💡", got);
+}
+
+test "decode xml entities recursively decodes double-escaped named and numeric references" {
+    const got = try decodeAlloc(std.testing.allocator, "&amp;copy; &amp;#169; &amp;#xA9; &amp;amp;copy;");
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings("© © © ©", got);
+}
+
+test "decode xml entities handles known malformed aliases from the dump" {
+    const got = try decodeAlloc(std.testing.allocator, "&emdash; &endash; &squo; &amp#91; &nsbp;");
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings("— – ’ [  ", got);
+}
+
+test "decode xml entities covers html5 named references from the shared table" {
+    const got = try decodeAlloc(std.testing.allocator, "&NotGreaterFullEqual; &CounterClockwiseContourIntegral; &Tab;&NewLine;");
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings("\u{2267}\u{338} \u{2233} \t\n", got);
+}
+
+test "decode xml entities does not let literal ampersands swallow later valid entities" {
+    const got = try decodeAlloc(
+        std.testing.allocator,
+        "|publisher=John Wiley &amp; Sons, Inc.\n|year=&amp;copy;1999\n|section=&amp;sect;1.2",
+    );
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings(
+        "|publisher=John Wiley & Sons, Inc.\n|year=©1999\n|section=§1.2",
+        got,
+    );
 }

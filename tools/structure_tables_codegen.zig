@@ -1,407 +1,5 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
-    const structure_optimize: std.builtin.OptimizeMode = .ReleaseFast;
-    const default_xml_path = b.path("data/wiktionary.xml");
-    const default_skip_headings = "anagrams,citations,meta,statistics,further_reading,translations";
-    const skip_headings_csv = b.option([]const u8, "skip-headings", "Comma-separated headings or heading families to exclude, e.g. Anagrams,Translations") orelse default_skip_headings;
-    const filter_languages_csv = b.option([]const u8, "filter-language", "Comma-separated language headings to store, e.g. English,Chinese") orelse "";
-    const config_options = b.addOptions();
-    config_options.addOption([]const u8, "skip_headings_csv", skip_headings_csv);
-    config_options.addOption([]const u8, "filter_languages_csv", filter_languages_csv);
-    const bootstrap_generated_tables = addBootstrapStructureTableModules(b, target, optimize, structure_optimize);
-    const cli_args_mod = b.createModule(.{
-        .root_source_file = b.path("tools/cli_args.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const cli_args_mod_structure = b.createModule(.{
-        .root_source_file = b.path("tools/cli_args.zig"),
-        .target = target,
-        .optimize = structure_optimize,
-    });
-
-    const zxml_dep = b.dependency("zxml", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zxml_dep_structure = b.dependency("zxml", .{
-        .target = target,
-        .optimize = structure_optimize,
-    });
-    const zhttp_dep = b.dependency("zhttp", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const normalize_mod = b.createModule(.{
-        .root_source_file = b.path("decoder/normalize.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const normalize_mod_structure = b.createModule(.{
-        .root_source_file = b.path("decoder/normalize.zig"),
-        .target = target,
-        .optimize = structure_optimize,
-    });
-    const shared_html_entities_mod = b.createModule(.{
-        .root_source_file = b.path("shared/html_entities.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const shared_xml_decode_mod = b.createModule(.{
-        .root_source_file = b.path("shared/xml_decode.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const renderer_mod = b.addModule("renderer", .{
-        .root_source_file = b.path("renderer/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    renderer_mod.addImport("shared_html_entities", shared_html_entities_mod);
-    renderer_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
-    const encoder_mod_bootstrap = b.addModule("encoder_bootstrap", .{
-        .root_source_file = b.path("encoder/root.zig"),
-        .target = target,
-        .optimize = structure_optimize,
-    });
-    encoder_mod_bootstrap.addOptions("config", config_options);
-    encoder_mod_bootstrap.addImport("normalize", normalize_mod_structure);
-    encoder_mod_bootstrap.addImport("zxml", zxml_dep_structure.module("zxml"));
-    encoder_mod_bootstrap.addImport("generated_structure_tables", bootstrap_generated_tables.structure);
-    encoder_mod_bootstrap.addImport("cli_args", cli_args_mod_structure);
-    encoder_mod_bootstrap.addImport("shared_html_entities", shared_html_entities_mod);
-    encoder_mod_bootstrap.addImport("shared_xml_decode", shared_xml_decode_mod);
-
-    const structure_exe = addCliExecutable(b, "dict-structure", b.path("tools/structure_analyzer.zig"), target, structure_optimize, &.{
-        .{ .name = "encoder", .module = encoder_mod_bootstrap },
-        .{ .name = "zxml", .module = zxml_dep_structure.module("zxml") },
-    });
-    const structure_codegen_exe = addCliExecutable(b, "dict-structure-tables-codegen", b.path("tools/structure_tables_codegen.zig"), target, optimize, &.{});
-    const generated_tables = addGeneratedStructureTableModules(
-        b,
-        target,
-        optimize,
-        structure_optimize,
-        structure_exe,
-        structure_codegen_exe,
-        default_xml_path,
-    );
-
-    const encoder_mod = b.addModule("encoder", .{
-        .root_source_file = b.path("encoder/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    encoder_mod.addOptions("config", config_options);
-    encoder_mod.addImport("normalize", normalize_mod);
-    encoder_mod.addImport("zxml", zxml_dep.module("zxml"));
-    encoder_mod.addImport("generated_structure_tables", generated_tables.regular);
-    encoder_mod.addImport("cli_args", cli_args_mod);
-    encoder_mod.addImport("shared_html_entities", shared_html_entities_mod);
-    encoder_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
-
-    const encoder_mod_test = b.addModule("encoder_test", .{
-        .root_source_file = b.path("encoder/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    encoder_mod_test.addOptions("config", config_options);
-    encoder_mod_test.addImport("normalize", normalize_mod);
-    encoder_mod_test.addImport("zxml", zxml_dep.module("zxml"));
-    encoder_mod_test.addImport("generated_structure_tables", bootstrap_generated_tables.regular);
-    encoder_mod_test.addImport("cli_args", cli_args_mod);
-    encoder_mod_test.addImport("shared_html_entities", shared_html_entities_mod);
-    encoder_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod);
-
-    const decoder_mod = b.addModule("decoder", .{
-        .root_source_file = b.path("decoder/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    decoder_mod.addImport("normalize", normalize_mod);
-    decoder_mod.addImport("encoder", encoder_mod);
-    decoder_mod.addImport("cli_args", cli_args_mod);
-
-    const decoder_mod_test = b.addModule("decoder_test", .{
-        .root_source_file = b.path("decoder/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    decoder_mod_test.addImport("normalize", normalize_mod);
-    decoder_mod_test.addImport("encoder", encoder_mod_test);
-    decoder_mod_test.addImport("cli_args", cli_args_mod);
-
-    const backend_mod = b.addModule("backend", .{
-        .root_source_file = b.path("backend/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    backend_mod.addImport("decoder", decoder_mod);
-    backend_mod.addImport("zhttp", zhttp_dep.module("zhttp"));
-    backend_mod.addImport("cli_args", cli_args_mod);
-    backend_mod.addImport("shared_html_entities", shared_html_entities_mod);
-    backend_mod.addImport("renderer", renderer_mod);
-
-    const backend_mod_test = b.addModule("backend_test", .{
-        .root_source_file = b.path("backend/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    backend_mod_test.addImport("decoder", decoder_mod_test);
-    backend_mod_test.addImport("zhttp", zhttp_dep.module("zhttp"));
-    backend_mod_test.addImport("cli_args", cli_args_mod);
-    backend_mod_test.addImport("shared_html_entities", shared_html_entities_mod);
-    backend_mod_test.addImport("renderer", renderer_mod);
-
-    const encoder_exe = addCliExecutable(b, "dict-encoder", b.path("encoder/main.zig"), target, optimize, &.{
-        .{ .name = "encoder", .module = encoder_mod },
-        .{ .name = "cli_args", .module = cli_args_mod },
-    });
-    const decoder_exe = addCliExecutable(b, "dict-decoder", b.path("decoder/main.zig"), target, optimize, &.{
-        .{ .name = "decoder", .module = decoder_mod },
-        .{ .name = "cli_args", .module = cli_args_mod },
-    });
-    const backend_exe = addCliExecutable(b, "dict-backend", b.path("backend/main.zig"), target, optimize, &.{
-        .{ .name = "backend", .module = backend_mod },
-        .{ .name = "cli_args", .module = cli_args_mod },
-    });
-    const verifier_exe = addCliExecutable(b, "dict-verify", b.path("tools/verifier.zig"), target, optimize, &.{
-        .{ .name = "encoder", .module = encoder_mod },
-        .{ .name = "decoder", .module = decoder_mod },
-        .{ .name = "zxml", .module = zxml_dep.module("zxml") },
-    });
-    const frontend_exe = addCliExecutable(b, "dict-frontend", b.path("tools/frontend.zig"), target, optimize, &.{});
-    const generated_dict = addGeneratedDictionaryFile(b, encoder_exe, default_xml_path);
-    const generated_index_step = addGeneratedIndexStep(b, decoder_exe, generated_dict);
-    b.installArtifact(encoder_exe);
-    b.installArtifact(decoder_exe);
-    b.installArtifact(backend_exe);
-    b.installArtifact(structure_exe);
-    b.installArtifact(verifier_exe);
-    b.installArtifact(structure_codegen_exe);
-    b.installArtifact(frontend_exe);
-
-    addRunStep(b, "encode", "Run the encoder CLI", encoder_exe, &.{});
-    addRunStep(b, "structure", "Analyze Wiktionary structure", structure_exe, &.{});
-    addGeneratedDecodeStep(b, decoder_exe, generated_dict, generated_index_step);
-    addGeneratedServeStep(b, backend_exe, generated_dict);
-    addGeneratedVerifyStep(b, verifier_exe, default_xml_path, generated_dict, generated_index_step);
-
-    addRunStep(b, "frontend", "Run the frontend CLI", frontend_exe, &.{});
-
-    const test_runner = b.path("tools/test_runner.zig");
-
-    const encoder_tests = b.addTest(.{
-        .root_module = encoder_mod_test,
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const decoder_tests = b.addTest(.{
-        .root_module = decoder_mod_test,
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const backend_tests = b.addTest(.{
-        .root_module = backend_mod_test,
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const renderer_tests = b.addTest(.{
-        .root_module = renderer_mod,
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const structure_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/structure_analyzer.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "encoder", .module = encoder_mod_test },
-                .{ .name = "zxml", .module = zxml_dep.module("zxml") },
-            },
-        }),
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const verifier_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/verifier.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "encoder", .module = encoder_mod_test },
-                .{ .name = "decoder", .module = decoder_mod_test },
-                .{ .name = "zxml", .module = zxml_dep.module("zxml") },
-            },
-        }),
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const run_encoder_tests = b.addRunArtifact(encoder_tests);
-    const run_decoder_tests = b.addRunArtifact(decoder_tests);
-    const run_backend_tests = b.addRunArtifact(backend_tests);
-    const run_renderer_tests = b.addRunArtifact(renderer_tests);
-    const run_structure_tests = b.addRunArtifact(structure_tests);
-    const run_verifier_tests = b.addRunArtifact(verifier_tests);
-
-    const test_step = b.step("test", "Run encoder, decoder, and backend tests");
-    test_step.dependOn(&run_encoder_tests.step);
-    test_step.dependOn(&run_decoder_tests.step);
-    test_step.dependOn(&run_backend_tests.step);
-    test_step.dependOn(&run_renderer_tests.step);
-    test_step.dependOn(&run_structure_tests.step);
-    test_step.dependOn(&run_verifier_tests.step);
-}
-
-fn addCliExecutable(
-    b: *std.Build,
-    name: []const u8,
-    root_source: std.Build.LazyPath,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    imports: []const std.Build.Module.Import,
-) *std.Build.Step.Compile {
-    return b.addExecutable(.{
-        .name = name,
-        .root_module = b.createModule(.{
-            .root_source_file = root_source,
-            .target = target,
-            .optimize = optimize,
-            .imports = imports,
-        }),
-    });
-}
-
-fn addRunStep(
-    b: *std.Build,
-    name: []const u8,
-    description: []const u8,
-    exe: *std.Build.Step.Compile,
-    fixed_args: []const []const u8,
-) void {
-    const run_cmd = b.addRunArtifact(exe);
-    for (fixed_args) |arg| run_cmd.addArg(arg);
-    if (b.args) |args| run_cmd.addArgs(args);
-
-    const step = b.step(name, description);
-    step.dependOn(&run_cmd.step);
-}
-
-fn addGeneratedDecodeStep(
-    b: *std.Build,
-    exe: *std.Build.Step.Compile,
-    db_path: std.Build.LazyPath,
-    index_step: *std.Build.Step,
-) void {
-    const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |args| run_cmd.addArgs(args);
-    if (!argsRequestHelp(b.args) and !argsContainFlag(b.args, "--db")) {
-        run_cmd.addArg("--db");
-        run_cmd.addFileArg(db_path);
-        run_cmd.step.dependOn(index_step);
-    }
-
-    const step = b.step("decode", "Run the decoder CLI");
-    step.dependOn(&run_cmd.step);
-}
-
-fn addGeneratedServeStep(
-    b: *std.Build,
-    exe: *std.Build.Step.Compile,
-    db_path: std.Build.LazyPath,
-) void {
-    const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |args| run_cmd.addArgs(args);
-    if (!argsRequestHelp(b.args) and !argsContainFlag(b.args, "--db")) {
-        run_cmd.addArg("--db");
-        run_cmd.addFileArg(db_path);
-    }
-
-    const step = b.step("serve", "Run the backend server");
-    step.dependOn(&run_cmd.step);
-}
-
-fn addGeneratedVerifyStep(
-    b: *std.Build,
-    exe: *std.Build.Step.Compile,
-    xml_path: std.Build.LazyPath,
-    db_path: std.Build.LazyPath,
-    index_step: *std.Build.Step,
-) void {
-    const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |args| run_cmd.addArgs(args);
-    if (argsRequestHelp(b.args)) {
-        const step = b.step("verify", "Verify dictionary raw entries against the XML dump");
-        step.dependOn(&run_cmd.step);
-        return;
-    }
-    if (!argsContainFlag(b.args, "--input")) {
-        run_cmd.addArg("--input");
-        run_cmd.addFileArg(xml_path);
-    }
-    if (!argsContainFlag(b.args, "--db")) {
-        run_cmd.addArg("--db");
-        run_cmd.addFileArg(db_path);
-        run_cmd.step.dependOn(index_step);
-    }
-
-    const step = b.step("verify", "Verify dictionary raw entries against the XML dump");
-    step.dependOn(&run_cmd.step);
-}
-
-fn addGeneratedDictionaryFile(
-    b: *std.Build,
-    encoder_exe: *std.Build.Step.Compile,
-    xml_path: std.Build.LazyPath,
-) std.Build.LazyPath {
-    const run_cmd = b.addRunArtifact(encoder_exe);
-    run_cmd.addArg("--input");
-    run_cmd.addFileArg(xml_path);
-    run_cmd.addArg("--output");
-    const output_path = run_cmd.addOutputFileArg("wiktionary.bin");
-    run_cmd.expectExitCode(0);
-    _ = run_cmd.captureStdErr(.{ .basename = "wiktionary-build.stderr" });
-    return output_path;
-}
-
-fn addGeneratedIndexStep(
-    b: *std.Build,
-    decoder_exe: *std.Build.Step.Compile,
-    db_path: std.Build.LazyPath,
-) *std.Build.Step {
-    const run_cmd = b.addRunArtifact(decoder_exe);
-    run_cmd.addArgs(&.{ "stats", "--db" });
-    run_cmd.addFileArg(db_path);
-    run_cmd.expectExitCode(0);
-    _ = run_cmd.captureStdOut(.{ .basename = "wiktionary-index-prime.stdout" });
-    _ = run_cmd.captureStdErr(.{ .basename = "wiktionary-index-prime.stderr" });
-    return &run_cmd.step;
-}
-
-fn argsContainFlag(maybe_args: ?[]const []const u8, flag: []const u8) bool {
-    const args = maybe_args orelse return false;
-    for (args) |arg| {
-        if (std.mem.eql(u8, arg, flag)) return true;
-    }
-    return false;
-}
-
-fn argsRequestHelp(maybe_args: ?[]const []const u8) bool {
-    const args = maybe_args orelse return false;
-    for (args) |arg| {
-        if (std.mem.eql(u8, arg, "help") or
-            std.mem.eql(u8, arg, "--help") or
-            std.mem.eql(u8, arg, "-h"))
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-const GeneratedStructureModules = struct {
-    regular: *std.Build.Module,
-    structure: *std.Build.Module,
-};
-
 const StructureReport = struct {
     heading_profiles: []const HeadingProfile,
     headings_by_level: ?[]const CountEntry = null,
@@ -465,86 +63,57 @@ const GeneratedTargetLanguage = struct {
     count: u64,
 };
 
-fn addBootstrapStructureTableModules(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    structure_optimize: std.builtin.OptimizeMode,
-) GeneratedStructureModules {
-    const generated_source = generateDefaultStructureTableSource(b) catch |err| {
-        std.debug.panic("failed to generate bootstrap structure tables: {s}", .{@errorName(err)});
-    };
+const ParsedHeadingLevelKey = struct {
+    level: u8,
+    title: []const u8,
+};
 
-    const write_files = b.addWriteFiles();
-    const generated_path = write_files.add("generated/structure_tables.zig", generated_source);
-    return .{
-        .regular = b.createModule(.{
-            .root_source_file = generated_path,
-            .target = target,
-            .optimize = optimize,
-        }),
-        .structure = b.createModule(.{
-            .root_source_file = generated_path,
-            .target = target,
-            .optimize = structure_optimize,
-        }),
-    };
-}
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(allocator);
 
-fn addGeneratedStructureTableModules(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    structure_optimize: std.builtin.OptimizeMode,
-    structure_exe: *std.Build.Step.Compile,
-    codegen_exe: *std.Build.Step.Compile,
-    xml_path: std.Build.LazyPath,
-) GeneratedStructureModules {
-    const structure_run = b.addRunArtifact(structure_exe);
-    structure_run.addArg("--input");
-    structure_run.addFileArg(xml_path);
-    structure_run.addArg("--output");
-    const report_path = structure_run.addOutputFileArg("wiktionary-structure.json");
-    structure_run.expectExitCode(0);
-    _ = structure_run.captureStdErr(.{ .basename = "wiktionary-structure.stderr" });
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "help")) {
+        std.debug.print(
+        \\dict-structure-tables-codegen --input report.json --compact-source encoder/compact_encoding.zig --output structure_tables.zig
+        \\
+        , .{});
+        return;
+    }
 
-    const codegen_run = b.addRunArtifact(codegen_exe);
-    codegen_run.addArg("--input");
-    codegen_run.addFileArg(report_path);
-    codegen_run.addArg("--compact-source");
-    codegen_run.addFileArg(b.path("encoder/compact_encoding.zig"));
-    codegen_run.addArg("--output");
-    const generated_source = codegen_run.addOutputFileArg("structure_tables.zig");
-    codegen_run.expectExitCode(0);
-    _ = codegen_run.captureStdErr(.{ .basename = "structure_tables_codegen.stderr" });
+    const input_path = flagValue(args[1..], "--input") orelse return error.InvalidArgument;
+    const compact_source_path = flagValue(args[1..], "--compact-source") orelse return error.InvalidArgument;
+    const output_path = flagValue(args[1..], "--output") orelse return error.InvalidArgument;
 
-    return .{
-        .regular = b.createModule(.{
-            .root_source_file = generated_source,
-            .target = target,
-            .optimize = optimize,
-        }),
-        .structure = b.createModule(.{
-            .root_source_file = generated_source,
-            .target = target,
-            .optimize = structure_optimize,
-        }),
-    };
-}
-
-fn generateDefaultStructureTableSource(b: *std.Build) ![]const u8 {
-    return generateStructureTableSourceFromJson(
-        b.allocator,
-        default_structure_report_json,
-        b.pathFromRoot("encoder/compact_encoding.zig"),
+    const source = try generateStructureTableSource(
+        allocator,
+        init.io,
+        input_path,
+        compact_source_path,
     );
+    defer allocator.free(source);
+
+    var file = try std.Io.Dir.cwd().createFile(init.io, output_path, .{ .truncate = true });
+    defer file.close(init.io);
+    try file.writePositionalAll(init.io, source, 0);
 }
 
-fn generateStructureTableSourceFromJson(
+fn flagValue(args: []const []const u8, name: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], name) and i + 1 < args.len) return args[i + 1];
+    }
+    return null;
+}
+
+fn generateStructureTableSource(
     allocator: std.mem.Allocator,
-    json_bytes: []const u8,
+    io: std.Io,
+    report_path: []const u8,
     compact_source_path: []const u8,
-) ![]const u8 {
+) ![]u8 {
+    const json_bytes = try readFileAlloc(allocator, io, report_path, 64 * 1024 * 1024);
+    defer allocator.free(json_bytes);
+
     var parsed = try std.json.parseFromSlice(StructureReport, allocator, json_bytes, .{
         .ignore_unknown_fields = true,
     });
@@ -654,9 +223,7 @@ fn generateStructureTableSourceFromJson(
     }
     std.mem.sortUnstable(GeneratedTemplate, templates.items, {}, generatedTemplateLessThan);
     std.mem.sortUnstable(GeneratedLineTemplate, line_templates.items, {}, generatedLineTemplateLessThan);
-    if (line_templates.items.len > 1024) {
-        line_templates.shrinkRetainingCapacity(1024);
-    }
+    if (line_templates.items.len > 1024) line_templates.shrinkRetainingCapacity(1024);
 
     var compact_patterns: std.ArrayList(GeneratedCompactPattern) = .empty;
     defer compact_patterns.deinit(allocator);
@@ -684,7 +251,7 @@ fn generateStructureTableSourceFromJson(
 
     var covered_compact_patterns = std.StringHashMapUnmanaged(void).empty;
     defer covered_compact_patterns.deinit(allocator);
-    try seedCoveredCompactPatterns(allocator, compact_source_path, &covered_compact_patterns);
+    try seedCoveredCompactPatterns(allocator, io, compact_source_path, &covered_compact_patterns);
 
     for (all_compact_patterns.items) |pattern_entry| {
         const gop = try covered_compact_patterns.getOrPut(allocator, pattern_entry.pattern);
@@ -734,7 +301,7 @@ fn generateStructureTableSourceFromJson(
     const writer = &out.writer;
 
     try writer.writeAll(
-        \\// Generated by build.zig from data/wiktionary-structure.json.
+        \\// Generated by tools/structure_tables_codegen.zig from wiktionary-structure.json.
         \\const std = @import("std");
         \\
         \\pub const SectionKind = enum(u8) {
@@ -760,7 +327,6 @@ fn generateStructureTableSourceFromJson(
         \\pub const heading_level_specs = [_]HeadingLevelSpec{
         \\
     );
-
     for (heading_levels.items, 0..) |heading, index| {
         try writer.writeAll("    .{ .code = ");
         try writer.print("{d}", .{index + 2});
@@ -778,7 +344,6 @@ fn generateStructureTableSourceFromJson(
         \\pub const heading_specs = [_]HeadingSpec{
         \\
     );
-
     for (headings.items, 0..) |heading, index| {
         try writer.writeAll("    .{ .code = ");
         try writer.print("{d}", .{index + 2});
@@ -917,12 +482,8 @@ fn generateStructureTableSourceFromJson(
         \\        hasher.update(&code_buf);
         \\        fingerprintUpdateString(&hasher, entry.name);
         \\    }
-        \\    for (compact_patterns) |entry| {
-        \\        fingerprintUpdateString(&hasher, entry);
-        \\    }
-        \\    for (compact_patterns_ext) |entry| {
-        \\        fingerprintUpdateString(&hasher, entry);
-        \\    }
+        \\    for (compact_patterns) |entry| fingerprintUpdateString(&hasher, entry);
+        \\    for (compact_patterns_ext) |entry| fingerprintUpdateString(&hasher, entry);
         \\    for (translation_templates) |entry| {
         \\        var code_buf: [2]u8 = undefined;
         \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
@@ -950,38 +511,8 @@ fn generateStructureTableSourceFromJson(
     return allocator.dupe(u8, out.written());
 }
 
-const default_structure_report_json =
-    \\{
-    \\  "heading_profiles": [
-    \\    { "title": "English", "parser_kind": "language-root", "count": 1 },
-    \\    { "title": "Noun", "parser_kind": "part-of-speech", "count": 1 },
-    \\    { "title": "Verb", "parser_kind": "part-of-speech", "count": 1 },
-    \\    { "title": "Adjective", "parser_kind": "part-of-speech", "count": 1 },
-    \\    { "title": "Proper noun", "parser_kind": "part-of-speech", "count": 1 },
-    \\    { "title": "Etymology", "parser_kind": "etymology", "count": 1 },
-    \\    { "title": "Pronunciation", "parser_kind": "pronunciation", "count": 1 },
-    \\    { "title": "Alternative forms", "parser_kind": "alternative-forms", "count": 1 },
-    \\    { "title": "Translations", "parser_kind": "translations", "count": 1 },
-    \\    { "title": "Derived terms", "parser_kind": "relations", "count": 1 },
-    \\    { "title": "Synonyms", "parser_kind": "relations", "count": 1 },
-    \\    { "title": "Usage notes", "parser_kind": "notes", "count": 1 },
-    \\    { "title": "Conjugation", "parser_kind": "inflection", "count": 1 },
-    \\    { "title": "Descendants", "parser_kind": "descendants", "count": 1 },
-    \\    { "title": "See also", "parser_kind": "navigation", "count": 1 },
-    \\    { "title": "References", "parser_kind": "citations", "count": 1 },
-    \\    { "title": "Further reading", "parser_kind": "citations", "count": 1 },
-    \\    { "title": "Quotations", "parser_kind": "citations", "count": 1 }
-    \\  ],
-    \\  "headings_by_level": [],
-    \\  "translation_source_labels": [],
-    \\  "translation_target_languages": [],
-    \\  "templates_by_heading": []
-    \\}
-;
-
-fn readFileAllocAbsolute(allocator: std.mem.Allocator, path: []const u8, max_bytes: usize) ![]u8 {
-    const io = std.Options.debug_io;
-    var file = try std.Io.Dir.openFileAbsolute(io, path, .{});
+fn readFileAlloc(allocator: std.mem.Allocator, io: std.Io, path: []const u8, max_bytes: usize) ![]u8 {
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
 
     const stat = try file.stat(io);
@@ -989,7 +520,6 @@ fn readFileAllocAbsolute(allocator: std.mem.Allocator, path: []const u8, max_byt
 
     const out = try allocator.alloc(u8, @intCast(stat.size));
     errdefer allocator.free(out);
-
     const read_len = try file.readPositionalAll(io, out, 0);
     if (read_len == out.len) return out;
 
@@ -1004,9 +534,6 @@ fn sectionKindNameForParser(parser_kind: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, parser_kind, "relations")) return "term_list";
     if (std.mem.eql(u8, parser_kind, "navigation")) return "term_list";
     if (std.mem.eql(u8, parser_kind, "translations")) return "translations";
-    // These section families are structurally loose and often contain free-form
-    // wikitext, comments, refs, or mixed templates that are not worth forcing
-    // through the line-stream codec. Keep them as raw joined bodies.
     if (std.mem.eql(u8, parser_kind, "citations")) return "lines";
     if (std.mem.eql(u8, parser_kind, "descendants")) return "lines";
     if (std.mem.eql(u8, parser_kind, "etymology")) return "lines";
@@ -1022,27 +549,17 @@ fn isTranslationHeading(heading: []const u8) bool {
     return std.mem.eql(u8, heading, "Translations") or std.mem.eql(u8, heading, "Translate");
 }
 
-const ParsedHeadingLevelKey = struct {
-    level: u8,
-    title: []const u8,
-};
-
 fn parseHeadingLevelKey(key: []const u8) ?ParsedHeadingLevelKey {
     if (key.len < 4 or key[0] != 'L') return null;
     const colon = std.mem.indexOfScalar(u8, key, ':') orelse return null;
     if (colon <= 1 or colon + 1 >= key.len) return null;
     const level = std.fmt.parseInt(u8, key[1..colon], 10) catch return null;
-    return .{
-        .level = level,
-        .title = key[colon + 1 ..],
-    };
+    return .{ .level = level, .title = key[colon + 1 ..] };
 }
 
 fn headingKindNameForTitle(profiles: []const HeadingProfile, title: []const u8) ?[]const u8 {
     for (profiles) |profile| {
-        if (std.mem.eql(u8, profile.title, title)) {
-            return sectionKindNameForParser(profile.parser_kind);
-        }
+        if (std.mem.eql(u8, profile.title, title)) return sectionKindNameForParser(profile.parser_kind);
     }
     return null;
 }
@@ -1078,12 +595,33 @@ fn generatedCompactPatternLessThan(_: void, a: GeneratedCompactPattern, b: Gener
     return std.mem.lessThan(u8, a.pattern, b.pattern);
 }
 
+fn generatedTargetLanguageLessThan(_: void, a: GeneratedTargetLanguage, b: GeneratedTargetLanguage) bool {
+    if (a.count != b.count) return a.count > b.count;
+    return std.mem.lessThan(u8, a.value, b.value);
+}
+
+fn compactPatternForTemplate(allocator: std.mem.Allocator, name: []const u8) ?[]const u8 {
+    if (name.len == 0) return null;
+    if (std.mem.indexOfAny(u8, name, "\r\n")) |_| return null;
+
+    if (std.mem.startsWith(u8, name, "en-") or
+        std.mem.eql(u8, name, "enPR") or
+        std.mem.eql(u8, name, "...") or
+        std.mem.eql(u8, name, "nb..."))
+    {
+        return std.fmt.allocPrint(allocator, "{{{{{s}", .{name}) catch null;
+    }
+
+    return std.fmt.allocPrint(allocator, "{{{{{s}|", .{name}) catch null;
+}
+
 fn seedCoveredCompactPatterns(
     allocator: std.mem.Allocator,
+    io: std.Io,
     source_path: []const u8,
     covered: *std.StringHashMapUnmanaged(void),
 ) !void {
-    const source = try readFileAllocAbsolute(allocator, source_path, 512 * 1024);
+    const source = try readFileAlloc(allocator, io, source_path, 512 * 1024);
     defer allocator.free(source);
 
     const marker = "pub const static_escaped_patterns = [_][]const u8{";
@@ -1135,26 +673,6 @@ fn seedCoveredCompactPatterns(
         const gop = try covered.getOrPut(allocator, name);
         if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, name);
     }
-}
-
-fn compactPatternForTemplate(allocator: std.mem.Allocator, name: []const u8) ?[]const u8 {
-    if (name.len == 0) return null;
-    if (std.mem.indexOfAny(u8, name, "\r\n")) |_| return null;
-
-    if (std.mem.startsWith(u8, name, "en-") or
-        std.mem.eql(u8, name, "enPR") or
-        std.mem.eql(u8, name, "...") or
-        std.mem.eql(u8, name, "nb..."))
-    {
-        return std.fmt.allocPrint(allocator, "{{{{{s}", .{name}) catch null;
-    }
-
-    return std.fmt.allocPrint(allocator, "{{{{{s}|", .{name}) catch null;
-}
-
-fn generatedTargetLanguageLessThan(_: void, a: GeneratedTargetLanguage, b: GeneratedTargetLanguage) bool {
-    if (a.count != b.count) return a.count > b.count;
-    return std.mem.lessThan(u8, a.value, b.value);
 }
 
 fn appendZigStringLiteral(writer: *std.Io.Writer, bytes: []const u8) !void {

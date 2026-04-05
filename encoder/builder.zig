@@ -6,7 +6,7 @@ const normalize = @import("normalize");
 const compact = @import("compact_encoding.zig");
 const format = @import("format.zig");
 const wikitext = @import("wikitext.zig");
-const xml_decode = @import("xml_decode.zig");
+const xml_decode = @import("shared_xml_decode");
 
 const parse_opts: zxml.ParseOptions = .{
     .mode = .strict,

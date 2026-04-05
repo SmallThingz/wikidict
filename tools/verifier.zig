@@ -152,8 +152,8 @@ fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
 }
 
 const Options = struct {
-    input_path: []const u8 = "enwiktionary.xml",
-    db_path: []const u8 = "data/enwiktionary.bin",
+    input_path: []const u8 = "data/wiktionary.xml",
+    db_path: []const u8 = "data/wiktionary.bin",
     report_path: []const u8 = "data/verification-report.txt",
     limit_entries: ?usize = null,
     thread_count: ?usize = null,
@@ -1011,7 +1011,7 @@ fn parseOptions(args: []const []const u8) !Options {
 
 fn printUsage() void {
     std.debug.print(
-        \\dict-verify [--input enwiktionary.xml] [--db data/enwiktionary.bin]
+        \\dict-verify [--input data/wiktionary.xml] [--db data/wiktionary.bin]
         \\            [--report data/verification-report.txt] [--limit 10000]
         \\            [--threads N]
         \\build-time exclusions come from -Dskip-headings=...

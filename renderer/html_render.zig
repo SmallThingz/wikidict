@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const wikitext = @import("wikitext_runtime.zig");
-const xml_decode = @import("xml_decode.zig");
+const xml_decode = @import("shared_xml_decode");
 
 const max_render_line_bytes = 4096;
 const max_term_bytes = 256;

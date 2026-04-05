@@ -32,15 +32,15 @@ Encode the dictionary:
 
 ```bash
 zig build -Doptimize=ReleaseFast encode -- \
-  --input enwiktionary.xml \
-  --output data/enwiktionary.bin
+  --input data/wiktionary.xml \
+  --output data/wiktionary.bin
 ```
 
 Build a smaller test binary:
 
 ```bash
 zig build encode -- \
-  --input enwiktionary.xml \
+  --input data/wiktionary.xml \
   --output data/test.bin \
   --limit 500
 ```
@@ -48,28 +48,28 @@ zig build encode -- \
 Lookup a word with the decoder CLI:
 
 ```bash
-zig build decode -- lookup --db data/enwiktionary.bin --word color
+zig build decode -- lookup --db data/wiktionary.bin --word color
 ```
 
 Suggestions:
 
 ```bash
-zig build decode -- suggest --db data/enwiktionary.bin --prefix colo --limit 10
+zig build decode -- suggest --db data/wiktionary.bin --prefix colo --limit 10
 ```
 
 Stats:
 
 ```bash
-zig build decode -- stats --db data/enwiktionary.bin
+zig build decode -- stats --db data/wiktionary.bin
 ```
 
-The first decoder open builds a sidecar cache at `data/enwiktionary.bin.idx`. Later opens mmap that cache and skip the expensive metadata rebuild.
+The first decoder open builds a sidecar cache at `data/wiktionary.bin.idx`. Later opens mmap that cache and skip the expensive metadata rebuild.
 
 Analyze the full dump structure:
 
 ```bash
 zig build structure -- \
-  --input enwiktionary.xml \
+  --input data/wiktionary.xml \
   --output data/wiktionary-structure.json \
   --top 100 \
   --samples 100
@@ -86,10 +86,10 @@ The structure analyzer runs in `ReleaseFast` by default and emits structured JSO
 Run the backend server:
 
 ```bash
-zig build -Doptimize=ReleaseFast serve -- --db data/enwiktionary.bin --port 3000
+zig build -Doptimize=ReleaseFast serve -- --db data/wiktionary.bin --port 3000
 ```
 
-If `data/enwiktionary.bin` does not exist, the backend will build it from `enwiktionary.xml` before serving requests.
+If `data/wiktionary.bin` does not exist, the backend will build it from `data/wiktionary.xml` before serving requests.
 
 ## Frontend Commands
 

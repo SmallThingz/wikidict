@@ -19,14 +19,22 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
     if (args.len >= 2 and std.mem.eql(u8, args[1], "help")) {
-        printUsage();
+        try printUsage(init.io, allocator);
         return;
+    }
+    for (args[1..]) |arg| {
+        if (std.mem.eql(u8, arg, "--help")) {
+            try printUsage(init.io, allocator);
+            return;
+        }
     }
 
     const options = try parseOptions(args[1..]);
     const stats = try analyzeDump(init.io, init.gpa, options);
 
-    std.debug.print(
+    try printStdOut(
+        init.io,
+        allocator,
         "wrote {s}\npages={d}\nns0={d}\nlanguage_entries={d}\nheading_titles={d}\nunclassified_headings={d}\nanomalies={d}\n",
         .{
             options.output_path,
@@ -41,7 +49,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const Options = struct {
-    input_path: []const u8 = "enwiktionary.xml",
+    input_path: []const u8 = "data/wiktionary.xml",
     output_path: []const u8 = "data/wiktionary-structure.json",
     format: OutputFormat = .json,
     limit_entries: ?usize = null,
@@ -845,7 +853,7 @@ fn writeTextReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer
     }
 
     if (std.mem.eql(u8, analyzer.options.output_path, "-")) {
-        std.debug.print("{s}", .{out.written()});
+        try std.Io.File.stdout().writeStreamingAll(io, out.written());
         return;
     }
 
@@ -926,7 +934,7 @@ fn writeJsonReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer
     try out.writer.print("\n  ]\n}}\n", .{});
 
     if (std.mem.eql(u8, analyzer.options.output_path, "-")) {
-        std.debug.print("{s}", .{out.written()});
+        try std.Io.File.stdout().writeStreamingAll(io, out.written());
         return;
     }
 
@@ -1708,9 +1716,6 @@ fn parseOptions(args: []const []const u8) !Options {
         } else if (std.mem.eql(u8, arg, "--samples") and i + 1 < args.len) {
             options.sample_limit = try std.fmt.parseInt(usize, args[i + 1], 10);
             i += 1;
-        } else if (std.mem.eql(u8, arg, "--help")) {
-            printUsage();
-            std.process.exit(0);
         } else {
             return error.InvalidArgument;
         }
@@ -1718,12 +1723,19 @@ fn parseOptions(args: []const []const u8) !Options {
     return options;
 }
 
-fn printUsage() void {
-    std.debug.print(
-        \\dict-structure [--input enwiktionary.xml] [--output data/wiktionary-structure.json]
+fn printUsage(io: std.Io, allocator: std.mem.Allocator) !void {
+    try printStdOut(
+        io,
+        allocator,
+        \\dict-structure [--input data/wiktionary.xml] [--output data/wiktionary-structure.json]
         \\               [--format json|text] [--limit 10000] [--threads 4] [--top 50] [--samples 64]
         \\
     , .{});
+}
+
+fn printStdOut(io: std.Io, allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
+    const text = try std.fmt.allocPrint(allocator, fmt, args);
+    try std.Io.File.stdout().writeStreamingAll(io, text);
 }
 
 test "line signature classifies common prefixes" {

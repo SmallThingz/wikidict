@@ -1,5 +1,5 @@
 const std = @import("std");
-const xml_decode = @import("xml_decode.zig");
+const xml_decode = @import("shared_xml_decode");
 
 pub const ParsedHeading = struct {
     level: u8,

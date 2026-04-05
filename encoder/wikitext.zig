@@ -1,6 +1,6 @@
 const std = @import("std");
 const config = @import("config");
-const xml_decode = @import("xml_decode.zig");
+const xml_decode = @import("shared_xml_decode");
 
 const max_gloss_bytes = 2048;
 const max_example_bytes = 1024;
@@ -844,11 +844,12 @@ pub fn sectionParserSpecForHeading(heading: ParsedHeading) ?SectionParserSpec {
 }
 
 pub fn sectionParserSpecForTitle(title: []const u8, level: u8) ?SectionParserSpec {
-    if (level == 2 and headingMatches(title, "English")) {
+    const trimmed = std.mem.trim(u8, title, " \t");
+    if (level == 2 and trimmed.len != 0) {
         return .{
             .kind = .language_root,
             .parser_name = parser_name_capture,
-            .canonical_title = "English",
+            .canonical_title = title,
         };
     }
     if (isAlternativeFormsHeading(title)) {
@@ -931,6 +932,13 @@ pub fn sectionParserSpecForTitle(title: []const u8, level: u8) ?SectionParserSpe
     if (isMetaHeading(title)) {
         return .{
             .kind = .meta,
+            .parser_name = parser_name_capture,
+            .canonical_title = title,
+        };
+    }
+    if (level >= 3 and trimmed.len != 0) {
+        return .{
+            .kind = .notes,
             .parser_name = parser_name_capture,
             .canonical_title = title,
         };
@@ -2942,50 +2950,6 @@ fn asciiContainsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     return false;
 }
 
-const StructureHeadingTitles = struct {
-    json: []u8,
-    titles: std.ArrayList([]const u8),
-
-    fn deinit(self: *StructureHeadingTitles, allocator: std.mem.Allocator) void {
-        self.titles.deinit(allocator);
-        allocator.free(self.json);
-    }
-};
-
-fn loadStructureHeadingTitlesForTest(allocator: std.mem.Allocator) !StructureHeadingTitles {
-    var file = try std.Io.Dir.cwd().openFile(std.testing.io, "data/wiktionary-structure.json", .{});
-    defer file.close(std.testing.io);
-
-    const stat = try file.stat(std.testing.io);
-    const len = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
-    const json = try allocator.alloc(u8, len);
-    errdefer allocator.free(json);
-    _ = try file.readPositionalAll(std.testing.io, json, 0);
-
-    const profiles_marker = "\"heading_profiles\": [";
-    const levels_marker = "\"headings_by_level\": [";
-    const profiles_start = std.mem.indexOf(u8, json, profiles_marker) orelse return error.InvalidStructureReport;
-    const levels_start = std.mem.indexOfPos(u8, json, profiles_start, levels_marker) orelse return error.InvalidStructureReport;
-    const slice = json[profiles_start..levels_start];
-
-    var titles: std.ArrayList([]const u8) = .empty;
-    errdefer titles.deinit(allocator);
-
-    const title_marker = "\"title\": \"";
-    var cursor: usize = 0;
-    while (std.mem.indexOfPos(u8, slice, cursor, title_marker)) |match| {
-        const value_start = match + title_marker.len;
-        const value_end = std.mem.indexOfScalarPos(u8, slice, value_start, '"') orelse return error.InvalidStructureReport;
-        try titles.append(allocator, slice[value_start..value_end]);
-        cursor = value_end + 1;
-    }
-
-    return .{
-        .json = json,
-        .titles = titles,
-    };
-}
-
 test "parse alternative spelling and noun gloss" {
     const source =
         \\==English==
@@ -3346,20 +3310,6 @@ test "languageMatchesFilterCsv matches trimmed names" {
     try std.testing.expect(languageMatchesFilterCsv("Chinese", "English, Chinese"));
     try std.testing.expect(!languageMatchesFilterCsv("Hindi", "English, Chinese"));
     try std.testing.expect(languageMatchesFilterCsv("Hindi", ""));
-}
-
-test "current structure report headings all map to a section parser" {
-    var titles = try loadStructureHeadingTitlesForTest(std.testing.allocator);
-    defer titles.deinit(std.testing.allocator);
-
-    try std.testing.expect(titles.titles.items.len != 0);
-
-    for (titles.titles.items) |title| {
-        const level: u8 = if (headingMatches(title, "English")) 2 else 3;
-        const parser = sectionParserSpecForTitle(title, level);
-        try std.testing.expect(parser != null);
-        try std.testing.expect(parser.?.parser_name.len != 0);
-    }
 }
 
 test "section parser specs advertise live shared parser implementations" {

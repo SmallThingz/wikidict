@@ -7,7 +7,7 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
     if (args.len < 2) {
-        printUsage();
+        try printUsage(init.io, allocator);
         return;
     }
 
@@ -21,17 +21,17 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     if (std.mem.eql(u8, command, "stats")) {
-        try cmdStats(init.io, args[2..]);
+        try cmdStats(init.io, allocator, args[2..]);
         return;
     }
 
-    printUsage();
+    try printUsage(init.io, allocator);
 }
 
 fn cmdLookup(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
-    const db_path = cli_args.flagValue(args, "--db") orelse "data/enwiktionary.bin";
+    const db_path = cli_args.flagValue(args, "--db") orelse "data/wiktionary.bin";
     const term = cli_args.flagValue(args, "--word") orelse {
-        printUsage();
+        try printUsage(io, allocator);
         return;
     };
     const open_options = try openOptionsFromArgs(args);
@@ -56,9 +56,9 @@ fn cmdLookup(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
 }
 
 fn cmdSuggest(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
-    const db_path = cli_args.flagValue(args, "--db") orelse "data/enwiktionary.bin";
+    const db_path = cli_args.flagValue(args, "--db") orelse "data/wiktionary.bin";
     const prefix = cli_args.flagValue(args, "--prefix") orelse {
-        printUsage();
+        try printUsage(io, allocator);
         return;
     };
     const limit = (try cli_args.parseOptionalIntFlag(usize, args, "--limit")) orelse 12;
@@ -86,13 +86,15 @@ fn cmdSuggest(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8
     }
 }
 
-fn cmdStats(io: std.Io, args: []const []const u8) !void {
-    const db_path = cli_args.flagValue(args, "--db") orelse "data/enwiktionary.bin";
+fn cmdStats(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
+    const db_path = cli_args.flagValue(args, "--db") orelse "data/wiktionary.bin";
     const open_options = try openOptionsFromArgs(args);
     var db = try decoder.openDictionaryWithOptions(std.heap.page_allocator, io, db_path, open_options);
     defer db.deinit();
 
-    std.debug.print(
+    try printStdOut(
+        io,
+        allocator,
         "path: {s}\nentries: {d}\nraw entries: {d}\nredirects: {d}\nlookups: {d}\nrecord bytes: {d}\n",
         .{
             db_path,
@@ -293,13 +295,20 @@ fn lookupKindName(kind: u8) []const u8 {
     };
 }
 
-fn printUsage() void {
-    std.debug.print(
-        \\dict-decoder lookup  --db data/enwiktionary.bin --word colour [--index-threads 2]
-        \\dict-decoder suggest --db data/enwiktionary.bin --prefix col [--limit 12] [--index-threads 2]
-        \\dict-decoder stats   --db data/enwiktionary.bin [--index-threads 2]
+fn printUsage(io: std.Io, allocator: std.mem.Allocator) !void {
+    try printStdOut(
+        io,
+        allocator,
+        \\dict-decoder lookup  --db data/wiktionary.bin --word colour [--index-threads 2]
+        \\dict-decoder suggest --db data/wiktionary.bin --prefix col [--limit 12] [--index-threads 2]
+        \\dict-decoder stats   --db data/wiktionary.bin [--index-threads 2]
         \\
     , .{});
+}
+
+fn printStdOut(io: std.Io, allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
+    const text = try std.fmt.allocPrint(allocator, fmt, args);
+    try std.Io.File.stdout().writeStreamingAll(io, text);
 }
 
 test "lookupKindName maps known lookup kinds" {
