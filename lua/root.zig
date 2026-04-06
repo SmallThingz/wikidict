@@ -135,6 +135,7 @@ const Instruction = union(enum) {
     table_set_name: u16,
     table_set_dynamic,
     load_field_name: u16,
+    load_method_name: u16,
     store_field_name: u16,
     load_index,
     store_index,
@@ -330,6 +331,11 @@ pub const Expr = union(enum) {
         callee: *Expr,
         args: []const *Expr,
     },
+    method_call: struct {
+        object: *Expr,
+        name: []const u8,
+        args: []const *Expr,
+    },
     function_lit: struct {
         params: []const []const u8,
         body: []const *Stmt,
@@ -480,6 +486,42 @@ pub fn run(allocator: std.mem.Allocator, chunk: *const Chunk) !RunResult {
         .returns = returns,
         .globals = globals,
     };
+}
+
+pub const ModuleArg = struct {
+    name: ?[]const u8 = null,
+    value: []const u8,
+};
+
+pub fn runModuleFunctionAlloc(
+    allocator: std.mem.Allocator,
+    module_source: []const u8,
+    function_name: []const u8,
+    args: []const ModuleArg,
+) ![]u8 {
+    var chunk = try compile(allocator, module_source);
+    defer chunk.deinit();
+
+    var vm = try Vm.init(allocator);
+    defer vm.deinit();
+
+    const globals = try vm.createGlobalState(chunk.program);
+    try vm.installBuiltinGlobals(globals, chunk.program.builtins);
+
+    const entry = try vm.createTopClosure(chunk.program.top);
+    const module_returns = try vm.executeClosure(globals, entry, &.{});
+    if (module_returns.len == 0 or module_returns[0] != .table) return allocator.dupe(u8, "");
+
+    const function_value = module_returns[0].table.getString(function_name);
+    if (function_value != .function) return allocator.dupe(u8, "");
+
+    const frame_table = try buildModuleFrameTable(&vm, args);
+    const results = try vm.invokeResolvedFunction(globals, function_value, &.{.{ .table = frame_table }});
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    if (results.len != 0) try appendValueText(&out, allocator, results[0]);
+    return out.toOwnedSlice(allocator);
 }
 
 pub fn formatOpcodesAlloc(allocator: std.mem.Allocator, chunk: *const Chunk) ![]u8 {
@@ -647,6 +689,12 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: *cons
             try formatExpr(out, allocator, call.callee);
             try out.appendSlice(allocator, "(...)");
         },
+        .method_call => |call| {
+            try formatExpr(out, allocator, call.object);
+            try out.appendSlice(allocator, ":");
+            try out.appendSlice(allocator, call.name);
+            try out.appendSlice(allocator, "(...)");
+        },
         .function_lit => try out.appendSlice(allocator, "function(...) end"),
         .unary => |unary| {
             try out.appendSlice(allocator, @tagName(unary.op));
@@ -756,6 +804,10 @@ fn optimizeExpr(allocator: std.mem.Allocator, expr: *Expr) OptimizeError!void {
             try optimizeExpr(allocator, call.callee);
             try optimizeExprSlice(allocator, call.args);
         },
+        .method_call => |*call| {
+            try optimizeExpr(allocator, call.object);
+            try optimizeExprSlice(allocator, call.args);
+        },
         .function_lit => |*func| try optimizeChunk(allocator, func.body),
         .nil_lit, .bool_lit, .number_lit, .string_lit, .variable, .varargs => {},
     }
@@ -796,6 +848,7 @@ fn constExprValueAlloc(allocator: std.mem.Allocator, expr: *const Expr) Optimize
         .field,
         .index,
         .call,
+        .method_call,
         .function_lit,
         .variable,
         .varargs,
@@ -1425,6 +1478,13 @@ fn compileExprBytecode(builder: *ProtoBuilder, expr: *const Expr) BytecodeCompil
             const name_idx = try builder.stringConst(field.name);
             _ = try builder.emit(.{ .load_field_name = name_idx }, 0);
         },
+        .method_call => |call| {
+            try compileExprBytecode(builder, call.object);
+            const name_idx = try builder.stringConst(call.name);
+            _ = try builder.emit(.{ .load_method_name = name_idx }, 1);
+            try compileExprList(builder, call.args);
+            _ = try builder.emit(.{ .call = try castU16(call.args.len + 1) }, -@as(i32, @intCast(call.args.len + 1)));
+        },
         .index => |index| {
             try compileExprBytecode(builder, index.object);
             try compileExprBytecode(builder, index.key);
@@ -1436,7 +1496,15 @@ fn compileExprBytecode(builder: *ProtoBuilder, expr: *const Expr) BytecodeCompil
             _ = try builder.emit(.{ .call = try castU16(call.args.len) }, -@as(i32, @intCast(call.args.len)));
         },
         .function_lit => |func| {
-            const proto = try compileChildPrototype(builder.allocator, builder.program, builder, "anonymous", func.params, func.body, func.is_vararg);
+            const proto = try compileChildPrototype(
+                builder.allocator,
+                builder.program,
+                builder,
+                "anonymous",
+                func.params,
+                func.body,
+                func.is_vararg,
+            );
             const child_idx = try builder.addChildProto(proto);
             _ = try builder.emit(.{ .make_closure = child_idx }, 1);
         },
@@ -1506,6 +1574,7 @@ fn formatPrototypeBytecode(out: *std.ArrayList(u8), allocator: std.mem.Allocator
             .jump_if_true,
             .table_set_name,
             .load_field_name,
+            .load_method_name,
             .store_field_name,
             .make_closure,
             .call,
@@ -1816,7 +1885,7 @@ const Parser = struct {
             });
         }
         switch (prefix.*) {
-            .call => return try self.allocStmt(.{ .expr_stmt = prefix }),
+            .call, .method_call => return try self.allocStmt(.{ .expr_stmt = prefix }),
             else => return error.InvalidAssignment,
         }
     }
@@ -1895,17 +1964,12 @@ const Parser = struct {
             }
             if (self.eat(.colon)) {
                 const method_name = try self.expectIdentifier();
-                const callee = try self.allocExpr(.{
-                    .field = .{
-                        .object = expr,
-                        .name = method_name,
-                    },
-                });
                 const method_args = try self.parseCallArgs();
-                const args = try self.allocator.alloc(*Expr, method_args.len + 1);
-                args[0] = expr;
-                @memcpy(args[1..], method_args);
-                expr = try self.allocExpr(.{ .call = .{ .callee = callee, .args = args } });
+                expr = try self.allocExpr(.{ .method_call = .{
+                    .object = expr,
+                    .name = method_name,
+                    .args = method_args,
+                } });
                 continue;
             }
             break;
@@ -2117,6 +2181,14 @@ fn precedence(op: BinaryOp) u8 {
 }
 
 fn lex(allocator: std.mem.Allocator, source: []const u8) ![]const Token {
+    return lexWithDiagnostics(allocator, source, true);
+}
+
+fn lexQuiet(allocator: std.mem.Allocator, source: []const u8) ![]const Token {
+    return lexWithDiagnostics(allocator, source, false);
+}
+
+fn lexWithDiagnostics(allocator: std.mem.Allocator, source: []const u8, diagnostics: bool) ![]const Token {
     var tokens: std.ArrayList(Token) = .empty;
     var i: usize = 0;
     while (i < source.len) {
@@ -2127,7 +2199,7 @@ fn lex(allocator: std.mem.Allocator, source: []const u8) ![]const Token {
                 if (i + 1 < source.len and source[i + 1] == '-') {
                     if (detectLongBracketStart(source, i + 2)) |long_bracket| {
                         const end = findLongBracketEnd(source, long_bracket.content_start, long_bracket.eq_count) orelse {
-                            reportLexErrorAt(source, i, error.UnexpectedEof);
+                            if (diagnostics) reportLexErrorAt(source, i, error.UnexpectedEof);
                             return error.UnexpectedEof;
                         };
                         i = end + long_bracket.eq_count + 2;
@@ -2153,7 +2225,7 @@ fn lex(allocator: std.mem.Allocator, source: []const u8) ![]const Token {
             '[' => {
                 if (detectLongBracketStart(source, i)) |long_bracket| {
                     const end = findLongBracketEnd(source, long_bracket.content_start, long_bracket.eq_count) orelse {
-                        reportLexErrorAt(source, i, error.UnexpectedEof);
+                        if (diagnostics) reportLexErrorAt(source, i, error.UnexpectedEof);
                         return error.UnexpectedEof;
                     };
                     try tokens.append(allocator, .{
@@ -2196,7 +2268,7 @@ fn lex(allocator: std.mem.Allocator, source: []const u8) ![]const Token {
                     try tokens.append(allocator, .{ .tag = .ne, .lexeme = source[i .. i + 2] });
                     i += 2;
                 } else {
-                    reportLexErrorAt(source, i, error.UnexpectedToken);
+                    if (diagnostics) reportLexErrorAt(source, i, error.UnexpectedToken);
                     return error.UnexpectedToken;
                 }
             },
@@ -2226,7 +2298,7 @@ fn lex(allocator: std.mem.Allocator, source: []const u8) ![]const Token {
                     if (source[i] == '\\' and i + 1 < source.len) i += 1;
                 }
                 if (i >= source.len) {
-                    reportLexErrorAt(source, start - 1, error.UnexpectedEof);
+                    if (diagnostics) reportLexErrorAt(source, start - 1, error.UnexpectedEof);
                     return error.UnexpectedEof;
                 }
                 const decoded = try decodeLuaStringAlloc(allocator, source[start..i]);
@@ -2245,7 +2317,7 @@ fn lex(allocator: std.mem.Allocator, source: []const u8) ![]const Token {
                     const ident = source[start..i];
                     try tokens.append(allocator, .{ .tag = keywordTag(ident) orelse .identifier, .lexeme = ident });
                 } else {
-                    reportLexErrorAt(source, i, error.UnexpectedToken);
+                    if (diagnostics) reportLexErrorAt(source, i, error.UnexpectedToken);
                     return error.UnexpectedToken;
                 }
             },
@@ -2253,6 +2325,13 @@ fn lex(allocator: std.mem.Allocator, source: []const u8) ![]const Token {
     }
     try tokens.append(allocator, .{ .tag = .eof, .lexeme = "" });
     return tokens.toOwnedSlice(allocator);
+}
+
+fn freeTokenSlice(allocator: std.mem.Allocator, tokens: []const Token) void {
+    for (tokens) |token| {
+        if (token.tag == .string) allocator.free(token.lexeme);
+    }
+    allocator.free(tokens);
 }
 
 fn reportLexErrorAt(source: []const u8, pos: usize, err: CompileError) void {
@@ -2655,6 +2734,12 @@ const Vm = struct {
                     if (object != .table) return error.InvalidIndex;
                     try self.pushFrameValue(frame, object.table.getString(constantString(proto.constants[name_idx])));
                 },
+                .load_method_name => |name_idx| {
+                    const object = try self.popFrameValue(frame);
+                    if (object != .table) return error.InvalidIndex;
+                    try self.pushFrameValue(frame, object.table.getString(constantString(proto.constants[name_idx])));
+                    try self.pushFrameValue(frame, object);
+                },
                 .store_field_name => |name_idx| {
                     const object = try self.popFrameValue(frame);
                     const value = try self.popFrameValue(frame);
@@ -2982,6 +3067,18 @@ const Vm = struct {
                 const object = try self.evalExpr(env, field.object);
                 if (object != .table) return error.InvalidIndex;
                 break :blk object.table.getString(field.name);
+            },
+            .method_call => |call| blk: {
+                const object = try self.evalExpr(env, call.object);
+                if (object != .table) return error.InvalidIndex;
+                const callee = object.table.getString(call.name);
+                if (callee != .function) return error.InvalidCall;
+                const other_args = try self.evalExprs(env, call.args);
+                const args = try self.alloc().alloc(Value, other_args.len + 1);
+                args[0] = object;
+                @memcpy(args[1..], other_args);
+                const results = try self.callFunction(callee.function, args);
+                break :blk if (results.len == 0) .nil else results[0];
             },
             .index => |index| blk: {
                 const object = try self.evalExpr(env, index.object);
@@ -3356,10 +3453,37 @@ fn builtinTableConcat(vm: *Vm, args: []const Value) ![]Value {
     return try singleReturn(vm, .{ .string = try out.toOwnedSlice(vm.alloc()) });
 }
 
+fn builtinFrameGetParent(vm: *Vm, args: []const Value) ![]Value {
+    if (args.len == 0) return emptyReturns();
+    return singleReturn(vm, args[0]);
+}
+
+fn builtinFrameExpandTemplate(vm: *Vm, _: []const Value) ![]Value {
+    return singleReturn(vm, .{ .string = "" });
+}
+
+fn buildModuleFrameTable(vm: *Vm, args: []const ModuleArg) !*Table {
+    const frame = try Table.init(vm.alloc());
+    const args_table = try Table.init(vm.alloc());
+
+    for (args, 0..) |arg, idx| {
+        try args_table.putNumber(@floatFromInt(idx + 1), .{ .string = try vm.alloc().dupe(u8, arg.value) });
+        if (arg.name) |name| {
+            try args_table.putString(name, .{ .string = try vm.alloc().dupe(u8, arg.value) });
+        }
+    }
+
+    try frame.putString("args", .{ .table = args_table });
+    try frame.putString("getParent", .{ .function = try vm.nativeFunction("frame.getParent", builtinFrameGetParent) });
+    try frame.putString("expandTemplate", .{ .function = try vm.nativeFunction("frame.expandTemplate", builtinFrameExpandTemplate) });
+    return frame;
+}
+
 pub const DependencyReport = struct {
     direct_templates: []const []const u8,
     direct_modules: []const []const u8,
     transitive_modules: []const []const u8,
+    missing_modules: []const []const u8,
     compiled_ok: []const []const u8,
     compiled_failed: []const ModuleCompileFailure,
     bytecode_consistent: []const []const u8,
@@ -3372,6 +3496,7 @@ pub const TemplateDependencyReport = struct {
     unresolved_templates: []const []const u8,
     direct_modules: []const []const u8,
     transitive_modules: []const []const u8,
+    missing_modules: []const []const u8,
     compiled_ok: []const []const u8,
     compiled_failed: []const ModuleCompileFailure,
     bytecode_consistent: []const []const u8,
@@ -3383,6 +3508,7 @@ pub const TemplateDependencyReport = struct {
         freeStringSlice(allocator, self.unresolved_templates);
         freeStringSlice(allocator, self.direct_modules);
         freeStringSlice(allocator, self.transitive_modules);
+        freeStringSlice(allocator, self.missing_modules);
         freeStringSlice(allocator, self.compiled_ok);
         freeStringSlice(allocator, self.bytecode_consistent);
         for (self.compiled_failed) |failure| {
@@ -3405,12 +3531,14 @@ pub const ModuleCompileFailure = struct {
 };
 
 const ModuleAudit = struct {
+    missing_modules: []const []const u8,
     compiled_ok: []const []const u8,
     compiled_failed: []const ModuleCompileFailure,
     bytecode_consistent: []const []const u8,
     bytecode_inconsistent: []const ModuleCompileFailure,
 
     fn deinit(self: *ModuleAudit, allocator: std.mem.Allocator) void {
+        freeStringSlice(allocator, self.missing_modules);
         freeStringSlice(allocator, self.compiled_ok);
         freeStringSlice(allocator, self.bytecode_consistent);
         for (self.compiled_failed) |failure| {
@@ -3436,11 +3564,11 @@ const MappedReadOnlyFile = struct {
     }
 };
 
-const TemplateSources = struct {
+pub const TemplateSources = struct {
     template_sources: std.StringHashMap([]const u8),
     module_sources: std.StringHashMap([]const u8),
 
-    fn deinit(self: *TemplateSources, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *TemplateSources, allocator: std.mem.Allocator) void {
         var template_it = self.template_sources.iterator();
         while (template_it.next()) |entry| {
             allocator.free(entry.key_ptr.*);
@@ -3505,6 +3633,7 @@ pub fn analyzeDependenciesAlloc(
         .direct_templates = template_names,
         .direct_modules = direct_modules,
         .transitive_modules = transitive_modules,
+        .missing_modules = try dupStringSliceAlloc(allocator, audit.missing_modules),
         .compiled_ok = try dupStringSliceAlloc(allocator, audit.compiled_ok),
         .compiled_failed = try dupFailureSliceAlloc(allocator, audit.compiled_failed),
         .bytecode_consistent = try dupStringSliceAlloc(allocator, audit.bytecode_consistent),
@@ -3527,6 +3656,64 @@ pub fn loadModuleSourceAlloc(
     return try allocator.dupe(u8, source);
 }
 
+pub fn findModuleReferrersAlloc(
+    allocator: std.mem.Allocator,
+    xml_path: []const u8,
+    module_name: []const u8,
+) ![]const []const u8 {
+    var sources = try scanTemplateAndModuleSourcesAlloc(allocator, xml_path);
+    defer sources.deinit(allocator);
+
+    const canonical = try canonicalModuleNameAlloc(allocator, module_name);
+    defer allocator.free(canonical);
+
+    var matches = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &matches);
+
+    var it = sources.module_sources.iterator();
+    while (it.next()) |entry| {
+        const deps = try extractModuleDependencies(allocator, entry.value_ptr.*);
+        defer freeStringSlice(allocator, deps);
+        for (deps) |dep| {
+            if (!std.mem.eql(u8, dep, canonical)) continue;
+            const gop = try matches.getOrPut(allocator, entry.key_ptr.*);
+            if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, entry.key_ptr.*);
+            break;
+        }
+    }
+
+    return collectStringSet(allocator, &matches);
+}
+
+pub fn findTemplateReferrersAlloc(
+    allocator: std.mem.Allocator,
+    xml_path: []const u8,
+    template_name: []const u8,
+) ![]const []const u8 {
+    var sources = try scanTemplateAndModuleSourcesAlloc(allocator, xml_path);
+    defer sources.deinit(allocator);
+
+    const canonical = try canonicalTemplateNameAlloc(allocator, template_name);
+    defer allocator.free(canonical);
+
+    var matches = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &matches);
+
+    var it = sources.template_sources.iterator();
+    while (it.next()) |entry| {
+        const deps = try extractTemplateDependenciesAlloc(allocator, entry.value_ptr.*, entry.key_ptr.*);
+        defer freeStringSlice(allocator, deps);
+        for (deps) |dep| {
+            if (!std.mem.eql(u8, dep, canonical)) continue;
+            const gop = try matches.getOrPut(allocator, entry.key_ptr.*);
+            if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, entry.key_ptr.*);
+            break;
+        }
+    }
+
+    return collectStringSet(allocator, &matches);
+}
+
 pub fn analyzeTemplateDependenciesAlloc(
     allocator: std.mem.Allocator,
     xml_path: []const u8,
@@ -3537,7 +3724,7 @@ pub fn analyzeTemplateDependenciesAlloc(
     return analyzeTemplateDependenciesFromSourcesAlloc(allocator, template_names, &sources);
 }
 
-fn analyzeTemplateDependenciesFromSourcesAlloc(
+pub fn analyzeTemplateDependenciesFromSourcesAlloc(
     allocator: std.mem.Allocator,
     template_names: []const []const u8,
     sources: *const TemplateSources,
@@ -3547,6 +3734,7 @@ fn analyzeTemplateDependenciesFromSourcesAlloc(
     defer deinitOwnedStringSet(allocator, &root_templates);
     for (template_names) |name| {
         if (!isLikelyTemplatePageName(name)) continue;
+        if (isIgnoredTemplateMagicName(name)) continue;
         try insertCanonicalTemplateName(&root_templates, allocator, name);
     }
 
@@ -3572,12 +3760,14 @@ fn analyzeTemplateDependenciesFromSourcesAlloc(
 
     while (template_stack.pop()) |name| {
         const source = sources.template_sources.get(name) orelse {
-            const unresolved_gop = try unresolved_templates.getOrPut(allocator, name);
-            if (!unresolved_gop.found_existing) unresolved_gop.key_ptr.* = try allocator.dupe(u8, name);
+            if (!root_templates.contains(name)) {
+                const unresolved_gop = try unresolved_templates.getOrPut(allocator, name);
+                if (!unresolved_gop.found_existing) unresolved_gop.key_ptr.* = try allocator.dupe(u8, name);
+            }
             continue;
         };
 
-        const template_deps = try extractTemplateDependenciesAlloc(allocator, source);
+        const template_deps = try extractTemplateDependenciesAlloc(allocator, source, name);
         defer freeStringSlice(allocator, template_deps);
         for (template_deps) |dep| {
             if (!sources.template_sources.contains(dep)) {
@@ -3634,6 +3824,7 @@ fn analyzeTemplateDependenciesFromSourcesAlloc(
         .unresolved_templates = try collectStringSet(allocator, &unresolved_templates),
         .direct_modules = try collectStringSet(allocator, &direct_modules),
         .transitive_modules = transitive_module_names,
+        .missing_modules = try dupStringSliceAlloc(allocator, audit.missing_modules),
         .compiled_ok = try dupStringSliceAlloc(allocator, audit.compiled_ok),
         .compiled_failed = try dupFailureSliceAlloc(allocator, audit.compiled_failed),
         .bytecode_consistent = try dupStringSliceAlloc(allocator, audit.bytecode_consistent),
@@ -3646,6 +3837,9 @@ fn auditModuleNamesAlloc(
     module_sources: *const std.StringHashMap([]const u8),
     module_names: []const []const u8,
 ) !ModuleAudit {
+    var missing_modules: std.ArrayList([]const u8) = .empty;
+    errdefer freeOwnedStringList(allocator, &missing_modules);
+
     var compiled_ok: std.ArrayList([]const u8) = .empty;
     errdefer freeOwnedStringList(allocator, &compiled_ok);
 
@@ -3660,7 +3854,7 @@ fn auditModuleNamesAlloc(
 
     for (module_names) |name| {
         const source = module_sources.get(name) orelse {
-            try appendFailureAlloc(allocator, &compiled_failed, name, "SourceMissing");
+            try missing_modules.append(allocator, try allocator.dupe(u8, name));
             continue;
         };
 
@@ -3692,6 +3886,7 @@ fn auditModuleNamesAlloc(
     }
 
     return .{
+        .missing_modules = try missing_modules.toOwnedSlice(allocator),
         .compiled_ok = try compiled_ok.toOwnedSlice(allocator),
         .compiled_failed = try compiled_failed.toOwnedSlice(allocator),
         .bytecode_consistent = try bytecode_consistent.toOwnedSlice(allocator),
@@ -3957,7 +4152,7 @@ fn scanDumpDependenciesAlloc(allocator: std.mem.Allocator, path: []const u8) !Du
     };
 }
 
-fn scanTemplateAndModuleSourcesAlloc(allocator: std.mem.Allocator, path: []const u8) !TemplateSources {
+pub fn scanTemplateAndModuleSourcesAlloc(allocator: std.mem.Allocator, path: []const u8) !TemplateSources {
     var template_sources = std.StringHashMap([]const u8).init(allocator);
     errdefer {
         var it = template_sources.iterator();
@@ -4174,32 +4369,44 @@ fn addInvokeMatches(allocator: std.mem.Allocator, set: *std.StringHashMapUnmanag
     }
 }
 
-fn extractTemplateDependenciesAlloc(allocator: std.mem.Allocator, source: []const u8) ![]const []const u8 {
+fn extractTemplateDependenciesAlloc(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    current_template_name: ?[]const u8,
+) ![]const []const u8 {
+    const filtered = try filterTemplateDependencySourceAlloc(allocator, source);
+    defer allocator.free(filtered);
+
     var set = std.StringHashMapUnmanaged(void){};
     defer deinitOwnedStringSet(allocator, &set);
 
     var i: usize = 0;
-    while (i + 2 <= source.len) : (i += 1) {
-        if (!std.mem.eql(u8, source[i .. i + 2], "{{")) continue;
-        if ((i > 0 and source[i - 1] == '{') or (i + 3 <= source.len and source[i + 2] == '{')) continue;
+    while (i + 2 <= filtered.len) : (i += 1) {
+        if (!std.mem.eql(u8, filtered[i .. i + 2], "{{")) continue;
+        if ((i > 0 and filtered[i - 1] == '{') or (i + 3 <= filtered.len and filtered[i + 2] == '{')) continue;
 
         var name_start = i + 2;
-        while (name_start < source.len and std.ascii.isWhitespace(source[name_start])) : (name_start += 1) {}
+        while (name_start < filtered.len and std.ascii.isWhitespace(filtered[name_start])) : (name_start += 1) {}
         var name_end = name_start;
-        while (name_end < source.len) : (name_end += 1) {
-            const byte = source[name_end];
+        while (name_end < filtered.len) : (name_end += 1) {
+            const byte = filtered[name_end];
             if (byte == '|' or byte == '}' or byte == '\n' or byte == '\r') break;
         }
         if (name_end <= name_start) continue;
 
-        var raw_name = std.mem.trim(u8, source[name_start..name_end], " \t");
+        var raw_name = std.mem.trim(u8, filtered[name_start..name_end], " \t");
         raw_name = stripSubstPrefix(raw_name);
-        raw_name = stripTemplateNamespace(raw_name);
         if (raw_name.len == 0) continue;
         if (raw_name[0] == '#') continue;
-        if (!isLikelyTemplatePageName(raw_name)) continue;
+        if (isIgnoredTemplateMagicName(raw_name)) continue;
 
-        try insertCanonicalTemplateName(&set, allocator, raw_name);
+        const resolved_name = try resolveTemplateDependencyNameAlloc(allocator, current_template_name, raw_name);
+        defer if (resolved_name.owned) allocator.free(resolved_name.name);
+        if (resolved_name.name.len == 0) continue;
+        if (isIgnoredTemplateMagicName(resolved_name.name)) continue;
+        if (!isLikelyTemplatePageName(resolved_name.name)) continue;
+
+        try insertCanonicalTemplateName(&set, allocator, resolved_name.name);
         i = name_end;
     }
 
@@ -4209,24 +4416,290 @@ fn extractTemplateDependenciesAlloc(allocator: std.mem.Allocator, source: []cons
 fn extractModuleDependencies(allocator: std.mem.Allocator, source: []const u8) ![]const []const u8 {
     var set = std.StringHashMapUnmanaged(void){};
     defer deinitOwnedStringSet(allocator, &set);
-    const patterns = [_][]const u8{
-        "require(\"Module:",
-        "require('Module:",
-        "mw.loadData(\"Module:",
-        "mw.loadData('Module:",
-    };
-    for (patterns) |pattern| {
-        var cursor: usize = 0;
-        while (std.mem.indexOfPos(u8, source, cursor, pattern)) |start| {
-            const name_start = start + pattern.len;
-            var name_end = name_start;
-            while (name_end < source.len and source[name_end] != '"' and source[name_end] != '\'') : (name_end += 1) {}
-            const name = source[name_start..name_end];
+
+    const tokens = lexQuiet(allocator, source) catch return allocator.alloc([]const u8, 0);
+    defer freeTokenSlice(allocator, tokens);
+
+    var i: usize = 0;
+    while (i < tokens.len) : (i += 1) {
+        const token = tokens[i];
+        if (token.tag == .identifier and std.mem.eql(u8, token.lexeme, "require")) {
+            if (extractModuleDependencyArg(tokens, i + 1)) |name| {
+                if (isLikelyModulePageName(name)) try insertCanonicalModuleName(&set, allocator, name);
+            }
+            continue;
+        }
+
+        if (i + 3 >= tokens.len) continue;
+        if (token.tag != .identifier or !std.mem.eql(u8, token.lexeme, "mw")) continue;
+        if (tokens[i + 1].tag != .dot) continue;
+        if (tokens[i + 2].tag != .identifier or !std.mem.eql(u8, tokens[i + 2].lexeme, "loadData")) continue;
+        if (extractModuleDependencyArg(tokens, i + 3)) |name| {
             if (isLikelyModulePageName(name)) try insertCanonicalModuleName(&set, allocator, name);
-            cursor = name_end;
         }
     }
+
     return collectStringSet(allocator, &set);
+}
+
+fn resolveTemplateDependencyNameAlloc(
+    allocator: std.mem.Allocator,
+    current_template_name: ?[]const u8,
+    raw_name: []const u8,
+) !struct { name: []const u8, owned: bool } {
+    const stripped = std.mem.trim(u8, stripTemplateNamespace(raw_name), " \t\r\n");
+    if (stripped.len == 0) return .{ .name = "", .owned = false };
+    if (current_template_name == null) return .{ .name = stripped, .owned = false };
+    if (!isRelativeTemplateName(stripped)) return .{ .name = stripped, .owned = false };
+
+    const resolved = try resolveRelativeTemplateNameAlloc(allocator, current_template_name.?, stripped);
+    return .{ .name = resolved, .owned = true };
+}
+
+fn isRelativeTemplateName(name: []const u8) bool {
+    return std.mem.eql(u8, name, ".") or
+        std.mem.eql(u8, name, "..") or
+        std.mem.startsWith(u8, name, "./") or
+        std.mem.startsWith(u8, name, "../") or
+        std.mem.startsWith(u8, name, "/");
+}
+
+fn resolveRelativeTemplateNameAlloc(
+    allocator: std.mem.Allocator,
+    current_template_name: []const u8,
+    relative_name: []const u8,
+) ![]u8 {
+    var segments: std.ArrayList([]const u8) = .empty;
+    defer segments.deinit(allocator);
+
+    var current_it = std.mem.splitScalar(u8, stripTemplateNamespace(current_template_name), '/');
+    while (current_it.next()) |segment| {
+        const trimmed = std.mem.trim(u8, segment, " \t\r\n");
+        if (trimmed.len == 0) continue;
+        try segments.append(allocator, trimmed);
+    }
+
+    var cursor = relative_name;
+    if (std.mem.startsWith(u8, cursor, "/")) {
+        cursor = cursor[1..];
+    } else {
+        while (std.mem.startsWith(u8, cursor, "../")) {
+            if (segments.items.len != 0) _ = segments.pop();
+            cursor = cursor[3..];
+        }
+        if (std.mem.eql(u8, cursor, "..")) {
+            if (segments.items.len != 0) _ = segments.pop();
+            cursor = "";
+        } else if (std.mem.startsWith(u8, cursor, "./")) {
+            cursor = cursor[2..];
+        } else if (std.mem.eql(u8, cursor, ".")) {
+            cursor = "";
+        }
+    }
+
+    if (cursor.len != 0) {
+        var rel_it = std.mem.splitScalar(u8, cursor, '/');
+        while (rel_it.next()) |segment| {
+            const trimmed = std.mem.trim(u8, segment, " \t\r\n");
+            if (trimmed.len == 0 or std.mem.eql(u8, trimmed, ".")) continue;
+            if (std.mem.eql(u8, trimmed, "..")) {
+                if (segments.items.len != 0) _ = segments.pop();
+                continue;
+            }
+            try segments.append(allocator, trimmed);
+        }
+    }
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    for (segments.items, 0..) |segment, idx| {
+        if (idx != 0) try out.append(allocator, '/');
+        try out.appendSlice(allocator, segment);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn isIgnoredTemplateMagicName(name: []const u8) bool {
+    const upper = comptime [_][]const u8{
+        "CURRENTDAY",
+        "CURRENTMONTH",
+        "CURRENTMONTHNAME",
+        "CURRENTYEAR",
+        "DISPLAYTITLE:",
+        "FULLPAGENAME",
+        "NAMESPACE",
+        "NAMESPACENUMBER",
+        "REVISIONUSER",
+        "REVISIONYEAR",
+        "SERVER",
+        "SUBPAGENAME",
+        "TALKPAGENAME",
+        "WIKIMEDIALANGUAGE",
+    };
+    for (upper) |candidate| {
+        if (startsWithCanonicalIgnoreCase(name, candidate)) return true;
+    }
+    return false;
+}
+
+fn startsWithCanonicalIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    var hay_idx: usize = 0;
+    var needle_idx: usize = 0;
+    while (hay_idx < haystack.len and needle_idx < needle.len) {
+        const hay = haystack[hay_idx];
+        if (hay == ' ' or hay == '_' or hay == '-') {
+            hay_idx += 1;
+            continue;
+        }
+        if (std.ascii.toLower(hay) != std.ascii.toLower(needle[needle_idx])) return false;
+        hay_idx += 1;
+        needle_idx += 1;
+    }
+    while (hay_idx < haystack.len) : (hay_idx += 1) {
+        const hay = haystack[hay_idx];
+        if (hay != ' ' and hay != '_' and hay != '-') break;
+    }
+    return needle_idx == needle.len;
+}
+
+fn filterTemplateDependencySourceAlloc(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    var cursor: usize = 0;
+    while (cursor < source.len) {
+        if (std.mem.startsWith(u8, source[cursor..], "<!--")) {
+            cursor = skipUntil(source, cursor + 4, "-->") orelse source.len;
+            continue;
+        }
+        if (matchHtmlTagName(source[cursor..], "noinclude")) |tag| {
+            if (tag.self_closing) {
+                cursor += tag.end_offset;
+            } else {
+                cursor = skipPastClosingTag(source, cursor + tag.end_offset, "noinclude") orelse source.len;
+            }
+            continue;
+        }
+        if (matchHtmlTagName(source[cursor..], "includeonly")) |tag| {
+            cursor += tag.end_offset;
+            continue;
+        }
+        if (matchHtmlTagName(source[cursor..], "nowiki")) |tag| {
+            if (tag.self_closing) {
+                cursor += tag.end_offset;
+            } else {
+                cursor = skipPastClosingTag(source, cursor + tag.end_offset, "nowiki") orelse source.len;
+            }
+            continue;
+        }
+        if (matchHtmlTagName(source[cursor..], "pre")) |tag| {
+            if (tag.self_closing) {
+                cursor += tag.end_offset;
+            } else {
+                cursor = skipPastClosingTag(source, cursor + tag.end_offset, "pre") orelse source.len;
+            }
+            continue;
+        }
+        if (matchHtmlTagName(source[cursor..], "source")) |tag| {
+            if (tag.self_closing) {
+                cursor += tag.end_offset;
+            } else {
+                cursor = skipPastClosingTag(source, cursor + tag.end_offset, "source") orelse source.len;
+            }
+            continue;
+        }
+        if (matchHtmlTagName(source[cursor..], "syntaxhighlight")) |tag| {
+            if (tag.self_closing) {
+                cursor += tag.end_offset;
+            } else {
+                cursor = skipPastClosingTag(source, cursor + tag.end_offset, "syntaxhighlight") orelse source.len;
+            }
+            continue;
+        }
+        if (matchHtmlTagName(source[cursor..], "templatedata")) |tag| {
+            if (tag.self_closing) {
+                cursor += tag.end_offset;
+            } else {
+                cursor = skipPastClosingTag(source, cursor + tag.end_offset, "templatedata") orelse source.len;
+            }
+            continue;
+        }
+        try out.append(allocator, source[cursor]);
+        cursor += 1;
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+const MatchedHtmlTag = struct {
+    end_offset: usize,
+    self_closing: bool,
+};
+
+fn matchHtmlTagName(source: []const u8, name: []const u8) ?MatchedHtmlTag {
+    if (source.len < 3 or source[0] != '<') return null;
+
+    var cursor: usize = 1;
+    while (cursor < source.len and std.ascii.isWhitespace(source[cursor])) : (cursor += 1) {}
+
+    var closing = false;
+    if (cursor < source.len and source[cursor] == '/') {
+        closing = true;
+        cursor += 1;
+        while (cursor < source.len and std.ascii.isWhitespace(source[cursor])) : (cursor += 1) {}
+    }
+
+    if (closing or cursor + name.len > source.len) return null;
+    if (!startsWithIgnoreCase(source[cursor..], name)) return null;
+    const boundary_idx = cursor + name.len;
+    if (boundaryIdxInvalid(source, boundary_idx)) return null;
+
+    const tag_end = std.mem.indexOfScalarPos(u8, source, boundary_idx, '>') orelse return null;
+    const inner = source[boundary_idx..tag_end];
+    const trimmed = std.mem.trim(u8, inner, " \t\r\n");
+    return .{
+        .end_offset = tag_end + 1,
+        .self_closing = trimmed.len != 0 and trimmed[trimmed.len - 1] == '/',
+    };
+}
+
+fn boundaryIdxInvalid(source: []const u8, idx: usize) bool {
+    if (idx >= source.len) return false;
+    const byte = source[idx];
+    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-';
+}
+
+fn skipPastClosingTag(source: []const u8, start: usize, name: []const u8) ?usize {
+    var closing_buf: [64]u8 = undefined;
+    const prefix = std.fmt.bufPrint(&closing_buf, "</{s}", .{name}) catch return null;
+    var cursor = start;
+    while (cursor < source.len) : (cursor += 1) {
+        if (!startsWithIgnoreCase(source[cursor..], prefix)) continue;
+        const end_idx = std.mem.indexOfScalarPos(u8, source, cursor + prefix.len, '>') orelse return null;
+        return end_idx + 1;
+    }
+    return null;
+}
+
+fn skipUntil(source: []const u8, start: usize, needle: []const u8) ?usize {
+    const found = std.mem.indexOfPos(u8, source, start, needle) orelse return null;
+    return found + needle.len;
+}
+
+fn extractModuleDependencyArg(tokens: []const Token, start: usize) ?[]const u8 {
+    if (start >= tokens.len) return null;
+    var idx = start;
+    if (tokens[idx].tag == .lparen) {
+        idx += 1;
+        if (idx >= tokens.len or tokens[idx].tag != .string) return null;
+        const text = tokens[idx].lexeme;
+        return if (startsWithIgnoreCase(text, "Module:")) text["Module:".len..] else null;
+    }
+    if (tokens[idx].tag == .string) {
+        const text = tokens[idx].lexeme;
+        return if (startsWithIgnoreCase(text, "Module:")) text["Module:".len..] else null;
+    }
+    return null;
 }
 
 fn stripSubstPrefix(name: []const u8) []const u8 {
@@ -4272,7 +4745,7 @@ fn insertCanonicalTemplateName(set: *std.StringHashMapUnmanaged(void), allocator
     gop.key_ptr.* = canonical;
 }
 
-fn canonicalTemplateNameAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+pub fn canonicalTemplateNameAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
@@ -4284,7 +4757,7 @@ fn canonicalTemplateNameAlloc(allocator: std.mem.Allocator, name: []const u8) ![
     return out.toOwnedSlice(allocator);
 }
 
-fn canonicalModuleNameAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+pub fn canonicalModuleNameAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
@@ -4603,6 +5076,7 @@ fn findFirstConstTableInExpr(expr: *const Expr) ?*const Table {
         .field => |field| findFirstConstTableInExpr(field.object),
         .index => |index| findFirstConstTableInExpr(index.object) orelse findFirstConstTableInExpr(index.key),
         .call => |call| findFirstConstTableInExpr(call.callee) orelse findFirstConstTableInExprs(call.args),
+        .method_call => |call| findFirstConstTableInExpr(call.object) orelse findFirstConstTableInExprs(call.args),
         .function_lit => |func| findFirstConstTableInBody(func.body),
         .nil_lit, .bool_lit, .number_lit, .string_lit, .variable, .varargs => null,
     };
@@ -4674,9 +5148,12 @@ test "template dependency extraction ignores parser-function and formula garbage
         \\{{e^x}}
         \\{{Template:quote-news|1}}
         \\{{safesubst:col3|a|b}}
+        \\<noinclude>{{documentation}}{{server}}{{/doc-example}}</noinclude>
+        \\<!-- {{comment-only}} -->
+        \\<nowiki>{{nowiki-example}}</nowiki>
     ;
 
-    const deps = try extractTemplateDependenciesAlloc(std.testing.allocator, source);
+    const deps = try extractTemplateDependenciesAlloc(std.testing.allocator, source, "demo/doc");
     defer freeStringSlice(std.testing.allocator, deps);
 
     try std.testing.expectEqual(@as(usize, 4), deps.len);
@@ -4684,6 +5161,25 @@ test "template dependency extraction ignores parser-function and formula garbage
     try std.testing.expectEqualStrings("col3", deps[1]);
     try std.testing.expectEqualStrings("foo", deps[2]);
     try std.testing.expectEqualStrings("quote-news", deps[3]);
+}
+
+test "module dependency extraction ignores comments and unrelated strings" {
+    const source =
+        \\local ok = require("Module:real")
+        \\local also = require 'Module:also real'
+        \\local data = mw.loadData("Module:data")
+        \\-- require("Module:commented")
+        \\local text = "require(\"Module:not a dependency\")"
+        \\local sample = 'mw.loadData("Module:not data")'
+    ;
+
+    const deps = try extractModuleDependencies(std.testing.allocator, source);
+    defer freeStringSlice(std.testing.allocator, deps);
+
+    try std.testing.expectEqual(@as(usize, 3), deps.len);
+    try std.testing.expectEqualStrings("also real", deps[0]);
+    try std.testing.expectEqualStrings("data", deps[1]);
+    try std.testing.expectEqualStrings("real", deps[2]);
 }
 
 test "template bytecode audit compiles reachable modules with stable bytecode" {
@@ -4731,6 +5227,7 @@ test "template bytecode audit compiles reachable modules with stable bytecode" {
     try std.testing.expectEqual(@as(usize, 0), report.unresolved_templates.len);
     try std.testing.expectEqual(@as(usize, 1), report.direct_modules.len);
     try std.testing.expectEqual(@as(usize, 1), report.transitive_modules.len);
+    try std.testing.expectEqual(@as(usize, 0), report.missing_modules.len);
     try std.testing.expectEqual(@as(usize, 1), report.compiled_ok.len);
     try std.testing.expectEqual(@as(usize, 0), report.compiled_failed.len);
     try std.testing.expectEqual(@as(usize, 1), report.bytecode_consistent.len);
@@ -4738,7 +5235,7 @@ test "template bytecode audit compiles reachable modules with stable bytecode" {
     try std.testing.expectEqualStrings("demo", report.bytecode_consistent[0]);
 }
 
-test "template bytecode audit reports missing templates and compile failures" {
+test "template bytecode audit separates missing modules from compile failures" {
     var sources = TemplateSources{
         .template_sources = std.StringHashMap([]const u8).init(std.testing.allocator),
         .module_sources = std.StringHashMap([]const u8).init(std.testing.allocator),
@@ -4750,16 +5247,8 @@ test "template bytecode audit reports missing templates and compile failures" {
         &sources.template_sources,
         "broken",
         try std.testing.allocator.dupe(u8,
-            \\{{#invoke:broken|main}}
+            \\{{#invoke:missing-module|main}}
             \\{{missing-helper}}
-        ),
-    );
-    try putCanonicalModuleSource(
-        std.testing.allocator,
-        &sources.module_sources,
-        "broken",
-        try std.testing.allocator.dupe(u8,
-            \\local =
         ),
     );
 
@@ -4767,8 +5256,39 @@ test "template bytecode audit reports missing templates and compile failures" {
     var report = try analyzeTemplateDependenciesFromSourcesAlloc(std.testing.allocator, &template_names, &sources);
     defer report.deinit(std.testing.allocator);
 
-    try std.testing.expect(report.unresolved_templates.len >= 2);
+    try std.testing.expectEqual(@as(usize, 1), report.unresolved_templates.len);
+    try std.testing.expectEqualStrings("missing-helper", report.unresolved_templates[0]);
     try std.testing.expectEqual(@as(usize, 0), report.bytecode_consistent.len);
+    try std.testing.expectEqual(@as(usize, 1), report.missing_modules.len);
+    try std.testing.expectEqualStrings("missing-module", report.missing_modules[0]);
+    try std.testing.expectEqual(@as(usize, 0), report.compiled_failed.len);
+}
+
+test "template bytecode audit still reports real compile failures" {
+    var sources = TemplateSources{
+        .template_sources = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .module_sources = std.StringHashMap([]const u8).init(std.testing.allocator),
+    };
+    defer sources.deinit(std.testing.allocator);
+
+    try putCanonicalTemplateSource(
+        std.testing.allocator,
+        &sources.template_sources,
+        "broken",
+        try std.testing.allocator.dupe(u8, "\\{{#invoke:broken|main}}"),
+    );
+    try putCanonicalModuleSource(
+        std.testing.allocator,
+        &sources.module_sources,
+        "broken",
+        try std.testing.allocator.dupe(u8, "local ="),
+    );
+
+    const template_names = [_][]const u8{"broken"};
+    var report = try analyzeTemplateDependenciesFromSourcesAlloc(std.testing.allocator, &template_names, &sources);
+    defer report.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), report.missing_modules.len);
     try std.testing.expectEqual(@as(usize, 1), report.compiled_failed.len);
     try std.testing.expectEqualStrings("broken", report.compiled_failed[0].name);
 }
@@ -4779,4 +5299,10 @@ test "likely template page name filter keeps real titles and drops magic-like na
     try std.testing.expect(!isLikelyTemplatePageName("#tag:ref"));
     try std.testing.expect(!isLikelyTemplatePageName("DISPLAYTITLE:<sup>x</sup>"));
     try std.testing.expect(!isLikelyTemplatePageName("e^x"));
+}
+
+test "template magic-name matcher ignores separators" {
+    try std.testing.expect(isIgnoredTemplateMagicName("wikimedia language"));
+    try std.testing.expect(isIgnoredTemplateMagicName("Wikimedia_language"));
+    try std.testing.expect(isIgnoredTemplateMagicName("wikimedia-language"));
 }

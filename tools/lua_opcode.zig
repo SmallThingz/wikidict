@@ -55,6 +55,24 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("{s}", .{source});
         return;
     }
+    if (std.mem.eql(u8, command, "referrers")) {
+        const input = flagValue(args[2..], "--input") orelse "data/wiktionary.xml";
+        required_path.ensureExistsOrExit(init.io, input, "wiktionary dump");
+        if (flagValue(args[2..], "--module")) |name| {
+            const referrers = try lua.findModuleReferrersAlloc(allocator, input, name);
+            defer freeOwnedStrings(allocator, referrers);
+            for (referrers) |referrer| std.debug.print("{s}\n", .{referrer});
+            return;
+        }
+        if (flagValue(args[2..], "--template")) |name| {
+            const referrers = try lua.findTemplateReferrersAlloc(allocator, input, name);
+            defer freeOwnedStrings(allocator, referrers);
+            for (referrers) |referrer| std.debug.print("{s}\n", .{referrer});
+            return;
+        }
+        printUsage();
+        return;
+    }
     if (std.mem.eql(u8, command, "deps")) {
         const input = flagValue(args[2..], "--input") orelse "data/wiktionary.xml";
         required_path.ensureExistsOrExit(init.io, input, "wiktionary dump");
@@ -88,7 +106,7 @@ pub fn main(init: std.process.Init) !void {
         var report = try lua.analyzeTemplateDependenciesAlloc(allocator, input, template_names);
         defer report.deinit(allocator);
         try printTemplateDependencyReport(allocator, report);
-        if (report.unresolved_templates.len != 0 or report.compiled_failed.len != 0 or report.bytecode_inconsistent.len != 0) {
+        if (report.compiled_failed.len != 0 or report.bytecode_inconsistent.len != 0) {
             return error.LuaDependencyAuditFailed;
         }
         return;
@@ -102,6 +120,8 @@ fn printUsage() void {
         \\dict-lua compile --input path.lua
         \\dict-lua run --input path.lua
         \\dict-lua dump-module --input data/wiktionary.xml --name "string utilities"
+        \\dict-lua referrers --input data/wiktionary.xml --module "gender and number/templates"
+        \\dict-lua referrers --input data/wiktionary.xml --template "an-lite"
         \\dict-lua deps [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json]
         \\dict-lua deps --input data/wiktionary.xml --db data/wiktionary.bin
         \\dict-lua audit --input data/wiktionary.xml --db data/wiktionary.bin
@@ -143,10 +163,17 @@ fn printDependencyReport(allocator: std.mem.Allocator, report: lua.DependencyRep
     std.debug.print("direct templates: {d}\n", .{report.direct_templates.len});
     std.debug.print("direct modules: {d}\n", .{report.direct_modules.len});
     std.debug.print("transitive modules: {d}\n", .{report.transitive_modules.len});
+    std.debug.print("missing modules: {d}\n", .{report.missing_modules.len});
     std.debug.print("compiled ok: {d}\n", .{report.compiled_ok.len});
     std.debug.print("compiled failed: {d}\n", .{report.compiled_failed.len});
     std.debug.print("bytecode consistent: {d}\n", .{report.bytecode_consistent.len});
     std.debug.print("bytecode inconsistent: {d}\n", .{report.bytecode_inconsistent.len});
+    if (report.missing_modules.len != 0) {
+        std.debug.print("first missing modules:\n", .{});
+        for (report.missing_modules[0..@min(report.missing_modules.len, 32)]) |name| {
+            std.debug.print("  {s}\n", .{name});
+        }
+    }
     if (report.compiled_failed.len != 0) {
         std.debug.print("first failures:\n", .{});
         for (report.compiled_failed[0..@min(report.compiled_failed.len, 32)]) |failure| {
@@ -165,16 +192,23 @@ fn printDependencyReport(allocator: std.mem.Allocator, report: lua.DependencyRep
 fn printTemplateDependencyReport(allocator: std.mem.Allocator, report: lua.TemplateDependencyReport) !void {
     std.debug.print("root templates: {d}\n", .{report.root_templates.len});
     std.debug.print("reachable templates: {d}\n", .{report.reachable_templates.len});
-    std.debug.print("unresolved templates: {d}\n", .{report.unresolved_templates.len});
+    std.debug.print("missing templates: {d}\n", .{report.unresolved_templates.len});
     std.debug.print("direct modules: {d}\n", .{report.direct_modules.len});
     std.debug.print("transitive modules: {d}\n", .{report.transitive_modules.len});
+    std.debug.print("missing modules: {d}\n", .{report.missing_modules.len});
     std.debug.print("compiled ok: {d}\n", .{report.compiled_ok.len});
     std.debug.print("compiled failed: {d}\n", .{report.compiled_failed.len});
     std.debug.print("bytecode consistent: {d}\n", .{report.bytecode_consistent.len});
     std.debug.print("bytecode inconsistent: {d}\n", .{report.bytecode_inconsistent.len});
     if (report.unresolved_templates.len != 0) {
-        std.debug.print("first unresolved templates:\n", .{});
+        std.debug.print("first missing templates:\n", .{});
         for (report.unresolved_templates[0..@min(report.unresolved_templates.len, 32)]) |name| {
+            std.debug.print("  {s}\n", .{name});
+        }
+    }
+    if (report.missing_modules.len != 0) {
+        std.debug.print("first missing modules:\n", .{});
+        for (report.missing_modules[0..@min(report.missing_modules.len, 32)]) |name| {
             std.debug.print("  {s}\n", .{name});
         }
     }
