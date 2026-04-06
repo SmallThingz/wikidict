@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const generated_templates = @import("generated_template_runtime.zig");
-const template_support = @import("template_compiler_support.zig");
+const generated_templates = @import("generated_template_runtime");
+const template_support = @import("template_compiler_support");
 const wikitext = @import("wikitext_runtime.zig");
 const xml_decode = @import("shared_xml_decode");
 
@@ -1212,10 +1212,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
     const trimmed = trimWikiWhitespace(name);
     if (trimmed.len == 0) return false;
     if (generatedTemplateClassHtml(trimmed)) |class| {
-        return switch (class) {
-            .metadata_only, .compiled => true,
-            .unsupported => false,
-        };
+        if (class != .unsupported) return true;
     }
     if (templateNameStartsWithHtml(trimmed, "ctRenderF")) return true;
     if (std.mem.indexOf(u8, trimmed, "Render") != null or std.mem.indexOf(u8, trimmed, "Rende") != null) return true;
@@ -1611,6 +1608,13 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         if (templateMatchesHtml(trimmed, candidate)) return true;
     }
     return false;
+}
+
+test "strict template support falls back to manual allowlist when generated runtime marks a template unsupported" {
+    try std.testing.expect((generatedTemplateClassHtml("place") orelse return error.TestExpectedEqual) == .unsupported);
+    try std.testing.expect(isStrictSupportedTemplateName("place"));
+    try std.testing.expect((generatedTemplateClassHtml("audio") orelse return error.TestExpectedEqual) == .unsupported);
+    try std.testing.expect(isStrictSupportedTemplateName("audio"));
 }
 
 fn shouldSkipStrictTemplateArgValidation(name: []const u8) bool {
@@ -2421,6 +2425,12 @@ fn renderTemplateHtml(
         try appendEscapedHtmlSlice(out, allocator, ".");
         return;
     }
+    if (templateMatchesHtml(name, "sense") or templateMatchesHtml(name, "antsense") or templateMatchesHtml(name, "s")) {
+        if (templatePositionalHtml(&parts, 0)) |value| {
+            try renderInlineHtml(out, allocator, value, options);
+        }
+        return;
+    }
     if (templateMatchesHtml(name, "q") or templateMatchesHtml(name, "q-lite") or templateMatchesHtml(name, "qualifier") or templateMatchesHtml(name, "i") or templateMatchesHtml(name, "gl")) {
         try appendParenthesizedTemplateArgs(out, allocator, &parts, 0, options);
         return;
@@ -2574,6 +2584,10 @@ fn renderKnownListTemplateHtml(
     options: RenderOptions,
 ) anyerror!bool {
     const terms = wikitext.knownListTerms(name) orelse return false;
+    if (std.mem.trim(u8, out.items, " \t\r\n").len != 0) {
+        try appendKnownListInlineHtml(out, allocator, terms, options);
+        return true;
+    }
     return appendKnownListTermGridHtml(out, allocator, terms, options);
 }
 
@@ -2593,6 +2607,18 @@ fn appendKnownListTermGridHtml(
     }
     try out.appendSlice(allocator, "</ul>");
     return true;
+}
+
+fn appendKnownListInlineHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    terms: []const []const u8,
+    options: RenderOptions,
+) anyerror!void {
+    for (terms, 0..) |term, idx| {
+        if (idx != 0) try out.appendSlice(allocator, ", ");
+        try renderPhraseHtml(out, allocator, term, options);
+    }
 }
 
 const TemplateExpansion = struct {

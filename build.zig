@@ -5,6 +5,7 @@ pub fn build(b: *std.Build) void {
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const codegen_optimize: std.builtin.OptimizeMode = .ReleaseFast;
     const structure_optimize: std.builtin.OptimizeMode = .ReleaseFast;
     const default_skip_headings = "anagrams,citations,meta,statistics,further_reading,translations";
     const skip_headings_csv = b.option([]const u8, "skip-headings", "Comma-separated headings or heading families to exclude, e.g. Anagrams,Translations") orelse default_skip_headings;
@@ -20,10 +21,20 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const cli_args_mod_codegen = b.createModule(.{
+        .root_source_file = b.path("tools/cli_args.zig"),
+        .target = target,
+        .optimize = codegen_optimize,
+    });
     const required_path_mod = b.createModule(.{
         .root_source_file = b.path("tools/required_path.zig"),
         .target = target,
         .optimize = optimize,
+    });
+    const required_path_mod_codegen = b.createModule(.{
+        .root_source_file = b.path("tools/required_path.zig"),
+        .target = target,
+        .optimize = codegen_optimize,
     });
     const encoder_tool_paths_options = b.addOptions();
     const decoder_tool_paths_options = b.addOptions();
@@ -54,6 +65,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const normalize_mod_codegen = b.createModule(.{
+        .root_source_file = b.path("decoder/normalize.zig"),
+        .target = target,
+        .optimize = codegen_optimize,
+    });
     const normalize_mod_structure = b.createModule(.{
         .root_source_file = b.path("decoder/normalize.zig"),
         .target = target,
@@ -69,16 +85,32 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const shared_xml_decode_mod_codegen = b.createModule(.{
+        .root_source_file = b.path("shared/xml_decode.zig"),
+        .target = target,
+        .optimize = codegen_optimize,
+    });
     const lua_mod = b.addModule("lua", .{
         .root_source_file = b.path("lua/root.zig"),
         .target = target,
         .optimize = optimize,
     });
     lua_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
+    const lua_mod_codegen = b.createModule(.{
+        .root_source_file = b.path("lua/root.zig"),
+        .target = target,
+        .optimize = codegen_optimize,
+    });
+    lua_mod_codegen.addImport("shared_xml_decode", shared_xml_decode_mod_codegen);
     const compact_pattern_seed_mod = b.createModule(.{
         .root_source_file = b.path("shared/compact_pattern_seed.zig"),
         .target = target,
         .optimize = optimize,
+    });
+    const compact_pattern_seed_mod_codegen = b.createModule(.{
+        .root_source_file = b.path("shared/compact_pattern_seed.zig"),
+        .target = target,
+        .optimize = codegen_optimize,
     });
     const wikitext_source_mod = b.createModule(.{
         .root_source_file = b.path("encoder/wikitext.zig"),
@@ -87,6 +119,26 @@ pub fn build(b: *std.Build) void {
     });
     wikitext_source_mod.addOptions("config", config_options);
     wikitext_source_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
+    const wikitext_source_mod_codegen = b.createModule(.{
+        .root_source_file = b.path("encoder/wikitext.zig"),
+        .target = target,
+        .optimize = codegen_optimize,
+    });
+    wikitext_source_mod_codegen.addOptions("config", config_options);
+    wikitext_source_mod_codegen.addImport("shared_xml_decode", shared_xml_decode_mod_codegen);
+    const template_compiler_support_mod = b.createModule(.{
+        .root_source_file = b.path("renderer/template_compiler_support.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    template_compiler_support_mod.addImport("lua", lua_mod);
+    const generated_template_runtime_mod = addGeneratedTemplateRuntimeModule(
+        b,
+        target,
+        optimize,
+        lua_mod,
+        template_compiler_support_mod,
+    );
     const renderer_mod = b.addModule("renderer", .{
         .root_source_file = b.path("renderer/root.zig"),
         .target = target,
@@ -95,6 +147,8 @@ pub fn build(b: *std.Build) void {
     renderer_mod.addImport("shared_html_entities", shared_html_entities_mod);
     renderer_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
     renderer_mod.addImport("lua", lua_mod);
+    renderer_mod.addImport("template_compiler_support", template_compiler_support_mod);
+    renderer_mod.addImport("generated_template_runtime", generated_template_runtime_mod);
     const encoder_mod_bootstrap = b.addModule("encoder_bootstrap", .{
         .root_source_file = b.path("encoder/root.zig"),
         .target = target,
@@ -174,6 +228,16 @@ pub fn build(b: *std.Build) void {
     decoder_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
     decoder_mod.addImport("wikitext_source", wikitext_source_mod);
     decoder_mod.addImport("cli_args", cli_args_mod);
+    const decoder_mod_codegen = b.createModule(.{
+        .root_source_file = b.path("decoder/root.zig"),
+        .target = target,
+        .optimize = codegen_optimize,
+    });
+    decoder_mod_codegen.addOptions("config", config_options);
+    decoder_mod_codegen.addImport("normalize", normalize_mod_codegen);
+    decoder_mod_codegen.addImport("shared_xml_decode", shared_xml_decode_mod_codegen);
+    decoder_mod_codegen.addImport("wikitext_source", wikitext_source_mod_codegen);
+    decoder_mod_codegen.addImport("cli_args", cli_args_mod_codegen);
 
     const decoder_mod_test = b.addModule("decoder_test", .{
         .root_source_file = b.path("decoder/root.zig"),
@@ -237,18 +301,18 @@ pub fn build(b: *std.Build) void {
         .{ .name = "cli_args", .module = cli_args_mod },
         .{ .name = "required_path", .module = required_path_mod },
     });
-    const template_codegen_exe = addCliExecutable(b, "dict-template-compile", b.path("tools/template_codegen.zig"), target, optimize, &.{
-        .{ .name = "lua", .module = lua_mod },
-        .{ .name = "decoder", .module = decoder_mod },
-        .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod },
-        .{ .name = "required_path", .module = required_path_mod },
+    const template_codegen_exe = addCliExecutable(b, "dict-template-compile", b.path("tools/template_codegen.zig"), target, codegen_optimize, &.{
+        .{ .name = "lua", .module = lua_mod_codegen },
+        .{ .name = "decoder", .module = decoder_mod_codegen },
+        .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod_codegen },
+        .{ .name = "required_path", .module = required_path_mod_codegen },
     });
     const frontend_exe = addCliExecutable(b, "dict-frontend", b.path("tools/frontend.zig"), target, optimize, &.{});
-    const lua_exe = addCliExecutable(b, "dict-lua", b.path("tools/lua_translate.zig"), target, optimize, &.{
-        .{ .name = "lua", .module = lua_mod },
-        .{ .name = "decoder", .module = decoder_mod },
-        .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod },
-        .{ .name = "required_path", .module = required_path_mod },
+    const lua_exe = addCliExecutable(b, "dict-lua", b.path("tools/lua_translate.zig"), target, codegen_optimize, &.{
+        .{ .name = "lua", .module = lua_mod_codegen },
+        .{ .name = "decoder", .module = decoder_mod_codegen },
+        .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod_codegen },
+        .{ .name = "required_path", .module = required_path_mod_codegen },
     });
     encoder_tool_paths_options.addOptionPath("structure_bin_path", structure_bin);
     decoder_tool_paths_options.addOptionPath("encoder_bin_path", encoder_exe.getEmittedBin());
@@ -479,6 +543,81 @@ fn existingBuildPath(b: *std.Build, relative_path: []const u8) ?std.Build.LazyPa
     _ = std.Io.Dir.cwd().statFile(b.graph.io, relative_path, .{}) catch return null;
     return b.path(relative_path);
 }
+
+fn addGeneratedTemplateRuntimeModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    lua_mod: *std.Build.Module,
+    template_compiler_support_mod: *std.Build.Module,
+) *std.Build.Module {
+    const source = loadGeneratedTemplateRuntimeSourceAlloc(b) catch |err| {
+        std.debug.panic("failed to prepare generated template runtime: {s}", .{@errorName(err)});
+    };
+    const write_files = b.addWriteFiles();
+    const generated_path = write_files.add("generated/template_runtime.zig", source);
+    const generated_mod = b.createModule(.{
+        .root_source_file = generated_path,
+        .target = target,
+        .optimize = optimize,
+    });
+    generated_mod.addImport("lua", lua_mod);
+    generated_mod.addImport("template_compiler_support", template_compiler_support_mod);
+    return generated_mod;
+}
+
+fn loadGeneratedTemplateRuntimeSourceAlloc(b: *std.Build) ![]const u8 {
+    const source = std.Io.Dir.cwd().readFileAlloc(
+        b.graph.io,
+        b.pathFromRoot("renderer/generated_template_runtime.zig"),
+        b.allocator,
+        std.Io.Limit.limited(64 * 1024 * 1024),
+    ) catch |err| switch (err) {
+        error.FileNotFound => return b.allocator.dupe(u8, generatedTemplateRuntimeStubSource),
+        else => return err,
+    };
+    return rewriteTemplateRuntimeImportsAlloc(b.allocator, source);
+}
+
+fn rewriteTemplateRuntimeImportsAlloc(allocator: std.mem.Allocator, source: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    var start: usize = 0;
+    while (std.mem.indexOfPos(u8, source, start, "template_compiler_support.zig")) |idx| {
+        try out.appendSlice(allocator, source[start..idx]);
+        try out.appendSlice(allocator, "template_compiler_support");
+        start = idx + "template_compiler_support.zig".len;
+    }
+    try out.appendSlice(allocator, source[start..]);
+    return out.toOwnedSlice(allocator);
+}
+
+const generatedTemplateRuntimeStubSource =
+    \\const std = @import("std");
+    \\const support = @import("template_compiler_support");
+    \\
+    \\pub const TemplateClass = support.TemplateClass;
+    \\
+    \\pub fn classifyTemplate(name: []const u8) ?TemplateClass {
+    \\    if (name.len == 0) return null;
+    \\    return .unsupported;
+    \\}
+    \\
+    \\pub fn renderTemplateByName(
+    \\    out: *std.ArrayList(u8),
+    \\    allocator: std.mem.Allocator,
+    \\    name: []const u8,
+    \\    args: *const support.TemplateArgs,
+    \\) !bool {
+    \\    _ = out;
+    \\    _ = allocator;
+    \\    _ = name;
+    \\    _ = args;
+    \\    return false;
+    \\}
+    \\
+;
 
 const GeneratedStructureModules = struct {
     regular: *std.Build.Module,

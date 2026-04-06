@@ -12,6 +12,12 @@ pub const NamedArg = struct {
     value: []const u8,
 };
 
+pub const BorrowedText = struct {
+    items: []const u8,
+
+    pub fn deinit(_: *BorrowedText, _: std.mem.Allocator) void {}
+};
+
 pub const TemplateArgs = struct {
     positional: []const []const u8,
     named: []const NamedArg,
@@ -51,6 +57,12 @@ pub const TemplateArgs = struct {
     }
 };
 
+// Legacy generated runtimes call this to mark the argument bundle as observed.
+// Keeping the shim avoids rebuilding every previously generated template runtime.
+pub fn touchTemplateArgs(args: *const TemplateArgs) void {
+    _ = args;
+}
+
 pub const TemplateArgsBuilder = struct {
     positional: std.ArrayList([]const u8) = .empty,
     named: std.ArrayList(NamedArg) = .empty,
@@ -84,8 +96,19 @@ pub const TemplateArgsBuilder = struct {
         try self.positional.append(allocator, value);
     }
 
+    pub fn addPositionalBorrowed(self: *TemplateArgsBuilder, allocator: std.mem.Allocator, value: []const u8) !void {
+        try self.positional.append(allocator, value);
+    }
+
     pub fn addNamedBuffer(self: *TemplateArgsBuilder, allocator: std.mem.Allocator, name: []const u8, value: []u8) !void {
         try self.owned_buffers.append(allocator, value);
+        try self.named.append(allocator, .{
+            .name = name,
+            .value = value,
+        });
+    }
+
+    pub fn addNamedBorrowed(self: *TemplateArgsBuilder, allocator: std.mem.Allocator, name: []const u8, value: []const u8) !void {
         try self.named.append(allocator, .{
             .name = name,
             .value = value,
@@ -170,10 +193,6 @@ pub fn templateArgsFromPartsAlloc(
 pub fn appendText(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
     if (text.len == 0) return;
     try out.appendSlice(allocator, text);
-}
-
-pub fn touchTemplateArgs(args: *const TemplateArgs) void {
-    _ = args;
 }
 
 pub fn appendLower(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
@@ -416,6 +435,25 @@ pub fn templateNameEquals(lhs: []const u8, rhs: []const u8) bool {
     while (i < lhs.len and isTemplateNameSpacer(lhs[i])) : (i += 1) {}
     while (j < rhs.len and isTemplateNameSpacer(rhs[j])) : (j += 1) {}
     return i == lhs.len and j == rhs.len;
+}
+
+pub fn compareTemplateNameToNormalized(lhs: []const u8, rhs_normalized: []const u8) std.math.Order {
+    var i: usize = 0;
+    var j: usize = 0;
+    while (true) {
+        while (i < lhs.len and isTemplateNameSpacer(lhs[i])) : (i += 1) {}
+        if (i == lhs.len or j == rhs_normalized.len) break;
+        const lhs_byte = std.ascii.toLower(lhs[i]);
+        const rhs_byte = rhs_normalized[j];
+        if (lhs_byte < rhs_byte) return .lt;
+        if (lhs_byte > rhs_byte) return .gt;
+        i += 1;
+        j += 1;
+    }
+    while (i < lhs.len and isTemplateNameSpacer(lhs[i])) : (i += 1) {}
+    if (i == lhs.len and j == rhs_normalized.len) return .eq;
+    if (i == lhs.len) return .lt;
+    return .gt;
 }
 
 fn isTemplateNameSpacer(byte: u8) bool {

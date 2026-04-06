@@ -1,7 +1,7 @@
 const std = @import("std");
 const xml_decode = @import("shared_xml_decode");
-const generated_templates = @import("generated_template_runtime.zig");
-const template_support = @import("template_compiler_support.zig");
+const generated_templates = @import("generated_template_runtime");
+const template_support = @import("template_compiler_support");
 
 pub const ParsedHeading = struct {
     level: u8,
@@ -1432,59 +1432,65 @@ pub fn knownListTerms(name: []const u8) ?[]const []const u8 {
 
     if (std.ascii.eqlIgnoreCase(list_name, "latin script letter names/en/simple")) {
         return &.{
-            "a", "bee", "cee", "dee", "e", "ef", "gee", "aitch", "i", "jay", "kay", "el", "em",
-            "en", "o", "pee", "cue", "ar", "ess", "tee", "u", "vee", "double-u", "ex", "wy", "zed",
+            "a",  "bee", "cee", "dee", "e",  "ef",  "gee", "aitch", "i",   "jay",      "kay", "el", "em",
+            "en", "o",   "pee", "cue", "ar", "ess", "tee", "u",     "vee", "double-u", "ex",  "wy", "zed",
         };
     }
 
     if (std.ascii.eqlIgnoreCase(list_name, "countries in europe/en")) {
         return &.{
-            "Albania", "Andorra", "Armenia", "Austria", "Azerbaijan", "Belarus", "Belgium",
-            "Bosnia and Herzegovina", "Bulgaria", "Croatia", "Cyprus", "Czech Republic",
-            "Denmark", "Estonia", "Finland", "France", "Georgia", "Germany", "Greece",
-            "Hungary", "Iceland", "Ireland", "Italy", "Kazakhstan", "Kosovo", "Latvia",
-            "Liechtenstein", "Lithuania", "Luxembourg", "Malta", "Moldova", "Monaco",
-            "Montenegro", "Netherlands", "North Macedonia", "Norway", "Poland", "Portugal",
-            "Romania", "Russia", "San Marino", "Serbia", "Slovakia", "Slovenia", "Spain",
-            "Sweden", "Switzerland", "Turkey", "Ukraine", "United Kingdom", "Vatican City",
+            "Albania",                "Andorra",      "Armenia",    "Austria", "Azerbaijan",     "Belarus",       "Belgium",
+            "Bosnia and Herzegovina", "Bulgaria",     "Croatia",    "Cyprus",  "Czech Republic", "Denmark",       "Estonia",
+            "Finland",                "France",       "Georgia",    "Germany", "Greece",         "Hungary",       "Iceland",
+            "Ireland",                "Italy",        "Kazakhstan", "Kosovo",  "Latvia",         "Liechtenstein", "Lithuania",
+            "Luxembourg",             "Malta",        "Moldova",    "Monaco",  "Montenegro",     "Netherlands",   "North Macedonia",
+            "Norway",                 "Poland",       "Portugal",   "Romania", "Russia",         "San Marino",    "Serbia",
+            "Slovakia",               "Slovenia",     "Spain",      "Sweden",  "Switzerland",    "Turkey",        "Ukraine",
+            "United Kingdom",         "Vatican City",
         };
     }
 
     if (std.ascii.eqlIgnoreCase(list_name, "countries in south america/en")) {
         return &.{
-            "Argentina", "Bolivia", "Brazil", "Chile", "Colombia", "Ecuador",
-            "Guyana", "Paraguay", "Peru", "Suriname", "Uruguay", "Venezuela",
+            "Argentina", "Bolivia",  "Brazil", "Chile",    "Colombia", "Ecuador",
+            "Guyana",    "Paraguay", "Peru",   "Suriname", "Uruguay",  "Venezuela",
         };
     }
 
     if (std.ascii.eqlIgnoreCase(list_name, "countries in asia/en")) {
         return &.{
-            "Afghanistan", "Armenia", "Azerbaijan", "Bahrain", "Bangladesh", "Bhutan",
-            "Brunei", "Cambodia", "China", "Cyprus", "Georgia", "India", "Indonesia",
-            "Iran", "Iraq", "Israel", "Japan", "Jordan", "Kazakhstan", "Kuwait",
-            "Kyrgyzstan", "Laos", "Lebanon", "Malaysia", "Maldives", "Mongolia",
-            "Myanmar", "Nepal", "North Korea", "Oman", "Pakistan", "Palestine",
-            "Philippines", "Qatar", "Saudi Arabia", "Singapore", "South Korea",
-            "Sri Lanka", "Syria", "Taiwan", "Tajikistan", "Thailand", "Timor-Leste",
-            "Turkey", "Turkmenistan", "United Arab Emirates", "Uzbekistan", "Vietnam",
+            "Afghanistan", "Armenia",   "Azerbaijan",   "Bahrain",              "Bangladesh",   "Bhutan",
+            "Brunei",      "Cambodia",  "China",        "Cyprus",               "Georgia",      "India",
+            "Indonesia",   "Iran",      "Iraq",         "Israel",               "Japan",        "Jordan",
+            "Kazakhstan",  "Kuwait",    "Kyrgyzstan",   "Laos",                 "Lebanon",      "Malaysia",
+            "Maldives",    "Mongolia",  "Myanmar",      "Nepal",                "North Korea",  "Oman",
+            "Pakistan",    "Palestine", "Philippines",  "Qatar",                "Saudi Arabia", "Singapore",
+            "South Korea", "Sri Lanka", "Syria",        "Taiwan",               "Tajikistan",   "Thailand",
+            "Timor-Leste", "Turkey",    "Turkmenistan", "United Arab Emirates", "Uzbekistan",   "Vietnam",
             "Yemen",
         };
     }
 
     if (std.ascii.eqlIgnoreCase(list_name, "provinces of equatorial guinea/en")) {
         return &.{
-            "Annobón", "Bioko Norte", "Bioko Sur", "Centro Sur",
-            "Djibloho", "Kié-Ntem", "Litoral", "Wele-Nzas",
+            "Annobón",
+            "Bioko Norte",
+            "Bioko Sur",
+            "Centro Sur",
+            "Djibloho",
+            "Kié-Ntem",
+            "Litoral",
+            "Wele-Nzas",
         };
     }
 
     if (std.ascii.eqlIgnoreCase(list_name, "provinces of china/en")) {
         return &.{
-            "Anhui", "Beijing", "Chongqing", "Fujian", "Gansu", "Guangdong", "Guangxi",
-            "Guizhou", "Hainan", "Hebei", "Heilongjiang", "Henan", "Hong Kong", "Hubei",
-            "Hunan", "Inner Mongolia", "Jiangsu", "Jiangxi", "Jilin", "Liaoning", "Macau",
-            "Ningxia", "Qinghai", "Shaanxi", "Shandong", "Shanghai", "Shanxi", "Sichuan",
-            "Taiwan", "Tianjin", "Tibet", "Xinjiang", "Yunnan", "Zhejiang",
+            "Anhui",   "Beijing",        "Chongqing", "Fujian",       "Gansu",    "Guangdong", "Guangxi",
+            "Guizhou", "Hainan",         "Hebei",     "Heilongjiang", "Henan",    "Hong Kong", "Hubei",
+            "Hunan",   "Inner Mongolia", "Jiangsu",   "Jiangxi",      "Jilin",    "Liaoning",  "Macau",
+            "Ningxia", "Qinghai",        "Shaanxi",   "Shandong",     "Shanghai", "Shanxi",    "Sichuan",
+            "Taiwan",  "Tianjin",        "Tibet",     "Xinjiang",     "Yunnan",   "Zhejiang",
         };
     }
 

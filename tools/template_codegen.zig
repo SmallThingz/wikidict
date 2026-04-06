@@ -4,7 +4,7 @@ const decoder = @import("decoder");
 const compact_pattern_seed = @import("compact_pattern_seed");
 const required_path = @import("required_path");
 
-const support_import = "template_compiler_support.zig";
+const support_import = "template_compiler_support";
 const max_generated_template_source_bytes = 16 * 1024;
 const max_generated_module_source_bytes = 64 * 1024;
 const max_generated_module_zig_bytes = 512 * 1024;
@@ -235,6 +235,12 @@ const ModuleInfo = struct {
     too_large: bool = false,
 };
 
+const DispatchTemplate = struct {
+    normalized: []const u8,
+    class: CompileClass,
+    fn_ident: ?[]const u8,
+};
+
 const UnsupportedTemplate = struct {
     key: []const u8,
     reason: []const u8,
@@ -246,6 +252,52 @@ const CompileRuntimeResult = struct {
     metadata_only_count: usize,
     unsupported: []const UnsupportedTemplate,
 };
+
+fn normalizeTemplateLookupNameAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    for (name) |byte| {
+        if (byte == ' ' or byte == '\t' or byte == '\r' or byte == '\n' or byte == '_') continue;
+        try out.append(allocator, std.ascii.toLower(byte));
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+fn buildDispatchTemplatesAlloc(
+    allocator: std.mem.Allocator,
+    templates: []const TemplateInfo,
+) ![]DispatchTemplate {
+    var entries: std.ArrayList(DispatchTemplate) = .empty;
+    errdefer {
+        for (entries.items) |entry| allocator.free(entry.normalized);
+        entries.deinit(allocator);
+    }
+
+    var seen = std.StringHashMap(void).init(allocator);
+    defer seen.deinit();
+
+    for (templates) |template| {
+        const normalized = try normalizeTemplateLookupNameAlloc(allocator, template.key);
+        errdefer allocator.free(normalized);
+        if (seen.contains(normalized)) {
+            allocator.free(normalized);
+            continue;
+        }
+        try seen.put(normalized, {});
+        try entries.append(allocator, .{
+            .normalized = normalized,
+            .class = template.class,
+            .fn_ident = if (template.class == .compiled) template.fn_ident else null,
+        });
+    }
+
+    std.mem.sort(DispatchTemplate, entries.items, {}, struct {
+        fn lessThan(_: void, lhs: DispatchTemplate, rhs: DispatchTemplate) bool {
+            return std.mem.order(u8, lhs.normalized, rhs.normalized) == .lt;
+        }
+    }.lessThan);
+    return try entries.toOwnedSlice(allocator);
+}
 
 fn compileTemplateRuntimeAlloc(
     allocator: std.mem.Allocator,
@@ -321,6 +373,11 @@ fn compileTemplateRuntimeAlloc(
     defer wrappers.deinit(allocator);
     var wrapper_indexes = std.StringHashMap([]const u8).init(allocator);
     defer wrapper_indexes.deinit();
+    const dispatch_templates = try buildDispatchTemplatesAlloc(allocator, templates);
+    defer {
+        for (dispatch_templates) |entry| allocator.free(entry.normalized);
+        allocator.free(dispatch_templates);
+    }
 
     for (templates) |template| {
         if (template.class != .compiled) continue;
@@ -345,8 +402,8 @@ fn compileTemplateRuntimeAlloc(
         try emitTemplateFunction(allocator, writer, templates, &template_indexes, &wrapper_indexes, template);
     }
 
-    try emitClassifier(writer, templates);
-    try emitDispatcher(writer, templates);
+    try emitClassifier(writer, dispatch_templates);
+    try emitDispatcher(writer);
 
     var unsupported: std.ArrayList(UnsupportedTemplate) = .empty;
     errdefer {
@@ -373,31 +430,63 @@ fn compileTemplateRuntimeAlloc(
     };
 }
 
-fn emitClassifier(writer: *std.Io.Writer, templates: []const TemplateInfo) !void {
+fn emitClassifier(writer: *std.Io.Writer, templates: []const DispatchTemplate) !void {
     try writer.writeAll(
         \\
-        \\pub fn classifyTemplate(name: []const u8) ?TemplateClass {
+        \\const TemplateDispatchFn = *const fn (
+        \\    out: *runtime_std.ArrayList(u8),
+        \\    allocator: runtime_std.mem.Allocator,
+        \\    args: *const support.TemplateArgs,
+        \\) anyerror!void;
+        \\
+        \\const TemplateDispatchEntry = struct {
+        \\    normalized: []const u8,
+        \\    class: TemplateClass,
+        \\    render: ?TemplateDispatchFn,
+        \\};
+        \\
+        \\const template_dispatch_entries = [_]TemplateDispatchEntry{
         \\
     );
     for (templates) |template| {
-        try writer.writeAll("    if (support.templateNameEquals(name, ");
-        try appendZigStringLiteral(writer, template.key);
-        try writer.writeAll(")) return .");
-        try writer.writeAll(switch (template.class) {
-            .metadata_only => "metadata_only",
-            .compiled => "compiled",
-            .unsupported => "unsupported",
-        });
-        try writer.writeAll(";\n");
+        try writer.writeAll("    .{ .normalized = ");
+        try appendZigStringLiteral(writer, template.normalized);
+        try writer.writeAll(", .class = .");
+        try writer.writeAll(@tagName(template.class));
+        try writer.writeAll(", .render = ");
+        if (template.fn_ident) |fn_ident| {
+            try writer.writeAll(fn_ident);
+        } else {
+            try writer.writeAll("null");
+        }
+        try writer.writeAll(" },\n");
     }
     try writer.writeAll(
+        \\};
+        \\
+        \\fn findTemplateDispatchEntry(name: []const u8) ?*const TemplateDispatchEntry {
+        \\    var lo: usize = 0;
+        \\    var hi: usize = template_dispatch_entries.len;
+        \\    while (lo < hi) {
+        \\        const mid = lo + ((hi - lo) / 2);
+        \\        switch (support.compareTemplateNameToNormalized(name, template_dispatch_entries[mid].normalized)) {
+        \\            .lt => hi = mid,
+        \\            .gt => lo = mid + 1,
+        \\            .eq => return &template_dispatch_entries[mid],
+        \\        }
+        \\    }
         \\    return null;
+        \\}
+        \\
+        \\pub fn classifyTemplate(name: []const u8) ?TemplateClass {
+        \\    const entry = findTemplateDispatchEntry(name) orelse return null;
+        \\    return entry.class;
         \\}
         \\
     );
 }
 
-fn emitDispatcher(writer: *std.Io.Writer, templates: []const TemplateInfo) !void {
+fn emitDispatcher(writer: *std.Io.Writer) !void {
     try writer.writeAll(
         \\pub fn renderTemplateByName(
         \\    out: *runtime_std.ArrayList(u8),
@@ -405,18 +494,10 @@ fn emitDispatcher(writer: *std.Io.Writer, templates: []const TemplateInfo) !void
         \\    name: []const u8,
         \\    args: *const support.TemplateArgs,
         \\) !bool {
-        \\
-    );
-    for (templates) |template| {
-        if (template.class != .compiled) continue;
-        try writer.writeAll("    if (support.templateNameEquals(name, ");
-        try appendZigStringLiteral(writer, template.key);
-        try writer.writeAll(")) {\n        try ");
-        try writer.writeAll(template.fn_ident);
-        try writer.writeAll("(out, allocator, args);\n        return true;\n    }\n");
-    }
-    try writer.writeAll(
-        \\    return false;
+        \\    const entry = findTemplateDispatchEntry(name) orelse return false;
+        \\    const render = entry.render orelse return false;
+        \\    try render(out, allocator, args);
+        \\    return true;
         \\}
         \\
     );
@@ -458,7 +539,9 @@ fn emitTemplateFunction(
         \\) !void {
         \\
     );
-    try writer.writeAll("    support.touchTemplateArgs(args);\n");
+    if (!nodesUseArgs(template.nodes)) {
+        try writer.writeAll("    support.touchTemplateArgs(args);\n");
+    }
     try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, template.nodes, "out", "args", 1, &temp_counter);
     try writer.writeAll("}\n\n");
 }
@@ -486,6 +569,21 @@ fn emitNodes(
             try writer.writeAll(");\n");
         },
         .param => |param| {
+            const static_default = try staticVisibleTextAlloc(allocator, param.default_nodes);
+            defer if (static_default) |value| allocator.free(value);
+            if (static_default) |default_value| {
+                try writeIndent(writer, indent);
+                try writer.writeAll("try support.appendResolvedParam(");
+                try writer.writeAll(out_name);
+                try writer.writeAll(", allocator, ");
+                try writer.writeAll(args_name);
+                try writer.writeAll(", ");
+                try appendZigStringLiteral(writer, param.key);
+                try writer.writeAll(", ");
+                try appendZigStringLiteral(writer, default_value);
+                try writer.writeAll(");\n");
+                continue;
+            }
             try writeIndent(writer, indent);
             try writer.writeAll("if (");
             try writer.writeAll(args_name);
@@ -538,6 +636,70 @@ fn nodesUseArgs(nodes: []const Node) bool {
     return false;
 }
 
+const SimpleNodesExpr = union(enum) {
+    literal: []const u8,
+    resolved_param: struct {
+        key: []const u8,
+        default_value: []const u8,
+    },
+
+    fn deinit(self: SimpleNodesExpr, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .literal => |value| allocator.free(value),
+            .resolved_param => |value| allocator.free(value.default_value),
+        }
+    }
+};
+
+fn staticVisibleTextAlloc(allocator: std.mem.Allocator, nodes: []const Node) !?[]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    for (nodes) |node| switch (node) {
+        .text => |text| {
+            if (!hasVisibleText(text)) continue;
+            try out.appendSlice(allocator, text);
+        },
+        else => return null,
+    };
+    return try out.toOwnedSlice(allocator);
+}
+
+fn simpleNodesExprAlloc(allocator: std.mem.Allocator, nodes: []const Node) !?SimpleNodesExpr {
+    const literal = try staticVisibleTextAlloc(allocator, nodes);
+    if (literal) |value| return .{ .literal = value };
+
+    if (nodes.len != 1) return null;
+    return switch (nodes[0]) {
+        .param => |param| blk: {
+            const default_value = try staticVisibleTextAlloc(allocator, param.default_nodes) orelse return null;
+            break :blk .{ .resolved_param = .{
+                .key = param.key,
+                .default_value = default_value,
+            } };
+        },
+        else => null,
+    };
+}
+
+fn emitSimpleNodesExpr(
+    writer: *std.Io.Writer,
+    expr: SimpleNodesExpr,
+    args_name: []const u8,
+) !void {
+    switch (expr) {
+        .literal => |value| try appendZigStringLiteral(writer, value),
+        .resolved_param => |value| {
+            try writer.writeAll("(");
+            try writer.writeAll(args_name);
+            try writer.writeAll(".paramValue(");
+            try appendZigStringLiteral(writer, value.key);
+            try writer.writeAll(") orelse ");
+            try appendZigStringLiteral(writer, value.default_value);
+            try writer.writeAll(")");
+        },
+    }
+}
+
 fn emitNestedCall(
     allocator: std.mem.Allocator,
     writer: *std.Io.Writer,
@@ -560,15 +722,27 @@ fn emitNestedCall(
     try writeIndent(writer, indent + 1);
     try writer.print("defer child_builder_{d}.deinit(allocator);\n", .{call_id});
     for (args, 0..) |arg, arg_index| {
-        try writeIndent(writer, indent + 1);
-        try writer.print("var value_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
-        try writeIndent(writer, indent + 1);
-        try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
-        const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
-        defer allocator.free(value_buf_name);
-        try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, arg.value_nodes, value_buf_name, parent_args_name, indent + 1, temp_counter);
+        const simple_value = try simpleNodesExprAlloc(allocator, arg.value_nodes);
+        defer if (simple_value) |value| value.deinit(allocator);
         try writeIndent(writer, indent + 1);
         if (arg.name_is_dynamic) {
+            const simple_name = try simpleNodesExprAlloc(allocator, arg.name_nodes);
+            defer if (simple_name) |value| value.deinit(allocator);
+            if (simple_name != null and simple_value != null) {
+                try writer.print("try child_builder_{d}.addNamedBorrowed(allocator, ", .{call_id});
+                try emitSimpleNodesExpr(writer, simple_name.?, parent_args_name);
+                try writer.writeAll(", ");
+                try emitSimpleNodesExpr(writer, simple_value.?, parent_args_name);
+                try writer.writeAll(");\n");
+                continue;
+            }
+            try writer.print("var value_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writeIndent(writer, indent + 1);
+            try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
+            const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
+            defer allocator.free(value_buf_name);
+            try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, arg.value_nodes, value_buf_name, parent_args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
             try writer.print("var name_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
             try writeIndent(writer, indent + 1);
             try writer.print("defer name_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
@@ -578,10 +752,38 @@ fn emitNestedCall(
             try writeIndent(writer, indent + 1);
             try writer.print("try child_builder_{d}.addNamedOwnedBuffers(allocator, try name_buf_{d}_{d}.toOwnedSlice(allocator), try value_buf_{d}_{d}.toOwnedSlice(allocator));\n", .{ call_id, call_id, arg_index, call_id, arg_index });
         } else if (arg.name) |name| {
+            if (simple_value) |value| {
+                try writer.print("try child_builder_{d}.addNamedBorrowed(allocator, ", .{call_id});
+                try appendZigStringLiteral(writer, name);
+                try writer.writeAll(", ");
+                try emitSimpleNodesExpr(writer, value, parent_args_name);
+                try writer.writeAll(");\n");
+                continue;
+            }
+            try writer.print("var value_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writeIndent(writer, indent + 1);
+            try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
+            const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
+            defer allocator.free(value_buf_name);
+            try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, arg.value_nodes, value_buf_name, parent_args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
             try writer.print("try child_builder_{d}.addNamedBuffer(allocator, ", .{call_id});
             try appendZigStringLiteral(writer, name);
             try writer.print(", try value_buf_{d}_{d}.toOwnedSlice(allocator));\n", .{ call_id, arg_index });
         } else {
+            if (simple_value) |value| {
+                try writer.print("try child_builder_{d}.addPositionalBorrowed(allocator, ", .{call_id});
+                try emitSimpleNodesExpr(writer, value, parent_args_name);
+                try writer.writeAll(");\n");
+                continue;
+            }
+            try writer.print("var value_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writeIndent(writer, indent + 1);
+            try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
+            const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
+            defer allocator.free(value_buf_name);
+            try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, arg.value_nodes, value_buf_name, parent_args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
             try writer.print("try child_builder_{d}.addPositionalBuffer(allocator, try value_buf_{d}_{d}.toOwnedSlice(allocator));\n", .{ call_id, call_id, arg_index });
         }
     }
@@ -958,6 +1160,17 @@ fn emitNodesIntoLocalBuffer(
     indent: usize,
     temp_counter: *usize,
 ) anyerror!void {
+    const simple_expr = try simpleNodesExprAlloc(allocator, nodes);
+    defer if (simple_expr) |expr| expr.deinit(allocator);
+    if (simple_expr) |expr| {
+        try writeIndent(writer, indent);
+        try writer.writeAll("const ");
+        try writer.writeAll(local_name);
+        try writer.writeAll(" = support.BorrowedText{ .items = ");
+        try emitSimpleNodesExpr(writer, expr, args_name);
+        try writer.writeAll(" };\n");
+        return;
+    }
     try writeIndent(writer, indent);
     try writer.writeAll("var ");
     try writer.writeAll(local_name);
@@ -2054,7 +2267,7 @@ test "template compiler classifies metadata-only templates by nested nop closure
     try sources.template_sources.put(try allocator.dupe(u8, "outer"), try allocator.dupe(u8, "{{meta}}"));
 
     const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "meta", "outer" }, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "return .metadata_only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".class = .metadata_only") != null);
     try std.testing.expectEqual(@as(usize, 2), generated.metadata_only_count);
 }
 
@@ -2075,6 +2288,7 @@ test "template compiler emits direct nested template calls" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_inner_0") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_outer_1") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "try tpl_inner_0(out, allocator, &child_args_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "findTemplateDispatchEntry") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "renderTemplateByName") != null);
     try std.testing.expectEqual(@as(usize, 2), generated.compiled_count);
 }
@@ -2095,7 +2309,7 @@ test "template compiler strips metadata and emits nop for pure metadata template
     );
 
     const generated = try compileTemplateRuntimeAlloc(allocator, &.{"meta-only"}, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "return .metadata_only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".class = .metadata_only") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_meta_only_0") == null);
     try std.testing.expectEqual(@as(usize, 1), generated.metadata_only_count);
 }
@@ -2142,7 +2356,7 @@ test "template compiler marks unresolved nested templates unsupported" {
     );
 
     const generated = try compileTemplateRuntimeAlloc(allocator, &.{"outer"}, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "return .unsupported") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".class = .unsupported") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_outer_0") == null);
     try std.testing.expectEqual(@as(usize, 1), generated.unsupported.len);
     try std.testing.expectEqualStrings("UnsupportedTemplateDependency", generated.unsupported[0].reason);

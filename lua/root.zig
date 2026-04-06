@@ -1061,6 +1061,23 @@ const DirectCaptureOrigin = enum {
 const DirectCaptureInfo = struct {
     name: []const u8,
     origin: DirectCaptureOrigin,
+    mutable: bool,
+};
+
+const DirectCaptureBinding = struct {
+    name: []const u8,
+    origin: DirectCaptureOrigin,
+    mutable: bool,
+};
+
+const DirectStmtFunctionRef = struct {
+    stmt_ptr: usize,
+    function_id: u32,
+};
+
+const DirectExprFunctionRef = struct {
+    expr_ptr: usize,
+    function_id: u32,
 };
 
 const DirectFunctionInfo = struct {
@@ -1081,9 +1098,8 @@ const DirectModuleState = struct {
     allocator: std.mem.Allocator,
     tables: TableSeedState,
     functions: std.ArrayList(DirectFunctionInfo) = .empty,
-    stmt_function_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
-    expr_function_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
-    global_ids: std.StringHashMapUnmanaged(u32) = .empty,
+    stmt_function_refs: std.ArrayList(DirectStmtFunctionRef) = .empty,
+    expr_function_refs: std.ArrayList(DirectExprFunctionRef) = .empty,
     globals: std.ArrayList([]const u8) = .empty,
     top_id: u32 = 0,
 
@@ -1097,9 +1113,8 @@ const DirectModuleState = struct {
     fn deinit(self: *DirectModuleState) void {
         for (self.functions.items) |info| self.allocator.free(info.captures);
         self.functions.deinit(self.allocator);
-        self.stmt_function_ids.deinit(self.allocator);
-        self.expr_function_ids.deinit(self.allocator);
-        self.global_ids.deinit(self.allocator);
+        self.stmt_function_refs.deinit(self.allocator);
+        self.expr_function_refs.deinit(self.allocator);
         self.globals.deinit(self.allocator);
         self.tables.deinit();
         self.* = undefined;
@@ -1124,12 +1139,48 @@ const DirectModuleState = struct {
         return id;
     }
 
+    fn addStmtFunctionRef(self: *DirectModuleState, stmt: *const Stmt, function_id: u32) !void {
+        try self.stmt_function_refs.append(self.allocator, .{
+            .stmt_ptr = @intFromPtr(stmt),
+            .function_id = function_id,
+        });
+    }
+
+    fn addExprFunctionRef(self: *DirectModuleState, expr: *const Expr, function_id: u32) !void {
+        try self.expr_function_refs.append(self.allocator, .{
+            .expr_ptr = @intFromPtr(expr),
+            .function_id = function_id,
+        });
+    }
+
+    fn stmtFunctionId(self: *const DirectModuleState, stmt: *const Stmt) ?u32 {
+        const stmt_ptr = @intFromPtr(stmt);
+        for (self.stmt_function_refs.items) |entry| {
+            if (entry.stmt_ptr == stmt_ptr) return entry.function_id;
+        }
+        return null;
+    }
+
+    fn exprFunctionId(self: *const DirectModuleState, expr: *const Expr) ?u32 {
+        const expr_ptr = @intFromPtr(expr);
+        for (self.expr_function_refs.items) |entry| {
+            if (entry.expr_ptr == expr_ptr) return entry.function_id;
+        }
+        return null;
+    }
+
     fn addGlobal(self: *DirectModuleState, name: []const u8) !u32 {
-        if (self.global_ids.get(name)) |existing| return existing;
+        if (self.globalId(name)) |existing| return existing;
         const id: u32 = @intCast(self.globals.items.len);
-        try self.global_ids.put(self.allocator, name, id);
         try self.globals.append(self.allocator, name);
         return id;
+    }
+
+    fn globalId(self: *const DirectModuleState, name: []const u8) ?u32 {
+        for (self.globals.items, 0..) |existing, idx| {
+            if (std.mem.eql(u8, existing, name)) return @intCast(idx);
+        }
+        return null;
     }
 
     fn globalFieldName(self: *const DirectModuleState, name: []const u8) []const u8 {
@@ -1144,7 +1195,7 @@ const DirectAnalyzeContext = struct {
     function_id: u32,
     locals: std.ArrayList([]const u8) = .empty,
     scope_marks: std.ArrayList(usize) = .empty,
-    captures: std.StringHashMapUnmanaged(DirectCaptureOrigin) = .empty,
+    captures: std.ArrayList(DirectCaptureBinding) = .empty,
 
     fn init(state: *DirectModuleState, parent: ?*DirectAnalyzeContext, function_id: u32) DirectAnalyzeContext {
         return .{
@@ -1183,44 +1234,58 @@ const DirectAnalyzeContext = struct {
         return false;
     }
 
-    fn hasCapture(self: *const DirectAnalyzeContext, name: []const u8) bool {
-        return self.captures.contains(name);
-    }
-
-    fn addCapture(self: *DirectAnalyzeContext, name: []const u8, origin: DirectCaptureOrigin) !void {
-        const gop = try self.captures.getOrPut(self.state.allocator, name);
-        if (!gop.found_existing) {
-            gop.key_ptr.* = name;
-            gop.value_ptr.* = origin;
+    fn captureIndex(self: *const DirectAnalyzeContext, name: []const u8) ?usize {
+        for (self.captures.items, 0..) |capture, idx| {
+            if (std.mem.eql(u8, capture.name, name)) return idx;
         }
+        return null;
     }
 
-    fn ensureChildAccessible(self: *DirectAnalyzeContext, name: []const u8) !?ChildAccessKind {
+    fn addCapture(self: *DirectAnalyzeContext, name: []const u8, origin: DirectCaptureOrigin, mutable: bool) !void {
+        if (self.captureIndex(name)) |idx| {
+            if (mutable) self.captures.items[idx].mutable = true;
+            return;
+        }
+        try self.captures.append(self.state.allocator, .{
+            .name = name,
+            .origin = origin,
+            .mutable = mutable,
+        });
+    }
+
+    fn ensureChildAccessible(self: *DirectAnalyzeContext, name: []const u8, mutable: bool) !?ChildAccessKind {
         if (self.hasLocal(name)) return .local;
-        if (self.hasCapture(name)) return .capture;
+        if (self.captureIndex(name)) |idx| {
+            if (mutable) self.captures.items[idx].mutable = true;
+            return .capture;
+        }
         const parent = self.parent orelse return null;
-        const parent_kind = try parent.ensureChildAccessible(name) orelse return null;
+        const parent_kind = try parent.ensureChildAccessible(name, mutable) orelse return null;
         try self.addCapture(name, switch (parent_kind) {
             .local => .parent_local,
             .capture => .parent_capture,
-        });
+        }, mutable);
         return .capture;
     }
 
-    fn resolveOwnReference(self: *DirectAnalyzeContext, name: []const u8) !void {
-        if (self.hasLocal(name) or self.hasCapture(name)) return;
+    fn resolveOwnReference(self: *DirectAnalyzeContext, name: []const u8, mutable: bool) !void {
+        if (self.hasLocal(name)) return;
+        if (self.captureIndex(name)) |idx| {
+            if (mutable) self.captures.items[idx].mutable = true;
+            return;
+        }
         const parent = self.parent orelse {
             _ = try self.state.addGlobal(name);
             return;
         };
-        const parent_kind = try parent.ensureChildAccessible(name) orelse {
+        const parent_kind = try parent.ensureChildAccessible(name, mutable) orelse {
             _ = try self.state.addGlobal(name);
             return;
         };
         try self.addCapture(name, switch (parent_kind) {
             .local => .parent_local,
             .capture => .parent_capture,
-        });
+        }, mutable);
     }
 
     fn finish(self: *DirectAnalyzeContext) !void {
@@ -1231,17 +1296,15 @@ const DirectAnalyzeContext = struct {
 
 fn capturesToOwnedSlice(
     allocator: std.mem.Allocator,
-    captures: *const std.StringHashMapUnmanaged(DirectCaptureOrigin),
+    captures: *const std.ArrayList(DirectCaptureBinding),
 ) ![]const DirectCaptureInfo {
-    const out = try allocator.alloc(DirectCaptureInfo, captures.count());
-    var idx: usize = 0;
-    var it = captures.iterator();
-    while (it.next()) |entry| {
+    const out = try allocator.alloc(DirectCaptureInfo, captures.items.len);
+    for (captures.items, 0..) |capture, idx| {
         out[idx] = .{
-            .name = entry.key_ptr.*,
-            .origin = entry.value_ptr.*,
+            .name = capture.name,
+            .origin = capture.origin,
+            .mutable = capture.mutable,
         };
-        idx += 1;
     }
     std.mem.sort(DirectCaptureInfo, out, {}, struct {
         fn lessThan(_: void, lhs: DirectCaptureInfo, rhs: DirectCaptureInfo) bool {
@@ -1282,7 +1345,7 @@ fn analyzeStmt(ctx: *DirectAnalyzeContext, stmt: *const Stmt) std.mem.Allocator.
                 .field => |field| field.name,
                 .index => "anonymous",
             }, op.params, op.body, op.is_vararg);
-            try ctx.state.stmt_function_ids.put(ctx.state.allocator, @intFromPtr(stmt), child_id);
+            try ctx.state.addStmtFunctionRef(stmt, child_id);
             var child_ctx = DirectAnalyzeContext.init(ctx.state, ctx, child_id);
             defer child_ctx.deinit();
             for (op.params) |param| try child_ctx.declareLocal(param);
@@ -1342,7 +1405,7 @@ fn analyzeStmt(ctx: *DirectAnalyzeContext, stmt: *const Stmt) std.mem.Allocator.
 
 fn analyzeLValue(ctx: *DirectAnalyzeContext, lvalue: LValue) std.mem.Allocator.Error!void {
     switch (lvalue) {
-        .name => |name| try ctx.resolveOwnReference(name),
+        .name => |name| try ctx.resolveOwnReference(name, true),
         .field => |field| try analyzeExpr(ctx, field.object),
         .index => |index| {
             try analyzeExpr(ctx, index.object);
@@ -1353,7 +1416,7 @@ fn analyzeLValue(ctx: *DirectAnalyzeContext, lvalue: LValue) std.mem.Allocator.E
 
 fn analyzeExpr(ctx: *DirectAnalyzeContext, expr: *const Expr) std.mem.Allocator.Error!void {
     switch (expr.*) {
-        .variable => |name| try ctx.resolveOwnReference(name),
+        .variable => |name| try ctx.resolveOwnReference(name, false),
         .unary => |op| try analyzeExpr(ctx, op.expr),
         .binary => |op| {
             try analyzeExpr(ctx, op.lhs);
@@ -1380,7 +1443,7 @@ fn analyzeExpr(ctx: *DirectAnalyzeContext, expr: *const Expr) std.mem.Allocator.
         },
         .function_lit => |func| {
             const child_id = try ctx.state.addFunction("anonymous", func.params, func.body, func.is_vararg);
-            try ctx.state.expr_function_ids.put(ctx.state.allocator, @intFromPtr(expr), child_id);
+            try ctx.state.addExprFunctionRef(expr, child_id);
             var child_ctx = DirectAnalyzeContext.init(ctx.state, ctx, child_id);
             defer child_ctx.deinit();
             for (func.params) |param| try child_ctx.declareLocal(param);
@@ -1394,6 +1457,86 @@ fn analyzeExpr(ctx: *DirectAnalyzeContext, expr: *const Expr) std.mem.Allocator.
 const DirectEmitLocalBinding = struct {
     name: []const u8,
     id: u32,
+};
+
+const DirectLocalUseContext = struct {
+    state: *const DirectModuleState,
+    info: *const DirectFunctionInfo,
+    locals: std.ArrayList(DirectEmitLocalBinding) = .empty,
+    scope_marks: std.ArrayList(usize) = .empty,
+    used_locals: std.ArrayList(bool) = .empty,
+    local_requires_var: std.ArrayList(bool) = .empty,
+    pending_local_function_captures: std.ArrayList(PendingLocalFunctionCaptures) = .empty,
+
+    fn init(state: *const DirectModuleState, info: *const DirectFunctionInfo) DirectLocalUseContext {
+        return .{ .state = state, .info = info };
+    }
+
+    fn deinit(self: *DirectLocalUseContext) void {
+        for (self.pending_local_function_captures.items) |pending| self.state.allocator.free(pending.captured_locals);
+        self.locals.deinit(self.state.allocator);
+        self.scope_marks.deinit(self.state.allocator);
+        self.used_locals.deinit(self.state.allocator);
+        self.local_requires_var.deinit(self.state.allocator);
+        self.pending_local_function_captures.deinit(self.state.allocator);
+        self.* = undefined;
+    }
+
+    fn beginScope(self: *DirectLocalUseContext) !void {
+        try self.scope_marks.append(self.state.allocator, self.locals.items.len);
+    }
+
+    fn endScope(self: *DirectLocalUseContext) void {
+        const mark = self.scope_marks.pop().?;
+        self.locals.items.len = mark;
+    }
+
+    fn declareLocal(self: *DirectLocalUseContext, name: []const u8) !u32 {
+        const id: u32 = @intCast(self.used_locals.items.len);
+        try self.locals.append(self.state.allocator, .{ .name = name, .id = id });
+        try self.used_locals.append(self.state.allocator, false);
+        try self.local_requires_var.append(self.state.allocator, false);
+        return id;
+    }
+
+    fn lookupLocal(self: *const DirectLocalUseContext, name: []const u8) ?u32 {
+        var idx = self.locals.items.len;
+        while (idx != 0) {
+            idx -= 1;
+            const local = self.locals.items[idx];
+            if (std.mem.eql(u8, local.name, name)) return local.id;
+        }
+        return null;
+    }
+
+    fn markLocalUsed(self: *DirectLocalUseContext, local_id: u32) void {
+        self.used_locals.items[local_id] = true;
+    }
+
+    fn markLocalRequiresVar(self: *DirectLocalUseContext, local_id: u32) void {
+        self.local_requires_var.items[local_id] = true;
+    }
+};
+
+const PendingCapturedLocal = struct {
+    local_id: u32,
+    mutable: bool,
+};
+
+const PendingLocalFunctionCaptures = struct {
+    local_id: u32,
+    captured_locals: []const PendingCapturedLocal,
+};
+
+const DirectLocalAnalysis = struct {
+    used: []bool,
+    requires_var: []bool,
+
+    fn deinit(self: *DirectLocalAnalysis, allocator: std.mem.Allocator) void {
+        allocator.free(self.used);
+        allocator.free(self.requires_var);
+        self.* = undefined;
+    }
 };
 
 const DirectBuiltinCall = enum {
@@ -1418,13 +1561,27 @@ const DirectEmitFunctionContext = struct {
     state: *const DirectModuleState,
     info: *const DirectFunctionInfo,
     uses_return_block: bool,
+    local_used: []const bool,
+    local_requires_var: []const bool,
     locals: std.ArrayList(DirectEmitLocalBinding) = .empty,
     scope_marks: std.ArrayList(usize) = .empty,
     next_local_id: u32 = 0,
     next_temp_id: u32 = 0,
 
-    fn init(state: *const DirectModuleState, info: *const DirectFunctionInfo, uses_return_block: bool) DirectEmitFunctionContext {
-        return .{ .state = state, .info = info, .uses_return_block = uses_return_block };
+    fn init(
+        state: *const DirectModuleState,
+        info: *const DirectFunctionInfo,
+        uses_return_block: bool,
+        local_used: []const bool,
+        local_requires_var: []const bool,
+    ) DirectEmitFunctionContext {
+        return .{
+            .state = state,
+            .info = info,
+            .uses_return_block = uses_return_block,
+            .local_used = local_used,
+            .local_requires_var = local_requires_var,
+        };
     }
 
     fn deinit(self: *DirectEmitFunctionContext) void {
@@ -1473,6 +1630,275 @@ const DirectEmitFunctionContext = struct {
     }
 };
 
+fn analyzeDirectFunctionLocalAnalysisAlloc(
+    allocator: std.mem.Allocator,
+    state: *const DirectModuleState,
+    info: *const DirectFunctionInfo,
+) AnalyzeDirectUseError!DirectLocalAnalysis {
+    var ctx = DirectLocalUseContext.init(state, info);
+    defer ctx.deinit();
+    for (info.params) |param| _ = try ctx.declareLocal(param);
+    try analyzeDirectUseStmtSlice(&ctx, info.body);
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (ctx.pending_local_function_captures.items) |pending| {
+            if (!ctx.used_locals.items[pending.local_id]) continue;
+            const used_before = countTrue(ctx.used_locals.items);
+            const var_before = countTrue(ctx.local_requires_var.items);
+            markPendingCapturedLocalsUsed(&ctx, pending.captured_locals);
+            if (used_before != countTrue(ctx.used_locals.items) or var_before != countTrue(ctx.local_requires_var.items)) {
+                changed = true;
+            }
+        }
+    }
+    return .{
+        .used = try ctx.used_locals.toOwnedSlice(allocator),
+        .requires_var = try ctx.local_requires_var.toOwnedSlice(allocator),
+    };
+}
+
+fn countTrue(values: []const bool) usize {
+    var count: usize = 0;
+    for (values) |value| {
+        if (value) count += 1;
+    }
+    return count;
+}
+
+const AnalyzeDirectUseError = std.mem.Allocator.Error || error{UnsupportedSyntax};
+
+fn analyzeDirectUseStmtSlice(ctx: *DirectLocalUseContext, stmts: []const *Stmt) AnalyzeDirectUseError!void {
+    for (stmts) |stmt| try analyzeDirectUseStmt(ctx, stmt);
+}
+
+fn markCapturedParentLocalsUsed(ctx: *DirectLocalUseContext, info: *const DirectFunctionInfo) void {
+    for (info.captures) |capture| {
+        if (capture.origin != .parent_local) continue;
+        const local_id = ctx.lookupLocal(capture.name) orelse continue;
+        ctx.markLocalUsed(local_id);
+        if (capture.mutable) ctx.markLocalRequiresVar(local_id);
+    }
+}
+
+fn markPendingCapturedLocalsUsed(ctx: *DirectLocalUseContext, captures: []const PendingCapturedLocal) void {
+    for (captures) |capture| {
+        ctx.markLocalUsed(capture.local_id);
+        if (capture.mutable) ctx.markLocalRequiresVar(capture.local_id);
+    }
+}
+
+fn collectPendingCapturedLocalsAlloc(
+    allocator: std.mem.Allocator,
+    ctx: *const DirectLocalUseContext,
+    info: *const DirectFunctionInfo,
+) ![]const PendingCapturedLocal {
+    var pending: std.ArrayList(PendingCapturedLocal) = .empty;
+    errdefer pending.deinit(allocator);
+    for (info.captures) |capture| {
+        if (capture.origin != .parent_local) continue;
+        const local_id = ctx.lookupLocal(capture.name) orelse continue;
+        try pending.append(allocator, .{
+            .local_id = local_id,
+            .mutable = capture.mutable,
+        });
+    }
+    return pending.toOwnedSlice(allocator);
+}
+
+fn analyzeDirectUseLValueExprs(ctx: *DirectLocalUseContext, target: LValue) AnalyzeDirectUseError!void {
+    switch (target) {
+        .name => {},
+        .field => |field| try analyzeDirectUseExpr(ctx, field.object),
+        .index => |index| {
+            try analyzeDirectUseExpr(ctx, index.object);
+            try analyzeDirectUseExpr(ctx, index.key);
+        },
+    }
+}
+
+fn analyzeDirectUseStmt(ctx: *DirectLocalUseContext, stmt: *const Stmt) AnalyzeDirectUseError!void {
+    switch (stmt.*) {
+        .local_assign => |op| {
+            const deferred = try ctx.state.allocator.alloc(?[]const PendingCapturedLocal, @min(op.names.len, op.exprs.len));
+            defer {
+                for (deferred) |captures_opt| {
+                    if (captures_opt) |captures| ctx.state.allocator.free(captures);
+                }
+                ctx.state.allocator.free(deferred);
+            }
+            @memset(deferred, null);
+
+            for (op.exprs, 0..) |expr, idx| {
+                if (idx < deferred.len and expr.* == .function_lit) {
+                    const child_id = ctx.state.exprFunctionId(expr) orelse return error.UnsupportedSyntax;
+                    deferred[idx] = try collectPendingCapturedLocalsAlloc(ctx.state.allocator, ctx, &ctx.state.functions.items[child_id]);
+                    continue;
+                }
+                try analyzeDirectUseExpr(ctx, expr);
+            }
+
+            const local_ids = try ctx.state.allocator.alloc(u32, op.names.len);
+            defer ctx.state.allocator.free(local_ids);
+            for (op.names, 0..) |name, idx| {
+                local_ids[idx] = try ctx.declareLocal(name);
+            }
+            for (deferred, 0..) |captures_opt, idx| {
+                if (captures_opt) |captures| {
+                    try ctx.pending_local_function_captures.append(ctx.state.allocator, .{
+                        .local_id = local_ids[idx],
+                        .captured_locals = try ctx.state.allocator.dupe(PendingCapturedLocal, captures),
+                    });
+                }
+            }
+        },
+        .assign => |op| {
+            for (op.exprs, 0..) |expr, idx| {
+                if (idx < op.targets.len and expr.* == .function_lit and op.targets[idx] == .name) {
+                    if (ctx.lookupLocal(op.targets[idx].name)) |local_id| {
+                        const child_id = ctx.state.exprFunctionId(expr) orelse return error.UnsupportedSyntax;
+                        try ctx.pending_local_function_captures.append(ctx.state.allocator, .{
+                            .local_id = local_id,
+                            .captured_locals = try collectPendingCapturedLocalsAlloc(
+                                ctx.state.allocator,
+                                ctx,
+                                &ctx.state.functions.items[child_id],
+                            ),
+                        });
+                        continue;
+                    }
+                }
+                try analyzeDirectUseExpr(ctx, expr);
+            }
+            for (op.targets) |target| {
+                if (target == .name) {
+                    if (ctx.lookupLocal(target.name)) |local_id| ctx.markLocalRequiresVar(local_id);
+                }
+                try analyzeDirectUseLValueExprs(ctx, target);
+            }
+        },
+        .function_def => |op| {
+            const child_id = ctx.state.stmtFunctionId(stmt) orelse return error.UnsupportedSyntax;
+            const child_info = &ctx.state.functions.items[child_id];
+            if (op.is_local and op.target == .name) {
+                const local_id = try ctx.declareLocal(op.target.name);
+                ctx.markLocalRequiresVar(local_id);
+                var pending_captures: std.ArrayList(PendingCapturedLocal) = .empty;
+                errdefer pending_captures.deinit(ctx.state.allocator);
+                for (child_info.captures) |capture| {
+                    if (capture.origin != .parent_local) continue;
+                    const captured_local_id = ctx.lookupLocal(capture.name) orelse continue;
+                    try pending_captures.append(ctx.state.allocator, .{
+                        .local_id = captured_local_id,
+                        .mutable = capture.mutable,
+                    });
+                }
+                try ctx.pending_local_function_captures.append(ctx.state.allocator, .{
+                    .local_id = local_id,
+                    .captured_locals = try pending_captures.toOwnedSlice(ctx.state.allocator),
+                });
+            } else {
+                try analyzeDirectUseLValueExprs(ctx, op.target);
+                markCapturedParentLocalsUsed(ctx, child_info);
+            }
+        },
+        .if_stmt => |op| {
+            for (op.branches) |branch| {
+                try analyzeDirectUseExpr(ctx, branch.condition);
+                try ctx.beginScope();
+                try analyzeDirectUseStmtSlice(ctx, branch.body);
+                ctx.endScope();
+            }
+            try ctx.beginScope();
+            try analyzeDirectUseStmtSlice(ctx, op.else_body);
+            ctx.endScope();
+        },
+        .do_block => |body| {
+            try ctx.beginScope();
+            try analyzeDirectUseStmtSlice(ctx, body);
+            ctx.endScope();
+        },
+        .while_stmt => |op| {
+            try analyzeDirectUseExpr(ctx, op.condition);
+            try ctx.beginScope();
+            try analyzeDirectUseStmtSlice(ctx, op.body);
+            ctx.endScope();
+        },
+        .repeat_stmt => |op| {
+            try ctx.beginScope();
+            try analyzeDirectUseStmtSlice(ctx, op.body);
+            try analyzeDirectUseExpr(ctx, op.condition);
+            ctx.endScope();
+        },
+        .numeric_for => |op| {
+            try analyzeDirectUseExpr(ctx, op.start);
+            try analyzeDirectUseExpr(ctx, op.finish);
+            if (op.step) |step| try analyzeDirectUseExpr(ctx, step);
+            try ctx.beginScope();
+            const local_id = try ctx.declareLocal(op.name);
+            ctx.markLocalRequiresVar(local_id);
+            try analyzeDirectUseStmtSlice(ctx, op.body);
+            ctx.endScope();
+        },
+        .generic_for => |op| {
+            for (op.iterator_exprs) |expr| try analyzeDirectUseExpr(ctx, expr);
+            try ctx.beginScope();
+            for (op.names) |name| _ = try ctx.declareLocal(name);
+            try analyzeDirectUseStmtSlice(ctx, op.body);
+            ctx.endScope();
+        },
+        .return_stmt => |op| for (op.exprs) |expr| try analyzeDirectUseExpr(ctx, expr),
+        .expr_stmt => |expr| try analyzeDirectUseExpr(ctx, expr),
+        .break_stmt => {},
+    }
+}
+
+fn analyzeDirectUseExpr(ctx: *DirectLocalUseContext, expr: *const Expr) AnalyzeDirectUseError!void {
+    switch (expr.*) {
+        .nil_lit, .bool_lit, .number_lit, .string_lit, .varargs, .const_table => {},
+        .variable => |name| {
+            const local_id = ctx.lookupLocal(name) orelse return;
+            ctx.markLocalUsed(local_id);
+        },
+        .unary => |op| try analyzeDirectUseExpr(ctx, op.expr),
+        .binary => |op| {
+            try analyzeDirectUseExpr(ctx, op.lhs);
+            try analyzeDirectUseExpr(ctx, op.rhs);
+        },
+        .table_ctor => |fields| {
+            for (fields) |field| switch (field) {
+                .array => |value| try analyzeDirectUseExpr(ctx, value),
+                .named => |named| try analyzeDirectUseExpr(ctx, named.value),
+                .indexed => |indexed| {
+                    try analyzeDirectUseExpr(ctx, indexed.key);
+                    try analyzeDirectUseExpr(ctx, indexed.value);
+                },
+            };
+        },
+        .field => |field| try analyzeDirectUseExpr(ctx, field.object),
+        .index => |index| {
+            try analyzeDirectUseExpr(ctx, index.object);
+            try analyzeDirectUseExpr(ctx, index.key);
+        },
+        .call => |call| {
+            try analyzeDirectUseExpr(ctx, call.callee);
+            for (call.args) |arg| try analyzeDirectUseExpr(ctx, arg);
+        },
+        .function_lit => {
+            const child_id = ctx.state.exprFunctionId(expr) orelse return error.UnsupportedSyntax;
+            markCapturedParentLocalsUsed(ctx, &ctx.state.functions.items[child_id]);
+        },
+    }
+}
+
+fn localBindingKeyword(ctx: *const DirectEmitFunctionContext, local_id: u32) []const u8 {
+    return if (ctx.local_requires_var[local_id]) "var" else "const";
+}
+
+fn localShouldEmit(ctx: *const DirectEmitFunctionContext, local_id: u32) bool {
+    return ctx.local_used[local_id];
+}
+
 fn emitDirectZigModuleAlloc(allocator: std.mem.Allocator, chunk: *const Chunk) anyerror![]u8 {
     var state = DirectModuleState.init(allocator);
     defer state.deinit();
@@ -1497,7 +1923,9 @@ fn emitDirectZigModuleAlloc(allocator: std.mem.Allocator, chunk: *const Chunk) a
     }
     for (state.functions.items) |info| try emitDirectFunction(writer, &state, &info);
     try emitDirectRun(writer, &state);
-    return out.toOwnedSlice();
+    const raw_source = try out.toOwnedSlice();
+    errdefer allocator.free(raw_source);
+    return stripUnusedGeneratedLocalsAlloc(allocator, raw_source);
 }
 
 fn emitDirectGlobals(writer: anytype, state: *const DirectModuleState) anyerror!void {
@@ -1511,7 +1939,11 @@ fn emitDirectGlobals(writer: anytype, state: *const DirectModuleState) anyerror!
 fn emitDirectCaptureStruct(writer: anytype, info: *const DirectFunctionInfo) anyerror!void {
     try writer.print("const Capture_{d} = struct {{\n", .{info.id});
     for (info.captures, 0..) |capture, idx| {
-        try writer.print("    // captures {s}\n    capture_{d}: *lua.Value,\n", .{ capture.name, idx });
+        try writer.print("    // captures {s}\n    capture_{d}: *{s}lua.Value,\n", .{
+            capture.name,
+            idx,
+            if (capture.mutable) "" else "const ",
+        });
     }
     try writer.writeAll("};\n\n");
 }
@@ -1631,6 +2063,77 @@ fn emitDirectConstValueSeed(writer: anytype, value: Value, state: *const TableSe
 
 fn emitIndent(writer: anytype, depth: usize) anyerror!void {
     for (0..depth) |_| try writer.writeAll("    ");
+}
+
+fn stripUnusedGeneratedLocalsAlloc(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    var line_start: usize = 0;
+    while (line_start < source.len) {
+        const line_end = std.mem.indexOfScalarPos(u8, source, line_start, '\n') orelse source.len;
+        const line = source[line_start..line_end];
+        if (try rewriteUnusedGeneratedLocalLineAlloc(allocator, source, line, line_start, &out)) {
+            if (line_end < source.len) try out.append(allocator, '\n');
+            line_start = if (line_end < source.len) line_end + 1 else source.len;
+            continue;
+        }
+        try out.appendSlice(allocator, line);
+        if (line_end < source.len) try out.append(allocator, '\n');
+        line_start = if (line_end < source.len) line_end + 1 else source.len;
+    }
+    allocator.free(source);
+    return out.toOwnedSlice(allocator);
+}
+
+fn rewriteUnusedGeneratedLocalLineAlloc(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    line: []const u8,
+    line_start: usize,
+    out: *std.ArrayList(u8),
+) !bool {
+    const prefix_len = std.mem.indexOfNone(u8, line, " ") orelse line.len;
+    const trimmed = line[prefix_len..];
+    if (!std.mem.startsWith(u8, trimmed, "const local_")) return false;
+    const type_marker = ": lua.Value = ";
+    const marker_index = std.mem.indexOf(u8, trimmed, type_marker) orelse return false;
+    if (trimmed.len == 0 or trimmed[trimmed.len - 1] != ';') return false;
+
+    const token = trimmed["const ".len..marker_index];
+    if (countGeneratedLocalOccurrencesInFunction(source, line_start, token) != 1) return false;
+
+    try out.appendNTimes(allocator, ' ', prefix_len);
+    try out.appendSlice(allocator, "_ = ");
+    try out.appendSlice(allocator, trimmed[marker_index + type_marker.len .. trimmed.len - 1]);
+    try out.appendSlice(allocator, ";");
+    return true;
+}
+
+fn countGeneratedLocalOccurrencesInFunction(source: []const u8, line_start: usize, token: []const u8) usize {
+    const fn_marker = "\nfn fn_";
+    const fn_start = if (line_start == 0 or std.mem.startsWith(u8, source, "fn fn_"))
+        0
+    else if (std.mem.lastIndexOf(u8, source[0..line_start], fn_marker)) |idx|
+        idx + 1
+    else
+        0;
+    const fn_end = std.mem.indexOfPos(u8, source, line_start, fn_marker) orelse source.len;
+
+    var count: usize = 0;
+    var index = fn_start;
+    while (index < fn_end) : (index += 1) {
+        if (!std.mem.startsWith(u8, source[index..fn_end], token)) continue;
+        if (index != fn_start and isGeneratedIdentifierChar(source[index - 1])) continue;
+        const end = index + token.len;
+        if (end < fn_end and isGeneratedIdentifierChar(source[end])) continue;
+        count += 1;
+    }
+    return count;
+}
+
+fn isGeneratedIdentifierChar(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_';
 }
 
 fn formatTagName(comptime T: type, value: T) []const u8 {
@@ -1753,15 +2256,27 @@ fn emitDirectFunction(writer: anytype, state: *const DirectModuleState, info: *c
     }
 
     const uses_return_block = blockContainsReturn(info.body);
-    var ctx = DirectEmitFunctionContext.init(state, info, uses_return_block);
+    var local_analysis = try analyzeDirectFunctionLocalAnalysisAlloc(state.allocator, state, info);
+    defer local_analysis.deinit(state.allocator);
+    var ctx = DirectEmitFunctionContext.init(
+        state,
+        info,
+        uses_return_block,
+        local_analysis.used,
+        local_analysis.requires_var,
+    );
     defer ctx.deinit();
 
     for (info.params, 0..) |param, idx| {
         const local_id = try ctx.declareLocal(param);
+        if (!localShouldEmit(&ctx, local_id)) continue;
         try emitIndent(writer, 1);
-        try writer.print("var local_{d}: lua.Value = if (args.len > {d}) args[{d}] else @as(lua.Value, .nil);\n", .{ local_id, idx, idx });
-        try emitIndent(writer, 1);
-        try writer.print("local_{d} = local_{d};\n", .{ local_id, local_id });
+        try writer.print("{s} local_{d}: lua.Value = if (args.len > {d}) args[{d}] else @as(lua.Value, .nil);\n", .{
+            localBindingKeyword(&ctx, local_id),
+            local_id,
+            idx,
+            idx,
+        });
     }
     if (info.is_vararg and blockContainsVarargs(info.body)) {
         try emitIndent(writer, 1);
@@ -1818,9 +2333,15 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             for (op.names, 0..) |name, idx| {
                 const local_id = try ctx.declareLocal(name);
                 try emitIndent(writer, depth);
-                try writer.print("var local_{d}: lua.Value = tmp_{d};\n", .{ local_id, temp_ids[idx] });
-                try emitIndent(writer, depth);
-                try writer.print("local_{d} = local_{d};\n", .{ local_id, local_id });
+                if (localShouldEmit(ctx, local_id)) {
+                    try writer.print("{s} local_{d}: lua.Value = tmp_{d};\n", .{
+                        localBindingKeyword(ctx, local_id),
+                        local_id,
+                        temp_ids[idx],
+                    });
+                } else {
+                    try writer.print("_ = tmp_{d};\n", .{temp_ids[idx]});
+                }
             }
             if (op.exprs.len > op.names.len) {
                 for (temp_ids[op.names.len..op.exprs.len]) |temp_id| {
@@ -1859,14 +2380,16 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             }
         },
         .function_def => |op| {
-            const child_id = ctx.state.stmt_function_ids.get(@intFromPtr(stmt)) orelse return error.UnsupportedSyntax;
+            const child_id = ctx.state.stmtFunctionId(stmt) orelse return error.UnsupportedSyntax;
             const child_info = &ctx.state.functions.items[child_id];
             if (op.is_local and op.target == .name) {
                 const local_id = try ctx.declareLocal(op.target.name);
+                if (!localShouldEmit(ctx, local_id)) return;
                 try emitIndent(writer, depth);
-                try writer.print("var local_{d}: lua.Value = lua.Value.nil;\n", .{local_id});
-                try emitIndent(writer, depth);
-                try writer.print("local_{d} = local_{d};\n", .{ local_id, local_id });
+                try writer.print("{s} local_{d}: lua.Value = lua.Value.nil;\n", .{
+                    localBindingKeyword(ctx, local_id),
+                    local_id,
+                });
                 try emitIndent(writer, depth);
                 try writer.print("local_{d} = ", .{local_id});
                 try emitFunctionValueExpr(writer, ctx, child_info, depth);
@@ -1980,9 +2503,11 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             try ctx.beginScope();
             const loop_local = try ctx.declareLocal(op.name);
             try emitIndent(writer, depth + 1);
-            try writer.print("var local_{d}: lua.Value = tmp_{d};\n", .{ loop_local, start_temp });
-            try emitIndent(writer, depth + 1);
-            try writer.print("local_{d} = local_{d};\n", .{ loop_local, loop_local });
+            try writer.print("{s} local_{d}: lua.Value = tmp_{d};\n", .{
+                localBindingKeyword(ctx, loop_local),
+                loop_local,
+                start_temp,
+            });
             try emitIndent(writer, depth + 1);
             try writer.writeAll("while (true) {\n");
             try ctx.beginScope();
@@ -2005,27 +2530,51 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
         .generic_for => |op| {
             const iter_temp = ctx.nextTemp();
             const pair_temp = ctx.nextTemp();
+            const local_ids = try ctx.state.allocator.alloc(u32, op.names.len);
+            defer ctx.state.allocator.free(local_ids);
             try emitIndent(writer, depth);
-            try writer.print("var tmp_{d}: lua.Iterator = ", .{iter_temp});
+            try writer.print("var tmp_{d}: lua.Iterator = undefined;\n", .{iter_temp});
+            try emitIndent(writer, depth);
+            try writer.print("tmp_{d} = ", .{iter_temp});
             try emitIteratorInit(writer, ctx, op.iterator_exprs, depth);
             try writer.writeAll(";\n");
+            try ctx.beginScope();
+            var uses_pair_capture = false;
+            for (op.names, 0..) |name, idx| {
+                const local_id = try ctx.declareLocal(name);
+                local_ids[idx] = local_id;
+                if (localShouldEmit(ctx, local_id)) uses_pair_capture = true;
+            }
             try emitIndent(writer, depth);
             try writer.writeAll("while (try lua.generatedIteratorNext(&tmp_");
             try writer.print("{d}", .{iter_temp});
-            try writer.print(")) |pair_{d}| {{\n", .{pair_temp});
-            try ctx.beginScope();
-            for (op.names, 0..) |name, idx| {
-                const local_id = try ctx.declareLocal(name);
+            if (uses_pair_capture) {
+                try writer.print(")) |pair_{d}| {{\n", .{pair_temp});
+            } else {
+                try writer.writeAll(")) |_| {\n");
+            }
+            for (op.names, 0..) |_, idx| {
+                const local_id = local_ids[idx];
+                if (!localShouldEmit(ctx, local_id)) continue;
                 try emitIndent(writer, depth + 1);
                 if (idx == 0) {
-                    try writer.print("var local_{d}: lua.Value = pair_{d}[0];\n", .{ local_id, pair_temp });
+                    try writer.print("{s} local_{d}: lua.Value = pair_{d}[0];\n", .{
+                        localBindingKeyword(ctx, local_id),
+                        local_id,
+                        pair_temp,
+                    });
                 } else if (idx == 1) {
-                    try writer.print("var local_{d}: lua.Value = pair_{d}[1];\n", .{ local_id, pair_temp });
+                    try writer.print("{s} local_{d}: lua.Value = pair_{d}[1];\n", .{
+                        localBindingKeyword(ctx, local_id),
+                        local_id,
+                        pair_temp,
+                    });
                 } else {
-                    try writer.print("var local_{d}: lua.Value = lua.Value.nil;\n", .{local_id});
+                    try writer.print("{s} local_{d}: lua.Value = lua.Value.nil;\n", .{
+                        localBindingKeyword(ctx, local_id),
+                        local_id,
+                    });
                 }
-                try emitIndent(writer, depth + 1);
-                try writer.print("local_{d} = local_{d};\n", .{ local_id, local_id });
             }
             try emitStmtSlice(writer, ctx, op.body, depth + 1);
             ctx.endScope();
@@ -2079,6 +2628,11 @@ fn emitStoreTarget(writer: anytype, ctx: *DirectEmitFunctionContext, target: LVa
     switch (target) {
         .name => |name| {
             if (ctx.lookupLocal(name)) |local_id| {
+                if (!ctx.local_used[local_id]) {
+                    try emitIndent(writer, depth);
+                    try writer.print("_ = tmp_{d};\n", .{temp_id});
+                    return;
+                }
                 try emitIndent(writer, depth);
                 try writer.print("local_{d} = tmp_{d};\n", .{ local_id, temp_id });
                 return;
@@ -2088,7 +2642,7 @@ fn emitStoreTarget(writer: anytype, ctx: *DirectEmitFunctionContext, target: LVa
                 try writer.print("capture.capture_{d}.* = tmp_{d};\n", .{ capture_id, temp_id });
                 return;
             }
-            const global_id = ctx.state.global_ids.get(name) orelse return error.UnknownVariable;
+            const global_id = ctx.state.globalId(name) orelse return error.UnknownVariable;
             try emitIndent(writer, depth);
             try writer.print("globals.global_{d} = tmp_{d};\n", .{ global_id, temp_id });
         },
@@ -2216,7 +2770,7 @@ fn emitExpr(writer: anytype, ctx: *DirectEmitFunctionContext, expr: *const Expr,
             } else if (ctx.lookupCapture(name)) |capture_id| {
                 try writer.print("capture.capture_{d}.*", .{capture_id});
             } else {
-                const global_id = ctx.state.global_ids.get(name) orelse return error.UnknownVariable;
+                const global_id = ctx.state.globalId(name) orelse return error.UnknownVariable;
                 try writer.print("globals.global_{d}", .{global_id});
             }
         },
@@ -2331,7 +2885,7 @@ fn emitExpr(writer: anytype, ctx: *DirectEmitFunctionContext, expr: *const Expr,
             }
         },
         .function_lit => {
-            const child_id = ctx.state.expr_function_ids.get(@intFromPtr(expr)) orelse return error.UnsupportedSyntax;
+            const child_id = ctx.state.exprFunctionId(expr) orelse return error.UnsupportedSyntax;
             const child_info = &ctx.state.functions.items[child_id];
             try emitFunctionValueExpr(writer, ctx, child_info, depth);
         },
@@ -6643,14 +7197,12 @@ test "classifyModuleSource distinguishes Lua from module documentation markup" {
 }
 
 test "classifyNamedModuleSource recognizes JSON-backed modules" {
-    try std.testing.expectEqual(.json, classifyNamedModuleSource(
-        "etymology languages/canonical names.json",
+    try std.testing.expectEqual(.json, classifyNamedModuleSource("etymology languages/canonical names.json",
         \\{
         \\  "Arbëresh Albanian": "aae"
         \\}
     ));
-    try std.testing.expectEqual(.lua, classifyNamedModuleSource(
-        "utilities",
+    try std.testing.expectEqual(.lua, classifyNamedModuleSource("utilities",
         \\return { ok = true }
     ));
 }
