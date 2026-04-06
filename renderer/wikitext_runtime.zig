@@ -248,18 +248,6 @@ fn renderTemplate(
 
     const name = trimWikiWhitespace(parts.items[0]);
 
-    if (generated_templates.classifyTemplate(name)) |class| {
-        switch (class) {
-            .metadata_only => return,
-            .compiled => {
-                var args = try template_support.templateArgsFromPartsAlloc(allocator, &parts);
-                defer args.deinit(allocator);
-                if (try generated_templates.renderTemplateByName(out, allocator, name, &args)) return;
-            },
-            .unsupported => {},
-        }
-    }
-
     if (templateMatches(name, "also") or
         templateMatches(name, "was wotd") or
         templateMatches(name, "commonscat") or
@@ -1314,6 +1302,9 @@ fn renderTemplate(
         try appendPositional(out, allocator, &parts, 1, "", "", ", ");
         return;
     }
+    if (try renderGeneratedTemplate(out, allocator, name, &parts)) {
+        return;
+    }
     if (templateNamed(&parts, "passage") orelse templateNamed(&parts, "text")) |arg| {
         try renderInline(out, allocator, arg);
         return;
@@ -1321,6 +1312,42 @@ fn renderTemplate(
     if (templatePositional(&parts, positionalCount(&parts) -| 1)) |fallback| {
         try renderInline(out, allocator, fallback);
     }
+}
+
+fn renderGeneratedTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    parts: *const std.ArrayList([]const u8),
+) !bool {
+    const class = generated_templates.classifyTemplate(name) orelse return false;
+    switch (class) {
+        .metadata_only => return true,
+        .unsupported => return false,
+        .compiled => {
+            var args = try template_support.templateArgsFromPartsAlloc(allocator, parts);
+            defer args.deinit(allocator);
+
+            const start_len = out.items.len;
+            if (!(generated_templates.renderTemplateByName(out, allocator, name, &args) catch false)) {
+                out.items.len = start_len;
+                return false;
+            }
+            const appended = out.items[start_len..];
+            if (appended.len == 0) return true;
+            if (looksLikeTemplateRedirectText(appended)) {
+                out.items.len = start_len;
+                return false;
+            }
+
+            return true;
+        },
+    }
+}
+
+fn looksLikeTemplateRedirectText(text: []const u8) bool {
+    const trimmed = trimWikiWhitespace(text);
+    return trimmed.len >= "#REDIRECT".len and std.ascii.startsWithIgnoreCase(trimmed, "#REDIRECT");
 }
 
 pub fn knownListTerms(name: []const u8) ?[]const []const u8 {

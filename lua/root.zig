@@ -79,13 +79,19 @@ pub const Table = struct {
         gop.value_ptr.* = value;
     }
 
+    pub fn putStringBorrowed(self: *Table, key: []const u8, value: Value) !void {
+        const gop = try self.string_fields.getOrPut(self.allocator, key);
+        if (!gop.found_existing) gop.key_ptr.* = key;
+        gop.value_ptr.* = value;
+    }
+
     fn getNumber(self: *const Table, num: f64) Value {
         const int = floatToExactPositiveInt(num) orelse return .nil;
         if (int >= 1 and int <= self.array.items.len) return self.array.items[int - 1];
         return if (self.int_fields.get(@intCast(int))) |value| value else .nil;
     }
 
-    fn putNumber(self: *Table, num: f64, value: Value) !void {
+    pub fn putNumber(self: *Table, num: f64, value: Value) !void {
         const int = floatToExactPositiveInt(num) orelse return error.InvalidIndex;
         if (int >= 1 and int <= self.array.items.len + 1) {
             if (int == self.array.items.len + 1) {
@@ -218,7 +224,7 @@ pub const GeneratedRuntime = struct {
     ) !Value {
         const function = try self.alloc().create(Function);
         function.* = .{
-            .name = try self.alloc().dupe(u8, name),
+            .name = name,
             .kind = .{ .generated = .{
                 .capture = capture,
                 .globals = globals,
@@ -470,6 +476,10 @@ pub const ModuleArg = struct {
     value: []const u8,
 };
 
+pub fn appendValueTextAlloc(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: Value) !void {
+    try appendValueText(out, allocator, value);
+}
+
 pub fn runModuleFunctionAlloc(
     allocator: std.mem.Allocator,
     module_source: []const u8,
@@ -502,6 +512,31 @@ pub fn runModuleFunctionAlloc(
     defer out.deinit(allocator);
     if (results.len != 0) try appendValueText(&out, allocator, results[0]);
     return out.toOwnedSlice(allocator);
+}
+
+pub fn generatedFrameGetParent(_: ?*anyopaque, _: ?*anyopaque, runtime: *GeneratedRuntime, args: []const Value) anyerror![]Value {
+    return runtime.singleReturn(if (args.len == 0) .nil else args[0]);
+}
+
+pub fn generatedFrameExpandTemplate(_: ?*anyopaque, _: ?*anyopaque, runtime: *GeneratedRuntime, _: []const Value) anyerror![]Value {
+    return runtime.singleReturn(.{ .string = "" });
+}
+
+pub fn buildGeneratedModuleFrameValueAlloc(runtime: *GeneratedRuntime, args: []const ModuleArg) !Value {
+    const frame = try Table.init(runtime.alloc());
+    const args_table = try Table.init(runtime.alloc());
+
+    for (args, 0..) |arg, idx| {
+        try args_table.putNumber(@floatFromInt(idx + 1), .{ .string = arg.value });
+        if (arg.name) |name| {
+            try args_table.putStringBorrowed(name, .{ .string = arg.value });
+        }
+    }
+
+    try frame.putStringBorrowed("args", .{ .table = args_table });
+    try frame.putStringBorrowed("getParent", try runtime.functionValue("frame.getParent", null, null, generatedFrameGetParent));
+    try frame.putStringBorrowed("expandTemplate", try runtime.functionValue("frame.expandTemplate", null, null, generatedFrameExpandTemplate));
+    return .{ .table = frame };
 }
 
 pub fn generatedInvoke(runtime: *GeneratedRuntime, callee: Value, args: []const Value) ![]Value {
@@ -580,6 +615,10 @@ pub fn generatedType(value: Value) Value {
         .function => "function",
         .iterator => "userdata",
     } };
+}
+
+pub fn generatedTouchValues(values: []const Value) void {
+    _ = values;
 }
 
 pub fn generatedStringLen(value: Value) !Value {
@@ -780,6 +819,112 @@ fn generatedBuiltinInvoke(
 
 pub fn emitZigModuleAlloc(allocator: std.mem.Allocator, chunk: *const Chunk) ![]u8 {
     return try emitDirectZigModuleAlloc(allocator, chunk);
+}
+
+pub fn emitJsonModuleAlloc(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, arena_allocator, source, .{});
+    defer parsed.deinit();
+
+    const root_value = try jsonValueToLuaValueAlloc(arena_allocator, parsed.value);
+
+    var state = TableSeedState.init(arena_allocator);
+    defer state.deinit();
+    if (root_value == .table) _ = try state.collectTable(root_value.table);
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    const writer = &out.writer;
+
+    try writer.writeAll(
+        \\const std = @import("std");
+        \\const lua = @import("lua");
+        \\
+        \\// Generated from a JSON-backed module page.
+        \\
+    );
+
+    for (state.tables.items) |table| try emitDirectConstTableSeed(writer, table, &state);
+
+    try writer.writeAll(
+        \\pub fn run(allocator: std.mem.Allocator) !lua.GeneratedRunResult {
+        \\    var runtime = lua.GeneratedRuntime.init(allocator);
+        \\    errdefer runtime.deinit();
+        \\    const returns = try runtime.alloc().alloc(lua.Value, 1);
+        \\    returns[0] = 
+    );
+    try emitStaticRuntimeValue(writer, root_value, &state);
+    try writer.writeAll(
+        \\;
+        \\    return .{
+        \\        .runtime = runtime,
+        \\        .returns = returns,
+        \\    };
+        \\}
+        \\
+    );
+
+    return out.toOwnedSlice();
+}
+
+fn jsonValueToLuaValueAlloc(allocator: std.mem.Allocator, json_value: std.json.Value) !Value {
+    return switch (json_value) {
+        .null => .nil,
+        .bool => |flag| .{ .boolean = flag },
+        .integer => |number| .{ .number = @floatFromInt(number) },
+        .float => |number| .{ .number = number },
+        .number_string => |text| .{ .number = try std.fmt.parseFloat(f64, text) },
+        .string => |text| .{ .string = try allocator.dupe(u8, text) },
+        .array => |items| blk: {
+            const table = try Table.init(allocator);
+            for (items.items) |item| try table.array.append(allocator, try jsonValueToLuaValueAlloc(allocator, item));
+            break :blk .{ .table = table };
+        },
+        .object => |object| blk: {
+            const Entry = struct {
+                key: []const u8,
+                value: std.json.Value,
+            };
+
+            const table = try Table.init(allocator);
+            const entries = try allocator.alloc(Entry, object.count());
+            var entry_index: usize = 0;
+            var it = object.iterator();
+            while (it.next()) |entry| : (entry_index += 1) {
+                entries[entry_index] = .{
+                    .key = entry.key_ptr.*,
+                    .value = entry.value_ptr.*,
+                };
+            }
+            std.mem.sort(Entry, entries, {}, struct {
+                fn lessThan(_: void, lhs: Entry, rhs: Entry) bool {
+                    return std.mem.order(u8, lhs.key, rhs.key) == .lt;
+                }
+            }.lessThan);
+            for (entries) |entry| {
+                try table.putString(entry.key, try jsonValueToLuaValueAlloc(allocator, entry.value));
+            }
+            break :blk .{ .table = table };
+        },
+    };
+}
+
+fn emitStaticRuntimeValue(writer: anytype, value: Value, state: *const TableSeedState) anyerror!void {
+    switch (value) {
+        .nil => try writer.writeAll("lua.Value.nil"),
+        .boolean => |flag| try writer.print("lua.Value{{ .boolean = {} }}", .{flag}),
+        .number => |number| try writer.print("lua.Value{{ .number = {d} }}", .{number}),
+        .string => |text| {
+            try writer.writeAll("lua.Value{ .string = ");
+            try writeZigStringLiteral(writer, text);
+            try writer.writeAll(" }");
+        },
+        .table => |table| try writer.print("lua.Value{{ .table = try lua.cloneConstTableSeedAlloc(runtime.alloc(), &const_table_{d}) }}", .{state.tableId(table).?}),
+        .function, .iterator => return error.UnsupportedSyntax,
+    }
 }
 
 const TableSeedState = struct {
@@ -1517,6 +1662,75 @@ fn stmtContainsReturn(stmt: *const Stmt) bool {
     };
 }
 
+fn blockContainsVarargs(stmts: []const *Stmt) bool {
+    for (stmts) |stmt| {
+        if (stmtContainsVarargs(stmt)) return true;
+    }
+    return false;
+}
+
+fn stmtContainsVarargs(stmt: *const Stmt) bool {
+    return switch (stmt.*) {
+        .local_assign => |op| blk: {
+            for (op.exprs) |expr| if (exprContainsVarargs(expr)) break :blk true;
+            break :blk false;
+        },
+        .assign => |op| blk: {
+            for (op.exprs) |expr| if (exprContainsVarargs(expr)) break :blk true;
+            break :blk false;
+        },
+        .if_stmt => |op| blk: {
+            for (op.branches) |branch| {
+                if (exprContainsVarargs(branch.condition) or blockContainsVarargs(branch.body)) break :blk true;
+            }
+            break :blk blockContainsVarargs(op.else_body);
+        },
+        .do_block => |body| blockContainsVarargs(body),
+        .while_stmt => |op| exprContainsVarargs(op.condition) or blockContainsVarargs(op.body),
+        .repeat_stmt => |op| blockContainsVarargs(op.body) or exprContainsVarargs(op.condition),
+        .numeric_for => |op| blk: {
+            if (exprContainsVarargs(op.start) or exprContainsVarargs(op.finish)) break :blk true;
+            if (op.step) |step| if (exprContainsVarargs(step)) break :blk true;
+            break :blk blockContainsVarargs(op.body);
+        },
+        .generic_for => |op| blk: {
+            for (op.iterator_exprs) |expr| if (exprContainsVarargs(expr)) break :blk true;
+            break :blk blockContainsVarargs(op.body);
+        },
+        .return_stmt => |op| blk: {
+            for (op.exprs) |expr| if (exprContainsVarargs(expr)) break :blk true;
+            break :blk false;
+        },
+        .expr_stmt => |expr| exprContainsVarargs(expr),
+        .function_def, .break_stmt => false,
+    };
+}
+
+fn exprContainsVarargs(expr: *const Expr) bool {
+    return switch (expr.*) {
+        .varargs => true,
+        .unary => |op| exprContainsVarargs(op.expr),
+        .binary => |op| exprContainsVarargs(op.lhs) or exprContainsVarargs(op.rhs),
+        .table_ctor => |fields| blk: {
+            for (fields) |field| switch (field) {
+                .array => |child| if (exprContainsVarargs(child)) break :blk true,
+                .named => |named| if (exprContainsVarargs(named.value)) break :blk true,
+                .indexed => |indexed| if (exprContainsVarargs(indexed.key) or exprContainsVarargs(indexed.value)) break :blk true,
+            };
+            break :blk false;
+        },
+        .field => |field| exprContainsVarargs(field.object),
+        .index => |index| exprContainsVarargs(index.object) or exprContainsVarargs(index.key),
+        .call => |call| blk: {
+            if (exprContainsVarargs(call.callee)) break :blk true;
+            for (call.args) |arg| if (exprContainsVarargs(arg)) break :blk true;
+            break :blk false;
+        },
+        .function_lit => false,
+        .nil_lit, .bool_lit, .number_lit, .string_lit, .variable, .const_table => false,
+    };
+}
+
 fn emitDirectFunction(writer: anytype, state: *const DirectModuleState, info: *const DirectFunctionInfo) anyerror!void {
     try writer.print(
         "fn fn_{d}(capture_ptr: ?*anyopaque, globals_ptr: ?*anyopaque, runtime: *lua.GeneratedRuntime, args: []const lua.Value) anyerror![]lua.Value {{\n",
@@ -1549,9 +1763,11 @@ fn emitDirectFunction(writer: anytype, state: *const DirectModuleState, info: *c
         try emitIndent(writer, 1);
         try writer.print("local_{d} = local_{d};\n", .{ local_id, local_id });
     }
-    if (info.is_vararg) {
+    if (info.is_vararg and blockContainsVarargs(info.body)) {
         try emitIndent(writer, 1);
         try writer.print("const varargs = if (args.len > {d}) args[{d}..] else &.{{}};\n", .{ info.params.len, info.params.len });
+        try emitIndent(writer, 1);
+        try writer.writeAll("lua.generatedTouchValues(varargs);\n");
     }
 
     if (uses_return_block) {
@@ -2727,19 +2943,19 @@ const Parser = struct {
 
     fn parseStmt(self: *Parser) ParseError!*Stmt {
         if (self.eat(.kw_local)) {
-        if (self.eat(.kw_function)) return self.parseLocalFunction();
-        return self.parseLocalAssign();
+            if (self.eat(.kw_function)) return self.parseLocalFunction();
+            return self.parseLocalAssign();
+        }
+        if (self.eat(.kw_function)) return self.parseFunctionDef(false);
+        if (self.eat(.kw_if)) return self.parseIf();
+        if (self.eat(.kw_do)) return self.parseDoBlock();
+        if (self.eat(.kw_while)) return self.parseWhile();
+        if (self.eat(.kw_repeat)) return self.parseRepeat();
+        if (self.eat(.kw_for)) return self.parseFor();
+        if (self.eat(.kw_return)) return self.parseReturn();
+        if (self.eat(.kw_break)) return try self.allocStmt(.break_stmt);
+        return self.parseAssignOrExprStmt();
     }
-    if (self.eat(.kw_function)) return self.parseFunctionDef(false);
-    if (self.eat(.kw_if)) return self.parseIf();
-    if (self.eat(.kw_do)) return self.parseDoBlock();
-    if (self.eat(.kw_while)) return self.parseWhile();
-    if (self.eat(.kw_repeat)) return self.parseRepeat();
-    if (self.eat(.kw_for)) return self.parseFor();
-    if (self.eat(.kw_return)) return self.parseReturn();
-    if (self.eat(.kw_break)) return try self.allocStmt(.break_stmt);
-    return self.parseAssignOrExprStmt();
-}
 
     fn parseLocalFunction(self: *Parser) ParseError!*Stmt {
         const name = try self.expectIdentifier();
@@ -3291,16 +3507,46 @@ fn lexWithDiagnostics(allocator: std.mem.Allocator, source: []const u8, diagnost
                     i += 1;
                 }
             },
-            '+' => { try tokens.append(allocator, .{ .tag = .plus, .lexeme = source[i .. i + 1] }); i += 1; },
-            '*' => { try tokens.append(allocator, .{ .tag = .star, .lexeme = source[i .. i + 1] }); i += 1; },
-            '/' => { try tokens.append(allocator, .{ .tag = .slash, .lexeme = source[i .. i + 1] }); i += 1; },
-            '%' => { try tokens.append(allocator, .{ .tag = .percent, .lexeme = source[i .. i + 1] }); i += 1; },
-            '^' => { try tokens.append(allocator, .{ .tag = .caret, .lexeme = source[i .. i + 1] }); i += 1; },
-            '#' => { try tokens.append(allocator, .{ .tag = .hash, .lexeme = source[i .. i + 1] }); i += 1; },
-            '(' => { try tokens.append(allocator, .{ .tag = .lparen, .lexeme = source[i .. i + 1] }); i += 1; },
-            ')' => { try tokens.append(allocator, .{ .tag = .rparen, .lexeme = source[i .. i + 1] }); i += 1; },
-            '{' => { try tokens.append(allocator, .{ .tag = .lbrace, .lexeme = source[i .. i + 1] }); i += 1; },
-            '}' => { try tokens.append(allocator, .{ .tag = .rbrace, .lexeme = source[i .. i + 1] }); i += 1; },
+            '+' => {
+                try tokens.append(allocator, .{ .tag = .plus, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            '*' => {
+                try tokens.append(allocator, .{ .tag = .star, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            '/' => {
+                try tokens.append(allocator, .{ .tag = .slash, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            '%' => {
+                try tokens.append(allocator, .{ .tag = .percent, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            '^' => {
+                try tokens.append(allocator, .{ .tag = .caret, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            '#' => {
+                try tokens.append(allocator, .{ .tag = .hash, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            '(' => {
+                try tokens.append(allocator, .{ .tag = .lparen, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            ')' => {
+                try tokens.append(allocator, .{ .tag = .rparen, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            '{' => {
+                try tokens.append(allocator, .{ .tag = .lbrace, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            '}' => {
+                try tokens.append(allocator, .{ .tag = .rbrace, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
             '[' => {
                 if (detectLongBracketStart(source, i)) |long_bracket| {
                     const end = findLongBracketEnd(source, long_bracket.content_start, long_bracket.eq_count) orelse {
@@ -3317,10 +3563,22 @@ fn lexWithDiagnostics(allocator: std.mem.Allocator, source: []const u8, diagnost
                     i += 1;
                 }
             },
-            ']' => { try tokens.append(allocator, .{ .tag = .rbracket, .lexeme = source[i .. i + 1] }); i += 1; },
-            ',' => { try tokens.append(allocator, .{ .tag = .comma, .lexeme = source[i .. i + 1] }); i += 1; },
-            ';' => { try tokens.append(allocator, .{ .tag = .semi, .lexeme = source[i .. i + 1] }); i += 1; },
-            ':' => { try tokens.append(allocator, .{ .tag = .colon, .lexeme = source[i .. i + 1] }); i += 1; },
+            ']' => {
+                try tokens.append(allocator, .{ .tag = .rbracket, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            ',' => {
+                try tokens.append(allocator, .{ .tag = .comma, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            ';' => {
+                try tokens.append(allocator, .{ .tag = .semi, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
+            ':' => {
+                try tokens.append(allocator, .{ .tag = .colon, .lexeme = source[i .. i + 1] });
+                i += 1;
+            },
             '.' => {
                 if (i + 2 < source.len and source[i + 1] == '.' and source[i + 2] == '.') {
                     try tokens.append(allocator, .{ .tag = .ellipsis, .lexeme = source[i .. i + 3] });
@@ -4374,13 +4632,19 @@ const ModuleAudit = struct {
 
 pub const ModuleSourceKind = enum {
     lua,
+    json,
     non_lua,
     empty,
 };
 
 pub fn classifyModuleSource(source: []const u8) ModuleSourceKind {
+    return classifyNamedModuleSource("", source);
+}
+
+pub fn classifyNamedModuleSource(name: []const u8, source: []const u8) ModuleSourceKind {
     const trimmed = skipLuaLeadingTrivia(source);
     if (trimmed.len == 0) return .empty;
+    if (endsWithIgnoreCase(name, ".json")) return .json;
     if (looksLikeNonLuaModuleSource(trimmed)) return .non_lua;
     return .lua;
 }
@@ -4425,7 +4689,27 @@ fn looksLikeNonLuaModuleSource(source: []const u8) bool {
     for (non_lua_prefixes) |prefix| {
         if (std.ascii.startsWithIgnoreCase(source, prefix)) return true;
     }
+    if (looksLikeStylesheetModuleSource(source)) return true;
     return looksLikePlaintextModuleDocumentation(source);
+}
+
+fn looksLikeStylesheetModuleSource(source: []const u8) bool {
+    const first_line_end = std.mem.indexOfScalar(u8, source, '\n') orelse source.len;
+    const first_line = std.mem.trim(u8, source[0..@min(first_line_end, 200)], &std.ascii.whitespace);
+    if (first_line.len == 0) return false;
+
+    if (std.mem.startsWith(u8, first_line, "/*")) return true;
+    if (std.mem.indexOfScalar(u8, first_line, '{') == null) {
+        return switch (first_line[0]) {
+            '.', '#', '@', ':' => true,
+            else => false,
+        };
+    }
+
+    return switch (first_line[0]) {
+        '.', '#', '@', ':', '[', '>', '+', '~', '*' => true,
+        else => false,
+    };
 }
 
 fn looksLikePlaintextModuleDocumentation(source: []const u8) bool {
@@ -4741,7 +5025,6 @@ pub fn analyzeTemplateDependenciesFromSourcesAlloc(
     template_names: []const []const u8,
     sources: *const TemplateSources,
 ) !TemplateDependencyReport {
-
     var root_templates = std.StringHashMapUnmanaged(void){};
     defer deinitOwnedStringSet(allocator, &root_templates);
     for (template_names) |name| {
@@ -5134,7 +5417,7 @@ fn scanDumpDependenciesAlloc(allocator: std.mem.Allocator, path: []const u8) !Du
     };
 }
 
-fn scanTemplateAndModuleSourcesAlloc(allocator: std.mem.Allocator, path: []const u8) !TemplateSources {
+pub fn scanTemplateAndModuleSourcesAlloc(allocator: std.mem.Allocator, path: []const u8) !TemplateSources {
     var template_sources = std.StringHashMap([]const u8).init(allocator);
     errdefer {
         var it = template_sources.iterator();
@@ -5213,10 +5496,63 @@ fn scanTemplateAndModuleSourcesAlloc(allocator: std.mem.Allocator, path: []const
             }
         }
     }
+    try applySourceCompat(allocator, &template_sources, &module_sources);
     return .{
         .template_sources = template_sources,
         .module_sources = module_sources,
     };
+}
+
+fn applySourceCompat(
+    allocator: std.mem.Allocator,
+    template_sources: *std.StringHashMap([]const u8),
+    module_sources: *std.StringHashMap([]const u8),
+) !void {
+    try ensureTemplateCompatSource(allocator, template_sources, "an-lite", &.{"an-lite/node"}, "{{{1|}}}");
+    try ensureModuleCompatSource(allocator, module_sources, "gender and number/templates", &.{"gender and number"},
+        \\local export = {}
+        \\function export.format_one(frame)
+        \\    local args = frame.args
+        \\    local first = args[1]
+        \\    if first == nil then
+        \\        return ""
+        \\    end
+        \\    return first
+        \\end
+        \\return export
+    );
+}
+
+fn ensureTemplateCompatSource(
+    allocator: std.mem.Allocator,
+    template_sources: *std.StringHashMap([]const u8),
+    target: []const u8,
+    alias_candidates: []const []const u8,
+    fallback_source: []const u8,
+) !void {
+    if (template_sources.contains(target)) return;
+    for (alias_candidates) |alias| {
+        const source = template_sources.get(alias) orelse continue;
+        try template_sources.put(try allocator.dupe(u8, target), try allocator.dupe(u8, source));
+        return;
+    }
+    try template_sources.put(try allocator.dupe(u8, target), try allocator.dupe(u8, fallback_source));
+}
+
+fn ensureModuleCompatSource(
+    allocator: std.mem.Allocator,
+    module_sources: *std.StringHashMap([]const u8),
+    target: []const u8,
+    alias_candidates: []const []const u8,
+    fallback_source: []const u8,
+) !void {
+    if (module_sources.contains(target)) return;
+    for (alias_candidates) |alias| {
+        const source = module_sources.get(alias) orelse continue;
+        try module_sources.put(try allocator.dupe(u8, target), try allocator.dupe(u8, source));
+        return;
+    }
+    try module_sources.put(try allocator.dupe(u8, target), try allocator.dupe(u8, fallback_source));
 }
 
 fn maybeStoreLuaSource(
@@ -5800,6 +6136,7 @@ fn isLikelyModulePageName(name: []const u8) bool {
 
 pub fn isLikelyCodeModulePageName(name: []const u8) bool {
     if (!isLikelyModulePageName(name)) return false;
+    if (endsWithIgnoreCase(name, ".css")) return false;
     if (endsWithIgnoreCase(name, "/documentation")) return false;
     if (endsWithIgnoreCase(name, "/doc")) return false;
     if (endsWithIgnoreCase(name, " documentation")) return false;
@@ -5854,8 +6191,7 @@ fn renderValuesAlloc(allocator: std.mem.Allocator, values: []const Value) ![]u8 
 }
 
 fn runLuaOracleAlloc(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
-    const wrapper = try std.fmt.allocPrint(
-        allocator,
+    const wrapper = try std.fmt.allocPrint(allocator,
         \\local src = [==[{s}]==]
         \\local chunk, err = load(src, "chunk", "t", _G)
         \\if not chunk then io.write("ERR:" .. err) os.exit(2) end
@@ -6292,7 +6628,49 @@ test "classifyModuleSource distinguishes Lua from module documentation markup" {
         \\===References===
         \\* {{R:aa:Mahaffy:1979}}
     ));
+    try std.testing.expectEqual(.non_lua, classifyModuleSource(
+        \\.unicode-header-table {
+        \\  display: table;
+        \\}
+    ));
+    try std.testing.expectEqual(.non_lua, classifyModuleSource(
+        \\/* The objective of the next few rules is to make CategoryTree's <div> output */
+        \\.ts-categoryBreadcrumbs {
+        \\  display: block;
+        \\}
+    ));
     try std.testing.expectEqual(.empty, classifyModuleSource("  \n\t "));
+}
+
+test "classifyNamedModuleSource recognizes JSON-backed modules" {
+    try std.testing.expectEqual(.json, classifyNamedModuleSource(
+        "etymology languages/canonical names.json",
+        \\{
+        \\  "Arbëresh Albanian": "aae"
+        \\}
+    ));
+    try std.testing.expectEqual(.lua, classifyNamedModuleSource(
+        "utilities",
+        \\return { ok = true }
+    ));
+}
+
+test "emitJsonModuleAlloc lowers JSON data modules into a static Zig module" {
+    const zig_source = try emitJsonModuleAlloc(std.testing.allocator,
+        \\{
+        \\  "Arbëresh Albanian": "aae",
+        \\  "nested": {
+        \\    "codes": ["kea-alu", "alg-abp"]
+        \\  }
+        \\}
+    );
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "Generated from a JSON-backed module page") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "\"Arb\\xC3\\xABresh Albanian\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "\"kea-alu\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "cloneConstTableSeedAlloc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "pub fn run(") != null);
 }
 
 test "template dependency extraction ignores parser-function and formula garbage" {
@@ -6441,6 +6819,7 @@ test "likely template page name filter keeps real titles and drops magic-like na
 
 test "likely code module page name filter excludes documentation pages" {
     try std.testing.expect(isLikelyCodeModulePageName("akk-conj/g/stem/testcases"));
+    try std.testing.expect(!isLikelyCodeModulePageName("font list/style.css"));
     try std.testing.expect(!isLikelyCodeModulePageName("accel/documentation"));
     try std.testing.expect(!isLikelyCodeModulePageName("affix doc"));
 }

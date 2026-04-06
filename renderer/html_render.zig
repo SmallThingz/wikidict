@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const generated_templates = @import("generated_template_runtime.zig");
+const template_support = @import("template_compiler_support.zig");
 const wikitext = @import("wikitext_runtime.zig");
 const xml_decode = @import("shared_xml_decode");
 
@@ -1200,9 +1202,21 @@ fn isStrictSupportedTemplateBody(body: []const u8) bool {
     return isStrictSupportedTemplateName(name);
 }
 
+fn generatedTemplateClassHtml(name: []const u8) ?generated_templates.TemplateClass {
+    const trimmed = trimWikiWhitespace(name);
+    if (trimmed.len == 0) return null;
+    return generated_templates.classifyTemplate(trimmed);
+}
+
 fn isStrictSupportedTemplateName(name: []const u8) bool {
     const trimmed = trimWikiWhitespace(name);
     if (trimmed.len == 0) return false;
+    if (generatedTemplateClassHtml(trimmed)) |class| {
+        return switch (class) {
+            .metadata_only, .compiled => true,
+            .unsupported => false,
+        };
+    }
     if (templateNameStartsWithHtml(trimmed, "ctRenderF")) return true;
     if (std.mem.indexOf(u8, trimmed, "Render") != null or std.mem.indexOf(u8, trimmed, "Rende") != null) return true;
     if (templateNameStartsWithHtml(trimmed, "CURRENT")) return true;
@@ -1757,8 +1771,19 @@ fn parseDefinitionLine(line: []const u8) ?ParsedDefinitionLine {
     };
 }
 
+fn classifyStandaloneTemplateLineHtml(line: []const u8) ?generated_templates.TemplateClass {
+    const trimmed = trimWikiWhitespace(line);
+    if (trimmed.len < 4 or !std.mem.startsWith(u8, trimmed, "{{") or !std.mem.endsWith(u8, trimmed, "}}")) return null;
+    const body = trimWikiWhitespace(trimmed[2 .. trimmed.len - 2]);
+    const sep = topLevelSeparator(body, '|') orelse body.len;
+    return generatedTemplateClassHtml(body[0..sep]);
+}
+
 fn shouldSkipStandaloneLine(line: []const u8) bool {
     const trimmed = trimWikiWhitespace(line);
+    if (classifyStandaloneTemplateLineHtml(trimmed)) |class| {
+        if (class == .metadata_only) return true;
+    }
     return std.mem.startsWith(u8, trimmed, "<!--") or
         isHeadwordTemplateLine(trimmed) or
         isStandaloneTemplateLineNamed(line, "col-top") or
@@ -2102,7 +2127,6 @@ fn renderTemplateHtml(
     if (parts.items.len == 0) return;
 
     const name = trimWikiWhitespace(parts.items[0]);
-
     if (templateMatchesHtml(name, "partial calque")) {
         try appendResolvedDisplayTargetHtml(out, allocator, "Partial calque", "partial calque", options);
         try appendEscapedHtmlSlice(out, allocator, " of ");
@@ -2486,8 +2510,46 @@ fn renderTemplateHtml(
     if (asciiStartsWithIgnoreCase(name, "list:")) {
         if (try renderKnownListTemplateHtml(out, allocator, name, options)) return;
     }
+    if (try renderGeneratedTemplateHtml(out, allocator, name, &parts, options)) return;
 
     try renderTemplateTextFallbackHtml(out, allocator, body, options);
+}
+
+fn renderGeneratedTemplateHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    parts: *const std.ArrayList([]const u8),
+    options: RenderOptions,
+) !bool {
+    const class = generatedTemplateClassHtml(name) orelse return false;
+    switch (class) {
+        .metadata_only => return true,
+        .unsupported => return false,
+        .compiled => {
+            var args = try template_support.templateArgsFromPartsAlloc(allocator, parts);
+            defer args.deinit(allocator);
+
+            var generated_text: std.ArrayList(u8) = .empty;
+            defer generated_text.deinit(allocator);
+            if (!try generated_templates.renderTemplateByName(&generated_text, allocator, name, &args)) return false;
+            if (generated_text.items.len == 0) return true;
+            if (looksLikeTemplateRedirectTextHtml(generated_text.items)) return false;
+
+            try renderInlineHtml(out, allocator, generated_text.items, .{
+                .strict = false,
+                .issue = options.issue,
+                .link_resolver = options.link_resolver,
+                .sense_ids = options.sense_ids,
+            });
+            return true;
+        },
+    }
+}
+
+fn looksLikeTemplateRedirectTextHtml(text: []const u8) bool {
+    const trimmed = trimWikiWhitespace(text);
+    return trimmed.len >= "#REDIRECT".len and std.ascii.startsWithIgnoreCase(trimmed, "#REDIRECT");
 }
 
 fn renderTemplateTextFallbackHtml(

@@ -104,17 +104,21 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, command, "audit-all-modules")) {
         const input = flagValue(args[2..], "--input") orelse "data/wiktionary.xml";
         const batch_size = (try parseUsizeFlag(args[2..], "--batch-size")) orelse 64;
+        const batch_bytes = (try parseUsizeFlag(args[2..], "--batch-bytes")) orelse 64 * 1024 * 1024;
         const start = (try parseUsizeFlag(args[2..], "--start")) orelse 0;
         const limit = try parseUsizeFlag(args[2..], "--limit");
         const workspace = flagValue(args[2..], "--workspace") orelse ".zig-cache/lua-module-audit";
+        const skip_zig_compile = flagPresent(args[2..], "--skip-zig-compile");
 
         required_path.ensureExistsOrExit(init.io, input, "wiktionary dump");
         var report = try auditAllModulesToZigAlloc(init, allocator, .{
             .xml_path = input,
             .batch_size = batch_size,
+            .batch_bytes = batch_bytes,
             .start = start,
             .limit = limit,
             .workspace = workspace,
+            .skip_zig_compile = skip_zig_compile,
         });
         defer report.deinit(allocator);
 
@@ -137,7 +141,7 @@ fn printUsage() void {
         \\dict-lua deps [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json]
         \\dict-lua deps --input data/wiktionary.xml --db data/wiktionary.bin
         \\dict-lua audit --input data/wiktionary.xml --db data/wiktionary.bin
-        \\dict-lua audit-all-modules --input data/wiktionary.xml [--batch-size 64] [--start 0] [--limit N] [--workspace .zig-cache/lua-module-audit]
+        \\dict-lua audit-all-modules --input data/wiktionary.xml [--batch-size 64] [--batch-bytes 67108864] [--start 0] [--limit N] [--workspace .zig-cache/lua-module-audit] [--skip-zig-compile]
         \\
     , .{});
 }
@@ -148,6 +152,13 @@ fn flagValue(args: []const []const u8, name: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, args[i], name)) return args[i + 1];
     }
     return null;
+}
+
+fn flagPresent(args: []const []const u8, name: []const u8) bool {
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, name)) return true;
+    }
+    return false;
 }
 
 fn parseUsizeFlag(args: []const []const u8, name: []const u8) !?usize {
@@ -248,9 +259,11 @@ fn printTemplateDependencyReport(allocator: std.mem.Allocator, report: lua.Templ
 const ModuleZigAuditOptions = struct {
     xml_path: []const u8,
     batch_size: usize,
+    batch_bytes: usize,
     start: usize,
     limit: ?usize,
     workspace: []const u8,
+    skip_zig_compile: bool,
 };
 
 const GeneratedModuleArtifact = struct {
@@ -321,6 +334,7 @@ fn auditAllModulesToZigAlloc(
     defer freeFailureList(allocator, &zig_compiled_failed);
     var generated_modules: std.ArrayList(GeneratedModuleArtifact) = .empty;
     defer freeGeneratedModuleArtifacts(allocator, &generated_modules);
+    var generated_batch_bytes: usize = 0;
     var batch_counter: usize = 0;
 
     var last_progress: usize = 0;
@@ -344,33 +358,38 @@ fn auditAllModulesToZigAlloc(
             try skipped_non_lua.append(allocator, try allocator.dupe(u8, name));
             continue;
         }
-        switch (lua.classifyModuleSource(source)) {
-            .lua => {},
+        const zig_source = switch (lua.classifyNamedModuleSource(name, source)) {
+            .lua => blk: {
+                var chunk = lua.compile(allocator, source) catch |err| {
+                    try appendFailureAlloc(allocator, &lua_compiled_failed, name, @errorName(err));
+                    continue;
+                };
+                defer chunk.deinit();
+                try lua_compiled_ok.append(allocator, try allocator.dupe(u8, name));
+                break :blk lua.emitZigModuleAlloc(allocator, &chunk) catch |err| {
+                    try appendFailureAlloc(allocator, &zig_emitted_failed, name, @errorName(err));
+                    continue;
+                };
+            },
+            .json => blk: {
+                const emitted = lua.emitJsonModuleAlloc(allocator, source) catch |err| {
+                    try appendFailureAlloc(allocator, &lua_compiled_failed, name, @errorName(err));
+                    continue;
+                };
+                try lua_compiled_ok.append(allocator, try allocator.dupe(u8, name));
+                break :blk emitted;
+            },
             .non_lua, .empty => {
                 try skipped_non_lua.append(allocator, try allocator.dupe(u8, name));
                 continue;
             },
-        }
-        var chunk = lua.compile(allocator, source) catch |err| {
-            try appendFailureAlloc(allocator, &lua_compiled_failed, name, @errorName(err));
-            continue;
-        };
-        defer chunk.deinit();
-        try lua_compiled_ok.append(allocator, try allocator.dupe(u8, name));
-
-        const zig_source = lua.emitZigModuleAlloc(allocator, &chunk) catch |err| {
-            try appendFailureAlloc(allocator, &zig_emitted_failed, name, @errorName(err));
-            continue;
         };
         errdefer allocator.free(zig_source);
 
-        try zig_emitted_ok.append(allocator, try allocator.dupe(u8, name));
-        try generated_modules.append(allocator, .{
-            .name = try allocator.dupe(u8, name),
-            .zig_source = zig_source,
-        });
-
-        if (generated_modules.items.len >= @max(options.batch_size, 1)) {
+        if (!options.skip_zig_compile and generated_modules.items.len != 0 and
+            (generated_modules.items.len >= @max(options.batch_size, 1) or
+                generatedBatchWouldOverflow(generated_batch_bytes, zig_source.len, options.batch_bytes)))
+        {
             try compileGeneratedModuleRangeAlloc(
                 init.io,
                 allocator,
@@ -387,10 +406,22 @@ fn auditAllModulesToZigAlloc(
             );
             freeGeneratedModuleArtifacts(allocator, &generated_modules);
             generated_modules = .empty;
+            generated_batch_bytes = 0;
         }
+
+        try zig_emitted_ok.append(allocator, try allocator.dupe(u8, name));
+        if (options.skip_zig_compile) {
+            allocator.free(zig_source);
+            continue;
+        }
+        try generated_modules.append(allocator, .{
+            .name = try allocator.dupe(u8, name),
+            .zig_source = zig_source,
+        });
+        generated_batch_bytes += zig_source.len;
     }
 
-    if (generated_modules.items.len != 0) {
+    if (!options.skip_zig_compile and generated_modules.items.len != 0) {
         try compileGeneratedModuleRangeAlloc(
             init.io,
             allocator,
@@ -407,6 +438,7 @@ fn auditAllModulesToZigAlloc(
         );
         freeGeneratedModuleArtifacts(allocator, &generated_modules);
         generated_modules = .empty;
+        generated_batch_bytes = 0;
     }
 
     return .{
@@ -502,6 +534,11 @@ fn freeGeneratedModuleArtifacts(allocator: std.mem.Allocator, list: *std.ArrayLi
         allocator.free(artifact.zig_source);
     }
     list.deinit(allocator);
+}
+
+fn generatedBatchWouldOverflow(current_bytes: usize, next_bytes: usize, limit_bytes: usize) bool {
+    if (limit_bytes == 0) return false;
+    return current_bytes > limit_bytes -| next_bytes;
 }
 
 fn appendFailureAlloc(
@@ -629,8 +666,8 @@ fn compileGeneratedModuleBatchAlloc(
     defer argv.deinit(allocator);
     try argv.appendSlice(allocator, &.{
         "zig",
-        "build-exe",
-        "-OReleaseFast",
+        "build-obj",
+        "-ODebug",
         "--name",
         "lua-zig-audit",
         "--dep",
@@ -681,6 +718,10 @@ fn buildAuditBatchSourceAlloc(
         try writer.print("    result_{d}.deinit();\n", .{idx});
     }
     try writer.writeAll(
+        \\}
+        \\
+        \\pub export fn auditAll() void {
+        \\    main() catch @panic("lua-zig-audit failed");
         \\}
         \\
     );

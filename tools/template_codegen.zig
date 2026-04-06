@@ -5,6 +5,9 @@ const compact_pattern_seed = @import("compact_pattern_seed");
 const required_path = @import("required_path");
 
 const support_import = "template_compiler_support.zig";
+const max_generated_template_source_bytes = 16 * 1024;
+const max_generated_module_source_bytes = 64 * 1024;
+const max_generated_module_zig_bytes = 512 * 1024;
 
 pub fn main(init: std.process.Init) !void {
     const args_allocator = init.arena.allocator();
@@ -30,16 +33,46 @@ pub fn main(init: std.process.Init) !void {
     var report = try lua.analyzeTemplateDependenciesFromSourcesAlloc(allocator, roots, &sources);
     defer report.deinit(allocator);
 
-    const generated = try compileTemplateRuntimeAlloc(allocator, report.reachable_templates, &sources);
-    defer allocator.free(generated);
+    const had_audit_failures = report.unresolved_templates.len != 0 or
+        report.missing_modules.len != 0 or
+        report.compiled_failed.len != 0 or
+        report.emitted_inconsistent.len != 0;
+    if (had_audit_failures) {
+        try printDependencyFailures(allocator, report);
+    }
+
+    const compiled = try compileTemplateRuntimeAlloc(allocator, report.reachable_templates, &sources);
+    defer {
+        allocator.free(compiled.source);
+        for (compiled.unsupported) |entry| allocator.free(entry.reason);
+        allocator.free(compiled.unsupported);
+    }
+    if (compiled.unsupported.len != 0) {
+        try printUnsupportedTemplates(allocator, compiled.unsupported);
+        if (options.template_name) |name| {
+            const source = sources.template_sources.get(name) orelse "";
+            if (source.len != 0) {
+                std.debug.print("--- template source: {s} ---\n{s}\n", .{ name, source });
+            }
+        }
+    }
 
     var file = try std.Io.Dir.cwd().createFile(init.io, options.output_path, .{ .truncate = true });
     defer file.close(init.io);
-    try file.writeStreamingAll(init.io, generated);
+    try file.writeStreamingAll(init.io, compiled.source);
 
     std.debug.print(
-        "template compiler: roots={d} reachable={d} output={s}\n",
-        .{ roots.len, report.reachable_templates.len, options.output_path },
+        "template compiler: roots={d} reachable={d} compiled={d} metadata_only={d} unsupported={d} unresolved={d} missing_modules={d} output={s}\n",
+        .{
+            roots.len,
+            report.reachable_templates.len,
+            compiled.compiled_count,
+            compiled.metadata_only_count,
+            compiled.unsupported.len,
+            report.unresolved_templates.len,
+            report.missing_modules.len,
+            options.output_path,
+        },
     );
 }
 
@@ -106,6 +139,7 @@ const Node = union(enum) {
     param: ParamNode,
     template_call: TemplateCallNode,
     invoke_call: InvokeCallNode,
+    parser_func: ParserFunctionNode,
 };
 
 const ParamNode = struct {
@@ -115,6 +149,8 @@ const ParamNode = struct {
 
 const ArgNode = struct {
     name: ?[]const u8,
+    name_nodes: []const Node = &.{},
+    name_is_dynamic: bool = false,
     value_nodes: []const Node,
 };
 
@@ -129,6 +165,39 @@ const InvokeCallNode = struct {
     args: []const ArgNode,
 };
 
+const ParserFunctionKind = enum {
+    displaytitle,
+    if_,
+    ifeq,
+    switch_,
+    tag,
+    lc,
+    uc,
+    lcfirst,
+    ucfirst,
+    formatnum,
+    anchorencode,
+    padleft,
+    padright,
+    currentday,
+    currentmonth,
+    currentmonthname,
+    currentyear,
+    pagename,
+    fullpagename,
+    basepagename,
+    subpagename,
+    namespace,
+    namespacenumber,
+    talkpagename,
+    wikimedialanguage,
+};
+
+const ParserFunctionNode = struct {
+    kind: ParserFunctionKind,
+    args: []const ArgNode,
+};
+
 const ParseTemplateError = std.mem.Allocator.Error || error{
     UnbalancedTemplate,
     UnsupportedTemplateForm,
@@ -138,24 +207,51 @@ const TemplateInfo = struct {
     key: []const u8,
     source: []const u8,
     nodes: []const Node = &.{},
-    parse_failed: bool = false,
+    parse_error: ?ParseFailureKind = null,
+    source_too_large: bool = false,
     class: CompileClass = .unsupported,
     class_state: enum { unresolved, resolving, resolved } = .unresolved,
     fn_ident: []const u8 = "",
 };
 
+const ParseFailureKind = enum {
+    unbalanced_template,
+    unsupported_template_form,
+    oom,
+};
+
 const ModuleWrapper = struct {
     module_name: []const u8,
     function_name: []const u8,
-    source: []const u8,
+    module_ident: []const u8,
     fn_ident: []const u8,
+};
+
+const ModuleInfo = struct {
+    key: []const u8,
+    struct_ident: []const u8,
+    zig_source: []const u8 = "",
+    emit_failed: bool = false,
+    too_large: bool = false,
+};
+
+const UnsupportedTemplate = struct {
+    key: []const u8,
+    reason: []const u8,
+};
+
+const CompileRuntimeResult = struct {
+    source: []u8,
+    compiled_count: usize,
+    metadata_only_count: usize,
+    unsupported: []const UnsupportedTemplate,
 };
 
 fn compileTemplateRuntimeAlloc(
     allocator: std.mem.Allocator,
     reachable_templates: []const []const u8,
     sources: *const lua.TemplateSources,
-) ![]u8 {
+) !CompileRuntimeResult {
     var templates = try allocator.alloc(TemplateInfo, reachable_templates.len);
     errdefer allocator.free(templates);
 
@@ -174,16 +270,52 @@ fn compileTemplateRuntimeAlloc(
 
     for (templates) |*template| {
         if (template.source.len == 0) {
-            template.parse_failed = true;
+            template.parse_error = .unsupported_template_form;
             continue;
         }
-        template.nodes = parseTemplateSourceAlloc(allocator, template.source) catch {
-            template.parse_failed = true;
+        if (template.source.len > max_generated_template_source_bytes) {
+            template.source_too_large = true;
+            continue;
+        }
+        template.nodes = parseTemplateSourceAlloc(allocator, template.source) catch |err| {
+            template.parse_error = switch (err) {
+                error.UnbalancedTemplate => .unbalanced_template,
+                error.UnsupportedTemplateForm => .unsupported_template_form,
+                error.OutOfMemory => .oom,
+            };
             continue;
         };
     }
 
+    var modules = try buildModuleInfosAlloc(allocator, templates, sources);
+    defer {
+        for (modules.items) |module| allocator.free(module.key);
+        for (modules.items) |module| allocator.free(module.struct_ident);
+        for (modules.items) |module| allocator.free(module.zig_source);
+        modules.deinit(allocator);
+    }
+    var module_indexes = std.StringHashMap(usize).init(allocator);
+    defer module_indexes.deinit();
+    for (modules.items, 0..) |module, idx| try module_indexes.put(module.key, idx);
+
     for (templates, 0..) |_, idx| _ = resolveTemplateClass(templates, &template_indexes, idx);
+    for (templates, 0..) |*template, idx| {
+        if (template.class == .unsupported) continue;
+        if (templateHasUnsupportedInvoke(templates[idx].nodes, modules.items, &module_indexes)) {
+            template.class = .unsupported;
+        }
+    }
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (templates) |*template| {
+            if (template.class == .unsupported) continue;
+            if (templateDependsOnUnsupportedTemplate(template.nodes, templates, &template_indexes)) {
+                template.class = .unsupported;
+                changed = true;
+            }
+        }
+    }
 
     var wrappers: std.ArrayList(ModuleWrapper) = .empty;
     defer wrappers.deinit(allocator);
@@ -192,17 +324,21 @@ fn compileTemplateRuntimeAlloc(
 
     for (templates) |template| {
         if (template.class != .compiled) continue;
-        try collectModuleWrappers(allocator, &wrappers, &wrapper_indexes, sources, template.nodes);
+        try collectModuleWrappers(allocator, &wrappers, &wrapper_indexes, modules.items, &module_indexes, template.nodes);
     }
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
     const writer = &out.writer;
 
-    try writer.writeAll("// Generated by tools/template_codegen.zig\nconst std = @import(\"std\");\nconst support = @import(");
+    try writer.writeAll("// Generated by tools/template_codegen.zig\nconst runtime_std = @import(\"std\");\nconst support = @import(");
     try appendZigStringLiteral(writer, support_import);
     try writer.writeAll(");\n\npub const TemplateClass = support.TemplateClass;\n\n");
 
+    for (modules.items) |module| {
+        if (!moduleUsedByWrappers(module.struct_ident, wrappers.items)) continue;
+        try emitGeneratedModuleStruct(writer, module);
+    }
     for (wrappers.items) |wrapper| try emitModuleWrapper(writer, wrapper);
     for (templates) |template| {
         if (template.class != .compiled) continue;
@@ -211,7 +347,30 @@ fn compileTemplateRuntimeAlloc(
 
     try emitClassifier(writer, templates);
     try emitDispatcher(writer, templates);
-    return out.toOwnedSlice();
+
+    var unsupported: std.ArrayList(UnsupportedTemplate) = .empty;
+    errdefer {
+        for (unsupported.items) |entry| allocator.free(entry.reason);
+        unsupported.deinit(allocator);
+    }
+
+    var compiled_count: usize = 0;
+    var metadata_only_count: usize = 0;
+    for (templates) |template| switch (template.class) {
+        .compiled => compiled_count += 1,
+        .metadata_only => metadata_only_count += 1,
+        .unsupported => try unsupported.append(allocator, .{
+            .key = template.key,
+            .reason = try unsupportedReasonAlloc(allocator, template, modules.items, &module_indexes),
+        }),
+    };
+
+    return .{
+        .source = try out.toOwnedSlice(),
+        .compiled_count = compiled_count,
+        .metadata_only_count = metadata_only_count,
+        .unsupported = try unsupported.toOwnedSlice(allocator),
+    };
 }
 
 fn emitClassifier(writer: *std.Io.Writer, templates: []const TemplateInfo) !void {
@@ -241,8 +400,8 @@ fn emitClassifier(writer: *std.Io.Writer, templates: []const TemplateInfo) !void
 fn emitDispatcher(writer: *std.Io.Writer, templates: []const TemplateInfo) !void {
     try writer.writeAll(
         \\pub fn renderTemplateByName(
-        \\    out: *std.ArrayList(u8),
-        \\    allocator: std.mem.Allocator,
+        \\    out: *runtime_std.ArrayList(u8),
+        \\    allocator: runtime_std.mem.Allocator,
         \\    name: []const u8,
         \\    args: *const support.TemplateArgs,
         \\) !bool {
@@ -268,14 +427,14 @@ fn emitModuleWrapper(writer: *std.Io.Writer, wrapper: ModuleWrapper) !void {
     try writer.writeAll(wrapper.fn_ident);
     try writer.writeAll(
         \\(
-        \\    out: *std.ArrayList(u8),
-        \\    allocator: std.mem.Allocator,
+        \\    out: *runtime_std.ArrayList(u8),
+        \\    allocator: runtime_std.mem.Allocator,
         \\    args: *const support.TemplateArgs,
         \\) !void {
-        \\    try support.invokeModuleFunction(out, allocator, 
+        \\    try support.invokeGeneratedModuleFunction(out, allocator, 
     );
-    try appendZigStringLiteral(writer, wrapper.source);
-    try writer.writeAll(", ");
+    try writer.writeAll(wrapper.module_ident);
+    try writer.writeAll(".run, ");
     try appendZigStringLiteral(writer, wrapper.function_name);
     try writer.writeAll(", args);\n}\n\n");
 }
@@ -288,17 +447,19 @@ fn emitTemplateFunction(
     wrapper_indexes: *const std.StringHashMap([]const u8),
     template: TemplateInfo,
 ) anyerror!void {
+    var temp_counter: usize = 0;
     try writer.writeAll("fn ");
     try writer.writeAll(template.fn_ident);
     try writer.writeAll(
         \\(
-        \\    out: *std.ArrayList(u8),
-        \\    allocator: std.mem.Allocator,
+        \\    out: *runtime_std.ArrayList(u8),
+        \\    allocator: runtime_std.mem.Allocator,
         \\    args: *const support.TemplateArgs,
         \\) !void {
         \\
     );
-    try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, template.nodes, "out", "args", 1);
+    try writer.writeAll("    support.touchTemplateArgs(args);\n");
+    try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, template.nodes, "out", "args", 1, &temp_counter);
     try writer.writeAll("}\n\n");
 }
 
@@ -312,6 +473,7 @@ fn emitNodes(
     out_name: []const u8,
     args_name: []const u8,
     indent: usize,
+    temp_counter: *usize,
 ) anyerror!void {
     for (nodes) |node| switch (node) {
         .text => |text| {
@@ -337,7 +499,7 @@ fn emitNodes(
             try writer.writeAll("value);\n");
             try writeIndent(writer, indent);
             try writer.writeAll("} else {\n");
-            try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, param.default_nodes, out_name, args_name, indent + 1);
+            try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, param.default_nodes, out_name, args_name, indent + 1, temp_counter);
             try writeIndent(writer, indent);
             try writer.writeAll("}\n");
         },
@@ -345,15 +507,35 @@ fn emitNodes(
             const callee_index = template_indexes.get(call.name) orelse continue;
             if (templates[callee_index].class == .metadata_only) continue;
             if (templates[callee_index].class != .compiled) continue;
-            try emitNestedCall(allocator, writer, templates[callee_index].fn_ident, templates, template_indexes, wrapper_indexes, call.args, out_name, args_name, indent);
+            try emitNestedCall(allocator, writer, templates[callee_index].fn_ident, templates, template_indexes, wrapper_indexes, call.args, out_name, args_name, indent, temp_counter);
         },
         .invoke_call => |call| {
             const wrapper_key = try moduleWrapperKeyAlloc(allocator, call.module_name, call.function_name);
             defer allocator.free(wrapper_key);
             const wrapper_ident = wrapper_indexes.get(wrapper_key) orelse continue;
-            try emitNestedCall(allocator, writer, wrapper_ident, templates, template_indexes, wrapper_indexes, call.args, out_name, args_name, indent);
+            try emitNestedCall(allocator, writer, wrapper_ident, templates, template_indexes, wrapper_indexes, call.args, out_name, args_name, indent, temp_counter);
+        },
+        .parser_func => |func| try emitParserFunction(allocator, writer, templates, template_indexes, wrapper_indexes, func, out_name, args_name, indent, temp_counter),
+    };
+}
+
+fn nodesUseArgs(nodes: []const Node) bool {
+    for (nodes) |node| switch (node) {
+        .text => {},
+        .param => return true,
+        // Nested transclusions inherit the caller's page-title context.
+        .template_call => return true,
+        // Generated invoke wrappers also inherit page-title context.
+        .invoke_call => return true,
+        .parser_func => |func| {
+            if (parserFunctionNeedsArgs(func.kind)) return true;
+            for (func.args) |arg| {
+                if (arg.name_is_dynamic and nodesUseArgs(arg.name_nodes)) return true;
+                if (nodesUseArgs(arg.value_nodes)) return true;
+            }
         },
     };
+    return false;
 }
 
 fn emitNestedCall(
@@ -367,70 +549,690 @@ fn emitNestedCall(
     out_name: []const u8,
     parent_args_name: []const u8,
     indent: usize,
+    temp_counter: *usize,
 ) anyerror!void {
+    const call_id = temp_counter.*;
+    temp_counter.* += 1;
     try writeIndent(writer, indent);
     try writer.writeAll("{\n");
     try writeIndent(writer, indent + 1);
-    try writer.writeAll("var child_builder: support.TemplateArgsBuilder = .{};\n");
+    try writer.print("var child_builder_{d}: support.TemplateArgsBuilder = .{{}};\n", .{call_id});
     try writeIndent(writer, indent + 1);
-    try writer.writeAll("defer child_builder.deinit(allocator);\n");
-    for (args) |arg| {
+    try writer.print("defer child_builder_{d}.deinit(allocator);\n", .{call_id});
+    for (args, 0..) |arg, arg_index| {
         try writeIndent(writer, indent + 1);
-        try writer.writeAll("var value_buf: std.ArrayList(u8) = .empty;\n");
+        try writer.print("var value_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
         try writeIndent(writer, indent + 1);
-        try writer.writeAll("defer value_buf.deinit(allocator);\n");
-        try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, arg.value_nodes, "&value_buf", parent_args_name, indent + 1);
+        try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
+        const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
+        defer allocator.free(value_buf_name);
+        try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, arg.value_nodes, value_buf_name, parent_args_name, indent + 1, temp_counter);
         try writeIndent(writer, indent + 1);
-        if (arg.name) |name| {
-            try writer.writeAll("try child_builder.addNamedOwned(allocator, ");
+        if (arg.name_is_dynamic) {
+            try writer.print("var name_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writeIndent(writer, indent + 1);
+            try writer.print("defer name_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
+            const name_buf_name = try std.fmt.allocPrint(allocator, "&name_buf_{d}_{d}", .{ call_id, arg_index });
+            defer allocator.free(name_buf_name);
+            try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, arg.name_nodes, name_buf_name, parent_args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.print("try child_builder_{d}.addNamedOwnedBuffers(allocator, try name_buf_{d}_{d}.toOwnedSlice(allocator), try value_buf_{d}_{d}.toOwnedSlice(allocator));\n", .{ call_id, call_id, arg_index, call_id, arg_index });
+        } else if (arg.name) |name| {
+            try writer.print("try child_builder_{d}.addNamedBuffer(allocator, ", .{call_id});
             try appendZigStringLiteral(writer, name);
-            try writer.writeAll(", value_buf.items);\n");
+            try writer.print(", try value_buf_{d}_{d}.toOwnedSlice(allocator));\n", .{ call_id, arg_index });
         } else {
-            try writer.writeAll("try child_builder.addPositionalOwned(allocator, value_buf.items);\n");
+            try writer.print("try child_builder_{d}.addPositionalBuffer(allocator, try value_buf_{d}_{d}.toOwnedSlice(allocator));\n", .{ call_id, call_id, arg_index });
         }
     }
     try writeIndent(writer, indent + 1);
-    try writer.writeAll("var child_args = try child_builder.buildOwned(allocator);\n");
-    try writeIndent(writer, indent + 1);
-    try writer.writeAll("defer child_args.deinit(allocator);\n");
+    try writer.print("const child_args_{d} = child_builder_{d}.buildBorrowed(", .{ call_id, call_id });
+    try writer.writeAll(parent_args_name);
+    try writer.writeAll(".page_title);\n");
     try writeIndent(writer, indent + 1);
     try writer.writeAll("try ");
     try writer.writeAll(callee_ident);
     try writer.writeAll("(");
     try writer.writeAll(out_name);
-    try writer.writeAll(", allocator, &child_args);\n");
+    try writer.print(", allocator, &child_args_{d});\n", .{call_id});
     try writeIndent(writer, indent);
     try writer.writeAll("}\n");
+}
+
+fn allocTempLocalName(
+    allocator: std.mem.Allocator,
+    prefix: []const u8,
+    temp_counter: *usize,
+) ![]u8 {
+    const id = temp_counter.*;
+    temp_counter.* += 1;
+    return std.fmt.allocPrint(allocator, "{s}_{d}", .{ prefix, id });
+}
+
+fn emitParserFunction(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    wrapper_indexes: *const std.StringHashMap([]const u8),
+    func: ParserFunctionNode,
+    out_name: []const u8,
+    args_name: []const u8,
+    indent: usize,
+    temp_counter: *usize,
+) anyerror!void {
+    switch (func.kind) {
+        .displaytitle => return,
+        .if_ => {
+            const pf_cond_name = try allocTempLocalName(allocator, "pf_cond", temp_counter);
+            defer allocator.free(pf_cond_name);
+            try writeIndent(writer, indent);
+            try writer.writeAll("{\n");
+            try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(func.args, 0), pf_cond_name, args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("if (support.isTruthy(");
+            try writer.writeAll(pf_cond_name);
+            try writer.writeAll(".items)) {\n");
+            try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(func.args, 1), out_name, args_name, indent + 2, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("} else {\n");
+            try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(func.args, 2), out_name, args_name, indent + 2, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("}\n");
+            try writeIndent(writer, indent);
+            try writer.writeAll("}\n");
+        },
+        .ifeq => {
+            const pf_lhs_name = try allocTempLocalName(allocator, "pf_lhs", temp_counter);
+            defer allocator.free(pf_lhs_name);
+            const pf_rhs_name = try allocTempLocalName(allocator, "pf_rhs", temp_counter);
+            defer allocator.free(pf_rhs_name);
+            try writeIndent(writer, indent);
+            try writer.writeAll("{\n");
+            try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(func.args, 0), pf_lhs_name, args_name, indent + 1, temp_counter);
+            try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(func.args, 1), pf_rhs_name, args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("if (support.wikiTextEquals(");
+            try writer.writeAll(pf_lhs_name);
+            try writer.writeAll(".items, ");
+            try writer.writeAll(pf_rhs_name);
+            try writer.writeAll(".items)) {\n");
+            try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(func.args, 2), out_name, args_name, indent + 2, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("} else {\n");
+            try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(func.args, 3), out_name, args_name, indent + 2, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("}\n");
+            try writeIndent(writer, indent);
+            try writer.writeAll("}\n");
+        },
+        .switch_ => try emitSwitchParserFunction(allocator, writer, templates, template_indexes, wrapper_indexes, func.args, out_name, args_name, indent, temp_counter),
+        .tag => try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(func.args, 1), out_name, args_name, indent, temp_counter),
+        .lc, .uc, .lcfirst, .ucfirst, .formatnum, .anchorencode, .padleft, .padright => {
+            const pf_arg0_name = try allocTempLocalName(allocator, "pf_arg0", temp_counter);
+            defer allocator.free(pf_arg0_name);
+            try writeIndent(writer, indent);
+            try writer.writeAll("{\n");
+            try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(func.args, 0), pf_arg0_name, args_name, indent + 1, temp_counter);
+            switch (func.kind) {
+                .lc => {
+                    try writeIndent(writer, indent + 1);
+                    try writer.writeAll("try support.appendLower(");
+                    try writer.writeAll(out_name);
+                    try writer.writeAll(", allocator, ");
+                    try writer.writeAll(pf_arg0_name);
+                    try writer.writeAll(".items);\n");
+                },
+                .uc => {
+                    try writeIndent(writer, indent + 1);
+                    try writer.writeAll("try support.appendUpper(");
+                    try writer.writeAll(out_name);
+                    try writer.writeAll(", allocator, ");
+                    try writer.writeAll(pf_arg0_name);
+                    try writer.writeAll(".items);\n");
+                },
+                .lcfirst => {
+                    try writeIndent(writer, indent + 1);
+                    try writer.writeAll("try support.appendLcFirst(");
+                    try writer.writeAll(out_name);
+                    try writer.writeAll(", allocator, ");
+                    try writer.writeAll(pf_arg0_name);
+                    try writer.writeAll(".items);\n");
+                },
+                .ucfirst => {
+                    try writeIndent(writer, indent + 1);
+                    try writer.writeAll("try support.appendUcFirst(");
+                    try writer.writeAll(out_name);
+                    try writer.writeAll(", allocator, ");
+                    try writer.writeAll(pf_arg0_name);
+                    try writer.writeAll(".items);\n");
+                },
+                .formatnum => {
+                    try writeIndent(writer, indent + 1);
+                    try writer.writeAll("try support.appendFormatNum(");
+                    try writer.writeAll(out_name);
+                    try writer.writeAll(", allocator, ");
+                    try writer.writeAll(pf_arg0_name);
+                    try writer.writeAll(".items);\n");
+                },
+                .anchorencode => {
+                    try writeIndent(writer, indent + 1);
+                    try writer.writeAll("try support.appendAnchorEncode(");
+                    try writer.writeAll(out_name);
+                    try writer.writeAll(", allocator, ");
+                    try writer.writeAll(pf_arg0_name);
+                    try writer.writeAll(".items);\n");
+                },
+                .padleft, .padright => {
+                    const pf_width_name = try allocTempLocalName(allocator, "pf_width", temp_counter);
+                    defer allocator.free(pf_width_name);
+                    const pf_pad_name = try allocTempLocalName(allocator, "pf_pad", temp_counter);
+                    defer allocator.free(pf_pad_name);
+                    try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(func.args, 1), pf_width_name, args_name, indent + 1, temp_counter);
+                    try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(func.args, 2), pf_pad_name, args_name, indent + 1, temp_counter);
+                    try writeIndent(writer, indent + 1);
+                    try writer.writeAll("const pf_width_value = runtime_std.fmt.parseUnsigned(usize, runtime_std.mem.trim(u8, ");
+                    try writer.writeAll(pf_width_name);
+                    try writer.writeAll(".items, \" \\t\\r\\n\"), 10) catch 0;\n");
+                    try writeIndent(writer, indent + 1);
+                    try writer.writeAll("try support.appendPad(");
+                    try writer.writeAll(out_name);
+                    try writer.writeAll(", allocator, ");
+                    try writer.writeAll(pf_arg0_name);
+                    try writer.writeAll(".items, pf_width_value, ");
+                    try writer.writeAll(pf_pad_name);
+                    try writer.writeAll(".items, .");
+                    try writer.writeAll(if (func.kind == .padleft) "left" else "right");
+                    try writer.writeAll(");\n");
+                },
+                else => unreachable,
+            }
+            try writeIndent(writer, indent);
+            try writer.writeAll("}\n");
+        },
+        .currentday, .currentmonth, .currentmonthname, .currentyear, .pagename, .fullpagename, .basepagename, .subpagename, .namespace, .namespacenumber, .talkpagename, .wikimedialanguage => {
+            try writeIndent(writer, indent);
+            try writer.writeAll("try support.appendText(");
+            try writer.writeAll(out_name);
+            try writer.writeAll(", allocator, ");
+            switch (func.kind) {
+                .currentday => try writer.writeAll("support.currentDayText()"),
+                .currentmonth => try writer.writeAll("support.currentMonthText()"),
+                .currentmonthname => try writer.writeAll("support.currentMonthName()"),
+                .currentyear => try writer.writeAll("support.currentYearText()"),
+                .pagename => {
+                    try writer.writeAll("support.pageName(");
+                    try writer.writeAll(args_name);
+                    try writer.writeAll(")");
+                },
+                .fullpagename => {
+                    try writer.writeAll("support.fullPageName(");
+                    try writer.writeAll(args_name);
+                    try writer.writeAll(")");
+                },
+                .basepagename => {
+                    try writer.writeAll("support.basePageName(");
+                    try writer.writeAll(args_name);
+                    try writer.writeAll(")");
+                },
+                .subpagename => {
+                    try writer.writeAll("support.subPageName(");
+                    try writer.writeAll(args_name);
+                    try writer.writeAll(")");
+                },
+                .namespace => {
+                    try writer.writeAll("support.namespaceText(");
+                    try writer.writeAll(args_name);
+                    try writer.writeAll(")");
+                },
+                .namespacenumber => {
+                    try writer.writeAll("support.namespaceNumber(");
+                    try writer.writeAll(args_name);
+                    try writer.writeAll(")");
+                },
+                .talkpagename => {
+                    try writer.writeAll("support.talkPageName(");
+                    try writer.writeAll(args_name);
+                    try writer.writeAll(")");
+                },
+                .wikimedialanguage => try writer.writeAll("support.wikimediaLanguage()"),
+                else => unreachable,
+            }
+            try writer.writeAll(");\n");
+        },
+    }
+}
+
+fn emitSwitchParserFunction(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    wrapper_indexes: *const std.StringHashMap([]const u8),
+    args: []const ArgNode,
+    out_name: []const u8,
+    args_name: []const u8,
+    indent: usize,
+    temp_counter: *usize,
+) anyerror!void {
+    const pf_switch_key_name = try allocTempLocalName(allocator, "pf_switch_key", temp_counter);
+    defer allocator.free(pf_switch_key_name);
+    const pf_switch_matched_name = try allocTempLocalName(allocator, "pf_switch_matched", temp_counter);
+    defer allocator.free(pf_switch_matched_name);
+    try writeIndent(writer, indent);
+    try writer.writeAll("{\n");
+    try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, wrapper_indexes, parserArgValueNodes(args, 0), pf_switch_key_name, args_name, indent + 1, temp_counter);
+    try writeIndent(writer, indent + 1);
+    try writer.writeAll("var ");
+    try writer.writeAll(pf_switch_matched_name);
+    try writer.writeAll(" = false;\n");
+
+    var pending_start: usize = 1;
+    var saw_default = false;
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (arg.name != null or arg.name_is_dynamic) {
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("if (!");
+            try writer.writeAll(pf_switch_matched_name);
+            try writer.writeAll(" and (");
+            var wrote_cond = false;
+            var label_index = pending_start;
+            while (label_index < i) : (label_index += 1) {
+                if (wrote_cond) try writer.writeAll(" or ");
+                const key_expr = try std.fmt.allocPrint(allocator, "{s}.items", .{pf_switch_key_name});
+                defer allocator.free(key_expr);
+                try emitSwitchCaseComparison(allocator, writer, templates, template_indexes, wrapper_indexes, args[label_index], key_expr, args_name, indent + 1, temp_counter);
+                wrote_cond = true;
+            }
+            if (wrote_cond) try writer.writeAll(" or ");
+            if (!switchArgIsDefault(arg)) {
+                const key_expr = try std.fmt.allocPrint(allocator, "{s}.items", .{pf_switch_key_name});
+                defer allocator.free(key_expr);
+                try emitSwitchCaseComparison(allocator, writer, templates, template_indexes, wrapper_indexes, arg, key_expr, args_name, indent + 1, temp_counter);
+            } else {
+                try writer.writeAll("true");
+                saw_default = true;
+            }
+            try writer.writeAll(")) {\n");
+            try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, arg.value_nodes, out_name, args_name, indent + 2, temp_counter);
+            try writeIndent(writer, indent + 2);
+            try writer.writeAll(pf_switch_matched_name);
+            try writer.writeAll(" = true;\n");
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("}\n");
+            pending_start = i + 1;
+        }
+    }
+
+    if (!saw_default and pending_start < args.len) {
+        try writeIndent(writer, indent + 1);
+        try writer.writeAll("if (!");
+        try writer.writeAll(pf_switch_matched_name);
+        try writer.writeAll(") {\n");
+        try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, args[args.len - 1].value_nodes, out_name, args_name, indent + 2, temp_counter);
+        try writeIndent(writer, indent + 1);
+        try writer.writeAll("}\n");
+    }
+    try writeIndent(writer, indent);
+    try writer.writeAll("}\n");
+}
+
+fn emitSwitchCaseComparison(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    wrapper_indexes: *const std.StringHashMap([]const u8),
+    arg: ArgNode,
+    key_expr: []const u8,
+    args_name: []const u8,
+    indent: usize,
+    temp_counter: *usize,
+) anyerror!void {
+    if (arg.name_is_dynamic) {
+        const pf_case_name_name = try allocTempLocalName(allocator, "pf_case_name", temp_counter);
+        defer allocator.free(pf_case_name_name);
+        try writer.writeAll("blk: {\n");
+        try writeIndent(writer, indent + 1);
+        try writer.writeAll("var ");
+        try writer.writeAll(pf_case_name_name);
+        try writer.writeAll(": runtime_std.ArrayList(u8) = .empty;\n");
+        try writeIndent(writer, indent + 1);
+        try writer.writeAll("defer ");
+        try writer.writeAll(pf_case_name_name);
+        try writer.writeAll(".deinit(allocator);\n");
+        const pf_case_name_ref = try std.fmt.allocPrint(allocator, "&{s}", .{pf_case_name_name});
+        defer allocator.free(pf_case_name_ref);
+        try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, arg.name_nodes, pf_case_name_ref, args_name, indent + 1, temp_counter);
+        try writeIndent(writer, indent + 1);
+        try writer.writeAll("break :blk support.wikiTextEquals(");
+        try writer.writeAll(key_expr);
+        try writer.writeAll(", ");
+        try writer.writeAll(pf_case_name_name);
+        try writer.writeAll(".items);\n");
+        try writeIndent(writer, indent);
+        try writer.writeAll("}");
+    } else if (arg.name) |name| {
+        try writer.writeAll("support.wikiTextEquals(");
+        try writer.writeAll(key_expr);
+        try writer.writeAll(", ");
+        try appendZigStringLiteral(writer, name);
+        try writer.writeAll(")");
+    } else {
+        const pf_case_value_name = try allocTempLocalName(allocator, "pf_case_value", temp_counter);
+        defer allocator.free(pf_case_value_name);
+        try writer.writeAll("blk: {\n");
+        try writeIndent(writer, indent + 1);
+        try writer.writeAll("var ");
+        try writer.writeAll(pf_case_value_name);
+        try writer.writeAll(": runtime_std.ArrayList(u8) = .empty;\n");
+        try writeIndent(writer, indent + 1);
+        try writer.writeAll("defer ");
+        try writer.writeAll(pf_case_value_name);
+        try writer.writeAll(".deinit(allocator);\n");
+        const pf_case_value_ref = try std.fmt.allocPrint(allocator, "&{s}", .{pf_case_value_name});
+        defer allocator.free(pf_case_value_ref);
+        try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, arg.value_nodes, pf_case_value_ref, args_name, indent + 1, temp_counter);
+        try writeIndent(writer, indent + 1);
+        try writer.writeAll("break :blk support.wikiTextEquals(");
+        try writer.writeAll(key_expr);
+        try writer.writeAll(", ");
+        try writer.writeAll(pf_case_value_name);
+        try writer.writeAll(".items);\n");
+        try writeIndent(writer, indent);
+        try writer.writeAll("}");
+    }
+}
+
+fn emitNodesIntoLocalBuffer(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    wrapper_indexes: *const std.StringHashMap([]const u8),
+    nodes: []const Node,
+    local_name: []const u8,
+    args_name: []const u8,
+    indent: usize,
+    temp_counter: *usize,
+) anyerror!void {
+    try writeIndent(writer, indent);
+    try writer.writeAll("var ");
+    try writer.writeAll(local_name);
+    try writer.writeAll(": runtime_std.ArrayList(u8) = .empty;\n");
+    try writeIndent(writer, indent);
+    try writer.writeAll("defer ");
+    try writer.writeAll(local_name);
+    try writer.writeAll(".deinit(allocator);\n");
+    const ref_name = try std.fmt.allocPrint(allocator, "&{s}", .{local_name});
+    defer allocator.free(ref_name);
+    try emitNodes(allocator, writer, templates, template_indexes, wrapper_indexes, nodes, ref_name, args_name, indent, temp_counter);
+}
+
+fn parserArgValueNodes(args: []const ArgNode, index: usize) []const Node {
+    return if (index < args.len) args[index].value_nodes else &.{};
+}
+
+fn switchArgIsDefault(arg: ArgNode) bool {
+    if (arg.name_is_dynamic) return false;
+    const name = arg.name orelse return false;
+    return std.ascii.eqlIgnoreCase(name, "#default");
 }
 
 fn collectModuleWrappers(
     allocator: std.mem.Allocator,
     wrappers: *std.ArrayList(ModuleWrapper),
     wrapper_indexes: *std.StringHashMap([]const u8),
-    sources: *const lua.TemplateSources,
+    modules: []const ModuleInfo,
+    module_indexes: *const std.StringHashMap(usize),
     nodes: []const Node,
 ) !void {
     for (nodes) |node| switch (node) {
-        .text, .param => {},
-        .template_call => |call| for (call.args) |arg| try collectModuleWrappers(allocator, wrappers, wrapper_indexes, sources, arg.value_nodes),
+        .text => {},
+        .param => |param| try collectModuleWrappers(allocator, wrappers, wrapper_indexes, modules, module_indexes, param.default_nodes),
+        .template_call => |call| for (call.args) |arg| {
+            if (arg.name_is_dynamic) try collectModuleWrappers(allocator, wrappers, wrapper_indexes, modules, module_indexes, arg.name_nodes);
+            try collectModuleWrappers(allocator, wrappers, wrapper_indexes, modules, module_indexes, arg.value_nodes);
+        },
         .invoke_call => |call| {
-            const module_key = try lua.canonicalModuleNameAlloc(allocator, call.module_name);
-            defer allocator.free(module_key);
-            const fn_key = try moduleWrapperKeyAlloc(allocator, module_key, call.function_name);
+            const module_index = module_indexes.get(call.module_name) orelse continue;
+            if (modules[module_index].emit_failed) continue;
+            const fn_key = try moduleWrapperKeyAlloc(allocator, call.module_name, call.function_name);
             defer allocator.free(fn_key);
             if (wrapper_indexes.contains(fn_key)) continue;
-            const source = sources.module_sources.get(module_key) orelse "";
-            const fn_ident = try wrapperFnIdentAlloc(allocator, module_key, call.function_name, wrappers.items.len);
+            const fn_ident = try wrapperFnIdentAlloc(allocator, call.module_name, call.function_name, wrappers.items.len);
             try wrappers.append(allocator, .{
-                .module_name = try allocator.dupe(u8, module_key),
+                .module_name = try allocator.dupe(u8, call.module_name),
                 .function_name = try allocator.dupe(u8, call.function_name),
-                .source = try allocator.dupe(u8, source),
+                .module_ident = modules[module_index].struct_ident,
                 .fn_ident = fn_ident,
             });
             try wrapper_indexes.put(try allocator.dupe(u8, fn_key), fn_ident);
-            for (call.args) |arg| try collectModuleWrappers(allocator, wrappers, wrapper_indexes, sources, arg.value_nodes);
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic) try collectModuleWrappers(allocator, wrappers, wrapper_indexes, modules, module_indexes, arg.name_nodes);
+                try collectModuleWrappers(allocator, wrappers, wrapper_indexes, modules, module_indexes, arg.value_nodes);
+            }
+        },
+        .parser_func => |func| for (func.args) |arg| {
+            if (arg.name_is_dynamic) try collectModuleWrappers(allocator, wrappers, wrapper_indexes, modules, module_indexes, arg.name_nodes);
+            try collectModuleWrappers(allocator, wrappers, wrapper_indexes, modules, module_indexes, arg.value_nodes);
         },
     };
+}
+
+fn buildModuleInfosAlloc(
+    allocator: std.mem.Allocator,
+    templates: []const TemplateInfo,
+    sources: *const lua.TemplateSources,
+) !std.ArrayList(ModuleInfo) {
+    var module_keys = std.StringHashMapUnmanaged(void){};
+    defer {
+        var it = module_keys.iterator();
+        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+        module_keys.deinit(allocator);
+    }
+
+    for (templates) |template| {
+        if (template.parse_error != null) continue;
+        try collectModuleNames(allocator, &module_keys, template.nodes);
+    }
+
+    var modules: std.ArrayList(ModuleInfo) = .empty;
+    errdefer {
+        for (modules.items) |module| allocator.free(module.key);
+        for (modules.items) |module| allocator.free(module.struct_ident);
+        for (modules.items) |module| allocator.free(module.zig_source);
+        modules.deinit(allocator);
+    }
+
+    var it = module_keys.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const struct_ident = try moduleStructIdentAlloc(allocator, key, modules.items.len);
+        const module_source = sources.module_sources.get(key) orelse "";
+        var module: ModuleInfo = .{
+            .key = try allocator.dupe(u8, key),
+            .struct_ident = struct_ident,
+        };
+        if (module_source.len == 0) {
+            module.emit_failed = true;
+        } else if (module_source.len > max_generated_module_source_bytes) {
+            module.emit_failed = true;
+            module.too_large = true;
+        } else {
+            var chunk = lua.compile(allocator, module_source) catch {
+                module.emit_failed = true;
+                try modules.append(allocator, module);
+                continue;
+            };
+            defer chunk.deinit();
+            module.zig_source = lua.emitZigModuleAlloc(allocator, &chunk) catch {
+                module.emit_failed = true;
+                try modules.append(allocator, module);
+                continue;
+            };
+            if (module.zig_source.len > max_generated_module_zig_bytes) {
+                allocator.free(module.zig_source);
+                module.zig_source = "";
+                module.emit_failed = true;
+                module.too_large = true;
+            }
+        }
+        try modules.append(allocator, module);
+    }
+    return modules;
+}
+
+fn collectModuleNames(
+    allocator: std.mem.Allocator,
+    names: *std.StringHashMapUnmanaged(void),
+    nodes: []const Node,
+) !void {
+    for (nodes) |node| switch (node) {
+        .text => {},
+        .param => |param| try collectModuleNames(allocator, names, param.default_nodes),
+        .template_call => |call| for (call.args) |arg| {
+            if (arg.name_is_dynamic) try collectModuleNames(allocator, names, arg.name_nodes);
+            try collectModuleNames(allocator, names, arg.value_nodes);
+        },
+        .invoke_call => |call| {
+            const gop = try names.getOrPut(allocator, call.module_name);
+            if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, call.module_name);
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic) try collectModuleNames(allocator, names, arg.name_nodes);
+                try collectModuleNames(allocator, names, arg.value_nodes);
+            }
+        },
+        .parser_func => |func| for (func.args) |arg| {
+            if (arg.name_is_dynamic) try collectModuleNames(allocator, names, arg.name_nodes);
+            try collectModuleNames(allocator, names, arg.value_nodes);
+        },
+    };
+}
+
+fn templateHasUnsupportedInvoke(
+    nodes: []const Node,
+    modules: []const ModuleInfo,
+    module_indexes: *const std.StringHashMap(usize),
+) bool {
+    for (nodes) |node| switch (node) {
+        .text => {},
+        .param => |param| if (templateHasUnsupportedInvoke(param.default_nodes, modules, module_indexes)) return true,
+        .template_call => |call| for (call.args) |arg| {
+            if (arg.name_is_dynamic and templateHasUnsupportedInvoke(arg.name_nodes, modules, module_indexes)) return true;
+            if (templateHasUnsupportedInvoke(arg.value_nodes, modules, module_indexes)) return true;
+        },
+        .invoke_call => |call| {
+            const module_index = module_indexes.get(call.module_name) orelse return true;
+            if (modules[module_index].emit_failed) return true;
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic and templateHasUnsupportedInvoke(arg.name_nodes, modules, module_indexes)) return true;
+                if (templateHasUnsupportedInvoke(arg.value_nodes, modules, module_indexes)) return true;
+            }
+        },
+        .parser_func => |func| for (func.args) |arg| {
+            if (arg.name_is_dynamic and templateHasUnsupportedInvoke(arg.name_nodes, modules, module_indexes)) return true;
+            if (templateHasUnsupportedInvoke(arg.value_nodes, modules, module_indexes)) return true;
+        },
+    };
+    return false;
+}
+
+fn templateHasOversizedInvoke(
+    nodes: []const Node,
+    modules: []const ModuleInfo,
+    module_indexes: *const std.StringHashMap(usize),
+) bool {
+    for (nodes) |node| switch (node) {
+        .text => {},
+        .param => |param| if (templateHasOversizedInvoke(param.default_nodes, modules, module_indexes)) return true,
+        .template_call => |call| for (call.args) |arg| {
+            if (arg.name_is_dynamic and templateHasOversizedInvoke(arg.name_nodes, modules, module_indexes)) return true;
+            if (templateHasOversizedInvoke(arg.value_nodes, modules, module_indexes)) return true;
+        },
+        .invoke_call => |call| {
+            const module_index = module_indexes.get(call.module_name) orelse continue;
+            if (modules[module_index].too_large) return true;
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic and templateHasOversizedInvoke(arg.name_nodes, modules, module_indexes)) return true;
+                if (templateHasOversizedInvoke(arg.value_nodes, modules, module_indexes)) return true;
+            }
+        },
+        .parser_func => |func| for (func.args) |arg| {
+            if (arg.name_is_dynamic and templateHasOversizedInvoke(arg.name_nodes, modules, module_indexes)) return true;
+            if (templateHasOversizedInvoke(arg.value_nodes, modules, module_indexes)) return true;
+        },
+    };
+    return false;
+}
+
+fn templateDependsOnUnsupportedTemplate(
+    nodes: []const Node,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+) bool {
+    for (nodes) |node| switch (node) {
+        .text => {},
+        .param => |param| if (templateDependsOnUnsupportedTemplate(param.default_nodes, templates, template_indexes)) return true,
+        .invoke_call => |call| for (call.args) |arg| {
+            if (arg.name_is_dynamic and templateDependsOnUnsupportedTemplate(arg.name_nodes, templates, template_indexes)) return true;
+            if (templateDependsOnUnsupportedTemplate(arg.value_nodes, templates, template_indexes)) return true;
+        },
+        .template_call => |call| {
+            const callee_index = template_indexes.get(call.name) orelse return true;
+            if (templates[callee_index].class == .unsupported) return true;
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic and templateDependsOnUnsupportedTemplate(arg.name_nodes, templates, template_indexes)) return true;
+                if (templateDependsOnUnsupportedTemplate(arg.value_nodes, templates, template_indexes)) return true;
+            }
+        },
+        .parser_func => |func| for (func.args) |arg| {
+            if (arg.name_is_dynamic and templateDependsOnUnsupportedTemplate(arg.name_nodes, templates, template_indexes)) return true;
+            if (templateDependsOnUnsupportedTemplate(arg.value_nodes, templates, template_indexes)) return true;
+        },
+    };
+    return false;
+}
+
+fn moduleUsedByWrappers(struct_ident: []const u8, wrappers: []const ModuleWrapper) bool {
+    for (wrappers) |wrapper| {
+        if (std.mem.eql(u8, wrapper.module_ident, struct_ident)) return true;
+    }
+    return false;
+}
+
+fn emitGeneratedModuleStruct(writer: *std.Io.Writer, module: ModuleInfo) !void {
+    try writer.writeAll("const ");
+    try writer.writeAll(module.struct_ident);
+    try writer.writeAll(" = struct {\n");
+    try writeIndentedBlock(writer, module.zig_source, 1);
+    try writer.writeAll("};\n\n");
+}
+
+fn writeIndentedBlock(writer: *std.Io.Writer, text: []const u8, indent: usize) !void {
+    var start: usize = 0;
+    while (start < text.len) {
+        const end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
+        try writeIndent(writer, indent);
+        try writer.writeAll(text[start..end]);
+        try writer.writeByte('\n');
+        start = @min(end + 1, text.len);
+    }
+}
+
+fn unsupportedReasonAlloc(
+    allocator: std.mem.Allocator,
+    template: TemplateInfo,
+    modules: []const ModuleInfo,
+    module_indexes: *const std.StringHashMap(usize),
+) ![]u8 {
+    if (template.source_too_large) return allocator.dupe(u8, "TemplateTooLarge");
+    if (template.parse_error) |kind| return allocator.dupe(u8, @tagName(kind));
+    if (templateHasOversizedInvoke(template.nodes, modules, module_indexes)) return allocator.dupe(u8, "ModuleTooLarge");
+    if (templateHasUnsupportedInvoke(template.nodes, modules, module_indexes)) return allocator.dupe(u8, "InvokeEmissionFailed");
+    return allocator.dupe(u8, "UnsupportedTemplateDependency");
 }
 
 fn resolveTemplateClass(
@@ -442,8 +1244,8 @@ fn resolveTemplateClass(
     if (templates[index].class_state == .resolving) return .compiled;
     templates[index].class_state = .resolving;
 
-    var class: CompileClass = if (templates[index].parse_failed) .unsupported else .metadata_only;
-    if (!templates[index].parse_failed) {
+    var class: CompileClass = if (templates[index].parse_error != null or templates[index].source_too_large) .unsupported else .metadata_only;
+    if (templates[index].parse_error == null and !templates[index].source_too_large) {
         var saw_visible_output = false;
         for (templates[index].nodes) |node| {
             if (nodeIsUnsupported(templates, template_indexes, node)) {
@@ -471,6 +1273,7 @@ fn nodeContributesVisibleOutput(
         .text => |text| hasVisibleText(text),
         .param => true,
         .invoke_call => true,
+        .parser_func => |func| parserFunctionProducesVisibleOutput(func.kind),
         .template_call => |call| blk: {
             const callee_index = template_indexes.get(call.name) orelse break :blk true;
             break :blk resolveTemplateClass(templates, template_indexes, callee_index) == .compiled;
@@ -485,6 +1288,7 @@ fn nodeIsUnsupported(
 ) bool {
     return switch (node) {
         .text, .param, .invoke_call => false,
+        .parser_func => false,
         .template_call => |call| blk: {
             const callee_index = template_indexes.get(call.name) orelse break :blk true;
             break :blk resolveTemplateClass(templates, template_indexes, callee_index) == .unsupported;
@@ -575,9 +1379,12 @@ fn parseCallNodeAlloc(allocator: std.mem.Allocator, body: []const u8) ParseTempl
     defer parts.deinit(allocator);
     if (parts.items.len == 0) return .{ .text = "" };
 
-    const raw_name = trimWikiWhitespace(parts.items[0]);
+    const raw_name = stripSubstPrefix(trimWikiWhitespace(parts.items[0]));
     if (startsWithInvoke(raw_name)) {
         return .{ .invoke_call = try parseInvokeNodeAlloc(allocator, raw_name, parts.items[1..]) };
+    }
+    if (try parseParserFunctionNodeAlloc(allocator, raw_name, parts.items[1..])) |node| {
+        return node;
     }
     if (raw_name.len == 0 or raw_name[0] == '#') return error.UnsupportedTemplateForm;
 
@@ -589,6 +1396,29 @@ fn parseCallNodeAlloc(allocator: std.mem.Allocator, body: []const u8) ParseTempl
             .args = args,
         },
     };
+}
+
+fn parseParserFunctionNodeAlloc(
+    allocator: std.mem.Allocator,
+    raw_name: []const u8,
+    arg_segments: []const []const u8,
+) ParseTemplateError!?Node {
+    const colon = topLevelColon(raw_name);
+    const head = trimWikiWhitespace(if (colon) |idx| raw_name[0..idx] else raw_name);
+    const first_arg = if (colon) |idx| trimWikiWhitespace(raw_name[idx + 1 ..]) else null;
+    const kind = parserFunctionKind(head) orelse return null;
+    const merged_segments = if (first_arg) |value| blk: {
+        var tmp = try allocator.alloc([]const u8, arg_segments.len + 1);
+        tmp[0] = value;
+        @memcpy(tmp[1..], arg_segments);
+        break :blk tmp;
+    } else arg_segments;
+    defer if (first_arg != null) allocator.free(merged_segments);
+
+    return .{ .parser_func = .{
+        .kind = kind,
+        .args = try parseArgNodesAlloc(allocator, merged_segments),
+    } };
 }
 
 fn parseInvokeNodeAlloc(allocator: std.mem.Allocator, raw_name: []const u8, arg_segments: []const []const u8) ParseTemplateError!InvokeCallNode {
@@ -610,11 +1440,26 @@ fn parseArgNodesAlloc(allocator: std.mem.Allocator, segments: []const []const u8
 
     for (segments) |segment| {
         if (topLevelEquals(segment)) |equals| {
-            const key = try allocator.dupe(u8, trimWikiWhitespace(segment[0..equals]));
+            const key_raw = trimWikiWhitespace(segment[0..equals]);
             const value_raw = segment[equals + 1 ..];
             var cursor: usize = 0;
             const value_nodes = try parseNodesAlloc(allocator, value_raw, &cursor, null);
-            try args.append(allocator, .{ .name = key, .value_nodes = value_nodes });
+            if (argNameNeedsDynamicEvaluation(key_raw)) {
+                var name_cursor: usize = 0;
+                const name_nodes = try parseNodesAlloc(allocator, key_raw, &name_cursor, null);
+                try args.append(allocator, .{
+                    .name = null,
+                    .name_nodes = name_nodes,
+                    .name_is_dynamic = true,
+                    .value_nodes = value_nodes,
+                });
+            } else {
+                const key = try allocator.dupe(u8, key_raw);
+                try args.append(allocator, .{
+                    .name = key,
+                    .value_nodes = value_nodes,
+                });
+            }
         } else {
             var cursor: usize = 0;
             const value_nodes = try parseNodesAlloc(allocator, segment, &cursor, null);
@@ -649,6 +1494,61 @@ fn hasVisibleText(text: []const u8) bool {
 
 fn startsWithInvoke(name: []const u8) bool {
     return startsWithAtIgnoreCase(name, 0, "#invoke:");
+}
+
+fn parserFunctionKind(name: []const u8) ?ParserFunctionKind {
+    const trimmed = trimWikiWhitespace(name);
+    inline for ([_]struct { []const u8, ParserFunctionKind }{
+        .{ "#if", .if_ },
+        .{ "#ifeq", .ifeq },
+        .{ "#switch", .switch_ },
+        .{ "#tag", .tag },
+        .{ "displaytitle", .displaytitle },
+        .{ "lc", .lc },
+        .{ "uc", .uc },
+        .{ "lcfirst", .lcfirst },
+        .{ "ucfirst", .ucfirst },
+        .{ "formatnum", .formatnum },
+        .{ "anchorencode", .anchorencode },
+        .{ "padleft", .padleft },
+        .{ "padright", .padright },
+        .{ "currentday", .currentday },
+        .{ "currentmonth", .currentmonth },
+        .{ "currentmonthname", .currentmonthname },
+        .{ "currentyear", .currentyear },
+        .{ "pagename", .pagename },
+        .{ "fullpagename", .fullpagename },
+        .{ "basepagename", .basepagename },
+        .{ "subpagename", .subpagename },
+        .{ "namespace", .namespace },
+        .{ "namespacenumber", .namespacenumber },
+        .{ "talkpagename", .talkpagename },
+        .{ "wikimedialanguage", .wikimedialanguage },
+    }) |entry| {
+        if (templateNameEqualsLoose(trimmed, entry[0])) return entry[1];
+    }
+    return null;
+}
+
+fn parserFunctionProducesVisibleOutput(kind: ParserFunctionKind) bool {
+    return switch (kind) {
+        .displaytitle => false,
+        else => true,
+    };
+}
+
+fn parserFunctionNeedsArgs(kind: ParserFunctionKind) bool {
+    return switch (kind) {
+        .pagename,
+        .fullpagename,
+        .basepagename,
+        .subpagename,
+        .namespace,
+        .namespacenumber,
+        .talkpagename,
+        => true,
+        else => false,
+    };
 }
 
 fn startsWithCategoryLink(input: []const u8, index: usize) bool {
@@ -686,8 +1586,8 @@ fn findTemplateEnd(input: []const u8, start: usize) ?usize {
             i += 3;
             continue;
         }
-        if (startsWithAt(input, i, "}}}")) {
-            if (params != 0) params -= 1;
+        if (params != 0 and startsWithAt(input, i, "}}}")) {
+            params -= 1;
             i += 3;
             continue;
         }
@@ -717,7 +1617,7 @@ fn findParamEnd(input: []const u8, start: usize) ?usize {
             i += 3;
             continue;
         }
-        if (startsWithAt(input, i, "}}}")) {
+        if (params != 0 and startsWithAt(input, i, "}}}")) {
             params -= 1;
             if (params == 0 and templates == 0) return i;
             i += 3;
@@ -752,8 +1652,8 @@ fn splitTopLevelAlloc(allocator: std.mem.Allocator, input: []const u8, delim: u8
             i += 2;
             continue;
         }
-        if (startsWithAt(input, i, "}}}")) {
-            if (params != 0) params -= 1;
+        if (params != 0 and startsWithAt(input, i, "}}}")) {
+            params -= 1;
             i += 2;
             continue;
         }
@@ -790,8 +1690,7 @@ fn matchSkippableTag(source: []const u8) ?usize {
     inline for ([_][]const u8{
         "<includeonly>", "</includeonly>",
         "<onlyinclude>", "</onlyinclude>",
-        "<noinclude/>",
-        "<onlyinclude/>",
+        "<noinclude/>",  "<onlyinclude/>",
     }) |tag| {
         if (startsWithAtIgnoreCase(source, 0, tag)) return tag.len;
     }
@@ -836,8 +1735,8 @@ fn topLevelEquals(segment: []const u8) ?usize {
             i += 2;
             continue;
         }
-        if (startsWithAt(segment, i, "}}}")) {
-            if (params != 0) params -= 1;
+        if (params != 0 and startsWithAt(segment, i, "}}}")) {
+            params -= 1;
             i += 2;
             continue;
         }
@@ -866,8 +1765,92 @@ fn topLevelEquals(segment: []const u8) ?usize {
     return null;
 }
 
+fn topLevelColon(segment: []const u8) ?usize {
+    var templates: usize = 0;
+    var params: usize = 0;
+    var links: usize = 0;
+    var i: usize = 0;
+    while (i < segment.len) : (i += 1) {
+        if (startsWithAt(segment, i, "{{{")) {
+            params += 1;
+            i += 2;
+            continue;
+        }
+        if (params != 0 and startsWithAt(segment, i, "}}}")) {
+            params -= 1;
+            i += 2;
+            continue;
+        }
+        if (startsWithAt(segment, i, "{{")) {
+            templates += 1;
+            i += 1;
+            continue;
+        }
+        if (startsWithAt(segment, i, "}}")) {
+            if (templates != 0) templates -= 1;
+            i += 1;
+            continue;
+        }
+        if (startsWithAt(segment, i, "[[")) {
+            links += 1;
+            i += 1;
+            continue;
+        }
+        if (startsWithAt(segment, i, "]]")) {
+            if (links != 0) links -= 1;
+            i += 1;
+            continue;
+        }
+        if (segment[i] == ':' and templates == 0 and params == 0 and links == 0) return i;
+    }
+    return null;
+}
+
 fn trimWikiWhitespace(input: []const u8) []const u8 {
     return std.mem.trim(u8, input, " \t\r\n");
+}
+
+fn stripSubstPrefix(name: []const u8) []const u8 {
+    var current = name;
+    while (true) {
+        if (startsWithAtIgnoreCase(current, 0, "subst:")) {
+            current = trimWikiWhitespace(current["subst:".len..]);
+            continue;
+        }
+        if (startsWithAtIgnoreCase(current, 0, "safesubst:")) {
+            current = trimWikiWhitespace(current["safesubst:".len..]);
+            continue;
+        }
+        break;
+    }
+    return current;
+}
+
+fn argNameNeedsDynamicEvaluation(name: []const u8) bool {
+    return std.mem.indexOf(u8, name, "{{") != null or
+        std.mem.indexOf(u8, name, "{{{") != null or
+        std.mem.indexOf(u8, name, "[[") != null or
+        std.mem.indexOf(u8, name, "<") != null;
+}
+
+fn templateNameEqualsLoose(lhs: []const u8, rhs: []const u8) bool {
+    var i: usize = 0;
+    var j: usize = 0;
+    while (true) {
+        while (i < lhs.len and isTemplateNameSpacer(lhs[i])) : (i += 1) {}
+        while (j < rhs.len and isTemplateNameSpacer(rhs[j])) : (j += 1) {}
+        if (i == lhs.len or j == rhs.len) break;
+        if (std.ascii.toLower(lhs[i]) != std.ascii.toLower(rhs[j])) return false;
+        i += 1;
+        j += 1;
+    }
+    while (i < lhs.len and isTemplateNameSpacer(lhs[i])) : (i += 1) {}
+    while (j < rhs.len and isTemplateNameSpacer(rhs[j])) : (j += 1) {}
+    return i == lhs.len and j == rhs.len;
+}
+
+fn isTemplateNameSpacer(byte: u8) bool {
+    return byte == ' ' or byte == '\t' or byte == '\r' or byte == '\n' or byte == '_' or byte == '-';
 }
 
 fn templateFnIdentAlloc(allocator: std.mem.Allocator, key: []const u8, index: usize) ![]u8 {
@@ -878,6 +1861,10 @@ fn wrapperFnIdentAlloc(allocator: std.mem.Allocator, module_name: []const u8, fu
     const joined = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ module_name, function_name });
     defer allocator.free(joined);
     return sanitizeIdentAlloc(allocator, "invoke_", joined, index);
+}
+
+fn moduleStructIdentAlloc(allocator: std.mem.Allocator, module_name: []const u8, index: usize) ![]u8 {
+    return sanitizeIdentAlloc(allocator, "module_", module_name, index);
 }
 
 fn sanitizeIdentAlloc(allocator: std.mem.Allocator, prefix: []const u8, raw: []const u8, index: usize) ![]u8 {
@@ -991,6 +1978,48 @@ fn freeOwnedStrings(allocator: std.mem.Allocator, values: []const []const u8) vo
     allocator.free(values);
 }
 
+fn printDependencyFailures(allocator: std.mem.Allocator, report: lua.TemplateDependencyReport) !void {
+    std.debug.print("template compiler audit failed\n", .{});
+    std.debug.print("  unresolved templates: {d}\n", .{report.unresolved_templates.len});
+    std.debug.print("  missing modules: {d}\n", .{report.missing_modules.len});
+    std.debug.print("  lua compile failures: {d}\n", .{report.compiled_failed.len});
+    std.debug.print("  lua zig emission mismatches: {d}\n", .{report.emitted_inconsistent.len});
+
+    if (report.unresolved_templates.len != 0) {
+        std.debug.print("first unresolved templates:\n", .{});
+        for (report.unresolved_templates[0..@min(report.unresolved_templates.len, 16)]) |name| {
+            std.debug.print("  {s}\n", .{name});
+        }
+    }
+    if (report.missing_modules.len != 0) {
+        std.debug.print("first missing modules:\n", .{});
+        for (report.missing_modules[0..@min(report.missing_modules.len, 16)]) |name| {
+            std.debug.print("  {s}\n", .{name});
+        }
+    }
+    if (report.compiled_failed.len != 0) {
+        std.debug.print("first lua compile failures:\n", .{});
+        for (report.compiled_failed[0..@min(report.compiled_failed.len, 16)]) |failure| {
+            std.debug.print("  {s}: {s}\n", .{ failure.name, failure.reason });
+        }
+    }
+    if (report.emitted_inconsistent.len != 0) {
+        std.debug.print("first lua zig emission mismatches:\n", .{});
+        for (report.emitted_inconsistent[0..@min(report.emitted_inconsistent.len, 16)]) |failure| {
+            std.debug.print("  {s}: {s}\n", .{ failure.name, failure.reason });
+        }
+    }
+    _ = allocator;
+}
+
+fn printUnsupportedTemplates(allocator: std.mem.Allocator, unsupported: []const UnsupportedTemplate) !void {
+    std.debug.print("template compiler left unsupported templates: {d}\n", .{unsupported.len});
+    for (unsupported[0..@min(unsupported.len, 32)]) |entry| {
+        std.debug.print("  {s}: {s}\n", .{ entry.key, entry.reason });
+    }
+    _ = allocator;
+}
+
 fn mmapReadOnlyPath(path: []const u8) !MappedReadOnlyFile {
     const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
         .ACCMODE = .RDONLY,
@@ -1025,7 +2054,8 @@ test "template compiler classifies metadata-only templates by nested nop closure
     try sources.template_sources.put(try allocator.dupe(u8, "outer"), try allocator.dupe(u8, "{{meta}}"));
 
     const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "meta", "outer" }, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated, "return .metadata_only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "return .metadata_only") != null);
+    try std.testing.expectEqual(@as(usize, 2), generated.metadata_only_count);
 }
 
 test "template compiler emits direct nested template calls" {
@@ -1042,10 +2072,11 @@ test "template compiler emits direct nested template calls" {
     try sources.template_sources.put(try allocator.dupe(u8, "outer"), try allocator.dupe(u8, "before {{inner}} after"));
 
     const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "inner", "outer" }, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated, "fn tpl_inner_0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated, "fn tpl_outer_1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated, "try tpl_inner_0(out, allocator, &child_args);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated, "renderTemplateByName") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_inner_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_outer_1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "try tpl_inner_0(out, allocator, &child_args_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "renderTemplateByName") != null);
+    try std.testing.expectEqual(@as(usize, 2), generated.compiled_count);
 }
 
 test "template compiler strips metadata and emits nop for pure metadata template" {
@@ -1063,9 +2094,10 @@ test "template compiler strips metadata and emits nop for pure metadata template
         try allocator.dupe(u8, "<noinclude>doc</noinclude>[[Category:test]]__NOTOC__"),
     );
 
-    const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "meta-only" }, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated, "return .metadata_only") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated, "fn tpl_meta_only_0") == null);
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"meta-only"}, &sources);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "return .metadata_only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_meta_only_0") == null);
+    try std.testing.expectEqual(@as(usize, 1), generated.metadata_only_count);
 }
 
 test "template compiler emits direct invoke wrappers for nested module calls" {
@@ -1087,9 +2119,11 @@ test "template compiler emits direct invoke wrappers for nested module calls" {
         try allocator.dupe(u8, "return { bar = function(frame) return frame.args[1] or '' end }"),
     );
 
-    const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "wrap" }, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated, "fn invoke_foo_bar_0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated, "try invoke_foo_bar_0(out, allocator, &child_args);") != null);
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"wrap"}, &sources);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_foo_0 = struct") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn invoke_foo_bar_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "support.invokeGeneratedModuleFunction(out, allocator, module_foo_0.run, \"bar\", args);") != null);
+    try std.testing.expectEqual(@as(usize, 1), generated.compiled_count);
 }
 
 test "template compiler marks unresolved nested templates unsupported" {
@@ -1107,7 +2141,9 @@ test "template compiler marks unresolved nested templates unsupported" {
         try allocator.dupe(u8, "before {{missing-template}} after"),
     );
 
-    const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "outer" }, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated, "return .unsupported") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated, "fn tpl_outer_0") == null);
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"outer"}, &sources);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "return .unsupported") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_outer_0") == null);
+    try std.testing.expectEqual(@as(usize, 1), generated.unsupported.len);
+    try std.testing.expectEqualStrings("UnsupportedTemplateDependency", generated.unsupported[0].reason);
 }
