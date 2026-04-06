@@ -830,6 +830,39 @@ fn extendedPatternForCodeIn(mappings: RuntimeMappings, code: u8) ?[]const u8 {
     return mappings.extended_patterns[index];
 }
 
+fn appendUniqueTemplateName(
+    allocator: std.mem.Allocator,
+    names: *std.ArrayList([]const u8),
+    name: []const u8,
+) !void {
+    for (names.items) |existing| {
+        if (std.mem.eql(u8, existing, name)) return;
+    }
+    try names.append(allocator, try allocator.dupe(u8, name));
+}
+
+fn combinedKnownTemplateNamesAlloc(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
+    var names: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (names.items) |entry| allocator.free(entry);
+        names.deinit(allocator);
+    }
+
+    var covered: std.StringHashMapUnmanaged(void) = .empty;
+    defer {
+        var it = covered.iterator();
+        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+        covered.deinit(allocator);
+    }
+    try compact_pattern_seed.seedCoveredTemplateNames(allocator, &covered);
+
+    var it = covered.iterator();
+    while (it.next()) |entry| try appendUniqueTemplateName(allocator, &names, entry.key_ptr.*);
+    for (line_template_defs) |template| try appendUniqueTemplateName(allocator, &names, template.name);
+    for (translation_template_defs) |template| try appendUniqueTemplateName(allocator, &names, template.name);
+    return names;
+}
+
 fn fingerprintUpdateString(hasher: *std.hash.Wyhash, value: []const u8) void {
     var len_buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &len_buf, value.len, .little);
@@ -998,5 +1031,28 @@ test "compact encoding generically encodes non-hot template names" {
         defer std.testing.allocator.free(decoded);
         try std.testing.expectEqualStrings(sample, decoded);
         try std.testing.expect(std.mem.indexOf(u8, encoded, raw_prefix) == null);
+    }
+}
+
+test "compact encoding round trips every known template name from the bottom of the combined table" {
+    var names = try combinedKnownTemplateNamesAlloc(std.testing.allocator);
+    defer {
+        for (names.items) |entry| std.testing.allocator.free(entry);
+        names.deinit(std.testing.allocator);
+    }
+
+    var idx = names.items.len;
+    while (idx > 0) {
+        idx -= 1;
+        const name = names.items[idx];
+        const sample = try std.fmt.allocPrint(std.testing.allocator, "{{{{{s}|x|y}}}}", .{name});
+        defer std.testing.allocator.free(sample);
+
+        const encoded = try encodeAlloc(std.testing.allocator, sample);
+        defer std.testing.allocator.free(encoded);
+        const decoded = try decodeAlloc(std.testing.allocator, encoded);
+        defer std.testing.allocator.free(decoded);
+
+        try std.testing.expectEqualStrings(sample, decoded);
     }
 }

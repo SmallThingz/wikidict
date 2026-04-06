@@ -69,6 +69,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const lua_mod = b.addModule("lua", .{
+        .root_source_file = b.path("lua/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    lua_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
     const compact_pattern_seed_mod = b.createModule(.{
         .root_source_file = b.path("shared/compact_pattern_seed.zig"),
         .target = target,
@@ -224,7 +230,19 @@ pub fn build(b: *std.Build) void {
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
         .{ .name = "tool_paths", .module = verifier_tool_paths_mod },
     });
+    const template_audit_exe = addCliExecutable(b, "dict-template-audit", b.path("tools/template_audit.zig"), target, optimize, &.{
+        .{ .name = "renderer", .module = renderer_mod },
+        .{ .name = "wikitext_source", .module = wikitext_source_mod },
+        .{ .name = "cli_args", .module = cli_args_mod },
+        .{ .name = "required_path", .module = required_path_mod },
+    });
     const frontend_exe = addCliExecutable(b, "dict-frontend", b.path("tools/frontend.zig"), target, optimize, &.{});
+    const lua_exe = addCliExecutable(b, "dict-lua", b.path("tools/lua_opcode.zig"), target, optimize, &.{
+        .{ .name = "lua", .module = lua_mod },
+        .{ .name = "decoder", .module = decoder_mod },
+        .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod },
+        .{ .name = "required_path", .module = required_path_mod },
+    });
     encoder_tool_paths_options.addOptionPath("structure_bin_path", structure_bin);
     decoder_tool_paths_options.addOptionPath("encoder_bin_path", encoder_exe.getEmittedBin());
     verifier_tool_paths_options.addOptionPath("decoder_bin_path", decoder_exe.getEmittedBin());
@@ -234,13 +252,17 @@ pub fn build(b: *std.Build) void {
     const decoder_install = b.addInstallArtifact(decoder_exe, .{});
     const backend_install = b.addInstallArtifact(backend_exe, .{});
     const verifier_install = b.addInstallArtifact(verifier_exe, .{});
+    const template_audit_install = b.addInstallArtifact(template_audit_exe, .{});
     const frontend_install = b.addInstallArtifact(frontend_exe, .{});
+    const lua_install = b.addInstallArtifact(lua_exe, .{});
     b.getInstallStep().dependOn(&structure_install.step);
     b.getInstallStep().dependOn(&encoder_install.step);
     b.getInstallStep().dependOn(&decoder_install.step);
     b.getInstallStep().dependOn(&backend_install.step);
     b.getInstallStep().dependOn(&verifier_install.step);
+    b.getInstallStep().dependOn(&template_audit_install.step);
     b.getInstallStep().dependOn(&frontend_install.step);
+    b.getInstallStep().dependOn(&lua_install.step);
 
     const structure_run = addDirectToolRunCommand(b, structure_bin, &.{}, b.args);
     addPublicRunStep(b, "structure", "Analyze Wiktionary structure", structure_run, &.{});
@@ -257,8 +279,14 @@ pub fn build(b: *std.Build) void {
     const verify_run = addDirectToolRunCommand(b, verifier_bin, &.{}, b.args);
     addPublicRunStep(b, "verify", "Verify dictionary raw entries against the XML dump", verify_run, &.{ structure_bin.generated.file.step, &encoder_exe.step, &decoder_exe.step });
 
+    const template_audit_run = addRunArtifactCommand(b, template_audit_exe, &.{}, b.args);
+    addPublicRunStep(b, "template-audit", "Audit every structure-listed template against renderer output", template_audit_run, &.{});
+
     const frontend_run = addRunArtifactCommand(b, frontend_exe, &.{}, b.args);
     addPublicRunStep(b, "frontend", "Run the frontend CLI", frontend_run, &.{});
+
+    const lua_run = addRunArtifactCommand(b, lua_exe, &.{}, b.args);
+    addPublicRunStep(b, "lua", "Run the Lua opcode CLI", lua_run, &.{});
 
     const test_runner = b.path("tools/test_runner.zig");
 
@@ -316,6 +344,31 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const template_audit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/template_audit.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "renderer", .module = renderer_mod },
+                .{ .name = "wikitext_source", .module = wikitext_source_mod },
+                .{ .name = "cli_args", .module = cli_args_mod },
+                .{ .name = "required_path", .module = required_path_mod },
+            },
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const lua_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("lua/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod },
+            },
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
     const run_encoder_tests = b.addRunArtifact(encoder_tests);
     const run_decoder_tests = b.addRunArtifact(decoder_tests);
     const run_backend_tests = b.addRunArtifact(backend_tests);
@@ -323,6 +376,8 @@ pub fn build(b: *std.Build) void {
     const run_structure_tests = b.addRunArtifact(structure_tests);
     const run_structure_tables_support_tests = b.addRunArtifact(structure_tables_support_tests);
     const run_verifier_tests = b.addRunArtifact(verifier_tests);
+    const run_template_audit_tests = b.addRunArtifact(template_audit_tests);
+    const run_lua_tests = b.addRunArtifact(lua_tests);
 
     const test_step = b.step("test", "Run encoder, decoder, and backend tests");
     test_step.dependOn(&run_encoder_tests.step);
@@ -332,6 +387,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_structure_tests.step);
     test_step.dependOn(&run_structure_tables_support_tests.step);
     test_step.dependOn(&run_verifier_tests.step);
+    test_step.dependOn(&run_template_audit_tests.step);
+    test_step.dependOn(&run_lua_tests.step);
 }
 
 fn addCliExecutable(

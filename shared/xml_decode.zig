@@ -10,6 +10,13 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
+pub fn decodeSinglePassAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    try decodeSinglePassInto(&out, allocator, input);
+    return out.toOwnedSlice(allocator);
+}
+
 pub fn decodeInto(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) !void {
     if (std.mem.indexOfScalar(u8, input, '&') == null) {
         out.items.len = 0;
@@ -34,6 +41,15 @@ pub fn decodeInto(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: 
         }
         current = target.items;
     }
+}
+
+pub fn decodeSinglePassInto(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) !void {
+    if (std.mem.indexOfScalar(u8, input, '&') == null) {
+        out.items.len = 0;
+        try out.appendSlice(allocator, input);
+        return;
+    }
+    _ = try decodePass(out, allocator, input);
 }
 
 fn decodePass(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) !bool {
@@ -133,4 +149,10 @@ test "decode xml entities does not let literal ampersands swallow later valid en
         "|publisher=John Wiley & Sons, Inc.\n|year=©1999\n|section=§1.2",
         got,
     );
+}
+
+test "decode xml entities single pass preserves literal encoded entity text" {
+    const got = try decodeSinglePassAlloc(std.testing.allocator, "&amp;quot; &amp;amp; &amp;#169;");
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings("&quot; &amp; &#169;", got);
 }

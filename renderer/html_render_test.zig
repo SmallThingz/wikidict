@@ -1501,6 +1501,29 @@ test "renderEnglishSectionAlloc preserves defdate and thesaurus synonym links" {
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Thesaurus:dictionary") != null);
 }
 
+test "renderEnglishSectionAlloc routes unsupported helpers through shared template text rendering" {
+    const source =
+        \\==English==
+        \\===Etymology===
+        \\From {{1|en|[[Acme]]}}.
+    ;
+    const resolver = TestResolverContext{ .terms = &.{"Acme"} };
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .link_resolver = .{
+            .context = @ptrCast(&resolver),
+            .resolve = resolveTestLink,
+        },
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "From <a href=\"/entry/Acme\">Acme</a>.") != null);
+}
+
 test "renderEnglishSectionAlloc renders abbreviation place templates with article and expanded country names" {
     const source =
         \\==English==

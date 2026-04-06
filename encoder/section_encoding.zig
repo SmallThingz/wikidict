@@ -1887,6 +1887,96 @@ fn targetLanguageValueForCode(code: u16) ?[]const u8 {
     return null;
 }
 
+fn expectEnglishSectionRoundTripExact(sample: []const u8) !void {
+    const encoded = try encodeEnglishAlloc(std.testing.allocator, sample);
+    defer std.testing.allocator.free(encoded);
+
+    const decoded = try decodeEnglishAlloc(std.testing.allocator, encoded);
+    defer std.testing.allocator.free(decoded);
+
+    try std.testing.expectEqualStrings(sample, decoded);
+}
+
+fn lineTemplateSampleAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator,
+        \\==English==
+        \\===Noun===
+        \\{{{{{s}|en|alpha|beta}}}}
+        \\
+    , .{name});
+}
+
+fn translationTemplateSampleAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator,
+        \\==English==
+        \\===Noun===
+        \\# thing
+        \\====Translations====
+        \\{{{{trans-top|test}}}}
+        \\* French: {{{{{s}|fr|alpha}}}}
+        \\{{{{trans-bottom}}}}
+        \\
+    , .{name});
+}
+
+fn specialLinePrefixSampleAlloc(allocator: std.mem.Allocator, prefix: []const u8) ![]u8 {
+    const line = if (std.mem.eql(u8, prefix, "{{en-noun"))
+        "{{en-noun|s}}"
+    else if (std.mem.eql(u8, prefix, "{{en-verb"))
+        "{{en-verb}}"
+    else if (std.mem.eql(u8, prefix, "{{en-adj"))
+        "{{en-adj|er}}"
+    else if (std.mem.eql(u8, prefix, "{{en-proper noun"))
+        "{{en-proper noun}}"
+    else if (std.mem.eql(u8, prefix, "{{head|en|"))
+        "{{head|en|noun}}"
+    else if (std.mem.eql(u8, prefix, "{{plural of|"))
+        "{{plural of|en|cat}}"
+    else if (std.mem.eql(u8, prefix, "{{infl of|"))
+        "{{infl of|en|cat||s-verb-form}}"
+    else if (std.mem.eql(u8, prefix, "{{lb|en|"))
+        "{{lb|en|countable}}"
+    else if (std.mem.eql(u8, prefix, "{{IPA|en|"))
+        "{{IPA|en|/kat/}}"
+    else if (std.mem.eql(u8, prefix, "{{audio|en|"))
+        "{{audio|en|cat.ogg|a=UK}}"
+    else if (std.mem.eql(u8, prefix, "{{rhymes|en|"))
+        "{{rhymes|en|at}}"
+    else if (std.mem.eql(u8, prefix, "<references/>"))
+        "<references/>"
+    else
+        return error.InvalidArgument;
+
+    return std.fmt.allocPrint(allocator,
+        \\==English==
+        \\===Noun===
+        \\# thing
+        \\{s}
+        \\
+    , .{line});
+}
+
+fn inlineColumnTemplateSampleAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator,
+        \\==English==
+        \\===Derived terms===
+        \\{{{{{s}|en|alpha|beta|gamma}}}}
+        \\
+    , .{name});
+}
+
+fn blockColumnTemplateSampleAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator,
+        \\==English==
+        \\===Derived terms===
+        \\{{{{{s}|en|alpha
+        \\|beta
+        \\|gamma
+        \\}}}}
+        \\
+    , .{name});
+}
+
 test "tiered refs round trip inline and extended values" {
     var bytes: std.ArrayList(u8) = .empty;
     defer bytes.deinit(std.testing.allocator);
@@ -1991,4 +2081,60 @@ test "section encoding preserves blank-only spacer bodies between headings" {
     defer std.testing.allocator.free(decoded);
 
     try std.testing.expectEqualStrings(sample, decoded);
+}
+
+test "section encoding round trips every generated line template from the bottom of the table" {
+    if (line_templates.len == 0) return;
+    var idx = line_templates.len;
+    while (idx > 0) {
+        idx -= 1;
+        const sample = try lineTemplateSampleAlloc(std.testing.allocator, line_templates[idx].name);
+        defer std.testing.allocator.free(sample);
+        try expectEnglishSectionRoundTripExact(sample);
+    }
+}
+
+test "section encoding round trips every generated translation template from the bottom of the table" {
+    if (translation_templates.len == 0) return;
+    var idx = translation_templates.len;
+    while (idx > 0) {
+        idx -= 1;
+        const sample = try translationTemplateSampleAlloc(std.testing.allocator, translation_templates[idx].name);
+        defer std.testing.allocator.free(sample);
+        try expectEnglishSectionRoundTripExact(sample);
+    }
+}
+
+test "section encoding round trips every static special line template from the bottom of the table" {
+    var idx = special_line_prefixes.len;
+    while (idx > 0) {
+        idx -= 1;
+        const prefix = special_line_prefixes[idx].prefix;
+        if (!std.mem.startsWith(u8, prefix, "{{") and !std.mem.eql(u8, prefix, "<references/>")) continue;
+        const sample = try specialLinePrefixSampleAlloc(std.testing.allocator, prefix);
+        defer std.testing.allocator.free(sample);
+        try expectEnglishSectionRoundTripExact(sample);
+    }
+}
+
+test "section encoding round trips every inline column template from the bottom of the table" {
+    const column_names = [_][]const u8{ "col", "col2", "col3", "col4", "col5" };
+    var idx = column_names.len;
+    while (idx > 0) {
+        idx -= 1;
+        const sample = try inlineColumnTemplateSampleAlloc(std.testing.allocator, column_names[idx]);
+        defer std.testing.allocator.free(sample);
+        try expectEnglishSectionRoundTripExact(sample);
+    }
+}
+
+test "section encoding round trips every block column template from the bottom of the table" {
+    const column_names = [_][]const u8{ "col", "col2", "col3", "col4", "col5" };
+    var idx = column_names.len;
+    while (idx > 0) {
+        idx -= 1;
+        const sample = try blockColumnTemplateSampleAlloc(std.testing.allocator, column_names[idx]);
+        defer std.testing.allocator.free(sample);
+        try expectEnglishSectionRoundTripExact(sample);
+    }
 }

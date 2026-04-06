@@ -221,7 +221,10 @@ pub fn buildDataFromLegacyAlloc(
     std.mem.sortUnstable(GeneratedHeading, headings.items, {}, generatedHeadingLessThan);
 
     var heading_levels: std.ArrayList(GeneratedHeadingLevel) = .empty;
-    defer heading_levels.deinit(allocator);
+    defer {
+        for (heading_levels.items) |entry| allocator.free(entry.title);
+        heading_levels.deinit(allocator);
+    }
     for (legacy.headings_by_level) |entry| {
         const parsed_key = parseHeadingLevelKey(entry.key) orelse continue;
         const kind = headingKindForTitle(legacy.heading_profiles, parsed_key.title) orelse continue;

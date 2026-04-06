@@ -201,6 +201,21 @@ pub fn renderEnglishSectionWithOptionsAlloc(
     return rendered_sections.toOwnedSlice(allocator);
 }
 
+pub fn renderLineFragmentAlloc(
+    allocator: std.mem.Allocator,
+    raw_line: []const u8,
+) ![]u8 {
+    return renderLineFragmentWithOptionsAlloc(allocator, raw_line, .{});
+}
+
+pub fn renderLineFragmentWithOptionsAlloc(
+    allocator: std.mem.Allocator,
+    raw_line: []const u8,
+    options: RenderOptions,
+) ![]u8 {
+    return renderLineHtmlAlloc(allocator, "Template Audit", raw_line, 1, options);
+}
+
 fn buildSenseIdIndexAlloc(allocator: std.mem.Allocator, english_section: []const u8) !SenseIdIndex {
     var index: SenseIdIndex = .{};
     errdefer index.deinit(allocator);
@@ -2472,12 +2487,22 @@ fn renderTemplateHtml(
         if (try renderKnownListTemplateHtml(out, allocator, name, options)) return;
     }
 
-    const wrapped = try std.fmt.allocPrint(allocator, "{{{{{s}}}}}", .{body});
-    defer allocator.free(wrapped);
-    const text = try wikitext.renderWikitextToOwned(allocator, wrapped, max_render_line_bytes);
+    try renderTemplateTextFallbackHtml(out, allocator, body, options);
+}
+
+fn renderTemplateTextFallbackHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    options: RenderOptions,
+) anyerror!void {
+    // Unsupported or low-priority templates fall back through the shared text
+    // template runtime first so the HTML renderer reuses the same semantic
+    // template expansion instead of inventing a separate ad hoc phrase.
+    const text = try wikitext.renderTemplateBodyToOwned(allocator, body, max_render_line_bytes);
     defer allocator.free(text);
     if (text.len == 0) return;
-    try appendEscapedHtmlSlice(out, allocator, text);
+    try renderPhraseHtml(out, allocator, text, options);
 }
 
 fn renderKnownListTemplateHtml(

@@ -45,6 +45,16 @@ pub fn renderWikitextToOwned(
     return collapsed.toOwnedSlice(allocator);
 }
 
+pub fn renderTemplateBodyToOwned(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    max_len: usize,
+) std.mem.Allocator.Error![]const u8 {
+    const wrapped = try std.fmt.allocPrint(allocator, "{{{{{s}}}}}", .{body});
+    defer allocator.free(wrapped);
+    return renderWikitextToOwned(allocator, wrapped, max_len);
+}
+
 fn renderInline(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
