@@ -191,7 +191,13 @@ pub const GeneratedRunResult = struct {
 
 pub const GeneratedRuntime = struct {
     arena: std.heap.ArenaAllocator,
+    // Legacy generated runtimes still use string-keyed module caching. Keep it
+    // available until all generated code is refreshed.
     generated_module_cache: std.StringHashMapUnmanaged(Value) = .empty,
+    // New generated runtimes resolve modules to compact numeric indices and use
+    // these slices as the per-runtime module cache.
+    generated_module_loaded: []bool = &.{},
+    generated_module_values: []Value = &.{},
 
     pub fn init(allocator: std.mem.Allocator) GeneratedRuntime {
         return .{
@@ -227,6 +233,37 @@ pub const GeneratedRuntime = struct {
         const gop = try self.generated_module_cache.getOrPut(self.alloc(), canonical_name);
         if (!gop.found_existing) gop.key_ptr.* = canonical_name;
         gop.value_ptr.* = value;
+    }
+
+    pub fn getGeneratedModuleByIndex(self: *const GeneratedRuntime, module_index: u16) ?Value {
+        const index: usize = module_index;
+        if (index >= self.generated_module_loaded.len or !self.generated_module_loaded[index]) return null;
+        return self.generated_module_values[index];
+    }
+
+    pub fn putGeneratedModuleByIndex(self: *GeneratedRuntime, module_index: u16, value: Value) !void {
+        const needed_len: usize = @as(usize, module_index) + 1;
+        if (needed_len > self.generated_module_loaded.len) try self.ensureGeneratedModuleSlots(needed_len);
+        const index: usize = module_index;
+        self.generated_module_loaded[index] = true;
+        self.generated_module_values[index] = value;
+    }
+
+    fn ensureGeneratedModuleSlots(self: *GeneratedRuntime, needed_len: usize) !void {
+        if (needed_len <= self.generated_module_loaded.len) return;
+
+        const allocator = self.alloc();
+        const loaded = try allocator.alloc(bool, needed_len);
+        const values = try allocator.alloc(Value, needed_len);
+
+        @memset(loaded, false);
+        for (values) |*slot| slot.* = .nil;
+
+        @memcpy(loaded[0..self.generated_module_loaded.len], self.generated_module_loaded);
+        @memcpy(values[0..self.generated_module_values.len], self.generated_module_values);
+
+        self.generated_module_loaded = loaded;
+        self.generated_module_values = values;
     }
 
     pub fn functionValue(
@@ -553,7 +590,7 @@ pub fn buildGeneratedModuleFrameValueAlloc(runtime: *GeneratedRuntime, args: []c
     return .{ .table = frame };
 }
 
-pub fn generatedInvoke(runtime: *GeneratedRuntime, callee: Value, args: []const Value) ![]Value {
+pub fn generatedCall(runtime: *GeneratedRuntime, callee: Value, args: []const Value) ![]Value {
     if (callee != .function) return error.InvalidCall;
     return switch (callee.function.kind) {
         .generated => |generated| try generated.invoke(generated.capture, generated.globals, runtime, args),
@@ -562,8 +599,50 @@ pub fn generatedInvoke(runtime: *GeneratedRuntime, callee: Value, args: []const 
 }
 
 pub fn generatedCallFirst(runtime: *GeneratedRuntime, callee: Value, args: []const Value) !Value {
-    const results = try generatedInvoke(runtime, callee, args);
+    const results = try generatedCall(runtime, callee, args);
     return if (results.len == 0) .nil else results[0];
+}
+
+pub fn generatedResultsFirst(results: []const Value) Value {
+    return if (results.len == 0) .nil else results[0];
+}
+
+pub fn generatedDispatchKnownRuntimeFirst(
+    runtime: *GeneratedRuntime,
+    callee: Value,
+    args: []const Value,
+) !?Value {
+    if (callee != .function) return null;
+    return switch (callee.function.kind) {
+        .generated => |generated| {
+            if (generated.invoke == generatedBuiltinInvoke) {
+                return generatedResultsFirst(try generatedBuiltinInvoke(
+                    generated.capture,
+                    generated.globals,
+                    runtime,
+                    args,
+                ));
+            }
+            if (generated.invoke == generatedFrameGetParent) {
+                return generatedResultsFirst(try generatedFrameGetParent(
+                    generated.capture,
+                    generated.globals,
+                    runtime,
+                    args,
+                ));
+            }
+            if (generated.invoke == generatedFrameExpandTemplate) {
+                return generatedResultsFirst(try generatedFrameExpandTemplate(
+                    generated.capture,
+                    generated.globals,
+                    runtime,
+                    args,
+                ));
+            }
+            return null;
+        },
+        else => null,
+    };
 }
 
 pub fn cloneConstTableSeedAlloc(allocator: std.mem.Allocator, seed: *const ConstTableSeed) !*Table {
@@ -833,6 +912,12 @@ fn generatedBuiltinInvoke(
 
 pub const EmitZigModuleOptions = struct {
     enable_direct_module_dispatch: bool = false,
+    // Canonical module names in the shared generated-runtime dispatch order.
+    // When present, emitted require/loadData calls lower to numeric indices
+    // instead of string-name dispatch helpers.
+    direct_module_dispatch_names: []const []const u8 = &.{},
+    call_dispatch_helper_name: []const u8 = "generatedDispatchFirst",
+    emit_local_dispatch_helper: bool = true,
 };
 
 pub fn emitZigModuleAlloc(allocator: std.mem.Allocator, chunk: *const Chunk) ![]u8 {
@@ -1219,6 +1304,13 @@ const DirectModuleState = struct {
         _ = self;
         return name;
     }
+
+    fn moduleDispatchIndex(self: *const DirectModuleState, canonical_name: []const u8) ?u16 {
+        for (self.options.direct_module_dispatch_names, 0..) |known_name, idx| {
+            if (std.mem.eql(u8, known_name, canonical_name)) return @intCast(idx);
+        }
+        return null;
+    }
 };
 
 const DirectAnalyzeContext = struct {
@@ -1598,6 +1690,24 @@ const DirectMethodCall = struct {
 const DirectModuleDispatchCall = enum {
     require,
     mw_load_data,
+    safe_require,
+    safe_mw_load_data,
+};
+
+const DirectHelperDispatchCall = enum {
+    require_when_needed,
+    utilities_require_when_needed,
+};
+
+const KnownModuleExportCall = struct {
+    module_values: KnownStringValues,
+    function_name: []const u8,
+};
+
+const DirectInvokeLowering = union(enum) {
+    module_dispatch: DirectModuleDispatchCall,
+    helper_dispatch: DirectHelperDispatchCall,
+    module_export: KnownModuleExportCall,
 };
 
 const max_known_string_values = 8;
@@ -1636,7 +1746,10 @@ const KnownStringValues = struct {
 const KnownValueFact = union(enum) {
     unknown,
     string_values: KnownStringValues,
+    loaded_module_values: KnownStringValues,
     dispatch_fn: DirectModuleDispatchCall,
+    helper_fn: DirectHelperDispatchCall,
+    module_export: KnownModuleExportCall,
     mw_table,
 };
 
@@ -1658,9 +1771,11 @@ const DirectEmitFunctionContext = struct {
     local_used: []const bool,
     local_requires_var: []const bool,
     locals: std.ArrayList(DirectEmitLocalBinding) = .empty,
+    local_source_names: std.ArrayList([]const u8) = .empty,
     local_facts: std.ArrayList(KnownValueFact) = .empty,
     capture_facts: []KnownValueFact = &.{},
     scope_marks: std.ArrayList(usize) = .empty,
+    capture_fact_seeds: []?[]KnownValueFact = &.{},
     next_local_id: u32 = 0,
     next_temp_id: u32 = 0,
 
@@ -1670,6 +1785,7 @@ const DirectEmitFunctionContext = struct {
         uses_return_block: bool,
         local_used: []const bool,
         local_requires_var: []const bool,
+        capture_fact_seeds: []?[]KnownValueFact,
     ) DirectEmitFunctionContext {
         return .{
             .state = state,
@@ -1677,11 +1793,13 @@ const DirectEmitFunctionContext = struct {
             .uses_return_block = uses_return_block,
             .local_used = local_used,
             .local_requires_var = local_requires_var,
+            .capture_fact_seeds = capture_fact_seeds,
         };
     }
 
     fn deinit(self: *DirectEmitFunctionContext) void {
         self.locals.deinit(self.state.allocator);
+        self.local_source_names.deinit(self.state.allocator);
         self.local_facts.deinit(self.state.allocator);
         self.state.allocator.free(self.capture_facts);
         self.scope_marks.deinit(self.state.allocator);
@@ -1701,6 +1819,7 @@ const DirectEmitFunctionContext = struct {
         const id = self.next_local_id;
         self.next_local_id += 1;
         try self.locals.append(self.state.allocator, .{ .name = name, .id = id });
+        try self.local_source_names.append(self.state.allocator, name);
         try self.local_facts.append(self.state.allocator, .unknown);
         return id;
     }
@@ -1728,6 +1847,11 @@ const DirectEmitFunctionContext = struct {
         return id;
     }
 
+    fn localSourceName(self: *const DirectEmitFunctionContext, local_id: u32) []const u8 {
+        if (local_id >= self.local_source_names.items.len) return "value";
+        return self.local_source_names.items[local_id];
+    }
+
     fn localFact(self: *const DirectEmitFunctionContext, local_id: u32) KnownValueFact {
         if (local_id >= self.local_facts.items.len) return .unknown;
         return self.local_facts.items[local_id];
@@ -1749,18 +1873,26 @@ const DirectEmitFunctionContext = struct {
     }
 
     fn snapshotFactsAlloc(self: *const DirectEmitFunctionContext) !KnownFactSnapshot {
+        const local_facts = try self.state.allocator.alloc(KnownValueFact, self.local_facts.items.len);
+        errdefer self.state.allocator.free(local_facts);
+        for (self.local_facts.items, 0..) |fact, idx| local_facts[idx] = fact;
+
+        const capture_facts = try self.state.allocator.alloc(KnownValueFact, self.capture_facts.len);
+        errdefer self.state.allocator.free(capture_facts);
+        for (self.capture_facts, 0..) |fact, idx| capture_facts[idx] = fact;
+
         return .{
-            .local_facts = try self.state.allocator.dupe(KnownValueFact, self.local_facts.items),
-            .capture_facts = try self.state.allocator.dupe(KnownValueFact, self.capture_facts),
+            .local_facts = local_facts,
+            .capture_facts = capture_facts,
         };
     }
 
     fn restoreFacts(self: *DirectEmitFunctionContext, snapshot: *const KnownFactSnapshot) !void {
         try self.local_facts.ensureTotalCapacity(self.state.allocator, snapshot.local_facts.len);
         self.local_facts.items.len = snapshot.local_facts.len;
-        @memcpy(self.local_facts.items, snapshot.local_facts);
+        for (snapshot.local_facts, 0..) |fact, idx| self.local_facts.items[idx] = fact;
         if (self.capture_facts.len != snapshot.capture_facts.len) return error.InvalidCall;
-        @memcpy(self.capture_facts, snapshot.capture_facts);
+        for (snapshot.capture_facts, 0..) |fact, idx| self.capture_facts[idx] = fact;
     }
 };
 
@@ -1771,10 +1903,41 @@ fn mergeKnownValueFacts(lhs: KnownValueFact, rhs: KnownValueFact) KnownValueFact
             .mw_table => .mw_table,
             else => .unknown,
         },
+        .loaded_module_values => |lhs_values| switch (rhs) {
+            .loaded_module_values => |rhs_values| blk: {
+                var merged = lhs_values;
+                for (rhs_values.slice()) |value| {
+                    if (!merged.append(value)) break :blk .unknown;
+                }
+                break :blk .{ .loaded_module_values = merged };
+            },
+            else => .unknown,
+        },
         .dispatch_fn => |lhs_dispatch| switch (rhs) {
             .dispatch_fn => |rhs_dispatch| if (lhs_dispatch == rhs_dispatch)
                 .{ .dispatch_fn = lhs_dispatch }
             else
+                .unknown,
+            else => .unknown,
+        },
+        .helper_fn => |lhs_helper| switch (rhs) {
+            .helper_fn => |rhs_helper| if (lhs_helper == rhs_helper)
+                .{ .helper_fn = lhs_helper }
+            else
+                .unknown,
+            else => .unknown,
+        },
+        .module_export => |lhs_export| switch (rhs) {
+            .module_export => |rhs_export| if (std.mem.eql(u8, lhs_export.function_name, rhs_export.function_name)) blk: {
+                var merged = lhs_export.module_values;
+                for (rhs_export.module_values.slice()) |value| {
+                    if (!merged.append(value)) break :blk .unknown;
+                }
+                break :blk .{ .module_export = .{
+                    .module_values = merged,
+                    .function_name = lhs_export.function_name,
+                } };
+            } else
                 .unknown,
             else => .unknown,
         },
@@ -1797,10 +1960,12 @@ fn mergeSnapshotFactsAlloc(
     paths: []const KnownFactSnapshot,
 ) !KnownFactSnapshot {
     var merged = KnownFactSnapshot{
-        .local_facts = try allocator.dupe(KnownValueFact, base.local_facts),
-        .capture_facts = try allocator.dupe(KnownValueFact, base.capture_facts),
+        .local_facts = try allocator.alloc(KnownValueFact, base.local_facts.len),
+        .capture_facts = try allocator.alloc(KnownValueFact, base.capture_facts.len),
     };
     errdefer merged.deinit(allocator);
+    for (base.local_facts, 0..) |fact, idx| merged.local_facts[idx] = fact;
+    for (base.capture_facts, 0..) |fact, idx| merged.capture_facts[idx] = fact;
 
     for (paths) |path| {
         const local_len = @min(merged.local_facts.len, path.local_facts.len);
@@ -1822,7 +1987,214 @@ fn builtinKnownValueFact(state: *const DirectModuleState, name: []const u8) Know
     return .unknown;
 }
 
+fn rawModuleNameMatchesCanonical(raw_value: []const u8, canonical_name: []const u8) bool {
+    var text = std.mem.trim(u8, raw_value, " \t\r\n");
+    if (text.len >= "Module:".len and std.ascii.eqlIgnoreCase(text[0.."Module:".len], "Module:")) {
+        text = text["Module:".len..];
+    }
+    return std.ascii.eqlIgnoreCase(text, canonical_name);
+}
+
+fn singleKnownHelperModule(values: KnownStringValues) ?DirectHelperDispatchCall {
+    var helper: ?DirectHelperDispatchCall = null;
+    for (values.slice()) |value| {
+        const candidate: DirectHelperDispatchCall = if (rawModuleNameMatchesCanonical(value, "require when needed"))
+            .require_when_needed
+        else if (rawModuleNameMatchesCanonical(value, "utilities/require when needed"))
+            .utilities_require_when_needed
+        else
+            return null;
+        if (helper) |existing| {
+            if (existing != candidate) return null;
+        } else {
+            helper = candidate;
+        }
+    }
+    return helper;
+}
+
+fn allKnownModuleNamesMatchCanonical(values: KnownStringValues, canonical_name: []const u8) bool {
+    if (values.len == 0) return false;
+    for (values.slice()) |value| {
+        if (!rawModuleNameMatchesCanonical(value, canonical_name)) return false;
+    }
+    return true;
+}
+
+fn knownModuleExportFact(values: KnownStringValues, field_name: []const u8) KnownValueFact {
+    if (allKnownModuleNamesMatchCanonical(values, "load")) {
+        if (std.mem.eql(u8, field_name, "load_data")) return .{ .dispatch_fn = .mw_load_data };
+        if (std.mem.eql(u8, field_name, "safe_load_data")) return .{ .dispatch_fn = .safe_mw_load_data };
+        if (std.mem.eql(u8, field_name, "safe_require")) return .{ .dispatch_fn = .safe_require };
+    }
+    if (field_name.len == 0) return .unknown;
+    return .{ .module_export = .{
+        .module_values = values,
+        .function_name = field_name,
+    } };
+}
+
 fn knownValueFactForExpr(ctx: *const DirectEmitFunctionContext, expr: *const Expr) KnownValueFact {
+    return knownValueFactForExprWithDepth(ctx, expr, 8);
+}
+
+const KnownFactStmtResult = union(enum) {
+    continue_,
+    returned: KnownValueFact,
+    abort,
+};
+
+fn initKnownFactChildContext(parent_ctx: *const DirectEmitFunctionContext, info: *const DirectFunctionInfo) !DirectEmitFunctionContext {
+    var child = DirectEmitFunctionContext.init(
+        parent_ctx.state,
+        info,
+        false,
+        &.{},
+        &.{},
+        &.{},
+    );
+    errdefer child.deinit();
+
+    if (info.captures.len != 0) {
+        child.capture_facts = try parent_ctx.state.allocator.alloc(KnownValueFact, info.captures.len);
+        for (info.captures, 0..) |capture, idx| {
+            child.capture_facts[idx] = switch (capture.origin) {
+                .parent_local => if (parent_ctx.lookupLocal(capture.name)) |local_id|
+                    parent_ctx.localFact(local_id)
+                else
+                    .unknown,
+                .parent_capture => if (parent_ctx.lookupCapture(capture.name)) |capture_id|
+                    parent_ctx.captureFact(capture_id)
+                else
+                    .unknown,
+            };
+        }
+    }
+
+    for (info.params) |param| {
+        const local_id = try child.declareLocal(param);
+        child.setLocalFact(local_id, .unknown);
+    }
+    return child;
+}
+
+fn applyKnownFactToTarget(ctx: *DirectEmitFunctionContext, target: LValue, fact: KnownValueFact) void {
+    switch (target) {
+        .name => |name| {
+            if (ctx.lookupLocal(name)) |local_id| {
+                ctx.setLocalFact(local_id, fact);
+            } else if (ctx.lookupCapture(name)) |capture_id| {
+                ctx.setCaptureFact(capture_id, fact);
+            }
+        },
+        else => {},
+    }
+}
+
+fn isIdentityForwardArg(ctx: *const DirectEmitFunctionContext, expr: *const Expr) bool {
+    return switch (expr.*) {
+        .variable => |name| ctx.info.params.len != 0 and std.mem.eql(u8, name, ctx.info.params[0]),
+        .varargs => ctx.info.is_vararg and ctx.info.params.len == 0,
+        else => false,
+    };
+}
+
+fn knownForwardedCallableFact(
+    ctx: *const DirectEmitFunctionContext,
+    expr: *const Expr,
+    remaining_depth: u8,
+) KnownValueFact {
+    if (remaining_depth == 0) return .unknown;
+    return switch (expr.*) {
+        .call => |call| blk: {
+            const lowering = knownInvokeLoweringForExpr(ctx, call.callee) orelse break :blk .unknown;
+            if (call.args.len != 1 or !isIdentityForwardArg(ctx, call.args[0])) break :blk .unknown;
+            break :blk switch (lowering) {
+                .module_dispatch => |dispatch| .{ .dispatch_fn = dispatch },
+                .helper_dispatch => |helper| .{ .helper_fn = helper },
+                .module_export => |module_export| .{ .module_export = module_export },
+            };
+        },
+        else => .unknown,
+    };
+}
+
+fn knownFunctionValueFact(ctx: *const DirectEmitFunctionContext, info: *const DirectFunctionInfo, remaining_depth: u8) KnownValueFact {
+    if (remaining_depth == 0) return .unknown;
+
+    var child = initKnownFactChildContext(ctx, info) catch return .unknown;
+    defer child.deinit();
+
+    for (info.body) |stmt| switch (analyzeKnownFactStmt(&child, stmt, remaining_depth - 1)) {
+        .continue_ => {},
+        .returned => |fact| return fact,
+        .abort => return .unknown,
+    };
+
+    return .unknown;
+}
+
+fn analyzeKnownFactStmt(ctx: *DirectEmitFunctionContext, stmt: *const Stmt, remaining_depth: u8) KnownFactStmtResult {
+    switch (stmt.*) {
+        .local_assign => |op| {
+            const value_count = @max(op.names.len, op.exprs.len);
+            const value_facts = ctx.state.allocator.alloc(KnownValueFact, value_count) catch return .abort;
+            defer ctx.state.allocator.free(value_facts);
+
+            for (0..value_count) |idx| {
+                value_facts[idx] = if (idx < op.exprs.len)
+                    knownValueFactForExprWithDepth(ctx, op.exprs[idx], remaining_depth)
+                else
+                    .unknown;
+            }
+
+            for (op.names, 0..) |name, idx| {
+                const local_id = ctx.declareLocal(name) catch return .abort;
+                ctx.setLocalFact(local_id, value_facts[idx]);
+            }
+            return .continue_;
+        },
+        .assign => |op| {
+            const value_count = @max(op.targets.len, op.exprs.len);
+            const value_facts = ctx.state.allocator.alloc(KnownValueFact, value_count) catch return .abort;
+            defer ctx.state.allocator.free(value_facts);
+
+            for (0..value_count) |idx| {
+                value_facts[idx] = if (idx < op.exprs.len)
+                    knownValueFactForExprWithDepth(ctx, op.exprs[idx], remaining_depth)
+                else
+                    .unknown;
+            }
+
+            for (op.targets, 0..) |target, idx| applyKnownFactToTarget(ctx, target, value_facts[idx]);
+            return .continue_;
+        },
+        .function_def => |op| {
+            const child_id = ctx.state.stmtFunctionId(stmt) orelse return .abort;
+            const child_info = &ctx.state.functions.items[child_id];
+            const fact = knownFunctionValueFact(ctx, child_info, remaining_depth);
+
+            if (op.is_local and op.target == .name) {
+                const local_id = ctx.declareLocal(op.target.name) catch return .abort;
+                ctx.setLocalFact(local_id, fact);
+            } else {
+                applyKnownFactToTarget(ctx, op.target, fact);
+            }
+            return .continue_;
+        },
+        .expr_stmt => return .continue_,
+        .return_stmt => |op| return .{ .returned = if (op.exprs.len == 1) blk: {
+            const forwarded = knownForwardedCallableFact(ctx, op.exprs[0], remaining_depth);
+            if (forwarded != .unknown) break :blk forwarded;
+            break :blk knownValueFactForExprWithDepth(ctx, op.exprs[0], remaining_depth);
+        } else
+            .unknown },
+        .if_stmt, .do_block, .while_stmt, .repeat_stmt, .numeric_for, .generic_for, .break_stmt => return .abort,
+    }
+}
+
+fn knownValueFactForExprWithDepth(ctx: *const DirectEmitFunctionContext, expr: *const Expr, remaining_depth: u8) KnownValueFact {
+    if (remaining_depth == 0) return .unknown;
     return switch (expr.*) {
         .string_lit => |value| .{ .string_values = KnownStringValues.fromSingle(value) },
         .variable => |name| blk: {
@@ -1833,12 +2205,42 @@ fn knownValueFactForExpr(ctx: *const DirectEmitFunctionContext, expr: *const Exp
         .field => |field| blk: {
             const object_fact = knownValueFactForExpr(ctx, field.object);
             break :blk switch (object_fact) {
+                .loaded_module_values => |values| knownModuleExportFact(values, field.name),
                 .mw_table => if (std.mem.eql(u8, field.name, "loadData"))
                     .{ .dispatch_fn = .mw_load_data }
                 else
                     .unknown,
                 else => .unknown,
             };
+        },
+        .call => |call| blk: {
+            const callee_fact = knownValueFactForExprWithDepth(ctx, call.callee, remaining_depth - 1);
+            break :blk switch (callee_fact) {
+                .dispatch_fn => |dispatch| switch (dispatch) {
+                    .require => if (call.args.len != 0)
+                        if (knownStringValuesForExpr(ctx, call.args[0])) |values|
+                            if (singleKnownHelperModule(values)) |helper|
+                                .{ .helper_fn = helper }
+                            else
+                                .{ .loaded_module_values = values }
+                        else
+                            .unknown
+                    else
+                        .unknown,
+                    .mw_load_data, .safe_require, .safe_mw_load_data => if (call.args.len != 0)
+                        if (knownStringValuesForExpr(ctx, call.args[0])) |values|
+                            .{ .loaded_module_values = values }
+                        else
+                            .unknown
+                    else
+                        .unknown,
+                },
+                else => .unknown,
+            };
+        },
+        .function_lit => {
+            const child_id = ctx.state.exprFunctionId(expr) orelse return .unknown;
+            return knownFunctionValueFact(ctx, &ctx.state.functions.items[child_id], remaining_depth - 1);
         },
         else => .unknown,
     };
@@ -1851,11 +2253,41 @@ fn knownStringValuesForExpr(ctx: *const DirectEmitFunctionContext, expr: *const 
     };
 }
 
-fn knownDispatchCallForExpr(ctx: *const DirectEmitFunctionContext, expr: *const Expr) ?DirectModuleDispatchCall {
+fn knownInvokeLoweringForExpr(ctx: *const DirectEmitFunctionContext, expr: *const Expr) ?DirectInvokeLowering {
     return switch (knownValueFactForExpr(ctx, expr)) {
-        .dispatch_fn => |dispatch| dispatch,
+        .dispatch_fn => |dispatch| .{ .module_dispatch = dispatch },
+        .helper_fn => |helper| .{ .helper_dispatch = helper },
+        .module_export => |module_export| .{ .module_export = module_export },
         else => null,
     };
+}
+
+fn seedChildCaptureFacts(ctx: *DirectEmitFunctionContext, info: *const DirectFunctionInfo) !void {
+    if (info.id >= ctx.capture_fact_seeds.len or info.captures.len == 0) return;
+
+    const next_facts = try ctx.state.allocator.alloc(KnownValueFact, info.captures.len);
+    errdefer ctx.state.allocator.free(next_facts);
+    for (info.captures, 0..) |capture, idx| {
+        next_facts[idx] = switch (capture.origin) {
+            .parent_local => if (ctx.lookupLocal(capture.name)) |local_id|
+                ctx.localFact(local_id)
+            else
+                .unknown,
+            .parent_capture => if (ctx.lookupCapture(capture.name)) |capture_id|
+                ctx.captureFact(capture_id)
+            else
+                .unknown,
+        };
+    }
+
+    if (ctx.capture_fact_seeds[info.id]) |existing| {
+        if (existing.len != next_facts.len) return error.InvalidCall;
+        for (next_facts, 0..) |*fact, idx| {
+            fact.* = mergeKnownValueFacts(existing[idx], fact.*);
+        }
+        ctx.state.allocator.free(existing);
+    }
+    ctx.capture_fact_seeds[info.id] = next_facts;
 }
 
 fn analyzeDirectFunctionLocalAnalysisAlloc(
@@ -2140,6 +2572,15 @@ fn emitDirectZigModuleAlloc(
     defer state.deinit();
     try analyzeDirectModule(&state, chunk.body);
 
+    const function_capture_fact_seeds = try allocator.alloc(?[]KnownValueFact, state.functions.items.len);
+    defer {
+        for (function_capture_fact_seeds) |facts_opt| {
+            if (facts_opt) |facts| allocator.free(facts);
+        }
+        allocator.free(function_capture_fact_seeds);
+    }
+    @memset(function_capture_fact_seeds, null);
+
     var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
     const writer = &out.writer;
@@ -2157,7 +2598,8 @@ fn emitDirectZigModuleAlloc(
     for (state.functions.items) |info| {
         if (info.captures.len != 0) try emitDirectCaptureStruct(writer, &info);
     }
-    for (state.functions.items) |info| try emitDirectFunction(writer, &state, &info);
+    for (state.functions.items) |info| try emitDirectFunction(writer, &state, &info, function_capture_fact_seeds);
+    if (state.options.emit_local_dispatch_helper) try emitDirectDispatchHelper(writer, &state);
     try emitDirectRun(writer, &state);
     const raw_source = try out.toOwnedSlice();
     errdefer allocator.free(raw_source);
@@ -2167,7 +2609,11 @@ fn emitDirectZigModuleAlloc(
 fn emitDirectGlobals(writer: anytype, state: *const DirectModuleState) anyerror!void {
     try writer.writeAll("const Globals = struct {\n");
     for (state.globals.items, 0..) |name, idx| {
-        try writer.print("    // global {s}\n    global_{d}: lua.Value = lua.Value.nil,\n", .{ name, idx });
+        try writer.writeAll("    // Lua global: ");
+        try writer.writeAll(name);
+        try writer.writeAll("\n    ");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(": lua.Value = lua.Value.nil,\n");
     }
     try writer.writeAll("};\n\n");
 }
@@ -2175,11 +2621,11 @@ fn emitDirectGlobals(writer: anytype, state: *const DirectModuleState) anyerror!
 fn emitDirectCaptureStruct(writer: anytype, info: *const DirectFunctionInfo) anyerror!void {
     try writer.print("const Capture_{d} = struct {{\n", .{info.id});
     for (info.captures, 0..) |capture, idx| {
-        try writer.print("    // captures {s}\n    capture_{d}: *{s}lua.Value,\n", .{
-            capture.name,
-            idx,
-            if (capture.mutable) "" else "const ",
-        });
+        try writer.writeAll("    // Lua capture: ");
+        try writer.writeAll(capture.name);
+        try writer.writeAll("\n    ");
+        try emitGeneratedIdentifier(writer, "lua_capture_", capture.name, idx);
+        try writer.print(": *{s}lua.Value,\n", .{if (capture.mutable) "" else "const "});
     }
     try writer.writeAll("};\n\n");
 }
@@ -2211,49 +2657,99 @@ fn emitDirectRun(writer: anytype, state: *const DirectModuleState) anyerror!void
     );
 }
 
+fn emitDirectDispatchHelper(writer: anytype, state: *const DirectModuleState) anyerror!void {
+    try writer.writeAll("fn ");
+    try writer.writeAll(state.options.call_dispatch_helper_name);
+    try writer.writeAll(
+        \\(runtime: *lua.GeneratedRuntime, callee: lua.Value, args: []const lua.Value) !lua.Value {
+        \\    if (callee != .function) return error.InvalidCall;
+        \\    return switch (callee.function.kind) {
+        \\        .generated => |generated| blk: {
+        \\
+    );
+    for (state.functions.items) |info| {
+        try writer.writeAll("            if (generated.invoke == fn_");
+        try writer.print("{d}", .{info.id});
+        try writer.writeAll(") break :blk lua.generatedResultsFirst(try fn_");
+        try writer.print("{d}", .{info.id});
+        try writer.writeAll("(generated.capture, generated.globals, runtime, args));\n");
+    }
+    try writer.writeAll(
+        \\            if (try lua.generatedDispatchKnownRuntimeFirst(runtime, callee, args)) |first| break :blk first;
+        \\            return error.InvalidCall;
+        \\        },
+        \\        else => error.InvalidCall,
+        \\    };
+        \\}
+        \\
+    );
+}
+
 fn emitBuiltinGlobalInit(writer: anytype, state: *const DirectModuleState, name: []const u8, idx: usize) anyerror!bool {
     if (state.options.enable_direct_module_dispatch and std.mem.eql(u8, name, "require")) {
-        try writer.print("    globals.global_{d} = try runtime.functionValue(\"require\", null, globals, generatedModuleRequireInvoke);\n", .{idx});
+        try writer.writeAll("    globals.");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(" = try runtime.functionValue(\"require\", null, globals, generatedModuleRequireFn);\n");
         return true;
     }
     if (state.options.enable_direct_module_dispatch and std.mem.eql(u8, name, "mw")) {
-        try writer.print("    globals.global_{d} = try generatedModuleMwTableValue(runtime, globals);\n", .{idx});
+        try writer.writeAll("    globals.");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(" = try generatedModuleMwTableValue(runtime, globals);\n");
         return true;
     }
     if (std.mem.eql(u8, name, "print")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinPrintValue(runtime, globals);\n", .{idx});
+        try writer.writeAll("    globals.");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(" = try lua.generatedBuiltinPrintValue(runtime, globals);\n");
         return true;
     }
     if (std.mem.eql(u8, name, "tostring")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTostringValue(runtime, globals);\n", .{idx});
+        try writer.writeAll("    globals.");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(" = try lua.generatedBuiltinTostringValue(runtime, globals);\n");
         return true;
     }
     if (std.mem.eql(u8, name, "tonumber")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTonumberValue(runtime, globals);\n", .{idx});
+        try writer.writeAll("    globals.");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(" = try lua.generatedBuiltinTonumberValue(runtime, globals);\n");
         return true;
     }
     if (std.mem.eql(u8, name, "type")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTypeValue(runtime, globals);\n", .{idx});
+        try writer.writeAll("    globals.");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(" = try lua.generatedBuiltinTypeValue(runtime, globals);\n");
         return true;
     }
     if (std.mem.eql(u8, name, "pairs")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinPairsValue(runtime, globals);\n", .{idx});
+        try writer.writeAll("    globals.");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(" = try lua.generatedBuiltinPairsValue(runtime, globals);\n");
         return true;
     }
     if (std.mem.eql(u8, name, "ipairs")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinIpairsValue(runtime, globals);\n", .{idx});
+        try writer.writeAll("    globals.");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(" = try lua.generatedBuiltinIpairsValue(runtime, globals);\n");
         return true;
     }
     if (std.mem.eql(u8, name, "string")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinStringTableValue(runtime, globals);\n", .{idx});
+        try writer.writeAll("    globals.");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(" = try lua.generatedBuiltinStringTableValue(runtime, globals);\n");
         return true;
     }
     if (std.mem.eql(u8, name, "math")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinMathTableValue(runtime, globals);\n", .{idx});
+        try writer.writeAll("    globals.");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(" = try lua.generatedBuiltinMathTableValue(runtime, globals);\n");
         return true;
     }
     if (std.mem.eql(u8, name, "table")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTableTableValue(runtime, globals);\n", .{idx});
+        try writer.writeAll("    globals.");
+        try emitGlobalFieldIdentifier(writer, state, @intCast(idx));
+        try writer.writeAll(" = try lua.generatedBuiltinTableTableValue(runtime, globals);\n");
         return true;
     }
     return false;
@@ -2317,6 +2813,46 @@ fn emitIndent(writer: anytype, depth: usize) anyerror!void {
     for (0..depth) |_| try writer.writeAll("    ");
 }
 
+fn writeSanitizedIdentifierBody(writer: anytype, source_name: []const u8) anyerror!void {
+    var wrote_any = false;
+    var last_was_underscore = true;
+    for (source_name) |byte| {
+        if (std.ascii.isAlphanumeric(byte)) {
+            try writer.writeByte(byte);
+            wrote_any = true;
+            last_was_underscore = false;
+        } else if (!last_was_underscore) {
+            try writer.writeByte('_');
+            last_was_underscore = true;
+        }
+    }
+    if (!wrote_any) try writer.writeAll("value");
+}
+
+fn emitGeneratedIdentifier(
+    writer: anytype,
+    prefix: []const u8,
+    source_name: []const u8,
+    id: usize,
+) anyerror!void {
+    try writer.writeAll(prefix);
+    try writeSanitizedIdentifierBody(writer, source_name);
+    try writer.print("_{d}", .{id});
+}
+
+fn emitLocalIdentifier(writer: anytype, ctx: *const DirectEmitFunctionContext, local_id: u32) anyerror!void {
+    try emitGeneratedIdentifier(writer, "lua_local_", ctx.localSourceName(local_id), local_id);
+}
+
+fn emitCaptureFieldIdentifier(writer: anytype, ctx: *const DirectEmitFunctionContext, capture_id: u32) anyerror!void {
+    const capture = ctx.info.captures[capture_id];
+    try emitGeneratedIdentifier(writer, "lua_capture_", capture.name, capture_id);
+}
+
+fn emitGlobalFieldIdentifier(writer: anytype, state: *const DirectModuleState, global_id: u32) anyerror!void {
+    try emitGeneratedIdentifier(writer, "lua_global_", state.globals.items[global_id], global_id);
+}
+
 fn stripUnusedGeneratedLocalsAlloc(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -2347,7 +2883,7 @@ fn rewriteUnusedGeneratedLocalLineAlloc(
 ) !bool {
     const prefix_len = std.mem.indexOfNone(u8, line, " ") orelse line.len;
     const trimmed = line[prefix_len..];
-    if (!std.mem.startsWith(u8, trimmed, "const local_")) return false;
+    if (!std.mem.startsWith(u8, trimmed, "const lua_local_")) return false;
     const type_marker = ": lua.Value = ";
     const marker_index = std.mem.indexOf(u8, trimmed, type_marker) orelse return false;
     if (trimmed.len == 0 or trimmed[trimmed.len - 1] != ';') return false;
@@ -2486,7 +3022,12 @@ fn exprContainsVarargs(expr: *const Expr) bool {
     };
 }
 
-fn emitDirectFunction(writer: anytype, state: *const DirectModuleState, info: *const DirectFunctionInfo) anyerror!void {
+fn emitDirectFunction(
+    writer: anytype,
+    state: *const DirectModuleState,
+    info: *const DirectFunctionInfo,
+    capture_fact_seeds: []?[]KnownValueFact,
+) anyerror!void {
     try writer.print(
         "fn fn_{d}(capture_ptr: ?*anyopaque, globals_ptr: ?*anyopaque, runtime: *lua.GeneratedRuntime, args: []const lua.Value) anyerror![]lua.Value {{\n",
         .{info.id},
@@ -2516,23 +3057,31 @@ fn emitDirectFunction(writer: anytype, state: *const DirectModuleState, info: *c
         uses_return_block,
         local_analysis.used,
         local_analysis.requires_var,
+        capture_fact_seeds,
     );
     defer ctx.deinit();
     if (info.captures.len != 0) {
         ctx.capture_facts = try state.allocator.alloc(KnownValueFact, info.captures.len);
-        @memset(ctx.capture_facts, .unknown);
+        if (info.id < capture_fact_seeds.len) {
+            if (capture_fact_seeds[info.id]) |seed| {
+                if (seed.len != ctx.capture_facts.len) return error.InvalidCall;
+                for (seed, 0..) |fact, idx| ctx.capture_facts[idx] = fact;
+            } else {
+                for (ctx.capture_facts) |*fact| fact.* = .unknown;
+            }
+        } else {
+            for (ctx.capture_facts) |*fact| fact.* = .unknown;
+        }
     }
 
     for (info.params, 0..) |param, idx| {
         const local_id = try ctx.declareLocal(param);
         if (!localShouldEmit(&ctx, local_id)) continue;
         try emitIndent(writer, 1);
-        try writer.print("{s} local_{d}: lua.Value = if (args.len > {d}) args[{d}] else @as(lua.Value, .nil);\n", .{
-            localBindingKeyword(&ctx, local_id),
-            local_id,
-            idx,
-            idx,
-        });
+        try writer.writeAll(localBindingKeyword(&ctx, local_id));
+        try writer.writeByte(' ');
+        try emitLocalIdentifier(writer, &ctx, local_id);
+        try writer.print(": lua.Value = if (args.len > {d}) args[{d}] else @as(lua.Value, .nil);\n", .{ idx, idx });
     }
     if (info.is_vararg and blockContainsVarargs(info.body)) {
         try emitIndent(writer, 1);
@@ -2594,11 +3143,10 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
                 ctx.setLocalFact(local_id, value_facts[idx]);
                 try emitIndent(writer, depth);
                 if (localShouldEmit(ctx, local_id)) {
-                    try writer.print("{s} local_{d}: lua.Value = tmp_{d};\n", .{
-                        localBindingKeyword(ctx, local_id),
-                        local_id,
-                        temp_ids[idx],
-                    });
+                    try writer.writeAll(localBindingKeyword(ctx, local_id));
+                    try writer.writeByte(' ');
+                    try emitLocalIdentifier(writer, ctx, local_id);
+                    try writer.print(": lua.Value = tmp_{d};\n", .{temp_ids[idx]});
                 } else {
                     try writer.print("_ = tmp_{d};\n", .{temp_ids[idx]});
                 }
@@ -2655,17 +3203,19 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
         .function_def => |op| {
             const child_id = ctx.state.stmtFunctionId(stmt) orelse return error.UnsupportedSyntax;
             const child_info = &ctx.state.functions.items[child_id];
+            const function_fact = knownFunctionValueFact(ctx, child_info, 8);
             if (op.is_local and op.target == .name) {
                 const local_id = try ctx.declareLocal(op.target.name);
-                ctx.setLocalFact(local_id, .unknown);
+                ctx.setLocalFact(local_id, function_fact);
                 if (!localShouldEmit(ctx, local_id)) return;
                 try emitIndent(writer, depth);
-                try writer.print("{s} local_{d}: lua.Value = lua.Value.nil;\n", .{
-                    localBindingKeyword(ctx, local_id),
-                    local_id,
-                });
+                try writer.writeAll(localBindingKeyword(ctx, local_id));
+                try writer.writeByte(' ');
+                try emitLocalIdentifier(writer, ctx, local_id);
+                try writer.writeAll(": lua.Value = lua.Value.nil;\n");
                 try emitIndent(writer, depth);
-                try writer.print("local_{d} = ", .{local_id});
+                try emitLocalIdentifier(writer, ctx, local_id);
+                try writer.writeAll(" = ");
                 try emitFunctionValueExpr(writer, ctx, child_info, depth);
                 try writer.writeAll(";\n");
             } else {
@@ -2678,9 +3228,9 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
                 switch (op.target) {
                     .name => |name| {
                         if (ctx.lookupLocal(name)) |local_id| {
-                            ctx.setLocalFact(local_id, .unknown);
+                            ctx.setLocalFact(local_id, function_fact);
                         } else if (ctx.lookupCapture(name)) |capture_id| {
-                            ctx.setCaptureFact(capture_id, .unknown);
+                            ctx.setCaptureFact(capture_id, function_fact);
                         }
                     },
                     else => {},
@@ -2824,20 +3374,22 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             const loop_local = try ctx.declareLocal(op.name);
             ctx.setLocalFact(loop_local, .unknown);
             try emitIndent(writer, depth + 1);
-            try writer.print("{s} local_{d}: lua.Value = tmp_{d};\n", .{
-                localBindingKeyword(ctx, loop_local),
-                loop_local,
-                start_temp,
-            });
+            try writer.writeAll(localBindingKeyword(ctx, loop_local));
+            try writer.writeByte(' ');
+            try emitLocalIdentifier(writer, ctx, loop_local);
+            try writer.print(": lua.Value = tmp_{d};\n", .{start_temp});
             try emitIndent(writer, depth + 1);
             try writer.writeAll("while (true) {\n");
             try ctx.beginScope();
             try emitStmtSlice(writer, ctx, op.body, depth + 2);
             ctx.endScope();
             try emitIndent(writer, depth + 2);
-            try writer.print("const next_num = try lua.valueToNumberAlloc(local_{d}) + tmp_{d};\n", .{ loop_local, step_num_temp });
+            try writer.writeAll("const next_num = try lua.valueToNumberAlloc(");
+            try emitLocalIdentifier(writer, ctx, loop_local);
+            try writer.print(") + tmp_{d};\n", .{step_num_temp});
             try emitIndent(writer, depth + 2);
-            try writer.print("local_{d} = lua.Value{{ .number = next_num }};\n", .{loop_local});
+            try emitLocalIdentifier(writer, ctx, loop_local);
+            try writer.writeAll(" = lua.Value{ .number = next_num };\n");
             try emitIndent(writer, depth + 2);
             try writer.print("if (!((tmp_{d} >= 0 and next_num <= try lua.valueToNumberAlloc(tmp_{d})) or (tmp_{d} < 0 and next_num >= try lua.valueToNumberAlloc(tmp_{d})))) break;\n", .{
                 step_num_temp, limit_temp, step_num_temp, limit_temp,
@@ -2887,22 +3439,20 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
                 if (!localShouldEmit(ctx, local_id)) continue;
                 try emitIndent(writer, depth + 1);
                 if (idx == 0) {
-                    try writer.print("{s} local_{d}: lua.Value = pair_{d}[0];\n", .{
-                        localBindingKeyword(ctx, local_id),
-                        local_id,
-                        pair_temp,
-                    });
+                    try writer.writeAll(localBindingKeyword(ctx, local_id));
+                    try writer.writeByte(' ');
+                    try emitLocalIdentifier(writer, ctx, local_id);
+                    try writer.print(": lua.Value = pair_{d}[0];\n", .{pair_temp});
                 } else if (idx == 1) {
-                    try writer.print("{s} local_{d}: lua.Value = pair_{d}[1];\n", .{
-                        localBindingKeyword(ctx, local_id),
-                        local_id,
-                        pair_temp,
-                    });
+                    try writer.writeAll(localBindingKeyword(ctx, local_id));
+                    try writer.writeByte(' ');
+                    try emitLocalIdentifier(writer, ctx, local_id);
+                    try writer.print(": lua.Value = pair_{d}[1];\n", .{pair_temp});
                 } else {
-                    try writer.print("{s} local_{d}: lua.Value = lua.Value.nil;\n", .{
-                        localBindingKeyword(ctx, local_id),
-                        local_id,
-                    });
+                    try writer.writeAll(localBindingKeyword(ctx, local_id));
+                    try writer.writeByte(' ');
+                    try emitLocalIdentifier(writer, ctx, local_id);
+                    try writer.writeAll(": lua.Value = lua.Value.nil;\n");
                 }
             }
             try emitStmtSlice(writer, ctx, op.body, depth + 1);
@@ -2968,17 +3518,22 @@ fn emitStoreTarget(writer: anytype, ctx: *DirectEmitFunctionContext, target: LVa
                     return;
                 }
                 try emitIndent(writer, depth);
-                try writer.print("local_{d} = tmp_{d};\n", .{ local_id, temp_id });
+                try emitLocalIdentifier(writer, ctx, local_id);
+                try writer.print(" = tmp_{d};\n", .{temp_id});
                 return;
             }
             if (ctx.lookupCapture(name)) |capture_id| {
                 try emitIndent(writer, depth);
-                try writer.print("capture.capture_{d}.* = tmp_{d};\n", .{ capture_id, temp_id });
+                try writer.writeAll("capture.");
+                try emitCaptureFieldIdentifier(writer, ctx, capture_id);
+                try writer.print(".* = tmp_{d};\n", .{temp_id});
                 return;
             }
             const global_id = ctx.state.globalId(name) orelse return error.UnknownVariable;
             try emitIndent(writer, depth);
-            try writer.print("globals.global_{d} = tmp_{d};\n", .{ global_id, temp_id });
+            try writer.writeAll("globals.");
+            try emitGlobalFieldIdentifier(writer, ctx.state, global_id);
+            try writer.print(" = tmp_{d};\n", .{temp_id});
         },
         .field => |field| {
             const object_tmp = ctx.nextTemp();
@@ -3051,6 +3606,7 @@ fn emitIteratorInit(writer: anytype, ctx: *DirectEmitFunctionContext, exprs: []c
 }
 
 fn emitFunctionValueExpr(writer: anytype, ctx: *DirectEmitFunctionContext, info: *const DirectFunctionInfo, depth: usize) anyerror!void {
+    try seedChildCaptureFacts(ctx, info);
     const label_id = ctx.nextTemp();
     try writer.print("blk_{d}: {{\n", .{label_id});
     if (info.captures.len != 0) {
@@ -3060,15 +3616,21 @@ fn emitFunctionValueExpr(writer: anytype, ctx: *DirectEmitFunctionContext, info:
         try writer.writeAll("capture_obj.* = .{\n");
         for (info.captures, 0..) |capture, idx| {
             try emitIndent(writer, depth + 2);
-            try writer.print(".capture_{d} = ", .{idx});
+            try writer.writeByte('.');
+            try emitGeneratedIdentifier(writer, "lua_capture_", capture.name, idx);
+            try writer.writeAll(" = ");
             switch (capture.origin) {
                 .parent_local => {
                     const local_id = ctx.lookupLocal(capture.name) orelse return error.UnknownVariable;
-                    try writer.print("&local_{d},\n", .{local_id});
+                    try writer.writeByte('&');
+                    try emitLocalIdentifier(writer, ctx, local_id);
+                    try writer.writeAll(",\n");
                 },
                 .parent_capture => {
                     const capture_id = ctx.lookupCapture(capture.name) orelse return error.UnknownVariable;
-                    try writer.print("capture.capture_{d},\n", .{capture_id});
+                    try writer.writeAll("capture.");
+                    try emitCaptureFieldIdentifier(writer, ctx, capture_id);
+                    try writer.writeAll(",\n");
                 },
             }
         }
@@ -3104,12 +3666,15 @@ fn emitExpr(writer: anytype, ctx: *DirectEmitFunctionContext, expr: *const Expr,
         },
         .variable => |name| {
             if (ctx.lookupLocal(name)) |local_id| {
-                try writer.print("local_{d}", .{local_id});
+                try emitLocalIdentifier(writer, ctx, local_id);
             } else if (ctx.lookupCapture(name)) |capture_id| {
-                try writer.print("capture.capture_{d}.*", .{capture_id});
+                try writer.writeAll("capture.");
+                try emitCaptureFieldIdentifier(writer, ctx, capture_id);
+                try writer.writeAll(".*");
             } else {
                 const global_id = ctx.state.globalId(name) orelse return error.UnknownVariable;
-                try writer.print("globals.global_{d}", .{global_id});
+                try writer.writeAll("globals.");
+                try emitGlobalFieldIdentifier(writer, ctx.state, global_id);
             }
         },
         .varargs => try writer.writeAll("(if (varargs.len != 0) varargs[0] else @as(lua.Value, .nil))"),
@@ -3212,22 +3777,25 @@ fn emitExpr(writer: anytype, ctx: *DirectEmitFunctionContext, expr: *const Expr,
                 try emitMethodCall(writer, ctx, method, depth);
             } else {
                 if (ctx.state.options.enable_direct_module_dispatch) {
-                    if (knownDispatchCallForExpr(ctx, call.callee)) |dispatch| {
-                        try emitDirectModuleDispatchCall(writer, ctx, dispatch, call.args, depth);
+                    if (knownInvokeLoweringForExpr(ctx, call.callee)) |dispatch| {
+                        try emitDirectInvokeLoweringCall(writer, ctx, dispatch, call.callee, call.args, depth);
                         return;
                     }
                 }
                 const label_id = ctx.nextTemp();
                 const callee_id = ctx.nextTemp();
-                const results_id = ctx.nextTemp();
                 try writer.print("blk_{d}: {{ const tmp_{d} = ", .{ label_id, callee_id });
                 try emitExpr(writer, ctx, call.callee, depth);
-                try writer.print("; const tmp_{d} = try lua.generatedInvoke(runtime, tmp_{d}, &.{{ ", .{ results_id, callee_id });
+                try writer.writeAll("; break :blk_");
+                try writer.print("{d}", .{label_id});
+                try writer.writeAll(" try ");
+                try writer.writeAll(ctx.state.options.call_dispatch_helper_name);
+                try writer.print("(runtime, tmp_{d}, &.{{ ", .{callee_id});
                 for (call.args, 0..) |arg, idx| {
                     if (idx != 0) try writer.writeAll(", ");
                     try emitExpr(writer, ctx, arg, depth);
                 }
-                try writer.print(" }}); break :blk_{d} if (tmp_{d}.len == 0) @as(lua.Value, .nil) else tmp_{d}[0]; }}", .{ label_id, results_id, results_id });
+                try writer.writeAll(" }); }");
             }
         },
         .function_lit => {
@@ -3292,18 +3860,20 @@ fn matchBuiltinCall(call: @FieldType(Expr, "call")) ?DirectBuiltinCall {
     return null;
 }
 
-fn emitKnownCanonicalModuleNamesLiteral(
+fn emitKnownCanonicalModuleIndicesLiteral(
     writer: anytype,
+    state: *const DirectModuleState,
     allocator: std.mem.Allocator,
     values: KnownStringValues,
 ) !void {
     var owned: [max_known_string_values][]u8 = undefined;
     var owned_len: usize = 0;
+    var canonical_indices: [max_known_string_values]u16 = undefined;
+    var canonical_indices_len: usize = 0;
     defer {
         for (owned[0..owned_len]) |value| allocator.free(value);
     }
 
-    var canonical_values: KnownStringValues = .{};
     for (values.slice()) |raw_value| {
         const canonical_owned = try canonicalModuleNameAlloc(allocator, raw_value);
         owned[owned_len] = canonical_owned;
@@ -3312,13 +3882,24 @@ fn emitKnownCanonicalModuleNamesLiteral(
             canonical_owned["module:".len..]
         else
             canonical_owned;
-        if (!canonical_values.append(canonical_value)) return error.OutOfMemory;
+        const module_index = state.moduleDispatchIndex(canonical_value) orelse return error.UnknownVariable;
+        var duplicate = false;
+        for (canonical_indices[0..canonical_indices_len]) |existing| {
+            if (existing == module_index) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            canonical_indices[canonical_indices_len] = module_index;
+            canonical_indices_len += 1;
+        }
     }
 
     try writer.writeAll("&.{ ");
-    for (canonical_values.slice(), 0..) |value, idx| {
+    for (canonical_indices[0..canonical_indices_len], 0..) |value, idx| {
         if (idx != 0) try writer.writeAll(", ");
-        try writeZigStringLiteral(writer, value);
+        try writer.print("{d}", .{value});
     }
     try writer.writeAll(" }");
 }
@@ -3333,17 +3914,21 @@ fn emitDirectModuleDispatchCall(
     const helper_name = switch (dispatch) {
         .require => "generatedModuleRequireFirst",
         .mw_load_data => "generatedModuleLoadDataFirst",
+        .safe_require => "generatedSafeModuleRequireFirst",
+        .safe_mw_load_data => "generatedSafeModuleLoadDataFirst",
     };
     const known_helper_name = switch (dispatch) {
         .require => "generatedModuleRequireKnownFirst",
         .mw_load_data => "generatedModuleLoadDataKnownFirst",
+        .safe_require => "generatedSafeModuleRequireKnownFirst",
+        .safe_mw_load_data => "generatedSafeModuleLoadDataKnownFirst",
     };
     const known_values = if (args.len != 0) knownStringValuesForExpr(ctx, args[0]) else null;
     if (known_values) |values| {
         try writer.writeAll("try ");
         try writer.writeAll(known_helper_name);
         try writer.writeAll("(");
-        try emitKnownCanonicalModuleNamesLiteral(writer, ctx.state.allocator, values);
+        try emitKnownCanonicalModuleIndicesLiteral(writer, ctx.state, ctx.state.allocator, values);
         try writer.writeAll(", runtime, ");
     } else {
         try writer.writeAll("try ");
@@ -3358,6 +3943,97 @@ fn emitDirectModuleDispatchCall(
     try writer.writeAll(")");
 }
 
+fn emitDirectHelperDispatchCall(
+    writer: anytype,
+    ctx: *DirectEmitFunctionContext,
+    helper: DirectHelperDispatchCall,
+    args: []const *Expr,
+    depth: usize,
+) anyerror!void {
+    _ = helper;
+    const label_id = ctx.nextTemp();
+    const module_id = ctx.nextTemp();
+    try writer.print("blk_{d}: {{ const tmp_{d}: lua.Value = ", .{ label_id, module_id });
+    if (args.len != 0) {
+        const known_values = knownStringValuesForExpr(ctx, args[0]);
+        if (known_values) |values| {
+            try writer.writeAll("try generatedModuleRequireKnownFirst(");
+            try emitKnownCanonicalModuleIndicesLiteral(writer, ctx.state, ctx.state.allocator, values);
+            try writer.writeAll(", runtime, ");
+            try emitExpr(writer, ctx, args[0], depth);
+            try writer.writeAll(")");
+        } else {
+            try writer.writeAll("try generatedModuleRequireFirst(runtime, ");
+            try emitExpr(writer, ctx, args[0], depth);
+            try writer.writeAll(")");
+        }
+    } else {
+        try writer.writeAll("lua.Value.nil");
+    }
+
+    if (args.len <= 1) {
+        try writer.print("; break :blk_{d} tmp_{d}; }}", .{ label_id, module_id });
+        return;
+    }
+
+    var current_id = module_id;
+    for (args[1..]) |arg| {
+        const next_id = ctx.nextTemp();
+        try writer.print("; if (tmp_{d} != .table) return error.InvalidIndex; const tmp_{d}: lua.Value = tmp_{d}.table.get(", .{
+            current_id,
+            next_id,
+            current_id,
+        });
+        try emitExpr(writer, ctx, arg, depth);
+        try writer.writeAll(")");
+        current_id = next_id;
+    }
+    try writer.print("; break :blk_{d} tmp_{d}; }}", .{ label_id, current_id });
+}
+
+fn emitKnownModuleExportDispatchCall(
+    writer: anytype,
+    ctx: *DirectEmitFunctionContext,
+    module_export: KnownModuleExportCall,
+    callee_expr: *const Expr,
+    args: []const *Expr,
+    depth: usize,
+) anyerror!void {
+    const label_id = ctx.nextTemp();
+    const callee_id = ctx.nextTemp();
+    try writer.print("blk_{d}: {{ const tmp_{d}: lua.Value = ", .{ label_id, callee_id });
+    try emitExpr(writer, ctx, callee_expr, depth);
+    try writer.writeAll("; break :blk_");
+    try writer.print("{d}", .{label_id});
+    try writer.writeAll(" try generatedCallKnownModuleExportFirst(");
+    try emitKnownCanonicalModuleIndicesLiteral(writer, ctx.state, ctx.state.allocator, module_export.module_values);
+    try writer.writeAll(", ");
+    try writeZigStringLiteral(writer, module_export.function_name);
+    try writer.writeAll(", runtime, tmp_");
+    try writer.print("{d}", .{callee_id});
+    try writer.writeAll(", &.{ ");
+    for (args, 0..) |arg, idx| {
+        if (idx != 0) try writer.writeAll(", ");
+        try emitExpr(writer, ctx, arg, depth);
+    }
+    try writer.writeAll(" }); }");
+}
+
+fn emitDirectInvokeLoweringCall(
+    writer: anytype,
+    ctx: *DirectEmitFunctionContext,
+    lowering: DirectInvokeLowering,
+    callee_expr: *const Expr,
+    args: []const *Expr,
+    depth: usize,
+) anyerror!void {
+    switch (lowering) {
+        .module_dispatch => |dispatch| try emitDirectModuleDispatchCall(writer, ctx, dispatch, args, depth),
+        .helper_dispatch => |helper| try emitDirectHelperDispatchCall(writer, ctx, helper, args, depth),
+        .module_export => |module_export| try emitKnownModuleExportDispatchCall(writer, ctx, module_export, callee_expr, args, depth),
+    }
+}
+
 fn emitMethodCall(
     writer: anytype,
     ctx: *DirectEmitFunctionContext,
@@ -3367,7 +4043,6 @@ fn emitMethodCall(
     const label_id = ctx.nextTemp();
     const receiver_id = ctx.nextTemp();
     const callee_id = ctx.nextTemp();
-    const results_id = ctx.nextTemp();
 
     try writer.print("blk_{d}: {{ const tmp_{d} = ", .{ label_id, receiver_id });
     try emitExpr(writer, ctx, method.receiver, depth);
@@ -3377,8 +4052,11 @@ fn emitMethodCall(
         receiver_id,
     });
     try writeZigStringLiteral(writer, method.name);
-    try writer.print("); const tmp_{d} = try lua.generatedInvoke(runtime, tmp_{d}, &.{{ tmp_{d}", .{
-        results_id,
+    try writer.writeAll("); break :blk_");
+    try writer.print("{d}", .{label_id});
+    try writer.writeAll(" try ");
+    try writer.writeAll(ctx.state.options.call_dispatch_helper_name);
+    try writer.print("(runtime, tmp_{d}, &.{{ tmp_{d}", .{
         callee_id,
         receiver_id,
     });
@@ -3386,11 +4064,7 @@ fn emitMethodCall(
         try writer.writeAll(", ");
         try emitExpr(writer, ctx, arg, depth);
     }
-    try writer.print(" }}); break :blk_{d} if (tmp_{d}.len == 0) @as(lua.Value, .nil) else tmp_{d}[0]; }}", .{
-        label_id,
-        results_id,
-        results_id,
-    });
+    try writer.writeAll(" }); }");
 }
 
 fn emitBuiltinCall(
@@ -5816,6 +6490,12 @@ pub const TemplateSources = struct {
     }
 };
 
+pub const SourcePageRef = struct {
+    name: []const u8,
+    page_start: u64,
+    page_end: u64,
+};
+
 pub const LuaSourceScan = TemplateSources;
 
 pub const ModuleSourceScan = struct {
@@ -6691,6 +7371,74 @@ pub fn scanSelectedTemplateAndModuleSourcesAlloc(
     );
 }
 
+fn loadTemplateOrModuleSourceRefAlloc(
+    allocator: std.mem.Allocator,
+    mapped: []const u8,
+    map: *std.StringHashMap([]const u8),
+    ref: SourcePageRef,
+    expected_ns: []const u8,
+) !void {
+    const start = std.math.cast(usize, ref.page_start) orelse return error.FileTooBig;
+    const end = std.math.cast(usize, ref.page_end) orelse return error.FileTooBig;
+    if (start >= end or end > mapped.len) return error.InvalidDictionaryFile;
+
+    const page_fragment = mapped[start..end];
+    const ns = extractPageTagText(page_fragment, "ns") orelse return error.InvalidDictionaryFile;
+    if (!std.mem.eql(u8, std.mem.trim(u8, ns, " \t\r\n"), expected_ns)) return error.InvalidDictionaryFile;
+
+    const text_raw = extractPageText(page_fragment) orelse return error.InvalidDictionaryFile;
+    const decoded = try xml_decode.decodeSinglePassAlloc(allocator, text_raw);
+    errdefer allocator.free(decoded);
+
+    if (std.mem.eql(u8, expected_ns, "10")) {
+        try putCanonicalTemplateSource(allocator, map, ref.name, decoded);
+    } else {
+        try putCanonicalModuleSource(allocator, map, ref.name, decoded);
+    }
+}
+
+pub fn loadSelectedTemplateAndModuleSourcesByRefsAlloc(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    template_refs: []const SourcePageRef,
+    module_refs: []const SourcePageRef,
+) !TemplateSources {
+    var template_sources = std.StringHashMap([]const u8).init(allocator);
+    errdefer {
+        var it = template_sources.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        template_sources.deinit();
+    }
+
+    var module_sources = std.StringHashMap([]const u8).init(allocator);
+    errdefer {
+        var it = module_sources.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        module_sources.deinit();
+    }
+
+    var mapped = try mmapReadOnlyPath(path);
+    defer mapped.deinit();
+
+    for (template_refs) |ref| {
+        try loadTemplateOrModuleSourceRefAlloc(allocator, mapped.mapping, &template_sources, ref, "10");
+    }
+    for (module_refs) |ref| {
+        try loadTemplateOrModuleSourceRefAlloc(allocator, mapped.mapping, &module_sources, ref, "828");
+    }
+
+    return .{
+        .template_sources = template_sources,
+        .module_sources = module_sources,
+    };
+}
+
 fn scanTemplateAndModuleSourcesFilteredAlloc(
     allocator: std.mem.Allocator,
     path: []const u8,
@@ -7006,6 +7754,25 @@ fn extractTagText(line: []const u8, tag: []const u8) ?[]const u8 {
     const after_start = start_idx + start.len;
     const end_idx = std.mem.indexOfPos(u8, line, after_start, end) orelse return null;
     return line[after_start..end_idx];
+}
+
+fn extractPageTagText(page: []const u8, tag: []const u8) ?[]const u8 {
+    var start_buf: [32]u8 = undefined;
+    var end_buf: [32]u8 = undefined;
+    const start = std.fmt.bufPrint(&start_buf, "<{s}>", .{tag}) catch return null;
+    const end = std.fmt.bufPrint(&end_buf, "</{s}>", .{tag}) catch return null;
+    const start_idx = std.mem.indexOf(u8, page, start) orelse return null;
+    const after_start = start_idx + start.len;
+    const end_idx = std.mem.indexOfPos(u8, page, after_start, end) orelse return null;
+    return page[after_start..end_idx];
+}
+
+fn extractPageText(page: []const u8) ?[]const u8 {
+    const text_tag_start = std.mem.indexOf(u8, page, "<text") orelse return null;
+    const content_start_rel = std.mem.indexOfScalarPos(u8, page, text_tag_start, '>') orelse return null;
+    const content_start = content_start_rel + 1;
+    const content_end = std.mem.indexOfPos(u8, page, content_start, "</text>") orelse return null;
+    return page[content_start..content_end];
 }
 
 fn nextMappedLine(mapped: []const u8, cursor: *usize) ?[]const u8 {
@@ -7765,6 +8532,25 @@ test "emitZigModuleAlloc lowers builtin calls into direct Zig helpers" {
     try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.Instruction") == null);
 }
 
+test "emitZigModuleAlloc emits static call dispatcher instead of runtime generic call trampoline" {
+    const source =
+        \\local function f(x)
+        \\  return x
+        \\end
+        \\return f("ok")
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "fn generatedDispatchFirst") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedDispatchFirst(runtime, tmp_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedCall(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedInvoke(") == null);
+}
+
 test "emitZigModuleWithOptionsAlloc lowers require into generated module dispatch helper" {
     const source =
         \\local languages = require("Module:languages")
@@ -7775,11 +8561,13 @@ test "emitZigModuleWithOptionsAlloc lowers require into generated module dispatc
 
     const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
         .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{"languages"},
     });
     defer std.testing.allocator.free(zig_source);
 
-    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireKnownFirst(&.{ \"languages\" }, runtime, lua.Value{ .string = \"Module:languages\" })") != null);
-    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireInvoke") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua_global_require_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireKnownFirst(&.{ 0 }, runtime, lua.Value{ .string = \"Module:languages\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireFn") != null);
 }
 
 test "emitZigModuleWithOptionsAlloc lowers mw.loadData into generated module dispatch helper" {
@@ -7792,10 +8580,12 @@ test "emitZigModuleWithOptionsAlloc lowers mw.loadData into generated module dis
 
     const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
         .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{"languages/data/2"},
     });
     defer std.testing.allocator.free(zig_source);
 
-    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleLoadDataKnownFirst(&.{ \"languages/data/2\" }, runtime, lua.Value{ .string = \"Module:languages/data/2\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua_global_mw_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleLoadDataKnownFirst(&.{ 0 }, runtime, lua.Value{ .string = \"Module:languages/data/2\" })") != null);
     try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleMwTableValue") != null);
 }
 
@@ -7810,11 +8600,12 @@ test "emitZigModuleWithOptionsAlloc lowers require aliases into generated module
 
     const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
         .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{"languages"},
     });
     defer std.testing.allocator.free(zig_source);
 
-    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireKnownFirst(&.{ \"languages\" }, runtime, local_1)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedInvoke(runtime, local_0") == null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireKnownFirst(&.{ 0 }, runtime, lua_local_name_1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedCall(runtime, lua_local_loader_0") == null);
 }
 
 test "emitZigModuleWithOptionsAlloc lowers mw aliases into generated module dispatch helper" {
@@ -7828,10 +8619,11 @@ test "emitZigModuleWithOptionsAlloc lowers mw aliases into generated module disp
 
     const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
         .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{"languages/data/2"},
     });
     defer std.testing.allocator.free(zig_source);
 
-    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleLoadDataKnownFirst(&.{ \"languages/data/2\" }, runtime, lua.Value{ .string = \"Module:languages/data/2\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleLoadDataKnownFirst(&.{ 0 }, runtime, lua.Value{ .string = \"Module:languages/data/2\" })") != null);
 }
 
 test "emitZigModuleWithOptionsAlloc merges branch-local module names into a known dispatch set" {
@@ -7850,10 +8642,152 @@ test "emitZigModuleWithOptionsAlloc merges branch-local module names into a know
 
     const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
         .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{ "foo", "bar" },
     });
     defer std.testing.allocator.free(zig_source);
 
-    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireKnownFirst(&.{ \"foo\", \"bar\" }, runtime, local_1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireKnownFirst(&.{ 0, 1 }, runtime, lua_local_name_1)") != null);
+}
+
+test "emitZigModuleWithOptionsAlloc propagates captured require facts into nested functions" {
+    const source =
+        \\local loader = require
+        \\local function inner(name)
+        \\  return loader(name)
+        \\end
+        \\return inner("Module:languages")
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{"languages"},
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireFirst(runtime, lua_local_name_0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedCall(runtime, capture.lua_capture_loader_0.*") == null);
+}
+
+test "emitZigModuleWithOptionsAlloc lowers require when needed helper into direct module dispatch" {
+    const source =
+        \\local require_when_needed = require("Module:require when needed")
+        \\return require_when_needed("Module:parameters", "process")
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{ "require when needed", "parameters" },
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireKnownFirst(&.{ 1 }, runtime, lua.Value{ .string = \"Module:parameters\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, ".table.get(lua.Value{ .string = \"process\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedCall(runtime, lua_local_require_when_needed_0") == null);
+}
+
+test "emitZigModuleWithOptionsAlloc lowers Module:load load_data export into direct module dispatch" {
+    const source =
+        \\local load = require("Module:load")
+        \\local load_data = load.load_data
+        \\return load_data("Module:languages/data/2")
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{ "load", "languages/data/2" },
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleLoadDataKnownFirst(&.{ 1 }, runtime, lua.Value{ .string = \"Module:languages/data/2\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedCall(runtime, lua_local_load_data_") == null);
+}
+
+test "emitZigModuleWithOptionsAlloc lowers Module:load safe_load_data export into direct safe dispatch" {
+    const source =
+        \\local load = require("Module:load")
+        \\local safe_load_data = load.safe_load_data
+        \\return safe_load_data("Module:languages/data/2")
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{ "load", "languages/data/2" },
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedSafeModuleLoadDataKnownFirst(&.{ 1 }, runtime, lua.Value{ .string = \"Module:languages/data/2\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedCall(runtime, lua_local_safe_load_data_") == null);
+}
+
+test "emitZigModuleWithOptionsAlloc lowers Module:load safe_require export into direct safe dispatch" {
+    const source =
+        \\local load = require("Module:load")
+        \\local safe_require = load.safe_require
+        \\return safe_require("Module:languages")
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{ "load", "languages" },
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedSafeModuleRequireKnownFirst(&.{ 1 }, runtime, lua.Value{ .string = \"Module:languages\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedCall(runtime, lua_local_safe_require_") == null);
+}
+
+test "emitZigModuleWithOptionsAlloc lowers identity load_data wrapper functions into direct dispatch" {
+    const source =
+        \\local load = require("Module:load")
+        \\local function load_data(name)
+        \\  return load.load_data(name)
+        \\end
+        \\return load_data("Module:languages/data/2")
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{ "load", "languages/data/2" },
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleLoadDataKnownFirst(&.{ 1 }, runtime, lua.Value{ .string = \"Module:languages/data/2\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedCall(runtime, lua_local_load_data_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedCall(runtime, capture.lua_capture_load_data_") == null);
+}
+
+test "emitZigModuleWithOptionsAlloc lowers identity safe_require wrapper functions into direct dispatch" {
+    const source =
+        \\local load = require("Module:load")
+        \\local function safe_require(name)
+        \\  return load.safe_require(name)
+        \\end
+        \\return safe_require("Module:languages")
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = &.{ "load", "languages" },
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedSafeModuleRequireKnownFirst(&.{ 1 }, runtime, lua.Value{ .string = \"Module:languages\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedCall(runtime, lua_local_safe_require_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedCall(runtime, capture.lua_capture_safe_require_") == null);
 }
 
 test "emitZigModuleAlloc evaluates method-call receivers once" {
@@ -7924,8 +8858,8 @@ test "emitZigModuleAlloc preserves captured locals for evaluated dead closures" 
     const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
     defer std.testing.allocator.free(zig_source);
 
-    try std.testing.expect(std.mem.indexOf(u8, zig_source, "const local_0: lua.Value = tmp_0;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, zig_source, "&local_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "const lua_local_outer_0: lua.Value = tmp_0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "&lua_local_outer_0") != null);
 }
 
 test "emitZigModuleAlloc emits negative zero as float literal" {
@@ -7960,8 +8894,31 @@ test "emitZigModuleAlloc emits capture structs for lexical closures" {
     defer std.testing.allocator.free(zig_source);
 
     try std.testing.expect(std.mem.indexOf(u8, zig_source, "const Capture_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua_capture_outer_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, ".lua_capture_outer_0 = &lua_local_outer_0") != null);
     try std.testing.expect(std.mem.indexOf(u8, zig_source, "capture_obj") != null);
     try std.testing.expect(std.mem.indexOf(u8, zig_source, "runtime.functionValue") != null);
+}
+
+test "emitZigModuleAlloc preserves readable Lua variable names in generated identifiers" {
+    const source =
+        \\local outer_value = 41
+        \\local function make_result(input_value)
+        \\  local inner_total = outer_value + input_value
+        \\  return inner_total
+        \\end
+        \\return make_result(1)
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua_local_outer_value_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua_local_input_value_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua_local_inner_total_1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua_capture_outer_value_0") != null);
 }
 
 test "emitZigModuleAlloc gives nested generic-for captures unique names" {
@@ -8402,6 +9359,43 @@ test "graph dependency analysis uses collected nodes without module audit" {
     try std.testing.expectEqualStrings("entrymod", report.missing_modules[0]);
     try std.testing.expectEqual(@as(usize, 0), report.compiled_failed.len);
     try std.testing.expectEqual(@as(usize, 0), report.emitted_inconsistent.len);
+}
+
+test "loadSelectedTemplateAndModuleSourcesByRefsAlloc loads only referenced pages" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/lua-source-refs.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(xml_path);
+
+    const xml =
+        \\<mediawiki>
+        \\<page><title>Template:demo</title><ns>10</ns><revision><text xml:space="preserve">{{helper}}</text></revision></page>
+        \\<page><title>Module:demo</title><ns>828</ns><revision><text xml:space="preserve">return {}</text></revision></page>
+        \\</mediawiki>
+    ;
+
+    var file = try std.Io.Dir.cwd().createFile(std.testing.io, xml_path, .{ .truncate = true });
+    defer file.close(std.testing.io);
+    try file.writeStreamingAll(std.testing.io, xml);
+
+    const template_start = std.mem.indexOf(u8, xml, "<page><title>Template:demo</title>") orelse unreachable;
+    const module_start = std.mem.indexOf(u8, xml, "<page><title>Module:demo</title>") orelse unreachable;
+    const first_page_end = (std.mem.indexOfPos(u8, xml, template_start, "</page>") orelse unreachable) + "</page>".len;
+    const second_page_end = (std.mem.indexOfPos(u8, xml, module_start, "</page>") orelse unreachable) + "</page>".len;
+
+    var sources = try loadSelectedTemplateAndModuleSourcesByRefsAlloc(
+        std.testing.allocator,
+        xml_path,
+        &.{.{ .name = "demo", .page_start = template_start, .page_end = first_page_end }},
+        &.{.{ .name = "demo", .page_start = module_start, .page_end = second_page_end }},
+    );
+    defer sources.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), sources.template_sources.count());
+    try std.testing.expectEqual(@as(usize, 1), sources.module_sources.count());
+    try std.testing.expect(std.mem.indexOf(u8, sources.template_sources.get("demo").?, "{{helper}}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sources.module_sources.get("demo").?, "return {}") != null);
 }
 
 test "likely template page name filter keeps real titles and drops magic-like names" {

@@ -90,6 +90,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = codegen_optimize,
     });
+    const shared_structure_report_mod = b.createModule(.{
+        .root_source_file = b.path("shared/structure_report.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const shared_structure_report_mod_codegen = b.createModule(.{
+        .root_source_file = b.path("shared/structure_report.zig"),
+        .target = target,
+        .optimize = codegen_optimize,
+    });
     const lua_mod = b.addModule("lua", .{
         .root_source_file = b.path("lua/root.zig"),
         .target = target,
@@ -161,6 +171,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod_bootstrap.addImport("cli_args", cli_args_mod_structure);
     encoder_mod_bootstrap.addImport("shared_html_entities", shared_html_entities_mod);
     encoder_mod_bootstrap.addImport("shared_xml_decode", shared_xml_decode_mod);
+    encoder_mod_bootstrap.addImport("shared_structure_report", shared_structure_report_mod);
     encoder_mod_bootstrap.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     encoder_mod_bootstrap.addImport("wikitext_source", wikitext_source_mod);
 
@@ -200,6 +211,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("cli_args", cli_args_mod);
     encoder_mod.addImport("shared_html_entities", shared_html_entities_mod);
     encoder_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
+    encoder_mod.addImport("shared_structure_report", shared_structure_report_mod);
     encoder_mod.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     encoder_mod.addImport("wikitext_source", wikitext_source_mod);
 
@@ -215,6 +227,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod_test.addImport("cli_args", cli_args_mod);
     encoder_mod_test.addImport("shared_html_entities", shared_html_entities_mod);
     encoder_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod);
+    encoder_mod_test.addImport("shared_structure_report", shared_structure_report_mod);
     encoder_mod_test.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     encoder_mod_test.addImport("wikitext_source", wikitext_source_mod);
 
@@ -226,6 +239,7 @@ pub fn build(b: *std.Build) void {
     decoder_mod.addOptions("config", config_options);
     decoder_mod.addImport("normalize", normalize_mod);
     decoder_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
+    decoder_mod.addImport("shared_structure_report", shared_structure_report_mod);
     decoder_mod.addImport("wikitext_source", wikitext_source_mod);
     decoder_mod.addImport("cli_args", cli_args_mod);
     const decoder_mod_codegen = b.createModule(.{
@@ -236,6 +250,7 @@ pub fn build(b: *std.Build) void {
     decoder_mod_codegen.addOptions("config", config_options);
     decoder_mod_codegen.addImport("normalize", normalize_mod_codegen);
     decoder_mod_codegen.addImport("shared_xml_decode", shared_xml_decode_mod_codegen);
+    decoder_mod_codegen.addImport("shared_structure_report", shared_structure_report_mod_codegen);
     decoder_mod_codegen.addImport("wikitext_source", wikitext_source_mod_codegen);
     decoder_mod_codegen.addImport("cli_args", cli_args_mod_codegen);
 
@@ -248,6 +263,7 @@ pub fn build(b: *std.Build) void {
     decoder_mod_test.addImport("normalize", normalize_mod);
     decoder_mod_test.addImport("encoder", encoder_mod_test);
     decoder_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod);
+    decoder_mod_test.addImport("shared_structure_report", shared_structure_report_mod);
     decoder_mod_test.addImport("wikitext_source", wikitext_source_mod);
     decoder_mod_test.addImport("cli_args", cli_args_mod);
 
@@ -304,6 +320,7 @@ pub fn build(b: *std.Build) void {
     const template_codegen_exe = addCliExecutable(b, "dict-template-compile", b.path("tools/template_codegen.zig"), target, codegen_optimize, &.{
         .{ .name = "lua", .module = lua_mod_codegen },
         .{ .name = "required_path", .module = required_path_mod_codegen },
+        .{ .name = "shared_structure_report", .module = shared_structure_report_mod_codegen },
     });
     const frontend_exe = addCliExecutable(b, "dict-frontend", b.path("tools/frontend.zig"), target, optimize, &.{});
     const lua_exe = addCliExecutable(b, "dict-lua", b.path("tools/lua_translate.zig"), target, codegen_optimize, &.{
@@ -311,6 +328,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "decoder", .module = decoder_mod_codegen },
         .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod_codegen },
         .{ .name = "required_path", .module = required_path_mod_codegen },
+        .{ .name = "shared_structure_report", .module = shared_structure_report_mod_codegen },
     });
     encoder_tool_paths_options.addOptionPath("structure_bin_path", structure_bin);
     decoder_tool_paths_options.addOptionPath("encoder_bin_path", encoder_exe.getEmittedBin());
@@ -452,6 +470,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "lua", .module = lua_mod },
                 .{ .name = "required_path", .module = required_path_mod },
+                .{ .name = "shared_structure_report", .module = shared_structure_report_mod },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -595,21 +614,33 @@ const generatedTemplateRuntimeStubSource =
     \\const support = @import("template_compiler_support");
     \\
     \\pub const TemplateClass = support.TemplateClass;
+    \\// Compact index used by the generated template switch dispatcher.
+    \\pub const TemplateRenderIndex = u16;
+    \\// Shared lookup shape used by the renderers when the generated runtime is absent.
+    \\pub const TemplateLookup = struct {
+    \\    class: TemplateClass,
+    \\    render_index: TemplateRenderIndex,
+    \\};
     \\
     \\pub fn classifyTemplate(name: []const u8) ?TemplateClass {
-    \\    if (name.len == 0) return null;
-    \\    return .unsupported;
+    \\    const lookup = lookupTemplate(name) orelse return null;
+    \\    return lookup.class;
     \\}
     \\
-    \\pub fn renderTemplateByName(
+    \\pub fn lookupTemplate(name: []const u8) ?TemplateLookup {
+    \\    if (name.len == 0) return null;
+    \\    return .{ .class = .unsupported, .render_index = 0 };
+    \\}
+    \\
+    \\pub fn renderTemplateByIndex(
     \\    out: *std.ArrayList(u8),
     \\    allocator: std.mem.Allocator,
-    \\    name: []const u8,
+    \\    render_index: TemplateRenderIndex,
     \\    args: *const support.TemplateArgs,
     \\) !bool {
     \\    _ = out;
     \\    _ = allocator;
-    \\    _ = name;
+    \\    _ = render_index;
     \\    _ = args;
     \\    return false;
     \\}
@@ -783,6 +814,8 @@ fn addDirectStructureBinary(
         "--dep",
         "shared_xml_decode",
         "--dep",
+        "shared_structure_report",
+        "--dep",
         "compact_pattern_seed",
         "--dep",
         "wikitext_source",
@@ -806,6 +839,8 @@ fn addDirectStructureBinary(
     compile.addPrefixedFileArg("-Mshared_html_entities=", b.path("shared/html_entities.zig"));
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mshared_xml_decode=", b.path("shared/xml_decode.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mshared_structure_report=", b.path("shared/structure_report.zig"));
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("shared/compact_pattern_seed.zig"));
     compile.addArg("-OReleaseFast");
@@ -843,13 +878,15 @@ fn addDirectVerifierBinary(
         "--dep",
         "shared_xml_decode",
         "--dep",
+        "shared_structure_report",
+        "--dep",
         "compact_pattern_seed",
         "--dep",
         "wikitext_source",
     });
     compile.addPrefixedFileArg("-Mencoder=", b.path("encoder/root.zig"));
     compile.addArg("-OReleaseFast");
-    compile.addArgs(&.{ "--dep", "normalize", "--dep", "encoder", "--dep", "shared_xml_decode", "--dep", "wikitext_source", "--dep", "cli_args", "--dep", "config=config1" });
+    compile.addArgs(&.{ "--dep", "normalize", "--dep", "encoder", "--dep", "shared_xml_decode", "--dep", "shared_structure_report", "--dep", "wikitext_source", "--dep", "cli_args", "--dep", "config=config1" });
     compile.addPrefixedFileArg("-Mdecoder=", b.path("decoder/root.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{ "--dep", "config=config0" });
@@ -865,6 +902,8 @@ fn addDirectVerifierBinary(
     compile.addPrefixedFileArg("-Mshared_html_entities=", b.path("shared/html_entities.zig"));
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mshared_xml_decode=", b.path("shared/xml_decode.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addPrefixedFileArg("-Mshared_structure_report=", b.path("shared/structure_report.zig"));
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("shared/compact_pattern_seed.zig"));
     compile.addArg("-OReleaseFast");
@@ -889,14 +928,12 @@ fn generateDefaultStructureTableSource(b: *std.Build) ![]const u8 {
     return generateStructureTableSourceFromJson(
         b.allocator,
         default_structure_report_json,
-        b.pathFromRoot("shared/compact_pattern_seed.zig"),
     );
 }
 
 fn generateStructureTableSourceFromJson(
     allocator: std.mem.Allocator,
     json_bytes: []const u8,
-    compact_source_path: []const u8,
 ) ![]const u8 {
     var parsed = try std.json.parseFromSlice(StructureReport, allocator, json_bytes, .{
         .ignore_unknown_fields = true,
@@ -1015,43 +1052,6 @@ fn generateStructureTableSourceFromJson(
     defer compact_patterns.deinit(allocator);
     var compact_patterns_ext: std.ArrayList(GeneratedCompactPattern) = .empty;
     defer compact_patterns_ext.deinit(allocator);
-    var all_compact_patterns: std.ArrayList(GeneratedCompactPattern) = .empty;
-    defer all_compact_patterns.deinit(allocator);
-    var all_compact_pattern_indexes = std.StringHashMapUnmanaged(usize).empty;
-    defer all_compact_pattern_indexes.deinit(allocator);
-    for (line_templates.items) |template_entry| {
-        const pattern = compactPatternForTemplate(allocator, template_entry.name) orelse continue;
-        const gop = try all_compact_pattern_indexes.getOrPut(allocator, pattern);
-        if (!gop.found_existing) {
-            gop.key_ptr.* = try allocator.dupe(u8, pattern);
-            gop.value_ptr.* = all_compact_patterns.items.len;
-            try all_compact_patterns.append(allocator, .{
-                .pattern = gop.key_ptr.*,
-                .count = template_entry.count,
-            });
-        } else {
-            all_compact_patterns.items[gop.value_ptr.*].count += template_entry.count;
-        }
-    }
-    std.mem.sortUnstable(GeneratedCompactPattern, all_compact_patterns.items, {}, generatedCompactPatternLessThan);
-
-    var covered_compact_patterns = std.StringHashMapUnmanaged(void).empty;
-    defer covered_compact_patterns.deinit(allocator);
-    try seedCoveredCompactPatterns(allocator, compact_source_path, &covered_compact_patterns);
-
-    for (all_compact_patterns.items) |pattern_entry| {
-        const gop = try covered_compact_patterns.getOrPut(allocator, pattern_entry.pattern);
-        if (gop.found_existing) continue;
-        gop.key_ptr.* = try allocator.dupe(u8, pattern_entry.pattern);
-
-        if (compact_patterns.items.len < 50) {
-            try compact_patterns.append(allocator, pattern_entry);
-        } else if (compact_patterns_ext.items.len < 200) {
-            try compact_patterns_ext.append(allocator, pattern_entry);
-        } else {
-            break;
-        }
-    }
 
     var target_languages: std.ArrayList(GeneratedTargetLanguage) = .empty;
     defer target_languages.deinit(allocator);
@@ -1488,21 +1488,6 @@ fn seedCoveredCompactPatterns(
         const gop = try covered.getOrPut(allocator, name);
         if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, name);
     }
-}
-
-fn compactPatternForTemplate(allocator: std.mem.Allocator, name: []const u8) ?[]const u8 {
-    if (name.len == 0) return null;
-    if (std.mem.indexOfAny(u8, name, "\r\n")) |_| return null;
-
-    if (std.mem.startsWith(u8, name, "en-") or
-        std.mem.eql(u8, name, "enPR") or
-        std.mem.eql(u8, name, "...") or
-        std.mem.eql(u8, name, "nb..."))
-    {
-        return std.fmt.allocPrint(allocator, "{{{{{s}", .{name}) catch null;
-    }
-
-    return std.fmt.allocPrint(allocator, "{{{{{s}|", .{name}) catch null;
 }
 
 fn generatedTargetLanguageLessThan(_: void, a: GeneratedTargetLanguage, b: GeneratedTargetLanguage) bool {

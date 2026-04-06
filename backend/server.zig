@@ -12,6 +12,7 @@ const Header = zhttp.response.Header;
 
 pub const ServeOptions = struct {
     db_path: []const u8 = "data/wiktionary.bin",
+    structure_path: ?[]const u8 = null,
     port: u16 = 3000,
 };
 
@@ -40,7 +41,9 @@ const AppContext = struct {
     fn init(io: std.Io, allocator: std.mem.Allocator, options: ServeOptions) !AppContext {
         return .{
             .allocator = allocator,
-            .db = try decoder.openDictionary(allocator, io, options.db_path),
+            .db = try decoder.openDictionaryWithOptions(allocator, io, options.db_path, .{
+                .structure_path = options.structure_path,
+            }),
             .db_path = try allocator.dupe(u8, options.db_path),
             .theme_palette = try system_theme.detectSystemPalette(io, allocator),
             .index_html = blk: {
@@ -350,6 +353,7 @@ const App = blk: {
 pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
     const options = ServeOptions{
         .db_path = cli_args.flagValue(args, "--db") orelse "data/wiktionary.bin",
+        .structure_path = cli_args.flagValue(args, "--structure"),
         .port = (try cli_args.parseOptionalIntFlag(u16, args, "--port")) orelse 3000,
     };
     ensurePathExistsOrExit(io, options.db_path, "dictionary");

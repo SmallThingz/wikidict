@@ -366,12 +366,13 @@ pub fn invokeGeneratedModuleFunction(
     if (function_value != .function) return;
 
     const frame = try buildGeneratedFrameFromTemplateArgsAlloc(&generated.runtime, args);
-    const results = lua.generatedInvoke(&generated.runtime, function_value, &.{frame}) catch return;
-    if (results.len == 0) return;
-    try lua.appendValueTextAlloc(out, allocator, results[0]);
+    const first = lua.generatedCallFirst(&generated.runtime, function_value, &.{frame}) catch return;
+    try lua.appendValueTextAlloc(out, allocator, first);
 }
 
-fn buildGeneratedFrameFromTemplateArgsAlloc(
+// Generated template runtimes reuse the same frame builder so #invoke and
+// generated module exports see the same `frame.args` layout everywhere.
+pub fn buildGeneratedFrameFromTemplateArgsAlloc(
     runtime: *lua.GeneratedRuntime,
     args: *const TemplateArgs,
 ) !lua.Value {

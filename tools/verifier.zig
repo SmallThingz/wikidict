@@ -116,6 +116,7 @@ pub fn main(init: std.process.Init) !void {
 const Options = struct {
     input_path: []const u8 = "data/wiktionary.xml",
     db_path: []const u8 = "data/wiktionary.bin",
+    structure_path: ?[]const u8 = null,
     report_path: []const u8 = "data/verification-report.txt",
     limit_entries: ?usize = null,
     thread_count: ?usize = null,
@@ -241,6 +242,7 @@ const PageCapture = struct {
     title_raw: ?[]const u8 = null,
     ns_raw: ?[]const u8 = null,
     text_raw: ?[]const u8 = null,
+    redirect_title_raw: ?[]const u8 = null,
 
     fn onNode(self: *@This(), node: StreamNode) bool {
         if (node.kind != .element) return true;
@@ -251,6 +253,8 @@ const PageCapture = struct {
             self.title_raw = node.leadingTextRaw();
         } else if (node.depth == 1 and std.mem.eql(u8, name, "ns")) {
             self.ns_raw = node.leadingTextRaw();
+        } else if (node.depth == 1 and std.mem.eql(u8, name, "redirect")) {
+            self.redirect_title_raw = node.getAttributeValueRaw("title");
         } else if (node.depth == 2 and std.mem.eql(u8, name, "text") and std.mem.eql(u8, self.names_by_depth[1], "revision")) {
             self.text_raw = node.leadingTextRaw();
         }
@@ -471,6 +475,8 @@ const Verifier = struct {
 
         const entry = self.dict.entryAt(entry_ref.entry_index);
         const actual_raw = (try entry.rawStoredAlloc(temp_allocator)) orelse {
+            // Redirect-only entries intentionally do not store raw wikitext bodies.
+            if (!entry.hasRaw()) return;
             try self.recordMissingEntry(title, expected_raw);
             return;
         };
@@ -551,7 +557,9 @@ const Verifier = struct {
 };
 
 fn openOrBuildDictionary(allocator: std.mem.Allocator, io: std.Io, options: Options) !decoder.Dictionary {
-    return decoder.openDictionary(allocator, io, options.db_path);
+    return decoder.openDictionaryWithOptions(allocator, io, options.db_path, .{
+        .structure_path = options.structure_path,
+    });
 }
 
 fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options: Options) void {
@@ -572,6 +580,10 @@ fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options
     argv.append(allocator, options.input_path) catch unreachable;
     argv.append(allocator, "--db") catch unreachable;
     argv.append(allocator, options.db_path) catch unreachable;
+    if (options.structure_path) |structure_path| {
+        argv.append(allocator, "--structure") catch unreachable;
+        argv.append(allocator, structure_path) catch unreachable;
+    }
     if (options.limit_entries) |limit| {
         const limit_text = std.fmt.allocPrint(allocator, "{d}", .{limit}) catch unreachable;
         defer allocator.free(limit_text);
@@ -593,6 +605,12 @@ const VerifyChunkJob = struct {
     queue: *WorkQueue,
     progress: *VerifyProgress,
     err: ?anyerror = null,
+};
+
+const PageOutcome = enum {
+    none,
+    raw,
+    redirect,
 };
 
 pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Options) !VerifyStats {
@@ -811,7 +829,7 @@ fn processVerifyChunk(job: *VerifyChunkJob) !void {
             error.OutOfMemory, error.ClosedWorkQueue => return err,
             else => blk: {
                 job.verifier.noteParseSkip();
-                break :blk false;
+                break :blk PageOutcome.none;
             },
         };
         consumed = page_end;
@@ -831,22 +849,22 @@ fn processMappedInputSequential(
     progress: *VerifyProgress,
 ) !void {
     var consumed: usize = 0;
-    var queued_language_entries: usize = 0;
+    var selected_entries: usize = 0;
     while (true) {
         const start = std.mem.indexOfPos(u8, mapped, consumed, "<page>") orelse break;
         const end_start = std.mem.indexOfPos(u8, mapped, start, "</page>") orelse break;
         const page_end = end_start + "</page>".len;
 
         const page_allocator = page_arena.allocator();
-        const queued = processPageFragment(page_allocator, stream_parser, mapped[start..page_end], verifier, queue) catch |err| switch (err) {
+        const outcome = processPageFragment(page_allocator, stream_parser, mapped[start..page_end], verifier, queue) catch |err| switch (err) {
             error.OutOfMemory, error.ClosedWorkQueue => return err,
             else => blk: {
                 verifier.noteParseSkip();
-                break :blk false;
+                break :blk PageOutcome.none;
             },
         };
-        if (queued) {
-            queued_language_entries += 1;
+        if (outcome != .none) {
+            selected_entries += 1;
         }
         consumed = page_end;
         _ = page_arena.reset(.retain_capacity);
@@ -854,7 +872,7 @@ fn processMappedInputSequential(
         progress.scanAdvance(page_end - start, counts.pages, counts.compared, counts.failures);
 
         if (verifier.options.limit_entries) |limit| {
-            if (queued_language_entries >= limit) return;
+            if (selected_entries >= limit) return;
         }
     }
 }
@@ -865,24 +883,30 @@ fn processPageFragment(
     page_fragment: []const u8,
     verifier: *Verifier,
     queue: *WorkQueue,
-) !bool {
+) !PageOutcome {
     var capture: PageCapture = .{};
     try parser.parse(page_fragment, &capture, PageCapture.onNode);
 
-    const ns_raw = capture.ns_raw orelse return false;
-    const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch return false;
+    const ns_raw = capture.ns_raw orelse return .none;
+    const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch return .none;
     verifier.notePageSeen(ns == 0);
-    if (ns != 0) return false;
+    if (ns != 0) return .none;
 
-    const text_raw = capture.text_raw orelse return false;
-    const title_raw = capture.title_raw orelse return false;
+    const title_raw = capture.title_raw orelse return .none;
+    const text_raw = capture.text_raw orelse {
+        if (capture.redirect_title_raw != null) return .redirect;
+        return .none;
+    };
 
     const title = try xml_decode.decodeAlloc(allocator, title_raw);
     const text = try xml_decode.decodeAlloc(allocator, text_raw);
-    const stored_sections = (try wikitext.extractConfiguredLanguageSectionsAlloc(allocator, text, verifier.options.exclusions)) orelse return false;
+    const stored_sections = (try wikitext.extractConfiguredLanguageSectionsAlloc(allocator, text, verifier.options.exclusions)) orelse {
+        if (capture.redirect_title_raw != null) return .redirect;
+        return .none;
+    };
 
     try queue.push(title, stored_sections);
-    return true;
+    return .raw;
 }
 
 fn verifierWorkerMain(verifier: *Verifier, queue: *WorkQueue) void {
@@ -1070,6 +1094,9 @@ fn parseOptions(args: []const []const u8) !Options {
         } else if (std.mem.eql(u8, arg, "--db") and i + 1 < args.len) {
             options.db_path = args[i + 1];
             i += 1;
+        } else if (std.mem.eql(u8, arg, "--structure") and i + 1 < args.len) {
+            options.structure_path = args[i + 1];
+            i += 1;
         } else if (std.mem.eql(u8, arg, "--report") and i + 1 < args.len) {
             options.report_path = args[i + 1];
             i += 1;
@@ -1093,6 +1120,7 @@ fn parseOptions(args: []const []const u8) !Options {
 fn printUsage() void {
     std.debug.print(
         \\dict-verify [--input data/wiktionary.xml] [--db data/wiktionary.bin]
+        \\            [--structure data/wiktionary-structure.json]
         \\            [--report data/verification-report.txt] [--limit 10000]
         \\            [--threads N]
         \\build-time exclusions come from -Dskip-headings=...
@@ -1336,6 +1364,110 @@ test "verifyDictionary treats decoded unicode spacing entities as whitespace-onl
     });
 
     try std.testing.expectEqual(@as(usize, 1), stats.whitespace_only_matches);
+    try std.testing.expectEqual(@as(usize, 0), stats.failures());
+}
+
+test "verifyDictionary skips redirect-only entries without raw payloads" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>headspace</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# [[space]] in the [[head]]
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>head space</title>
+        \\<ns>0</ns>
+        \\<redirect title="headspace" />
+        \\<revision><text xml:space="preserve">#REDIRECT [[headspace]]</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    const xml_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "redirect.xml");
+    defer std.testing.allocator.free(xml_rel);
+    const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
+    defer std.testing.allocator.free(db_rel);
+    const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
+    defer std.testing.allocator.free(report_rel);
+    try writeMappedFile(xml_rel, xml);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .output_path = db_rel,
+    });
+
+    const stats = try verifyDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .db_path = db_rel,
+        .report_path = report_rel,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), stats.exact_matches);
+    try std.testing.expectEqual(@as(usize, 0), stats.missing_raw_entries);
+    try std.testing.expectEqual(@as(usize, 0), stats.failures());
+}
+
+test "verifyDictionary limit matches encoder entry limit when redirects are included" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>alpha</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# first
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>alpha redirect</title>
+        \\<ns>0</ns>
+        \\<redirect title="alpha" />
+        \\<revision><text xml:space="preserve">#REDIRECT [[alpha]]</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>beta</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# second
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    const xml_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "limit.xml");
+    defer std.testing.allocator.free(xml_rel);
+    const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
+    defer std.testing.allocator.free(db_rel);
+    const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
+    defer std.testing.allocator.free(report_rel);
+    try writeMappedFile(xml_rel, xml);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .output_path = db_rel,
+        .limit_entries = 2,
+    });
+
+    const stats = try verifyDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .db_path = db_rel,
+        .report_path = report_rel,
+        .limit_entries = 2,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), stats.exact_matches);
+    try std.testing.expectEqual(@as(usize, 0), stats.missing_raw_entries);
     try std.testing.expectEqual(@as(usize, 0), stats.failures());
 }
 

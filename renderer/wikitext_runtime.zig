@@ -1320,8 +1320,8 @@ fn renderGeneratedTemplate(
     name: []const u8,
     parts: *const std.ArrayList([]const u8),
 ) !bool {
-    const class = generated_templates.classifyTemplate(name) orelse return false;
-    switch (class) {
+    const lookup = generated_templates.lookupTemplate(name) orelse return false;
+    switch (lookup.class) {
         .metadata_only => return true,
         .unsupported => return false,
         .compiled => {
@@ -1329,7 +1329,7 @@ fn renderGeneratedTemplate(
             defer args.deinit(allocator);
 
             const start_len = out.items.len;
-            if (!(generated_templates.renderTemplateByName(out, allocator, name, &args) catch false)) {
+            if (!(generated_templates.renderTemplateByIndex(out, allocator, lookup.render_index, &args) catch false)) {
                 out.items.len = start_len;
                 return false;
             }

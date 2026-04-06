@@ -141,6 +141,7 @@ fn cmdIndex(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) 
 fn openOptionsFromArgs(args: []const []const u8) !decoder.OpenOptions {
     return .{
         .index_build_threads = try cli_args.parseOptionalIntFlag(usize, args, "--index-threads"),
+        .structure_path = cli_args.flagValue(args, "--structure"),
     };
 }
 
@@ -351,10 +352,10 @@ fn lookupKindName(kind: u8) []const u8 {
 
 fn printUsage(io: std.Io, allocator: std.mem.Allocator) !void {
     try printStdOut(io, allocator,
-        \\dict-decoder lookup  --db data/wiktionary.bin [--input data/wiktionary.xml] --word colour [--index-threads 2]
-        \\dict-decoder suggest --db data/wiktionary.bin [--input data/wiktionary.xml] --prefix col [--limit 12] [--index-threads 2]
-        \\dict-decoder index   --db data/wiktionary.bin [--input data/wiktionary.xml] [--index-threads 2]
-        \\dict-decoder stats   --db data/wiktionary.bin [--input data/wiktionary.xml] [--index-threads 2]
+        \\dict-decoder lookup  --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json] --word colour [--index-threads 2]
+        \\dict-decoder suggest --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json] --prefix col [--limit 12] [--index-threads 2]
+        \\dict-decoder index   --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json] [--index-threads 2]
+        \\dict-decoder stats   --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json] [--index-threads 2]
         \\
     , .{});
 }

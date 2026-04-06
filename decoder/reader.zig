@@ -4,6 +4,7 @@ const std = @import("std");
 const normalize = @import("normalize");
 const compact = @import("compact_runtime.zig");
 const format = @import("format.zig");
+const structure_report = @import("shared_structure_report");
 const wikitext = @import("wikitext_source");
 const testing_encoder = if (builtin.is_test) @import("encoder") else struct {};
 
@@ -208,6 +209,7 @@ const EntryRecordView = struct {
 
 pub const OpenOptions = struct {
     index_build_threads: ?usize = null,
+    structure_path: ?[]const u8 = null,
 };
 
 pub const EntryDerivedData = struct {
@@ -226,6 +228,100 @@ pub const EntryDerivedData = struct {
         if (self.alias_hint_label.len != 0) allocator.free(self.alias_hint_label);
     }
 };
+
+fn loadTemplateTablesIntoMappings(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    db_path: []const u8,
+    explicit_structure_path: ?[]const u8,
+    mappings: *compact.OwnedRuntimeMappings,
+) !void {
+    const structure_path = try defaultStructurePathAlloc(allocator, db_path, explicit_structure_path);
+    defer allocator.free(structure_path);
+
+    var template_mappings = structure_report.loadTemplateMappingsAlloc(io, allocator, structure_path) catch |err| switch (err) {
+        error.FileNotFound => {
+            if (builtin.is_test) {
+                try loadTestingTemplateTables(allocator, mappings);
+                return;
+            }
+            return error.MissingStructureReport;
+        },
+        else => return err,
+    };
+    errdefer template_mappings.deinit(allocator);
+
+    if (template_mappings.line_templates.len != mappings.expected_line_template_count) return error.InvalidStructureReport;
+    if (template_mappings.translation_templates.len != mappings.expected_translation_template_count) return error.InvalidStructureReport;
+    const fingerprint = structure_report.templateTableFingerprint(
+        template_mappings.line_templates,
+        template_mappings.translation_templates,
+    );
+    if (fingerprint != mappings.template_table_fingerprint) return error.InvalidStructureReport;
+
+    const line_templates = try allocator.alloc(compact.RuntimeLineTemplate, template_mappings.line_templates.len);
+    errdefer allocator.free(line_templates);
+    for (template_mappings.line_templates, 0..) |entry, idx| {
+        line_templates[idx] = .{
+            .code = entry.code,
+            .name = entry.name,
+        };
+    }
+    allocator.free(template_mappings.line_templates);
+    template_mappings.line_templates = &.{};
+
+    const translation_templates = try allocator.alloc(compact.RuntimeTranslationTemplate, template_mappings.translation_templates.len);
+    errdefer allocator.free(translation_templates);
+    for (template_mappings.translation_templates, 0..) |entry, idx| {
+        translation_templates[idx] = .{
+            .code = entry.code,
+            .name = entry.name,
+        };
+    }
+    allocator.free(template_mappings.translation_templates);
+    template_mappings.translation_templates = &.{};
+
+    mappings.line_templates = line_templates;
+    mappings.translation_templates = translation_templates;
+    mappings.owns_template_names = true;
+}
+
+fn defaultStructurePathAlloc(
+    allocator: std.mem.Allocator,
+    db_path: []const u8,
+    explicit_structure_path: ?[]const u8,
+) ![]u8 {
+    if (explicit_structure_path) |path| return allocator.dupe(u8, path);
+    if (std.mem.lastIndexOfScalar(u8, db_path, '/')) |idx| {
+        const dir = db_path[0..idx];
+        return std.fmt.allocPrint(allocator, "{s}/wiktionary-structure.json", .{dir});
+    }
+    return allocator.dupe(u8, "data/wiktionary-structure.json");
+}
+
+fn loadTestingTemplateTables(
+    allocator: std.mem.Allocator,
+    mappings: *compact.OwnedRuntimeMappings,
+) !void {
+    if (!builtin.is_test) return error.MissingStructureReport;
+    const runtime = testing_encoder.compact_encoding.currentRuntimeMappings();
+    if (runtime.line_templates.len != mappings.expected_line_template_count) return error.InvalidStructureReport;
+    if (runtime.translation_templates.len != mappings.expected_translation_template_count) return error.InvalidStructureReport;
+    if (testing_encoder.compact_encoding.templateTableFingerprint(runtime) != mappings.template_table_fingerprint) {
+        return error.InvalidStructureReport;
+    }
+
+    mappings.line_templates = try allocator.alloc(compact.RuntimeLineTemplate, runtime.line_templates.len);
+    for (runtime.line_templates, 0..) |entry, idx| mappings.line_templates[idx] = .{
+        .code = entry.code,
+        .name = entry.name,
+    };
+    mappings.translation_templates = try allocator.alloc(compact.RuntimeTranslationTemplate, runtime.translation_templates.len);
+    for (runtime.translation_templates, 0..) |entry, idx| mappings.translation_templates[idx] = .{
+        .code = entry.code,
+        .name = entry.name,
+    };
+}
 
 const CacheBuildProgress = struct {
     const refresh_interval_ns = std.time.ns_per_s / 20;
@@ -599,6 +695,7 @@ pub const Dictionary = struct {
             else => return err,
         };
         errdefer compact_mappings.deinit(allocator);
+        try loadTemplateTablesIntoMappings(allocator, io, path, options.structure_path, &compact_mappings);
 
         const cache = try openOrBuildCache(allocator, io, path, db.stat, db.mapping, &inspected.header, inspected.layout, compact_mappings.view(), options);
         errdefer std.posix.munmap(cache.mapping);

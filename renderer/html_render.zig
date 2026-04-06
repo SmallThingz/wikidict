@@ -2532,8 +2532,9 @@ fn renderGeneratedTemplateHtml(
     parts: *const std.ArrayList([]const u8),
     options: RenderOptions,
 ) !bool {
-    const class = generatedTemplateClassHtml(name) orelse return false;
-    switch (class) {
+    const trimmed = trimWikiWhitespace(name);
+    const lookup = generated_templates.lookupTemplate(trimmed) orelse return false;
+    switch (lookup.class) {
         .metadata_only => return true,
         .unsupported => return false,
         .compiled => {
@@ -2542,7 +2543,7 @@ fn renderGeneratedTemplateHtml(
 
             var generated_text: std.ArrayList(u8) = .empty;
             defer generated_text.deinit(allocator);
-            if (!try generated_templates.renderTemplateByName(&generated_text, allocator, name, &args)) return false;
+            if (!try generated_templates.renderTemplateByIndex(&generated_text, allocator, lookup.render_index, &args)) return false;
             if (generated_text.items.len == 0) return true;
             if (looksLikeTemplateRedirectTextHtml(generated_text.items)) return false;
 

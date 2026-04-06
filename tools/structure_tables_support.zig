@@ -104,6 +104,12 @@ pub const Dependencies = struct {
     unresolved_templates: []const []const u8 = &.{},
     direct_modules: []const []const u8 = &.{},
     transitive_modules: []const []const u8 = &.{},
+    // Full template page ref table captured during structure analysis so tools
+    // can reload any template source directly from the XML mmap without rescans.
+    all_template_pages: []const DependencySourceRef = &.{},
+    // Full module page ref table captured during structure analysis for the
+    // same offset-based source loading path used by code generation.
+    all_module_pages: []const DependencySourceRef = &.{},
     reachable_template_pages: []const DependencySourceRef = &.{},
     transitive_module_pages: []const DependencySourceRef = &.{},
     missing_modules: []const []const u8 = &.{},
@@ -324,10 +330,6 @@ pub fn buildDataFromLegacyAlloc(
     std.mem.sortUnstable(GeneratedTemplate, templates.items, {}, generatedTemplateLessThan);
     std.mem.sortUnstable(GeneratedTemplate, line_templates.items, {}, generatedTemplateLessThan);
 
-    var covered_template_names: std.StringHashMapUnmanaged(void) = .empty;
-    defer deinitOwnedStringMap(allocator, void, &covered_template_names);
-    try compact_pattern_seed.seedCoveredTemplateNames(allocator, &covered_template_names);
-
     var covered_patterns: std.StringHashMapUnmanaged(void) = .empty;
     defer deinitOwnedStringMap(allocator, void, &covered_patterns);
     try compact_pattern_seed.seedCoveredPatterns(allocator, &covered_patterns);
@@ -353,46 +355,6 @@ pub fn buildDataFromLegacyAlloc(
         } else {
             allocator.free(pattern);
             compact_patterns_all.items[gop.value_ptr.*].count += heading_entry.count;
-        }
-    }
-    for (line_templates.items) |template_entry| {
-        if (covered_template_names.contains(template_entry.name)) continue;
-        const pattern = compactPatternForTemplate(allocator, template_entry.name) orelse continue;
-        if (covered_patterns.contains(pattern)) {
-            allocator.free(pattern);
-            continue;
-        }
-        const gop = try compact_pattern_indexes.getOrPut(allocator, pattern);
-        if (!gop.found_existing) {
-            gop.key_ptr.* = pattern;
-            gop.value_ptr.* = compact_patterns_all.items.len;
-            try compact_patterns_all.append(allocator, .{
-                .pattern = gop.key_ptr.*,
-                .count = template_entry.count,
-            });
-        } else {
-            allocator.free(pattern);
-            compact_patterns_all.items[gop.value_ptr.*].count += template_entry.count;
-        }
-    }
-    for (templates.items) |template_entry| {
-        if (covered_template_names.contains(template_entry.name)) continue;
-        const pattern = compactPatternForTemplate(allocator, template_entry.name) orelse continue;
-        if (covered_patterns.contains(pattern)) {
-            allocator.free(pattern);
-            continue;
-        }
-        const gop = try compact_pattern_indexes.getOrPut(allocator, pattern);
-        if (!gop.found_existing) {
-            gop.key_ptr.* = pattern;
-            gop.value_ptr.* = compact_patterns_all.items.len;
-            try compact_patterns_all.append(allocator, .{
-                .pattern = gop.key_ptr.*,
-                .count = template_entry.count,
-            });
-        } else {
-            allocator.free(pattern);
-            compact_patterns_all.items[gop.value_ptr.*].count += template_entry.count;
         }
     }
     std.mem.sortUnstable(GeneratedCompactPattern, compact_patterns_all.items, {}, generatedCompactPatternLessThan);
@@ -806,21 +768,6 @@ fn generatedTargetLanguageLessThan(_: void, a: GeneratedTargetLanguage, b: Gener
     return std.mem.lessThan(u8, a.value, b.value);
 }
 
-fn compactPatternForTemplate(allocator: std.mem.Allocator, name: []const u8) ?[]u8 {
-    if (name.len == 0) return null;
-    if (std.mem.indexOfAny(u8, name, "\r\n")) |_| return null;
-
-    if (std.mem.startsWith(u8, name, "en-") or
-        std.mem.eql(u8, name, "enPR") or
-        std.mem.eql(u8, name, "...") or
-        std.mem.eql(u8, name, "nb..."))
-    {
-        return std.fmt.allocPrint(allocator, "{{{{{s}", .{name}) catch null;
-    }
-
-    return std.fmt.allocPrint(allocator, "{{{{{s}|", .{name}) catch null;
-}
-
 fn compactPatternForHeading(allocator: std.mem.Allocator, level: u8, title: []const u8) ?[]u8 {
     if (level == 0 or title.len == 0) return null;
     if (level > 8) return null;
@@ -921,7 +868,7 @@ fn appendZigStringLiteral(writer: *std.Io.Writer, bytes: []const u8) !void {
     try writer.writeByte('"');
 }
 
-test "buildDataFromLegacyAlloc excludes templates already covered by static seeds" {
+test "buildDataFromLegacyAlloc keeps template names out of compact exact patterns" {
     var build = try buildDataFromLegacyAlloc(std.testing.allocator, .{
         .heading_profiles = &.{
             .{ .title = "Noun", .parser_kind = "part-of-speech", .count = 10 },
@@ -933,9 +880,8 @@ test "buildDataFromLegacyAlloc excludes templates already covered by static seed
     });
     defer build.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(usize, 1), build.compact_direct_patterns.len);
+    try std.testing.expectEqual(@as(usize, 0), build.compact_direct_patterns.len);
     try std.testing.expectEqual(@as(usize, 0), build.compact_patterns.len);
-    try std.testing.expectEqualStrings("{{custom form of|", build.compact_direct_patterns[0]);
 }
 
 test "buildDataFromLegacyAlloc promotes exact heading lines into compact direct patterns" {

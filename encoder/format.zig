@@ -2,8 +2,8 @@ const std = @import("std");
 const compact = @import("compact_encoding.zig");
 const generated = @import("generated_structure_tables");
 
-pub const magic = "WIKDIC29";
-pub const version: u32 = 29;
+pub const magic = "WIKDIC30";
+pub const version: u32 = 30;
 pub const max_serialized_payload_len: u32 = 0x00ff_ffff;
 pub const legacy_magic_v25 = "WIKDIC25";
 pub const legacy_version_v25: u32 = 25;
@@ -16,7 +16,7 @@ pub const legacy_version_v22: u32 = 22;
 pub const structure_fingerprint: u32 = generated.structure_fingerprint;
 
 pub fn currentMappingFingerprint() u32 {
-    return compact.mappingFingerprint(compact.currentRuntimeMappings());
+    return compact.binaryMappingFingerprint(compact.currentRuntimeMappings());
 }
 
 pub const record_flag_has_raw: u8 = 1 << 0;
@@ -295,6 +295,8 @@ pub fn encodeCurrentCompactMappingsAlloc(allocator: std.mem.Allocator) ![]u8 {
     var u32_buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &u32_buf, currentMappingFingerprint(), .little);
     try out.appendSlice(allocator, &u32_buf);
+    std.mem.writeInt(u32, &u32_buf, compact.templateTableFingerprint(mappings), .little);
+    try out.appendSlice(allocator, &u32_buf);
 
     inline for (.{
         mappings.direct_patterns.len,
@@ -313,16 +315,6 @@ pub fn encodeCurrentCompactMappingsAlloc(allocator: std.mem.Allocator) ![]u8 {
     for (mappings.extended_patterns) |pattern| try appendBytesSlice(&out, allocator, pattern);
 
     var u16_buf: [2]u8 = undefined;
-    for (mappings.line_templates) |entry| {
-        std.mem.writeInt(u16, &u16_buf, entry.code, .little);
-        try out.appendSlice(allocator, &u16_buf);
-        try appendBytesSlice(&out, allocator, entry.name);
-    }
-    for (mappings.translation_templates) |entry| {
-        std.mem.writeInt(u16, &u16_buf, entry.code, .little);
-        try out.appendSlice(allocator, &u16_buf);
-        try appendBytesSlice(&out, allocator, entry.name);
-    }
     for (mappings.heading_levels) |entry| {
         std.mem.writeInt(u16, &u16_buf, entry.code, .little);
         try out.appendSlice(allocator, &u16_buf);
@@ -338,10 +330,11 @@ pub fn parseCompactMappingsAlloc(
     allocator: std.mem.Allocator,
     blob: []const u8,
 ) (std.mem.Allocator.Error || LayoutError)!compact.OwnedRuntimeMappings {
-    if (blob.len < 28) return error.InvalidDictionaryFile;
+    if (blob.len < 32) return error.InvalidDictionaryFile;
 
     var cursor: usize = 0;
     const fingerprint = try readFixedU32(blob, &cursor);
+    const template_fingerprint = try readFixedU32(blob, &cursor);
     const direct_count = try readFixedU32(blob, &cursor);
     const escaped_count = try readFixedU32(blob, &cursor);
     const extended_count = try readFixedU32(blob, &cursor);
@@ -353,9 +346,12 @@ pub fn parseCompactMappingsAlloc(
         .direct_patterns = try allocator.alloc([]const u8, std.math.cast(usize, direct_count) orelse return error.FileTooBig),
         .escaped_patterns = try allocator.alloc([]const u8, std.math.cast(usize, escaped_count) orelse return error.FileTooBig),
         .extended_patterns = try allocator.alloc([]const u8, std.math.cast(usize, extended_count) orelse return error.FileTooBig),
-        .line_templates = try allocator.alloc(compact.RuntimeLineTemplate, std.math.cast(usize, line_template_count) orelse return error.FileTooBig),
-        .translation_templates = try allocator.alloc(compact.RuntimeTranslationTemplate, std.math.cast(usize, translation_template_count) orelse return error.FileTooBig),
+        .line_templates = try allocator.alloc(compact.RuntimeLineTemplate, 0),
+        .translation_templates = try allocator.alloc(compact.RuntimeTranslationTemplate, 0),
         .heading_levels = try allocator.alloc(compact.RuntimeHeadingLevelSpec, std.math.cast(usize, heading_level_count) orelse return error.FileTooBig),
+        .expected_line_template_count = line_template_count,
+        .expected_translation_template_count = translation_template_count,
+        .template_table_fingerprint = template_fingerprint,
     };
     errdefer owned.deinit(allocator);
 
@@ -367,18 +363,6 @@ pub fn parseCompactMappingsAlloc(
     }
     for (owned.extended_patterns) |*pattern| {
         pattern.* = try readMappingString(blob, &cursor);
-    }
-    for (owned.line_templates) |*entry| {
-        entry.* = .{
-            .code = try readFixedU16(blob, &cursor),
-            .name = try readMappingString(blob, &cursor),
-        };
-    }
-    for (owned.translation_templates) |*entry| {
-        entry.* = .{
-            .code = try readFixedU16(blob, &cursor),
-            .name = try readMappingString(blob, &cursor),
-        };
     }
     for (owned.heading_levels) |*entry| {
         const code = try readFixedU16(blob, &cursor);
@@ -401,7 +385,7 @@ pub fn parseCompactMappingsAlloc(
     }
 
     if (cursor != blob.len) return error.InvalidDictionaryFile;
-    if (compact.mappingFingerprint(owned.view()) != fingerprint) return error.InvalidDictionaryFile;
+    if (compact.binaryMappingFingerprint(owned.view()) != fingerprint) return error.InvalidDictionaryFile;
     return owned;
 }
 
@@ -434,9 +418,27 @@ test "compact mapping blob round trips" {
     var parsed = try parseCompactMappingsAlloc(std.testing.allocator, blob);
     defer parsed.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(currentMappingFingerprint(), compact.mappingFingerprint(parsed.view()));
+    try std.testing.expectEqual(currentMappingFingerprint(), compact.binaryMappingFingerprint(parsed.view()));
     try std.testing.expectEqual(compact.currentRuntimeMappings().direct_patterns.len, parsed.direct_patterns.len);
+    try std.testing.expectEqual(@as(u32, @intCast(compact.currentRuntimeMappings().line_templates.len)), parsed.expected_line_template_count);
+    try std.testing.expectEqual(compact.templateTableFingerprint(compact.currentRuntimeMappings()), parsed.template_table_fingerprint);
     try std.testing.expectEqual(compact.currentRuntimeMappings().heading_levels.len, parsed.heading_levels.len);
+}
+
+test "compact mapping blob does not serialize template names" {
+    const blob = try encodeCurrentCompactMappingsAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(blob);
+
+    for (compact.currentRuntimeMappings().line_templates) |entry| {
+        const opener = try std.fmt.allocPrint(std.testing.allocator, "{{{{{s}", .{entry.name});
+        defer std.testing.allocator.free(opener);
+        try std.testing.expect(std.mem.indexOf(u8, blob, opener) == null);
+    }
+    for (compact.currentRuntimeMappings().translation_templates) |entry| {
+        const opener = try std.fmt.allocPrint(std.testing.allocator, "{{{{{s}", .{entry.name});
+        defer std.testing.allocator.free(opener);
+        try std.testing.expect(std.mem.indexOf(u8, blob, opener) == null);
+    }
 }
 
 pub fn encodeRawRecordPayloadAlloc(

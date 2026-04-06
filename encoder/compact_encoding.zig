@@ -1,6 +1,7 @@
 const std = @import("std");
 const generated = @import("generated_structure_tables");
 const compact_pattern_seed = @import("compact_pattern_seed");
+const structure_report = @import("shared_structure_report");
 const wikitext = @import("wikitext_source");
 
 pub const RuntimeLineTemplate = generated.LineTemplate;
@@ -23,6 +24,9 @@ pub const OwnedRuntimeMappings = struct {
     line_templates: []RuntimeLineTemplate = &.{},
     translation_templates: []RuntimeTranslationTemplate = &.{},
     heading_levels: []RuntimeHeadingLevelSpec = &.{},
+    expected_line_template_count: u32 = 0,
+    expected_translation_template_count: u32 = 0,
+    template_table_fingerprint: u32 = 0,
 
     pub fn view(self: *const OwnedRuntimeMappings) RuntimeMappings {
         return .{
@@ -128,6 +132,28 @@ pub fn mappingFingerprint(mappings: RuntimeMappings) u32 {
     }
 
     return @truncate(hasher.final());
+}
+
+pub fn binaryMappingFingerprint(mappings: RuntimeMappings) u32 {
+    var hasher = std.hash.Wyhash.init(0x4a92b39d6f1357c1);
+
+    for (mappings.direct_patterns) |entry| fingerprintUpdateString(&hasher, entry);
+    for (mappings.escaped_patterns) |entry| fingerprintUpdateString(&hasher, entry);
+    for (mappings.extended_patterns) |entry| fingerprintUpdateString(&hasher, entry);
+    for (mappings.heading_levels) |entry| {
+        var code_buf: [2]u8 = undefined;
+        std.mem.writeInt(u16, &code_buf, entry.code, .little);
+        hasher.update(&code_buf);
+        hasher.update(&[_]u8{entry.level});
+        fingerprintUpdateString(&hasher, entry.title);
+        hasher.update(&[_]u8{@intFromEnum(entry.kind)});
+    }
+
+    return @truncate(hasher.final());
+}
+
+pub fn templateTableFingerprint(mappings: RuntimeMappings) u32 {
+    return structure_report.templateTableFingerprint(mappings.line_templates, mappings.translation_templates);
 }
 
 comptime {
@@ -848,16 +874,6 @@ fn combinedKnownTemplateNamesAlloc(allocator: std.mem.Allocator) !std.ArrayList(
         names.deinit(allocator);
     }
 
-    var covered: std.StringHashMapUnmanaged(void) = .empty;
-    defer {
-        var it = covered.iterator();
-        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
-        covered.deinit(allocator);
-    }
-    try compact_pattern_seed.seedCoveredTemplateNames(allocator, &covered);
-
-    var it = covered.iterator();
-    while (it.next()) |entry| try appendUniqueTemplateName(allocator, &names, entry.key_ptr.*);
     for (line_template_defs) |template| try appendUniqueTemplateName(allocator, &names, template.name);
     for (translation_template_defs) |template| try appendUniqueTemplateName(allocator, &names, template.name);
     return names;
@@ -1031,6 +1047,20 @@ test "compact encoding generically encodes non-hot template names" {
         defer std.testing.allocator.free(decoded);
         try std.testing.expectEqualStrings(sample, decoded);
         try std.testing.expect(std.mem.indexOf(u8, encoded, raw_prefix) == null);
+    }
+}
+
+test "compact pattern tables do not embed template-specific opener strings" {
+    inline for (.{
+        direct_patterns[0..],
+        escaped_patterns[0..],
+        extended_escaped_patterns[0..],
+    }) |patterns| {
+        for (patterns) |pattern| {
+            const template_start = std.mem.indexOf(u8, pattern, "{{") orelse continue;
+            try std.testing.expectEqualStrings("{{", pattern[template_start .. template_start + 2]);
+            try std.testing.expect(template_start + 2 == pattern.len);
+        }
     }
 }
 

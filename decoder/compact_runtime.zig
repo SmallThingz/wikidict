@@ -1,4 +1,5 @@
 const std = @import("std");
+const structure_report = @import("shared_structure_report");
 
 pub const SectionKind = enum(u8) {
     lines = 0,
@@ -40,6 +41,10 @@ pub const OwnedRuntimeMappings = struct {
     line_templates: []RuntimeLineTemplate = &.{},
     translation_templates: []RuntimeTranslationTemplate = &.{},
     heading_levels: []RuntimeHeadingLevelSpec = &.{},
+    expected_line_template_count: u32 = 0,
+    expected_translation_template_count: u32 = 0,
+    template_table_fingerprint: u32 = 0,
+    owns_template_names: bool = false,
 
     pub fn view(self: *const OwnedRuntimeMappings) RuntimeMappings {
         return .{
@@ -53,6 +58,10 @@ pub const OwnedRuntimeMappings = struct {
     }
 
     pub fn deinit(self: *OwnedRuntimeMappings, allocator: std.mem.Allocator) void {
+        if (self.owns_template_names) {
+            for (self.line_templates) |entry| allocator.free(entry.name);
+            for (self.translation_templates) |entry| allocator.free(entry.name);
+        }
         allocator.free(self.direct_patterns);
         allocator.free(self.escaped_patterns);
         allocator.free(self.extended_patterns);
@@ -98,6 +107,28 @@ pub fn mappingFingerprint(mappings: RuntimeMappings) u32 {
     }
 
     return @truncate(hasher.final());
+}
+
+pub fn binaryMappingFingerprint(mappings: RuntimeMappings) u32 {
+    var hasher = std.hash.Wyhash.init(0x4a92b39d6f1357c1);
+
+    for (mappings.direct_patterns) |entry| fingerprintUpdateString(&hasher, entry);
+    for (mappings.escaped_patterns) |entry| fingerprintUpdateString(&hasher, entry);
+    for (mappings.extended_patterns) |entry| fingerprintUpdateString(&hasher, entry);
+    for (mappings.heading_levels) |entry| {
+        var code_buf: [2]u8 = undefined;
+        std.mem.writeInt(u16, &code_buf, entry.code, .little);
+        hasher.update(&code_buf);
+        hasher.update(&[_]u8{entry.level});
+        fingerprintUpdateString(&hasher, entry.title);
+        hasher.update(&[_]u8{@intFromEnum(entry.kind)});
+    }
+
+    return @truncate(hasher.final());
+}
+
+pub fn templateTableFingerprint(mappings: RuntimeMappings) u32 {
+    return structure_report.templateTableFingerprint(mappings.line_templates, mappings.translation_templates);
 }
 
 pub fn decodeAllocWithMappings(
