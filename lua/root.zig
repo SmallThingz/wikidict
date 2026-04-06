@@ -69,11 +69,11 @@ pub const Table = struct {
         }
     }
 
-    fn getString(self: *const Table, key: []const u8) Value {
+    pub fn getString(self: *const Table, key: []const u8) Value {
         return self.string_fields.get(key) orelse .nil;
     }
 
-    fn putString(self: *Table, key: []const u8, value: Value) !void {
+    pub fn putString(self: *Table, key: []const u8, value: Value) !void {
         const gop = try self.string_fields.getOrPut(self.allocator, key);
         if (!gop.found_existing) gop.key_ptr.* = try self.allocator.dupe(u8, key);
         gop.value_ptr.* = value;
@@ -100,18 +100,24 @@ pub const Table = struct {
 };
 
 const NativeFn = *const fn (vm: *Vm, args: []const Value) anyerror![]Value;
+pub const GeneratedInvokeFn = *const fn (
+    capture: ?*anyopaque,
+    globals: ?*anyopaque,
+    runtime: *GeneratedRuntime,
+    args: []const Value,
+) anyerror![]Value;
 
-const Constant = union(enum) {
+pub const Constant = union(enum) {
     number: f64,
     string: []const u8,
 };
 
-const UpvalueBinding = union(enum) {
+pub const UpvalueBinding = union(enum) {
     parent_local: u16,
     parent_upvalue: u16,
 };
 
-const Instruction = union(enum) {
+pub const Instruction = union(enum) {
     push_nil,
     push_bool: bool,
     push_const: u16,
@@ -183,7 +189,7 @@ const Closure = struct {
     upvalues: []const *Value,
 };
 
-const BuiltinGlobalSlots = struct {
+pub const BuiltinGlobalSlots = struct {
     print: ?u16 = null,
     tostring: ?u16 = null,
     tonumber: ?u16 = null,
@@ -202,6 +208,49 @@ const BytecodeProgram = struct {
     builtins: BuiltinGlobalSlots,
 };
 
+pub const ConstValueSeed = union(enum) {
+    nil,
+    boolean: bool,
+    number: f64,
+    string: []const u8,
+    table: *const ConstTableSeed,
+};
+
+pub const ConstTableStringFieldSeed = struct {
+    key: []const u8,
+    value: ConstValueSeed,
+};
+
+pub const ConstTableIntFieldSeed = struct {
+    key: i64,
+    value: ConstValueSeed,
+};
+
+pub const ConstTableSeed = struct {
+    array: []const ConstValueSeed,
+    string_fields: []const ConstTableStringFieldSeed,
+    int_fields: []const ConstTableIntFieldSeed,
+};
+
+pub const StaticPrototype = struct {
+    name: []const u8,
+    params: u16,
+    local_count: u16,
+    stack_size: u16,
+    is_vararg: bool,
+    code: []const Instruction,
+    constants: []const Constant,
+    const_tables: []const *const ConstTableSeed,
+    child_protos: []const *const StaticPrototype,
+    upvalues: []const UpvalueBinding,
+};
+
+pub const StaticProgram = struct {
+    top: *const StaticPrototype,
+    global_count: u16,
+    builtins: BuiltinGlobalSlots,
+};
+
 const GlobalState = struct {
     values: []Value,
 };
@@ -210,6 +259,11 @@ pub const FunctionKind = union(enum) {
     user: UserFunction,
     native: NativeFn,
     bytecode: *Closure,
+    generated: struct {
+        capture: ?*anyopaque,
+        globals: ?*anyopaque,
+        invoke: GeneratedInvokeFn,
+    },
 };
 
 pub const Function = struct {
@@ -228,7 +282,6 @@ pub const Chunk = struct {
     arena: std.heap.ArenaAllocator,
     source: []const u8,
     body: []const *Stmt,
-    program: *const BytecodeProgram,
 
     pub fn deinit(self: *Chunk) void {
         self.arena.deinit();
@@ -238,11 +291,67 @@ pub const Chunk = struct {
 pub const RunResult = struct {
     vm: Vm,
     returns: []const Value,
-    globals: *GlobalState,
 
     pub fn deinit(self: *RunResult) void {
         self.vm.deinit();
         self.* = undefined;
+    }
+};
+
+pub const GeneratedRunResult = struct {
+    runtime: GeneratedRuntime,
+    returns: []const Value,
+
+    pub fn deinit(self: *GeneratedRunResult) void {
+        self.runtime.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const GeneratedRuntime = struct {
+    arena: std.heap.ArenaAllocator,
+
+    pub fn init(allocator: std.mem.Allocator) GeneratedRuntime {
+        return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
+    }
+
+    pub fn deinit(self: *GeneratedRuntime) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+
+    pub fn alloc(self: *GeneratedRuntime) std.mem.Allocator {
+        return self.arena.allocator();
+    }
+
+    pub fn allocValues(self: *GeneratedRuntime, values: []const Value) ![]Value {
+        return try self.alloc().dupe(Value, values);
+    }
+
+    pub fn singleReturn(self: *GeneratedRuntime, value: Value) ![]Value {
+        const out = try self.alloc().alloc(Value, 1);
+        out[0] = value;
+        return out;
+    }
+
+    pub fn functionValue(
+        self: *GeneratedRuntime,
+        name: []const u8,
+        capture: ?*anyopaque,
+        globals: ?*anyopaque,
+        invoke: GeneratedInvokeFn,
+    ) !Value {
+        const function = try self.alloc().create(Function);
+        function.* = .{
+            .name = try self.alloc().dupe(u8, name),
+            .kind = .{ .generated = .{
+                .capture = capture,
+                .globals = globals,
+                .invoke = invoke,
+            } },
+            .env = null,
+        };
+        return .{ .function = function };
     }
 };
 
@@ -460,30 +569,2036 @@ pub fn compile(allocator: std.mem.Allocator, source: []const u8) !Chunk {
         return err;
     };
     try optimizeChunk(a, body);
-    const program = try compileBytecodeProgram(a, body);
     return .{
         .arena = arena,
         .source = owned_source,
         .body = body,
-        .program = program,
     };
 }
 
 pub fn run(allocator: std.mem.Allocator, chunk: *const Chunk) !RunResult {
     var vm = try Vm.init(allocator);
-    const globals = try vm.createGlobalState(chunk.program);
-    try vm.installBuiltinGlobals(globals, chunk.program.builtins);
-    const entry = try vm.createTopClosure(chunk.program.top);
-    const returns = try vm.executeClosure(globals, entry, &.{});
+    const env = try vm.createEnv(null);
+    try vm.installBuiltins(env);
+    const exec = try vm.executeBlock(env, chunk.body);
     return .{
         .vm = vm,
-        .returns = returns,
-        .globals = globals,
+        .returns = switch (exec) {
+            .none => &.{},
+            .returned => |returns| returns,
+            .break_loop => return error.UnsupportedSyntax,
+        },
     };
 }
 
-pub fn formatOpcodesAlloc(allocator: std.mem.Allocator, chunk: *const Chunk) ![]u8 {
-    return formatBytecodeAlloc(allocator, chunk.program);
+pub fn generatedInvoke(runtime: *GeneratedRuntime, callee: Value, args: []const Value) ![]Value {
+    if (callee != .function) return error.InvalidCall;
+    return switch (callee.function.kind) {
+        .generated => |generated| try generated.invoke(generated.capture, generated.globals, runtime, args),
+        else => error.InvalidCall,
+    };
+}
+
+pub fn generatedCallFirst(runtime: *GeneratedRuntime, callee: Value, args: []const Value) !Value {
+    const results = try generatedInvoke(runtime, callee, args);
+    return if (results.len == 0) .nil else results[0];
+}
+
+pub fn cloneConstTableSeedAlloc(allocator: std.mem.Allocator, seed: *const ConstTableSeed) !*Table {
+    return try loadStaticConstTableAlloc(allocator, seed);
+}
+
+pub fn executeUnaryValueAlloc(op: UnaryOp, value: Value) !Value {
+    return try executeUnaryValue(op, value);
+}
+
+pub fn executeBinaryValueAlloc(allocator: std.mem.Allocator, op: BinaryOp, lhs: Value, rhs: Value) !Value {
+    return try executeBinaryValue(allocator, op, lhs, rhs);
+}
+
+pub fn valueToNumberAlloc(value: Value) !f64 {
+    return try valueToNumber(value);
+}
+
+pub fn valueToStringValueAlloc(allocator: std.mem.Allocator, value: Value) ![]const u8 {
+    return try valueToStringAlloc(allocator, value);
+}
+
+pub fn generatedPairsIterator(value: Value) !Iterator {
+    if (value != .table) return error.TypeError;
+    return .{ .kind = .pairs, .table = value.table };
+}
+
+pub fn generatedIpairsIterator(value: Value) !Iterator {
+    if (value != .table) return error.TypeError;
+    return .{ .kind = .ipairs, .table = value.table };
+}
+
+pub fn generatedIteratorNext(iterator: *Iterator) !?[2]Value {
+    return try iteratorNextAlloc(iterator);
+}
+
+pub fn generatedPrint(runtime: *GeneratedRuntime, args: []const Value) !Value {
+    var out: std.ArrayList(u8) = .empty;
+    for (args, 0..) |arg, idx| {
+        if (idx != 0) try out.appendSlice(runtime.alloc(), "\t");
+        try appendValueText(&out, runtime.alloc(), arg);
+    }
+    try out.appendSlice(runtime.alloc(), "\n");
+    try std.Io.File.stdout().writeStreamingAll(std.Options.debug_io, out.items);
+    return .nil;
+}
+
+pub fn generatedTostring(runtime: *GeneratedRuntime, value: Value) !Value {
+    return .{ .string = try valueToStringAlloc(runtime.alloc(), value) };
+}
+
+pub fn generatedTonumber(value: Value) !Value {
+    return .{ .number = try valueToNumber(value) };
+}
+
+pub fn generatedType(value: Value) Value {
+    return .{ .string = switch (value) {
+        .nil => "nil",
+        .boolean => "boolean",
+        .number => "number",
+        .string => "string",
+        .table => "table",
+        .function => "function",
+        .iterator => "userdata",
+    } };
+}
+
+pub fn generatedStringLen(value: Value) !Value {
+    if (value != .string) return error.TypeError;
+    return .{ .number = @floatFromInt(value.string.len) };
+}
+
+pub fn generatedStringLower(runtime: *GeneratedRuntime, value: Value) !Value {
+    if (value != .string) return error.TypeError;
+    const out = try runtime.alloc().dupe(u8, value.string);
+    for (out) |*byte| byte.* = std.ascii.toLower(byte.*);
+    return .{ .string = out };
+}
+
+pub fn generatedStringUpper(runtime: *GeneratedRuntime, value: Value) !Value {
+    if (value != .string) return error.TypeError;
+    const out = try runtime.alloc().dupe(u8, value.string);
+    for (out) |*byte| byte.* = std.ascii.toUpper(byte.*);
+    return .{ .string = out };
+}
+
+pub fn generatedStringSub(runtime: *GeneratedRuntime, str_value: Value, start_value: Value, finish_value: ?Value) !Value {
+    if (str_value != .string) return error.TypeError;
+    const str = str_value.string;
+    const start_num = try valueToNumber(start_value);
+    const finish_num = if (finish_value) |value| try valueToNumber(value) else @as(f64, @floatFromInt(str.len));
+    const start = @max(@as(usize, 1), @as(usize, @intFromFloat(start_num)));
+    const finish = @min(str.len, @as(usize, @intFromFloat(finish_num)));
+    if (start > finish or start > str.len) return .{ .string = "" };
+    return .{ .string = try runtime.alloc().dupe(u8, str[start - 1 .. finish]) };
+}
+
+pub fn generatedMathFloor(value: Value) !Value {
+    return .{ .number = @floor(try valueToNumber(value)) };
+}
+
+pub fn generatedMathCeil(value: Value) !Value {
+    return .{ .number = @ceil(try valueToNumber(value)) };
+}
+
+pub fn generatedMathAbs(value: Value) !Value {
+    return .{ .number = @abs(try valueToNumber(value)) };
+}
+
+pub fn generatedTableInsert(table_value: Value, value: Value) !Value {
+    if (table_value != .table) return error.TypeError;
+    try table_value.table.array.append(table_value.table.allocator, value);
+    return .nil;
+}
+
+pub fn generatedTableConcat(runtime: *GeneratedRuntime, table_value: Value, sep_value: ?Value) !Value {
+    if (table_value != .table) return error.TypeError;
+    const sep = if (sep_value) |value|
+        switch (value) {
+            .string => |text| text,
+            else => "",
+        }
+    else
+        "";
+    var out: std.ArrayList(u8) = .empty;
+    for (table_value.table.array.items, 0..) |item, idx| {
+        if (idx != 0) try out.appendSlice(runtime.alloc(), sep);
+        try appendValueText(&out, runtime.alloc(), item);
+    }
+    return .{ .string = try out.toOwnedSlice(runtime.alloc()) };
+}
+
+const GeneratedBuiltinKind = enum {
+    print,
+    tostring,
+    tonumber,
+    type_,
+    pairs,
+    ipairs,
+    string_len,
+    string_lower,
+    string_upper,
+    string_sub,
+    math_floor,
+    math_ceil,
+    math_abs,
+    table_insert,
+    table_concat,
+};
+
+const generated_builtin_print = GeneratedBuiltinKind.print;
+const generated_builtin_tostring = GeneratedBuiltinKind.tostring;
+const generated_builtin_tonumber = GeneratedBuiltinKind.tonumber;
+const generated_builtin_type = GeneratedBuiltinKind.type_;
+const generated_builtin_pairs = GeneratedBuiltinKind.pairs;
+const generated_builtin_ipairs = GeneratedBuiltinKind.ipairs;
+const generated_builtin_string_len = GeneratedBuiltinKind.string_len;
+const generated_builtin_string_lower = GeneratedBuiltinKind.string_lower;
+const generated_builtin_string_upper = GeneratedBuiltinKind.string_upper;
+const generated_builtin_string_sub = GeneratedBuiltinKind.string_sub;
+const generated_builtin_math_floor = GeneratedBuiltinKind.math_floor;
+const generated_builtin_math_ceil = GeneratedBuiltinKind.math_ceil;
+const generated_builtin_math_abs = GeneratedBuiltinKind.math_abs;
+const generated_builtin_table_insert = GeneratedBuiltinKind.table_insert;
+const generated_builtin_table_concat = GeneratedBuiltinKind.table_concat;
+
+pub fn generatedBuiltinPrintValue(runtime: *GeneratedRuntime, globals: ?*anyopaque) !Value {
+    return try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_print);
+}
+
+pub fn generatedBuiltinTostringValue(runtime: *GeneratedRuntime, globals: ?*anyopaque) !Value {
+    return try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_tostring);
+}
+
+pub fn generatedBuiltinTonumberValue(runtime: *GeneratedRuntime, globals: ?*anyopaque) !Value {
+    return try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_tonumber);
+}
+
+pub fn generatedBuiltinTypeValue(runtime: *GeneratedRuntime, globals: ?*anyopaque) !Value {
+    return try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_type);
+}
+
+pub fn generatedBuiltinPairsValue(runtime: *GeneratedRuntime, globals: ?*anyopaque) !Value {
+    return try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_pairs);
+}
+
+pub fn generatedBuiltinIpairsValue(runtime: *GeneratedRuntime, globals: ?*anyopaque) !Value {
+    return try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_ipairs);
+}
+
+pub fn generatedBuiltinStringTableValue(runtime: *GeneratedRuntime, globals: ?*anyopaque) !Value {
+    const table = try Table.init(runtime.alloc());
+    try table.putString("len", try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_string_len));
+    try table.putString("lower", try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_string_lower));
+    try table.putString("upper", try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_string_upper));
+    try table.putString("sub", try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_string_sub));
+    return .{ .table = table };
+}
+
+pub fn generatedBuiltinMathTableValue(runtime: *GeneratedRuntime, globals: ?*anyopaque) !Value {
+    const table = try Table.init(runtime.alloc());
+    try table.putString("floor", try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_math_floor));
+    try table.putString("ceil", try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_math_ceil));
+    try table.putString("abs", try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_math_abs));
+    return .{ .table = table };
+}
+
+pub fn generatedBuiltinTableTableValue(runtime: *GeneratedRuntime, globals: ?*anyopaque) !Value {
+    const table = try Table.init(runtime.alloc());
+    try table.putString("insert", try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_table_insert));
+    try table.putString("concat", try generatedBuiltinFunctionValue(runtime, globals, &generated_builtin_table_concat));
+    return .{ .table = table };
+}
+
+fn generatedBuiltinFunctionValue(
+    runtime: *GeneratedRuntime,
+    globals: ?*anyopaque,
+    kind: *const GeneratedBuiltinKind,
+) !Value {
+    return try runtime.functionValue(@tagName(kind.*), @constCast(kind), globals, generatedBuiltinInvoke);
+}
+
+fn generatedBuiltinInvoke(
+    capture: ?*anyopaque,
+    _: ?*anyopaque,
+    runtime: *GeneratedRuntime,
+    args: []const Value,
+) anyerror![]Value {
+    const kind: *const GeneratedBuiltinKind = @ptrCast(@alignCast(capture.?));
+    return switch (kind.*) {
+        .print => blk: {
+            _ = try generatedPrint(runtime, args);
+            break :blk &.{};
+        },
+        .tostring => try runtime.singleReturn(try generatedTostring(runtime, if (args.len == 0) .nil else args[0])),
+        .tonumber => try runtime.singleReturn(if (args.len == 0) .nil else try generatedTonumber(args[0])),
+        .type_ => try runtime.singleReturn(generatedType(if (args.len == 0) .nil else args[0])),
+        .pairs => try runtime.singleReturn(.{ .iterator = try generatedPairsIterator(if (args.len == 0) .nil else args[0]) }),
+        .ipairs => try runtime.singleReturn(.{ .iterator = try generatedIpairsIterator(if (args.len == 0) .nil else args[0]) }),
+        .string_len => try runtime.singleReturn(try generatedStringLen(if (args.len == 0) .nil else args[0])),
+        .string_lower => try runtime.singleReturn(try generatedStringLower(runtime, if (args.len == 0) .nil else args[0])),
+        .string_upper => try runtime.singleReturn(try generatedStringUpper(runtime, if (args.len == 0) .nil else args[0])),
+        .string_sub => try runtime.singleReturn(try generatedStringSub(
+            runtime,
+            if (args.len == 0) .nil else args[0],
+            if (args.len <= 1) .nil else args[1],
+            if (args.len <= 2) null else args[2],
+        )),
+        .math_floor => try runtime.singleReturn(try generatedMathFloor(if (args.len == 0) .nil else args[0])),
+        .math_ceil => try runtime.singleReturn(try generatedMathCeil(if (args.len == 0) .nil else args[0])),
+        .math_abs => try runtime.singleReturn(try generatedMathAbs(if (args.len == 0) .nil else args[0])),
+        .table_insert => blk: {
+            _ = try generatedTableInsert(if (args.len == 0) .nil else args[0], if (args.len <= 1) .nil else args[1]);
+            break :blk &.{};
+        },
+        .table_concat => try runtime.singleReturn(try generatedTableConcat(
+            runtime,
+            if (args.len == 0) .nil else args[0],
+            if (args.len <= 1) null else args[1],
+        )),
+    };
+}
+
+pub fn emitZigModuleAlloc(allocator: std.mem.Allocator, chunk: *const Chunk) ![]u8 {
+    return try emitDirectZigModuleAlloc(allocator, chunk);
+}
+
+const TableSeedState = struct {
+    allocator: std.mem.Allocator,
+    table_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+    tables: std.ArrayList(*const Table) = .empty,
+
+    fn init(allocator: std.mem.Allocator) TableSeedState {
+        return .{ .allocator = allocator };
+    }
+
+    fn deinit(self: *TableSeedState) void {
+        self.table_ids.deinit(self.allocator);
+        self.tables.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    fn collectTable(self: *TableSeedState, table: *const Table) !u32 {
+        const key = @intFromPtr(table);
+        if (self.table_ids.get(key)) |existing| return existing;
+        for (table.array.items) |value| {
+            if (value == .table) _ = try self.collectTable(value.table);
+        }
+        var string_it = table.string_fields.iterator();
+        while (string_it.next()) |entry| {
+            if (entry.value_ptr.* == .table) _ = try self.collectTable(entry.value_ptr.*.table);
+        }
+        var int_it = table.int_fields.iterator();
+        while (int_it.next()) |entry| {
+            if (entry.value_ptr.* == .table) _ = try self.collectTable(entry.value_ptr.*.table);
+        }
+        const id: u32 = @intCast(self.tables.items.len);
+        try self.table_ids.put(self.allocator, key, id);
+        try self.tables.append(self.allocator, table);
+        return id;
+    }
+
+    fn collectStmt(self: *TableSeedState, stmt: *const Stmt) std.mem.Allocator.Error!void {
+        switch (stmt.*) {
+            .local_assign => |op| for (op.exprs) |expr| try self.collectExpr(expr),
+            .assign => |op| {
+                for (op.targets) |target| try self.collectLValue(target);
+                for (op.exprs) |expr| try self.collectExpr(expr);
+            },
+            .function_def => |op| {
+                try self.collectLValue(op.target);
+                for (op.body) |child| try self.collectStmt(child);
+            },
+            .if_stmt => |op| {
+                for (op.branches) |branch| {
+                    try self.collectExpr(branch.condition);
+                    for (branch.body) |child| try self.collectStmt(child);
+                }
+                for (op.else_body) |child| try self.collectStmt(child);
+            },
+            .do_block => |body| for (body) |child| try self.collectStmt(child),
+            .while_stmt => |op| {
+                try self.collectExpr(op.condition);
+                for (op.body) |child| try self.collectStmt(child);
+            },
+            .repeat_stmt => |op| {
+                for (op.body) |child| try self.collectStmt(child);
+                try self.collectExpr(op.condition);
+            },
+            .numeric_for => |op| {
+                try self.collectExpr(op.start);
+                try self.collectExpr(op.finish);
+                if (op.step) |step| try self.collectExpr(step);
+                for (op.body) |child| try self.collectStmt(child);
+            },
+            .generic_for => |op| {
+                for (op.iterator_exprs) |expr| try self.collectExpr(expr);
+                for (op.body) |child| try self.collectStmt(child);
+            },
+            .return_stmt => |op| for (op.exprs) |expr| try self.collectExpr(expr),
+            .break_stmt => {},
+            .expr_stmt => |expr| try self.collectExpr(expr),
+        }
+    }
+
+    fn collectLValue(self: *TableSeedState, lvalue: LValue) std.mem.Allocator.Error!void {
+        switch (lvalue) {
+            .name => {},
+            .field => |field| try self.collectExpr(field.object),
+            .index => |index| {
+                try self.collectExpr(index.object);
+                try self.collectExpr(index.key);
+            },
+        }
+    }
+
+    fn collectExpr(self: *TableSeedState, expr: *const Expr) std.mem.Allocator.Error!void {
+        switch (expr.*) {
+            .unary => |op| try self.collectExpr(op.expr),
+            .binary => |op| {
+                try self.collectExpr(op.lhs);
+                try self.collectExpr(op.rhs);
+            },
+            .table_ctor => |fields| {
+                for (fields) |field| switch (field) {
+                    .array => |child| try self.collectExpr(child),
+                    .named => |named| try self.collectExpr(named.value),
+                    .indexed => |indexed| {
+                        try self.collectExpr(indexed.key);
+                        try self.collectExpr(indexed.value);
+                    },
+                };
+            },
+            .const_table => |table| _ = try self.collectTable(table),
+            .field => |field| try self.collectExpr(field.object),
+            .index => |index| {
+                try self.collectExpr(index.object);
+                try self.collectExpr(index.key);
+            },
+            .call => |call| {
+                try self.collectExpr(call.callee);
+                for (call.args) |arg| try self.collectExpr(arg);
+            },
+            .function_lit => |func| for (func.body) |child| try self.collectStmt(child),
+            .nil_lit, .bool_lit, .number_lit, .string_lit, .variable, .varargs => {},
+        }
+    }
+
+    fn tableId(self: *const TableSeedState, table: *const Table) ?u32 {
+        return self.table_ids.get(@intFromPtr(table));
+    }
+};
+
+const DirectCaptureOrigin = enum {
+    parent_local,
+    parent_capture,
+};
+
+const DirectCaptureInfo = struct {
+    name: []const u8,
+    origin: DirectCaptureOrigin,
+};
+
+const DirectFunctionInfo = struct {
+    id: u32,
+    name: []const u8,
+    params: []const []const u8,
+    body: []const *Stmt,
+    is_vararg: bool,
+    captures: []const DirectCaptureInfo,
+};
+
+const ChildAccessKind = enum {
+    local,
+    capture,
+};
+
+const DirectModuleState = struct {
+    allocator: std.mem.Allocator,
+    tables: TableSeedState,
+    functions: std.ArrayList(DirectFunctionInfo) = .empty,
+    stmt_function_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+    expr_function_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+    global_ids: std.StringHashMapUnmanaged(u32) = .empty,
+    globals: std.ArrayList([]const u8) = .empty,
+    top_id: u32 = 0,
+
+    fn init(allocator: std.mem.Allocator) DirectModuleState {
+        return .{
+            .allocator = allocator,
+            .tables = TableSeedState.init(allocator),
+        };
+    }
+
+    fn deinit(self: *DirectModuleState) void {
+        for (self.functions.items) |info| self.allocator.free(info.captures);
+        self.functions.deinit(self.allocator);
+        self.stmt_function_ids.deinit(self.allocator);
+        self.expr_function_ids.deinit(self.allocator);
+        self.global_ids.deinit(self.allocator);
+        self.globals.deinit(self.allocator);
+        self.tables.deinit();
+        self.* = undefined;
+    }
+
+    fn addFunction(
+        self: *DirectModuleState,
+        name: []const u8,
+        params: []const []const u8,
+        body: []const *Stmt,
+        is_vararg: bool,
+    ) !u32 {
+        const id: u32 = @intCast(self.functions.items.len);
+        try self.functions.append(self.allocator, .{
+            .id = id,
+            .name = name,
+            .params = params,
+            .body = body,
+            .is_vararg = is_vararg,
+            .captures = &.{},
+        });
+        return id;
+    }
+
+    fn addGlobal(self: *DirectModuleState, name: []const u8) !u32 {
+        if (self.global_ids.get(name)) |existing| return existing;
+        const id: u32 = @intCast(self.globals.items.len);
+        try self.global_ids.put(self.allocator, name, id);
+        try self.globals.append(self.allocator, name);
+        return id;
+    }
+
+    fn globalFieldName(self: *const DirectModuleState, name: []const u8) []const u8 {
+        _ = self;
+        return name;
+    }
+};
+
+const DirectAnalyzeContext = struct {
+    state: *DirectModuleState,
+    parent: ?*DirectAnalyzeContext,
+    function_id: u32,
+    locals: std.ArrayList([]const u8) = .empty,
+    scope_marks: std.ArrayList(usize) = .empty,
+    captures: std.StringHashMapUnmanaged(DirectCaptureOrigin) = .empty,
+
+    fn init(state: *DirectModuleState, parent: ?*DirectAnalyzeContext, function_id: u32) DirectAnalyzeContext {
+        return .{
+            .state = state,
+            .parent = parent,
+            .function_id = function_id,
+        };
+    }
+
+    fn deinit(self: *DirectAnalyzeContext) void {
+        self.locals.deinit(self.state.allocator);
+        self.scope_marks.deinit(self.state.allocator);
+        self.captures.deinit(self.state.allocator);
+        self.* = undefined;
+    }
+
+    fn beginScope(self: *DirectAnalyzeContext) !void {
+        try self.scope_marks.append(self.state.allocator, self.locals.items.len);
+    }
+
+    fn endScope(self: *DirectAnalyzeContext) void {
+        const mark = self.scope_marks.pop().?;
+        self.locals.items.len = mark;
+    }
+
+    fn declareLocal(self: *DirectAnalyzeContext, name: []const u8) !void {
+        try self.locals.append(self.state.allocator, name);
+    }
+
+    fn hasLocal(self: *const DirectAnalyzeContext, name: []const u8) bool {
+        var idx = self.locals.items.len;
+        while (idx != 0) {
+            idx -= 1;
+            if (std.mem.eql(u8, self.locals.items[idx], name)) return true;
+        }
+        return false;
+    }
+
+    fn hasCapture(self: *const DirectAnalyzeContext, name: []const u8) bool {
+        return self.captures.contains(name);
+    }
+
+    fn addCapture(self: *DirectAnalyzeContext, name: []const u8, origin: DirectCaptureOrigin) !void {
+        const gop = try self.captures.getOrPut(self.state.allocator, name);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = name;
+            gop.value_ptr.* = origin;
+        }
+    }
+
+    fn ensureChildAccessible(self: *DirectAnalyzeContext, name: []const u8) !?ChildAccessKind {
+        if (self.hasLocal(name)) return .local;
+        if (self.hasCapture(name)) return .capture;
+        const parent = self.parent orelse return null;
+        const parent_kind = try parent.ensureChildAccessible(name) orelse return null;
+        try self.addCapture(name, switch (parent_kind) {
+            .local => .parent_local,
+            .capture => .parent_capture,
+        });
+        return .capture;
+    }
+
+    fn resolveOwnReference(self: *DirectAnalyzeContext, name: []const u8) !void {
+        if (self.hasLocal(name) or self.hasCapture(name)) return;
+        const parent = self.parent orelse {
+            _ = try self.state.addGlobal(name);
+            return;
+        };
+        const parent_kind = try parent.ensureChildAccessible(name) orelse {
+            _ = try self.state.addGlobal(name);
+            return;
+        };
+        try self.addCapture(name, switch (parent_kind) {
+            .local => .parent_local,
+            .capture => .parent_capture,
+        });
+    }
+
+    fn finish(self: *DirectAnalyzeContext) !void {
+        const info = &self.state.functions.items[self.function_id];
+        info.captures = try capturesToOwnedSlice(self.state.allocator, &self.captures);
+    }
+};
+
+fn capturesToOwnedSlice(
+    allocator: std.mem.Allocator,
+    captures: *const std.StringHashMapUnmanaged(DirectCaptureOrigin),
+) ![]const DirectCaptureInfo {
+    const out = try allocator.alloc(DirectCaptureInfo, captures.count());
+    var idx: usize = 0;
+    var it = captures.iterator();
+    while (it.next()) |entry| {
+        out[idx] = .{
+            .name = entry.key_ptr.*,
+            .origin = entry.value_ptr.*,
+        };
+        idx += 1;
+    }
+    std.mem.sort(DirectCaptureInfo, out, {}, struct {
+        fn lessThan(_: void, lhs: DirectCaptureInfo, rhs: DirectCaptureInfo) bool {
+            return std.mem.order(u8, lhs.name, rhs.name) == .lt;
+        }
+    }.lessThan);
+    return out;
+}
+
+fn analyzeDirectModule(state: *DirectModuleState, body: []const *Stmt) std.mem.Allocator.Error!void {
+    for (body) |stmt| try state.tables.collectStmt(stmt);
+    const top_id = try state.addFunction("chunk", &.{}, body, false);
+    state.top_id = top_id;
+    var ctx = DirectAnalyzeContext.init(state, null, top_id);
+    defer ctx.deinit();
+    try analyzeStmtSlice(&ctx, body);
+    try ctx.finish();
+}
+
+fn analyzeStmtSlice(ctx: *DirectAnalyzeContext, stmts: []const *Stmt) std.mem.Allocator.Error!void {
+    for (stmts) |stmt| try analyzeStmt(ctx, stmt);
+}
+
+fn analyzeStmt(ctx: *DirectAnalyzeContext, stmt: *const Stmt) std.mem.Allocator.Error!void {
+    switch (stmt.*) {
+        .local_assign => |op| {
+            for (op.exprs) |expr| try analyzeExpr(ctx, expr);
+            for (op.names) |name| try ctx.declareLocal(name);
+        },
+        .assign => |op| {
+            for (op.exprs) |expr| try analyzeExpr(ctx, expr);
+            for (op.targets) |target| try analyzeLValue(ctx, target);
+        },
+        .function_def => |op| {
+            if (op.is_local and op.target == .name) try ctx.declareLocal(op.target.name);
+            const child_id = try ctx.state.addFunction(switch (op.target) {
+                .name => |name| name,
+                .field => |field| field.name,
+                .index => "anonymous",
+            }, op.params, op.body, op.is_vararg);
+            try ctx.state.stmt_function_ids.put(ctx.state.allocator, @intFromPtr(stmt), child_id);
+            var child_ctx = DirectAnalyzeContext.init(ctx.state, ctx, child_id);
+            defer child_ctx.deinit();
+            for (op.params) |param| try child_ctx.declareLocal(param);
+            try analyzeStmtSlice(&child_ctx, op.body);
+            try child_ctx.finish();
+            if (!op.is_local or op.target != .name) try analyzeLValue(ctx, op.target);
+        },
+        .if_stmt => |op| {
+            for (op.branches) |branch| {
+                try analyzeExpr(ctx, branch.condition);
+                try ctx.beginScope();
+                try analyzeStmtSlice(ctx, branch.body);
+                ctx.endScope();
+            }
+            try ctx.beginScope();
+            try analyzeStmtSlice(ctx, op.else_body);
+            ctx.endScope();
+        },
+        .do_block => |body| {
+            try ctx.beginScope();
+            try analyzeStmtSlice(ctx, body);
+            ctx.endScope();
+        },
+        .while_stmt => |op| {
+            try analyzeExpr(ctx, op.condition);
+            try ctx.beginScope();
+            try analyzeStmtSlice(ctx, op.body);
+            ctx.endScope();
+        },
+        .repeat_stmt => |op| {
+            try ctx.beginScope();
+            try analyzeStmtSlice(ctx, op.body);
+            try analyzeExpr(ctx, op.condition);
+            ctx.endScope();
+        },
+        .numeric_for => |op| {
+            try analyzeExpr(ctx, op.start);
+            try analyzeExpr(ctx, op.finish);
+            if (op.step) |step| try analyzeExpr(ctx, step);
+            try ctx.beginScope();
+            try ctx.declareLocal(op.name);
+            try analyzeStmtSlice(ctx, op.body);
+            ctx.endScope();
+        },
+        .generic_for => |op| {
+            for (op.iterator_exprs) |expr| try analyzeExpr(ctx, expr);
+            try ctx.beginScope();
+            for (op.names) |name| try ctx.declareLocal(name);
+            try analyzeStmtSlice(ctx, op.body);
+            ctx.endScope();
+        },
+        .return_stmt => |op| for (op.exprs) |expr| try analyzeExpr(ctx, expr),
+        .break_stmt => {},
+        .expr_stmt => |expr| try analyzeExpr(ctx, expr),
+    }
+}
+
+fn analyzeLValue(ctx: *DirectAnalyzeContext, lvalue: LValue) std.mem.Allocator.Error!void {
+    switch (lvalue) {
+        .name => |name| try ctx.resolveOwnReference(name),
+        .field => |field| try analyzeExpr(ctx, field.object),
+        .index => |index| {
+            try analyzeExpr(ctx, index.object);
+            try analyzeExpr(ctx, index.key);
+        },
+    }
+}
+
+fn analyzeExpr(ctx: *DirectAnalyzeContext, expr: *const Expr) std.mem.Allocator.Error!void {
+    switch (expr.*) {
+        .variable => |name| try ctx.resolveOwnReference(name),
+        .unary => |op| try analyzeExpr(ctx, op.expr),
+        .binary => |op| {
+            try analyzeExpr(ctx, op.lhs);
+            try analyzeExpr(ctx, op.rhs);
+        },
+        .table_ctor => |fields| {
+            for (fields) |field| switch (field) {
+                .array => |child| try analyzeExpr(ctx, child),
+                .named => |named| try analyzeExpr(ctx, named.value),
+                .indexed => |indexed| {
+                    try analyzeExpr(ctx, indexed.key);
+                    try analyzeExpr(ctx, indexed.value);
+                },
+            };
+        },
+        .field => |field| try analyzeExpr(ctx, field.object),
+        .index => |index| {
+            try analyzeExpr(ctx, index.object);
+            try analyzeExpr(ctx, index.key);
+        },
+        .call => |call| {
+            try analyzeExpr(ctx, call.callee);
+            for (call.args) |arg| try analyzeExpr(ctx, arg);
+        },
+        .function_lit => |func| {
+            const child_id = try ctx.state.addFunction("anonymous", func.params, func.body, func.is_vararg);
+            try ctx.state.expr_function_ids.put(ctx.state.allocator, @intFromPtr(expr), child_id);
+            var child_ctx = DirectAnalyzeContext.init(ctx.state, ctx, child_id);
+            defer child_ctx.deinit();
+            for (func.params) |param| try child_ctx.declareLocal(param);
+            try analyzeStmtSlice(&child_ctx, func.body);
+            try child_ctx.finish();
+        },
+        .nil_lit, .bool_lit, .number_lit, .string_lit, .varargs, .const_table => {},
+    }
+}
+
+const DirectEmitLocalBinding = struct {
+    name: []const u8,
+    id: u32,
+};
+
+const DirectBuiltinCall = enum {
+    print,
+    tostring,
+    tonumber,
+    type_,
+    pairs,
+    ipairs,
+    string_len,
+    string_lower,
+    string_upper,
+    string_sub,
+    math_floor,
+    math_ceil,
+    math_abs,
+    table_insert,
+    table_concat,
+};
+
+const DirectEmitFunctionContext = struct {
+    state: *const DirectModuleState,
+    info: *const DirectFunctionInfo,
+    uses_return_block: bool,
+    locals: std.ArrayList(DirectEmitLocalBinding) = .empty,
+    scope_marks: std.ArrayList(usize) = .empty,
+    next_local_id: u32 = 0,
+    next_temp_id: u32 = 0,
+
+    fn init(state: *const DirectModuleState, info: *const DirectFunctionInfo, uses_return_block: bool) DirectEmitFunctionContext {
+        return .{ .state = state, .info = info, .uses_return_block = uses_return_block };
+    }
+
+    fn deinit(self: *DirectEmitFunctionContext) void {
+        self.locals.deinit(self.state.allocator);
+        self.scope_marks.deinit(self.state.allocator);
+        self.* = undefined;
+    }
+
+    fn beginScope(self: *DirectEmitFunctionContext) !void {
+        try self.scope_marks.append(self.state.allocator, self.locals.items.len);
+    }
+
+    fn endScope(self: *DirectEmitFunctionContext) void {
+        const mark = self.scope_marks.pop().?;
+        self.locals.items.len = mark;
+    }
+
+    fn declareLocal(self: *DirectEmitFunctionContext, name: []const u8) !u32 {
+        const id = self.next_local_id;
+        self.next_local_id += 1;
+        try self.locals.append(self.state.allocator, .{ .name = name, .id = id });
+        return id;
+    }
+
+    fn lookupLocal(self: *const DirectEmitFunctionContext, name: []const u8) ?u32 {
+        var idx = self.locals.items.len;
+        while (idx != 0) {
+            idx -= 1;
+            const local = self.locals.items[idx];
+            if (std.mem.eql(u8, local.name, name)) return local.id;
+        }
+        return null;
+    }
+
+    fn lookupCapture(self: *const DirectEmitFunctionContext, name: []const u8) ?u32 {
+        for (self.info.captures, 0..) |capture, idx| {
+            if (std.mem.eql(u8, capture.name, name)) return @intCast(idx);
+        }
+        return null;
+    }
+
+    fn nextTemp(self: *DirectEmitFunctionContext) u32 {
+        const id = self.next_temp_id;
+        self.next_temp_id += 1;
+        return id;
+    }
+};
+
+fn emitDirectZigModuleAlloc(allocator: std.mem.Allocator, chunk: *const Chunk) anyerror![]u8 {
+    var state = DirectModuleState.init(allocator);
+    defer state.deinit();
+    try analyzeDirectModule(&state, chunk.body);
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    const writer = &out.writer;
+
+    try writer.writeAll(
+        \\const std = @import("std");
+        \\const lua = @import("lua");
+        \\
+        \\// Generated from the parsed Lua AST. Const tables are hoisted and function bodies are lowered directly to Zig.
+        \\
+    );
+
+    for (state.tables.tables.items) |table| try emitDirectConstTableSeed(writer, table, &state.tables);
+    try emitDirectGlobals(writer, &state);
+    for (state.functions.items) |info| {
+        if (info.captures.len != 0) try emitDirectCaptureStruct(writer, &info);
+    }
+    for (state.functions.items) |info| try emitDirectFunction(writer, &state, &info);
+    try emitDirectRun(writer, &state);
+    return out.toOwnedSlice();
+}
+
+fn emitDirectGlobals(writer: anytype, state: *const DirectModuleState) anyerror!void {
+    try writer.writeAll("const Globals = struct {\n");
+    for (state.globals.items, 0..) |name, idx| {
+        try writer.print("    // global {s}\n    global_{d}: lua.Value = lua.Value.nil,\n", .{ name, idx });
+    }
+    try writer.writeAll("};\n\n");
+}
+
+fn emitDirectCaptureStruct(writer: anytype, info: *const DirectFunctionInfo) anyerror!void {
+    try writer.print("const Capture_{d} = struct {{\n", .{info.id});
+    for (info.captures, 0..) |capture, idx| {
+        try writer.print("    // captures {s}\n    capture_{d}: *lua.Value,\n", .{ capture.name, idx });
+    }
+    try writer.writeAll("};\n\n");
+}
+
+fn emitDirectRun(writer: anytype, state: *const DirectModuleState) anyerror!void {
+    try writer.writeAll(
+        \\pub fn run(allocator: std.mem.Allocator) !lua.GeneratedRunResult {
+        \\    var runtime = lua.GeneratedRuntime.init(allocator);
+        \\    errdefer runtime.deinit();
+        \\    const globals = try runtime.alloc().create(Globals);
+        \\    globals.* = .{};
+        \\
+    );
+    for (state.globals.items, 0..) |name, idx| {
+        _ = try emitBuiltinGlobalInit(writer, name, idx);
+    }
+    try writer.print("    const returns = try fn_{d}(null, globals, &runtime, &.{{}});\n", .{state.top_id});
+    try writer.writeAll(
+        \\    return .{
+        \\        .runtime = runtime,
+        \\        .returns = returns,
+        \\    };
+        \\}
+        \\
+    );
+}
+
+fn emitBuiltinGlobalInit(writer: anytype, name: []const u8, idx: usize) anyerror!bool {
+    if (std.mem.eql(u8, name, "print")) {
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinPrintValue(&runtime, globals);\n", .{idx});
+        return true;
+    }
+    if (std.mem.eql(u8, name, "tostring")) {
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTostringValue(&runtime, globals);\n", .{idx});
+        return true;
+    }
+    if (std.mem.eql(u8, name, "tonumber")) {
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTonumberValue(&runtime, globals);\n", .{idx});
+        return true;
+    }
+    if (std.mem.eql(u8, name, "type")) {
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTypeValue(&runtime, globals);\n", .{idx});
+        return true;
+    }
+    if (std.mem.eql(u8, name, "pairs")) {
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinPairsValue(&runtime, globals);\n", .{idx});
+        return true;
+    }
+    if (std.mem.eql(u8, name, "ipairs")) {
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinIpairsValue(&runtime, globals);\n", .{idx});
+        return true;
+    }
+    if (std.mem.eql(u8, name, "string")) {
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinStringTableValue(&runtime, globals);\n", .{idx});
+        return true;
+    }
+    if (std.mem.eql(u8, name, "math")) {
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinMathTableValue(&runtime, globals);\n", .{idx});
+        return true;
+    }
+    if (std.mem.eql(u8, name, "table")) {
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTableTableValue(&runtime, globals);\n", .{idx});
+        return true;
+    }
+    return false;
+}
+
+fn emitDirectConstTableSeed(writer: anytype, table: *const Table, state: *const TableSeedState) anyerror!void {
+    const id = state.tableId(table) orelse return error.UnsupportedSyntax;
+    try writer.print("const const_table_{d}_array = [_]lua.ConstValueSeed{{\n", .{id});
+    for (table.array.items) |value| {
+        try writer.writeAll("    ");
+        try emitDirectConstValueSeed(writer, value, state);
+        try writer.writeAll(",\n");
+    }
+    try writer.writeAll("};\n");
+
+    try writer.print("const const_table_{d}_string_fields = [_]lua.ConstTableStringFieldSeed{{\n", .{id});
+    var string_it = table.string_fields.iterator();
+    while (string_it.next()) |entry| {
+        try writer.writeAll("    .{ .key = ");
+        try writeZigStringLiteral(writer, entry.key_ptr.*);
+        try writer.writeAll(", .value = ");
+        try emitDirectConstValueSeed(writer, entry.value_ptr.*, state);
+        try writer.writeAll(" },\n");
+    }
+    try writer.writeAll("};\n");
+
+    try writer.print("const const_table_{d}_int_fields = [_]lua.ConstTableIntFieldSeed{{\n", .{id});
+    var int_it = table.int_fields.iterator();
+    while (int_it.next()) |entry| {
+        try writer.print("    .{{ .key = {d}, .value = ", .{entry.key_ptr.*});
+        try emitDirectConstValueSeed(writer, entry.value_ptr.*, state);
+        try writer.writeAll(" },\n");
+    }
+    try writer.writeAll("};\n");
+    try writer.print(
+        "const const_table_{d} = lua.ConstTableSeed{{ .array = &const_table_{d}_array, .string_fields = &const_table_{d}_string_fields, .int_fields = &const_table_{d}_int_fields }};\n\n",
+        .{ id, id, id, id },
+    );
+}
+
+fn emitDirectConstValueSeed(writer: anytype, value: Value, state: *const TableSeedState) anyerror!void {
+    switch (value) {
+        .nil => try writer.writeAll(".nil"),
+        .boolean => |flag| try writer.print(".{{ .boolean = {} }}", .{flag}),
+        .number => |number| try writer.print(".{{ .number = {d} }}", .{number}),
+        .string => |text| {
+            try writer.writeAll(".{ .string = ");
+            try writeZigStringLiteral(writer, text);
+            try writer.writeAll(" }");
+        },
+        .table => |table| try writer.print(".{{ .table = &const_table_{d} }}", .{state.tableId(table).?}),
+        .function, .iterator => return error.UnsupportedSyntax,
+    }
+}
+
+fn emitIndent(writer: anytype, depth: usize) anyerror!void {
+    for (0..depth) |_| try writer.writeAll("    ");
+}
+
+fn formatTagName(comptime T: type, value: T) []const u8 {
+    return @tagName(value);
+}
+
+fn blockContainsReturn(stmts: []const *Stmt) bool {
+    for (stmts) |stmt| {
+        if (stmtContainsReturn(stmt)) return true;
+    }
+    return false;
+}
+
+fn stmtContainsReturn(stmt: *const Stmt) bool {
+    return switch (stmt.*) {
+        .if_stmt => |op| blk: {
+            for (op.branches) |branch| {
+                if (blockContainsReturn(branch.body)) break :blk true;
+            }
+            break :blk blockContainsReturn(op.else_body);
+        },
+        .do_block => |body| blockContainsReturn(body),
+        .while_stmt => |op| blockContainsReturn(op.body),
+        .repeat_stmt => |op| blockContainsReturn(op.body),
+        .numeric_for => |op| blockContainsReturn(op.body),
+        .generic_for => |op| blockContainsReturn(op.body),
+        .return_stmt => true,
+        .local_assign, .assign, .function_def, .break_stmt, .expr_stmt => false,
+    };
+}
+
+fn emitDirectFunction(writer: anytype, state: *const DirectModuleState, info: *const DirectFunctionInfo) anyerror!void {
+    try writer.print(
+        "fn fn_{d}(capture_ptr: ?*anyopaque, globals_ptr: ?*anyopaque, runtime: *lua.GeneratedRuntime, args: []const lua.Value) anyerror![]lua.Value {{\n",
+        .{info.id},
+    );
+    try emitIndent(writer, 1);
+    try writer.writeAll("const globals: *Globals = @ptrCast(@alignCast(globals_ptr.?));\n");
+    try emitIndent(writer, 1);
+    try writer.writeAll("if (@intFromPtr(globals) == 0) unreachable;\n");
+    try emitIndent(writer, 1);
+    try writer.writeAll("if (args.len == std.math.maxInt(usize)) unreachable;\n");
+    if (info.captures.len != 0) {
+        try emitIndent(writer, 1);
+        try writer.print("const capture: *Capture_{d} = @ptrCast(@alignCast(capture_ptr.?));\n", .{info.id});
+        try emitIndent(writer, 1);
+        try writer.writeAll("if (@intFromPtr(capture) == 0) unreachable;\n");
+    } else {
+        try emitIndent(writer, 1);
+        try writer.writeAll("_ = capture_ptr;\n");
+    }
+
+    const uses_return_block = blockContainsReturn(info.body);
+    var ctx = DirectEmitFunctionContext.init(state, info, uses_return_block);
+    defer ctx.deinit();
+
+    for (info.params, 0..) |param, idx| {
+        const local_id = try ctx.declareLocal(param);
+        try emitIndent(writer, 1);
+        try writer.print("var local_{d}: lua.Value = if (args.len > {d}) args[{d}] else @as(lua.Value, .nil);\n", .{ local_id, idx, idx });
+        try emitIndent(writer, 1);
+        try writer.print("local_{d} = local_{d};\n", .{ local_id, local_id });
+    }
+    if (info.is_vararg) {
+        try emitIndent(writer, 1);
+        try writer.print("const varargs = if (args.len > {d}) args[{d}..] else &.{{}};\n", .{ info.params.len, info.params.len });
+    }
+
+    if (uses_return_block) {
+        try emitIndent(writer, 1);
+        try writer.writeAll("var return_result: ?[]lua.Value = null;\n");
+        try emitIndent(writer, 1);
+        try writer.writeAll("lua_fn: {\n");
+        try ctx.beginScope();
+        try emitStmtSlice(writer, &ctx, info.body, 2);
+        ctx.endScope();
+        try emitIndent(writer, 1);
+        try writer.writeAll("}\n");
+        try emitIndent(writer, 1);
+        try writer.writeAll("return return_result orelse try runtime.allocValues(&.{});\n");
+    } else {
+        try ctx.beginScope();
+        try emitStmtSlice(writer, &ctx, info.body, 1);
+        ctx.endScope();
+        try emitIndent(writer, 1);
+        try writer.writeAll("return try runtime.allocValues(&.{});\n");
+    }
+    try writer.writeAll("}\n\n");
+}
+
+fn emitStmtSlice(writer: anytype, ctx: *DirectEmitFunctionContext, stmts: []const *Stmt, depth: usize) anyerror!void {
+    for (stmts) |stmt| try emitStmt(writer, ctx, stmt, depth);
+}
+
+fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt, depth: usize) anyerror!void {
+    switch (stmt.*) {
+        .local_assign => |op| {
+            const value_count = @max(op.names.len, op.exprs.len);
+            const temp_ids = try ctx.state.allocator.alloc(u32, value_count);
+            defer ctx.state.allocator.free(temp_ids);
+
+            for (0..value_count) |idx| {
+                temp_ids[idx] = ctx.nextTemp();
+                try emitIndent(writer, depth);
+                try writer.print("const tmp_{d}: lua.Value = ", .{temp_ids[idx]});
+                if (idx < op.exprs.len) {
+                    try emitExpr(writer, ctx, op.exprs[idx], depth);
+                } else {
+                    try writer.writeAll("lua.Value.nil");
+                }
+                try writer.writeAll(";\n");
+            }
+
+            for (op.names, 0..) |name, idx| {
+                const local_id = try ctx.declareLocal(name);
+                try emitIndent(writer, depth);
+                try writer.print("var local_{d}: lua.Value = tmp_{d};\n", .{ local_id, temp_ids[idx] });
+                try emitIndent(writer, depth);
+                try writer.print("local_{d} = local_{d};\n", .{ local_id, local_id });
+            }
+            if (op.exprs.len > op.names.len) {
+                for (temp_ids[op.names.len..op.exprs.len]) |temp_id| {
+                    try emitIndent(writer, depth);
+                    try writer.print("_ = tmp_{d};\n", .{temp_id});
+                }
+            }
+        },
+        .assign => |op| {
+            const value_count = @max(op.targets.len, op.exprs.len);
+            const temp_ids = try ctx.state.allocator.alloc(u32, value_count);
+            defer ctx.state.allocator.free(temp_ids);
+
+            for (0..value_count) |idx| {
+                temp_ids[idx] = ctx.nextTemp();
+                try emitIndent(writer, depth);
+                try writer.print("const tmp_{d}: lua.Value = ", .{temp_ids[idx]});
+                if (idx < op.exprs.len) {
+                    try emitExpr(writer, ctx, op.exprs[idx], depth);
+                } else {
+                    try writer.writeAll("lua.Value.nil");
+                }
+                try writer.writeAll(";\n");
+            }
+
+            var idx = op.targets.len;
+            while (idx != 0) {
+                idx -= 1;
+                try emitStoreTarget(writer, ctx, op.targets[idx], temp_ids[idx], depth);
+            }
+            if (op.exprs.len > op.targets.len) {
+                for (temp_ids[op.targets.len..op.exprs.len]) |temp_id| {
+                    try emitIndent(writer, depth);
+                    try writer.print("_ = tmp_{d};\n", .{temp_id});
+                }
+            }
+        },
+        .function_def => |op| {
+            const child_id = ctx.state.stmt_function_ids.get(@intFromPtr(stmt)) orelse return error.UnsupportedSyntax;
+            const child_info = &ctx.state.functions.items[child_id];
+            if (op.is_local and op.target == .name) {
+                const local_id = try ctx.declareLocal(op.target.name);
+                try emitIndent(writer, depth);
+                try writer.print("var local_{d}: lua.Value = lua.Value.nil;\n", .{local_id});
+                try emitIndent(writer, depth);
+                try writer.print("local_{d} = local_{d};\n", .{ local_id, local_id });
+                try emitIndent(writer, depth);
+                try writer.print("local_{d} = ", .{local_id});
+                try emitFunctionValueExpr(writer, ctx, child_info, depth);
+                try writer.writeAll(";\n");
+            } else {
+                const temp_id = ctx.nextTemp();
+                try emitIndent(writer, depth);
+                try writer.print("const tmp_{d}: lua.Value = ", .{temp_id});
+                try emitFunctionValueExpr(writer, ctx, child_info, depth);
+                try writer.writeAll(";\n");
+                try emitStoreTarget(writer, ctx, op.target, temp_id, depth);
+            }
+        },
+        .if_stmt => |op| {
+            for (op.branches, 0..) |branch, idx| {
+                try emitIndent(writer, depth);
+                if (idx == 0) {
+                    try writer.writeAll("if ((");
+                } else {
+                    try writer.writeAll("else if ((");
+                }
+                try emitExpr(writer, ctx, branch.condition, depth);
+                try writer.writeAll(").truthy()) {\n");
+                try ctx.beginScope();
+                try emitStmtSlice(writer, ctx, branch.body, depth + 1);
+                ctx.endScope();
+                try emitIndent(writer, depth);
+                try writer.writeAll("}");
+                if (idx + 1 == op.branches.len and op.else_body.len == 0) try writer.writeAll("\n");
+            }
+            if (op.else_body.len != 0) {
+                if (op.branches.len == 0) {
+                    try emitIndent(writer, depth);
+                    try writer.writeAll("{\n");
+                } else {
+                    try writer.writeAll(" else {\n");
+                }
+                try ctx.beginScope();
+                try emitStmtSlice(writer, ctx, op.else_body, depth + 1);
+                ctx.endScope();
+                try emitIndent(writer, depth);
+                try writer.writeAll("}\n");
+            }
+        },
+        .do_block => |body| {
+            try emitIndent(writer, depth);
+            try writer.writeAll("{\n");
+            try ctx.beginScope();
+            try emitStmtSlice(writer, ctx, body, depth + 1);
+            ctx.endScope();
+            try emitIndent(writer, depth);
+            try writer.writeAll("}\n");
+        },
+        .while_stmt => |op| {
+            try emitIndent(writer, depth);
+            try writer.writeAll("while ((");
+            try emitExpr(writer, ctx, op.condition, depth);
+            try writer.writeAll(").truthy()) {\n");
+            try ctx.beginScope();
+            try emitStmtSlice(writer, ctx, op.body, depth + 1);
+            ctx.endScope();
+            try emitIndent(writer, depth);
+            try writer.writeAll("}\n");
+        },
+        .repeat_stmt => |op| {
+            try emitIndent(writer, depth);
+            try writer.writeAll("while (true) {\n");
+            try ctx.beginScope();
+            try emitStmtSlice(writer, ctx, op.body, depth + 1);
+            try emitIndent(writer, depth + 1);
+            try writer.writeAll("if ((");
+            try emitExpr(writer, ctx, op.condition, depth + 1);
+            try writer.writeAll(").truthy()) break;\n");
+            ctx.endScope();
+            try emitIndent(writer, depth);
+            try writer.writeAll("}\n");
+        },
+        .numeric_for => |op| {
+            const start_temp = ctx.nextTemp();
+            const limit_temp = ctx.nextTemp();
+            const step_temp = ctx.nextTemp();
+            const step_num_temp = ctx.nextTemp();
+
+            try emitIndent(writer, depth);
+            try writer.print("const tmp_{d}: lua.Value = ", .{start_temp});
+            try emitExpr(writer, ctx, op.start, depth);
+            try writer.writeAll(";\n");
+
+            try emitIndent(writer, depth);
+            try writer.print("const tmp_{d}: lua.Value = ", .{limit_temp});
+            try emitExpr(writer, ctx, op.finish, depth);
+            try writer.writeAll(";\n");
+
+            try emitIndent(writer, depth);
+            try writer.print("const tmp_{d}: lua.Value = ", .{step_temp});
+            if (op.step) |step| {
+                try emitExpr(writer, ctx, step, depth);
+            } else {
+                try writer.writeAll("lua.Value{ .number = 1 }");
+            }
+            try writer.writeAll(";\n");
+
+            try emitIndent(writer, depth);
+            try writer.print("const tmp_{d} = try lua.valueToNumberAlloc(tmp_{d});\n", .{ step_num_temp, step_temp });
+            try emitIndent(writer, depth);
+            try writer.writeAll("if ((tmp_");
+            try writer.print("{d} >= 0 and try lua.valueToNumberAlloc(tmp_{d}) <= try lua.valueToNumberAlloc(tmp_{d})) or (tmp_{d} < 0 and try lua.valueToNumberAlloc(tmp_{d}) >= try lua.valueToNumberAlloc(tmp_{d}))) {{\n", .{
+                step_num_temp, start_temp, limit_temp, step_num_temp, start_temp, limit_temp,
+            });
+
+            try ctx.beginScope();
+            const loop_local = try ctx.declareLocal(op.name);
+            try emitIndent(writer, depth + 1);
+            try writer.print("var local_{d}: lua.Value = tmp_{d};\n", .{ loop_local, start_temp });
+            try emitIndent(writer, depth + 1);
+            try writer.print("local_{d} = local_{d};\n", .{ loop_local, loop_local });
+            try emitIndent(writer, depth + 1);
+            try writer.writeAll("while (true) {\n");
+            try ctx.beginScope();
+            try emitStmtSlice(writer, ctx, op.body, depth + 2);
+            ctx.endScope();
+            try emitIndent(writer, depth + 2);
+            try writer.print("const next_num = try lua.valueToNumberAlloc(local_{d}) + tmp_{d};\n", .{ loop_local, step_num_temp });
+            try emitIndent(writer, depth + 2);
+            try writer.print("local_{d} = lua.Value{{ .number = next_num }};\n", .{loop_local});
+            try emitIndent(writer, depth + 2);
+            try writer.print("if (!((tmp_{d} >= 0 and next_num <= try lua.valueToNumberAlloc(tmp_{d})) or (tmp_{d} < 0 and next_num >= try lua.valueToNumberAlloc(tmp_{d})))) break;\n", .{
+                step_num_temp, limit_temp, step_num_temp, limit_temp,
+            });
+            try emitIndent(writer, depth + 1);
+            try writer.writeAll("}\n");
+            ctx.endScope();
+            try emitIndent(writer, depth);
+            try writer.writeAll("}\n");
+        },
+        .generic_for => |op| {
+            const iter_temp = ctx.nextTemp();
+            const pair_temp = ctx.nextTemp();
+            try emitIndent(writer, depth);
+            try writer.print("var tmp_{d}: lua.Iterator = ", .{iter_temp});
+            try emitIteratorInit(writer, ctx, op.iterator_exprs, depth);
+            try writer.writeAll(";\n");
+            try emitIndent(writer, depth);
+            try writer.writeAll("while (try lua.generatedIteratorNext(&tmp_");
+            try writer.print("{d}", .{iter_temp});
+            try writer.print(")) |pair_{d}| {{\n", .{pair_temp});
+            try ctx.beginScope();
+            for (op.names, 0..) |name, idx| {
+                const local_id = try ctx.declareLocal(name);
+                try emitIndent(writer, depth + 1);
+                if (idx == 0) {
+                    try writer.print("var local_{d}: lua.Value = pair_{d}[0];\n", .{ local_id, pair_temp });
+                } else if (idx == 1) {
+                    try writer.print("var local_{d}: lua.Value = pair_{d}[1];\n", .{ local_id, pair_temp });
+                } else {
+                    try writer.print("var local_{d}: lua.Value = lua.Value.nil;\n", .{local_id});
+                }
+                try emitIndent(writer, depth + 1);
+                try writer.print("local_{d} = local_{d};\n", .{ local_id, local_id });
+            }
+            try emitStmtSlice(writer, ctx, op.body, depth + 1);
+            ctx.endScope();
+            try emitIndent(writer, depth);
+            try writer.writeAll("}\n");
+        },
+        .return_stmt => |op| {
+            try emitIndent(writer, depth);
+            if (ctx.uses_return_block) {
+                if (op.exprs.len == 0) {
+                    try writer.writeAll("return_result = &.{};\n");
+                    try emitIndent(writer, depth);
+                    try writer.writeAll("break :lua_fn;\n");
+                } else {
+                    try writer.writeAll("return_result = try runtime.allocValues(&.{ ");
+                    for (op.exprs, 0..) |expr, idx| {
+                        if (idx != 0) try writer.writeAll(", ");
+                        try emitExpr(writer, ctx, expr, depth);
+                    }
+                    try writer.writeAll(" });\n");
+                    try emitIndent(writer, depth);
+                    try writer.writeAll("break :lua_fn;\n");
+                }
+            } else {
+                if (op.exprs.len == 0) {
+                    try writer.writeAll("return try runtime.allocValues(&.{});\n");
+                } else {
+                    try writer.writeAll("return try runtime.allocValues(&.{ ");
+                    for (op.exprs, 0..) |expr, idx| {
+                        if (idx != 0) try writer.writeAll(", ");
+                        try emitExpr(writer, ctx, expr, depth);
+                    }
+                    try writer.writeAll(" });\n");
+                }
+            }
+        },
+        .break_stmt => {
+            try emitIndent(writer, depth);
+            try writer.writeAll("break;\n");
+        },
+        .expr_stmt => |expr| {
+            try emitIndent(writer, depth);
+            try writer.writeAll("_ = ");
+            try emitExpr(writer, ctx, expr, depth);
+            try writer.writeAll(";\n");
+        },
+    }
+}
+
+fn emitStoreTarget(writer: anytype, ctx: *DirectEmitFunctionContext, target: LValue, temp_id: u32, depth: usize) anyerror!void {
+    switch (target) {
+        .name => |name| {
+            if (ctx.lookupLocal(name)) |local_id| {
+                try emitIndent(writer, depth);
+                try writer.print("local_{d} = tmp_{d};\n", .{ local_id, temp_id });
+                return;
+            }
+            if (ctx.lookupCapture(name)) |capture_id| {
+                try emitIndent(writer, depth);
+                try writer.print("capture.capture_{d}.* = tmp_{d};\n", .{ capture_id, temp_id });
+                return;
+            }
+            const global_id = ctx.state.global_ids.get(name) orelse return error.UnknownVariable;
+            try emitIndent(writer, depth);
+            try writer.print("globals.global_{d} = tmp_{d};\n", .{ global_id, temp_id });
+        },
+        .field => |field| {
+            const object_tmp = ctx.nextTemp();
+            try emitIndent(writer, depth);
+            try writer.print("const tmp_{d}: lua.Value = ", .{object_tmp});
+            try emitExpr(writer, ctx, field.object, depth);
+            try writer.writeAll(";\n");
+            try emitIndent(writer, depth);
+            try writer.print("if (tmp_{d} != .table) return error.InvalidIndex;\n", .{object_tmp});
+            try emitIndent(writer, depth);
+            try writer.print("try tmp_{d}.table.putString(", .{object_tmp});
+            try writeZigStringLiteral(writer, field.name);
+            try writer.print(", tmp_{d});\n", .{temp_id});
+        },
+        .index => |index| {
+            const object_tmp = ctx.nextTemp();
+            const key_tmp = ctx.nextTemp();
+            try emitIndent(writer, depth);
+            try writer.print("const tmp_{d}: lua.Value = ", .{object_tmp});
+            try emitExpr(writer, ctx, index.object, depth);
+            try writer.writeAll(";\n");
+            try emitIndent(writer, depth);
+            try writer.print("const tmp_{d}: lua.Value = ", .{key_tmp});
+            try emitExpr(writer, ctx, index.key, depth);
+            try writer.writeAll(";\n");
+            try emitIndent(writer, depth);
+            try writer.print("if (tmp_{d} != .table) return error.InvalidIndex;\n", .{object_tmp});
+            try emitIndent(writer, depth);
+            try writer.print("try tmp_{d}.table.set(tmp_{d}, tmp_{d});\n", .{ object_tmp, key_tmp, temp_id });
+        },
+    }
+}
+
+fn emitIteratorInit(writer: anytype, ctx: *DirectEmitFunctionContext, exprs: []const *Expr, depth: usize) anyerror!void {
+    if (exprs.len != 0 and exprs[0].* == .call) {
+        const call = exprs[0].call;
+        if (matchBuiltinCall(call)) |builtin| switch (builtin) {
+            .pairs => {
+                try writer.writeAll("try lua.generatedPairsIterator(");
+                if (call.args.len != 0) {
+                    try emitExpr(writer, ctx, call.args[0], depth);
+                } else {
+                    try writer.writeAll("lua.Value.nil");
+                }
+                try writer.writeAll(")");
+                return;
+            },
+            .ipairs => {
+                try writer.writeAll("try lua.generatedIpairsIterator(");
+                if (call.args.len != 0) {
+                    try emitExpr(writer, ctx, call.args[0], depth);
+                } else {
+                    try writer.writeAll("lua.Value.nil");
+                }
+                try writer.writeAll(")");
+                return;
+            },
+            else => {},
+        };
+    }
+    const label_id = ctx.nextTemp();
+    const iter_id = ctx.nextTemp();
+    try writer.print("blk_{d}: {{ const tmp_{d} = ", .{ label_id, iter_id });
+    if (exprs.len != 0) {
+        try emitExpr(writer, ctx, exprs[0], depth);
+    } else {
+        try writer.writeAll("lua.Value.nil");
+    }
+    try writer.print("; if (tmp_{d} != .iterator) return error.UnsupportedGenericFor; break :blk_{d} tmp_{d}.iterator; }}", .{ iter_id, label_id, iter_id });
+}
+
+fn emitFunctionValueExpr(writer: anytype, ctx: *DirectEmitFunctionContext, info: *const DirectFunctionInfo, depth: usize) anyerror!void {
+    const label_id = ctx.nextTemp();
+    try writer.print("blk_{d}: {{\n", .{label_id});
+    if (info.captures.len != 0) {
+        try emitIndent(writer, depth + 1);
+        try writer.print("const capture_obj = try runtime.alloc().create(Capture_{d});\n", .{info.id});
+        try emitIndent(writer, depth + 1);
+        try writer.writeAll("capture_obj.* = .{\n");
+        for (info.captures, 0..) |capture, idx| {
+            try emitIndent(writer, depth + 2);
+            try writer.print(".capture_{d} = ", .{idx});
+            switch (capture.origin) {
+                .parent_local => {
+                    const local_id = ctx.lookupLocal(capture.name) orelse return error.UnknownVariable;
+                    try writer.print("&local_{d},\n", .{local_id});
+                },
+                .parent_capture => {
+                    const capture_id = ctx.lookupCapture(capture.name) orelse return error.UnknownVariable;
+                    try writer.print("capture.capture_{d},\n", .{capture_id});
+                },
+            }
+        }
+        try emitIndent(writer, depth + 1);
+        try writer.writeAll("};\n");
+        try emitIndent(writer, depth + 1);
+        try writer.print("break :blk_{d} try runtime.functionValue(", .{label_id});
+        try writeZigStringLiteral(writer, info.name);
+        try writer.print(", capture_obj, globals, fn_{d});\n", .{info.id});
+    } else {
+        try emitIndent(writer, depth + 1);
+        try writer.print("break :blk_{d} try runtime.functionValue(", .{label_id});
+        try writeZigStringLiteral(writer, info.name);
+        try writer.print(", null, globals, fn_{d});\n", .{info.id});
+    }
+    try emitIndent(writer, depth);
+    try writer.writeAll("}");
+}
+
+fn emitExpr(writer: anytype, ctx: *DirectEmitFunctionContext, expr: *const Expr, depth: usize) anyerror!void {
+    switch (expr.*) {
+        .nil_lit => try writer.writeAll("lua.Value.nil"),
+        .bool_lit => |value| try writer.print("lua.Value{{ .boolean = {} }}", .{value}),
+        .number_lit => |value| try writer.print("lua.Value{{ .number = {d} }}", .{value}),
+        .string_lit => |value| {
+            try writer.writeAll("lua.Value{ .string = ");
+            try writeZigStringLiteral(writer, value);
+            try writer.writeAll(" }");
+        },
+        .variable => |name| {
+            if (ctx.lookupLocal(name)) |local_id| {
+                try writer.print("local_{d}", .{local_id});
+            } else if (ctx.lookupCapture(name)) |capture_id| {
+                try writer.print("capture.capture_{d}.*", .{capture_id});
+            } else {
+                const global_id = ctx.state.global_ids.get(name) orelse return error.UnknownVariable;
+                try writer.print("globals.global_{d}", .{global_id});
+            }
+        },
+        .varargs => try writer.writeAll("(if (varargs.len != 0) varargs[0] else @as(lua.Value, .nil))"),
+        .unary => |op| {
+            try writer.print("try lua.executeUnaryValueAlloc(.{s}, ", .{formatTagName(UnaryOp, op.op)});
+            try emitExpr(writer, ctx, op.expr, depth);
+            try writer.writeAll(")");
+        },
+        .binary => |op| switch (op.op) {
+            .and_ => {
+                const label_id = ctx.nextTemp();
+                const lhs_id = ctx.nextTemp();
+                try writer.print("blk_{d}: {{ const tmp_{d} = ", .{ label_id, lhs_id });
+                try emitExpr(writer, ctx, op.lhs, depth);
+                try writer.print("; if (!tmp_{d}.truthy()) break :blk_{d} tmp_{d}; break :blk_{d} ", .{ lhs_id, label_id, lhs_id, label_id });
+                try emitExpr(writer, ctx, op.rhs, depth);
+                try writer.writeAll("; }");
+            },
+            .or_ => {
+                const label_id = ctx.nextTemp();
+                const lhs_id = ctx.nextTemp();
+                try writer.print("blk_{d}: {{ const tmp_{d} = ", .{ label_id, lhs_id });
+                try emitExpr(writer, ctx, op.lhs, depth);
+                try writer.print("; if (tmp_{d}.truthy()) break :blk_{d} tmp_{d}; break :blk_{d} ", .{ lhs_id, label_id, lhs_id, label_id });
+                try emitExpr(writer, ctx, op.rhs, depth);
+                try writer.writeAll("; }");
+            },
+            else => {
+                const label_id = ctx.nextTemp();
+                const lhs_id = ctx.nextTemp();
+                const rhs_id = ctx.nextTemp();
+                try writer.print("blk_{d}: {{ const tmp_{d} = ", .{ label_id, lhs_id });
+                try emitExpr(writer, ctx, op.lhs, depth);
+                try writer.print("; const tmp_{d} = ", .{rhs_id});
+                try emitExpr(writer, ctx, op.rhs, depth);
+                try writer.print("; break :blk_{d} try lua.executeBinaryValueAlloc(runtime.alloc(), .", .{label_id});
+                try writer.print("{s}", .{formatTagName(BinaryOp, op.op)});
+                try writer.print(", tmp_{d}, tmp_{d}); }}", .{ lhs_id, rhs_id });
+            },
+        },
+        .table_ctor => |fields| {
+            const label_id = ctx.nextTemp();
+            const table_id = ctx.nextTemp();
+            try writer.print("blk_{d}: {{\n", .{label_id});
+            try emitIndent(writer, depth + 1);
+            try writer.print("const tmp_{d} = try lua.Table.init(runtime.alloc());\n", .{table_id});
+            for (fields) |field| switch (field) {
+                .array => |value| {
+                    try emitIndent(writer, depth + 1);
+                    try writer.print("try tmp_{d}.array.append(runtime.alloc(), ", .{table_id});
+                    try emitExpr(writer, ctx, value, depth + 1);
+                    try writer.writeAll(");\n");
+                },
+                .named => |named| {
+                    try emitIndent(writer, depth + 1);
+                    try writer.print("try tmp_{d}.putString(", .{table_id});
+                    try writeZigStringLiteral(writer, named.name);
+                    try writer.writeAll(", ");
+                    try emitExpr(writer, ctx, named.value, depth + 1);
+                    try writer.writeAll(");\n");
+                },
+                .indexed => |indexed| {
+                    try emitIndent(writer, depth + 1);
+                    try writer.print("try tmp_{d}.set(", .{table_id});
+                    try emitExpr(writer, ctx, indexed.key, depth + 1);
+                    try writer.writeAll(", ");
+                    try emitExpr(writer, ctx, indexed.value, depth + 1);
+                    try writer.writeAll(");\n");
+                },
+            };
+            try emitIndent(writer, depth + 1);
+            try writer.print("break :blk_{d} lua.Value{{ .table = tmp_{d} }};\n", .{ label_id, table_id });
+            try emitIndent(writer, depth);
+            try writer.writeAll("}");
+        },
+        .const_table => |table| try writer.print("lua.Value{{ .table = try lua.cloneConstTableSeedAlloc(runtime.alloc(), &const_table_{d}) }}", .{ctx.state.tables.tableId(table).?}),
+        .field => |field| {
+            const label_id = ctx.nextTemp();
+            const object_id = ctx.nextTemp();
+            try writer.print("blk_{d}: {{ const tmp_{d} = ", .{ label_id, object_id });
+            try emitExpr(writer, ctx, field.object, depth);
+            try writer.print("; if (tmp_{d} != .table) return error.InvalidIndex; break :blk_{d} tmp_{d}.table.getString(", .{ object_id, label_id, object_id });
+            try writeZigStringLiteral(writer, field.name);
+            try writer.writeAll("); }");
+        },
+        .index => |index| {
+            const label_id = ctx.nextTemp();
+            const object_id = ctx.nextTemp();
+            const key_id = ctx.nextTemp();
+            try writer.print("blk_{d}: {{ const tmp_{d} = ", .{ label_id, object_id });
+            try emitExpr(writer, ctx, index.object, depth);
+            try writer.print("; const tmp_{d} = ", .{key_id});
+            try emitExpr(writer, ctx, index.key, depth);
+            try writer.print("; if (tmp_{d} != .table) return error.InvalidIndex; break :blk_{d} tmp_{d}.table.get(tmp_{d}); }}", .{ object_id, label_id, object_id, key_id });
+        },
+        .call => |call| {
+            if (matchBuiltinCall(call)) |builtin| {
+                try emitBuiltinCall(writer, ctx, builtin, call.args, depth);
+            } else {
+                const label_id = ctx.nextTemp();
+                const callee_id = ctx.nextTemp();
+                const results_id = ctx.nextTemp();
+                try writer.print("blk_{d}: {{ const tmp_{d} = ", .{ label_id, callee_id });
+                try emitExpr(writer, ctx, call.callee, depth);
+                try writer.print("; const tmp_{d} = try lua.generatedInvoke(runtime, tmp_{d}, &.{{ ", .{ results_id, callee_id });
+                for (call.args, 0..) |arg, idx| {
+                    if (idx != 0) try writer.writeAll(", ");
+                    try emitExpr(writer, ctx, arg, depth);
+                }
+                try writer.print(" }}); break :blk_{d} if (tmp_{d}.len == 0) @as(lua.Value, .nil) else tmp_{d}[0]; }}", .{ label_id, results_id, results_id });
+            }
+        },
+        .function_lit => {
+            const child_id = ctx.state.expr_function_ids.get(@intFromPtr(expr)) orelse return error.UnsupportedSyntax;
+            const child_info = &ctx.state.functions.items[child_id];
+            try emitFunctionValueExpr(writer, ctx, child_info, depth);
+        },
+    }
+}
+
+fn matchBuiltinCall(call: @FieldType(Expr, "call")) ?DirectBuiltinCall {
+    switch (call.callee.*) {
+        .variable => |name| {
+            if (std.mem.eql(u8, name, "print")) return .print;
+            if (std.mem.eql(u8, name, "tostring")) return .tostring;
+            if (std.mem.eql(u8, name, "tonumber")) return .tonumber;
+            if (std.mem.eql(u8, name, "type")) return .type_;
+            if (std.mem.eql(u8, name, "pairs")) return .pairs;
+            if (std.mem.eql(u8, name, "ipairs")) return .ipairs;
+        },
+        .field => |field| switch (field.object.*) {
+            .variable => |object_name| {
+                if (std.mem.eql(u8, object_name, "string")) {
+                    if (std.mem.eql(u8, field.name, "len")) return .string_len;
+                    if (std.mem.eql(u8, field.name, "lower")) return .string_lower;
+                    if (std.mem.eql(u8, field.name, "upper")) return .string_upper;
+                    if (std.mem.eql(u8, field.name, "sub")) return .string_sub;
+                }
+                if (std.mem.eql(u8, object_name, "math")) {
+                    if (std.mem.eql(u8, field.name, "floor")) return .math_floor;
+                    if (std.mem.eql(u8, field.name, "ceil")) return .math_ceil;
+                    if (std.mem.eql(u8, field.name, "abs")) return .math_abs;
+                }
+                if (std.mem.eql(u8, object_name, "table")) {
+                    if (std.mem.eql(u8, field.name, "insert")) return .table_insert;
+                    if (std.mem.eql(u8, field.name, "concat")) return .table_concat;
+                }
+            },
+            else => {},
+        },
+        else => {},
+    }
+    return null;
+}
+
+fn emitBuiltinCall(
+    writer: anytype,
+    ctx: *DirectEmitFunctionContext,
+    builtin: DirectBuiltinCall,
+    args: []const *Expr,
+    depth: usize,
+) anyerror!void {
+    switch (builtin) {
+        .print => {
+            const label_id = ctx.nextTemp();
+            try writer.print("blk_{d}: {{ _ = try lua.generatedPrint(runtime, &.{{ ", .{label_id});
+            for (args, 0..) |arg, idx| {
+                if (idx != 0) try writer.writeAll(", ");
+                try emitExpr(writer, ctx, arg, depth);
+            }
+            try writer.print(" }}); break :blk_{d} lua.Value.nil; }}", .{label_id});
+        },
+        .tostring => {
+            try writer.writeAll("try lua.generatedTostring(runtime, ");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(")");
+        },
+        .tonumber => {
+            const label_id = ctx.nextTemp();
+            try writer.print("blk_{d}: {{ ", .{label_id});
+            if (args.len == 0) {
+                try writer.print("break :blk_{d} lua.Value.nil; }}", .{label_id});
+            } else {
+                try writer.print("break :blk_{d} try lua.generatedTonumber(", .{label_id});
+                try emitExpr(writer, ctx, args[0], depth);
+                try writer.writeAll("); }");
+            }
+        },
+        .type_ => {
+            try writer.writeAll("lua.generatedType(");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(")");
+        },
+        .pairs => {
+            try writer.writeAll("lua.Value{ .iterator = try lua.generatedPairsIterator(");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(") }");
+        },
+        .ipairs => {
+            try writer.writeAll("lua.Value{ .iterator = try lua.generatedIpairsIterator(");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(") }");
+        },
+        .string_len => {
+            try writer.writeAll("try lua.generatedStringLen(");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(")");
+        },
+        .string_lower => {
+            try writer.writeAll("try lua.generatedStringLower(runtime, ");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(")");
+        },
+        .string_upper => {
+            try writer.writeAll("try lua.generatedStringUpper(runtime, ");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(")");
+        },
+        .string_sub => {
+            try writer.writeAll("try lua.generatedStringSub(runtime, ");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(", ");
+            if (args.len > 1) try emitExpr(writer, ctx, args[1], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(", ");
+            if (args.len > 2) {
+                try emitExpr(writer, ctx, args[2], depth);
+            } else {
+                try writer.writeAll("null");
+            }
+            try writer.writeAll(")");
+        },
+        .math_floor => {
+            try writer.writeAll("try lua.generatedMathFloor(");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(")");
+        },
+        .math_ceil => {
+            try writer.writeAll("try lua.generatedMathCeil(");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(")");
+        },
+        .math_abs => {
+            try writer.writeAll("try lua.generatedMathAbs(");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(")");
+        },
+        .table_insert => {
+            try writer.writeAll("try lua.generatedTableInsert(");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(", ");
+            if (args.len > 1) try emitExpr(writer, ctx, args[1], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(")");
+        },
+        .table_concat => {
+            try writer.writeAll("try lua.generatedTableConcat(runtime, ");
+            if (args.len != 0) try emitExpr(writer, ctx, args[0], depth) else try writer.writeAll("lua.Value.nil");
+            try writer.writeAll(", ");
+            if (args.len > 1) try emitExpr(writer, ctx, args[1], depth) else try writer.writeAll("null");
+            try writer.writeAll(")");
+        },
+    }
+}
+
+const ZigEmitState = struct {
+    allocator: std.mem.Allocator,
+    table_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+    tables: std.ArrayList(*const Table) = .empty,
+    proto_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+    protos: std.ArrayList(*const Prototype) = .empty,
+
+    fn init(allocator: std.mem.Allocator) ZigEmitState {
+        return .{ .allocator = allocator };
+    }
+
+    fn collectPrototype(self: *ZigEmitState, proto: *const Prototype) !u32 {
+        const key = @intFromPtr(proto);
+        if (self.proto_ids.get(key)) |existing| return existing;
+        for (proto.const_tables) |table| _ = try self.collectTable(table);
+        for (proto.child_protos) |child| _ = try self.collectPrototype(child);
+        const id: u32 = @intCast(self.protos.items.len);
+        try self.proto_ids.put(self.allocator, key, id);
+        try self.protos.append(self.allocator, proto);
+        return id;
+    }
+
+    fn collectTable(self: *ZigEmitState, table: *const Table) !u32 {
+        const key = @intFromPtr(table);
+        if (self.table_ids.get(key)) |existing| return existing;
+        for (table.array.items) |value| {
+            if (value == .table) _ = try self.collectTable(value.table);
+        }
+        var string_it = table.string_fields.iterator();
+        while (string_it.next()) |entry| {
+            if (entry.value_ptr.* == .table) _ = try self.collectTable(entry.value_ptr.*.table);
+        }
+        var int_it = table.int_fields.iterator();
+        while (int_it.next()) |entry| {
+            if (entry.value_ptr.* == .table) _ = try self.collectTable(entry.value_ptr.*.table);
+        }
+        const id: u32 = @intCast(self.tables.items.len);
+        try self.table_ids.put(self.allocator, key, id);
+        try self.tables.append(self.allocator, table);
+        return id;
+    }
+
+    fn tableId(self: *const ZigEmitState, table: *const Table) ?u32 {
+        return self.table_ids.get(@intFromPtr(table));
+    }
+
+    fn prototypeId(self: *const ZigEmitState, proto: *const Prototype) ?u32 {
+        return self.proto_ids.get(@intFromPtr(proto));
+    }
+};
+
+fn emitConstTableSeed(writer: anytype, table: *const Table, state: *const ZigEmitState) !void {
+    const id = state.tableId(table).?;
+    try writer.print("const const_table_{d}_array = [_]lua.ConstValueSeed{{\n", .{id});
+    for (table.array.items) |value| {
+        try writer.writeAll("    ");
+        try emitConstValueSeed(writer, value, state);
+        try writer.writeAll(",\n");
+    }
+    try writer.writeAll("};\n");
+
+    try writer.print("const const_table_{d}_string_fields = [_]lua.ConstTableStringFieldSeed{{\n", .{id});
+    var string_it = table.string_fields.iterator();
+    while (string_it.next()) |entry| {
+        try writer.writeAll("    .{ .key = ");
+        try writeZigStringLiteral(writer, entry.key_ptr.*);
+        try writer.writeAll(", .value = ");
+        try emitConstValueSeed(writer, entry.value_ptr.*, state);
+        try writer.writeAll(" },\n");
+    }
+    try writer.writeAll("};\n");
+
+    try writer.print("const const_table_{d}_int_fields = [_]lua.ConstTableIntFieldSeed{{\n", .{id});
+    var int_it = table.int_fields.iterator();
+    while (int_it.next()) |entry| {
+        try writer.print("    .{{ .key = {d}, .value = ", .{entry.key_ptr.*});
+        try emitConstValueSeed(writer, entry.value_ptr.*, state);
+        try writer.writeAll(" },\n");
+    }
+    try writer.writeAll("};\n");
+
+    try writer.print(
+        "const const_table_{d} = lua.ConstTableSeed{{ .array = &const_table_{d}_array, .string_fields = &const_table_{d}_string_fields, .int_fields = &const_table_{d}_int_fields }};\n\n",
+        .{ id, id, id, id },
+    );
+}
+
+fn emitConstValueSeed(writer: anytype, value: Value, state: *const ZigEmitState) !void {
+    switch (value) {
+        .nil => try writer.writeAll(".nil"),
+        .boolean => |flag| try writer.print(".{{ .boolean = {} }}", .{flag}),
+        .number => |number| try writer.print(".{{ .number = {d} }}", .{number}),
+        .string => |text| {
+            try writer.writeAll(".{ .string = ");
+            try writeZigStringLiteral(writer, text);
+            try writer.writeAll(" }");
+        },
+        .table => |table| try writer.print(".{{ .table = &const_table_{d} }}", .{state.tableId(table).?}),
+        .function, .iterator => return error.UnsupportedSyntax,
+    }
+}
+
+fn emitStaticPrototype(writer: anytype, proto: *const Prototype, state: *const ZigEmitState) !void {
+    const id = state.prototypeId(proto).?;
+    try writer.print("const proto_{d}_code = [_]lua.Instruction{{\n", .{id});
+    for (proto.code) |inst| {
+        try writer.writeAll("    ");
+        try emitInstructionLiteral(writer, inst);
+        try writer.writeAll(",\n");
+    }
+    try writer.writeAll("};\n");
+
+    try writer.print("const proto_{d}_constants = [_]lua.Constant{{\n", .{id});
+    for (proto.constants) |constant| {
+        try writer.writeAll("    ");
+        try emitConstantLiteral(writer, constant);
+        try writer.writeAll(",\n");
+    }
+    try writer.writeAll("};\n");
+
+    try writer.print("const proto_{d}_const_tables = [_]*const lua.ConstTableSeed{{\n", .{id});
+    for (proto.const_tables) |table| try writer.print("    &const_table_{d},\n", .{state.tableId(table).?});
+    try writer.writeAll("};\n");
+
+    try writer.print("const proto_{d}_child_protos = [_]*const lua.StaticPrototype{{\n", .{id});
+    for (proto.child_protos) |child| try writer.print("    &proto_{d},\n", .{state.prototypeId(child).?});
+    try writer.writeAll("};\n");
+
+    try writer.print("const proto_{d}_upvalues = [_]lua.UpvalueBinding{{\n", .{id});
+    for (proto.upvalues) |binding| {
+        try writer.writeAll("    ");
+        try emitUpvalueBindingLiteral(writer, binding);
+        try writer.writeAll(",\n");
+    }
+    try writer.writeAll("};\n");
+
+    try writer.print("pub const proto_{d} = lua.StaticPrototype{{\n", .{id});
+    try writer.writeAll("    .name = ");
+    try writeZigStringLiteral(writer, proto.name);
+    try writer.writeAll(",\n");
+    try writer.print("    .params = {d},\n", .{proto.params});
+    try writer.print("    .local_count = {d},\n", .{proto.local_count});
+    try writer.print("    .stack_size = {d},\n", .{proto.stack_size});
+    try writer.print("    .is_vararg = {},\n", .{proto.is_vararg});
+    try writer.print("    .code = &proto_{d}_code,\n", .{id});
+    try writer.print("    .constants = &proto_{d}_constants,\n", .{id});
+    try writer.print("    .const_tables = &proto_{d}_const_tables,\n", .{id});
+    try writer.print("    .child_protos = &proto_{d}_child_protos,\n", .{id});
+    try writer.print("    .upvalues = &proto_{d}_upvalues,\n", .{id});
+    try writer.writeAll("};\n\n");
+}
+
+fn emitConstantLiteral(writer: anytype, constant: Constant) !void {
+    switch (constant) {
+        .number => |value| try writer.print(".{{ .number = {d} }}", .{value}),
+        .string => |value| {
+            try writer.writeAll(".{ .string = ");
+            try writeZigStringLiteral(writer, value);
+            try writer.writeAll(" }");
+        },
+    }
+}
+
+fn emitUpvalueBindingLiteral(writer: anytype, binding: UpvalueBinding) !void {
+    switch (binding) {
+        .parent_local => |slot| try writer.print(".{{ .parent_local = {d} }}", .{slot}),
+        .parent_upvalue => |slot| try writer.print(".{{ .parent_upvalue = {d} }}", .{slot}),
+    }
+}
+
+fn emitInstructionLiteral(writer: anytype, inst: Instruction) !void {
+    switch (inst) {
+        .push_nil => try writer.writeAll(".push_nil"),
+        .push_bool => |value| try writer.print(".{{ .push_bool = {} }}", .{value}),
+        .push_const => |value| try writer.print(".{{ .push_const = {d} }}", .{value}),
+        .push_const_table => |value| try writer.print(".{{ .push_const_table = {d} }}", .{value}),
+        .load_local => |value| try writer.print(".{{ .load_local = {d} }}", .{value}),
+        .store_local => |value| try writer.print(".{{ .store_local = {d} }}", .{value}),
+        .load_upvalue => |value| try writer.print(".{{ .load_upvalue = {d} }}", .{value}),
+        .store_upvalue => |value| try writer.print(".{{ .store_upvalue = {d} }}", .{value}),
+        .load_global => |value| try writer.print(".{{ .load_global = {d} }}", .{value}),
+        .store_global => |value| try writer.print(".{{ .store_global = {d} }}", .{value}),
+        .load_vararg0 => try writer.writeAll(".load_vararg0"),
+        .dup => try writer.writeAll(".dup"),
+        .pop => try writer.writeAll(".pop"),
+        .unary => |op| try writer.print(".{{ .unary = .{s} }}", .{@tagName(op)}),
+        .binary => |op| try writer.print(".{{ .binary = .{s} }}", .{@tagName(op)}),
+        .jump => |target| try writer.print(".{{ .jump = {d} }}", .{target}),
+        .jump_if_false => |target| try writer.print(".{{ .jump_if_false = {d} }}", .{target}),
+        .jump_if_true => |target| try writer.print(".{{ .jump_if_true = {d} }}", .{target}),
+        .new_table => try writer.writeAll(".new_table"),
+        .table_append => try writer.writeAll(".table_append"),
+        .table_set_name => |value| try writer.print(".{{ .table_set_name = {d} }}", .{value}),
+        .table_set_dynamic => try writer.writeAll(".table_set_dynamic"),
+        .load_field_name => |value| try writer.print(".{{ .load_field_name = {d} }}", .{value}),
+        .store_field_name => |value| try writer.print(".{{ .store_field_name = {d} }}", .{value}),
+        .load_index => try writer.writeAll(".load_index"),
+        .store_index => try writer.writeAll(".store_index"),
+        .make_closure => |value| try writer.print(".{{ .make_closure = {d} }}", .{value}),
+        .call => |value| try writer.print(".{{ .call = {d} }}", .{value}),
+        .return_ => |value| try writer.print(".{{ .return_ = {d} }}", .{value}),
+        .iter_next => |op| try writer.print(
+            ".{{ .iter_next = .{{ .iter_slot = {d}, .first_slot = {d}, .slot_count = {d}, .target = {d} }} }}",
+            .{ op.iter_slot, op.first_slot, op.slot_count, op.target },
+        ),
+        .numeric_for_prep => |op| try writer.print(
+            ".{{ .numeric_for_prep = .{{ .var_slot = {d}, .limit_slot = {d}, .step_slot = {d}, .target = {d} }} }}",
+            .{ op.var_slot, op.limit_slot, op.step_slot, op.target },
+        ),
+        .numeric_for_loop => |op| try writer.print(
+            ".{{ .numeric_for_loop = .{{ .var_slot = {d}, .limit_slot = {d}, .step_slot = {d}, .target = {d} }} }}",
+            .{ op.var_slot, op.limit_slot, op.step_slot, op.target },
+        ),
+    }
+}
+
+fn emitBuiltinSlots(writer: anytype, slots: BuiltinGlobalSlots) !void {
+    try writer.writeAll(".{");
+    if (slots.print) |slot| try writer.print(" .print = {d},", .{slot});
+    if (slots.tostring) |slot| try writer.print(" .tostring = {d},", .{slot});
+    if (slots.tonumber) |slot| try writer.print(" .tonumber = {d},", .{slot});
+    if (slots.type_) |slot| try writer.print(" .type_ = {d},", .{slot});
+    if (slots.pairs) |slot| try writer.print(" .pairs = {d},", .{slot});
+    if (slots.ipairs) |slot| try writer.print(" .ipairs = {d},", .{slot});
+    if (slots.string) |slot| try writer.print(" .string = {d},", .{slot});
+    if (slots.math) |slot| try writer.print(" .math = {d},", .{slot});
+    if (slots.table) |slot| try writer.print(" .table = {d},", .{slot});
+    try writer.writeAll(" }");
+}
+
+fn writeZigStringLiteral(writer: anytype, value: []const u8) !void {
+    try writer.writeByte('"');
+    for (value) |byte| switch (byte) {
+        '\\' => try writer.writeAll("\\\\"),
+        '"' => try writer.writeAll("\\\""),
+        '\n' => try writer.writeAll("\\n"),
+        '\r' => try writer.writeAll("\\r"),
+        '\t' => try writer.writeAll("\\t"),
+        else => {
+            if (byte >= 0x20 and byte <= 0x7e) {
+                try writer.writeByte(byte);
+            } else {
+                try writer.print("\\x{X:0>2}", .{byte});
+            }
+        },
+    };
+    try writer.writeByte('"');
 }
 
 fn reportParseError(source: []const u8, parser: *const Parser, err: ParseError) void {
@@ -2730,6 +4845,7 @@ const Vm = struct {
         return switch (callee.function.kind) {
             .native => |native| try native(self, args),
             .bytecode => |closure| try self.executeClosure(globals, closure, args),
+            .generated => error.InvalidCall,
             .user => error.InvalidCall,
         };
     }
@@ -3088,6 +5204,7 @@ const Vm = struct {
         return switch (function.kind) {
             .native => |native| try native(self, args),
             .bytecode => error.InvalidCall,
+            .generated => error.InvalidCall,
             .user => |user| blk: {
                 const call_env = try self.createEnv(function.env);
                 for (user.params, 0..) |name, idx| {
@@ -3248,6 +5365,32 @@ fn floatToExactPositiveInt(num: f64) ?usize {
     return int;
 }
 
+fn iteratorNextAlloc(iterator: *Iterator) !?[2]Value {
+    switch (iterator.kind) {
+        .pairs => {
+            if (iterator.index < iterator.table.array.items.len) {
+                iterator.index += 1;
+                return .{ .{ .number = @floatFromInt(iterator.index) }, iterator.table.array.items[iterator.index - 1] };
+            }
+            var count: usize = iterator.table.array.items.len;
+            var it = iterator.table.string_fields.iterator();
+            while (it.next()) |entry| {
+                count += 1;
+                if (count == iterator.index + 1) {
+                    iterator.index += 1;
+                    return .{ .{ .string = entry.key_ptr.* }, entry.value_ptr.* };
+                }
+            }
+            return null;
+        },
+        .ipairs => {
+            if (iterator.index >= iterator.table.array.items.len) return null;
+            iterator.index += 1;
+            return .{ .{ .number = @floatFromInt(iterator.index) }, iterator.table.array.items[iterator.index - 1] };
+        },
+    }
+}
+
 fn builtinPrint(vm: *Vm, args: []const Value) ![]Value {
     var out: std.ArrayList(u8) = .empty;
     for (args, 0..) |arg, idx| {
@@ -3362,8 +5505,8 @@ pub const DependencyReport = struct {
     transitive_modules: []const []const u8,
     compiled_ok: []const []const u8,
     compiled_failed: []const ModuleCompileFailure,
-    bytecode_consistent: []const []const u8,
-    bytecode_inconsistent: []const ModuleCompileFailure,
+    emitted_consistent: []const []const u8,
+    emitted_inconsistent: []const ModuleCompileFailure,
 };
 
 pub const TemplateDependencyReport = struct {
@@ -3374,8 +5517,8 @@ pub const TemplateDependencyReport = struct {
     transitive_modules: []const []const u8,
     compiled_ok: []const []const u8,
     compiled_failed: []const ModuleCompileFailure,
-    bytecode_consistent: []const []const u8,
-    bytecode_inconsistent: []const ModuleCompileFailure,
+    emitted_consistent: []const []const u8,
+    emitted_inconsistent: []const ModuleCompileFailure,
 
     pub fn deinit(self: *TemplateDependencyReport, allocator: std.mem.Allocator) void {
         freeStringSlice(allocator, self.root_templates);
@@ -3384,17 +5527,17 @@ pub const TemplateDependencyReport = struct {
         freeStringSlice(allocator, self.direct_modules);
         freeStringSlice(allocator, self.transitive_modules);
         freeStringSlice(allocator, self.compiled_ok);
-        freeStringSlice(allocator, self.bytecode_consistent);
+        freeStringSlice(allocator, self.emitted_consistent);
         for (self.compiled_failed) |failure| {
             allocator.free(failure.name);
             allocator.free(failure.reason);
         }
         allocator.free(self.compiled_failed);
-        for (self.bytecode_inconsistent) |failure| {
+        for (self.emitted_inconsistent) |failure| {
             allocator.free(failure.name);
             allocator.free(failure.reason);
         }
-        allocator.free(self.bytecode_inconsistent);
+        allocator.free(self.emitted_inconsistent);
         self.* = undefined;
     }
 };
@@ -3407,25 +5550,123 @@ pub const ModuleCompileFailure = struct {
 const ModuleAudit = struct {
     compiled_ok: []const []const u8,
     compiled_failed: []const ModuleCompileFailure,
-    bytecode_consistent: []const []const u8,
-    bytecode_inconsistent: []const ModuleCompileFailure,
+    emitted_consistent: []const []const u8,
+    emitted_inconsistent: []const ModuleCompileFailure,
 
     fn deinit(self: *ModuleAudit, allocator: std.mem.Allocator) void {
         freeStringSlice(allocator, self.compiled_ok);
-        freeStringSlice(allocator, self.bytecode_consistent);
+        freeStringSlice(allocator, self.emitted_consistent);
         for (self.compiled_failed) |failure| {
             allocator.free(failure.name);
             allocator.free(failure.reason);
         }
         allocator.free(self.compiled_failed);
-        for (self.bytecode_inconsistent) |failure| {
+        for (self.emitted_inconsistent) |failure| {
             allocator.free(failure.name);
             allocator.free(failure.reason);
         }
-        allocator.free(self.bytecode_inconsistent);
+        allocator.free(self.emitted_inconsistent);
         self.* = undefined;
     }
 };
+
+pub const ModuleSourceKind = enum {
+    lua,
+    non_lua,
+    empty,
+};
+
+pub fn classifyModuleSource(source: []const u8) ModuleSourceKind {
+    const trimmed = skipLuaLeadingTrivia(source);
+    if (trimmed.len == 0) return .empty;
+    if (looksLikeNonLuaModuleSource(trimmed)) return .non_lua;
+    return .lua;
+}
+
+fn skipLuaLeadingTrivia(source: []const u8) []const u8 {
+    var index: usize = 0;
+    if (std.mem.startsWith(u8, source, "\xEF\xBB\xBF")) index = 3;
+    while (index < source.len) {
+        while (index < source.len and std.ascii.isWhitespace(source[index])) : (index += 1) {}
+        if (index + 1 >= source.len or source[index] != '-' or source[index + 1] != '-') break;
+        index += 2;
+        if (index + 1 < source.len and source[index] == '[' and source[index + 1] == '[') {
+            index += 2;
+            while (index + 1 < source.len and !(source[index] == ']' and source[index + 1] == ']')) : (index += 1) {}
+            if (index + 1 >= source.len) return source[source.len..];
+            index += 2;
+            continue;
+        }
+        while (index < source.len and source[index] != '\n') : (index += 1) {}
+    }
+    return source[index..];
+}
+
+fn looksLikeNonLuaModuleSource(source: []const u8) bool {
+    const non_lua_prefixes = [_][]const u8{
+        "{{",
+        "{|",
+        "|}",
+        "==",
+        "__",
+        "<!--",
+        "<div",
+        "<includeonly",
+        "<noinclude",
+        "<nowiki",
+        "<onlyinclude",
+        "<pre",
+        "<templatedata",
+        "[[category:",
+        "#redirect",
+    };
+    for (non_lua_prefixes) |prefix| {
+        if (std.ascii.startsWithIgnoreCase(source, prefix)) return true;
+    }
+    return looksLikePlaintextModuleDocumentation(source);
+}
+
+fn looksLikePlaintextModuleDocumentation(source: []const u8) bool {
+    const first_line_end = std.mem.indexOfScalar(u8, source, '\n') orelse source.len;
+    const first_line = std.mem.trim(u8, source[0..@min(first_line_end, 160)], &std.ascii.whitespace);
+    if (first_line.len == 0) return false;
+
+    const lua_prefixes = [_][]const u8{
+        "local ",
+        "function ",
+        "return",
+        "if ",
+        "for ",
+        "while ",
+        "repeat",
+        "do",
+        "break",
+        "module(",
+        "require(",
+    };
+    for (lua_prefixes) |prefix| {
+        if (std.ascii.startsWithIgnoreCase(first_line, prefix)) return false;
+    }
+    if (std.mem.indexOfAny(u8, first_line, "=(") != null) return false;
+
+    const has_wiki_markup =
+        std.mem.indexOf(u8, source, "[[") != null or
+        std.mem.indexOf(u8, source, "{{") != null or
+        std.mem.indexOf(u8, source, "==") != null;
+    if (!has_wiki_markup) return false;
+
+    var words: usize = 0;
+    var in_word = false;
+    for (first_line) |char| {
+        if (std.ascii.isAlphabetic(char)) {
+            if (!in_word) words += 1;
+            in_word = true;
+        } else {
+            in_word = false;
+        }
+    }
+    return words >= 3 and std.mem.indexOfAny(u8, first_line, ".:") != null;
+}
 
 const MappedReadOnlyFile = struct {
     mapping: []align(std.heap.page_size_min) const u8,
@@ -3440,7 +5681,7 @@ const TemplateSources = struct {
     template_sources: std.StringHashMap([]const u8),
     module_sources: std.StringHashMap([]const u8),
 
-    fn deinit(self: *TemplateSources, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *TemplateSources, allocator: std.mem.Allocator) void {
         var template_it = self.template_sources.iterator();
         while (template_it.next()) |entry| {
             allocator.free(entry.key_ptr.*);
@@ -3450,6 +5691,22 @@ const TemplateSources = struct {
 
         var module_it = self.module_sources.iterator();
         while (module_it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        self.module_sources.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const LuaSourceScan = TemplateSources;
+
+pub const ModuleSourceScan = struct {
+    module_sources: std.StringHashMap([]const u8),
+
+    pub fn deinit(self: *ModuleSourceScan, allocator: std.mem.Allocator) void {
+        var it = self.module_sources.iterator();
+        while (it.next()) |entry| {
             allocator.free(entry.key_ptr.*);
             allocator.free(entry.value_ptr.*);
         }
@@ -3507,8 +5764,8 @@ pub fn analyzeDependenciesAlloc(
         .transitive_modules = transitive_modules,
         .compiled_ok = try dupStringSliceAlloc(allocator, audit.compiled_ok),
         .compiled_failed = try dupFailureSliceAlloc(allocator, audit.compiled_failed),
-        .bytecode_consistent = try dupStringSliceAlloc(allocator, audit.bytecode_consistent),
-        .bytecode_inconsistent = try dupFailureSliceAlloc(allocator, audit.bytecode_inconsistent),
+        .emitted_consistent = try dupStringSliceAlloc(allocator, audit.emitted_consistent),
+        .emitted_inconsistent = try dupFailureSliceAlloc(allocator, audit.emitted_inconsistent),
     };
 }
 
@@ -3525,6 +5782,87 @@ pub fn loadModuleSourceAlloc(
 
     const source = sources.module_sources.get(canonical) orelse return null;
     return try allocator.dupe(u8, source);
+}
+
+pub fn scanLuaSourcesAlloc(allocator: std.mem.Allocator, xml_path: []const u8) !LuaSourceScan {
+    return scanTemplateAndModuleSourcesAlloc(allocator, xml_path);
+}
+
+pub fn scanModuleSourcesAlloc(allocator: std.mem.Allocator, xml_path: []const u8) !ModuleSourceScan {
+    var module_sources = std.StringHashMap([]const u8).init(allocator);
+    errdefer {
+        var it = module_sources.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        module_sources.deinit();
+    }
+
+    var mapped = try mmapReadOnlyPath(xml_path);
+    defer mapped.deinit();
+
+    var current_title: ?[]u8 = null;
+    defer if (current_title) |title| allocator.free(title);
+    var current_ns: enum { other, module } = .other;
+    var capture_text = false;
+    var text_accum = std.ArrayList(u8).empty;
+    defer text_accum.deinit(allocator);
+    var pages_seen: usize = 0;
+    var last_progress_pages: usize = 0;
+    var cursor: usize = 0;
+
+    while (nextMappedLine(mapped.mapping, &cursor)) |line| {
+        if (std.mem.indexOf(u8, line, "<page>") != null) {
+            pages_seen += 1;
+            if (pages_seen - last_progress_pages >= 250_000) {
+                last_progress_pages = pages_seen;
+                std.debug.print(
+                    "lua module scan: pages={d} module_sources={d}\n",
+                    .{ pages_seen, module_sources.count() },
+                );
+            }
+        }
+        if (extractTagText(line, "title")) |title| {
+            if (current_title) |old| allocator.free(old);
+            current_title = try allocator.dupe(u8, title);
+        }
+        if (extractTagText(line, "ns")) |ns| {
+            current_ns = if (std.mem.eql(u8, ns, "828")) .module else .other;
+        }
+
+        if (std.mem.indexOf(u8, line, "<text")) |_| {
+            capture_text = true;
+            text_accum.clearRetainingCapacity();
+            if (std.mem.indexOf(u8, line, ">")) |start_tag_end| {
+                const rest = line[start_tag_end + 1 ..];
+                if (std.mem.indexOf(u8, rest, "</text>")) |end_idx| {
+                    try text_accum.appendSlice(allocator, rest[0..end_idx]);
+                    capture_text = false;
+                    if (current_ns == .module) try maybeStoreModuleSource(allocator, &module_sources, current_title, "828", text_accum.items);
+                } else {
+                    try text_accum.appendSlice(allocator, rest);
+                    try text_accum.append(allocator, '\n');
+                }
+            }
+            continue;
+        }
+
+        if (capture_text) {
+            if (std.mem.indexOf(u8, line, "</text>")) |end_idx| {
+                try text_accum.appendSlice(allocator, line[0..end_idx]);
+                capture_text = false;
+                if (current_ns == .module) try maybeStoreModuleSource(allocator, &module_sources, current_title, "828", text_accum.items);
+            } else {
+                try text_accum.appendSlice(allocator, line);
+                try text_accum.append(allocator, '\n');
+            }
+        }
+    }
+
+    return .{
+        .module_sources = module_sources,
+    };
 }
 
 pub fn analyzeTemplateDependenciesAlloc(
@@ -3636,8 +5974,8 @@ fn analyzeTemplateDependenciesFromSourcesAlloc(
         .transitive_modules = transitive_module_names,
         .compiled_ok = try dupStringSliceAlloc(allocator, audit.compiled_ok),
         .compiled_failed = try dupFailureSliceAlloc(allocator, audit.compiled_failed),
-        .bytecode_consistent = try dupStringSliceAlloc(allocator, audit.bytecode_consistent),
-        .bytecode_inconsistent = try dupFailureSliceAlloc(allocator, audit.bytecode_inconsistent),
+        .emitted_consistent = try dupStringSliceAlloc(allocator, audit.emitted_consistent),
+        .emitted_inconsistent = try dupFailureSliceAlloc(allocator, audit.emitted_inconsistent),
     };
 }
 
@@ -3652,11 +5990,11 @@ fn auditModuleNamesAlloc(
     var compiled_failed: std.ArrayList(ModuleCompileFailure) = .empty;
     errdefer freeFailureList(allocator, &compiled_failed);
 
-    var bytecode_consistent: std.ArrayList([]const u8) = .empty;
-    errdefer freeOwnedStringList(allocator, &bytecode_consistent);
+    var emitted_consistent: std.ArrayList([]const u8) = .empty;
+    errdefer freeOwnedStringList(allocator, &emitted_consistent);
 
-    var bytecode_inconsistent: std.ArrayList(ModuleCompileFailure) = .empty;
-    errdefer freeFailureList(allocator, &bytecode_inconsistent);
+    var emitted_inconsistent: std.ArrayList(ModuleCompileFailure) = .empty;
+    errdefer freeFailureList(allocator, &emitted_inconsistent);
 
     for (module_names) |name| {
         const source = module_sources.get(name) orelse {
@@ -3683,19 +6021,41 @@ fn auditModuleNamesAlloc(
 
         try compiled_ok.append(allocator, try allocator.dupe(u8, name));
 
-        if (!bytecodeProgramEqual(first.program, second.program)) {
-            try appendFailureAlloc(allocator, &bytecode_inconsistent, name, "BytecodeMismatch");
+        const first_zig = emitZigModuleAlloc(allocator, &first) catch |err| {
+            const reason = try std.fmt.allocPrint(allocator, "FirstEmit:{s}", .{@errorName(err)});
+            errdefer allocator.free(reason);
+            try compiled_failed.append(allocator, .{
+                .name = try allocator.dupe(u8, name),
+                .reason = reason,
+            });
+            continue;
+        };
+        defer allocator.free(first_zig);
+
+        const second_zig = emitZigModuleAlloc(allocator, &second) catch |err| {
+            const reason = try std.fmt.allocPrint(allocator, "SecondEmit:{s}", .{@errorName(err)});
+            errdefer allocator.free(reason);
+            try compiled_failed.append(allocator, .{
+                .name = try allocator.dupe(u8, name),
+                .reason = reason,
+            });
+            continue;
+        };
+        defer allocator.free(second_zig);
+
+        if (!std.mem.eql(u8, first_zig, second_zig)) {
+            try appendFailureAlloc(allocator, &emitted_inconsistent, name, "ZigEmissionMismatch");
             continue;
         }
 
-        try bytecode_consistent.append(allocator, try allocator.dupe(u8, name));
+        try emitted_consistent.append(allocator, try allocator.dupe(u8, name));
     }
 
     return .{
         .compiled_ok = try compiled_ok.toOwnedSlice(allocator),
         .compiled_failed = try compiled_failed.toOwnedSlice(allocator),
-        .bytecode_consistent = try bytecode_consistent.toOwnedSlice(allocator),
-        .bytecode_inconsistent = try bytecode_inconsistent.toOwnedSlice(allocator),
+        .emitted_consistent = try emitted_consistent.toOwnedSlice(allocator),
+        .emitted_inconsistent = try emitted_inconsistent.toOwnedSlice(allocator),
     };
 }
 
@@ -3756,6 +6116,69 @@ fn dupFailureSliceAlloc(allocator: std.mem.Allocator, failures: []const ModuleCo
         filled = idx + 1;
     }
     return out;
+}
+
+fn loadStaticProgramAlloc(allocator: std.mem.Allocator, program: *const StaticProgram) !*BytecodeProgram {
+    const loaded = try allocator.create(BytecodeProgram);
+    loaded.* = .{
+        .top = try loadStaticPrototypeAlloc(allocator, program.top),
+        .global_count = program.global_count,
+        .builtins = program.builtins,
+    };
+    return loaded;
+}
+
+fn loadStaticPrototypeAlloc(allocator: std.mem.Allocator, proto: *const StaticPrototype) !*Prototype {
+    const loaded = try allocator.create(Prototype);
+    const child_protos = try allocator.alloc(*Prototype, proto.child_protos.len);
+    for (proto.child_protos, 0..) |child, idx| child_protos[idx] = try loadStaticPrototypeAlloc(allocator, child);
+
+    const const_tables = try allocator.alloc(*const Table, proto.const_tables.len);
+    for (proto.const_tables, 0..) |table_seed, idx| const_tables[idx] = try loadStaticConstTableAlloc(allocator, table_seed);
+
+    loaded.* = .{
+        .name = try allocator.dupe(u8, proto.name),
+        .params = proto.params,
+        .local_count = proto.local_count,
+        .stack_size = proto.stack_size,
+        .is_vararg = proto.is_vararg,
+        .code = try allocator.dupe(Instruction, proto.code),
+        .constants = try dupConstantsAlloc(allocator, proto.constants),
+        .const_tables = const_tables,
+        .child_protos = child_protos,
+        .upvalues = try allocator.dupe(UpvalueBinding, proto.upvalues),
+    };
+    return loaded;
+}
+
+fn dupConstantsAlloc(allocator: std.mem.Allocator, constants: []const Constant) ![]const Constant {
+    const out = try allocator.alloc(Constant, constants.len);
+    for (constants, 0..) |constant, idx| {
+        out[idx] = switch (constant) {
+            .number => |value| .{ .number = value },
+            .string => |value| .{ .string = try allocator.dupe(u8, value) },
+        };
+    }
+    return out;
+}
+
+fn loadStaticConstTableAlloc(allocator: std.mem.Allocator, seed: *const ConstTableSeed) std.mem.Allocator.Error!*Table {
+    const table = try Table.init(allocator);
+    try table.array.ensureTotalCapacity(allocator, seed.array.len);
+    for (seed.array) |value| table.array.appendAssumeCapacity(try staticConstValueToValueAlloc(allocator, value));
+    for (seed.string_fields) |field| try table.putString(field.key, try staticConstValueToValueAlloc(allocator, field.value));
+    for (seed.int_fields) |field| try table.int_fields.put(allocator, field.key, try staticConstValueToValueAlloc(allocator, field.value));
+    return table;
+}
+
+fn staticConstValueToValueAlloc(allocator: std.mem.Allocator, seed: ConstValueSeed) std.mem.Allocator.Error!Value {
+    return switch (seed) {
+        .nil => .nil,
+        .boolean => |value| .{ .boolean = value },
+        .number => |value| .{ .number = value },
+        .string => |value| .{ .string = try allocator.dupe(u8, value) },
+        .table => |table| .{ .table = try loadStaticConstTableAlloc(allocator, table) },
+    };
 }
 
 fn bytecodeProgramEqual(lhs: *const BytecodeProgram, rhs: *const BytecodeProgram) bool {
@@ -4260,6 +6683,15 @@ fn startsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     return true;
 }
 
+fn endsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (haystack.len < needle.len) return false;
+    const offset = haystack.len - needle.len;
+    for (needle, 0..) |byte, idx| {
+        if (std.ascii.toLower(haystack[offset + idx]) != std.ascii.toLower(byte)) return false;
+    }
+    return true;
+}
+
 fn insertCanonicalTemplateName(set: *std.StringHashMapUnmanaged(void), allocator: std.mem.Allocator, name: []const u8) !void {
     const canonical = try canonicalTemplateNameAlloc(allocator, name);
     errdefer allocator.free(canonical);
@@ -4331,6 +6763,15 @@ fn isLikelyModulePageName(name: []const u8) bool {
             else => return false,
         }
     }
+    return true;
+}
+
+pub fn isLikelyCodeModulePageName(name: []const u8) bool {
+    if (!isLikelyModulePageName(name)) return false;
+    if (endsWithIgnoreCase(name, "/documentation")) return false;
+    if (endsWithIgnoreCase(name, "/doc")) return false;
+    if (endsWithIgnoreCase(name, " documentation")) return false;
+    if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, name, " \t\r\n"), "affix doc")) return false;
     return true;
 }
 
@@ -4465,7 +6906,7 @@ fn appendValueText(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value:
     }
 }
 
-test "simple lua opcode VM matches lua for arithmetic and locals" {
+test "simple lua interpreter matches lua for arithmetic and locals" {
     const source =
         \\local x = 4
         \\local y = 7
@@ -4482,7 +6923,7 @@ test "simple lua opcode VM matches lua for arithmetic and locals" {
     try std.testing.expectEqualStrings(lua, ours);
 }
 
-test "simple lua opcode VM matches lua for tables functions and loops" {
+test "simple lua interpreter matches lua for tables functions and loops" {
     const source =
         \\local p = {}
         \\function p.bump(n)
@@ -4510,14 +6951,7 @@ test "simple lua opcode VM matches lua for tables functions and loops" {
     try std.testing.expectEqualStrings(lua, ours);
 }
 
-fn codeContainsInstruction(code: []const Instruction, comptime tag: std.meta.Tag(Instruction)) bool {
-    for (code) |inst| {
-        if (std.meta.activeTag(inst) == tag) return true;
-    }
-    return false;
-}
-
-test "lua bytecode resolves names to slots during compilation" {
+test "emitZigModuleAlloc is deterministic across repeated compiles" {
     const source =
         \\local outer = 41
         \\local function capture(arg)
@@ -4525,19 +6959,162 @@ test "lua bytecode resolves names to slots during compilation" {
         \\end
         \\return capture
     ;
+    var first = try compile(std.testing.allocator, source);
+    defer first.deinit();
+    const first_zig = try emitZigModuleAlloc(std.testing.allocator, &first);
+    defer std.testing.allocator.free(first_zig);
+
+    var second = try compile(std.testing.allocator, source);
+    defer second.deinit();
+    const second_zig = try emitZigModuleAlloc(std.testing.allocator, &second);
+    defer std.testing.allocator.free(second_zig);
+
+    try std.testing.expectEqualStrings(first_zig, second_zig);
+}
+
+test "cloneConstTableSeedAlloc clones hoisted const tables" {
+    const table_array = [_]ConstValueSeed{};
+    const table_string_fields = [_]ConstTableStringFieldSeed{
+        .{ .key = "answer", .value = .{ .number = 42 } },
+    };
+    const table_int_fields = [_]ConstTableIntFieldSeed{};
+    const table_seed = ConstTableSeed{
+        .array = &table_array,
+        .string_fields = &table_string_fields,
+        .int_fields = &table_int_fields,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const table = try cloneConstTableSeedAlloc(arena.allocator(), &table_seed);
+    try std.testing.expectEqual(@as(f64, 42), table.getString("answer").number);
+}
+
+test "emitZigModuleAlloc hoists const tables at file scope" {
+    const source =
+        \\local function build()
+        \\  local map = { answer = 40 + 2, nested = { ok = true } }
+        \\  return map
+        \\end
+        \\return build()
+    ;
     var chunk = try compile(std.testing.allocator, source);
     defer chunk.deinit();
 
-    try std.testing.expectEqual(@as(usize, 1), chunk.program.top.child_protos.len);
-    const proto = chunk.program.top.child_protos[0];
-    try std.testing.expect(codeContainsInstruction(proto.code, .load_upvalue));
-    try std.testing.expect(codeContainsInstruction(proto.code, .load_local));
-    try std.testing.expect(codeContainsInstruction(proto.code, .load_global));
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
 
-    const opcodes = try formatOpcodesAlloc(std.testing.allocator, &chunk);
-    defer std.testing.allocator.free(opcodes);
-    try std.testing.expect(std.mem.indexOf(u8, opcodes, "outer") == null);
-    try std.testing.expect(std.mem.indexOf(u8, opcodes, "arg") == null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "const const_table_0 = lua.ConstTableSeed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "const const_table_1 = lua.ConstTableSeed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "pub fn run(") != null);
+
+    const first_table = std.mem.indexOf(u8, zig_source, "const const_table_0 = lua.ConstTableSeed").?;
+    const run_fn = std.mem.indexOf(u8, zig_source, "pub fn run(").?;
+    try std.testing.expect(first_table < run_fn);
+}
+
+test "emitZigModuleAlloc lowers builtin calls into direct Zig helpers" {
+    const source =
+        \\local values = { "ok", "go" }
+        \\local total = 0
+        \\local function build(word)
+        \\  table.insert(values, string.upper(word))
+        \\  total = string.len(word) + math.floor(2.9)
+        \\  for k, v in pairs(values) do
+        \\    total = total + k
+        \\  end
+        \\  for i, v in ipairs(values) do
+        \\    total = total + i
+        \\  end
+        \\  return total
+        \\end
+        \\return build("zig")
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedStringUpper") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedStringLen") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedMathFloor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedTableInsert") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedPairsIterator") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedIpairsIterator") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "runStaticProgram") == null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.StaticProgram") == null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.Instruction") == null);
+}
+
+test "emitZigModuleAlloc emits capture structs for lexical closures" {
+    const source =
+        \\local outer = 41
+        \\local function make()
+        \\  local function inner(arg)
+        \\    return outer + arg
+        \\  end
+        \\  return inner
+        \\end
+        \\return make()
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "const Capture_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "capture_obj") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "runtime.functionValue") != null);
+}
+
+test "emitZigModuleAlloc gives nested generic-for captures unique names" {
+    const source =
+        \\local t = { a = 1, b = 2 }
+        \\for k, v in pairs(t) do
+        \\  for x, y in pairs(t) do
+        \\    print(k, v, x, y)
+        \\  end
+        \\end
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, zig_source, "|pair|"));
+    try std.testing.expect(std.mem.count(u8, zig_source, "|pair_") >= 2);
+}
+
+test "emitZigModuleAlloc consumes extra local assignment temporaries" {
+    const source =
+        \\local a, b = { one = 1 }, { two = 2 }, { three = 3 }
+        \\return a, b
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "_ = tmp_") != null);
+}
+
+test "emitZigModuleAlloc consumes extra assignment temporaries" {
+    const source =
+        \\local a = nil
+        \\a = { one = 1 }, { two = 2 }
+        \\return a
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "_ = tmp_") != null);
 }
 
 fn findFirstConstTableInBody(body: []const *Stmt) ?*const Table {
@@ -4663,6 +7240,29 @@ test "lua optimizer keeps runtime-dependent table literals dynamic" {
     try std.testing.expect(findFirstConstTableInBody(chunk.body) == null);
 }
 
+test "classifyModuleSource distinguishes Lua from module documentation markup" {
+    try std.testing.expectEqual(.lua, classifyModuleSource(
+        \\-- comment
+        \\local export = {}
+        \\function export.main(frame)
+        \\  return "ok"
+        \\end
+        \\return export
+    ));
+    try std.testing.expectEqual(.non_lua, classifyModuleSource(
+        \\{{#invoke:aa-IPA/testcases|run_tests|differs_at=1}}
+    ));
+    try std.testing.expectEqual(.non_lua, classifyModuleSource(
+        \\<noinclude>{{documentation}}</noinclude>
+    ));
+    try std.testing.expectEqual(.non_lua, classifyModuleSource(
+        \\This module generates the phonemic IPA transcription of Afar entries. It runs [[Template:aa-IPA]].
+        \\===References===
+        \\* {{R:aa:Mahaffy:1979}}
+    ));
+    try std.testing.expectEqual(.empty, classifyModuleSource("  \n\t "));
+}
+
 test "template dependency extraction ignores parser-function and formula garbage" {
     const source =
         \\{{foo|x}}
@@ -4686,7 +7286,7 @@ test "template dependency extraction ignores parser-function and formula garbage
     try std.testing.expectEqualStrings("quote-news", deps[3]);
 }
 
-test "template bytecode audit compiles reachable modules with stable bytecode" {
+test "template zig emission audit compiles reachable modules with stable output" {
     var sources = TemplateSources{
         .template_sources = std.StringHashMap([]const u8).init(std.testing.allocator),
         .module_sources = std.StringHashMap([]const u8).init(std.testing.allocator),
@@ -4733,12 +7333,12 @@ test "template bytecode audit compiles reachable modules with stable bytecode" {
     try std.testing.expectEqual(@as(usize, 1), report.transitive_modules.len);
     try std.testing.expectEqual(@as(usize, 1), report.compiled_ok.len);
     try std.testing.expectEqual(@as(usize, 0), report.compiled_failed.len);
-    try std.testing.expectEqual(@as(usize, 1), report.bytecode_consistent.len);
-    try std.testing.expectEqual(@as(usize, 0), report.bytecode_inconsistent.len);
-    try std.testing.expectEqualStrings("demo", report.bytecode_consistent[0]);
+    try std.testing.expectEqual(@as(usize, 1), report.emitted_consistent.len);
+    try std.testing.expectEqual(@as(usize, 0), report.emitted_inconsistent.len);
+    try std.testing.expectEqualStrings("demo", report.emitted_consistent[0]);
 }
 
-test "template bytecode audit reports missing templates and compile failures" {
+test "template zig emission audit reports missing templates and compile failures" {
     var sources = TemplateSources{
         .template_sources = std.StringHashMap([]const u8).init(std.testing.allocator),
         .module_sources = std.StringHashMap([]const u8).init(std.testing.allocator),
@@ -4768,7 +7368,7 @@ test "template bytecode audit reports missing templates and compile failures" {
     defer report.deinit(std.testing.allocator);
 
     try std.testing.expect(report.unresolved_templates.len >= 2);
-    try std.testing.expectEqual(@as(usize, 0), report.bytecode_consistent.len);
+    try std.testing.expectEqual(@as(usize, 0), report.emitted_consistent.len);
     try std.testing.expectEqual(@as(usize, 1), report.compiled_failed.len);
     try std.testing.expectEqualStrings("broken", report.compiled_failed[0].name);
 }
@@ -4779,4 +7379,10 @@ test "likely template page name filter keeps real titles and drops magic-like na
     try std.testing.expect(!isLikelyTemplatePageName("#tag:ref"));
     try std.testing.expect(!isLikelyTemplatePageName("DISPLAYTITLE:<sup>x</sup>"));
     try std.testing.expect(!isLikelyTemplatePageName("e^x"));
+}
+
+test "likely code module page name filter excludes documentation pages" {
+    try std.testing.expect(isLikelyCodeModulePageName("akk-conj/g/stem/testcases"));
+    try std.testing.expect(!isLikelyCodeModulePageName("accel/documentation"));
+    try std.testing.expect(!isLikelyCodeModulePageName("affix doc"));
 }

@@ -237,7 +237,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "required_path", .module = required_path_mod },
     });
     const frontend_exe = addCliExecutable(b, "dict-frontend", b.path("tools/frontend.zig"), target, optimize, &.{});
-    const lua_exe = addCliExecutable(b, "dict-lua", b.path("tools/lua_opcode.zig"), target, optimize, &.{
+    const lua_exe = addCliExecutable(b, "dict-lua", b.path("tools/lua_translate.zig"), target, optimize, &.{
         .{ .name = "lua", .module = lua_mod },
         .{ .name = "decoder", .module = decoder_mod },
         .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod },
@@ -286,7 +286,7 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "frontend", "Run the frontend CLI", frontend_run, &.{});
 
     const lua_run = addRunArtifactCommand(b, lua_exe, &.{}, b.args);
-    addPublicRunStep(b, "lua", "Run the Lua opcode CLI", lua_run, &.{});
+    addPublicRunStep(b, "lua", "Run the Lua translator CLI", lua_run, &.{});
 
     const test_runner = b.path("tools/test_runner.zig");
 
