@@ -191,12 +191,16 @@ pub const GeneratedRunResult = struct {
 
 pub const GeneratedRuntime = struct {
     arena: std.heap.ArenaAllocator,
+    generated_module_cache: std.StringHashMapUnmanaged(Value) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) GeneratedRuntime {
-        return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
+        return .{
+            .arena = std.heap.ArenaAllocator.init(allocator),
+        };
     }
 
     pub fn deinit(self: *GeneratedRuntime) void {
+        self.generated_module_cache.deinit(self.alloc());
         self.arena.deinit();
         self.* = undefined;
     }
@@ -213,6 +217,16 @@ pub const GeneratedRuntime = struct {
         const out = try self.alloc().alloc(Value, 1);
         out[0] = value;
         return out;
+    }
+
+    pub fn getGeneratedModule(self: *const GeneratedRuntime, canonical_name: []const u8) ?Value {
+        return self.generated_module_cache.get(canonical_name);
+    }
+
+    pub fn putGeneratedModule(self: *GeneratedRuntime, canonical_name: []const u8, value: Value) !void {
+        const gop = try self.generated_module_cache.getOrPut(self.alloc(), canonical_name);
+        if (!gop.found_existing) gop.key_ptr.* = canonical_name;
+        gop.value_ptr.* = value;
     }
 
     pub fn functionValue(
@@ -817,8 +831,20 @@ fn generatedBuiltinInvoke(
     };
 }
 
+pub const EmitZigModuleOptions = struct {
+    enable_direct_module_dispatch: bool = false,
+};
+
 pub fn emitZigModuleAlloc(allocator: std.mem.Allocator, chunk: *const Chunk) ![]u8 {
-    return try emitDirectZigModuleAlloc(allocator, chunk);
+    return try emitZigModuleWithOptionsAlloc(allocator, chunk, .{});
+}
+
+pub fn emitZigModuleWithOptionsAlloc(
+    allocator: std.mem.Allocator,
+    chunk: *const Chunk,
+    options: EmitZigModuleOptions,
+) ![]u8 {
+    return try emitDirectZigModuleAlloc(allocator, chunk, options);
 }
 
 pub fn emitJsonModuleAlloc(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
@@ -916,7 +942,11 @@ fn emitStaticRuntimeValue(writer: anytype, value: Value, state: *const TableSeed
     switch (value) {
         .nil => try writer.writeAll("lua.Value.nil"),
         .boolean => |flag| try writer.print("lua.Value{{ .boolean = {} }}", .{flag}),
-        .number => |number| try writer.print("lua.Value{{ .number = {d} }}", .{number}),
+        .number => |number| {
+            try writer.writeAll("lua.Value{ .number = ");
+            try emitZigNumberLiteral(writer, number);
+            try writer.writeAll(" }");
+        },
         .string => |text| {
             try writer.writeAll("lua.Value{ .string = ");
             try writeZigStringLiteral(writer, text);
@@ -1096,6 +1126,7 @@ const ChildAccessKind = enum {
 
 const DirectModuleState = struct {
     allocator: std.mem.Allocator,
+    options: EmitZigModuleOptions,
     tables: TableSeedState,
     functions: std.ArrayList(DirectFunctionInfo) = .empty,
     stmt_function_refs: std.ArrayList(DirectStmtFunctionRef) = .empty,
@@ -1103,9 +1134,10 @@ const DirectModuleState = struct {
     globals: std.ArrayList([]const u8) = .empty,
     top_id: u32 = 0,
 
-    fn init(allocator: std.mem.Allocator) DirectModuleState {
+    fn init(allocator: std.mem.Allocator, options: EmitZigModuleOptions) DirectModuleState {
         return .{
             .allocator = allocator,
+            .options = options,
             .tables = TableSeedState.init(allocator),
         };
     }
@@ -1316,7 +1348,7 @@ fn capturesToOwnedSlice(
 
 fn analyzeDirectModule(state: *DirectModuleState, body: []const *Stmt) std.mem.Allocator.Error!void {
     for (body) |stmt| try state.tables.collectStmt(stmt);
-    const top_id = try state.addFunction("chunk", &.{}, body, false);
+    const top_id = try state.addFunction("chunk", &.{}, body, blockContainsVarargs(body));
     state.top_id = top_id;
     var ctx = DirectAnalyzeContext.init(state, null, top_id);
     defer ctx.deinit();
@@ -1557,6 +1589,17 @@ const DirectBuiltinCall = enum {
     table_concat,
 };
 
+const DirectMethodCall = struct {
+    receiver: *const Expr,
+    name: []const u8,
+    args: []const *Expr,
+};
+
+const DirectModuleDispatchCall = enum {
+    require,
+    mw_load_data,
+};
+
 const DirectEmitFunctionContext = struct {
     state: *const DirectModuleState,
     info: *const DirectFunctionInfo,
@@ -1732,7 +1775,9 @@ fn analyzeDirectUseStmt(ctx: *DirectLocalUseContext, stmt: *const Stmt) AnalyzeD
             for (op.exprs, 0..) |expr, idx| {
                 if (idx < deferred.len and expr.* == .function_lit) {
                     const child_id = ctx.state.exprFunctionId(expr) orelse return error.UnsupportedSyntax;
-                    deferred[idx] = try collectPendingCapturedLocalsAlloc(ctx.state.allocator, ctx, &ctx.state.functions.items[child_id]);
+                    const captures = try collectPendingCapturedLocalsAlloc(ctx.state.allocator, ctx, &ctx.state.functions.items[child_id]);
+                    markPendingCapturedLocalsUsed(ctx, captures);
+                    deferred[idx] = captures;
                     continue;
                 }
                 try analyzeDirectUseExpr(ctx, expr);
@@ -1757,13 +1802,15 @@ fn analyzeDirectUseStmt(ctx: *DirectLocalUseContext, stmt: *const Stmt) AnalyzeD
                 if (idx < op.targets.len and expr.* == .function_lit and op.targets[idx] == .name) {
                     if (ctx.lookupLocal(op.targets[idx].name)) |local_id| {
                         const child_id = ctx.state.exprFunctionId(expr) orelse return error.UnsupportedSyntax;
+                        const captures = try collectPendingCapturedLocalsAlloc(
+                            ctx.state.allocator,
+                            ctx,
+                            &ctx.state.functions.items[child_id],
+                        );
+                        markPendingCapturedLocalsUsed(ctx, captures);
                         try ctx.pending_local_function_captures.append(ctx.state.allocator, .{
                             .local_id = local_id,
-                            .captured_locals = try collectPendingCapturedLocalsAlloc(
-                                ctx.state.allocator,
-                                ctx,
-                                &ctx.state.functions.items[child_id],
-                            ),
+                            .captured_locals = captures,
                         });
                         continue;
                     }
@@ -1899,8 +1946,12 @@ fn localShouldEmit(ctx: *const DirectEmitFunctionContext, local_id: u32) bool {
     return ctx.local_used[local_id];
 }
 
-fn emitDirectZigModuleAlloc(allocator: std.mem.Allocator, chunk: *const Chunk) anyerror![]u8 {
-    var state = DirectModuleState.init(allocator);
+fn emitDirectZigModuleAlloc(
+    allocator: std.mem.Allocator,
+    chunk: *const Chunk,
+    options: EmitZigModuleOptions,
+) anyerror![]u8 {
+    var state = DirectModuleState.init(allocator, options);
     defer state.deinit();
     try analyzeDirectModule(&state, chunk.body);
 
@@ -1950,18 +2001,22 @@ fn emitDirectCaptureStruct(writer: anytype, info: *const DirectFunctionInfo) any
 
 fn emitDirectRun(writer: anytype, state: *const DirectModuleState) anyerror!void {
     try writer.writeAll(
-        \\pub fn run(allocator: std.mem.Allocator) !lua.GeneratedRunResult {
-        \\    var runtime = lua.GeneratedRuntime.init(allocator);
-        \\    errdefer runtime.deinit();
+        \\pub fn runInRuntime(runtime: *lua.GeneratedRuntime) ![]lua.Value {
         \\    const globals = try runtime.alloc().create(Globals);
         \\    globals.* = .{};
         \\
     );
     for (state.globals.items, 0..) |name, idx| {
-        _ = try emitBuiltinGlobalInit(writer, name, idx);
+        _ = try emitBuiltinGlobalInit(writer, state, name, idx);
     }
-    try writer.print("    const returns = try fn_{d}(null, globals, &runtime, &.{{}});\n", .{state.top_id});
+    try writer.print("    return try fn_{d}(null, globals, runtime, &.{{}});\n", .{state.top_id});
     try writer.writeAll(
+        \\}
+        \\
+        \\pub fn run(allocator: std.mem.Allocator) !lua.GeneratedRunResult {
+        \\    var runtime = lua.GeneratedRuntime.init(allocator);
+        \\    errdefer runtime.deinit();
+        \\    const returns = try runInRuntime(&runtime);
         \\    return .{
         \\        .runtime = runtime,
         \\        .returns = returns,
@@ -1971,41 +2026,49 @@ fn emitDirectRun(writer: anytype, state: *const DirectModuleState) anyerror!void
     );
 }
 
-fn emitBuiltinGlobalInit(writer: anytype, name: []const u8, idx: usize) anyerror!bool {
+fn emitBuiltinGlobalInit(writer: anytype, state: *const DirectModuleState, name: []const u8, idx: usize) anyerror!bool {
+    if (state.options.enable_direct_module_dispatch and std.mem.eql(u8, name, "require")) {
+        try writer.print("    globals.global_{d} = try runtime.functionValue(\"require\", null, globals, generatedModuleRequireInvoke);\n", .{idx});
+        return true;
+    }
+    if (state.options.enable_direct_module_dispatch and std.mem.eql(u8, name, "mw")) {
+        try writer.print("    globals.global_{d} = try generatedModuleMwTableValue(runtime, globals);\n", .{idx});
+        return true;
+    }
     if (std.mem.eql(u8, name, "print")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinPrintValue(&runtime, globals);\n", .{idx});
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinPrintValue(runtime, globals);\n", .{idx});
         return true;
     }
     if (std.mem.eql(u8, name, "tostring")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTostringValue(&runtime, globals);\n", .{idx});
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTostringValue(runtime, globals);\n", .{idx});
         return true;
     }
     if (std.mem.eql(u8, name, "tonumber")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTonumberValue(&runtime, globals);\n", .{idx});
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTonumberValue(runtime, globals);\n", .{idx});
         return true;
     }
     if (std.mem.eql(u8, name, "type")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTypeValue(&runtime, globals);\n", .{idx});
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTypeValue(runtime, globals);\n", .{idx});
         return true;
     }
     if (std.mem.eql(u8, name, "pairs")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinPairsValue(&runtime, globals);\n", .{idx});
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinPairsValue(runtime, globals);\n", .{idx});
         return true;
     }
     if (std.mem.eql(u8, name, "ipairs")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinIpairsValue(&runtime, globals);\n", .{idx});
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinIpairsValue(runtime, globals);\n", .{idx});
         return true;
     }
     if (std.mem.eql(u8, name, "string")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinStringTableValue(&runtime, globals);\n", .{idx});
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinStringTableValue(runtime, globals);\n", .{idx});
         return true;
     }
     if (std.mem.eql(u8, name, "math")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinMathTableValue(&runtime, globals);\n", .{idx});
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinMathTableValue(runtime, globals);\n", .{idx});
         return true;
     }
     if (std.mem.eql(u8, name, "table")) {
-        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTableTableValue(&runtime, globals);\n", .{idx});
+        try writer.print("    globals.global_{d} = try lua.generatedBuiltinTableTableValue(runtime, globals);\n", .{idx});
         return true;
     }
     return false;
@@ -2050,7 +2113,11 @@ fn emitDirectConstValueSeed(writer: anytype, value: Value, state: *const TableSe
     switch (value) {
         .nil => try writer.writeAll(".nil"),
         .boolean => |flag| try writer.print(".{{ .boolean = {} }}", .{flag}),
-        .number => |number| try writer.print(".{{ .number = {d} }}", .{number}),
+        .number => |number| {
+            try writer.writeAll(".{ .number = ");
+            try emitZigNumberLiteral(writer, number);
+            try writer.writeAll(" }");
+        },
         .string => |text| {
             try writer.writeAll(".{ .string = ");
             try writeZigStringLiteral(writer, text);
@@ -2758,7 +2825,11 @@ fn emitExpr(writer: anytype, ctx: *DirectEmitFunctionContext, expr: *const Expr,
     switch (expr.*) {
         .nil_lit => try writer.writeAll("lua.Value.nil"),
         .bool_lit => |value| try writer.print("lua.Value{{ .boolean = {} }}", .{value}),
-        .number_lit => |value| try writer.print("lua.Value{{ .number = {d} }}", .{value}),
+        .number_lit => |value| {
+            try writer.writeAll("lua.Value{ .number = ");
+            try emitZigNumberLiteral(writer, value);
+            try writer.writeAll(" }");
+        },
         .string_lit => |value| {
             try writer.writeAll("lua.Value{ .string = ");
             try writeZigStringLiteral(writer, value);
@@ -2870,7 +2941,15 @@ fn emitExpr(writer: anytype, ctx: *DirectEmitFunctionContext, expr: *const Expr,
         .call => |call| {
             if (matchBuiltinCall(call)) |builtin| {
                 try emitBuiltinCall(writer, ctx, builtin, call.args, depth);
+            } else if (matchMethodCall(call)) |method| {
+                try emitMethodCall(writer, ctx, method, depth);
             } else {
+                if (ctx.state.options.enable_direct_module_dispatch) {
+                    if (matchDirectModuleDispatchCall(call)) |dispatch| {
+                        try emitDirectModuleDispatchCall(writer, ctx, dispatch, call.args, depth);
+                        return;
+                    }
+                }
                 const label_id = ctx.nextTemp();
                 const callee_id = ctx.nextTemp();
                 const results_id = ctx.nextTemp();
@@ -2890,6 +2969,43 @@ fn emitExpr(writer: anytype, ctx: *DirectEmitFunctionContext, expr: *const Expr,
             try emitFunctionValueExpr(writer, ctx, child_info, depth);
         },
     }
+}
+
+fn emitZigNumberLiteral(writer: anytype, value: f64) !void {
+    if (value == 0 and std.math.signbit(value)) {
+        try writer.writeAll("-0.0");
+        return;
+    }
+    try writer.print("{d}", .{value});
+}
+
+fn matchMethodCall(call: @FieldType(Expr, "call")) ?DirectMethodCall {
+    if (call.callee.* != .field or call.args.len == 0) return null;
+    const field = call.callee.field;
+    if (call.args[0] != field.object) return null;
+    return .{
+        .receiver = field.object,
+        .name = field.name,
+        .args = call.args[1..],
+    };
+}
+
+fn matchDirectModuleDispatchCall(call: @FieldType(Expr, "call")) ?DirectModuleDispatchCall {
+    switch (call.callee.*) {
+        .variable => |name| {
+            if (std.mem.eql(u8, name, "require")) return .require;
+        },
+        .field => |field| switch (field.object.*) {
+            .variable => |object_name| {
+                if (std.mem.eql(u8, object_name, "mw") and std.mem.eql(u8, field.name, "loadData")) {
+                    return .mw_load_data;
+                }
+            },
+            else => {},
+        },
+        else => {},
+    }
+    return null;
 }
 
 fn matchBuiltinCall(call: @FieldType(Expr, "call")) ?DirectBuiltinCall {
@@ -2925,6 +3041,63 @@ fn matchBuiltinCall(call: @FieldType(Expr, "call")) ?DirectBuiltinCall {
         else => {},
     }
     return null;
+}
+
+fn emitDirectModuleDispatchCall(
+    writer: anytype,
+    ctx: *DirectEmitFunctionContext,
+    dispatch: DirectModuleDispatchCall,
+    args: []const *Expr,
+    depth: usize,
+) anyerror!void {
+    const helper_name = switch (dispatch) {
+        .require => "generatedModuleRequireFirst",
+        .mw_load_data => "generatedModuleLoadDataFirst",
+    };
+    try writer.writeAll("try ");
+    try writer.writeAll(helper_name);
+    try writer.writeAll("(runtime, ");
+    if (args.len != 0) {
+        try emitExpr(writer, ctx, args[0], depth);
+    } else {
+        try writer.writeAll("lua.Value.nil");
+    }
+    try writer.writeAll(")");
+}
+
+fn emitMethodCall(
+    writer: anytype,
+    ctx: *DirectEmitFunctionContext,
+    method: DirectMethodCall,
+    depth: usize,
+) anyerror!void {
+    const label_id = ctx.nextTemp();
+    const receiver_id = ctx.nextTemp();
+    const callee_id = ctx.nextTemp();
+    const results_id = ctx.nextTemp();
+
+    try writer.print("blk_{d}: {{ const tmp_{d} = ", .{ label_id, receiver_id });
+    try emitExpr(writer, ctx, method.receiver, depth);
+    try writer.print("; if (tmp_{d} != .table) return error.InvalidIndex; const tmp_{d} = tmp_{d}.table.getString(", .{
+        receiver_id,
+        callee_id,
+        receiver_id,
+    });
+    try writeZigStringLiteral(writer, method.name);
+    try writer.print("); const tmp_{d} = try lua.generatedInvoke(runtime, tmp_{d}, &.{{ tmp_{d}", .{
+        results_id,
+        callee_id,
+        receiver_id,
+    });
+    for (method.args) |arg| {
+        try writer.writeAll(", ");
+        try emitExpr(writer, ctx, arg, depth);
+    }
+    try writer.print(" }}); break :blk_{d} if (tmp_{d}.len == 0) @as(lua.Value, .nil) else tmp_{d}[0]; }}", .{
+        label_id,
+        results_id,
+        results_id,
+    });
 }
 
 fn emitBuiltinCall(
@@ -5361,52 +5534,19 @@ pub fn analyzeDependenciesAlloc(
     structure_json_path: []const u8,
 ) !DependencyReport {
     const template_names = try loadStructureTemplateNames(allocator, structure_json_path);
-    var dump_scan = try scanDumpDependenciesAlloc(allocator, xml_path);
-    defer dump_scan.deinit(allocator);
-    const direct_modules = dump_scan.direct_modules;
-    const module_sources = dump_scan.module_sources;
+    defer freeStringSlice(allocator, template_names);
 
-    var transitive = std.StringHashMapUnmanaged(void){};
-    defer deinitOwnedStringSet(allocator, &transitive);
-    var stack: std.ArrayList([]const u8) = .empty;
-    defer stack.deinit(allocator);
-    for (direct_modules) |name| {
-        const gop = try transitive.getOrPut(allocator, name);
-        if (!gop.found_existing) {
-            gop.key_ptr.* = try allocator.dupe(u8, name);
-            try stack.append(allocator, gop.key_ptr.*);
-        }
-    }
-
-    while (stack.pop()) |name| {
-        const source = module_sources.get(name) orelse continue;
-        const deps = try extractModuleDependencies(allocator, source);
-        defer freeStringSlice(allocator, deps);
-        for (deps) |dep| {
-            const gop = try transitive.getOrPut(allocator, dep);
-            if (!gop.found_existing) {
-                gop.key_ptr.* = try allocator.dupe(u8, dep);
-                try stack.append(allocator, gop.key_ptr.*);
-            }
-        }
-    }
-
-    const transitive_modules = try collectStringSet(allocator, &transitive);
-    errdefer freeStringSlice(allocator, transitive_modules);
-    var audit = try auditModuleNamesAlloc(allocator, &module_sources, transitive_modules);
-    defer audit.deinit(allocator);
-
-    dump_scan.direct_modules = &.{};
-    dump_scan.module_sources = std.StringHashMap([]const u8).init(allocator);
+    var report = try analyzeRenderDependenciesAlloc(allocator, xml_path, template_names);
+    errdefer report.deinit(allocator);
     return .{
-        .direct_templates = template_names,
-        .direct_modules = direct_modules,
-        .transitive_modules = transitive_modules,
-        .missing_modules = try dupStringSliceAlloc(allocator, audit.missing_modules),
-        .compiled_ok = try dupStringSliceAlloc(allocator, audit.compiled_ok),
-        .compiled_failed = try dupFailureSliceAlloc(allocator, audit.compiled_failed),
-        .emitted_consistent = try dupStringSliceAlloc(allocator, audit.emitted_consistent),
-        .emitted_inconsistent = try dupFailureSliceAlloc(allocator, audit.emitted_inconsistent),
+        .direct_templates = report.root_templates,
+        .direct_modules = report.direct_modules,
+        .transitive_modules = report.transitive_modules,
+        .missing_modules = report.missing_modules,
+        .compiled_ok = report.compiled_ok,
+        .compiled_failed = report.compiled_failed,
+        .emitted_consistent = report.emitted_consistent,
+        .emitted_inconsistent = report.emitted_inconsistent,
     };
 }
 
@@ -5572,6 +5712,65 @@ pub fn analyzeTemplateDependenciesAlloc(
     var sources = try scanTemplateAndModuleSourcesAlloc(allocator, xml_path);
     defer sources.deinit(allocator);
     return analyzeTemplateDependenciesFromSourcesAlloc(allocator, template_names, &sources);
+}
+
+pub fn analyzeRenderDependenciesAlloc(
+    allocator: std.mem.Allocator,
+    xml_path: []const u8,
+    template_names: []const []const u8,
+) !TemplateDependencyReport {
+    var sources = try scanTemplateAndModuleSourcesAlloc(allocator, xml_path);
+    defer sources.deinit(allocator);
+    return analyzeRenderDependenciesFromSourcesAlloc(allocator, xml_path, template_names, &sources);
+}
+
+pub fn analyzeRenderDependenciesFromSourcesAlloc(
+    allocator: std.mem.Allocator,
+    xml_path: []const u8,
+    template_names: []const []const u8,
+    sources: *const TemplateSources,
+) !TemplateDependencyReport {
+    var report = try analyzeTemplateDependenciesFromSourcesAlloc(allocator, template_names, sources);
+    errdefer report.deinit(allocator);
+
+    const direct_entry_modules = try scanDirectInvokeModules(allocator, xml_path);
+    defer freeStringSlice(allocator, direct_entry_modules);
+    if (direct_entry_modules.len == 0) return report;
+
+    const merged_direct_modules = try mergeUniqueStringSlicesAlloc(allocator, &.{
+        report.direct_modules,
+        direct_entry_modules,
+    });
+    const transitive_modules = try collectTransitiveModulesFromSourcesAlloc(allocator, &sources.module_sources, merged_direct_modules);
+    errdefer freeStringSlice(allocator, transitive_modules);
+
+    var audit = try auditModuleNamesAlloc(allocator, &sources.module_sources, transitive_modules);
+    defer audit.deinit(allocator);
+
+    freeStringSlice(allocator, report.direct_modules);
+    freeStringSlice(allocator, report.transitive_modules);
+    freeStringSlice(allocator, report.missing_modules);
+    freeStringSlice(allocator, report.compiled_ok);
+    freeStringSlice(allocator, report.emitted_consistent);
+    for (report.compiled_failed) |failure| {
+        allocator.free(failure.name);
+        allocator.free(failure.reason);
+    }
+    allocator.free(report.compiled_failed);
+    for (report.emitted_inconsistent) |failure| {
+        allocator.free(failure.name);
+        allocator.free(failure.reason);
+    }
+    allocator.free(report.emitted_inconsistent);
+
+    report.direct_modules = merged_direct_modules;
+    report.transitive_modules = transitive_modules;
+    report.missing_modules = try dupStringSliceAlloc(allocator, audit.missing_modules);
+    report.compiled_ok = try dupStringSliceAlloc(allocator, audit.compiled_ok);
+    report.compiled_failed = try dupFailureSliceAlloc(allocator, audit.compiled_failed);
+    report.emitted_consistent = try dupStringSliceAlloc(allocator, audit.emitted_consistent);
+    report.emitted_inconsistent = try dupFailureSliceAlloc(allocator, audit.emitted_inconsistent);
+    return report;
 }
 
 pub fn analyzeTemplateDependenciesFromSourcesAlloc(
@@ -5765,6 +5964,57 @@ fn auditModuleNamesAlloc(
     };
 }
 
+pub fn collectTransitiveModulesFromSourcesAlloc(
+    allocator: std.mem.Allocator,
+    module_sources: *const std.StringHashMap([]const u8),
+    direct_modules: []const []const u8,
+) ![]const []const u8 {
+    var transitive = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &transitive);
+    var stack: std.ArrayList([]const u8) = .empty;
+    defer stack.deinit(allocator);
+
+    for (direct_modules) |name| {
+        const gop = try transitive.getOrPut(allocator, name);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try allocator.dupe(u8, name);
+            try stack.append(allocator, gop.key_ptr.*);
+        }
+    }
+
+    while (stack.pop()) |name| {
+        const source = module_sources.get(name) orelse continue;
+        const deps = try extractModuleDependencies(allocator, source);
+        defer freeStringSlice(allocator, deps);
+        for (deps) |dep| {
+            const gop = try transitive.getOrPut(allocator, dep);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = try allocator.dupe(u8, dep);
+                try stack.append(allocator, gop.key_ptr.*);
+            }
+        }
+    }
+
+    return collectStringSet(allocator, &transitive);
+}
+
+fn mergeUniqueStringSlicesAlloc(
+    allocator: std.mem.Allocator,
+    groups: []const []const []const u8,
+) ![]const []const u8 {
+    var set = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &set);
+
+    for (groups) |group| {
+        for (group) |value| {
+            const gop = try set.getOrPut(allocator, value);
+            if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, value);
+        }
+    }
+
+    return collectStringSet(allocator, &set);
+}
+
 fn appendFailureAlloc(
     allocator: std.mem.Allocator,
     list: *std.ArrayList(ModuleCompileFailure),
@@ -5862,18 +6112,40 @@ fn loadStructureTemplateNames(allocator: std.mem.Allocator, path: []const u8) ![
     const bytes = try readFileAlloc(allocator, path);
     defer allocator.free(bytes);
     const Report = struct {
+        dependencies: struct {
+            root_templates: []const []const u8 = &.{},
+        } = .{},
         build: struct {
             line_templates: []const struct {
                 name: []const u8,
-            },
-        },
+            } = &.{},
+            translation_templates: []const struct {
+                name: []const u8,
+            } = &.{},
+        } = .{},
     };
     var parsed = try std.json.parseFromSlice(Report, allocator, bytes, .{
         .ignore_unknown_fields = true,
     });
     defer parsed.deinit();
-    const out = try allocator.alloc([]const u8, parsed.value.build.line_templates.len);
-    for (parsed.value.build.line_templates, 0..) |entry, idx| out[idx] = try allocator.dupe(u8, entry.name);
+
+    if (parsed.value.dependencies.root_templates.len != 0) {
+        const out = try allocator.alloc([]const u8, parsed.value.dependencies.root_templates.len);
+        for (parsed.value.dependencies.root_templates, 0..) |entry, idx| out[idx] = try allocator.dupe(u8, entry);
+        return out;
+    }
+
+    const total = parsed.value.build.line_templates.len + parsed.value.build.translation_templates.len;
+    const out = try allocator.alloc([]const u8, total);
+    var idx: usize = 0;
+    for (parsed.value.build.line_templates) |entry| {
+        out[idx] = try allocator.dupe(u8, entry.name);
+        idx += 1;
+    }
+    for (parsed.value.build.translation_templates) |entry| {
+        out[idx] = try allocator.dupe(u8, entry.name);
+        idx += 1;
+    }
     return out;
 }
 
@@ -5972,6 +6244,43 @@ fn scanDumpDependenciesAlloc(allocator: std.mem.Allocator, path: []const u8) !Du
 }
 
 pub fn scanTemplateAndModuleSourcesAlloc(allocator: std.mem.Allocator, path: []const u8) !TemplateSources {
+    return try scanTemplateAndModuleSourcesFilteredAlloc(allocator, path, null, null);
+}
+
+pub fn scanSelectedTemplateAndModuleSourcesAlloc(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    template_names: []const []const u8,
+    module_names: []const []const u8,
+) !TemplateSources {
+    var wanted_templates = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &wanted_templates);
+    for (template_names) |name| {
+        if (!isLikelyTemplatePageName(name)) continue;
+        try insertCanonicalTemplateName(&wanted_templates, allocator, name);
+    }
+
+    var wanted_modules = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &wanted_modules);
+    for (module_names) |name| {
+        if (!isLikelyModulePageName(name)) continue;
+        try insertCanonicalModuleName(&wanted_modules, allocator, name);
+    }
+
+    return try scanTemplateAndModuleSourcesFilteredAlloc(
+        allocator,
+        path,
+        if (wanted_templates.count() == 0) null else &wanted_templates,
+        if (wanted_modules.count() == 0) null else &wanted_modules,
+    );
+}
+
+fn scanTemplateAndModuleSourcesFilteredAlloc(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    wanted_templates: ?*const std.StringHashMapUnmanaged(void),
+    wanted_modules: ?*const std.StringHashMapUnmanaged(void),
+) !TemplateSources {
     var template_sources = std.StringHashMap([]const u8).init(allocator);
     errdefer {
         var it = template_sources.iterator();
@@ -6033,7 +6342,17 @@ pub fn scanTemplateAndModuleSourcesAlloc(allocator: std.mem.Allocator, path: []c
                 if (std.mem.indexOf(u8, rest, "</text>")) |end_idx| {
                     try text_accum.appendSlice(allocator, rest[0..end_idx]);
                     capture_text = false;
-                    try maybeStoreLuaSource(allocator, &template_sources, &module_sources, current_title, current_ns, text_accum.items);
+                    try maybeStoreLuaSourceFiltered(
+                        allocator,
+                        &template_sources,
+                        &module_sources,
+                        current_title,
+                        current_ns,
+                        text_accum.items,
+                        wanted_templates,
+                        wanted_modules,
+                    );
+                    if (scanTemplateSourceTargetsSatisfied(&template_sources, &module_sources, wanted_templates, wanted_modules)) break;
                 } else {
                     try text_accum.appendSlice(allocator, rest);
                     try text_accum.append(allocator, '\n');
@@ -6043,7 +6362,17 @@ pub fn scanTemplateAndModuleSourcesAlloc(allocator: std.mem.Allocator, path: []c
             if (std.mem.indexOf(u8, line, "</text>")) |end_idx| {
                 try text_accum.appendSlice(allocator, line[0..end_idx]);
                 capture_text = false;
-                try maybeStoreLuaSource(allocator, &template_sources, &module_sources, current_title, current_ns, text_accum.items);
+                try maybeStoreLuaSourceFiltered(
+                    allocator,
+                    &template_sources,
+                    &module_sources,
+                    current_title,
+                    current_ns,
+                    text_accum.items,
+                    wanted_templates,
+                    wanted_modules,
+                );
+                if (scanTemplateSourceTargetsSatisfied(&template_sources, &module_sources, wanted_templates, wanted_modules)) break;
             } else {
                 try text_accum.appendSlice(allocator, line);
                 try text_accum.append(allocator, '\n');
@@ -6055,6 +6384,17 @@ pub fn scanTemplateAndModuleSourcesAlloc(allocator: std.mem.Allocator, path: []c
         .template_sources = template_sources,
         .module_sources = module_sources,
     };
+}
+
+fn scanTemplateSourceTargetsSatisfied(
+    template_sources: *const std.StringHashMap([]const u8),
+    module_sources: *const std.StringHashMap([]const u8),
+    wanted_templates: ?*const std.StringHashMapUnmanaged(void),
+    wanted_modules: ?*const std.StringHashMapUnmanaged(void),
+) bool {
+    const templates_done = if (wanted_templates) |wanted| template_sources.count() >= wanted.count() else true;
+    const modules_done = if (wanted_modules) |wanted| module_sources.count() >= wanted.count() else true;
+    return templates_done and modules_done;
 }
 
 fn applySourceCompat(
@@ -6117,21 +6457,53 @@ fn maybeStoreLuaSource(
     current_ns: ?[]const u8,
     text: []const u8,
 ) !void {
+    return try maybeStoreLuaSourceFiltered(
+        allocator,
+        template_sources,
+        module_sources,
+        current_title,
+        current_ns,
+        text,
+        null,
+        null,
+    );
+}
+
+fn maybeStoreLuaSourceFiltered(
+    allocator: std.mem.Allocator,
+    template_sources: *std.StringHashMap([]const u8),
+    module_sources: *std.StringHashMap([]const u8),
+    current_title: ?[]u8,
+    current_ns: ?[]const u8,
+    text: []const u8,
+    wanted_templates: ?*const std.StringHashMapUnmanaged(void),
+    wanted_modules: ?*const std.StringHashMapUnmanaged(void),
+) !void {
     if (current_title == null or current_ns == null) return;
-    const decoded = try xml_decode.decodeSinglePassAlloc(allocator, text);
-    errdefer allocator.free(decoded);
 
     if (std.mem.eql(u8, current_ns.?, "10")) {
         if (!std.mem.startsWith(u8, current_title.?, "Template:")) return;
         const name = current_title.?["Template:".len..];
-        try putCanonicalTemplateSource(allocator, template_sources, name, decoded);
+        const canonical = try canonicalTemplateNameAlloc(allocator, name);
+        defer allocator.free(canonical);
+        if (wanted_templates) |wanted| {
+            if (!wanted.contains(canonical)) return;
+        }
+        const decoded = try xml_decode.decodeSinglePassAlloc(allocator, text);
+        try putCanonicalTemplateSource(allocator, template_sources, canonical, decoded);
         return;
     }
 
     if (!std.mem.eql(u8, current_ns.?, "828")) return;
     if (!std.mem.startsWith(u8, current_title.?, "Module:")) return;
     const name = current_title.?["Module:".len..];
-    try putCanonicalModuleSource(allocator, module_sources, name, decoded);
+    const canonical = try canonicalModuleNameAlloc(allocator, name);
+    defer allocator.free(canonical);
+    if (wanted_modules) |wanted| {
+        if (!wanted.contains(canonical)) return;
+    }
+    const decoded = try xml_decode.decodeSinglePassAlloc(allocator, text);
+    try putCanonicalModuleSource(allocator, module_sources, canonical, decoded);
 }
 
 fn putCanonicalTemplateSource(
@@ -6691,6 +7063,7 @@ fn isLikelyModulePageName(name: []const u8) bool {
 pub fn isLikelyCodeModulePageName(name: []const u8) bool {
     if (!isLikelyModulePageName(name)) return false;
     if (endsWithIgnoreCase(name, ".css")) return false;
+    if (std.mem.indexOf(u8, name, ".txt/") != null) return false;
     if (endsWithIgnoreCase(name, "/documentation")) return false;
     if (endsWithIgnoreCase(name, "/doc")) return false;
     if (endsWithIgnoreCase(name, " documentation")) return false;
@@ -6967,6 +7340,126 @@ test "emitZigModuleAlloc lowers builtin calls into direct Zig helpers" {
     try std.testing.expect(std.mem.indexOf(u8, zig_source, "runStaticProgram") == null);
     try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.StaticProgram") == null);
     try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.Instruction") == null);
+}
+
+test "emitZigModuleWithOptionsAlloc lowers require into generated module dispatch helper" {
+    const source =
+        \\local languages = require("Module:languages")
+        \\return languages
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireFirst(runtime, lua.Value{ .string = \"Module:languages\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireInvoke") != null);
+}
+
+test "emitZigModuleWithOptionsAlloc lowers mw.loadData into generated module dispatch helper" {
+    const source =
+        \\local data = mw.loadData("Module:languages/data/2")
+        \\return data
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleLoadDataFirst(runtime, lua.Value{ .string = \"Module:languages/data/2\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleMwTableValue") != null);
+}
+
+test "emitZigModuleAlloc evaluates method-call receivers once" {
+    const source =
+        \\local alt = "tooltip"
+        \\local html = "body"
+        \\return tostring(mw.html.create("span"):attr("title", alt):wikitext(html))
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, zig_source, "getString(\"create\")"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, zig_source, "getString(\"attr\")"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, zig_source, "getString(\"wikitext\")"));
+    try std.testing.expect(zig_source.len < 16 * 1024);
+}
+
+test "emitZigModuleAlloc keeps long method chains linear in size" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+    try source.appendSlice(std.testing.allocator, "return tostring(mw.html.create(\"div\")");
+    for (0..24) |idx| {
+        _ = idx;
+        try source.appendSlice(std.testing.allocator, ":css(\"width\", \"8px\")");
+    }
+    try source.appendSlice(std.testing.allocator, ")\n");
+
+    var chunk = try compile(std.testing.allocator, source.items);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, zig_source, "getString(\"create\")"));
+    try std.testing.expectEqual(@as(usize, 24), std.mem.count(u8, zig_source, "getString(\"css\")"));
+    try std.testing.expect(zig_source.len < 96 * 1024);
+}
+
+test "emitZigModuleAlloc supports top-level varargs" {
+    const source =
+        \\local opts = ...
+        \\return opts
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "const varargs = if (args.len > 0) args[0..] else &.{};") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "varargs[0]") != null);
+}
+
+test "emitZigModuleAlloc preserves captured locals for evaluated dead closures" {
+    const source =
+        \\local outer = 1
+        \\local unused = function()
+        \\  return outer
+        \\end
+        \\return 0
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "const local_0: lua.Value = tmp_0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "&local_0") != null);
+}
+
+test "emitZigModuleAlloc emits negative zero as float literal" {
+    const source =
+        \\return -0
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleAlloc(std.testing.allocator, &chunk);
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, ".number = -0.0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, ".number = -0 }") == null);
 }
 
 test "emitZigModuleAlloc emits capture structs for lexical closures" {
@@ -7372,6 +7865,7 @@ test "likely template page name filter keeps real titles and drops magic-like na
 test "likely code module page name filter excludes documentation pages" {
     try std.testing.expect(isLikelyCodeModulePageName("akk-conj/g/stem/testcases"));
     try std.testing.expect(!isLikelyCodeModulePageName("font list/style.css"));
+    try std.testing.expect(!isLikelyCodeModulePageName("unicode data/raw/unicodedata.txt/bmp"));
     try std.testing.expect(!isLikelyCodeModulePageName("accel/documentation"));
     try std.testing.expect(!isLikelyCodeModulePageName("affix doc"));
 }
@@ -7380,4 +7874,30 @@ test "template magic-name matcher ignores separators" {
     try std.testing.expect(isIgnoredTemplateMagicName("wikimedia language"));
     try std.testing.expect(isIgnoredTemplateMagicName("Wikimedia_language"));
     try std.testing.expect(isIgnoredTemplateMagicName("wikimedia-language"));
+}
+
+test "loadStructureTemplateNames prefers stored dependency roots" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const structure_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure.json", .{tmp.sub_path});
+    defer std.testing.allocator.free(structure_path);
+    var file = try std.Io.Dir.cwd().createFile(std.testing.io, structure_path, .{ .truncate = true });
+    defer file.close(std.testing.io);
+    try file.writeStreamingAll(std.testing.io,
+        \\{
+        \\  "dependencies": {
+        \\    "root_templates": ["from-deps"]
+        \\  },
+        \\  "build": {
+        \\    "line_templates": [{ "name": "from-build" }]
+        \\  }
+        \\}
+    );
+
+    const names = try loadStructureTemplateNames(std.testing.allocator, structure_path);
+    defer freeStringSlice(std.testing.allocator, names);
+
+    try std.testing.expectEqual(@as(usize, 1), names.len);
+    try std.testing.expectEqualStrings("from-deps", names[0]);
 }

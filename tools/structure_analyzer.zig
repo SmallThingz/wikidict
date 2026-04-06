@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const zxml = @import("zxml");
 
 const encoder = @import("encoder");
+const lua = @import("lua");
 const wikitext = encoder.wikitext;
 const xml_decode = encoder.xml_decode;
 const required_path = @import("required_path.zig");
@@ -640,7 +641,7 @@ const StructureProgress = struct {
     fn phaseLabel(self: *const StructureProgress, phase: Phase) []const u8 {
         return switch (phase) {
             .scanning => if (self.scanning_parallel) "scan xml in parallel" else "scan xml",
-            .writing => "write report",
+            .writing => "resolve deps + write report",
             .done => "ready",
         };
     }
@@ -1166,6 +1167,7 @@ fn writeJsonReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyz
     const build = try structure_tables_support.buildDataFromLegacyAlloc(arena_allocator, legacy_inputs);
     const anomaly_kinds = try countEntriesAlloc(arena_allocator, analyzer.anomaly_kind_counts);
     const anomaly_samples = try anomalySamplesAlloc(arena_allocator, analyzer.anomaly_samples.items);
+    const dependencies = try buildStructureDependenciesAlloc(arena_allocator, allocator, analyzer.options.input_path, build);
 
     const report = structure_tables_support.ExactStructureReport{
         .input = analyzer.options.input_path,
@@ -1182,6 +1184,7 @@ fn writeJsonReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyz
             .kinds = anomaly_kinds,
             .samples = anomaly_samples,
         },
+        .dependencies = dependencies,
         .build = build,
     };
 
@@ -1201,6 +1204,87 @@ fn asIoWriter(writer: anytype) *std.Io.Writer {
         return &writer.interface;
     }
     @compileError("unsupported writer type");
+}
+
+fn buildStructureDependenciesAlloc(
+    dest_allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
+    input_path: []const u8,
+    build: structure_tables_support.BuildData,
+) !structure_tables_support.Dependencies {
+    const root_templates = try collectBuildTemplateRootsAlloc(scratch_allocator, build);
+    defer freeOwnedStringSlice(scratch_allocator, root_templates);
+
+    var report = try lua.analyzeRenderDependenciesAlloc(scratch_allocator, input_path, root_templates);
+    defer report.deinit(scratch_allocator);
+
+    return .{
+        .root_templates = try dupStringSliceAlloc(dest_allocator, report.root_templates),
+        .reachable_templates = try dupStringSliceAlloc(dest_allocator, report.reachable_templates),
+        .unresolved_templates = try dupStringSliceAlloc(dest_allocator, report.unresolved_templates),
+        .direct_modules = try dupStringSliceAlloc(dest_allocator, report.direct_modules),
+        .transitive_modules = try dupStringSliceAlloc(dest_allocator, report.transitive_modules),
+        .missing_modules = try dupStringSliceAlloc(dest_allocator, report.missing_modules),
+        .compiled_failed = try dupDependencyFailuresAlloc(dest_allocator, report.compiled_failed),
+        .emitted_inconsistent = try dupDependencyFailuresAlloc(dest_allocator, report.emitted_inconsistent),
+    };
+}
+
+fn collectBuildTemplateRootsAlloc(
+    allocator: std.mem.Allocator,
+    build: structure_tables_support.BuildData,
+) ![]const []const u8 {
+    var set = std.StringHashMapUnmanaged(void){};
+    defer {
+        var it = set.iterator();
+        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+        set.deinit(allocator);
+    }
+
+    for (build.line_templates) |entry| {
+        const gop = try set.getOrPut(allocator, entry.name);
+        if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, entry.name);
+    }
+    for (build.translation_templates) |entry| {
+        const gop = try set.getOrPut(allocator, entry.name);
+        if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, entry.name);
+    }
+
+    var out = try allocator.alloc([]const u8, set.count());
+    var it = set.iterator();
+    var idx: usize = 0;
+    while (it.next()) |entry| : (idx += 1) out[idx] = try allocator.dupe(u8, entry.key_ptr.*);
+    std.mem.sortUnstable([]const u8, out, {}, struct {
+        fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
+            return std.mem.order(u8, lhs, rhs) == .lt;
+        }
+    }.lessThan);
+    return out;
+}
+
+fn dupStringSliceAlloc(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
+    const out = try allocator.alloc([]const u8, values.len);
+    for (values, out) |value, *slot| slot.* = try allocator.dupe(u8, value);
+    return out;
+}
+
+fn dupDependencyFailuresAlloc(
+    allocator: std.mem.Allocator,
+    failures: []const lua.ModuleCompileFailure,
+) ![]const structure_tables_support.DependencyFailure {
+    const out = try allocator.alloc(structure_tables_support.DependencyFailure, failures.len);
+    for (failures, out) |failure, *slot| {
+        slot.* = .{
+            .name = try allocator.dupe(u8, failure.name),
+            .reason = try allocator.dupe(u8, failure.reason),
+        };
+    }
+    return out;
+}
+
+fn freeOwnedStringSlice(allocator: std.mem.Allocator, values: []const []const u8) void {
+    for (values) |value| allocator.free(value);
+    allocator.free(values);
 }
 
 fn legacyBuildInputsAlloc(
@@ -2081,7 +2165,20 @@ test "internalLinkShapeAlloc records namespaces and pipe tricks" {
 }
 
 test "json report includes exact build payload and omits exploratory sections" {
-    var analyzer = Analyzer.init(std.testing.allocator, .{});
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const input_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure-fixture.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(input_path);
+    var fixture = try std.Io.Dir.cwd().createFile(std.testing.io, input_path, .{ .truncate = true });
+    defer fixture.close(std.testing.io);
+    try fixture.writeStreamingAll(std.testing.io,
+        \\<mediawiki>
+        \\  <page><title>Template:custom form of</title><ns>10</ns><revision><text xml:space="preserve">{{{1}}}</text></revision></page>
+        \\</mediawiki>
+    );
+
+    var analyzer = Analyzer.init(std.testing.allocator, .{ .input_path = input_path });
     defer analyzer.deinit();
 
     analyzer.pages_seen = 3;
@@ -2104,6 +2201,7 @@ test "json report includes exact build payload and omits exploratory sections" {
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"build\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"anomalies\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"dependencies\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"compact_direct_patterns\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"heading_specs\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"template_shapes_by_heading\"") == null);

@@ -303,8 +303,6 @@ pub fn build(b: *std.Build) void {
     });
     const template_codegen_exe = addCliExecutable(b, "dict-template-compile", b.path("tools/template_codegen.zig"), target, codegen_optimize, &.{
         .{ .name = "lua", .module = lua_mod_codegen },
-        .{ .name = "decoder", .module = decoder_mod_codegen },
-        .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod_codegen },
         .{ .name = "required_path", .module = required_path_mod_codegen },
     });
     const frontend_exe = addCliExecutable(b, "dict-frontend", b.path("tools/frontend.zig"), target, optimize, &.{});
@@ -389,6 +387,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "encoder", .module = encoder_mod_test },
+                .{ .name = "lua", .module = lua_mod },
                 .{ .name = "zxml", .module = zxml_dep.module("zxml") },
                 .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod },
             },
@@ -452,8 +451,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "lua", .module = lua_mod },
-                .{ .name = "decoder", .module = decoder_mod_test },
-                .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod },
                 .{ .name = "required_path", .module = required_path_mod },
             },
         }),
@@ -767,7 +764,7 @@ fn addDirectStructureBinary(
     bootstrap_tables_path: std.Build.LazyPath,
 ) std.Build.LazyPath {
     const compile = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-OReleaseFast" });
-    compile.addArgs(&.{ "--dep", "encoder", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "wikitext_source" });
+    compile.addArgs(&.{ "--dep", "encoder", "--dep", "lua", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "wikitext_source" });
     compile.addPrefixedFileArg("-Mroot=", b.path("tools/structure_analyzer.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{
@@ -792,6 +789,10 @@ fn addDirectStructureBinary(
     });
     compile.addPrefixedFileArg("-Mencoder=", b.path("encoder/root.zig"));
     compile.addArg("-OReleaseFast");
+    compile.addArgs(&.{ "--dep", "shared_xml_decode" });
+    compile.addPrefixedFileArg("-Mlua=", b.path("lua/root.zig"));
+    compile.addArg("-OReleaseFast");
+    compile.addArgs(&.{ "--dep", "shared_xml_decode" });
     compile.addArgs(&.{ "--dep", "config=config0" });
     compile.addPrefixedFileArg("-Mzxml=", b.path(".deps/zxml/src/root.zig"));
     compile.addPrefixedFileArg("-Mconfig=", config_path);

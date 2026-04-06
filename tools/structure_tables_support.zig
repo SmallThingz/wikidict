@@ -87,6 +87,22 @@ pub const AnomalySample = struct {
     detail: []const u8,
 };
 
+pub const DependencyFailure = struct {
+    name: []const u8,
+    reason: []const u8,
+};
+
+pub const Dependencies = struct {
+    root_templates: []const []const u8 = &.{},
+    reachable_templates: []const []const u8 = &.{},
+    unresolved_templates: []const []const u8 = &.{},
+    direct_modules: []const []const u8 = &.{},
+    transitive_modules: []const []const u8 = &.{},
+    missing_modules: []const []const u8 = &.{},
+    compiled_failed: []const DependencyFailure = &.{},
+    emitted_inconsistent: []const DependencyFailure = &.{},
+};
+
 pub const Anomalies = struct {
     kinds: []const CountEntry = &.{},
     samples: []const AnomalySample = &.{},
@@ -106,6 +122,7 @@ pub const ExactStructureReport = struct {
     input: []const u8,
     summary: Summary,
     anomalies: Anomalies,
+    dependencies: Dependencies = .{},
     build: BuildData,
 };
 

@@ -1,7 +1,5 @@
 const std = @import("std");
 const lua = @import("lua");
-const decoder = @import("decoder");
-const compact_pattern_seed = @import("compact_pattern_seed");
 const required_path = @import("required_path");
 
 const support_import = "template_compiler_support";
@@ -16,32 +14,75 @@ pub fn main(init: std.process.Init) !void {
     const options = try parseOptions(args[1..]);
 
     required_path.ensureExistsOrExit(init.io, options.input_path, "wiktionary dump");
-    if (options.template_name == null) {
-        required_path.ensureExistsOrExit(init.io, options.db_path, "dictionary binary");
+    if (options.template_name == null) required_path.ensureExistsOrExit(init.io, options.structure_path, "structure report");
+
+    var manual_report: ?lua.TemplateDependencyReport = null;
+    defer if (manual_report) |*report| report.deinit(allocator);
+
+    var stored_dependencies: ?std.json.Parsed(StoredDependencyFile) = null;
+    defer if (stored_dependencies) |*parsed| parsed.deinit();
+
+    var roots_count: usize = 0;
+    var reachable_templates: []const []const u8 = &.{};
+    var required_modules: []const []const u8 = &.{};
+    var audit_view: DependencyAuditView = .{};
+    var maybe_sources: ?lua.TemplateSources = null;
+    defer if (maybe_sources) |*sources| sources.deinit(allocator);
+
+    if (options.template_name) |name| {
+        maybe_sources = try lua.scanTemplateAndModuleSourcesAlloc(allocator, options.input_path);
+        const roots = blk: {
+            const out = try allocator.alloc([]const u8, 1);
+            out[0] = try allocator.dupe(u8, name);
+            break :blk out;
+        };
+        defer freeOwnedStrings(allocator, roots);
+
+        manual_report = try lua.analyzeTemplateDependenciesFromSourcesAlloc(allocator, roots, &maybe_sources.?);
+        const report = manual_report.?;
+        roots_count = report.root_templates.len;
+        reachable_templates = report.reachable_templates;
+        required_modules = report.transitive_modules;
+        audit_view = .{
+            .unresolved_templates = report.unresolved_templates,
+            .missing_modules = report.missing_modules,
+            .compiled_failed = report.compiled_failed,
+            .emitted_inconsistent = report.emitted_inconsistent,
+        };
+    } else {
+        stored_dependencies = try loadStoredDependenciesAlloc(allocator, options.structure_path);
+        const deps = stored_dependencies.?.value.dependencies;
+        if (deps.root_templates.len == 0 and deps.reachable_templates.len == 0 and deps.transitive_modules.len == 0) {
+            std.debug.print(
+                "template compiler: structure report at {s} does not contain stored dependencies; rerun zig build structure\n",
+                .{options.structure_path},
+            );
+            return error.MissingStructureDependencies;
+        }
+        roots_count = deps.root_templates.len;
+        reachable_templates = if (deps.reachable_templates.len != 0) deps.reachable_templates else deps.root_templates;
+        required_modules = deps.transitive_modules;
+        audit_view = .{
+            .unresolved_templates = deps.unresolved_templates,
+            .missing_modules = deps.missing_modules,
+            .compiled_failed = deps.compiled_failed,
+            .emitted_inconsistent = deps.emitted_inconsistent,
+        };
+        maybe_sources = try lua.scanSelectedTemplateAndModuleSourcesAlloc(
+            allocator,
+            options.input_path,
+            reachable_templates,
+            required_modules,
+        );
     }
 
-    var sources = try lua.scanTemplateAndModuleSourcesAlloc(allocator, options.input_path);
-    defer sources.deinit(allocator);
+    const had_audit_failures = audit_view.unresolved_templates.len != 0 or
+        audit_view.missing_modules.len != 0 or
+        audit_view.compiled_failed.len != 0 or
+        audit_view.emitted_inconsistent.len != 0;
+    if (had_audit_failures) try printDependencyFailures(audit_view);
 
-    const roots = if (options.template_name) |name| blk: {
-        const out = try allocator.alloc([]const u8, 1);
-        out[0] = try allocator.dupe(u8, name);
-        break :blk out;
-    } else try loadDbTemplateNamesAlloc(allocator, options.db_path);
-    defer freeOwnedStrings(allocator, roots);
-
-    var report = try lua.analyzeTemplateDependenciesFromSourcesAlloc(allocator, roots, &sources);
-    defer report.deinit(allocator);
-
-    const had_audit_failures = report.unresolved_templates.len != 0 or
-        report.missing_modules.len != 0 or
-        report.compiled_failed.len != 0 or
-        report.emitted_inconsistent.len != 0;
-    if (had_audit_failures) {
-        try printDependencyFailures(allocator, report);
-    }
-
-    const compiled = try compileTemplateRuntimeAlloc(allocator, report.reachable_templates, &sources);
+    const compiled = try compileTemplateRuntimeAlloc(allocator, reachable_templates, required_modules, &maybe_sources.?);
     defer {
         allocator.free(compiled.source);
         for (compiled.unsupported) |entry| allocator.free(entry.reason);
@@ -50,7 +91,7 @@ pub fn main(init: std.process.Init) !void {
     if (compiled.unsupported.len != 0) {
         try printUnsupportedTemplates(allocator, compiled.unsupported);
         if (options.template_name) |name| {
-            const source = sources.template_sources.get(name) orelse "";
+            const source = maybe_sources.?.template_sources.get(name) orelse "";
             if (source.len != 0) {
                 std.debug.print("--- template source: {s} ---\n{s}\n", .{ name, source });
             }
@@ -62,15 +103,16 @@ pub fn main(init: std.process.Init) !void {
     try file.writeStreamingAll(init.io, compiled.source);
 
     std.debug.print(
-        "template compiler: roots={d} reachable={d} compiled={d} metadata_only={d} unsupported={d} unresolved={d} missing_modules={d} output={s}\n",
+        "template compiler: roots={d} reachable={d} modules={d} compiled={d} metadata_only={d} unsupported={d} unresolved={d} missing_modules={d} output={s}\n",
         .{
-            roots.len,
-            report.reachable_templates.len,
+            roots_count,
+            reachable_templates.len,
+            required_modules.len,
             compiled.compiled_count,
             compiled.metadata_only_count,
             compiled.unsupported.len,
-            report.unresolved_templates.len,
-            report.missing_modules.len,
+            audit_view.unresolved_templates.len,
+            audit_view.missing_modules.len,
             options.output_path,
         },
     );
@@ -78,7 +120,7 @@ pub fn main(init: std.process.Init) !void {
 
 const Options = struct {
     input_path: []const u8 = "data/wiktionary.xml",
-    db_path: []const u8 = "data/wiktionary.bin",
+    structure_path: []const u8 = "data/wiktionary-structure.json",
     output_path: []const u8 = "renderer/generated_template_runtime.zig",
     template_name: ?[]const u8 = null,
 };
@@ -97,7 +139,12 @@ fn parseOptions(args: []const []const u8) !Options {
         if (std.mem.eql(u8, arg, "--db")) {
             i += 1;
             if (i >= args.len) return error.MissingValue;
-            options.db_path = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--structure")) {
+            i += 1;
+            if (i >= args.len) return error.MissingValue;
+            options.structure_path = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--output")) {
@@ -122,10 +169,46 @@ fn parseOptions(args: []const []const u8) !Options {
 
 fn printUsage() void {
     std.debug.print(
-        \\dict-template-compile --input data/wiktionary.xml --db data/wiktionary.bin --output renderer/generated_template_runtime.zig
+        \\dict-template-compile --input data/wiktionary.xml --structure data/wiktionary-structure.json --output renderer/generated_template_runtime.zig
         \\dict-template-compile --input data/wiktionary.xml --template \"template name\" --output /tmp/generated_templates.zig
         \\
     , .{});
+}
+
+const StoredDependencyFile = struct {
+    dependencies: struct {
+        root_templates: []const []const u8 = &.{},
+        reachable_templates: []const []const u8 = &.{},
+        unresolved_templates: []const []const u8 = &.{},
+        direct_modules: []const []const u8 = &.{},
+        transitive_modules: []const []const u8 = &.{},
+        missing_modules: []const []const u8 = &.{},
+        compiled_failed: []const lua.ModuleCompileFailure = &.{},
+        emitted_inconsistent: []const lua.ModuleCompileFailure = &.{},
+    } = .{},
+};
+
+const DependencyAuditView = struct {
+    unresolved_templates: []const []const u8 = &.{},
+    missing_modules: []const []const u8 = &.{},
+    compiled_failed: []const lua.ModuleCompileFailure = &.{},
+    emitted_inconsistent: []const lua.ModuleCompileFailure = &.{},
+};
+
+fn loadStoredDependenciesAlloc(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) !std.json.Parsed(StoredDependencyFile) {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(
+        std.Options.debug_io,
+        path,
+        allocator,
+        std.Io.Limit.limited(std.math.maxInt(usize)),
+    );
+    defer allocator.free(bytes);
+    return std.json.parseFromSlice(StoredDependencyFile, allocator, bytes, .{
+        .ignore_unknown_fields = true,
+    });
 }
 
 const CompileClass = enum {
@@ -302,6 +385,7 @@ fn buildDispatchTemplatesAlloc(
 fn compileTemplateRuntimeAlloc(
     allocator: std.mem.Allocator,
     reachable_templates: []const []const u8,
+    required_modules: []const []const u8,
     sources: *const lua.TemplateSources,
 ) !CompileRuntimeResult {
     var templates = try allocator.alloc(TemplateInfo, reachable_templates.len);
@@ -339,7 +423,7 @@ fn compileTemplateRuntimeAlloc(
         };
     }
 
-    var modules = try buildModuleInfosAlloc(allocator, templates, sources);
+    var modules = try buildModuleInfosAlloc(allocator, templates, required_modules, sources);
     defer {
         for (modules.items) |module| allocator.free(module.key);
         for (modules.items) |module| allocator.free(module.struct_ident);
@@ -388,14 +472,17 @@ fn compileTemplateRuntimeAlloc(
     defer out.deinit();
     const writer = &out.writer;
 
-    try writer.writeAll("// Generated by tools/template_codegen.zig\nconst runtime_std = @import(\"std\");\nconst support = @import(");
+    try writer.writeAll("// Generated by tools/template_codegen.zig\nconst runtime_std = @import(\"std\");\nconst lua = @import(\"lua\");\nconst support = @import(");
     try appendZigStringLiteral(writer, support_import);
     try writer.writeAll(");\n\npub const TemplateClass = support.TemplateClass;\n\n");
 
+    const emit_all_modules = true;
     for (modules.items) |module| {
-        if (!moduleUsedByWrappers(module.struct_ident, wrappers.items)) continue;
+        if (module.emit_failed or module.zig_source.len == 0) continue;
+        if (!emit_all_modules and !moduleUsedByWrappers(module.struct_ident, wrappers.items)) continue;
         try emitGeneratedModuleStruct(writer, module);
     }
+    try emitGeneratedModuleDispatchSupport(writer, modules.items);
     for (wrappers.items) |wrapper| try emitModuleWrapper(writer, wrapper);
     for (templates) |template| {
         if (template.class != .compiled) continue;
@@ -1238,19 +1325,28 @@ fn collectModuleWrappers(
 fn buildModuleInfosAlloc(
     allocator: std.mem.Allocator,
     templates: []const TemplateInfo,
+    required_modules: []const []const u8,
     sources: *const lua.TemplateSources,
 ) !std.ArrayList(ModuleInfo) {
-    var module_keys = std.StringHashMapUnmanaged(void){};
-    defer {
-        var it = module_keys.iterator();
-        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
-        module_keys.deinit(allocator);
-    }
+    const direct_modules = blk: {
+        if (required_modules.len != 0) break :blk try dupStringSliceAlloc(allocator, required_modules);
 
-    for (templates) |template| {
-        if (template.parse_error != null) continue;
-        try collectModuleNames(allocator, &module_keys, template.nodes);
-    }
+        var module_keys = std.StringHashMapUnmanaged(void){};
+        defer {
+            var it = module_keys.iterator();
+            while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+            module_keys.deinit(allocator);
+        }
+        for (templates) |template| {
+            if (template.parse_error != null) continue;
+            try collectModuleNames(allocator, &module_keys, template.nodes);
+        }
+        break :blk try collectStringSet(allocator, &module_keys);
+    };
+    defer freeOwnedStrings(allocator, direct_modules);
+
+    const all_modules = try lua.collectTransitiveModulesFromSourcesAlloc(allocator, &sources.module_sources, direct_modules);
+    defer freeOwnedStrings(allocator, all_modules);
 
     var modules: std.ArrayList(ModuleInfo) = .empty;
     errdefer {
@@ -1260,9 +1356,7 @@ fn buildModuleInfosAlloc(
         modules.deinit(allocator);
     }
 
-    var it = module_keys.iterator();
-    while (it.next()) |entry| {
-        const key = entry.key_ptr.*;
+    for (all_modules) |key| {
         const struct_ident = try moduleStructIdentAlloc(allocator, key, modules.items.len);
         const module_source = sources.module_sources.get(key) orelse "";
         var module: ModuleInfo = .{
@@ -1281,7 +1375,9 @@ fn buildModuleInfosAlloc(
                 continue;
             };
             defer chunk.deinit();
-            module.zig_source = lua.emitZigModuleAlloc(allocator, &chunk) catch {
+            module.zig_source = lua.emitZigModuleWithOptionsAlloc(allocator, &chunk, .{
+                .enable_direct_module_dispatch = true,
+            }) catch {
                 module.emit_failed = true;
                 try modules.append(allocator, module);
                 continue;
@@ -1422,6 +1518,81 @@ fn emitGeneratedModuleStruct(writer: *std.Io.Writer, module: ModuleInfo) !void {
     try writer.writeAll(" = struct {\n");
     try writeIndentedBlock(writer, module.zig_source, 1);
     try writer.writeAll("};\n\n");
+}
+
+fn emitGeneratedModuleDispatchSupport(writer: *std.Io.Writer, modules: []const ModuleInfo) !void {
+    try writer.writeAll(
+        \\fn generatedCanonicalModuleNameAlloc(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) ![]const u8 {
+        \\    const module_name_text = switch (module_name_value) {
+        \\        .string => |text| text,
+        \\        else => try lua.valueToStringValueAlloc(runtime.alloc(), module_name_value),
+        \\    };
+        \\    const canonical = try lua.canonicalModuleNameAlloc(runtime.alloc(), module_name_text);
+        \\    if (runtime_std.mem.startsWith(u8, canonical, "module:")) return canonical["module:".len..];
+        \\    return canonical;
+        \\}
+        \\
+        \\fn generatedLoadCompiledModuleFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
+        \\    const canonical_name = try generatedCanonicalModuleNameAlloc(runtime, module_name_value);
+        \\    if (runtime.getGeneratedModule(canonical_name)) |cached| return cached;
+        \\
+    );
+    for (modules) |module| {
+        if (module.emit_failed or module.zig_source.len == 0) continue;
+        try writer.writeAll("    if (runtime_std.mem.eql(u8, canonical_name, ");
+        try appendZigStringLiteral(writer, module.key);
+        try writer.writeAll(")) {\n");
+        try writer.writeAll("        const returns = try ");
+        try writer.writeAll(module.struct_ident);
+        try writer.writeAll(".runInRuntime(runtime);\n");
+        try writer.writeAll("        const first = if (returns.len == 0) lua.Value.nil else returns[0];\n");
+        try writer.writeAll("        try runtime.putGeneratedModule(canonical_name, first);\n");
+        try writer.writeAll("        return first;\n");
+        try writer.writeAll("    }\n");
+    }
+    try writer.writeAll(
+        \\    return error.UnknownVariable;
+        \\}
+        \\
+        \\fn generatedModuleRequireFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
+        \\    return try generatedLoadCompiledModuleFirst(runtime, module_name_value);
+        \\}
+        \\
+        \\fn generatedModuleLoadDataFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
+        \\    return try generatedLoadCompiledModuleFirst(runtime, module_name_value);
+        \\}
+        \\
+        \\fn generatedModuleRequireInvoke(
+        \\    _: ?*anyopaque,
+        \\    _: ?*anyopaque,
+        \\    runtime: *lua.GeneratedRuntime,
+        \\    args: []const lua.Value,
+        \\) anyerror![]lua.Value {
+        \\    return try runtime.singleReturn(try generatedModuleRequireFirst(
+        \\        runtime,
+        \\        if (args.len == 0) lua.Value.nil else args[0],
+        \\    ));
+        \\}
+        \\
+        \\fn generatedModuleLoadDataInvoke(
+        \\    _: ?*anyopaque,
+        \\    _: ?*anyopaque,
+        \\    runtime: *lua.GeneratedRuntime,
+        \\    args: []const lua.Value,
+        \\) anyerror![]lua.Value {
+        \\    return try runtime.singleReturn(try generatedModuleLoadDataFirst(
+        \\        runtime,
+        \\        if (args.len == 0) lua.Value.nil else args[0],
+        \\    ));
+        \\}
+        \\
+        \\fn generatedModuleMwTableValue(runtime: *lua.GeneratedRuntime, globals: ?*anyopaque) !lua.Value {
+        \\    const table = try lua.Table.init(runtime.alloc());
+        \\    try table.putStringBorrowed("loadData", try runtime.functionValue("mw.loadData", null, globals, generatedModuleLoadDataInvoke));
+        \\    return .{ .table = table };
+        \\}
+        \\
+    );
 }
 
 fn writeIndentedBlock(writer: *std.Io.Writer, text: []const u8, indent: usize) !void {
@@ -2124,66 +2295,34 @@ fn writeIndent(writer: *std.Io.Writer, indent: usize) !void {
     for (0..indent) |_| try writer.writeAll("    ");
 }
 
-const static_bin_template_names = [_][]const u8{
-    "en-noun",
-    "en-verb",
-    "en-adj",
-    "en-proper noun",
-    "head",
-    "plural of",
-    "infl of",
-    "lb",
-    "IPA",
-    "audio",
-    "rhymes",
-    "col",
-    "col2",
-    "col3",
-    "col4",
-    "col5",
-};
-
-const MappedReadOnlyFile = struct {
-    mapping: []align(std.heap.page_size_min) const u8,
-
-    fn deinit(self: *MappedReadOnlyFile) void {
-        std.posix.munmap(self.mapping);
-        self.* = undefined;
-    }
-};
-
-fn loadDbTemplateNamesAlloc(allocator: std.mem.Allocator, db_path: []const u8) ![]const []const u8 {
-    var mapped = try mmapReadOnlyPath(db_path);
-    defer mapped.deinit();
-
-    const inspected = try decoder.format.inspectDictionary(mapped.mapping);
-    const mapping_start: usize = @intCast(inspected.layout.mappings_offset);
-    const mapping_end: usize = @intCast(inspected.layout.mappings_offset + inspected.layout.mappings_len);
-    const mapping_blob = mapped.mapping[mapping_start..mapping_end];
-
-    var mappings = try decoder.format.parseCompactMappingsAlloc(allocator, mapping_blob);
-    defer mappings.deinit(allocator);
-
-    var names: std.ArrayList([]const u8) = .empty;
+fn dupStringSliceAlloc(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
+    const out = try allocator.alloc([]const u8, values.len);
+    errdefer allocator.free(out);
+    var filled: usize = 0;
     errdefer {
-        for (names.items) |name| allocator.free(name);
-        names.deinit(allocator);
+        for (out[0..filled]) |value| allocator.free(value);
     }
-
-    var covered: std.StringHashMapUnmanaged(void) = .empty;
-    defer {
-        var it = covered.iterator();
-        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
-        covered.deinit(allocator);
+    for (values, 0..) |value, idx| {
+        out[idx] = try allocator.dupe(u8, value);
+        filled = idx + 1;
     }
-    try compact_pattern_seed.seedCoveredTemplateNames(allocator, &covered);
+    return out;
+}
 
-    var covered_it = covered.iterator();
-    while (covered_it.next()) |entry| try names.append(allocator, try allocator.dupe(u8, entry.key_ptr.*));
-    for (mappings.line_templates) |entry| try names.append(allocator, try allocator.dupe(u8, entry.name));
-    for (mappings.translation_templates) |entry| try names.append(allocator, try allocator.dupe(u8, entry.name));
-    for (static_bin_template_names) |name| try names.append(allocator, try allocator.dupe(u8, name));
-    return names.toOwnedSlice(allocator);
+fn collectStringSet(allocator: std.mem.Allocator, set: *std.StringHashMapUnmanaged(void)) ![]const []const u8 {
+    const out = try allocator.alloc([]const u8, set.count());
+    errdefer allocator.free(out);
+    var it = set.iterator();
+    var idx: usize = 0;
+    while (it.next()) |entry| : (idx += 1) {
+        out[idx] = try allocator.dupe(u8, entry.key_ptr.*);
+    }
+    std.mem.sort([]const u8, out, {}, struct {
+        fn less(_: void, lhs: []const u8, rhs: []const u8) bool {
+            return std.mem.lessThan(u8, lhs, rhs);
+        }
+    }.less);
+    return out;
 }
 
 fn freeOwnedStrings(allocator: std.mem.Allocator, values: []const []const u8) void {
@@ -2191,7 +2330,7 @@ fn freeOwnedStrings(allocator: std.mem.Allocator, values: []const []const u8) vo
     allocator.free(values);
 }
 
-fn printDependencyFailures(allocator: std.mem.Allocator, report: lua.TemplateDependencyReport) !void {
+fn printDependencyFailures(report: DependencyAuditView) !void {
     std.debug.print("template compiler audit failed\n", .{});
     std.debug.print("  unresolved templates: {d}\n", .{report.unresolved_templates.len});
     std.debug.print("  missing modules: {d}\n", .{report.missing_modules.len});
@@ -2222,7 +2361,6 @@ fn printDependencyFailures(allocator: std.mem.Allocator, report: lua.TemplateDep
             std.debug.print("  {s}: {s}\n", .{ failure.name, failure.reason });
         }
     }
-    _ = allocator;
 }
 
 fn printUnsupportedTemplates(allocator: std.mem.Allocator, unsupported: []const UnsupportedTemplate) !void {
@@ -2231,26 +2369,6 @@ fn printUnsupportedTemplates(allocator: std.mem.Allocator, unsupported: []const 
         std.debug.print("  {s}: {s}\n", .{ entry.key, entry.reason });
     }
     _ = allocator;
-}
-
-fn mmapReadOnlyPath(path: []const u8) !MappedReadOnlyFile {
-    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
-        .ACCMODE = .RDONLY,
-        .CLOEXEC = true,
-    }, 0);
-
-    const io = std.Options.debug_io;
-    var file: std.Io.File = .{
-        .handle = fd,
-        .flags = .{ .nonblocking = false },
-    };
-    defer file.close(io);
-    const stat = try file.stat(io);
-    const len = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
-    if (len == 0) return error.FileTooBig;
-
-    const mapping = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0);
-    return .{ .mapping = mapping };
 }
 
 test "template compiler classifies metadata-only templates by nested nop closure" {
@@ -2266,7 +2384,7 @@ test "template compiler classifies metadata-only templates by nested nop closure
     try sources.template_sources.put(try allocator.dupe(u8, "meta"), try allocator.dupe(u8, "__NOTOC__"));
     try sources.template_sources.put(try allocator.dupe(u8, "outer"), try allocator.dupe(u8, "{{meta}}"));
 
-    const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "meta", "outer" }, &sources);
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "meta", "outer" }, &.{}, &sources);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, ".class = .metadata_only") != null);
     try std.testing.expectEqual(@as(usize, 2), generated.metadata_only_count);
 }
@@ -2284,7 +2402,7 @@ test "template compiler emits direct nested template calls" {
     try sources.template_sources.put(try allocator.dupe(u8, "inner"), try allocator.dupe(u8, "hello"));
     try sources.template_sources.put(try allocator.dupe(u8, "outer"), try allocator.dupe(u8, "before {{inner}} after"));
 
-    const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "inner", "outer" }, &sources);
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "inner", "outer" }, &.{}, &sources);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_inner_0") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_outer_1") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "try tpl_inner_0(out, allocator, &child_args_") != null);
@@ -2308,7 +2426,7 @@ test "template compiler strips metadata and emits nop for pure metadata template
         try allocator.dupe(u8, "<noinclude>doc</noinclude>[[Category:test]]__NOTOC__"),
     );
 
-    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"meta-only"}, &sources);
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"meta-only"}, &.{}, &sources);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, ".class = .metadata_only") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_meta_only_0") == null);
     try std.testing.expectEqual(@as(usize, 1), generated.metadata_only_count);
@@ -2333,11 +2451,45 @@ test "template compiler emits direct invoke wrappers for nested module calls" {
         try allocator.dupe(u8, "return { bar = function(frame) return frame.args[1] or '' end }"),
     );
 
-    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"wrap"}, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_foo_0 = struct") != null);
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"wrap"}, &.{}, &sources);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_foo_") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn invoke_foo_bar_0") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "support.invokeGeneratedModuleFunction(out, allocator, module_foo_0.run, \"bar\", args);") != null);
     try std.testing.expectEqual(@as(usize, 1), generated.compiled_count);
+}
+
+test "template compiler emits transitive modules and generated require dispatch support" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var sources = lua.TemplateSources{
+        .template_sources = std.StringHashMap([]const u8).init(allocator),
+        .module_sources = std.StringHashMap([]const u8).init(allocator),
+    };
+    defer sources.deinit(allocator);
+    try sources.template_sources.put(
+        try allocator.dupe(u8, "wrap"),
+        try allocator.dupe(u8, "{{#invoke:foo|show}}"),
+    );
+    try sources.module_sources.put(
+        try allocator.dupe(u8, "foo"),
+        try allocator.dupe(
+            u8,
+            \\local bar = require("Module:bar")
+            \\return { show = function(frame) return bar.value end }
+        ),
+    );
+    try sources.module_sources.put(
+        try allocator.dupe(u8, "bar"),
+        try allocator.dupe(u8, "return { value = \"ok\" }"),
+    );
+
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"wrap"}, &.{}, &sources);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_foo_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_bar_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedLoadCompiledModuleFirst") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "generatedModuleRequireFirst(runtime, lua.Value{ .string = \"Module:bar\" })") != null);
 }
 
 test "template compiler marks unresolved nested templates unsupported" {
@@ -2355,7 +2507,7 @@ test "template compiler marks unresolved nested templates unsupported" {
         try allocator.dupe(u8, "before {{missing-template}} after"),
     );
 
-    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"outer"}, &sources);
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"outer"}, &.{}, &sources);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, ".class = .unsupported") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_outer_0") == null);
     try std.testing.expectEqual(@as(usize, 1), generated.unsupported.len);
