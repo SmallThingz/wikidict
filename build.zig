@@ -566,7 +566,7 @@ fn addGeneratedTemplateRuntimeModule(
 fn loadGeneratedTemplateRuntimeSourceAlloc(b: *std.Build) ![]const u8 {
     const source = std.Io.Dir.cwd().readFileAlloc(
         b.graph.io,
-        b.pathFromRoot("renderer/generated_template_runtime.zig"),
+        b.pathFromRoot("data/generated_template_runtime.zig"),
         b.allocator,
         std.Io.Limit.limited(64 * 1024 * 1024),
     ) catch |err| switch (err) {

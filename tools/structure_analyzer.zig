@@ -166,6 +166,9 @@ const Analyzer = struct {
     translation_target_lang_counts: std.StringHashMapUnmanaged(u64) = .empty,
     anomaly_kind_counts: std.StringHashMapUnmanaged(u64) = .empty,
     anomaly_samples: std.ArrayListUnmanaged(AnomalySample) = .empty,
+    entry_direct_modules: std.StringHashMap(void),
+    template_nodes: std.StringHashMap(lua.TemplateDependencyNode),
+    module_nodes: std.StringHashMap([]const []const u8),
     key_scratch: std.ArrayList(u8) = .empty,
     shape_scratch: std.ArrayList(u8) = .empty,
 
@@ -174,6 +177,9 @@ const Analyzer = struct {
             .gpa = gpa,
             .arena = std.heap.ArenaAllocator.init(gpa),
             .options = options,
+            .entry_direct_modules = std.StringHashMap(void).init(gpa),
+            .template_nodes = std.StringHashMap(lua.TemplateDependencyNode).init(gpa),
+            .module_nodes = std.StringHashMap([]const []const u8).init(gpa),
         };
     }
 
@@ -200,6 +206,9 @@ const Analyzer = struct {
         self.translation_target_lang_counts.deinit(self.gpa);
         self.anomaly_kind_counts.deinit(self.gpa);
         self.anomaly_samples.deinit(self.gpa);
+        self.entry_direct_modules.deinit();
+        self.template_nodes.deinit();
+        self.module_nodes.deinit();
         self.key_scratch.deinit(self.gpa);
         self.shape_scratch.deinit(self.gpa);
         self.arena.deinit();
@@ -269,6 +278,131 @@ const Analyzer = struct {
         }
     }
 
+    fn cloneStringSlice(self: *Analyzer, values: []const []const u8) ![]const []const u8 {
+        const out = try self.keyAllocator().alloc([]const u8, values.len);
+        for (values, 0..) |value, idx| out[idx] = try self.keyAllocator().dupe(u8, value);
+        return out;
+    }
+
+    fn mergeUniqueStringSlice(self: *Analyzer, existing: []const []const u8, incoming: []const []const u8) ![]const []const u8 {
+        var additional: usize = 0;
+        for (incoming) |value| {
+            if (!stringSliceContains(existing, value)) additional += 1;
+        }
+        if (additional == 0) return existing;
+
+        const out = try self.keyAllocator().alloc([]const u8, existing.len + additional);
+        @memcpy(out[0..existing.len], existing);
+        var out_idx = existing.len;
+        for (incoming) |value| {
+            if (stringSliceContains(existing, value)) continue;
+            out[out_idx] = try self.keyAllocator().dupe(u8, value);
+            out_idx += 1;
+        }
+        return out;
+    }
+
+    fn mergeStringSet(self: *Analyzer, dst: *std.StringHashMap(void), src: *const std.StringHashMap(void)) !void {
+        var it = src.iterator();
+        while (it.next()) |entry| {
+            if (dst.contains(entry.key_ptr.*)) continue;
+            try dst.put(try self.keyAllocator().dupe(u8, entry.key_ptr.*), {});
+        }
+    }
+
+    fn mergeTemplateNodes(self: *Analyzer, src: *const std.StringHashMap(lua.TemplateDependencyNode)) !void {
+        var it = src.iterator();
+        while (it.next()) |entry| {
+            if (self.template_nodes.getPtr(entry.key_ptr.*)) |existing| {
+                existing.template_deps = try self.mergeUniqueStringSlice(existing.template_deps, entry.value_ptr.template_deps);
+                existing.direct_modules = try self.mergeUniqueStringSlice(existing.direct_modules, entry.value_ptr.direct_modules);
+                continue;
+            }
+            try self.template_nodes.put(
+                try self.keyAllocator().dupe(u8, entry.key_ptr.*),
+                .{
+                    .template_deps = try self.cloneStringSlice(entry.value_ptr.template_deps),
+                    .direct_modules = try self.cloneStringSlice(entry.value_ptr.direct_modules),
+                },
+            );
+        }
+    }
+
+    fn mergeModuleNodes(self: *Analyzer, src: *const std.StringHashMap([]const []const u8)) !void {
+        var it = src.iterator();
+        while (it.next()) |entry| {
+            if (self.module_nodes.getPtr(entry.key_ptr.*)) |existing| {
+                existing.* = try self.mergeUniqueStringSlice(existing.*, entry.value_ptr.*);
+                continue;
+            }
+            try self.module_nodes.put(
+                try self.keyAllocator().dupe(u8, entry.key_ptr.*),
+                try self.cloneStringSlice(entry.value_ptr.*),
+            );
+        }
+    }
+
+    fn rememberTemplatePage(self: *Analyzer, allocator: std.mem.Allocator, title: []const u8, source: []const u8) !void {
+        if (!std.mem.startsWith(u8, title, "Template:")) return;
+
+        const canonical = try lua.canonicalTemplateNameAlloc(self.gpa, title["Template:".len..]);
+        defer self.gpa.free(canonical);
+
+        const template_deps = try lua.extractTemplateDependenciesAlloc(allocator, source, canonical);
+        const direct_modules = try lua.extractInvokeModulesAlloc(allocator, source);
+
+        if (self.template_nodes.getPtr(canonical)) |existing| {
+            existing.template_deps = try self.mergeUniqueStringSlice(existing.template_deps, template_deps);
+            existing.direct_modules = try self.mergeUniqueStringSlice(existing.direct_modules, direct_modules);
+            return;
+        }
+
+        try self.template_nodes.put(
+            try self.keyAllocator().dupe(u8, canonical),
+            .{
+                .template_deps = try self.cloneStringSlice(template_deps),
+                .direct_modules = try self.cloneStringSlice(direct_modules),
+            },
+        );
+    }
+
+    fn rememberModulePage(self: *Analyzer, allocator: std.mem.Allocator, title: []const u8, source: []const u8) !void {
+        if (!std.mem.startsWith(u8, title, "Module:")) return;
+
+        const canonical = try lua.canonicalModuleNameAlloc(self.gpa, title["Module:".len..]);
+        defer self.gpa.free(canonical);
+
+        const deps = try lua.extractModuleDependencies(allocator, source);
+        if (self.module_nodes.getPtr(canonical)) |existing| {
+            existing.* = try self.mergeUniqueStringSlice(existing.*, deps);
+            return;
+        }
+
+        try self.module_nodes.put(
+            try self.keyAllocator().dupe(u8, canonical),
+            try self.cloneStringSlice(deps),
+        );
+    }
+
+    fn rememberEntryInvokeModules(self: *Analyzer, line: []const u8) !void {
+        var cursor: usize = 0;
+        while (std.mem.indexOfPos(u8, line, cursor, "{{#invoke:")) |start| {
+            var name_start = start + "{{#invoke:".len;
+            while (name_start < line.len and std.ascii.isWhitespace(line[name_start])) : (name_start += 1) {}
+            var name_end = name_start;
+            while (name_end < line.len and line[name_end] != '|' and line[name_end] != '}' and line[name_end] != '\n') : (name_end += 1) {}
+            const raw_name = std.mem.trim(u8, line[name_start..name_end], " \t");
+            if (raw_name.len != 0) {
+                const canonical = try lua.canonicalModuleNameAlloc(self.gpa, raw_name);
+                defer self.gpa.free(canonical);
+                if (!self.entry_direct_modules.contains(canonical)) {
+                    try self.entry_direct_modules.put(try self.keyAllocator().dupe(u8, canonical), {});
+                }
+            }
+            cursor = name_end;
+        }
+    }
+
     fn mergeFrom(self: *Analyzer, other: *const Analyzer) !void {
         self.pages_seen += other.pages_seen;
         self.namespace_zero_pages += other.namespace_zero_pages;
@@ -298,6 +432,9 @@ const Analyzer = struct {
         try self.mergeCountMap(&self.translation_source_label_counts, other.translation_source_label_counts);
         try self.mergeCountMap(&self.translation_target_lang_counts, other.translation_target_lang_counts);
         try self.mergeCountMap(&self.anomaly_kind_counts, other.anomaly_kind_counts);
+        try self.mergeStringSet(&self.entry_direct_modules, &other.entry_direct_modules);
+        try self.mergeTemplateNodes(&other.template_nodes);
+        try self.mergeModuleNodes(&other.module_nodes);
 
         for (other.anomaly_samples.items) |sample| try self.appendAnomalySample(sample);
     }
@@ -322,6 +459,7 @@ const Analyzer = struct {
             }
 
             const trimmed = std.mem.trim(u8, raw_line, " \t");
+            try self.rememberEntryInvokeModules(raw_line);
             const scope = currentHeadingLabel(&active_titles, language_title);
             const profile = currentHeadingProfile(&active_titles, language_title);
             const family = profile.family;
@@ -641,7 +779,7 @@ const StructureProgress = struct {
     fn phaseLabel(self: *const StructureProgress, phase: Phase) []const u8 {
         return switch (phase) {
             .scanning => if (self.scanning_parallel) "scan xml in parallel" else "scan xml",
-            .writing => "resolve deps + write report",
+            .writing => "build deps + write report",
             .done => "ready",
         };
     }
@@ -902,17 +1040,29 @@ fn processPageFragment(
 
     const ns_raw = capture.ns_raw orelse return;
     const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch return;
-    if (ns != 0) return;
-    analyzer.namespace_zero_pages += 1;
+    var decoded_title = try decodeXmlBorrowOrAlloc(allocator, capture.title_raw orelse return);
+    defer decoded_title.deinit(allocator);
+    const title = decoded_title.slice();
 
     const text_raw = capture.text_raw orelse return;
     var decoded_text = try decodeXmlBorrowOrAlloc(allocator, text_raw);
     defer decoded_text.deinit(allocator);
     const text = decoded_text.slice();
 
-    var decoded_title = try decodeXmlBorrowOrAlloc(allocator, capture.title_raw orelse return);
-    defer decoded_title.deinit(allocator);
-    const title = decoded_title.slice();
+    switch (ns) {
+        0 => {},
+        10 => {
+            try analyzer.rememberTemplatePage(allocator, title, text);
+            return;
+        },
+        828 => {
+            try analyzer.rememberModulePage(allocator, title, text);
+            return;
+        },
+        else => return,
+    }
+
+    analyzer.namespace_zero_pages += 1;
 
     const stored_sections = (try wikitext.extractConfiguredLanguageSectionsAlloc(allocator, text, .defaultCompact())) orelse return;
 
@@ -976,19 +1126,25 @@ fn writeReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer) !v
         return;
     }
 
-    var file = try std.Io.Dir.cwd().createFile(io, analyzer.options.output_path, .{ .truncate = true });
+    const report_bytes = if (analyzer.options.format == .json)
+        try jsonReportAlloc(allocator, analyzer)
+    else
+        try textReportAlloc(allocator, analyzer);
+    defer allocator.free(report_bytes);
+
+    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{analyzer.options.output_path});
+    defer allocator.free(temp_path);
+    std.Io.Dir.cwd().deleteFile(io, temp_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+    defer std.Io.Dir.cwd().deleteFile(io, temp_path) catch {};
+
+    var file = try std.Io.Dir.cwd().createFile(io, temp_path, .{ .truncate = true });
     defer file.close(io);
-
-    var buffer: [4096]u8 = undefined;
-    var writer = file.writerStreaming(io, &buffer);
-    defer writer.flush() catch {};
-
-    if (analyzer.options.format == .json) {
-        try writeJsonReportToWriter(&writer.interface, allocator, analyzer);
-        return;
-    }
-
-    try writeTextReportToWriter(&writer.interface, allocator, analyzer);
+    try file.writeStreamingAll(io, report_bytes);
+    try file.sync(io);
+    try std.Io.Dir.cwd().rename(temp_path, std.Io.Dir.cwd(), analyzer.options.output_path, io);
 }
 
 fn writeTextReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
@@ -1158,6 +1314,14 @@ fn jsonReportAlloc(allocator: std.mem.Allocator, analyzer: *Analyzer) ![]u8 {
     return allocator.dupe(u8, writer.written());
 }
 
+fn textReportAlloc(allocator: std.mem.Allocator, analyzer: *Analyzer) ![]u8 {
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+
+    try writeTextReportToWriter(&writer.writer, allocator, analyzer);
+    return allocator.dupe(u8, writer.written());
+}
+
 fn writeJsonReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -1167,7 +1331,7 @@ fn writeJsonReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyz
     const build = try structure_tables_support.buildDataFromLegacyAlloc(arena_allocator, legacy_inputs);
     const anomaly_kinds = try countEntriesAlloc(arena_allocator, analyzer.anomaly_kind_counts);
     const anomaly_samples = try anomalySamplesAlloc(arena_allocator, analyzer.anomaly_samples.items);
-    const dependencies = try buildStructureDependenciesAlloc(arena_allocator, allocator, analyzer.options.input_path, build);
+    const dependencies = try buildStructureDependenciesAlloc(arena_allocator, allocator, analyzer, build);
 
     const report = structure_tables_support.ExactStructureReport{
         .input = analyzer.options.input_path,
@@ -1209,13 +1373,19 @@ fn asIoWriter(writer: anytype) *std.Io.Writer {
 fn buildStructureDependenciesAlloc(
     dest_allocator: std.mem.Allocator,
     scratch_allocator: std.mem.Allocator,
-    input_path: []const u8,
+    analyzer: *Analyzer,
     build: structure_tables_support.BuildData,
 ) !structure_tables_support.Dependencies {
     const root_templates = try collectBuildTemplateRootsAlloc(scratch_allocator, build);
     defer freeOwnedStringSlice(scratch_allocator, root_templates);
 
-    var report = try lua.analyzeRenderDependenciesAlloc(scratch_allocator, input_path, root_templates);
+    try applyDependencyGraphCompat(analyzer);
+
+    var report = try lua.analyzeRenderDependenciesFromGraphAlloc(scratch_allocator, root_templates, .{
+        .entry_direct_modules = try collectSortedMapKeysAlloc(scratch_allocator, analyzer.entry_direct_modules),
+        .template_nodes = &analyzer.template_nodes,
+        .module_nodes = &analyzer.module_nodes,
+    });
     defer report.deinit(scratch_allocator);
 
     return .{
@@ -1282,9 +1452,84 @@ fn dupDependencyFailuresAlloc(
     return out;
 }
 
+fn collectSortedMapKeysAlloc(
+    allocator: std.mem.Allocator,
+    map: anytype,
+) ![]const []const u8 {
+    const Map = @TypeOf(map);
+    comptime {
+        if (!@hasDecl(Map, "iterator") or !@hasDecl(Map, "count")) {
+            @compileError("collectSortedMapKeysAlloc expects a std.StringHashMap-like map");
+        }
+    }
+
+    var out = try allocator.alloc([]const u8, map.count());
+    var it = map.iterator();
+    var idx: usize = 0;
+    while (it.next()) |entry| : (idx += 1) out[idx] = try allocator.dupe(u8, entry.key_ptr.*);
+    std.mem.sortUnstable([]const u8, out, {}, struct {
+        fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
+            return std.mem.order(u8, lhs, rhs) == .lt;
+        }
+    }.lessThan);
+    return out;
+}
+
 fn freeOwnedStringSlice(allocator: std.mem.Allocator, values: []const []const u8) void {
     for (values) |value| allocator.free(value);
     allocator.free(values);
+}
+
+fn stringSliceContains(values: []const []const u8, needle: []const u8) bool {
+    for (values) |value| {
+        if (std.mem.eql(u8, value, needle)) return true;
+    }
+    return false;
+}
+
+fn applyDependencyGraphCompat(analyzer: *Analyzer) !void {
+    try ensureTemplateGraphCompat(analyzer, "an-lite", &.{"an-lite/node"});
+    try ensureModuleGraphCompat(analyzer, "gender and number/templates", &.{"gender and number"});
+}
+
+fn ensureTemplateGraphCompat(analyzer: *Analyzer, target: []const u8, alias_candidates: []const []const u8) !void {
+    if (analyzer.template_nodes.contains(target)) return;
+    for (alias_candidates) |alias_name| {
+        if (analyzer.template_nodes.get(alias_name)) |node| {
+            try analyzer.template_nodes.put(
+                try analyzer.keyAllocator().dupe(u8, target),
+                .{
+                    .template_deps = try analyzer.cloneStringSlice(node.template_deps),
+                    .direct_modules = try analyzer.cloneStringSlice(node.direct_modules),
+                },
+            );
+            return;
+        }
+    }
+    try analyzer.template_nodes.put(
+        try analyzer.keyAllocator().dupe(u8, target),
+        .{
+            .template_deps = try analyzer.keyAllocator().alloc([]const u8, 0),
+            .direct_modules = try analyzer.keyAllocator().alloc([]const u8, 0),
+        },
+    );
+}
+
+fn ensureModuleGraphCompat(analyzer: *Analyzer, target: []const u8, alias_candidates: []const []const u8) !void {
+    if (analyzer.module_nodes.contains(target)) return;
+    for (alias_candidates) |alias_name| {
+        if (analyzer.module_nodes.get(alias_name)) |deps| {
+            try analyzer.module_nodes.put(
+                try analyzer.keyAllocator().dupe(u8, target),
+                try analyzer.cloneStringSlice(deps),
+            );
+            return;
+        }
+    }
+    try analyzer.module_nodes.put(
+        try analyzer.keyAllocator().dupe(u8, target),
+        try analyzer.keyAllocator().alloc([]const u8, 0),
+    );
 }
 
 fn legacyBuildInputsAlloc(
@@ -2205,4 +2450,26 @@ test "json report includes exact build payload and omits exploratory sections" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"compact_direct_patterns\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"heading_specs\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"template_shapes_by_heading\"") == null);
+}
+
+test "dependency graph compat aliases suppress synthetic unresolved entries" {
+    var analyzer = Analyzer.init(std.testing.allocator, .{});
+    defer analyzer.deinit();
+
+    try analyzer.template_nodes.put(
+        try analyzer.keyAllocator().dupe(u8, "an-lite/node"),
+        .{
+            .template_deps = try analyzer.keyAllocator().alloc([]const u8, 0),
+            .direct_modules = try analyzer.keyAllocator().alloc([]const u8, 0),
+        },
+    );
+    try analyzer.module_nodes.put(
+        try analyzer.keyAllocator().dupe(u8, "gender and number"),
+        try analyzer.keyAllocator().alloc([]const u8, 0),
+    );
+
+    try applyDependencyGraphCompat(&analyzer);
+
+    try std.testing.expect(analyzer.template_nodes.contains("an-lite"));
+    try std.testing.expect(analyzer.module_nodes.contains("gender and number/templates"));
 }

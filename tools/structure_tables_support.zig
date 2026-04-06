@@ -92,12 +92,20 @@ pub const DependencyFailure = struct {
     reason: []const u8,
 };
 
+pub const DependencySourceRef = struct {
+    name: []const u8,
+    page_start: u64,
+    page_end: u64,
+};
+
 pub const Dependencies = struct {
     root_templates: []const []const u8 = &.{},
     reachable_templates: []const []const u8 = &.{},
     unresolved_templates: []const []const u8 = &.{},
     direct_modules: []const []const u8 = &.{},
     transitive_modules: []const []const u8 = &.{},
+    reachable_template_pages: []const DependencySourceRef = &.{},
+    transitive_module_pages: []const DependencySourceRef = &.{},
     missing_modules: []const []const u8 = &.{},
     compiled_failed: []const DependencyFailure = &.{},
     emitted_inconsistent: []const DependencyFailure = &.{},

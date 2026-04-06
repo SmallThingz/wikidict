@@ -121,7 +121,7 @@ pub fn main(init: std.process.Init) !void {
 const Options = struct {
     input_path: []const u8 = "data/wiktionary.xml",
     structure_path: []const u8 = "data/wiktionary-structure.json",
-    output_path: []const u8 = "renderer/generated_template_runtime.zig",
+    output_path: []const u8 = "data/generated_template_runtime.zig",
     template_name: ?[]const u8 = null,
 };
 
@@ -169,7 +169,7 @@ fn parseOptions(args: []const []const u8) !Options {
 
 fn printUsage() void {
     std.debug.print(
-        \\dict-template-compile --input data/wiktionary.xml --structure data/wiktionary-structure.json --output renderer/generated_template_runtime.zig
+        \\dict-template-compile --input data/wiktionary.xml --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
         \\dict-template-compile --input data/wiktionary.xml --template \"template name\" --output /tmp/generated_templates.zig
         \\
     , .{});
@@ -1532,8 +1532,7 @@ fn emitGeneratedModuleDispatchSupport(writer: *std.Io.Writer, modules: []const M
         \\    return canonical;
         \\}
         \\
-        \\fn generatedLoadCompiledModuleFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
-        \\    const canonical_name = try generatedCanonicalModuleNameAlloc(runtime, module_name_value);
+        \\fn generatedLoadCompiledModuleByCanonicalName(runtime: *lua.GeneratedRuntime, canonical_name: []const u8) !lua.Value {
         \\    if (runtime.getGeneratedModule(canonical_name)) |cached| return cached;
         \\
     );
@@ -1554,12 +1553,49 @@ fn emitGeneratedModuleDispatchSupport(writer: *std.Io.Writer, modules: []const M
         \\    return error.UnknownVariable;
         \\}
         \\
+        \\fn generatedLoadCompiledModuleFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
+        \\    return try generatedLoadCompiledModuleByCanonicalName(
+        \\        runtime,
+        \\        try generatedCanonicalModuleNameAlloc(runtime, module_name_value),
+        \\    );
+        \\}
+        \\
+        \\fn generatedLoadCompiledModuleKnownFirst(
+        \\    comptime known_names: []const []const u8,
+        \\    runtime: *lua.GeneratedRuntime,
+        \\    module_name_value: lua.Value,
+        \\) !lua.Value {
+        \\    const canonical_name = try generatedCanonicalModuleNameAlloc(runtime, module_name_value);
+        \\    inline for (known_names) |known_name| {
+        \\        if (runtime_std.mem.eql(u8, canonical_name, known_name)) {
+        \\            return try generatedLoadCompiledModuleByCanonicalName(runtime, known_name);
+        \\        }
+        \\    }
+        \\    return try generatedLoadCompiledModuleByCanonicalName(runtime, canonical_name);
+        \\}
+        \\
         \\fn generatedModuleRequireFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
         \\    return try generatedLoadCompiledModuleFirst(runtime, module_name_value);
         \\}
         \\
+        \\fn generatedModuleRequireKnownFirst(
+        \\    comptime known_names: []const []const u8,
+        \\    runtime: *lua.GeneratedRuntime,
+        \\    module_name_value: lua.Value,
+        \\) !lua.Value {
+        \\    return try generatedLoadCompiledModuleKnownFirst(known_names, runtime, module_name_value);
+        \\}
+        \\
         \\fn generatedModuleLoadDataFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
         \\    return try generatedLoadCompiledModuleFirst(runtime, module_name_value);
+        \\}
+        \\
+        \\fn generatedModuleLoadDataKnownFirst(
+        \\    comptime known_names: []const []const u8,
+        \\    runtime: *lua.GeneratedRuntime,
+        \\    module_name_value: lua.Value,
+        \\) !lua.Value {
+        \\    return try generatedLoadCompiledModuleKnownFirst(known_names, runtime, module_name_value);
         \\}
         \\
         \\fn generatedModuleRequireInvoke(
@@ -2489,7 +2525,8 @@ test "template compiler emits transitive modules and generated require dispatch 
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_foo_") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_bar_") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedLoadCompiledModuleFirst") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "generatedModuleRequireFirst(runtime, lua.Value{ .string = \"Module:bar\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedLoadCompiledModuleKnownFirst") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "generatedModuleRequireKnownFirst(&.{ \"bar\" }, runtime, lua.Value{ .string = \"Module:bar\" })") != null);
 }
 
 test "template compiler marks unresolved nested templates unsupported" {

@@ -1600,6 +1600,57 @@ const DirectModuleDispatchCall = enum {
     mw_load_data,
 };
 
+const max_known_string_values = 8;
+
+const KnownStringValues = struct {
+    len: usize = 0,
+    items: [max_known_string_values][]const u8 = [_][]const u8{""} ** max_known_string_values,
+
+    fn fromSingle(value: []const u8) KnownStringValues {
+        var out: KnownStringValues = .{};
+        out.items[0] = value;
+        out.len = 1;
+        return out;
+    }
+
+    fn slice(self: *const KnownStringValues) []const []const u8 {
+        return self.items[0..self.len];
+    }
+
+    fn contains(self: *const KnownStringValues, value: []const u8) bool {
+        for (self.slice()) |item| {
+            if (std.mem.eql(u8, item, value)) return true;
+        }
+        return false;
+    }
+
+    fn append(self: *KnownStringValues, value: []const u8) bool {
+        if (self.contains(value)) return true;
+        if (self.len >= self.items.len) return false;
+        self.items[self.len] = value;
+        self.len += 1;
+        return true;
+    }
+};
+
+const KnownValueFact = union(enum) {
+    unknown,
+    string_values: KnownStringValues,
+    dispatch_fn: DirectModuleDispatchCall,
+    mw_table,
+};
+
+const KnownFactSnapshot = struct {
+    local_facts: []KnownValueFact,
+    capture_facts: []KnownValueFact,
+
+    fn deinit(self: *KnownFactSnapshot, allocator: std.mem.Allocator) void {
+        allocator.free(self.local_facts);
+        allocator.free(self.capture_facts);
+        self.* = undefined;
+    }
+};
+
 const DirectEmitFunctionContext = struct {
     state: *const DirectModuleState,
     info: *const DirectFunctionInfo,
@@ -1607,6 +1658,8 @@ const DirectEmitFunctionContext = struct {
     local_used: []const bool,
     local_requires_var: []const bool,
     locals: std.ArrayList(DirectEmitLocalBinding) = .empty,
+    local_facts: std.ArrayList(KnownValueFact) = .empty,
+    capture_facts: []KnownValueFact = &.{},
     scope_marks: std.ArrayList(usize) = .empty,
     next_local_id: u32 = 0,
     next_temp_id: u32 = 0,
@@ -1629,6 +1682,8 @@ const DirectEmitFunctionContext = struct {
 
     fn deinit(self: *DirectEmitFunctionContext) void {
         self.locals.deinit(self.state.allocator);
+        self.local_facts.deinit(self.state.allocator);
+        self.state.allocator.free(self.capture_facts);
         self.scope_marks.deinit(self.state.allocator);
         self.* = undefined;
     }
@@ -1646,6 +1701,7 @@ const DirectEmitFunctionContext = struct {
         const id = self.next_local_id;
         self.next_local_id += 1;
         try self.locals.append(self.state.allocator, .{ .name = name, .id = id });
+        try self.local_facts.append(self.state.allocator, .unknown);
         return id;
     }
 
@@ -1671,7 +1727,136 @@ const DirectEmitFunctionContext = struct {
         self.next_temp_id += 1;
         return id;
     }
+
+    fn localFact(self: *const DirectEmitFunctionContext, local_id: u32) KnownValueFact {
+        if (local_id >= self.local_facts.items.len) return .unknown;
+        return self.local_facts.items[local_id];
+    }
+
+    fn setLocalFact(self: *DirectEmitFunctionContext, local_id: u32, fact: KnownValueFact) void {
+        if (local_id >= self.local_facts.items.len) return;
+        self.local_facts.items[local_id] = fact;
+    }
+
+    fn captureFact(self: *const DirectEmitFunctionContext, capture_id: u32) KnownValueFact {
+        if (capture_id >= self.capture_facts.len) return .unknown;
+        return self.capture_facts[capture_id];
+    }
+
+    fn setCaptureFact(self: *DirectEmitFunctionContext, capture_id: u32, fact: KnownValueFact) void {
+        if (capture_id >= self.capture_facts.len) return;
+        self.capture_facts[capture_id] = fact;
+    }
+
+    fn snapshotFactsAlloc(self: *const DirectEmitFunctionContext) !KnownFactSnapshot {
+        return .{
+            .local_facts = try self.state.allocator.dupe(KnownValueFact, self.local_facts.items),
+            .capture_facts = try self.state.allocator.dupe(KnownValueFact, self.capture_facts),
+        };
+    }
+
+    fn restoreFacts(self: *DirectEmitFunctionContext, snapshot: *const KnownFactSnapshot) !void {
+        try self.local_facts.ensureTotalCapacity(self.state.allocator, snapshot.local_facts.len);
+        self.local_facts.items.len = snapshot.local_facts.len;
+        @memcpy(self.local_facts.items, snapshot.local_facts);
+        if (self.capture_facts.len != snapshot.capture_facts.len) return error.InvalidCall;
+        @memcpy(self.capture_facts, snapshot.capture_facts);
+    }
 };
+
+fn mergeKnownValueFacts(lhs: KnownValueFact, rhs: KnownValueFact) KnownValueFact {
+    return switch (lhs) {
+        .unknown => .unknown,
+        .mw_table => switch (rhs) {
+            .mw_table => .mw_table,
+            else => .unknown,
+        },
+        .dispatch_fn => |lhs_dispatch| switch (rhs) {
+            .dispatch_fn => |rhs_dispatch| if (lhs_dispatch == rhs_dispatch)
+                .{ .dispatch_fn = lhs_dispatch }
+            else
+                .unknown,
+            else => .unknown,
+        },
+        .string_values => |lhs_values| switch (rhs) {
+            .string_values => |rhs_values| blk: {
+                var merged = lhs_values;
+                for (rhs_values.slice()) |value| {
+                    if (!merged.append(value)) break :blk .unknown;
+                }
+                break :blk .{ .string_values = merged };
+            },
+            else => .unknown,
+        },
+    };
+}
+
+fn mergeSnapshotFactsAlloc(
+    allocator: std.mem.Allocator,
+    base: *const KnownFactSnapshot,
+    paths: []const KnownFactSnapshot,
+) !KnownFactSnapshot {
+    var merged = KnownFactSnapshot{
+        .local_facts = try allocator.dupe(KnownValueFact, base.local_facts),
+        .capture_facts = try allocator.dupe(KnownValueFact, base.capture_facts),
+    };
+    errdefer merged.deinit(allocator);
+
+    for (paths) |path| {
+        const local_len = @min(merged.local_facts.len, path.local_facts.len);
+        for (0..local_len) |idx| {
+            merged.local_facts[idx] = mergeKnownValueFacts(merged.local_facts[idx], path.local_facts[idx]);
+        }
+        const capture_len = @min(merged.capture_facts.len, path.capture_facts.len);
+        for (0..capture_len) |idx| {
+            merged.capture_facts[idx] = mergeKnownValueFacts(merged.capture_facts[idx], path.capture_facts[idx]);
+        }
+    }
+    return merged;
+}
+
+fn builtinKnownValueFact(state: *const DirectModuleState, name: []const u8) KnownValueFact {
+    if (!state.options.enable_direct_module_dispatch) return .unknown;
+    if (std.mem.eql(u8, name, "require")) return .{ .dispatch_fn = .require };
+    if (std.mem.eql(u8, name, "mw")) return .mw_table;
+    return .unknown;
+}
+
+fn knownValueFactForExpr(ctx: *const DirectEmitFunctionContext, expr: *const Expr) KnownValueFact {
+    return switch (expr.*) {
+        .string_lit => |value| .{ .string_values = KnownStringValues.fromSingle(value) },
+        .variable => |name| blk: {
+            if (ctx.lookupLocal(name)) |local_id| break :blk ctx.localFact(local_id);
+            if (ctx.lookupCapture(name)) |capture_id| break :blk ctx.captureFact(capture_id);
+            break :blk builtinKnownValueFact(ctx.state, name);
+        },
+        .field => |field| blk: {
+            const object_fact = knownValueFactForExpr(ctx, field.object);
+            break :blk switch (object_fact) {
+                .mw_table => if (std.mem.eql(u8, field.name, "loadData"))
+                    .{ .dispatch_fn = .mw_load_data }
+                else
+                    .unknown,
+                else => .unknown,
+            };
+        },
+        else => .unknown,
+    };
+}
+
+fn knownStringValuesForExpr(ctx: *const DirectEmitFunctionContext, expr: *const Expr) ?KnownStringValues {
+    return switch (knownValueFactForExpr(ctx, expr)) {
+        .string_values => |values| values,
+        else => null,
+    };
+}
+
+fn knownDispatchCallForExpr(ctx: *const DirectEmitFunctionContext, expr: *const Expr) ?DirectModuleDispatchCall {
+    return switch (knownValueFactForExpr(ctx, expr)) {
+        .dispatch_fn => |dispatch| dispatch,
+        else => null,
+    };
+}
 
 fn analyzeDirectFunctionLocalAnalysisAlloc(
     allocator: std.mem.Allocator,
@@ -2333,6 +2518,10 @@ fn emitDirectFunction(writer: anytype, state: *const DirectModuleState, info: *c
         local_analysis.requires_var,
     );
     defer ctx.deinit();
+    if (info.captures.len != 0) {
+        ctx.capture_facts = try state.allocator.alloc(KnownValueFact, info.captures.len);
+        @memset(ctx.capture_facts, .unknown);
+    }
 
     for (info.params, 0..) |param, idx| {
         const local_id = try ctx.declareLocal(param);
@@ -2384,9 +2573,12 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             const value_count = @max(op.names.len, op.exprs.len);
             const temp_ids = try ctx.state.allocator.alloc(u32, value_count);
             defer ctx.state.allocator.free(temp_ids);
+            const value_facts = try ctx.state.allocator.alloc(KnownValueFact, value_count);
+            defer ctx.state.allocator.free(value_facts);
 
             for (0..value_count) |idx| {
                 temp_ids[idx] = ctx.nextTemp();
+                value_facts[idx] = if (idx < op.exprs.len) knownValueFactForExpr(ctx, op.exprs[idx]) else .unknown;
                 try emitIndent(writer, depth);
                 try writer.print("const tmp_{d}: lua.Value = ", .{temp_ids[idx]});
                 if (idx < op.exprs.len) {
@@ -2399,6 +2591,7 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
 
             for (op.names, 0..) |name, idx| {
                 const local_id = try ctx.declareLocal(name);
+                ctx.setLocalFact(local_id, value_facts[idx]);
                 try emitIndent(writer, depth);
                 if (localShouldEmit(ctx, local_id)) {
                     try writer.print("{s} local_{d}: lua.Value = tmp_{d};\n", .{
@@ -2421,9 +2614,12 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             const value_count = @max(op.targets.len, op.exprs.len);
             const temp_ids = try ctx.state.allocator.alloc(u32, value_count);
             defer ctx.state.allocator.free(temp_ids);
+            const value_facts = try ctx.state.allocator.alloc(KnownValueFact, value_count);
+            defer ctx.state.allocator.free(value_facts);
 
             for (0..value_count) |idx| {
                 temp_ids[idx] = ctx.nextTemp();
+                value_facts[idx] = if (idx < op.exprs.len) knownValueFactForExpr(ctx, op.exprs[idx]) else .unknown;
                 try emitIndent(writer, depth);
                 try writer.print("const tmp_{d}: lua.Value = ", .{temp_ids[idx]});
                 if (idx < op.exprs.len) {
@@ -2438,6 +2634,16 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             while (idx != 0) {
                 idx -= 1;
                 try emitStoreTarget(writer, ctx, op.targets[idx], temp_ids[idx], depth);
+                switch (op.targets[idx]) {
+                    .name => |name| {
+                        if (ctx.lookupLocal(name)) |local_id| {
+                            ctx.setLocalFact(local_id, value_facts[idx]);
+                        } else if (ctx.lookupCapture(name)) |capture_id| {
+                            ctx.setCaptureFact(capture_id, value_facts[idx]);
+                        }
+                    },
+                    else => {},
+                }
             }
             if (op.exprs.len > op.targets.len) {
                 for (temp_ids[op.targets.len..op.exprs.len]) |temp_id| {
@@ -2451,6 +2657,7 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             const child_info = &ctx.state.functions.items[child_id];
             if (op.is_local and op.target == .name) {
                 const local_id = try ctx.declareLocal(op.target.name);
+                ctx.setLocalFact(local_id, .unknown);
                 if (!localShouldEmit(ctx, local_id)) return;
                 try emitIndent(writer, depth);
                 try writer.print("{s} local_{d}: lua.Value = lua.Value.nil;\n", .{
@@ -2468,10 +2675,28 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
                 try emitFunctionValueExpr(writer, ctx, child_info, depth);
                 try writer.writeAll(";\n");
                 try emitStoreTarget(writer, ctx, op.target, temp_id, depth);
+                switch (op.target) {
+                    .name => |name| {
+                        if (ctx.lookupLocal(name)) |local_id| {
+                            ctx.setLocalFact(local_id, .unknown);
+                        } else if (ctx.lookupCapture(name)) |capture_id| {
+                            ctx.setCaptureFact(capture_id, .unknown);
+                        }
+                    },
+                    else => {},
+                }
             }
         },
         .if_stmt => |op| {
+            var original_facts = try ctx.snapshotFactsAlloc();
+            defer original_facts.deinit(ctx.state.allocator);
+            var path_facts: std.ArrayList(KnownFactSnapshot) = .empty;
+            defer {
+                for (path_facts.items) |*snapshot| snapshot.deinit(ctx.state.allocator);
+                path_facts.deinit(ctx.state.allocator);
+            }
             for (op.branches, 0..) |branch, idx| {
+                try ctx.restoreFacts(&original_facts);
                 try emitIndent(writer, depth);
                 if (idx == 0) {
                     try writer.writeAll("if ((");
@@ -2483,11 +2708,13 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
                 try ctx.beginScope();
                 try emitStmtSlice(writer, ctx, branch.body, depth + 1);
                 ctx.endScope();
+                try path_facts.append(ctx.state.allocator, try ctx.snapshotFactsAlloc());
                 try emitIndent(writer, depth);
                 try writer.writeAll("}");
                 if (idx + 1 == op.branches.len and op.else_body.len == 0) try writer.writeAll("\n");
             }
             if (op.else_body.len != 0) {
+                try ctx.restoreFacts(&original_facts);
                 if (op.branches.len == 0) {
                     try emitIndent(writer, depth);
                     try writer.writeAll("{\n");
@@ -2497,9 +2724,19 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
                 try ctx.beginScope();
                 try emitStmtSlice(writer, ctx, op.else_body, depth + 1);
                 ctx.endScope();
+                try path_facts.append(ctx.state.allocator, try ctx.snapshotFactsAlloc());
                 try emitIndent(writer, depth);
                 try writer.writeAll("}\n");
+            } else {
+                try ctx.restoreFacts(&original_facts);
+                try path_facts.append(ctx.state.allocator, try ctx.snapshotFactsAlloc());
             }
+            var merged_facts = if (op.else_body.len != 0 or op.branches.len == 0)
+                try mergeSnapshotFactsAlloc(ctx.state.allocator, &path_facts.items[0], path_facts.items[1..])
+            else
+                try mergeSnapshotFactsAlloc(ctx.state.allocator, &original_facts, path_facts.items);
+            defer merged_facts.deinit(ctx.state.allocator);
+            try ctx.restoreFacts(&merged_facts);
         },
         .do_block => |body| {
             try emitIndent(writer, depth);
@@ -2511,17 +2748,26 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             try writer.writeAll("}\n");
         },
         .while_stmt => |op| {
+            var original_facts = try ctx.snapshotFactsAlloc();
+            defer original_facts.deinit(ctx.state.allocator);
             try emitIndent(writer, depth);
             try writer.writeAll("while ((");
             try emitExpr(writer, ctx, op.condition, depth);
             try writer.writeAll(").truthy()) {\n");
             try ctx.beginScope();
             try emitStmtSlice(writer, ctx, op.body, depth + 1);
+            var loop_path = try ctx.snapshotFactsAlloc();
+            defer loop_path.deinit(ctx.state.allocator);
             ctx.endScope();
             try emitIndent(writer, depth);
             try writer.writeAll("}\n");
+            var merged_facts = try mergeSnapshotFactsAlloc(ctx.state.allocator, &original_facts, &.{loop_path});
+            defer merged_facts.deinit(ctx.state.allocator);
+            try ctx.restoreFacts(&merged_facts);
         },
         .repeat_stmt => |op| {
+            var original_facts = try ctx.snapshotFactsAlloc();
+            defer original_facts.deinit(ctx.state.allocator);
             try emitIndent(writer, depth);
             try writer.writeAll("while (true) {\n");
             try ctx.beginScope();
@@ -2530,11 +2776,18 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             try writer.writeAll("if ((");
             try emitExpr(writer, ctx, op.condition, depth + 1);
             try writer.writeAll(").truthy()) break;\n");
+            var loop_path = try ctx.snapshotFactsAlloc();
+            defer loop_path.deinit(ctx.state.allocator);
             ctx.endScope();
             try emitIndent(writer, depth);
             try writer.writeAll("}\n");
+            var merged_facts = try mergeSnapshotFactsAlloc(ctx.state.allocator, &original_facts, &.{loop_path});
+            defer merged_facts.deinit(ctx.state.allocator);
+            try ctx.restoreFacts(&merged_facts);
         },
         .numeric_for => |op| {
+            var original_facts = try ctx.snapshotFactsAlloc();
+            defer original_facts.deinit(ctx.state.allocator);
             const start_temp = ctx.nextTemp();
             const limit_temp = ctx.nextTemp();
             const step_temp = ctx.nextTemp();
@@ -2569,6 +2822,7 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
 
             try ctx.beginScope();
             const loop_local = try ctx.declareLocal(op.name);
+            ctx.setLocalFact(loop_local, .unknown);
             try emitIndent(writer, depth + 1);
             try writer.print("{s} local_{d}: lua.Value = tmp_{d};\n", .{
                 localBindingKeyword(ctx, loop_local),
@@ -2590,11 +2844,18 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             });
             try emitIndent(writer, depth + 1);
             try writer.writeAll("}\n");
+            var loop_path = try ctx.snapshotFactsAlloc();
+            defer loop_path.deinit(ctx.state.allocator);
             ctx.endScope();
             try emitIndent(writer, depth);
             try writer.writeAll("}\n");
+            var merged_facts = try mergeSnapshotFactsAlloc(ctx.state.allocator, &original_facts, &.{loop_path});
+            defer merged_facts.deinit(ctx.state.allocator);
+            try ctx.restoreFacts(&merged_facts);
         },
         .generic_for => |op| {
+            var original_facts = try ctx.snapshotFactsAlloc();
+            defer original_facts.deinit(ctx.state.allocator);
             const iter_temp = ctx.nextTemp();
             const pair_temp = ctx.nextTemp();
             const local_ids = try ctx.state.allocator.alloc(u32, op.names.len);
@@ -2610,6 +2871,7 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
             for (op.names, 0..) |name, idx| {
                 const local_id = try ctx.declareLocal(name);
                 local_ids[idx] = local_id;
+                ctx.setLocalFact(local_id, .unknown);
                 if (localShouldEmit(ctx, local_id)) uses_pair_capture = true;
             }
             try emitIndent(writer, depth);
@@ -2644,9 +2906,14 @@ fn emitStmt(writer: anytype, ctx: *DirectEmitFunctionContext, stmt: *const Stmt,
                 }
             }
             try emitStmtSlice(writer, ctx, op.body, depth + 1);
+            var loop_path = try ctx.snapshotFactsAlloc();
+            defer loop_path.deinit(ctx.state.allocator);
             ctx.endScope();
             try emitIndent(writer, depth);
             try writer.writeAll("}\n");
+            var merged_facts = try mergeSnapshotFactsAlloc(ctx.state.allocator, &original_facts, &.{loop_path});
+            defer merged_facts.deinit(ctx.state.allocator);
+            try ctx.restoreFacts(&merged_facts);
         },
         .return_stmt => |op| {
             try emitIndent(writer, depth);
@@ -2945,7 +3212,7 @@ fn emitExpr(writer: anytype, ctx: *DirectEmitFunctionContext, expr: *const Expr,
                 try emitMethodCall(writer, ctx, method, depth);
             } else {
                 if (ctx.state.options.enable_direct_module_dispatch) {
-                    if (matchDirectModuleDispatchCall(call)) |dispatch| {
+                    if (knownDispatchCallForExpr(ctx, call.callee)) |dispatch| {
                         try emitDirectModuleDispatchCall(writer, ctx, dispatch, call.args, depth);
                         return;
                     }
@@ -2990,24 +3257,6 @@ fn matchMethodCall(call: @FieldType(Expr, "call")) ?DirectMethodCall {
     };
 }
 
-fn matchDirectModuleDispatchCall(call: @FieldType(Expr, "call")) ?DirectModuleDispatchCall {
-    switch (call.callee.*) {
-        .variable => |name| {
-            if (std.mem.eql(u8, name, "require")) return .require;
-        },
-        .field => |field| switch (field.object.*) {
-            .variable => |object_name| {
-                if (std.mem.eql(u8, object_name, "mw") and std.mem.eql(u8, field.name, "loadData")) {
-                    return .mw_load_data;
-                }
-            },
-            else => {},
-        },
-        else => {},
-    }
-    return null;
-}
-
 fn matchBuiltinCall(call: @FieldType(Expr, "call")) ?DirectBuiltinCall {
     switch (call.callee.*) {
         .variable => |name| {
@@ -3043,6 +3292,37 @@ fn matchBuiltinCall(call: @FieldType(Expr, "call")) ?DirectBuiltinCall {
     return null;
 }
 
+fn emitKnownCanonicalModuleNamesLiteral(
+    writer: anytype,
+    allocator: std.mem.Allocator,
+    values: KnownStringValues,
+) !void {
+    var owned: [max_known_string_values][]u8 = undefined;
+    var owned_len: usize = 0;
+    defer {
+        for (owned[0..owned_len]) |value| allocator.free(value);
+    }
+
+    var canonical_values: KnownStringValues = .{};
+    for (values.slice()) |raw_value| {
+        const canonical_owned = try canonicalModuleNameAlloc(allocator, raw_value);
+        owned[owned_len] = canonical_owned;
+        owned_len += 1;
+        const canonical_value = if (std.mem.startsWith(u8, canonical_owned, "module:"))
+            canonical_owned["module:".len..]
+        else
+            canonical_owned;
+        if (!canonical_values.append(canonical_value)) return error.OutOfMemory;
+    }
+
+    try writer.writeAll("&.{ ");
+    for (canonical_values.slice(), 0..) |value, idx| {
+        if (idx != 0) try writer.writeAll(", ");
+        try writeZigStringLiteral(writer, value);
+    }
+    try writer.writeAll(" }");
+}
+
 fn emitDirectModuleDispatchCall(
     writer: anytype,
     ctx: *DirectEmitFunctionContext,
@@ -3054,9 +3334,22 @@ fn emitDirectModuleDispatchCall(
         .require => "generatedModuleRequireFirst",
         .mw_load_data => "generatedModuleLoadDataFirst",
     };
-    try writer.writeAll("try ");
-    try writer.writeAll(helper_name);
-    try writer.writeAll("(runtime, ");
+    const known_helper_name = switch (dispatch) {
+        .require => "generatedModuleRequireKnownFirst",
+        .mw_load_data => "generatedModuleLoadDataKnownFirst",
+    };
+    const known_values = if (args.len != 0) knownStringValuesForExpr(ctx, args[0]) else null;
+    if (known_values) |values| {
+        try writer.writeAll("try ");
+        try writer.writeAll(known_helper_name);
+        try writer.writeAll("(");
+        try emitKnownCanonicalModuleNamesLiteral(writer, ctx.state.allocator, values);
+        try writer.writeAll(", runtime, ");
+    } else {
+        try writer.writeAll("try ");
+        try writer.writeAll(helper_name);
+        try writer.writeAll("(runtime, ");
+    }
     if (args.len != 0) {
         try emitExpr(writer, ctx, args[0], depth);
     } else {
@@ -5327,6 +5620,17 @@ pub const TemplateDependencyReport = struct {
     }
 };
 
+pub const TemplateDependencyNode = struct {
+    template_deps: []const []const u8 = &.{},
+    direct_modules: []const []const u8 = &.{},
+};
+
+pub const TemplateDependencyGraph = struct {
+    entry_direct_modules: []const []const u8 = &.{},
+    template_nodes: *const std.StringHashMap(TemplateDependencyNode),
+    module_nodes: *const std.StringHashMap([]const []const u8),
+};
+
 pub const ModuleCompileFailure = struct {
     name: []const u8,
     reason: []const u8,
@@ -5771,6 +6075,118 @@ pub fn analyzeRenderDependenciesFromSourcesAlloc(
     report.emitted_consistent = try dupStringSliceAlloc(allocator, audit.emitted_consistent);
     report.emitted_inconsistent = try dupFailureSliceAlloc(allocator, audit.emitted_inconsistent);
     return report;
+}
+
+pub fn analyzeRenderDependenciesFromGraphAlloc(
+    allocator: std.mem.Allocator,
+    template_names: []const []const u8,
+    graph: TemplateDependencyGraph,
+) !TemplateDependencyReport {
+    var root_templates = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &root_templates);
+    for (template_names) |name| {
+        if (!isLikelyTemplatePageName(name)) continue;
+        if (isIgnoredTemplateMagicName(name)) continue;
+        try insertCanonicalTemplateName(&root_templates, allocator, name);
+    }
+
+    var reachable_templates = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &reachable_templates);
+    var unresolved_templates = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &unresolved_templates);
+    var direct_modules = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &direct_modules);
+
+    var template_stack: std.ArrayList([]const u8) = .empty;
+    defer template_stack.deinit(allocator);
+
+    var root_it = root_templates.iterator();
+    while (root_it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const gop = try reachable_templates.getOrPut(allocator, key);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try allocator.dupe(u8, key);
+            try template_stack.append(allocator, gop.key_ptr.*);
+        }
+    }
+
+    while (template_stack.pop()) |name| {
+        const node = graph.template_nodes.get(name) orelse {
+            if (!root_templates.contains(name)) {
+                const unresolved_gop = try unresolved_templates.getOrPut(allocator, name);
+                if (!unresolved_gop.found_existing) unresolved_gop.key_ptr.* = try allocator.dupe(u8, name);
+            }
+            continue;
+        };
+
+        for (node.template_deps) |dep| {
+            if (!graph.template_nodes.contains(dep)) {
+                const unresolved_gop = try unresolved_templates.getOrPut(allocator, dep);
+                if (!unresolved_gop.found_existing) unresolved_gop.key_ptr.* = try allocator.dupe(u8, dep);
+                continue;
+            }
+            const dep_gop = try reachable_templates.getOrPut(allocator, dep);
+            if (!dep_gop.found_existing) {
+                dep_gop.key_ptr.* = try allocator.dupe(u8, dep);
+                try template_stack.append(allocator, dep_gop.key_ptr.*);
+            }
+        }
+
+        for (node.direct_modules) |module_name| {
+            if (!isLikelyModulePageName(module_name)) continue;
+            try insertCanonicalModuleName(&direct_modules, allocator, module_name);
+        }
+    }
+
+    for (graph.entry_direct_modules) |module_name| {
+        if (!isLikelyModulePageName(module_name)) continue;
+        try insertCanonicalModuleName(&direct_modules, allocator, module_name);
+    }
+
+    var transitive_modules = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &transitive_modules);
+    var missing_modules = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &missing_modules);
+    var module_stack: std.ArrayList([]const u8) = .empty;
+    defer module_stack.deinit(allocator);
+
+    var direct_module_it = direct_modules.iterator();
+    while (direct_module_it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const gop = try transitive_modules.getOrPut(allocator, name);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try allocator.dupe(u8, name);
+            try module_stack.append(allocator, gop.key_ptr.*);
+        }
+    }
+
+    while (module_stack.pop()) |name| {
+        const deps = graph.module_nodes.get(name) orelse {
+            const missing_gop = try missing_modules.getOrPut(allocator, name);
+            if (!missing_gop.found_existing) missing_gop.key_ptr.* = try allocator.dupe(u8, name);
+            continue;
+        };
+        for (deps) |dep| {
+            const gop = try transitive_modules.getOrPut(allocator, dep);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = try allocator.dupe(u8, dep);
+                try module_stack.append(allocator, gop.key_ptr.*);
+            }
+        }
+    }
+
+    return .{
+        .root_templates = try collectStringSet(allocator, &root_templates),
+        .reachable_templates = try collectStringSet(allocator, &reachable_templates),
+        .unresolved_templates = try collectStringSet(allocator, &unresolved_templates),
+        .direct_modules = try collectStringSet(allocator, &direct_modules),
+        .transitive_modules = try collectStringSet(allocator, &transitive_modules),
+        .missing_modules = try collectStringSet(allocator, &missing_modules),
+        .compiled_ok = try allocator.alloc([]const u8, 0),
+        .compiled_failed = try allocator.alloc(ModuleCompileFailure, 0),
+        .emitted_consistent = try allocator.alloc([]const u8, 0),
+        .emitted_inconsistent = try allocator.alloc(ModuleCompileFailure, 0),
+    };
 }
 
 pub fn analyzeTemplateDependenciesFromSourcesAlloc(
@@ -6613,7 +7029,14 @@ fn addInvokeMatches(allocator: std.mem.Allocator, set: *std.StringHashMapUnmanag
     }
 }
 
-fn extractTemplateDependenciesAlloc(
+pub fn extractInvokeModulesAlloc(allocator: std.mem.Allocator, source: []const u8) ![]const []const u8 {
+    var set = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &set);
+    try addInvokeMatches(allocator, &set, source);
+    return collectStringSet(allocator, &set);
+}
+
+pub fn extractTemplateDependenciesAlloc(
     allocator: std.mem.Allocator,
     source: []const u8,
     current_template_name: ?[]const u8,
@@ -6657,7 +7080,7 @@ fn extractTemplateDependenciesAlloc(
     return collectStringSet(allocator, &set);
 }
 
-fn extractModuleDependencies(allocator: std.mem.Allocator, source: []const u8) ![]const []const u8 {
+pub fn extractModuleDependencies(allocator: std.mem.Allocator, source: []const u8) ![]const []const u8 {
     var set = std.StringHashMapUnmanaged(void){};
     defer deinitOwnedStringSet(allocator, &set);
 
@@ -7355,7 +7778,7 @@ test "emitZigModuleWithOptionsAlloc lowers require into generated module dispatc
     });
     defer std.testing.allocator.free(zig_source);
 
-    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireFirst(runtime, lua.Value{ .string = \"Module:languages\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireKnownFirst(&.{ \"languages\" }, runtime, lua.Value{ .string = \"Module:languages\" })") != null);
     try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireInvoke") != null);
 }
 
@@ -7372,8 +7795,65 @@ test "emitZigModuleWithOptionsAlloc lowers mw.loadData into generated module dis
     });
     defer std.testing.allocator.free(zig_source);
 
-    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleLoadDataFirst(runtime, lua.Value{ .string = \"Module:languages/data/2\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleLoadDataKnownFirst(&.{ \"languages/data/2\" }, runtime, lua.Value{ .string = \"Module:languages/data/2\" })") != null);
     try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleMwTableValue") != null);
+}
+
+test "emitZigModuleWithOptionsAlloc lowers require aliases into generated module dispatch helper" {
+    const source =
+        \\local loader = require
+        \\local name = "Module:languages"
+        \\return loader(name)
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireKnownFirst(&.{ \"languages\" }, runtime, local_1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "lua.generatedInvoke(runtime, local_0") == null);
+}
+
+test "emitZigModuleWithOptionsAlloc lowers mw aliases into generated module dispatch helper" {
+    const source =
+        \\local mw2 = mw
+        \\local loader = mw2.loadData
+        \\return loader("Module:languages/data/2")
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleLoadDataKnownFirst(&.{ \"languages/data/2\" }, runtime, lua.Value{ .string = \"Module:languages/data/2\" })") != null);
+}
+
+test "emitZigModuleWithOptionsAlloc merges branch-local module names into a known dispatch set" {
+    const source =
+        \\local loader = require
+        \\local name
+        \\if true then
+        \\  name = "Module:foo"
+        \\else
+        \\  name = "Module:bar"
+        \\end
+        \\return loader(name)
+    ;
+    var chunk = try compile(std.testing.allocator, source);
+    defer chunk.deinit();
+
+    const zig_source = try emitZigModuleWithOptionsAlloc(std.testing.allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+    });
+    defer std.testing.allocator.free(zig_source);
+
+    try std.testing.expect(std.mem.indexOf(u8, zig_source, "generatedModuleRequireKnownFirst(&.{ \"foo\", \"bar\" }, runtime, local_1)") != null);
 }
 
 test "emitZigModuleAlloc evaluates method-call receivers once" {
@@ -7852,6 +8332,76 @@ test "template zig emission audit still reports real compile failures" {
     try std.testing.expectEqual(@as(usize, 0), report.emitted_consistent.len);
     try std.testing.expectEqual(@as(usize, 1), report.compiled_failed.len);
     try std.testing.expectEqualStrings("broken", report.compiled_failed[0].name);
+}
+
+test "graph dependency analysis uses collected nodes without module audit" {
+    var template_nodes = std.StringHashMap(TemplateDependencyNode).init(std.testing.allocator);
+    defer {
+        var it = template_nodes.iterator();
+        while (it.next()) |entry| {
+            std.testing.allocator.free(entry.key_ptr.*);
+            freeStringSlice(std.testing.allocator, entry.value_ptr.template_deps);
+            freeStringSlice(std.testing.allocator, entry.value_ptr.direct_modules);
+        }
+        template_nodes.deinit();
+    }
+
+    var module_nodes = std.StringHashMap([]const []const u8).init(std.testing.allocator);
+    defer {
+        var it = module_nodes.iterator();
+        while (it.next()) |entry| {
+            std.testing.allocator.free(entry.key_ptr.*);
+            freeStringSlice(std.testing.allocator, entry.value_ptr.*);
+        }
+        module_nodes.deinit();
+    }
+
+    const demo_template_deps = try std.testing.allocator.alloc([]const u8, 1);
+    demo_template_deps[0] = try std.testing.allocator.dupe(u8, "helper");
+    const demo_direct_modules = try std.testing.allocator.alloc([]const u8, 1);
+    demo_direct_modules[0] = try std.testing.allocator.dupe(u8, "templatemod");
+    try template_nodes.put(
+        try std.testing.allocator.dupe(u8, "demo"),
+        .{
+            .template_deps = demo_template_deps,
+            .direct_modules = demo_direct_modules,
+        },
+    );
+
+    try template_nodes.put(
+        try std.testing.allocator.dupe(u8, "helper"),
+        .{
+            .template_deps = try std.testing.allocator.alloc([]const u8, 0),
+            .direct_modules = try std.testing.allocator.alloc([]const u8, 0),
+        },
+    );
+
+    const template_module_deps = try std.testing.allocator.alloc([]const u8, 1);
+    template_module_deps[0] = try std.testing.allocator.dupe(u8, "sharedmod");
+    try module_nodes.put(try std.testing.allocator.dupe(u8, "templatemod"), template_module_deps);
+    try module_nodes.put(try std.testing.allocator.dupe(u8, "sharedmod"), try std.testing.allocator.alloc([]const u8, 0));
+
+    const entry_direct_modules = try std.testing.allocator.alloc([]const u8, 1);
+    defer freeStringSlice(std.testing.allocator, entry_direct_modules);
+    entry_direct_modules[0] = try std.testing.allocator.dupe(u8, "entrymod");
+
+    const template_names = [_][]const u8{"demo"};
+    var report = try analyzeRenderDependenciesFromGraphAlloc(std.testing.allocator, &template_names, .{
+        .entry_direct_modules = entry_direct_modules,
+        .template_nodes = &template_nodes,
+        .module_nodes = &module_nodes,
+    });
+    defer report.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), report.root_templates.len);
+    try std.testing.expectEqual(@as(usize, 2), report.reachable_templates.len);
+    try std.testing.expectEqual(@as(usize, 0), report.unresolved_templates.len);
+    try std.testing.expectEqual(@as(usize, 2), report.direct_modules.len);
+    try std.testing.expectEqual(@as(usize, 3), report.transitive_modules.len);
+    try std.testing.expectEqual(@as(usize, 1), report.missing_modules.len);
+    try std.testing.expectEqualStrings("entrymod", report.missing_modules[0]);
+    try std.testing.expectEqual(@as(usize, 0), report.compiled_failed.len);
+    try std.testing.expectEqual(@as(usize, 0), report.emitted_inconsistent.len);
 }
 
 test "likely template page name filter keeps real titles and drops magic-like names" {
