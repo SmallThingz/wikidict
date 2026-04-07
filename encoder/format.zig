@@ -6,6 +6,7 @@ pub const lookup_kind_alternative_form: u8 = 1;
 
 pub const LayoutError = error{ InvalidDictionaryFile, FileTooBig };
 pub const VarUIntError = error{InvalidVarUInt};
+pub const storage_escape: u8 = 0xFF;
 
 // The final dictionary stores only the minimum persisted data:
 // raw titles, alias titles, alias target indices, and raw payloads.
@@ -101,6 +102,56 @@ pub fn readNullTerminatedSlice(bytes: []const u8, cursor: *usize, limit: usize) 
     return out;
 }
 
+pub fn storageEncodedLen(input: []const u8) usize {
+    var len: usize = 0;
+    for (input) |byte| {
+        len += if (byte == 0 or byte == storage_escape) 2 else 1;
+    }
+    return len;
+}
+
+pub fn appendStorageEncoded(list: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error!void {
+    try list.ensureUnusedCapacity(allocator, storageEncodedLen(input));
+    for (input) |byte| switch (byte) {
+        0 => {
+            list.appendAssumeCapacity(storage_escape);
+            list.appendAssumeCapacity(1);
+        },
+        storage_escape => {
+            list.appendAssumeCapacity(storage_escape);
+            list.appendAssumeCapacity(2);
+        },
+        else => list.appendAssumeCapacity(byte),
+    };
+}
+
+pub fn decodeStorageAlloc(allocator: std.mem.Allocator, input: []const u8) (std.mem.Allocator.Error || LayoutError)![]u8 {
+    var out = try allocator.alloc(u8, input.len);
+    errdefer allocator.free(out);
+
+    var src: usize = 0;
+    var dst: usize = 0;
+    while (src < input.len) {
+        const byte = input[src];
+        if (byte != storage_escape) {
+            out[dst] = byte;
+            dst += 1;
+            src += 1;
+            continue;
+        }
+        if (src + 1 >= input.len) return error.InvalidDictionaryFile;
+        const tag = input[src + 1];
+        switch (tag) {
+            1 => out[dst] = 0,
+            2 => out[dst] = storage_escape,
+            else => return error.InvalidDictionaryFile,
+        }
+        dst += 1;
+        src += 2;
+    }
+    return allocator.realloc(out, dst);
+}
+
 fn skipNullTerminatedStrings(bytes: []const u8, cursor: *usize, limit: usize, count: u32) LayoutError!void {
     var remaining = count;
     while (remaining != 0) : (remaining -= 1) {
@@ -165,4 +216,17 @@ test "varuint helpers still round-trip" {
     const encoded = encodeVarUInt(&buf, 987654);
     try std.testing.expectEqual(@as(u64, 987654), try readVarUInt(encoded, &cursor, encoded.len));
     try std.testing.expectEqual(encoded.len, cursor);
+}
+
+test "storage escaping round-trips embedded nul and escape bytes" {
+    var list: std.ArrayList(u8) = .empty;
+    defer list.deinit(std.testing.allocator);
+
+    const sample = [_]u8{ 'a', 0, storage_escape, 'b' };
+    try appendStorageEncoded(&list, std.testing.allocator, &sample);
+    try std.testing.expect(std.mem.indexOfScalar(u8, list.items, 0) == null);
+
+    const decoded = try decodeStorageAlloc(std.testing.allocator, list.items);
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqualSlices(u8, &sample, decoded);
 }

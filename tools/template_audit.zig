@@ -11,7 +11,7 @@ pub fn main(init: std.process.Init) !void {
     const args_allocator = init.arena.allocator();
     const allocator = init.gpa;
     const args = try init.minimal.args.toSlice(args_allocator);
-    if (args.len >= 2 and (std.mem.eql(u8, args[1], "help") or std.mem.eql(u8, args[1], "--help"))) {
+    if (args.len >= 2 and (std.mem.eql(u8, args[1], "help") or std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "--help"))) {
         try printUsage(init.io);
         return;
     }
@@ -23,8 +23,10 @@ pub fn main(init: std.process.Init) !void {
     var catalog = try loadCatalogAlloc(allocator, options.structure_path, options.template_name);
     defer catalog.deinit(allocator);
 
-    const scan_stats = try scanDumpForSamples(init.io, allocator, options, &catalog);
-    const audit_stats = try auditCatalog(allocator, &catalog);
+    const scan_stats, const audit_stats = if (catalog.cases.len == 0)
+        .{ ScanStats{}, AuditStats{} }
+    else
+        .{ try scanDumpForSamples(init.io, allocator, options, &catalog), try auditCatalog(allocator, &catalog) };
 
     const report = try buildReportAlloc(allocator, options, catalog.cases, scan_stats, audit_stats);
     defer allocator.free(report);

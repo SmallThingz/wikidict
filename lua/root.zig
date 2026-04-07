@@ -514,13 +514,21 @@ const Token = struct {
 };
 
 pub fn compile(allocator: std.mem.Allocator, source: []const u8) !Chunk {
+    return compileWithDiagnostics(allocator, source, true);
+}
+
+fn compileQuiet(allocator: std.mem.Allocator, source: []const u8) !Chunk {
+    return compileWithDiagnostics(allocator, source, false);
+}
+
+fn compileWithDiagnostics(allocator: std.mem.Allocator, source: []const u8, diagnostics: bool) !Chunk {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
     const owned_source = try a.dupe(u8, source);
-    var parser = try Parser.init(a, owned_source);
+    var parser = try Parser.init(a, owned_source, diagnostics);
     const body = parser.parseChunk() catch |err| {
-        reportParseError(owned_source, &parser, err);
+        if (diagnostics) reportParseError(owned_source, &parser, err);
         return err;
     };
     try optimizeChunk(a, body);
@@ -573,7 +581,6 @@ pub fn runCompiledModuleFunctionAlloc(
     function_name: []const u8,
     args: []const ModuleArg,
 ) ![]u8 {
-
     var vm = try Vm.init(allocator);
     defer vm.deinit();
 
@@ -7776,10 +7783,10 @@ const Parser = struct {
     tokens: []const Token,
     index: usize = 0,
 
-    fn init(allocator: std.mem.Allocator, source: []const u8) !Parser {
+    fn init(allocator: std.mem.Allocator, source: []const u8, diagnostics: bool) !Parser {
         return .{
             .allocator = allocator,
-            .tokens = try lex(allocator, source),
+            .tokens = try lexWithDiagnostics(allocator, source, diagnostics),
         };
     }
 
@@ -10043,25 +10050,139 @@ pub fn analyzeRenderDependenciesAlloc(
 ) !TemplateDependencyReport {
     var sources = try scanTemplateAndModuleSourcesAlloc(allocator, xml_path);
     defer sources.deinit(allocator);
-    return analyzeRenderDependenciesFromSourcesAlloc(allocator, xml_path, template_names, &sources);
+
+    const direct_entry_modules = try scanDirectInvokeModules(allocator, xml_path);
+    defer freeStringSlice(allocator, direct_entry_modules);
+
+    return analyzeRenderDependenciesFromSourcesAlloc(
+        allocator,
+        template_names,
+        direct_entry_modules,
+        &sources,
+    );
+}
+
+pub fn analyzeTemplateDependenciesFromSourcesAlloc(
+    allocator: std.mem.Allocator,
+    template_names: []const []const u8,
+    sources: *const TemplateSources,
+) !TemplateDependencyReport {
+    var root_templates = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &root_templates);
+    for (template_names) |name| {
+        if (!isLikelyTemplatePageName(name)) continue;
+        if (isIgnoredTemplateMagicName(name)) continue;
+        try insertCanonicalTemplateName(&root_templates, allocator, name);
+    }
+
+    var reachable_templates = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &reachable_templates);
+    var unresolved_templates = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &unresolved_templates);
+    var direct_modules = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &direct_modules);
+
+    var template_stack: std.ArrayList([]const u8) = .empty;
+    defer template_stack.deinit(allocator);
+
+    var root_it = root_templates.iterator();
+    while (root_it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const gop = try reachable_templates.getOrPut(allocator, key);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try allocator.dupe(u8, key);
+            try template_stack.append(allocator, gop.key_ptr.*);
+        }
+    }
+
+    while (template_stack.pop()) |name| {
+        const source = sources.template_sources.get(name) orelse {
+            if (!root_templates.contains(name)) {
+                const unresolved_gop = try unresolved_templates.getOrPut(allocator, name);
+                if (!unresolved_gop.found_existing) unresolved_gop.key_ptr.* = try allocator.dupe(u8, name);
+            }
+            continue;
+        };
+
+        const template_deps = try extractTemplateDependenciesAlloc(allocator, source, name);
+        defer freeStringSlice(allocator, template_deps);
+        for (template_deps) |dep| {
+            if (!sources.template_sources.contains(dep)) {
+                const unresolved_gop = try unresolved_templates.getOrPut(allocator, dep);
+                if (!unresolved_gop.found_existing) unresolved_gop.key_ptr.* = try allocator.dupe(u8, dep);
+                continue;
+            }
+            const dep_gop = try reachable_templates.getOrPut(allocator, dep);
+            if (!dep_gop.found_existing) {
+                dep_gop.key_ptr.* = try allocator.dupe(u8, dep);
+                try template_stack.append(allocator, dep_gop.key_ptr.*);
+            }
+        }
+
+        try addInvokeMatches(allocator, &direct_modules, source);
+    }
+
+    var transitive_modules = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &transitive_modules);
+    var module_stack: std.ArrayList([]const u8) = .empty;
+    defer module_stack.deinit(allocator);
+
+    var direct_module_it = direct_modules.iterator();
+    while (direct_module_it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const gop = try transitive_modules.getOrPut(allocator, name);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try allocator.dupe(u8, name);
+            try module_stack.append(allocator, gop.key_ptr.*);
+        }
+    }
+
+    while (module_stack.pop()) |name| {
+        const source = sources.module_sources.get(name) orelse continue;
+        const deps = try extractModuleDependencies(allocator, source);
+        defer freeStringSlice(allocator, deps);
+        for (deps) |dep| {
+            const gop = try transitive_modules.getOrPut(allocator, dep);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = try allocator.dupe(u8, dep);
+                try module_stack.append(allocator, gop.key_ptr.*);
+            }
+        }
+    }
+
+    const transitive_module_names = try collectStringSet(allocator, &transitive_modules);
+    errdefer freeStringSlice(allocator, transitive_module_names);
+    var audit = try auditModuleNamesAlloc(allocator, &sources.module_sources, transitive_module_names);
+    defer audit.deinit(allocator);
+
+    return .{
+        .root_templates = try collectStringSet(allocator, &root_templates),
+        .reachable_templates = try collectStringSet(allocator, &reachable_templates),
+        .unresolved_templates = try collectStringSet(allocator, &unresolved_templates),
+        .direct_modules = try collectStringSet(allocator, &direct_modules),
+        .transitive_modules = transitive_module_names,
+        .missing_modules = try dupStringSliceAlloc(allocator, audit.missing_modules),
+        .compiled_ok = try dupStringSliceAlloc(allocator, audit.compiled_ok),
+        .compiled_failed = try dupFailureSliceAlloc(allocator, audit.compiled_failed),
+        .emitted_consistent = try dupStringSliceAlloc(allocator, audit.emitted_consistent),
+        .emitted_inconsistent = try dupFailureSliceAlloc(allocator, audit.emitted_inconsistent),
+    };
 }
 
 pub fn analyzeRenderDependenciesFromSourcesAlloc(
     allocator: std.mem.Allocator,
-    xml_path: []const u8,
     template_names: []const []const u8,
+    entry_direct_modules: []const []const u8,
     sources: *const TemplateSources,
 ) !TemplateDependencyReport {
     var report = try analyzeTemplateDependenciesFromSourcesAlloc(allocator, template_names, sources);
     errdefer report.deinit(allocator);
 
-    const direct_entry_modules = try scanDirectInvokeModules(allocator, xml_path);
-    defer freeStringSlice(allocator, direct_entry_modules);
-    if (direct_entry_modules.len == 0) return report;
+    if (entry_direct_modules.len == 0) return report;
 
     const merged_direct_modules = try mergeUniqueStringSlicesAlloc(allocator, &.{
         report.direct_modules,
-        direct_entry_modules,
+        entry_direct_modules,
     });
     const transitive_modules = try collectTransitiveModulesFromSourcesAlloc(allocator, &sources.module_sources, merged_direct_modules);
     errdefer freeStringSlice(allocator, transitive_modules);
@@ -10207,113 +10328,6 @@ pub fn analyzeRenderDependenciesFromGraphAlloc(
     };
 }
 
-pub fn analyzeTemplateDependenciesFromSourcesAlloc(
-    allocator: std.mem.Allocator,
-    template_names: []const []const u8,
-    sources: *const TemplateSources,
-) !TemplateDependencyReport {
-    var root_templates = std.StringHashMapUnmanaged(void){};
-    defer deinitOwnedStringSet(allocator, &root_templates);
-    for (template_names) |name| {
-        if (!isLikelyTemplatePageName(name)) continue;
-        if (isIgnoredTemplateMagicName(name)) continue;
-        try insertCanonicalTemplateName(&root_templates, allocator, name);
-    }
-
-    var reachable_templates = std.StringHashMapUnmanaged(void){};
-    defer deinitOwnedStringSet(allocator, &reachable_templates);
-    var unresolved_templates = std.StringHashMapUnmanaged(void){};
-    defer deinitOwnedStringSet(allocator, &unresolved_templates);
-    var direct_modules = std.StringHashMapUnmanaged(void){};
-    defer deinitOwnedStringSet(allocator, &direct_modules);
-
-    var template_stack: std.ArrayList([]const u8) = .empty;
-    defer template_stack.deinit(allocator);
-
-    var root_it = root_templates.iterator();
-    while (root_it.next()) |entry| {
-        const key = entry.key_ptr.*;
-        const gop = try reachable_templates.getOrPut(allocator, key);
-        if (!gop.found_existing) {
-            gop.key_ptr.* = try allocator.dupe(u8, key);
-            try template_stack.append(allocator, gop.key_ptr.*);
-        }
-    }
-
-    while (template_stack.pop()) |name| {
-        const source = sources.template_sources.get(name) orelse {
-            if (!root_templates.contains(name)) {
-                const unresolved_gop = try unresolved_templates.getOrPut(allocator, name);
-                if (!unresolved_gop.found_existing) unresolved_gop.key_ptr.* = try allocator.dupe(u8, name);
-            }
-            continue;
-        };
-
-        const template_deps = try extractTemplateDependenciesAlloc(allocator, source, name);
-        defer freeStringSlice(allocator, template_deps);
-        for (template_deps) |dep| {
-            if (!sources.template_sources.contains(dep)) {
-                const unresolved_gop = try unresolved_templates.getOrPut(allocator, dep);
-                if (!unresolved_gop.found_existing) unresolved_gop.key_ptr.* = try allocator.dupe(u8, dep);
-                continue;
-            }
-            const dep_gop = try reachable_templates.getOrPut(allocator, dep);
-            if (!dep_gop.found_existing) {
-                dep_gop.key_ptr.* = try allocator.dupe(u8, dep);
-                try template_stack.append(allocator, dep_gop.key_ptr.*);
-            }
-        }
-
-        try addInvokeMatches(allocator, &direct_modules, source);
-    }
-
-    var transitive_modules = std.StringHashMapUnmanaged(void){};
-    defer deinitOwnedStringSet(allocator, &transitive_modules);
-    var module_stack: std.ArrayList([]const u8) = .empty;
-    defer module_stack.deinit(allocator);
-
-    var direct_module_it = direct_modules.iterator();
-    while (direct_module_it.next()) |entry| {
-        const name = entry.key_ptr.*;
-        const gop = try transitive_modules.getOrPut(allocator, name);
-        if (!gop.found_existing) {
-            gop.key_ptr.* = try allocator.dupe(u8, name);
-            try module_stack.append(allocator, gop.key_ptr.*);
-        }
-    }
-
-    while (module_stack.pop()) |name| {
-        const source = sources.module_sources.get(name) orelse continue;
-        const deps = try extractModuleDependencies(allocator, source);
-        defer freeStringSlice(allocator, deps);
-        for (deps) |dep| {
-            const gop = try transitive_modules.getOrPut(allocator, dep);
-            if (!gop.found_existing) {
-                gop.key_ptr.* = try allocator.dupe(u8, dep);
-                try module_stack.append(allocator, gop.key_ptr.*);
-            }
-        }
-    }
-
-    const transitive_module_names = try collectStringSet(allocator, &transitive_modules);
-    errdefer freeStringSlice(allocator, transitive_module_names);
-    var audit = try auditModuleNamesAlloc(allocator, &sources.module_sources, transitive_module_names);
-    defer audit.deinit(allocator);
-
-    return .{
-        .root_templates = try collectStringSet(allocator, &root_templates),
-        .reachable_templates = try collectStringSet(allocator, &reachable_templates),
-        .unresolved_templates = try collectStringSet(allocator, &unresolved_templates),
-        .direct_modules = try collectStringSet(allocator, &direct_modules),
-        .transitive_modules = transitive_module_names,
-        .missing_modules = try dupStringSliceAlloc(allocator, audit.missing_modules),
-        .compiled_ok = try dupStringSliceAlloc(allocator, audit.compiled_ok),
-        .compiled_failed = try dupFailureSliceAlloc(allocator, audit.compiled_failed),
-        .emitted_consistent = try dupStringSliceAlloc(allocator, audit.emitted_consistent),
-        .emitted_inconsistent = try dupFailureSliceAlloc(allocator, audit.emitted_inconsistent),
-    };
-}
-
 fn auditModuleNamesAlloc(
     allocator: std.mem.Allocator,
     module_sources: *const std.StringHashMap([]const u8),
@@ -10340,13 +10354,23 @@ fn auditModuleNamesAlloc(
             continue;
         };
 
-        var first = compile(allocator, source) catch |err| {
+        switch (classifyNamedModuleSource(name, source)) {
+            .lua => {},
+            .json => {
+                try compiled_ok.append(allocator, try allocator.dupe(u8, name));
+                try emitted_consistent.append(allocator, try allocator.dupe(u8, name));
+                continue;
+            },
+            .non_lua, .empty => continue,
+        }
+
+        var first = compileQuiet(allocator, source) catch |err| {
             try appendFailureAlloc(allocator, &compiled_failed, name, @errorName(err));
             continue;
         };
         defer first.deinit();
 
-        var second = compile(allocator, source) catch |err| {
+        var second = compileQuiet(allocator, source) catch |err| {
             const reason = try std.fmt.allocPrint(allocator, "SecondCompile:{s}", .{@errorName(err)});
             errdefer allocator.free(reason);
             try compiled_failed.append(allocator, .{
@@ -10707,6 +10731,13 @@ pub fn scanSelectedTemplateAndModuleSourcesAlloc(
     template_names: []const []const u8,
     module_names: []const []const u8,
 ) !TemplateSources {
+    if (template_names.len == 0 and module_names.len == 0) {
+        return .{
+            .template_sources = std.StringHashMap([]const u8).init(allocator),
+            .module_sources = std.StringHashMap([]const u8).init(allocator),
+        };
+    }
+
     var wanted_templates = std.StringHashMapUnmanaged(void){};
     defer deinitOwnedStringSet(allocator, &wanted_templates);
     for (template_names) |name| {
@@ -10724,8 +10755,8 @@ pub fn scanSelectedTemplateAndModuleSourcesAlloc(
     return try scanTemplateAndModuleSourcesFilteredAlloc(
         allocator,
         path,
-        if (wanted_templates.count() == 0) null else &wanted_templates,
-        if (wanted_modules.count() == 0) null else &wanted_modules,
+        &wanted_templates,
+        &wanted_modules,
     );
 }
 
@@ -11491,7 +11522,7 @@ fn extractModuleDependenciesFromAstInto(
     set: *std.StringHashMapUnmanaged(void),
     source: []const u8,
 ) !void {
-    var chunk = compile(allocator, source) catch return;
+    var chunk = compileQuiet(allocator, source) catch return;
     defer chunk.deinit();
 
     var state = DirectModuleState.init(allocator, .{
@@ -11772,6 +11803,15 @@ fn extractModuleDependenciesWithLexInto(
 pub fn extractModuleDependencies(allocator: std.mem.Allocator, source: []const u8) ![]const []const u8 {
     var set = std.StringHashMapUnmanaged(void){};
     defer deinitOwnedStringSet(allocator, &set);
+
+    // Structure building and dependency closure analysis touch every Module:
+    // page in the dump, including documentation, CSS, redirects, and JSON.
+    // Those pages cannot produce Lua module deps, so skip the expensive parser
+    // path entirely instead of emitting noisy diagnostics for each one.
+    switch (classifyModuleSource(source)) {
+        .lua => {},
+        .json, .non_lua, .empty => return collectStringSet(allocator, &set),
+    }
 
     try extractModuleDependenciesFromAstInto(allocator, &set, source);
     try extractModuleDependenciesWithLexInto(allocator, &set, source);
@@ -12932,6 +12972,31 @@ test "extractModuleDependencies does not treat module values as require aliases"
     try std.testing.expectEqualStrings("debug/track", deps[0]);
 }
 
+test "extractModuleDependencies skips module documentation markup" {
+    const source =
+        \\{{documentation needed}}<!-- Replace this with a short description of the purpose of the module, and how to use it. -->
+        \\{{module cat|-|Utility}}
+    ;
+
+    const deps = try extractModuleDependencies(std.testing.allocator, source);
+    defer freeStringSlice(std.testing.allocator, deps);
+
+    try std.testing.expectEqual(@as(usize, 0), deps.len);
+}
+
+test "extractModuleDependencies skips json-backed module content" {
+    const source =
+        \\{
+        \\  "foo": "bar"
+        \\}
+    ;
+
+    const deps = try extractModuleDependencies(std.testing.allocator, source);
+    defer freeStringSlice(std.testing.allocator, deps);
+
+    try std.testing.expectEqual(@as(usize, 0), deps.len);
+}
+
 test "emitZigModuleAlloc evaluates method-call receivers once" {
     const source =
         \\local alt = "tooltip"
@@ -13521,6 +13586,39 @@ test "template zig emission audit separates missing modules from compile failure
     try std.testing.expectEqual(@as(usize, 1), report.missing_modules.len);
     try std.testing.expectEqualStrings("missing-module", report.missing_modules[0]);
     try std.testing.expectEqual(@as(usize, 0), report.compiled_failed.len);
+}
+
+test "template zig emission audit skips non-lua modules without compile failures" {
+    var sources = TemplateSources{
+        .template_sources = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .module_sources = std.StringHashMap([]const u8).init(std.testing.allocator),
+    };
+    defer sources.deinit(std.testing.allocator);
+
+    try putCanonicalTemplateSource(
+        std.testing.allocator,
+        &sources.template_sources,
+        "docmod",
+        try std.testing.allocator.dupe(u8, "\\{{#invoke:docmod|main}}"),
+    );
+    try putCanonicalModuleSource(
+        std.testing.allocator,
+        &sources.module_sources,
+        "docmod",
+        try std.testing.allocator.dupe(u8,
+            \\This module is used by {{temp|docmod}}.
+            \\==Documentation==
+            \\* {{temp|demo}}
+        ),
+    );
+
+    const template_names = [_][]const u8{"docmod"};
+    var report = try analyzeTemplateDependenciesFromSourcesAlloc(std.testing.allocator, &template_names, &sources);
+    defer report.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), report.missing_modules.len);
+    try std.testing.expectEqual(@as(usize, 0), report.compiled_failed.len);
+    try std.testing.expectEqual(@as(usize, 0), report.emitted_inconsistent.len);
 }
 
 test "template zig emission audit still reports real compile failures" {

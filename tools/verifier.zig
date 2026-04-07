@@ -71,7 +71,7 @@ const VerifyProgress = struct {
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
-    if (args.len >= 2 and std.mem.eql(u8, args[1], "help")) {
+    if (args.len >= 2 and (std.mem.eql(u8, args[1], "help") or std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "--help"))) {
         printUsage();
         return;
     }
@@ -91,13 +91,14 @@ pub fn main(init: std.process.Init) !void {
     };
 
     std.debug.print(
-        "verified {s} against {s}\npages={d}\nns0={d}\nlanguage_entries={d}\ncompared={d}\nexact_matches={d}\nwhitespace_only_matches={d}\nmissing_raw_entries={d}\nduplicate_raw_titles={d}\ncontent_mismatches={d}\nunexpected_raw_entries={d}\nskipped_parse_errors={d}\nreport={s}\n",
+        "verified {s} against {s}\npages={d}\nns0={d}\nlanguage_entries={d}\nalias_only_entries={d}\ncompared={d}\nexact_matches={d}\nwhitespace_only_matches={d}\nmissing_raw_entries={d}\nduplicate_raw_titles={d}\ncontent_mismatches={d}\nunexpected_raw_entries={d}\nskipped_parse_errors={d}\nreport={s}\n",
         .{
             options.db_path,
             options.input_path,
             stats.pages_seen,
             stats.namespace_zero_pages,
             stats.language_entries,
+            stats.alias_only_entries,
             stats.compared_entries,
             stats.exact_matches,
             stats.whitespace_only_matches,
@@ -127,6 +128,9 @@ pub const VerifyStats = struct {
     pages_seen: usize = 0,
     namespace_zero_pages: usize = 0,
     language_entries: usize = 0,
+    // These alias-only pages are intentionally omitted from the raw-entry set and therefore
+    // explain the gap between language_entries and compared_entries in successful runs.
+    alias_only_entries: usize = 0,
     compared_entries: usize = 0,
     exact_matches: usize = 0,
     whitespace_only_matches: usize = 0,
@@ -351,11 +355,12 @@ const Verifier = struct {
         }
 
         try self.report.writer.print(
-            "Summary\n-------\npages: {d}\nnamespace_zero_pages: {d}\nlanguage_entries: {d}\ncompared_entries: {d}\nexact_matches: {d}\nwhitespace_only_matches: {d}\nmissing_raw_entries: {d}\nduplicate_raw_titles: {d}\ncontent_mismatches: {d}\nunexpected_raw_entries: {d}\nskipped_parse_errors: {d}\nfailures: {d}\n",
+            "Summary\n-------\npages: {d}\nnamespace_zero_pages: {d}\nlanguage_entries: {d}\nalias_only_entries: {d}\ncompared_entries: {d}\nexact_matches: {d}\nwhitespace_only_matches: {d}\nmissing_raw_entries: {d}\nduplicate_raw_titles: {d}\ncontent_mismatches: {d}\nunexpected_raw_entries: {d}\nskipped_parse_errors: {d}\nfailures: {d}\n",
             .{
                 self.stats.pages_seen,
                 self.stats.namespace_zero_pages,
                 self.stats.language_entries,
+                self.stats.alias_only_entries,
                 self.stats.compared_entries,
                 self.stats.exact_matches,
                 self.stats.whitespace_only_matches,
@@ -413,6 +418,12 @@ const Verifier = struct {
         self.stats.skipped_parse_errors += 1;
     }
 
+    fn noteAliasOnlyEntry(self: *Verifier) void {
+        self.state_mutex.lockUncancelable(self.io);
+        defer self.state_mutex.unlock(self.io);
+        self.stats.alias_only_entries += 1;
+    }
+
     fn recordMissingEntry(self: *Verifier, title: []const u8, expected_raw: []const u8) !void {
         self.state_mutex.lockUncancelable(self.io);
         defer self.state_mutex.unlock(self.io);
@@ -464,7 +475,10 @@ const Verifier = struct {
         self.noteLanguageEntry();
 
         const entry_ref = self.raw_by_word.get(title) orelse {
-            if (try self.shouldSkipMissingEntry(temp_allocator, title, expected_raw)) return;
+            if (try self.shouldSkipMissingEntry(temp_allocator, title, expected_raw)) {
+                self.noteAliasOnlyEntry();
+                return;
+            }
             try self.recordMissingEntry(title, expected_raw);
             return;
         };
@@ -562,17 +576,45 @@ fn openOrBuildDictionary(allocator: std.mem.Allocator, io: std.Io, options: Opti
     });
 }
 
-fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options: Options) void {
-    const idx_path = std.fmt.allocPrint(allocator, "{s}.idx", .{options.db_path}) catch unreachable;
-    defer allocator.free(idx_path);
-
-    const found = required_path.exists(io, idx_path) catch |err| {
-        std.debug.print("failed to access dictionary index at {s}: {s}\n", .{ idx_path, @errorName(err) });
+fn ensureDictionaryExists(io: std.Io, allocator: std.mem.Allocator, options: Options) void {
+    const found = required_path.exists(io, options.db_path) catch |err| {
+        std.debug.print("failed to access dictionary at {s}: {s}\n", .{ options.db_path, @errorName(err) });
         std.process.exit(1);
     };
     if (found) return;
 
-    std.debug.print("dictionary index not found: {s}; running {s} index\n", .{ idx_path, tool_paths.decoder_bin_path });
+    std.debug.print("dictionary not found: {s}; building it now\n", .{options.db_path});
+    _ = encoder.buildDictionary(io, allocator, .{
+        .input_path = options.input_path,
+        .output_path = options.db_path,
+        .limit_entries = options.limit_entries,
+        .worker_threads = options.thread_count,
+    }) catch |err| {
+        std.debug.print("failed to build dictionary at {s}: {s}\n", .{ options.db_path, @errorName(err) });
+        std.process.exit(1);
+    };
+}
+
+fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options: Options) void {
+    const db_found = required_path.exists(io, options.db_path) catch |err| {
+        std.debug.print("failed to access dictionary at {s}: {s}\n", .{ options.db_path, @errorName(err) });
+        std.process.exit(1);
+    };
+    const idx_path = std.fmt.allocPrint(allocator, "{s}.idx", .{options.db_path}) catch unreachable;
+    defer allocator.free(idx_path);
+
+    const idx_found = required_path.exists(io, idx_path) catch |err| {
+        std.debug.print("failed to access dictionary index at {s}: {s}\n", .{ idx_path, @errorName(err) });
+        std.process.exit(1);
+    };
+    if (db_found and idx_found) return;
+
+    if (!db_found) {
+        std.debug.print("dictionary not found: {s}; running {s} index\n", .{ options.db_path, tool_paths.decoder_bin_path });
+    } else {
+        std.debug.print("dictionary index not found: {s}; running {s} index\n", .{ idx_path, tool_paths.decoder_bin_path });
+    }
+
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
     argv.append(allocator, "index") catch unreachable;
@@ -1570,8 +1612,90 @@ test "verifyDictionary ignores dropped alias-only entries with invalid destinati
     });
 
     try std.testing.expectEqual(@as(usize, 2), stats.language_entries);
+    try std.testing.expectEqual(@as(usize, 1), stats.alias_only_entries);
     try std.testing.expectEqual(@as(usize, 1), stats.compared_entries);
     try std.testing.expectEqual(@as(usize, 1), stats.exact_matches + stats.whitespace_only_matches);
+    try std.testing.expectEqual(@as(usize, 0), stats.failures());
+}
+
+test "ensureDictionaryExists builds the dictionary when missing" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>color</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# [[light]]
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    const xml_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "sample.xml");
+    defer std.testing.allocator.free(xml_rel);
+    const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
+    defer std.testing.allocator.free(db_rel);
+    try writeMappedFile(xml_rel, xml);
+
+    ensureDictionaryExists(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .db_path = db_rel,
+        .thread_count = 1,
+    });
+
+    try std.testing.expect(try required_path.exists(std.testing.io, db_rel));
+}
+
+test "verifyDictionary builds the index on first open after auto-building the dictionary" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>color</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Noun===
+        \\# [[light]]
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    const xml_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "sample.xml");
+    defer std.testing.allocator.free(xml_rel);
+    const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
+    defer std.testing.allocator.free(db_rel);
+    const idx_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin.idx");
+    defer std.testing.allocator.free(idx_rel);
+    const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-report.txt");
+    defer std.testing.allocator.free(report_rel);
+    try writeMappedFile(xml_rel, xml);
+
+    ensureDictionaryExists(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .db_path = db_rel,
+        .report_path = report_rel,
+        .thread_count = 1,
+    });
+
+    try std.testing.expect(try required_path.exists(std.testing.io, db_rel));
+    try std.testing.expect(!(try required_path.exists(std.testing.io, idx_rel)));
+
+    const stats = try verifyDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .db_path = db_rel,
+        .report_path = report_rel,
+        .thread_count = 1,
+    });
+
+    try std.testing.expect(try required_path.exists(std.testing.io, idx_rel));
+    try std.testing.expectEqual(@as(usize, 1), stats.exact_matches);
     try std.testing.expectEqual(@as(usize, 0), stats.failures());
 }
 

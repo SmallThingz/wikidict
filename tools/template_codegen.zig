@@ -1,4 +1,5 @@
 const std = @import("std");
+const decoder = @import("decoder");
 const lua = @import("lua");
 const required_path = @import("required_path");
 pub const structure_report = @import("shared_structure_report");
@@ -23,6 +24,13 @@ pub fn main(init: std.process.Init) !void {
 
     required_path.ensureExistsOrExit(init.io, options.input_path, "wiktionary dump");
     required_path.ensureExistsOrExit(init.io, options.structure_path, "structure report");
+    const dictionary_exists = required_path.exists(init.io, options.db_path) catch |err| {
+        std.debug.print("failed to access dictionary at {s}: {s}\n", .{ options.db_path, @errorName(err) });
+        return err;
+    };
+    if (options.template_name == null and !dictionary_exists) {
+        required_path.ensureExistsOrExit(init.io, options.db_path, "dictionary");
+    }
 
     var manual_report: ?lua.TemplateDependencyReport = null;
     defer if (manual_report) |*report| report.deinit(allocator);
@@ -39,18 +47,26 @@ pub fn main(init: std.process.Init) !void {
     var reachable_templates: []const []const u8 = &.{};
     var owned_reachable_templates: []const []const u8 = &.{};
     defer if (owned_reachable_templates.len != 0) freeOwnedStrings(allocator, owned_reachable_templates);
+    var compiled_templates: []const []const u8 = &.{};
     var required_modules: []const []const u8 = &.{};
     var owned_required_modules: []const []const u8 = &.{};
     defer if (owned_required_modules.len != 0) freeOwnedStrings(allocator, owned_required_modules);
+    var base_dispatch_templates: []const structure_report.TemplateSpec = &.{};
+    var owned_base_dispatch_templates: []structure_report.TemplateSpec = &.{};
+    defer if (owned_base_dispatch_templates.len != 0) freeTemplateSpecs(allocator, owned_base_dispatch_templates);
     var dispatch_templates: []const structure_report.TemplateSpec = &.{};
     var owned_dispatch_templates: []structure_report.TemplateSpec = &.{};
     defer if (owned_dispatch_templates.len != 0) freeTemplateSpecs(allocator, owned_dispatch_templates);
     var dynamic_templates: []const []const u8 = &.{};
-    var owned_dynamic_templates: []const []const u8 = &.{};
-    defer if (owned_dynamic_templates.len != 0) freeOwnedStrings(allocator, owned_dynamic_templates);
     var audit_view: DependencyAuditView = .{};
     var maybe_sources: ?lua.TemplateSources = null;
     defer if (maybe_sources) |*sources| sources.deinit(allocator);
+    var concrete_plan: ?ConcreteTemplatePlan = null;
+    defer if (concrete_plan) |*plan| plan.deinit(allocator);
+    var all_template_refs: []const lua.SourcePageRef = &.{};
+    defer if (all_template_refs.len != 0) freeLuaSourceRefs(allocator, all_template_refs);
+    var all_module_refs: []const lua.SourcePageRef = &.{};
+    defer if (all_module_refs.len != 0) freeLuaSourceRefs(allocator, all_module_refs);
 
     if (options.template_name) |name| {
         stored_dependencies = try structure_report.loadDependencySetAlloc(init.io, allocator, options.structure_path);
@@ -67,13 +83,11 @@ pub fn main(init: std.process.Init) !void {
             out[0] = try allocator.dupe(u8, name);
             break :blk out;
         };
-        defer freeOwnedStrings(allocator, roots);
-        root_templates = roots;
+        owned_root_templates = roots;
+        root_templates = owned_root_templates;
 
-        const all_template_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_template_pages);
-        defer freeLuaSourceRefs(allocator, all_template_refs);
-        const all_module_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_module_pages);
-        defer freeLuaSourceRefs(allocator, all_module_refs);
+        all_template_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_template_pages);
+        all_module_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_module_pages);
         maybe_sources = try loadTemplateClosureByRefsAlloc(
             allocator,
             options.input_path,
@@ -88,12 +102,8 @@ pub fn main(init: std.process.Init) !void {
         roots_count = report.root_templates.len;
         owned_reachable_templates = try dupStringSliceAlloc(allocator, report.reachable_templates);
         reachable_templates = owned_reachable_templates;
-        owned_required_modules = try dupStringSliceAlloc(allocator, report.transitive_modules);
-        required_modules = owned_required_modules;
-        owned_dispatch_templates = try buildSequentialTemplateSpecsAlloc(allocator, reachable_templates);
-        dispatch_templates = owned_dispatch_templates;
-        owned_dynamic_templates = try collectDynamicTemplateNamesAlloc(allocator, reachable_templates, &maybe_sources.?);
-        dynamic_templates = owned_dynamic_templates;
+        owned_base_dispatch_templates = try buildSequentialTemplateSpecsAlloc(allocator, root_templates);
+        base_dispatch_templates = owned_base_dispatch_templates;
         audit_view = .{
             .unresolved_templates = report.unresolved_templates,
             .missing_modules = report.missing_modules,
@@ -126,6 +136,8 @@ pub fn main(init: std.process.Init) !void {
             return error.MissingStructureDependencies;
         }
         roots_count = root_templates.len;
+        all_template_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_template_pages);
+        all_module_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_module_pages);
         const selected_template_refs = try dupLuaSourceRefsAlloc(
             allocator,
             if (deps.reachable_template_pages.len != 0) deps.reachable_template_pages else deps.all_template_pages,
@@ -158,21 +170,7 @@ pub fn main(init: std.process.Init) !void {
             owned_required_modules = try dupStringSliceAlloc(allocator, report.transitive_modules);
         }
         required_modules = owned_required_modules;
-        if (mappings.line_templates.len != reachable_templates.len) {
-            std.debug.print(
-                "template compiler: structure report at {s} has mismatched dispatch template table; rerun zig build structure\n",
-                .{options.structure_path},
-            );
-            return error.InvalidStructureReport;
-        }
-        try validateDispatchTemplateOrder(mappings.line_templates, reachable_templates);
-        dispatch_templates = mappings.line_templates;
-        if (deps.dynamic_templates.len != 0) {
-            owned_dynamic_templates = try dupStringSliceAlloc(allocator, deps.dynamic_templates);
-        } else {
-            owned_dynamic_templates = try collectDynamicTemplateNamesAlloc(allocator, reachable_templates, &maybe_sources.?);
-        }
-        dynamic_templates = owned_dynamic_templates;
+        base_dispatch_templates = mappings.line_templates;
         audit_view = .{
             .unresolved_templates = report.unresolved_templates,
             .missing_modules = report.missing_modules,
@@ -181,14 +179,56 @@ pub fn main(init: std.process.Init) !void {
         };
     }
 
+    concrete_plan = if (dictionary_exists)
+        try collectConcreteTemplatePlanAlloc(
+            allocator,
+            init.io,
+            options.db_path,
+            root_templates,
+            &maybe_sources.?,
+        )
+    else
+        try collectConcreteTemplatePlanFromPagesAlloc(
+            allocator,
+            root_templates,
+            &.{},
+            &maybe_sources.?,
+        );
+    var plan_iteration: usize = 0;
+    while (dictionary_exists and plan_iteration < 8) : (plan_iteration += 1) {
+        const loaded_any = try loadMissingPlanSourcesAlloc(
+            allocator,
+            options.input_path,
+            all_template_refs,
+            all_module_refs,
+            &maybe_sources.?,
+            &concrete_plan.?,
+        );
+        if (!loaded_any) break;
+        concrete_plan.?.deinit(allocator);
+        concrete_plan = try collectConcreteTemplatePlanAlloc(
+            allocator,
+            init.io,
+            options.db_path,
+            root_templates,
+            &maybe_sources.?,
+        );
+    }
+    compiled_templates = concrete_plan.?.compiled_templates;
+    dynamic_templates = concrete_plan.?.dynamic_templates;
+    required_modules = concrete_plan.?.required_modules;
+    owned_dispatch_templates = try buildDispatchTemplateSpecsAlloc(allocator, base_dispatch_templates, dynamic_templates);
+    dispatch_templates = owned_dispatch_templates;
+
     const had_audit_failures = audit_view.unresolved_templates.len != 0 or
         audit_view.missing_modules.len != 0 or
         audit_view.compiled_failed.len != 0 or
         audit_view.emitted_inconsistent.len != 0;
     if (had_audit_failures) try printDependencyFailures(audit_view);
 
-    const compiled = try compileTemplateRuntimeWithDispatchAlloc(
+    const compiled = try compileTemplateRuntimeWithTemplateSetAlloc(
         allocator,
+        compiled_templates,
         dispatch_templates,
         dynamic_templates,
         required_modules,
@@ -218,7 +258,7 @@ pub fn main(init: std.process.Init) !void {
         "template compiler: roots={d} reachable={d} dynamic={d} modules={d} compiled={d} metadata_only={d} unsupported={d} unresolved={d} missing_modules={d} output={s}\n",
         .{
             roots_count,
-            reachable_templates.len,
+            compiled_templates.len,
             dynamic_templates.len,
             required_modules.len,
             compiled.compiled_count,
@@ -294,6 +334,7 @@ fn validateDispatchTemplateOrder(
 
 const Options = struct {
     input_path: []const u8 = "data/wiktionary.xml",
+    db_path: []const u8 = "data/wiktionary.bin",
     structure_path: []const u8 = "data/wiktionary-structure.json",
     output_path: []const u8 = "data/generated_template_runtime.zig",
     template_name: ?[]const u8 = null,
@@ -314,6 +355,7 @@ fn parseOptions(args: []const []const u8) !Options {
         if (std.mem.eql(u8, arg, "--db")) {
             i += 1;
             if (i >= args.len) return error.MissingValue;
+            options.db_path = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--structure")) {
@@ -340,7 +382,7 @@ fn parseOptions(args: []const []const u8) !Options {
             options.mode = std.meta.stringToEnum(CompileMode, args[i]) orelse return error.InvalidMode;
             continue;
         }
-        if (std.mem.eql(u8, arg, "help") or std.mem.eql(u8, arg, "--help")) {
+        if (std.mem.eql(u8, arg, "help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             printUsage();
             std.process.exit(0);
         }
@@ -350,9 +392,9 @@ fn parseOptions(args: []const []const u8) !Options {
 
 fn printUsage() void {
     std.debug.print(
-        \\dict-template-compile --mode zig --input data/wiktionary.xml --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
-        \\dict-template-compile --mode bytecode --input data/wiktionary.xml --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
-        \\dict-template-compile --mode zig --input data/wiktionary.xml --structure data/wiktionary-structure.json --template \"template name\" --output /tmp/generated_templates.zig
+        \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
+        \\dict-template-compile --mode bytecode --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
+        \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.json --template \"template name\" --output /tmp/generated_templates.zig
         \\
     , .{});
 }
@@ -757,6 +799,652 @@ fn collectRenderedTemplateDependenciesFromNodesAlloc(
     };
 }
 
+const ConcreteArgValue = union(enum) {
+    known: []const u8,
+    unknown,
+};
+
+const ConcreteArgAssignment = struct {
+    key: []const u8,
+    value: ConcreteArgValue,
+};
+
+const ConcreteTemplateArgs = struct {
+    assignments: []const ConcreteArgAssignment = &.{},
+
+    fn get(self: *const ConcreteTemplateArgs, key: []const u8) ?ConcreteArgValue {
+        for (self.assignments) |entry| {
+            if (std.mem.eql(u8, entry.key, key)) return entry.value;
+        }
+        return null;
+    }
+};
+
+const ConcreteEnvBucket = struct {
+    // Each template keeps the distinct concrete argument sets seen in the
+    // actual corpus so we only explore the dynamic call graph for reachable
+    // call shapes, not every syntactic possibility.
+    envs: std.ArrayList(ConcreteTemplateArgs) = .empty,
+    seen_signatures: std.StringHashMapUnmanaged(void) = .{},
+    processed: usize = 0,
+};
+
+const ConcreteTemplatePlan = struct {
+    // `compiled_templates` is the exact corpus-observed closure we emit,
+    // while `dynamic_templates` is the smaller runtime dispatch surface for
+    // templates whose names are constructed from args or parser functions.
+    compiled_templates: []const []const u8 = &.{},
+    dynamic_templates: []const []const u8 = &.{},
+    direct_modules: []const []const u8 = &.{},
+    required_modules: []const []const u8 = &.{},
+
+    fn deinit(self: *ConcreteTemplatePlan, allocator: std.mem.Allocator) void {
+        freeOwnedStrings(allocator, self.compiled_templates);
+        freeOwnedStrings(allocator, self.dynamic_templates);
+        freeOwnedStrings(allocator, self.direct_modules);
+        freeOwnedStrings(allocator, self.required_modules);
+        self.* = .{};
+    }
+};
+
+const ConcreteClosureState = struct {
+    perm: std.mem.Allocator,
+    temp_parent: std.mem.Allocator,
+    sources: *const lua.TemplateSources,
+    root_templates: std.StringHashMapUnmanaged(void) = .{},
+    used_templates: std.StringHashMapUnmanaged(void) = .{},
+    dynamic_templates: std.StringHashMapUnmanaged(void) = .{},
+    direct_modules: std.StringHashMapUnmanaged(void) = .{},
+    // Each template accumulates the distinct concrete arg environments seen
+    // in stored pages so dynamic heads can be resolved against real corpus
+    // values instead of the full theoretical search space.
+    env_buckets: std.StringHashMap(ConcreteEnvBucket),
+    parsed_templates: std.StringHashMap([]const Node),
+};
+
+fn initConcreteClosureStateAlloc(
+    perm: std.mem.Allocator,
+    temp_parent: std.mem.Allocator,
+    sources: *const lua.TemplateSources,
+    root_templates: []const []const u8,
+) !ConcreteClosureState {
+    var state = ConcreteClosureState{
+        .perm = perm,
+        .temp_parent = temp_parent,
+        .sources = sources,
+        .env_buckets = std.StringHashMap(ConcreteEnvBucket).init(perm),
+        .parsed_templates = std.StringHashMap([]const Node).init(perm),
+    };
+    for (root_templates) |name| {
+        try insertOwnedSetStringAlloc(perm, &state.root_templates, name);
+        try insertOwnedSetStringAlloc(perm, &state.used_templates, name);
+    }
+    return state;
+}
+
+fn insertOwnedSetStringAlloc(
+    allocator: std.mem.Allocator,
+    set: *std.StringHashMapUnmanaged(void),
+    value: []const u8,
+) !void {
+    if (set.contains(value)) return;
+    try set.put(allocator, try allocator.dupe(u8, value), {});
+}
+
+fn collectConcreteTemplatePlanAlloc(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    db_path: []const u8,
+    root_templates: []const []const u8,
+    sources: *const lua.TemplateSources,
+) !ConcreteTemplatePlan {
+    // Build a corpus-constrained template/module closure from the stored bin.
+    // This is the path that lets dynamic template heads compile down to only
+    // the concrete targets we actually observe in real dictionary pages.
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var state = try initConcreteClosureStateAlloc(arena.allocator(), allocator, sources, root_templates);
+    try seedConcreteTemplatePlanFromDictionaryAlloc(&state, io, db_path);
+    try ensureConcreteRootEnvsAlloc(&state);
+    try drainConcreteTemplateEnvQueueAlloc(&state);
+
+    const direct_modules = try collectStringSet(allocator, &state.direct_modules);
+    errdefer freeOwnedStrings(allocator, direct_modules);
+
+    return .{
+        .compiled_templates = try collectStringSet(allocator, &state.used_templates),
+        .dynamic_templates = try collectStringSet(allocator, &state.dynamic_templates),
+        .direct_modules = direct_modules,
+        .required_modules = try lua.collectTransitiveModulesFromSourcesAlloc(
+            allocator,
+            &sources.module_sources,
+            direct_modules,
+        ),
+    };
+}
+
+fn collectConcreteTemplatePlanFromPagesAlloc(
+    allocator: std.mem.Allocator,
+    root_templates: []const []const u8,
+    page_sources: []const []const u8,
+    sources: *const lua.TemplateSources,
+) !ConcreteTemplatePlan {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var state = try initConcreteClosureStateAlloc(arena.allocator(), allocator, sources, root_templates);
+    for (page_sources) |source| try seedConcreteTemplatePlanFromPageSourceAlloc(&state, source);
+    try ensureConcreteRootEnvsAlloc(&state);
+    try drainConcreteTemplateEnvQueueAlloc(&state);
+
+    const direct_modules = try collectStringSet(allocator, &state.direct_modules);
+    errdefer freeOwnedStrings(allocator, direct_modules);
+
+    return .{
+        .compiled_templates = try collectStringSet(allocator, &state.used_templates),
+        .dynamic_templates = try collectStringSet(allocator, &state.dynamic_templates),
+        .direct_modules = direct_modules,
+        .required_modules = try lua.collectTransitiveModulesFromSourcesAlloc(
+            allocator,
+            &sources.module_sources,
+            direct_modules,
+        ),
+    };
+}
+
+fn seedConcreteTemplatePlanFromDictionaryAlloc(
+    state: *ConcreteClosureState,
+    io: std.Io,
+    db_path: []const u8,
+) !void {
+    var dict = try decoder.openDictionary(state.temp_parent, io, db_path);
+    defer dict.deinit();
+
+    var entry_index: u32 = 0;
+    while (entry_index < dict.header.raw_count) : (entry_index += 1) {
+        var page_arena = std.heap.ArenaAllocator.init(state.temp_parent);
+        defer page_arena.deinit();
+
+        const page_allocator = page_arena.allocator();
+        const stored = (try dict.entryAt(entry_index).rawStoredAlloc(page_allocator)) orelse continue;
+        try seedConcreteTemplatePlanFromPageSourceAllocWithAllocator(state, page_allocator, stored);
+    }
+}
+
+fn seedConcreteTemplatePlanFromPageSourceAlloc(
+    state: *ConcreteClosureState,
+    source: []const u8,
+) !void {
+    var page_arena = std.heap.ArenaAllocator.init(state.temp_parent);
+    defer page_arena.deinit();
+    try seedConcreteTemplatePlanFromPageSourceAllocWithAllocator(state, page_arena.allocator(), source);
+}
+
+fn seedConcreteTemplatePlanFromPageSourceAllocWithAllocator(
+    state: *ConcreteClosureState,
+    temp_allocator: std.mem.Allocator,
+    source: []const u8,
+) !void {
+    const nodes = parseTemplateSourceAlloc(temp_allocator, source) catch return;
+    const empty_args = ConcreteTemplateArgs{};
+    try walkExecutedNodesForPlanAlloc(state, temp_allocator, nodes, &empty_args, true);
+}
+
+fn ensureConcreteRootEnvsAlloc(state: *ConcreteClosureState) !void {
+    var it = state.root_templates.iterator();
+    while (it.next()) |entry| {
+        if (state.env_buckets.get(entry.key_ptr.*)) |bucket| {
+            if (bucket.envs.items.len != 0) continue;
+        }
+        try enqueueConcreteTemplateArgsAlloc(state, entry.key_ptr.*, .{});
+    }
+}
+
+fn drainConcreteTemplateEnvQueueAlloc(state: *ConcreteClosureState) !void {
+    var changed = true;
+    while (changed) {
+        changed = false;
+        var it = state.env_buckets.iterator();
+        while (it.next()) |entry| {
+            while (entry.value_ptr.processed < entry.value_ptr.envs.items.len) {
+                changed = true;
+                const env = entry.value_ptr.envs.items[entry.value_ptr.processed];
+                entry.value_ptr.processed += 1;
+                const nodes = try parsedTemplateNodesAlloc(state, entry.key_ptr.*);
+                if (nodes.len == 0) continue;
+                var temp_arena = std.heap.ArenaAllocator.init(state.temp_parent);
+                defer temp_arena.deinit();
+                try walkExecutedNodesForPlanAlloc(state, temp_arena.allocator(), nodes, &env, false);
+            }
+        }
+    }
+}
+
+fn parsedTemplateNodesAlloc(state: *ConcreteClosureState, template_name: []const u8) ![]const Node {
+    if (state.parsed_templates.get(template_name)) |nodes| return nodes;
+
+    const source = state.sources.template_sources.get(template_name) orelse {
+        try state.parsed_templates.put(try state.perm.dupe(u8, template_name), &.{});
+        return &.{};
+    };
+    const nodes = parseTemplateSourceAlloc(state.perm, source) catch &.{};
+    try state.parsed_templates.put(try state.perm.dupe(u8, template_name), nodes);
+    return nodes;
+}
+
+fn enqueueConcreteTemplateArgsAlloc(
+    state: *ConcreteClosureState,
+    template_name: []const u8,
+    args: ConcreteTemplateArgs,
+) !void {
+    var bucket_gop = try state.env_buckets.getOrPut(template_name);
+    if (!bucket_gop.found_existing) {
+        bucket_gop.key_ptr.* = try state.perm.dupe(u8, template_name);
+        bucket_gop.value_ptr.* = .{};
+    }
+
+    const signature = try buildConcreteArgsSignatureAlloc(state.perm, args.assignments);
+    const sig_gop = try bucket_gop.value_ptr.seen_signatures.getOrPut(state.perm, signature);
+    if (sig_gop.found_existing) return;
+    sig_gop.key_ptr.* = signature;
+    try bucket_gop.value_ptr.envs.append(state.perm, args);
+}
+
+fn buildConcreteArgsSignatureAlloc(
+    allocator: std.mem.Allocator,
+    assignments: []const ConcreteArgAssignment,
+) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (assignments) |entry| {
+        try out.appendSlice(allocator, entry.key);
+        try out.append(allocator, 0);
+        switch (entry.value) {
+            .known => |value| {
+                try out.append(allocator, 1);
+                try out.appendSlice(allocator, value);
+            },
+            .unknown => try out.append(allocator, 2),
+        }
+        try out.append(allocator, 0);
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+fn walkExecutedNodesForPlanAlloc(
+    state: *ConcreteClosureState,
+    temp_allocator: std.mem.Allocator,
+    nodes: []const Node,
+    args: *const ConcreteTemplateArgs,
+    roots_only: bool,
+) anyerror!void {
+    for (nodes) |node| switch (node) {
+        .text => {},
+        .param => |param| {
+            if (args.get(param.key) == null) {
+                try walkExecutedNodesForPlanAlloc(state, temp_allocator, param.default_nodes, args, roots_only);
+            }
+        },
+        .template_call => |call| try walkExecutedTemplateCallForPlanAlloc(state, temp_allocator, call, args, roots_only),
+        .invoke_call => |call| try walkExecutedInvokeCallForPlanAlloc(state, temp_allocator, call, args, roots_only),
+        .parser_func => |func| try walkExecutedParserFuncForPlanAlloc(state, temp_allocator, func, args, roots_only),
+    };
+}
+
+fn walkExecutedTemplateCallForPlanAlloc(
+    state: *ConcreteClosureState,
+    temp_allocator: std.mem.Allocator,
+    call: TemplateCallNode,
+    args: *const ConcreteTemplateArgs,
+    roots_only: bool,
+) anyerror!void {
+    if (call.name_nodes.len != 0) {
+        try walkExecutedNodesForPlanAlloc(state, temp_allocator, call.name_nodes, args, roots_only);
+    }
+    for (call.args) |arg| {
+        if (arg.name_is_dynamic) try walkExecutedNodesForPlanAlloc(state, temp_allocator, arg.name_nodes, args, roots_only);
+        try walkExecutedNodesForPlanAlloc(state, temp_allocator, arg.value_nodes, args, roots_only);
+    }
+
+    const target_names = try resolveConcreteTemplateCallNamesAlloc(temp_allocator, args, call);
+    const child_args = try buildConcreteArgsForCallAlloc(state.perm, temp_allocator, args, call.args);
+
+    for (target_names) |target_name| {
+        if (roots_only and !state.root_templates.contains(target_name)) continue;
+        try insertOwnedSetStringAlloc(state.perm, &state.used_templates, target_name);
+        if (call.name_nodes.len != 0) try insertOwnedSetStringAlloc(state.perm, &state.dynamic_templates, target_name);
+        try enqueueConcreteTemplateArgsAlloc(state, target_name, child_args);
+    }
+}
+
+fn walkExecutedInvokeCallForPlanAlloc(
+    state: *ConcreteClosureState,
+    temp_allocator: std.mem.Allocator,
+    call: InvokeCallNode,
+    args: *const ConcreteTemplateArgs,
+    roots_only: bool,
+) anyerror!void {
+    for (call.args) |arg| {
+        if (arg.name_is_dynamic) try walkExecutedNodesForPlanAlloc(state, temp_allocator, arg.name_nodes, args, roots_only);
+        try walkExecutedNodesForPlanAlloc(state, temp_allocator, arg.value_nodes, args, roots_only);
+    }
+    if (lua.isLikelyCodeModulePageName(call.module_name)) {
+        try insertOwnedSetStringAlloc(state.perm, &state.direct_modules, call.module_name);
+    }
+}
+
+fn walkExecutedParserFuncForPlanAlloc(
+    state: *ConcreteClosureState,
+    temp_allocator: std.mem.Allocator,
+    func: ParserFunctionNode,
+    args: *const ConcreteTemplateArgs,
+    roots_only: bool,
+) anyerror!void {
+    switch (func.kind) {
+        .if_ => {
+            if (func.args.len != 0) try walkExecutedNodesForPlanAlloc(state, temp_allocator, func.args[0].value_nodes, args, roots_only);
+            const cond_values = if (func.args.len != 0)
+                try resolveConcreteTextValuesAlloc(temp_allocator, func.args[0].value_nodes, args)
+            else
+                null;
+            const recurse_then = shouldRecurseTruthyBranch(cond_values);
+            const recurse_else = shouldRecurseFalsyBranch(cond_values);
+            if (recurse_then and func.args.len > 1) try walkExecutedNodesForPlanAlloc(state, temp_allocator, func.args[1].value_nodes, args, roots_only);
+            if (recurse_else and func.args.len > 2) try walkExecutedNodesForPlanAlloc(state, temp_allocator, func.args[2].value_nodes, args, roots_only);
+        },
+        .ifexist => {
+            if (func.args.len != 0) try walkExecutedNodesForPlanAlloc(state, temp_allocator, func.args[0].value_nodes, args, roots_only);
+            const title_values = if (func.args.len != 0)
+                try resolveConcreteTextValuesAlloc(temp_allocator, func.args[0].value_nodes, args)
+            else
+                null;
+            const recurse_then = shouldRecurseTruthyBranch(title_values);
+            const recurse_else = shouldRecurseFalsyBranch(title_values);
+            if (recurse_then and func.args.len > 1) try walkExecutedNodesForPlanAlloc(state, temp_allocator, func.args[1].value_nodes, args, roots_only);
+            if (recurse_else and func.args.len > 2) try walkExecutedNodesForPlanAlloc(state, temp_allocator, func.args[2].value_nodes, args, roots_only);
+        },
+        .ifeq => {
+            if (func.args.len > 0) try walkExecutedNodesForPlanAlloc(state, temp_allocator, func.args[0].value_nodes, args, roots_only);
+            if (func.args.len > 1) try walkExecutedNodesForPlanAlloc(state, temp_allocator, func.args[1].value_nodes, args, roots_only);
+            const lhs_values = if (func.args.len > 0)
+                try resolveConcreteTextValuesAlloc(temp_allocator, func.args[0].value_nodes, args)
+            else
+                null;
+            const rhs_values = if (func.args.len > 1)
+                try resolveConcreteTextValuesAlloc(temp_allocator, func.args[1].value_nodes, args)
+            else
+                null;
+            const branch_decision = decideIfeqBranches(lhs_values, rhs_values);
+            if (branch_decision.recurse_then and func.args.len > 2) try walkExecutedNodesForPlanAlloc(state, temp_allocator, func.args[2].value_nodes, args, roots_only);
+            if (branch_decision.recurse_else and func.args.len > 3) try walkExecutedNodesForPlanAlloc(state, temp_allocator, func.args[3].value_nodes, args, roots_only);
+        },
+        .switch_ => {
+            if (func.args.len == 0) return;
+            try walkExecutedNodesForPlanAlloc(state, temp_allocator, func.args[0].value_nodes, args, roots_only);
+            const key_values = try resolveConcreteTextValuesAlloc(temp_allocator, func.args[0].value_nodes, args);
+            var matched_any = false;
+            for (func.args[1..]) |arg| {
+                if (arg.name_is_dynamic) try walkExecutedNodesForPlanAlloc(state, temp_allocator, arg.name_nodes, args, roots_only);
+                if (switchArgIsDefault(arg)) continue;
+                const label = arg.name orelse continue;
+                if (key_values) |values| {
+                    var matched = false;
+                    for (values) |value| {
+                        if (staticWikiTextEquals(value, label)) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched) continue;
+                    matched_any = true;
+                }
+                try walkExecutedNodesForPlanAlloc(state, temp_allocator, arg.value_nodes, args, roots_only);
+            }
+            if (!matched_any) {
+                for (func.args[1..]) |arg| {
+                    if (!switchArgIsDefault(arg)) continue;
+                    try walkExecutedNodesForPlanAlloc(state, temp_allocator, arg.value_nodes, args, roots_only);
+                }
+            }
+        },
+        else => {
+            for (func.args) |arg| {
+                if (arg.name_is_dynamic) try walkExecutedNodesForPlanAlloc(state, temp_allocator, arg.name_nodes, args, roots_only);
+                try walkExecutedNodesForPlanAlloc(state, temp_allocator, arg.value_nodes, args, roots_only);
+            }
+        },
+    }
+}
+
+fn shouldRecurseTruthyBranch(values: ?[]const []const u8) bool {
+    const actual = values orelse return true;
+    if (actual.len == 0) return true;
+    for (actual) |value| {
+        if (isTruthyText(value)) return true;
+    }
+    return false;
+}
+
+fn shouldRecurseFalsyBranch(values: ?[]const []const u8) bool {
+    const actual = values orelse return true;
+    if (actual.len == 0) return true;
+    for (actual) |value| {
+        if (!isTruthyText(value)) return true;
+    }
+    return false;
+}
+
+fn decideIfeqBranches(
+    lhs_values: ?[]const []const u8,
+    rhs_values: ?[]const []const u8,
+) struct { recurse_then: bool, recurse_else: bool } {
+    const lhs = lhs_values orelse return .{ .recurse_then = true, .recurse_else = true };
+    const rhs = rhs_values orelse return .{ .recurse_then = true, .recurse_else = true };
+    if (lhs.len == 0 or rhs.len == 0) return .{ .recurse_then = true, .recurse_else = true };
+
+    var recurse_then = false;
+    var recurse_else = false;
+    for (lhs) |lhs_value| {
+        for (rhs) |rhs_value| {
+            if (staticWikiTextEquals(lhs_value, rhs_value)) {
+                recurse_then = true;
+            } else {
+                recurse_else = true;
+            }
+            if (recurse_then and recurse_else) return .{ .recurse_then = true, .recurse_else = true };
+        }
+    }
+    return .{ .recurse_then = recurse_then, .recurse_else = recurse_else };
+}
+
+fn buildConcreteArgsForCallAlloc(
+    perm: std.mem.Allocator,
+    temp_allocator: std.mem.Allocator,
+    parent_args: *const ConcreteTemplateArgs,
+    call_args: []const ArgNode,
+) !ConcreteTemplateArgs {
+    var assignments: std.ArrayList(ConcreteArgAssignment) = .empty;
+    var positional_index: usize = 1;
+
+    for (call_args) |arg| {
+        const key = if (arg.name_is_dynamic) blk: {
+            const values = try resolveConcreteTextValuesAlloc(temp_allocator, arg.name_nodes, parent_args);
+            if (values == null or values.?.len != 1) continue;
+            break :blk trimWikiWhitespace(values.?[0]);
+        } else if (arg.name) |name|
+            trimWikiWhitespace(name)
+        else blk: {
+            break :blk try std.fmt.allocPrint(temp_allocator, "{d}", .{positional_index});
+        };
+
+        if (key.len == 0) {
+            if (arg.name == null and !arg.name_is_dynamic) positional_index += 1;
+            continue;
+        }
+
+        const value = try resolveConcreteArgValueAlloc(temp_allocator, arg.value_nodes, parent_args);
+        try upsertConcreteAssignmentAlloc(perm, &assignments, key, value);
+        if (arg.name == null and !arg.name_is_dynamic) positional_index += 1;
+    }
+
+    std.mem.sortUnstable(ConcreteArgAssignment, assignments.items, {}, struct {
+        fn lessThan(_: void, lhs: ConcreteArgAssignment, rhs: ConcreteArgAssignment) bool {
+            return std.mem.order(u8, lhs.key, rhs.key) == .lt;
+        }
+    }.lessThan);
+
+    return .{ .assignments = try assignments.toOwnedSlice(perm) };
+}
+
+fn upsertConcreteAssignmentAlloc(
+    allocator: std.mem.Allocator,
+    assignments: *std.ArrayList(ConcreteArgAssignment),
+    key: []const u8,
+    value: ConcreteArgValue,
+) !void {
+    for (assignments.items) |*entry| {
+        if (!std.mem.eql(u8, entry.key, key)) continue;
+        entry.value = switch (value) {
+            .known => |known| .{ .known = try allocator.dupe(u8, known) },
+            .unknown => .unknown,
+        };
+        return;
+    }
+
+    try assignments.append(allocator, .{
+        .key = try allocator.dupe(u8, key),
+        .value = switch (value) {
+            .known => |known| .{ .known = try allocator.dupe(u8, known) },
+            .unknown => .unknown,
+        },
+    });
+}
+
+fn resolveConcreteArgValueAlloc(
+    allocator: std.mem.Allocator,
+    nodes: []const Node,
+    args: *const ConcreteTemplateArgs,
+) !ConcreteArgValue {
+    const values = try resolveConcreteTextValuesAlloc(allocator, nodes, args) orelse return .unknown;
+    if (values.len != 1) return .unknown;
+    return .{ .known = values[0] };
+}
+
+fn resolveConcreteTemplateCallNamesAlloc(
+    allocator: std.mem.Allocator,
+    args: *const ConcreteTemplateArgs,
+    call: TemplateCallNode,
+) ![]const []const u8 {
+    if (call.name_nodes.len == 0) return dupStringSliceAlloc(allocator, call.resolved_names);
+    const resolved = try resolveTemplateNamesFromNodesWithArgsAlloc(allocator, call.name_nodes, args);
+    if (resolved) |names| return names;
+    return dupStringSliceAlloc(allocator, call.resolved_names);
+}
+
+fn buildDispatchTemplateSpecsAlloc(
+    allocator: std.mem.Allocator,
+    base_specs: []const structure_report.TemplateSpec,
+    dynamic_templates: []const []const u8,
+) ![]structure_report.TemplateSpec {
+    var out: std.ArrayList(structure_report.TemplateSpec) = .empty;
+    errdefer freeTemplateSpecs(allocator, out.items);
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &seen);
+
+    var next_code: u32 = 1;
+    for (base_specs) |entry| {
+        try out.append(allocator, .{
+            .code = entry.code,
+            .name = try allocator.dupe(u8, entry.name),
+        });
+        try insertOwnedSetStringAlloc(allocator, &seen, entry.name);
+        next_code = @max(next_code, @as(u32, entry.code) + 1);
+    }
+
+    for (dynamic_templates) |name| {
+        if (seen.contains(name)) continue;
+        try insertOwnedSetStringAlloc(allocator, &seen, name);
+        try out.append(allocator, .{
+            .code = std.math.cast(u16, next_code) orelse return error.TooManyGeneratedTemplates,
+            .name = try allocator.dupe(u8, name),
+        });
+        next_code += 1;
+    }
+
+    return try out.toOwnedSlice(allocator);
+}
+
+fn loadMissingPlanSourcesAlloc(
+    allocator: std.mem.Allocator,
+    xml_path: []const u8,
+    all_template_refs: []const lua.SourcePageRef,
+    all_module_refs: []const lua.SourcePageRef,
+    sources: *lua.TemplateSources,
+    plan: *const ConcreteTemplatePlan,
+) !bool {
+    var template_batch = std.ArrayList(lua.SourcePageRef).empty;
+    defer {
+        if (template_batch.items.len != 0) freeLuaSourceRefs(allocator, template_batch.items) else template_batch.deinit(allocator);
+    }
+    var module_batch = std.ArrayList(lua.SourcePageRef).empty;
+    defer {
+        if (module_batch.items.len != 0) freeLuaSourceRefs(allocator, module_batch.items) else module_batch.deinit(allocator);
+    }
+    var missing_template_names = std.ArrayList([]const u8).empty;
+    defer missing_template_names.deinit(allocator);
+    var missing_module_names = std.ArrayList([]const u8).empty;
+    defer missing_module_names.deinit(allocator);
+
+    for (plan.compiled_templates) |name| {
+        if (sources.template_sources.contains(name)) continue;
+        if (findStructureRefByName(all_template_refs, name)) |ref| {
+            try template_batch.append(allocator, .{
+                .name = try allocator.dupe(u8, ref.name),
+                .page_start = ref.page_start,
+                .page_end = ref.page_end,
+            });
+        } else {
+            try missing_template_names.append(allocator, name);
+        }
+    }
+    for (plan.required_modules) |name| {
+        if (sources.module_sources.contains(name)) continue;
+        if (findStructureRefByName(all_module_refs, name)) |ref| {
+            try module_batch.append(allocator, .{
+                .name = try allocator.dupe(u8, ref.name),
+                .page_start = ref.page_start,
+                .page_end = ref.page_end,
+            });
+        } else {
+            try missing_module_names.append(allocator, name);
+        }
+    }
+
+    if (template_batch.items.len == 0 and module_batch.items.len == 0 and missing_template_names.items.len == 0 and missing_module_names.items.len == 0) {
+        return false;
+    }
+
+    if (template_batch.items.len != 0 or module_batch.items.len != 0) {
+        var batch_sources = try loadSourcesByRefsWithScanFallbackAlloc(allocator, xml_path, template_batch.items, module_batch.items);
+        defer batch_sources.deinit(allocator);
+        try mergeTemplateSourcesAlloc(allocator, sources, &batch_sources);
+    }
+    if (missing_template_names.items.len != 0 or missing_module_names.items.len != 0) {
+        var fallback_sources = try lua.scanSelectedTemplateAndModuleSourcesAlloc(
+            allocator,
+            xml_path,
+            missing_template_names.items,
+            missing_module_names.items,
+        );
+        defer fallback_sources.deinit(allocator);
+        try mergeTemplateSourcesAlloc(allocator, sources, &fallback_sources);
+    }
+    try loadSupplementalModulesAlloc(allocator, xml_path, sources);
+    try applyTemplateSourceOverridesAlloc(allocator, sources);
+    return true;
+}
+
 const DependencyAuditView = struct {
     unresolved_templates: []const []const u8 = &.{},
     missing_modules: []const []const u8 = &.{},
@@ -1013,12 +1701,19 @@ pub const CompileRuntimeResult = struct {
     source: []u8,
     compiled_count: usize,
     metadata_only_count: usize,
+    module_count: usize,
     unsupported: []const UnsupportedTemplate,
 };
 
 const DynamicTemplateDispatchEntry = struct {
-    normalized: []const u8,
+    key: NormalizedTemplateNameKey,
     dispatch_id: u16,
+};
+
+const NormalizedTemplateNameKey = struct {
+    primary: u64,
+    secondary: u64,
+    len: u32,
 };
 
 fn templateCompileTraceEnabled() bool {
@@ -1035,6 +1730,33 @@ fn normalizeTemplateLookupNameAlloc(allocator: std.mem.Allocator, name: []const 
     return try out.toOwnedSlice(allocator);
 }
 
+fn normalizedTemplateLookupKey(name: []const u8) NormalizedTemplateNameKey {
+    var primary = std.hash.Wyhash.init(0x6b7d4f13e9c2a581);
+    var secondary = std.hash.Wyhash.init(0x91a54d7bc38ef245);
+    var len: u32 = 0;
+    for (name) |byte| {
+        const normalized = std.ascii.toLower(byte);
+        primary.update(&[_]u8{normalized});
+        secondary.update(&[_]u8{normalized});
+        len += 1;
+    }
+    return .{
+        .primary = primary.final(),
+        .secondary = secondary.final(),
+        .len = len,
+    };
+}
+
+fn compareNormalizedTemplateLookupKey(lhs: NormalizedTemplateNameKey, rhs: NormalizedTemplateNameKey) std.math.Order {
+    if (lhs.primary < rhs.primary) return .lt;
+    if (lhs.primary > rhs.primary) return .gt;
+    if (lhs.secondary < rhs.secondary) return .lt;
+    if (lhs.secondary > rhs.secondary) return .gt;
+    if (lhs.len < rhs.len) return .lt;
+    if (lhs.len > rhs.len) return .gt;
+    return .eq;
+}
+
 fn buildDynamicDispatchEntriesAlloc(
     allocator: std.mem.Allocator,
     dynamic_templates: []const []const u8,
@@ -1042,10 +1764,7 @@ fn buildDynamicDispatchEntriesAlloc(
     template_indexes: *const std.StringHashMap(usize),
 ) ![]DynamicTemplateDispatchEntry {
     var entries: std.ArrayList(DynamicTemplateDispatchEntry) = .empty;
-    errdefer {
-        for (entries.items) |entry| allocator.free(entry.normalized);
-        entries.deinit(allocator);
-    }
+    errdefer entries.deinit(allocator);
 
     var seen = std.StringHashMapUnmanaged(void){};
     defer {
@@ -1053,11 +1772,13 @@ fn buildDynamicDispatchEntriesAlloc(
         while (it.next()) |entry| allocator.free(entry.key_ptr.*);
         seen.deinit(allocator);
     }
+    var seen_keys = std.AutoHashMapUnmanaged(NormalizedTemplateNameKey, void){};
+    defer seen_keys.deinit(allocator);
 
     for (dynamic_templates) |name| {
         const template_index = template_indexes.get(name) orelse continue;
         const template = templates[template_index];
-        if (template.class == .unsupported) continue;
+        if (template.class == .unsupported or template.dispatch_id == 0) continue;
 
         const normalized = try normalizeTemplateLookupNameAlloc(allocator, name);
         errdefer allocator.free(normalized);
@@ -1067,15 +1788,19 @@ fn buildDynamicDispatchEntriesAlloc(
             continue;
         }
         gop.key_ptr.* = normalized;
+        const key = normalizedTemplateLookupKey(normalized);
+        const key_gop = try seen_keys.getOrPut(allocator, key);
+        if (key_gop.found_existing) return error.TemplateNameHashCollision;
+        key_gop.key_ptr.* = key;
         try entries.append(allocator, .{
-            .normalized = normalized,
+            .key = key,
             .dispatch_id = template.dispatch_id,
         });
     }
 
     std.mem.sort(DynamicTemplateDispatchEntry, entries.items, {}, struct {
         fn lessThan(_: void, lhs: DynamicTemplateDispatchEntry, rhs: DynamicTemplateDispatchEntry) bool {
-            return std.mem.order(u8, lhs.normalized, rhs.normalized) == .lt;
+            return compareNormalizedTemplateLookupKey(lhs.key, rhs.key) == .lt;
         }
     }.lessThan);
     return entries.toOwnedSlice(allocator);
@@ -1107,8 +1832,9 @@ pub fn compileTemplateRuntimeWithModeAlloc(
     defer freeTemplateSpecs(allocator, dispatch_templates);
     const dynamic_templates = try collectDynamicTemplateNamesAlloc(allocator, reachable_templates, sources);
     defer freeOwnedStrings(allocator, dynamic_templates);
-    return compileTemplateRuntimeWithDispatchAlloc(
+    return compileTemplateRuntimeWithTemplateSetAlloc(
         allocator,
+        reachable_templates,
         dispatch_templates,
         dynamic_templates,
         required_modules,
@@ -1117,31 +1843,35 @@ pub fn compileTemplateRuntimeWithModeAlloc(
     );
 }
 
-fn compileTemplateRuntimeWithDispatchAlloc(
+fn compileTemplateRuntimeWithTemplateSetAlloc(
     allocator: std.mem.Allocator,
+    compiled_templates: []const []const u8,
     dispatch_templates: []const structure_report.TemplateSpec,
     dynamic_templates: []const []const u8,
     required_modules: []const []const u8,
     sources: *const lua.TemplateSources,
     mode: CompileMode,
 ) !CompileRuntimeResult {
-    var templates = try allocator.alloc(TemplateInfo, dispatch_templates.len);
+    var templates = try allocator.alloc(TemplateInfo, compiled_templates.len);
     errdefer allocator.free(templates);
 
     var template_indexes = std.StringHashMap(usize).init(allocator);
     defer template_indexes.deinit();
 
-    for (dispatch_templates, 0..) |entry, idx| {
-        const key = entry.name;
+    for (compiled_templates, 0..) |key, idx| {
         const duped_key = try allocator.dupe(u8, key);
         templates[idx] = .{
             .key = duped_key,
-            .dispatch_id = entry.code,
+            .dispatch_id = 0,
             .source = sources.template_sources.get(key) orelse "",
             .manual_impl = manualTemplateImplForKey(key),
             .fn_ident = try templateFnIdentAlloc(allocator, key, idx),
         };
         try template_indexes.put(duped_key, idx);
+    }
+    for (dispatch_templates) |entry| {
+        const template_index = template_indexes.get(entry.name) orelse return error.InvalidStructureReport;
+        templates[template_index].dispatch_id = entry.code;
     }
 
     for (templates) |*template| {
@@ -1163,6 +1893,9 @@ fn compileTemplateRuntimeWithDispatchAlloc(
             };
             continue;
         };
+        if (dynamic_templates.len != 0) {
+            rewriteDynamicTemplateCallCandidates(@constCast(template.nodes), dynamic_templates);
+        }
     }
 
     var modules = try buildModuleInfosAlloc(allocator, templates, required_modules, sources);
@@ -1205,10 +1938,7 @@ fn compileTemplateRuntimeWithDispatchAlloc(
         templates,
         &template_indexes,
     );
-    defer {
-        for (dynamic_dispatch_entries) |entry| allocator.free(entry.normalized);
-        allocator.free(dynamic_dispatch_entries);
-    }
+    defer allocator.free(dynamic_dispatch_entries);
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
@@ -1281,42 +2011,49 @@ fn compileTemplateRuntimeWithDispatchAlloc(
         .source = try out.toOwnedSlice(),
         .compiled_count = compiled_count,
         .metadata_only_count = metadata_only_count,
+        .module_count = modules.items.len,
         .unsupported = try unsupported.toOwnedSlice(allocator),
     };
 }
 
 fn emitClassifier(
-    allocator: std.mem.Allocator,
+    _: std.mem.Allocator,
     writer: *std.Io.Writer,
     templates: []const TemplateInfo,
     dynamic_dispatch_entries: []const DynamicTemplateDispatchEntry,
 ) !void {
     try writer.writeAll(
         \\
-        \\pub fn classifyTemplate(name: []const u8) ?TemplateClass {
-        \\    var lo: usize = 0;
-        \\    var hi: usize = template_class_entries.len;
-        \\    while (lo < hi) {
-        \\        const mid = lo + ((hi - lo) / 2);
-        \\        const entry = template_class_entries[mid];
-        \\        switch (support.compareTemplateNameToNormalized(name, entry.normalized)) {
-        \\            .lt => hi = mid,
-        \\            .gt => lo = mid + 1,
-        \\            .eq => return entry.class,
-        \\        }
-        \\    }
-        \\    return null;
-        \\}
-        \\
         \\pub const TemplateDispatchId = u16;
         \\
+        \\pub fn classifyTemplateDispatchId(dispatch_id: TemplateDispatchId) ?TemplateClass {
+        \\    switch (dispatch_id) {
+        \\
+    );
+    for (templates) |template| {
+        if (template.dispatch_id == 0) continue;
+        try writer.writeAll("        ");
+        try writer.print("{d}", .{template.dispatch_id});
+        try writer.writeAll(" => .");
+        try writer.writeAll(@tagName(template.class));
+        try writer.writeAll(",\n");
+    }
+    try writer.writeAll(
+        \\        else => return null,
+        \\    }
+        \\}
+        \\
+    );
+    try writer.writeAll(
+        \\
         \\pub fn lookupDynamicTemplateDispatchId(name: []const u8) ?TemplateDispatchId {
+        \\    const key = support.normalizedTemplateNameKey(name);
         \\    var lo: usize = 0;
         \\    var hi: usize = dynamic_template_dispatch_entries.len;
         \\    while (lo < hi) {
         \\        const mid = lo + ((hi - lo) / 2);
         \\        const entry = dynamic_template_dispatch_entries[mid];
-        \\        switch (support.compareTemplateNameToNormalized(name, entry.normalized)) {
+        \\        switch (support.compareNormalizedTemplateNameKey(key, entry.key)) {
         \\            .lt => hi = mid,
         \\            .gt => lo = mid + 1,
         \\            .eq => return entry.dispatch_id,
@@ -1326,37 +2063,21 @@ fn emitClassifier(
         \\}
         \\
         \\const DynamicTemplateDispatchEntry = struct {
-        \\    normalized: []const u8,
+        \\    key: support.NormalizedTemplateNameKey,
         \\    dispatch_id: TemplateDispatchId,
-        \\};
-        \\
-        \\const TemplateClassEntry = struct {
-        \\    normalized: []const u8,
-        \\    class: TemplateClass,
-        \\};
-        \\
-        \\const template_class_entries = [_]TemplateClassEntry{
-        \\
-    );
-    for (templates) |template| {
-        const normalized = try normalizeTemplateLookupNameAlloc(allocator, template.key);
-        defer allocator.free(normalized);
-        try writer.writeAll("    .{ .normalized = ");
-        try appendZigStringLiteral(writer, normalized);
-        try writer.writeAll(", .class = .");
-        try writer.writeAll(@tagName(template.class));
-        try writer.writeAll(" },\n");
-    }
-    try writer.writeAll(
         \\};
         \\
         \\const dynamic_template_dispatch_entries = [_]DynamicTemplateDispatchEntry{
         \\
     );
     for (dynamic_dispatch_entries) |entry| {
-        try writer.writeAll("    .{ .normalized = ");
-        try appendZigStringLiteral(writer, entry.normalized);
-        try writer.print(", .dispatch_id = {d} }},\n", .{entry.dispatch_id});
+        try writer.writeAll("    .{ .key = .{ .primary = ");
+        try writer.print("{d}", .{entry.key.primary});
+        try writer.writeAll(", .secondary = ");
+        try writer.print("{d}", .{entry.key.secondary});
+        try writer.writeAll(", .len = ");
+        try writer.print("{d}", .{entry.key.len});
+        try writer.print(" }}, .dispatch_id = {d} }},\n", .{entry.dispatch_id});
     }
     try writer.writeAll(
         \\};
@@ -1376,7 +2097,7 @@ fn emitDispatcher(writer: *std.Io.Writer, templates: []const TemplateInfo) !void
         \\
     );
     for (templates) |template| {
-        if (template.class == .unsupported) continue;
+        if (template.class == .unsupported or template.dispatch_id == 0) continue;
         try writer.writeAll("        ");
         try writer.print("{d}", .{template.dispatch_id});
         try writer.writeAll(" => {\n");
@@ -1408,7 +2129,7 @@ fn emitBytecodeDispatcher(writer: *std.Io.Writer, templates: []const TemplateInf
         \\
     );
     for (templates) |template| {
-        if (template.class == .unsupported) continue;
+        if (template.class == .unsupported or template.dispatch_id == 0) continue;
         try writer.writeAll("        ");
         try writer.print("{d}", .{template.dispatch_id});
         try writer.writeAll(" => {\n");
@@ -3210,6 +3931,9 @@ fn templateCallHasUnsupportedCandidate(
     template_indexes: *const std.StringHashMap(usize),
     call: TemplateCallNode,
 ) bool {
+    if (call.name_nodes.len != 0) {
+        return !templateCallHasCompiledCandidate(templates, template_indexes, call);
+    }
     if (call.resolved_names.len == 0) return true;
     for (call.resolved_names) |candidate| {
         const callee_index = template_indexes.get(candidate) orelse return true;
@@ -3348,6 +4072,7 @@ fn findUnsupportedTemplateDependencyInNode(
         .template_call => |call| blk: {
             if (call.name_nodes.len != 0) {
                 if (findFirstUnsupportedTemplateDependency(call.name_nodes, templates, template_indexes)) |name| break :blk name;
+                if (templateCallHasCompiledCandidate(templates, template_indexes, call)) break :blk null;
             }
             if (call.resolved_names.len == 0) break :blk "<dynamic-template-name>";
             for (call.resolved_names) |candidate| {
@@ -3738,6 +4463,34 @@ fn resolveTemplateClass(
     return class;
 }
 
+fn rewriteDynamicTemplateCallCandidates(
+    nodes: []Node,
+    dynamic_templates: []const []const u8,
+) void {
+    for (nodes) |*node| switch (node.*) {
+        .text => {},
+        .param => |*param| rewriteDynamicTemplateCallCandidates(@constCast(param.default_nodes), dynamic_templates),
+        .invoke_call => |*call| for (call.args) |*arg| {
+            if (arg.name_is_dynamic) rewriteDynamicTemplateCallCandidates(@constCast(arg.name_nodes), dynamic_templates);
+            rewriteDynamicTemplateCallCandidates(@constCast(arg.value_nodes), dynamic_templates);
+        },
+        .parser_func => |*func| for (func.args) |*arg| {
+            if (arg.name_is_dynamic) rewriteDynamicTemplateCallCandidates(@constCast(arg.name_nodes), dynamic_templates);
+            rewriteDynamicTemplateCallCandidates(@constCast(arg.value_nodes), dynamic_templates);
+        },
+        .template_call => |*call| {
+            if (call.name_nodes.len != 0) {
+                call.resolved_names = dynamic_templates;
+                rewriteDynamicTemplateCallCandidates(@constCast(call.name_nodes), dynamic_templates);
+            }
+            for (call.args) |*arg| {
+                if (arg.name_is_dynamic) rewriteDynamicTemplateCallCandidates(@constCast(arg.name_nodes), dynamic_templates);
+                rewriteDynamicTemplateCallCandidates(@constCast(arg.value_nodes), dynamic_templates);
+            }
+        },
+    };
+}
+
 fn nodeContributesVisibleOutput(
     templates: []TemplateInfo,
     template_indexes: *const std.StringHashMap(usize),
@@ -3798,6 +4551,17 @@ fn parseNodesAlloc(
         if (startsWithCategoryLink(input, cursor.*)) {
             try appendTextNode(allocator, &nodes, input[text_start..cursor.*]);
             cursor.* = skipBalancedLink(input, cursor.*) orelse input.len;
+            text_start = cursor.*;
+            continue;
+        }
+        // Four opening braces are a template whose head starts with another
+        // template/parser-function invocation, not a parameter.
+        if (startsWithAt(input, cursor.*, "{{{{")) {
+            try appendTextNode(allocator, &nodes, input[text_start..cursor.*]);
+            const end = findTemplateEnd(input, cursor.*) orelse return error.UnbalancedTemplate;
+            const body = input[cursor.* + 2 .. end];
+            try nodes.append(allocator, try parseCallNodeAlloc(allocator, body));
+            cursor.* = end + 2;
             text_start = cursor.*;
             continue;
         }
@@ -3998,7 +4762,15 @@ fn isTruthyText(text: []const u8) bool {
 }
 
 fn resolveTemplateNamesFromNodesAlloc(allocator: std.mem.Allocator, nodes: []const Node) !?[]const []const u8 {
-    const raw_values = try resolveStaticTextValuesAlloc(allocator, nodes);
+    return resolveTemplateNamesFromNodesWithArgsAlloc(allocator, nodes, null);
+}
+
+fn resolveTemplateNamesFromNodesWithArgsAlloc(
+    allocator: std.mem.Allocator,
+    nodes: []const Node,
+    args: ?*const ConcreteTemplateArgs,
+) !?[]const []const u8 {
+    const raw_values = try resolveTextValuesAlloc(allocator, nodes, args);
     defer if (raw_values) |values| freeOwnedStrings(allocator, values);
 
     const values = raw_values orelse return null;
@@ -4031,6 +4803,22 @@ fn resolveStaticTextValuesAlloc(
     allocator: std.mem.Allocator,
     nodes: []const Node,
 ) std.mem.Allocator.Error!?[]const []const u8 {
+    return resolveTextValuesAlloc(allocator, nodes, null);
+}
+
+fn resolveConcreteTextValuesAlloc(
+    allocator: std.mem.Allocator,
+    nodes: []const Node,
+    args: *const ConcreteTemplateArgs,
+) std.mem.Allocator.Error!?[]const []const u8 {
+    return resolveTextValuesAlloc(allocator, nodes, args);
+}
+
+fn resolveTextValuesAlloc(
+    allocator: std.mem.Allocator,
+    nodes: []const Node,
+    args: ?*const ConcreteTemplateArgs,
+) std.mem.Allocator.Error!?[]const []const u8 {
     var current = try allocator.alloc([]const u8, 1);
     errdefer {
         for (current) |value| allocator.free(value);
@@ -4040,7 +4828,7 @@ fn resolveStaticTextValuesAlloc(
     var current_len: usize = 1;
 
     for (nodes) |node| {
-        const node_values = try resolveStaticTextValuesForNodeAlloc(allocator, node) orelse {
+        const node_values = try resolveTextValuesForNodeAlloc(allocator, node, args) orelse {
             for (current[0..current_len]) |value| allocator.free(value);
             allocator.free(current);
             return null;
@@ -4081,6 +4869,14 @@ fn resolveStaticTextValuesForNodeAlloc(
     allocator: std.mem.Allocator,
     node: Node,
 ) std.mem.Allocator.Error!?[]const []const u8 {
+    return resolveTextValuesForNodeAlloc(allocator, node, null);
+}
+
+fn resolveTextValuesForNodeAlloc(
+    allocator: std.mem.Allocator,
+    node: Node,
+    args: ?*const ConcreteTemplateArgs,
+) std.mem.Allocator.Error!?[]const []const u8 {
     switch (node) {
         .text => |text| {
             const out = try allocator.alloc([]const u8, 1);
@@ -4088,11 +4884,21 @@ fn resolveStaticTextValuesForNodeAlloc(
             return out;
         },
         .param => |param| {
+            if (args) |actual_args| {
+                if (actual_args.get(param.key)) |value| return switch (value) {
+                    .known => |known| blk: {
+                        const out = try allocator.alloc([]const u8, 1);
+                        out[0] = try allocator.dupe(u8, known);
+                        break :blk out;
+                    },
+                    .unknown => null,
+                };
+            }
             if (param.default_nodes.len == 0) return null;
-            return resolveStaticTextValuesAlloc(allocator, param.default_nodes);
+            return resolveTextValuesAlloc(allocator, param.default_nodes, args);
         },
         .template_call, .invoke_call => return null,
-        .parser_func => |func| return resolveStaticTextValuesForParserFuncAlloc(allocator, func),
+        .parser_func => |func| return resolveTextValuesForParserFuncAlloc(allocator, func, args),
     }
 }
 
@@ -4100,16 +4906,24 @@ fn resolveStaticTextValuesForParserFuncAlloc(
     allocator: std.mem.Allocator,
     func: ParserFunctionNode,
 ) std.mem.Allocator.Error!?[]const []const u8 {
+    return resolveTextValuesForParserFuncAlloc(allocator, func, null);
+}
+
+fn resolveTextValuesForParserFuncAlloc(
+    allocator: std.mem.Allocator,
+    func: ParserFunctionNode,
+    args: ?*const ConcreteTemplateArgs,
+) std.mem.Allocator.Error!?[]const []const u8 {
     switch (func.kind) {
         .if_ => {
             const cond_values = if (func.args.len != 0)
-                try resolveStaticTextValuesAlloc(allocator, func.args[0].value_nodes)
+                try resolveTextValuesAlloc(allocator, func.args[0].value_nodes, args)
             else
                 null;
             defer if (cond_values) |values| freeOwnedStrings(allocator, values);
 
             const then_values = if (func.args.len > 1)
-                (try resolveStaticTextValuesAlloc(allocator, func.args[1].value_nodes) orelse return null)
+                (try resolveTextValuesAlloc(allocator, func.args[1].value_nodes, args) orelse return null)
             else blk: {
                 const out = try allocator.alloc([]const u8, 1);
                 out[0] = try allocator.dupe(u8, "");
@@ -4118,7 +4932,7 @@ fn resolveStaticTextValuesForParserFuncAlloc(
             defer freeOwnedStrings(allocator, then_values);
 
             const else_values = if (func.args.len > 2)
-                (try resolveStaticTextValuesAlloc(allocator, func.args[2].value_nodes) orelse return null)
+                (try resolveTextValuesAlloc(allocator, func.args[2].value_nodes, args) orelse return null)
             else blk: {
                 const out = try allocator.alloc([]const u8, 1);
                 out[0] = try allocator.dupe(u8, "");
@@ -4138,11 +4952,11 @@ fn resolveStaticTextValuesForParserFuncAlloc(
             return @as(?[]const []const u8, try mergeUniqueStringSlicesAlloc(allocator, &.{ then_values, else_values }));
         },
         .ifexist => {
-            const title_values = try resolveStaticTextValuesAlloc(allocator, func.args[0].value_nodes);
+            const title_values = try resolveTextValuesAlloc(allocator, func.args[0].value_nodes, args);
             defer if (title_values) |values| freeOwnedStrings(allocator, values);
 
             const then_values = if (func.args.len > 1)
-                (try resolveStaticTextValuesAlloc(allocator, func.args[1].value_nodes) orelse return null)
+                (try resolveTextValuesAlloc(allocator, func.args[1].value_nodes, args) orelse return null)
             else blk: {
                 const out = try allocator.alloc([]const u8, 1);
                 out[0] = try allocator.dupe(u8, "");
@@ -4151,7 +4965,7 @@ fn resolveStaticTextValuesForParserFuncAlloc(
             defer freeOwnedStrings(allocator, then_values);
 
             const else_values = if (func.args.len > 2)
-                (try resolveStaticTextValuesAlloc(allocator, func.args[2].value_nodes) orelse return null)
+                (try resolveTextValuesAlloc(allocator, func.args[2].value_nodes, args) orelse return null)
             else blk: {
                 const out = try allocator.alloc([]const u8, 1);
                 out[0] = try allocator.dupe(u8, "");
@@ -4174,13 +4988,13 @@ fn resolveStaticTextValuesForParserFuncAlloc(
         },
         .ifeq => {
             if (func.args.len < 4) return null;
-            const lhs_values = try resolveStaticTextValuesAlloc(allocator, func.args[0].value_nodes);
+            const lhs_values = try resolveTextValuesAlloc(allocator, func.args[0].value_nodes, args);
             defer if (lhs_values) |values| freeOwnedStrings(allocator, values);
-            const rhs_values = try resolveStaticTextValuesAlloc(allocator, func.args[1].value_nodes);
+            const rhs_values = try resolveTextValuesAlloc(allocator, func.args[1].value_nodes, args);
             defer if (rhs_values) |values| freeOwnedStrings(allocator, values);
-            const then_values = try resolveStaticTextValuesAlloc(allocator, func.args[2].value_nodes) orelse return null;
+            const then_values = try resolveTextValuesAlloc(allocator, func.args[2].value_nodes, args) orelse return null;
             defer freeOwnedStrings(allocator, then_values);
-            const else_values = try resolveStaticTextValuesAlloc(allocator, func.args[3].value_nodes) orelse return null;
+            const else_values = try resolveTextValuesAlloc(allocator, func.args[3].value_nodes, args) orelse return null;
             defer freeOwnedStrings(allocator, else_values);
 
             if (lhs_values) |lhs_set| {
@@ -4202,7 +5016,7 @@ fn resolveStaticTextValuesForParserFuncAlloc(
         },
         .switch_ => {
             if (func.args.len == 0) return null;
-            const key_values = try resolveStaticTextValuesAlloc(allocator, func.args[0].value_nodes);
+            const key_values = try resolveTextValuesAlloc(allocator, func.args[0].value_nodes, args);
             defer if (key_values) |values| freeOwnedStrings(allocator, values);
 
             var matches: std.ArrayList([]const []const u8) = .empty;
@@ -4213,11 +5027,11 @@ fn resolveStaticTextValuesForParserFuncAlloc(
             for (func.args[1..]) |arg| {
                 if (arg.name_is_dynamic) return null;
                 if (switchArgIsDefault(arg)) {
-                    default_values = try resolveStaticTextValuesAlloc(allocator, arg.value_nodes);
+                    default_values = try resolveTextValuesAlloc(allocator, arg.value_nodes, args);
                     continue;
                 }
                 const label = arg.name orelse continue;
-                const value_set = try resolveStaticTextValuesAlloc(allocator, arg.value_nodes) orelse return null;
+                const value_set = try resolveTextValuesAlloc(allocator, arg.value_nodes, args) orelse return null;
                 errdefer freeOwnedStrings(allocator, value_set);
                 if (key_values) |keys| {
                     var matched = false;
@@ -4245,7 +5059,7 @@ fn resolveStaticTextValuesForParserFuncAlloc(
         },
         .lc, .uc, .lcfirst, .ucfirst => {
             if (func.args.len == 0) return null;
-            const input_values = try resolveStaticTextValuesAlloc(allocator, func.args[0].value_nodes) orelse return null;
+            const input_values = try resolveTextValuesAlloc(allocator, func.args[0].value_nodes, args) orelse return null;
             defer freeOwnedStrings(allocator, input_values);
             const out = try allocator.alloc([]const u8, input_values.len);
             errdefer {
@@ -4437,6 +5251,11 @@ fn advanceNestedMarkup(input: []const u8, cursor: *usize, stack: *NestedMarkupSt
     }
     if (matchSkippableTag(input[cursor.*..])) |tag_len| {
         cursor.* += tag_len;
+        return true;
+    }
+    if (startsWithAt(input, cursor.*, "{{{{")) {
+        if (!stack.push(.template)) return false;
+        cursor.* += 2;
         return true;
     }
     if (startsWithAt(input, cursor.*, "{{{")) {
@@ -4863,6 +5682,96 @@ test "template compiler emits direct nested template calls" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "lookupDynamicTemplateDispatchId") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "renderTemplateByDispatchId") != null);
     try std.testing.expectEqual(@as(usize, 2), generated.compiled_count);
+}
+
+test "concrete template plan keeps only dynamically selected template targets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var sources = lua.TemplateSources{
+        .template_sources = std.StringHashMap([]const u8).init(allocator),
+        .module_sources = std.StringHashMap([]const u8).init(allocator),
+    };
+    defer sources.deinit(allocator);
+
+    try sources.template_sources.put(try allocator.dupe(u8, "chooser"), try allocator.dupe(u8, "{{wrapper|{{{1|FOO}}}}}"));
+    try sources.template_sources.put(try allocator.dupe(u8, "wrapper"), try allocator.dupe(u8, "{{{{lc:{{{1|FOO}}}}}}}"));
+    try sources.template_sources.put(try allocator.dupe(u8, "foo"), try allocator.dupe(u8, "{{#invoke:modfoo|main}}"));
+    try sources.template_sources.put(try allocator.dupe(u8, "bar"), try allocator.dupe(u8, "{{#invoke:modbar|main}}"));
+    try sources.module_sources.put(try allocator.dupe(u8, "modfoo"), try allocator.dupe(u8, "return { main = function() return \"foo\" end }"));
+    try sources.module_sources.put(try allocator.dupe(u8, "modbar"), try allocator.dupe(u8, "return { main = function() return \"bar\" end }"));
+
+    var plan = try collectConcreteTemplatePlanFromPagesAlloc(
+        std.testing.allocator,
+        &.{"chooser"},
+        &.{"{{chooser|BAR}}"},
+        &sources,
+    );
+    defer plan.deinit(std.testing.allocator);
+
+    try std.testing.expect(stringSliceContains(plan.compiled_templates, "chooser"));
+    try std.testing.expect(stringSliceContains(plan.compiled_templates, "wrapper"));
+    try std.testing.expect(stringSliceContains(plan.compiled_templates, "bar"));
+    try std.testing.expect(!stringSliceContains(plan.compiled_templates, "foo"));
+    try std.testing.expect(stringSliceContains(plan.dynamic_templates, "bar"));
+    try std.testing.expect(!stringSliceContains(plan.dynamic_templates, "foo"));
+    try std.testing.expect(stringSliceContains(plan.required_modules, "modbar"));
+    try std.testing.expect(!stringSliceContains(plan.required_modules, "modfoo"));
+}
+
+test "template compiler emits only concretely selected dynamic targets and modules" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var sources = lua.TemplateSources{
+        .template_sources = std.StringHashMap([]const u8).init(allocator),
+        .module_sources = std.StringHashMap([]const u8).init(allocator),
+    };
+    defer sources.deinit(allocator);
+
+    try sources.template_sources.put(try allocator.dupe(u8, "chooser"), try allocator.dupe(u8, "{{wrapper|{{{1|FOO}}}}}"));
+    try sources.template_sources.put(try allocator.dupe(u8, "wrapper"), try allocator.dupe(u8, "{{{{lc:{{{1|FOO}}}}}}}"));
+    try sources.template_sources.put(try allocator.dupe(u8, "foo"), try allocator.dupe(u8, "{{#invoke:modfoo|main}}"));
+    try sources.template_sources.put(try allocator.dupe(u8, "bar"), try allocator.dupe(u8, "{{#invoke:modbar|main}}"));
+    try sources.module_sources.put(try allocator.dupe(u8, "modfoo"), try allocator.dupe(u8, "return { main = function() return \"foo\" end }"));
+    try sources.module_sources.put(try allocator.dupe(u8, "modbar"), try allocator.dupe(u8, "return { main = function() return \"bar\" end }"));
+
+    var plan = try collectConcreteTemplatePlanFromPagesAlloc(
+        std.testing.allocator,
+        &.{"chooser"},
+        &.{"{{chooser|BAR}}"},
+        &sources,
+    );
+    defer plan.deinit(std.testing.allocator);
+
+    const base_dispatch_templates = try buildSequentialTemplateSpecsAlloc(allocator, &.{"chooser"});
+    defer freeTemplateSpecs(allocator, base_dispatch_templates);
+    const dispatch_templates = try buildDispatchTemplateSpecsAlloc(allocator, base_dispatch_templates, plan.dynamic_templates);
+    defer freeTemplateSpecs(allocator, dispatch_templates);
+
+    const generated = try compileTemplateRuntimeWithTemplateSetAlloc(
+        allocator,
+        plan.compiled_templates,
+        dispatch_templates,
+        plan.dynamic_templates,
+        plan.required_modules,
+        &sources,
+        .zig,
+    );
+    defer {
+        allocator.free(generated.source);
+        for (generated.unsupported) |entry| allocator.free(entry.reason);
+        allocator.free(generated.unsupported);
+    }
+
+    try std.testing.expectEqual(@as(usize, 3), generated.compiled_count);
+    try std.testing.expectEqual(@as(usize, 0), generated.metadata_only_count);
+    try std.testing.expectEqual(@as(usize, 1), generated.module_count);
+    try std.testing.expectEqual(@as(usize, 0), generated.unsupported.len);
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, generated.source, "fn tpl_"));
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "\"foo\"") == null);
 }
 
 test "template compiler strips metadata and emits nop for pure metadata template" {

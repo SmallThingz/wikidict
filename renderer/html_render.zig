@@ -1205,7 +1205,8 @@ fn isStrictSupportedTemplateBody(body: []const u8) bool {
 fn generatedTemplateClassHtml(name: []const u8) ?generated_templates.TemplateClass {
     const trimmed = trimWikiWhitespace(name);
     if (trimmed.len == 0) return null;
-    return generated_templates.classifyTemplate(trimmed);
+    const dispatch_id = template_support.templateDispatchId(trimmed) orelse return null;
+    return generated_templates.classifyTemplateDispatchId(dispatch_id);
 }
 
 fn isStrictSupportedTemplateName(name: []const u8) bool {
@@ -1611,9 +1612,9 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
 }
 
 test "strict template support falls back to manual allowlist when generated runtime marks a template unsupported" {
-    try std.testing.expect((generatedTemplateClassHtml("place") orelse return error.TestExpectedEqual) == .unsupported);
+    try std.testing.expect(generatedTemplateClassHtml("place") == null);
     try std.testing.expect(isStrictSupportedTemplateName("place"));
-    try std.testing.expect((generatedTemplateClassHtml("audio") orelse return error.TestExpectedEqual) == .unsupported);
+    try std.testing.expect(generatedTemplateClassHtml("audio") == null);
     try std.testing.expect(isStrictSupportedTemplateName("audio"));
 }
 

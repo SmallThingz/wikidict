@@ -740,9 +740,13 @@ fn collectTempRawCandidatesAlloc(
         const title_encoded = try readNullTerminatedSlice(mapped, &title_cursor, titles_end);
         const payload_encoded = try readNullTerminatedSlice(mapped, &payload_cursor, payloads_end);
 
-        const decoded_title = try compact.decodeAlloc(allocator, title_encoded);
+        const title_bytes = try format.decodeStorageAlloc(allocator, title_encoded);
+        defer allocator.free(title_bytes);
+        const decoded_title = try compact.decodeAlloc(allocator, title_bytes);
         defer allocator.free(decoded_title);
-        const decoded_payload = try compact.decodeAlloc(allocator, payload_encoded);
+        const payload_bytes = try format.decodeStorageAlloc(allocator, payload_encoded);
+        defer allocator.free(payload_bytes);
+        const decoded_payload = try compact.decodeAlloc(allocator, payload_bytes);
         defer allocator.free(decoded_payload);
 
         const normalized_title = try normalizeOwnedAlloc(allocator, decoded_title);
@@ -790,9 +794,13 @@ fn collectTempAliasCandidatesAlloc(
     for (out) |*candidate| {
         const title_encoded = try readNullTerminatedSlice(mapped, &title_cursor, titles_end);
         const target_encoded = try readNullTerminatedSlice(mapped, &target_cursor, targets_end);
-        const decoded_title = try compact.decodeAlloc(allocator, title_encoded);
+        const title_bytes = try format.decodeStorageAlloc(allocator, title_encoded);
+        defer allocator.free(title_bytes);
+        const decoded_title = try compact.decodeAlloc(allocator, title_bytes);
         defer allocator.free(decoded_title);
-        const decoded_target = try compact.decodeAlloc(allocator, target_encoded);
+        const target_bytes = try format.decodeStorageAlloc(allocator, target_encoded);
+        defer allocator.free(target_bytes);
+        const decoded_target = try compact.decodeAlloc(allocator, target_bytes);
         defer allocator.free(decoded_target);
 
         candidate.* = .{
@@ -1290,7 +1298,7 @@ const OutputWriter = struct {
     ) !void {
         if (std.mem.indexOfScalar(u8, value, 0) != null) return error.InvalidDictionaryFile;
         const encoded = try compact.encodeToList(&self.encode_buf, self.allocator, value);
-        try buffer.appendSlice(self.allocator, encoded);
+        try format.appendStorageEncoded(buffer, self.allocator, encoded);
         try buffer.append(self.allocator, 0);
         if (buffer.items.len >= flush_threshold) {
             try flushFn(self);

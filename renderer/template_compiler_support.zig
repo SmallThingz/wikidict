@@ -8,12 +8,7 @@ pub const TemplateClass = enum {
     unsupported,
 };
 
-pub const TemplateRenderIndex = u16;
-
-pub const TemplateLookup = struct {
-    class: TemplateClass,
-    render_index: TemplateRenderIndex,
-};
+pub const TemplateDispatchId = u16;
 
 pub const BytecodeParserFunctionKind = enum {
     displaytitle,
@@ -68,7 +63,7 @@ pub const BytecodeParam = struct {
 };
 
 pub const BytecodeTemplateCall = struct {
-    dispatch_id: TemplateRenderIndex = 0,
+    dispatch_id: TemplateDispatchId = 0,
     name_nodes: []const BytecodeNode = &.{},
     args: []const BytecodeArg = &.{},
 };
@@ -96,8 +91,39 @@ pub fn templateDispatchId(name: []const u8) ?u16 {
     return template_dispatch.dispatchIdFromName(name);
 }
 
-const template_registry_magic = "TREG";
-const template_registry_entry_size = 9;
+pub const NormalizedTemplateNameKey = struct {
+    primary: u64,
+    secondary: u64,
+    len: u32,
+};
+
+pub fn normalizedTemplateNameKey(name: []const u8) NormalizedTemplateNameKey {
+    var primary = std.hash.Wyhash.init(0x6b7d4f13e9c2a581);
+    var secondary = std.hash.Wyhash.init(0x91a54d7bc38ef245);
+    var len: u32 = 0;
+    for (name) |byte| {
+        if (isTemplateNameSpacer(byte)) continue;
+        const normalized = std.ascii.toLower(byte);
+        primary.update(&[_]u8{normalized});
+        secondary.update(&[_]u8{normalized});
+        len += 1;
+    }
+    return .{
+        .primary = primary.final(),
+        .secondary = secondary.final(),
+        .len = len,
+    };
+}
+
+pub fn compareNormalizedTemplateNameKey(lhs: NormalizedTemplateNameKey, rhs: NormalizedTemplateNameKey) std.math.Order {
+    if (lhs.primary < rhs.primary) return .lt;
+    if (lhs.primary > rhs.primary) return .gt;
+    if (lhs.secondary < rhs.secondary) return .lt;
+    if (lhs.secondary > rhs.secondary) return .gt;
+    if (lhs.len < rhs.len) return .lt;
+    if (lhs.len > rhs.len) return .gt;
+    return .eq;
+}
 
 pub const NamedArg = struct {
     name: []const u8,
@@ -1049,57 +1075,6 @@ pub fn compareTemplateNameToNormalized(lhs: []const u8, rhs_normalized: []const 
     return .gt;
 }
 
-pub fn lookupTemplateRegistry(blob: []const u8, name: []const u8) ?TemplateLookup {
-    const count = templateRegistryCount(blob) orelse return null;
-    var lo: usize = 0;
-    var hi: usize = count;
-    while (lo < hi) {
-        const mid = lo + ((hi - lo) / 2);
-        const entry = templateRegistryEntry(blob, mid) orelse return null;
-        switch (compareTemplateNameToNormalized(name, entry.normalized)) {
-            .lt => hi = mid,
-            .gt => lo = mid + 1,
-            .eq => return .{
-                .class = entry.class,
-                .render_index = entry.render_index,
-            },
-        }
-    }
-    return null;
-}
-
-const TemplateRegistryEntry = struct {
-    normalized: []const u8,
-    class: TemplateClass,
-    render_index: TemplateRenderIndex,
-};
-
-fn templateRegistryCount(blob: []const u8) ?usize {
-    if (blob.len < template_registry_magic.len + 4) return null;
-    if (!std.mem.eql(u8, blob[0..template_registry_magic.len], template_registry_magic)) return null;
-    return std.mem.readInt(u32, blob[template_registry_magic.len .. template_registry_magic.len + 4][0..4], .little);
-}
-
-fn templateRegistryEntry(blob: []const u8, index: usize) ?TemplateRegistryEntry {
-    const header_len = template_registry_magic.len + 4;
-    const entry_offset = header_len + (index * template_registry_entry_size);
-    if (entry_offset + template_registry_entry_size > blob.len) return null;
-
-    const name_offset: usize = std.mem.readInt(u32, blob[entry_offset .. entry_offset + 4][0..4], .little);
-    const name_len: usize = std.mem.readInt(u16, blob[entry_offset + 4 .. entry_offset + 6][0..2], .little);
-    const class_value = blob[entry_offset + 6];
-    if (class_value > @intFromEnum(TemplateClass.unsupported)) return null;
-    const class: TemplateClass = @enumFromInt(class_value);
-    const render_index = std.mem.readInt(u16, blob[entry_offset + 7 .. entry_offset + 9][0..2], .little);
-    if (name_offset + name_len > blob.len) return null;
-
-    return .{
-        .normalized = blob[name_offset .. name_offset + name_len],
-        .class = class,
-        .render_index = render_index,
-    };
-}
-
 fn isTemplateNameSpacer(byte: u8) bool {
     return byte == ' ' or byte == '\t' or byte == '\r' or byte == '\n' or byte == '_';
 }
@@ -1321,26 +1296,19 @@ test "template args parse positional and named fields" {
     try std.testing.expectEqualStrings("test", args.namedArg("gloss").?);
 }
 
-test "lookupTemplateRegistry matches normalized template names" {
-    const blob = [_]u8{
-        'T',  'R',  'E',                                  'G',
-        0x02, 0x00, 0x00,                                 0x00,
-        0x1A, 0x00, 0x00,                                 0x00,
-        0x06, 0x00, @intFromEnum(TemplateClass.compiled), 0x07,
-        0x00, 0x20, 0x00,                                 0x00,
-        0x00, 0x04, 0x00,                                 @intFromEnum(TemplateClass.metadata_only),
-        0x09, 0x00, 'p',                                  'l',
-        'u',  'r',  'a',                                  'l',
-        'y',  'e',  's',                                  'n',
-    };
+test "compareTemplateNameToNormalized ignores casing and spacers" {
+    try std.testing.expectEqual(std.math.Order.eq, compareTemplateNameToNormalized("Plu ral", "plural"));
+    try std.testing.expectEqual(std.math.Order.eq, compareTemplateNameToNormalized("yes_no", "yesno"));
+    try std.testing.expectEqual(std.math.Order.lt, compareTemplateNameToNormalized("alpha", "beta"));
+    try std.testing.expectEqual(std.math.Order.gt, compareTemplateNameToNormalized("beta", "alpha"));
+}
 
-    const plural = lookupTemplateRegistry(&blob, "Plu ral").?;
-    try std.testing.expectEqual(.compiled, plural.class);
-    try std.testing.expectEqual(@as(TemplateRenderIndex, 7), plural.render_index);
-
-    const yesno = lookupTemplateRegistry(&blob, "yes_no").?;
-    try std.testing.expectEqual(.metadata_only, yesno.class);
-    try std.testing.expectEqual(@as(TemplateRenderIndex, 9), yesno.render_index);
-
-    try std.testing.expect(lookupTemplateRegistry(&blob, "missing") == null);
+test "normalizedTemplateNameKey matches equivalent names" {
+    const a = normalizedTemplateNameKey("Plu ral");
+    const b = normalizedTemplateNameKey("plural");
+    const c = normalizedTemplateNameKey("yes_no");
+    const d = normalizedTemplateNameKey("yesno");
+    try std.testing.expectEqual(std.math.Order.eq, compareNormalizedTemplateNameKey(a, b));
+    try std.testing.expectEqual(std.math.Order.eq, compareNormalizedTemplateNameKey(c, d));
+    try std.testing.expect(compareNormalizedTemplateNameKey(a, normalizedTemplateNameKey("zeta")) != .eq);
 }

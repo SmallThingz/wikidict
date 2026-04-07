@@ -9,7 +9,7 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
 
-    if (args.len >= 2 and std.mem.eql(u8, args[1], "help")) {
+    if (args.len >= 2 and (std.mem.eql(u8, args[1], "help") or std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "--help"))) {
         try printStdOut(init.io, allocator,
             \\dict-encoder [build] --input data/wiktionary.xml --output data/wiktionary.bin [--limit 10000] [--threads 4]
             \\
@@ -46,6 +46,10 @@ fn printStdOut(io: std.Io, allocator: std.mem.Allocator, comptime fmt: []const u
     try std.Io.File.stdout().writeStreamingAll(io, text);
 }
 
+fn ensureFileExistsOrExit(io: std.Io, path: []const u8, label: []const u8) void {
+    required_path.ensureExistsOrExit(io, path, label);
+}
+
 fn ensureStructureReportExists(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8) void {
     const structure_path = "data/wiktionary-structure.json";
     const found = required_path.exists(io, structure_path) catch |err| {
@@ -55,15 +59,10 @@ fn ensureStructureReportExists(io: std.Io, allocator: std.mem.Allocator, input_p
     if (found) return;
 
     std.debug.print("structure report not found: {s}; running {s}\n", .{ structure_path, tool_paths.structure_bin_path });
-    var argv: std.ArrayList([]const u8) = .empty;
-    defer argv.deinit(allocator);
-    argv.append(allocator, "--input") catch unreachable;
-    argv.append(allocator, input_path) catch unreachable;
-    argv.append(allocator, "--output") catch unreachable;
-    argv.append(allocator, structure_path) catch unreachable;
-    required_path.runToolOrExit(io, allocator, tool_paths.structure_bin_path, "structure binary", argv.items);
-}
-
-fn ensureFileExistsOrExit(io: std.Io, path: []const u8, label: []const u8) void {
-    required_path.ensureExistsOrExit(io, path, label);
+    required_path.runToolOrExit(io, allocator, tool_paths.structure_bin_path, "structure binary", &.{
+        "--input",
+        input_path,
+        "--output",
+        structure_path,
+    });
 }

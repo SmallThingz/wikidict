@@ -21,12 +21,12 @@ const StreamNode = ztypes.StreamNode;
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
-    if (args.len >= 2 and std.mem.eql(u8, args[1], "help")) {
+    if (args.len >= 2 and (std.mem.eql(u8, args[1], "help") or std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "--help"))) {
         try printUsage(init.io, allocator);
         return;
     }
     for (args[1..]) |arg| {
-        if (std.mem.eql(u8, arg, "--help")) {
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             try printUsage(init.io, allocator);
             return;
         }
@@ -39,12 +39,13 @@ pub fn main(init: std.process.Init) !void {
     try printStdOut(
         init.io,
         allocator,
-        "wrote {s}\npages={d}\nns0={d}\nlanguage_entries={d}\nheading_titles={d}\nunclassified_headings={d}\nanomalies={d}\n",
+        "wrote {s}\npages={d}\nns0={d}\nlanguage_entries={d}\nparse_errors={d}\nheading_titles={d}\nunclassified_headings={d}\nanomalies={d}\n",
         .{
             options.output_path,
             stats.pages_seen,
             stats.namespace_zero_pages,
             stats.language_entries,
+            stats.parse_errors,
             stats.heading_title_keys,
             stats.unknown_heading_keys,
             stats.anomaly_samples,
@@ -66,6 +67,7 @@ const AnalyzeStats = struct {
     pages_seen: usize,
     namespace_zero_pages: usize,
     language_entries: usize,
+    parse_errors: usize,
     heading_title_keys: usize,
     unknown_heading_keys: usize,
     anomaly_samples: usize,
@@ -146,6 +148,7 @@ const Analyzer = struct {
     pages_seen: usize = 0,
     namespace_zero_pages: usize = 0,
     language_entries: usize = 0,
+    parse_errors: usize = 0,
     heading_jumps: usize = 0,
     content_before_subheading: usize = 0,
     unbalanced_sections: usize = 0,
@@ -230,6 +233,7 @@ const Analyzer = struct {
             .pages_seen = self.pages_seen,
             .namespace_zero_pages = self.namespace_zero_pages,
             .language_entries = self.language_entries,
+            .parse_errors = self.parse_errors,
             .heading_title_keys = self.heading_title_counts.count(),
             .unknown_heading_keys = self.unclassified_heading_counts.count(),
             .anomaly_samples = self.anomaly_samples.items.len,
@@ -362,6 +366,8 @@ const Analyzer = struct {
     }
 
     fn rememberTemplatePage(self: *Analyzer, allocator: std.mem.Allocator, title: []const u8, source: []const u8, page_start: usize, page_end: usize) !void {
+        _ = allocator;
+        _ = source;
         if (!std.mem.startsWith(u8, title, "Template:")) return;
 
         const canonical = try lua.canonicalTemplateNameAlloc(self.gpa, title["Template:".len..]);
@@ -373,26 +379,11 @@ const Analyzer = struct {
                 .{ .page_start = @intCast(page_start), .page_end = @intCast(page_end) },
             );
         }
-
-        const template_deps = try lua.extractTemplateDependenciesAlloc(allocator, source, canonical);
-        const direct_modules = try lua.extractInvokeModulesAlloc(allocator, source);
-
-        if (self.template_nodes.getPtr(canonical)) |existing| {
-            existing.template_deps = try self.mergeUniqueStringSlice(existing.template_deps, template_deps);
-            existing.direct_modules = try self.mergeUniqueStringSlice(existing.direct_modules, direct_modules);
-            return;
-        }
-
-        try self.template_nodes.put(
-            try self.keyAllocator().dupe(u8, canonical),
-            .{
-                .template_deps = try self.cloneStringSlice(template_deps),
-                .direct_modules = try self.cloneStringSlice(direct_modules),
-            },
-        );
     }
 
     fn rememberModulePage(self: *Analyzer, allocator: std.mem.Allocator, title: []const u8, source: []const u8, page_start: usize, page_end: usize) !void {
+        _ = allocator;
+        _ = source;
         if (!std.mem.startsWith(u8, title, "Module:")) return;
 
         const canonical = try lua.canonicalModuleNameAlloc(self.gpa, title["Module:".len..]);
@@ -404,17 +395,6 @@ const Analyzer = struct {
                 .{ .page_start = @intCast(page_start), .page_end = @intCast(page_end) },
             );
         }
-
-        const deps = try lua.extractModuleDependencies(allocator, source);
-        if (self.module_nodes.getPtr(canonical)) |existing| {
-            existing.* = try self.mergeUniqueStringSlice(existing.*, deps);
-            return;
-        }
-
-        try self.module_nodes.put(
-            try self.keyAllocator().dupe(u8, canonical),
-            try self.cloneStringSlice(deps),
-        );
     }
 
     fn rememberEntryInvokeModules(self: *Analyzer, line: []const u8) !void {
@@ -440,6 +420,7 @@ const Analyzer = struct {
         self.pages_seen += other.pages_seen;
         self.namespace_zero_pages += other.namespace_zero_pages;
         self.language_entries += other.language_entries;
+        self.parse_errors += other.parse_errors;
         self.heading_jumps += other.heading_jumps;
         self.content_before_subheading += other.content_before_subheading;
         self.unbalanced_sections += other.unbalanced_sections;
@@ -472,6 +453,17 @@ const Analyzer = struct {
         try self.mergeSourcePageRefs(&self.module_page_refs, &other.module_page_refs);
 
         for (other.anomaly_samples.items) |sample| try self.appendAnomalySample(sample);
+    }
+
+    fn recordPageParseError(self: *Analyzer, page_fragment: []const u8, page_start: usize, err: anyerror) !void {
+        self.parse_errors += 1;
+
+        const title = pageTitleHint(page_fragment) orelse "(unknown page)";
+        self.key_scratch.items.len = 0;
+        try self.key_scratch.appendSlice(self.gpa, @errorName(err));
+        try self.key_scratch.appendSlice(self.gpa, " @");
+        try appendUnsignedDecimal(&self.key_scratch, self.gpa, page_start);
+        try self.addAnomaly(title, "page-parse-error", self.key_scratch.items);
     }
 
     fn analyzeEntry(self: *Analyzer, title: []const u8, language_title: []const u8, language_section: []const u8) !void {
@@ -719,7 +711,8 @@ const AnalyzeChunkResult = struct {
 
 const AnalyzeChunkJob = struct {
     mapped: []const u8,
-    chunk: AnalyzeChunk,
+    chunks: []const AnalyzeChunk,
+    next_chunk_index: *std.atomic.Value(usize),
     result: *AnalyzeChunkResult,
     progress: *StructureProgress,
 };
@@ -960,10 +953,11 @@ fn processMappedInputParallel(
     analyzer: *Analyzer,
     progress: *StructureProgress,
 ) !void {
-    const chunks = try collectAnalyzeChunksAlloc(allocator, mapped, worker_count);
+    const desired_chunks = @max(worker_count, worker_count * 4);
+    const chunks = try collectAnalyzeChunksAlloc(allocator, mapped, desired_chunks);
     defer allocator.free(chunks);
 
-    const results = try allocator.alloc(AnalyzeChunkResult, chunks.len);
+    const results = try allocator.alloc(AnalyzeChunkResult, worker_count);
     defer {
         for (results) |*result| result.analyzer.deinit();
         allocator.free(results);
@@ -974,27 +968,29 @@ fn processMappedInputParallel(
         };
     }
 
-    const jobs = try allocator.alloc(AnalyzeChunkJob, chunks.len);
+    const jobs = try allocator.alloc(AnalyzeChunkJob, worker_count);
     defer allocator.free(jobs);
-    for (chunks, jobs, results) |chunk, *job, *result| {
+    var next_chunk_index: std.atomic.Value(usize) = .init(0);
+    for (jobs, results) |*job, *result| {
         job.* = .{
             .mapped = mapped,
-            .chunk = chunk,
+            .chunks = chunks,
+            .next_chunk_index = &next_chunk_index,
             .result = result,
             .progress = progress,
         };
     }
 
-    const threads = try allocator.alloc(std.Thread, chunks.len - 1);
+    const threads = try allocator.alloc(std.Thread, worker_count - 1);
     defer allocator.free(threads);
     var started_threads: usize = 0;
     errdefer for (threads[0..started_threads]) |thread| thread.join();
 
     for (jobs[1..], threads) |*job, *thread| {
-        thread.* = try std.Thread.spawn(.{}, processAnalyzeChunk, .{job});
+        thread.* = try std.Thread.spawn(.{}, processAnalyzeChunks, .{job});
         started_threads += 1;
     }
-    processAnalyzeChunk(&jobs[0]);
+    processAnalyzeChunks(&jobs[0]);
     for (threads[0..started_threads]) |thread| thread.join();
 
     for (results) |*result| {
@@ -1003,35 +999,41 @@ fn processMappedInputParallel(
     }
 }
 
-fn processAnalyzeChunk(job: *AnalyzeChunkJob) void {
-    processAnalyzeChunkFallible(job) catch |err| {
+fn processAnalyzeChunks(job: *AnalyzeChunkJob) void {
+    processAnalyzeChunksFallible(job) catch |err| {
         job.result.err = err;
     };
 }
 
-fn processAnalyzeChunkFallible(job: *AnalyzeChunkJob) !void {
+fn processAnalyzeChunksFallible(job: *AnalyzeChunkJob) !void {
     var parser = StreamParser.init(std.heap.smp_allocator);
     defer parser.deinit();
 
     var page_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer page_arena.deinit();
 
-    var consumed = job.chunk.start;
     while (true) {
-        const start = std.mem.indexOfPos(u8, job.mapped, consumed, "<page>") orelse break;
-        if (start >= job.chunk.end) break;
-        const end_start = std.mem.indexOfPos(u8, job.mapped, start, "</page>") orelse break;
-        const page_end = end_start + "</page>".len;
-        if (page_end > job.chunk.end) break;
+        const chunk_index = job.next_chunk_index.fetchAdd(1, .monotonic);
+        if (chunk_index >= job.chunks.len) break;
 
-        const page_allocator = page_arena.allocator();
-        const language_entries_before = job.result.analyzer.language_entries;
-        processPageFragment(page_allocator, &parser, job.mapped[start..page_end], start, page_end, &job.result.analyzer) catch |err| {
-            std.log.warn("skipping page after parse error: {}", .{err});
-        };
-        job.progress.scanAdvance(page_end - start, 1, job.result.analyzer.language_entries - language_entries_before);
-        consumed = page_end;
-        _ = page_arena.reset(.retain_capacity);
+        const chunk = job.chunks[chunk_index];
+        var consumed = chunk.start;
+        while (true) {
+            const start = std.mem.indexOfPos(u8, job.mapped, consumed, "<page>") orelse break;
+            if (start >= chunk.end) break;
+            const end_start = std.mem.indexOfPos(u8, job.mapped, start, "</page>") orelse break;
+            const page_end = end_start + "</page>".len;
+            if (page_end > chunk.end) break;
+
+            const page_allocator = page_arena.allocator();
+            const language_entries_before = job.result.analyzer.language_entries;
+            processPageFragment(page_allocator, &parser, job.mapped[start..page_end], start, page_end, &job.result.analyzer) catch |err| {
+                try job.result.analyzer.recordPageParseError(job.mapped[start..page_end], start, err);
+            };
+            job.progress.scanAdvance(page_end - start, 1, job.result.analyzer.language_entries - language_entries_before);
+            consumed = page_end;
+            _ = page_arena.reset(.retain_capacity);
+        }
     }
 }
 
@@ -1051,7 +1053,7 @@ fn processMappedInputSequential(
         const page_allocator = page_arena.allocator();
         const language_entries_before = analyzer.language_entries;
         processPageFragment(page_allocator, stream_parser, mapped[start..page_end], start, page_end, analyzer) catch |err| {
-            std.log.warn("skipping page after parse error: {}", .{err});
+            try analyzer.recordPageParseError(mapped[start..page_end], start, err);
         };
         progress.scanAdvance(page_end - start, 1, analyzer.language_entries - language_entries_before);
         consumed = page_end;
@@ -1148,6 +1150,12 @@ fn decodeXmlBorrowOrAlloc(allocator: std.mem.Allocator, input: []const u8) !Deco
     return .{ .owned = try xml_decode.decodeAlloc(allocator, input) };
 }
 
+fn pageTitleHint(page_fragment: []const u8) ?[]const u8 {
+    const start_tag = std.mem.indexOf(u8, page_fragment, "<title>") orelse return null;
+    const title_start = start_tag + "<title>".len;
+    const title_end = std.mem.indexOfPos(u8, page_fragment, title_start, "</title>") orelse return null;
+    return std.mem.trim(u8, page_fragment[title_start..title_end], " \t\r\n");
+}
 fn writeReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
     if (std.mem.eql(u8, analyzer.options.output_path, "-")) {
         var stdout_buffer: [4096]u8 = undefined;
@@ -1163,12 +1171,6 @@ fn writeReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer) !v
         return;
     }
 
-    const report_bytes = if (analyzer.options.format == .json)
-        try jsonReportAlloc(allocator, analyzer)
-    else
-        try textReportAlloc(allocator, analyzer);
-    defer allocator.free(report_bytes);
-
     const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{analyzer.options.output_path});
     defer allocator.free(temp_path);
     std.Io.Dir.cwd().deleteFile(io, temp_path) catch |err| switch (err) {
@@ -1179,7 +1181,17 @@ fn writeReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer) !v
 
     var file = try std.Io.Dir.cwd().createFile(io, temp_path, .{ .truncate = true });
     defer file.close(io);
-    try file.writeStreamingAll(io, report_bytes);
+    // Stream the structure report directly to disk. The full-corpus JSON is large
+    // enough that materializing the entire payload before writing can fail right at
+    // the end of an otherwise successful scan.
+    var file_buffer: [64 * 1024]u8 = undefined;
+    var file_writer = file.writerStreaming(io, &file_buffer);
+    defer file_writer.flush() catch {};
+    if (analyzer.options.format == .json) {
+        try writeJsonReportToWriter(&file_writer.interface, allocator, analyzer);
+    } else {
+        try writeTextReportToWriter(&file_writer.interface, allocator, analyzer);
+    }
     try file.sync(io);
     try std.Io.Dir.cwd().rename(temp_path, std.Io.Dir.cwd(), analyzer.options.output_path, io);
 }
@@ -1192,6 +1204,7 @@ fn writeTextReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyz
         \\Pages scanned: {d}
         \\Namespace 0 pages: {d}
         \\Language entries: {d}
+        \\Page parse errors: {d}
         \\Heading level jumps: {d}
         \\Content before first subheading: {d}
         \\Unbalanced language sections: {d}
@@ -1203,6 +1216,7 @@ fn writeTextReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyz
         analyzer.pages_seen,
         analyzer.namespace_zero_pages,
         analyzer.language_entries,
+        analyzer.parse_errors,
         analyzer.heading_jumps,
         analyzer.content_before_subheading,
         analyzer.unbalanced_sections,
@@ -1378,6 +1392,7 @@ fn writeJsonReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyz
             .pages_scanned = analyzer.pages_seen,
             .namespace_zero_pages = analyzer.namespace_zero_pages,
             .language_entries = analyzer.language_entries,
+            .parse_errors = analyzer.parse_errors,
             .heading_level_jumps = analyzer.heading_jumps,
             .content_before_subheading = analyzer.content_before_subheading,
             .unbalanced_sections = analyzer.unbalanced_sections,
@@ -1418,7 +1433,12 @@ fn buildStructureDependenciesAlloc(
     const all_root_templates = try collectBuildTemplateRootsAlloc(scratch_allocator, build);
     defer freeOwnedStringSlice(scratch_allocator, all_root_templates);
 
-    try applyDependencyGraphCompat(analyzer);
+    const use_prebuilt_graph = analyzer.template_nodes.count() != 0 or analyzer.module_nodes.count() != 0;
+    if (use_prebuilt_graph) {
+        try applyDependencyGraphCompat(analyzer);
+    } else {
+        try applyDependencyPageRefCompat(analyzer);
+    }
 
     const root_templates = try filterNamesPresentInMapAlloc(
         scratch_allocator,
@@ -1427,11 +1447,30 @@ fn buildStructureDependenciesAlloc(
     );
     defer freeOwnedStringSlice(scratch_allocator, root_templates);
 
-    var report = try lua.analyzeRenderDependenciesFromGraphAlloc(scratch_allocator, root_templates, .{
-        .entry_direct_modules = try collectSortedMapKeysAlloc(scratch_allocator, analyzer.entry_direct_modules),
-        .template_nodes = &analyzer.template_nodes,
-        .module_nodes = &analyzer.module_nodes,
-    });
+    const entry_direct_modules = try collectSortedMapKeysAlloc(scratch_allocator, analyzer.entry_direct_modules);
+    defer freeOwnedStringSlice(scratch_allocator, entry_direct_modules);
+
+    var report = if (use_prebuilt_graph) blk: {
+        break :blk try lua.analyzeRenderDependenciesFromGraphAlloc(scratch_allocator, root_templates, .{
+            .entry_direct_modules = entry_direct_modules,
+            .template_nodes = &analyzer.template_nodes,
+            .module_nodes = &analyzer.module_nodes,
+        });
+    } else blk: {
+        const template_refs = try collectBorrowedSourceRefsAlloc(scratch_allocator, analyzer.template_page_refs);
+        defer scratch_allocator.free(template_refs);
+        const module_refs = try collectBorrowedSourceRefsAlloc(scratch_allocator, analyzer.module_page_refs);
+        defer scratch_allocator.free(module_refs);
+
+        break :blk try analyzeRenderDependenciesFromPageRefsAlloc(
+            scratch_allocator,
+            analyzer.options.input_path,
+            root_templates,
+            entry_direct_modules,
+            template_refs,
+            module_refs,
+        );
+    };
     defer report.deinit(scratch_allocator);
 
     const reachable_templates = try filterNamesPresentInMapAlloc(
@@ -1451,7 +1490,10 @@ fn buildStructureDependenciesAlloc(
     return .{
         .root_templates = try dupStringSliceAlloc(dest_allocator, report.root_templates),
         .reachable_templates = try dupStringSliceAlloc(dest_allocator, reachable_templates),
-        .dynamic_templates = &.{},
+        // Keep the structure report self-contained for codegen. This is a
+        // conservative superset of runtime-built template names, but it avoids
+        // a second dynamic-name analysis pass during template compilation.
+        .dynamic_templates = try dupStringSliceAlloc(dest_allocator, reachable_templates),
         .unresolved_templates = try dupStringSliceAlloc(dest_allocator, report.unresolved_templates),
         .direct_modules = try dupStringSliceAlloc(dest_allocator, report.direct_modules),
         .transitive_modules = try dupStringSliceAlloc(dest_allocator, transitive_modules),
@@ -1463,6 +1505,222 @@ fn buildStructureDependenciesAlloc(
         .compiled_failed = try dupDependencyFailuresAlloc(dest_allocator, report.compiled_failed),
         .emitted_inconsistent = try dupDependencyFailuresAlloc(dest_allocator, report.emitted_inconsistent),
     };
+}
+
+fn analyzeRenderDependenciesFromPageRefsAlloc(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    root_templates: []const []const u8,
+    entry_direct_modules: []const []const u8,
+    template_refs: []const lua.SourcePageRef,
+    module_refs: []const lua.SourcePageRef,
+) !lua.TemplateDependencyReport {
+    var sources = try collectReachableSourcesFromPageRefsAlloc(
+        allocator,
+        input_path,
+        root_templates,
+        entry_direct_modules,
+        template_refs,
+        module_refs,
+    );
+    defer sources.deinit(allocator);
+
+    return try lua.analyzeRenderDependenciesFromSourcesAlloc(
+        allocator,
+        root_templates,
+        entry_direct_modules,
+        &sources,
+    );
+}
+
+fn collectReachableSourcesFromPageRefsAlloc(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    root_templates: []const []const u8,
+    entry_direct_modules: []const []const u8,
+    template_refs: []const lua.SourcePageRef,
+    module_refs: []const lua.SourcePageRef,
+) !lua.TemplateSources {
+    var template_ref_map = std.StringHashMapUnmanaged(lua.SourcePageRef){};
+    defer template_ref_map.deinit(allocator);
+    for (template_refs) |ref| {
+        const gop = try template_ref_map.getOrPut(allocator, ref.name);
+        if (!gop.found_existing) gop.key_ptr.* = ref.name;
+        gop.value_ptr.* = ref;
+    }
+    if (!template_ref_map.contains("an-lite")) {
+        if (template_ref_map.get("an-lite/node")) |ref| {
+            const gop = try template_ref_map.getOrPut(allocator, "an-lite");
+            if (!gop.found_existing) gop.key_ptr.* = "an-lite";
+            gop.value_ptr.* = ref;
+        }
+    }
+
+    var module_ref_map = std.StringHashMapUnmanaged(lua.SourcePageRef){};
+    defer module_ref_map.deinit(allocator);
+    for (module_refs) |ref| {
+        const gop = try module_ref_map.getOrPut(allocator, ref.name);
+        if (!gop.found_existing) gop.key_ptr.* = ref.name;
+        gop.value_ptr.* = ref;
+    }
+    if (!module_ref_map.contains("gender and number/templates")) {
+        if (module_ref_map.get("gender and number")) |ref| {
+            const gop = try module_ref_map.getOrPut(allocator, "gender and number/templates");
+            if (!gop.found_existing) gop.key_ptr.* = "gender and number/templates";
+            gop.value_ptr.* = ref;
+        }
+    }
+
+    var mapped = try mmapReadOnlyPath(std.Options.debug_io, input_path);
+    defer mapped.deinit();
+    const mapped_bytes = mapped.bytes();
+
+    var sources = lua.TemplateSources{
+        .template_sources = std.StringHashMap([]const u8).init(allocator),
+        .module_sources = std.StringHashMap([]const u8).init(allocator),
+    };
+    errdefer sources.deinit(allocator);
+
+    var pending_templates = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &pending_templates);
+    var pending_modules = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &pending_modules);
+
+    var template_stack: std.ArrayList([]const u8) = .empty;
+    defer template_stack.deinit(allocator);
+    var module_stack: std.ArrayList([]const u8) = .empty;
+    defer module_stack.deinit(allocator);
+
+    for (root_templates) |name| {
+        const canonical = try lua.canonicalTemplateNameAlloc(allocator, name);
+        defer allocator.free(canonical);
+        const gop = try pending_templates.getOrPut(allocator, canonical);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try allocator.dupe(u8, canonical);
+            try template_stack.append(allocator, gop.key_ptr.*);
+        }
+    }
+
+    for (entry_direct_modules) |name| {
+        const canonical = try lua.canonicalModuleNameAlloc(allocator, name);
+        defer allocator.free(canonical);
+        const gop = try pending_modules.getOrPut(allocator, canonical);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try allocator.dupe(u8, canonical);
+            try module_stack.append(allocator, gop.key_ptr.*);
+        }
+    }
+
+    while (template_stack.pop()) |name| {
+        if (sources.template_sources.contains(name)) continue;
+        const ref = template_ref_map.get(name) orelse continue;
+
+        const source = try loadSelectedSourceFromMappedAlloc(allocator, mapped_bytes, ref, "10");
+        errdefer allocator.free(source);
+        const key = try allocator.dupe(u8, name);
+        errdefer allocator.free(key);
+        try sources.template_sources.put(key, source);
+
+        const template_deps = try lua.extractTemplateDependenciesAlloc(allocator, source, name);
+        defer freeOwnedStringSlice(allocator, template_deps);
+        for (template_deps) |dep| {
+            if (sources.template_sources.contains(dep)) continue;
+            const gop = try pending_templates.getOrPut(allocator, dep);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = try allocator.dupe(u8, dep);
+                try template_stack.append(allocator, gop.key_ptr.*);
+            }
+        }
+
+        const direct_modules = try lua.extractInvokeModulesAlloc(allocator, source);
+        defer freeOwnedStringSlice(allocator, direct_modules);
+        for (direct_modules) |module_name| {
+            if (sources.module_sources.contains(module_name)) continue;
+            const gop = try pending_modules.getOrPut(allocator, module_name);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = try allocator.dupe(u8, module_name);
+                try module_stack.append(allocator, gop.key_ptr.*);
+            }
+        }
+    }
+
+    while (module_stack.pop()) |name| {
+        if (sources.module_sources.contains(name)) continue;
+        const ref = module_ref_map.get(name) orelse continue;
+
+        const source = try loadSelectedSourceFromMappedAlloc(allocator, mapped_bytes, ref, "828");
+        errdefer allocator.free(source);
+        const key = try allocator.dupe(u8, name);
+        errdefer allocator.free(key);
+        try sources.module_sources.put(key, source);
+
+        const deps = try lua.extractModuleDependencies(allocator, source);
+        defer freeOwnedStringSlice(allocator, deps);
+        for (deps) |dep| {
+            if (sources.module_sources.contains(dep)) continue;
+            const gop = try pending_modules.getOrPut(allocator, dep);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = try allocator.dupe(u8, dep);
+                try module_stack.append(allocator, gop.key_ptr.*);
+            }
+        }
+    }
+
+    return sources;
+}
+
+fn collectBorrowedSourceRefsAlloc(
+    allocator: std.mem.Allocator,
+    map: std.StringHashMap(SourcePageOffset),
+) ![]const lua.SourcePageRef {
+    const out = try allocator.alloc(lua.SourcePageRef, map.count());
+    var it = map.iterator();
+    var idx: usize = 0;
+    while (it.next()) |entry| : (idx += 1) {
+        out[idx] = .{
+            .name = entry.key_ptr.*,
+            .page_start = entry.value_ptr.page_start,
+            .page_end = entry.value_ptr.page_end,
+        };
+    }
+    return out;
+}
+
+fn loadSelectedSourceFromMappedAlloc(
+    allocator: std.mem.Allocator,
+    mapped: []const u8,
+    ref: lua.SourcePageRef,
+    expected_ns: []const u8,
+) ![]u8 {
+    const start = std.math.cast(usize, ref.page_start) orelse return error.FileTooBig;
+    const end = std.math.cast(usize, ref.page_end) orelse return error.FileTooBig;
+    if (start >= end or end > mapped.len) return error.InvalidDictionaryFile;
+
+    const page_fragment = mapped[start..end];
+    const ns = extractPageTagText(page_fragment, "ns") orelse return error.InvalidDictionaryFile;
+    if (!std.mem.eql(u8, std.mem.trim(u8, ns, " \t\r\n"), expected_ns)) return error.InvalidDictionaryFile;
+
+    const text_raw = extractPageText(page_fragment) orelse return error.InvalidDictionaryFile;
+    return try xml_decode.decodeSinglePassAlloc(allocator, text_raw);
+}
+
+fn extractPageTagText(page: []const u8, tag: []const u8) ?[]const u8 {
+    var start_buf: [32]u8 = undefined;
+    var end_buf: [32]u8 = undefined;
+    const start = std.fmt.bufPrint(&start_buf, "<{s}>", .{tag}) catch return null;
+    const end = std.fmt.bufPrint(&end_buf, "</{s}>", .{tag}) catch return null;
+    const start_idx = std.mem.indexOf(u8, page, start) orelse return null;
+    const after_start = start_idx + start.len;
+    const end_idx = std.mem.indexOfPos(u8, page, after_start, end) orelse return null;
+    return page[after_start..end_idx];
+}
+
+fn extractPageText(page: []const u8) ?[]const u8 {
+    const text_tag_start = std.mem.indexOf(u8, page, "<text") orelse return null;
+    const content_start_rel = std.mem.indexOfScalarPos(u8, page, text_tag_start, '>') orelse return null;
+    const content_start = content_start_rel + 1;
+    const content_end = std.mem.indexOfPos(u8, page, content_start, "</text>") orelse return null;
+    return page[content_start..content_end];
 }
 
 fn collectBuildTemplateRootsAlloc(
@@ -1511,7 +1769,6 @@ fn replaceBuildLineTemplatesAlloc(
     }
     build.line_templates = out;
 }
-
 
 fn dupStringSliceAlloc(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
     const out = try allocator.alloc([]const u8, values.len);
@@ -1605,42 +1862,15 @@ fn filterNamesPresentInMapAlloc(
     return out.toOwnedSlice(allocator);
 }
 
-fn collectAllStructureSourceRefsAlloc(
-    allocator: std.mem.Allocator,
-    map: std.StringHashMap(SourcePageOffset),
-) ![]const lua.SourcePageRef {
-    const names = try collectSortedMapKeysAlloc(allocator, map);
-    defer freeOwnedStringSlice(allocator, names);
-
-    const out = try allocator.alloc(lua.SourcePageRef, names.len);
-    var initialized: usize = 0;
-    errdefer {
-        for (out[0..initialized]) |entry| allocator.free(entry.name);
-        allocator.free(out);
-    }
-    for (names, out) |name, *slot| {
-        const offset = map.get(name).?;
-        slot.* = .{
-            .name = try allocator.dupe(u8, name),
-            .page_start = offset.page_start,
-            .page_end = offset.page_end,
-        };
-        initialized += 1;
-    }
-    return out;
+fn deinitOwnedStringSet(allocator: std.mem.Allocator, set: *std.StringHashMapUnmanaged(void)) void {
+    var it = set.iterator();
+    while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+    set.deinit(allocator);
 }
 
 fn freeOwnedStringSlice(allocator: std.mem.Allocator, values: []const []const u8) void {
     for (values) |value| allocator.free(value);
     allocator.free(values);
-}
-
-fn freeStructureSourceRefs(
-    allocator: std.mem.Allocator,
-    refs: []const lua.SourcePageRef,
-) void {
-    for (refs) |ref| allocator.free(ref.name);
-    allocator.free(refs);
 }
 
 fn stringSliceContains(values: []const []const u8, needle: []const u8) bool {
@@ -1653,6 +1883,11 @@ fn stringSliceContains(values: []const []const u8, needle: []const u8) bool {
 fn applyDependencyGraphCompat(analyzer: *Analyzer) !void {
     try ensureTemplateGraphCompat(analyzer, "an-lite", &.{"an-lite/node"});
     try ensureModuleGraphCompat(analyzer, "gender and number/templates", &.{"gender and number"});
+    try ensureTemplatePageRefCompat(analyzer, "an-lite", &.{"an-lite/node"});
+    try ensureModulePageRefCompat(analyzer, "gender and number/templates", &.{"gender and number"});
+}
+
+fn applyDependencyPageRefCompat(analyzer: *Analyzer) !void {
     try ensureTemplatePageRefCompat(analyzer, "an-lite", &.{"an-lite/node"});
     try ensureModulePageRefCompat(analyzer, "gender and number/templates", &.{"gender and number"});
 }
@@ -2738,5 +2973,74 @@ test "buildStructureDependenciesAlloc skips root templates without source pages"
     try std.testing.expectEqual(@as(usize, 1), deps.reachable_template_pages.len);
     try std.testing.expectEqualStrings("realtemplate", deps.reachable_template_pages[0].name);
     try std.testing.expectEqual(@as(u64, 100), deps.reachable_template_pages[0].page_start);
+    try std.testing.expectEqual(@as(usize, 0), deps.unresolved_templates.len);
+}
+
+test "buildStructureDependenciesAlloc loads reachable dependencies from page refs" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const input_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure-refs-fixture.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(input_path);
+
+    const fixture =
+        \\<mediawiki>
+        \\  <page><title>Template:realtemplate</title><ns>10</ns><revision><text xml:space="preserve">{{subtemplate}}{{#invoke:testmod|main}}</text></revision></page>
+        \\  <page><title>Template:subtemplate</title><ns>10</ns><revision><text xml:space="preserve">body</text></revision></page>
+        \\  <page><title>Module:testmod</title><ns>828</ns><revision><text xml:space="preserve">return { main = function() return "ok" end }</text></revision></page>
+        \\</mediawiki>
+    ;
+
+    var file = try std.Io.Dir.cwd().createFile(std.testing.io, input_path, .{ .truncate = true });
+    defer file.close(std.testing.io);
+    try file.writeStreamingAll(std.testing.io, fixture);
+
+    const root_start = std.mem.indexOf(u8, fixture, "<page><title>Template:realtemplate</title>") orelse unreachable;
+    const root_end_start = std.mem.indexOfPos(u8, fixture, root_start, "</page>") orelse unreachable;
+    const child_start = std.mem.indexOf(u8, fixture, "<page><title>Template:subtemplate</title>") orelse unreachable;
+    const child_end_start = std.mem.indexOfPos(u8, fixture, child_start, "</page>") orelse unreachable;
+    const module_start = std.mem.indexOf(u8, fixture, "<page><title>Module:testmod</title>") orelse unreachable;
+    const module_end_start = std.mem.indexOfPos(u8, fixture, module_start, "</page>") orelse unreachable;
+
+    var analyzer = Analyzer.init(std.testing.allocator, .{ .input_path = input_path });
+    defer analyzer.deinit();
+    try analyzer.template_page_refs.put(
+        try analyzer.keyAllocator().dupe(u8, "realtemplate"),
+        .{ .page_start = @intCast(root_start), .page_end = @intCast(root_end_start + "</page>".len) },
+    );
+    try analyzer.template_page_refs.put(
+        try analyzer.keyAllocator().dupe(u8, "subtemplate"),
+        .{ .page_start = @intCast(child_start), .page_end = @intCast(child_end_start + "</page>".len) },
+    );
+    try analyzer.module_page_refs.put(
+        try analyzer.keyAllocator().dupe(u8, "testmod"),
+        .{ .page_start = @intCast(module_start), .page_end = @intCast(module_end_start + "</page>".len) },
+    );
+
+    const line_templates = [_]structure_tables_support.TemplateSpec{
+        .{ .code = 1, .name = "realtemplate" },
+    };
+    const build = structure_tables_support.BuildData{
+        .heading_specs = &.{},
+        .heading_level_specs = &.{},
+        .line_templates = &line_templates,
+        .compact_patterns = &.{},
+        .compact_patterns_ext = &.{},
+        .translation_templates = &.{},
+        .target_languages = &.{},
+        .language_labels = &.{},
+        .structure_fingerprint = 0,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const deps = try buildStructureDependenciesAlloc(arena.allocator(), std.testing.allocator, &analyzer, build);
+    try std.testing.expect(stringSliceContains(deps.reachable_templates, "realtemplate"));
+    try std.testing.expect(stringSliceContains(deps.reachable_templates, "subtemplate"));
+    try std.testing.expect(stringSliceContains(deps.direct_modules, "testmod"));
+    try std.testing.expect(stringSliceContains(deps.transitive_modules, "testmod"));
+    try std.testing.expectEqual(@as(usize, 2), deps.reachable_template_pages.len);
+    try std.testing.expectEqual(@as(usize, 1), deps.transitive_module_pages.len);
     try std.testing.expectEqual(@as(usize, 0), deps.unresolved_templates.len);
 }

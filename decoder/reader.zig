@@ -658,14 +658,23 @@ pub const EntryView = struct {
     fn rawStoredTextAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
         const encoded = try self.dict.rawPayload(self.index);
-        const decoded = try compact.decodeAllocWithMappings(allocator, encoded, self.dict.compact_mappings);
+        const storage_bytes = try format.decodeStorageAlloc(allocator, encoded);
+        defer allocator.free(storage_bytes);
+        const decoded = try compact.decodeAllocWithMappings(allocator, storage_bytes, self.dict.compact_mappings);
         return decoded;
     }
 
     fn rawStoredTextRenderAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
         const encoded = try self.dict.rawPayload(self.index);
-        return compact.decodeAllocForRenderWithMappings(allocator, encoded, self.dict.compact_mappings);
+        const storage_bytes = try format.decodeStorageAlloc(allocator, encoded);
+        defer allocator.free(storage_bytes);
+        const decoded: []const u8 = try compact.decodeAllocForRenderWithMappings(
+            allocator,
+            storage_bytes,
+            self.dict.compact_mappings,
+        );
+        return decoded;
     }
 };
 
@@ -1513,7 +1522,9 @@ fn buildEntryFromRecord(
     descriptor: RecordDescriptor,
     mappings: compact.RuntimeMappings,
 ) !BuildEntryData {
-    const word = try compact.decodeAllocWithMappings(allocator, descriptor.title_encoded, mappings);
+    const title_bytes = try format.decodeStorageAlloc(allocator, descriptor.title_encoded);
+    defer allocator.free(title_bytes);
+    const word = try compact.decodeAllocWithMappings(allocator, title_bytes, mappings);
     const normalized = if (normalize.isIdentity(word))
         word
     else
@@ -1545,7 +1556,9 @@ fn decodeBuildRawMetadataAlloc(
     payload: []const u8,
     mappings: compact.RuntimeMappings,
 ) !BuildRawMetadata {
-    const stored = compact.decodeAllocWithMappings(allocator, payload, mappings) catch return error.InvalidDictionaryFile;
+    const payload_bytes = format.decodeStorageAlloc(allocator, payload) catch return error.InvalidDictionaryFile;
+    defer allocator.free(payload_bytes);
+    const stored = compact.decodeAllocWithMappings(allocator, payload_bytes, mappings) catch return error.InvalidDictionaryFile;
     defer allocator.free(stored);
     const raw = wikitext.extractEnglishSection(stored) orelse "";
     var metadata: wikitext.EntryMetadata = .{};

@@ -165,8 +165,8 @@ const StatsEndpoint = struct {
             .rawEntries = db.header.raw_count,
             .redirects = db.header.alias_count,
             .lookups = db.lookups.len,
-            .recordsBytes = db.header.records_len,
-            .version = format.version,
+            .recordsBytes = db.layout.raw_payloads_len,
+            .version = format.magic,
         });
     }
 };
@@ -352,6 +352,12 @@ const App = blk: {
 };
 
 pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "help") or std.mem.eql(u8, arg, "--help")) {
+            printUsage();
+            return;
+        }
+    }
     const options = ServeOptions{
         .db_path = cli_args.flagValue(args, "--db") orelse "data/wiktionary.bin",
         .structure_path = cli_args.flagValue(args, "--structure"),
@@ -373,6 +379,13 @@ pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
         .address = addr,
         .ctx = &ctx,
     });
+}
+
+fn printUsage() void {
+    std.debug.print(
+        \\dict-backend serve [--db data/wiktionary.bin] [--structure data/wiktionary-structure.json] [--port 3000]
+        \\
+    , .{});
 }
 
 fn ensurePathExistsOrExit(io: std.Io, path: []const u8, label: []const u8) void {

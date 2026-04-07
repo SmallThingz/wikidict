@@ -127,6 +127,7 @@ pub const Summary = struct {
     pages_scanned: usize,
     namespace_zero_pages: usize,
     language_entries: usize,
+    parse_errors: usize = 0,
     heading_level_jumps: usize,
     content_before_subheading: usize,
     unbalanced_sections: usize,
