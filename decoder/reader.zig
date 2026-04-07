@@ -658,20 +658,16 @@ pub const EntryView = struct {
     fn rawStoredTextAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
         const encoded = try self.dict.rawPayload(self.index);
-        const storage_bytes = try format.decodeStorageAlloc(allocator, encoded);
-        defer allocator.free(storage_bytes);
-        const decoded = try compact.decodeAllocWithMappings(allocator, storage_bytes, self.dict.compact_mappings);
+        const decoded = try compact.decodeAllocWithMappings(allocator, encoded, self.dict.compact_mappings);
         return decoded;
     }
 
     fn rawStoredTextRenderAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
         const encoded = try self.dict.rawPayload(self.index);
-        const storage_bytes = try format.decodeStorageAlloc(allocator, encoded);
-        defer allocator.free(storage_bytes);
         const decoded: []const u8 = try compact.decodeAllocForRenderWithMappings(
             allocator,
-            storage_bytes,
+            encoded,
             self.dict.compact_mappings,
         );
         return decoded;
@@ -990,7 +986,7 @@ pub const Dictionary = struct {
         const start = self.rawPayloadStart(index);
         const payloads_end = std.math.cast(usize, self.layout.raw_payloads_offset + self.layout.raw_payloads_len) orelse return error.InvalidDictionaryFile;
         var cursor = start;
-        return format.readNullTerminatedSlice(self.mapping, &cursor, payloads_end);
+        return format.readCompactTerminatedSlice(self.mapping, &cursor, payloads_end);
     }
 
     fn incomingAliasList(self: *const Dictionary, range: Range) []const u32 {
@@ -1487,9 +1483,9 @@ fn collectRecordDescriptors(
     var raw_payload_cursor: usize = @intCast(layout.raw_payloads_offset);
     const raw_payloads_end: usize = @intCast(layout.raw_payloads_offset + layout.raw_payloads_len);
     for (descriptors[0..raw_count]) |*descriptor| {
-        const title_encoded = try format.readNullTerminatedSlice(mapped, &raw_title_cursor, raw_titles_end);
+        const title_encoded = try format.readCompactTerminatedSlice(mapped, &raw_title_cursor, raw_titles_end);
         const payload_offset = raw_payload_cursor - @as(usize, @intCast(layout.raw_payloads_offset));
-        const payload_encoded = try format.readNullTerminatedSlice(mapped, &raw_payload_cursor, raw_payloads_end);
+        const payload_encoded = try format.readCompactTerminatedSlice(mapped, &raw_payload_cursor, raw_payloads_end);
         descriptor.* = .{
             .has_raw = true,
             .storage_ref = std.math.cast(u32, payload_offset) orelse return error.InvalidDictionaryFile,
@@ -1502,7 +1498,7 @@ fn collectRecordDescriptors(
     var alias_title_cursor: usize = @intCast(layout.alias_titles_offset);
     const alias_titles_end: usize = @intCast(layout.alias_titles_offset + layout.alias_titles_len);
     for (descriptors[raw_count..], 0..) |*descriptor, alias_idx| {
-        const title_encoded = try format.readNullTerminatedSlice(mapped, &alias_title_cursor, alias_titles_end);
+        const title_encoded = try format.readCompactTerminatedSlice(mapped, &alias_title_cursor, alias_titles_end);
         descriptor.* = .{
             .has_raw = false,
             .storage_ref = try format.readAliasTargetAt(mapped, layout, alias_idx),
@@ -1522,9 +1518,7 @@ fn buildEntryFromRecord(
     descriptor: RecordDescriptor,
     mappings: compact.RuntimeMappings,
 ) !BuildEntryData {
-    const title_bytes = try format.decodeStorageAlloc(allocator, descriptor.title_encoded);
-    defer allocator.free(title_bytes);
-    const word = try compact.decodeAllocWithMappings(allocator, title_bytes, mappings);
+    const word = try compact.decodeAllocWithMappings(allocator, descriptor.title_encoded, mappings);
     const normalized = if (normalize.isIdentity(word))
         word
     else
@@ -1556,9 +1550,7 @@ fn decodeBuildRawMetadataAlloc(
     payload: []const u8,
     mappings: compact.RuntimeMappings,
 ) !BuildRawMetadata {
-    const payload_bytes = format.decodeStorageAlloc(allocator, payload) catch return error.InvalidDictionaryFile;
-    defer allocator.free(payload_bytes);
-    const stored = compact.decodeAllocWithMappings(allocator, payload_bytes, mappings) catch return error.InvalidDictionaryFile;
+    const stored = compact.decodeAllocWithMappings(allocator, payload, mappings) catch return error.InvalidDictionaryFile;
     defer allocator.free(stored);
     const raw = wikitext.extractEnglishSection(stored) orelse "";
     var metadata: wikitext.EntryMetadata = .{};
@@ -1806,15 +1798,6 @@ fn computeCacheKey(stat: anytype, header: *const format.Header, layout: format.D
         raw_payloads_len,
     }) |value| hasher.update(std.mem.asBytes(&value));
     return hasher.final();
-}
-
-fn readNullTerminatedSlice(bytes: []const u8, cursor: *usize, limit: usize) ![]const u8 {
-    if (cursor.* >= limit) return error.InvalidDictionaryFile;
-    const terminator = std.mem.indexOfScalarPos(u8, bytes, cursor.*, 0) orelse return error.InvalidDictionaryFile;
-    if (terminator >= limit) return error.InvalidDictionaryFile;
-    const out = bytes[cursor.*..terminator];
-    cursor.* = terminator + 1;
-    return out;
 }
 
 fn finalizeIncomingAliases(

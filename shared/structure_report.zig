@@ -37,6 +37,7 @@ pub const DependencySet = struct {
     unresolved_templates: []const []const u8 = &.{},
     direct_modules: []const []const u8 = &.{},
     transitive_modules: []const []const u8 = &.{},
+    all_entry_pages: []const SourcePageRef = &.{},
     // Full template page ref table copied from the structure report so tools
     // can mmap-load arbitrary template sources without rescanning the XML.
     all_template_pages: []const SourcePageRef = &.{},
@@ -56,6 +57,7 @@ pub const DependencySet = struct {
         freeOwnedStrings(allocator, self.unresolved_templates);
         freeOwnedStrings(allocator, self.direct_modules);
         freeOwnedStrings(allocator, self.transitive_modules);
+        freeSourceRefs(allocator, self.all_entry_pages);
         freeSourceRefs(allocator, self.all_template_pages);
         freeSourceRefs(allocator, self.all_module_pages);
         freeSourceRefs(allocator, self.reachable_template_pages);
@@ -75,6 +77,7 @@ const ParsedStructureFile = struct {
         unresolved_templates: []const []const u8 = &.{},
         direct_modules: []const []const u8 = &.{},
         transitive_modules: []const []const u8 = &.{},
+        all_entry_pages: []const SourcePageRef = &.{},
         all_template_pages: []const SourcePageRef = &.{},
         all_module_pages: []const SourcePageRef = &.{},
         reachable_template_pages: []const SourcePageRef = &.{},
@@ -144,6 +147,7 @@ pub fn loadDependencySetAlloc(
         .unresolved_templates = try dupOwnedStringsAlloc(allocator, deps.unresolved_templates),
         .direct_modules = try dupOwnedStringsAlloc(allocator, deps.direct_modules),
         .transitive_modules = try dupOwnedStringsAlloc(allocator, deps.transitive_modules),
+        .all_entry_pages = try dupSourceRefsAlloc(allocator, deps.all_entry_pages),
         .all_template_pages = try dupSourceRefsAlloc(allocator, deps.all_template_pages),
         .all_module_pages = try dupSourceRefsAlloc(allocator, deps.all_module_pages),
         .reachable_template_pages = try dupSourceRefsAlloc(allocator, deps.reachable_template_pages),
@@ -152,6 +156,19 @@ pub fn loadDependencySetAlloc(
         .compiled_failed = try dupFailuresAlloc(allocator, deps.compiled_failed),
         .emitted_inconsistent = try dupFailuresAlloc(allocator, deps.emitted_inconsistent),
     };
+}
+
+pub fn loadEntryPageRefsAlloc(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) ![]SourcePageRef {
+    var deps = try loadDependencySetAlloc(io, allocator, path);
+    errdefer deps.deinit(allocator);
+    const refs = deps.all_entry_pages;
+    deps.all_entry_pages = &.{};
+    deps.deinit(allocator);
+    return refs;
 }
 
 pub fn templateTableFingerprint(line_templates: anytype, translation_templates: anytype) u32 {
@@ -267,6 +284,9 @@ test "loadDependencySetAlloc reads full source ref tables" {
         \\{
         \\  "dependencies": {
         \\    "root_templates": ["foo"],
+        \\    "all_entry_pages": [
+        \\      { "name": "entry", "page_start": 1, "page_end": 9 }
+        \\    ],
         \\    "all_template_pages": [
         \\      { "name": "foo", "page_start": 10, "page_end": 20 }
         \\    ],
@@ -297,6 +317,8 @@ test "loadDependencySetAlloc reads full source ref tables" {
     defer deps.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), deps.all_template_pages.len);
+    try std.testing.expectEqual(@as(usize, 1), deps.all_entry_pages.len);
+    try std.testing.expectEqualStrings("entry", deps.all_entry_pages[0].name);
     try std.testing.expectEqualStrings("foo", deps.all_template_pages[0].name);
     try std.testing.expectEqual(@as(u64, 30), deps.all_module_pages[0].page_start);
 }

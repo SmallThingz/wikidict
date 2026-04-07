@@ -566,7 +566,7 @@ fn decodeXmlViewAlloc(allocator: std.mem.Allocator, raw: []const u8) !DecodedXml
     };
 }
 
-const temp_magic = "WIKTMP01";
+const temp_magic = "WIKTMP02";
 
 const TempHeader = extern struct {
     magic_bytes: [8]u8,
@@ -737,16 +737,12 @@ fn collectTempRawCandidatesAlloc(
         while (built != 0) : (built -= 1) out[built - 1].deinit(allocator);
     }
     for (out) |*candidate| {
-        const title_encoded = try readNullTerminatedSlice(mapped, &title_cursor, titles_end);
-        const payload_encoded = try readNullTerminatedSlice(mapped, &payload_cursor, payloads_end);
+        const title_encoded = try readCompactTerminatedSlice(mapped, &title_cursor, titles_end);
+        const payload_encoded = try readCompactTerminatedSlice(mapped, &payload_cursor, payloads_end);
 
-        const title_bytes = try format.decodeStorageAlloc(allocator, title_encoded);
-        defer allocator.free(title_bytes);
-        const decoded_title = try compact.decodeAlloc(allocator, title_bytes);
+        const decoded_title = try compact.decodeAlloc(allocator, title_encoded);
         defer allocator.free(decoded_title);
-        const payload_bytes = try format.decodeStorageAlloc(allocator, payload_encoded);
-        defer allocator.free(payload_bytes);
-        const decoded_payload = try compact.decodeAlloc(allocator, payload_bytes);
+        const decoded_payload = try compact.decodeAlloc(allocator, payload_encoded);
         defer allocator.free(decoded_payload);
 
         const normalized_title = try normalizeOwnedAlloc(allocator, decoded_title);
@@ -792,15 +788,11 @@ fn collectTempAliasCandidatesAlloc(
         while (built != 0) : (built -= 1) out[built - 1].deinit(allocator);
     }
     for (out) |*candidate| {
-        const title_encoded = try readNullTerminatedSlice(mapped, &title_cursor, titles_end);
-        const target_encoded = try readNullTerminatedSlice(mapped, &target_cursor, targets_end);
-        const title_bytes = try format.decodeStorageAlloc(allocator, title_encoded);
-        defer allocator.free(title_bytes);
-        const decoded_title = try compact.decodeAlloc(allocator, title_bytes);
+        const title_encoded = try readCompactTerminatedSlice(mapped, &title_cursor, titles_end);
+        const target_encoded = try readCompactTerminatedSlice(mapped, &target_cursor, targets_end);
+        const decoded_title = try compact.decodeAlloc(allocator, title_encoded);
         defer allocator.free(decoded_title);
-        const target_bytes = try format.decodeStorageAlloc(allocator, target_encoded);
-        defer allocator.free(target_bytes);
-        const decoded_target = try compact.decodeAlloc(allocator, target_bytes);
+        const decoded_target = try compact.decodeAlloc(allocator, target_encoded);
         defer allocator.free(decoded_target);
 
         candidate.* = .{
@@ -1117,13 +1109,8 @@ fn deinitValidTitleSet(allocator: std.mem.Allocator, valid_titles: *ValidTitleSe
     valid_titles.deinit();
 }
 
-fn readNullTerminatedSlice(bytes: []const u8, cursor: *usize, limit: usize) ![]const u8 {
-    if (cursor.* >= limit) return error.InvalidDictionaryFile;
-    const terminator = std.mem.indexOfScalarPos(u8, bytes, cursor.*, 0) orelse return error.InvalidDictionaryFile;
-    if (terminator >= limit) return error.InvalidDictionaryFile;
-    const out = bytes[cursor.*..terminator];
-    cursor.* = terminator + 1;
-    return out;
+fn readCompactTerminatedSlice(bytes: []const u8, cursor: *usize, limit: usize) ![]const u8 {
+    return format.readCompactTerminatedSlice(bytes, cursor, limit);
 }
 
 const OutputWriter = struct {
@@ -1298,7 +1285,7 @@ const OutputWriter = struct {
     ) !void {
         if (std.mem.indexOfScalar(u8, value, 0) != null) return error.InvalidDictionaryFile;
         const encoded = try compact.encodeToList(&self.encode_buf, self.allocator, value);
-        try format.appendStorageEncoded(buffer, self.allocator, encoded);
+        try buffer.appendSlice(self.allocator, encoded);
         try buffer.append(self.allocator, 0);
         if (buffer.items.len >= flush_threshold) {
             try flushFn(self);
@@ -1588,8 +1575,8 @@ test "full build filters unresolved alias records in binary second pass" {
 
     var raw_cursor: usize = @intCast(inspected.layout.raw_titles_offset);
     const raw_titles_end: usize = @intCast(inspected.layout.raw_titles_offset + inspected.layout.raw_titles_len);
-    const raw0 = try format.readNullTerminatedSlice(mapped, &raw_cursor, raw_titles_end);
-    const raw1 = try format.readNullTerminatedSlice(mapped, &raw_cursor, raw_titles_end);
+    const raw0 = try format.readCompactTerminatedSlice(mapped, &raw_cursor, raw_titles_end);
+    const raw1 = try format.readCompactTerminatedSlice(mapped, &raw_cursor, raw_titles_end);
     const raw0_decoded = try compact.decodeAlloc(std.testing.allocator, raw0);
     defer std.testing.allocator.free(raw0_decoded);
     const raw1_decoded = try compact.decodeAlloc(std.testing.allocator, raw1);
@@ -1599,9 +1586,40 @@ test "full build filters unresolved alias records in binary second pass" {
 
     var alias_cursor: usize = @intCast(inspected.layout.alias_titles_offset);
     const alias_titles_end: usize = @intCast(inspected.layout.alias_titles_offset + inspected.layout.alias_titles_len);
-    const alias0 = try format.readNullTerminatedSlice(mapped, &alias_cursor, alias_titles_end);
+    const alias0 = try format.readCompactTerminatedSlice(mapped, &alias_cursor, alias_titles_end);
     const alias_title = try compact.decodeAlloc(std.testing.allocator, alias0);
     defer std.testing.allocator.free(alias_title);
     try std.testing.expectEqualStrings("colours", alias_title);
     try std.testing.expectEqual(@as(u32, 1), try format.readAliasTargetAt(mapped, inspected.layout, 0));
+}
+
+test "output writer rejects literal nul in raw titles and payloads" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_path);
+
+    var writer = try OutputWriter.init(std.testing.io, std.testing.allocator, db_path);
+    defer writer.deinit(std.testing.allocator);
+
+    const bad_title = [_]u8{ 'b', 'a', 'd', 0, 't', 'i', 't', 'l', 'e' };
+    try std.testing.expectError(error.InvalidDictionaryFile, writer.writeRawRecord(&bad_title, "==English=="));
+
+    const bad_payload = [_]u8{ '=', '=', 'E', 'n', 'g', 'l', 'i', 's', 'h', '=', '=', 0 };
+    try std.testing.expectError(error.InvalidDictionaryFile, writer.writeRawRecord("good-title", &bad_payload));
+}
+
+test "output writer rejects literal nul in alias titles" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_path);
+
+    var writer = try OutputWriter.init(std.testing.io, std.testing.allocator, db_path);
+    defer writer.deinit(std.testing.allocator);
+
+    const bad_alias = [_]u8{ 'b', 'a', 'd', 0, 'a', 'l', 'i', 'a', 's' };
+    try std.testing.expectError(error.InvalidDictionaryFile, writer.writeRedirectRecord(&bad_alias, "target"));
 }

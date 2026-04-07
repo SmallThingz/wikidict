@@ -177,6 +177,7 @@ const Analyzer = struct {
     entry_direct_modules: std.StringHashMap(void),
     template_nodes: std.StringHashMap(lua.TemplateDependencyNode),
     module_nodes: std.StringHashMap([]const []const u8),
+    entry_page_refs: std.StringHashMap(SourcePageOffset),
     template_page_refs: std.StringHashMap(SourcePageOffset),
     module_page_refs: std.StringHashMap(SourcePageOffset),
     key_scratch: std.ArrayList(u8) = .empty,
@@ -190,6 +191,7 @@ const Analyzer = struct {
             .entry_direct_modules = std.StringHashMap(void).init(gpa),
             .template_nodes = std.StringHashMap(lua.TemplateDependencyNode).init(gpa),
             .module_nodes = std.StringHashMap([]const []const u8).init(gpa),
+            .entry_page_refs = std.StringHashMap(SourcePageOffset).init(gpa),
             .template_page_refs = std.StringHashMap(SourcePageOffset).init(gpa),
             .module_page_refs = std.StringHashMap(SourcePageOffset).init(gpa),
         };
@@ -221,6 +223,7 @@ const Analyzer = struct {
         self.entry_direct_modules.deinit();
         self.template_nodes.deinit();
         self.module_nodes.deinit();
+        self.entry_page_refs.deinit();
         self.template_page_refs.deinit();
         self.module_page_refs.deinit();
         self.key_scratch.deinit(self.gpa);
@@ -381,6 +384,14 @@ const Analyzer = struct {
         }
     }
 
+    fn rememberEntryPage(self: *Analyzer, title: []const u8, page_start: usize, page_end: usize) !void {
+        if (self.entry_page_refs.contains(title)) return;
+        try self.entry_page_refs.put(
+            try self.keyAllocator().dupe(u8, title),
+            .{ .page_start = @intCast(page_start), .page_end = @intCast(page_end) },
+        );
+    }
+
     fn rememberModulePage(self: *Analyzer, allocator: std.mem.Allocator, title: []const u8, source: []const u8, page_start: usize, page_end: usize) !void {
         _ = allocator;
         _ = source;
@@ -449,6 +460,7 @@ const Analyzer = struct {
         try self.mergeStringSet(&self.entry_direct_modules, &other.entry_direct_modules);
         try self.mergeTemplateNodes(&other.template_nodes);
         try self.mergeModuleNodes(&other.module_nodes);
+        try self.mergeSourcePageRefs(&self.entry_page_refs, &other.entry_page_refs);
         try self.mergeSourcePageRefs(&self.template_page_refs, &other.template_page_refs);
         try self.mergeSourcePageRefs(&self.module_page_refs, &other.module_page_refs);
 
@@ -1102,6 +1114,7 @@ fn processPageFragment(
     }
 
     analyzer.namespace_zero_pages += 1;
+    try analyzer.rememberEntryPage(title, page_start, page_end);
 
     const stored_sections = (try wikitext.extractConfiguredLanguageSectionsAlloc(allocator, text, .defaultCompact())) orelse return;
 
@@ -1497,6 +1510,7 @@ fn buildStructureDependenciesAlloc(
         .unresolved_templates = try dupStringSliceAlloc(dest_allocator, report.unresolved_templates),
         .direct_modules = try dupStringSliceAlloc(dest_allocator, report.direct_modules),
         .transitive_modules = try dupStringSliceAlloc(dest_allocator, transitive_modules),
+        .all_entry_pages = try collectAllSourceRefsAlloc(dest_allocator, analyzer.entry_page_refs),
         .all_template_pages = try collectAllSourceRefsAlloc(dest_allocator, analyzer.template_page_refs),
         .all_module_pages = try collectAllSourceRefsAlloc(dest_allocator, analyzer.module_page_refs),
         .reachable_template_pages = try collectDependencySourceRefsAlloc(dest_allocator, reachable_templates, analyzer.template_page_refs),
@@ -2882,6 +2896,10 @@ test "json report includes exact build payload and omits exploratory sections" {
     try analyzer.bump(&analyzer.translation_source_label_counts, "gloss");
     try analyzer.bump(&analyzer.translation_target_lang_counts, "French");
     try analyzer.addAnomaly("entry", "heading-jump", "bad nesting");
+    try analyzer.entry_page_refs.put(
+        try analyzer.keyAllocator().dupe(u8, "entry"),
+        .{ .page_start = 1, .page_end = 9 },
+    );
 
     const json = try jsonReportAlloc(std.testing.allocator, &analyzer);
     defer std.testing.allocator.free(json);
@@ -2889,6 +2907,7 @@ test "json report includes exact build payload and omits exploratory sections" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"build\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"anomalies\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"dependencies\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"all_entry_pages\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"all_template_pages\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"reachable_template_pages\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"compact_direct_patterns\"") != null);

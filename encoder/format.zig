@@ -1,12 +1,18 @@
 const std = @import("std");
 
-pub const magic = "WIKDIC31";
+pub const magic = "WIKDIC32";
 pub const lookup_kind_title: u8 = 0;
 pub const lookup_kind_alternative_form: u8 = 1;
 
 pub const LayoutError = error{ InvalidDictionaryFile, FileTooBig };
 pub const VarUIntError = error{InvalidVarUInt};
-pub const storage_escape: u8 = 0xFF;
+
+const escape_byte: u8 = 0xFF;
+const special_template_line_code: u8 = 0xFB;
+const special_template_translation_code: u8 = 0xFC;
+const special_heading_line_code: u8 = 0xFD;
+const extended_pattern_code: u8 = 0xFE;
+const raw_literal_code: u8 = 0xFF;
 
 // The final dictionary stores only the minimum persisted data:
 // raw titles, alias titles, alias target indices, and raw payloads.
@@ -54,11 +60,11 @@ pub fn inspectDictionary(bytes: []const u8) LayoutError!InspectedDictionary {
 
     var cursor: usize = header_len;
     const raw_titles_offset: u64 = cursor;
-    try skipNullTerminatedStrings(bytes, &cursor, bytes.len, header.raw_count);
+    try skipCompactTerminatedFields(bytes, &cursor, bytes.len, header.raw_count);
     const raw_titles_end = cursor;
 
     const alias_titles_offset: u64 = cursor;
-    try skipNullTerminatedStrings(bytes, &cursor, bytes.len, header.alias_count);
+    try skipCompactTerminatedFields(bytes, &cursor, bytes.len, header.alias_count);
     const alias_titles_end = cursor;
 
     const alias_targets_offset: u64 = cursor;
@@ -67,7 +73,7 @@ pub fn inspectDictionary(bytes: []const u8) LayoutError!InspectedDictionary {
     cursor += @intCast(alias_targets_len);
 
     const raw_payloads_offset: u64 = cursor;
-    try skipNullTerminatedStrings(bytes, &cursor, bytes.len, header.raw_count);
+    try skipCompactTerminatedFields(bytes, &cursor, bytes.len, header.raw_count);
     if (cursor != bytes.len) return error.InvalidDictionaryFile;
 
     return .{
@@ -93,70 +99,70 @@ pub fn readAliasTargetAt(bytes: []const u8, layout: DictionaryLayout, alias_inde
     return std.mem.readInt(u32, ptr, .little);
 }
 
-pub fn readNullTerminatedSlice(bytes: []const u8, cursor: *usize, limit: usize) LayoutError![]const u8 {
+pub fn readCompactTerminatedSlice(bytes: []const u8, cursor: *usize, limit: usize) LayoutError![]const u8 {
     if (cursor.* >= limit) return error.InvalidDictionaryFile;
-    const terminator = std.mem.indexOfScalarPos(u8, bytes, cursor.*, 0) orelse return error.InvalidDictionaryFile;
-    if (terminator >= limit) return error.InvalidDictionaryFile;
-    const out = bytes[cursor.*..terminator];
-    cursor.* = terminator + 1;
-    return out;
-}
-
-pub fn storageEncodedLen(input: []const u8) usize {
-    var len: usize = 0;
-    for (input) |byte| {
-        len += if (byte == 0 or byte == storage_escape) 2 else 1;
-    }
-    return len;
-}
-
-pub fn appendStorageEncoded(list: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error!void {
-    try list.ensureUnusedCapacity(allocator, storageEncodedLen(input));
-    for (input) |byte| switch (byte) {
-        0 => {
-            list.appendAssumeCapacity(storage_escape);
-            list.appendAssumeCapacity(1);
-        },
-        storage_escape => {
-            list.appendAssumeCapacity(storage_escape);
-            list.appendAssumeCapacity(2);
-        },
-        else => list.appendAssumeCapacity(byte),
-    };
-}
-
-pub fn decodeStorageAlloc(allocator: std.mem.Allocator, input: []const u8) (std.mem.Allocator.Error || LayoutError)![]u8 {
-    var out = try allocator.alloc(u8, input.len);
-    errdefer allocator.free(out);
-
-    var src: usize = 0;
-    var dst: usize = 0;
-    while (src < input.len) {
-        const byte = input[src];
-        if (byte != storage_escape) {
-            out[dst] = byte;
-            dst += 1;
-            src += 1;
+    const start = cursor.*;
+    var index = start;
+    while (index < limit) {
+        const byte = bytes[index];
+        if (byte == 0) {
+            cursor.* = index + 1;
+            return bytes[start..index];
+        }
+        if (byte < 0x80) {
+            index += 1;
             continue;
         }
-        if (src + 1 >= input.len) return error.InvalidDictionaryFile;
-        const tag = input[src + 1];
-        switch (tag) {
-            1 => out[dst] = 0,
-            2 => out[dst] = storage_escape,
-            else => return error.InvalidDictionaryFile,
+        if (byte < 0xC0) {
+            if (index + 1 >= limit) return error.InvalidDictionaryFile;
+            index += 2;
+            continue;
         }
-        dst += 1;
-        src += 2;
+        if (byte < 0xE0) {
+            if (index + 2 >= limit) return error.InvalidDictionaryFile;
+            index += 3;
+            continue;
+        }
+        if (byte != escape_byte) {
+            index += 1;
+            continue;
+        }
+        if (index + 1 >= limit) return error.InvalidDictionaryFile;
+        const code = bytes[index + 1];
+        switch (code) {
+            0 => index += 2,
+            special_template_line_code, special_template_translation_code, special_heading_line_code => {
+                var ref_cursor = index + 2;
+                _ = try readCompactRef(bytes, &ref_cursor, limit);
+                index = ref_cursor;
+            },
+            extended_pattern_code, raw_literal_code => {
+                if (index + 2 >= limit) return error.InvalidDictionaryFile;
+                index += 3;
+            },
+            else => index += 2,
+        }
     }
-    return allocator.realloc(out, dst);
+    return error.InvalidDictionaryFile;
 }
 
-fn skipNullTerminatedStrings(bytes: []const u8, cursor: *usize, limit: usize, count: u32) LayoutError!void {
+fn skipCompactTerminatedFields(bytes: []const u8, cursor: *usize, limit: usize, count: u32) LayoutError!void {
     var remaining = count;
     while (remaining != 0) : (remaining -= 1) {
-        _ = try readNullTerminatedSlice(bytes, cursor, limit);
+        _ = try readCompactTerminatedSlice(bytes, cursor, limit);
     }
+}
+
+fn readCompactRef(bytes: []const u8, cursor: *usize, limit: usize) LayoutError!u16 {
+    if (cursor.* >= limit) return error.InvalidDictionaryFile;
+    const first = bytes[cursor.*];
+    cursor.* += 1;
+    if (first != 0xFF) return first;
+    if (cursor.* + 1 >= limit) return error.InvalidDictionaryFile;
+    const lo = bytes[cursor.*];
+    const hi = bytes[cursor.* + 1];
+    cursor.* += 2;
+    return std.mem.readInt(u16, &[_]u8{ lo, hi }, .little);
 }
 
 pub fn encodeVarUInt(buffer: *[10]u8, value_init: u64) []const u8 {
@@ -192,17 +198,18 @@ test "inspectDictionary parses the stripped final layout" {
         magic ++
         &[_]u8{ 2, 0, 0, 0 } ++
         &[_]u8{ 1, 0, 0, 0 } ++
-        "cat\x00dog\x00" ++
-        "cats\x00" ++
+        &[_]u8{ 'c', 'a', 't', 0, 0x81, 0x00, 0 } ++
+        &[_]u8{ 'c', 'a', 't', 's', 0 } ++
         &[_]u8{ 0, 0, 0, 0 } ++
-        "raw-cat\x00raw-dog\x00";
+        &[_]u8{ 0xFF, special_heading_line_code, 1, 0 } ++
+        &[_]u8{ 0xFF, extended_pattern_code, 1, 0 };
 
     const inspected = try inspectDictionary(blob);
     try std.testing.expectEqual(@as(u32, 2), inspected.header.raw_count);
     try std.testing.expectEqual(@as(u32, 1), inspected.header.alias_count);
-    try std.testing.expectEqualStrings("cat\x00dog\x00", blob[@intCast(inspected.layout.raw_titles_offset)..@intCast(inspected.layout.raw_titles_offset + inspected.layout.raw_titles_len)]);
-    try std.testing.expectEqualStrings("cats\x00", blob[@intCast(inspected.layout.alias_titles_offset)..@intCast(inspected.layout.alias_titles_offset + inspected.layout.alias_titles_len)]);
-    try std.testing.expectEqualStrings("raw-cat\x00raw-dog\x00", blob[@intCast(inspected.layout.raw_payloads_offset)..@intCast(inspected.layout.raw_payloads_offset + inspected.layout.raw_payloads_len)]);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 'c', 'a', 't', 0, 0x81, 0x00, 0 }, blob[@intCast(inspected.layout.raw_titles_offset)..@intCast(inspected.layout.raw_titles_offset + inspected.layout.raw_titles_len)]);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 'c', 'a', 't', 's', 0 }, blob[@intCast(inspected.layout.alias_titles_offset)..@intCast(inspected.layout.alias_titles_offset + inspected.layout.alias_titles_len)]);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xFF, special_heading_line_code, 1, 0, 0xFF, extended_pattern_code, 1, 0 }, blob[@intCast(inspected.layout.raw_payloads_offset)..@intCast(inspected.layout.raw_payloads_offset + inspected.layout.raw_payloads_len)]);
     try std.testing.expectEqual(@as(u32, 0), try readAliasTargetAt(blob, inspected.layout, 0));
 }
 
@@ -218,15 +225,10 @@ test "varuint helpers still round-trip" {
     try std.testing.expectEqual(encoded.len, cursor);
 }
 
-test "storage escaping round-trips embedded nul and escape bytes" {
-    var list: std.ArrayList(u8) = .empty;
-    defer list.deinit(std.testing.allocator);
-
-    const sample = [_]u8{ 'a', 0, storage_escape, 'b' };
-    try appendStorageEncoded(&list, std.testing.allocator, &sample);
-    try std.testing.expect(std.mem.indexOfScalar(u8, list.items, 0) == null);
-
-    const decoded = try decodeStorageAlloc(std.testing.allocator, list.items);
-    defer std.testing.allocator.free(decoded);
-    try std.testing.expectEqualSlices(u8, &sample, decoded);
+test "readCompactTerminatedSlice skips embedded zero bytes inside packed literals" {
+    const blob = [_]u8{ 'a', 0x81, 0x00, 0xC1, 0x00, 0x00, 0 };
+    var cursor: usize = 0;
+    const field = try readCompactTerminatedSlice(&blob, &cursor, blob.len);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 'a', 0x81, 0x00, 0xC1, 0x00, 0x00 }, field);
+    try std.testing.expectEqual(blob.len, cursor);
 }
