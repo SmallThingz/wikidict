@@ -1,12 +1,19 @@
 const std = @import("std");
 const lua = @import("lua");
 const required_path = @import("required_path");
-const structure_report = @import("shared_structure_report");
+pub const structure_report = @import("shared_structure_report");
 
 const support_import = "template_compiler_support";
-const max_generated_template_source_bytes = 16 * 1024;
-const max_generated_module_source_bytes = 64 * 1024;
-const max_generated_module_zig_bytes = 512 * 1024;
+// Reachable Wiktionary templates/modules must compile even when they are large.
+// Do not reintroduce source-size caps here; they only mask unsupported cases.
+const max_generated_template_source_bytes = std.math.maxInt(usize);
+const max_generated_module_source_bytes = std.math.maxInt(usize);
+const max_generated_module_zig_bytes = std.math.maxInt(usize);
+
+const CompileMode = enum {
+    zig,
+    bytecode,
+};
 
 pub fn main(init: std.process.Init) !void {
     const args_allocator = init.arena.allocator();
@@ -22,16 +29,27 @@ pub fn main(init: std.process.Init) !void {
 
     var stored_dependencies: ?structure_report.DependencySet = null;
     defer if (stored_dependencies) |*deps| deps.deinit(allocator);
+    var stored_mappings: ?structure_report.TemplateMappings = null;
+    defer if (stored_mappings) |*mappings| mappings.deinit(allocator);
 
     var roots_count: usize = 0;
+    var root_templates: []const []const u8 = &.{};
+    var owned_root_templates: []const []const u8 = &.{};
+    defer if (owned_root_templates.len != 0) freeOwnedStrings(allocator, owned_root_templates);
     var reachable_templates: []const []const u8 = &.{};
+    var owned_reachable_templates: []const []const u8 = &.{};
+    defer if (owned_reachable_templates.len != 0) freeOwnedStrings(allocator, owned_reachable_templates);
     var required_modules: []const []const u8 = &.{};
+    var owned_required_modules: []const []const u8 = &.{};
+    defer if (owned_required_modules.len != 0) freeOwnedStrings(allocator, owned_required_modules);
+    var dispatch_templates: []const structure_report.TemplateSpec = &.{};
+    var owned_dispatch_templates: []structure_report.TemplateSpec = &.{};
+    defer if (owned_dispatch_templates.len != 0) freeTemplateSpecs(allocator, owned_dispatch_templates);
+    var dynamic_templates: []const []const u8 = &.{};
+    var owned_dynamic_templates: []const []const u8 = &.{};
+    defer if (owned_dynamic_templates.len != 0) freeOwnedStrings(allocator, owned_dynamic_templates);
     var audit_view: DependencyAuditView = .{};
     var maybe_sources: ?lua.TemplateSources = null;
-    var copied_compiled_failed: []const lua.ModuleCompileFailure = &.{};
-    defer freeFailureSlice(allocator, copied_compiled_failed);
-    var copied_emitted_inconsistent: []const lua.ModuleCompileFailure = &.{};
-    defer freeFailureSlice(allocator, copied_emitted_inconsistent);
     defer if (maybe_sources) |*sources| sources.deinit(allocator);
 
     if (options.template_name) |name| {
@@ -44,24 +62,38 @@ pub fn main(init: std.process.Init) !void {
             );
             return error.MissingStructureDependencies;
         }
-        const template_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_template_pages);
-        defer freeLuaSourceRefs(allocator, template_refs);
-        const module_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_module_pages);
-        defer freeLuaSourceRefs(allocator, module_refs);
-        maybe_sources = try loadSourcesByRefsWithScanFallbackAlloc(allocator, options.input_path, template_refs, module_refs);
-
         const roots = blk: {
             const out = try allocator.alloc([]const u8, 1);
             out[0] = try allocator.dupe(u8, name);
             break :blk out;
         };
         defer freeOwnedStrings(allocator, roots);
+        root_templates = roots;
+
+        const all_template_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_template_pages);
+        defer freeLuaSourceRefs(allocator, all_template_refs);
+        const all_module_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_module_pages);
+        defer freeLuaSourceRefs(allocator, all_module_refs);
+        maybe_sources = try loadTemplateClosureByRefsAlloc(
+            allocator,
+            options.input_path,
+            all_template_refs,
+            all_module_refs,
+            roots,
+        );
+        try loadSupplementalModulesAlloc(allocator, options.input_path, &maybe_sources.?);
 
         manual_report = try lua.analyzeTemplateDependenciesFromSourcesAlloc(allocator, roots, &maybe_sources.?);
         const report = manual_report.?;
         roots_count = report.root_templates.len;
-        reachable_templates = report.reachable_templates;
-        required_modules = report.transitive_modules;
+        owned_reachable_templates = try dupStringSliceAlloc(allocator, report.reachable_templates);
+        reachable_templates = owned_reachable_templates;
+        owned_required_modules = try dupStringSliceAlloc(allocator, report.transitive_modules);
+        required_modules = owned_required_modules;
+        owned_dispatch_templates = try buildSequentialTemplateSpecsAlloc(allocator, reachable_templates);
+        dispatch_templates = owned_dispatch_templates;
+        owned_dynamic_templates = try collectDynamicTemplateNamesAlloc(allocator, reachable_templates, &maybe_sources.?);
+        dynamic_templates = owned_dynamic_templates;
         audit_view = .{
             .unresolved_templates = report.unresolved_templates,
             .missing_modules = report.missing_modules,
@@ -70,39 +102,83 @@ pub fn main(init: std.process.Init) !void {
         };
     } else {
         stored_dependencies = try structure_report.loadDependencySetAlloc(init.io, allocator, options.structure_path);
+        stored_mappings = try structure_report.loadTemplateMappingsAlloc(init.io, allocator, options.structure_path);
         const deps = stored_dependencies.?;
-        if (deps.root_templates.len == 0 and deps.reachable_templates.len == 0 and deps.transitive_modules.len == 0) {
+        const mappings = stored_mappings.?;
+        if (deps.root_templates.len != 0) {
+            owned_root_templates = try dupStringSliceAlloc(allocator, deps.root_templates);
+        } else {
+            owned_root_templates = try loadActiveTemplateRootsAlloc(init.io, allocator, options.structure_path);
+        }
+        root_templates = owned_root_templates;
+        if (root_templates.len == 0 and deps.transitive_modules.len == 0) {
             std.debug.print(
-                "template compiler: structure report at {s} does not contain stored dependencies; rerun zig build structure\n",
+                "template compiler: structure report at {s} does not contain active bin template roots; rerun zig build structure\n",
                 .{options.structure_path},
             );
             return error.MissingStructureDependencies;
         }
-        roots_count = deps.root_templates.len;
-        reachable_templates = if (deps.reachable_templates.len != 0) deps.reachable_templates else deps.root_templates;
-        required_modules = deps.transitive_modules;
-        audit_view = .{
-            .unresolved_templates = deps.unresolved_templates,
-            .missing_modules = deps.missing_modules,
-            .compiled_failed = copied_compiled_failed,
-            .emitted_inconsistent = copied_emitted_inconsistent,
-        };
-        copied_compiled_failed = try dupLuaFailureSliceAlloc(allocator, deps.compiled_failed);
-        copied_emitted_inconsistent = try dupLuaFailureSliceAlloc(allocator, deps.emitted_inconsistent);
-        audit_view.compiled_failed = copied_compiled_failed;
-        audit_view.emitted_inconsistent = copied_emitted_inconsistent;
-        if (deps.reachable_template_pages.len == 0 and deps.transitive_module_pages.len == 0) {
+        if (deps.reachable_template_pages.len == 0 and deps.all_template_pages.len == 0 and deps.transitive_module_pages.len == 0 and deps.all_module_pages.len == 0) {
             std.debug.print(
                 "template compiler: structure report at {s} does not contain dependency page refs; rerun zig build structure\n",
                 .{options.structure_path},
             );
             return error.MissingStructureDependencies;
         }
-        const template_refs = try dupLuaSourceRefsAlloc(allocator, deps.reachable_template_pages);
-        defer freeLuaSourceRefs(allocator, template_refs);
-        const module_refs = try dupLuaSourceRefsAlloc(allocator, deps.transitive_module_pages);
-        defer freeLuaSourceRefs(allocator, module_refs);
-        maybe_sources = try loadSourcesByRefsWithScanFallbackAlloc(allocator, options.input_path, template_refs, module_refs);
+        roots_count = root_templates.len;
+        const selected_template_refs = try dupLuaSourceRefsAlloc(
+            allocator,
+            if (deps.reachable_template_pages.len != 0) deps.reachable_template_pages else deps.all_template_pages,
+        );
+        defer freeLuaSourceRefs(allocator, selected_template_refs);
+        const selected_module_refs = try dupLuaSourceRefsAlloc(
+            allocator,
+            if (deps.transitive_module_pages.len != 0) deps.transitive_module_pages else deps.all_module_pages,
+        );
+        defer freeLuaSourceRefs(allocator, selected_module_refs);
+        maybe_sources = try loadTemplateClosureByRefsAlloc(
+            allocator,
+            options.input_path,
+            selected_template_refs,
+            selected_module_refs,
+            root_templates,
+        );
+        try loadSupplementalModulesAlloc(allocator, options.input_path, &maybe_sources.?);
+        manual_report = try lua.analyzeTemplateDependenciesFromSourcesAlloc(allocator, root_templates, &maybe_sources.?);
+        const report = manual_report.?;
+        if (deps.reachable_templates.len != 0) {
+            owned_reachable_templates = try dupStringSliceAlloc(allocator, deps.reachable_templates);
+        } else {
+            owned_reachable_templates = try dupStringSliceAlloc(allocator, report.reachable_templates);
+        }
+        reachable_templates = owned_reachable_templates;
+        if (deps.transitive_modules.len != 0) {
+            owned_required_modules = try dupStringSliceAlloc(allocator, deps.transitive_modules);
+        } else {
+            owned_required_modules = try dupStringSliceAlloc(allocator, report.transitive_modules);
+        }
+        required_modules = owned_required_modules;
+        if (mappings.line_templates.len != reachable_templates.len) {
+            std.debug.print(
+                "template compiler: structure report at {s} has mismatched dispatch template table; rerun zig build structure\n",
+                .{options.structure_path},
+            );
+            return error.InvalidStructureReport;
+        }
+        try validateDispatchTemplateOrder(mappings.line_templates, reachable_templates);
+        dispatch_templates = mappings.line_templates;
+        if (deps.dynamic_templates.len != 0) {
+            owned_dynamic_templates = try dupStringSliceAlloc(allocator, deps.dynamic_templates);
+        } else {
+            owned_dynamic_templates = try collectDynamicTemplateNamesAlloc(allocator, reachable_templates, &maybe_sources.?);
+        }
+        dynamic_templates = owned_dynamic_templates;
+        audit_view = .{
+            .unresolved_templates = report.unresolved_templates,
+            .missing_modules = report.missing_modules,
+            .compiled_failed = report.compiled_failed,
+            .emitted_inconsistent = report.emitted_inconsistent,
+        };
     }
 
     const had_audit_failures = audit_view.unresolved_templates.len != 0 or
@@ -111,7 +187,14 @@ pub fn main(init: std.process.Init) !void {
         audit_view.emitted_inconsistent.len != 0;
     if (had_audit_failures) try printDependencyFailures(audit_view);
 
-    const compiled = try compileTemplateRuntimeAlloc(allocator, reachable_templates, required_modules, &maybe_sources.?);
+    const compiled = try compileTemplateRuntimeWithDispatchAlloc(
+        allocator,
+        dispatch_templates,
+        dynamic_templates,
+        required_modules,
+        &maybe_sources.?,
+        options.mode,
+    );
     defer {
         allocator.free(compiled.source);
         for (compiled.unsupported) |entry| allocator.free(entry.reason);
@@ -132,10 +215,11 @@ pub fn main(init: std.process.Init) !void {
     try file.writeStreamingAll(init.io, compiled.source);
 
     std.debug.print(
-        "template compiler: roots={d} reachable={d} modules={d} compiled={d} metadata_only={d} unsupported={d} unresolved={d} missing_modules={d} output={s}\n",
+        "template compiler: roots={d} reachable={d} dynamic={d} modules={d} compiled={d} metadata_only={d} unsupported={d} unresolved={d} missing_modules={d} output={s}\n",
         .{
             roots_count,
             reachable_templates.len,
+            dynamic_templates.len,
             required_modules.len,
             compiled.compiled_count,
             compiled.metadata_only_count,
@@ -147,11 +231,73 @@ pub fn main(init: std.process.Init) !void {
     );
 }
 
+fn loadActiveTemplateRootsAlloc(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) ![]const []const u8 {
+    var mappings = try structure_report.loadTemplateMappingsAlloc(io, allocator, path);
+    defer mappings.deinit(allocator);
+
+    var set = std.StringHashMapUnmanaged(void){};
+    defer {
+        var it = set.iterator();
+        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+        set.deinit(allocator);
+    }
+
+    for (mappings.line_templates) |entry| {
+        const gop = try set.getOrPut(allocator, entry.name);
+        if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, entry.name);
+    }
+    for (mappings.translation_templates) |entry| {
+        const gop = try set.getOrPut(allocator, entry.name);
+        if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, entry.name);
+    }
+
+    return collectStringSet(allocator, &set);
+}
+
+fn buildSequentialTemplateSpecsAlloc(
+    allocator: std.mem.Allocator,
+    names: []const []const u8,
+) ![]structure_report.TemplateSpec {
+    const out = try allocator.alloc(structure_report.TemplateSpec, names.len);
+    errdefer allocator.free(out);
+    for (names, out, 0..) |name, *slot, idx| {
+        slot.* = .{
+            .code = std.math.cast(u16, idx + 1) orelse return error.TooManyGeneratedTemplates,
+            .name = try allocator.dupe(u8, name),
+        };
+    }
+    return out;
+}
+
+fn freeTemplateSpecs(
+    allocator: std.mem.Allocator,
+    specs: []const structure_report.TemplateSpec,
+) void {
+    for (specs) |entry| allocator.free(entry.name);
+    allocator.free(specs);
+}
+
+fn validateDispatchTemplateOrder(
+    dispatch_templates: []const structure_report.TemplateSpec,
+    reachable_templates: []const []const u8,
+) !void {
+    for (dispatch_templates, reachable_templates, 0..) |entry, reachable, idx| {
+        const expected_code: u16 = @intCast(idx + 1);
+        if (entry.code != expected_code) return error.InvalidStructureReport;
+        if (!std.mem.eql(u8, entry.name, reachable)) return error.InvalidStructureReport;
+    }
+}
+
 const Options = struct {
     input_path: []const u8 = "data/wiktionary.xml",
     structure_path: []const u8 = "data/wiktionary-structure.json",
     output_path: []const u8 = "data/generated_template_runtime.zig",
     template_name: ?[]const u8 = null,
+    mode: CompileMode = .zig,
 };
 
 fn parseOptions(args: []const []const u8) !Options {
@@ -188,6 +334,12 @@ fn parseOptions(args: []const []const u8) !Options {
             options.template_name = args[i];
             continue;
         }
+        if (std.mem.eql(u8, arg, "--mode")) {
+            i += 1;
+            if (i >= args.len) return error.MissingValue;
+            options.mode = std.meta.stringToEnum(CompileMode, args[i]) orelse return error.InvalidMode;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "help") or std.mem.eql(u8, arg, "--help")) {
             printUsage();
             std.process.exit(0);
@@ -198,8 +350,9 @@ fn parseOptions(args: []const []const u8) !Options {
 
 fn printUsage() void {
     std.debug.print(
-        \\dict-template-compile --input data/wiktionary.xml --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
-        \\dict-template-compile --input data/wiktionary.xml --structure data/wiktionary-structure.json --template \"template name\" --output /tmp/generated_templates.zig
+        \\dict-template-compile --mode zig --input data/wiktionary.xml --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
+        \\dict-template-compile --mode bytecode --input data/wiktionary.xml --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
+        \\dict-template-compile --mode zig --input data/wiktionary.xml --structure data/wiktionary-structure.json --template \"template name\" --output /tmp/generated_templates.zig
         \\
     , .{});
 }
@@ -255,6 +408,352 @@ fn loadSourcesByRefsWithScanFallbackAlloc(
             );
         },
         else => err,
+    };
+}
+
+fn loadSupplementalModulesAlloc(
+    allocator: std.mem.Allocator,
+    xml_path: []const u8,
+    sources: *lua.TemplateSources,
+) !void {
+    const supplemental_modules = [_][]const u8{
+        "libraryutil",
+        "chart/default colors",
+        "labels/data",
+        "ml-translit",
+        "pa-translit",
+        "strict",
+    };
+
+    var missing: std.ArrayList([]const u8) = .empty;
+    defer missing.deinit(allocator);
+    for (supplemental_modules) |name| {
+        if (!sources.module_sources.contains(name)) {
+            try missing.append(allocator, name);
+        }
+    }
+    if (missing.items.len == 0) return;
+
+    var supplemental = try lua.scanSelectedTemplateAndModuleSourcesAlloc(
+        allocator,
+        xml_path,
+        &.{},
+        missing.items,
+    );
+    defer supplemental.deinit(allocator);
+
+    var it = supplemental.module_sources.iterator();
+    while (it.next()) |entry| {
+        if (sources.module_sources.contains(entry.key_ptr.*)) continue;
+        try sources.module_sources.put(
+            try allocator.dupe(u8, entry.key_ptr.*),
+            try allocator.dupe(u8, entry.value_ptr.*),
+        );
+    }
+}
+
+pub fn loadTemplateClosureByRefsAlloc(
+    allocator: std.mem.Allocator,
+    xml_path: []const u8,
+    all_template_refs: []const lua.SourcePageRef,
+    all_module_refs: []const lua.SourcePageRef,
+    root_templates: []const []const u8,
+) !lua.TemplateSources {
+    var sources = lua.TemplateSources{
+        .template_sources = std.StringHashMap([]const u8).init(allocator),
+        .module_sources = std.StringHashMap([]const u8).init(allocator),
+    };
+    errdefer sources.deinit(allocator);
+
+    var wanted_templates = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &wanted_templates);
+    var wanted_modules = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &wanted_modules);
+
+    for (root_templates) |name| {
+        const canonical = try lua.canonicalTemplateNameAlloc(allocator, name);
+        errdefer allocator.free(canonical);
+        const gop = try wanted_templates.getOrPut(allocator, canonical);
+        if (gop.found_existing) {
+            allocator.free(canonical);
+        } else {
+            gop.key_ptr.* = canonical;
+        }
+    }
+
+    var iteration: usize = 0;
+    while (iteration < 256) : (iteration += 1) {
+        var template_batch = std.ArrayList(lua.SourcePageRef).empty;
+        defer {
+            if (template_batch.items.len != 0) {
+                freeLuaSourceRefs(allocator, template_batch.items);
+            } else {
+                template_batch.deinit(allocator);
+            }
+        }
+        var module_batch = std.ArrayList(lua.SourcePageRef).empty;
+        defer {
+            if (module_batch.items.len != 0) {
+                freeLuaSourceRefs(allocator, module_batch.items);
+            } else {
+                module_batch.deinit(allocator);
+            }
+        }
+        var missing_template_names = std.ArrayList([]const u8).empty;
+        defer missing_template_names.deinit(allocator);
+        var missing_module_names = std.ArrayList([]const u8).empty;
+        defer missing_module_names.deinit(allocator);
+
+        var template_it = wanted_templates.iterator();
+        while (template_it.next()) |entry| {
+            if (sources.template_sources.contains(entry.key_ptr.*)) continue;
+            if (findStructureRefByName(all_template_refs, entry.key_ptr.*)) |ref| {
+                try template_batch.append(allocator, .{
+                    .name = try allocator.dupe(u8, ref.name),
+                    .page_start = ref.page_start,
+                    .page_end = ref.page_end,
+                });
+            } else {
+                try missing_template_names.append(allocator, entry.key_ptr.*);
+            }
+        }
+
+        var module_it = wanted_modules.iterator();
+        while (module_it.next()) |entry| {
+            if (sources.module_sources.contains(entry.key_ptr.*)) continue;
+            if (findStructureRefByName(all_module_refs, entry.key_ptr.*)) |ref| {
+                try module_batch.append(allocator, .{
+                    .name = try allocator.dupe(u8, ref.name),
+                    .page_start = ref.page_start,
+                    .page_end = ref.page_end,
+                });
+            } else {
+                try missing_module_names.append(allocator, entry.key_ptr.*);
+            }
+        }
+
+        if (template_batch.items.len == 0 and module_batch.items.len == 0 and missing_template_names.items.len == 0 and missing_module_names.items.len == 0) break;
+
+        if (template_batch.items.len != 0 or module_batch.items.len != 0) {
+            var batch_sources = try loadSourcesByRefsWithScanFallbackAlloc(
+                allocator,
+                xml_path,
+                template_batch.items,
+                module_batch.items,
+            );
+            defer batch_sources.deinit(allocator);
+            try mergeTemplateSourcesAlloc(allocator, &sources, &batch_sources);
+        }
+        if (missing_template_names.items.len != 0 or missing_module_names.items.len != 0) {
+            var fallback_sources = try lua.scanSelectedTemplateAndModuleSourcesAlloc(
+                allocator,
+                xml_path,
+                missing_template_names.items,
+                missing_module_names.items,
+            );
+            defer fallback_sources.deinit(allocator);
+            try mergeTemplateSourcesAlloc(allocator, &sources, &fallback_sources);
+        }
+        try loadSupplementalModulesAlloc(allocator, xml_path, &sources);
+        try applyTemplateSourceOverridesAlloc(allocator, &sources);
+
+        var report = try lua.analyzeTemplateDependenciesFromSourcesAlloc(allocator, root_templates, &sources);
+        defer report.deinit(allocator);
+
+        for (report.reachable_templates) |name| {
+            if (wanted_templates.contains(name)) continue;
+            try wanted_templates.put(allocator, try allocator.dupe(u8, name), {});
+        }
+        var loaded_template_it = sources.template_sources.iterator();
+        while (loaded_template_it.next()) |entry| {
+            try collectRenderedTemplateDependenciesAlloc(allocator, &wanted_templates, entry.value_ptr.*);
+        }
+        for (report.transitive_modules) |name| {
+            if (wanted_modules.contains(name)) continue;
+            try wanted_modules.put(allocator, try allocator.dupe(u8, name), {});
+        }
+    }
+
+    return sources;
+}
+
+fn applyTemplateSourceOverridesAlloc(
+    allocator: std.mem.Allocator,
+    sources: *lua.TemplateSources,
+) !void {
+    try upsertTemplateSourceOverride(allocator, sources, "pagename", "{{PAGENAME}}");
+    try upsertTemplateSourceOverride(allocator, sources, "yesno", "{{{1|}}}");
+    try upsertTemplateSourceOverride(allocator, sources, "maintenanceline", "{{{1|}}}");
+    try upsertTemplateSourceOverride(allocator, sources, "error", "{{{1|}}}");
+    try upsertTemplateSourceOverride(allocator, sources, "requestbox", "{{{2|{{{1|}}}}}}");
+    try upsertTemplateSourceOverride(allocator, sources, "strindex-lite", "{{#invoke:string/templates|sub|{{{1|}}}|{{{2|0}}}|{{{2|0}}}}}");
+    try upsertTemplateSourceOverride(allocator, sources, "strsub-lite", "{{#invoke:string/templates|sub|{{{1|}}}|{{{2|1}}}|{{{3|}}}}}");
+    try upsertTemplateSourceOverride(allocator, sources, "inflection-table-top", "");
+    try upsertTemplateSourceOverride(allocator, sources, "rfd", "{{{1|}}}");
+    try upsertTemplateSourceOverride(allocator, sources, "diffurl", "{{fullurl:{{{1|}}}}}");
+    try upsertTemplateSourceOverride(allocator, sources, "elements/dowork", "{{{symbol|}}}");
+    try upsertTemplateSourceOverride(allocator, sources, "named-after", "{{{alt|Named after {{{2|an unknown person}}}}}}");
+    try upsertTemplateSourceOverride(allocator, sources, "vi-l", "{{l-lite|vi|{{{1|}}}|{{{1|}}}|{{{2|}}}|{{{3|}}}}}");
+}
+
+fn upsertTemplateSourceOverride(
+    allocator: std.mem.Allocator,
+    sources: *lua.TemplateSources,
+    name: []const u8,
+    source: []const u8,
+) !void {
+    const canonical = try lua.canonicalTemplateNameAlloc(allocator, name);
+    const owned_source = try allocator.dupe(u8, source);
+    errdefer allocator.free(owned_source);
+
+    const gop = try sources.template_sources.getOrPut(canonical);
+    if (gop.found_existing) {
+        allocator.free(gop.value_ptr.*);
+        allocator.free(canonical);
+        gop.value_ptr.* = owned_source;
+        return;
+    }
+
+    gop.key_ptr.* = canonical;
+    gop.value_ptr.* = owned_source;
+}
+
+fn findStructureRefByName(
+    refs: []const lua.SourcePageRef,
+    name: []const u8,
+) ?lua.SourcePageRef {
+    for (refs) |ref| {
+        if (std.mem.eql(u8, ref.name, name)) return ref;
+    }
+    return null;
+}
+
+fn findModuleExportId(module: ModuleInfo, function_name: []const u8) ?u16 {
+    for (module.exports) |entry| {
+        if (std.mem.eql(u8, entry.name, function_name)) return entry.export_id;
+    }
+    return null;
+}
+
+fn mergeTemplateSourcesAlloc(
+    allocator: std.mem.Allocator,
+    dst: *lua.TemplateSources,
+    src: *const lua.TemplateSources,
+) !void {
+    var template_it = src.template_sources.iterator();
+    while (template_it.next()) |entry| {
+        if (dst.template_sources.contains(entry.key_ptr.*)) continue;
+        try dst.template_sources.put(
+            try allocator.dupe(u8, entry.key_ptr.*),
+            try allocator.dupe(u8, entry.value_ptr.*),
+        );
+    }
+
+    var module_it = src.module_sources.iterator();
+    while (module_it.next()) |entry| {
+        if (dst.module_sources.contains(entry.key_ptr.*)) continue;
+        try dst.module_sources.put(
+            try allocator.dupe(u8, entry.key_ptr.*),
+            try allocator.dupe(u8, entry.value_ptr.*),
+        );
+    }
+}
+
+fn collectRenderedTemplateDependenciesAlloc(
+    allocator: std.mem.Allocator,
+    wanted_templates: *std.StringHashMapUnmanaged(void),
+    source: []const u8,
+) !void {
+    const nodes = parseTemplateSourceAlloc(allocator, source) catch return;
+    defer freeNodes(allocator, nodes);
+    try collectRenderedTemplateDependenciesFromNodesAlloc(allocator, wanted_templates, nodes);
+}
+
+pub fn collectDynamicTemplateNamesAlloc(
+    allocator: std.mem.Allocator,
+    reachable_templates: []const []const u8,
+    sources: *const lua.TemplateSources,
+) ![]const []const u8 {
+    var set = std.StringHashMapUnmanaged(void){};
+    defer deinitOwnedStringSet(allocator, &set);
+
+    for (reachable_templates) |name| {
+        const source = sources.template_sources.get(name) orelse continue;
+        const nodes = parseTemplateSourceAlloc(allocator, source) catch continue;
+        defer freeNodes(allocator, nodes);
+        try collectDynamicTemplateNamesFromNodesAlloc(allocator, &set, nodes);
+    }
+
+    return collectStringSet(allocator, &set);
+}
+
+fn collectDynamicTemplateNamesFromNodesAlloc(
+    allocator: std.mem.Allocator,
+    out: *std.StringHashMapUnmanaged(void),
+    nodes: []const Node,
+) !void {
+    for (nodes) |node| switch (node) {
+        .text => {},
+        .param => |param| try collectDynamicTemplateNamesFromNodesAlloc(allocator, out, param.default_nodes),
+        .template_call => |call| {
+            if (call.name_nodes.len != 0) {
+                for (call.resolved_names) |name| {
+                    if (out.contains(name)) continue;
+                    try out.put(allocator, try allocator.dupe(u8, name), {});
+                }
+                try collectDynamicTemplateNamesFromNodesAlloc(allocator, out, call.name_nodes);
+            }
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic) try collectDynamicTemplateNamesFromNodesAlloc(allocator, out, arg.name_nodes);
+                try collectDynamicTemplateNamesFromNodesAlloc(allocator, out, arg.value_nodes);
+            }
+        },
+        .invoke_call => |call| {
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic) try collectDynamicTemplateNamesFromNodesAlloc(allocator, out, arg.name_nodes);
+                try collectDynamicTemplateNamesFromNodesAlloc(allocator, out, arg.value_nodes);
+            }
+        },
+        .parser_func => |func| {
+            for (func.args) |arg| {
+                if (arg.name_is_dynamic) try collectDynamicTemplateNamesFromNodesAlloc(allocator, out, arg.name_nodes);
+                try collectDynamicTemplateNamesFromNodesAlloc(allocator, out, arg.value_nodes);
+            }
+        },
+    };
+}
+
+fn collectRenderedTemplateDependenciesFromNodesAlloc(
+    allocator: std.mem.Allocator,
+    wanted_templates: *std.StringHashMapUnmanaged(void),
+    nodes: []const Node,
+) !void {
+    for (nodes) |node| switch (node) {
+        .text => {},
+        .param => |param| try collectRenderedTemplateDependenciesFromNodesAlloc(allocator, wanted_templates, param.default_nodes),
+        .template_call => |call| {
+            for (call.resolved_names) |name| {
+                if (wanted_templates.contains(name)) continue;
+                try wanted_templates.put(allocator, try allocator.dupe(u8, name), {});
+            }
+            if (call.name_nodes.len != 0) try collectRenderedTemplateDependenciesFromNodesAlloc(allocator, wanted_templates, call.name_nodes);
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic) try collectRenderedTemplateDependenciesFromNodesAlloc(allocator, wanted_templates, arg.name_nodes);
+                try collectRenderedTemplateDependenciesFromNodesAlloc(allocator, wanted_templates, arg.value_nodes);
+            }
+        },
+        .invoke_call => |call| {
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic) try collectRenderedTemplateDependenciesFromNodesAlloc(allocator, wanted_templates, arg.name_nodes);
+                try collectRenderedTemplateDependenciesFromNodesAlloc(allocator, wanted_templates, arg.value_nodes);
+            }
+        },
+        .parser_func => |func| {
+            for (func.args) |arg| {
+                if (arg.name_is_dynamic) try collectRenderedTemplateDependenciesFromNodesAlloc(allocator, wanted_templates, arg.name_nodes);
+                try collectRenderedTemplateDependenciesFromNodesAlloc(allocator, wanted_templates, arg.value_nodes);
+            }
+        },
     };
 }
 
@@ -348,7 +847,8 @@ const ArgNode = struct {
 };
 
 const TemplateCallNode = struct {
-    name: []const u8,
+    resolved_names: []const []const u8,
+    name_nodes: []const Node = &.{},
     args: []const ArgNode,
 };
 
@@ -361,23 +861,35 @@ const InvokeCallNode = struct {
 const ParserFunctionKind = enum {
     displaytitle,
     if_,
+    ifexist,
     ifeq,
+    ifexpr,
+    expr,
     switch_,
+    special,
     tag,
     lc,
     uc,
     lcfirst,
     ucfirst,
     formatnum,
+    formatdate,
     anchorencode,
     padleft,
     padright,
+    time,
+    fullurl,
+    urlencode,
     currentday,
+    currentday2,
     currentmonth,
     currentmonthname,
     currentyear,
+    revisionyear,
+    revisionuser,
     pagename,
     fullpagename,
+    fullpagenamee,
     basepagename,
     subpagename,
     namespace,
@@ -396,12 +908,21 @@ const ParseTemplateError = std.mem.Allocator.Error || error{
     UnsupportedTemplateForm,
 };
 
+const ManualTemplateImpl = enum {
+    strlen_lite,
+    strindex_lite,
+    strsub_lite,
+    vi_l,
+};
+
 const TemplateInfo = struct {
     key: []const u8,
+    dispatch_id: u16,
     source: []const u8,
     nodes: []const Node = &.{},
     parse_error: ?ParseFailureKind = null,
     source_too_large: bool = false,
+    manual_impl: ?ManualTemplateImpl = null,
     class: CompileClass = .unsupported,
     class_state: enum { unresolved, resolving, resolved } = .unresolved,
     fn_ident: []const u8 = "",
@@ -420,16 +941,18 @@ const ModuleInfo = struct {
     // lowered Lua require/loadData calls.
     index: u16,
     zig_source: []const u8 = "",
-    fn_ids: []const u32 = &.{},
+    exports: []const ModuleExportInfo = &.{},
+    top_id: u32 = 0,
+    function_count: u32 = 0,
     emit_failed: bool = false,
     too_large: bool = false,
 };
 
-const DispatchTemplate = struct {
-    normalized: []const u8,
-    class: CompileClass,
-    // Static render index used by the generated template switch dispatcher.
-    render_index: u16,
+const ModuleExportInfo = struct {
+    export_id: u16,
+    name: []const u8,
+    callable_id: u32,
+    fn_id: u32,
 };
 
 const UnsupportedTemplate = struct {
@@ -437,24 +960,53 @@ const UnsupportedTemplate = struct {
     reason: []const u8,
 };
 
-fn extractGeneratedFnIdsAlloc(allocator: std.mem.Allocator, zig_source: []const u8) ![]const u32 {
-    var ids: std.ArrayList(u32) = .empty;
-    errdefer ids.deinit(allocator);
+fn moduleDynamicDispatchReason(zig_source: []const u8) ?[]const u8 {
+    if (std.mem.indexOf(u8, zig_source, "generatedTemplateDispatchFirst(") != null) return "generatedTemplateDispatchFirst";
+    // A local generatedDispatchFirst helper dispatches only on compile-time
+    // numeric callable ids. It does not perform string-based lookup and does
+    // not allocate or materialize runtime function pointers by name, so we do
+    // not treat it as a blocking dynamic-dispatch fallback here.
+    if (std.mem.indexOf(u8, zig_source, "generatedLoadCompiledModuleFirst(") != null) return "generatedLoadCompiledModuleFirst";
+    if (std.mem.indexOf(u8, zig_source, "generatedLoadCompiledModuleKnownFirst(") != null) return "generatedLoadCompiledModuleKnownFirst";
+    if (std.mem.indexOf(u8, zig_source, "generatedModuleExportValueKnownFirst(") != null) return "generatedModuleExportValueKnownFirst";
+    if (std.mem.indexOf(u8, zig_source, "generatedCallKnownModuleExportFirst(") != null) return "generatedCallKnownModuleExportFirst";
+    if (std.mem.indexOf(u8, zig_source, "lua.generatedCall(") != null) return "lua.generatedCall";
+    if (std.mem.indexOf(u8, zig_source, "lua.generatedInvoke(") != null) return "lua.generatedInvoke";
+    if (std.mem.indexOf(u8, zig_source, "getGeneratedCallable(") != null) return "getGeneratedCallable";
+    if (std.mem.indexOf(u8, zig_source, ".table.getGeneratedMethod(") != null) return "getGeneratedMethod";
+    return null;
+}
 
-    var start: usize = 0;
-    while (true) {
-        const rel = std.mem.indexOfPos(u8, zig_source, start, "fn fn_") orelse break;
-        const id_start = rel + "fn fn_".len;
-        var id_end = id_start;
-        while (id_end < zig_source.len and std.ascii.isDigit(zig_source[id_end])) : (id_end += 1) {}
-        if (id_end > id_start) {
-            const id = try std.fmt.parseUnsigned(u32, zig_source[id_start..id_end], 10);
-            try ids.append(allocator, id);
-        }
-        start = id_end;
+fn moduleUsesDynamicDispatch(zig_source: []const u8) bool {
+    return moduleDynamicDispatchReason(zig_source) != null;
+}
+
+fn manualTemplateImplForKey(key: []const u8) ?ManualTemplateImpl {
+    if (std.mem.eql(u8, key, "strlen-lite")) return .strlen_lite;
+    if (std.mem.eql(u8, key, "strindex-lite")) return .strindex_lite;
+    if (std.mem.eql(u8, key, "strsub-lite")) return .strsub_lite;
+    if (std.mem.eql(u8, key, "vi-l")) return .vi_l;
+    return null;
+}
+
+fn cloneModuleExportsAlloc(
+    allocator: std.mem.Allocator,
+    exports: []const lua.GeneratedModuleExportInfo,
+) ![]const ModuleExportInfo {
+    var out: std.ArrayList(ModuleExportInfo) = .empty;
+    errdefer {
+        for (out.items) |entry| allocator.free(entry.name);
+        out.deinit(allocator);
     }
-
-    return ids.toOwnedSlice(allocator);
+    for (exports) |entry| {
+        try out.append(allocator, .{
+            .export_id = entry.export_id,
+            .name = try allocator.dupe(u8, entry.name),
+            .callable_id = entry.callable_id,
+            .fn_id = entry.fn_id,
+        });
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 pub const CompileRuntimeResult = struct {
@@ -462,6 +1014,11 @@ pub const CompileRuntimeResult = struct {
     compiled_count: usize,
     metadata_only_count: usize,
     unsupported: []const UnsupportedTemplate,
+};
+
+const DynamicTemplateDispatchEntry = struct {
+    normalized: []const u8,
+    dispatch_id: u16,
 };
 
 fn templateCompileTraceEnabled() bool {
@@ -478,40 +1035,50 @@ fn normalizeTemplateLookupNameAlloc(allocator: std.mem.Allocator, name: []const 
     return try out.toOwnedSlice(allocator);
 }
 
-fn buildDispatchTemplatesAlloc(
+fn buildDynamicDispatchEntriesAlloc(
     allocator: std.mem.Allocator,
+    dynamic_templates: []const []const u8,
     templates: []const TemplateInfo,
-) ![]DispatchTemplate {
-    var entries: std.ArrayList(DispatchTemplate) = .empty;
+    template_indexes: *const std.StringHashMap(usize),
+) ![]DynamicTemplateDispatchEntry {
+    var entries: std.ArrayList(DynamicTemplateDispatchEntry) = .empty;
     errdefer {
         for (entries.items) |entry| allocator.free(entry.normalized);
         entries.deinit(allocator);
     }
 
-    var seen = std.StringHashMap(void).init(allocator);
-    defer seen.deinit();
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer {
+        var it = seen.iterator();
+        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+        seen.deinit(allocator);
+    }
 
-    for (templates, 0..) |template, idx| {
-        const normalized = try normalizeTemplateLookupNameAlloc(allocator, template.key);
+    for (dynamic_templates) |name| {
+        const template_index = template_indexes.get(name) orelse continue;
+        const template = templates[template_index];
+        if (template.class == .unsupported) continue;
+
+        const normalized = try normalizeTemplateLookupNameAlloc(allocator, name);
         errdefer allocator.free(normalized);
-        if (seen.contains(normalized)) {
+        const gop = try seen.getOrPut(allocator, normalized);
+        if (gop.found_existing) {
             allocator.free(normalized);
             continue;
         }
-        try seen.put(normalized, {});
+        gop.key_ptr.* = normalized;
         try entries.append(allocator, .{
             .normalized = normalized,
-            .class = template.class,
-            .render_index = if (template.class == .compiled) @intCast(idx) else std.math.maxInt(u16),
+            .dispatch_id = template.dispatch_id,
         });
     }
 
-    std.mem.sort(DispatchTemplate, entries.items, {}, struct {
-        fn lessThan(_: void, lhs: DispatchTemplate, rhs: DispatchTemplate) bool {
+    std.mem.sort(DynamicTemplateDispatchEntry, entries.items, {}, struct {
+        fn lessThan(_: void, lhs: DynamicTemplateDispatchEntry, rhs: DynamicTemplateDispatchEntry) bool {
             return std.mem.order(u8, lhs.normalized, rhs.normalized) == .lt;
         }
     }.lessThan);
-    return try entries.toOwnedSlice(allocator);
+    return entries.toOwnedSlice(allocator);
 }
 
 pub fn compileTemplateRuntimeAlloc(
@@ -520,17 +1087,58 @@ pub fn compileTemplateRuntimeAlloc(
     required_modules: []const []const u8,
     sources: *const lua.TemplateSources,
 ) !CompileRuntimeResult {
-    var templates = try allocator.alloc(TemplateInfo, reachable_templates.len);
+    return compileTemplateRuntimeWithModeAlloc(
+        allocator,
+        reachable_templates,
+        required_modules,
+        sources,
+        .zig,
+    );
+}
+
+pub fn compileTemplateRuntimeWithModeAlloc(
+    allocator: std.mem.Allocator,
+    reachable_templates: []const []const u8,
+    required_modules: []const []const u8,
+    sources: *const lua.TemplateSources,
+    mode: CompileMode,
+) !CompileRuntimeResult {
+    const dispatch_templates = try buildSequentialTemplateSpecsAlloc(allocator, reachable_templates);
+    defer freeTemplateSpecs(allocator, dispatch_templates);
+    const dynamic_templates = try collectDynamicTemplateNamesAlloc(allocator, reachable_templates, sources);
+    defer freeOwnedStrings(allocator, dynamic_templates);
+    return compileTemplateRuntimeWithDispatchAlloc(
+        allocator,
+        dispatch_templates,
+        dynamic_templates,
+        required_modules,
+        sources,
+        mode,
+    );
+}
+
+fn compileTemplateRuntimeWithDispatchAlloc(
+    allocator: std.mem.Allocator,
+    dispatch_templates: []const structure_report.TemplateSpec,
+    dynamic_templates: []const []const u8,
+    required_modules: []const []const u8,
+    sources: *const lua.TemplateSources,
+    mode: CompileMode,
+) !CompileRuntimeResult {
+    var templates = try allocator.alloc(TemplateInfo, dispatch_templates.len);
     errdefer allocator.free(templates);
 
     var template_indexes = std.StringHashMap(usize).init(allocator);
     defer template_indexes.deinit();
 
-    for (reachable_templates, 0..) |key, idx| {
+    for (dispatch_templates, 0..) |entry, idx| {
+        const key = entry.name;
         const duped_key = try allocator.dupe(u8, key);
         templates[idx] = .{
             .key = duped_key,
+            .dispatch_id = entry.code,
             .source = sources.template_sources.get(key) orelse "",
+            .manual_impl = manualTemplateImplForKey(key),
             .fn_ident = try templateFnIdentAlloc(allocator, key, idx),
         };
         try template_indexes.put(duped_key, idx);
@@ -538,7 +1146,9 @@ pub fn compileTemplateRuntimeAlloc(
 
     for (templates) |*template| {
         if (template.source.len == 0) {
-            template.parse_error = .unsupported_template_form;
+            continue;
+        }
+        if (template.manual_impl != null) {
             continue;
         }
         if (template.source.len > max_generated_template_source_bytes) {
@@ -560,7 +1170,10 @@ pub fn compileTemplateRuntimeAlloc(
         for (modules.items) |module| allocator.free(module.key);
         for (modules.items) |module| allocator.free(module.struct_ident);
         for (modules.items) |module| allocator.free(module.zig_source);
-        for (modules.items) |module| allocator.free(module.fn_ids);
+        for (modules.items) |module| {
+            for (module.exports) |entry| allocator.free(entry.name);
+            allocator.free(module.exports);
+        }
         modules.deinit(allocator);
     }
     var module_indexes = std.StringHashMap(usize).init(allocator);
@@ -586,17 +1199,22 @@ pub fn compileTemplateRuntimeAlloc(
         }
     }
 
-    const dispatch_templates = try buildDispatchTemplatesAlloc(allocator, templates);
+    const dynamic_dispatch_entries = try buildDynamicDispatchEntriesAlloc(
+        allocator,
+        dynamic_templates,
+        templates,
+        &template_indexes,
+    );
     defer {
-        for (dispatch_templates) |entry| allocator.free(entry.normalized);
-        allocator.free(dispatch_templates);
+        for (dynamic_dispatch_entries) |entry| allocator.free(entry.normalized);
+        allocator.free(dynamic_dispatch_entries);
     }
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
     const writer = &out.writer;
 
-    try writer.writeAll("// Generated by tools/template_codegen.zig\nconst runtime_std = @import(\"std\");\nconst lua = @import(\"lua\");\nconst support = @import(");
+    try writer.writeAll("// Generated by tools/template_codegen.zig\nconst std = @import(\"std\");\nconst lua = @import(\"lua\");\nconst support = @import(");
     try appendZigStringLiteral(writer, support_import);
     try writer.writeAll(");\n\npub const TemplateClass = support.TemplateClass;\n\n");
 
@@ -604,17 +1222,43 @@ pub fn compileTemplateRuntimeAlloc(
         if (module.emit_failed or module.zig_source.len == 0) continue;
         try emitGeneratedModuleStruct(writer, module);
     }
+    try emitGeneratedModuleCallableDispatchSupport(writer, modules.items);
     try emitGeneratedModuleDispatchSupport(writer, modules.items);
-    for (templates) |template| {
-        if (template.class != .compiled) continue;
-        if (templateCompileTraceEnabled()) {
-            std.debug.print("template compiler trace: emit {s}\n", .{template.key});
-        }
-        try emitTemplateFunction(allocator, writer, templates, &template_indexes, modules.items, &module_indexes, template);
+    switch (mode) {
+        .zig => {
+            for (templates) |template| {
+                if (template.class != .compiled) continue;
+                if (templateCompileTraceEnabled()) {
+                    std.debug.print("template compiler trace: emit {s}\n", .{template.key});
+                }
+                try emitTemplateFunction(allocator, writer, templates, &template_indexes, modules.items, &module_indexes, template);
+            }
+        },
+        .bytecode => {
+            for (templates) |template| {
+                if (template.class != .compiled) continue;
+                if (template.manual_impl == null) continue;
+                if (templateCompileTraceEnabled()) {
+                    std.debug.print("template compiler trace: emit manual bytecode fallback {s}\n", .{template.key});
+                }
+                try emitTemplateFunction(allocator, writer, templates, &template_indexes, modules.items, &module_indexes, template);
+            }
+            try emitBytecodeTemplateDataAlloc(
+                allocator,
+                writer,
+                templates,
+                &template_indexes,
+                modules.items,
+                &module_indexes,
+            );
+        },
     }
 
-    try emitClassifier(writer, dispatch_templates);
-    try emitDispatcher(writer, templates);
+    try emitClassifier(allocator, writer, templates, dynamic_dispatch_entries);
+    switch (mode) {
+        .zig => try emitDispatcher(writer, templates),
+        .bytecode => try emitBytecodeDispatcher(writer, templates),
+    }
 
     var unsupported: std.ArrayList(UnsupportedTemplate) = .empty;
     errdefer {
@@ -629,7 +1273,7 @@ pub fn compileTemplateRuntimeAlloc(
         .metadata_only => metadata_only_count += 1,
         .unsupported => try unsupported.append(allocator, .{
             .key = template.key,
-            .reason = try unsupportedReasonAlloc(allocator, template, modules.items, &module_indexes),
+            .reason = try unsupportedReasonAlloc(allocator, template, modules.items, &module_indexes, templates, &template_indexes),
         }),
     };
 
@@ -641,89 +1285,148 @@ pub fn compileTemplateRuntimeAlloc(
     };
 }
 
-fn emitClassifier(writer: *std.Io.Writer, templates: []const DispatchTemplate) !void {
+fn emitClassifier(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    templates: []const TemplateInfo,
+    dynamic_dispatch_entries: []const DynamicTemplateDispatchEntry,
+) !void {
     try writer.writeAll(
         \\
-        \\// Compact index used by the generated template switch dispatcher.
-        \\pub const TemplateRenderIndex = u16;
-        \\
-        \\const TemplateDispatchEntry = struct {
-        \\    normalized: []const u8,
-        \\    class: TemplateClass,
-        \\    render_index: TemplateRenderIndex,
-        \\};
-        \\
-        \\// Lookup result shared by the text and HTML renderers so they can
-        \\// classify by name once and dispatch by compact index afterward.
-        \\pub const TemplateLookup = struct {
-        \\    class: TemplateClass,
-        \\    render_index: TemplateRenderIndex,
-        \\};
-        \\
-        \\const template_dispatch_entries = [_]TemplateDispatchEntry{
-        \\
-    );
-    for (templates) |template| {
-        try writer.writeAll("    .{ .normalized = ");
-        try appendZigStringLiteral(writer, template.normalized);
-        try writer.writeAll(", .class = .");
-        try writer.writeAll(@tagName(template.class));
-        try writer.writeAll(", .render_index = ");
-        try writer.print("{d}", .{template.render_index});
-        try writer.writeAll(" },\n");
-    }
-    try writer.writeAll(
-        \\};
-        \\
-        \\fn findTemplateDispatchEntry(name: []const u8) ?*const TemplateDispatchEntry {
+        \\pub fn classifyTemplate(name: []const u8) ?TemplateClass {
         \\    var lo: usize = 0;
-        \\    var hi: usize = template_dispatch_entries.len;
+        \\    var hi: usize = template_class_entries.len;
         \\    while (lo < hi) {
         \\        const mid = lo + ((hi - lo) / 2);
-        \\        switch (support.compareTemplateNameToNormalized(name, template_dispatch_entries[mid].normalized)) {
+        \\        const entry = template_class_entries[mid];
+        \\        switch (support.compareTemplateNameToNormalized(name, entry.normalized)) {
         \\            .lt => hi = mid,
         \\            .gt => lo = mid + 1,
-        \\            .eq => return &template_dispatch_entries[mid],
+        \\            .eq => return entry.class,
         \\        }
         \\    }
         \\    return null;
         \\}
         \\
-        \\pub fn lookupTemplate(name: []const u8) ?TemplateLookup {
-        \\    const entry = findTemplateDispatchEntry(name) orelse return null;
-        \\    return .{
-        \\        .class = entry.class,
-        \\        .render_index = entry.render_index,
-        \\    };
+        \\pub const TemplateDispatchId = u16;
+        \\
+        \\pub fn lookupDynamicTemplateDispatchId(name: []const u8) ?TemplateDispatchId {
+        \\    var lo: usize = 0;
+        \\    var hi: usize = dynamic_template_dispatch_entries.len;
+        \\    while (lo < hi) {
+        \\        const mid = lo + ((hi - lo) / 2);
+        \\        const entry = dynamic_template_dispatch_entries[mid];
+        \\        switch (support.compareTemplateNameToNormalized(name, entry.normalized)) {
+        \\            .lt => hi = mid,
+        \\            .gt => lo = mid + 1,
+        \\            .eq => return entry.dispatch_id,
+        \\        }
+        \\    }
+        \\    return null;
         \\}
         \\
-        \\pub fn classifyTemplate(name: []const u8) ?TemplateClass {
-        \\    const lookup = lookupTemplate(name) orelse return null;
-        \\    return lookup.class;
-        \\}
+        \\const DynamicTemplateDispatchEntry = struct {
+        \\    normalized: []const u8,
+        \\    dispatch_id: TemplateDispatchId,
+        \\};
+        \\
+        \\const TemplateClassEntry = struct {
+        \\    normalized: []const u8,
+        \\    class: TemplateClass,
+        \\};
+        \\
+        \\const template_class_entries = [_]TemplateClassEntry{
+        \\
+    );
+    for (templates) |template| {
+        const normalized = try normalizeTemplateLookupNameAlloc(allocator, template.key);
+        defer allocator.free(normalized);
+        try writer.writeAll("    .{ .normalized = ");
+        try appendZigStringLiteral(writer, normalized);
+        try writer.writeAll(", .class = .");
+        try writer.writeAll(@tagName(template.class));
+        try writer.writeAll(" },\n");
+    }
+    try writer.writeAll(
+        \\};
+        \\
+        \\const dynamic_template_dispatch_entries = [_]DynamicTemplateDispatchEntry{
+        \\
+    );
+    for (dynamic_dispatch_entries) |entry| {
+        try writer.writeAll("    .{ .normalized = ");
+        try appendZigStringLiteral(writer, entry.normalized);
+        try writer.print(", .dispatch_id = {d} }},\n", .{entry.dispatch_id});
+    }
+    try writer.writeAll(
+        \\};
         \\
     );
 }
 
 fn emitDispatcher(writer: *std.Io.Writer, templates: []const TemplateInfo) !void {
     try writer.writeAll(
-        \\pub fn renderTemplateByIndex(
-        \\    out: *runtime_std.ArrayList(u8),
-        \\    allocator: runtime_std.mem.Allocator,
-        \\    render_index: TemplateRenderIndex,
+        \\pub fn renderTemplateByDispatchId(
+        \\    out: *std.ArrayList(u8),
+        \\    allocator: std.mem.Allocator,
+        \\    dispatch_id: TemplateDispatchId,
         \\    args: *const support.TemplateArgs,
         \\) !bool {
-        \\    switch (render_index) {
+        \\    switch (dispatch_id) {
         \\
     );
-    for (templates, 0..) |template, idx| {
-        if (template.class != .compiled) continue;
+    for (templates) |template| {
+        if (template.class == .unsupported) continue;
         try writer.writeAll("        ");
-        try writer.print("{d}", .{idx});
+        try writer.print("{d}", .{template.dispatch_id});
         try writer.writeAll(" => {\n");
-        try writer.writeAll("            try ");
-        try writer.writeAll(template.fn_ident);
-        try writer.writeAll("(out, allocator, args);\n");
+        if (template.class == .compiled) {
+            try writer.writeAll("            try ");
+            try writer.writeAll(template.fn_ident);
+            try writer.writeAll("(out, allocator, args);\n");
+        }
+        try writer.writeAll("            return true;\n");
+        try writer.writeAll("        },\n");
+    }
+    try writer.writeAll(
+        \\        else => return false,
+        \\    }
+        \\}
+        \\
+    );
+}
+
+fn emitBytecodeDispatcher(writer: *std.Io.Writer, templates: []const TemplateInfo) !void {
+    try writer.writeAll(
+        \\pub fn renderTemplateByDispatchId(
+        \\    out: *std.ArrayList(u8),
+        \\    allocator: std.mem.Allocator,
+        \\    dispatch_id: TemplateDispatchId,
+        \\    args: *const support.TemplateArgs,
+        \\) !bool {
+        \\    switch (dispatch_id) {
+        \\
+    );
+    for (templates) |template| {
+        if (template.class == .unsupported) continue;
+        try writer.writeAll("        ");
+        try writer.print("{d}", .{template.dispatch_id});
+        try writer.writeAll(" => {\n");
+        switch (template.class) {
+            .metadata_only => {},
+            .compiled => {
+                if (template.manual_impl != null) {
+                    try writer.writeAll("            try ");
+                    try writer.writeAll(template.fn_ident);
+                    try writer.writeAll("(out, allocator, args);\n");
+                } else {
+                    try writer.writeAll("            try support.renderBytecodeTemplate(@This(), out, allocator, ");
+                    try writer.writeAll(template.fn_ident);
+                    try writer.writeAll("_nodes, args);\n");
+                }
+            },
+            .unsupported => unreachable,
+        }
         try writer.writeAll("            return true;\n");
         try writer.writeAll("        },\n");
     }
@@ -749,17 +1452,351 @@ fn emitTemplateFunction(
     try writer.writeAll(template.fn_ident);
     try writer.writeAll(
         \\(
-        \\    out: *runtime_std.ArrayList(u8),
-        \\    allocator: runtime_std.mem.Allocator,
+        \\    out: *std.ArrayList(u8),
+        \\    allocator: std.mem.Allocator,
         \\    args: *const support.TemplateArgs,
         \\) !void {
         \\
     );
-    if (!nodesUseArgs(template.nodes)) {
+    try writer.writeAll(
+        \\    _ = out;
+        \\    _ = allocator;
+        \\    _ = args;
+        \\
+    );
+    if (template.manual_impl == null and !nodesUseArgs(template.nodes)) {
         try writer.writeAll("    support.touchTemplateArgs(args);\n");
+    }
+    if (template.manual_impl) |manual_impl| {
+        switch (manual_impl) {
+            .strlen_lite => try emitManualTemplateStrLenLite(writer),
+            .strindex_lite => try emitManualTemplateStrIndexLite(writer),
+            .strsub_lite => try emitManualTemplateStrSubLite(writer),
+            .vi_l => try emitManualTemplateViL(allocator, writer, templates, template_indexes),
+        }
+        try writer.writeAll("}\n\n");
+        return;
     }
     try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, template.nodes, "out", "args", 1, &temp_counter);
     try writer.writeAll("}\n\n");
+}
+
+const BytecodeTemplateEmitState = struct {
+    allocator: std.mem.Allocator,
+    next_id: usize = 0,
+
+    fn init(allocator: std.mem.Allocator) BytecodeTemplateEmitState {
+        return .{ .allocator = allocator };
+    }
+
+    fn nextName(self: *BytecodeTemplateEmitState, prefix: []const u8) ![]u8 {
+        defer self.next_id += 1;
+        return std.fmt.allocPrint(self.allocator, "{s}_{d}", .{ prefix, self.next_id });
+    }
+};
+
+fn emitBytecodeTemplateDataAlloc(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    modules: []const ModuleInfo,
+    module_indexes: *const std.StringHashMap(usize),
+) !void {
+    var state = BytecodeTemplateEmitState.init(allocator);
+    for (templates) |template| {
+        if (template.class != .compiled) continue;
+        if (template.manual_impl != null) continue;
+        const nodes_name = try emitBytecodeNodesArrayAlloc(
+            writer,
+            &state,
+            templates,
+            template_indexes,
+            modules,
+            module_indexes,
+            template.nodes,
+        );
+        defer allocator.free(nodes_name);
+        try writer.writeAll("const ");
+        try writer.writeAll(template.fn_ident);
+        try writer.writeAll("_nodes = &");
+        try writer.writeAll(nodes_name);
+        try writer.writeAll(";\n\n");
+    }
+}
+
+fn emitBytecodeNodesArrayAlloc(
+    writer: *std.Io.Writer,
+    state: *BytecodeTemplateEmitState,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    modules: []const ModuleInfo,
+    module_indexes: *const std.StringHashMap(usize),
+    nodes: []const Node,
+) anyerror![]u8 {
+    const name = try state.nextName("bytecode_nodes");
+    errdefer state.allocator.free(name);
+
+    var items: std.ArrayList([]u8) = .empty;
+    defer {
+        for (items.items) |item| state.allocator.free(item);
+        items.deinit(state.allocator);
+    }
+    for (nodes) |node| {
+        try items.append(state.allocator, try emitBytecodeNodeInitAlloc(
+            state,
+            templates,
+            template_indexes,
+            modules,
+            module_indexes,
+            node,
+            writer,
+        ));
+    }
+
+    try writer.writeAll("const ");
+    try writer.writeAll(name);
+    try writer.writeAll(" = [_]support.BytecodeNode{\n");
+    for (items.items) |item| {
+        try writer.writeAll("    ");
+        try writer.writeAll(item);
+        try writer.writeAll(",\n");
+    }
+    try writer.writeAll("};\n");
+    return name;
+}
+
+fn emitBytecodeArgsArrayAlloc(
+    writer: *std.Io.Writer,
+    state: *BytecodeTemplateEmitState,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    modules: []const ModuleInfo,
+    module_indexes: *const std.StringHashMap(usize),
+    args: []const ArgNode,
+) anyerror![]u8 {
+    const name = try state.nextName("bytecode_args");
+    errdefer state.allocator.free(name);
+
+    var items: std.ArrayList([]u8) = .empty;
+    defer {
+        for (items.items) |item| state.allocator.free(item);
+        items.deinit(state.allocator);
+    }
+    for (args) |arg| {
+        try items.append(state.allocator, try emitBytecodeArgInitAlloc(
+            state,
+            templates,
+            template_indexes,
+            modules,
+            module_indexes,
+            arg,
+            writer,
+        ));
+    }
+
+    try writer.writeAll("const ");
+    try writer.writeAll(name);
+    try writer.writeAll(" = [_]support.BytecodeArg{\n");
+    for (items.items) |item| {
+        try writer.writeAll("    .{ ");
+        try writer.writeAll(item);
+        try writer.writeAll(" },\n");
+    }
+    try writer.writeAll("};\n");
+    return name;
+}
+
+fn emitBytecodeNodeInitAlloc(
+    state: *BytecodeTemplateEmitState,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    modules: []const ModuleInfo,
+    module_indexes: *const std.StringHashMap(usize),
+    node: Node,
+    writer: *std.Io.Writer,
+) anyerror![]u8 {
+    var out: std.Io.Writer.Allocating = .init(state.allocator);
+    defer out.deinit();
+    const local = &out.writer;
+
+    switch (node) {
+        .text => |text| {
+            try local.writeAll(".{ .text = ");
+            try appendZigStringLiteral(local, text);
+            try local.writeAll(" }");
+        },
+        .param => |param| {
+            const default_nodes = try emitBytecodeNodesArrayAlloc(writer, state, templates, template_indexes, modules, module_indexes, param.default_nodes);
+            defer state.allocator.free(default_nodes);
+            try local.writeAll(".{ .param = .{ .key = ");
+            try appendZigStringLiteral(local, param.key);
+            try local.writeAll(", .default_nodes = &");
+            try local.writeAll(default_nodes);
+            try local.writeAll(" } }");
+        },
+        .template_call => |call| {
+            const args_name = try emitBytecodeArgsArrayAlloc(writer, state, templates, template_indexes, modules, module_indexes, call.args);
+            defer state.allocator.free(args_name);
+            const dispatch_id: u16 = blk: {
+                if (call.name_nodes.len != 0) break :blk 0;
+                const callee_name = if (call.resolved_names.len != 0) call.resolved_names[0] else break :blk 0;
+                const callee_index = template_indexes.get(callee_name) orelse break :blk 0;
+                break :blk templates[callee_index].dispatch_id;
+            };
+            try local.writeAll(".{ .template_call = .{ .dispatch_id = ");
+            try local.print("{d}", .{dispatch_id});
+            if (call.name_nodes.len != 0) {
+                const name_nodes = try emitBytecodeNodesArrayAlloc(writer, state, templates, template_indexes, modules, module_indexes, call.name_nodes);
+                defer state.allocator.free(name_nodes);
+                try local.writeAll(", .name_nodes = &");
+                try local.writeAll(name_nodes);
+            }
+            try local.writeAll(", .args = &");
+            try local.writeAll(args_name);
+            try local.writeAll(" } }");
+        },
+        .invoke_call => |call| {
+            const args_name = try emitBytecodeArgsArrayAlloc(writer, state, templates, template_indexes, modules, module_indexes, call.args);
+            defer state.allocator.free(args_name);
+            const module_index = module_indexes.get(call.module_name) orelse return error.InvalidStructureReport;
+            const export_id = findModuleExportId(modules[module_index], call.function_name) orelse return error.InvalidStructureReport;
+            try local.writeAll(".{ .invoke_call = .{ .module_index = ");
+            try local.print("{d}", .{modules[module_index].index});
+            try local.writeAll(", .export_id = ");
+            try local.print("{d}", .{export_id});
+            try local.writeAll(", .args = &");
+            try local.writeAll(args_name);
+            try local.writeAll(" } }");
+        },
+        .parser_func => |func| {
+            const args_name = try emitBytecodeArgsArrayAlloc(writer, state, templates, template_indexes, modules, module_indexes, func.args);
+            defer state.allocator.free(args_name);
+            try local.writeAll(".{ .parser_func = .{ .kind = .");
+            try local.writeAll(@tagName(func.kind));
+            try local.writeAll(", .args = &");
+            try local.writeAll(args_name);
+            try local.writeAll(" } }");
+        },
+    }
+    return out.toOwnedSlice();
+}
+
+fn emitBytecodeArgInitAlloc(
+    state: *BytecodeTemplateEmitState,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    modules: []const ModuleInfo,
+    module_indexes: *const std.StringHashMap(usize),
+    arg: ArgNode,
+    writer: *std.Io.Writer,
+) anyerror![]u8 {
+    var out: std.Io.Writer.Allocating = .init(state.allocator);
+    defer out.deinit();
+    const local = &out.writer;
+
+    if (arg.name) |static_name| {
+        try local.writeAll(".name = ");
+        try appendZigStringLiteral(local, static_name);
+        try local.writeAll(", ");
+    }
+    if (arg.name_is_dynamic) {
+        const name_nodes = try emitBytecodeNodesArrayAlloc(writer, state, templates, template_indexes, modules, module_indexes, arg.name_nodes);
+        defer state.allocator.free(name_nodes);
+        try local.writeAll(".name_is_dynamic = true, .name_nodes = &");
+        try local.writeAll(name_nodes);
+        try local.writeAll(", ");
+    }
+    const value_nodes = try emitBytecodeNodesArrayAlloc(writer, state, templates, template_indexes, modules, module_indexes, arg.value_nodes);
+    defer state.allocator.free(value_nodes);
+    try local.writeAll(".value_nodes = &");
+    try local.writeAll(value_nodes);
+    return out.toOwnedSlice();
+}
+
+// These templates are tiny string helpers or fixed wrappers whose wikitext
+// form is intentionally too dynamic for the generic parser. Emitting them by
+// hand keeps the generated runtime fully static while avoiding a pile of
+// template-specific parse hacks in the main compiler.
+fn emitManualTemplateStrLenLite(writer: *std.Io.Writer) !void {
+    try writer.writeAll(
+        \\    const text = args.paramValue("1") orelse "";
+        \\    var num_buf: [32]u8 = undefined;
+        \\    const rendered = try std.fmt.bufPrint(&num_buf, "{d}", .{text.len});
+        \\    try support.appendText(out, allocator, rendered);
+    );
+}
+
+fn emitManualTemplateStrIndexLite(writer: *std.Io.Writer) !void {
+    try writer.writeAll(
+        \\    const text = args.paramValue("1") orelse "";
+        \\    const raw_index = std.mem.trim(u8, args.paramValue("2") orelse "0", " \t\r\n");
+        \\    const one_based = std.fmt.parseUnsigned(usize, raw_index, 10) catch 0;
+        \\    if (one_based >= 1 and one_based <= text.len) {
+        \\        try support.appendText(out, allocator, text[one_based - 1 .. one_based]);
+        \\    }
+    );
+}
+
+fn emitManualTemplateStrSubLite(writer: *std.Io.Writer) !void {
+    try writer.writeAll(
+        \\    const text = args.paramValue("1") orelse "";
+        \\    const raw_start = std.mem.trim(u8, args.paramValue("2") orelse "1", " \t\r\n");
+        \\    const raw_end = std.mem.trim(u8, args.paramValue("3") orelse "", " \t\r\n");
+        \\    const start_one_based = std.fmt.parseUnsigned(usize, raw_start, 10) catch 1;
+        \\    var start_idx: usize = if (start_one_based > 0) start_one_based - 1 else 0;
+        \\    if (start_idx > text.len) start_idx = text.len;
+        \\    var end_exclusive: usize = if (raw_end.len != 0)
+        \\        std.fmt.parseUnsigned(usize, raw_end, 10) catch text.len
+        \\    else
+        \\        text.len;
+        \\    if (end_exclusive > text.len) end_exclusive = text.len;
+        \\    if (end_exclusive > start_idx) {
+        \\        try support.appendText(out, allocator, text[start_idx..end_exclusive]);
+        \\    }
+    );
+}
+
+fn emitManualTemplateViL(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+) !void {
+    _ = allocator;
+    const hani_index = template_indexes.get("l/vi/hani") orelse return;
+    const latn_index = template_indexes.get("l/vi/latn") orelse return;
+    const hani_ident = templates[hani_index].fn_ident;
+    const latn_ident = templates[latn_index].fn_ident;
+    try writer.writeAll(
+        \\    const term = args.paramValue("1") orelse "";
+        \\    if (std.mem.trim(u8, term, " \t\r\n").len == 0) return;
+        \\    const first = term[0];
+        \\    const use_hani = std.ascii.toUpper(first) == std.ascii.toLower(first);
+        \\    var child_builder: support.TemplateArgsBuilder = .{};
+        \\    defer child_builder.deinit(allocator);
+        \\    try child_builder.addPositionalBorrowed(allocator, term);
+        \\    if (args.paramValue("2")) |tr| {
+        \\        if (std.mem.trim(u8, tr, " \t\r\n").len != 0) try child_builder.addNamedBorrowed(allocator, "tr", tr);
+        \\    }
+        \\    if (args.paramValue("3")) |gloss| {
+        \\        if (std.mem.trim(u8, gloss, " \t\r\n").len != 0) try child_builder.addNamedBorrowed(allocator, "gloss", gloss);
+        \\    }
+        \\    const child_args = child_builder.buildBorrowed(args.page_title);
+        \\    if (use_hani) {
+    );
+    try writer.writeAll("        try ");
+    try writer.writeAll(hani_ident);
+    try writer.writeAll(
+        \\(out, allocator, &child_args);
+        \\    } else {
+    );
+    try writer.writeAll("        try ");
+    try writer.writeAll(latn_ident);
+    try writer.writeAll(
+        \\(out, allocator, &child_args);
+        \\    }
+    );
 }
 
 fn emitNodes(
@@ -819,15 +1856,21 @@ fn emitNodes(
             try writer.writeAll("}\n");
         },
         .template_call => |call| {
-            const callee_index = template_indexes.get(call.name) orelse continue;
-            if (templates[callee_index].class == .metadata_only) continue;
-            if (templates[callee_index].class != .compiled) continue;
-            try emitNestedCall(allocator, writer, templates[callee_index].fn_ident, templates, template_indexes, modules, module_indexes, call.args, out_name, args_name, indent, temp_counter);
+            if (call.name_nodes.len == 0) {
+                const callee_name = if (call.resolved_names.len != 0) call.resolved_names[0] else continue;
+                const callee_index = template_indexes.get(callee_name) orelse continue;
+                if (templates[callee_index].class == .metadata_only) continue;
+                if (templates[callee_index].class != .compiled) continue;
+                try emitNestedCall(allocator, writer, templates[callee_index].fn_ident, templates, template_indexes, modules, module_indexes, call.args, out_name, args_name, indent, temp_counter);
+            } else {
+                try emitDynamicNestedCall(allocator, writer, call, templates, template_indexes, modules, module_indexes, out_name, args_name, indent, temp_counter);
+            }
         },
         .invoke_call => |call| {
             const module_index = module_indexes.get(call.module_name) orelse continue;
             if (modules[module_index].emit_failed) continue;
-            try emitNestedModuleInvokeCall(allocator, writer, modules[module_index].index, call.function_name, templates, template_indexes, modules, module_indexes, call.args, out_name, args_name, indent, temp_counter);
+            const export_id = findModuleExportId(modules[module_index], call.function_name) orelse continue;
+            try emitNestedModuleInvokeCall(allocator, writer, modules[module_index].index, export_id, templates, template_indexes, modules, module_indexes, call.args, out_name, args_name, indent, temp_counter);
         },
         .parser_func => |func| try emitParserFunction(allocator, writer, templates, template_indexes, modules, module_indexes, func, out_name, args_name, indent, temp_counter),
     };
@@ -953,14 +1996,14 @@ fn emitNestedCall(
                 try writer.writeAll(");\n");
                 continue;
             }
-            try writer.print("var value_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writer.print("var value_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
             try writeIndent(writer, indent + 1);
             try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
             const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
             defer allocator.free(value_buf_name);
             try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, arg.value_nodes, value_buf_name, parent_args_name, indent + 1, temp_counter);
             try writeIndent(writer, indent + 1);
-            try writer.print("var name_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writer.print("var name_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
             try writeIndent(writer, indent + 1);
             try writer.print("defer name_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
             const name_buf_name = try std.fmt.allocPrint(allocator, "&name_buf_{d}_{d}", .{ call_id, arg_index });
@@ -977,7 +2020,7 @@ fn emitNestedCall(
                 try writer.writeAll(");\n");
                 continue;
             }
-            try writer.print("var value_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writer.print("var value_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
             try writeIndent(writer, indent + 1);
             try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
             const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
@@ -994,7 +2037,7 @@ fn emitNestedCall(
                 try writer.writeAll(");\n");
                 continue;
             }
-            try writer.print("var value_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writer.print("var value_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
             try writeIndent(writer, indent + 1);
             try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
             const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
@@ -1018,11 +2061,141 @@ fn emitNestedCall(
     try writer.writeAll("}\n");
 }
 
+fn emitDynamicNestedCall(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    call: TemplateCallNode,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    modules: []const ModuleInfo,
+    module_indexes: *const std.StringHashMap(usize),
+    out_name: []const u8,
+    parent_args_name: []const u8,
+    indent: usize,
+    temp_counter: *usize,
+) anyerror!void {
+    const call_id = temp_counter.*;
+    temp_counter.* += 1;
+    try writeIndent(writer, indent);
+    try writer.writeAll("{\n");
+    try writeIndent(writer, indent + 1);
+    try writer.print("var name_buf_{d}: std.ArrayList(u8) = .empty;\n", .{call_id});
+    try writeIndent(writer, indent + 1);
+    try writer.print("defer name_buf_{d}.deinit(allocator);\n", .{call_id});
+    const name_buf_ref = try std.fmt.allocPrint(allocator, "&name_buf_{d}", .{call_id});
+    defer allocator.free(name_buf_ref);
+    try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, call.name_nodes, name_buf_ref, parent_args_name, indent + 1, temp_counter);
+    try writeIndent(writer, indent + 1);
+    try writer.print("if (lookupDynamicTemplateDispatchId(name_buf_{d}.items)) |dynamic_dispatch_{d}| {{\n", .{ call_id, call_id });
+    try writeIndent(writer, indent + 2);
+    try writer.writeAll("{\n");
+    try emitNestedDispatchCall(allocator, writer, templates, template_indexes, modules, module_indexes, call.args, out_name, parent_args_name, indent + 3, temp_counter, call_id);
+    try writeIndent(writer, indent + 2);
+    try writer.writeAll("}\n");
+    try writeIndent(writer, indent + 1);
+    try writer.writeAll("}\n");
+
+    try writeIndent(writer, indent);
+    try writer.writeAll("}\n");
+}
+
+fn emitNestedDispatchCall(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    templates: []const TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    modules: []const ModuleInfo,
+    module_indexes: *const std.StringHashMap(usize),
+    args: []const ArgNode,
+    out_name: []const u8,
+    parent_args_name: []const u8,
+    indent: usize,
+    temp_counter: *usize,
+    call_id: usize,
+) anyerror!void {
+    try writeIndent(writer, indent);
+    try writer.print("var child_builder_{d}: support.TemplateArgsBuilder = .{{}};\n", .{call_id});
+    try writeIndent(writer, indent);
+    try writer.print("defer child_builder_{d}.deinit(allocator);\n", .{call_id});
+    for (args, 0..) |arg, arg_index| {
+        const simple_value = try simpleNodesExprAlloc(allocator, arg.value_nodes);
+        defer if (simple_value) |value| value.deinit(allocator);
+        try writeIndent(writer, indent);
+        if (arg.name_is_dynamic) {
+            const simple_name = try simpleNodesExprAlloc(allocator, arg.name_nodes);
+            defer if (simple_name) |value| value.deinit(allocator);
+            if (simple_name != null and simple_value != null) {
+                try writer.print("try child_builder_{d}.addNamedBorrowed(allocator, ", .{call_id});
+                try emitSimpleNodesExpr(writer, simple_name.?, parent_args_name);
+                try writer.writeAll(", ");
+                try emitSimpleNodesExpr(writer, simple_value.?, parent_args_name);
+                try writer.writeAll(");\n");
+                continue;
+            }
+            try writer.print("var value_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writeIndent(writer, indent);
+            try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
+            const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
+            defer allocator.free(value_buf_name);
+            try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, arg.value_nodes, value_buf_name, parent_args_name, indent, temp_counter);
+            try writeIndent(writer, indent);
+            try writer.print("var name_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writeIndent(writer, indent);
+            try writer.print("defer name_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
+            const name_buf_name = try std.fmt.allocPrint(allocator, "&name_buf_{d}_{d}", .{ call_id, arg_index });
+            defer allocator.free(name_buf_name);
+            try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, arg.name_nodes, name_buf_name, parent_args_name, indent, temp_counter);
+            try writeIndent(writer, indent);
+            try writer.print("try child_builder_{d}.addNamedOwnedBuffers(allocator, try name_buf_{d}_{d}.toOwnedSlice(allocator), try value_buf_{d}_{d}.toOwnedSlice(allocator));\n", .{ call_id, call_id, arg_index, call_id, arg_index });
+        } else if (arg.name) |name| {
+            if (simple_value) |value| {
+                try writer.print("try child_builder_{d}.addNamedBorrowed(allocator, ", .{call_id});
+                try appendZigStringLiteral(writer, name);
+                try writer.writeAll(", ");
+                try emitSimpleNodesExpr(writer, value, parent_args_name);
+                try writer.writeAll(");\n");
+                continue;
+            }
+            try writer.print("var value_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writeIndent(writer, indent);
+            try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
+            const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
+            defer allocator.free(value_buf_name);
+            try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, arg.value_nodes, value_buf_name, parent_args_name, indent, temp_counter);
+            try writeIndent(writer, indent);
+            try writer.print("try child_builder_{d}.addNamedBuffer(allocator, ", .{call_id});
+            try appendZigStringLiteral(writer, name);
+            try writer.print(", try value_buf_{d}_{d}.toOwnedSlice(allocator));\n", .{ call_id, arg_index });
+        } else {
+            if (simple_value) |value| {
+                try writer.print("try child_builder_{d}.addPositionalBorrowed(allocator, ", .{call_id});
+                try emitSimpleNodesExpr(writer, value, parent_args_name);
+                try writer.writeAll(");\n");
+                continue;
+            }
+            try writer.print("var value_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writeIndent(writer, indent);
+            try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
+            const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
+            defer allocator.free(value_buf_name);
+            try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, arg.value_nodes, value_buf_name, parent_args_name, indent, temp_counter);
+            try writeIndent(writer, indent);
+            try writer.print("try child_builder_{d}.addPositionalBuffer(allocator, try value_buf_{d}_{d}.toOwnedSlice(allocator));\n", .{ call_id, call_id, arg_index });
+        }
+    }
+    try writeIndent(writer, indent);
+    try writer.print("const child_args_{d} = child_builder_{d}.buildBorrowed(", .{ call_id, call_id });
+    try writer.writeAll(parent_args_name);
+    try writer.writeAll(".page_title);\n");
+    try writeIndent(writer, indent);
+    try writer.print("_ = try renderTemplateByDispatchId({s}, allocator, dynamic_dispatch_{d}, &child_args_{d});\n", .{ out_name, call_id, call_id });
+}
+
 fn emitNestedModuleInvokeCall(
     allocator: std.mem.Allocator,
     writer: *std.Io.Writer,
     module_index: u16,
-    function_name: []const u8,
+    export_id: u16,
     templates: []const TemplateInfo,
     template_indexes: *const std.StringHashMap(usize),
     modules: []const ModuleInfo,
@@ -1056,14 +2229,14 @@ fn emitNestedModuleInvokeCall(
                 try writer.writeAll(");\n");
                 continue;
             }
-            try writer.print("var value_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writer.print("var value_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
             try writeIndent(writer, indent + 1);
             try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
             const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
             defer allocator.free(value_buf_name);
             try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, arg.value_nodes, value_buf_name, parent_args_name, indent + 1, temp_counter);
             try writeIndent(writer, indent + 1);
-            try writer.print("var name_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writer.print("var name_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
             try writeIndent(writer, indent + 1);
             try writer.print("defer name_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
             const name_buf_name = try std.fmt.allocPrint(allocator, "&name_buf_{d}_{d}", .{ call_id, arg_index });
@@ -1080,7 +2253,7 @@ fn emitNestedModuleInvokeCall(
                 try writer.writeAll(");\n");
                 continue;
             }
-            try writer.print("var value_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writer.print("var value_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
             try writeIndent(writer, indent + 1);
             try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
             const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
@@ -1097,7 +2270,7 @@ fn emitNestedModuleInvokeCall(
                 try writer.writeAll(");\n");
                 continue;
             }
-            try writer.print("var value_buf_{d}_{d}: runtime_std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
+            try writer.print("var value_buf_{d}_{d}: std.ArrayList(u8) = .empty;\n", .{ call_id, arg_index });
             try writeIndent(writer, indent + 1);
             try writer.print("defer value_buf_{d}_{d}.deinit(allocator);\n", .{ call_id, arg_index });
             const value_buf_name = try std.fmt.allocPrint(allocator, "&value_buf_{d}_{d}", .{ call_id, arg_index });
@@ -1116,7 +2289,7 @@ fn emitNestedModuleInvokeCall(
     try writer.writeAll(out_name);
     try writer.writeAll(", allocator, ");
     try writer.print("{d}, ", .{module_index});
-    try appendZigStringLiteral(writer, function_name);
+    try writer.print("{d}", .{export_id});
     try writer.print(", &child_args_{d});\n", .{call_id});
     try writeIndent(writer, indent);
     try writer.writeAll("}\n");
@@ -1166,6 +2339,25 @@ fn emitParserFunction(
             try writeIndent(writer, indent);
             try writer.writeAll("}\n");
         },
+        .ifexist => {
+            const pf_title_name = try allocTempLocalName(allocator, "pf_title", temp_counter);
+            defer allocator.free(pf_title_name);
+            try writeIndent(writer, indent);
+            try writer.writeAll("{\n");
+            try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 0), pf_title_name, args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("if (support.pageExists(");
+            try writer.writeAll(pf_title_name);
+            try writer.writeAll(".items)) {\n");
+            try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 1), out_name, args_name, indent + 2, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("} else {\n");
+            try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 2), out_name, args_name, indent + 2, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("}\n");
+            try writeIndent(writer, indent);
+            try writer.writeAll("}\n");
+        },
         .ifeq => {
             const pf_lhs_name = try allocTempLocalName(allocator, "pf_lhs", temp_counter);
             defer allocator.free(pf_lhs_name);
@@ -1190,9 +2382,58 @@ fn emitParserFunction(
             try writeIndent(writer, indent);
             try writer.writeAll("}\n");
         },
+        .ifexpr => {
+            const pf_expr_name = try allocTempLocalName(allocator, "pf_expr", temp_counter);
+            defer allocator.free(pf_expr_name);
+            try writeIndent(writer, indent);
+            try writer.writeAll("{\n");
+            try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 0), pf_expr_name, args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("if (support.exprTruthy(");
+            try writer.writeAll(pf_expr_name);
+            try writer.writeAll(".items)) {\n");
+            try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 1), out_name, args_name, indent + 2, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("} else {\n");
+            try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 2), out_name, args_name, indent + 2, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("}\n");
+            try writeIndent(writer, indent);
+            try writer.writeAll("}\n");
+        },
+        .expr => {
+            const pf_expr_name = try allocTempLocalName(allocator, "pf_expr", temp_counter);
+            defer allocator.free(pf_expr_name);
+            try writeIndent(writer, indent);
+            try writer.writeAll("{\n");
+            try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 0), pf_expr_name, args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("try support.appendExpr(");
+            try writer.writeAll(out_name);
+            try writer.writeAll(", allocator, ");
+            try writer.writeAll(pf_expr_name);
+            try writer.writeAll(".items);\n");
+            try writeIndent(writer, indent);
+            try writer.writeAll("}\n");
+        },
         .switch_ => try emitSwitchParserFunction(allocator, writer, templates, template_indexes, modules, module_indexes, func.args, out_name, args_name, indent, temp_counter),
+        .special => {
+            const pf_special_name = try allocTempLocalName(allocator, "pf_special", temp_counter);
+            defer allocator.free(pf_special_name);
+            try writeIndent(writer, indent);
+            try writer.writeAll("{\n");
+            try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 0), pf_special_name, args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("try support.appendSpecialPageName(");
+            try writer.writeAll(out_name);
+            try writer.writeAll(", allocator, ");
+            try writer.writeAll(pf_special_name);
+            try writer.writeAll(".items);\n");
+            try writeIndent(writer, indent);
+            try writer.writeAll("}\n");
+        },
         .tag => try emitNodes(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 1), out_name, args_name, indent, temp_counter),
-        .lc, .uc, .lcfirst, .ucfirst, .formatnum, .anchorencode, .padleft, .padright => {
+        .lc, .uc, .lcfirst, .ucfirst, .formatnum, .formatdate, .anchorencode, .urlencode, .padleft, .padright => {
             const pf_arg0_name = try allocTempLocalName(allocator, "pf_arg0", temp_counter);
             defer allocator.free(pf_arg0_name);
             try writeIndent(writer, indent);
@@ -1239,9 +2480,25 @@ fn emitParserFunction(
                     try writer.writeAll(pf_arg0_name);
                     try writer.writeAll(".items);\n");
                 },
+                .formatdate => {
+                    try writeIndent(writer, indent + 1);
+                    try writer.writeAll("try support.appendFormatDate(");
+                    try writer.writeAll(out_name);
+                    try writer.writeAll(", allocator, ");
+                    try writer.writeAll(pf_arg0_name);
+                    try writer.writeAll(".items);\n");
+                },
                 .anchorencode => {
                     try writeIndent(writer, indent + 1);
                     try writer.writeAll("try support.appendAnchorEncode(");
+                    try writer.writeAll(out_name);
+                    try writer.writeAll(", allocator, ");
+                    try writer.writeAll(pf_arg0_name);
+                    try writer.writeAll(".items);\n");
+                },
+                .urlencode => {
+                    try writeIndent(writer, indent + 1);
+                    try writer.writeAll("try support.appendUrlEncode(");
                     try writer.writeAll(out_name);
                     try writer.writeAll(", allocator, ");
                     try writer.writeAll(pf_arg0_name);
@@ -1255,7 +2512,7 @@ fn emitParserFunction(
                     try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 1), pf_width_name, args_name, indent + 1, temp_counter);
                     try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 2), pf_pad_name, args_name, indent + 1, temp_counter);
                     try writeIndent(writer, indent + 1);
-                    try writer.writeAll("const pf_width_value = runtime_std.fmt.parseUnsigned(usize, runtime_std.mem.trim(u8, ");
+                    try writer.writeAll("const pf_width_value = std.fmt.parseUnsigned(usize, std.mem.trim(u8, ");
                     try writer.writeAll(pf_width_name);
                     try writer.writeAll(".items, \" \\t\\r\\n\"), 10) catch 0;\n");
                     try writeIndent(writer, indent + 1);
@@ -1274,16 +2531,124 @@ fn emitParserFunction(
             try writeIndent(writer, indent);
             try writer.writeAll("}\n");
         },
-        .currentday, .currentmonth, .currentmonthname, .currentyear, .pagename, .fullpagename, .basepagename, .subpagename, .namespace, .namespacenumber, .talkpagename, .wikimedialanguage => {
+        .time => {
+            const pf_format_name = try allocTempLocalName(allocator, "pf_format", temp_counter);
+            defer allocator.free(pf_format_name);
+            const pf_value_name = try allocTempLocalName(allocator, "pf_value", temp_counter);
+            defer allocator.free(pf_value_name);
+            try writeIndent(writer, indent);
+            try writer.writeAll("{\n");
+            try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 0), pf_format_name, args_name, indent + 1, temp_counter);
+            try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 1), pf_value_name, args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("try support.appendTime(");
+            try writer.writeAll(out_name);
+            try writer.writeAll(", allocator, ");
+            try writer.writeAll(pf_format_name);
+            try writer.writeAll(".items, ");
+            try writer.writeAll(pf_value_name);
+            try writer.writeAll(".items);\n");
+            try writeIndent(writer, indent);
+            try writer.writeAll("}\n");
+        },
+        .fullurl => {
+            const pf_title_name = try allocTempLocalName(allocator, "pf_title", temp_counter);
+            defer allocator.free(pf_title_name);
+            const pf_query_name = try allocTempLocalName(allocator, "pf_query", temp_counter);
+            defer allocator.free(pf_query_name);
+            try writeIndent(writer, indent);
+            try writer.writeAll("{\n");
+            if (func.args.len != 0) {
+                try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 0), pf_title_name, args_name, indent + 1, temp_counter);
+            } else {
+                try writeIndent(writer, indent + 1);
+                try writer.writeAll("const ");
+                try writer.writeAll(pf_title_name);
+                try writer.writeAll(" = support.BorrowedText{ .items = support.fullPageName(");
+                try writer.writeAll(args_name);
+                try writer.writeAll(") };\n");
+            }
+            try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 1), pf_query_name, args_name, indent + 1, temp_counter);
+            try writeIndent(writer, indent + 1);
+            try writer.writeAll("try support.appendFullUrl(");
+            try writer.writeAll(out_name);
+            try writer.writeAll(", allocator, ");
+            try writer.writeAll(pf_title_name);
+            try writer.writeAll(".items, ");
+            try writer.writeAll(pf_query_name);
+            try writer.writeAll(".items);\n");
+            try writeIndent(writer, indent);
+            try writer.writeAll("}\n");
+        },
+        .currentday, .currentday2, .currentmonth, .currentmonthname, .currentyear, .revisionyear, .revisionuser, .pagename, .fullpagename, .fullpagenamee, .basepagename, .subpagename, .namespace, .namespacenumber, .talkpagename, .wikimedialanguage => {
             try writeIndent(writer, indent);
             try writer.writeAll("try support.appendText(");
             try writer.writeAll(out_name);
             try writer.writeAll(", allocator, ");
-            switch (func.kind) {
+            if (func.args.len != 0 and parserFunctionNeedsArgs(func.kind)) {
+                const pf_title_name = try allocTempLocalName(allocator, "pf_title", temp_counter);
+                defer allocator.free(pf_title_name);
+                try writer.writeAll("blk: {\n");
+                try emitNodesIntoLocalBuffer(allocator, writer, templates, template_indexes, modules, module_indexes, parserArgValueNodes(func.args, 0), pf_title_name, args_name, indent + 1, temp_counter);
+                try writeIndent(writer, indent + 1);
+                try writer.writeAll("break :blk ");
+                switch (func.kind) {
+                    .pagename => {
+                        try writer.writeAll("support.pageNameFromTitle(");
+                        try writer.writeAll(pf_title_name);
+                        try writer.writeAll(".items)");
+                    },
+                    .fullpagename => {
+                        try writer.writeAll("support.fullPageNameFromTitle(");
+                        try writer.writeAll(pf_title_name);
+                        try writer.writeAll(".items)");
+                    },
+                    .fullpagenamee => {
+                        try writer.writeAll("support.fullPageNameEncodedFromTitle(");
+                        try writer.writeAll(pf_title_name);
+                        try writer.writeAll(".items)");
+                    },
+                    .basepagename => {
+                        try writer.writeAll("support.basePageNameFromTitle(");
+                        try writer.writeAll(pf_title_name);
+                        try writer.writeAll(".items)");
+                    },
+                    .subpagename => {
+                        try writer.writeAll("support.subPageNameFromTitle(");
+                        try writer.writeAll(pf_title_name);
+                        try writer.writeAll(".items)");
+                    },
+                    .namespace => {
+                        try writer.writeAll("support.namespaceTextFromTitle(");
+                        try writer.writeAll(pf_title_name);
+                        try writer.writeAll(".items)");
+                    },
+                    .namespacenumber => {
+                        try writer.writeAll("support.namespaceNumberFromTitle(");
+                        try writer.writeAll(pf_title_name);
+                        try writer.writeAll(".items)");
+                    },
+                    .talkpagename => {
+                        try writer.writeAll("support.talkPageNameFromTitle(");
+                        try writer.writeAll(pf_title_name);
+                        try writer.writeAll(".items)");
+                    },
+                    else => unreachable,
+                }
+                // `break :blk expr` is a statement inside the generated block,
+                // so it needs its own trailing semicolon before the block
+                // closes and gets used as an expression argument.
+                try writer.writeAll(";\n");
+                try writeIndent(writer, indent);
+                try writer.writeAll("}");
+            } else switch (func.kind) {
                 .currentday => try writer.writeAll("support.currentDayText()"),
+                .currentday2 => try writer.writeAll("support.currentDay2Text()"),
                 .currentmonth => try writer.writeAll("support.currentMonthText()"),
                 .currentmonthname => try writer.writeAll("support.currentMonthName()"),
                 .currentyear => try writer.writeAll("support.currentYearText()"),
+                .revisionyear => try writer.writeAll("support.revisionYearText()"),
+                .revisionuser => try writer.writeAll("support.revisionUserText()"),
                 .pagename => {
                     try writer.writeAll("support.pageName(");
                     try writer.writeAll(args_name);
@@ -1291,6 +2656,11 @@ fn emitParserFunction(
                 },
                 .fullpagename => {
                     try writer.writeAll("support.fullPageName(");
+                    try writer.writeAll(args_name);
+                    try writer.writeAll(")");
+                },
+                .fullpagenamee => {
+                    try writer.writeAll("support.fullPageNameEncoded(");
                     try writer.writeAll(args_name);
                     try writer.writeAll(")");
                 },
@@ -1424,7 +2794,7 @@ fn emitSwitchCaseComparison(
         try writeIndent(writer, indent + 1);
         try writer.writeAll("var ");
         try writer.writeAll(pf_case_name_name);
-        try writer.writeAll(": runtime_std.ArrayList(u8) = .empty;\n");
+        try writer.writeAll(": std.ArrayList(u8) = .empty;\n");
         try writeIndent(writer, indent + 1);
         try writer.writeAll("defer ");
         try writer.writeAll(pf_case_name_name);
@@ -1453,7 +2823,7 @@ fn emitSwitchCaseComparison(
         try writeIndent(writer, indent + 1);
         try writer.writeAll("var ");
         try writer.writeAll(pf_case_value_name);
-        try writer.writeAll(": runtime_std.ArrayList(u8) = .empty;\n");
+        try writer.writeAll(": std.ArrayList(u8) = .empty;\n");
         try writeIndent(writer, indent + 1);
         try writer.writeAll("defer ");
         try writer.writeAll(pf_case_value_name);
@@ -1499,7 +2869,7 @@ fn emitNodesIntoLocalBuffer(
     try writeIndent(writer, indent);
     try writer.writeAll("var ");
     try writer.writeAll(local_name);
-    try writer.writeAll(": runtime_std.ArrayList(u8) = .empty;\n");
+    try writer.writeAll(": std.ArrayList(u8) = .empty;\n");
     try writeIndent(writer, indent);
     try writer.writeAll("defer ");
     try writer.writeAll(local_name);
@@ -1519,6 +2889,121 @@ fn switchArgIsDefault(arg: ArgNode) bool {
     return std.ascii.eqlIgnoreCase(name, "#default");
 }
 
+fn expandReachableModulesWithLiteralRefsAlloc(
+    allocator: std.mem.Allocator,
+    module_sources: *const std.StringHashMap([]const u8),
+    seed_modules: []const []const u8,
+) ![]const []const u8 {
+    const known_dispatch_gap_modules = [_][]const u8{
+        "libraryutil",
+        "chart/default colors",
+        "labels/data",
+        "ml-translit",
+        "pa-translit",
+        "strict",
+    };
+
+    var set = std.StringHashMapUnmanaged(void){};
+    defer {
+        var it = set.iterator();
+        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+        set.deinit(allocator);
+    }
+
+    var queue: std.ArrayList([]const u8) = .empty;
+    defer queue.deinit(allocator);
+
+    for (seed_modules) |name| {
+        const duped = try allocator.dupe(u8, name);
+        errdefer allocator.free(duped);
+        const gop = try set.getOrPut(allocator, duped);
+        if (gop.found_existing) {
+            allocator.free(duped);
+            continue;
+        }
+        gop.key_ptr.* = duped;
+        try queue.append(allocator, gop.key_ptr.*);
+    }
+
+    // These helper/data modules are required by high-frequency templates but
+    // may come from compat fallbacks rather than the dump itself. They still
+    // need stable static dispatch slots so emitted require/loadData calls never
+    // fall back to unsupported dynamic lookup.
+    for (known_dispatch_gap_modules) |name| {
+        const duped = try allocator.dupe(u8, name);
+        errdefer allocator.free(duped);
+        const gop = try set.getOrPut(allocator, duped);
+        if (gop.found_existing) {
+            allocator.free(duped);
+            continue;
+        }
+        gop.key_ptr.* = duped;
+        try queue.append(allocator, gop.key_ptr.*);
+    }
+
+    var scan_index: usize = 0;
+    while (scan_index < queue.items.len) : (scan_index += 1) {
+        const module_name = queue.items[scan_index];
+        const source = module_sources.get(module_name) orelse continue;
+        const literals = try lua.collectLikelyModuleStringLiteralsAlloc(allocator, source);
+        defer freeOwnedStrings(allocator, literals);
+
+        for (literals) |literal_name| {
+            const duped = try allocator.dupe(u8, literal_name);
+            errdefer allocator.free(duped);
+            const gop = try set.getOrPut(allocator, duped);
+            if (gop.found_existing) {
+                allocator.free(duped);
+                continue;
+            }
+            gop.key_ptr.* = duped;
+            try queue.append(allocator, gop.key_ptr.*);
+        }
+    }
+
+    return collectStringSet(allocator, &set);
+}
+
+fn syntheticMissingModuleSource(module_name: []const u8) []const u8 {
+    if (std.mem.eql(u8, module_name, "libraryutil")) return
+    \\local export = {}
+    \\function export.checkType(_, _, value, _, _)
+    \\    return value
+    \\end
+    \\function export.checkTypeForNamedArg(_, _, value, _, _)
+    \\    return value
+    \\end
+    \\function export.checkTypeMulti(_, _, value, _, _)
+    \\    return value
+    \\end
+    \\function export.makeCheckSelfFunction(...)
+    \\    return function(...)
+    \\        return ...
+    \\    end
+    \\end
+    \\return export
+    ;
+    if (std.mem.eql(u8, module_name, "strict")) return
+    \\return {}
+    ;
+    if (std.mem.eql(u8, module_name, "ml-translit") or std.mem.eql(u8, module_name, "pa-translit")) return
+    \\local export = {}
+    \\function export.tr(text)
+    \\    return text or ""
+    \\end
+    \\function export.translit(text)
+    \\    return text or ""
+    \\end
+    \\return export
+    ;
+    // Missing helper/data modules still need a stable static module index so
+    // generated require/loadData lowering never falls back to string lookup.
+    // Return an empty table rather than rejecting the whole template runtime.
+    return
+    \\return {}
+    ;
+}
+
 fn buildModuleInfosAlloc(
     allocator: std.mem.Allocator,
     templates: []const TemplateInfo,
@@ -1526,8 +3011,6 @@ fn buildModuleInfosAlloc(
     sources: *const lua.TemplateSources,
 ) !std.ArrayList(ModuleInfo) {
     const direct_modules = blk: {
-        if (required_modules.len != 0) break :blk try dupStringSliceAlloc(allocator, required_modules);
-
         var module_keys = std.StringHashMapUnmanaged(void){};
         defer {
             var it = module_keys.iterator();
@@ -1541,69 +3024,141 @@ fn buildModuleInfosAlloc(
         break :blk try collectStringSet(allocator, &module_keys);
     };
     defer freeOwnedStrings(allocator, direct_modules);
-
-    const all_modules = try lua.collectTransitiveModulesFromSourcesAlloc(allocator, &sources.module_sources, direct_modules);
-    defer freeOwnedStrings(allocator, all_modules);
+    for (direct_modules) |name| {
+        if (!stringSliceContains(required_modules, name)) {
+            std.debug.print("template compiler: structure dependency closure missing direct module {s}\n", .{name});
+            return error.InvalidStructureReport;
+        }
+    }
 
     var modules: std.ArrayList(ModuleInfo) = .empty;
     errdefer {
         for (modules.items) |module| allocator.free(module.key);
         for (modules.items) |module| allocator.free(module.struct_ident);
         for (modules.items) |module| allocator.free(module.zig_source);
-        for (modules.items) |module| allocator.free(module.fn_ids);
+        for (modules.items) |module| {
+            for (module.exports) |entry| allocator.free(entry.name);
+            allocator.free(module.exports);
+        }
         modules.deinit(allocator);
     }
 
-    for (all_modules) |key| {
+    for (required_modules) |key| {
         const module_index: u16 = @intCast(modules.items.len);
         const struct_ident = try moduleStructIdentAlloc(allocator, key, module_index);
         const module_source = sources.module_sources.get(key) orelse "";
+        const effective_source = if (module_source.len != 0) module_source else syntheticMissingModuleSource(key);
         var module: ModuleInfo = .{
             .key = try allocator.dupe(u8, key),
             .struct_ident = struct_ident,
             .index = module_index,
         };
-        if (module_source.len == 0) {
-            module.emit_failed = true;
-        } else if (module_source.len > max_generated_module_source_bytes) {
+        if (effective_source.len > max_generated_module_source_bytes) {
+            std.debug.print("template compiler module source too large: {s}\n", .{module.key});
             module.emit_failed = true;
             module.too_large = true;
         } else {
-            var chunk = lua.compile(allocator, module_source) catch {
+            var emitted = emitLuaModuleResultAlloc(
+                allocator,
+                module.key,
+                effective_source,
+                required_modules,
+                &.{},
+                module_index,
+            ) catch |err| {
+                std.debug.print("template compiler lua compile failed: {s}: {s}\n", .{ module.key, @errorName(err) });
                 module.emit_failed = true;
                 try modules.append(allocator, module);
                 continue;
             };
-            defer chunk.deinit();
-            module.zig_source = lua.emitZigModuleWithOptionsAlloc(allocator, &chunk, .{
-                .enable_direct_module_dispatch = true,
-                // The emitted module lowers require/loadData into the shared
-                // generated module index space instead of string dispatch.
-                .direct_module_dispatch_names = all_modules,
-                .call_dispatch_helper_name = "generatedTemplateDispatchFirst",
-                .emit_local_dispatch_helper = false,
-            }) catch {
+            defer emitted.deinit(allocator);
+            module.top_id = emitted.top_id;
+            module.function_count = emitted.function_count;
+            module.exports = cloneModuleExportsAlloc(allocator, emitted.exports) catch |err| {
+                std.debug.print("template compiler export extraction failed: {s}: {s}\n", .{ module.key, @errorName(err) });
                 module.emit_failed = true;
                 try modules.append(allocator, module);
                 continue;
             };
-            module.fn_ids = extractGeneratedFnIdsAlloc(allocator, module.zig_source) catch {
-                allocator.free(module.zig_source);
-                module.zig_source = "";
-                module.emit_failed = true;
-                try modules.append(allocator, module);
-                continue;
-            };
-            if (module.zig_source.len > max_generated_module_zig_bytes) {
-                allocator.free(module.zig_source);
-                allocator.free(module.fn_ids);
-                module.zig_source = "";
-                module.fn_ids = &.{};
-                module.emit_failed = true;
-                module.too_large = true;
-            }
         }
         try modules.append(allocator, module);
+    }
+
+    const export_tables = try allocator.alloc(lua.DirectModuleExportTable, modules.items.len);
+    defer {
+        for (export_tables) |table| {
+            for (table.exports) |entry| allocator.free(entry.name);
+            allocator.free(table.exports);
+        }
+        allocator.free(export_tables);
+    }
+    for (modules.items, 0..) |module, module_index| {
+        if (module.emit_failed or module.exports.len == 0) {
+            export_tables[module_index] = .{};
+            continue;
+        }
+        const duped = try allocator.alloc(lua.GeneratedModuleExportInfo, module.exports.len);
+        errdefer allocator.free(duped);
+        for (module.exports, 0..) |entry, export_index| {
+            duped[export_index] = .{
+                .export_id = entry.export_id,
+                .name = try allocator.dupe(u8, entry.name),
+                .callable_id = entry.callable_id,
+                .fn_id = entry.fn_id,
+            };
+        }
+        export_tables[module_index] = .{ .exports = duped };
+    }
+
+    for (modules.items, 0..) |*module, module_index| {
+        if (module.emit_failed) continue;
+        const module_source = sources.module_sources.get(module.key) orelse "";
+        const effective_source = if (module_source.len != 0) module_source else syntheticMissingModuleSource(module.key);
+        var emitted = emitLuaModuleResultAlloc(
+            allocator,
+            module.key,
+            effective_source,
+            required_modules,
+            export_tables,
+            @intCast(module_index),
+        ) catch |err| {
+            std.debug.print("template compiler zig emit failed: {s}: {s}\n", .{ module.key, @errorName(err) });
+            module.emit_failed = true;
+            continue;
+        };
+        defer emitted.deinit(allocator);
+
+        module.zig_source = try stripEmbeddedLuaModuleImportsAlloc(allocator, emitted.source);
+        module.top_id = emitted.top_id;
+        module.function_count = emitted.function_count;
+        if (moduleDynamicDispatchReason(module.zig_source)) |reason| {
+            std.debug.print("template compiler rejected module {s}: {s}\n", .{ module.key, reason });
+            allocator.free(module.zig_source);
+            module.zig_source = "";
+            module.emit_failed = true;
+            continue;
+        }
+
+        for (module.exports) |entry| allocator.free(entry.name);
+        allocator.free(module.exports);
+        module.exports = &.{};
+        module.exports = cloneModuleExportsAlloc(allocator, emitted.exports) catch |err| {
+            std.debug.print("template compiler export extraction failed: {s}: {s}\n", .{ module.key, @errorName(err) });
+            allocator.free(module.zig_source);
+            module.zig_source = "";
+            module.emit_failed = true;
+            continue;
+        };
+        if (module.zig_source.len > max_generated_module_zig_bytes) {
+            std.debug.print("template compiler emitted zig too large: {s}\n", .{module.key});
+            allocator.free(module.zig_source);
+            for (module.exports) |entry| allocator.free(entry.name);
+            allocator.free(module.exports);
+            module.zig_source = "";
+            module.exports = &.{};
+            module.emit_failed = true;
+            module.too_large = true;
+        }
     }
     return modules;
 }
@@ -1616,9 +3171,12 @@ fn collectModuleNames(
     for (nodes) |node| switch (node) {
         .text => {},
         .param => |param| try collectModuleNames(allocator, names, param.default_nodes),
-        .template_call => |call| for (call.args) |arg| {
-            if (arg.name_is_dynamic) try collectModuleNames(allocator, names, arg.name_nodes);
-            try collectModuleNames(allocator, names, arg.value_nodes);
+        .template_call => |call| {
+            if (call.name_nodes.len != 0) try collectModuleNames(allocator, names, call.name_nodes);
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic) try collectModuleNames(allocator, names, arg.name_nodes);
+                try collectModuleNames(allocator, names, arg.value_nodes);
+            }
         },
         .invoke_call => |call| {
             const gop = try names.getOrPut(allocator, call.module_name);
@@ -1635,6 +3193,31 @@ fn collectModuleNames(
     };
 }
 
+fn templateCallHasCompiledCandidate(
+    templates: []TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    call: TemplateCallNode,
+) bool {
+    for (call.resolved_names) |candidate| {
+        const callee_index = template_indexes.get(candidate) orelse continue;
+        if (resolveTemplateClass(templates, template_indexes, callee_index) == .compiled) return true;
+    }
+    return false;
+}
+
+fn templateCallHasUnsupportedCandidate(
+    templates: []TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+    call: TemplateCallNode,
+) bool {
+    if (call.resolved_names.len == 0) return true;
+    for (call.resolved_names) |candidate| {
+        const callee_index = template_indexes.get(candidate) orelse return true;
+        if (resolveTemplateClass(templates, template_indexes, callee_index) == .unsupported) return true;
+    }
+    return false;
+}
+
 fn templateHasUnsupportedInvoke(
     nodes: []const Node,
     modules: []const ModuleInfo,
@@ -1643,9 +3226,12 @@ fn templateHasUnsupportedInvoke(
     for (nodes) |node| switch (node) {
         .text => {},
         .param => |param| if (templateHasUnsupportedInvoke(param.default_nodes, modules, module_indexes)) return true,
-        .template_call => |call| for (call.args) |arg| {
-            if (arg.name_is_dynamic and templateHasUnsupportedInvoke(arg.name_nodes, modules, module_indexes)) return true;
-            if (templateHasUnsupportedInvoke(arg.value_nodes, modules, module_indexes)) return true;
+        .template_call => |call| {
+            if (call.name_nodes.len != 0 and templateHasUnsupportedInvoke(call.name_nodes, modules, module_indexes)) return true;
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic and templateHasUnsupportedInvoke(arg.name_nodes, modules, module_indexes)) return true;
+                if (templateHasUnsupportedInvoke(arg.value_nodes, modules, module_indexes)) return true;
+            }
         },
         .invoke_call => |call| {
             const module_index = module_indexes.get(call.module_name) orelse return true;
@@ -1671,9 +3257,12 @@ fn templateHasOversizedInvoke(
     for (nodes) |node| switch (node) {
         .text => {},
         .param => |param| if (templateHasOversizedInvoke(param.default_nodes, modules, module_indexes)) return true,
-        .template_call => |call| for (call.args) |arg| {
-            if (arg.name_is_dynamic and templateHasOversizedInvoke(arg.name_nodes, modules, module_indexes)) return true;
-            if (templateHasOversizedInvoke(arg.value_nodes, modules, module_indexes)) return true;
+        .template_call => |call| {
+            if (call.name_nodes.len != 0 and templateHasOversizedInvoke(call.name_nodes, modules, module_indexes)) return true;
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic and templateHasOversizedInvoke(arg.name_nodes, modules, module_indexes)) return true;
+                if (templateHasOversizedInvoke(arg.value_nodes, modules, module_indexes)) return true;
+            }
         },
         .invoke_call => |call| {
             const module_index = module_indexes.get(call.module_name) orelse continue;
@@ -1693,7 +3282,7 @@ fn templateHasOversizedInvoke(
 
 fn templateDependsOnUnsupportedTemplate(
     nodes: []const Node,
-    templates: []const TemplateInfo,
+    templates: []TemplateInfo,
     template_indexes: *const std.StringHashMap(usize),
 ) bool {
     for (nodes) |node| switch (node) {
@@ -1704,8 +3293,8 @@ fn templateDependsOnUnsupportedTemplate(
             if (templateDependsOnUnsupportedTemplate(arg.value_nodes, templates, template_indexes)) return true;
         },
         .template_call => |call| {
-            const callee_index = template_indexes.get(call.name) orelse return true;
-            if (templates[callee_index].class == .unsupported) return true;
+            if (call.name_nodes.len != 0 and templateDependsOnUnsupportedTemplate(call.name_nodes, templates, template_indexes)) return true;
+            if (templateCallHasUnsupportedCandidate(templates, template_indexes, call)) return true;
             for (call.args) |arg| {
                 if (arg.name_is_dynamic and templateDependsOnUnsupportedTemplate(arg.name_nodes, templates, template_indexes)) return true;
                 if (templateDependsOnUnsupportedTemplate(arg.value_nodes, templates, template_indexes)) return true;
@@ -1719,6 +3308,63 @@ fn templateDependsOnUnsupportedTemplate(
     return false;
 }
 
+fn findFirstUnsupportedTemplateDependency(
+    nodes: []const Node,
+    templates: []TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+) ?[]const u8 {
+    for (nodes) |node| {
+        if (findUnsupportedTemplateDependencyInNode(node, templates, template_indexes)) |name| return name;
+    }
+    return null;
+}
+
+fn findUnsupportedTemplateDependencyInNode(
+    node: Node,
+    templates: []TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
+) ?[]const u8 {
+    return switch (node) {
+        .text => null,
+        .param => |param| findFirstUnsupportedTemplateDependency(param.default_nodes, templates, template_indexes),
+        .invoke_call => |call| blk: {
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic) {
+                    if (findFirstUnsupportedTemplateDependency(arg.name_nodes, templates, template_indexes)) |name| break :blk name;
+                }
+                if (findFirstUnsupportedTemplateDependency(arg.value_nodes, templates, template_indexes)) |name| break :blk name;
+            }
+            break :blk null;
+        },
+        .parser_func => |func| blk: {
+            for (func.args) |arg| {
+                if (arg.name_is_dynamic) {
+                    if (findFirstUnsupportedTemplateDependency(arg.name_nodes, templates, template_indexes)) |name| break :blk name;
+                }
+                if (findFirstUnsupportedTemplateDependency(arg.value_nodes, templates, template_indexes)) |name| break :blk name;
+            }
+            break :blk null;
+        },
+        .template_call => |call| blk: {
+            if (call.name_nodes.len != 0) {
+                if (findFirstUnsupportedTemplateDependency(call.name_nodes, templates, template_indexes)) |name| break :blk name;
+            }
+            if (call.resolved_names.len == 0) break :blk "<dynamic-template-name>";
+            for (call.resolved_names) |candidate| {
+                const callee_index = template_indexes.get(candidate) orelse break :blk candidate;
+                if (resolveTemplateClass(templates, template_indexes, callee_index) == .unsupported) break :blk candidate;
+            }
+            for (call.args) |arg| {
+                if (arg.name_is_dynamic) {
+                    if (findFirstUnsupportedTemplateDependency(arg.name_nodes, templates, template_indexes)) |name| break :blk name;
+                }
+                if (findFirstUnsupportedTemplateDependency(arg.value_nodes, templates, template_indexes)) |name| break :blk name;
+            }
+            break :blk null;
+        },
+    };
+}
+
 fn emitGeneratedModuleStruct(writer: *std.Io.Writer, module: ModuleInfo) !void {
     try writer.writeAll("const ");
     try writer.writeAll(module.struct_ident);
@@ -1727,172 +3373,120 @@ fn emitGeneratedModuleStruct(writer: *std.Io.Writer, module: ModuleInfo) !void {
     try writer.writeAll("};\n\n");
 }
 
-fn emitGeneratedModuleDispatchSupport(writer: *std.Io.Writer, modules: []const ModuleInfo) !void {
+fn emitGeneratedModuleCallableDispatchSupport(writer: *std.Io.Writer, modules: []const ModuleInfo) !void {
     try writer.writeAll(
-        \\const GeneratedModuleIndex = u16;
-        \\
-        \\// Canonical module names indexed in the same order used by the
-        \\// generated Lua->Zig modules. Runtime require/loadData helpers resolve
-        \\// raw module strings into these indices and then dispatch through the
-        \\// compact switch below.
-        \\const generated_module_canonical_names = [_][]const u8{
+        \\fn generatedModuleCallableDispatchFirst(
+        \\    runtime: *lua.GeneratedRuntime,
+        \\    callee: lua.Value,
+        \\    args: []const lua.Value,
+        \\) !lua.Value {
+        \\    const generated = switch (callee) {
+        \\        .generated_callable => |value| value,
+        \\        else => return error.InvalidCall,
+        \\    };
+        \\    switch (generated.id) {
+        \\        lua.generated_callable_id_module_require => return lua.generatedResultsFirst(try generatedModuleRequireFn(
+        \\            generated.capture,
+        \\            generated.globals,
+        \\            runtime,
+        \\            args,
+        \\        )),
+        \\        lua.generated_callable_id_module_load_data => return lua.generatedResultsFirst(try generatedModuleLoadDataFn(
+        \\            generated.capture,
+        \\            generated.globals,
+        \\            runtime,
+        \\            args,
+        \\        )),
+        \\        else => {},
+        \\    }
+        \\    const module_index: u16 = @intCast(generated.id >> 16);
+        \\    const function_id: u16 = @intCast(generated.id & 0xFFFF);
+        \\    _ = function_id;
+        \\    return switch (module_index) {
         \\
     );
     for (modules) |module| {
-        try writer.writeAll("    ");
-        try appendZigStringLiteral(writer, module.key);
-        try writer.writeAll(",\n");
+        if (module.emit_failed or module.zig_source.len == 0) continue;
+        try writer.writeAll("        ");
+        try writer.print("{d}", .{module.index});
+        try writer.writeAll(" => switch (function_id) {\n");
+        var function_id: u32 = 0;
+        while (function_id < module.function_count) : (function_id += 1) {
+            try writer.writeAll("            ");
+            try writer.print("{d}", .{function_id});
+            try writer.writeAll(" => lua.generatedResultsFirst(try ");
+            try writer.writeAll(module.struct_ident);
+            try writer.writeAll(".fn_");
+            try writer.print("{d}", .{function_id});
+            try writer.writeAll("(generated.capture, generated.globals, runtime, args)),\n");
+        }
+        try writer.writeAll("            else => error.InvalidCall,\n");
+        try writer.writeAll("        },\n");
     }
     try writer.writeAll(
-        \\};
-        \\
-        \\const generated_all_module_indices = [_]GeneratedModuleIndex{
+        \\        else => if (try lua.generatedDispatchKnownRuntimeFirst(runtime, callee, args)) |first| first else error.InvalidCall,
+        \\    };
+        \\}
         \\
     );
-    for (modules, 0..) |_, module_index| {
-        try writer.writeAll("    ");
-        try writer.print("{d}", .{module_index});
-        try writer.writeAll(",\n");
+}
+
+fn stripEmbeddedLuaModuleImportsAlloc(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+    var rewritten = try allocator.dupe(u8, source);
+    errdefer allocator.free(rewritten);
+
+    for ([_][]const u8{
+        "const std = @import(\"std\");\n",
+        "const lua = @import(\"lua\");\n",
+    }) |needle| {
+        if (std.mem.indexOf(u8, rewritten, needle) == null) continue;
+
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+
+        var start: usize = 0;
+        while (std.mem.indexOfPos(u8, rewritten, start, needle)) |idx| {
+            try out.appendSlice(allocator, rewritten[start..idx]);
+            start = idx + needle.len;
+        }
+        try out.appendSlice(allocator, rewritten[start..]);
+        allocator.free(rewritten);
+        rewritten = try out.toOwnedSlice(allocator);
     }
+    return rewritten;
+}
+
+fn emitGeneratedModuleDispatchSupport(writer: *std.Io.Writer, modules: []const ModuleInfo) !void {
     try writer.writeAll(
-        \\};
-        \\
-        \\fn generatedCanonicalModuleNameAlloc(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) ![]const u8 {
-        \\    const module_name_text = switch (module_name_value) {
-        \\        .string => |text| text,
-        \\        else => try lua.valueToStringValueAlloc(runtime.alloc(), module_name_value),
-        \\    };
-        \\    const canonical = try lua.canonicalModuleNameAlloc(runtime.alloc(), module_name_text);
-        \\    if (runtime_std.mem.startsWith(u8, canonical, "module:")) return canonical["module:".len..];
-        \\    return canonical;
-        \\}
-        \\
-        \\fn generatedResolveKnownModuleIndex(
-        \\    comptime known_indices: []const GeneratedModuleIndex,
-        \\    runtime: *lua.GeneratedRuntime,
-        \\    module_name_value: lua.Value,
-        \\) !GeneratedModuleIndex {
-        \\    const canonical_name = try generatedCanonicalModuleNameAlloc(runtime, module_name_value);
-        \\    inline for (known_indices) |known_index| {
-        \\        if (runtime_std.mem.eql(u8, canonical_name, generated_module_canonical_names[known_index])) {
-        \\            return known_index;
-        \\        }
-        \\    }
-        \\    inline for (generated_module_canonical_names, 0..) |known_name, idx| {
-        \\        if (runtime_std.mem.eql(u8, canonical_name, known_name)) {
-        \\            return @intCast(idx);
-        \\        }
-        \\    }
-        \\    return error.UnknownVariable;
-        \\}
-        \\
-        \\fn generatedResolveModuleIndex(
-        \\    runtime: *lua.GeneratedRuntime,
-        \\    module_name_value: lua.Value,
-        \\) !GeneratedModuleIndex {
-        \\    return try generatedResolveKnownModuleIndex(&generated_all_module_indices, runtime, module_name_value);
-        \\}
-        \\
+        \\const GeneratedModuleIndex = u16;
+        \\const GeneratedModuleExportIndex = u16;
         \\fn generatedLoadCompiledModuleByIndex(runtime: *lua.GeneratedRuntime, module_index: GeneratedModuleIndex) !lua.Value {
         \\    if (runtime.getGeneratedModuleByIndex(module_index)) |cached| return cached;
+        \\    const first = switch (module_index) {
         \\
     );
     for (modules, 0..) |module, module_index| {
         if (module.emit_failed or module.zig_source.len == 0) continue;
-        try writer.writeAll("    if (module_index == ");
+        try writer.writeAll("        ");
         try writer.print("{d}", .{module_index});
-        try writer.writeAll(") {\n");
-        try writer.writeAll("        const returns = try ");
+        try writer.writeAll(" => blk: {\n");
+        try writer.writeAll("            const globals = try ");
         try writer.writeAll(module.struct_ident);
-        try writer.writeAll(".runInRuntime(runtime);\n");
-        try writer.writeAll("        const first = if (returns.len == 0) lua.Value.nil else returns[0];\n");
-        try writer.writeAll("        try runtime.putGeneratedModuleByIndex(module_index, first);\n");
-        try writer.writeAll("        return first;\n");
-        try writer.writeAll("    }\n");
+        try writer.writeAll(".initRuntimeGlobals(runtime);\n");
+        try writer.writeAll("            const returns = try ");
+        try writer.writeAll(module.struct_ident);
+        try writer.writeAll(".fn_");
+        try writer.print("{d}", .{module.top_id});
+        try writer.writeAll("(null, globals, runtime, &.{});\n");
+        try writer.writeAll("            const first = if (returns.len == 0) lua.Value.nil else returns[0];\n");
+        try writer.writeAll("            try runtime.putGeneratedModuleByIndex(module_index, first, globals);\n");
+        try writer.writeAll("            break :blk first;\n");
+        try writer.writeAll("        },\n");
     }
     try writer.writeAll(
-        \\    return error.UnknownVariable;
-        \\}
-        \\
-        \\fn generatedLoadCompiledModuleFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
-        \\    return try generatedLoadCompiledModuleByIndex(runtime, try generatedResolveModuleIndex(runtime, module_name_value));
-        \\}
-        \\
-        \\fn generatedLoadCompiledModuleKnownFirst(
-        \\    comptime known_indices: []const GeneratedModuleIndex,
-        \\    runtime: *lua.GeneratedRuntime,
-        \\    module_name_value: lua.Value,
-        \\) !lua.Value {
-        \\    return try generatedLoadCompiledModuleByIndex(
-        \\        runtime,
-        \\        try generatedResolveKnownModuleIndex(known_indices, runtime, module_name_value),
-        \\    );
-        \\}
-        \\
-        \\fn generatedModuleRequireFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
-        \\    return try generatedLoadCompiledModuleFirst(runtime, module_name_value);
-        \\}
-        \\
-        \\fn generatedModuleRequireKnownFirst(
-        \\    comptime known_indices: []const GeneratedModuleIndex,
-        \\    runtime: *lua.GeneratedRuntime,
-        \\    module_name_value: lua.Value,
-        \\) !lua.Value {
-        \\    return try generatedLoadCompiledModuleKnownFirst(known_indices, runtime, module_name_value);
-        \\}
-        \\
-        \\fn generatedModuleLoadDataFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
-        \\    return try generatedLoadCompiledModuleFirst(runtime, module_name_value);
-        \\}
-        \\
-        \\fn generatedModuleLoadDataKnownFirst(
-        \\    comptime known_indices: []const GeneratedModuleIndex,
-        \\    runtime: *lua.GeneratedRuntime,
-        \\    module_name_value: lua.Value,
-        \\) !lua.Value {
-        \\    return try generatedLoadCompiledModuleKnownFirst(known_indices, runtime, module_name_value);
-        \\}
-        \\
-        \\fn generatedSafeLoadCompiledModuleFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
-        \\    return generatedLoadCompiledModuleFirst(runtime, module_name_value) catch |err| switch (err) {
-        \\        error.UnknownVariable => lua.Value.nil,
-        \\        else => err,
+        \\        else => return error.UnknownVariable,
         \\    };
-        \\}
-        \\
-        \\fn generatedSafeLoadCompiledModuleKnownFirst(
-        \\    comptime known_indices: []const GeneratedModuleIndex,
-        \\    runtime: *lua.GeneratedRuntime,
-        \\    module_name_value: lua.Value,
-        \\) !lua.Value {
-        \\    return generatedLoadCompiledModuleKnownFirst(known_indices, runtime, module_name_value) catch |err| switch (err) {
-        \\        error.UnknownVariable => lua.Value.nil,
-        \\        else => err,
-        \\    };
-        \\}
-        \\
-        \\fn generatedSafeModuleRequireFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
-        \\    return try generatedSafeLoadCompiledModuleFirst(runtime, module_name_value);
-        \\}
-        \\
-        \\fn generatedSafeModuleRequireKnownFirst(
-        \\    comptime known_indices: []const GeneratedModuleIndex,
-        \\    runtime: *lua.GeneratedRuntime,
-        \\    module_name_value: lua.Value,
-        \\) !lua.Value {
-        \\    return try generatedSafeLoadCompiledModuleKnownFirst(known_indices, runtime, module_name_value);
-        \\}
-        \\
-        \\fn generatedSafeModuleLoadDataFirst(runtime: *lua.GeneratedRuntime, module_name_value: lua.Value) !lua.Value {
-        \\    return try generatedSafeLoadCompiledModuleFirst(runtime, module_name_value);
-        \\}
-        \\
-        \\fn generatedSafeModuleLoadDataKnownFirst(
-        \\    comptime known_indices: []const GeneratedModuleIndex,
-        \\    runtime: *lua.GeneratedRuntime,
-        \\    module_name_value: lua.Value,
-        \\) !lua.Value {
-        \\    return try generatedSafeLoadCompiledModuleKnownFirst(known_indices, runtime, module_name_value);
+        \\    return first;
         \\}
         \\
         \\fn generatedModuleRequireFn(
@@ -1901,10 +3495,9 @@ fn emitGeneratedModuleDispatchSupport(writer: *std.Io.Writer, modules: []const M
         \\    runtime: *lua.GeneratedRuntime,
         \\    args: []const lua.Value,
         \\) anyerror![]lua.Value {
-        \\    return try runtime.singleReturn(try generatedModuleRequireFirst(
-        \\        runtime,
-        \\        if (args.len == 0) lua.Value.nil else args[0],
-        \\    ));
+        \\    _ = runtime;
+        \\    _ = args;
+        \\    return error.InvalidCall;
         \\}
         \\
         \\fn generatedModuleLoadDataFn(
@@ -1913,109 +3506,138 @@ fn emitGeneratedModuleDispatchSupport(writer: *std.Io.Writer, modules: []const M
         \\    runtime: *lua.GeneratedRuntime,
         \\    args: []const lua.Value,
         \\) anyerror![]lua.Value {
-        \\    return try runtime.singleReturn(try generatedModuleLoadDataFirst(
-        \\        runtime,
-        \\        if (args.len == 0) lua.Value.nil else args[0],
-        \\    ));
+        \\    _ = runtime;
+        \\    _ = args;
+        \\    return error.InvalidCall;
         \\}
         \\
-        \\fn generatedTemplateDispatchFirst(
+        \\fn generatedModuleExportValueByIndex(
         \\    runtime: *lua.GeneratedRuntime,
-        \\    callee: lua.Value,
+        \\    comptime module_index: GeneratedModuleIndex,
+        \\    comptime export_id: GeneratedModuleExportIndex,
+        \\) !lua.Value {
+        \\    _ = try generatedLoadCompiledModuleByIndex(runtime, module_index);
+        \\    _ = export_id;
+        \\    switch (comptime module_index) {
+        \\
+    );
+    for (modules, 0..) |module, module_index| {
+        if (module.emit_failed or module.zig_source.len == 0) continue;
+        try writer.writeAll("        ");
+        try writer.print("{d}", .{module_index});
+        try writer.writeAll(" => switch (comptime export_id) {\n");
+        for (module.exports) |export_info| {
+            try writer.writeAll("            ");
+            try writer.print("{d}", .{export_info.export_id});
+            try writer.writeAll(" => blk: {\n");
+            try writer.writeAll("                const module_globals = runtime.getGeneratedModuleGlobalsByIndex(module_index) orelse return error.InvalidCall;\n");
+            try writer.writeAll("                break :blk runtime.generatedCallableValue(");
+            try writer.print("{d}", .{export_info.callable_id});
+            try writer.writeAll(", null, module_globals);\n");
+            try writer.writeAll("            },\n");
+        }
+        try writer.writeAll("            else => error.InvalidCall,\n");
+        try writer.writeAll("        },\n");
+    }
+    try writer.writeAll(
+        \\        else => return error.InvalidCall,
+        \\    }
+        \\}
+        \\
+        \\fn generatedCallModuleExportByIndexFirst(
+        \\    runtime: *lua.GeneratedRuntime,
+        \\    comptime module_index: GeneratedModuleIndex,
+        \\    comptime export_id: GeneratedModuleExportIndex,
         \\    args: []const lua.Value,
         \\) !lua.Value {
-        \\    if (callee != .function) return error.InvalidCall;
-        \\    return switch (callee.function.kind) {
-        \\        .generated => |generated| blk: {
-        \\            if (generated.invoke == generatedModuleRequireFn) {
-        \\                break :blk lua.generatedResultsFirst(try generatedModuleRequireFn(
-        \\                    generated.capture,
-        \\                    generated.globals,
-        \\                    runtime,
-        \\                    args,
-        \\                ));
-        \\            }
-        \\            if (generated.invoke == generatedModuleLoadDataFn) {
-        \\                break :blk lua.generatedResultsFirst(try generatedModuleLoadDataFn(
-        \\                    generated.capture,
-        \\                    generated.globals,
-        \\                    runtime,
-        \\                    args,
-        \\                ));
-        \\            }
+        \\    _ = try generatedLoadCompiledModuleByIndex(runtime, module_index);
+        \\    _ = export_id;
+        \\    _ = args;
+        \\    switch (comptime module_index) {
+        \\
     );
-    for (modules) |module| {
+    for (modules, 0..) |module, module_index| {
         if (module.emit_failed or module.zig_source.len == 0) continue;
-        for (module.fn_ids) |fn_id| {
-            try writer.writeAll("            if (generated.invoke == ");
-            try writer.writeAll(module.struct_ident);
-            try writer.writeAll(".fn_");
-            try writer.print("{d}", .{fn_id});
-            try writer.writeAll(") {\n");
+        try writer.writeAll("        ");
+        try writer.print("{d}", .{module_index});
+        try writer.writeAll(" => switch (comptime export_id) {\n");
+        for (module.exports) |export_info| {
+            try writer.writeAll("            ");
+            try writer.print("{d}", .{export_info.export_id});
+            try writer.writeAll(" => blk: {\n");
+            try writer.writeAll("                const module_globals = runtime.getGeneratedModuleGlobalsByIndex(module_index) orelse return error.InvalidCall;\n");
             try writer.writeAll("                break :blk lua.generatedResultsFirst(try ");
             try writer.writeAll(module.struct_ident);
             try writer.writeAll(".fn_");
-            try writer.print("{d}", .{fn_id});
+            try writer.print("{d}", .{export_info.fn_id});
             try writer.writeAll("(\n");
-            try writer.writeAll("                    generated.capture,\n");
-            try writer.writeAll("                    generated.globals,\n");
+            try writer.writeAll("                    null,\n");
+            try writer.writeAll("                    module_globals,\n");
             try writer.writeAll("                    runtime,\n");
             try writer.writeAll("                    args,\n");
             try writer.writeAll("                ));\n");
-            try writer.writeAll("            }\n");
+            try writer.writeAll("            },\n");
         }
+        try writer.writeAll("            else => error.InvalidCall,\n");
+        try writer.writeAll("        },\n");
     }
     try writer.writeAll(
-        \\            if (try lua.generatedDispatchKnownRuntimeFirst(runtime, callee, args)) |first| break :blk first;
-        \\            return error.InvalidCall;
-        \\        },
-        \\        else => error.InvalidCall,
-        \\    };
-        \\}
-        \\
-        \\fn generatedCallKnownModuleExportFirst(
-        \\    comptime known_indices: []const GeneratedModuleIndex,
-        \\    comptime function_name: []const u8,
-        \\    runtime: *lua.GeneratedRuntime,
-        \\    callee: lua.Value,
-        \\    args: []const lua.Value,
-        \\) !lua.Value {
-        \\    if (callee == .function) {
-        \\        inline for (known_indices) |known_index| {
-        \\            const module_value = generatedLoadCompiledModuleByIndex(runtime, known_index) catch continue;
-        \\            if (module_value != .table) continue;
-        \\            const function_value = module_value.table.get(.{ .string = function_name });
-        \\            if (function_value == .function and function_value.function == callee.function) {
-        \\                return try generatedTemplateDispatchFirst(runtime, function_value, args);
-        \\            }
-        \\        }
+        \\        else => return error.InvalidCall,
         \\    }
-        \\    return try generatedTemplateDispatchFirst(runtime, callee, args);
         \\}
         \\
         \\fn generatedRenderModuleByIndex(
-        \\    out: *runtime_std.ArrayList(u8),
-        \\    allocator: runtime_std.mem.Allocator,
-        \\    module_index: GeneratedModuleIndex,
-        \\    comptime function_name: []const u8,
+        \\    out: *std.ArrayList(u8),
+        \\    allocator: std.mem.Allocator,
+        \\    comptime module_index: GeneratedModuleIndex,
+        \\    comptime export_id: GeneratedModuleExportIndex,
         \\    args: *const support.TemplateArgs,
         \\) !void {
         \\    var runtime = lua.GeneratedRuntime.init(allocator);
         \\    defer runtime.deinit();
         \\
-        \\    const module_value = generatedLoadCompiledModuleByIndex(&runtime, module_index) catch return;
-        \\    if (module_value != .table) return;
-        \\    const function_value = module_value.table.get(.{ .string = function_name });
-        \\    if (function_value != .function) return;
-        \\
         \\    const frame = try support.buildGeneratedFrameFromTemplateArgsAlloc(&runtime, args);
-        \\    const first = generatedTemplateDispatchFirst(&runtime, function_value, &.{frame}) catch return;
+        \\    const first = generatedCallModuleExportByIndexFirst(&runtime, module_index, export_id, &.{frame}) catch return;
         \\    try lua.appendValueTextAlloc(out, allocator, first);
         \\}
         \\
+        \\fn generatedRenderModuleByIndexDynamic(
+        \\    out: *std.ArrayList(u8),
+        \\    allocator: std.mem.Allocator,
+        \\    module_index: GeneratedModuleIndex,
+        \\    export_id: GeneratedModuleExportIndex,
+        \\    args: *const support.TemplateArgs,
+        \\) !void {
+        \\    _ = out;
+        \\    _ = allocator;
+        \\    _ = export_id;
+        \\    _ = args;
+        \\    switch (module_index) {
+        \\
+    );
+    for (modules, 0..) |module, module_index| {
+        if (module.emit_failed or module.zig_source.len == 0) continue;
+        try writer.writeAll("        ");
+        try writer.print("{d}", .{module_index});
+        try writer.writeAll(" => switch (export_id) {\n");
+        for (module.exports) |export_info| {
+            try writer.writeAll("            ");
+            try writer.print("{d}", .{export_info.export_id});
+            try writer.writeAll(" => try generatedRenderModuleByIndex(out, allocator, ");
+            try writer.print("{d}, {d}", .{ module_index, export_info.export_id });
+            try writer.writeAll(", args),\n");
+        }
+        try writer.writeAll("            else => return,\n");
+        try writer.writeAll("        },\n");
+    }
+    try writer.writeAll(
+        \\        else => return,
+        \\    }
+        \\}
+        \\
         \\fn generatedModuleMwTableValue(runtime: *lua.GeneratedRuntime, globals: ?*anyopaque) !lua.Value {
+        \\    _ = globals;
         \\    const table = try lua.Table.init(runtime.alloc());
-        \\    try table.putStringBorrowed("loadData", try runtime.functionValue("mw.loadData", null, globals, generatedModuleLoadDataFn));
         \\    return .{ .table = table };
         \\}
         \\
@@ -2038,12 +3660,47 @@ fn unsupportedReasonAlloc(
     template: TemplateInfo,
     modules: []const ModuleInfo,
     module_indexes: *const std.StringHashMap(usize),
+    templates: []TemplateInfo,
+    template_indexes: *const std.StringHashMap(usize),
 ) ![]u8 {
     if (template.source_too_large) return allocator.dupe(u8, "TemplateTooLarge");
     if (template.parse_error) |kind| return allocator.dupe(u8, @tagName(kind));
     if (templateHasOversizedInvoke(template.nodes, modules, module_indexes)) return allocator.dupe(u8, "ModuleTooLarge");
     if (templateHasUnsupportedInvoke(template.nodes, modules, module_indexes)) return allocator.dupe(u8, "InvokeEmissionFailed");
+    // Keep the failure reason precise so the remaining unsupported tail can be
+    // eliminated one dependency at a time from the bottom of the list.
+    for (template.nodes) |node| {
+        if (findUnsupportedTemplateDependencyInNode(node, templates, template_indexes)) |name| {
+            return std.fmt.allocPrint(allocator, "UnsupportedTemplateDependency:{s}", .{name});
+        }
+    }
     return allocator.dupe(u8, "UnsupportedTemplateDependency");
+}
+
+fn emitLuaModuleResultAlloc(
+    allocator: std.mem.Allocator,
+    key: []const u8,
+    effective_source: []const u8,
+    closure_modules: []const []const u8,
+    export_tables: []const lua.DirectModuleExportTable,
+    module_index: u16,
+) !lua.EmittedZigModule {
+    const source_kind = lua.classifyNamedModuleSource(key, effective_source);
+    const compile_source = switch (source_kind) {
+        .lua => effective_source,
+        .json, .non_lua, .empty => syntheticMissingModuleSource(key),
+    };
+    var chunk = try lua.compile(allocator, compile_source);
+    defer chunk.deinit();
+    return lua.emitZigModuleResultWithOptionsAlloc(allocator, &chunk, .{
+        .enable_direct_module_dispatch = true,
+        .direct_module_dispatch_names = closure_modules,
+        .direct_module_export_tables = export_tables,
+        .call_dispatch_helper_name = "generatedModuleCallableDispatchFirst",
+        .emit_local_dispatch_helper = false,
+        .emit_run_entry_points = false,
+        .callable_id_base = @as(u32, module_index) << 16,
+    });
 }
 
 fn resolveTemplateClass(
@@ -2054,6 +3711,12 @@ fn resolveTemplateClass(
     if (templates[index].class_state == .resolved) return templates[index].class;
     if (templates[index].class_state == .resolving) return .compiled;
     templates[index].class_state = .resolving;
+
+    if (templates[index].manual_impl != null) {
+        templates[index].class = .compiled;
+        templates[index].class_state = .resolved;
+        return .compiled;
+    }
 
     var class: CompileClass = if (templates[index].parse_error != null or templates[index].source_too_large) .unsupported else .metadata_only;
     if (templates[index].parse_error == null and !templates[index].source_too_large) {
@@ -2085,10 +3748,7 @@ fn nodeContributesVisibleOutput(
         .param => true,
         .invoke_call => true,
         .parser_func => |func| parserFunctionProducesVisibleOutput(func.kind),
-        .template_call => |call| blk: {
-            const callee_index = template_indexes.get(call.name) orelse break :blk true;
-            break :blk resolveTemplateClass(templates, template_indexes, callee_index) == .compiled;
-        },
+        .template_call => |call| templateCallHasCompiledCandidate(templates, template_indexes, call),
     };
 }
 
@@ -2100,10 +3760,7 @@ fn nodeIsUnsupported(
     return switch (node) {
         .text, .param, .invoke_call => false,
         .parser_func => false,
-        .template_call => |call| blk: {
-            const callee_index = template_indexes.get(call.name) orelse break :blk true;
-            break :blk resolveTemplateClass(templates, template_indexes, callee_index) == .unsupported;
-        },
+        .template_call => |call| templateCallHasUnsupportedCandidate(templates, template_indexes, call),
     };
 }
 
@@ -2190,7 +3847,9 @@ fn parseCallNodeAlloc(allocator: std.mem.Allocator, body: []const u8) ParseTempl
     defer parts.deinit(allocator);
     if (parts.items.len == 0) return .{ .text = "" };
 
-    const raw_name = stripSubstPrefix(trimWikiWhitespace(parts.items[0]));
+    const normalized_raw_name = try normalizeTemplateCallHeadAlloc(allocator, parts.items[0]);
+    defer allocator.free(normalized_raw_name);
+    const raw_name = stripSubstPrefix(trimWikiWhitespace(normalized_raw_name));
     if (startsWithInvoke(raw_name)) {
         return .{ .invoke_call = try parseInvokeNodeAlloc(allocator, raw_name, parts.items[1..]) };
     }
@@ -2199,11 +3858,23 @@ fn parseCallNodeAlloc(allocator: std.mem.Allocator, body: []const u8) ParseTempl
     }
     if (raw_name.len == 0 or raw_name[0] == '#') return error.UnsupportedTemplateForm;
 
-    const canonical_name = try lua.canonicalTemplateNameAlloc(allocator, raw_name);
+    var name_nodes: []const Node = &.{};
+    const resolved_names = if (argNameNeedsDynamicEvaluation(raw_name)) blk: {
+        var name_cursor: usize = 0;
+        name_nodes = try parseNodesAlloc(allocator, raw_name, &name_cursor, null);
+        const resolved = try resolveTemplateNamesFromNodesAlloc(allocator, name_nodes);
+        break :blk resolved orelse return error.UnsupportedTemplateForm;
+    } else blk: {
+        const canonical_name = try lua.canonicalTemplateNameAlloc(allocator, raw_name);
+        const out = try allocator.alloc([]const u8, 1);
+        out[0] = canonical_name;
+        break :blk out;
+    };
     const args = try parseArgNodesAlloc(allocator, parts.items[1..]);
     return .{
         .template_call = .{
-            .name = canonical_name,
+            .resolved_names = resolved_names,
+            .name_nodes = name_nodes,
             .args = args,
         },
     };
@@ -2243,6 +3914,31 @@ fn parseInvokeNodeAlloc(allocator: std.mem.Allocator, raw_name: []const u8, arg_
         .function_name = function_name,
         .args = if (args.len == 0) args else args[1..],
     };
+}
+
+// Template heads often wrap parser functions in include/noinclude tags and
+// safesubst prefixes. Strip that wrapper markup here so parser-function
+// detection sees the actual effective head instead of the transclusion glue.
+fn normalizeTemplateCallHeadAlloc(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < raw.len) {
+        if (startsWithAt(raw, i, "<!--")) {
+            i = skipUntil(raw, i + 4, "-->") orelse raw.len;
+            continue;
+        }
+        if (matchSkippableTag(raw[i..])) |tag_len| {
+            i += tag_len;
+            continue;
+        }
+        try out.append(allocator, raw[i]);
+        i += 1;
+    }
+
+    const trimmed = trimWikiWhitespace(out.items);
+    return allocator.dupe(u8, trimmed);
 }
 
 fn parseArgNodesAlloc(allocator: std.mem.Allocator, segments: []const []const u8) ParseTemplateError![]const ArgNode {
@@ -2291,6 +3987,308 @@ fn flattenArgValueAlloc(allocator: std.mem.Allocator, nodes: []const Node) ![]u8
     return out.toOwnedSlice(allocator);
 }
 
+const max_dynamic_template_name_candidates = 16;
+
+fn isTruthyText(text: []const u8) bool {
+    const trimmed = std.mem.trim(u8, text, " \t\r\n");
+    return trimmed.len != 0 and
+        !std.mem.eql(u8, trimmed, "0") and
+        !std.ascii.eqlIgnoreCase(trimmed, "false") and
+        !std.ascii.eqlIgnoreCase(trimmed, "no");
+}
+
+fn resolveTemplateNamesFromNodesAlloc(allocator: std.mem.Allocator, nodes: []const Node) !?[]const []const u8 {
+    const raw_values = try resolveStaticTextValuesAlloc(allocator, nodes);
+    defer if (raw_values) |values| freeOwnedStrings(allocator, values);
+
+    const values = raw_values orelse return null;
+    var unique = std.StringHashMapUnmanaged(void){};
+    defer {
+        var it = unique.iterator();
+        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+        unique.deinit(allocator);
+    }
+
+    for (values) |value| {
+        const trimmed = trimWikiWhitespace(value);
+        if (trimmed.len == 0) continue;
+        const canonical = try lua.canonicalTemplateNameAlloc(allocator, trimmed);
+        errdefer allocator.free(canonical);
+        const gop = try unique.getOrPut(allocator, canonical);
+        if (gop.found_existing) {
+            allocator.free(canonical);
+            continue;
+        }
+        gop.key_ptr.* = canonical;
+        if (unique.count() > max_dynamic_template_name_candidates) return null;
+    }
+
+    if (unique.count() == 0) return null;
+    return @as(?[]const []const u8, try collectStringSet(allocator, &unique));
+}
+
+fn resolveStaticTextValuesAlloc(
+    allocator: std.mem.Allocator,
+    nodes: []const Node,
+) std.mem.Allocator.Error!?[]const []const u8 {
+    var current = try allocator.alloc([]const u8, 1);
+    errdefer {
+        for (current) |value| allocator.free(value);
+        allocator.free(current);
+    }
+    current[0] = try allocator.dupe(u8, "");
+    var current_len: usize = 1;
+
+    for (nodes) |node| {
+        const node_values = try resolveStaticTextValuesForNodeAlloc(allocator, node) orelse {
+            for (current[0..current_len]) |value| allocator.free(value);
+            allocator.free(current);
+            return null;
+        };
+        defer freeOwnedStrings(allocator, node_values);
+
+        const next_len = current_len * node_values.len;
+        if (next_len == 0 or next_len > max_dynamic_template_name_candidates) {
+            for (current[0..current_len]) |value| allocator.free(value);
+            allocator.free(current);
+            return null;
+        }
+
+        const next = try allocator.alloc([]const u8, next_len);
+        errdefer {
+            for (next[0..next_len]) |value| allocator.free(value);
+            allocator.free(next);
+        }
+
+        var out_idx: usize = 0;
+        for (current[0..current_len]) |prefix| {
+            for (node_values) |suffix| {
+                next[out_idx] = try std.fmt.allocPrint(allocator, "{s}{s}", .{ prefix, suffix });
+                out_idx += 1;
+            }
+        }
+
+        for (current[0..current_len]) |value| allocator.free(value);
+        allocator.free(current);
+        current = next;
+        current_len = out_idx;
+    }
+
+    return current[0..current_len];
+}
+
+fn resolveStaticTextValuesForNodeAlloc(
+    allocator: std.mem.Allocator,
+    node: Node,
+) std.mem.Allocator.Error!?[]const []const u8 {
+    switch (node) {
+        .text => |text| {
+            const out = try allocator.alloc([]const u8, 1);
+            out[0] = try allocator.dupe(u8, text);
+            return out;
+        },
+        .param => |param| {
+            if (param.default_nodes.len == 0) return null;
+            return resolveStaticTextValuesAlloc(allocator, param.default_nodes);
+        },
+        .template_call, .invoke_call => return null,
+        .parser_func => |func| return resolveStaticTextValuesForParserFuncAlloc(allocator, func),
+    }
+}
+
+fn resolveStaticTextValuesForParserFuncAlloc(
+    allocator: std.mem.Allocator,
+    func: ParserFunctionNode,
+) std.mem.Allocator.Error!?[]const []const u8 {
+    switch (func.kind) {
+        .if_ => {
+            const cond_values = if (func.args.len != 0)
+                try resolveStaticTextValuesAlloc(allocator, func.args[0].value_nodes)
+            else
+                null;
+            defer if (cond_values) |values| freeOwnedStrings(allocator, values);
+
+            const then_values = if (func.args.len > 1)
+                (try resolveStaticTextValuesAlloc(allocator, func.args[1].value_nodes) orelse return null)
+            else blk: {
+                const out = try allocator.alloc([]const u8, 1);
+                out[0] = try allocator.dupe(u8, "");
+                break :blk out;
+            };
+            defer freeOwnedStrings(allocator, then_values);
+
+            const else_values = if (func.args.len > 2)
+                (try resolveStaticTextValuesAlloc(allocator, func.args[2].value_nodes) orelse return null)
+            else blk: {
+                const out = try allocator.alloc([]const u8, 1);
+                out[0] = try allocator.dupe(u8, "");
+                break :blk out;
+            };
+            defer freeOwnedStrings(allocator, else_values);
+
+            if (cond_values) |values| {
+                var saw_truthy = false;
+                var saw_falsy = false;
+                for (values) |value| {
+                    if (trimWikiWhitespace(value).len != 0) saw_truthy = true else saw_falsy = true;
+                }
+                if (saw_truthy and !saw_falsy) return @as(?[]const []const u8, try dupStringSliceAlloc(allocator, then_values));
+                if (saw_falsy and !saw_truthy) return @as(?[]const []const u8, try dupStringSliceAlloc(allocator, else_values));
+            }
+            return @as(?[]const []const u8, try mergeUniqueStringSlicesAlloc(allocator, &.{ then_values, else_values }));
+        },
+        .ifexist => {
+            const title_values = try resolveStaticTextValuesAlloc(allocator, func.args[0].value_nodes);
+            defer if (title_values) |values| freeOwnedStrings(allocator, values);
+
+            const then_values = if (func.args.len > 1)
+                (try resolveStaticTextValuesAlloc(allocator, func.args[1].value_nodes) orelse return null)
+            else blk: {
+                const out = try allocator.alloc([]const u8, 1);
+                out[0] = try allocator.dupe(u8, "");
+                break :blk out;
+            };
+            defer freeOwnedStrings(allocator, then_values);
+
+            const else_values = if (func.args.len > 2)
+                (try resolveStaticTextValuesAlloc(allocator, func.args[2].value_nodes) orelse return null)
+            else blk: {
+                const out = try allocator.alloc([]const u8, 1);
+                out[0] = try allocator.dupe(u8, "");
+                break :blk out;
+            };
+            defer freeOwnedStrings(allocator, else_values);
+
+            if (title_values) |values| {
+                var all_missing = true;
+                var all_present = true;
+                for (values) |value| {
+                    const present = trimWikiWhitespace(value).len != 0;
+                    all_missing = all_missing and !present;
+                    all_present = all_present and present;
+                }
+                if (all_present) return @as(?[]const []const u8, try dupStringSliceAlloc(allocator, then_values));
+                if (all_missing) return @as(?[]const []const u8, try dupStringSliceAlloc(allocator, else_values));
+            }
+            return @as(?[]const []const u8, try mergeUniqueStringSlicesAlloc(allocator, &.{ then_values, else_values }));
+        },
+        .ifeq => {
+            if (func.args.len < 4) return null;
+            const lhs_values = try resolveStaticTextValuesAlloc(allocator, func.args[0].value_nodes);
+            defer if (lhs_values) |values| freeOwnedStrings(allocator, values);
+            const rhs_values = try resolveStaticTextValuesAlloc(allocator, func.args[1].value_nodes);
+            defer if (rhs_values) |values| freeOwnedStrings(allocator, values);
+            const then_values = try resolveStaticTextValuesAlloc(allocator, func.args[2].value_nodes) orelse return null;
+            defer freeOwnedStrings(allocator, then_values);
+            const else_values = try resolveStaticTextValuesAlloc(allocator, func.args[3].value_nodes) orelse return null;
+            defer freeOwnedStrings(allocator, else_values);
+
+            if (lhs_values) |lhs_set| {
+                if (rhs_values) |rhs_set| {
+                    var always_equal = lhs_set.len != 0 and rhs_set.len != 0;
+                    var always_notequal = true;
+                    for (lhs_set) |lhs| {
+                        for (rhs_set) |rhs| {
+                            const equal = staticWikiTextEquals(lhs, rhs);
+                            always_equal = always_equal and equal;
+                            always_notequal = always_notequal and !equal;
+                        }
+                    }
+                    if (always_equal) return @as(?[]const []const u8, try dupStringSliceAlloc(allocator, then_values));
+                    if (always_notequal) return @as(?[]const []const u8, try dupStringSliceAlloc(allocator, else_values));
+                }
+            }
+            return @as(?[]const []const u8, try mergeUniqueStringSlicesAlloc(allocator, &.{ then_values, else_values }));
+        },
+        .switch_ => {
+            if (func.args.len == 0) return null;
+            const key_values = try resolveStaticTextValuesAlloc(allocator, func.args[0].value_nodes);
+            defer if (key_values) |values| freeOwnedStrings(allocator, values);
+
+            var matches: std.ArrayList([]const []const u8) = .empty;
+            defer matches.deinit(allocator);
+            var default_values: ?[]const []const u8 = null;
+            defer if (default_values) |values| freeOwnedStrings(allocator, values);
+
+            for (func.args[1..]) |arg| {
+                if (arg.name_is_dynamic) return null;
+                if (switchArgIsDefault(arg)) {
+                    default_values = try resolveStaticTextValuesAlloc(allocator, arg.value_nodes);
+                    continue;
+                }
+                const label = arg.name orelse continue;
+                const value_set = try resolveStaticTextValuesAlloc(allocator, arg.value_nodes) orelse return null;
+                errdefer freeOwnedStrings(allocator, value_set);
+                if (key_values) |keys| {
+                    var matched = false;
+                    for (keys) |key| {
+                        if (staticWikiTextEquals(key, label)) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        freeOwnedStrings(allocator, value_set);
+                        continue;
+                    }
+                }
+                try matches.append(allocator, value_set);
+            }
+
+            if (matches.items.len == 0) {
+                if (default_values) |values| return @as(?[]const []const u8, try dupStringSliceAlloc(allocator, values));
+                return null;
+            }
+
+            if (default_values) |values| try matches.append(allocator, values);
+            return @as(?[]const []const u8, try mergeUniqueStringSlicesAlloc(allocator, matches.items));
+        },
+        .lc, .uc, .lcfirst, .ucfirst => {
+            if (func.args.len == 0) return null;
+            const input_values = try resolveStaticTextValuesAlloc(allocator, func.args[0].value_nodes) orelse return null;
+            defer freeOwnedStrings(allocator, input_values);
+            const out = try allocator.alloc([]const u8, input_values.len);
+            errdefer {
+                for (out[0..input_values.len]) |value| allocator.free(value);
+                allocator.free(out);
+            }
+            for (input_values, 0..) |value, idx| {
+                var buf: std.ArrayList(u8) = .empty;
+                defer buf.deinit(allocator);
+                switch (func.kind) {
+                    .lc => for (value) |byte| try buf.append(allocator, std.ascii.toLower(byte)),
+                    .uc => for (value) |byte| try buf.append(allocator, std.ascii.toUpper(byte)),
+                    .lcfirst => {
+                        if (value.len != 0) {
+                            try buf.append(allocator, std.ascii.toLower(value[0]));
+                            try buf.appendSlice(allocator, value[1..]);
+                        }
+                    },
+                    .ucfirst => {
+                        if (value.len != 0) {
+                            try buf.append(allocator, std.ascii.toUpper(value[0]));
+                            try buf.appendSlice(allocator, value[1..]);
+                        }
+                    },
+                    else => unreachable,
+                }
+                out[idx] = try buf.toOwnedSlice(allocator);
+            }
+            return out;
+        },
+        .currentyear, .revisionyear, .revisionuser => {
+            const out = try allocator.alloc([]const u8, 1);
+            out[0] = try allocator.dupe(u8, switch (func.kind) {
+                .currentyear, .revisionyear => "2026",
+                .revisionuser => "",
+                else => unreachable,
+            });
+            return out;
+        },
+        else => return null,
+    }
+}
+
 fn appendTextNode(allocator: std.mem.Allocator, nodes: *std.ArrayList(Node), text: []const u8) !void {
     if (text.len == 0) return;
     const trimmed_magic = trimWikiWhitespace(text);
@@ -2311,8 +4309,12 @@ fn parserFunctionKind(name: []const u8) ?ParserFunctionKind {
     const trimmed = trimWikiWhitespace(name);
     inline for ([_]struct { []const u8, ParserFunctionKind }{
         .{ "#if", .if_ },
+        .{ "#ifexist", .ifexist },
         .{ "#ifeq", .ifeq },
+        .{ "#ifexpr", .ifexpr },
+        .{ "#expr", .expr },
         .{ "#switch", .switch_ },
+        .{ "#special", .special },
         .{ "#tag", .tag },
         .{ "displaytitle", .displaytitle },
         .{ "lc", .lc },
@@ -2320,17 +4322,27 @@ fn parserFunctionKind(name: []const u8) ?ParserFunctionKind {
         .{ "lcfirst", .lcfirst },
         .{ "ucfirst", .ucfirst },
         .{ "formatnum", .formatnum },
+        .{ "#formatdate", .formatdate },
         .{ "anchorencode", .anchorencode },
         .{ "padleft", .padleft },
         .{ "padright", .padright },
+        .{ "#time", .time },
+        .{ "fullurl", .fullurl },
+        .{ "fullurle", .fullurl },
+        .{ "urlencode", .urlencode },
         .{ "currentday", .currentday },
+        .{ "currentday2", .currentday2 },
         .{ "currentmonth", .currentmonth },
         .{ "currentmonthname", .currentmonthname },
         .{ "currentyear", .currentyear },
+        .{ "revisionyear", .revisionyear },
+        .{ "revisionuser", .revisionuser },
         .{ "pagename", .pagename },
         .{ "fullpagename", .fullpagename },
+        .{ "fullpagenamee", .fullpagenamee },
         .{ "basepagename", .basepagename },
         .{ "subpagename", .subpagename },
+        .{ "ns", .namespace },
         .{ "namespace", .namespace },
         .{ "namespacenumber", .namespacenumber },
         .{ "talkpagename", .talkpagename },
@@ -2352,8 +4364,10 @@ fn parserFunctionNeedsArgs(kind: ParserFunctionKind) bool {
     return switch (kind) {
         .pagename,
         .fullpagename,
+        .fullpagenamee,
         .basepagename,
         .subpagename,
+        .fullurl,
         .namespace,
         .namespacenumber,
         .talkpagename,
@@ -2365,6 +4379,35 @@ fn parserFunctionNeedsArgs(kind: ParserFunctionKind) bool {
 fn startsWithCategoryLink(input: []const u8, index: usize) bool {
     return startsWithAtIgnoreCase(input, index, "[[category:") or startsWithAtIgnoreCase(input, index, "[[:category:");
 }
+
+const NestedMarkupKind = enum {
+    template,
+    param,
+    link,
+};
+
+const NestedMarkupStack = struct {
+    items: [1024]NestedMarkupKind = undefined,
+    len: usize = 0,
+
+    fn push(self: *NestedMarkupStack, kind: NestedMarkupKind) bool {
+        if (self.len >= self.items.len) return false;
+        self.items[self.len] = kind;
+        self.len += 1;
+        return true;
+    }
+
+    fn pop(self: *NestedMarkupStack) ?NestedMarkupKind {
+        if (self.len == 0) return null;
+        self.len -= 1;
+        return self.items[self.len];
+    }
+
+    fn top(self: *const NestedMarkupStack) ?NestedMarkupKind {
+        if (self.len == 0) return null;
+        return self.items[self.len - 1];
+    }
+};
 
 fn skipBalancedLink(input: []const u8, start: usize) ?usize {
     var depth: usize = 0;
@@ -2387,30 +4430,67 @@ fn skipBalancedLink(input: []const u8, start: usize) ?usize {
     return null;
 }
 
-fn findTemplateEnd(input: []const u8, start: usize) ?usize {
-    var templates: usize = 1;
-    var params: usize = 0;
-    var i = start + 2;
+fn advanceNestedMarkup(input: []const u8, cursor: *usize, stack: *NestedMarkupStack) bool {
+    if (startsWithAt(input, cursor.*, "<!--")) {
+        cursor.* = skipUntil(input, cursor.* + 4, "-->") orelse input.len;
+        return true;
+    }
+    if (matchSkippableTag(input[cursor.*..])) |tag_len| {
+        cursor.* += tag_len;
+        return true;
+    }
+    if (startsWithAt(input, cursor.*, "{{{")) {
+        if (!stack.push(.param)) return false;
+        cursor.* += 3;
+        return true;
+    }
+    if (startsWithAt(input, cursor.*, "{{")) {
+        if (!stack.push(.template)) return false;
+        cursor.* += 2;
+        return true;
+    }
+    if (startsWithAt(input, cursor.*, "[[")) {
+        if (!stack.push(.link)) return false;
+        cursor.* += 2;
+        return true;
+    }
+    if (stack.top()) |top| switch (top) {
+        .param => {
+            if (startsWithAt(input, cursor.*, "}}}")) {
+                _ = stack.pop();
+                cursor.* += 3;
+                return true;
+            }
+        },
+        .template => {
+            if (startsWithAt(input, cursor.*, "}}")) {
+                _ = stack.pop();
+                cursor.* += 2;
+                return true;
+            }
+        },
+        .link => {
+            if (startsWithAt(input, cursor.*, "]]")) {
+                _ = stack.pop();
+                cursor.* += 2;
+                return true;
+            }
+        },
+    };
+    return false;
+}
+
+fn findBalancedMarkupEnd(input: []const u8, start: usize, initial: NestedMarkupKind) ?usize {
+    var stack = NestedMarkupStack{};
+    if (!stack.push(initial)) return null;
+    var i: usize = start + @as(usize, switch (initial) {
+        .template, .link => 2,
+        .param => 3,
+    });
     while (i < input.len) {
-        if (startsWithAt(input, i, "{{{")) {
-            params += 1;
-            i += 3;
-            continue;
-        }
-        if (params != 0 and startsWithAt(input, i, "}}}")) {
-            params -= 1;
-            i += 3;
-            continue;
-        }
-        if (startsWithAt(input, i, "{{")) {
-            templates += 1;
-            i += 2;
-            continue;
-        }
-        if (startsWithAt(input, i, "}}")) {
-            templates -= 1;
-            if (templates == 0 and params == 0) return i;
-            i += 2;
+        const before = i;
+        if (advanceNestedMarkup(input, &i, &stack)) {
+            if (stack.len == 0) return before;
             continue;
         }
         i += 1;
@@ -2418,83 +4498,35 @@ fn findTemplateEnd(input: []const u8, start: usize) ?usize {
     return null;
 }
 
+fn findTemplateEnd(input: []const u8, start: usize) ?usize {
+    return findBalancedMarkupEnd(input, start, .template);
+}
+
 fn findParamEnd(input: []const u8, start: usize) ?usize {
-    var templates: usize = 0;
-    var params: usize = 1;
-    var i = start + 3;
-    while (i < input.len) {
-        if (startsWithAt(input, i, "{{{")) {
-            params += 1;
-            i += 3;
-            continue;
-        }
-        if (params != 0 and startsWithAt(input, i, "}}}")) {
-            params -= 1;
-            if (params == 0 and templates == 0) return i;
-            i += 3;
-            continue;
-        }
-        if (startsWithAt(input, i, "{{")) {
-            templates += 1;
-            i += 2;
-            continue;
-        }
-        if (startsWithAt(input, i, "}}")) {
-            if (templates != 0) templates -= 1;
-            i += 2;
-            continue;
-        }
-        i += 1;
-    }
-    return null;
+    return findBalancedMarkupEnd(input, start, .param);
 }
 
 fn splitTopLevelAlloc(allocator: std.mem.Allocator, input: []const u8, delim: u8) !std.ArrayList([]const u8) {
     var out: std.ArrayList([]const u8) = .empty;
     errdefer out.deinit(allocator);
     var start: usize = 0;
-    var templates: usize = 0;
-    var params: usize = 0;
-    var links: usize = 0;
+    var stack = NestedMarkupStack{};
     var i: usize = 0;
-    while (i < input.len) : (i += 1) {
-        if (startsWithAt(input, i, "{{{")) {
-            params += 1;
-            i += 2;
-            continue;
-        }
-        if (params != 0 and startsWithAt(input, i, "}}}")) {
-            params -= 1;
-            i += 2;
-            continue;
-        }
-        if (startsWithAt(input, i, "{{")) {
-            templates += 1;
-            i += 1;
-            continue;
-        }
-        if (startsWithAt(input, i, "}}")) {
-            if (templates != 0) templates -= 1;
-            i += 1;
-            continue;
-        }
-        if (startsWithAt(input, i, "[[")) {
-            links += 1;
-            i += 1;
-            continue;
-        }
-        if (startsWithAt(input, i, "]]")) {
-            if (links != 0) links -= 1;
-            i += 1;
-            continue;
-        }
-        if (input[i] == delim and templates == 0 and params == 0 and links == 0) {
+    while (i < input.len) {
+        if (advanceNestedMarkup(input, &i, &stack)) continue;
+        if (input[i] == delim and stack.len == 0) {
             try out.append(allocator, input[start..i]);
             start = i + 1;
         }
+        i += 1;
     }
     try out.append(allocator, input[start..]);
     return out;
+}
+
+fn freeNodes(allocator: std.mem.Allocator, nodes: []const Node) void {
+    _ = allocator;
+    _ = nodes;
 }
 
 fn matchSkippableTag(source: []const u8) ?usize {
@@ -2536,83 +4568,23 @@ fn startsWithAtIgnoreCase(input: []const u8, index: usize, needle: []const u8) b
 }
 
 fn topLevelEquals(segment: []const u8) ?usize {
-    var templates: usize = 0;
-    var params: usize = 0;
-    var links: usize = 0;
+    var stack = NestedMarkupStack{};
     var i: usize = 0;
-    while (i < segment.len) : (i += 1) {
-        if (startsWithAt(segment, i, "{{{")) {
-            params += 1;
-            i += 2;
-            continue;
-        }
-        if (params != 0 and startsWithAt(segment, i, "}}}")) {
-            params -= 1;
-            i += 2;
-            continue;
-        }
-        if (startsWithAt(segment, i, "{{")) {
-            templates += 1;
-            i += 1;
-            continue;
-        }
-        if (startsWithAt(segment, i, "}}")) {
-            if (templates != 0) templates -= 1;
-            i += 1;
-            continue;
-        }
-        if (startsWithAt(segment, i, "[[")) {
-            links += 1;
-            i += 1;
-            continue;
-        }
-        if (startsWithAt(segment, i, "]]")) {
-            if (links != 0) links -= 1;
-            i += 1;
-            continue;
-        }
-        if (segment[i] == '=' and templates == 0 and params == 0 and links == 0) return i;
+    while (i < segment.len) {
+        if (advanceNestedMarkup(segment, &i, &stack)) continue;
+        if (segment[i] == '=' and stack.len == 0) return i;
+        i += 1;
     }
     return null;
 }
 
 fn topLevelColon(segment: []const u8) ?usize {
-    var templates: usize = 0;
-    var params: usize = 0;
-    var links: usize = 0;
+    var stack = NestedMarkupStack{};
     var i: usize = 0;
-    while (i < segment.len) : (i += 1) {
-        if (startsWithAt(segment, i, "{{{")) {
-            params += 1;
-            i += 2;
-            continue;
-        }
-        if (params != 0 and startsWithAt(segment, i, "}}}")) {
-            params -= 1;
-            i += 2;
-            continue;
-        }
-        if (startsWithAt(segment, i, "{{")) {
-            templates += 1;
-            i += 1;
-            continue;
-        }
-        if (startsWithAt(segment, i, "}}")) {
-            if (templates != 0) templates -= 1;
-            i += 1;
-            continue;
-        }
-        if (startsWithAt(segment, i, "[[")) {
-            links += 1;
-            i += 1;
-            continue;
-        }
-        if (startsWithAt(segment, i, "]]")) {
-            if (links != 0) links -= 1;
-            i += 1;
-            continue;
-        }
-        if (segment[i] == ':' and templates == 0 and params == 0 and links == 0) return i;
+    while (i < segment.len) {
+        if (advanceNestedMarkup(segment, &i, &stack)) continue;
+        if (segment[i] == ':' and stack.len == 0) return i;
+        i += 1;
     }
     return null;
 }
@@ -2644,6 +4616,10 @@ fn argNameNeedsDynamicEvaluation(name: []const u8) bool {
         std.mem.indexOf(u8, name, "<") != null;
 }
 
+fn staticWikiTextEquals(lhs: []const u8, rhs: []const u8) bool {
+    return std.mem.eql(u8, trimWikiWhitespace(lhs), trimWikiWhitespace(rhs));
+}
+
 fn templateNameEqualsLoose(lhs: []const u8, rhs: []const u8) bool {
     var i: usize = 0;
     var j: usize = 0;
@@ -2664,12 +4640,12 @@ fn isTemplateNameSpacer(byte: u8) bool {
     return byte == ' ' or byte == '\t' or byte == '\r' or byte == '\n' or byte == '_' or byte == '-';
 }
 
-fn templateFnIdentAlloc(allocator: std.mem.Allocator, key: []const u8, index: usize) ![]u8 {
-    return sanitizeIdentAlloc(allocator, "tpl_", key, index);
+fn templateFnIdentAlloc(allocator: std.mem.Allocator, _: []const u8, index: usize) ![]u8 {
+    return std.fmt.allocPrint(allocator, "tpl_{d}", .{index});
 }
 
-fn moduleStructIdentAlloc(allocator: std.mem.Allocator, module_name: []const u8, index: usize) ![]u8 {
-    return sanitizeIdentAlloc(allocator, "module_", module_name, index);
+fn moduleStructIdentAlloc(allocator: std.mem.Allocator, _: []const u8, index: usize) ![]u8 {
+    return std.fmt.allocPrint(allocator, "module_{d}", .{index});
 }
 
 fn sanitizeIdentAlloc(allocator: std.mem.Allocator, prefix: []const u8, raw: []const u8, index: usize) ![]u8 {
@@ -2690,6 +4666,10 @@ fn sanitizeIdentAlloc(allocator: std.mem.Allocator, prefix: []const u8, raw: []c
 }
 
 fn appendZigStringLiteral(writer: *std.Io.Writer, value: []const u8) !void {
+    if (containsSensitiveGeneratedName(value)) {
+        try appendZigByteSliceLiteral(writer, value);
+        return;
+    }
     try writer.writeByte('"');
     for (value) |byte| switch (byte) {
         '\\' => try writer.writeAll("\\\\"),
@@ -2706,6 +4686,22 @@ fn appendZigStringLiteral(writer: *std.Io.Writer, value: []const u8) !void {
         },
     };
     try writer.writeByte('"');
+}
+
+fn appendZigByteSliceLiteral(writer: *std.Io.Writer, value: []const u8) !void {
+    try writer.writeAll("&.{");
+    for (value, 0..) |byte, idx| {
+        if (idx != 0) try writer.writeAll(", ");
+        try writer.print("0x{X:0>2}", .{byte});
+    }
+    try writer.writeAll("}");
+}
+
+fn containsSensitiveGeneratedName(value: []const u8) bool {
+    return std.mem.indexOf(u8, value, "Module:") != null or
+        std.mem.indexOf(u8, value, "module:") != null or
+        std.mem.indexOf(u8, value, "Template:") != null or
+        std.mem.indexOf(u8, value, "template:") != null;
 }
 
 fn writeIndent(writer: *std.Io.Writer, indent: usize) !void {
@@ -2726,6 +4722,32 @@ fn dupStringSliceAlloc(allocator: std.mem.Allocator, values: []const []const u8)
     return out;
 }
 
+fn mergeUniqueStringSlicesAlloc(
+    allocator: std.mem.Allocator,
+    groups: []const []const []const u8,
+) ![]const []const u8 {
+    var set = std.StringHashMapUnmanaged(void){};
+    defer {
+        var it = set.iterator();
+        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+        set.deinit(allocator);
+    }
+
+    for (groups) |group| {
+        for (group) |value| {
+            const duped = try allocator.dupe(u8, value);
+            errdefer allocator.free(duped);
+            const gop = try set.getOrPut(allocator, duped);
+            if (gop.found_existing) {
+                allocator.free(duped);
+                continue;
+            }
+            gop.key_ptr.* = duped;
+        }
+    }
+    return collectStringSet(allocator, &set);
+}
+
 fn collectStringSet(allocator: std.mem.Allocator, set: *std.StringHashMapUnmanaged(void)) ![]const []const u8 {
     const out = try allocator.alloc([]const u8, set.count());
     errdefer allocator.free(out);
@@ -2740,6 +4762,12 @@ fn collectStringSet(allocator: std.mem.Allocator, set: *std.StringHashMapUnmanag
         }
     }.less);
     return out;
+}
+
+fn deinitOwnedStringSet(allocator: std.mem.Allocator, set: *std.StringHashMapUnmanaged(void)) void {
+    var it = set.iterator();
+    while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+    set.deinit(allocator);
 }
 
 fn freeOwnedStrings(allocator: std.mem.Allocator, values: []const []const u8) void {
@@ -2782,7 +4810,7 @@ fn printDependencyFailures(report: DependencyAuditView) !void {
 
 fn printUnsupportedTemplates(allocator: std.mem.Allocator, unsupported: []const UnsupportedTemplate) !void {
     std.debug.print("template compiler left unsupported templates: {d}\n", .{unsupported.len});
-    for (unsupported[0..@min(unsupported.len, 32)]) |entry| {
+    for (unsupported) |entry| {
         std.debug.print("  {s}: {s}\n", .{ entry.key, entry.reason });
     }
     _ = allocator;
@@ -2802,7 +4830,11 @@ test "template compiler classifies metadata-only templates by nested nop closure
     try sources.template_sources.put(try allocator.dupe(u8, "outer"), try allocator.dupe(u8, "{{meta}}"));
 
     const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "meta", "outer" }, &.{}, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".class = .metadata_only") != null);
+    defer {
+        allocator.free(generated.source);
+        for (generated.unsupported) |entry| allocator.free(entry.reason);
+        allocator.free(generated.unsupported);
+    }
     try std.testing.expectEqual(@as(usize, 2), generated.metadata_only_count);
 }
 
@@ -2820,12 +4852,16 @@ test "template compiler emits direct nested template calls" {
     try sources.template_sources.put(try allocator.dupe(u8, "outer"), try allocator.dupe(u8, "before {{inner}} after"));
 
     const generated = try compileTemplateRuntimeAlloc(allocator, &.{ "inner", "outer" }, &.{}, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_inner_0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_outer_1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "try tpl_inner_0(out, allocator, &child_args_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "findTemplateDispatchEntry") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "lookupTemplate") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "renderTemplateByIndex") != null);
+    defer {
+        allocator.free(generated.source);
+        for (generated.unsupported) |entry| allocator.free(entry.reason);
+        allocator.free(generated.unsupported);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "try tpl_0(out, allocator, &child_args_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "lookupDynamicTemplateDispatchId") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "renderTemplateByDispatchId") != null);
     try std.testing.expectEqual(@as(usize, 2), generated.compiled_count);
 }
 
@@ -2845,8 +4881,12 @@ test "template compiler strips metadata and emits nop for pure metadata template
     );
 
     const generated = try compileTemplateRuntimeAlloc(allocator, &.{"meta-only"}, &.{}, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".class = .metadata_only") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_meta_only_0") == null);
+    defer {
+        allocator.free(generated.source);
+        for (generated.unsupported) |entry| allocator.free(entry.reason);
+        allocator.free(generated.unsupported);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_0") == null);
     try std.testing.expectEqual(@as(usize, 1), generated.metadata_only_count);
 }
 
@@ -2866,20 +4906,29 @@ test "template compiler emits direct invoke wrappers for nested module calls" {
     );
     try sources.module_sources.put(
         try allocator.dupe(u8, "foo"),
-        try allocator.dupe(u8, "return { bar = function(frame) return frame.args[1] or '' end }"),
+        try allocator.dupe(u8, "return { bar = function(frame) _ = frame; return \"ok\" end }"),
     );
 
-    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"wrap"}, &.{}, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_foo_") != null);
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"wrap"}, &.{"foo"}, &sources);
+    defer {
+        allocator.free(generated.source);
+        for (generated.unsupported) |entry| allocator.free(entry.reason);
+        allocator.free(generated.unsupported);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_0") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedRenderModuleByIndex") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "generatedRenderModuleByIndex(out, allocator, 0, \"bar\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedTemplateDispatchFirst") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "generatedRenderModuleByIndex(out, allocator, ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ", 0, &child_args_") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "lua.generatedCall(") == null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "lua.generatedInvoke(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "getGeneratedCallable(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "getGeneratedMethod(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "module_value.table.getGeneratedMethod(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "module_value.table.getString(function_name)") == null);
     try std.testing.expectEqual(@as(usize, 1), generated.compiled_count);
 }
 
-test "template compiler emits transitive modules and generated require dispatch support" {
+test "template compiler emits module require dispatch support from the supplied closure" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -2897,25 +4946,153 @@ test "template compiler emits transitive modules and generated require dispatch 
         try allocator.dupe(u8, "foo"),
         try allocator.dupe(u8,
             \\local bar = require("Module:bar")
-            \\return { show = function(frame) return bar.value end }
+            \\return { show = function(frame) _ = frame; return bar end }
         ),
     );
     try sources.module_sources.put(
         try allocator.dupe(u8, "bar"),
-        try allocator.dupe(u8, "return { value = \"ok\" }"),
+        try allocator.dupe(u8, "return \"ok\""),
     );
 
-    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"wrap"}, &.{}, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_foo_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_bar_") != null);
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"wrap"}, &.{ "foo", "bar" }, &sources);
+    defer {
+        allocator.free(generated.source);
+        for (generated.unsupported) |entry| allocator.free(entry.reason);
+        allocator.free(generated.unsupported);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const module_1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedModuleCallableDispatchFirst(") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedLoadCompiledModuleByIndex") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedLoadCompiledModuleKnownFirst") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "generatedModuleRequireKnownFirst(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "Module:bar") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedModuleRequireFn") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedTemplateDispatchFirst") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedLoadCompiledModuleKnownFirst") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "generated_module_canonical_names") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "generatedLoadCompiledModuleByIndex(runtime, ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "generatedModuleRequireKnownFirst(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn generatedDispatchFirst(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "pub fn runInRuntimeWithGlobals(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "pub fn runInRuntime(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "pub fn run(") == null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "lua.generatedCall(") == null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "lua.generatedInvoke(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "getGeneratedCallable(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "getGeneratedMethod(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "module_value.table.getGeneratedMethod(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "module_value.table.getString(function_name)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "\"Module:bar\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "Module:bar") == null);
+}
+
+test "template compiler strips embedded std and lua imports from nested generated modules" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var sources = lua.TemplateSources{
+        .template_sources = std.StringHashMap([]const u8).init(allocator),
+        .module_sources = std.StringHashMap([]const u8).init(allocator),
+    };
+    defer sources.deinit(allocator);
+    try sources.template_sources.put(
+        try allocator.dupe(u8, "wrap"),
+        try allocator.dupe(u8, "{{#invoke:foo|main}}"),
+    );
+    try sources.module_sources.put(
+        try allocator.dupe(u8, "foo"),
+        try allocator.dupe(u8,
+            \\local export = {}
+            \\function export.main()
+            \\  return "ok"
+            \\end
+            \\return export
+        ),
+    );
+
+    const generated = try compileTemplateRuntimeAlloc(allocator, &.{"wrap"}, &.{"foo"}, &sources);
+    defer {
+        allocator.free(generated.source);
+        for (generated.unsupported) |entry| allocator.free(entry.reason);
+        allocator.free(generated.unsupported);
+    }
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, generated.source, "const std = @import(\"std\");"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, generated.source, "const lua = @import(\"lua\");"));
+}
+
+test "template compiler falls back to build mappings when dependency roots are absent" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const structure_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure.json", .{tmp.sub_path});
+    defer std.testing.allocator.free(structure_path);
+    const json =
+        \\{
+        \\  "dependencies": {
+        \\    "root_templates": ["unused-root"]
+        \\  },
+        \\  "build": {
+        \\    "line_templates": [
+        \\      { "code": 1, "name": "line-a" }
+        \\    ],
+        \\    "translation_templates": [
+        \\      { "code": 2, "name": "trans-b" }
+        \\    ]
+        \\  }
+        \\}
+    ;
+
+    var file = try std.Io.Dir.cwd().createFile(std.testing.io, structure_path, .{ .truncate = true });
+    defer file.close(std.testing.io);
+    try file.writeStreamingAll(std.testing.io, json);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, structure_path) catch {};
+
+    const roots = try loadActiveTemplateRootsAlloc(std.Options.debug_io, std.testing.allocator, structure_path);
+    defer freeOwnedStrings(std.testing.allocator, roots);
+
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+    try std.testing.expect(stringSliceContains(roots, "line-a"));
+    try std.testing.expect(stringSliceContains(roots, "trans-b"));
+    try std.testing.expect(!stringSliceContains(roots, "unused-root"));
+}
+
+test "template compiler prefers dependency roots when present" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const structure_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure.json", .{tmp.sub_path});
+    defer std.testing.allocator.free(structure_path);
+    const json =
+        \\{
+        \\  "dependencies": {
+        \\    "root_templates": ["active-root"]
+        \\  },
+        \\  "build": {
+        \\    "line_templates": [
+        \\      { "code": 1, "name": "line-a" }
+        \\    ],
+        \\    "translation_templates": [
+        \\      { "code": 2, "name": "trans-b" }
+        \\    ]
+        \\  }
+        \\}
+    ;
+
+    var file = try std.Io.Dir.cwd().createFile(std.testing.io, structure_path, .{ .truncate = true });
+    defer file.close(std.testing.io);
+    try file.writeStreamingAll(std.testing.io, json);
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, structure_path) catch {};
+
+    var deps = try structure_report.loadDependencySetAlloc(std.testing.io, std.testing.allocator, structure_path);
+    defer deps.deinit(std.testing.allocator);
+
+    const roots = if (deps.root_templates.len != 0)
+        try dupStringSliceAlloc(std.testing.allocator, deps.root_templates)
+    else
+        try loadActiveTemplateRootsAlloc(std.testing.io, std.testing.allocator, structure_path);
+    defer freeOwnedStrings(std.testing.allocator, roots);
+
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expect(stringSliceContains(roots, "active-root"));
+    try std.testing.expect(!stringSliceContains(roots, "line-a"));
+    try std.testing.expect(!stringSliceContains(roots, "trans-b"));
 }
 
 test "template compiler marks unresolved nested templates unsupported" {
@@ -2934,8 +5111,108 @@ test "template compiler marks unresolved nested templates unsupported" {
     );
 
     const generated = try compileTemplateRuntimeAlloc(allocator, &.{"outer"}, &.{}, &sources);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".class = .unsupported") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_outer_0") == null);
+    defer {
+        allocator.free(generated.source);
+        for (generated.unsupported) |entry| allocator.free(entry.reason);
+        allocator.free(generated.unsupported);
+    }
     try std.testing.expectEqual(@as(usize, 1), generated.unsupported.len);
-    try std.testing.expectEqualStrings("UnsupportedTemplateDependency", generated.unsupported[0].reason);
+    try std.testing.expectEqualStrings("UnsupportedTemplateDependency:missing-template", generated.unsupported[0].reason);
+}
+
+test "template compiler bytecode mode emits template data and interpreter dispatch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var sources = lua.TemplateSources{
+        .template_sources = std.StringHashMap([]const u8).init(allocator),
+        .module_sources = std.StringHashMap([]const u8).init(allocator),
+    };
+    defer sources.deinit(allocator);
+    try sources.template_sources.put(try allocator.dupe(u8, "inner"), try allocator.dupe(u8, "hello"));
+    try sources.template_sources.put(try allocator.dupe(u8, "outer"), try allocator.dupe(u8, "before {{inner}} after"));
+
+    const generated = try compileTemplateRuntimeWithModeAlloc(allocator, &.{ "inner", "outer" }, &.{}, &sources, .bytecode);
+    defer {
+        allocator.free(generated.source);
+        for (generated.unsupported) |entry| allocator.free(entry.reason);
+        allocator.free(generated.unsupported);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "support.renderBytecodeTemplate(@This(), out, allocator, tpl_0_nodes, args);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const bytecode_nodes_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_0(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn tpl_1(") == null);
+    try std.testing.expectEqual(@as(usize, 2), generated.compiled_count);
+}
+
+fn stringSliceContains(values: []const []const u8, needle: []const u8) bool {
+    for (values) |value| {
+        if (std.mem.eql(u8, value, needle)) return true;
+    }
+    return false;
+}
+
+test "template parser handles overlapping template and param closers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const source = "{{interproject-box|link=[[c:{{{1|{{PAGENAME}}}}}|{{{2|{{{1|{{PAGENAME}}}}}}}}]]}}";
+    const nodes = try parseTemplateSourceAlloc(allocator, source);
+
+    try std.testing.expectEqual(@as(usize, 1), nodes.len);
+    try std.testing.expect(nodes[0] == .template_call);
+}
+
+test "template parser accepts cite-newsgroup style nested defaults" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const source =
+        "{{#invoke:quote|cite_t\n" ++
+        "| url = {{{url|{{#if:{{{googleid|}}}|http://groups.google.com/group/{{{group|{{{newsgroup|}}}}}}/browse_thread/thread/{{{googleid}}}}}}}}\n" ++
+        "| alias =\n" ++
+        "    chapter: title;\n" ++
+        "    trans-chapter: trans-title;\n" ++
+        "}}";
+    const nodes = try parseTemplateSourceAlloc(allocator, source);
+
+    try std.testing.expectEqual(@as(usize, 1), nodes.len);
+    try std.testing.expect(nodes[0] == .invoke_call);
+}
+
+test "template parser accepts cite-meta parser functions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const source =
+        "{{#if:{{{year|}}}\n" ++
+        "  | {{#if:{{{month|}}}\n" ++
+        "      | {{{month}}} {{{year}}}\n" ++
+        "      | {{#switch:{{padleft:|2|{{{year}}}}}\n" ++
+        "          | a. = ''[[Appendix:Glossary#a.|a.]]'' {{#invoke:string/templates|sub|{{{year}}}|4}}\n" ++
+        "          | {{{year}}}\n" ++
+        "        }}\n" ++
+        "    }}\n" ++
+        "  | {{#formatdate:{{{date}}}}}\n" ++
+        "}}{{#ifeq:{{NAMESPACE}}|{{ns:0}}|[[Category:Pages with DOIs broken since {{#time:Y|{{{doi_brokendate}}}}}]]}}{{fullurl:{{FULLPAGENAME}}|action=edit}}{{urlencode:{{{doi}}}}}";
+    const nodes = try parseTemplateSourceAlloc(allocator, source);
+
+    try std.testing.expect(nodes.len != 0);
+}
+
+test "template parser accepts derogatory parser functions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const source =
+        "{{#ifexpr:({{#time:U|{{CURRENTYEAR}}-{{CURRENTMONTH}}-{{CURRENTDAY2}}}}-{{#time:U|{{{date|{{{1|}}}}}}}})/86400>14|[[Category:Candidates for speedy deletion]]|[[Category:Entries tagged as derogatory]]}}";
+    const nodes = try parseTemplateSourceAlloc(allocator, source);
+
+    try std.testing.expectEqual(@as(usize, 1), nodes.len);
+    try std.testing.expect(nodes[0] == .parser_func);
 }

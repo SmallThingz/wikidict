@@ -1,11 +1,103 @@
 const std = @import("std");
 const lua = @import("lua");
+const template_dispatch = @import("template_dispatch");
 
 pub const TemplateClass = enum {
     metadata_only,
     compiled,
     unsupported,
 };
+
+pub const TemplateRenderIndex = u16;
+
+pub const TemplateLookup = struct {
+    class: TemplateClass,
+    render_index: TemplateRenderIndex,
+};
+
+pub const BytecodeParserFunctionKind = enum {
+    displaytitle,
+    if_,
+    ifexist,
+    ifeq,
+    ifexpr,
+    expr,
+    switch_,
+    special,
+    tag,
+    lc,
+    uc,
+    lcfirst,
+    ucfirst,
+    formatnum,
+    formatdate,
+    anchorencode,
+    padleft,
+    padright,
+    time,
+    fullurl,
+    urlencode,
+    currentday,
+    currentday2,
+    currentmonth,
+    currentmonthname,
+    currentyear,
+    revisionyear,
+    revisionuser,
+    pagename,
+    fullpagename,
+    fullpagenamee,
+    basepagename,
+    subpagename,
+    namespace,
+    namespacenumber,
+    talkpagename,
+    wikimedialanguage,
+};
+
+pub const BytecodeArg = struct {
+    name: ?[]const u8 = null,
+    name_nodes: []const BytecodeNode = &.{},
+    name_is_dynamic: bool = false,
+    value_nodes: []const BytecodeNode,
+};
+
+pub const BytecodeParam = struct {
+    key: []const u8,
+    default_nodes: []const BytecodeNode,
+};
+
+pub const BytecodeTemplateCall = struct {
+    dispatch_id: TemplateRenderIndex = 0,
+    name_nodes: []const BytecodeNode = &.{},
+    args: []const BytecodeArg = &.{},
+};
+
+pub const BytecodeInvokeCall = struct {
+    module_index: u16,
+    export_id: u16,
+    args: []const BytecodeArg = &.{},
+};
+
+pub const BytecodeParserFunction = struct {
+    kind: BytecodeParserFunctionKind,
+    args: []const BytecodeArg = &.{},
+};
+
+pub const BytecodeNode = union(enum) {
+    text: []const u8,
+    param: BytecodeParam,
+    template_call: BytecodeTemplateCall,
+    invoke_call: BytecodeInvokeCall,
+    parser_func: BytecodeParserFunction,
+};
+
+pub fn templateDispatchId(name: []const u8) ?u16 {
+    return template_dispatch.dispatchIdFromName(name);
+}
+
+const template_registry_magic = "TREG";
+const template_registry_entry_size = 9;
 
 pub const NamedArg = struct {
     name: []const u8,
@@ -270,37 +362,78 @@ pub fn wikiTextEquals(lhs: []const u8, rhs: []const u8) bool {
 }
 
 pub fn pageName(args: *const TemplateArgs) []const u8 {
-    return stripNamespace(args.page_title);
+    return pageNameFromTitle(args.page_title);
 }
 
 pub fn fullPageName(args: *const TemplateArgs) []const u8 {
-    return args.page_title;
+    return fullPageNameFromTitle(args.page_title);
+}
+
+pub fn fullPageNameEncoded(args: *const TemplateArgs) []const u8 {
+    return fullPageNameEncodedFromTitle(args.page_title);
 }
 
 pub fn subPageName(args: *const TemplateArgs) []const u8 {
-    const full = pageName(args);
+    return subPageNameFromTitle(args.page_title);
+}
+
+pub fn basePageName(args: *const TemplateArgs) []const u8 {
+    return basePageNameFromTitle(args.page_title);
+}
+
+pub fn namespaceText(args: *const TemplateArgs) []const u8 {
+    return namespaceTextFromTitle(args.page_title);
+}
+
+pub fn namespaceNumber(args: *const TemplateArgs) []const u8 {
+    return namespaceNumberFromTitle(args.page_title);
+}
+
+pub fn talkPageName(args: *const TemplateArgs) []const u8 {
+    return talkPageNameFromTitle(args.page_title);
+}
+
+pub fn pageNameFromTitle(title: []const u8) []const u8 {
+    return stripNamespace(trimWikiWhitespace(title));
+}
+
+pub fn fullPageNameFromTitle(title: []const u8) []const u8 {
+    return trimWikiWhitespace(title);
+}
+
+pub fn fullPageNameEncodedFromTitle(title: []const u8) []const u8 {
+    return trimWikiWhitespace(title);
+}
+
+pub fn subPageNameFromTitle(title: []const u8) []const u8 {
+    const full = pageNameFromTitle(title);
     const idx = std.mem.lastIndexOfScalar(u8, full, '/') orelse return full;
     return full[idx + 1 ..];
 }
 
-pub fn basePageName(args: *const TemplateArgs) []const u8 {
-    const full = pageName(args);
+pub fn basePageNameFromTitle(title: []const u8) []const u8 {
+    const full = pageNameFromTitle(title);
     const idx = std.mem.lastIndexOfScalar(u8, full, '/') orelse return full;
     return full[0..idx];
 }
 
-pub fn namespaceText(args: *const TemplateArgs) []const u8 {
-    const title = args.page_title;
-    const colon = std.mem.indexOfScalar(u8, title, ':') orelse return "";
-    return trimWikiWhitespace(title[0..colon]);
+pub fn namespaceTextFromTitle(title: []const u8) []const u8 {
+    const trimmed = trimWikiWhitespace(title);
+    if (trimmed.len == 0) return "";
+    if (std.mem.eql(u8, trimmed, "0")) return "";
+    const colon = std.mem.indexOfScalar(u8, trimmed, ':') orelse return "";
+    return trimWikiWhitespace(trimmed[0..colon]);
 }
 
-pub fn namespaceNumber(args: *const TemplateArgs) []const u8 {
-    return if (namespaceText(args).len == 0) "0" else "";
+pub fn namespaceNumberFromTitle(title: []const u8) []const u8 {
+    const trimmed = trimWikiWhitespace(title);
+    if (trimmed.len == 0) return "0";
+    if (parseNumericKey(trimmed)) |_| return trimmed;
+    return if (namespaceTextFromTitle(trimmed).len == 0) "0" else "";
 }
 
-pub fn talkPageName(args: *const TemplateArgs) []const u8 {
-    _ = args;
+pub fn talkPageNameFromTitle(title: []const u8) []const u8 {
+    _ = title;
     return "";
 }
 
@@ -310,6 +443,10 @@ pub fn wikimediaLanguage() []const u8 {
 
 pub fn currentDayText() []const u8 {
     return "5";
+}
+
+pub fn currentDay2Text() []const u8 {
+    return "05";
 }
 
 pub fn currentMonthText() []const u8 {
@@ -322,6 +459,122 @@ pub fn currentMonthName() []const u8 {
 
 pub fn currentYearText() []const u8 {
     return "2026";
+}
+
+pub fn revisionYearText() []const u8 {
+    return currentYearText();
+}
+
+pub fn revisionUserText() []const u8 {
+    return "";
+}
+
+// The template compiler currently has no page-existence index in this support
+// runtime. Treat non-empty titles as existing so common maintenance/link
+// templates still compile through the static path instead of remaining
+// unsupported.
+pub fn pageExists(title: []const u8) bool {
+    return trimWikiWhitespace(title).len != 0;
+}
+
+pub fn appendFormatDate(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
+    try appendText(out, allocator, trimRelativeDateModifier(trimWikiWhitespace(text)));
+}
+
+pub fn appendTime(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    format_text: []const u8,
+    value_text: []const u8,
+) !void {
+    const format = trimWikiWhitespace(format_text);
+    const value = trimRelativeDateModifier(trimWikiWhitespace(value_text));
+    if (format.len == 0) {
+        try appendText(out, allocator, value);
+        return;
+    }
+    if (std.mem.eql(u8, format, "U")) {
+        try appendText(out, allocator, "0");
+        return;
+    }
+    if (std.mem.eql(u8, format, "Y")) {
+        if (extractYear(value)) |year| {
+            try appendText(out, allocator, year);
+        } else {
+            try appendText(out, allocator, currentYearText());
+        }
+        return;
+    }
+    if (std.mem.eql(u8, format, "j F Y")) {
+        if (value.len != 0) {
+            try appendText(out, allocator, value);
+        } else {
+            try appendText(out, allocator, currentDayText());
+            try appendText(out, allocator, " ");
+            try appendText(out, allocator, currentMonthName());
+            try appendText(out, allocator, " ");
+            try appendText(out, allocator, currentYearText());
+        }
+        return;
+    }
+    try appendText(out, allocator, if (value.len != 0) value else format);
+}
+
+pub fn appendExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
+    const trimmed = trimWikiWhitespace(text);
+    if (evalSimpleNumericExpr(trimmed)) |value| {
+        var buf: [64]u8 = undefined;
+        const printed = if (@round(value) == value)
+            try std.fmt.bufPrint(&buf, "{d}", .{@as(i64, @intFromFloat(value))})
+        else
+            try std.fmt.bufPrint(&buf, "{}", .{value});
+        try appendText(out, allocator, printed);
+        return;
+    }
+    try appendText(out, allocator, trimmed);
+}
+
+pub fn appendUrlEncode(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
+    try appendPercentEncoded(out, allocator, trimWikiWhitespace(text));
+}
+
+pub fn appendSpecialPageName(out: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8) !void {
+    try appendText(out, allocator, "Special:");
+    try appendText(out, allocator, trimWikiWhitespace(name));
+}
+
+pub fn appendFullUrl(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    title_text: []const u8,
+    query_text: []const u8,
+) !void {
+    try appendText(out, allocator, "https://en.wiktionary.org/wiki/");
+    try appendPercentEncoded(out, allocator, trimWikiWhitespace(title_text));
+    const query = trimWikiWhitespace(query_text);
+    if (query.len != 0) {
+        try appendText(out, allocator, "?");
+        try appendText(out, allocator, query);
+    }
+}
+
+pub fn exprTruthy(text: []const u8) bool {
+    const trimmed = trimWikiWhitespace(text);
+    if (trimmed.len == 0) return false;
+    if (findComparator(trimmed)) |cmp| {
+        const lhs = evalSimpleNumericExpr(trimmed[0..cmp.index]) orelse return isTruthy(trimmed);
+        const rhs = evalSimpleNumericExpr(trimmed[cmp.index + cmp.width ..]) orelse return isTruthy(trimmed);
+        return switch (cmp.kind) {
+            .eq => lhs == rhs,
+            .ne => lhs != rhs,
+            .lt => lhs < rhs,
+            .le => lhs <= rhs,
+            .gt => lhs > rhs,
+            .ge => lhs >= rhs,
+        };
+    }
+    const value = evalSimpleNumericExpr(trimmed) orelse return isTruthy(trimmed);
+    return value != 0;
 }
 
 pub fn appendResolvedParam(
@@ -370,6 +623,343 @@ pub fn invokeGeneratedModuleFunction(
     try lua.appendValueTextAlloc(out, allocator, first);
 }
 
+pub fn templateArgsToLuaArgsAlloc(
+    allocator: std.mem.Allocator,
+    args: *const TemplateArgs,
+) ![]lua.ModuleArg {
+    return buildLuaArgsAlloc(allocator, args);
+}
+
+pub fn renderBytecodeTemplate(
+    comptime Runtime: type,
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    nodes: []const BytecodeNode,
+    args: *const TemplateArgs,
+) !void {
+    try renderBytecodeNodes(Runtime, out, allocator, nodes, args);
+}
+
+fn renderBytecodeNodes(
+    comptime Runtime: type,
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    nodes: []const BytecodeNode,
+    args: *const TemplateArgs,
+) !void {
+    for (nodes) |node| switch (node) {
+        .text => |text| {
+            if (text.len == 0) continue;
+            try appendText(out, allocator, text);
+        },
+        .param => |param| {
+            if (args.paramValue(param.key)) |value| {
+                try appendText(out, allocator, value);
+            } else {
+                try renderBytecodeNodes(Runtime, out, allocator, param.default_nodes, args);
+            }
+        },
+        .template_call => |call| try renderBytecodeTemplateCall(Runtime, out, allocator, call, args),
+        .invoke_call => |call| try renderBytecodeInvokeCall(Runtime, out, allocator, call, args),
+        .parser_func => |func| try renderBytecodeParserFunction(Runtime, out, allocator, func, args),
+    };
+}
+
+fn renderBytecodeNodesAlloc(
+    comptime Runtime: type,
+    allocator: std.mem.Allocator,
+    nodes: []const BytecodeNode,
+    args: *const TemplateArgs,
+) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    try renderBytecodeNodes(Runtime, &out, allocator, nodes, args);
+    return out.toOwnedSlice(allocator);
+}
+
+fn buildBytecodeChildArgsAlloc(
+    comptime Runtime: type,
+    allocator: std.mem.Allocator,
+    arg_specs: []const BytecodeArg,
+    parent_args: *const TemplateArgs,
+) !TemplateArgs {
+    var builder: TemplateArgsBuilder = .{};
+    defer builder.deinit(allocator);
+
+    for (arg_specs) |arg| {
+        const value = try renderBytecodeNodesAlloc(Runtime, allocator, arg.value_nodes, parent_args);
+        errdefer allocator.free(value);
+        if (arg.name_is_dynamic) {
+            const name = try renderBytecodeNodesAlloc(Runtime, allocator, arg.name_nodes, parent_args);
+            errdefer allocator.free(name);
+            try builder.addNamedOwnedBuffers(allocator, name, value);
+            continue;
+        }
+        if (arg.name) |name| {
+            try builder.addNamedBuffer(allocator, name, value);
+            continue;
+        }
+        try builder.addPositionalBuffer(allocator, value);
+    }
+
+    var child_args = try builder.buildOwned(allocator);
+    child_args.page_title = parent_args.page_title;
+    return child_args;
+}
+
+fn renderBytecodeTemplateCall(
+    comptime Runtime: type,
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    call: BytecodeTemplateCall,
+    parent_args: *const TemplateArgs,
+) !void {
+    var child_args = try buildBytecodeChildArgsAlloc(Runtime, allocator, call.args, parent_args);
+    defer child_args.deinit(allocator);
+
+    const dispatch_id = if (call.dispatch_id != 0)
+        call.dispatch_id
+    else blk: {
+        const name = try renderBytecodeNodesAlloc(Runtime, allocator, call.name_nodes, parent_args);
+        defer allocator.free(name);
+        break :blk Runtime.lookupDynamicTemplateDispatchId(name) orelse return;
+    };
+    _ = try Runtime.renderTemplateByDispatchId(out, allocator, dispatch_id, &child_args);
+}
+
+fn renderBytecodeInvokeCall(
+    comptime Runtime: type,
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    call: BytecodeInvokeCall,
+    parent_args: *const TemplateArgs,
+) !void {
+    var child_args = try buildBytecodeChildArgsAlloc(Runtime, allocator, call.args, parent_args);
+    defer child_args.deinit(allocator);
+    try Runtime.generatedRenderModuleByIndexDynamic(out, allocator, call.module_index, call.export_id, &child_args);
+}
+
+fn parserArgValueNodes(args: []const BytecodeArg, index: usize) []const BytecodeNode {
+    return if (index < args.len) args[index].value_nodes else &.{};
+}
+
+fn renderParserArgTextAlloc(
+    comptime Runtime: type,
+    allocator: std.mem.Allocator,
+    args: []const BytecodeArg,
+    index: usize,
+    template_args: *const TemplateArgs,
+) ![]u8 {
+    return renderBytecodeNodesAlloc(Runtime, allocator, parserArgValueNodes(args, index), template_args);
+}
+
+fn bytecodeSwitchArgIsDefault(arg: BytecodeArg) bool {
+    if (arg.name_is_dynamic) return false;
+    const name = arg.name orelse return false;
+    return std.ascii.eqlIgnoreCase(name, "#default");
+}
+
+fn bytecodeSwitchArgMatches(
+    comptime Runtime: type,
+    allocator: std.mem.Allocator,
+    arg: BytecodeArg,
+    key: []const u8,
+    template_args: *const TemplateArgs,
+) !bool {
+    if (arg.name_is_dynamic) {
+        const name = try renderBytecodeNodesAlloc(Runtime, allocator, arg.name_nodes, template_args);
+        defer allocator.free(name);
+        return wikiTextEquals(key, name);
+    }
+    if (arg.name) |name| return wikiTextEquals(key, name);
+    const value = try renderBytecodeNodesAlloc(Runtime, allocator, arg.value_nodes, template_args);
+    defer allocator.free(value);
+    return wikiTextEquals(key, value);
+}
+
+fn renderBytecodeParserFunction(
+    comptime Runtime: type,
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    func: BytecodeParserFunction,
+    args: *const TemplateArgs,
+) !void {
+    switch (func.kind) {
+        .displaytitle => return,
+        .if_ => {
+            const cond = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(cond);
+            if (isTruthy(cond)) {
+                try renderBytecodeNodes(Runtime, out, allocator, parserArgValueNodes(func.args, 1), args);
+            } else {
+                try renderBytecodeNodes(Runtime, out, allocator, parserArgValueNodes(func.args, 2), args);
+            }
+        },
+        .ifexist => {
+            const title = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(title);
+            if (pageExists(title)) {
+                try renderBytecodeNodes(Runtime, out, allocator, parserArgValueNodes(func.args, 1), args);
+            } else {
+                try renderBytecodeNodes(Runtime, out, allocator, parserArgValueNodes(func.args, 2), args);
+            }
+        },
+        .ifeq => {
+            const lhs = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(lhs);
+            const rhs = try renderParserArgTextAlloc(Runtime, allocator, func.args, 1, args);
+            defer allocator.free(rhs);
+            if (wikiTextEquals(lhs, rhs)) {
+                try renderBytecodeNodes(Runtime, out, allocator, parserArgValueNodes(func.args, 2), args);
+            } else {
+                try renderBytecodeNodes(Runtime, out, allocator, parserArgValueNodes(func.args, 3), args);
+            }
+        },
+        .ifexpr => {
+            const expr = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(expr);
+            if (exprTruthy(expr)) {
+                try renderBytecodeNodes(Runtime, out, allocator, parserArgValueNodes(func.args, 1), args);
+            } else {
+                try renderBytecodeNodes(Runtime, out, allocator, parserArgValueNodes(func.args, 2), args);
+            }
+        },
+        .expr => {
+            const expr = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(expr);
+            try appendExpr(out, allocator, expr);
+        },
+        .switch_ => {
+            const key = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(key);
+
+            var pending_start: usize = 1;
+            var matched = false;
+            var saw_default = false;
+            var i: usize = 1;
+            while (i < func.args.len) : (i += 1) {
+                const arg = func.args[i];
+                if (arg.name != null or arg.name_is_dynamic) {
+                    if (!matched) {
+                        var matches = false;
+                        var label_index = pending_start;
+                        while (label_index < i) : (label_index += 1) {
+                            if (try bytecodeSwitchArgMatches(Runtime, allocator, func.args[label_index], key, args)) {
+                                matches = true;
+                                break;
+                            }
+                        }
+                        if (!matches) {
+                            if (!bytecodeSwitchArgIsDefault(arg)) {
+                                matches = try bytecodeSwitchArgMatches(Runtime, allocator, arg, key, args);
+                            } else {
+                                matches = true;
+                                saw_default = true;
+                            }
+                        }
+                        if (matches) {
+                            try renderBytecodeNodes(Runtime, out, allocator, arg.value_nodes, args);
+                            matched = true;
+                        }
+                    } else if (bytecodeSwitchArgIsDefault(arg)) {
+                        saw_default = true;
+                    }
+                    pending_start = i + 1;
+                }
+            }
+            if (!matched and !saw_default and pending_start < func.args.len) {
+                try renderBytecodeNodes(Runtime, out, allocator, func.args[func.args.len - 1].value_nodes, args);
+            }
+        },
+        .special => {
+            const name = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(name);
+            try appendSpecialPageName(out, allocator, name);
+        },
+        .tag => try renderBytecodeNodes(Runtime, out, allocator, parserArgValueNodes(func.args, 1), args),
+        .lc => {
+            const text = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(text);
+            try appendLower(out, allocator, text);
+        },
+        .uc => {
+            const text = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(text);
+            try appendUpper(out, allocator, text);
+        },
+        .lcfirst => {
+            const text = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(text);
+            try appendLcFirst(out, allocator, text);
+        },
+        .ucfirst => {
+            const text = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(text);
+            try appendUcFirst(out, allocator, text);
+        },
+        .formatnum => {
+            const text = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(text);
+            try appendFormatNum(out, allocator, text);
+        },
+        .formatdate => {
+            const text = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(text);
+            try appendFormatDate(out, allocator, text);
+        },
+        .anchorencode => {
+            const text = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(text);
+            try appendAnchorEncode(out, allocator, text);
+        },
+        .padleft, .padright => {
+            const text = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(text);
+            const width_text = try renderParserArgTextAlloc(Runtime, allocator, func.args, 1, args);
+            defer allocator.free(width_text);
+            const pad_text = try renderParserArgTextAlloc(Runtime, allocator, func.args, 2, args);
+            defer allocator.free(pad_text);
+            const width = std.fmt.parseUnsigned(usize, std.mem.trim(u8, width_text, " \t\r\n"), 10) catch text.len;
+            try appendPad(out, allocator, text, width, pad_text, if (func.kind == .padleft) .left else .right);
+        },
+        .time => {
+            const format = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(format);
+            const value = try renderParserArgTextAlloc(Runtime, allocator, func.args, 1, args);
+            defer allocator.free(value);
+            try appendTime(out, allocator, format, value);
+        },
+        .fullurl => {
+            const title = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(title);
+            const query = try renderParserArgTextAlloc(Runtime, allocator, func.args, 1, args);
+            defer allocator.free(query);
+            try appendFullUrl(out, allocator, title, query);
+        },
+        .urlencode => {
+            const text = try renderParserArgTextAlloc(Runtime, allocator, func.args, 0, args);
+            defer allocator.free(text);
+            try appendUrlEncode(out, allocator, text);
+        },
+        .currentday => try appendText(out, allocator, currentDayText()),
+        .currentday2 => try appendText(out, allocator, currentDay2Text()),
+        .currentmonth => try appendText(out, allocator, currentMonthText()),
+        .currentmonthname => try appendText(out, allocator, currentMonthName()),
+        .currentyear => try appendText(out, allocator, currentYearText()),
+        .revisionyear => try appendText(out, allocator, revisionYearText()),
+        .revisionuser => try appendText(out, allocator, revisionUserText()),
+        .pagename => try appendText(out, allocator, pageName(args)),
+        .fullpagename => try appendText(out, allocator, fullPageName(args)),
+        .fullpagenamee => try appendText(out, allocator, fullPageNameEncoded(args)),
+        .basepagename => try appendText(out, allocator, basePageName(args)),
+        .subpagename => try appendText(out, allocator, subPageName(args)),
+        .namespace => try appendText(out, allocator, namespaceText(args)),
+        .namespacenumber => try appendText(out, allocator, namespaceNumber(args)),
+        .talkpagename => try appendText(out, allocator, talkPageName(args)),
+        .wikimedialanguage => try appendText(out, allocator, wikimediaLanguage()),
+    }
+}
+
 // Generated template runtimes reuse the same frame builder so #invoke and
 // generated module exports see the same `frame.args` layout everywhere.
 pub fn buildGeneratedFrameFromTemplateArgsAlloc(
@@ -386,9 +976,11 @@ pub fn buildGeneratedFrameFromTemplateArgsAlloc(
         try args_table.putStringBorrowed(arg.name, .{ .string = arg.value });
     }
 
+    const get_parent_value = runtime.generatedCallableValue(lua.generated_callable_id_frame_get_parent, null, null);
+    const expand_template_value = runtime.generatedCallableValue(lua.generated_callable_id_frame_expand_template, null, null);
     try frame.putStringBorrowed("args", .{ .table = args_table });
-    try frame.putStringBorrowed("getParent", try runtime.functionValue("frame.getParent", null, null, lua.generatedFrameGetParent));
-    try frame.putStringBorrowed("expandTemplate", try runtime.functionValue("frame.expandTemplate", null, null, lua.generatedFrameExpandTemplate));
+    try frame.putStringBorrowed("getParent", get_parent_value);
+    try frame.putStringBorrowed("expandTemplate", expand_template_value);
     return .{ .table = frame };
 }
 
@@ -457,6 +1049,57 @@ pub fn compareTemplateNameToNormalized(lhs: []const u8, rhs_normalized: []const 
     return .gt;
 }
 
+pub fn lookupTemplateRegistry(blob: []const u8, name: []const u8) ?TemplateLookup {
+    const count = templateRegistryCount(blob) orelse return null;
+    var lo: usize = 0;
+    var hi: usize = count;
+    while (lo < hi) {
+        const mid = lo + ((hi - lo) / 2);
+        const entry = templateRegistryEntry(blob, mid) orelse return null;
+        switch (compareTemplateNameToNormalized(name, entry.normalized)) {
+            .lt => hi = mid,
+            .gt => lo = mid + 1,
+            .eq => return .{
+                .class = entry.class,
+                .render_index = entry.render_index,
+            },
+        }
+    }
+    return null;
+}
+
+const TemplateRegistryEntry = struct {
+    normalized: []const u8,
+    class: TemplateClass,
+    render_index: TemplateRenderIndex,
+};
+
+fn templateRegistryCount(blob: []const u8) ?usize {
+    if (blob.len < template_registry_magic.len + 4) return null;
+    if (!std.mem.eql(u8, blob[0..template_registry_magic.len], template_registry_magic)) return null;
+    return std.mem.readInt(u32, blob[template_registry_magic.len .. template_registry_magic.len + 4][0..4], .little);
+}
+
+fn templateRegistryEntry(blob: []const u8, index: usize) ?TemplateRegistryEntry {
+    const header_len = template_registry_magic.len + 4;
+    const entry_offset = header_len + (index * template_registry_entry_size);
+    if (entry_offset + template_registry_entry_size > blob.len) return null;
+
+    const name_offset: usize = std.mem.readInt(u32, blob[entry_offset .. entry_offset + 4][0..4], .little);
+    const name_len: usize = std.mem.readInt(u16, blob[entry_offset + 4 .. entry_offset + 6][0..2], .little);
+    const class_value = blob[entry_offset + 6];
+    if (class_value > @intFromEnum(TemplateClass.unsupported)) return null;
+    const class: TemplateClass = @enumFromInt(class_value);
+    const render_index = std.mem.readInt(u16, blob[entry_offset + 7 .. entry_offset + 9][0..2], .little);
+    if (name_offset + name_len > blob.len) return null;
+
+    return .{
+        .normalized = blob[name_offset .. name_offset + name_len],
+        .class = class,
+        .render_index = render_index,
+    };
+}
+
 fn isTemplateNameSpacer(byte: u8) bool {
     return byte == ' ' or byte == '\t' or byte == '\r' or byte == '\n' or byte == '_';
 }
@@ -506,6 +1149,157 @@ fn trimWikiWhitespace(input: []const u8) []const u8 {
     return std.mem.trim(u8, input, " \t\r\n");
 }
 
+fn trimRelativeDateModifier(input: []const u8) []const u8 {
+    const trimmed = trimWikiWhitespace(input);
+    const plus = std.mem.indexOfScalar(u8, trimmed, '+') orelse return trimmed;
+    return trimWikiWhitespace(trimmed[0..plus]);
+}
+
+fn extractYear(text: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i + 4 <= text.len) : (i += 1) {
+        const candidate = text[i .. i + 4];
+        var all_digits = true;
+        for (candidate) |byte| {
+            if (!std.ascii.isDigit(byte)) {
+                all_digits = false;
+                break;
+            }
+        }
+        if (all_digits) return candidate;
+    }
+    return null;
+}
+
+fn appendPercentEncoded(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
+    for (text) |byte| switch (byte) {
+        'A'...'Z', 'a'...'z', '0'...'9', '-', '_', '.', '~', '/', ':' => try out.append(allocator, byte),
+        else => {
+            var buf: [3]u8 = undefined;
+            buf[0] = '%';
+            _ = try std.fmt.bufPrint(buf[1..], "{X:0>2}", .{byte});
+            try out.appendSlice(allocator, &buf);
+        },
+    };
+}
+
+const ComparatorKind = enum { eq, ne, lt, le, gt, ge };
+
+const Comparator = struct {
+    index: usize,
+    width: usize,
+    kind: ComparatorKind,
+};
+
+fn findComparator(text: []const u8) ?Comparator {
+    var depth: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        switch (text[i]) {
+            '(' => depth += 1,
+            ')' => {
+                if (depth != 0) depth -= 1;
+            },
+            else => {},
+        }
+        if (depth != 0) continue;
+        if (i + 2 <= text.len) {
+            if (std.mem.eql(u8, text[i .. i + 2], ">=")) return .{ .index = i, .width = 2, .kind = .ge };
+            if (std.mem.eql(u8, text[i .. i + 2], "<=")) return .{ .index = i, .width = 2, .kind = .le };
+            if (std.mem.eql(u8, text[i .. i + 2], "!=")) return .{ .index = i, .width = 2, .kind = .ne };
+        }
+        switch (text[i]) {
+            '=' => return .{ .index = i, .width = 1, .kind = .eq },
+            '>' => return .{ .index = i, .width = 1, .kind = .gt },
+            '<' => return .{ .index = i, .width = 1, .kind = .lt },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn evalSimpleNumericExpr(text: []const u8) ?f64 {
+    var parser = NumericExprParser{ .input = trimWikiWhitespace(text) };
+    const value = parser.parseExpr() orelse return null;
+    parser.skipSpaces();
+    return if (parser.index == parser.input.len) value else null;
+}
+
+const NumericExprParser = struct {
+    input: []const u8,
+    index: usize = 0,
+
+    fn skipSpaces(self: *NumericExprParser) void {
+        while (self.index < self.input.len and std.ascii.isWhitespace(self.input[self.index])) : (self.index += 1) {}
+    }
+
+    fn parseExpr(self: *NumericExprParser) ?f64 {
+        var lhs = self.parseTerm() orelse return null;
+        while (true) {
+            self.skipSpaces();
+            if (self.index >= self.input.len) return lhs;
+            const op = self.input[self.index];
+            if (op != '+' and op != '-') return lhs;
+            self.index += 1;
+            const rhs = self.parseTerm() orelse return null;
+            lhs = if (op == '+') lhs + rhs else lhs - rhs;
+        }
+    }
+
+    fn parseTerm(self: *NumericExprParser) ?f64 {
+        var lhs = self.parseFactor() orelse return null;
+        while (true) {
+            self.skipSpaces();
+            if (self.index >= self.input.len) return lhs;
+            const op = self.input[self.index];
+            if (op != '*' and op != '/') return lhs;
+            self.index += 1;
+            const rhs = self.parseFactor() orelse return null;
+            lhs = if (op == '*') lhs * rhs else lhs / rhs;
+        }
+    }
+
+    fn parseFactor(self: *NumericExprParser) ?f64 {
+        self.skipSpaces();
+        if (self.index >= self.input.len) return null;
+        if (self.input[self.index] == '+') {
+            self.index += 1;
+            return self.parseFactor();
+        }
+        if (self.input[self.index] == '-') {
+            self.index += 1;
+            const value = self.parseFactor() orelse return null;
+            return -value;
+        }
+        if (self.input[self.index] == '(') {
+            self.index += 1;
+            const value = self.parseExpr() orelse return null;
+            self.skipSpaces();
+            if (self.index >= self.input.len or self.input[self.index] != ')') return null;
+            self.index += 1;
+            return value;
+        }
+        return self.parseNumber();
+    }
+
+    fn parseNumber(self: *NumericExprParser) ?f64 {
+        self.skipSpaces();
+        const start = self.index;
+        var seen_digit = false;
+        while (self.index < self.input.len) : (self.index += 1) {
+            const byte = self.input[self.index];
+            if (std.ascii.isDigit(byte)) {
+                seen_digit = true;
+                continue;
+            }
+            if (byte == '.') continue;
+            break;
+        }
+        if (!seen_digit) return null;
+        return std.fmt.parseFloat(f64, self.input[start..self.index]) catch null;
+    }
+};
+
 fn stripNamespace(title: []const u8) []const u8 {
     const colon = std.mem.indexOfScalar(u8, title, ':') orelse return title;
     return title[colon + 1 ..];
@@ -525,4 +1319,28 @@ test "template args parse positional and named fields" {
     try std.testing.expectEqualStrings("en", args.positionalArg(0).?);
     try std.testing.expectEqualStrings("term", args.positionalArg(1).?);
     try std.testing.expectEqualStrings("test", args.namedArg("gloss").?);
+}
+
+test "lookupTemplateRegistry matches normalized template names" {
+    const blob = [_]u8{
+        'T',  'R',  'E',                                  'G',
+        0x02, 0x00, 0x00,                                 0x00,
+        0x1A, 0x00, 0x00,                                 0x00,
+        0x06, 0x00, @intFromEnum(TemplateClass.compiled), 0x07,
+        0x00, 0x20, 0x00,                                 0x00,
+        0x00, 0x04, 0x00,                                 @intFromEnum(TemplateClass.metadata_only),
+        0x09, 0x00, 'p',                                  'l',
+        'u',  'r',  'a',                                  'l',
+        'y',  'e',  's',                                  'n',
+    };
+
+    const plural = lookupTemplateRegistry(&blob, "Plu ral").?;
+    try std.testing.expectEqual(.compiled, plural.class);
+    try std.testing.expectEqual(@as(TemplateRenderIndex, 7), plural.render_index);
+
+    const yesno = lookupTemplateRegistry(&blob, "yes_no").?;
+    try std.testing.expectEqual(.metadata_only, yesno.class);
+    try std.testing.expectEqual(@as(TemplateRenderIndex, 9), yesno.render_index);
+
+    try std.testing.expect(lookupTemplateRegistry(&blob, "missing") == null);
 }

@@ -288,7 +288,7 @@ const Verifier = struct {
         errdefer allocator.free(verifier.seen_raw);
         @memset(verifier.seen_raw, false);
 
-        try verifier.raw_by_word.ensureTotalCapacity(allocator, dict.header.raw_entry_count);
+        try verifier.raw_by_word.ensureTotalCapacity(allocator, dict.header.raw_count);
         errdefer verifier.raw_by_word.deinit(allocator);
 
         try verifier.report.writer.print(

@@ -32,6 +32,27 @@ pub fn main(init: std.process.Init) !void {
         }
         return;
     }
+    if (std.mem.eql(u8, command, "emit-bytecode")) {
+        const input = flagValue(args[2..], "--input") orelse {
+            printUsage();
+            return;
+        };
+        const module_name = flagValue(args[2..], "--name") orelse "module";
+        const output = flagValue(args[2..], "--output");
+        required_path.ensureExistsOrExit(init.io, input, "lua source");
+        const source = try readFileAlloc(init.io, allocator, input);
+        var chunk = try lua.compile(allocator, source);
+        defer chunk.deinit();
+        const body = try lua.emitBytecodeModuleAlloc(allocator, module_name, &chunk);
+        defer allocator.free(body);
+        const wrapped = try wrapStandaloneBytecodeModuleAlloc(allocator, body);
+        if (output) |output_path| {
+            try writeFileAlloc(init.io, output_path, wrapped);
+        } else {
+            std.debug.print("{s}", .{wrapped});
+        }
+        return;
+    }
     if (std.mem.eql(u8, command, "dump-module")) {
         const input = flagValue(args[2..], "--input") orelse "data/wiktionary.xml";
         const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.json";
@@ -41,7 +62,7 @@ pub fn main(init: std.process.Init) !void {
         };
         required_path.ensureExistsOrExit(init.io, input, "wiktionary dump");
         required_path.ensureExistsOrExit(init.io, structure_path, "structure report");
-        var sources = try loadAllStructureSourcesAlloc(init.io, allocator, input, structure_path);
+        var sources = try lua.loadAllStructureSourcesAlloc(allocator, input, structure_path);
         defer sources.deinit(allocator);
         const canonical = try lua.canonicalModuleNameAlloc(allocator, name);
         defer allocator.free(canonical);
@@ -57,16 +78,16 @@ pub fn main(init: std.process.Init) !void {
         const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.json";
         required_path.ensureExistsOrExit(init.io, input, "wiktionary dump");
         required_path.ensureExistsOrExit(init.io, structure_path, "structure report");
-        var sources = try loadAllStructureSourcesAlloc(init.io, allocator, input, structure_path);
+        var sources = try lua.loadAllStructureSourcesAlloc(allocator, input, structure_path);
         defer sources.deinit(allocator);
         if (flagValue(args[2..], "--module")) |name| {
-            const referrers = try findModuleReferrersFromSourcesAlloc(allocator, &sources, name);
+            const referrers = try lua.findModuleReferrersFromSourcesAlloc(allocator, &sources, name);
             defer freeOwnedStrings(allocator, referrers);
             for (referrers) |referrer| std.debug.print("{s}\n", .{referrer});
             return;
         }
         if (flagValue(args[2..], "--template")) |name| {
-            const referrers = try findTemplateReferrersFromSourcesAlloc(allocator, &sources, name);
+            const referrers = try lua.findTemplateReferrersFromSourcesAlloc(allocator, &sources, name);
             defer freeOwnedStrings(allocator, referrers);
             for (referrers) |referrer| std.debug.print("{s}\n", .{referrer});
             return;
@@ -84,7 +105,7 @@ pub fn main(init: std.process.Init) !void {
             const template_names = try loadDbTemplateNamesAlloc(init.io, allocator, db_path, structure_path);
             defer freeOwnedStrings(allocator, template_names);
 
-            var sources = try loadStructureDependencySourcesAlloc(init.io, allocator, input, structure_path);
+            var sources = try lua.loadDependencySourcesFromStructureAlloc(allocator, input, structure_path);
             defer sources.deinit(allocator);
             var report = try lua.analyzeTemplateDependenciesFromSourcesAlloc(allocator, template_names, &sources);
             defer report.deinit(allocator);
@@ -95,8 +116,20 @@ pub fn main(init: std.process.Init) !void {
 
         const structure = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.json";
         required_path.ensureExistsOrExit(init.io, structure, "structure report");
-        const report = try analyzeDependenciesFromStructureAlloc(init.io, allocator, input, structure);
+        const report = try lua.analyzeDependenciesAlloc(allocator, input, structure);
         try printDependencyReport(allocator, report);
+        return;
+    }
+    if (std.mem.eql(u8, command, "deps-file")) {
+        const input = flagValue(args[2..], "--input") orelse {
+            printUsage();
+            return;
+        };
+        required_path.ensureExistsOrExit(init.io, input, "lua source");
+        const source = try readFileAlloc(init.io, allocator, input);
+        const deps = try lua.extractModuleDependencies(allocator, source);
+        defer freeOwnedStrings(allocator, deps);
+        for (deps) |dep| std.debug.print("{s}\n", .{dep});
         return;
     }
     if (std.mem.eql(u8, command, "audit")) {
@@ -110,7 +143,7 @@ pub fn main(init: std.process.Init) !void {
         const template_names = try loadDbTemplateNamesAlloc(init.io, allocator, db_path, structure_path);
         defer freeOwnedStrings(allocator, template_names);
 
-        var sources = try loadStructureDependencySourcesAlloc(init.io, allocator, input, structure_path);
+        var sources = try lua.loadDependencySourcesFromStructureAlloc(allocator, input, structure_path);
         defer sources.deinit(allocator);
         var report = try lua.analyzeTemplateDependenciesFromSourcesAlloc(allocator, template_names, &sources);
         defer report.deinit(allocator);
@@ -159,15 +192,30 @@ pub fn main(init: std.process.Init) !void {
 fn printUsage() void {
     std.debug.print(
         \\dict-lua emit-zig --input path.lua [--output generated.zig]
+        \\dict-lua emit-bytecode --input path.lua [--name module] [--output generated.zig]
         \\dict-lua dump-module --input data/wiktionary.xml --structure data/wiktionary-structure.json --name "string utilities"
         \\dict-lua referrers --input data/wiktionary.xml --structure data/wiktionary-structure.json --module "gender and number/templates"
         \\dict-lua referrers --input data/wiktionary.xml --structure data/wiktionary-structure.json --template "an-lite"
         \\dict-lua deps [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json]
         \\dict-lua deps --input data/wiktionary.xml --db data/wiktionary.bin
+        \\dict-lua deps-file --input path.lua
         \\dict-lua audit --input data/wiktionary.xml --db data/wiktionary.bin
         \\dict-lua audit-all-modules --input data/wiktionary.xml --structure data/wiktionary-structure.json [--batch-size 64] [--batch-bytes 67108864] [--start 0] [--limit N] [--threads N] [--workspace .zig-cache/lua-module-audit] [--skip-zig-compile]
         \\
     , .{});
+}
+
+fn wrapStandaloneBytecodeModuleAlloc(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    try out.writer.writeAll(
+        \\const std = @import("std");
+        \\const lua = @import("lua");
+        \\const support = @import("template_compiler_support");
+        \\
+    );
+    try out.writer.writeAll(body);
+    return out.toOwnedSlice();
 }
 
 fn defaultAuditThreads() usize {
@@ -210,6 +258,7 @@ fn renderValuesAlloc(allocator: std.mem.Allocator, values: []const lua.Value) ![
             },
             .string => |v| try out.appendSlice(allocator, v),
             .table => try out.appendSlice(allocator, "table"),
+            .generated_callable => try out.appendSlice(allocator, "function"),
             .function => try out.appendSlice(allocator, "function"),
             .iterator => try out.appendSlice(allocator, "iterator"),
         }
@@ -362,7 +411,7 @@ fn auditAllModulesToZigAlloc(
     const repo_root = try std.process.currentPathAlloc(init.io, allocator);
     defer allocator.free(repo_root);
 
-    var sources = try loadAllModuleSourcesFromStructureAlloc(init.io, allocator, options.xml_path, options.structure_path);
+    var sources = try lua.loadAllModuleSourcesFromStructureAlloc(allocator, options.xml_path, options.structure_path);
     defer sources.deinit(allocator);
 
     const module_names = try collectSortedModuleNamesAlloc(allocator, &sources);
@@ -922,16 +971,7 @@ const MappedReadOnlyFile = struct {
 };
 
 fn loadDbTemplateNamesAlloc(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8, structure_path: []const u8) ![]const []const u8 {
-    var mapped = try mmapReadOnlyPath(db_path);
-    defer mapped.deinit();
-
-    const inspected = try decoder.format.inspectDictionary(mapped.mapping);
-    const mapping_start: usize = @intCast(inspected.layout.mappings_offset);
-    const mapping_end: usize = @intCast(inspected.layout.mappings_offset + inspected.layout.mappings_len);
-    const mapping_blob = mapped.mapping[mapping_start..mapping_end];
-
-    var mappings = try decoder.format.parseCompactMappingsAlloc(allocator, mapping_blob);
-    defer mappings.deinit(allocator);
+    _ = db_path;
     var template_mappings = try structure_report.loadTemplateMappingsAlloc(io, allocator, structure_path);
     defer template_mappings.deinit(allocator);
 
@@ -941,207 +981,9 @@ fn loadDbTemplateNamesAlloc(io: std.Io, allocator: std.mem.Allocator, db_path: [
         names.deinit(allocator);
     }
 
-    if (template_mappings.line_templates.len != mappings.expected_line_template_count) return error.InvalidStructureReport;
-    if (template_mappings.translation_templates.len != mappings.expected_translation_template_count) return error.InvalidStructureReport;
     for (template_mappings.line_templates) |entry| try names.append(allocator, try allocator.dupe(u8, entry.name));
     for (template_mappings.translation_templates) |entry| try names.append(allocator, try allocator.dupe(u8, entry.name));
     return names.toOwnedSlice(allocator);
-}
-
-fn loadStructureDependencySourcesAlloc(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    xml_path: []const u8,
-    structure_path: []const u8,
-) !lua.TemplateSources {
-    var deps = try structure_report.loadDependencySetAlloc(io, allocator, structure_path);
-    defer deps.deinit(allocator);
-
-    if (deps.reachable_template_pages.len == 0 and deps.transitive_module_pages.len == 0) {
-        return error.MissingStructureDependencies;
-    }
-
-    const template_refs = try dupLuaSourceRefsAlloc(allocator, deps.reachable_template_pages);
-    defer freeLuaSourceRefs(allocator, template_refs);
-    const module_refs = try dupLuaSourceRefsAlloc(allocator, deps.transitive_module_pages);
-    defer freeLuaSourceRefs(allocator, module_refs);
-    return try lua.loadSelectedTemplateAndModuleSourcesByRefsAlloc(allocator, xml_path, template_refs, module_refs);
-}
-
-fn loadAllStructureSourcesAlloc(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    xml_path: []const u8,
-    structure_path: []const u8,
-) !lua.TemplateSources {
-    var deps = try structure_report.loadDependencySetAlloc(io, allocator, structure_path);
-    defer deps.deinit(allocator);
-
-    if (deps.all_template_pages.len == 0 and deps.all_module_pages.len == 0) {
-        return error.MissingStructureDependencies;
-    }
-
-    const template_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_template_pages);
-    defer freeLuaSourceRefs(allocator, template_refs);
-    const module_refs = try dupLuaSourceRefsAlloc(allocator, deps.all_module_pages);
-    defer freeLuaSourceRefs(allocator, module_refs);
-    return try lua.loadSelectedTemplateAndModuleSourcesByRefsAlloc(allocator, xml_path, template_refs, module_refs);
-}
-
-fn loadAllModuleSourcesFromStructureAlloc(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    xml_path: []const u8,
-    structure_path: []const u8,
-) !lua.ModuleSourceScan {
-    var sources = try loadAllStructureSourcesAlloc(io, allocator, xml_path, structure_path);
-
-    // Only module sources are needed for the corpus-wide module audit. Move the
-    // module map out and free the template half immediately to keep memory down.
-    const modules = sources.module_sources;
-    sources.module_sources = std.StringHashMap([]const u8).init(allocator);
-    sources.deinit(allocator);
-    return .{ .module_sources = modules };
-}
-
-fn findModuleReferrersFromSourcesAlloc(
-    allocator: std.mem.Allocator,
-    sources: *const lua.TemplateSources,
-    module_name: []const u8,
-) ![]const []const u8 {
-    const canonical = try lua.canonicalModuleNameAlloc(allocator, module_name);
-    defer allocator.free(canonical);
-
-    var matches = std.StringHashMapUnmanaged(void){};
-    defer deinitOwnedStringSet(allocator, &matches);
-
-    var it = sources.module_sources.iterator();
-    while (it.next()) |entry| {
-        const deps = try lua.extractModuleDependencies(allocator, entry.value_ptr.*);
-        defer freeOwnedStrings(allocator, deps);
-        for (deps) |dep| {
-            if (!std.mem.eql(u8, dep, canonical)) continue;
-            const gop = try matches.getOrPut(allocator, entry.key_ptr.*);
-            if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, entry.key_ptr.*);
-            break;
-        }
-    }
-
-    return collectStringSetAlloc(allocator, &matches);
-}
-
-fn findTemplateReferrersFromSourcesAlloc(
-    allocator: std.mem.Allocator,
-    sources: *const lua.TemplateSources,
-    template_name: []const u8,
-) ![]const []const u8 {
-    const canonical = try lua.canonicalTemplateNameAlloc(allocator, template_name);
-    defer allocator.free(canonical);
-
-    var matches = std.StringHashMapUnmanaged(void){};
-    defer deinitOwnedStringSet(allocator, &matches);
-
-    var it = sources.template_sources.iterator();
-    while (it.next()) |entry| {
-        const deps = try lua.extractTemplateDependenciesAlloc(allocator, entry.value_ptr.*, entry.key_ptr.*);
-        defer freeOwnedStrings(allocator, deps);
-        for (deps) |dep| {
-            if (!std.mem.eql(u8, dep, canonical)) continue;
-            const gop = try matches.getOrPut(allocator, entry.key_ptr.*);
-            if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, entry.key_ptr.*);
-            break;
-        }
-    }
-
-    return collectStringSetAlloc(allocator, &matches);
-}
-
-fn analyzeDependenciesFromStructureAlloc(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    xml_path: []const u8,
-    structure_path: []const u8,
-) !lua.DependencyReport {
-    var deps = try structure_report.loadDependencySetAlloc(io, allocator, structure_path);
-    defer deps.deinit(allocator);
-
-    if (deps.reachable_template_pages.len == 0 and deps.transitive_module_pages.len == 0) {
-        return error.MissingStructureDependencies;
-    }
-
-    var sources = try loadStructureDependencySourcesAlloc(io, allocator, xml_path, structure_path);
-    defer sources.deinit(allocator);
-
-    var report = try lua.analyzeTemplateDependenciesFromSourcesAlloc(allocator, deps.root_templates, &sources);
-    errdefer report.deinit(allocator);
-    return .{
-        .direct_templates = report.root_templates,
-        .direct_modules = report.direct_modules,
-        .transitive_modules = report.transitive_modules,
-        .missing_modules = report.missing_modules,
-        .compiled_ok = report.compiled_ok,
-        .compiled_failed = report.compiled_failed,
-        .emitted_consistent = report.emitted_consistent,
-        .emitted_inconsistent = report.emitted_inconsistent,
-    };
-}
-
-fn dupLuaSourceRefsAlloc(
-    allocator: std.mem.Allocator,
-    refs: []const structure_report.SourcePageRef,
-) ![]const lua.SourcePageRef {
-    const out = try allocator.alloc(lua.SourcePageRef, refs.len);
-    errdefer {
-        for (out[0..refs.len]) |entry| if (entry.name.len != 0) allocator.free(entry.name);
-        allocator.free(out);
-    }
-    for (refs, 0..) |ref, idx| {
-        out[idx] = .{
-            .name = try allocator.dupe(u8, ref.name),
-            .page_start = ref.page_start,
-            .page_end = ref.page_end,
-        };
-    }
-    return out;
-}
-
-fn freeLuaSourceRefs(allocator: std.mem.Allocator, refs: []const lua.SourcePageRef) void {
-    for (refs) |ref| allocator.free(ref.name);
-    allocator.free(refs);
-}
-
-fn deinitOwnedStringSet(
-    allocator: std.mem.Allocator,
-    set: *std.StringHashMapUnmanaged(void),
-) void {
-    var it = set.iterator();
-    while (it.next()) |entry| allocator.free(entry.key_ptr.*);
-    set.deinit(allocator);
-}
-
-fn collectStringSetAlloc(
-    allocator: std.mem.Allocator,
-    set: *const std.StringHashMapUnmanaged(void),
-) ![]const []const u8 {
-    var out = try allocator.alloc([]const u8, set.count());
-    var filled: usize = 0;
-    errdefer {
-        for (out[0..filled]) |value| allocator.free(value);
-        allocator.free(out);
-    }
-
-    var it = set.iterator();
-    var idx: usize = 0;
-    while (it.next()) |entry| : (idx += 1) {
-        out[idx] = try allocator.dupe(u8, entry.key_ptr.*);
-        filled += 1;
-    }
-    std.mem.sort([]const u8, out, {}, struct {
-        fn less(_: void, lhs: []const u8, rhs: []const u8) bool {
-            return std.mem.lessThan(u8, lhs, rhs);
-        }
-    }.less);
-    return out;
 }
 
 fn freeOwnedStrings(allocator: std.mem.Allocator, values: []const []const u8) void {

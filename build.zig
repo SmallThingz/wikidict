@@ -100,18 +100,25 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = codegen_optimize,
     });
+    const shared_template_dispatch_mod = b.createModule(.{
+        .root_source_file = b.path("shared/template_dispatch.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const lua_mod = b.addModule("lua", .{
         .root_source_file = b.path("lua/root.zig"),
         .target = target,
         .optimize = optimize,
     });
     lua_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
+    lua_mod.addImport("shared_structure_report", shared_structure_report_mod);
     const lua_mod_codegen = b.createModule(.{
         .root_source_file = b.path("lua/root.zig"),
         .target = target,
         .optimize = codegen_optimize,
     });
     lua_mod_codegen.addImport("shared_xml_decode", shared_xml_decode_mod_codegen);
+    lua_mod_codegen.addImport("shared_structure_report", shared_structure_report_mod_codegen);
     const compact_pattern_seed_mod = b.createModule(.{
         .root_source_file = b.path("shared/compact_pattern_seed.zig"),
         .target = target,
@@ -142,6 +149,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     template_compiler_support_mod.addImport("lua", lua_mod);
+    template_compiler_support_mod.addImport("template_dispatch", shared_template_dispatch_mod);
     const generated_template_runtime_mod = addGeneratedTemplateRuntimeModule(
         b,
         target,
@@ -238,8 +246,11 @@ pub fn build(b: *std.Build) void {
     });
     decoder_mod.addOptions("config", config_options);
     decoder_mod.addImport("normalize", normalize_mod);
+    decoder_mod.addImport("generated_structure_tables", generated_tables.regular);
     decoder_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
     decoder_mod.addImport("shared_structure_report", shared_structure_report_mod);
+    decoder_mod.addImport("template_dispatch", shared_template_dispatch_mod);
+    decoder_mod.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     decoder_mod.addImport("wikitext_source", wikitext_source_mod);
     decoder_mod.addImport("cli_args", cli_args_mod);
     const decoder_mod_codegen = b.createModule(.{
@@ -249,8 +260,11 @@ pub fn build(b: *std.Build) void {
     });
     decoder_mod_codegen.addOptions("config", config_options);
     decoder_mod_codegen.addImport("normalize", normalize_mod_codegen);
+    decoder_mod_codegen.addImport("generated_structure_tables", generated_tables.regular);
     decoder_mod_codegen.addImport("shared_xml_decode", shared_xml_decode_mod_codegen);
     decoder_mod_codegen.addImport("shared_structure_report", shared_structure_report_mod_codegen);
+    decoder_mod_codegen.addImport("template_dispatch", shared_template_dispatch_mod);
+    decoder_mod_codegen.addImport("compact_pattern_seed", compact_pattern_seed_mod_codegen);
     decoder_mod_codegen.addImport("wikitext_source", wikitext_source_mod_codegen);
     decoder_mod_codegen.addImport("cli_args", cli_args_mod_codegen);
 
@@ -262,8 +276,11 @@ pub fn build(b: *std.Build) void {
     decoder_mod_test.addOptions("config", config_options);
     decoder_mod_test.addImport("normalize", normalize_mod);
     decoder_mod_test.addImport("encoder", encoder_mod_test);
+    decoder_mod_test.addImport("generated_structure_tables", bootstrap_generated_tables.regular);
     decoder_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod);
     decoder_mod_test.addImport("shared_structure_report", shared_structure_report_mod);
+    decoder_mod_test.addImport("template_dispatch", shared_template_dispatch_mod);
+    decoder_mod_test.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     decoder_mod_test.addImport("wikitext_source", wikitext_source_mod);
     decoder_mod_test.addImport("cli_args", cli_args_mod);
 
@@ -372,7 +389,7 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "template-audit", "Audit every structure-listed template against renderer output", template_audit_run, &.{});
 
     const template_codegen_run = addRunArtifactCommand(b, template_codegen_exe, &.{}, b.args);
-    addPublicRunStep(b, "template-compile", "Compile reachable template pages into generated Zig runtime code", template_codegen_run, &.{});
+    addPublicRunStep(b, "template-compile", "Compile reachable template pages into generated runtime code", template_codegen_run, &.{});
 
     const frontend_run = addRunArtifactCommand(b, frontend_exe, &.{}, b.args);
     addPublicRunStep(b, "frontend", "Run the frontend CLI", frontend_run, &.{});
@@ -458,6 +475,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod },
+                .{ .name = "shared_structure_report", .module = shared_structure_report_mod },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -587,7 +605,7 @@ fn loadGeneratedTemplateRuntimeSourceAlloc(b: *std.Build) ![]const u8 {
         b.graph.io,
         b.pathFromRoot("data/generated_template_runtime.zig"),
         b.allocator,
-        std.Io.Limit.limited(64 * 1024 * 1024),
+        std.Io.Limit.limited(512 * 1024 * 1024),
     ) catch |err| switch (err) {
         error.FileNotFound => return b.allocator.dupe(u8, generatedTemplateRuntimeStubSource),
         else => return err,
@@ -614,33 +632,27 @@ const generatedTemplateRuntimeStubSource =
     \\const support = @import("template_compiler_support");
     \\
     \\pub const TemplateClass = support.TemplateClass;
-    \\// Compact index used by the generated template switch dispatcher.
-    \\pub const TemplateRenderIndex = u16;
-    \\// Shared lookup shape used by the renderers when the generated runtime is absent.
-    \\pub const TemplateLookup = struct {
-    \\    class: TemplateClass,
-    \\    render_index: TemplateRenderIndex,
-    \\};
+    \\pub const TemplateDispatchId = u16;
     \\
     \\pub fn classifyTemplate(name: []const u8) ?TemplateClass {
-    \\    const lookup = lookupTemplate(name) orelse return null;
-    \\    return lookup.class;
+    \\    if (std.mem.trim(u8, name, " \t\r\n").len == 0) return null;
+    \\    return .unsupported;
     \\}
     \\
-    \\pub fn lookupTemplate(name: []const u8) ?TemplateLookup {
-    \\    if (name.len == 0) return null;
-    \\    return .{ .class = .unsupported, .render_index = 0 };
+    \\pub fn lookupDynamicTemplateDispatchId(name: []const u8) ?TemplateDispatchId {
+    \\    _ = name;
+    \\    return null;
     \\}
     \\
-    \\pub fn renderTemplateByIndex(
+    \\pub fn renderTemplateByDispatchId(
     \\    out: *std.ArrayList(u8),
     \\    allocator: std.mem.Allocator,
-    \\    render_index: TemplateRenderIndex,
+    \\    dispatch_id: TemplateDispatchId,
     \\    args: *const support.TemplateArgs,
     \\) !bool {
     \\    _ = out;
     \\    _ = allocator;
-    \\    _ = render_index;
+    \\    _ = dispatch_id;
     \\    _ = args;
     \\    return false;
     \\}

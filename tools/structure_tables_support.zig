@@ -101,6 +101,7 @@ pub const DependencySourceRef = struct {
 pub const Dependencies = struct {
     root_templates: []const []const u8 = &.{},
     reachable_templates: []const []const u8 = &.{},
+    dynamic_templates: []const []const u8 = &.{},
     unresolved_templates: []const []const u8 = &.{},
     direct_modules: []const []const u8 = &.{},
     transitive_modules: []const []const u8 = &.{},

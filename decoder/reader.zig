@@ -9,12 +9,8 @@ const wikitext = @import("wikitext_source");
 const testing_encoder = if (builtin.is_test) @import("encoder") else struct {};
 
 const cache_magic = "DCTIDX04";
-const cache_version: u32 = 7;
+const cache_version: u32 = 8;
 const cache_alignment: u32 = 8;
-
-fn isSupportedDictionaryVersion(dict_version: u32) bool {
-    return dict_version == format.version;
-}
 
 const StringRef = extern struct {
     offset: u32,
@@ -30,7 +26,7 @@ const CachedEntry = extern struct {
     word: StringRef,
     normalized: StringRef,
     incoming_aliases: Range,
-    record_offset: u32,
+    storage_ref: u32,
 };
 
 const CachedAltForm = extern struct {
@@ -102,12 +98,13 @@ const BuildAltForm = struct {
 };
 
 const BuildEntryData = struct {
-    record_offset: u32,
+    storage_ref: u32,
+    has_raw: bool,
     word: []const u8,
     normalized: []const u8,
     alt_forms: []BuildAltForm = &.{},
-    // Alias-like entries keep their normalized destinations separately so redirect resolution
-    // and lookup expansion do not have to reparse raw metadata during cache builds.
+    // Raw alias-like entries keep their normalized destinations so cache build can resolve
+    // incoming aliases without reparsing the stored payload later.
     normalized_targets: []const []const u8 = &.{},
     incoming_aliases: []const u32 = &.{},
     word_ref: StringRef = .{ .offset = 0, .len = 0 },
@@ -200,11 +197,6 @@ const MappedReadOnlyFile = struct {
     fn deinit(self: *MappedReadOnlyFile) void {
         std.posix.munmap(self.mapping);
     }
-};
-
-const EntryRecordView = struct {
-    flags: u8,
-    payload: []const u8,
 };
 
 pub const OpenOptions = struct {
@@ -471,10 +463,10 @@ fn formatByteCount(bytes: usize) ByteCountLabel {
 }
 
 const RecordDescriptor = struct {
-    record_offset: u32,
-    flags: u8,
-    title: []const u8,
-    payload: []const u8,
+    has_raw: bool,
+    storage_ref: u32,
+    title_encoded: []const u8,
+    payload_encoded: []const u8,
     record_len: u32,
 };
 
@@ -543,8 +535,7 @@ pub const EntryView = struct {
     }
 
     pub fn derivedAlloc(self: EntryView, allocator: std.mem.Allocator) !EntryDerivedData {
-        const entry_record = try self.dict.entryRecord(self.index);
-        if ((entry_record.flags & format.record_flag_has_raw) != 0) {
+        if (self.hasRaw()) {
             const stored = (try self.rawStoredTextAlloc(allocator)).?;
             defer allocator.free(stored);
             const raw = wikitext.extractEnglishSection(stored) orelse "";
@@ -566,11 +557,9 @@ pub const EntryView = struct {
             };
         }
 
-        const target = try format.decodeAliasRecordTargetAllocWithMappings(
-            allocator,
-            entry_record.payload,
-            self.dict.compact_mappings.view(),
-        );
+        const target_index = self.record().storage_ref;
+        if (target_index >= self.dict.header.raw_count) return error.InvalidDictionaryFile;
+        const target = try allocator.dupe(u8, self.dict.entryAt(target_index).word());
         errdefer allocator.free(target);
 
         var canonical_targets: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -589,8 +578,7 @@ pub const EntryView = struct {
     }
 
     pub fn hasRaw(self: EntryView) bool {
-        const offset = self.dict.entryRecordStart(self.index);
-        return (self.dict.mapping[offset] & format.record_flag_has_raw) != 0;
+        return self.index < self.dict.header.raw_count;
     }
 
     pub fn isAliasOnlyAlloc(self: EntryView, allocator: std.mem.Allocator) !bool {
@@ -651,16 +639,33 @@ pub const EntryView = struct {
         return owned;
     }
 
+    pub fn rawEnglishRenderAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
+        const stored = (try self.rawStoredTextRenderAlloc(allocator)) orelse return null;
+        errdefer allocator.free(stored);
+        const english = wikitext.extractEnglishSection(stored) orelse {
+            allocator.free(stored);
+            return null;
+        };
+        const owned = try allocator.dupe(u8, english);
+        allocator.free(stored);
+        return owned;
+    }
+
     pub fn rawStoredAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         return self.rawStoredTextAlloc(allocator);
     }
 
     fn rawStoredTextAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
-        const entry_record = try self.dict.entryRecord(self.index);
-        const encoded = try format.rawRecordContentPayloadVersion(entry_record.payload, self.dict.header.version);
-        const decoded = try compact.decodeAllocWithMappings(allocator, encoded, self.dict.compact_mappings.view());
+        const encoded = try self.dict.rawPayload(self.index);
+        const decoded = try compact.decodeAllocWithMappings(allocator, encoded, self.dict.compact_mappings);
         return decoded;
+    }
+
+    fn rawStoredTextRenderAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
+        if (!self.hasRaw()) return null;
+        const encoded = try self.dict.rawPayload(self.index);
+        return compact.decodeAllocForRenderWithMappings(allocator, encoded, self.dict.compact_mappings);
     }
 };
 
@@ -670,7 +675,7 @@ pub const Dictionary = struct {
     cache_mapping: []align(std.heap.page_size_min) const u8,
     header: format.Header,
     layout: format.DictionaryLayout,
-    compact_mappings: compact.OwnedRuntimeMappings,
+    compact_mappings: compact.RuntimeMappings,
     cache_header: *const CacheHeader,
     entries: []const CachedEntry,
     alt_forms: []const CachedAltForm,
@@ -686,18 +691,10 @@ pub const Dictionary = struct {
             error.InvalidDictionaryFile => return error.InvalidDictionaryFile,
             error.FileTooBig => return error.FileTooBig,
         };
-        if (!isSupportedDictionaryVersion(inspected.header.version)) return error.UnsupportedDictionaryVersion;
 
-        const mapping_blob = db.mapping[@as(usize, @intCast(inspected.layout.mappings_offset))..@as(usize, @intCast(inspected.layout.mappings_offset + inspected.layout.mappings_len))];
-        var compact_mappings = format.parseCompactMappingsAlloc(allocator, mapping_blob) catch |err| switch (err) {
-            error.InvalidDictionaryFile => return error.InvalidDictionaryFile,
-            error.FileTooBig => return error.FileTooBig,
-            else => return err,
-        };
-        errdefer compact_mappings.deinit(allocator);
-        try loadTemplateTablesIntoMappings(allocator, io, path, options.structure_path, &compact_mappings);
+        const compact_mappings = compact.currentRuntimeMappings();
 
-        const cache = try openOrBuildCache(allocator, io, path, db.stat, db.mapping, &inspected.header, inspected.layout, compact_mappings.view(), options);
+        const cache = try openOrBuildCache(allocator, io, path, db.stat, db.mapping, &inspected.header, inspected.layout, compact_mappings, options);
         errdefer std.posix.munmap(cache.mapping);
 
         return .{
@@ -717,7 +714,6 @@ pub const Dictionary = struct {
     }
 
     pub fn deinit(self: *Dictionary) void {
-        self.compact_mappings.deinit(self.allocator);
         std.posix.munmap(self.cache_mapping);
         std.posix.munmap(self.mapping);
     }
@@ -869,6 +865,9 @@ pub const Dictionary = struct {
         defer _ = visited.remove(entry_index);
 
         const entry = self.entryAt(entry_index);
+        if (!entry.hasRaw()) {
+            return self.resolveCanonicalLinkTargetAlloc(allocator, entry.record().storage_ref, visited);
+        }
         var derived = try entry.derivedAlloc(allocator);
         defer derived.deinit(allocator);
 
@@ -926,6 +925,9 @@ pub const Dictionary = struct {
         defer _ = visited.remove(entry_index);
 
         const entry = self.entryAt(entry_index);
+        if (!entry.hasRaw()) {
+            return self.collectCanonicalEntryIndexes(allocator, entry.record().storage_ref, visited, out);
+        }
         var derived = try entry.derivedAlloc(allocator);
         defer derived.deinit(allocator);
 
@@ -970,25 +972,16 @@ pub const Dictionary = struct {
         return std.mem.order(u8, candidate.matched, current.matched) == .lt;
     }
 
-    fn entryRecordStart(self: *const Dictionary, index: u32) usize {
-        return @as(usize, @intCast(self.header.records_offset)) + self.entries[index].record_offset;
+    fn rawPayloadStart(self: *const Dictionary, index: u32) usize {
+        return @as(usize, @intCast(self.layout.raw_payloads_offset)) + self.entries[index].storage_ref;
     }
 
-    fn entryRecord(self: *const Dictionary, index: u32) !EntryRecordView {
-        const length_table = self.mapping[@as(usize, @intCast(self.layout.lengths_offset))..@as(usize, @intCast(self.layout.lengths_offset + self.layout.lengths_len))];
-        const payload_len = format.payloadLengthAt(length_table, index) catch return error.InvalidDictionaryFile;
-        if (payload_len == 0) return error.InvalidDictionaryFile;
-
-        const start = self.entryRecordStart(index);
-        const records_end = std.math.cast(usize, self.header.records_offset + self.header.records_len) orelse return error.InvalidDictionaryFile;
-        if (start >= records_end) return error.InvalidDictionaryFile;
-        if (payload_len > records_end - start) return error.InvalidDictionaryFile;
-
-        const full_payload = self.mapping[start .. start + payload_len];
-        return .{
-            .flags = full_payload[0],
-            .payload = full_payload[1..],
-        };
+    fn rawPayload(self: *const Dictionary, index: u32) ![]const u8 {
+        if (index >= self.header.raw_count) return error.InvalidDictionaryFile;
+        const start = self.rawPayloadStart(index);
+        const payloads_end = std.math.cast(usize, self.layout.raw_payloads_offset + self.layout.raw_payloads_len) orelse return error.InvalidDictionaryFile;
+        var cursor = start;
+        return format.readNullTerminatedSlice(self.mapping, &cursor, payloads_end);
     }
 
     fn incomingAliasList(self: *const Dictionary, range: Range) []const u32 {
@@ -1138,10 +1131,14 @@ fn openOrBuildCache(
     const cache_path = try std.fmt.allocPrint(allocator, "{s}.idx", .{db_path});
     defer allocator.free(cache_path);
 
-    const expected_key = computeCacheKey(db_stat, header);
+    const expected_key = computeCacheKey(db_stat, header, layout);
     if (try tryOpenCache(io, cache_path, expected_key)) |cache| return cache;
 
-    var progress = CacheBuildProgress.init(std.math.cast(usize, header.records_len) orelse return error.FileTooBig);
+    const total_record_bytes = std.math.cast(
+        usize,
+        layout.raw_titles_len + layout.alias_titles_len + layout.alias_targets_len + layout.raw_payloads_len,
+    ) orelse return error.FileTooBig;
+    var progress = CacheBuildProgress.init(total_record_bytes);
     try buildAndWriteCache(allocator, io, cache_path, expected_key, mapped, header, layout, mappings, options, &progress);
     return (try tryOpenCache(io, cache_path, expected_key)) orelse error.InvalidDictionaryCache;
 }
@@ -1316,7 +1313,7 @@ fn materializeCacheData(allocator: std.mem.Allocator, payload: *BuildPayload) !C
                 .start = std.math.cast(u32, incoming_cursor) orelse return error.StringListTooLarge,
                 .len = std.math.cast(u32, incoming_len) orelse return error.StringListTooLarge,
             },
-            .record_offset = entry.record_offset,
+            .storage_ref = entry.storage_ref,
         };
         incoming_cursor += incoming_len;
     }
@@ -1419,8 +1416,8 @@ fn buildIndex(
     progress.setReadingParallel(thread_count > 1);
     if (thread_count == 1) {
         for (descriptors) |descriptor| {
-            const entry = buildEntryFromRecord(arena_allocator, descriptor, header.version, mappings) catch |err| {
-                std.log.err("failed to decode dictionary record at offset {d}: {s}", .{ descriptor.record_offset, @errorName(err) });
+            const entry = buildEntryFromRecord(arena_allocator, descriptor, mappings) catch |err| {
+                std.log.err("failed to decode dictionary record for title payload {s}", .{@errorName(err)});
                 return err;
             };
             state.entries.appendAssumeCapacity(entry);
@@ -1447,7 +1444,6 @@ fn buildIndex(
             descriptors[start..end],
             chunk,
             progress,
-            header.version,
             mappings,
         });
         started_threads += 1;
@@ -1472,72 +1468,69 @@ fn collectRecordDescriptors(
     header: *const format.Header,
     layout: format.DictionaryLayout,
 ) ![]const RecordDescriptor {
-    const entry_count: usize = header.entry_count;
+    const raw_count: usize = header.raw_count;
+    const entry_count: usize = header.entryCount();
     const descriptors = try allocator.alloc(RecordDescriptor, entry_count);
     errdefer allocator.free(descriptors);
 
-    const length_bytes = mapped[@as(usize, @intCast(layout.lengths_offset))..@as(usize, @intCast(layout.lengths_offset + layout.lengths_len))];
-    const titles_end: usize = @intCast(layout.titles_offset + layout.titles_len);
-    const records_start: usize = @intCast(layout.records_offset);
-    const records_end: usize = @intCast(layout.records_offset + layout.records_len);
-
-    var title_cursor: usize = @intCast(layout.titles_offset);
-    var payload_cursor: usize = records_start;
-    for (descriptors, 0..) |*descriptor, idx| {
-        const title = try readNullTerminatedSlice(mapped, &title_cursor, titles_end);
-        const payload_len = format.payloadLengthAt(length_bytes, idx) catch return error.InvalidDictionaryFile;
-        if (payload_len == 0 or payload_len > records_end - payload_cursor) return error.InvalidDictionaryFile;
-        const full_payload = mapped[payload_cursor .. payload_cursor + payload_len];
-        const record_offset = payload_cursor - records_start;
-        payload_cursor += payload_len;
-
+    var raw_title_cursor: usize = @intCast(layout.raw_titles_offset);
+    const raw_titles_end: usize = @intCast(layout.raw_titles_offset + layout.raw_titles_len);
+    var raw_payload_cursor: usize = @intCast(layout.raw_payloads_offset);
+    const raw_payloads_end: usize = @intCast(layout.raw_payloads_offset + layout.raw_payloads_len);
+    for (descriptors[0..raw_count]) |*descriptor| {
+        const title_encoded = try format.readNullTerminatedSlice(mapped, &raw_title_cursor, raw_titles_end);
+        const payload_offset = raw_payload_cursor - @as(usize, @intCast(layout.raw_payloads_offset));
+        const payload_encoded = try format.readNullTerminatedSlice(mapped, &raw_payload_cursor, raw_payloads_end);
         descriptor.* = .{
-            .record_offset = std.math.cast(u32, record_offset) orelse return error.InvalidDictionaryFile,
-            .flags = full_payload[0],
-            .title = title,
-            .payload = full_payload[1..],
-            .record_len = payload_len,
+            .has_raw = true,
+            .storage_ref = std.math.cast(u32, payload_offset) orelse return error.InvalidDictionaryFile,
+            .title_encoded = title_encoded,
+            .payload_encoded = payload_encoded,
+            .record_len = std.math.cast(u32, title_encoded.len + payload_encoded.len + 2) orelse return error.InvalidDictionaryFile,
         };
     }
-    if (title_cursor != titles_end or payload_cursor != records_end) return error.InvalidDictionaryFile;
+
+    var alias_title_cursor: usize = @intCast(layout.alias_titles_offset);
+    const alias_titles_end: usize = @intCast(layout.alias_titles_offset + layout.alias_titles_len);
+    for (descriptors[raw_count..], 0..) |*descriptor, alias_idx| {
+        const title_encoded = try format.readNullTerminatedSlice(mapped, &alias_title_cursor, alias_titles_end);
+        descriptor.* = .{
+            .has_raw = false,
+            .storage_ref = try format.readAliasTargetAt(mapped, layout, alias_idx),
+            .title_encoded = title_encoded,
+            .payload_encoded = &.{},
+            .record_len = std.math.cast(u32, title_encoded.len + 1 + @sizeOf(u32)) orelse return error.InvalidDictionaryFile,
+        };
+    }
+    if (raw_title_cursor != raw_titles_end or raw_payload_cursor != raw_payloads_end or alias_title_cursor != alias_titles_end) {
+        return error.InvalidDictionaryFile;
+    }
     return descriptors;
 }
 
 fn buildEntryFromRecord(
     allocator: std.mem.Allocator,
     descriptor: RecordDescriptor,
-    dictionary_version: u32,
     mappings: compact.RuntimeMappings,
 ) !BuildEntryData {
-    if (dictionary_version != format.version) return error.InvalidDictionaryFile;
-    const word = try allocator.dupe(u8, descriptor.title);
+    const word = try compact.decodeAllocWithMappings(allocator, descriptor.title_encoded, mappings);
     const normalized = if (normalize.isIdentity(word))
         word
     else
         try normalize.normalizeAlloc(allocator, word);
     var entry = BuildEntryData{
-        .record_offset = descriptor.record_offset,
+        .storage_ref = descriptor.storage_ref,
+        .has_raw = descriptor.has_raw,
         .word = word,
         .normalized = normalized,
     };
 
-    if ((descriptor.flags & format.record_flag_has_raw) != 0) {
-        const metadata = try decodeBuildRawMetadataAlloc(allocator, descriptor.payload, dictionary_version, mappings);
+    if (descriptor.has_raw) {
+        const metadata = try decodeBuildRawMetadataAlloc(allocator, word, descriptor.payload_encoded, mappings);
         entry.alt_forms = metadata.alt_forms;
         entry.normalized_targets = metadata.canonical_targets;
         return entry;
     }
-
-    const target = format.decodeAliasRecordTargetAllocWithMappings(allocator, descriptor.payload, mappings) catch return error.InvalidDictionaryFile;
-    const normalized_target = if (normalize.isIdentity(target)) blk: {
-        break :blk target;
-    } else blk: {
-        defer allocator.free(target);
-        break :blk try normalize.normalizeAlloc(allocator, target);
-    };
-    const targets = try allocator.alloc([]const u8, 1);
-    targets[0] = normalized_target;
-    entry.normalized_targets = targets;
     return entry;
 }
 
@@ -1548,20 +1541,26 @@ const BuildRawMetadata = struct {
 
 fn decodeBuildRawMetadataAlloc(
     allocator: std.mem.Allocator,
+    word: []const u8,
     payload: []const u8,
-    dictionary_version: u32,
     mappings: compact.RuntimeMappings,
 ) !BuildRawMetadata {
-    if (dictionary_version != format.version) return error.InvalidDictionaryFile;
-    const metadata = format.decodeRawRecordMetadataAllocWithMappings(allocator, payload, mappings) catch return error.InvalidDictionaryFile;
-    const alt_forms = try allocator.alloc(BuildAltForm, metadata.alt_forms.len);
+    const stored = compact.decodeAllocWithMappings(allocator, payload, mappings) catch return error.InvalidDictionaryFile;
+    defer allocator.free(stored);
+    const raw = wikitext.extractEnglishSection(stored) orelse "";
+    var metadata: wikitext.EntryMetadata = .{};
+    if (raw.len != 0) {
+        metadata = try wikitext.extractEntryMetadata(allocator, word, raw);
+    }
+    errdefer metadata.deinit(allocator);
+    const alt_forms = try allocator.alloc(BuildAltForm, metadata.alt_forms.items.len);
     errdefer allocator.free(alt_forms);
     var alt_index: usize = 0;
     errdefer {
-        while (alt_index < metadata.alt_forms.len) : (alt_index += 1) allocator.free(metadata.alt_forms[alt_index]);
-        allocator.free(metadata.alt_forms);
-        for (metadata.canonical_targets) |target| allocator.free(target);
-        allocator.free(metadata.canonical_targets);
+        while (alt_index < metadata.alt_forms.items.len) : (alt_index += 1) allocator.free(metadata.alt_forms.items[alt_index]);
+        metadata.alt_forms.deinit(allocator);
+        for (metadata.canonical_targets.items) |target| allocator.free(target);
+        metadata.canonical_targets.deinit(allocator);
     }
     errdefer {
         while (alt_index > 0) : (alt_index -= 1) {
@@ -1571,7 +1570,7 @@ fn decodeBuildRawMetadataAlloc(
             }
         }
     }
-    for (metadata.alt_forms, 0..) |value, idx| {
+    for (metadata.alt_forms.items, 0..) |value, idx| {
         const normalized = if (normalize.isIdentity(value))
             value
         else
@@ -1582,11 +1581,16 @@ fn decodeBuildRawMetadataAlloc(
         };
         alt_index += 1;
     }
-    allocator.free(metadata.alt_forms);
+    metadata.alt_forms.deinit(allocator);
+
+    const canonical_targets = try allocator.alloc([]const u8, metadata.canonical_targets.items.len);
+    @memcpy(canonical_targets, metadata.canonical_targets.items);
+    metadata.canonical_targets.deinit(allocator);
+    metadata.canonical_targets = .empty;
 
     return .{
         .alt_forms = alt_forms,
-        .canonical_targets = metadata.canonical_targets,
+        .canonical_targets = canonical_targets,
     };
 }
 
@@ -1594,7 +1598,6 @@ fn scanRecordChunk(
     descriptors: []const RecordDescriptor,
     chunk: *ScanChunkResult,
     progress: *CacheBuildProgress,
-    dictionary_version: u32,
     mappings: compact.RuntimeMappings,
 ) void {
     const allocator = chunk.arena.allocator();
@@ -1606,8 +1609,8 @@ fn scanRecordChunk(
     var pending_entries: usize = 0;
     var pending_bytes: usize = 0;
     for (descriptors, 0..) |descriptor, idx| {
-        chunk.entries[idx] = buildEntryFromRecord(allocator, descriptor, dictionary_version, mappings) catch |err| {
-            std.log.err("failed to decode dictionary record at offset {d}: {s}", .{ descriptor.record_offset, @errorName(err) });
+        chunk.entries[idx] = buildEntryFromRecord(allocator, descriptor, mappings) catch |err| {
+            std.log.err("failed to decode dictionary record: {s}", .{@errorName(err)});
             chunk.err = err;
             return;
         };
@@ -1760,40 +1763,34 @@ fn viewArray(comptime T: type, mapped: []align(std.heap.page_size_min) const u8,
     return ptr[0..count];
 }
 
-fn computeCacheKey(stat: anytype, header: *const format.Header) u64 {
+fn computeCacheKey(stat: anytype, header: *const format.Header, layout: format.DictionaryLayout) u64 {
     var hasher = std.hash.Wyhash.init(0);
     const size: u64 = @intCast(stat.size);
     const mtime_ns: i128 = stat.mtime.nanoseconds;
-    const version: u32 = header.version;
-    const reserved0: u32 = header.reserved0;
-    const entry_count: u32 = header.entry_count;
-    const raw_entry_count: u32 = header.raw_entry_count;
-    const redirect_count: u32 = header.redirect_count;
-    const lengths_offset: u64 = header.lengths_offset;
-    const lengths_len: u64 = header.lengths_len;
-    const mappings_offset: u64 = header.mappings_offset;
-    const mappings_len: u64 = header.mappings_len;
-    const titles_offset: u64 = header.titles_offset;
-    const titles_len: u64 = header.titles_len;
-    const records_offset: u64 = header.records_offset;
-    const records_len: u64 = header.records_len;
+    const raw_count: u32 = header.raw_count;
+    const alias_count: u32 = header.alias_count;
+    const raw_titles_offset: u64 = layout.raw_titles_offset;
+    const raw_titles_len: u64 = layout.raw_titles_len;
+    const alias_titles_offset: u64 = layout.alias_titles_offset;
+    const alias_titles_len: u64 = layout.alias_titles_len;
+    const alias_targets_offset: u64 = layout.alias_targets_offset;
+    const alias_targets_len: u64 = layout.alias_targets_len;
+    const raw_payloads_offset: u64 = layout.raw_payloads_offset;
+    const raw_payloads_len: u64 = layout.raw_payloads_len;
 
     inline for (.{
         size,
         mtime_ns,
-        version,
-        reserved0,
-        entry_count,
-        raw_entry_count,
-        redirect_count,
-        lengths_offset,
-        lengths_len,
-        mappings_offset,
-        mappings_len,
-        titles_offset,
-        titles_len,
-        records_offset,
-        records_len,
+        raw_count,
+        alias_count,
+        raw_titles_offset,
+        raw_titles_len,
+        alias_titles_offset,
+        alias_titles_len,
+        alias_targets_offset,
+        alias_targets_len,
+        raw_payloads_offset,
+        raw_payloads_len,
     }) |value| hasher.update(std.mem.asBytes(&value));
     return hasher.final();
 }
@@ -1844,6 +1841,10 @@ fn finalizeIncomingAliases(
     @memset(incoming_counts, 0);
 
     for (state.entries.items) |entry| {
+        if (!entry.has_raw) {
+            if (entry.storage_ref < state.entries.items.len) incoming_counts[entry.storage_ref] += 1;
+            continue;
+        }
         for (entry.normalized_targets) |normalized_target| {
             if (title_map.get(normalized_target)) |range| {
                 const target_indices = title_indices[range.start .. range.start + range.len];
@@ -1866,6 +1867,14 @@ fn finalizeIncomingAliases(
     @memcpy(incoming_cursors, incoming_offsets[0..state.entries.items.len]);
 
     for (state.entries.items, 0..) |entry, source_idx| {
+        if (!entry.has_raw) {
+            if (entry.storage_ref < state.entries.items.len) {
+                const cursor = incoming_cursors[entry.storage_ref];
+                incoming_refs[cursor] = @intCast(source_idx);
+                incoming_cursors[entry.storage_ref] = cursor + 1;
+            }
+            continue;
+        }
         for (entry.normalized_targets) |normalized_target| {
             if (title_map.get(normalized_target)) |range| {
                 const target_indices = title_indices[range.start .. range.start + range.len];
@@ -2254,7 +2263,8 @@ test "internEntryStrings reuses equivalent local refs" {
         .{ .value = "Beta", .normalized = "alpha" },
     };
     var entry = BuildEntryData{
-        .record_offset = 0,
+        .storage_ref = 0,
+        .has_raw = true,
         .word = "alpha",
         .normalized = "alpha",
         .alt_forms = &alt_forms,
@@ -2269,24 +2279,17 @@ test "internEntryStrings reuses equivalent local refs" {
 }
 
 test "decodeBuildRawMetadataAlloc matches format metadata decode" {
-    const payload = try testing_encoder.format.encodeRawRecordPayloadAlloc(
+    const payload = try testing_encoder.compact_encoding.encodeAlloc(
         std.testing.allocator,
-        &.{
-            "colour",
-            "Co lor",
-        },
-        &.{ "color", "colour" },
-        false,
-        "encoded-english",
+        \\==English==
+        \\===Noun===
+        \\{{head|en|noun form|head=colour|head2=Co lor}}
+        \\# {{alternative form of|en|color}}
+        \\# {{alternative form of|en|colour}}
     );
     defer std.testing.allocator.free(payload);
 
-    const mapping_blob = try testing_encoder.format.encodeCurrentCompactMappingsAlloc(std.testing.allocator);
-    defer std.testing.allocator.free(mapping_blob);
-    var mappings = try format.parseCompactMappingsAlloc(std.testing.allocator, mapping_blob);
-    defer mappings.deinit(std.testing.allocator);
-
-    const actual = try decodeBuildRawMetadataAlloc(std.testing.allocator, payload, format.version, mappings.view());
+    const actual = try decodeBuildRawMetadataAlloc(std.testing.allocator, "colour", payload, compact.currentRuntimeMappings());
     defer {
         for (actual.alt_forms) |alt_form| {
             std.testing.allocator.free(alt_form.value);
@@ -2297,14 +2300,7 @@ test "decodeBuildRawMetadataAlloc matches format metadata decode" {
         std.testing.allocator.free(actual.canonical_targets);
     }
 
-    try std.testing.expectEqual(@as(usize, 2), actual.alt_forms.len);
-    const expected_alt_forms = [_][]const u8{ "colour", "Co lor" };
-    for (expected_alt_forms, actual.alt_forms) |lhs, rhs| {
-        try std.testing.expectEqualStrings(lhs, rhs.value);
-        const normalized = try normalize.normalizeAlloc(std.testing.allocator, lhs);
-        defer std.testing.allocator.free(normalized);
-        try std.testing.expectEqualStrings(normalized, rhs.normalized);
-    }
+    try std.testing.expectEqual(@as(usize, 0), actual.alt_forms.len);
     const expected_targets = [_][]const u8{ "color", "colour" };
     try std.testing.expectEqual(expected_targets.len, actual.canonical_targets.len);
     for (expected_targets, actual.canonical_targets) |lhs, rhs| {
@@ -2312,31 +2308,24 @@ test "decodeBuildRawMetadataAlloc matches format metadata decode" {
     }
 }
 
-test "buildEntryFromRecord normalizes redirect targets during cache build" {
-    const payload = try testing_encoder.format.encodeAliasRecordPayloadAlloc(std.testing.allocator, "Color");
-    defer std.testing.allocator.free(payload);
-
-    const mapping_blob = try testing_encoder.format.encodeCurrentCompactMappingsAlloc(std.testing.allocator);
-    defer std.testing.allocator.free(mapping_blob);
-    var mappings = try format.parseCompactMappingsAlloc(std.testing.allocator, mapping_blob);
-    defer mappings.deinit(std.testing.allocator);
-
+test "buildEntryFromRecord keeps alias target indices" {
+    const title = try testing_encoder.compact_encoding.encodeAlloc(std.testing.allocator, "color");
+    defer std.testing.allocator.free(title);
     const entry = try buildEntryFromRecord(std.testing.allocator, .{
-        .record_offset = 0,
-        .flags = 0,
-        .title = "color",
-        .payload = payload,
+        .has_raw = false,
+        .storage_ref = 7,
+        .title_encoded = title,
+        .payload_encoded = &.{},
         .record_len = 0,
-    }, format.version, mappings.view());
+    }, compact.currentRuntimeMappings());
     defer {
         std.testing.allocator.free(entry.word);
-        std.testing.allocator.free(entry.normalized_targets[0]);
-        std.testing.allocator.free(entry.normalized_targets);
     }
 
     try std.testing.expectEqualStrings("color", entry.word);
     try std.testing.expectEqual(@intFromPtr(entry.word.ptr), @intFromPtr(entry.normalized.ptr));
-    try std.testing.expectEqualStrings("color", entry.normalized_targets[0]);
+    try std.testing.expectEqual(@as(u32, 7), entry.storage_ref);
+    try std.testing.expect(!entry.has_raw);
 }
 
 test "tryOpenCache rejects stale cache versions" {
@@ -2497,8 +2486,9 @@ test "dictionary build drops non-English entries by default" {
     const hits = try dict.lookupExact(std.testing.allocator, "चूत");
     defer std.testing.allocator.free(hits);
     try std.testing.expectEqual(@as(usize, 0), hits.len);
-    try std.testing.expectEqual(@as(u32, 0), dict.header.entry_count);
-    try std.testing.expectEqual(@as(u32, 0), dict.header.raw_entry_count);
+    try std.testing.expectEqual(@as(u32, 0), dict.header.entryCount());
+    try std.testing.expectEqual(@as(u32, 0), dict.header.raw_count);
+    try std.testing.expectEqual(@as(u32, 0), dict.header.alias_count);
 }
 
 test "dictionary cache rebuild recomputes normalized alias metadata" {
@@ -2608,8 +2598,9 @@ test "build drops alias entries whose destination is not stored" {
     var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path, .{});
     defer dict.deinit();
 
-    try std.testing.expectEqual(@as(u32, 1), dict.header.entry_count);
-    try std.testing.expectEqual(@as(u32, 0), dict.header.redirect_count);
+    try std.testing.expectEqual(@as(u32, 1), dict.header.entryCount());
+    try std.testing.expectEqual(@as(u32, 1), dict.header.raw_count);
+    try std.testing.expectEqual(@as(u32, 0), dict.header.alias_count);
 
     const valid_hits = try dict.lookupExact(std.testing.allocator, "color");
     defer std.testing.allocator.free(valid_hits);
@@ -2871,11 +2862,11 @@ test "sortLookups matches serial ordering" {
         beta_alt_forms[0..],
     };
     const entries = [_]BuildEntryData{
-        .{ .record_offset = 0, .word = "beta", .normalized = "beta", .alt_forms = alt_forms[0] },
-        .{ .record_offset = 0, .word = "zeta", .normalized = "alpha", .alt_forms = alt_forms[1] },
-        .{ .record_offset = 0, .word = "entry3", .normalized = "unused", .alt_forms = alt_forms[2] },
-        .{ .record_offset = 0, .word = "alpha", .normalized = "alpha", .alt_forms = alt_forms[3] },
-        .{ .record_offset = 0, .word = "entry5", .normalized = "unused", .alt_forms = alt_forms[4] },
+        .{ .storage_ref = 0, .has_raw = true, .word = "beta", .normalized = "beta", .alt_forms = alt_forms[0] },
+        .{ .storage_ref = 0, .has_raw = true, .word = "zeta", .normalized = "alpha", .alt_forms = alt_forms[1] },
+        .{ .storage_ref = 0, .has_raw = true, .word = "entry3", .normalized = "unused", .alt_forms = alt_forms[2] },
+        .{ .storage_ref = 0, .has_raw = true, .word = "alpha", .normalized = "alpha", .alt_forms = alt_forms[3] },
+        .{ .storage_ref = 0, .has_raw = true, .word = "entry5", .normalized = "unused", .alt_forms = alt_forms[4] },
     };
     const lookup_count = 7;
     var parallel: [lookup_count]BuildLookupRecord = undefined;
@@ -2903,10 +2894,10 @@ test "mergeSortedLookups preserves lookup ordering" {
         &.{},
     };
     const entries = [_]BuildEntryData{
-        .{ .record_offset = 0, .word = "alpha", .normalized = "alpha", .alt_forms = alt_forms[0] },
-        .{ .record_offset = 0, .word = "entry2", .normalized = "unused", .alt_forms = alt_forms[1] },
-        .{ .record_offset = 0, .word = "entry3", .normalized = "unused", .alt_forms = alt_forms[2] },
-        .{ .record_offset = 0, .word = "gamma", .normalized = "gamma", .alt_forms = alt_forms[3] },
+        .{ .storage_ref = 0, .has_raw = true, .word = "alpha", .normalized = "alpha", .alt_forms = alt_forms[0] },
+        .{ .storage_ref = 0, .has_raw = true, .word = "entry2", .normalized = "unused", .alt_forms = alt_forms[1] },
+        .{ .storage_ref = 0, .has_raw = true, .word = "entry3", .normalized = "unused", .alt_forms = alt_forms[2] },
+        .{ .storage_ref = 0, .has_raw = true, .word = "gamma", .normalized = "gamma", .alt_forms = alt_forms[3] },
     };
     var all = [_]BuildLookupRecord{ undefined, undefined, undefined, undefined, undefined, undefined };
     fillLookupChunk(&entries, 0, &all);
@@ -2937,7 +2928,8 @@ test "buildLookups partitions threaded workers without overlapping slices" {
 
     for (entries, 0..) |*entry, idx| {
         entry.* = .{
-            .record_offset = 0,
+            .storage_ref = 0,
+            .has_raw = true,
             .word = try std.fmt.allocPrint(std.testing.allocator, "word-{d}", .{idx}),
             .normalized = try std.fmt.allocPrint(std.testing.allocator, "word-{d}", .{idx}),
             .alt_forms = &.{},

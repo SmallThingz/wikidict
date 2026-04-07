@@ -1365,10 +1365,12 @@ fn writeJsonReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyz
     const arena_allocator = arena.allocator();
 
     const legacy_inputs = try legacyBuildInputsAlloc(arena_allocator, analyzer);
-    const build = try structure_tables_support.buildDataFromLegacyAlloc(arena_allocator, legacy_inputs);
+    var build = try structure_tables_support.buildDataFromLegacyAlloc(arena_allocator, legacy_inputs);
     const anomaly_kinds = try countEntriesAlloc(arena_allocator, analyzer.anomaly_kind_counts);
     const anomaly_samples = try anomalySamplesAlloc(arena_allocator, analyzer.anomaly_samples.items);
     const dependencies = try buildStructureDependenciesAlloc(arena_allocator, allocator, analyzer, build);
+    try replaceBuildLineTemplatesAlloc(arena_allocator, &build, dependencies.reachable_templates);
+    build.structure_fingerprint = structure_tables_support.computeStructureFingerprint(build);
 
     const report = structure_tables_support.ExactStructureReport{
         .input = analyzer.options.input_path,
@@ -1449,6 +1451,7 @@ fn buildStructureDependenciesAlloc(
     return .{
         .root_templates = try dupStringSliceAlloc(dest_allocator, report.root_templates),
         .reachable_templates = try dupStringSliceAlloc(dest_allocator, reachable_templates),
+        .dynamic_templates = &.{},
         .unresolved_templates = try dupStringSliceAlloc(dest_allocator, report.unresolved_templates),
         .direct_modules = try dupStringSliceAlloc(dest_allocator, report.direct_modules),
         .transitive_modules = try dupStringSliceAlloc(dest_allocator, transitive_modules),
@@ -1493,6 +1496,22 @@ fn collectBuildTemplateRootsAlloc(
     }.lessThan);
     return out;
 }
+
+fn replaceBuildLineTemplatesAlloc(
+    allocator: std.mem.Allocator,
+    build: *structure_tables_support.BuildData,
+    reachable_templates: []const []const u8,
+) !void {
+    const out = try allocator.alloc(structure_tables_support.TemplateSpec, reachable_templates.len);
+    for (reachable_templates, out, 0..) |name, *slot, idx| {
+        slot.* = .{
+            .code = std.math.cast(u16, idx + 1) orelse return error.TooManyGeneratedTemplates,
+            .name = try allocator.dupe(u8, name),
+        };
+    }
+    build.line_templates = out;
+}
+
 
 fn dupStringSliceAlloc(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
     const out = try allocator.alloc([]const u8, values.len);
@@ -1586,9 +1605,42 @@ fn filterNamesPresentInMapAlloc(
     return out.toOwnedSlice(allocator);
 }
 
+fn collectAllStructureSourceRefsAlloc(
+    allocator: std.mem.Allocator,
+    map: std.StringHashMap(SourcePageOffset),
+) ![]const lua.SourcePageRef {
+    const names = try collectSortedMapKeysAlloc(allocator, map);
+    defer freeOwnedStringSlice(allocator, names);
+
+    const out = try allocator.alloc(lua.SourcePageRef, names.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (out[0..initialized]) |entry| allocator.free(entry.name);
+        allocator.free(out);
+    }
+    for (names, out) |name, *slot| {
+        const offset = map.get(name).?;
+        slot.* = .{
+            .name = try allocator.dupe(u8, name),
+            .page_start = offset.page_start,
+            .page_end = offset.page_end,
+        };
+        initialized += 1;
+    }
+    return out;
+}
+
 fn freeOwnedStringSlice(allocator: std.mem.Allocator, values: []const []const u8) void {
     for (values) |value| allocator.free(value);
     allocator.free(values);
+}
+
+fn freeStructureSourceRefs(
+    allocator: std.mem.Allocator,
+    refs: []const lua.SourcePageRef,
+) void {
+    for (refs) |ref| allocator.free(ref.name);
+    allocator.free(refs);
 }
 
 fn stringSliceContains(values: []const []const u8, needle: []const u8) bool {

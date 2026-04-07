@@ -2532,30 +2532,23 @@ fn renderGeneratedTemplateHtml(
     parts: *const std.ArrayList([]const u8),
     options: RenderOptions,
 ) !bool {
-    const trimmed = trimWikiWhitespace(name);
-    const lookup = generated_templates.lookupTemplate(trimmed) orelse return false;
-    switch (lookup.class) {
-        .metadata_only => return true,
-        .unsupported => return false,
-        .compiled => {
-            var args = try template_support.templateArgsFromPartsAlloc(allocator, parts);
-            defer args.deinit(allocator);
+    const dispatch_id = template_support.templateDispatchId(trimWikiWhitespace(name)) orelse return false;
+    var args = try template_support.templateArgsFromPartsAlloc(allocator, parts);
+    defer args.deinit(allocator);
 
-            var generated_text: std.ArrayList(u8) = .empty;
-            defer generated_text.deinit(allocator);
-            if (!try generated_templates.renderTemplateByIndex(&generated_text, allocator, lookup.render_index, &args)) return false;
-            if (generated_text.items.len == 0) return true;
-            if (looksLikeTemplateRedirectTextHtml(generated_text.items)) return false;
+    var generated_text: std.ArrayList(u8) = .empty;
+    defer generated_text.deinit(allocator);
+    if (!try generated_templates.renderTemplateByDispatchId(&generated_text, allocator, dispatch_id, &args)) return false;
+    if (generated_text.items.len == 0) return true;
+    if (looksLikeTemplateRedirectTextHtml(generated_text.items)) return false;
 
-            try renderInlineHtml(out, allocator, generated_text.items, .{
-                .strict = false,
-                .issue = options.issue,
-                .link_resolver = options.link_resolver,
-                .sense_ids = options.sense_ids,
-            });
-            return true;
-        },
-    }
+    try renderInlineHtml(out, allocator, generated_text.items, .{
+        .strict = false,
+        .issue = options.issue,
+        .link_resolver = options.link_resolver,
+        .sense_ids = options.sense_ids,
+    });
+    return true;
 }
 
 fn looksLikeTemplateRedirectTextHtml(text: []const u8) bool {

@@ -33,6 +33,7 @@ pub const TemplateMappings = struct {
 pub const DependencySet = struct {
     root_templates: []const []const u8 = &.{},
     reachable_templates: []const []const u8 = &.{},
+    dynamic_templates: []const []const u8 = &.{},
     unresolved_templates: []const []const u8 = &.{},
     direct_modules: []const []const u8 = &.{},
     transitive_modules: []const []const u8 = &.{},
@@ -51,6 +52,7 @@ pub const DependencySet = struct {
     pub fn deinit(self: *DependencySet, allocator: std.mem.Allocator) void {
         freeOwnedStrings(allocator, self.root_templates);
         freeOwnedStrings(allocator, self.reachable_templates);
+        freeOwnedStrings(allocator, self.dynamic_templates);
         freeOwnedStrings(allocator, self.unresolved_templates);
         freeOwnedStrings(allocator, self.direct_modules);
         freeOwnedStrings(allocator, self.transitive_modules);
@@ -69,6 +71,7 @@ const ParsedStructureFile = struct {
     dependencies: struct {
         root_templates: []const []const u8 = &.{},
         reachable_templates: []const []const u8 = &.{},
+        dynamic_templates: []const []const u8 = &.{},
         unresolved_templates: []const []const u8 = &.{},
         direct_modules: []const []const u8 = &.{},
         transitive_modules: []const []const u8 = &.{},
@@ -137,6 +140,7 @@ pub fn loadDependencySetAlloc(
     return .{
         .root_templates = try dupOwnedStringsAlloc(allocator, deps.root_templates),
         .reachable_templates = try dupOwnedStringsAlloc(allocator, deps.reachable_templates),
+        .dynamic_templates = try dupOwnedStringsAlloc(allocator, deps.dynamic_templates),
         .unresolved_templates = try dupOwnedStringsAlloc(allocator, deps.unresolved_templates),
         .direct_modules = try dupOwnedStringsAlloc(allocator, deps.direct_modules),
         .transitive_modules = try dupOwnedStringsAlloc(allocator, deps.transitive_modules),

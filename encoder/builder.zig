@@ -216,26 +216,22 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
         progress.finishScanning();
         progress.setWriting(output.entry_count, output.redirect_count);
         try output.finish();
-        stats.english_entries = output.entry_count;
+        stats.english_entries = output.raw_entry_count;
         stats.redirect_aliases = output.redirect_count;
     }
 
-    if (options.limit_entries == null) {
-        const filtered_output_path = try std.fmt.allocPrint(allocator, "{s}.filter.tmp", .{options.output_path});
-        defer allocator.free(filtered_output_path);
-        std.Io.Dir.cwd().deleteFile(io, filtered_output_path) catch |err| switch (err) {
-            error.FileNotFound => {},
-            else => return err,
-        };
-        defer std.Io.Dir.cwd().deleteFile(io, filtered_output_path) catch {};
+    const filtered_output_path = try std.fmt.allocPrint(allocator, "{s}.filter.tmp", .{options.output_path});
+    defer allocator.free(filtered_output_path);
+    std.Io.Dir.cwd().deleteFile(io, filtered_output_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+    defer std.Io.Dir.cwd().deleteFile(io, filtered_output_path) catch {};
 
-        const filtered = try filterAliasRecordsFromBinary(io, allocator, temp_output_path, filtered_output_path, options.worker_threads, &progress);
-        stats.english_entries = filtered.entry_count;
-        stats.redirect_aliases = filtered.redirect_count;
-        try std.Io.Dir.cwd().rename(filtered_output_path, std.Io.Dir.cwd(), options.output_path, io);
-    } else {
-        try std.Io.Dir.cwd().rename(temp_output_path, std.Io.Dir.cwd(), options.output_path, io);
-    }
+    const filtered = try filterAliasRecordsFromBinary(io, allocator, temp_output_path, filtered_output_path, options.worker_threads, &progress);
+    stats.english_entries = filtered.entry_count;
+    stats.redirect_aliases = filtered.redirect_count;
+    try std.Io.Dir.cwd().rename(filtered_output_path, std.Io.Dir.cwd(), options.output_path, io);
     progress.finish(stats.pages_seen, stats.english_entries);
     return stats;
 }
@@ -433,7 +429,7 @@ fn processEncodeChunkFallible(job: *EncodeChunkJob) !void {
     job.result.stats = .{
         .pages_seen = stats.pages_seen,
         .namespace_zero_pages = stats.namespace_zero_pages,
-        .english_entries = output.entry_count,
+        .english_entries = output.raw_entry_count,
         .redirect_aliases = output.redirect_count,
     };
 }
@@ -443,20 +439,27 @@ fn appendChunkFileToOutput(io: std.Io, chunk_path: []const u8, output: *OutputWr
     defer chunk.deinit();
 
     const mapped = chunk.bytes();
-    const inspected = try validateDictionaryHeader(mapped, chunk.stat.size);
-    const lengths_start: usize = @intCast(inspected.layout.lengths_offset);
-    const lengths_end: usize = @intCast(inspected.layout.lengths_offset + inspected.layout.lengths_len);
-    const titles_start: usize = @intCast(inspected.layout.titles_offset);
-    const titles_end: usize = @intCast(inspected.layout.titles_offset + inspected.layout.titles_len);
-    const payloads_start: usize = @intCast(inspected.layout.records_offset);
-    const payloads_end: usize = @intCast(inspected.layout.records_offset + inspected.layout.records_len);
+    const inspected = try validateTempDictionaryHeader(mapped, chunk.stat.size);
 
-    try output.writeLengthBytes(mapped[lengths_start..lengths_end]);
-    try output.writeTitleBytes(mapped[titles_start..titles_end]);
-    try output.writePayloadBytes(mapped[payloads_start..payloads_end]);
-    output.entry_count += inspected.header.entry_count;
-    output.raw_entry_count += inspected.header.raw_entry_count;
-    output.redirect_count += inspected.header.redirect_count;
+    try output.writeRawTitleBytes(mapped[
+        @as(usize, @intCast(inspected.layout.raw_titles_offset))..
+            @as(usize, @intCast(inspected.layout.raw_titles_offset + inspected.layout.raw_titles_len))
+    ]);
+    try output.writeAliasTitleBytes(mapped[
+        @as(usize, @intCast(inspected.layout.alias_titles_offset))..
+            @as(usize, @intCast(inspected.layout.alias_titles_offset + inspected.layout.alias_titles_len))
+    ]);
+    try output.writeAliasTargetTitleBytes(mapped[
+        @as(usize, @intCast(inspected.layout.alias_target_titles_offset))..
+            @as(usize, @intCast(inspected.layout.alias_target_titles_offset + inspected.layout.alias_target_titles_len))
+    ]);
+    try output.writeRawPayloadBytes(mapped[
+        @as(usize, @intCast(inspected.layout.raw_payloads_offset))..
+            @as(usize, @intCast(inspected.layout.raw_payloads_offset + inspected.layout.raw_payloads_len))
+    ]);
+    output.raw_entry_count += inspected.header.raw_count;
+    output.redirect_count += inspected.header.alias_count;
+    output.entry_count += inspected.header.entryCount();
 }
 
 const PageCapture = struct {
@@ -525,12 +528,7 @@ fn processPageFragment(
             defer allocator.free(stored_sections);
             var title = try decodeXmlViewAlloc(allocator, title_raw);
             defer title.deinit(allocator);
-            var metadata: wikitext.EntryMetadata = .{};
-            defer metadata.deinit(allocator);
-            if (wikitext.extractEnglishSection(stored_sections)) |english_section| {
-                metadata = try wikitext.extractEntryMetadata(allocator, title.value, english_section);
-            }
-            try output.writeRawRecord(title.value, stored_sections, metadata);
+            try output.writeRawRecord(title.value, stored_sections);
             return;
         }
     }
@@ -568,53 +566,62 @@ fn decodeXmlViewAlloc(allocator: std.mem.Allocator, raw: []const u8) !DecodedXml
     };
 }
 
-const BinaryRecord = struct {
-    flags: u8,
-    title: []const u8,
-    payload: []const u8,
+const temp_magic = "WIKTMP01";
+
+const TempHeader = extern struct {
+    magic_bytes: [8]u8,
+    raw_count: u32,
+    alias_count: u32,
+    raw_titles_len: u64,
+    alias_titles_len: u64,
+    alias_target_titles_len: u64,
+    raw_payloads_len: u64,
+
+    fn init(
+        raw_count: u32,
+        alias_count: u32,
+        raw_titles_len: u64,
+        alias_titles_len: u64,
+        alias_target_titles_len: u64,
+        raw_payloads_len: u64,
+    ) TempHeader {
+        return .{
+            .magic_bytes = temp_magic.*,
+            .raw_count = raw_count,
+            .alias_count = alias_count,
+            .raw_titles_len = raw_titles_len,
+            .alias_titles_len = alias_titles_len,
+            .alias_target_titles_len = alias_target_titles_len,
+            .raw_payloads_len = raw_payloads_len,
+        };
+    }
+
+    fn entryCount(self: TempHeader) u32 {
+        return self.raw_count + self.alias_count;
+    }
+};
+
+const temp_header_len = @sizeOf(TempHeader);
+
+const TempLayout = struct {
+    raw_titles_offset: u64,
+    raw_titles_len: u64,
+    alias_titles_offset: u64,
+    alias_titles_len: u64,
+    alias_target_titles_offset: u64,
+    alias_target_titles_len: u64,
+    raw_payloads_offset: u64,
+    raw_payloads_len: u64,
+};
+
+const InspectedTempDictionary = struct {
+    header: TempHeader,
+    layout: TempLayout,
 };
 
 const FilterResult = struct {
     entry_count: usize,
     redirect_count: usize,
-};
-
-const CandidateChunkResult = struct {
-    arena: std.heap.ArenaAllocator,
-    candidates: []AliasCandidate = &.{},
-    err: ?anyerror = null,
-
-    fn init() CandidateChunkResult {
-        return .{
-            .arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator),
-        };
-    }
-
-    fn deinit(self: *CandidateChunkResult) void {
-        self.arena.deinit();
-    }
-};
-
-const CandidateChunkJob = struct {
-    records: []const BinaryRecord,
-    result: *CandidateChunkResult,
-};
-
-const FilterChunkResult = struct {
-    temp_output_path: []const u8 = "",
-    entry_count: usize = 0,
-    redirect_count: usize = 0,
-    err: ?anyerror = null,
-};
-
-const FilterChunkJob = struct {
-    io: std.Io,
-    records: []const BinaryRecord,
-    valid_titles: *const ValidTitleSet,
-    total_records: usize,
-    temp_output_path: []const u8,
-    result: *FilterChunkResult,
-    progress: *BuildProgress,
 };
 
 fn filterAliasRecordsFromBinary(
@@ -625,353 +632,325 @@ fn filterAliasRecordsFromBinary(
     thread_override: ?usize,
     progress: *BuildProgress,
 ) !FilterResult {
+    _ = thread_override;
     var source = try mmapReadOnlyPath(io, source_path);
     defer source.deinit();
 
     const mapped = source.bytes();
-    const inspected = try validateDictionaryHeader(mapped, source.stat.size);
-    const records = try collectBinaryRecords(allocator, mapped, inspected);
-    defer allocator.free(records);
-
-    const worker_count = filterThreadCount(records.len, thread_override);
-    var valid_titles = try collectValidTitlesFromBinary(allocator, records, worker_count);
-    defer deinitValidTitleSet(std.heap.smp_allocator, &valid_titles);
-
-    progress.filter(0, records.len, 0);
-    if (worker_count == 1) {
-        return filterAliasRecordsSequential(io, allocator, dest_path, records, &valid_titles, progress);
-    }
-    return filterAliasRecordsParallel(io, allocator, dest_path, records, &valid_titles, worker_count, progress);
-}
-
-fn collectValidTitlesFromBinary(
-    allocator: std.mem.Allocator,
-    records: []const BinaryRecord,
-    worker_count: usize,
-) !ValidTitleSet {
-    if (worker_count == 1) return collectValidTitlesFromBinarySequential(records);
-
-    const chunk_results = try allocator.alloc(CandidateChunkResult, worker_count);
+    const inspected = try validateTempDictionaryHeader(mapped, source.stat.size);
+    const raw_candidates = try collectTempRawCandidatesAlloc(allocator, mapped, inspected);
     defer {
-        for (chunk_results) |*result| result.deinit();
-        allocator.free(chunk_results);
+        for (raw_candidates) |*candidate| candidate.deinit(allocator);
+        allocator.free(raw_candidates);
     }
-    for (chunk_results) |*result| result.* = CandidateChunkResult.init();
+    const alias_candidates = try collectTempAliasCandidatesAlloc(allocator, mapped, inspected);
+    defer {
+        for (alias_candidates) |*candidate| candidate.deinit(allocator);
+        allocator.free(alias_candidates);
+    }
+    try resolveReachableCandidatesAlloc(allocator, raw_candidates, alias_candidates);
 
-    const jobs = try allocator.alloc(CandidateChunkJob, worker_count);
-    defer allocator.free(jobs);
+    progress.filter(0, raw_candidates.len + alias_candidates.len, 0);
+    return writeFinalDictionaryFromTempCandidates(
+        io,
+        allocator,
+        dest_path,
+        raw_candidates,
+        alias_candidates,
+        progress,
+    );
+}
 
-    const threads = try allocator.alloc(std.Thread, worker_count - 1);
-    defer allocator.free(threads);
-    var started_threads: usize = 0;
-    errdefer for (threads[0..started_threads]) |thread| thread.join();
+const TempRawCandidate = struct {
+    title_encoded: []const u8,
+    payload_encoded: []const u8,
+    normalized_title: []const u8,
+    normalized_targets: []const []const u8,
+    base_valid: bool,
+    valid: bool = false,
 
-    var start: usize = 0;
-    for (jobs, 0..) |*job, idx| {
-        const end = partitionEnd(records.len, worker_count, idx);
-        job.* = .{
-            .records = records[start..end],
-            .result = &chunk_results[idx],
+    fn deinit(self: *TempRawCandidate, allocator: std.mem.Allocator) void {
+        allocator.free(self.normalized_title);
+        freeOwnedStringSlice(allocator, self.normalized_targets);
+    }
+};
+
+const TempAliasCandidate = struct {
+    title_encoded: []const u8,
+    normalized_title: []const u8,
+    normalized_target: []const u8,
+    keep: bool = false,
+
+    fn deinit(self: *TempAliasCandidate, allocator: std.mem.Allocator) void {
+        allocator.free(self.normalized_title);
+        allocator.free(self.normalized_target);
+    }
+};
+
+fn inspectTempDictionary(bytes: []const u8) !InspectedTempDictionary {
+    if (bytes.len < temp_header_len) return error.InvalidDictionaryFile;
+    const header = std.mem.bytesToValue(TempHeader, bytes[0..temp_header_len]);
+    if (!std.mem.eql(u8, &header.magic_bytes, temp_magic)) return error.InvalidDictionaryFile;
+
+    var cursor: u64 = temp_header_len;
+    const raw_titles_offset = cursor;
+    cursor = std.math.add(u64, cursor, header.raw_titles_len) catch return error.FileTooBig;
+    const alias_titles_offset = cursor;
+    cursor = std.math.add(u64, cursor, header.alias_titles_len) catch return error.FileTooBig;
+    const alias_target_titles_offset = cursor;
+    cursor = std.math.add(u64, cursor, header.alias_target_titles_len) catch return error.FileTooBig;
+    const raw_payloads_offset = cursor;
+    cursor = std.math.add(u64, cursor, header.raw_payloads_len) catch return error.FileTooBig;
+    if (cursor != bytes.len) return error.InvalidDictionaryFile;
+
+    return .{
+        .header = header,
+        .layout = .{
+            .raw_titles_offset = raw_titles_offset,
+            .raw_titles_len = header.raw_titles_len,
+            .alias_titles_offset = alias_titles_offset,
+            .alias_titles_len = header.alias_titles_len,
+            .alias_target_titles_offset = alias_target_titles_offset,
+            .alias_target_titles_len = header.alias_target_titles_len,
+            .raw_payloads_offset = raw_payloads_offset,
+            .raw_payloads_len = header.raw_payloads_len,
+        },
+    };
+}
+
+fn collectTempRawCandidatesAlloc(
+    allocator: std.mem.Allocator,
+    mapped: []const u8,
+    inspected: InspectedTempDictionary,
+) ![]TempRawCandidate {
+    const raw_count: usize = inspected.header.raw_count;
+    const out = try allocator.alloc(TempRawCandidate, raw_count);
+    errdefer allocator.free(out);
+
+    var title_cursor: usize = @intCast(inspected.layout.raw_titles_offset);
+    const titles_end: usize = @intCast(inspected.layout.raw_titles_offset + inspected.layout.raw_titles_len);
+    var payload_cursor: usize = @intCast(inspected.layout.raw_payloads_offset);
+    const payloads_end: usize = @intCast(inspected.layout.raw_payloads_offset + inspected.layout.raw_payloads_len);
+
+    var built: usize = 0;
+    errdefer {
+        while (built != 0) : (built -= 1) out[built - 1].deinit(allocator);
+    }
+    for (out) |*candidate| {
+        const title_encoded = try readNullTerminatedSlice(mapped, &title_cursor, titles_end);
+        const payload_encoded = try readNullTerminatedSlice(mapped, &payload_cursor, payloads_end);
+
+        const decoded_title = try compact.decodeAlloc(allocator, title_encoded);
+        defer allocator.free(decoded_title);
+        const decoded_payload = try compact.decodeAlloc(allocator, payload_encoded);
+        defer allocator.free(decoded_payload);
+
+        const normalized_title = try normalizeOwnedAlloc(allocator, decoded_title);
+        errdefer allocator.free(normalized_title);
+
+        var metadata: wikitext.EntryMetadata = .{};
+        defer metadata.deinit(allocator);
+        if (wikitext.extractEnglishSection(decoded_payload)) |english_section| {
+            metadata = try wikitext.extractEntryMetadata(allocator, decoded_title, english_section);
+        }
+        const normalized_targets = try normalizeTargetsAlloc(allocator, metadata.canonical_targets.items);
+        errdefer freeOwnedStringSlice(allocator, normalized_targets);
+
+        candidate.* = .{
+            .title_encoded = title_encoded,
+            .payload_encoded = payload_encoded,
+            .normalized_title = normalized_title,
+            .normalized_targets = normalized_targets,
+            .base_valid = !metadata.alias_only,
         };
-        start = end;
+        built += 1;
     }
-
-    for (jobs[1..], threads) |*job, *thread| {
-        thread.* = try std.Thread.spawn(.{}, collectCandidateChunk, .{job});
-        started_threads += 1;
-    }
-    collectCandidateChunk(&jobs[0]);
-    for (threads[0..started_threads]) |thread| thread.join();
-
-    for (chunk_results) |result| {
-        if (result.err) |err| return err;
-    }
-
-    return resolveValidTitlesFromCandidateChunks(chunk_results);
+    if (title_cursor != titles_end or payload_cursor != payloads_end) return error.InvalidDictionaryFile;
+    return out;
 }
 
-fn collectValidTitlesFromBinarySequential(records: []const BinaryRecord) !ValidTitleSet {
-    var chunk = CandidateChunkResult.init();
-    defer chunk.deinit();
-    var job = CandidateChunkJob{
-        .records = records,
-        .result = &chunk,
-    };
-    collectCandidateChunk(&job);
-    if (chunk.err) |err| return err;
-    return resolveValidTitlesFromCandidateChunks(&.{chunk});
-}
+fn collectTempAliasCandidatesAlloc(
+    allocator: std.mem.Allocator,
+    mapped: []const u8,
+    inspected: InspectedTempDictionary,
+) ![]TempAliasCandidate {
+    const alias_count: usize = inspected.header.alias_count;
+    const out = try allocator.alloc(TempAliasCandidate, alias_count);
+    errdefer allocator.free(out);
 
-fn collectCandidateChunk(job: *CandidateChunkJob) void {
-    collectCandidateChunkFallible(job) catch |err| {
-        job.result.err = err;
-    };
-}
+    var title_cursor: usize = @intCast(inspected.layout.alias_titles_offset);
+    const titles_end: usize = @intCast(inspected.layout.alias_titles_offset + inspected.layout.alias_titles_len);
+    var target_cursor: usize = @intCast(inspected.layout.alias_target_titles_offset);
+    const targets_end: usize = @intCast(inspected.layout.alias_target_titles_offset + inspected.layout.alias_target_titles_len);
 
-fn collectCandidateChunkFallible(job: *CandidateChunkJob) !void {
-    const allocator = job.result.arena.allocator();
-    const candidates = try allocator.alloc(AliasCandidate, job.records.len);
-    for (job.records, 0..) |record, idx| {
-        candidates[idx] = try buildAliasCandidateFromBinaryRecord(allocator, allocator, record);
+    var built: usize = 0;
+    errdefer {
+        while (built != 0) : (built -= 1) out[built - 1].deinit(allocator);
     }
-    job.result.candidates = candidates;
+    for (out) |*candidate| {
+        const title_encoded = try readNullTerminatedSlice(mapped, &title_cursor, titles_end);
+        const target_encoded = try readNullTerminatedSlice(mapped, &target_cursor, targets_end);
+        const decoded_title = try compact.decodeAlloc(allocator, title_encoded);
+        defer allocator.free(decoded_title);
+        const decoded_target = try compact.decodeAlloc(allocator, target_encoded);
+        defer allocator.free(decoded_target);
+
+        candidate.* = .{
+            .title_encoded = title_encoded,
+            .normalized_title = try normalizeOwnedAlloc(allocator, decoded_title),
+            .normalized_target = try normalizeOwnedAlloc(allocator, decoded_target),
+        };
+        built += 1;
+    }
+    if (title_cursor != titles_end or target_cursor != targets_end) return error.InvalidDictionaryFile;
+    return out;
 }
 
-fn resolveValidTitlesFromCandidateChunks(chunks: []const CandidateChunkResult) !ValidTitleSet {
-    var valid_titles = ValidTitleSet.init(std.heap.smp_allocator);
-    errdefer deinitValidTitleSet(std.heap.smp_allocator, &valid_titles);
+fn resolveReachableCandidatesAlloc(
+    allocator: std.mem.Allocator,
+    raw_candidates: []TempRawCandidate,
+    alias_candidates: []TempAliasCandidate,
+) !void {
+    var valid_titles = ValidTitleSet.init(allocator);
+    defer deinitValidTitleSet(allocator, &valid_titles);
 
-    for (chunks) |*chunk| {
-        for (chunk.candidates) |*candidate| {
-            if (!candidate.base_valid) continue;
-            candidate.valid = true;
-            if (!valid_titles.contains(candidate.normalized_title)) {
-                try valid_titles.put(try std.heap.smp_allocator.dupe(u8, candidate.normalized_title), {});
-            }
+    for (raw_candidates) |*candidate| {
+        if (!candidate.base_valid) continue;
+        candidate.valid = true;
+        if (!valid_titles.contains(candidate.normalized_title)) {
+            try valid_titles.put(try allocator.dupe(u8, candidate.normalized_title), {});
         }
     }
 
     var changed = true;
     while (changed) {
         changed = false;
-        for (chunks) |*chunk| {
-            for (chunk.candidates) |*candidate| {
-                if (candidate.valid) continue;
-                for (candidate.normalized_targets) |target| {
-                    if (!valid_titles.contains(target)) continue;
-                    candidate.valid = true;
-                    if (!valid_titles.contains(candidate.normalized_title)) {
-                        try valid_titles.put(try std.heap.smp_allocator.dupe(u8, candidate.normalized_title), {});
-                    }
-                    changed = true;
-                    break;
+        for (alias_candidates) |*candidate| {
+            if (candidate.keep or !valid_titles.contains(candidate.normalized_target)) continue;
+            candidate.keep = true;
+            if (!valid_titles.contains(candidate.normalized_title)) {
+                try valid_titles.put(try allocator.dupe(u8, candidate.normalized_title), {});
+            }
+            changed = true;
+        }
+        for (raw_candidates) |*candidate| {
+            if (candidate.valid) continue;
+            for (candidate.normalized_targets) |target| {
+                if (!valid_titles.contains(target)) continue;
+                candidate.valid = true;
+                if (!valid_titles.contains(candidate.normalized_title)) {
+                    try valid_titles.put(try allocator.dupe(u8, candidate.normalized_title), {});
                 }
+                changed = true;
+                break;
             }
         }
     }
-
-    return valid_titles;
 }
 
-fn collectBinaryRecords(
-    allocator: std.mem.Allocator,
-    mapped: []const u8,
-    inspected: format.InspectedDictionary,
-) ![]BinaryRecord {
-    const records = try allocator.alloc(BinaryRecord, inspected.header.entry_count);
-    errdefer allocator.free(records);
-
-    const titles_end: usize = @intCast(inspected.layout.titles_offset + inspected.layout.titles_len);
-    const payloads_start: usize = @intCast(inspected.layout.records_offset);
-    const payloads_end: usize = @intCast(inspected.layout.records_offset + inspected.layout.records_len);
-    const length_bytes = mapped[@as(usize, @intCast(inspected.layout.lengths_offset))..@as(usize, @intCast(inspected.layout.lengths_offset + inspected.layout.lengths_len))];
-
-    var title_cursor: usize = @intCast(inspected.layout.titles_offset);
-    var payload_cursor: usize = payloads_start;
-    for (records, 0..) |*record, idx| {
-        const title = try readNullTerminatedSlice(mapped, &title_cursor, titles_end);
-        const payload_len = try format.payloadLengthAt(length_bytes, idx);
-        if (payload_len == 0 or payload_len > payloads_end - payload_cursor) return error.InvalidDictionaryFile;
-
-        const full_payload = mapped[payload_cursor .. payload_cursor + payload_len];
-        payload_cursor += payload_len;
-        record.* = .{
-            .flags = full_payload[0],
-            .title = title,
-            .payload = full_payload[1..],
-        };
-    }
-    if (title_cursor != titles_end or payload_cursor != payloads_end) return error.InvalidDictionaryFile;
-    return records;
-}
-
-fn filterAliasRecordsSequential(
+fn writeFinalDictionaryFromTempCandidates(
     io: std.Io,
     allocator: std.mem.Allocator,
     dest_path: []const u8,
-    records: []const BinaryRecord,
-    valid_titles: *const ValidTitleSet,
+    raw_candidates: []TempRawCandidate,
+    alias_candidates: []TempAliasCandidate,
     progress: *BuildProgress,
 ) !FilterResult {
-    var output = try OutputWriter.init(io, allocator, dest_path);
-    defer output.deinit(allocator);
+    const raw_index_map = try allocator.alloc(u32, raw_candidates.len);
+    defer allocator.free(raw_index_map);
+    @memset(raw_index_map, std.math.maxInt(u32));
 
-    var scratch = std.heap.ArenaAllocator.init(allocator);
-    defer scratch.deinit();
+    var valid_title_map = std.StringHashMap(u32).init(allocator);
+    defer valid_title_map.deinit();
+    var alias_title_map = std.StringHashMap(usize).init(allocator);
+    defer alias_title_map.deinit();
 
-    for (records) |record| {
-        const kept = try filterSingleBinaryRecord(io, allocator, valid_titles, &output, record, scratch.allocator());
-        progress.filterAdvance(1, records.len, if (kept) 1 else 0);
-        _ = scratch.reset(.retain_capacity);
-    }
-
-    try output.finish();
-    return .{
-        .entry_count = output.entry_count,
-        .redirect_count = output.redirect_count,
-    };
-}
-
-fn filterAliasRecordsParallel(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    dest_path: []const u8,
-    records: []const BinaryRecord,
-    valid_titles: *const ValidTitleSet,
-    worker_count: usize,
-    progress: *BuildProgress,
-) !FilterResult {
-    const results = try allocator.alloc(FilterChunkResult, worker_count);
-    defer {
-        for (results) |result| if (result.temp_output_path.len != 0) allocator.free(result.temp_output_path);
-        allocator.free(results);
-    }
-    for (results) |*result| result.* = .{};
-
-    const jobs = try allocator.alloc(FilterChunkJob, worker_count);
-    defer allocator.free(jobs);
-
-    const threads = try allocator.alloc(std.Thread, worker_count - 1);
-    defer allocator.free(threads);
-    var started_threads: usize = 0;
-    errdefer for (threads[0..started_threads]) |thread| thread.join();
-
-    var start: usize = 0;
-    for (jobs, results, 0..) |*job, *result, idx| {
-        const end = partitionEnd(records.len, worker_count, idx);
-        const temp_output_path = try std.fmt.allocPrint(allocator, "{s}.part{d}", .{ dest_path, idx });
-        result.temp_output_path = temp_output_path;
-        std.Io.Dir.cwd().deleteFile(io, temp_output_path) catch |err| switch (err) {
-            error.FileNotFound => {},
-            else => return err,
-        };
-        job.* = .{
-            .io = io,
-            .records = records[start..end],
-            .valid_titles = valid_titles,
-            .total_records = records.len,
-            .temp_output_path = temp_output_path,
-            .result = result,
-            .progress = progress,
-        };
-        start = end;
-    }
-
-    for (jobs[1..], threads) |*job, *thread| {
-        thread.* = try std.Thread.spawn(.{}, filterChunkWorker, .{job});
-        started_threads += 1;
-    }
-    filterChunkWorker(&jobs[0]);
-    for (threads[0..started_threads]) |thread| thread.join();
-
-    for (results) |result| {
-        if (result.err) |err| return err;
-    }
-
-    var output = try OutputWriter.init(io, allocator, dest_path);
-    defer output.deinit(allocator);
-
-    for (results) |result| {
-        defer std.Io.Dir.cwd().deleteFile(io, result.temp_output_path) catch {};
-        try appendChunkFileToOutput(io, result.temp_output_path, &output);
-    }
-    try output.finish();
-
-    return .{
-        .entry_count = output.entry_count,
-        .redirect_count = output.redirect_count,
-    };
-}
-
-fn filterChunkWorker(job: *FilterChunkJob) void {
-    filterChunkWorkerFallible(job) catch |err| {
-        job.result.err = err;
-    };
-}
-
-fn filterChunkWorkerFallible(job: *FilterChunkJob) !void {
-    var scratch = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
-    defer scratch.deinit();
-
-    var output = try OutputWriter.init(job.io, std.heap.smp_allocator, job.temp_output_path);
-    defer output.deinit(std.heap.smp_allocator);
-
-    for (job.records) |record| {
-        const kept = try filterSingleBinaryRecord(job.io, std.heap.smp_allocator, job.valid_titles, &output, record, scratch.allocator());
-        job.progress.filterAdvance(1, job.total_records, if (kept) 1 else 0);
-        _ = scratch.reset(.retain_capacity);
-    }
-    try output.finish();
-    job.result.entry_count = output.entry_count;
-    job.result.redirect_count = output.redirect_count;
-}
-
-fn filterSingleBinaryRecord(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    valid_titles: *const ValidTitleSet,
-    output: *OutputWriter,
-    record: BinaryRecord,
-    scratch_allocator: std.mem.Allocator,
-) !bool {
-    _ = io;
-    _ = allocator;
-    if ((record.flags & format.record_flag_has_raw) != 0) {
-        const raw_metadata = try format.decodeRawRecordMetadataAlloc(scratch_allocator, record.payload);
-        const filtered_targets = try filterCanonicalTargetsAlloc(scratch_allocator, raw_metadata.canonical_targets, valid_titles);
-        if (raw_metadata.alias_only and raw_metadata.canonical_targets.len != 0 and filtered_targets.len == 0) return false;
-
-        if (filtered_targets.len == raw_metadata.canonical_targets.len) {
-            try output.writeExistingRecord(record.title, record.flags, record.payload);
-        } else {
-            const encoded_raw = try format.rawRecordContentPayload(record.payload);
-            try output.writeRepackedRawRecord(
-                record.title,
-                raw_metadata.alt_forms,
-                filtered_targets,
-                raw_metadata.alias_only,
-                encoded_raw,
-            );
+    var kept_raw_count: usize = 0;
+    var raw_titles_len: usize = 0;
+    var raw_payloads_len: usize = 0;
+    for (raw_candidates, 0..) |candidate, idx| {
+        progress.filterAdvance(1, raw_candidates.len + alias_candidates.len, if (candidate.valid) 1 else 0);
+        if (!candidate.valid) continue;
+        raw_index_map[idx] = @intCast(kept_raw_count);
+        raw_titles_len += candidate.title_encoded.len + 1;
+        raw_payloads_len += candidate.payload_encoded.len + 1;
+        if (!valid_title_map.contains(candidate.normalized_title)) {
+            try valid_title_map.put(candidate.normalized_title, @intCast(kept_raw_count));
         }
-        return true;
+        kept_raw_count += 1;
     }
 
-    const target = try format.decodeAliasRecordTargetAlloc(scratch_allocator, record.payload);
-    const normalized_target = try normalizeViewAlloc(scratch_allocator, target);
-    if (!valid_titles.contains(normalized_target)) return false;
-    try output.writeExistingRecord(record.title, record.flags, record.payload);
-    return true;
-}
-
-fn buildAliasCandidateFromBinaryRecord(
-    allocator: std.mem.Allocator,
-    scratch_allocator: std.mem.Allocator,
-    record: BinaryRecord,
-) !AliasCandidate {
-    const normalized_title = try normalizeOwnedAlloc(allocator, record.title);
-    errdefer allocator.free(normalized_title);
-
-    if ((record.flags & format.record_flag_has_raw) != 0) {
-        const raw_metadata = try format.decodeRawRecordMetadataAlloc(scratch_allocator, record.payload);
-        const normalized_targets = try normalizeTargetsAlloc(allocator, raw_metadata.canonical_targets);
-        errdefer freeOwnedStringSlice(allocator, normalized_targets);
-        return .{
-            .normalized_title = normalized_title,
-            .normalized_targets = normalized_targets,
-            .base_valid = !raw_metadata.alias_only,
-        };
+    var kept_alias_count: usize = 0;
+    var alias_titles_len: usize = 0;
+    for (alias_candidates, 0..) |candidate, idx| {
+        progress.filterAdvance(1, raw_candidates.len + alias_candidates.len, if (candidate.keep) 1 else 0);
+        if (!candidate.keep) continue;
+        alias_titles_len += candidate.title_encoded.len + 1;
+        try alias_title_map.put(candidate.normalized_title, idx);
+        kept_alias_count += 1;
     }
 
-    const target = try format.decodeAliasRecordTargetAlloc(scratch_allocator, record.payload);
-    const normalized_target = try normalizeOwnedAlloc(allocator, target);
-    errdefer allocator.free(normalized_target);
-    const targets = try allocator.alloc([]const u8, 1);
-    errdefer allocator.free(targets);
-    targets[0] = normalized_target;
+    const alias_targets_len = try std.math.mul(usize, kept_alias_count, @sizeOf(u32));
+    const total_len = try std.math.add(usize, format.header_len, raw_titles_len + alias_titles_len + alias_targets_len + raw_payloads_len);
+
+    var out_file = try MappedWritableFile.create(io, dest_path, @max(total_len, 1));
+    defer out_file.deinit();
+    const out = out_file.bytes();
+
+    const header = format.Header.init(
+        std.math.cast(u32, kept_raw_count) orelse return error.FileTooBig,
+        std.math.cast(u32, kept_alias_count) orelse return error.FileTooBig,
+    );
+    @memcpy(out[0..format.header_len], std.mem.asBytes(&header));
+
+    var cursor: usize = format.header_len;
+    for (raw_candidates) |candidate| {
+        if (!candidate.valid) continue;
+        @memcpy(out[cursor .. cursor + candidate.title_encoded.len], candidate.title_encoded);
+        cursor += candidate.title_encoded.len;
+        out[cursor] = 0;
+        cursor += 1;
+    }
+
+    var kept_alias_targets: std.ArrayList(u32) = .empty;
+    defer kept_alias_targets.deinit(allocator);
+    try kept_alias_targets.ensureTotalCapacityPrecise(allocator, kept_alias_count);
+    for (alias_candidates) |candidate| {
+        if (!candidate.keep) continue;
+        const target_index = try resolveAliasTargetIndexAlloc(
+            allocator,
+            candidate.normalized_target,
+            &valid_title_map,
+            &alias_title_map,
+            alias_candidates,
+        ) orelse continue;
+        @memcpy(out[cursor .. cursor + candidate.title_encoded.len], candidate.title_encoded);
+        cursor += candidate.title_encoded.len;
+        out[cursor] = 0;
+        cursor += 1;
+        kept_alias_targets.appendAssumeCapacity(target_index);
+    }
+
+    for (kept_alias_targets.items) |target_index| {
+        const ptr: *[4]u8 = @ptrCast(out[cursor .. cursor + 4].ptr);
+        std.mem.writeInt(u32, ptr, target_index, .little);
+        cursor += 4;
+    }
+
+    for (raw_candidates) |candidate| {
+        if (!candidate.valid) continue;
+        @memcpy(out[cursor .. cursor + candidate.payload_encoded.len], candidate.payload_encoded);
+        cursor += candidate.payload_encoded.len;
+        out[cursor] = 0;
+        cursor += 1;
+    }
+
+    std.debug.assert(cursor == total_len);
+    try out_file.finish(total_len);
+
     return .{
-        .normalized_title = normalized_title,
-        .normalized_targets = targets,
-        .base_valid = false,
+        .entry_count = kept_raw_count,
+        .redirect_count = kept_alias_count,
     };
 }
 
@@ -980,9 +959,46 @@ fn normalizeOwnedAlloc(allocator: std.mem.Allocator, value: []const u8) ![]const
     return normalize.normalizeAlloc(allocator, value);
 }
 
-fn normalizeViewAlloc(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
-    if (normalize.isIdentity(value)) return value;
-    return normalize.normalizeAlloc(allocator, value);
+fn resolveAliasTargetIndexAlloc(
+    allocator: std.mem.Allocator,
+    normalized_target: []const u8,
+    raw_title_map: *const std.StringHashMap(u32),
+    alias_title_map: *const std.StringHashMap(usize),
+    alias_candidates: []const TempAliasCandidate,
+) !?u32 {
+    var visited: std.AutoHashMapUnmanaged(usize, void) = .empty;
+    defer visited.deinit(allocator);
+    return resolveAliasTargetIndex(
+        allocator,
+        normalized_target,
+        raw_title_map,
+        alias_title_map,
+        alias_candidates,
+        &visited,
+    );
+}
+
+fn resolveAliasTargetIndex(
+    allocator: std.mem.Allocator,
+    normalized_target: []const u8,
+    raw_title_map: *const std.StringHashMap(u32),
+    alias_title_map: *const std.StringHashMap(usize),
+    alias_candidates: []const TempAliasCandidate,
+    visited: *std.AutoHashMapUnmanaged(usize, void),
+) !?u32 {
+    if (raw_title_map.get(normalized_target)) |raw_index| return raw_index;
+    const alias_index = alias_title_map.get(normalized_target) orelse return null;
+    if (visited.contains(alias_index)) return null;
+    try visited.put(allocator, alias_index, {});
+    defer _ = visited.remove(alias_index);
+    return resolveAliasTargetIndex(
+        allocator,
+        alias_candidates[alias_index].normalized_target,
+        raw_title_map,
+        alias_title_map,
+        alias_candidates,
+        visited,
+    );
 }
 
 fn mapWholeFile(file: std.Io.File, size_u64: u64) ![]align(std.heap.page_size_min) const u8 {
@@ -1059,10 +1075,10 @@ fn writeMappedFile(path: []const u8, bytes: []const u8) !void {
     try mapped_file.finish(bytes.len);
 }
 
-fn validateDictionaryHeader(mapped: []const u8, size_u64: u64) !format.InspectedDictionary {
+fn validateTempDictionaryHeader(mapped: []const u8, size_u64: u64) !InspectedTempDictionary {
     const size = std.math.cast(usize, size_u64) orelse return error.FileTooBig;
     if (size != mapped.len) return error.InvalidDictionaryFile;
-    return format.inspectDictionary(mapped) catch |err| switch (err) {
+    return inspectTempDictionary(mapped) catch |err| switch (err) {
         error.InvalidDictionaryFile => error.InvalidDictionaryFile,
         error.FileTooBig => error.FileTooBig,
     };
@@ -1093,23 +1109,6 @@ fn deinitValidTitleSet(allocator: std.mem.Allocator, valid_titles: *ValidTitleSe
     valid_titles.deinit();
 }
 
-fn filterCanonicalTargetsAlloc(
-    allocator: std.mem.Allocator,
-    canonical_targets: []const []const u8,
-    valid_titles: *const ValidTitleSet,
-) ![]const []const u8 {
-    const filtered = try allocator.alloc([]const u8, canonical_targets.len);
-    var kept: usize = 0;
-    for (canonical_targets) |target| {
-        const normalized = try normalizeViewAlloc(allocator, target);
-        defer if (normalized.ptr != target.ptr) allocator.free(normalized);
-        if (!valid_titles.contains(normalized)) continue;
-        filtered[kept] = target;
-        kept += 1;
-    }
-    return filtered[0..kept];
-}
-
 fn readNullTerminatedSlice(bytes: []const u8, cursor: *usize, limit: usize) ![]const u8 {
     if (cursor.* >= limit) return error.InvalidDictionaryFile;
     const terminator = std.mem.indexOfScalarPos(u8, bytes, cursor.*, 0) orelse return error.InvalidDictionaryFile;
@@ -1126,139 +1125,150 @@ const OutputWriter = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     final_path: []const u8,
-    titles_path: []const u8,
-    payloads_path: []const u8,
-    titles_file: MappedWritableFile,
-    payloads_file: MappedWritableFile,
-    flushed_title_bytes: u64 = 0,
-    flushed_payload_bytes: u64 = 0,
+    raw_titles_path: []const u8,
+    alias_titles_path: []const u8,
+    alias_target_titles_path: []const u8,
+    raw_payloads_path: []const u8,
+    raw_titles_file: MappedWritableFile,
+    alias_titles_file: MappedWritableFile,
+    alias_target_titles_file: MappedWritableFile,
+    raw_payloads_file: MappedWritableFile,
+    flushed_raw_title_bytes: u64 = 0,
+    flushed_alias_title_bytes: u64 = 0,
+    flushed_alias_target_title_bytes: u64 = 0,
+    flushed_raw_payload_bytes: u64 = 0,
     entry_count: usize = 0,
     raw_entry_count: usize = 0,
     redirect_count: usize = 0,
-    mapping_blob: []u8,
-    length_bytes: std.ArrayList(u8) = .empty,
-    title_buffer: std.ArrayList(u8) = .empty,
-    payload_buffer: std.ArrayList(u8) = .empty,
-    // Scratch buffer reused for compact-encoding titles, fields, and raw section payloads.
+    raw_title_buffer: std.ArrayList(u8) = .empty,
+    alias_title_buffer: std.ArrayList(u8) = .empty,
+    alias_target_title_buffer: std.ArrayList(u8) = .empty,
+    raw_payload_buffer: std.ArrayList(u8) = .empty,
+    // Scratch buffer reused for compact-encoding titles and raw payload strings.
     encode_buf: std.ArrayList(u8) = .empty,
-    // Scratch buffer reused for whole record payload bodies before the leading flag byte is added.
-    record_buf: std.ArrayList(u8) = .empty,
 
     fn init(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !OutputWriter {
-        const titles_path = try std.fmt.allocPrint(allocator, "{s}.titles", .{path});
-        errdefer allocator.free(titles_path);
-        const payloads_path = try std.fmt.allocPrint(allocator, "{s}.payloads", .{path});
-        errdefer allocator.free(payloads_path);
+        const raw_titles_path = try std.fmt.allocPrint(allocator, "{s}.raw-titles", .{path});
+        errdefer allocator.free(raw_titles_path);
+        const alias_titles_path = try std.fmt.allocPrint(allocator, "{s}.alias-titles", .{path});
+        errdefer allocator.free(alias_titles_path);
+        const alias_target_titles_path = try std.fmt.allocPrint(allocator, "{s}.alias-targets", .{path});
+        errdefer allocator.free(alias_target_titles_path);
+        const raw_payloads_path = try std.fmt.allocPrint(allocator, "{s}.raw-payloads", .{path});
+        errdefer allocator.free(raw_payloads_path);
 
-        deleteFileIfExists(io, titles_path) catch {};
-        deleteFileIfExists(io, payloads_path) catch {};
+        deleteFileIfExists(io, raw_titles_path) catch {};
+        deleteFileIfExists(io, alias_titles_path) catch {};
+        deleteFileIfExists(io, alias_target_titles_path) catch {};
+        deleteFileIfExists(io, raw_payloads_path) catch {};
 
-        var titles_file = try MappedWritableFile.create(io, titles_path, initial_capacity);
-        errdefer titles_file.deinit();
-        var payloads_file = try MappedWritableFile.create(io, payloads_path, initial_capacity);
-        errdefer payloads_file.deinit();
-        const mapping_blob = try format.encodeCurrentCompactMappingsAlloc(allocator);
-        errdefer allocator.free(mapping_blob);
+        var raw_titles_file = try MappedWritableFile.create(io, raw_titles_path, initial_capacity);
+        errdefer raw_titles_file.deinit();
+        var alias_titles_file = try MappedWritableFile.create(io, alias_titles_path, initial_capacity);
+        errdefer alias_titles_file.deinit();
+        var alias_target_titles_file = try MappedWritableFile.create(io, alias_target_titles_path, initial_capacity);
+        errdefer alias_target_titles_file.deinit();
+        var raw_payloads_file = try MappedWritableFile.create(io, raw_payloads_path, initial_capacity);
+        errdefer raw_payloads_file.deinit();
         return .{
             .io = io,
             .allocator = allocator,
             .final_path = path,
-            .titles_path = titles_path,
-            .payloads_path = payloads_path,
-            .titles_file = titles_file,
-            .payloads_file = payloads_file,
-            .mapping_blob = mapping_blob,
+            .raw_titles_path = raw_titles_path,
+            .alias_titles_path = alias_titles_path,
+            .alias_target_titles_path = alias_target_titles_path,
+            .raw_payloads_path = raw_payloads_path,
+            .raw_titles_file = raw_titles_file,
+            .alias_titles_file = alias_titles_file,
+            .alias_target_titles_file = alias_target_titles_file,
+            .raw_payloads_file = raw_payloads_file,
         };
     }
 
     fn deinit(self: *OutputWriter, allocator: std.mem.Allocator) void {
-        allocator.free(self.mapping_blob);
-        self.length_bytes.deinit(allocator);
-        self.title_buffer.deinit(allocator);
-        self.payload_buffer.deinit(allocator);
+        self.raw_title_buffer.deinit(allocator);
+        self.alias_title_buffer.deinit(allocator);
+        self.alias_target_title_buffer.deinit(allocator);
+        self.raw_payload_buffer.deinit(allocator);
         self.encode_buf.deinit(allocator);
-        self.record_buf.deinit(allocator);
-        self.titles_file.deinit();
-        self.payloads_file.deinit();
-        if (self.titles_path.len != 0) {
-            deleteFileIfExists(self.io, self.titles_path) catch {};
-            allocator.free(self.titles_path);
-            self.titles_path = "";
-        }
-        if (self.payloads_path.len != 0) {
-            deleteFileIfExists(self.io, self.payloads_path) catch {};
-            allocator.free(self.payloads_path);
-            self.payloads_path = "";
-        }
+        self.raw_titles_file.deinit();
+        self.alias_titles_file.deinit();
+        self.alias_target_titles_file.deinit();
+        self.raw_payloads_file.deinit();
+        self.cleanupTempPath(allocator, &self.raw_titles_path);
+        self.cleanupTempPath(allocator, &self.alias_titles_path);
+        self.cleanupTempPath(allocator, &self.alias_target_titles_path);
+        self.cleanupTempPath(allocator, &self.raw_payloads_path);
     }
 
     fn finish(self: *OutputWriter) !void {
-        try self.flushTitleBuffer();
-        try self.flushPayloadBuffer();
-        try self.titles_file.finish(@intCast(self.flushed_title_bytes));
-        try self.payloads_file.finish(@intCast(self.flushed_payload_bytes));
+        try self.flushRawTitleBuffer();
+        try self.flushAliasTitleBuffer();
+        try self.flushAliasTargetTitleBuffer();
+        try self.flushRawPayloadBuffer();
+        try self.raw_titles_file.finish(@intCast(self.flushed_raw_title_bytes));
+        try self.alias_titles_file.finish(@intCast(self.flushed_alias_title_bytes));
+        try self.alias_target_titles_file.finish(@intCast(self.flushed_alias_target_title_bytes));
+        try self.raw_payloads_file.finish(@intCast(self.flushed_raw_payload_bytes));
 
-        var titles = try mmapReadOnlyPath(self.io, self.titles_path);
-        defer titles.deinit();
-        var payloads = try mmapReadOnlyPath(self.io, self.payloads_path);
-        defer payloads.deinit();
+        var raw_titles = try mmapReadOnlyPath(self.io, self.raw_titles_path);
+        defer raw_titles.deinit();
+        var alias_titles = try mmapReadOnlyPath(self.io, self.alias_titles_path);
+        defer alias_titles.deinit();
+        var alias_target_titles = try mmapReadOnlyPath(self.io, self.alias_target_titles_path);
+        defer alias_target_titles.deinit();
+        var raw_payloads = try mmapReadOnlyPath(self.io, self.raw_payloads_path);
+        defer raw_payloads.deinit();
 
-        const length_bytes_len = self.length_bytes.items.len;
-        const mapping_blob_len = self.mapping_blob.len;
-        const total_len = try std.math.add(usize, 8, length_bytes_len);
-        const total_with_mappings = try std.math.add(usize, total_len, mapping_blob_len);
-        const total_with_titles = try std.math.add(usize, total_with_mappings, titles.bytes().len);
-        const final_len = try std.math.add(usize, total_with_titles, payloads.bytes().len);
+        const header = TempHeader.init(
+            std.math.cast(u32, self.raw_entry_count) orelse return error.FileTooBig,
+            std.math.cast(u32, self.redirect_count) orelse return error.FileTooBig,
+            raw_titles.bytes().len,
+            alias_titles.bytes().len,
+            alias_target_titles.bytes().len,
+            raw_payloads.bytes().len,
+        );
+        const final_len = try std.math.add(
+            usize,
+            temp_header_len,
+            raw_titles.bytes().len + alias_titles.bytes().len + alias_target_titles.bytes().len + raw_payloads.bytes().len,
+        );
 
         var out_file = try MappedWritableFile.create(self.io, self.final_path, @max(final_len, 1));
         defer out_file.deinit();
 
         const out = out_file.bytes();
-        std.mem.writeInt(u32, out[0..4], std.math.cast(u32, self.entry_count) orelse return error.FileTooBig, .little);
-        std.mem.writeInt(u32, out[4..8], std.math.cast(u32, mapping_blob_len) orelse return error.FileTooBig, .little);
+        @memcpy(out[0..temp_header_len], std.mem.asBytes(&header));
 
-        var cursor: usize = 8;
-        if (length_bytes_len != 0) {
-            @memcpy(out[cursor .. cursor + length_bytes_len], self.length_bytes.items);
-            cursor += length_bytes_len;
+        var cursor: usize = temp_header_len;
+        if (raw_titles.bytes().len != 0) {
+            @memcpy(out[cursor .. cursor + raw_titles.bytes().len], raw_titles.bytes());
+            cursor += raw_titles.bytes().len;
         }
-        if (mapping_blob_len != 0) {
-            @memcpy(out[cursor .. cursor + mapping_blob_len], self.mapping_blob);
-            cursor += mapping_blob_len;
+        if (alias_titles.bytes().len != 0) {
+            @memcpy(out[cursor .. cursor + alias_titles.bytes().len], alias_titles.bytes());
+            cursor += alias_titles.bytes().len;
         }
-        if (titles.bytes().len != 0) {
-            @memcpy(out[cursor .. cursor + titles.bytes().len], titles.bytes());
-            cursor += titles.bytes().len;
+        if (alias_target_titles.bytes().len != 0) {
+            @memcpy(out[cursor .. cursor + alias_target_titles.bytes().len], alias_target_titles.bytes());
+            cursor += alias_target_titles.bytes().len;
         }
-        if (payloads.bytes().len != 0) {
-            @memcpy(out[cursor .. cursor + payloads.bytes().len], payloads.bytes());
-            cursor += payloads.bytes().len;
+        if (raw_payloads.bytes().len != 0) {
+            @memcpy(out[cursor .. cursor + raw_payloads.bytes().len], raw_payloads.bytes());
+            cursor += raw_payloads.bytes().len;
         }
         try out_file.finish(final_len);
-
-        deleteFileIfExists(self.io, self.titles_path) catch {};
-        self.allocator.free(self.titles_path);
-        self.titles_path = "";
-        deleteFileIfExists(self.io, self.payloads_path) catch {};
-        self.allocator.free(self.payloads_path);
-        self.payloads_path = "";
     }
 
     fn writeRawRecord(
         self: *OutputWriter,
         title: []const u8,
         stored_sections: []const u8,
-        metadata: wikitext.EntryMetadata,
     ) !void {
-        self.record_buf.items.len = 0;
-        try self.record_buf.append(self.allocator, format.record_flag_has_raw);
-        try self.appendRawPayload(
-            metadata.alt_forms.items,
-            metadata.canonical_targets.items,
-            metadata.alias_only,
-            stored_sections,
-        );
-        try self.writeRecord(title, self.record_buf.items);
+        try self.writeEncodedString(&self.raw_title_buffer, title, flushRawTitleBuffer);
+        try self.writeEncodedString(&self.raw_payload_buffer, stored_sections, flushRawPayloadBuffer);
+        self.raw_entry_count += 1;
+        self.entry_count += 1;
     }
 
     fn writeRedirectRecord(
@@ -1266,118 +1276,108 @@ const OutputWriter = struct {
         title: []const u8,
         target: []const u8,
     ) !void {
-        self.record_buf.items.len = 0;
-        try self.record_buf.append(self.allocator, 0);
-        try self.appendCompactSlice(&self.record_buf, target);
-        try self.writeRecord(title, self.record_buf.items);
-    }
-
-    fn writeExistingRecord(self: *OutputWriter, title: []const u8, flags: u8, payload: []const u8) !void {
-        self.record_buf.items.len = 0;
-        try self.record_buf.append(self.allocator, flags);
-        try self.record_buf.appendSlice(self.allocator, payload);
-        try self.writeRecord(title, self.record_buf.items);
-    }
-
-    fn appendCompactSlice(self: *OutputWriter, out: *std.ArrayList(u8), value: []const u8) !void {
-        const encoded = try compact.encodeToList(&self.encode_buf, self.allocator, value);
-        var len_buf: [10]u8 = undefined;
-        try out.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, encoded.len));
-        try out.appendSlice(self.allocator, encoded);
-    }
-
-    fn appendRawPayload(
-        self: *OutputWriter,
-        alt_forms: []const []const u8,
-        canonical_targets: []const []const u8,
-        alias_only: bool,
-        stored_sections: []const u8,
-    ) !void {
-        var len_buf: [10]u8 = undefined;
-        try self.record_buf.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, alt_forms.len));
-        for (alt_forms) |alt_form| try self.appendCompactSlice(&self.record_buf, alt_form);
-
-        try self.record_buf.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, canonical_targets.len));
-        for (canonical_targets) |target| try self.appendCompactSlice(&self.record_buf, target);
-
-        try self.record_buf.append(self.allocator, if (alias_only) 1 else 0);
-        try self.appendCompactSlice(&self.record_buf, stored_sections);
-    }
-
-    fn writeRepackedRawRecord(
-        self: *OutputWriter,
-        title: []const u8,
-        alt_forms: []const []const u8,
-        canonical_targets: []const []const u8,
-        alias_only: bool,
-        encoded_raw: []const u8,
-    ) !void {
-        self.record_buf.items.len = 0;
-        try self.record_buf.append(self.allocator, format.record_flag_has_raw);
-        var len_buf: [10]u8 = undefined;
-        try self.record_buf.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, alt_forms.len));
-        for (alt_forms) |alt_form| try self.appendCompactSlice(&self.record_buf, alt_form);
-
-        try self.record_buf.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, canonical_targets.len));
-        for (canonical_targets) |target| try self.appendCompactSlice(&self.record_buf, target);
-
-        try self.record_buf.append(self.allocator, if (alias_only) 1 else 0);
-        try self.record_buf.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, encoded_raw.len));
-        try self.record_buf.appendSlice(self.allocator, encoded_raw);
-        try self.writeRecord(title, self.record_buf.items);
-    }
-
-    fn writeRecord(self: *OutputWriter, title: []const u8, full_payload: []const u8) !void {
-        if (std.mem.indexOfScalar(u8, title, 0) != null) return error.InvalidDictionaryFile;
-        var len_buf: [3]u8 = undefined;
-        try self.length_bytes.appendSlice(self.allocator, try format.writeU24(&len_buf, full_payload.len));
-        try self.writeTitleBytes(title);
-        try self.writeTitleBytes(&.{0});
-        try self.writePayloadBytes(full_payload);
-
+        try self.writeEncodedString(&self.alias_title_buffer, title, flushAliasTitleBuffer);
+        try self.writeEncodedString(&self.alias_target_title_buffer, target, flushAliasTargetTitleBuffer);
+        self.redirect_count += 1;
         self.entry_count += 1;
-        if (full_payload[0] == format.record_flag_has_raw) {
-            self.raw_entry_count += 1;
-        } else {
-            self.redirect_count += 1;
+    }
+
+    fn writeEncodedString(
+        self: *OutputWriter,
+        buffer: *std.ArrayList(u8),
+        value: []const u8,
+        comptime flushFn: fn (*OutputWriter) anyerror!void,
+    ) !void {
+        if (std.mem.indexOfScalar(u8, value, 0) != null) return error.InvalidDictionaryFile;
+        const encoded = try compact.encodeToList(&self.encode_buf, self.allocator, value);
+        try buffer.appendSlice(self.allocator, encoded);
+        try buffer.append(self.allocator, 0);
+        if (buffer.items.len >= flush_threshold) {
+            try flushFn(self);
         }
     }
 
-    fn writeLengthBytes(self: *OutputWriter, bytes: []const u8) !void {
+    fn writeRawTitleBytes(self: *OutputWriter, bytes: []const u8) !void {
         if (bytes.len == 0) return;
-        try self.length_bytes.appendSlice(self.allocator, bytes);
+        try self.raw_title_buffer.appendSlice(self.allocator, bytes);
+        if (self.raw_title_buffer.items.len >= flush_threshold) try self.flushRawTitleBuffer();
     }
 
-    fn writeTitleBytes(self: *OutputWriter, bytes: []const u8) !void {
+    fn writeAliasTitleBytes(self: *OutputWriter, bytes: []const u8) !void {
         if (bytes.len == 0) return;
-        try self.title_buffer.appendSlice(self.allocator, bytes);
-        if (self.title_buffer.items.len >= flush_threshold) try self.flushTitleBuffer();
+        try self.alias_title_buffer.appendSlice(self.allocator, bytes);
+        if (self.alias_title_buffer.items.len >= flush_threshold) try self.flushAliasTitleBuffer();
     }
 
-    fn writePayloadBytes(self: *OutputWriter, bytes: []const u8) !void {
+    fn writeAliasTargetTitleBytes(self: *OutputWriter, bytes: []const u8) !void {
         if (bytes.len == 0) return;
-        try self.payload_buffer.appendSlice(self.allocator, bytes);
-        if (self.payload_buffer.items.len >= flush_threshold) try self.flushPayloadBuffer();
+        try self.alias_target_title_buffer.appendSlice(self.allocator, bytes);
+        if (self.alias_target_title_buffer.items.len >= flush_threshold) try self.flushAliasTargetTitleBuffer();
     }
 
-    fn flushTitleBuffer(self: *OutputWriter) !void {
-        if (self.title_buffer.items.len == 0) return;
-        const start: usize = @intCast(self.flushed_title_bytes);
-        const end = start + self.title_buffer.items.len;
-        try self.titles_file.ensureCapacity(end);
-        @memcpy(self.titles_file.bytes()[start..end], self.title_buffer.items);
-        self.flushed_title_bytes += self.title_buffer.items.len;
-        self.title_buffer.items.len = 0;
+    fn writeRawPayloadBytes(self: *OutputWriter, bytes: []const u8) !void {
+        if (bytes.len == 0) return;
+        try self.raw_payload_buffer.appendSlice(self.allocator, bytes);
+        if (self.raw_payload_buffer.items.len >= flush_threshold) try self.flushRawPayloadBuffer();
     }
 
-    fn flushPayloadBuffer(self: *OutputWriter) !void {
-        if (self.payload_buffer.items.len == 0) return;
-        const start: usize = @intCast(self.flushed_payload_bytes);
-        const end = start + self.payload_buffer.items.len;
-        try self.payloads_file.ensureCapacity(end);
-        @memcpy(self.payloads_file.bytes()[start..end], self.payload_buffer.items);
-        self.flushed_payload_bytes += self.payload_buffer.items.len;
-        self.payload_buffer.items.len = 0;
+    fn flushRawTitleBuffer(self: *OutputWriter) !void {
+        try flushBufferIntoFile(
+            self,
+            &self.raw_title_buffer,
+            &self.raw_titles_file,
+            &self.flushed_raw_title_bytes,
+        );
+    }
+
+    fn flushAliasTitleBuffer(self: *OutputWriter) !void {
+        try flushBufferIntoFile(
+            self,
+            &self.alias_title_buffer,
+            &self.alias_titles_file,
+            &self.flushed_alias_title_bytes,
+        );
+    }
+
+    fn flushAliasTargetTitleBuffer(self: *OutputWriter) !void {
+        try flushBufferIntoFile(
+            self,
+            &self.alias_target_title_buffer,
+            &self.alias_target_titles_file,
+            &self.flushed_alias_target_title_bytes,
+        );
+    }
+
+    fn flushRawPayloadBuffer(self: *OutputWriter) !void {
+        try flushBufferIntoFile(
+            self,
+            &self.raw_payload_buffer,
+            &self.raw_payloads_file,
+            &self.flushed_raw_payload_bytes,
+        );
+    }
+
+    fn flushBufferIntoFile(
+        self: *OutputWriter,
+        buffer: *std.ArrayList(u8),
+        file: *MappedWritableFile,
+        flushed_bytes: *u64,
+    ) !void {
+        _ = self;
+        if (buffer.items.len == 0) return;
+        const start: usize = @intCast(flushed_bytes.*);
+        const end = start + buffer.items.len;
+        try file.ensureCapacity(end);
+        @memcpy(file.bytes()[start..end], buffer.items);
+        flushed_bytes.* += buffer.items.len;
+        buffer.items.len = 0;
+    }
+
+    fn cleanupTempPath(self: *OutputWriter, allocator: std.mem.Allocator, path: *[]const u8) void {
+        if (path.*.len == 0) return;
+        deleteFileIfExists(self.io, path.*) catch {};
+        allocator.free(path.*);
+        path.* = "";
     }
 };
 
@@ -1488,9 +1488,7 @@ test "output writer buffers survive page arena resets" {
     const first_alloc = page_arena.allocator();
     const first_title = try first_alloc.dupe(u8, "color");
     const first_payload = try first_alloc.dupe(u8, "==English==\n===Noun===\n# [[light]]\n");
-    var metadata = try wikitext.extractEntryMetadata(std.testing.allocator, first_title, first_payload);
-    defer metadata.deinit(std.testing.allocator);
-    try writer.writeRawRecord(first_title, first_payload, metadata);
+    try writer.writeRawRecord(first_title, first_payload);
 
     _ = page_arena.reset(.retain_capacity);
 
@@ -1513,9 +1511,7 @@ test "output writer accepts english section without trailing heading newline" {
     var writer = try OutputWriter.init(std.testing.io, std.testing.allocator, output_path);
     defer writer.deinit(std.testing.allocator);
 
-    var metadata = try wikitext.extractEntryMetadata(std.testing.allocator, "color", "==English==");
-    defer metadata.deinit(std.testing.allocator);
-    try writer.writeRawRecord("color", "==English==", metadata);
+    try writer.writeRawRecord("color", "==English==");
     try writer.finish();
 
     try std.testing.expectEqual(@as(usize, 1), writer.entry_count);
@@ -1572,33 +1568,32 @@ test "full build filters unresolved alias records in binary second pass" {
         .input_path = xml_path,
         .output_path = db_path,
     });
-    try std.testing.expectEqual(@as(usize, 3), stats.english_entries);
+    try std.testing.expectEqual(@as(usize, 2), stats.english_entries);
     try std.testing.expectEqual(@as(usize, 1), stats.redirect_aliases);
 
     var mapped_db = try mmapReadOnlyPath(std.testing.io, db_path);
     defer mapped_db.deinit();
     const mapped = mapped_db.bytes();
-    const inspected = try validateDictionaryHeader(mapped, mapped.len);
-    try std.testing.expectEqual(@as(u32, 3), inspected.header.entry_count);
-    try std.testing.expectEqual(@as(u32, 2), inspected.header.raw_entry_count);
-    try std.testing.expectEqual(@as(u32, 1), inspected.header.redirect_count);
+    const inspected = try format.inspectDictionary(mapped);
+    try std.testing.expectEqual(@as(u32, 2), inspected.header.raw_count);
+    try std.testing.expectEqual(@as(u32, 1), inspected.header.alias_count);
 
-    const records = try collectBinaryRecords(std.testing.allocator, mapped, inspected);
-    defer std.testing.allocator.free(records);
+    var raw_cursor: usize = @intCast(inspected.layout.raw_titles_offset);
+    const raw_titles_end: usize = @intCast(inspected.layout.raw_titles_offset + inspected.layout.raw_titles_len);
+    const raw0 = try format.readNullTerminatedSlice(mapped, &raw_cursor, raw_titles_end);
+    const raw1 = try format.readNullTerminatedSlice(mapped, &raw_cursor, raw_titles_end);
+    const raw0_decoded = try compact.decodeAlloc(std.testing.allocator, raw0);
+    defer std.testing.allocator.free(raw0_decoded);
+    const raw1_decoded = try compact.decodeAlloc(std.testing.allocator, raw1);
+    defer std.testing.allocator.free(raw1_decoded);
+    try std.testing.expectEqualStrings("color", raw0_decoded);
+    try std.testing.expectEqualStrings("colour", raw1_decoded);
 
-    var saw_color = false;
-    var saw_colour = false;
-    var saw_colours = false;
-    var saw_broken = false;
-    for (records) |record| {
-        if (std.mem.eql(u8, record.title, "color")) saw_color = true;
-        if (std.mem.eql(u8, record.title, "colour")) saw_colour = true;
-        if (std.mem.eql(u8, record.title, "colours")) saw_colours = true;
-        if (std.mem.eql(u8, record.title, "broken")) saw_broken = true;
-    }
-
-    try std.testing.expect(saw_color);
-    try std.testing.expect(saw_colour);
-    try std.testing.expect(saw_colours);
-    try std.testing.expect(!saw_broken);
+    var alias_cursor: usize = @intCast(inspected.layout.alias_titles_offset);
+    const alias_titles_end: usize = @intCast(inspected.layout.alias_titles_offset + inspected.layout.alias_titles_len);
+    const alias0 = try format.readNullTerminatedSlice(mapped, &alias_cursor, alias_titles_end);
+    const alias_title = try compact.decodeAlloc(std.testing.allocator, alias0);
+    defer std.testing.allocator.free(alias_title);
+    try std.testing.expectEqualStrings("colours", alias_title);
+    try std.testing.expectEqual(@as(u32, 1), try format.readAliasTargetAt(mapped, inspected.layout, 0));
 }

@@ -1,29 +1,13 @@
 const std = @import("std");
+const generated = @import("generated_structure_tables");
+const compact_pattern_seed = @import("compact_pattern_seed");
 const structure_report = @import("shared_structure_report");
+const template_dispatch = @import("template_dispatch");
 
-pub const SectionKind = enum(u8) {
-    lines = 0,
-    pos_lines = 1,
-    term_list = 2,
-    translations = 3,
-};
-
-pub const RuntimeLineTemplate = struct {
-    code: u16,
-    name: []const u8,
-};
-
-pub const RuntimeTranslationTemplate = struct {
-    code: u16,
-    name: []const u8,
-};
-
-pub const RuntimeHeadingLevelSpec = struct {
-    code: u16,
-    level: u8,
-    title: []const u8,
-    kind: SectionKind,
-};
+pub const SectionKind = generated.SectionKind;
+pub const RuntimeLineTemplate = generated.LineTemplate;
+pub const RuntimeTranslationTemplate = generated.TranslationTemplate;
+pub const RuntimeHeadingLevelSpec = generated.HeadingLevelSpec;
 
 pub const RuntimeMappings = struct {
     direct_patterns: []const []const u8,
@@ -78,6 +62,31 @@ pub const special_template_translation_code: u8 = 0xFC;
 pub const special_heading_line_code: u8 = 0xFD;
 pub const extended_pattern_code: u8 = 0xFE;
 pub const raw_literal_code: u8 = 0xFF;
+
+pub const static_direct_patterns = compact_pattern_seed.static_direct_patterns;
+const generated_direct_patterns = if (@hasDecl(generated, "compact_direct_patterns"))
+    generated.compact_direct_patterns
+else
+    [_][]const u8{};
+pub const direct_patterns = static_direct_patterns ++ generated_direct_patterns;
+pub const static_escaped_patterns = compact_pattern_seed.static_escaped_patterns;
+pub const escaped_patterns = static_escaped_patterns ++ generated.compact_patterns;
+pub const static_extended_escaped_patterns = compact_pattern_seed.static_extended_escaped_patterns;
+pub const extended_escaped_patterns = static_extended_escaped_patterns ++ generated.compact_patterns_ext;
+const line_template_defs = generated.line_templates;
+const translation_template_defs = generated.translation_templates;
+const heading_level_defs = generated.heading_level_specs;
+
+pub fn currentRuntimeMappings() RuntimeMappings {
+    return .{
+        .direct_patterns = &direct_patterns,
+        .escaped_patterns = &escaped_patterns,
+        .extended_patterns = &extended_escaped_patterns,
+        .line_templates = &line_template_defs,
+        .translation_templates = &translation_template_defs,
+        .heading_levels = &heading_level_defs,
+    };
+}
 
 pub fn mappingFingerprint(mappings: RuntimeMappings) u32 {
     var hasher = std.hash.Wyhash.init(0x4a92b39d6f1357c1);
@@ -136,15 +145,41 @@ pub fn decodeAllocWithMappings(
     input: []const u8,
     mappings: RuntimeMappings,
 ) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
-    const out_len = try decodedLenWithMappings(input, mappings);
+    const out_len = try decodedLenWithMappingsMode(input, mappings, .literal_name);
     const out = try allocator.alloc(u8, out_len);
     errdefer allocator.free(out);
-    const written = try decodeIntoWithMappings(out, input, mappings);
+    const written = try decodeIntoWithMappingsMode(out, input, mappings, .literal_name);
     std.debug.assert(written == out.len);
     return out;
 }
 
+pub fn decodeAllocForRenderWithMappings(
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    mappings: RuntimeMappings,
+) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+    const out_len = try decodedLenWithMappingsMode(input, mappings, .dispatch_marker);
+    const out = try allocator.alloc(u8, out_len);
+    errdefer allocator.free(out);
+    const written = try decodeIntoWithMappingsMode(out, input, mappings, .dispatch_marker);
+    std.debug.assert(written == out.len);
+    return out;
+}
+
+const TemplateNameMode = enum {
+    literal_name,
+    dispatch_marker,
+};
+
 fn decodedLenWithMappings(input: []const u8, mappings: RuntimeMappings) error{InvalidEncoding}!usize {
+    return decodedLenWithMappingsMode(input, mappings, .literal_name);
+}
+
+fn decodedLenWithMappingsMode(
+    input: []const u8,
+    mappings: RuntimeMappings,
+    template_name_mode: TemplateNameMode,
+) error{InvalidEncoding}!usize {
     var out_len: usize = 0;
     var i: usize = 0;
 
@@ -181,15 +216,25 @@ fn decodedLenWithMappings(input: []const u8, mappings: RuntimeMappings) error{In
             if (code == special_template_line_code) {
                 i += 2;
                 const ref = try readCompactRef(input, &i);
-                const name = lineTemplateNameIn(mappings, ref) orelse return error.InvalidEncoding;
-                out_len += 2 + name.len;
+                switch (template_name_mode) {
+                    .literal_name => {
+                        const name = lineTemplateNameIn(mappings, ref) orelse return error.InvalidEncoding;
+                        out_len += 2 + name.len;
+                    },
+                    .dispatch_marker => out_len += 2 + template_dispatch.marker_len,
+                }
                 continue;
             }
             if (code == special_template_translation_code) {
                 i += 2;
                 const ref = try readCompactRef(input, &i);
-                const name = translationTemplateNameIn(mappings, ref) orelse return error.InvalidEncoding;
-                out_len += 2 + name.len;
+                switch (template_name_mode) {
+                    .literal_name => {
+                        const name = translationTemplateNameIn(mappings, ref) orelse return error.InvalidEncoding;
+                        out_len += 2 + name.len;
+                    },
+                    .dispatch_marker => out_len += 2 + template_dispatch.marker_len,
+                }
                 continue;
             }
             if (code == special_heading_line_code) {
@@ -231,6 +276,15 @@ fn decodedLenWithMappings(input: []const u8, mappings: RuntimeMappings) error{In
 }
 
 fn decodeIntoWithMappings(out: []u8, input: []const u8, mappings: RuntimeMappings) error{InvalidEncoding}!usize {
+    return decodeIntoWithMappingsMode(out, input, mappings, .literal_name);
+}
+
+fn decodeIntoWithMappingsMode(
+    out: []u8,
+    input: []const u8,
+    mappings: RuntimeMappings,
+    template_name_mode: TemplateNameMode,
+) error{InvalidEncoding}!usize {
     var out_index: usize = 0;
     var i: usize = 0;
 
@@ -271,21 +325,45 @@ fn decodeIntoWithMappings(out: []u8, input: []const u8, mappings: RuntimeMapping
             if (code == special_template_line_code) {
                 i += 2;
                 const ref = try readCompactRef(input, &i);
-                const name = lineTemplateNameIn(mappings, ref) orelse return error.InvalidEncoding;
                 out[out_index] = '{';
                 out[out_index + 1] = '{';
-                @memcpy(out[out_index + 2 .. out_index + 2 + name.len], name);
-                out_index += 2 + name.len;
+                switch (template_name_mode) {
+                    .literal_name => {
+                        const name = lineTemplateNameIn(mappings, ref) orelse return error.InvalidEncoding;
+                        @memcpy(out[out_index + 2 .. out_index + 2 + name.len], name);
+                        out_index += 2 + name.len;
+                    },
+                    .dispatch_marker => {
+                        var marker_buf: [template_dispatch.marker_len]u8 = undefined;
+                        marker_buf[0] = template_dispatch.marker_prefix;
+                        std.mem.writeInt(u16, marker_buf[1..3], ref, .little);
+                        marker_buf[3] = template_dispatch.marker_suffix;
+                        @memcpy(out[out_index + 2 .. out_index + 2 + template_dispatch.marker_len], &marker_buf);
+                        out_index += 2 + template_dispatch.marker_len;
+                    },
+                }
                 continue;
             }
             if (code == special_template_translation_code) {
                 i += 2;
                 const ref = try readCompactRef(input, &i);
-                const name = translationTemplateNameIn(mappings, ref) orelse return error.InvalidEncoding;
                 out[out_index] = '{';
                 out[out_index + 1] = '{';
-                @memcpy(out[out_index + 2 .. out_index + 2 + name.len], name);
-                out_index += 2 + name.len;
+                switch (template_name_mode) {
+                    .literal_name => {
+                        const name = translationTemplateNameIn(mappings, ref) orelse return error.InvalidEncoding;
+                        @memcpy(out[out_index + 2 .. out_index + 2 + name.len], name);
+                        out_index += 2 + name.len;
+                    },
+                    .dispatch_marker => {
+                        var marker_buf: [template_dispatch.marker_len]u8 = undefined;
+                        marker_buf[0] = template_dispatch.marker_prefix;
+                        std.mem.writeInt(u16, marker_buf[1..3], ref, .little);
+                        marker_buf[3] = template_dispatch.marker_suffix;
+                        @memcpy(out[out_index + 2 .. out_index + 2 + template_dispatch.marker_len], &marker_buf);
+                        out_index += 2 + template_dispatch.marker_len;
+                    },
+                }
                 continue;
             }
             if (code == special_heading_line_code) {

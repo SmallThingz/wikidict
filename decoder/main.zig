@@ -114,11 +114,11 @@ fn cmdStats(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) 
         "path: {s}\nentries: {d}\nraw entries: {d}\nredirects: {d}\nlookups: {d}\nrecord bytes: {d}\n",
         .{
             db_path,
-            db.header.entry_count,
-            db.header.raw_entry_count,
-            db.header.redirect_count,
+            db.header.entryCount(),
+            db.header.raw_count,
+            db.header.alias_count,
             db.lookups.len,
-            db.header.records_len,
+            db.layout.raw_payloads_len,
         },
     );
 }

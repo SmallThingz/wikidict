@@ -161,9 +161,9 @@ const StatsEndpoint = struct {
         const db = &req.ctx().db;
         return jsonResponse(req.allocator(), .{
             .path = req.ctx().db_path,
-            .entries = db.header.entry_count,
-            .rawEntries = db.header.raw_entry_count,
-            .redirects = db.header.redirect_count,
+            .entries = db.header.entryCount(),
+            .rawEntries = db.header.raw_count,
+            .redirects = db.header.alias_count,
             .lookups = db.lookups.len,
             .recordsBytes = db.header.records_len,
             .version = format.version,
@@ -293,8 +293,9 @@ const LookupEndpoint = struct {
             defer derived.deinit(req.allocator());
             const summary = try req.allocator().dupe(u8, derived.summary);
             const raw = if (try entry.rawEnglishAlloc(req.allocator())) |value| value else "";
-            const rendered_sections = if (raw.len != 0)
-                try renderSectionJsonAlloc(req.allocator(), &req.ctx().db, raw)
+            const render_raw = if (try entry.rawEnglishRenderAlloc(req.allocator())) |value| value else raw;
+            const rendered_sections = if (render_raw.len != 0)
+                try renderSectionJsonAlloc(req.allocator(), &req.ctx().db, render_raw)
             else
                 &.{};
             const alias_hint_label = if (derived.alias_hint_label.len != 0)

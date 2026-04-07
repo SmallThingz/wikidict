@@ -1320,29 +1320,23 @@ fn renderGeneratedTemplate(
     name: []const u8,
     parts: *const std.ArrayList([]const u8),
 ) !bool {
-    const lookup = generated_templates.lookupTemplate(name) orelse return false;
-    switch (lookup.class) {
-        .metadata_only => return true,
-        .unsupported => return false,
-        .compiled => {
-            var args = try template_support.templateArgsFromPartsAlloc(allocator, parts);
-            defer args.deinit(allocator);
+    const dispatch_id = template_support.templateDispatchId(name) orelse return false;
+    var args = try template_support.templateArgsFromPartsAlloc(allocator, parts);
+    defer args.deinit(allocator);
 
-            const start_len = out.items.len;
-            if (!(generated_templates.renderTemplateByIndex(out, allocator, lookup.render_index, &args) catch false)) {
-                out.items.len = start_len;
-                return false;
-            }
-            const appended = out.items[start_len..];
-            if (appended.len == 0) return true;
-            if (looksLikeTemplateRedirectText(appended)) {
-                out.items.len = start_len;
-                return false;
-            }
-
-            return true;
-        },
+    const start_len = out.items.len;
+    if (!(generated_templates.renderTemplateByDispatchId(out, allocator, dispatch_id, &args) catch false)) {
+        out.items.len = start_len;
+        return false;
     }
+    const appended = out.items[start_len..];
+    if (appended.len == 0) return true;
+    if (looksLikeTemplateRedirectText(appended)) {
+        out.items.len = start_len;
+        return false;
+    }
+
+    return true;
 }
 
 fn looksLikeTemplateRedirectText(text: []const u8) bool {
