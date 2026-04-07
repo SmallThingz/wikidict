@@ -22,19 +22,12 @@ const json_headers: []const Header = &.{
     .{ .name = "pragma", .value = "no-cache" },
     .{ .name = "access-control-allow-origin", .value = "*" },
 };
-const html_headers: []const Header = &.{
-    .{ .name = "content-type", .value = "text/html; charset=utf-8" },
-    .{ .name = "cache-control", .value = "no-store, max-age=0" },
-    .{ .name = "pragma", .value = "no-cache" },
-};
 
 const AppContext = struct {
     allocator: std.mem.Allocator,
     db: decoder.Dictionary,
     db_path: []const u8,
     theme_palette: system_theme.Palette,
-    // Preloaded SPA shell returned for both `/` and `/entry/...`.
-    index_html: []const u8,
     // Monotonic counter used to walk pseudo-randomly across entries without extra state.
     random_counter: std.atomic.Value(u64),
 
@@ -46,17 +39,6 @@ const AppContext = struct {
             }),
             .db_path = try allocator.dupe(u8, options.db_path),
             .theme_palette = try system_theme.detectSystemPalette(io, allocator),
-            .index_html = blk: {
-                var file = try std.Io.Dir.cwd().openFile(io, "frontend/dist/index.html", .{});
-                defer file.close(io);
-
-                const stat = try file.stat(io);
-                const len = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
-                const buffer = try allocator.alloc(u8, len);
-                errdefer allocator.free(buffer);
-                _ = try file.readPositionalAll(io, buffer, 0);
-                break :blk buffer;
-            },
             .random_counter = .init(0x9e3779b97f4a7c15),
         };
     }
@@ -65,7 +47,6 @@ const AppContext = struct {
         self.db.deinit();
         self.allocator.free(self.db_path);
         self.theme_palette.deinit(self.allocator);
-        self.allocator.free(self.index_html);
     }
 
     fn nextRandomWord(self: *AppContext) []const u8 {
@@ -130,29 +111,6 @@ fn writeMappedFile(path: []const u8, contents: []const u8) !void {
     try truncateFd(fd, contents.len);
     _ = std.os.linux.close(fd);
 }
-
-const AssetsMw = zhttp.middleware.Static(.{
-    .dir = "frontend/dist/assets",
-    .mount = "/assets",
-});
-
-const IndexPage = struct {
-    pub const Info: zhttp.router.EndpointInfo = .{
-        .operations = &.{zhttp.operations.Static},
-    };
-
-    pub fn call(comptime rctx: ReqCtx, req: rctx.T()) !zhttp.Res {
-        return htmlResponse(req.ctx().index_html);
-    }
-};
-
-const EntryPage = struct {
-    pub const Info: zhttp.router.EndpointInfo = .{};
-
-    pub fn call(comptime rctx: ReqCtx, req: rctx.T()) !zhttp.Res {
-        return htmlResponse(req.ctx().index_html);
-    }
-};
 
 const StatsEndpoint = struct {
     pub const Info: zhttp.router.EndpointInfo = .{};
@@ -253,7 +211,11 @@ const SearchEndpoint = struct {
 };
 
 const LookupEndpoint = struct {
-    pub const Info: zhttp.router.EndpointInfo = .{};
+    pub const Info: zhttp.router.EndpointInfo = .{
+        .query = struct {
+            debug: zhttp.parse.Optional(zhttp.parse.String),
+        },
+    };
 
     const RenderedSectionJson = struct {
         id: []const u8,
@@ -273,6 +235,7 @@ const LookupEndpoint = struct {
         renderedSections: []const RenderedSectionJson,
         // Filtered raw English wikitext stored in the dictionary payload.
         raw: []const u8,
+        rawRendered: ?[]const u8,
         summary: []const u8,
     };
 
@@ -284,6 +247,7 @@ const LookupEndpoint = struct {
 
     pub fn call(comptime rctx: ReqCtx, req: rctx.T()) !zhttp.Res {
         const term = req.paramValue(.term);
+        const debug_mode = req.queryParam(.debug) != null;
         const hits = try req.ctx().db.lookupExact(req.allocator(), term);
 
         var payload_hits: std.ArrayList(HitJson) = .empty;
@@ -293,9 +257,16 @@ const LookupEndpoint = struct {
             defer derived.deinit(req.allocator());
             const summary = try req.allocator().dupe(u8, derived.summary);
             const raw = if (try entry.rawEnglishAlloc(req.allocator())) |value| value else "";
-            const render_raw = if (try entry.rawEnglishRenderAlloc(req.allocator())) |value| value else raw;
-            const rendered_sections = if (render_raw.len != 0)
-                try renderSectionJsonAlloc(req.allocator(), &req.ctx().db, render_raw)
+            const raw_rendered: ?[]const u8 = if (debug_mode)
+                if (raw.len != 0) try renderer.wikitext_runtime.renderWikitextToOwned(
+                    req.allocator(),
+                    raw,
+                    std.math.maxInt(usize),
+                ) else ""
+            else
+                null;
+            const rendered_sections = if (raw.len != 0)
+                try renderSectionJsonAlloc(req.allocator(), &req.ctx().db, raw)
             else
                 &.{};
             const alias_hint_label = if (derived.alias_hint_label.len != 0)
@@ -320,6 +291,7 @@ const LookupEndpoint = struct {
                     .incomingAliases = incoming_aliases,
                     .renderedSections = rendered_sections,
                     .raw = raw,
+                    .rawRendered = raw_rendered,
                     .summary = summary,
                 },
             });
@@ -336,11 +308,7 @@ const App = blk: {
     @setEvalBranchQuota(12_000);
     break :blk zhttp.Server(.{
         .Context = AppContext,
-        .middlewares = .{AssetsMw},
-        .operations = .{zhttp.operations.Static},
         .routes = .{
-            zhttp.get("/", IndexPage),
-            zhttp.get("/entry/{*path}", EntryPage),
             zhttp.get("/api/stats", StatsEndpoint),
             zhttp.get("/api/word-of-day", WordOfDayEndpoint),
             zhttp.get("/api/theme/system", SystemThemeEndpoint),
@@ -364,8 +332,6 @@ pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
         .port = (try cli_args.parseOptionalIntFlag(u16, args, "--port")) orelse 3000,
     };
     ensurePathExistsOrExit(io, options.db_path, "dictionary");
-    ensurePathExistsOrExit(io, "frontend/dist/index.html", "frontend shell");
-    ensurePathExistsOrExit(io, "frontend/dist/assets", "frontend assets");
 
     var ctx = try AppContext.init(io, allocator, options);
     defer ctx.deinit();
@@ -383,7 +349,7 @@ pub fn serve(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
 
 fn printUsage() void {
     std.debug.print(
-        \\dict-backend serve [--db data/wiktionary.bin] [--structure data/wiktionary-structure.json] [--port 3000]
+        \\dict-backend serve [--db data/wiktionary.bin] [--structure data/wiktionary-structure.bin] [--port 3000]
         \\
     , .{});
 }
@@ -422,11 +388,15 @@ fn renderSectionJsonAlloc(
     dict: *const decoder.Dictionary,
     raw_english: []const u8,
 ) ![]const LookupEndpoint.RenderedSectionJson {
-    const rendered = try renderer.html_render.renderEnglishSectionWithOptionsAlloc(allocator, raw_english, .{
-        .link_resolver = .{
-            .context = @ptrCast(dict),
-            .resolve = resolveRendererLink,
-        },
+    const link_resolver: renderer.html_render.LinkResolver = .{
+        .context = @ptrCast(dict),
+        .resolve = resolveRendererLink,
+    };
+    const rendered = renderer.html_render.renderEnglishSectionWithOptionsAlloc(allocator, raw_english, .{
+        .link_resolver = link_resolver,
+    }) catch try renderer.html_render.renderEnglishSectionWithOptionsAlloc(allocator, raw_english, .{
+        .strict = false,
+        .link_resolver = link_resolver,
     });
     const out = try allocator.alloc(LookupEndpoint.RenderedSectionJson, rendered.len);
     for (rendered, out) |section, *slot| {
@@ -447,14 +417,6 @@ fn resolveRendererLink(
 ) !?[]const u8 {
     const dict: *const decoder.Dictionary = @ptrCast(@alignCast(context));
     return dict.resolveLinkTargetAlloc(allocator, term);
-}
-
-fn htmlResponse(body: []const u8) zhttp.Res {
-    return .{
-        .status = .ok,
-        .headers = html_headers,
-        .body = body,
-    };
 }
 
 fn jsonResponse(allocator: std.mem.Allocator, value: anytype) !zhttp.Res {

@@ -7,6 +7,7 @@ const lua = @import("lua");
 const wikitext = encoder.wikitext;
 const xml_decode = encoder.xml_decode;
 const required_path = @import("required_path.zig");
+const structure_report = @import("shared_structure_report");
 const structure_tables_support = @import("structure_tables_support.zig");
 
 const parse_opts: zxml.ParseOptions = .{
@@ -55,8 +56,7 @@ pub fn main(init: std.process.Init) !void {
 
 const Options = struct {
     input_path: []const u8 = "data/wiktionary.xml",
-    output_path: []const u8 = "data/wiktionary-structure.json",
-    format: OutputFormat = .json,
+    output_path: []const u8 = "data/wiktionary-structure.bin",
     limit_entries: ?usize = null,
     worker_threads: ?usize = null,
     top_n: usize = 50,
@@ -71,11 +71,6 @@ const AnalyzeStats = struct {
     heading_title_keys: usize,
     unknown_heading_keys: usize,
     anomaly_samples: usize,
-};
-
-const OutputFormat = enum {
-    json,
-    text,
 };
 
 const HeadingProfile = struct {
@@ -1170,116 +1165,35 @@ fn pageTitleHint(page_fragment: []const u8) ?[]const u8 {
     return std.mem.trim(u8, page_fragment[title_start..title_end], " \t\r\n");
 }
 fn writeReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    const legacy_inputs = try legacyBuildInputsAlloc(arena_allocator, analyzer);
+    var build = try structure_tables_support.buildDataFromLegacyAlloc(arena_allocator, legacy_inputs);
+    const dependencies = try buildStructureDependenciesAlloc(arena_allocator, allocator, analyzer, build);
+    try replaceBuildLineTemplatesAlloc(arena_allocator, &build, dependencies.reachable_templates);
+    build.structure_fingerprint = structure_tables_support.computeStructureFingerprint(build);
+
     if (std.mem.eql(u8, analyzer.options.output_path, "-")) {
-        var stdout_buffer: [4096]u8 = undefined;
+        var stdout_buffer: [256]u8 = undefined;
         var stdout_writer = std.Io.File.stdout().writerStreaming(io, &stdout_buffer);
         defer stdout_writer.flush() catch {};
-
-        if (analyzer.options.format == .json) {
-            try writeJsonReportToWriter(&stdout_writer.interface, allocator, analyzer);
-            return;
-        }
-
-        try writeTextReportToWriter(&stdout_writer.interface, allocator, analyzer);
+        try stdout_writer.interface.print(
+            "pages={d}\nns0={d}\nlanguage_entries={d}\nparse_errors={d}\nheading_titles={d}\nunclassified_headings={d}\nanomalies={d}\n",
+            .{
+                analyzer.pages_seen,
+                analyzer.namespace_zero_pages,
+                analyzer.language_entries,
+                analyzer.parse_errors,
+                analyzer.heading_title_counts.count(),
+                analyzer.unclassified_heading_counts.count(),
+                analyzer.anomaly_samples.items.len,
+            },
+        );
         return;
     }
-
-    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{analyzer.options.output_path});
-    defer allocator.free(temp_path);
-    std.Io.Dir.cwd().deleteFile(io, temp_path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => return err,
-    };
-    defer std.Io.Dir.cwd().deleteFile(io, temp_path) catch {};
-
-    var file = try std.Io.Dir.cwd().createFile(io, temp_path, .{ .truncate = true });
-    defer file.close(io);
-    // Stream the structure report directly to disk. The full-corpus JSON is large
-    // enough that materializing the entire payload before writing can fail right at
-    // the end of an otherwise successful scan.
-    var file_buffer: [64 * 1024]u8 = undefined;
-    var file_writer = file.writerStreaming(io, &file_buffer);
-    defer file_writer.flush() catch {};
-    if (analyzer.options.format == .json) {
-        try writeJsonReportToWriter(&file_writer.interface, allocator, analyzer);
-    } else {
-        try writeTextReportToWriter(&file_writer.interface, allocator, analyzer);
-    }
-    try file.sync(io);
-    try std.Io.Dir.cwd().rename(temp_path, std.Io.Dir.cwd(), analyzer.options.output_path, io);
-}
-
-fn writeTextReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
-    try writer.print(
-        \\# Wiktionary Structure Report
-        \\
-        \\Input: {s}
-        \\Pages scanned: {d}
-        \\Namespace 0 pages: {d}
-        \\Language entries: {d}
-        \\Page parse errors: {d}
-        \\Heading level jumps: {d}
-        \\Content before first subheading: {d}
-        \\Unbalanced language sections: {d}
-        \\
-        \\## Heading Kinds
-        \\
-    , .{
-        analyzer.options.input_path,
-        analyzer.pages_seen,
-        analyzer.namespace_zero_pages,
-        analyzer.language_entries,
-        analyzer.parse_errors,
-        analyzer.heading_jumps,
-        analyzer.content_before_subheading,
-        analyzer.unbalanced_sections,
-    });
-
-    try writeSortedMap(writer, allocator, analyzer.heading_kind_counts, analyzer.options.top_n);
-    try writer.print("\n## Parser Kinds\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.parser_kind_counts, analyzer.options.top_n);
-    try writer.print("\n## Heading Titles\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.heading_title_counts, analyzer.options.top_n);
-    try writer.print("\n## Headings By Level\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.heading_level_counts, analyzer.options.top_n);
-    try writer.print("\n## Unclassified Headings\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.unclassified_heading_counts, analyzer.options.top_n);
-    try writer.print("\n## Heading Transitions\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.heading_edge_counts, analyzer.options.top_n);
-    try writer.print("\n## Global Formatting Signatures\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.line_signature_counts, analyzer.options.top_n);
-    try writer.print("\n## Formatting By Active Heading\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.section_signature_counts, analyzer.options.top_n);
-    try writer.print("\n## Formatting By Heading Family\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.family_signature_counts, analyzer.options.top_n);
-    try writer.print("\n## Template Names\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.template_counts, analyzer.options.top_n);
-    try writer.print("\n## Templates By Active Heading\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.section_template_counts, analyzer.options.top_n);
-    try writer.print("\n## Templates By Heading Family\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.family_template_counts, analyzer.options.top_n);
-    try writer.print("\n## Template Shapes\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.template_shape_counts, analyzer.options.top_n);
-    try writer.print("\n## Template Shapes By Active Heading\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.section_template_shape_counts, analyzer.options.top_n);
-    try writer.print("\n## Template Shapes By Heading Family\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.family_template_shape_counts, analyzer.options.top_n);
-    try writer.print("\n## Link Shapes\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.link_shape_counts, analyzer.options.top_n);
-    try writer.print("\n## Link Shapes By Active Heading\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.section_link_shape_counts, analyzer.options.top_n);
-    try writer.print("\n## Link Shapes By Heading Family\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.family_link_shape_counts, analyzer.options.top_n);
-    try writer.print("\n## Translation Source Labels\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.translation_source_label_counts, analyzer.options.top_n);
-    try writer.print("\n## Translation Target Languages\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.translation_target_lang_counts, analyzer.options.top_n);
-    try writer.print("\n## Structural Anomaly Kinds\n\n", .{});
-    try writeSortedMap(writer, allocator, analyzer.anomaly_kind_counts, analyzer.options.top_n);
-    try writer.print("\n## Structural Anomaly Samples\n\n", .{});
-    for (analyzer.anomaly_samples.items) |sample| {
-        try writer.print("- [{s}] {s}: {s}\n", .{ sample.kind, sample.title, sample.detail });
-    }
+    try structure_report.saveStructureFile(io, analyzer.options.output_path, build, dependencies);
 }
 
 const SortedCount = struct {
@@ -1292,37 +1206,6 @@ const SortedCompositeCount = struct {
     right: []const u8,
     count: u64,
 };
-
-fn writeSortedMap(
-    writer: anytype,
-    allocator: std.mem.Allocator,
-    map: std.StringHashMapUnmanaged(u64),
-    limit: usize,
-) !void {
-    var items = try allocator.alloc(SortedCount, map.count());
-    defer allocator.free(items);
-
-    var it = map.iterator();
-    var idx: usize = 0;
-    while (it.next()) |entry| : (idx += 1) {
-        items[idx] = .{
-            .key = entry.key_ptr.*,
-            .count = entry.value_ptr.*,
-        };
-    }
-
-    std.mem.sort(SortedCount, items, {}, struct {
-        fn lessThan(_: void, lhs: SortedCount, rhs: SortedCount) bool {
-            if (lhs.count != rhs.count) return lhs.count > rhs.count;
-            return std.mem.order(u8, lhs.key, rhs.key) == .lt;
-        }
-    }.lessThan);
-
-    const max = @min(limit, items.len);
-    for (items[0..max]) |item| {
-        try writer.print("- {s}: {d}\n", .{ item.key, item.count });
-    }
-}
 
 fn sortedCounts(allocator: std.mem.Allocator, map: std.StringHashMapUnmanaged(u64)) ![]SortedCount {
     var items = try allocator.alloc(SortedCount, map.count());
@@ -1368,73 +1251,6 @@ fn sortedCompositeCounts(allocator: std.mem.Allocator, map: std.StringHashMapUnm
         }
     }.lessThan);
     return items;
-}
-
-fn jsonReportAlloc(allocator: std.mem.Allocator, analyzer: *Analyzer) ![]u8 {
-    var writer: std.Io.Writer.Allocating = .init(allocator);
-    defer writer.deinit();
-
-    try writeJsonReportToWriter(&writer.writer, allocator, analyzer);
-    return allocator.dupe(u8, writer.written());
-}
-
-fn textReportAlloc(allocator: std.mem.Allocator, analyzer: *Analyzer) ![]u8 {
-    var writer: std.Io.Writer.Allocating = .init(allocator);
-    defer writer.deinit();
-
-    try writeTextReportToWriter(&writer.writer, allocator, analyzer);
-    return allocator.dupe(u8, writer.written());
-}
-
-fn writeJsonReportToWriter(writer: anytype, allocator: std.mem.Allocator, analyzer: *Analyzer) !void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    const legacy_inputs = try legacyBuildInputsAlloc(arena_allocator, analyzer);
-    var build = try structure_tables_support.buildDataFromLegacyAlloc(arena_allocator, legacy_inputs);
-    const anomaly_kinds = try countEntriesAlloc(arena_allocator, analyzer.anomaly_kind_counts);
-    const anomaly_samples = try anomalySamplesAlloc(arena_allocator, analyzer.anomaly_samples.items);
-    const dependencies = try buildStructureDependenciesAlloc(arena_allocator, allocator, analyzer, build);
-    try replaceBuildLineTemplatesAlloc(arena_allocator, &build, dependencies.reachable_templates);
-    build.structure_fingerprint = structure_tables_support.computeStructureFingerprint(build);
-
-    const report = structure_tables_support.ExactStructureReport{
-        .input = analyzer.options.input_path,
-        .summary = .{
-            .pages_scanned = analyzer.pages_seen,
-            .namespace_zero_pages = analyzer.namespace_zero_pages,
-            .language_entries = analyzer.language_entries,
-            .parse_errors = analyzer.parse_errors,
-            .heading_level_jumps = analyzer.heading_jumps,
-            .content_before_subheading = analyzer.content_before_subheading,
-            .unbalanced_sections = analyzer.unbalanced_sections,
-            .unclassified_heading_titles = analyzer.unclassified_heading_counts.count(),
-        },
-        .anomalies = .{
-            .kinds = anomaly_kinds,
-            .samples = anomaly_samples,
-        },
-        .dependencies = dependencies,
-        .build = build,
-    };
-
-    const io_writer = asIoWriter(writer);
-    var json_stream: std.json.Stringify = .{
-        .writer = io_writer,
-        .options = .{ .whitespace = .indent_2 },
-    };
-    try json_stream.write(report);
-    try io_writer.writeByte('\n');
-}
-
-fn asIoWriter(writer: anytype) *std.Io.Writer {
-    const WriterType = @TypeOf(writer);
-    if (WriterType == *std.Io.Writer) return writer;
-    if (@hasField(@TypeOf(writer.*), "interface")) {
-        return &writer.interface;
-    }
-    @compileError("unsupported writer type");
 }
 
 fn buildStructureDependenciesAlloc(
@@ -2751,11 +2567,6 @@ fn parseOptions(args: []const []const u8) !Options {
             i += 1;
         } else if (std.mem.eql(u8, arg, "--output") and i + 1 < args.len) {
             options.output_path = args[i + 1];
-            if (std.mem.endsWith(u8, options.output_path, ".txt")) options.format = .text;
-            if (std.mem.endsWith(u8, options.output_path, ".json")) options.format = .json;
-            i += 1;
-        } else if (std.mem.eql(u8, arg, "--format") and i + 1 < args.len) {
-            options.format = if (std.mem.eql(u8, args[i + 1], "text")) .text else .json;
             i += 1;
         } else if (std.mem.eql(u8, arg, "--limit") and i + 1 < args.len) {
             options.limit_entries = try std.fmt.parseInt(usize, args[i + 1], 10);
@@ -2778,8 +2589,8 @@ fn parseOptions(args: []const []const u8) !Options {
 
 fn printUsage(io: std.Io, allocator: std.mem.Allocator) !void {
     try printStdOut(io, allocator,
-        \\dict-structure [--input data/wiktionary.xml] [--output data/wiktionary-structure.json]
-        \\               [--format json|text] [--limit 10000] [--threads 4] [--top 50] [--samples 64]
+        \\dict-structure [--input data/wiktionary.xml] [--output data/wiktionary-structure.bin]
+        \\               [--limit 10000] [--threads 4] [--top 50] [--samples 64]
         \\
     , .{});
 }
@@ -2843,7 +2654,7 @@ test "internalLinkShapeAlloc records namespaces and pipe tricks" {
     try std.testing.expectEqualStrings("wikilink|ns:file|pipe-trick", shape);
 }
 
-test "json report includes exact build payload and omits exploratory sections" {
+test "binary structure report includes exact build payload" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -2857,7 +2668,13 @@ test "json report includes exact build payload and omits exploratory sections" {
         \\</mediawiki>
     );
 
-    var analyzer = Analyzer.init(std.testing.allocator, .{ .input_path = input_path });
+    const output_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(output_path);
+
+    var analyzer = Analyzer.init(std.testing.allocator, .{
+        .input_path = input_path,
+        .output_path = output_path,
+    });
     defer analyzer.deinit();
 
     analyzer.pages_seen = 3;
@@ -2901,18 +2718,17 @@ test "json report includes exact build payload and omits exploratory sections" {
         .{ .page_start = 1, .page_end = 9 },
     );
 
-    const json = try jsonReportAlloc(std.testing.allocator, &analyzer);
-    defer std.testing.allocator.free(json);
+    try writeReport(std.testing.io, std.testing.allocator, &analyzer);
 
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"build\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"anomalies\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"dependencies\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"all_entry_pages\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"all_template_pages\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"reachable_template_pages\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"compact_direct_patterns\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"heading_specs\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"template_shapes_by_heading\"") == null);
+    var structure = try structure_report.loadStructureFileAlloc(std.testing.io, std.testing.allocator, output_path);
+    defer structure.deinit(std.testing.allocator);
+
+    try std.testing.expect(structure.build.compact_direct_patterns.len != 0);
+    try std.testing.expect(structure.build.heading_specs.len != 0);
+    try std.testing.expectEqual(@as(usize, 1), structure.dependencies.all_entry_pages.len);
+    try std.testing.expectEqualStrings("entry", structure.dependencies.all_entry_pages[0].name);
+    try std.testing.expectEqual(@as(usize, 2), structure.dependencies.all_template_pages.len);
+    try std.testing.expectEqual(@as(usize, 1), structure.dependencies.reachable_template_pages.len);
 }
 
 test "dependency graph compat aliases suppress synthetic unresolved entries" {

@@ -7,10 +7,15 @@ pub const cli_args = @import("cli_args");
 
 pub const BuildOptions = @import("builder.zig").BuildOptions;
 pub const BuildStats = @import("builder.zig").BuildStats;
+pub const GeneratedBuildDataView = @import("builder.zig").GeneratedBuildDataView;
 const builder = @import("builder.zig");
 
 pub fn buildDictionary(io: @import("std").Io, allocator: @import("std").mem.Allocator, options: BuildOptions) !BuildStats {
     return builder.build(io, allocator, options);
+}
+
+pub fn currentGeneratedBuildData() GeneratedBuildDataView {
+    return builder.currentGeneratedBuildData();
 }
 
 test "encoder root imports module tests" {

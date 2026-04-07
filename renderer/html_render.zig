@@ -1336,6 +1336,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "m",
         "m+",
         "minitoc",
+        "missp",
         "multiple images",
         "nb...",
         "nbsp",
@@ -1374,7 +1375,10 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
         "rhyme",
         "rhymes",
         "s",
+        "see citations",
+        "see more citations",
         "seeCites",
+        "see thesaurus",
         "seeSynonyms",
         "seemoreCites",
         "checksense",
@@ -2132,6 +2136,12 @@ fn renderTemplateHtml(
     if (parts.items.len == 0) return;
 
     const name = trimWikiWhitespace(parts.items[0]);
+    if (templateMatchesHtml(name, "see citations") or
+        templateMatchesHtml(name, "see more citations") or
+        templateMatchesHtml(name, "translation only"))
+    {
+        return;
+    }
     if (templateMatchesHtml(name, "partial calque")) {
         try appendResolvedDisplayTargetHtml(out, allocator, "Partial calque", "partial calque", options);
         try appendEscapedHtmlSlice(out, allocator, " of ");
@@ -2432,6 +2442,16 @@ fn renderTemplateHtml(
         }
         return;
     }
+    if (templateMatchesHtml(name, "see thesaurus")) {
+        const term_index: usize = if (looksLikeLanguageCodeHtml(templatePositionalHtml(&parts, 0) orelse "")) 1 else 0;
+        if (templatePositionalHtml(&parts, term_index)) |value| {
+            const target = try std.fmt.allocPrint(allocator, "Thesaurus:{s}", .{trimWikiWhitespace(value)});
+            defer allocator.free(target);
+            try appendEscapedHtmlSlice(out, allocator, "see ");
+            try renderTemplateTargetHtml(out, allocator, target, options);
+        }
+        return;
+    }
     if (templateMatchesHtml(name, "q") or templateMatchesHtml(name, "q-lite") or templateMatchesHtml(name, "qualifier") or templateMatchesHtml(name, "i") or templateMatchesHtml(name, "gl")) {
         try appendParenthesizedTemplateArgs(out, allocator, &parts, 0, options);
         return;
@@ -2540,7 +2560,7 @@ fn renderGeneratedTemplateHtml(
     var generated_text: std.ArrayList(u8) = .empty;
     defer generated_text.deinit(allocator);
     if (!try generated_templates.renderTemplateByDispatchId(&generated_text, allocator, dispatch_id, &args)) return false;
-    if (generated_text.items.len == 0) return true;
+    if (generated_text.items.len == 0) return false;
     if (looksLikeTemplateRedirectTextHtml(generated_text.items)) return false;
 
     try renderInlineHtml(out, allocator, generated_text.items, .{
@@ -3024,6 +3044,7 @@ fn expandedTemplateForName(name: []const u8) ?TemplateExpansion {
         .{ .name = "alt sp of", .display = "Alternative spelling", .link_target = null, .tail = " of " },
         .{ .name = "alt spell", .display = "Alternative spelling", .link_target = null, .tail = " of " },
         .{ .name = "alt spelling of", .display = "Alternative spelling", .link_target = null, .tail = " of " },
+        .{ .name = "missp", .display = "Misspelling", .link_target = null, .tail = " of " },
         .{ .name = "alt case", .display = "Alternative case form", .link_target = null, .tail = " of " },
         .{ .name = "alt case form", .display = "Alternative case form", .link_target = null, .tail = " of " },
         .{ .name = "alternative case form of", .display = "Alternative case form", .link_target = null, .tail = " of " },

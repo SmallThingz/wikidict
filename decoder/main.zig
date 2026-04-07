@@ -46,7 +46,7 @@ fn cmdLookup(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
         return;
     };
     const open_options = try openOptionsFromArgs(args);
-    ensureDictionaryExists(io, allocator, input_path, db_path, null);
+    ensureDictionaryExists(io, allocator, input_path, db_path, null, open_options.structure_path);
 
     var db = try decoder.openDictionaryWithOptions(allocator, io, db_path, open_options);
     defer db.deinit();
@@ -76,7 +76,7 @@ fn cmdSuggest(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8
     };
     const limit = (try cli_args.parseOptionalIntFlag(usize, args, "--limit")) orelse 12;
     const open_options = try openOptionsFromArgs(args);
-    ensureDictionaryExists(io, allocator, input_path, db_path, null);
+    ensureDictionaryExists(io, allocator, input_path, db_path, null, open_options.structure_path);
 
     var db = try decoder.openDictionaryWithOptions(allocator, io, db_path, open_options);
     defer db.deinit();
@@ -104,7 +104,7 @@ fn cmdStats(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) 
     const db_path = cli_args.flagValue(args, "--db") orelse "data/wiktionary.bin";
     const input_path = cli_args.flagValue(args, "--input") orelse "data/wiktionary.xml";
     const open_options = try openOptionsFromArgs(args);
-    ensureDictionaryExists(io, allocator, input_path, db_path, null);
+    ensureDictionaryExists(io, allocator, input_path, db_path, null, open_options.structure_path);
     var db = try decoder.openDictionaryWithOptions(std.heap.page_allocator, io, db_path, open_options);
     defer db.deinit();
 
@@ -128,7 +128,7 @@ fn cmdIndex(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) 
     const input_path = cli_args.flagValue(args, "--input") orelse "data/wiktionary.xml";
     const build_limit = try cli_args.parseOptionalIntFlag(usize, args, "--limit");
     const open_options = try openOptionsFromArgs(args);
-    ensureDictionaryExists(io, allocator, input_path, db_path, build_limit);
+    ensureDictionaryExists(io, allocator, input_path, db_path, build_limit, open_options.structure_path);
 
     var db = try decoder.openDictionaryWithOptions(std.heap.page_allocator, io, db_path, open_options);
     defer db.deinit();
@@ -145,7 +145,14 @@ fn openOptionsFromArgs(args: []const []const u8) !decoder.OpenOptions {
     };
 }
 
-fn ensureDictionaryExists(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, db_path: []const u8, build_limit: ?usize) void {
+fn ensureDictionaryExists(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    db_path: []const u8,
+    build_limit: ?usize,
+    structure_path: ?[]const u8,
+) void {
     const found = required_path.exists(io, db_path) catch |err| {
         std.debug.print("failed to access dictionary at {s}: {s}\n", .{ db_path, @errorName(err) });
         std.process.exit(1);
@@ -159,6 +166,10 @@ fn ensureDictionaryExists(io: std.Io, allocator: std.mem.Allocator, input_path: 
     argv.append(allocator, input_path) catch unreachable;
     argv.append(allocator, "--output") catch unreachable;
     argv.append(allocator, db_path) catch unreachable;
+    if (structure_path) |path| {
+        argv.append(allocator, "--structure") catch unreachable;
+        argv.append(allocator, path) catch unreachable;
+    }
     if (build_limit) |limit| {
         const limit_text = std.fmt.allocPrint(allocator, "{d}", .{limit}) catch unreachable;
         defer allocator.free(limit_text);
@@ -352,10 +363,10 @@ fn lookupKindName(kind: u8) []const u8 {
 
 fn printUsage(io: std.Io, allocator: std.mem.Allocator) !void {
     try printStdOut(io, allocator,
-        \\dict-decoder lookup  --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json] --word colour [--index-threads 2]
-        \\dict-decoder suggest --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json] --prefix col [--limit 12] [--index-threads 2]
-        \\dict-decoder index   --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json] [--index-threads 2]
-        \\dict-decoder stats   --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json] [--index-threads 2]
+        \\dict-decoder lookup  --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.bin] --word colour [--index-threads 2]
+        \\dict-decoder suggest --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.bin] --prefix col [--limit 12] [--index-threads 2]
+        \\dict-decoder index   --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.bin] [--index-threads 2]
+        \\dict-decoder stats   --db data/wiktionary.bin [--input data/wiktionary.xml] [--structure data/wiktionary-structure.bin] [--index-threads 2]
         \\
     , .{});
 }

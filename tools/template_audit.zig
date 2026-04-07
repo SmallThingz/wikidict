@@ -3,6 +3,7 @@ const renderer = @import("renderer");
 const wikitext = @import("wikitext_source");
 const cli_args = @import("cli_args");
 const required_path = @import("required_path");
+const structure_report = @import("shared_structure_report");
 
 const html_render = renderer.html_render;
 const xml_decode = renderer.xml_decode;
@@ -49,7 +50,7 @@ pub fn main(init: std.process.Init) !void {
 
 const Options = struct {
     input_path: []const u8 = "data/wiktionary.xml",
-    structure_path: []const u8 = "data/wiktionary-structure.json",
+    structure_path: []const u8 = "data/wiktionary-structure.bin",
     report_path: []const u8 = "data/template-audit-report.txt",
     page_limit: ?usize = null,
     template_name: ?[]const u8 = null,
@@ -222,7 +223,7 @@ fn printUsage(io: std.Io) !void {
     defer writer.flush() catch {};
     try writer.interface.print(
         \\dict-template-audit [--input data/wiktionary.xml]
-        \\                    [--structure data/wiktionary-structure.json]
+        \\                    [--structure data/wiktionary-structure.bin]
         \\                    [--report data/template-audit-report.txt]
         \\                    [--page-limit N]
         \\                    [--template name]
@@ -241,24 +242,11 @@ fn parseOptions(args: []const []const u8) !Options {
 }
 
 fn loadCatalogAlloc(allocator: std.mem.Allocator, structure_path: []const u8, filter_template: ?[]const u8) !Catalog {
-    const bytes = try readFileAlloc(std.Options.debug_io, allocator, structure_path);
-    defer allocator.free(bytes);
-
-    const Report = struct {
-        build: struct {
-            line_templates: []const struct {
-                name: []const u8,
-            },
-        },
-    };
-
-    var parsed = try std.json.parseFromSlice(Report, allocator, bytes, .{
-        .ignore_unknown_fields = true,
-    });
-    defer parsed.deinit();
+    var mappings = try structure_report.loadTemplateMappingsAlloc(std.Options.debug_io, allocator, structure_path);
+    defer mappings.deinit(allocator);
 
     var selected_count: usize = 0;
-    for (parsed.value.build.line_templates) |entry| {
+    for (mappings.line_templates) |entry| {
         if (filter_template) |expected| {
             if (!templateNamesEqual(entry.name, expected)) continue;
         }
@@ -272,7 +260,7 @@ fn loadCatalogAlloc(allocator: std.mem.Allocator, structure_path: []const u8, fi
     errdefer catalog.index_by_key.deinit(allocator);
 
     var write_idx: usize = 0;
-    for (parsed.value.build.line_templates) |entry| {
+    for (mappings.line_templates) |entry| {
         if (filter_template) |expected| {
             if (!templateNamesEqual(entry.name, expected)) continue;
         }

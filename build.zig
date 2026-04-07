@@ -1,4 +1,6 @@
 const std = @import("std");
+const bootstrap_support = @import("tools/structure_tables_support.zig");
+const structure_report_file = @import("shared/structure_report.zig");
 
 pub fn build(b: *std.Build) void {
     b.graph.incremental = false;
@@ -279,7 +281,7 @@ pub fn build(b: *std.Build) void {
         zxml_config_path,
         bootstrap_generated_tables.structure_source,
     );
-    const generated_tables = if (existingBuildPath(b, "data/wiktionary-structure.json")) |existing_structure_report|
+    const generated_tables = if (existingValidStructureReportPath(b, "data/wiktionary-structure.bin")) |existing_structure_report|
         addGeneratedStructureTableModules(
             b,
             target,
@@ -290,6 +292,8 @@ pub fn build(b: *std.Build) void {
         )
     else
         bootstrap_generated_tables;
+    renderer_mod.addImport("generated_structure_tables", generated_tables.regular);
+    renderer_mod_test.addImport("generated_structure_tables", bootstrap_generated_tables.regular);
     const encoder_mod = b.addModule("encoder", .{
         .root_source_file = b.path("encoder/root.zig"),
         .target = target,
@@ -393,6 +397,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "cli_args", .module = cli_args_mod },
         .{ .name = "required_path", .module = required_path_mod },
+        .{ .name = "shared_structure_report", .module = shared_structure_report_mod },
         .{ .name = "tool_paths", .module = encoder_tool_paths_mod },
     });
     const decoder_exe = addCliExecutable(b, "dict-decoder", b.path("decoder/main.zig"), target, optimize, &.{
@@ -409,6 +414,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "decoder", .module = decoder_mod },
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
+        .{ .name = "shared_structure_report", .module = shared_structure_report_mod },
         .{ .name = "tool_paths", .module = verifier_tool_paths_mod },
     });
     const template_audit_exe = addCliExecutable(b, "dict-template-audit", b.path("tools/template_audit.zig"), target, optimize, &.{
@@ -416,6 +422,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "wikitext_source", .module = wikitext_source_mod },
         .{ .name = "cli_args", .module = cli_args_mod },
         .{ .name = "required_path", .module = required_path_mod },
+        .{ .name = "shared_structure_report", .module = shared_structure_report_mod },
     });
     const template_codegen_exe = addCliExecutable(b, "dict-template-compile", b.path("tools/template_codegen.zig"), target, codegen_optimize, &.{
         .{ .name = "decoder", .module = decoder_mod_codegen },
@@ -433,7 +440,9 @@ pub fn build(b: *std.Build) void {
     });
     encoder_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
     decoder_tool_paths_options.addOption([]const u8, "encoder_bin_path", b.pathFromRoot("zig-out/bin/dict-encoder"));
+    verifier_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
     verifier_tool_paths_options.addOption([]const u8, "decoder_bin_path", b.pathFromRoot("zig-out/bin/dict-decoder"));
+    verifier_tool_paths_test_options.addOption([]const u8, "structure_bin_path", "dict-structure");
     verifier_tool_paths_test_options.addOption([]const u8, "decoder_bin_path", "dict-decoder");
 
     const structure_install = b.addInstallBinFile(structure_bin, "dict-structure");
@@ -526,7 +535,7 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const renderer_tests = b.addTest(.{
-        .root_module = renderer_mod,
+        .root_module = renderer_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const structure_tests = b.addTest(.{
@@ -538,6 +547,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "encoder", .module = encoder_mod_test },
                 .{ .name = "lua", .module = lua_mod_test },
                 .{ .name = "zxml", .module = zxml_dep_test.module("zxml") },
+                .{ .name = "shared_structure_report", .module = shared_structure_report_mod_test },
                 .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod_test },
             },
         }),
@@ -563,6 +573,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "encoder", .module = encoder_mod_test },
                 .{ .name = "decoder", .module = decoder_mod_test },
                 .{ .name = "zxml", .module = zxml_dep_test.module("zxml") },
+                .{ .name = "shared_structure_report", .module = shared_structure_report_mod_test },
                 .{ .name = "tool_paths", .module = verifier_tool_paths_mod_test },
             },
         }),
@@ -578,6 +589,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "wikitext_source", .module = wikitext_source_mod_test },
                 .{ .name = "cli_args", .module = cli_args_mod_test },
                 .{ .name = "required_path", .module = required_path_mod_test },
+                .{ .name = "shared_structure_report", .module = shared_structure_report_mod_test },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -720,6 +732,13 @@ fn existingBuildPath(b: *std.Build, relative_path: []const u8) ?std.Build.LazyPa
     return b.path(relative_path);
 }
 
+fn existingValidStructureReportPath(b: *std.Build, relative_path: []const u8) ?std.Build.LazyPath {
+    _ = existingBuildPath(b, relative_path) orelse return null;
+    const valid = structure_report_file.hasValidMagicAtPath(b.graph.io, relative_path) catch return null;
+    if (!valid) return null;
+    return b.path(relative_path);
+}
+
 fn addGeneratedTemplateRuntimeModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -808,9 +827,9 @@ const generatedTemplateRuntimeStubSource =
 ;
 
 const templateCompileUsageText =
-    \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
-    \\dict-template-compile --mode bytecode --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
-    \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.json --template "template name" --output /tmp/generated_templates.zig
+    \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.bin --output data/generated_template_runtime.zig
+    \\dict-template-compile --mode bytecode --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.bin --output data/generated_template_runtime.zig
+    \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.bin --template "template name" --output /tmp/generated_templates.zig
     \\
 ;
 
@@ -821,67 +840,25 @@ const GeneratedStructureModules = struct {
     structure_source: std.Build.LazyPath,
 };
 
-const StructureReport = struct {
-    heading_profiles: []const HeadingProfile,
-    headings_by_level: ?[]const CountEntry = null,
-    translation_source_labels: ?[]const CountEntry = null,
-    translation_target_languages: ?[]const CountEntry = null,
-    templates_by_heading: ?[]const HeadingTemplateEntry = null,
-};
-
-const HeadingProfile = struct {
-    title: []const u8,
-    parser_kind: []const u8,
-    count: u64 = 0,
-};
-
-const CountEntry = struct {
-    key: []const u8,
-    count: u64 = 0,
-};
-
-const HeadingTemplateEntry = struct {
-    heading: []const u8,
-    template: []const u8,
-    count: u64 = 0,
-};
-
-const GeneratedHeading = struct {
-    title: []const u8,
-    kind_name: []const u8,
-    count: u64,
-};
-
-const GeneratedHeadingLevel = struct {
-    title: []const u8,
-    level: u8,
-    kind_name: []const u8,
-    count: u64,
-};
-
-const GeneratedLabel = struct {
-    label: []const u8,
-    count: u64,
-};
-
-const GeneratedTemplate = struct {
-    name: []const u8,
-    count: u64,
-};
-
-const GeneratedLineTemplate = struct {
-    name: []const u8,
-    count: u64,
-};
-
-const GeneratedCompactPattern = struct {
-    pattern: []const u8,
-    count: u64,
-};
-
-const GeneratedTargetLanguage = struct {
-    value: []const u8,
-    count: u64,
+const bootstrap_heading_profiles = [_]bootstrap_support.LegacyHeadingProfile{
+    .{ .title = "English", .parser_kind = "language-root", .count = 1 },
+    .{ .title = "Noun", .parser_kind = "part-of-speech", .count = 1 },
+    .{ .title = "Verb", .parser_kind = "part-of-speech", .count = 1 },
+    .{ .title = "Adjective", .parser_kind = "part-of-speech", .count = 1 },
+    .{ .title = "Proper noun", .parser_kind = "part-of-speech", .count = 1 },
+    .{ .title = "Etymology", .parser_kind = "etymology", .count = 1 },
+    .{ .title = "Pronunciation", .parser_kind = "pronunciation", .count = 1 },
+    .{ .title = "Alternative forms", .parser_kind = "alternative-forms", .count = 1 },
+    .{ .title = "Translations", .parser_kind = "translations", .count = 1 },
+    .{ .title = "Derived terms", .parser_kind = "relations", .count = 1 },
+    .{ .title = "Synonyms", .parser_kind = "relations", .count = 1 },
+    .{ .title = "Usage notes", .parser_kind = "notes", .count = 1 },
+    .{ .title = "Conjugation", .parser_kind = "inflection", .count = 1 },
+    .{ .title = "Descendants", .parser_kind = "descendants", .count = 1 },
+    .{ .title = "See also", .parser_kind = "navigation", .count = 1 },
+    .{ .title = "References", .parser_kind = "citations", .count = 1 },
+    .{ .title = "Further reading", .parser_kind = "citations", .count = 1 },
+    .{ .title = "Quotations", .parser_kind = "citations", .count = 1 },
 };
 
 fn addBootstrapStructureTableModules(
@@ -918,12 +895,12 @@ fn addGeneratedStructureTableModules(
     optimize: std.builtin.OptimizeMode,
     structure_optimize: std.builtin.OptimizeMode,
     codegen_bin: std.Build.LazyPath,
-    json_path: std.Build.LazyPath,
+    structure_path: std.Build.LazyPath,
 ) GeneratedStructureModules {
     const codegen_run = b.addSystemCommand(&.{"/usr/bin/env"});
     codegen_run.addFileArg(codegen_bin);
     codegen_run.addArg("--input");
-    codegen_run.addFileArg(json_path);
+    codegen_run.addFileArg(structure_path);
     codegen_run.addArg("--output");
     const generated_source = codegen_run.addOutputFileArg("structure_tables.zig");
     codegen_run.expectExitCode(0);
@@ -947,10 +924,11 @@ fn addGeneratedStructureTableModules(
 
 fn addDirectStructureTablesCodegenBinary(b: *std.Build) std.Build.LazyPath {
     const compile = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-OReleaseFast" });
-    compile.addArgs(&.{ "--dep", "compact_pattern_seed" });
+    compile.addArgs(&.{ "--dep", "compact_pattern_seed", "--dep", "shared_structure_report" });
     compile.addPrefixedFileArg("-Mroot=", b.path("tools/structure_tables_codegen.zig"));
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("shared/compact_pattern_seed.zig"));
+    compile.addPrefixedFileArg("-Mshared_structure_report=", b.path("shared/structure_report.zig"));
     const output = compile.addPrefixedOutputFileArg("-femit-bin=", "dict-structure-tables-codegen");
     return output;
 }
@@ -962,7 +940,7 @@ fn addDirectStructureBinary(
     bootstrap_tables_path: std.Build.LazyPath,
 ) std.Build.LazyPath {
     const compile = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-OReleaseFast" });
-    compile.addArgs(&.{ "--dep", "encoder", "--dep", "lua", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "wikitext_source" });
+    compile.addArgs(&.{ "--dep", "encoder", "--dep", "lua", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "wikitext_source", "--dep", "shared_structure_report" });
     compile.addPrefixedFileArg("-Mroot=", b.path("tools/structure_analyzer.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{
@@ -1026,7 +1004,7 @@ fn addDirectVerifierBinary(
     tool_paths_path: std.Build.LazyPath,
 ) std.Build.LazyPath {
     const compile = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-OReleaseFast" });
-    compile.addArgs(&.{ "--dep", "encoder", "--dep", "decoder", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "tool_paths", "--dep", "wikitext_source" });
+    compile.addArgs(&.{ "--dep", "encoder", "--dep", "decoder", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "tool_paths", "--dep", "wikitext_source", "--dep", "shared_structure_report" });
     compile.addPrefixedFileArg("-Mroot=", b.path("tools/verifier.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{
@@ -1092,412 +1070,16 @@ fn addZxmlConfigModule(b: *std.Build) std.Build.LazyPath {
 }
 
 fn generateDefaultStructureTableSource(b: *std.Build) ![]const u8 {
-    return generateStructureTableSourceFromJson(
-        b.allocator,
-        default_structure_report_json,
-    );
-}
-
-fn generateStructureTableSourceFromJson(
-    allocator: std.mem.Allocator,
-    json_bytes: []const u8,
-) ![]const u8 {
-    var parsed = try std.json.parseFromSlice(StructureReport, allocator, json_bytes, .{
-        .ignore_unknown_fields = true,
+    var bootstrap_build = try bootstrap_support.buildDataFromLegacyAlloc(b.allocator, .{
+        .heading_profiles = &bootstrap_heading_profiles,
     });
-    defer parsed.deinit();
-
-    var headings: std.ArrayList(GeneratedHeading) = .empty;
-    defer headings.deinit(allocator);
-    var heading_indexes = std.StringHashMapUnmanaged(usize).empty;
-    defer heading_indexes.deinit(allocator);
-
-    for (parsed.value.heading_profiles) |profile| {
-        if (std.mem.eql(u8, profile.title, "English")) continue;
-        const gop = try heading_indexes.getOrPut(allocator, profile.title);
-        if (!gop.found_existing) {
-            gop.key_ptr.* = try allocator.dupe(u8, profile.title);
-            gop.value_ptr.* = headings.items.len;
-            try headings.append(allocator, .{
-                .title = gop.key_ptr.*,
-                .kind_name = sectionKindNameForParser(profile.parser_kind) orelse return error.InvalidStructureReport,
-                .count = profile.count,
-            });
-        } else {
-            headings.items[gop.value_ptr.*].count += profile.count;
-        }
-    }
-    std.mem.sortUnstable(GeneratedHeading, headings.items, {}, generatedHeadingLessThan);
-
-    var heading_levels: std.ArrayList(GeneratedHeadingLevel) = .empty;
-    defer heading_levels.deinit(allocator);
-    if (parsed.value.headings_by_level) |heading_rows| {
-        for (heading_rows) |entry| {
-            const parsed_key = parseHeadingLevelKey(entry.key) orelse continue;
-            if (std.mem.eql(u8, parsed_key.title, "English")) continue;
-            const kind_name = headingKindNameForTitle(parsed.value.heading_profiles, parsed_key.title) orelse return error.InvalidStructureReport;
-            try heading_levels.append(allocator, .{
-                .title = try allocator.dupe(u8, parsed_key.title),
-                .level = parsed_key.level,
-                .kind_name = kind_name,
-                .count = entry.count,
-            });
-        }
-    }
-    std.mem.sortUnstable(GeneratedHeadingLevel, heading_levels.items, {}, generatedHeadingLevelLessThan);
-
-    var labels: std.ArrayList(GeneratedLabel) = .empty;
-    defer labels.deinit(allocator);
-    var label_indexes = std.StringHashMapUnmanaged(usize).empty;
-    defer label_indexes.deinit(allocator);
-    if (parsed.value.translation_source_labels) |source_labels| {
-        for (source_labels) |entry| {
-            const label = std.mem.trim(u8, entry.key, " \t\r\n");
-            if (label.len == 0) continue;
-            const gop = try label_indexes.getOrPut(allocator, label);
-            if (!gop.found_existing) {
-                gop.key_ptr.* = try allocator.dupe(u8, label);
-                gop.value_ptr.* = labels.items.len;
-                try labels.append(allocator, .{
-                    .label = gop.key_ptr.*,
-                    .count = entry.count,
-                });
-            } else {
-                labels.items[gop.value_ptr.*].count += entry.count;
-            }
-        }
-    }
-    std.mem.sortUnstable(GeneratedLabel, labels.items, {}, generatedLabelLessThan);
-
-    var templates: std.ArrayList(GeneratedTemplate) = .empty;
-    defer templates.deinit(allocator);
-    var template_indexes = std.StringHashMapUnmanaged(usize).empty;
-    defer template_indexes.deinit(allocator);
-    var line_templates: std.ArrayList(GeneratedLineTemplate) = .empty;
-    defer line_templates.deinit(allocator);
-    var line_template_indexes = std.StringHashMapUnmanaged(usize).empty;
-    defer line_template_indexes.deinit(allocator);
-    if (parsed.value.templates_by_heading) |template_rows| {
-        for (template_rows) |entry| {
-            const template_name = std.mem.trim(u8, entry.template, " \t\r\n");
-            if (template_name.len == 0) continue;
-            if (isTranslationHeading(entry.heading)) {
-                const gop = try template_indexes.getOrPut(allocator, template_name);
-                if (!gop.found_existing) {
-                    gop.key_ptr.* = try allocator.dupe(u8, template_name);
-                    gop.value_ptr.* = templates.items.len;
-                    try templates.append(allocator, .{
-                        .name = gop.key_ptr.*,
-                        .count = entry.count,
-                    });
-                } else {
-                    templates.items[gop.value_ptr.*].count += entry.count;
-                }
-                continue;
-            }
-
-            const gop = try line_template_indexes.getOrPut(allocator, template_name);
-            if (!gop.found_existing) {
-                gop.key_ptr.* = try allocator.dupe(u8, template_name);
-                gop.value_ptr.* = line_templates.items.len;
-                try line_templates.append(allocator, .{
-                    .name = gop.key_ptr.*,
-                    .count = entry.count,
-                });
-            } else {
-                line_templates.items[gop.value_ptr.*].count += entry.count;
-            }
-        }
-    }
-    std.mem.sortUnstable(GeneratedTemplate, templates.items, {}, generatedTemplateLessThan);
-    std.mem.sortUnstable(GeneratedLineTemplate, line_templates.items, {}, generatedLineTemplateLessThan);
-    if (line_templates.items.len > 1024) {
-        line_templates.shrinkRetainingCapacity(1024);
-    }
-
-    var compact_patterns: std.ArrayList(GeneratedCompactPattern) = .empty;
-    defer compact_patterns.deinit(allocator);
-    var compact_patterns_ext: std.ArrayList(GeneratedCompactPattern) = .empty;
-    defer compact_patterns_ext.deinit(allocator);
-
-    var target_languages: std.ArrayList(GeneratedTargetLanguage) = .empty;
-    defer target_languages.deinit(allocator);
-    var target_language_indexes = std.StringHashMapUnmanaged(usize).empty;
-    defer target_language_indexes.deinit(allocator);
-    if (parsed.value.translation_target_languages) |target_language_rows| {
-        for (target_language_rows) |entry| {
-            const value = std.mem.trim(u8, entry.key, " \t\r\n");
-            if (value.len == 0) continue;
-            const gop = try target_language_indexes.getOrPut(allocator, value);
-            if (!gop.found_existing) {
-                gop.key_ptr.* = try allocator.dupe(u8, value);
-                gop.value_ptr.* = target_languages.items.len;
-                try target_languages.append(allocator, .{
-                    .value = gop.key_ptr.*,
-                    .count = entry.count,
-                });
-            } else {
-                target_languages.items[gop.value_ptr.*].count += entry.count;
-            }
-        }
-    }
-    std.mem.sortUnstable(GeneratedTargetLanguage, target_languages.items, {}, generatedTargetLanguageLessThan);
-
-    if (headings.items.len + 1 > std.math.maxInt(u16)) return error.TooManyGeneratedHeadings;
-    if (heading_levels.items.len + 1 > std.math.maxInt(u16)) return error.TooManyGeneratedHeadingLevels;
-    if (templates.items.len > std.math.maxInt(u16)) return error.TooManyGeneratedTemplates;
-    if (labels.items.len > std.math.maxInt(u16)) return error.TooManyGeneratedLabels;
-    if (target_languages.items.len > std.math.maxInt(u16)) return error.TooManyGeneratedTargetLanguages;
-
-    var out: std.Io.Writer.Allocating = .init(allocator);
-    defer out.deinit();
-    const writer = &out.writer;
-
-    try writer.writeAll(
-        \\// Generated by build.zig from data/wiktionary-structure.json.
-        \\const std = @import("std");
-        \\
-        \\pub const SectionKind = enum(u8) {
-        \\    lines = 0,
-        \\    pos_lines = 1,
-        \\    term_list = 2,
-        \\    translations = 3,
-        \\};
-        \\
-        \\pub const HeadingSpec = struct {
-        \\    code: u16,
-        \\    title: []const u8,
-        \\    kind: SectionKind,
-        \\};
-        \\
-        \\pub const HeadingLevelSpec = struct {
-        \\    code: u16,
-        \\    level: u8,
-        \\    title: []const u8,
-        \\    kind: SectionKind,
-        \\};
-        \\
-        \\pub const heading_level_specs = [_]HeadingLevelSpec{
-        \\
+    defer bootstrap_build.deinit(b.allocator);
+    return bootstrap_support.generateStructureTableSourceAlloc(
+        b.allocator,
+        "build.zig bootstrap defaults",
+        bootstrap_build,
     );
-
-    for (heading_levels.items, 0..) |heading, index| {
-        try writer.writeAll("    .{ .code = ");
-        try writer.print("{d}", .{index + 2});
-        try writer.writeAll(", .level = ");
-        try writer.print("{d}", .{heading.level});
-        try writer.writeAll(", .title = ");
-        try appendZigStringLiteral(writer, heading.title);
-        try writer.writeAll(", .kind = .");
-        try writer.writeAll(heading.kind_name);
-        try writer.writeAll(" },\n");
-    }
-    try writer.writeAll(
-        \\};
-        \\
-        \\pub const heading_specs = [_]HeadingSpec{
-        \\
-    );
-
-    for (headings.items, 0..) |heading, index| {
-        try writer.writeAll("    .{ .code = ");
-        try writer.print("{d}", .{index + 2});
-        try writer.writeAll(", .title = ");
-        try appendZigStringLiteral(writer, heading.title);
-        try writer.writeAll(", .kind = .");
-        try writer.writeAll(heading.kind_name);
-        try writer.writeAll(" },\n");
-    }
-    try writer.writeAll(
-        \\};
-        \\
-        \\pub const LineTemplate = struct {
-        \\    code: u16,
-        \\    name: []const u8,
-        \\};
-        \\
-        \\pub const line_templates = [_]LineTemplate{
-        \\
-    );
-    for (line_templates.items, 0..) |template_entry, index| {
-        try writer.writeAll("    .{ .code = ");
-        try writer.print("{d}", .{index + 1});
-        try writer.writeAll(", .name = ");
-        try appendZigStringLiteral(writer, template_entry.name);
-        try writer.writeAll(" },\n");
-    }
-    try writer.writeAll(
-        \\};
-        \\
-        \\pub const compact_patterns = [_][]const u8{
-        \\
-    );
-    for (compact_patterns.items) |pattern_entry| {
-        try writer.writeAll("    ");
-        try appendZigStringLiteral(writer, pattern_entry.pattern);
-        try writer.writeAll(",\n");
-    }
-    try writer.writeAll(
-        \\};
-        \\
-        \\pub const compact_patterns_ext = [_][]const u8{
-        \\
-    );
-    for (compact_patterns_ext.items) |pattern_entry| {
-        try writer.writeAll("    ");
-        try appendZigStringLiteral(writer, pattern_entry.pattern);
-        try writer.writeAll(",\n");
-    }
-    try writer.writeAll(
-        \\};
-        \\
-        \\pub const TranslationTemplate = struct {
-        \\    code: u16,
-        \\    name: []const u8,
-        \\};
-        \\
-        \\pub const translation_templates = [_]TranslationTemplate{
-        \\
-    );
-    for (templates.items, 0..) |template_entry, index| {
-        try writer.writeAll("    .{ .code = ");
-        try writer.print("{d}", .{index + 1});
-        try writer.writeAll(", .name = ");
-        try appendZigStringLiteral(writer, template_entry.name);
-        try writer.writeAll(" },\n");
-    }
-    try writer.writeAll(
-        \\};
-        \\
-        \\pub const TargetLanguage = struct {
-        \\    code: u16,
-        \\    value: []const u8,
-        \\};
-        \\
-        \\pub const target_languages = [_]TargetLanguage{
-        \\
-    );
-    for (target_languages.items, 0..) |lang_entry, index| {
-        try writer.writeAll("    .{ .code = ");
-        try writer.print("{d}", .{index + 1});
-        try writer.writeAll(", .value = ");
-        try appendZigStringLiteral(writer, lang_entry.value);
-        try writer.writeAll(" },\n");
-    }
-    try writer.writeAll(
-        \\};
-        \\
-        \\pub const LanguageLabel = struct {
-        \\    code: u16,
-        \\    label: []const u8,
-        \\};
-        \\
-        \\pub const language_labels = [_]LanguageLabel{
-        \\
-    );
-    for (labels.items, 0..) |label_entry, index| {
-        try writer.writeAll("    .{ .code = ");
-        try writer.print("{d}", .{index + 1});
-        try writer.writeAll(", .label = ");
-        try appendZigStringLiteral(writer, label_entry.label);
-        try writer.writeAll(" },\n");
-    }
-    try writer.writeAll(
-        \\};
-        \\
-        \\fn fingerprintUpdateString(hasher: *std.hash.Wyhash, value: []const u8) void {
-        \\    var len_buf: [8]u8 = undefined;
-        \\    std.mem.writeInt(u64, &len_buf, value.len, .little);
-        \\    hasher.update(&len_buf);
-        \\    hasher.update(value);
-        \\}
-        \\
-        \\pub const structure_fingerprint: u32 = blk: {
-        \\    @setEvalBranchQuota(1_000_000);
-        \\    var hasher = std.hash.Wyhash.init(0x8f3c2d17c4a9b651);
-        \\
-        \\    for (heading_level_specs) |entry| {
-        \\        var code_buf: [2]u8 = undefined;
-        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
-        \\        hasher.update(&code_buf);
-        \\        hasher.update(&[_]u8{entry.level});
-        \\        fingerprintUpdateString(&hasher, entry.title);
-        \\        hasher.update(&[_]u8{@intFromEnum(entry.kind)});
-        \\    }
-        \\    for (heading_specs) |entry| {
-        \\        var code_buf: [2]u8 = undefined;
-        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
-        \\        hasher.update(&code_buf);
-        \\        fingerprintUpdateString(&hasher, entry.title);
-        \\        hasher.update(&[_]u8{@intFromEnum(entry.kind)});
-        \\    }
-        \\    for (line_templates) |entry| {
-        \\        var code_buf: [2]u8 = undefined;
-        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
-        \\        hasher.update(&code_buf);
-        \\        fingerprintUpdateString(&hasher, entry.name);
-        \\    }
-        \\    for (compact_patterns) |entry| {
-        \\        fingerprintUpdateString(&hasher, entry);
-        \\    }
-        \\    for (compact_patterns_ext) |entry| {
-        \\        fingerprintUpdateString(&hasher, entry);
-        \\    }
-        \\    for (translation_templates) |entry| {
-        \\        var code_buf: [2]u8 = undefined;
-        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
-        \\        hasher.update(&code_buf);
-        \\        fingerprintUpdateString(&hasher, entry.name);
-        \\    }
-        \\    for (target_languages) |entry| {
-        \\        var code_buf: [2]u8 = undefined;
-        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
-        \\        hasher.update(&code_buf);
-        \\        fingerprintUpdateString(&hasher, entry.value);
-        \\    }
-        \\    for (language_labels) |entry| {
-        \\        var code_buf: [2]u8 = undefined;
-        \\        std.mem.writeInt(u16, &code_buf, entry.code, .little);
-        \\        hasher.update(&code_buf);
-        \\        fingerprintUpdateString(&hasher, entry.label);
-        \\    }
-        \\
-        \\    break :blk @as(u32, @truncate(hasher.final()));
-        \\};
-        \\
-    );
-
-    return allocator.dupe(u8, out.written());
 }
-
-const default_structure_report_json =
-    \\{
-    \\  "heading_profiles": [
-    \\    { "title": "English", "parser_kind": "language-root", "count": 1 },
-    \\    { "title": "Noun", "parser_kind": "part-of-speech", "count": 1 },
-    \\    { "title": "Verb", "parser_kind": "part-of-speech", "count": 1 },
-    \\    { "title": "Adjective", "parser_kind": "part-of-speech", "count": 1 },
-    \\    { "title": "Proper noun", "parser_kind": "part-of-speech", "count": 1 },
-    \\    { "title": "Etymology", "parser_kind": "etymology", "count": 1 },
-    \\    { "title": "Pronunciation", "parser_kind": "pronunciation", "count": 1 },
-    \\    { "title": "Alternative forms", "parser_kind": "alternative-forms", "count": 1 },
-    \\    { "title": "Translations", "parser_kind": "translations", "count": 1 },
-    \\    { "title": "Derived terms", "parser_kind": "relations", "count": 1 },
-    \\    { "title": "Synonyms", "parser_kind": "relations", "count": 1 },
-    \\    { "title": "Usage notes", "parser_kind": "notes", "count": 1 },
-    \\    { "title": "Conjugation", "parser_kind": "inflection", "count": 1 },
-    \\    { "title": "Descendants", "parser_kind": "descendants", "count": 1 },
-    \\    { "title": "See also", "parser_kind": "navigation", "count": 1 },
-    \\    { "title": "References", "parser_kind": "citations", "count": 1 },
-    \\    { "title": "Further reading", "parser_kind": "citations", "count": 1 },
-    \\    { "title": "Quotations", "parser_kind": "citations", "count": 1 }
-    \\  ],
-    \\  "headings_by_level": [],
-    \\  "translation_source_labels": [],
-    \\  "translation_target_languages": [],
-    \\  "templates_by_heading": []
-    \\}
-;
 
 fn readFileAllocAbsolute(allocator: std.mem.Allocator, path: []const u8, max_bytes: usize) ![]u8 {
     const io = std.Options.debug_io;
@@ -1516,86 +1098,6 @@ fn readFileAllocAbsolute(allocator: std.mem.Allocator, path: []const u8, max_byt
     const shrunk = try allocator.dupe(u8, out[0..read_len]);
     allocator.free(out);
     return shrunk;
-}
-
-fn sectionKindNameForParser(parser_kind: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, parser_kind, "part-of-speech")) return "pos_lines";
-    if (std.mem.eql(u8, parser_kind, "alternative-forms")) return "term_list";
-    if (std.mem.eql(u8, parser_kind, "relations")) return "term_list";
-    if (std.mem.eql(u8, parser_kind, "navigation")) return "term_list";
-    if (std.mem.eql(u8, parser_kind, "translations")) return "translations";
-    // These section families are structurally loose and often contain free-form
-    // wikitext, comments, refs, or mixed templates that are not worth forcing
-    // through the line-stream codec. Keep them as raw joined bodies.
-    if (std.mem.eql(u8, parser_kind, "citations")) return "lines";
-    if (std.mem.eql(u8, parser_kind, "descendants")) return "lines";
-    if (std.mem.eql(u8, parser_kind, "etymology")) return "lines";
-    if (std.mem.eql(u8, parser_kind, "inflection")) return "lines";
-    if (std.mem.eql(u8, parser_kind, "language-root")) return "lines";
-    if (std.mem.eql(u8, parser_kind, "meta")) return "lines";
-    if (std.mem.eql(u8, parser_kind, "notes")) return "lines";
-    if (std.mem.eql(u8, parser_kind, "pronunciation")) return "lines";
-    return null;
-}
-
-fn isTranslationHeading(heading: []const u8) bool {
-    return std.mem.eql(u8, heading, "Translations") or std.mem.eql(u8, heading, "Translate");
-}
-
-const ParsedHeadingLevelKey = struct {
-    level: u8,
-    title: []const u8,
-};
-
-fn parseHeadingLevelKey(key: []const u8) ?ParsedHeadingLevelKey {
-    if (key.len < 4 or key[0] != 'L') return null;
-    const colon = std.mem.indexOfScalar(u8, key, ':') orelse return null;
-    if (colon <= 1 or colon + 1 >= key.len) return null;
-    const level = std.fmt.parseInt(u8, key[1..colon], 10) catch return null;
-    return .{
-        .level = level,
-        .title = key[colon + 1 ..],
-    };
-}
-
-fn headingKindNameForTitle(profiles: []const HeadingProfile, title: []const u8) ?[]const u8 {
-    for (profiles) |profile| {
-        if (std.mem.eql(u8, profile.title, title)) {
-            return sectionKindNameForParser(profile.parser_kind);
-        }
-    }
-    return null;
-}
-
-fn generatedHeadingLessThan(_: void, a: GeneratedHeading, b: GeneratedHeading) bool {
-    if (a.count != b.count) return a.count > b.count;
-    return std.mem.lessThan(u8, a.title, b.title);
-}
-
-fn generatedHeadingLevelLessThan(_: void, a: GeneratedHeadingLevel, b: GeneratedHeadingLevel) bool {
-    if (a.count != b.count) return a.count > b.count;
-    if (a.level != b.level) return a.level < b.level;
-    return std.mem.lessThan(u8, a.title, b.title);
-}
-
-fn generatedLabelLessThan(_: void, a: GeneratedLabel, b: GeneratedLabel) bool {
-    if (a.count != b.count) return a.count > b.count;
-    return std.mem.lessThan(u8, a.label, b.label);
-}
-
-fn generatedTemplateLessThan(_: void, a: GeneratedTemplate, b: GeneratedTemplate) bool {
-    if (a.count != b.count) return a.count > b.count;
-    return std.mem.lessThan(u8, a.name, b.name);
-}
-
-fn generatedLineTemplateLessThan(_: void, a: GeneratedLineTemplate, b: GeneratedLineTemplate) bool {
-    if (a.count != b.count) return a.count > b.count;
-    return std.mem.lessThan(u8, a.name, b.name);
-}
-
-fn generatedCompactPatternLessThan(_: void, a: GeneratedCompactPattern, b: GeneratedCompactPattern) bool {
-    if (a.count != b.count) return a.count > b.count;
-    return std.mem.lessThan(u8, a.pattern, b.pattern);
 }
 
 fn seedCoveredCompactPatterns(
@@ -1655,11 +1157,6 @@ fn seedCoveredCompactPatterns(
         const gop = try covered.getOrPut(allocator, name);
         if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, name);
     }
-}
-
-fn generatedTargetLanguageLessThan(_: void, a: GeneratedTargetLanguage, b: GeneratedTargetLanguage) bool {
-    if (a.count != b.count) return a.count > b.count;
-    return std.mem.lessThan(u8, a.value, b.value);
 }
 
 fn appendZigStringLiteral(writer: *std.Io.Writer, bytes: []const u8) !void {

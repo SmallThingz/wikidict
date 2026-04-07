@@ -1,5 +1,4 @@
 const API_TIMEOUT_MS = 5000;
-const API_SCHEMA_VERSION = "rendered-sections-v2";
 const API_BASE_URL = resolveApiBaseUrl();
 
 type LookupPayload = {
@@ -54,7 +53,6 @@ function resolveApiBaseUrl(): string {
 
 function apiUrl(path: string, params?: Record<string, string | number>): string {
   const search = new URLSearchParams();
-  search.set("v", API_SCHEMA_VERSION);
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       search.set(key, String(value));
@@ -95,6 +93,7 @@ export type ApiEntry = {
   incomingAliases: string[];
   renderedSections: ApiRenderedSection[];
   raw: string;
+  rawRendered?: string | null;
   summary: string;
 };
 
@@ -173,22 +172,13 @@ function normalizeLookupHit(value: unknown): ApiLookupHit | null {
       incomingAliases: readStringArray(entryRecord.incomingAliases),
       renderedSections: normalizeRenderedSections(entryRecord.renderedSections),
       raw: readString(entryRecord.raw),
+      rawRendered:
+        entryRecord.rawRendered === null || typeof entryRecord.rawRendered === "string"
+          ? (entryRecord.rawRendered as string | null)
+          : undefined,
       summary: readString(entryRecord.summary),
     },
   };
-}
-
-function payloadMissesRenderedSections(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  const payload = value as JsonRecord;
-  if (!Array.isArray(payload.hits)) return false;
-  return payload.hits.some((hit) => {
-    if (!hit || typeof hit !== "object") return false;
-    const hitRecord = hit as JsonRecord;
-    if (!hitRecord.entry || typeof hitRecord.entry !== "object") return false;
-    const entry = hitRecord.entry as JsonRecord;
-    return typeof entry.raw === "string" && entry.raw.length > 0 && !("renderedSections" in entry);
-  });
 }
 
 export async function fetchSystemTheme(): Promise<ApiSystemTheme> {
@@ -197,13 +187,7 @@ export async function fetchSystemTheme(): Promise<ApiSystemTheme> {
 
 export async function fetchLookup(term: string): Promise<ApiLookupHit[]> {
   const path = `/api/lookup/${encodeURIComponent(term)}`;
-  let payload = await fetchJson<LookupPayload>(apiUrl(path), "Failed to load dictionary entry");
-  if (payloadMissesRenderedSections(payload)) {
-    payload = await fetchJson<LookupPayload>(
-      apiUrl(path, { bust: Date.now() }),
-      "Failed to load dictionary entry",
-    );
-  }
+  const payload = await fetchJson<LookupPayload>(apiUrl(path), "Failed to load dictionary entry");
   if (!Array.isArray(payload.hits)) return [];
   return payload.hits.flatMap((hit) => {
     const normalized = normalizeLookupHit(hit);

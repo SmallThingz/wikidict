@@ -1,5 +1,121 @@
 const std = @import("std");
-const compact_pattern_seed = @import("compact_pattern_seed");
+const compact_pattern_seed = struct {
+    pub const static_direct_patterns = [_][]const u8{
+        "{{",
+        "}}",
+        "[[",
+        "]]",
+        "==",
+        "===",
+        "====",
+        "\n# ",
+        "\n## ",
+        "\n#: ",
+        "\n#* ",
+        "|en|",
+        "\n* ",
+    };
+
+    pub const static_escaped_patterns = [_][]const u8{
+        "|head=",
+        "|title=",
+        "|author=",
+        "|page=",
+        "|passage=",
+        "|year=",
+        "|lang=",
+        "|url=",
+        "|publisher=",
+        "|date=",
+        "|text=",
+        "|accessdate=",
+        "|chapter=",
+        "|journal=",
+        "|volume=",
+        "|isbn=",
+        "|work=",
+        "|sort=",
+        "|type=",
+        "|nocat=",
+        "|gloss=",
+        "|archiveurl=",
+        "|entry=",
+        "|pageurl=",
+        "|location=",
+        "|editor=",
+        "|issue=",
+        "|translation=",
+        "|archivedate=",
+        "|first=",
+        "|last=",
+        "|series=",
+        "|month=",
+        "|edition=",
+        "|newsgroup=",
+        "|magazine=",
+        "|newspaper=",
+        "|quote=",
+        "|doi=",
+        "|oclc=",
+        "|issn=",
+        "|authorlink=",
+        "|section=",
+        "|pos=",
+        "|pages=",
+        "|inline=",
+        "|from=",
+        "|yomi=",
+        "|altform=",
+        "|hanja=",
+        "|hangeul=",
+        "|stem=",
+        "|grade=",
+        "|trans-title=",
+        "|column=",
+        "|ref=",
+        "|issue=",
+        "|cat=",
+        "|nocap=",
+        "|tr=",
+        "|alt=",
+        "|g=",
+        "|m}}",
+        "|f}}",
+        "|n}}",
+        "|impf}}",
+        "|pf}}",
+        "|sc=Cyrl}}",
+        "|sc=Hebr}}",
+        "\n** ",
+        "\n*: ",
+        "\n'''",
+        "'''",
+    };
+
+    pub const static_extended_escaped_patterns = [_][]const u8{
+        "|nolinkhead=",
+    };
+
+    pub const max_direct_pattern_count: usize = 0xFD - 0xE0 + 1;
+
+    pub fn seedCoveredPatterns(
+        allocator: std.mem.Allocator,
+        covered: *std.StringHashMapUnmanaged(void),
+    ) !void {
+        for (static_direct_patterns) |pattern| try seedCoveredPattern(allocator, covered, pattern);
+        for (static_escaped_patterns) |pattern| try seedCoveredPattern(allocator, covered, pattern);
+        for (static_extended_escaped_patterns) |pattern| try seedCoveredPattern(allocator, covered, pattern);
+    }
+
+    fn seedCoveredPattern(
+        allocator: std.mem.Allocator,
+        covered: *std.StringHashMapUnmanaged(void),
+        pattern: []const u8,
+    ) !void {
+        const gop = try covered.getOrPut(allocator, pattern);
+        if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, pattern);
+    }
+};
 
 pub const SectionKind = enum(u8) {
     lines = 0,
@@ -121,30 +237,6 @@ pub const Dependencies = struct {
     emitted_inconsistent: []const DependencyFailure = &.{},
 };
 
-pub const Anomalies = struct {
-    kinds: []const CountEntry = &.{},
-    samples: []const AnomalySample = &.{},
-};
-
-pub const Summary = struct {
-    pages_scanned: usize,
-    namespace_zero_pages: usize,
-    language_entries: usize,
-    parse_errors: usize = 0,
-    heading_level_jumps: usize,
-    content_before_subheading: usize,
-    unbalanced_sections: usize,
-    unclassified_heading_titles: usize,
-};
-
-pub const ExactStructureReport = struct {
-    input: []const u8,
-    summary: Summary,
-    anomalies: Anomalies,
-    dependencies: Dependencies = .{},
-    build: BuildData,
-};
-
 pub const LegacyHeadingProfile = struct {
     title: []const u8,
     parser_kind: []const u8,
@@ -203,15 +295,6 @@ const ParsedHeadingLevelKey = struct {
     level: u8,
     title: []const u8,
 };
-
-pub fn parseExactStructureReportFromSlice(
-    allocator: std.mem.Allocator,
-    json_bytes: []const u8,
-) !std.json.Parsed(ExactStructureReport) {
-    return std.json.parseFromSlice(ExactStructureReport, allocator, json_bytes, .{
-        .ignore_unknown_fields = true,
-    });
-}
 
 pub fn sectionKindForParserKind(parser_kind: []const u8) ?SectionKind {
     if (std.mem.eql(u8, parser_kind, "part-of-speech")) return .pos_lines;
@@ -673,34 +756,6 @@ pub fn generateStructureTableSourceAlloc(
     return allocator.dupe(u8, out.written());
 }
 
-pub fn generateStructureTableSourceFromExactJsonAlloc(
-    allocator: std.mem.Allocator,
-    source_label: []const u8,
-    json_bytes: []const u8,
-) ![]u8 {
-    var parsed = try parseExactStructureReportFromSlice(allocator, json_bytes);
-    defer parsed.deinit();
-
-    const expected = computeStructureFingerprint(parsed.value.build);
-    if (parsed.value.build.structure_fingerprint != expected) return error.InvalidStructureFingerprint;
-    return generateStructureTableSourceAlloc(allocator, source_label, parsed.value.build);
-}
-
-pub fn generateStructureTableSourceFromLegacyJsonAlloc(
-    allocator: std.mem.Allocator,
-    source_label: []const u8,
-    json_bytes: []const u8,
-) ![]u8 {
-    var parsed = try std.json.parseFromSlice(LegacyBuildInputs, allocator, json_bytes, .{
-        .ignore_unknown_fields = true,
-    });
-    defer parsed.deinit();
-
-    var build = try buildDataFromLegacyAlloc(allocator, parsed.value);
-    defer build.deinit(allocator);
-    return generateStructureTableSourceAlloc(allocator, source_label, build);
-}
-
 fn validateBuildData(build: BuildData) !void {
     if (build.compact_direct_patterns.len + compact_pattern_seed.static_direct_patterns.len > compact_pattern_seed.max_direct_pattern_count) return error.TooManyGeneratedCompactPatterns;
     if (build.heading_specs.len + 1 > std.math.maxInt(u16)) return error.TooManyGeneratedHeadings;
@@ -902,55 +957,4 @@ test "buildDataFromLegacyAlloc promotes exact heading lines into compact direct 
 
     try std.testing.expectEqual(@as(usize, 1), build.compact_direct_patterns.len);
     try std.testing.expectEqualStrings("===Noun===", build.compact_direct_patterns[0]);
-}
-
-test "generateStructureTableSourceFromExactJsonAlloc validates the embedded fingerprint" {
-    var build = try buildDataFromLegacyAlloc(std.testing.allocator, .{
-        .heading_profiles = &.{
-            .{ .title = "Noun", .parser_kind = "part-of-speech", .count = 1 },
-        },
-        .templates_by_heading = &.{
-            .{ .heading = "Translations", .template = "t", .count = 3 },
-        },
-    });
-    defer build.deinit(std.testing.allocator);
-
-    var report = ExactStructureReport{
-        .input = "fixture.xml",
-        .summary = .{
-            .pages_scanned = 1,
-            .namespace_zero_pages = 1,
-            .language_entries = 1,
-            .heading_level_jumps = 0,
-            .content_before_subheading = 0,
-            .unbalanced_sections = 0,
-            .unclassified_heading_titles = 0,
-        },
-        .anomalies = .{},
-        .build = build,
-    };
-
-    var writer: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer writer.deinit();
-    var stringify: std.json.Stringify = .{
-        .writer = &writer.writer,
-        .options = .{ .whitespace = .indent_2 },
-    };
-    try stringify.write(report);
-
-    const source = try generateStructureTableSourceFromExactJsonAlloc(std.testing.allocator, "fixture", writer.written());
-    defer std.testing.allocator.free(source);
-    try std.testing.expect(std.mem.indexOf(u8, source, "pub const heading_specs") != null);
-
-    report.build.structure_fingerprint +%= 1;
-    writer.clearRetainingCapacity();
-    stringify = .{
-        .writer = &writer.writer,
-        .options = .{ .whitespace = .indent_2 },
-    };
-    try stringify.write(report);
-    try std.testing.expectError(
-        error.InvalidStructureFingerprint,
-        generateStructureTableSourceFromExactJsonAlloc(std.testing.allocator, "fixture", writer.written()),
-    );
 }

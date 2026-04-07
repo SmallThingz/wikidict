@@ -1,5 +1,7 @@
 const std = @import("std");
 const html_render = @import("html_render.zig");
+const generated_templates = @import("generated_template_runtime");
+const generated = @import("generated_structure_tables");
 
 const renderEnglishSectionAlloc = html_render.renderEnglishSectionAlloc;
 const renderEnglishSectionWithOptionsAlloc = html_render.renderEnglishSectionWithOptionsAlloc;
@@ -8,6 +10,35 @@ const isStrictSupportedTemplateName = html_render.isStrictSupportedTemplateName;
 
 fn trimWikiWhitespace(value: []const u8) []const u8 {
     return std.mem.trim(u8, value, " \t");
+}
+
+fn lineTemplateSampleAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator,
+        \\==English==
+        \\===Noun===
+        \\# {{{{{s}|en|alpha|beta}}}}
+        \\
+    , .{name});
+}
+
+fn translationTemplateSampleAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator,
+        \\==English==
+        \\===Noun===
+        \\# thing
+        \\====Translations====
+        \\{{{{trans-top|test}}}}
+        \\* French: {{{{{s}|fr|alpha}}}}
+        \\{{{{trans-bottom}}}}
+        \\
+    , .{name});
+}
+
+fn renderedSectionsHaveVisibleHtml(sections: []const html_render.RenderedSection) bool {
+    for (sections) |section| {
+        if (std.mem.trim(u8, section.html, " \t\r\n").len != 0) return true;
+    }
+    return false;
 }
 
 test "renderEnglishSectionAlloc renders part-of-speech senses without raw templates" {
@@ -1501,6 +1532,92 @@ test "renderEnglishSectionAlloc preserves defdate and thesaurus synonym links" {
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Thesaurus:dictionary") != null);
 }
 
+test "renderEnglishSectionAlloc renders see thesaurus references in strict mode" {
+    const source =
+        \\==English==
+        \\====Synonyms====
+        \\* {{sense|greeting}} {{see thesaurus|en|hello}}
+    ;
+    const resolver = TestResolverContext{ .terms = &.{"Thesaurus:hello"} };
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .link_resolver = .{
+            .context = @ptrCast(&resolver),
+            .resolve = resolveTestLink,
+        },
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "greeting") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "see ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "/entry/Thesaurus%3Ahello") != null);
+}
+
+test "renderEnglishSectionAlloc ignores citation request templates in strict mode" {
+    const source =
+        \\==English==
+        \\===Phrase===
+        \\# A placeholder definition.
+        \\#* {{see more citations|en}}
+    ;
+
+    const sections = try renderEnglishSectionAlloc(std.testing.allocator, source);
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "placeholder definition") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "see more citations") == null);
+}
+
+test "generated non-metadata templates never render to empty html" {
+    if (generated.line_templates.len != 0) {
+        var idx = generated.line_templates.len;
+        while (idx > 0) {
+            idx -= 1;
+            const template = generated.line_templates[idx];
+            if (generated_templates.classifyTemplateDispatchId(template.code) == .metadata_only) continue;
+
+            const sample = try lineTemplateSampleAlloc(std.testing.allocator, template.name);
+            defer std.testing.allocator.free(sample);
+
+            const sections = try renderEnglishSectionAlloc(std.testing.allocator, sample);
+            defer {
+                for (sections) |*section| section.deinit(std.testing.allocator);
+                std.testing.allocator.free(sections);
+            }
+
+            try std.testing.expect(renderedSectionsHaveVisibleHtml(sections));
+        }
+    }
+
+    if (generated.translation_templates.len != 0) {
+        var idx = generated.translation_templates.len;
+        while (idx > 0) {
+            idx -= 1;
+            const template = generated.translation_templates[idx];
+            if (generated_templates.classifyTemplateDispatchId(template.code) == .metadata_only) continue;
+
+            const sample = try translationTemplateSampleAlloc(std.testing.allocator, template.name);
+            defer std.testing.allocator.free(sample);
+
+            const sections = try renderEnglishSectionAlloc(std.testing.allocator, sample);
+            defer {
+                for (sections) |*section| section.deinit(std.testing.allocator);
+                std.testing.allocator.free(sections);
+            }
+
+            try std.testing.expect(renderedSectionsHaveVisibleHtml(sections));
+        }
+    }
+}
+
 test "renderEnglishSectionAlloc routes unsupported helpers through shared template text rendering" {
     const source =
         \\==English==
@@ -1747,6 +1864,112 @@ test "renderEnglishSectionAlloc expands usage and county-seat place templates" {
     try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "The use of Israel to refer to the region") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "A city, the county seat of") != null);
     try std.testing.expect(std.mem.indexOf(u8, sections[1].html, "United States") != null);
+}
+
+test "renderEnglishSectionAlloc keeps Isreal semantic templates visible" {
+    const source =
+        \\==English==
+        \\
+        \\===Proper noun===
+        \\# {{surname|en}}.
+        \\# {{missp|en|Israel}}.
+    ;
+    const resolver = TestResolverContext{ .terms = &.{"Israel", "surname", "misspelling"} };
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .link_resolver = .{
+            .context = @ptrCast(&resolver),
+            .resolve = resolveTestLink,
+        },
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "A surname.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Misspelling") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Israel") != null);
+}
+
+test "renderEnglishSectionAlloc keeps full Isreal entry from collapsing to zero sections" {
+    const source =
+        \\==English==
+        \\
+        \\===Proper noun===
+        \\{{en-proper noun|s}}
+        \\
+        \\# {{surname|en}}.
+        \\# {{missp|en|Israel}}.
+        \\#* {{quote-journal
+        \\|en
+        \\|date=September 14, 1852
+        \\|journal={{w|Deseret News}}---Extra
+        \\|url=https://archive.org/details/prohibitionfalla00engl/
+        \\|location=Great [[Salt Lake City]], U. T.
+        \\|issn=0745-4724
+        \\|page=9
+        \\|pageurl=https://archive.org/details/specialconferenc00chur/page/n8/
+        \\|column=2
+        \\|text=May the Lord God of '''Isreal'''{{sic|Israel}} bless you, in the name of Jesus Christ, AMEN.}}
+        \\#* {{quote-book
+        \\|en
+        \\|year=1891
+        \\|author=Francis M. English
+        \\|title=Prohibition: A Fallacy, a Fanaticism, and an Absurdity, Contrary to the Constitution of the United States, the Laws of Creation, Civilization, Common Sense and Rational Progress, because Contrary to the Teachings of the Bible
+        \\|url=https://archive.org/details/prohibitionfalla00engl/
+        \\|location=[[Jerseyville]], Ill.
+        \\|publisher=Commercial Book and Job Printing Office
+        \\|OCLC=1051748393
+        \\|page=38
+        \\|pageurl=https://archive.org/details/prohibitionfalla00engl/page/38/
+        \\|text=1st SAMUEL.<br>Is the next book to Ruth. 1st ch, 24 v is a wonderful use of ''wine'', especially as it was an integral in the dedication of her son, Samuel, to the service of the God of '''Isreal'''{{sic|Israel}}. It is worth more than the time for the reader at convenience to turn to this chapter and read it all.}}
+        \\#* {{quote-journal
+        \\|en
+        \\|year=1965
+        \\|month=December
+        \\|author=Leo Ebreo
+        \\|title=A Homosexual Ghetto?
+        \\|journal={{w|The Ladder (magazine)|The Ladder}}: A Lesbian Review
+        \\|url=https://archive.org/details/sim_ladder_1965-12_10_3/
+        \\|volume=10
+        \\|issue=3
+        \\|location=[[San Francisco]]
+        \\|publisher=w:Daughters of Bilitis
+        \\|issn=0023-7108
+        \\|oclc=2263409
+        \\|page=4
+        \\|pageurl=https://archive.org/details/sim_ladder_1965-12_10_3/page/4/
+        \\|text=When I was younger - about sixteen - I was an active Zionist. I believed that the best thing for American Jews, in fact all Jews, to do would be to go to '''Isreal'''{{sic|Israel}} and live in a kibbutz (collective). I belonged to a Zionist "movement" and tried to get the Jews I knew to join. I expected of course that few would want to emigrate, but I thought that most would be interested in helping '''Isreal'''{{sic|Israel}} and the Zionist movement.}}
+        \\#* {{see more citations|en}}
+    ;
+    const resolver = TestResolverContext{ .terms = &.{
+        "Israel",
+        "surname",
+        "misspelling",
+        "Deseret News",
+        "Salt Lake City",
+        "Jerseyville",
+        "The Ladder",
+        "San Francisco",
+    } };
+
+    const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
+        .link_resolver = .{
+            .context = @ptrCast(&resolver),
+            .resolve = resolveTestLink,
+        },
+    });
+    defer {
+        for (sections) |*section| section.deinit(std.testing.allocator);
+        std.testing.allocator.free(sections);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "A surname.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Misspelling") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "Deseret News") != null);
 }
 
 test "renderEnglishSectionAlloc skips malformed hidden media links in strict mode" {

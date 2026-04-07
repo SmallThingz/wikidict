@@ -4,6 +4,7 @@ const zxml = @import("zxml");
 
 const encoder = @import("encoder");
 const decoder = @import("decoder");
+const structure_report = @import("shared_structure_report");
 const tool_paths = @import("tool_paths");
 const wikitext = encoder.wikitext;
 const xml_decode = encoder.xml_decode;
@@ -62,7 +63,7 @@ const VerifyProgress = struct {
         @memset(bar[0..filled], '#');
 
         std.debug.print(
-            "\rverify dict [{s}] {d:>3}% scan xml (pages={d} compared={d} failures={d})",
+            "\rverify dict [{s}] {d:>3}% scan entry refs (pages={d} compared={d} failures={d})",
             .{ &bar, percent, pages, compared, failures },
         );
     }
@@ -78,6 +79,7 @@ pub fn main(init: std.process.Init) !void {
 
     const options = try parseOptions(args[1..]);
     required_path.ensureExistsOrExit(init.io, options.input_path, "verifier input");
+    ensureStructureReportExists(init.io, allocator, options);
     ensureDictionaryIndexExists(init.io, allocator, options);
     const stats = verifyDictionary(init.io, init.gpa, options) catch |err| switch (err) {
         error.UnsupportedDictionaryVersion => {
@@ -576,6 +578,98 @@ fn openOrBuildDictionary(allocator: std.mem.Allocator, io: std.Io, options: Opti
     });
 }
 
+fn defaultStructurePathAlloc(allocator: std.mem.Allocator, input_path: []const u8, explicit: ?[]const u8) ![]u8 {
+    if (explicit) |path| return allocator.dupe(u8, path);
+    if (std.mem.lastIndexOfScalar(u8, input_path, '/')) |idx| {
+        return std.fmt.allocPrint(allocator, "{s}/wiktionary-structure.bin", .{input_path[0..idx]});
+    }
+    return allocator.dupe(u8, "data/wiktionary-structure.bin");
+}
+
+fn freeSourcePageRefs(allocator: std.mem.Allocator, refs: []const structure_report.SourcePageRef) void {
+    for (refs) |ref| allocator.free(ref.name);
+    allocator.free(refs);
+}
+
+fn totalRefBytes(refs: []const structure_report.SourcePageRef) usize {
+    var total: usize = 0;
+    for (refs) |ref| {
+        const page_len = ref.page_end - ref.page_start;
+        total +|= std.math.cast(usize, page_len) orelse std.math.maxInt(usize);
+    }
+    return total;
+}
+
+fn scanEntryPageRefsForTestAlloc(allocator: std.mem.Allocator, mapped: []const u8) ![]const structure_report.SourcePageRef {
+    var parser = StreamParser.init(allocator);
+    defer parser.deinit();
+    var page_arena = std.heap.ArenaAllocator.init(allocator);
+    defer page_arena.deinit();
+    var refs: std.ArrayList(structure_report.SourcePageRef) = .empty;
+    defer refs.deinit(allocator);
+
+    var consumed: usize = 0;
+    while (true) {
+        const start = std.mem.indexOfPos(u8, mapped, consumed, "<page>") orelse break;
+        const end_start = std.mem.indexOfPos(u8, mapped, start, "</page>") orelse break;
+        const page_end = end_start + "</page>".len;
+
+        var capture: PageCapture = .{};
+        try parser.parse(mapped[start..page_end], &capture, PageCapture.onNode);
+        const ns_raw = capture.ns_raw orelse {
+            consumed = page_end;
+            _ = page_arena.reset(.retain_capacity);
+            continue;
+        };
+        const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch {
+            consumed = page_end;
+            _ = page_arena.reset(.retain_capacity);
+            continue;
+        };
+        if (ns == 0) {
+            const title_raw = capture.title_raw orelse return error.InvalidStructureReport;
+            const title = try xml_decode.decodeAlloc(page_arena.allocator(), title_raw);
+            defer page_arena.allocator().free(title);
+            try refs.append(allocator, .{
+                .name = try allocator.dupe(u8, title),
+                .page_start = start,
+                .page_end = page_end,
+            });
+        }
+
+        consumed = page_end;
+        _ = page_arena.reset(.retain_capacity);
+    }
+
+    return refs.toOwnedSlice(allocator);
+}
+
+fn ensureStructureReportExists(io: std.Io, allocator: std.mem.Allocator, options: Options) void {
+    const structure_path = defaultStructurePathAlloc(allocator, options.input_path, options.structure_path) catch unreachable;
+    defer allocator.free(structure_path);
+    const found = required_path.exists(io, structure_path) catch |err| {
+        std.debug.print("failed to access structure report at {s}: {s}\n", .{ structure_path, @errorName(err) });
+        std.process.exit(1);
+    };
+    if (found) {
+        const valid = structure_report.hasValidMagicAtPath(io, structure_path) catch |err| {
+            std.debug.print("failed to validate structure report at {s}: {s}\n", .{ structure_path, @errorName(err) });
+            std.process.exit(1);
+        };
+        if (valid) return;
+        std.debug.print("structure report is stale or invalid: {s}; running {s}\n", .{ structure_path, tool_paths.structure_bin_path });
+    } else {
+        std.debug.print("structure report not found: {s}; running {s}\n", .{ structure_path, tool_paths.structure_bin_path });
+    }
+
+    required_path.runToolOrExit(io, allocator, tool_paths.structure_bin_path, "structure binary", &.{
+        "--input",
+        options.input_path,
+        "--output",
+        structure_path,
+    });
+}
+
 fn ensureDictionaryExists(io: std.Io, allocator: std.mem.Allocator, options: Options) void {
     const found = required_path.exists(io, options.db_path) catch |err| {
         std.debug.print("failed to access dictionary at {s}: {s}\n", .{ options.db_path, @errorName(err) });
@@ -587,6 +681,7 @@ fn ensureDictionaryExists(io: std.Io, allocator: std.mem.Allocator, options: Opt
     _ = encoder.buildDictionary(io, allocator, .{
         .input_path = options.input_path,
         .output_path = options.db_path,
+        .structure_path = options.structure_path,
         .limit_entries = options.limit_entries,
         .worker_threads = options.thread_count,
     }) catch |err| {
@@ -602,14 +697,18 @@ fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options
     };
     const idx_path = std.fmt.allocPrint(allocator, "{s}.idx", .{options.db_path}) catch unreachable;
     defer allocator.free(idx_path);
-
     const idx_found = required_path.exists(io, idx_path) catch |err| {
         std.debug.print("failed to access dictionary index at {s}: {s}\n", .{ idx_path, @errorName(err) });
         std.process.exit(1);
     };
     if (db_found and idx_found) return;
 
-    if (!db_found) {
+    if (!db_found and !idx_found) {
+        std.debug.print(
+            "dictionary and index not found: {s}, {s}; running {s} index\n",
+            .{ options.db_path, idx_path, tool_paths.decoder_bin_path },
+        );
+    } else if (!db_found) {
         std.debug.print("dictionary not found: {s}; running {s} index\n", .{ options.db_path, tool_paths.decoder_bin_path });
     } else {
         std.debug.print("dictionary index not found: {s}; running {s} index\n", .{ idx_path, tool_paths.decoder_bin_path });
@@ -622,9 +721,9 @@ fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options
     argv.append(allocator, options.input_path) catch unreachable;
     argv.append(allocator, "--db") catch unreachable;
     argv.append(allocator, options.db_path) catch unreachable;
-    if (options.structure_path) |structure_path| {
+    if (options.structure_path) |path| {
         argv.append(allocator, "--structure") catch unreachable;
-        argv.append(allocator, structure_path) catch unreachable;
+        argv.append(allocator, path) catch unreachable;
     }
     if (options.limit_entries) |limit| {
         const limit_text = std.fmt.allocPrint(allocator, "{d}", .{limit}) catch unreachable;
@@ -636,12 +735,13 @@ fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options
 }
 
 const VerifyChunk = struct {
-    start: usize,
-    end: usize,
+    start_index: usize,
+    end_index: usize,
 };
 
 const VerifyChunkJob = struct {
     mapped: []const u8,
+    refs: []const structure_report.SourcePageRef,
     chunk: VerifyChunk,
     verifier: *Verifier,
     queue: *WorkQueue,
@@ -661,9 +761,16 @@ pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Optio
 
     var input = try mmapReadOnlyPath(io, options.input_path);
     defer input.deinit();
+    const structure_path = try defaultStructurePathAlloc(allocator, options.input_path, options.structure_path);
+    defer allocator.free(structure_path);
+    const owned_entry_refs = try structure_report.loadEntryPageRefsAlloc(io, allocator, structure_path);
+    defer freeSourcePageRefs(allocator, owned_entry_refs);
+    var entry_refs = owned_entry_refs;
+    if (options.limit_entries) |limit| {
+        entry_refs = entry_refs[0..@min(limit, entry_refs.len)];
+    }
 
-    const stat = input.stat;
-    var progress = VerifyProgress.init(@intCast(stat.size));
+    var progress = VerifyProgress.init(totalRefBytes(entry_refs));
     const cpu_count = std.Thread.getCpuCount() catch 1;
     const thread_count = @max(@as(usize, 1), options.thread_count orelse cpu_count);
     var queue = WorkQueue.init(allocator, io, @max(@as(usize, 32), thread_count * 8));
@@ -684,9 +791,9 @@ pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Optio
         }
     }
 
-    if (stat.size != 0) {
+    if (entry_refs.len != 0) {
         const input_bytes = input.bytes();
-        const scan_thread_count = verifyScanThreadCount(input_bytes.len, options.limit_entries, options.thread_count);
+        const scan_thread_count = verifyScanThreadCount(entry_refs.len, options.limit_entries, options.thread_count);
         if (scan_thread_count == 1) {
             var stream_parser = StreamParser.init(allocator);
             defer stream_parser.deinit();
@@ -697,6 +804,7 @@ pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Optio
             try processMappedInputSequential(
                 &verifier,
                 input_bytes,
+                entry_refs,
                 &stream_parser,
                 &page_arena,
                 &queue,
@@ -707,6 +815,7 @@ pub fn verifyDictionary(io: std.Io, allocator: std.mem.Allocator, options: Optio
                 allocator,
                 &verifier,
                 input_bytes,
+                entry_refs,
                 scan_thread_count,
                 &queue,
                 &progress,
@@ -775,32 +884,21 @@ fn mmapReadOnlyPath(io: std.Io, path: []const u8) !MappedReadOnlyFile {
     };
 }
 
-fn verifyScanThreadCount(total_input_bytes: usize, limit_entries: ?usize, thread_override: ?usize) usize {
+fn verifyScanThreadCount(entry_count: usize, limit_entries: ?usize, thread_override: ?usize) usize {
     if (builtin.single_threaded or limit_entries != null) return 1;
     if (thread_override) |requested| return @max(@as(usize, 1), requested);
-    if (total_input_bytes < (32 << 20)) return 1;
+    if (entry_count < 1024) return 1;
     const cpu_count = std.Thread.getCpuCount() catch 1;
     return @max(@as(usize, 1), cpu_count);
 }
 
-fn collectVerifyChunksAlloc(allocator: std.mem.Allocator, mapped: []const u8, desired_chunks: usize) ![]VerifyChunk {
-    var starts: std.ArrayList(usize) = .empty;
-    defer starts.deinit(allocator);
-    try starts.append(allocator, 0);
-
-    for (1..desired_chunks) |chunk_index| {
-        const approx = @divTrunc(mapped.len * chunk_index, desired_chunks);
-        const page_start = std.mem.indexOfPos(u8, mapped, approx, "<page>") orelse continue;
-        if (page_start <= starts.items[starts.items.len - 1]) continue;
-        try starts.append(allocator, page_start);
-    }
-    try starts.append(allocator, mapped.len);
-
-    const chunks = try allocator.alloc(VerifyChunk, starts.items.len - 1);
+fn collectVerifyChunksAlloc(allocator: std.mem.Allocator, entry_count: usize, desired_chunks: usize) ![]VerifyChunk {
+    const chunk_count = @max(@as(usize, 1), @min(entry_count, desired_chunks));
+    const chunks = try allocator.alloc(VerifyChunk, chunk_count);
     for (chunks, 0..) |*chunk, idx| {
         chunk.* = .{
-            .start = starts.items[idx],
-            .end = starts.items[idx + 1],
+            .start_index = if (idx == 0) 0 else @divTrunc(entry_count * idx, chunk_count),
+            .end_index = @divTrunc(entry_count * (idx + 1), chunk_count),
         };
     }
     return chunks;
@@ -810,11 +908,12 @@ fn processMappedInputParallel(
     allocator: std.mem.Allocator,
     verifier: *Verifier,
     mapped: []const u8,
+    refs: []const structure_report.SourcePageRef,
     scan_thread_count: usize,
     queue: *WorkQueue,
     progress: *VerifyProgress,
 ) !void {
-    const chunks = try collectVerifyChunksAlloc(allocator, mapped, scan_thread_count);
+    const chunks = try collectVerifyChunksAlloc(allocator, refs.len, scan_thread_count);
     defer allocator.free(chunks);
 
     const jobs = try allocator.alloc(VerifyChunkJob, chunks.len);
@@ -822,6 +921,7 @@ fn processMappedInputParallel(
     for (chunks, jobs) |chunk, *job| {
         job.* = .{
             .mapped = mapped,
+            .refs = refs,
             .chunk = chunk,
             .verifier = verifier,
             .queue = queue,
@@ -858,14 +958,10 @@ fn processVerifyChunk(job: *VerifyChunkJob) !void {
     var page_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer page_arena.deinit();
 
-    var consumed: usize = job.chunk.start;
-    while (true) {
-        const start = std.mem.indexOfPos(u8, job.mapped, consumed, "<page>") orelse break;
-        if (start >= job.chunk.end) break;
-        const end_start = std.mem.indexOfPos(u8, job.mapped, start, "</page>") orelse break;
-        const page_end = end_start + "</page>".len;
-        if (page_end > job.chunk.end) break;
-
+    for (job.refs[job.chunk.start_index..job.chunk.end_index]) |page_ref| {
+        const start = std.math.cast(usize, page_ref.page_start) orelse return error.FileTooBig;
+        const page_end = std.math.cast(usize, page_ref.page_end) orelse return error.FileTooBig;
+        if (page_end > job.mapped.len or start > page_end) return error.InvalidStructureReport;
         const page_allocator = page_arena.allocator();
         _ = processPageFragment(page_allocator, &stream_parser, job.mapped[start..page_end], job.verifier, job.queue) catch |err| switch (err) {
             error.OutOfMemory, error.ClosedWorkQueue => return err,
@@ -874,7 +970,6 @@ fn processVerifyChunk(job: *VerifyChunkJob) !void {
                 break :blk PageOutcome.none;
             },
         };
-        consumed = page_end;
         _ = page_arena.reset(.retain_capacity);
 
         const counts = job.verifier.snapshotProgress();
@@ -885,37 +980,27 @@ fn processVerifyChunk(job: *VerifyChunkJob) !void {
 fn processMappedInputSequential(
     verifier: *Verifier,
     mapped: []const u8,
+    refs: []const structure_report.SourcePageRef,
     stream_parser: *StreamParser,
     page_arena: *std.heap.ArenaAllocator,
     queue: *WorkQueue,
     progress: *VerifyProgress,
 ) !void {
-    var consumed: usize = 0;
-    var selected_entries: usize = 0;
-    while (true) {
-        const start = std.mem.indexOfPos(u8, mapped, consumed, "<page>") orelse break;
-        const end_start = std.mem.indexOfPos(u8, mapped, start, "</page>") orelse break;
-        const page_end = end_start + "</page>".len;
-
+    for (refs) |page_ref| {
+        const start = std.math.cast(usize, page_ref.page_start) orelse return error.FileTooBig;
+        const page_end = std.math.cast(usize, page_ref.page_end) orelse return error.FileTooBig;
+        if (page_end > mapped.len or start > page_end) return error.InvalidStructureReport;
         const page_allocator = page_arena.allocator();
-        const outcome = processPageFragment(page_allocator, stream_parser, mapped[start..page_end], verifier, queue) catch |err| switch (err) {
+        _ = processPageFragment(page_allocator, stream_parser, mapped[start..page_end], verifier, queue) catch |err| switch (err) {
             error.OutOfMemory, error.ClosedWorkQueue => return err,
             else => blk: {
                 verifier.noteParseSkip();
                 break :blk PageOutcome.none;
             },
         };
-        if (outcome != .none) {
-            selected_entries += 1;
-        }
-        consumed = page_end;
         _ = page_arena.reset(.retain_capacity);
         const counts = verifier.snapshotProgress();
         progress.scanAdvance(page_end - start, counts.pages, counts.compared, counts.failures);
-
-        if (verifier.options.limit_entries) |limit| {
-            if (selected_entries >= limit) return;
-        }
     }
 }
 
@@ -1125,6 +1210,26 @@ fn writeMappedFile(path: []const u8, contents: []const u8) !void {
     _ = std.os.linux.close(fd);
 }
 
+fn writeXmlFixtureWithStructureAt(path: []const u8, structure_path: []const u8, contents: []const u8) !void {
+    try writeMappedFile(path, contents);
+
+    const allocator = std.testing.allocator;
+    const refs = try scanEntryPageRefsForTestAlloc(allocator, contents);
+    defer freeSourcePageRefs(allocator, refs);
+
+    const deps: structure_report.DependencySet = .{
+        .all_entry_pages = refs,
+    };
+    try structure_report.saveStructureFile(std.testing.io, structure_path, encoder.currentGeneratedBuildData(), deps);
+}
+
+fn writeXmlFixtureWithStructure(path: []const u8, contents: []const u8) !void {
+    const allocator = std.testing.allocator;
+    const structure_path = try defaultStructurePathAlloc(allocator, path, null);
+    defer allocator.free(structure_path);
+    try writeXmlFixtureWithStructureAt(path, structure_path, contents);
+}
+
 fn parseOptions(args: []const []const u8) !Options {
     var options: Options = .{};
     var i: usize = 0;
@@ -1162,7 +1267,7 @@ fn parseOptions(args: []const []const u8) !Options {
 fn printUsage() void {
     std.debug.print(
         \\dict-verify [--input data/wiktionary.xml] [--db data/wiktionary.bin]
-        \\            [--structure data/wiktionary-structure.json]
+        \\            [--structure data/wiktionary-structure.bin]
         \\            [--report data/verification-report.txt] [--limit 10000]
         \\            [--threads N]
         \\build-time exclusions come from -Dskip-headings=...
@@ -1213,17 +1318,23 @@ test "verifyDictionary accepts whitespace-only differences" {
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
-    try writeMappedFile(build_rel, build_xml);
-    try writeMappedFile(verify_rel, verify_xml);
+    const build_structure_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "build-structure.bin");
+    defer std.testing.allocator.free(build_structure_rel);
+    const verify_structure_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-structure.bin");
+    defer std.testing.allocator.free(verify_structure_rel);
+    try writeXmlFixtureWithStructureAt(build_rel, build_structure_rel, build_xml);
+    try writeXmlFixtureWithStructureAt(verify_rel, verify_structure_rel, verify_xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = build_rel,
         .output_path = db_rel,
+        .structure_path = build_structure_rel,
     });
 
     const stats = try verifyDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = verify_rel,
         .db_path = db_rel,
+        .structure_path = verify_structure_rel,
         .report_path = report_rel,
         .thread_count = 2,
     });
@@ -1269,17 +1380,23 @@ test "verifyDictionary reports content mismatches" {
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
-    try writeMappedFile(build_rel, build_xml);
-    try writeMappedFile(verify_rel, verify_xml);
+    const build_structure_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "build-structure.bin");
+    defer std.testing.allocator.free(build_structure_rel);
+    const verify_structure_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-structure.bin");
+    defer std.testing.allocator.free(verify_structure_rel);
+    try writeXmlFixtureWithStructureAt(build_rel, build_structure_rel, build_xml);
+    try writeXmlFixtureWithStructureAt(verify_rel, verify_structure_rel, verify_xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = build_rel,
         .output_path = db_rel,
+        .structure_path = build_structure_rel,
     });
 
     const stats = try verifyDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = verify_rel,
         .db_path = db_rel,
+        .structure_path = verify_structure_rel,
         .report_path = report_rel,
         .thread_count = 2,
     });
@@ -1322,7 +1439,7 @@ test "verifyDictionary decodes double-escaped symbols and builder stores decoded
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
-    try writeMappedFile(build_rel, build_xml);
+    try writeXmlFixtureWithStructure(build_rel, build_xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = build_rel,
@@ -1391,17 +1508,23 @@ test "verifyDictionary treats decoded unicode spacing entities as whitespace-onl
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
-    try writeMappedFile(build_rel, build_xml);
-    try writeMappedFile(verify_rel, verify_xml);
+    const build_structure_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "build-structure.bin");
+    defer std.testing.allocator.free(build_structure_rel);
+    const verify_structure_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-structure.bin");
+    defer std.testing.allocator.free(verify_structure_rel);
+    try writeXmlFixtureWithStructureAt(build_rel, build_structure_rel, build_xml);
+    try writeXmlFixtureWithStructureAt(verify_rel, verify_structure_rel, verify_xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = build_rel,
         .output_path = db_rel,
+        .structure_path = build_structure_rel,
     });
 
     const stats = try verifyDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = verify_rel,
         .db_path = db_rel,
+        .structure_path = verify_structure_rel,
         .report_path = report_rel,
     });
 
@@ -1438,7 +1561,7 @@ test "verifyDictionary skips redirect-only entries without raw payloads" {
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
-    try writeMappedFile(xml_rel, xml);
+    try writeXmlFixtureWithStructure(xml_rel, xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_rel,
@@ -1493,7 +1616,7 @@ test "verifyDictionary limit matches encoder entry limit when redirects are incl
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
-    try writeMappedFile(xml_rel, xml);
+    try writeXmlFixtureWithStructure(xml_rel, xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_rel,
@@ -1548,7 +1671,7 @@ test "verifyDictionary ignores excluded headings with matching blacklist" {
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "report.txt");
     defer std.testing.allocator.free(report_rel);
-    try writeMappedFile(build_rel, xml);
+    try writeXmlFixtureWithStructure(build_rel, xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = build_rel,
@@ -1597,7 +1720,7 @@ test "verifyDictionary ignores dropped alias-only entries with invalid destinati
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-report.txt");
     defer std.testing.allocator.free(report_rel);
-    try writeMappedFile(xml_rel, xml);
+    try writeXmlFixtureWithStructure(xml_rel, xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_rel,
@@ -1639,7 +1762,7 @@ test "ensureDictionaryExists builds the dictionary when missing" {
     defer std.testing.allocator.free(xml_rel);
     const db_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "dict.bin");
     defer std.testing.allocator.free(db_rel);
-    try writeMappedFile(xml_rel, xml);
+    try writeXmlFixtureWithStructure(xml_rel, xml);
 
     ensureDictionaryExists(std.testing.io, std.testing.allocator, .{
         .input_path = xml_rel,
@@ -1675,7 +1798,7 @@ test "verifyDictionary builds the index on first open after auto-building the di
     defer std.testing.allocator.free(idx_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-report.txt");
     defer std.testing.allocator.free(report_rel);
-    try writeMappedFile(xml_rel, xml);
+    try writeXmlFixtureWithStructure(xml_rel, xml);
 
     ensureDictionaryExists(std.testing.io, std.testing.allocator, .{
         .input_path = xml_rel,
@@ -1722,7 +1845,7 @@ test "verifyDictionary skips non-English entries by default" {
     defer std.testing.allocator.free(db_rel);
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-report.txt");
     defer std.testing.allocator.free(report_rel);
-    try writeMappedFile(xml_rel, xml);
+    try writeXmlFixtureWithStructure(xml_rel, xml);
 
     _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_rel,

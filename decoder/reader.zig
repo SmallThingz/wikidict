@@ -4,12 +4,13 @@ const std = @import("std");
 const normalize = @import("normalize");
 const compact = @import("compact_runtime.zig");
 const format = @import("format.zig");
+const generated = @import("generated_structure_tables");
 const structure_report = @import("shared_structure_report");
 const wikitext = @import("wikitext_source");
 const testing_encoder = if (builtin.is_test) @import("encoder") else struct {};
 
 const cache_magic = "DCTIDX04";
-const cache_version: u32 = 8;
+const cache_version: u32 = 9;
 const cache_alignment: u32 = 8;
 
 const StringRef = extern struct {
@@ -232,13 +233,7 @@ fn loadTemplateTablesIntoMappings(
     defer allocator.free(structure_path);
 
     var template_mappings = structure_report.loadTemplateMappingsAlloc(io, allocator, structure_path) catch |err| switch (err) {
-        error.FileNotFound => {
-            if (builtin.is_test) {
-                try loadTestingTemplateTables(allocator, mappings);
-                return;
-            }
-            return error.MissingStructureReport;
-        },
+        error.FileNotFound => return error.MissingStructureReport,
         else => return err,
     };
     errdefer template_mappings.deinit(allocator);
@@ -286,32 +281,36 @@ fn defaultStructurePathAlloc(
     if (explicit_structure_path) |path| return allocator.dupe(u8, path);
     if (std.mem.lastIndexOfScalar(u8, db_path, '/')) |idx| {
         const dir = db_path[0..idx];
-        return std.fmt.allocPrint(allocator, "{s}/wiktionary-structure.json", .{dir});
+        return std.fmt.allocPrint(allocator, "{s}/wiktionary-structure.bin", .{dir});
     }
-    return allocator.dupe(u8, "data/wiktionary-structure.json");
+    return allocator.dupe(u8, "data/wiktionary-structure.bin");
 }
 
-fn loadTestingTemplateTables(
-    allocator: std.mem.Allocator,
-    mappings: *compact.OwnedRuntimeMappings,
-) !void {
-    if (!builtin.is_test) return error.MissingStructureReport;
-    const runtime = testing_encoder.compact_encoding.currentRuntimeMappings();
-    if (runtime.line_templates.len != mappings.expected_line_template_count) return error.InvalidStructureReport;
-    if (runtime.translation_templates.len != mappings.expected_translation_template_count) return error.InvalidStructureReport;
-    if (testing_encoder.compact_encoding.templateTableFingerprint(runtime) != mappings.template_table_fingerprint) {
-        return error.InvalidStructureReport;
-    }
+const GeneratedBuildDataView = struct {
+    compact_direct_patterns: []const []const u8,
+    heading_specs: []const generated.HeadingSpec,
+    heading_level_specs: []const generated.HeadingLevelSpec,
+    line_templates: []const generated.LineTemplate,
+    compact_patterns: []const []const u8,
+    compact_patterns_ext: []const []const u8,
+    translation_templates: []const generated.TranslationTemplate,
+    target_languages: []const generated.TargetLanguage,
+    language_labels: []const generated.LanguageLabel,
+    structure_fingerprint: u32,
+};
 
-    mappings.line_templates = try allocator.alloc(compact.RuntimeLineTemplate, runtime.line_templates.len);
-    for (runtime.line_templates, 0..) |entry, idx| mappings.line_templates[idx] = .{
-        .code = entry.code,
-        .name = entry.name,
-    };
-    mappings.translation_templates = try allocator.alloc(compact.RuntimeTranslationTemplate, runtime.translation_templates.len);
-    for (runtime.translation_templates, 0..) |entry, idx| mappings.translation_templates[idx] = .{
-        .code = entry.code,
-        .name = entry.name,
+fn currentGeneratedBuildData() GeneratedBuildDataView {
+    return .{
+        .compact_direct_patterns = &generated.compact_direct_patterns,
+        .heading_specs = &generated.heading_specs,
+        .heading_level_specs = &generated.heading_level_specs,
+        .line_templates = &generated.line_templates,
+        .compact_patterns = &generated.compact_patterns,
+        .compact_patterns_ext = &generated.compact_patterns_ext,
+        .translation_templates = &generated.translation_templates,
+        .target_languages = &generated.target_languages,
+        .language_labels = &generated.language_labels,
+        .structure_fingerprint = generated.structure_fingerprint,
     };
 }
 
@@ -1736,6 +1735,59 @@ fn writeMappedFile(path: []const u8, bytes: []const u8) !void {
     try mapped_file.finish(bytes.len);
 }
 
+fn writeXmlFixtureWithStructure(path: []const u8, contents: []const u8) !void {
+    try writeMappedFile(path, contents);
+
+    const allocator = std.testing.allocator;
+    const structure_path = try defaultStructurePathAlloc(allocator, path, null);
+    defer allocator.free(structure_path);
+
+    var refs: std.ArrayList(structure_report.SourcePageRef) = .empty;
+    defer {
+        for (refs.items) |ref| allocator.free(ref.name);
+        refs.deinit(allocator);
+    }
+
+    var consumed: usize = 0;
+    while (true) {
+        const start = std.mem.indexOfPos(u8, contents, consumed, "<page>") orelse break;
+        const end_start = std.mem.indexOfPos(u8, contents, start, "</page>") orelse break;
+        const page_end = end_start + "</page>".len;
+
+        const page = contents[start..page_end];
+        const title_start = std.mem.indexOf(u8, page, "<title>") orelse {
+            consumed = page_end;
+            continue;
+        };
+        const title_end = std.mem.indexOfPos(u8, page, title_start, "</title>") orelse return error.InvalidStructureReport;
+        const ns_start = std.mem.indexOf(u8, page, "<ns>") orelse {
+            consumed = page_end;
+            continue;
+        };
+        const ns_end = std.mem.indexOfPos(u8, page, ns_start, "</ns>") orelse return error.InvalidStructureReport;
+        const ns_raw = page[ns_start + "<ns>".len .. ns_end];
+        const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch {
+            consumed = page_end;
+            continue;
+        };
+        if (ns == 0) {
+            const title_raw = page[title_start + "<title>".len .. title_end];
+            try refs.append(allocator, .{
+                .name = try allocator.dupe(u8, title_raw),
+                .page_start = start,
+                .page_end = page_end,
+            });
+        }
+
+        consumed = page_end;
+    }
+
+    const deps: structure_report.DependencySet = .{
+        .all_entry_pages = refs.items,
+    };
+    try structure_report.saveStructureFile(std.testing.io, structure_path, currentGeneratedBuildData(), deps);
+}
+
 fn truncateFd(fd: std.posix.fd_t, length: usize) !void {
     const signed_length = std.math.cast(i64, length) orelse return error.FileTooBig;
     switch (builtin.os.tag) {
@@ -2382,7 +2434,7 @@ test "dictionary open preserves raw etymology and pronunciation sections through
     defer std.testing.allocator.free(db_path);
     const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
     defer std.testing.allocator.free(xml_path);
-    try writeMappedFile(xml_path, xml);
+    try writeXmlFixtureWithStructure(xml_path, xml);
 
     _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
@@ -2424,7 +2476,7 @@ test "dictionary open reuses an up-to-date cache file" {
     defer std.testing.allocator.free(xml_path);
     const cache_path = try std.fmt.allocPrint(std.testing.allocator, "{s}.idx", .{db_path});
     defer std.testing.allocator.free(cache_path);
-    try writeMappedFile(xml_path, xml);
+    try writeXmlFixtureWithStructure(xml_path, xml);
 
     _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
@@ -2469,7 +2521,7 @@ test "dictionary build drops non-English entries by default" {
     defer std.testing.allocator.free(db_path);
     const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
     defer std.testing.allocator.free(xml_path);
-    try writeMappedFile(xml_path, xml);
+    try writeXmlFixtureWithStructure(xml_path, xml);
 
     _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
@@ -2515,7 +2567,7 @@ test "dictionary cache rebuild recomputes normalized alias metadata" {
     defer std.testing.allocator.free(db_path);
     const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
     defer std.testing.allocator.free(xml_path);
-    try writeMappedFile(xml_path, xml);
+    try writeXmlFixtureWithStructure(xml_path, xml);
 
     _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
@@ -2584,7 +2636,7 @@ test "build drops alias entries whose destination is not stored" {
     defer std.testing.allocator.free(db_path);
     const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
     defer std.testing.allocator.free(xml_path);
-    try writeMappedFile(xml_path, xml);
+    try writeXmlFixtureWithStructure(xml_path, xml);
 
     _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
@@ -2622,7 +2674,7 @@ test "lookupExact collapses duplicate entry hits and prefers the exact raw match
         \\<ns>0</ns>
         \\<revision><text xml:space="preserve">==English==
         \\===Alternative forms===
-        \\* [[Hellfire]]
+        \\* sometimes capitalized, hyphenated, or both: {{l|en|Hellfire}}, {{l|en|hell-fire}}, {{l|en|Hell-fire}}; also as {{l|en|fires}} of {{l|en|hell}}
         \\===Noun===
         \\# [[fire]]
         \\</text></revision>
@@ -2634,7 +2686,7 @@ test "lookupExact collapses duplicate entry hits and prefers the exact raw match
     defer std.testing.allocator.free(db_path);
     const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
     defer std.testing.allocator.free(xml_path);
-    try writeMappedFile(xml_path, xml);
+    try writeXmlFixtureWithStructure(xml_path, xml);
 
     _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
@@ -2661,6 +2713,20 @@ test "lookupExact collapses duplicate entry hits and prefers the exact raw match
     try std.testing.expectEqual(@as(usize, 1), upper_hits.len);
     try std.testing.expectEqual(format.lookup_kind_title, upper_hits[0].kind);
     try std.testing.expectEqualStrings("hellfire", upper_hits[0].matched);
+
+    const fires_hits = try dict.lookupExact(std.testing.allocator, "fires");
+    defer std.testing.allocator.free(fires_hits);
+    for (fires_hits) |hit| {
+        try std.testing.expect(!(hit.kind == format.lookup_kind_alternative_form and
+            std.mem.eql(u8, dict.entryAt(hit.entry_index).word(), "hellfire")));
+    }
+
+    const phrase_hits = try dict.lookupExact(std.testing.allocator, "fires of hell");
+    defer std.testing.allocator.free(phrase_hits);
+    try std.testing.expectEqual(@as(usize, 1), phrase_hits.len);
+    try std.testing.expectEqual(format.lookup_kind_alternative_form, phrase_hits[0].kind);
+    try std.testing.expectEqualStrings("fires of hell", phrase_hits[0].matched);
+    try std.testing.expectEqualStrings("hellfire", dict.entryAt(phrase_hits[0].entry_index).word());
 }
 
 test "lookupExact appends canonical hits for alias-only entries and redirects" {
@@ -2716,7 +2782,7 @@ test "lookupExact appends canonical hits for alias-only entries and redirects" {
     defer std.testing.allocator.free(db_path);
     const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
     defer std.testing.allocator.free(xml_path);
-    try writeMappedFile(xml_path, xml);
+    try writeXmlFixtureWithStructure(xml_path, xml);
 
     _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
@@ -2805,7 +2871,7 @@ test "resolveLinkTargetAlloc follows alias-only form chains and breaks cycles" {
     defer std.testing.allocator.free(db_path);
     const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
     defer std.testing.allocator.free(xml_path);
-    try writeMappedFile(xml_path, xml);
+    try writeXmlFixtureWithStructure(xml_path, xml);
 
     _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,

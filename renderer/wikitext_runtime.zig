@@ -589,6 +589,10 @@ fn renderTemplate(
         if (templateAliasTarget(&parts)) |arg| try renderInline(out, allocator, arg);
         return;
     }
+    if (templateMatches(name, "missp")) {
+        try renderUnaryTemplate(out, allocator, &parts, "misspelling of");
+        return;
+    }
     if (templateMatches(name, "q-g")) {
         try appendPositional(out, allocator, &parts, 0, "(", ")", ", ");
         return;
@@ -1330,7 +1334,10 @@ fn renderGeneratedTemplate(
         return false;
     }
     const appended = out.items[start_len..];
-    if (appended.len == 0) return true;
+    if (appended.len == 0) {
+        out.items.len = start_len;
+        return false;
+    }
     if (looksLikeTemplateRedirectText(appended)) {
         out.items.len = start_len;
         return false;
@@ -3810,6 +3817,17 @@ test "renderWikitextToOwned preserves nominal template origins" {
     defer std.testing.allocator.free(rendered);
 
     try std.testing.expectEqualStrings("A habitational surname from Old Norse", rendered);
+}
+
+test "renderWikitextToOwned expands missp shorthand semantically" {
+    const rendered = try renderWikitextToOwned(
+        std.testing.allocator,
+        "{{missp|en|Israel}}",
+        256,
+    );
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("misspelling of Israel", rendered);
 }
 
 test "renderWikitextToOwned expands metropolitan borough place fragments" {

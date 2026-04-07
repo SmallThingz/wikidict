@@ -335,7 +335,7 @@ fn validateDispatchTemplateOrder(
 const Options = struct {
     input_path: []const u8 = "data/wiktionary.xml",
     db_path: []const u8 = "data/wiktionary.bin",
-    structure_path: []const u8 = "data/wiktionary-structure.json",
+    structure_path: []const u8 = "data/wiktionary-structure.bin",
     output_path: []const u8 = "data/generated_template_runtime.zig",
     template_name: ?[]const u8 = null,
     mode: CompileMode = .zig,
@@ -392,9 +392,9 @@ fn parseOptions(args: []const []const u8) !Options {
 
 fn printUsage() void {
     std.debug.print(
-        \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
-        \\dict-template-compile --mode bytecode --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.json --output data/generated_template_runtime.zig
-        \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.json --template \"template name\" --output /tmp/generated_templates.zig
+        \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.bin --output data/generated_template_runtime.zig
+        \\dict-template-compile --mode bytecode --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.bin --output data/generated_template_runtime.zig
+        \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.bin --template \"template name\" --output /tmp/generated_templates.zig
         \\
     , .{});
 }
@@ -5930,27 +5930,20 @@ test "template compiler falls back to build mappings when dependency roots are a
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const structure_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure.json", .{tmp.sub_path});
+    const structure_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure.bin", .{tmp.sub_path});
     defer std.testing.allocator.free(structure_path);
-    const json =
-        \\{
-        \\  "dependencies": {
-        \\    "root_templates": ["unused-root"]
-        \\  },
-        \\  "build": {
-        \\    "line_templates": [
-        \\      { "code": 1, "name": "line-a" }
-        \\    ],
-        \\    "translation_templates": [
-        \\      { "code": 2, "name": "trans-b" }
-        \\    ]
-        \\  }
-        \\}
-    ;
-
-    var file = try std.Io.Dir.cwd().createFile(std.testing.io, structure_path, .{ .truncate = true });
-    defer file.close(std.testing.io);
-    try file.writeStreamingAll(std.testing.io, json);
+    const build: structure_report.BuildData = .{
+        .line_templates = &[_]structure_report.TemplateSpec{
+            .{ .code = 1, .name = "line-a" },
+        },
+        .translation_templates = &[_]structure_report.TemplateSpec{
+            .{ .code = 2, .name = "trans-b" },
+        },
+    };
+    const deps: structure_report.DependencySet = .{
+        .root_templates = &[_][]const u8{"unused-root"},
+    };
+    try structure_report.saveStructureFile(std.testing.io, structure_path, build, deps);
     defer std.Io.Dir.cwd().deleteFile(std.testing.io, structure_path) catch {};
 
     const roots = try loadActiveTemplateRootsAlloc(std.Options.debug_io, std.testing.allocator, structure_path);
@@ -5966,27 +5959,20 @@ test "template compiler prefers dependency roots when present" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const structure_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure.json", .{tmp.sub_path});
+    const structure_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure.bin", .{tmp.sub_path});
     defer std.testing.allocator.free(structure_path);
-    const json =
-        \\{
-        \\  "dependencies": {
-        \\    "root_templates": ["active-root"]
-        \\  },
-        \\  "build": {
-        \\    "line_templates": [
-        \\      { "code": 1, "name": "line-a" }
-        \\    ],
-        \\    "translation_templates": [
-        \\      { "code": 2, "name": "trans-b" }
-        \\    ]
-        \\  }
-        \\}
-    ;
-
-    var file = try std.Io.Dir.cwd().createFile(std.testing.io, structure_path, .{ .truncate = true });
-    defer file.close(std.testing.io);
-    try file.writeStreamingAll(std.testing.io, json);
+    const build: structure_report.BuildData = .{
+        .line_templates = &[_]structure_report.TemplateSpec{
+            .{ .code = 1, .name = "line-a" },
+        },
+        .translation_templates = &[_]structure_report.TemplateSpec{
+            .{ .code = 2, .name = "trans-b" },
+        },
+    };
+    const stored_deps: structure_report.DependencySet = .{
+        .root_templates = &[_][]const u8{"active-root"},
+    };
+    try structure_report.saveStructureFile(std.testing.io, structure_path, build, stored_deps);
     defer std.Io.Dir.cwd().deleteFile(std.testing.io, structure_path) catch {};
 
     var deps = try structure_report.loadDependencySetAlloc(std.testing.io, std.testing.allocator, structure_path);

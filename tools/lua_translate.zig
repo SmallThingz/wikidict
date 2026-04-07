@@ -55,7 +55,7 @@ pub fn main(init: std.process.Init) !void {
     }
     if (std.mem.eql(u8, command, "dump-module")) {
         const input = flagValue(args[2..], "--input") orelse "data/wiktionary.xml";
-        const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.json";
+        const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.bin";
         const name = flagValue(args[2..], "--name") orelse {
             printUsage();
             return;
@@ -75,7 +75,7 @@ pub fn main(init: std.process.Init) !void {
     }
     if (std.mem.eql(u8, command, "referrers")) {
         const input = flagValue(args[2..], "--input") orelse "data/wiktionary.xml";
-        const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.json";
+        const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.bin";
         required_path.ensureExistsOrExit(init.io, input, "wiktionary dump");
         required_path.ensureExistsOrExit(init.io, structure_path, "structure report");
         var sources = try lua.loadAllStructureSourcesAlloc(allocator, input, structure_path);
@@ -100,7 +100,7 @@ pub fn main(init: std.process.Init) !void {
         required_path.ensureExistsOrExit(init.io, input, "wiktionary dump");
         if (flagValue(args[2..], "--db")) |db_path| {
             required_path.ensureExistsOrExit(init.io, db_path, "dictionary binary");
-            const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.json";
+            const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.bin";
             required_path.ensureExistsOrExit(init.io, structure_path, "structure report");
             const template_names = try loadDbTemplateNamesAlloc(init.io, allocator, db_path, structure_path);
             defer freeOwnedStrings(allocator, template_names);
@@ -114,7 +114,7 @@ pub fn main(init: std.process.Init) !void {
             return;
         }
 
-        const structure = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.json";
+        const structure = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.bin";
         required_path.ensureExistsOrExit(init.io, structure, "structure report");
         const report = try lua.analyzeDependenciesAlloc(allocator, input, structure);
         try printDependencyReport(allocator, report);
@@ -135,7 +135,7 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, command, "audit")) {
         const input = flagValue(args[2..], "--input") orelse "data/wiktionary.xml";
         const db_path = flagValue(args[2..], "--db") orelse "data/wiktionary.bin";
-        const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.json";
+        const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.bin";
         required_path.ensureExistsOrExit(init.io, input, "wiktionary dump");
         required_path.ensureExistsOrExit(init.io, db_path, "dictionary binary");
         required_path.ensureExistsOrExit(init.io, structure_path, "structure report");
@@ -155,7 +155,7 @@ pub fn main(init: std.process.Init) !void {
     }
     if (std.mem.eql(u8, command, "audit-all-modules")) {
         const input = flagValue(args[2..], "--input") orelse "data/wiktionary.xml";
-        const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.json";
+        const structure_path = flagValue(args[2..], "--structure") orelse "data/wiktionary-structure.bin";
         const batch_size = (try parseUsizeFlag(args[2..], "--batch-size")) orelse 64;
         const batch_bytes = (try parseUsizeFlag(args[2..], "--batch-bytes")) orelse 64 * 1024 * 1024;
         const start = (try parseUsizeFlag(args[2..], "--start")) orelse 0;
@@ -193,14 +193,14 @@ fn printUsage() void {
     std.debug.print(
         \\dict-lua emit-zig --input path.lua [--output generated.zig]
         \\dict-lua emit-bytecode --input path.lua [--name module] [--output generated.zig]
-        \\dict-lua dump-module --input data/wiktionary.xml --structure data/wiktionary-structure.json --name "string utilities"
-        \\dict-lua referrers --input data/wiktionary.xml --structure data/wiktionary-structure.json --module "gender and number/templates"
-        \\dict-lua referrers --input data/wiktionary.xml --structure data/wiktionary-structure.json --template "an-lite"
-        \\dict-lua deps [--input data/wiktionary.xml] [--structure data/wiktionary-structure.json]
+        \\dict-lua dump-module --input data/wiktionary.xml --structure data/wiktionary-structure.bin --name "string utilities"
+        \\dict-lua referrers --input data/wiktionary.xml --structure data/wiktionary-structure.bin --module "gender and number/templates"
+        \\dict-lua referrers --input data/wiktionary.xml --structure data/wiktionary-structure.bin --template "an-lite"
+        \\dict-lua deps [--input data/wiktionary.xml] [--structure data/wiktionary-structure.bin]
         \\dict-lua deps --input data/wiktionary.xml --db data/wiktionary.bin
         \\dict-lua deps-file --input path.lua
         \\dict-lua audit --input data/wiktionary.xml --db data/wiktionary.bin
-        \\dict-lua audit-all-modules --input data/wiktionary.xml --structure data/wiktionary-structure.json [--batch-size 64] [--batch-bytes 67108864] [--start 0] [--limit N] [--threads N] [--workspace .zig-cache/lua-module-audit] [--skip-zig-compile]
+        \\dict-lua audit-all-modules --input data/wiktionary.xml --structure data/wiktionary-structure.bin [--batch-size 64] [--batch-bytes 67108864] [--start 0] [--limit N] [--threads N] [--workspace .zig-cache/lua-module-audit] [--skip-zig-compile]
         \\
     , .{});
 }

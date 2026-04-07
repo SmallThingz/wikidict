@@ -3,6 +3,7 @@ const std = @import("std");
 const encoder = @import("encoder");
 const cli_args = @import("cli_args");
 const required_path = @import("required_path");
+const structure_report = @import("shared_structure_report");
 const tool_paths = @import("tool_paths");
 
 pub fn main(init: std.process.Init) !void {
@@ -11,7 +12,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (args.len >= 2 and (std.mem.eql(u8, args[1], "help") or std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "--help"))) {
         try printStdOut(init.io, allocator,
-            \\dict-encoder [build] --input data/wiktionary.xml --output data/wiktionary.bin [--limit 10000] [--threads 4]
+            \\dict-encoder [build] --input data/wiktionary.xml --output data/wiktionary.bin [--structure data/wiktionary-structure.bin] [--limit 10000] [--threads 4]
             \\
         , .{});
         return;
@@ -21,14 +22,17 @@ pub fn main(init: std.process.Init) !void {
     const cmd_args = args[offset..];
     const input = cli_args.flagValue(cmd_args, "--input") orelse "data/wiktionary.xml";
     const output = cli_args.flagValue(cmd_args, "--output") orelse "data/wiktionary.bin";
+    const structure_path = cli_args.flagValue(cmd_args, "--structure") orelse try defaultStructurePathAlloc(allocator, input);
+    defer if (cli_args.flagValue(cmd_args, "--structure") == null) allocator.free(structure_path);
     const limit = try cli_args.parseOptionalIntFlag(usize, cmd_args, "--limit");
     const worker_threads = try cli_args.parseOptionalIntFlag(usize, cmd_args, "--threads");
     ensureFileExistsOrExit(init.io, input, "encoder input");
-    ensureStructureReportExists(init.io, allocator, input);
+    ensureStructureReportExists(init.io, allocator, input, structure_path);
 
     const stats = try encoder.buildDictionary(init.io, allocator, .{
         .input_path = input,
         .output_path = output,
+        .structure_path = structure_path,
         .limit_entries = limit,
         .worker_threads = worker_threads,
     });
@@ -50,15 +54,29 @@ fn ensureFileExistsOrExit(io: std.Io, path: []const u8, label: []const u8) void 
     required_path.ensureExistsOrExit(io, path, label);
 }
 
-fn ensureStructureReportExists(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8) void {
-    const structure_path = "data/wiktionary-structure.json";
+fn defaultStructurePathAlloc(allocator: std.mem.Allocator, input_path: []const u8) ![]u8 {
+    if (std.mem.lastIndexOfScalar(u8, input_path, '/')) |idx| {
+        return std.fmt.allocPrint(allocator, "{s}/wiktionary-structure.bin", .{input_path[0..idx]});
+    }
+    return allocator.dupe(u8, "data/wiktionary-structure.bin");
+}
+
+fn ensureStructureReportExists(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, structure_path: []const u8) void {
     const found = required_path.exists(io, structure_path) catch |err| {
         std.debug.print("failed to access structure report at {s}: {s}\n", .{ structure_path, @errorName(err) });
         std.process.exit(1);
     };
-    if (found) return;
+    if (found) {
+        const valid = structure_report.hasValidMagicAtPath(io, structure_path) catch |err| {
+            std.debug.print("failed to validate structure report at {s}: {s}\n", .{ structure_path, @errorName(err) });
+            std.process.exit(1);
+        };
+        if (valid) return;
+        std.debug.print("structure report is stale or invalid: {s}; rebuilding with {s}\n", .{ structure_path, tool_paths.structure_bin_path });
+    } else {
+        std.debug.print("structure report not found: {s}; running {s}\n", .{ structure_path, tool_paths.structure_bin_path });
+    }
 
-    std.debug.print("structure report not found: {s}; running {s}\n", .{ structure_path, tool_paths.structure_bin_path });
     required_path.runToolOrExit(io, allocator, tool_paths.structure_bin_path, "structure binary", &.{
         "--input",
         input_path,

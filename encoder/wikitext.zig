@@ -2381,21 +2381,45 @@ fn extractTermsFromLine(
     out: *std.ArrayListUnmanaged([]const u8),
     line: []const u8,
 ) !void {
+    var segments = try splitTopLevel(allocator, line, ',');
+    defer segments.deinit(allocator);
+
+    for (segments.items) |comma_segment| {
+        var subsegments = try splitTopLevel(allocator, comma_segment, ';');
+        defer subsegments.deinit(allocator);
+        for (subsegments.items) |segment| {
+            try extractTermsFromSegment(allocator, out, segment);
+        }
+    }
+}
+
+// Alternative-form prose often prefixes/suffixes the actual lexical material with notes like
+// "also as" or "capitalized". We keep only the text spanning the first..last lexical emitter
+// inside each top-level comma/semicolon segment so phrases like "fires of hell" survive intact
+// without indexing stray fragments such as "fires" or "hell" separately.
+fn extractTermsFromSegment(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayListUnmanaged([]const u8),
+    segment: []const u8,
+) !void {
+    const trimmed = std.mem.trim(u8, segment, " \t");
+    if (trimmed.len == 0) return;
+
     var i: usize = 0;
-    while (i < line.len) {
-        if (i + 2 <= line.len and std.mem.eql(u8, line[i .. i + 2], "{{")) {
-            const end = findBalanced(line, i, "{{", "}}") orelse break;
-            const body = line[i + 2 .. end];
+    var first_emitter_start: ?usize = null;
+    var last_emitter_end: usize = 0;
+
+    while (i < trimmed.len) {
+        if (i + 2 <= trimmed.len and std.mem.eql(u8, trimmed[i .. i + 2], "{{")) {
+            const end = findBalanced(trimmed, i, "{{", "}}") orelse break;
+            const body = trimmed[i + 2 .. end];
             var parts = try splitTopLevel(allocator, body, '|');
             defer parts.deinit(allocator);
             if (parts.items.len != 0) {
                 const name = parts.items[0];
                 if (templateMatches(name, "alt") or templateMatches(name, "alter") or templateMatches(name, "l") or templateMatches(name, "m") or templateMatches(name, "m+") or templateMatches(name, "link")) {
-                    if (templateLexeme(&parts)) |raw| {
-                        const rendered = try renderWikitextToOwned(allocator, raw, 256);
-                        defer allocator.free(rendered);
-                        try pushRenderedTerms(out, allocator, rendered);
-                    }
+                    if (first_emitter_start == null) first_emitter_start = i;
+                    last_emitter_end = end + 2;
                 } else if (isColumnTemplate(name)) {
                     const count = positionalCount(&parts);
                     var pos_index: usize = 1;
@@ -2411,21 +2435,25 @@ fn extractTermsFromLine(
             i = end + 2;
             continue;
         }
-        if (i + 2 <= line.len and std.mem.eql(u8, line[i .. i + 2], "[[")) {
-            const end = findBalanced(line, i, "[[", "]]") orelse break;
-            const body = line[i + 2 .. end];
+        if (i + 2 <= trimmed.len and std.mem.eql(u8, trimmed[i .. i + 2], "[[")) {
+            const end = findBalanced(trimmed, i, "[[", "]]") orelse break;
+            const body = trimmed[i + 2 .. end];
             if (body.len != 0 and body[0] == '#') {
                 i = end + 2;
                 continue;
             }
-            const rendered = try renderWikitextToOwned(allocator, body, 256);
-            defer allocator.free(rendered);
-            try pushRenderedTerms(out, allocator, rendered);
+            if (first_emitter_start == null) first_emitter_start = i;
+            last_emitter_end = end + 2;
             i = end + 2;
             continue;
         }
         i += 1;
     }
+
+    const start = first_emitter_start orelse return;
+    const rendered = try renderWikitextToOwned(allocator, trimmed[start..last_emitter_end], 256);
+    defer allocator.free(rendered);
+    try pushRenderedTerms(out, allocator, rendered);
 }
 
 fn pushRenderedTerms(out: *std.ArrayListUnmanaged([]const u8), allocator: std.mem.Allocator, rendered: []const u8) !void {
@@ -2978,6 +3006,35 @@ test "parse alternative spelling and noun gloss" {
     try std.testing.expectEqualStrings("(countable) light", parsed.senses.items[0].gloss);
     try std.testing.expectEqual(@as(usize, 1), parsed.canonical_targets.items.len);
     try std.testing.expectEqualStrings("color", parsed.canonical_targets.items[0]);
+}
+
+test "parse alternative forms preserves phrase candidates from prose-heavy lines" {
+    const source =
+        \\==English==
+        \\
+        \\===Alternative forms===
+        \\* sometimes capitalized, hyphenated, or both: {{l|en|Hellfire}}, {{l|en|hell-fire}}, {{l|en|Hell-fire}}; also as {{l|en|fires}} of {{l|en|hell}}
+        \\
+        \\===Noun===
+        \\# [[fire]]
+    ;
+
+    var parsed = (try parseEnglishEntry(std.testing.allocator, "hellfire", source)).?;
+    defer parsed.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 4), parsed.alt_forms.items.len);
+    try std.testing.expectEqualStrings("Hellfire", parsed.alt_forms.items[0]);
+    try std.testing.expectEqualStrings("hell-fire", parsed.alt_forms.items[1]);
+    try std.testing.expectEqualStrings("Hell-fire", parsed.alt_forms.items[2]);
+    try std.testing.expectEqualStrings("fires of hell", parsed.alt_forms.items[3]);
+
+    for (parsed.alt_forms.items) |alt| {
+        try std.testing.expect(!std.ascii.eqlIgnoreCase(alt, "fires"));
+        try std.testing.expect(!std.ascii.eqlIgnoreCase(alt, "hell"));
+        try std.testing.expect(!std.ascii.eqlIgnoreCase(alt, "sometimes capitalized"));
+        try std.testing.expect(!std.ascii.eqlIgnoreCase(alt, "hyphenated"));
+        try std.testing.expect(!std.ascii.eqlIgnoreCase(alt, "or both: Hellfire"));
+    }
 }
 
 test "parse noun form gloss preserves semantic template labels" {

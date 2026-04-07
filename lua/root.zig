@@ -13793,19 +13793,15 @@ test "loadStructureTemplateNames prefers stored dependency roots" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const structure_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure.json", .{tmp.sub_path});
+    const structure_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure.bin", .{tmp.sub_path});
     defer std.testing.allocator.free(structure_path);
-    var file = try std.Io.Dir.cwd().createFile(std.testing.io, structure_path, .{ .truncate = true });
-    defer file.close(std.testing.io);
-    try file.writeStreamingAll(std.testing.io,
-        \\{
-        \\  "dependencies": {
-        \\    "root_templates": ["from-deps"]
-        \\  },
-        \\  "build": {
-        \\    "line_templates": [{ "code": 1, "name": "from-build" }]
-        \\  }
-        \\}
+    try structure_report.saveStructureFile(
+        std.testing.io,
+        structure_path,
+        structure_report.BuildData{},
+        structure_report.DependencySet{
+            .root_templates = &.{"from-deps"},
+        },
     );
 
     const names = try loadStructureTemplateNames(std.testing.allocator, structure_path);

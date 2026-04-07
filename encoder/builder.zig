@@ -2,9 +2,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const zxml = @import("zxml");
 const normalize = @import("normalize");
+const generated = @import("generated_structure_tables");
 
 const compact = @import("compact_encoding.zig");
 const format = @import("format.zig");
+const structure_report = @import("shared_structure_report");
 const wikitext = @import("wikitext_source");
 const xml_decode = @import("shared_xml_decode");
 
@@ -20,6 +22,7 @@ const StreamNode = ztypes.StreamNode;
 pub const BuildOptions = struct {
     input_path: []const u8,
     output_path: []const u8,
+    structure_path: ?[]const u8 = null,
     limit_entries: ?usize = null,
     worker_threads: ?usize = null,
 };
@@ -30,6 +33,104 @@ pub const BuildStats = struct {
     english_entries: usize = 0,
     redirect_aliases: usize = 0,
 };
+
+fn defaultStructurePathAlloc(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    explicit_structure_path: ?[]const u8,
+) ![]u8 {
+    if (explicit_structure_path) |path| return allocator.dupe(u8, path);
+    if (std.mem.lastIndexOfScalar(u8, input_path, '/')) |idx| {
+        return std.fmt.allocPrint(allocator, "{s}/wiktionary-structure.bin", .{input_path[0..idx]});
+    }
+    return allocator.dupe(u8, "data/wiktionary-structure.bin");
+}
+
+fn freeSourcePageRefs(allocator: std.mem.Allocator, refs: []const structure_report.SourcePageRef) void {
+    for (refs) |ref| allocator.free(ref.name);
+    allocator.free(refs);
+}
+
+fn totalRefBytes(refs: []const structure_report.SourcePageRef) usize {
+    var total: usize = 0;
+    for (refs) |ref| {
+        const page_len = ref.page_end - ref.page_start;
+        total +|= std.math.cast(usize, page_len) orelse std.math.maxInt(usize);
+    }
+    return total;
+}
+
+fn scanEntryPageRefsForTestAlloc(allocator: std.mem.Allocator, mapped: []const u8) ![]const structure_report.SourcePageRef {
+    var parser = StreamParser.init(allocator);
+    defer parser.deinit();
+    var page_arena = std.heap.ArenaAllocator.init(allocator);
+    defer page_arena.deinit();
+    var refs: std.ArrayList(structure_report.SourcePageRef) = .empty;
+    defer refs.deinit(allocator);
+
+    var consumed: usize = 0;
+    while (true) {
+        const start = std.mem.indexOfPos(u8, mapped, consumed, "<page>") orelse break;
+        const end_start = std.mem.indexOfPos(u8, mapped, start, "</page>") orelse break;
+        const page_end = end_start + "</page>".len;
+
+        var capture: PageCapture = .{};
+        try parser.parse(mapped[start..page_end], &capture, PageCapture.onNode);
+        const ns_raw = capture.ns_raw orelse {
+            consumed = page_end;
+            _ = page_arena.reset(.retain_capacity);
+            continue;
+        };
+        const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch {
+            consumed = page_end;
+            _ = page_arena.reset(.retain_capacity);
+            continue;
+        };
+        if (ns == 0) {
+            const title_raw = capture.title_raw orelse return error.InvalidStructureReport;
+            var title = try decodeXmlViewAlloc(page_arena.allocator(), title_raw);
+            defer title.deinit(page_arena.allocator());
+            try refs.append(allocator, .{
+                .name = try allocator.dupe(u8, title.value),
+                .page_start = start,
+                .page_end = page_end,
+            });
+        }
+
+        consumed = page_end;
+        _ = page_arena.reset(.retain_capacity);
+    }
+
+    return refs.toOwnedSlice(allocator);
+}
+
+pub const GeneratedBuildDataView = struct {
+    compact_direct_patterns: []const []const u8,
+    heading_specs: []const generated.HeadingSpec,
+    heading_level_specs: []const generated.HeadingLevelSpec,
+    line_templates: []const generated.LineTemplate,
+    compact_patterns: []const []const u8,
+    compact_patterns_ext: []const []const u8,
+    translation_templates: []const generated.TranslationTemplate,
+    target_languages: []const generated.TargetLanguage,
+    language_labels: []const generated.LanguageLabel,
+    structure_fingerprint: u32,
+};
+
+pub fn currentGeneratedBuildData() GeneratedBuildDataView {
+    return .{
+        .compact_direct_patterns = &generated.compact_direct_patterns,
+        .heading_specs = &generated.heading_specs,
+        .heading_level_specs = &generated.heading_level_specs,
+        .line_templates = &generated.line_templates,
+        .compact_patterns = &generated.compact_patterns,
+        .compact_patterns_ext = &generated.compact_patterns_ext,
+        .translation_templates = &generated.translation_templates,
+        .target_languages = &generated.target_languages,
+        .language_labels = &generated.language_labels,
+        .structure_fingerprint = generated.structure_fingerprint,
+    };
+}
 
 const BuildProgress = struct {
     const refresh_interval_ns = std.time.ns_per_s / 20;
@@ -162,6 +263,14 @@ const BuildProgress = struct {
 pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !BuildStats {
     var input = try mmapReadOnlyPath(io, options.input_path);
     defer input.deinit();
+    const structure_path = try defaultStructurePathAlloc(allocator, options.input_path, options.structure_path);
+    defer allocator.free(structure_path);
+    const owned_entry_refs = try structure_report.loadEntryPageRefsAlloc(io, allocator, structure_path);
+    defer freeSourcePageRefs(allocator, owned_entry_refs);
+    var entry_refs = owned_entry_refs;
+    if (options.limit_entries) |limit| {
+        entry_refs = entry_refs[0..@min(limit, entry_refs.len)];
+    }
 
     const temp_output_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{options.output_path});
     defer allocator.free(temp_output_path);
@@ -173,15 +282,14 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
 
     var stats: BuildStats = .{};
 
-    const stat = input.stat;
-    var progress = BuildProgress.init(@intCast(stat.size));
+    var progress = BuildProgress.init(totalRefBytes(entry_refs));
     {
         var output = try OutputWriter.init(io, allocator, temp_output_path);
         defer output.deinit(allocator);
 
-        if (stat.size != 0) {
+        if (entry_refs.len != 0) {
             const input_bytes = input.bytes();
-            const worker_count = encodeThreadCount(input_bytes.len, options.limit_entries, options.worker_threads);
+            const worker_count = encodeThreadCount(entry_refs.len, options.limit_entries, options.worker_threads);
             progress.setScanningParallel(worker_count > 1);
             if (worker_count == 1) {
                 var stream_parser = StreamParser.init(allocator);
@@ -192,7 +300,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
 
                 try processMappedInputSequential(
                     input_bytes,
-                    options.limit_entries,
+                    entry_refs,
                     &stream_parser,
                     &page_arena,
                     &output,
@@ -204,6 +312,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
                     io,
                     allocator,
                     input_bytes,
+                    entry_refs,
                     worker_count,
                     temp_output_path,
                     &output,
@@ -215,7 +324,10 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
 
         progress.finishScanning();
         progress.setWriting(output.entry_count, output.redirect_count);
-        try output.finish();
+        output.finish() catch |err| {
+            std.debug.print("failed to finish temporary dictionary {s}: {s}\n", .{ temp_output_path, @errorName(err) });
+            return err;
+        };
         stats.english_entries = output.raw_entry_count;
         stats.redirect_aliases = output.redirect_count;
     }
@@ -228,45 +340,47 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     };
     defer std.Io.Dir.cwd().deleteFile(io, filtered_output_path) catch {};
 
-    const filtered = try filterAliasRecordsFromBinary(io, allocator, temp_output_path, filtered_output_path, options.worker_threads, &progress);
+    const filtered = filterAliasRecordsFromBinary(io, allocator, temp_output_path, filtered_output_path, options.worker_threads, &progress) catch |err| {
+        std.debug.print(
+            "failed to filter temporary dictionary {s} into {s}: {s}\n",
+            .{ temp_output_path, filtered_output_path, @errorName(err) },
+        );
+        return err;
+    };
     stats.english_entries = filtered.entry_count;
     stats.redirect_aliases = filtered.redirect_count;
-    try std.Io.Dir.cwd().rename(filtered_output_path, std.Io.Dir.cwd(), options.output_path, io);
+    std.Io.Dir.cwd().rename(filtered_output_path, std.Io.Dir.cwd(), options.output_path, io) catch |err| {
+        std.debug.print("failed to publish dictionary {s}: {s}\n", .{ options.output_path, @errorName(err) });
+        return err;
+    };
     progress.finish(stats.pages_seen, stats.english_entries);
     return stats;
 }
 
 fn processMappedInputSequential(
     mapped: []const u8,
-    limit_entries: ?usize,
+    entry_refs: []const structure_report.SourcePageRef,
     stream_parser: *StreamParser,
     page_arena: *std.heap.ArenaAllocator,
     output: *OutputWriter,
     stats: *BuildStats,
     progress: *BuildProgress,
 ) !void {
-    var consumed: usize = 0;
-    while (true) {
-        const start = std.mem.indexOfPos(u8, mapped, consumed, "<page>") orelse break;
-        const end_start = std.mem.indexOfPos(u8, mapped, start, "</page>") orelse break;
-        const page_end = end_start + "</page>".len;
-
+    for (entry_refs) |page_ref| {
+        const start = std.math.cast(usize, page_ref.page_start) orelse return error.FileTooBig;
+        const page_end = std.math.cast(usize, page_ref.page_end) orelse return error.FileTooBig;
+        if (page_end > mapped.len or start > page_end) return error.InvalidStructureReport;
         const page_allocator = page_arena.allocator();
         const entry_count_before = output.entry_count;
         try processPageFragment(page_allocator, stream_parser, mapped[start..page_end], output, stats);
-        consumed = page_end;
         _ = page_arena.reset(.retain_capacity);
         progress.scanAdvance(page_end - start, 1, output.entry_count - entry_count_before);
-
-        if (limit_entries) |limit| {
-            if (output.entry_count >= limit) return;
-        }
     }
 }
 
 const EncodeChunk = struct {
-    start: usize,
-    end: usize,
+    start_index: usize,
+    end_index: usize,
 };
 
 const EncodeChunkResult = struct {
@@ -278,16 +392,17 @@ const EncodeChunkResult = struct {
 const EncodeChunkJob = struct {
     io: std.Io,
     mapped: []const u8,
+    entry_refs: []const structure_report.SourcePageRef,
     chunk: EncodeChunk,
     temp_output_path: []const u8,
     progress: *BuildProgress,
     result: *EncodeChunkResult,
 };
 
-fn encodeThreadCount(total_input_bytes: usize, limit_entries: ?usize, thread_override: ?usize) usize {
+fn encodeThreadCount(entry_count: usize, limit_entries: ?usize, thread_override: ?usize) usize {
     if (builtin.single_threaded or limit_entries != null) return 1;
     if (thread_override) |requested| return @max(@as(usize, 1), requested);
-    if (total_input_bytes < (32 << 20)) return 1;
+    if (entry_count < 1024) return 1;
     const cpu_count = std.Thread.getCpuCount() catch 1;
     return @max(@as(usize, 1), cpu_count);
 }
@@ -303,24 +418,13 @@ fn partitionEnd(total: usize, part_count: usize, part_index: usize) usize {
     return @divTrunc(total * (part_index + 1), part_count);
 }
 
-fn collectEncodeChunksAlloc(allocator: std.mem.Allocator, mapped: []const u8, desired_chunks: usize) ![]EncodeChunk {
-    var starts: std.ArrayList(usize) = .empty;
-    defer starts.deinit(allocator);
-    try starts.append(allocator, 0);
-
-    for (1..desired_chunks) |chunk_index| {
-        const approx = @divTrunc(mapped.len * chunk_index, desired_chunks);
-        const page_start = std.mem.indexOfPos(u8, mapped, approx, "<page>") orelse continue;
-        if (page_start <= starts.items[starts.items.len - 1]) continue;
-        try starts.append(allocator, page_start);
-    }
-    try starts.append(allocator, mapped.len);
-
-    const chunks = try allocator.alloc(EncodeChunk, starts.items.len - 1);
+fn collectEncodeChunksAlloc(allocator: std.mem.Allocator, entry_count: usize, desired_chunks: usize) ![]EncodeChunk {
+    const chunk_count = @max(@as(usize, 1), @min(entry_count, desired_chunks));
+    const chunks = try allocator.alloc(EncodeChunk, chunk_count);
     for (chunks, 0..) |*chunk, idx| {
         chunk.* = .{
-            .start = starts.items[idx],
-            .end = starts.items[idx + 1],
+            .start_index = if (idx == 0) 0 else partitionEnd(entry_count, chunk_count, idx - 1),
+            .end_index = partitionEnd(entry_count, chunk_count, idx),
         };
     }
     return chunks;
@@ -330,13 +434,14 @@ fn processMappedInputParallel(
     io: std.Io,
     allocator: std.mem.Allocator,
     mapped: []const u8,
+    entry_refs: []const structure_report.SourcePageRef,
     worker_count: usize,
     temp_output_path: []const u8,
     output: *OutputWriter,
     stats: *BuildStats,
     progress: *BuildProgress,
 ) !void {
-    const chunks = try collectEncodeChunksAlloc(allocator, mapped, worker_count);
+    const chunks = try collectEncodeChunksAlloc(allocator, entry_refs.len, worker_count);
     defer allocator.free(chunks);
 
     const results = try allocator.alloc(EncodeChunkResult, chunks.len);
@@ -365,6 +470,7 @@ fn processMappedInputParallel(
         job.* = .{
             .io = io,
             .mapped = mapped,
+            .entry_refs = entry_refs,
             .chunk = chunk,
             .temp_output_path = chunk_path,
             .progress = progress,
@@ -409,18 +515,13 @@ fn processEncodeChunkFallible(job: *EncodeChunkJob) !void {
     defer output.deinit(std.heap.smp_allocator);
 
     var stats: BuildStats = .{};
-    var consumed = job.chunk.start;
-    while (true) {
-        const start = std.mem.indexOfPos(u8, job.mapped, consumed, "<page>") orelse break;
-        if (start >= job.chunk.end) break;
-        const end_start = std.mem.indexOfPos(u8, job.mapped, start, "</page>") orelse break;
-        const page_end = end_start + "</page>".len;
-        if (page_end > job.chunk.end) break;
-
+    for (job.entry_refs[job.chunk.start_index..job.chunk.end_index]) |page_ref| {
+        const start = std.math.cast(usize, page_ref.page_start) orelse return error.FileTooBig;
+        const page_end = std.math.cast(usize, page_ref.page_end) orelse return error.FileTooBig;
+        if (page_end > job.mapped.len or start > page_end) return error.InvalidStructureReport;
         const page_allocator = page_arena.allocator();
         const entry_count_before = output.entry_count;
         try processPageFragment(page_allocator, &parser, job.mapped[start..page_end], &output, &stats);
-        consumed = page_end;
         _ = page_arena.reset(.retain_capacity);
         job.progress.scanAdvance(page_end - start, 1, output.entry_count - entry_count_before);
     }
@@ -1003,7 +1104,6 @@ fn resolveAliasTargetIndex(
 
 fn mapWholeFile(file: std.Io.File, size_u64: u64) ![]align(std.heap.page_size_min) const u8 {
     const size = std.math.cast(usize, size_u64) orelse return error.FileTooBig;
-    if (size < 4) return error.InvalidDictionaryFile;
 
     return try std.posix.mmap(
         null,
@@ -1073,6 +1173,20 @@ fn writeMappedFile(path: []const u8, bytes: []const u8) !void {
 
     @memcpy(mapped_file.bytes()[0..bytes.len], bytes);
     try mapped_file.finish(bytes.len);
+}
+
+fn writeSiblingStructureFixture(path: []const u8, xml_bytes: []const u8) !void {
+    const allocator = std.testing.allocator;
+    const structure_path = try defaultStructurePathAlloc(allocator, path, null);
+    defer allocator.free(structure_path);
+
+    const refs = try scanEntryPageRefsForTestAlloc(allocator, xml_bytes);
+    defer freeSourcePageRefs(allocator, refs);
+
+    const deps: structure_report.DependencySet = .{
+        .all_entry_pages = refs,
+    };
+    try structure_report.saveStructureFile(std.testing.io, structure_path, currentGeneratedBuildData(), deps);
 }
 
 fn validateTempDictionaryHeader(mapped: []const u8, size_u64: u64) !InspectedTempDictionary {
@@ -1513,6 +1627,23 @@ test "output writer accepts english section without trailing heading newline" {
     try std.testing.expectEqual(@as(usize, 1), writer.raw_entry_count);
 }
 
+test "output writer accepts one-byte titles" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const output_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin.tmp", .{tmp.sub_path});
+    defer std.testing.allocator.free(output_path);
+
+    var writer = try OutputWriter.init(std.testing.io, std.testing.allocator, output_path);
+    defer writer.deinit(std.testing.allocator);
+
+    try writer.writeRawRecord("!", "==English==\n===Symbol===\n# punctuation\n");
+    try writer.finish();
+
+    try std.testing.expectEqual(@as(usize, 1), writer.entry_count);
+    try std.testing.expectEqual(@as(usize, 1), writer.raw_entry_count);
+}
+
 test "full build filters unresolved alias records in binary second pass" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1558,6 +1689,7 @@ test "full build filters unresolved alias records in binary second pass" {
     const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
     defer std.testing.allocator.free(xml_path);
     try writeMappedFile(xml_path, xml);
+    try writeSiblingStructureFixture(xml_path, xml);
 
     const stats = try build(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
