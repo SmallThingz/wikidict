@@ -1,5 +1,8 @@
 const API_TIMEOUT_MS = 5000;
-const API_BASE_URL = resolveApiBaseUrl();
+const API_BASE_URL = (() => {
+  const configured = import.meta.env.VITE_API_BASE_URL?.trim();
+  return configured ? configured.replace(/\/+$/, "") : "";
+})();
 
 type LookupPayload = {
   hits: ApiLookupHit[];
@@ -43,12 +46,6 @@ async function fetchJson<T>(url: string, failureMessage: string): Promise<T> {
   } finally {
     window.clearTimeout(timeout);
   }
-}
-
-function resolveApiBaseUrl(): string {
-  const configured = import.meta.env.VITE_API_BASE_URL?.trim();
-  if (configured) return configured.replace(/\/+$/, "");
-  return "";
 }
 
 function apiUrl(path: string, params?: Record<string, string | number>): string {
@@ -132,22 +129,6 @@ function readStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string");
 }
 
-function normalizeRenderedSections(value: unknown): ApiRenderedSection[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const record = item as JsonRecord;
-    return [
-      {
-        id: readString(record.id),
-        title: readString(record.title),
-        level: typeof record.level === "number" ? record.level : 0,
-        html: readString(record.html),
-      },
-    ];
-  });
-}
-
 function normalizeLookupHit(value: unknown): ApiLookupHit | null {
   if (!value || typeof value !== "object") return null;
   const hit = value as JsonRecord;
@@ -170,7 +151,20 @@ function normalizeLookupHit(value: unknown): ApiLookupHit | null {
       altForms: readStringArray(entryRecord.altForms),
       canonicalTargets: readStringArray(entryRecord.canonicalTargets),
       incomingAliases: readStringArray(entryRecord.incomingAliases),
-      renderedSections: normalizeRenderedSections(entryRecord.renderedSections),
+      renderedSections: Array.isArray(entryRecord.renderedSections)
+        ? entryRecord.renderedSections.flatMap((item) => {
+            if (!item || typeof item !== "object") return [];
+            const record = item as JsonRecord;
+            return [
+              {
+                id: readString(record.id),
+                title: readString(record.title),
+                level: typeof record.level === "number" ? record.level : 0,
+                html: readString(record.html),
+              },
+            ];
+          })
+        : [],
       raw: readString(entryRecord.raw),
       rawRendered:
         entryRecord.rawRendered === null || typeof entryRecord.rawRendered === "string"

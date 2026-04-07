@@ -10822,7 +10822,7 @@ pub fn loadSelectedTemplateAndModuleSourcesByRefsAlloc(
         try loadTemplateOrModuleSourceRefAlloc(allocator, mapped.mapping, &module_sources, ref, "828");
     }
 
-    try applySourceCompat(allocator, &template_sources, &module_sources);
+    try appendRuntimeBuiltinSources(allocator, &template_sources, &module_sources);
 
     return .{
         .template_sources = template_sources,
@@ -10934,7 +10934,7 @@ fn scanTemplateAndModuleSourcesFilteredAlloc(
             }
         }
     }
-    try applySourceCompat(allocator, &template_sources, &module_sources);
+    try appendRuntimeBuiltinSources(allocator, &template_sources, &module_sources);
     return .{
         .template_sources = template_sources,
         .module_sources = module_sources,
@@ -10952,7 +10952,7 @@ fn scanTemplateSourceTargetsSatisfied(
     return templates_done and modules_done;
 }
 
-fn applySourceCompat(
+fn appendRuntimeBuiltinSources(
     allocator: std.mem.Allocator,
     template_sources: *std.StringHashMap([]const u8),
     module_sources: *std.StringHashMap([]const u8),
@@ -10960,23 +10960,8 @@ fn applySourceCompat(
     // MediaWiki uses Template:! as the escaped pipe primitive inside template
     // arguments. The dump often omits it from the dependency surface, but many
     // high-traffic templates still rely on it transitively.
-    try ensureTemplateCompatSource(allocator, template_sources, "!", &.{}, "|");
-    try ensureTemplateCompatSource(allocator, template_sources, "an-lite", &.{"an-lite/node"}, "{{{1|}}}");
-    try ensureTemplateCompatSource(allocator, template_sources, "check deprecated lang param usage", &.{}, "{{{1|}}}");
-    try ensureTemplateCompatSource(allocator, template_sources, "no deprecated lang param usage", &.{}, "{{{1|}}}");
-    try ensureModuleCompatSource(allocator, module_sources, "gender and number/templates", &.{"gender and number"},
-        \\local export = {}
-        \\function export.format_one(frame)
-        \\    local args = frame.args
-        \\    local first = args[1]
-        \\    if first == nil then
-        \\        return ""
-        \\    end
-        \\    return first
-        \\end
-        \\return export
-    );
-    try ensureModuleCompatSource(allocator, module_sources, "libraryutil", &.{},
+    try ensureBuiltinTemplateSource(allocator, template_sources, "!", "|");
+    try ensureBuiltinModuleSource(allocator, module_sources, "libraryutil",
         \\local export = {}
         \\function export.checkType(_, _, value, _, _)
         \\    return value
@@ -10994,16 +10979,16 @@ fn applySourceCompat(
         \\end
         \\return export
     );
-    try ensureModuleCompatSource(allocator, module_sources, "strict", &.{},
+    try ensureBuiltinModuleSource(allocator, module_sources, "strict",
         \\return {}
     );
-    try ensureModuleCompatSource(allocator, module_sources, "chart/default colors", &.{},
+    try ensureBuiltinModuleSource(allocator, module_sources, "chart/default colors",
         \\return {}
     );
-    try ensureModuleCompatSource(allocator, module_sources, "labels/data", &.{},
+    try ensureBuiltinModuleSource(allocator, module_sources, "labels/data",
         \\return {}
     );
-    try ensureModuleCompatSource(allocator, module_sources, "ml-translit", &.{},
+    try ensureBuiltinModuleSource(allocator, module_sources, "ml-translit",
         \\local export = {}
         \\function export.tr(text)
         \\    return text or ""
@@ -11013,7 +10998,7 @@ fn applySourceCompat(
         \\end
         \\return export
     );
-    try ensureModuleCompatSource(allocator, module_sources, "pa-translit", &.{},
+    try ensureBuiltinModuleSource(allocator, module_sources, "pa-translit",
         \\local export = {}
         \\function export.tr(text)
         \\    return text or ""
@@ -11025,36 +11010,24 @@ fn applySourceCompat(
     );
 }
 
-fn ensureTemplateCompatSource(
+fn ensureBuiltinTemplateSource(
     allocator: std.mem.Allocator,
     template_sources: *std.StringHashMap([]const u8),
     target: []const u8,
-    alias_candidates: []const []const u8,
-    fallback_source: []const u8,
+    source: []const u8,
 ) !void {
     if (template_sources.contains(target)) return;
-    for (alias_candidates) |alias| {
-        const source = template_sources.get(alias) orelse continue;
-        try template_sources.put(try allocator.dupe(u8, target), try allocator.dupe(u8, source));
-        return;
-    }
-    try template_sources.put(try allocator.dupe(u8, target), try allocator.dupe(u8, fallback_source));
+    try template_sources.put(try allocator.dupe(u8, target), try allocator.dupe(u8, source));
 }
 
-fn ensureModuleCompatSource(
+fn ensureBuiltinModuleSource(
     allocator: std.mem.Allocator,
     module_sources: *std.StringHashMap([]const u8),
     target: []const u8,
-    alias_candidates: []const []const u8,
-    fallback_source: []const u8,
+    source: []const u8,
 ) !void {
     if (module_sources.contains(target)) return;
-    for (alias_candidates) |alias| {
-        const source = module_sources.get(alias) orelse continue;
-        try module_sources.put(try allocator.dupe(u8, target), try allocator.dupe(u8, source));
-        return;
-    }
-    try module_sources.put(try allocator.dupe(u8, target), try allocator.dupe(u8, fallback_source));
+    try module_sources.put(try allocator.dupe(u8, target), try allocator.dupe(u8, source));
 }
 
 fn maybeStoreLuaSource(
@@ -13756,7 +13729,7 @@ test "loadSelectedTemplateAndModuleSourcesByRefsAlloc loads only referenced page
     );
     defer sources.deinit(std.testing.allocator);
 
-    // The loader appends a small synthetic compat set after loading the
+    // The loader appends a small builtin runtime set after loading the
     // requested pages, so the stable invariant is that requested XML pages are
     // present and unrequested XML pages are absent.
     try std.testing.expect(sources.template_sources.count() >= 1);

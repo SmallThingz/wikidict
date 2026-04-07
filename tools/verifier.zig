@@ -645,7 +645,10 @@ fn scanEntryPageRefsForTestAlloc(allocator: std.mem.Allocator, mapped: []const u
 }
 
 fn ensureStructureReportExists(io: std.Io, allocator: std.mem.Allocator, options: Options) void {
-    const structure_path = defaultStructurePathAlloc(allocator, options.input_path, options.structure_path) catch unreachable;
+    const structure_path = defaultStructurePathAlloc(allocator, options.input_path, options.structure_path) catch |err| {
+        std.debug.print("failed to resolve structure report path: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
     defer allocator.free(structure_path);
     const found = required_path.exists(io, structure_path) catch |err| {
         std.debug.print("failed to access structure report at {s}: {s}\n", .{ structure_path, @errorName(err) });
@@ -695,7 +698,10 @@ fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options
         std.debug.print("failed to access dictionary at {s}: {s}\n", .{ options.db_path, @errorName(err) });
         std.process.exit(1);
     };
-    const idx_path = std.fmt.allocPrint(allocator, "{s}.idx", .{options.db_path}) catch unreachable;
+    const idx_path = std.fmt.allocPrint(allocator, "{s}.idx", .{options.db_path}) catch |err| {
+        std.debug.print("failed to allocate dictionary index path: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
     defer allocator.free(idx_path);
     const idx_found = required_path.exists(io, idx_path) catch |err| {
         std.debug.print("failed to access dictionary index at {s}: {s}\n", .{ idx_path, @errorName(err) });
@@ -716,22 +722,27 @@ fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options
 
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
-    argv.append(allocator, "index") catch unreachable;
-    argv.append(allocator, "--input") catch unreachable;
-    argv.append(allocator, options.input_path) catch unreachable;
-    argv.append(allocator, "--db") catch unreachable;
-    argv.append(allocator, options.db_path) catch unreachable;
+    argv.append(allocator, "index") catch |err| exitOnArgBuildFailure(err);
+    argv.append(allocator, "--input") catch |err| exitOnArgBuildFailure(err);
+    argv.append(allocator, options.input_path) catch |err| exitOnArgBuildFailure(err);
+    argv.append(allocator, "--db") catch |err| exitOnArgBuildFailure(err);
+    argv.append(allocator, options.db_path) catch |err| exitOnArgBuildFailure(err);
     if (options.structure_path) |path| {
-        argv.append(allocator, "--structure") catch unreachable;
-        argv.append(allocator, path) catch unreachable;
+        argv.append(allocator, "--structure") catch |err| exitOnArgBuildFailure(err);
+        argv.append(allocator, path) catch |err| exitOnArgBuildFailure(err);
     }
     if (options.limit_entries) |limit| {
-        const limit_text = std.fmt.allocPrint(allocator, "{d}", .{limit}) catch unreachable;
+        const limit_text = std.fmt.allocPrint(allocator, "{d}", .{limit}) catch |err| exitOnArgBuildFailure(err);
         defer allocator.free(limit_text);
-        argv.append(allocator, "--limit") catch unreachable;
-        argv.append(allocator, limit_text) catch unreachable;
+        argv.append(allocator, "--limit") catch |err| exitOnArgBuildFailure(err);
+        argv.append(allocator, limit_text) catch |err| exitOnArgBuildFailure(err);
     }
     required_path.runToolOrExit(io, allocator, tool_paths.decoder_bin_path, "decoder binary", argv.items);
+}
+
+fn exitOnArgBuildFailure(err: anyerror) noreturn {
+    std.debug.print("failed to build decoder argv: {s}\n", .{@errorName(err)});
+    std.process.exit(1);
 }
 
 const VerifyChunk = struct {

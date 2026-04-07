@@ -162,21 +162,26 @@ fn ensureDictionaryExists(
     std.debug.print("dictionary not found: {s}; running {s}\n", .{ db_path, tool_paths.encoder_bin_path });
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
-    argv.append(allocator, "--input") catch unreachable;
-    argv.append(allocator, input_path) catch unreachable;
-    argv.append(allocator, "--output") catch unreachable;
-    argv.append(allocator, db_path) catch unreachable;
+    argv.append(allocator, "--input") catch |err| exitOnArgBuildFailure(err);
+    argv.append(allocator, input_path) catch |err| exitOnArgBuildFailure(err);
+    argv.append(allocator, "--output") catch |err| exitOnArgBuildFailure(err);
+    argv.append(allocator, db_path) catch |err| exitOnArgBuildFailure(err);
     if (structure_path) |path| {
-        argv.append(allocator, "--structure") catch unreachable;
-        argv.append(allocator, path) catch unreachable;
+        argv.append(allocator, "--structure") catch |err| exitOnArgBuildFailure(err);
+        argv.append(allocator, path) catch |err| exitOnArgBuildFailure(err);
     }
     if (build_limit) |limit| {
-        const limit_text = std.fmt.allocPrint(allocator, "{d}", .{limit}) catch unreachable;
+        const limit_text = std.fmt.allocPrint(allocator, "{d}", .{limit}) catch |err| exitOnArgBuildFailure(err);
         defer allocator.free(limit_text);
-        argv.append(allocator, "--limit") catch unreachable;
-        argv.append(allocator, limit_text) catch unreachable;
+        argv.append(allocator, "--limit") catch |err| exitOnArgBuildFailure(err);
+        argv.append(allocator, limit_text) catch |err| exitOnArgBuildFailure(err);
     }
     required_path.runToolOrExit(io, allocator, tool_paths.encoder_bin_path, "encoder binary", argv.items);
+}
+
+fn exitOnArgBuildFailure(err: anyerror) noreturn {
+    std.debug.print("failed to build encoder argv: {s}\n", .{@errorName(err)});
+    std.process.exit(1);
 }
 
 fn printHit(

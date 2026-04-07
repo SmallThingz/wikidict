@@ -218,6 +218,11 @@ pub fn renderLineFragmentWithOptionsAlloc(
     return renderLineHtmlAlloc(allocator, "Template Audit", raw_line, 1, options);
 }
 
+pub fn hasGeneratedTemplateRuntime() bool {
+    const dispatch_id = template_support.templateDispatchId("1") orelse return false;
+    return generated_templates.classifyTemplateDispatchId(dispatch_id) != .unsupported;
+}
+
 fn buildSenseIdIndexAlloc(allocator: std.mem.Allocator, english_section: []const u8) !SenseIdIndex {
     var index: SenseIdIndex = .{};
     errdefer index.deinit(allocator);
@@ -1615,7 +1620,7 @@ fn isStrictSupportedTemplateName(name: []const u8) bool {
     return false;
 }
 
-test "strict template support falls back to manual allowlist when generated runtime marks a template unsupported" {
+test "strict template support falls back to shared-runtime allowlist when generated runtime marks a template unsupported" {
     try std.testing.expect(generatedTemplateClassHtml("place") == null);
     try std.testing.expect(isStrictSupportedTemplateName("place"));
     try std.testing.expect(generatedTemplateClassHtml("audio") == null);
@@ -2136,414 +2141,28 @@ fn renderTemplateHtml(
     if (parts.items.len == 0) return;
 
     const name = trimWikiWhitespace(parts.items[0]);
-    if (templateMatchesHtml(name, "see citations") or
-        templateMatchesHtml(name, "see more citations") or
-        templateMatchesHtml(name, "translation only"))
-    {
-        return;
-    }
-    if (templateMatchesHtml(name, "partial calque")) {
-        try appendResolvedDisplayTargetHtml(out, allocator, "Partial calque", "partial calque", options);
-        try appendEscapedHtmlSlice(out, allocator, " of ");
-        if (templatePositionalHtml(&parts, 2) orelse templatePositionalHtml(&parts, 1) orelse templatePositionalHtml(&parts, 0)) |target| {
-            try renderTemplateTargetHtml(out, allocator, target, options);
-        }
-        return;
-    }
-    if (templateMatchesHtml(name, "pcal")) {
-        try appendEscapedHtmlSlice(out, allocator, "Partial calque of ");
-        if (templatePositionalHtml(&parts, positionalCountHtml(&parts) -| 1)) |target| {
-            try renderTemplateTargetHtml(out, allocator, target, options);
-        }
-        return;
-    }
-    if (templateMatchesHtml(name, "mention-gloss")) {
-        if (templatePositionalHtml(&parts, positionalCountHtml(&parts) -| 1)) |value| {
-            try appendQuotedTemplateTargetHtml(out, allocator, value, options);
-        }
-        return;
-    }
-    if (templateMatchesHtml(name, "A.D.") or templateMatchesHtml(name, "CE")) {
-        try appendEscapedHtmlSlice(out, allocator, trimWikiWhitespace(name));
-        return;
-    }
-    if (templateMatchesHtml(name, "from")) {
-        if (templatePositionalHtml(&parts, semanticTemplateTargetIndexHtml(&parts))) |target| {
-            try renderTemplateTargetHtml(out, allocator, target, options);
-        }
-        return;
-    }
-    if (templateMatchesHtml(name, "=")) {
-        try appendEscapedHtmlSlice(out, allocator, "=");
-        return;
-    }
-    if (templateMatchesHtml(name, "coa")) {
-        const start_index: usize = if (looksLikeLanguageCodeHtml(templatePositionalHtml(&parts, 0) orelse "")) 1 else 0;
-        try appendPositionalTemplateTargetsAllowCodesHtml(out, allocator, &parts, start_index, ", ", options);
-        return;
-    }
-    if (templateMatchesHtml(name, "uncom form")) {
-        try renderSimpleRelationTemplateHtml(out, allocator, &parts, .{
-            .label = "Uncommon form",
-            .tail = " of ",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "obor")) {
-        try renderSimpleRelationTemplateHtml(out, allocator, &parts, .{
-            .label = "Orthographic borrowing",
-            .tail = " from ",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "pedlink")) {
-        const display = templateNamedHtml(&parts, "disp") orelse templatePositionalHtml(&parts, 0) orelse return;
-        try renderTemplateTargetHtml(out, allocator, display, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "n-g-lite")) {
-        if (templatePositionalHtml(&parts, 0)) |value| {
-            try renderTemplateTargetHtml(out, allocator, value, options);
-        }
-        return;
-    }
-
-    if (try renderExpandedTemplateHtml(out, allocator, name, &parts, options)) {
-        return;
-    }
-    if (templateMatchesHtml(name, "place")) {
-        try renderPlaceTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "ipa")) {
-        try renderIpaTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "enpr")) {
-        try renderEnprTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "audio")) {
-        try renderAudioTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "Latn-def")) {
-        try renderLatnDefTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "rhymes") or templateMatchesHtml(name, "rhyme")) {
-        try renderRhymesTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "syn") or templateMatchesHtml(name, "synonyms")) {
-        try renderSynonymsTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "nearsyn") or templateMatchesHtml(name, "near-synonyms")) {
-        try renderLabeledTemplateHtml(out, allocator, &parts, .{
-            .singular = "Near synonym",
-            .plural = "Near synonyms",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "ant") or templateMatchesHtml(name, "antonym") or templateMatchesHtml(name, "antonyms")) {
-        try renderLabeledTemplateHtml(out, allocator, &parts, .{
-            .singular = "Antonym",
-            .plural = "Antonyms",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "hyper") or templateMatchesHtml(name, "hypernyms")) {
-        try renderLabeledTemplateHtml(out, allocator, &parts, .{
-            .singular = "Hypernym",
-            .plural = "Hypernyms",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "hypo") or templateMatchesHtml(name, "hyponyms")) {
-        try renderLabeledTemplateHtml(out, allocator, &parts, .{
-            .singular = "Hyponym",
-            .plural = "Hyponyms",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "troponyms")) {
-        try renderLabeledTemplateHtml(out, allocator, &parts, .{
-            .singular = "Troponym",
-            .plural = "Troponyms",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "cot") or templateMatchesHtml(name, "coord") or templateMatchesHtml(name, "coordinate terms")) {
-        try renderLabeledTemplateHtml(out, allocator, &parts, .{
-            .singular = "Coordinate term",
-            .plural = "Coordinate terms",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "holo") or templateMatchesHtml(name, "holonyms")) {
-        try renderLabeledTemplateHtml(out, allocator, &parts, .{
-            .singular = "Holonym",
-            .plural = "Holonyms",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "mer") or templateMatchesHtml(name, "mero") or templateMatchesHtml(name, "meronyms") or templateMatchesHtml(name, "comeronyms")) {
-        try renderLabeledTemplateHtml(out, allocator, &parts, .{
-            .singular = "Meronym",
-            .plural = "Meronyms",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "collocation")) {
-        try renderLabeledTemplateHtml(out, allocator, &parts, .{
-            .singular = "Collocation",
-            .plural = "Collocations",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "hmp") or templateMatchesHtml(name, "homophone") or templateMatchesHtml(name, "homophones")) {
-        try renderHomophoneTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "hyphenation") or templateMatchesHtml(name, "hyph")) {
-        try renderHyphenationTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "prefix") or
-        templateMatchesHtml(name, "pre") or
-        templateMatchesHtml(name, "suffix") or
-        templateMatchesHtml(name, "suf") or
-        templateMatchesHtml(name, "affix") or
-        templateMatchesHtml(name, "af") or
-        templateMatchesHtml(name, "com") or
-        templateMatchesHtml(name, "confix"))
-    {
-        try renderAffixTemplateHtml(out, allocator, name, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "alter") or templateMatchesHtml(name, "alt")) {
-        try renderAlterTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "alti")) {
-        try renderAlternativeFormsTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "deverbal")) {
-        try renderSimpleRelationTemplateHtml(out, allocator, &parts, .{
-            .label = "Deverbal",
-            .tail = " from ",
-        }, options);
-        return;
-    }
-    if (isEtymologyLexemeTemplateHtml(name)) {
-        try renderEtymologyLexemeTemplateHtml(out, allocator, name, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "compound") or templateMatchesHtml(name, "compound+") or templateMatchesHtml(name, "com") or templateMatchesHtml(name, "com+")) {
-        try renderCompoundTemplateHtml(out, allocator, name, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "surname")) {
-        try renderNominalTemplateHtml(out, allocator, &parts, "surname", options);
-        return;
-    }
-    if (templateMatchesHtml(name, "given name")) {
-        try renderNominalTemplateHtml(out, allocator, &parts, "given name", options);
-        return;
-    }
-    if (templateMatchesHtml(name, "name translit")) {
-        try renderNameTranslitTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "onom") or templateMatchesHtml(name, "onomatopoeic")) {
-        try appendEscapedHtmlSlice(out, allocator, "Onomatopoeic");
-        return;
-    }
-    if (templateMatchesHtml(name, "&lit")) {
-        try appendEscapedHtmlSlice(out, allocator, "Used other than figuratively or idiomatically: see ");
-        try appendPositionalTemplateTargetsAllowCodesHtml(out, allocator, &parts, 1, ", ", options);
-        return;
-    }
-    if (templateMatchesHtml(name, "m+")) {
-        try renderLanguageAwareLexemeTemplateHtml(out, allocator, &parts, 0, 1, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "l") or templateMatchesHtml(name, "m") or templateMatchesHtml(name, "link")) {
-        try renderLexemeLikeTemplateHtml(out, allocator, &parts, 1, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "cog") or templateMatchesHtml(name, "cognate") or templateMatchesHtml(name, "noncog") or templateMatchesHtml(name, "ncog")) {
-        try renderLanguageAwareLexemeTemplateHtml(out, allocator, &parts, 0, 1, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "season name spelling")) {
-        try appendEscapedHtmlSlice(out, allocator, "Note that season names are not capitalized in modern English except where any noun would be capitalized, e.g. at the beginning of a sentence or as part of a name (Old Man Winter, the Winter War, Summer Glau). This is in contrast to the days of the week and months of the year, which are always capitalized (Thursday or September).");
-        return;
-    }
-    if (templateMatchesHtml(name, "CURRENTDAY")) {
-        try appendEscapedHtmlSlice(out, allocator, currentDayTextHtml());
-        return;
-    }
-    if (templateMatchesHtml(name, "CURRENTMONTHNAME")) {
-        try appendEscapedHtmlSlice(out, allocator, currentMonthNameHtml());
-        return;
-    }
-    if (templateMatchesHtml(name, "CURRENTYEAR")) {
-        try appendEscapedHtmlSlice(out, allocator, currentYearTextHtml());
-        return;
-    }
-    if (templateMatchesHtml(name, "w") or templateMatchesHtml(name, "wikipedia")) {
-        try renderExternalWikipediaTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (asciiStartsWithIgnoreCase(name, "quote-") or std.mem.startsWith(u8, name, "RQ:")) {
-        try renderQuoteTemplateHtml(out, allocator, name, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "lb") or
-        templateMatchesHtml(name, "lbl") or
-        templateMatchesHtml(name, "label") or
-        templateMatchesHtml(name, "term-label") or
-        templateMatchesHtml(name, "context") or
-        templateMatchesHtml(name, "cx"))
-    {
-        const label_start_index: usize = if (templateMatchesHtml(name, "context") or templateMatchesHtml(name, "cx"))
-            if (looksLikeLanguageCodeHtml(templatePositionalHtml(&parts, 0) orelse "")) 1 else 0
-        else if (templateMatchesHtml(name, "lb") or templateMatchesHtml(name, "lbl") or templateMatchesHtml(name, "label"))
-            1
-        else
-            0;
-        try renderLabelTemplateHtml(out, allocator, &parts, label_start_index, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "U") or asciiStartsWithIgnoreCase(name, "U:")) {
-        if (usageTemplateTargetHtml(name, &parts)) |value| {
-            if (knownUsageTemplateExpansionHtml(value)) |expanded| {
-                try renderPhraseHtml(out, allocator, expanded, options);
-            } else {
-                const display = try uppercaseFirstAsciiAlloc(allocator, value);
-                defer allocator.free(display);
-                try appendLinkedResolvedTextHtml(out, allocator, display, value, options);
-            }
-        }
-        return;
-    }
-    if (templateMatchesHtml(name, "only used in")) {
-        try appendEscapedHtmlSlice(out, allocator, "Only used in ");
-        try appendPositionalTemplateTargetsNaturalHtml(out, allocator, &parts, semanticTemplateTargetIndexHtml(&parts), options);
-        try appendEscapedHtmlSlice(out, allocator, ".");
-        return;
-    }
-    if (templateMatchesHtml(name, "sense") or templateMatchesHtml(name, "antsense") or templateMatchesHtml(name, "s")) {
-        if (templatePositionalHtml(&parts, 0)) |value| {
-            try renderInlineHtml(out, allocator, value, options);
-        }
-        return;
-    }
-    if (templateMatchesHtml(name, "see thesaurus")) {
-        const term_index: usize = if (looksLikeLanguageCodeHtml(templatePositionalHtml(&parts, 0) orelse "")) 1 else 0;
-        if (templatePositionalHtml(&parts, term_index)) |value| {
-            const target = try std.fmt.allocPrint(allocator, "Thesaurus:{s}", .{trimWikiWhitespace(value)});
-            defer allocator.free(target);
-            try appendEscapedHtmlSlice(out, allocator, "see ");
-            try renderTemplateTargetHtml(out, allocator, target, options);
-        }
-        return;
-    }
-    if (templateMatchesHtml(name, "q") or templateMatchesHtml(name, "q-lite") or templateMatchesHtml(name, "qualifier") or templateMatchesHtml(name, "i") or templateMatchesHtml(name, "gl")) {
-        try appendParenthesizedTemplateArgs(out, allocator, &parts, 0, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "Webster 1913")) {
-        return;
-    }
-    if (templateMatchesHtml(name, "col-top") or
-        templateMatchesHtml(name, "col-bottom") or
-        templateMatchesHtml(name, "top") or
-        templateMatchesHtml(name, "bottom"))
-    {
-        return;
-    }
-    if (templateMatchesHtml(name, "uxa")) {
-        if (templatePositionalHtml(&parts, 1) orelse templatePositionalHtml(&parts, 0)) |arg| {
-            try renderTemplateTargetHtml(out, allocator, arg, options);
-        }
-        return;
-    }
-    if (templateMatchesHtml(name, "C")) {
-        return;
-    }
-    if (templateMatchesHtml(name, "surf")) {
-        try appendEscapedHtmlSlice(out, allocator, "By surface analysis, ");
-        try appendPositionalTemplateTargetsHtml(out, allocator, &parts, 1, " + ", options);
-        return;
-    }
-    if (templateMatchesHtml(name, "surface analysis")) {
-        try renderSimpleRelationTemplateHtml(out, allocator, &parts, .{
-            .label = "Surface analysis",
-            .tail = " of ",
-            .separator = " + ",
-        }, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "doublet") or templateMatchesHtml(name, "dbt")) {
-        try appendEscapedHtmlSlice(out, allocator, "Doublet of ");
-        try appendPositionalTemplateTargetsNaturalHtml(out, allocator, &parts, if (looksLikeLanguageCodeHtml(templatePositionalHtml(&parts, 0) orelse "")) 1 else 0, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "unk")) {
-        try appendEscapedHtmlSlice(out, allocator, "Unknown");
-        return;
-    }
-    if (templateMatchesHtml(name, "unknown")) {
-        try renderUnknownTemplateHtml(out, allocator, &parts);
-        return;
-    }
-    if (templateMatchesHtml(name, "glossary")) {
-        if (templatePositionalHtml(&parts, positionalCountHtml(&parts) -| 1)) |value| {
-            try renderTemplateTargetHtml(out, allocator, value, options);
-        }
-        return;
-    }
-    if (templateMatchesHtml(name, "defdate")) {
-        try renderDefdateTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "SI-unit")) {
-        try renderSiUnitTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "suffixusex")) {
-        try renderSuffixUsexTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "phono-semantic matching")) {
-        try renderPhonoSemanticMatchingTemplateHtml(out, allocator, &parts, options);
-        return;
-    }
-    if (templateMatchesHtml(name, "senseno")) {
-        if (templatePositionalHtml(&parts, 1) orelse templatePositionalHtml(&parts, 0)) |value| {
-            const trimmed = trimWikiWhitespace(value);
-            if (looksLikeOpaqueSenseIdHtml(trimmed)) {
-                if (options.sense_ids) |sense_ids| {
-                    if (sense_ids.resolve(trimmed)) |label| {
-                        try appendDecodedEscapedChunk(out, allocator, label);
-                    }
-                }
-            } else {
-                try renderTemplateTargetHtml(out, allocator, trimmed, options);
-            }
-        }
-        return;
-    }
-    if (asciiStartsWithIgnoreCase(name, "list:")) {
-        if (try renderKnownListTemplateHtml(out, allocator, name, options)) return;
-    }
     if (try renderGeneratedTemplateHtml(out, allocator, name, &parts, options)) return;
-
     try renderTemplateTextFallbackHtml(out, allocator, body, options);
+}
+
+fn renderTemplateTextFallbackHtml(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    options: RenderOptions,
+) anyerror!void {
+    // The HTML renderer itself only executes generated template code. When a template
+    // is not covered there yet, we reuse the shared text runtime and render its output
+    // as HTML rather than keeping a second handwritten execution path here.
+    const text = try wikitext.renderTemplateBodyToOwned(allocator, body, max_render_line_bytes);
+    defer allocator.free(text);
+    if (text.len == 0) return;
+    try renderInlineHtml(out, allocator, text, .{
+        .strict = false,
+        .issue = options.issue,
+        .link_resolver = options.link_resolver,
+        .sense_ids = options.sense_ids,
+    });
 }
 
 fn renderGeneratedTemplateHtml(
@@ -2575,21 +2194,6 @@ fn renderGeneratedTemplateHtml(
 fn looksLikeTemplateRedirectTextHtml(text: []const u8) bool {
     const trimmed = trimWikiWhitespace(text);
     return trimmed.len >= "#REDIRECT".len and std.ascii.startsWithIgnoreCase(trimmed, "#REDIRECT");
-}
-
-fn renderTemplateTextFallbackHtml(
-    out: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
-    body: []const u8,
-    options: RenderOptions,
-) anyerror!void {
-    // Unsupported or low-priority templates fall back through the shared text
-    // template runtime first so the HTML renderer reuses the same semantic
-    // template expansion instead of inventing a separate ad hoc phrase.
-    const text = try wikitext.renderTemplateBodyToOwned(allocator, body, max_render_line_bytes);
-    defer allocator.free(text);
-    if (text.len == 0) return;
-    try renderPhraseHtml(out, allocator, text, options);
 }
 
 fn renderKnownListTemplateHtml(

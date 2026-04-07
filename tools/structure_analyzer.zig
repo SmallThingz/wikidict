@@ -1169,8 +1169,8 @@ fn writeReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer) !v
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    const legacy_inputs = try legacyBuildInputsAlloc(arena_allocator, analyzer);
-    var build = try structure_tables_support.buildDataFromLegacyAlloc(arena_allocator, legacy_inputs);
+    const build_inputs = try buildInputsAlloc(arena_allocator, analyzer);
+    var build = try structure_tables_support.buildDataFromInputsAlloc(arena_allocator, build_inputs);
     const dependencies = try buildStructureDependenciesAlloc(arena_allocator, allocator, analyzer, build);
     try replaceBuildLineTemplatesAlloc(arena_allocator, &build, dependencies.reachable_templates);
     build.structure_fingerprint = structure_tables_support.computeStructureFingerprint(build);
@@ -1263,11 +1263,6 @@ fn buildStructureDependenciesAlloc(
     defer freeOwnedStringSlice(scratch_allocator, all_root_templates);
 
     const use_prebuilt_graph = analyzer.template_nodes.count() != 0 or analyzer.module_nodes.count() != 0;
-    if (use_prebuilt_graph) {
-        try applyDependencyGraphCompat(analyzer);
-    } else {
-        try applyDependencyPageRefCompat(analyzer);
-    }
 
     const root_templates = try filterNamesPresentInMapAlloc(
         scratch_allocator,
@@ -1378,13 +1373,6 @@ fn collectReachableSourcesFromPageRefsAlloc(
         if (!gop.found_existing) gop.key_ptr.* = ref.name;
         gop.value_ptr.* = ref;
     }
-    if (!template_ref_map.contains("an-lite")) {
-        if (template_ref_map.get("an-lite/node")) |ref| {
-            const gop = try template_ref_map.getOrPut(allocator, "an-lite");
-            if (!gop.found_existing) gop.key_ptr.* = "an-lite";
-            gop.value_ptr.* = ref;
-        }
-    }
 
     var module_ref_map = std.StringHashMapUnmanaged(lua.SourcePageRef){};
     defer module_ref_map.deinit(allocator);
@@ -1392,13 +1380,6 @@ fn collectReachableSourcesFromPageRefsAlloc(
         const gop = try module_ref_map.getOrPut(allocator, ref.name);
         if (!gop.found_existing) gop.key_ptr.* = ref.name;
         gop.value_ptr.* = ref;
-    }
-    if (!module_ref_map.contains("gender and number/templates")) {
-        if (module_ref_map.get("gender and number")) |ref| {
-            const gop = try module_ref_map.getOrPut(allocator, "gender and number/templates");
-            if (!gop.found_existing) gop.key_ptr.* = "gender and number/templates";
-            gop.value_ptr.* = ref;
-        }
     }
 
     var mapped = try mmapReadOnlyPath(std.Options.debug_io, input_path);
@@ -1710,84 +1691,12 @@ fn stringSliceContains(values: []const []const u8, needle: []const u8) bool {
     return false;
 }
 
-fn applyDependencyGraphCompat(analyzer: *Analyzer) !void {
-    try ensureTemplateGraphCompat(analyzer, "an-lite", &.{"an-lite/node"});
-    try ensureModuleGraphCompat(analyzer, "gender and number/templates", &.{"gender and number"});
-    try ensureTemplatePageRefCompat(analyzer, "an-lite", &.{"an-lite/node"});
-    try ensureModulePageRefCompat(analyzer, "gender and number/templates", &.{"gender and number"});
-}
-
-fn applyDependencyPageRefCompat(analyzer: *Analyzer) !void {
-    try ensureTemplatePageRefCompat(analyzer, "an-lite", &.{"an-lite/node"});
-    try ensureModulePageRefCompat(analyzer, "gender and number/templates", &.{"gender and number"});
-}
-
-fn ensureTemplateGraphCompat(analyzer: *Analyzer, target: []const u8, alias_candidates: []const []const u8) !void {
-    if (analyzer.template_nodes.contains(target)) return;
-    for (alias_candidates) |alias_name| {
-        if (analyzer.template_nodes.get(alias_name)) |node| {
-            try analyzer.template_nodes.put(
-                try analyzer.keyAllocator().dupe(u8, target),
-                .{
-                    .template_deps = try analyzer.cloneStringSlice(node.template_deps),
-                    .direct_modules = try analyzer.cloneStringSlice(node.direct_modules),
-                },
-            );
-            return;
-        }
-    }
-    try analyzer.template_nodes.put(
-        try analyzer.keyAllocator().dupe(u8, target),
-        .{
-            .template_deps = try analyzer.keyAllocator().alloc([]const u8, 0),
-            .direct_modules = try analyzer.keyAllocator().alloc([]const u8, 0),
-        },
-    );
-}
-
-fn ensureModuleGraphCompat(analyzer: *Analyzer, target: []const u8, alias_candidates: []const []const u8) !void {
-    if (analyzer.module_nodes.contains(target)) return;
-    for (alias_candidates) |alias_name| {
-        if (analyzer.module_nodes.get(alias_name)) |deps| {
-            try analyzer.module_nodes.put(
-                try analyzer.keyAllocator().dupe(u8, target),
-                try analyzer.cloneStringSlice(deps),
-            );
-            return;
-        }
-    }
-    try analyzer.module_nodes.put(
-        try analyzer.keyAllocator().dupe(u8, target),
-        try analyzer.keyAllocator().alloc([]const u8, 0),
-    );
-}
-
-fn ensureTemplatePageRefCompat(analyzer: *Analyzer, target: []const u8, alias_candidates: []const []const u8) !void {
-    if (analyzer.template_page_refs.contains(target)) return;
-    for (alias_candidates) |alias_name| {
-        if (analyzer.template_page_refs.get(alias_name)) |offset| {
-            try analyzer.template_page_refs.put(try analyzer.keyAllocator().dupe(u8, target), offset);
-            return;
-        }
-    }
-}
-
-fn ensureModulePageRefCompat(analyzer: *Analyzer, target: []const u8, alias_candidates: []const []const u8) !void {
-    if (analyzer.module_page_refs.contains(target)) return;
-    for (alias_candidates) |alias_name| {
-        if (analyzer.module_page_refs.get(alias_name)) |offset| {
-            try analyzer.module_page_refs.put(try analyzer.keyAllocator().dupe(u8, target), offset);
-            return;
-        }
-    }
-}
-
-fn legacyBuildInputsAlloc(
+fn buildInputsAlloc(
     allocator: std.mem.Allocator,
     analyzer: *Analyzer,
-) !structure_tables_support.LegacyBuildInputs {
+) !structure_tables_support.BuildInputs {
     const heading_items = try sortedCounts(allocator, analyzer.heading_title_counts);
-    const heading_profiles = try allocator.alloc(structure_tables_support.LegacyHeadingProfile, heading_items.len);
+    const heading_profiles = try allocator.alloc(structure_tables_support.HeadingProfile, heading_items.len);
     for (heading_items, heading_profiles) |item, *slot| {
         const level = if (looksLikeLanguageHeading(item.key)) @as(u8, 2) else 3;
         const profile = classifyHeadingTitle(item.key, level);
@@ -1803,7 +1712,7 @@ fn legacyBuildInputsAlloc(
     const translation_target_languages = try countEntriesAlloc(allocator, analyzer.translation_target_lang_counts);
 
     const template_items = try sortedCompositeCounts(allocator, analyzer.section_template_counts);
-    const templates_by_heading = try allocator.alloc(structure_tables_support.LegacyHeadingTemplateEntry, template_items.len);
+    const templates_by_heading = try allocator.alloc(structure_tables_support.HeadingTemplateEntry, template_items.len);
     for (template_items, templates_by_heading) |item, *slot| {
         slot.* = .{
             .heading = item.left,
@@ -2731,7 +2640,7 @@ test "binary structure report includes exact build payload" {
     try std.testing.expectEqual(@as(usize, 1), structure.dependencies.reachable_template_pages.len);
 }
 
-test "dependency graph compat aliases suppress synthetic unresolved entries" {
+test "dependency analysis does not synthesize alias nodes" {
     var analyzer = Analyzer.init(std.testing.allocator, .{});
     defer analyzer.deinit();
 
@@ -2755,12 +2664,10 @@ test "dependency graph compat aliases suppress synthetic unresolved entries" {
         .{ .page_start = 30, .page_end = 40 },
     );
 
-    try applyDependencyGraphCompat(&analyzer);
-
-    try std.testing.expect(analyzer.template_nodes.contains("an-lite"));
-    try std.testing.expect(analyzer.module_nodes.contains("gender and number/templates"));
-    try std.testing.expect(analyzer.template_page_refs.contains("an-lite"));
-    try std.testing.expect(analyzer.module_page_refs.contains("gender and number/templates"));
+    try std.testing.expect(!analyzer.template_nodes.contains("an-lite"));
+    try std.testing.expect(!analyzer.module_nodes.contains("gender and number/templates"));
+    try std.testing.expect(!analyzer.template_page_refs.contains("an-lite"));
+    try std.testing.expect(!analyzer.module_page_refs.contains("gender and number/templates"));
 }
 
 test "buildStructureDependenciesAlloc skips root templates without source pages" {

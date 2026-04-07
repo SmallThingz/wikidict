@@ -88,27 +88,6 @@ const FALLBACK_SYSTEM_THEME: Record<"light" | "dark", ApiSystemTheme> = {
   },
 };
 
-function fallbackSystemTheme(scheme: "light" | "dark"): ApiSystemTheme {
-  return FALLBACK_SYSTEM_THEME[scheme];
-}
-
-function themeVarsFor(colors: ApiSystemTheme["colors"]): ThemeVars {
-  return {
-    "--bg": colors.bg,
-    "--page": colors.page,
-    "--panel": colors.panel,
-    "--line": colors.line,
-    "--line-strong": colors.lineStrong,
-    "--ink": colors.ink,
-    "--muted": colors.muted,
-    "--accent": colors.accent,
-    "--accent-strong": colors.accentStrong,
-    "--accent-soft": colors.accentSoft,
-    "--glass-bg": colors.glassBg,
-    "--glass-border": colors.glassBorder,
-  };
-}
-
 export default function App(props: ParentProps) {
   const navigate = useNavigate();
   const [themeMode, setThemeMode] = createSignal<ThemeMode>("system");
@@ -150,13 +129,28 @@ export default function App(props: ParentProps) {
   };
 
   const fallbackScheme = createMemo<"light" | "dark">(() => (prefersDark() ? "dark" : "light"));
-  const activeSystemTheme = createMemo<ApiSystemTheme>(() => systemTheme() ?? fallbackSystemTheme(fallbackScheme()));
+  const activeSystemTheme = createMemo<ApiSystemTheme>(() => systemTheme() ?? FALLBACK_SYSTEM_THEME[fallbackScheme()]);
   const activeColorScheme = createMemo<"light" | "dark">(() => {
     if (themeMode() === "system") return activeSystemTheme().scheme;
     return fallbackScheme();
   });
   const systemThemeVars = createMemo<ThemeVars | undefined>(() =>
-    themeMode() === "system" ? themeVarsFor(activeSystemTheme().colors) : undefined,
+    themeMode() === "system"
+      ? {
+          "--bg": activeSystemTheme().colors.bg,
+          "--page": activeSystemTheme().colors.page,
+          "--panel": activeSystemTheme().colors.panel,
+          "--line": activeSystemTheme().colors.line,
+          "--line-strong": activeSystemTheme().colors.lineStrong,
+          "--ink": activeSystemTheme().colors.ink,
+          "--muted": activeSystemTheme().colors.muted,
+          "--accent": activeSystemTheme().colors.accent,
+          "--accent-strong": activeSystemTheme().colors.accentStrong,
+          "--accent-soft": activeSystemTheme().colors.accentSoft,
+          "--glass-bg": activeSystemTheme().colors.glassBg,
+          "--glass-border": activeSystemTheme().colors.glassBorder,
+        }
+      : undefined,
   );
 
   return (
@@ -718,10 +712,65 @@ function EntryArticle(props: { hit: ApiLookupHit; primaryWord?: string }) {
         <div class="render-stack">
           <For each={renderedSections()}>
             {(block) => (
-              <section class="render-section" id={block.id} data-family={getHeadingFamily(block.title)}>
+              <section
+                class="render-section"
+                id={block.id}
+                data-family={(() => {
+                  const title = block.title.toLowerCase();
+                  switch (title) {
+                    case "noun":
+                    case "verb":
+                    case "adjective":
+                    case "adverb":
+                    case "pronoun":
+                    case "preposition":
+                    case "conjunction":
+                    case "interjection":
+                    case "proper noun":
+                    case "article":
+                    case "prepositional phrase":
+                    case "particle":
+                    case "determiner":
+                    case "numeral":
+                    case "participle":
+                      return "part-of-speech";
+                    case "etymology":
+                      return "etymology";
+                    case "pronunciation":
+                      return "pronunciation";
+                    case "translations":
+                      return "translations";
+                    case "derived terms":
+                    case "related terms":
+                    case "synonyms":
+                    case "antonyms":
+                    case "hypernyms":
+                    case "hyponyms":
+                    case "coordinate terms":
+                      return "relations";
+                    case "alternative forms":
+                      return "alternative-forms";
+                    case "anagrams":
+                    case "see also":
+                      return "navigation";
+                    case "references":
+                    case "further reading":
+                    case "notes":
+                      return "citations";
+                    case "english":
+                      return "language-root";
+                    default:
+                      return "unknown";
+                  }
+                })()}
+              >
                 <Show when={block.title && block.title !== props.primaryWord}>
                   <div class="render-heading">
-                    <Dynamic component={headingTag(block.level)}>{block.title}</Dynamic>
+                    <Dynamic
+                      component={block.level <= 2 ? "h2" : block.level === 3 ? "h3" : block.level === 4 ? "h4" : block.level === 5 ? "h5" : "h6"}
+                    >
+                      {block.title}
+                    </Dynamic>
                   </div>
                 </Show>
                 <div class="source-html" innerHTML={block.html} />
@@ -861,14 +910,6 @@ function SearchCard(props: {
       </Show>
     </div>
   );
-}
-
-function headingTag(level: number) {
-  if (level <= 2) return "h2";
-  if (level === 3) return "h3";
-  if (level === 4) return "h4";
-  if (level === 5) return "h5";
-  return "h6";
 }
 
 function SearchIcon() {
@@ -1070,53 +1111,4 @@ function resourceErrorMessage(error: unknown, fallback: string): string | null {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string" && error) return error;
   return fallback;
-}
-
-function getHeadingFamily(title: string): string {
-  const t = title.toLowerCase();
-  switch (t) {
-    case "noun":
-    case "verb":
-    case "adjective":
-    case "adverb":
-    case "pronoun":
-    case "preposition":
-    case "conjunction":
-    case "interjection":
-    case "proper noun":
-    case "article":
-    case "prepositional phrase":
-    case "particle":
-    case "determiner":
-    case "numeral":
-    case "participle":
-      return "part-of-speech";
-    case "etymology":
-      return "etymology";
-    case "pronunciation":
-      return "pronunciation";
-    case "translations":
-      return "translations";
-    case "derived terms":
-    case "related terms":
-    case "synonyms":
-    case "antonyms":
-    case "hypernyms":
-    case "hyponyms":
-    case "coordinate terms":
-      return "relations";
-    case "alternative forms":
-      return "alternative-forms";
-    case "anagrams":
-    case "see also":
-      return "navigation";
-    case "references":
-    case "further reading":
-    case "notes":
-      return "citations";
-    case "english":
-      return "language-root";
-    default:
-      return "unknown";
-  }
 }

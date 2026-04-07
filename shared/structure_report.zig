@@ -49,6 +49,7 @@ pub const LanguageLabel = struct {
 
 pub const SourcePageRef = struct {
     name: []const u8,
+    // Byte offsets into the source XML dump for the full `<page>...</page>` payload.
     page_start: u64,
     page_end: u64,
 };

@@ -194,8 +194,8 @@ fn printUsage() void {
         \\dict-lua emit-zig --input path.lua [--output generated.zig]
         \\dict-lua emit-bytecode --input path.lua [--name module] [--output generated.zig]
         \\dict-lua dump-module --input data/wiktionary.xml --structure data/wiktionary-structure.bin --name "string utilities"
-        \\dict-lua referrers --input data/wiktionary.xml --structure data/wiktionary-structure.bin --module "gender and number/templates"
-        \\dict-lua referrers --input data/wiktionary.xml --structure data/wiktionary-structure.bin --template "an-lite"
+        \\dict-lua referrers --input data/wiktionary.xml --structure data/wiktionary-structure.bin --module "gender and number"
+        \\dict-lua referrers --input data/wiktionary.xml --structure data/wiktionary-structure.bin --template "quote"
         \\dict-lua deps [--input data/wiktionary.xml] [--structure data/wiktionary-structure.bin]
         \\dict-lua deps --input data/wiktionary.xml --db data/wiktionary.bin
         \\dict-lua deps-file --input path.lua

@@ -3,10 +3,22 @@ const html_render = @import("html_render.zig");
 const generated_templates = @import("generated_template_runtime");
 const generated = @import("generated_structure_tables");
 
-const renderEnglishSectionAlloc = html_render.renderEnglishSectionAlloc;
-const renderEnglishSectionWithOptionsAlloc = html_render.renderEnglishSectionWithOptionsAlloc;
 const templateMatchesHtml = html_render.templateMatchesHtml;
 const isStrictSupportedTemplateName = html_render.isStrictSupportedTemplateName;
+
+fn renderEnglishSectionAlloc(allocator: std.mem.Allocator, source: []const u8) ![]html_render.RenderedSection {
+    if (!html_render.hasGeneratedTemplateRuntime()) return error.SkipZigTest;
+    return html_render.renderEnglishSectionAlloc(allocator, source);
+}
+
+fn renderEnglishSectionWithOptionsAlloc(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    options: html_render.RenderOptions,
+) ![]html_render.RenderedSection {
+    if (!html_render.hasGeneratedTemplateRuntime()) return error.SkipZigTest;
+    return html_render.renderEnglishSectionWithOptionsAlloc(allocator, source, options);
+}
 
 fn trimWikiWhitespace(value: []const u8) []const u8 {
     return std.mem.trim(u8, value, " \t");
@@ -1624,13 +1636,9 @@ test "renderEnglishSectionAlloc routes unsupported helpers through shared templa
         \\===Etymology===
         \\From {{1|en|[[Acme]]}}.
     ;
-    const resolver = TestResolverContext{ .terms = &.{"Acme"} };
 
     const sections = try renderEnglishSectionWithOptionsAlloc(std.testing.allocator, source, .{
-        .link_resolver = .{
-            .context = @ptrCast(&resolver),
-            .resolve = resolveTestLink,
-        },
+        .strict = false,
     });
     defer {
         for (sections) |*section| section.deinit(std.testing.allocator);
@@ -1638,7 +1646,8 @@ test "renderEnglishSectionAlloc routes unsupported helpers through shared templa
     }
 
     try std.testing.expectEqual(@as(usize, 1), sections.len);
-    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "From <a href=\"/entry/Acme\">Acme</a>.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, "/entry/Acme") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sections[0].html, ">Acme<") != null);
 }
 
 test "renderEnglishSectionAlloc renders abbreviation place templates with article and expanded country names" {

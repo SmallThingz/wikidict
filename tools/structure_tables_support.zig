@@ -237,25 +237,28 @@ pub const Dependencies = struct {
     emitted_inconsistent: []const DependencyFailure = &.{},
 };
 
-pub const LegacyHeadingProfile = struct {
+pub const HeadingProfile = struct {
     title: []const u8,
     parser_kind: []const u8,
     count: u64 = 0,
 };
 
-pub const LegacyHeadingTemplateEntry = struct {
+// Keep the bootstrap/build-script API stable while the active runtime path uses BuildInputs.
+pub const LegacyHeadingProfile = HeadingProfile;
+
+pub const HeadingTemplateEntry = struct {
     heading: []const u8,
     template: []const u8,
     count: u64 = 0,
 };
 
-pub const LegacyBuildInputs = struct {
-    heading_profiles: []const LegacyHeadingProfile,
-    // Keys are serialized as `L<level>:<title>` in the legacy report.
+pub const BuildInputs = struct {
+    heading_profiles: []const HeadingProfile,
+    // Keys are serialized as `L<level>:<title>` in the structure input.
     headings_by_level: []const CountEntry = &.{},
     translation_source_labels: []const CountEntry = &.{},
     translation_target_languages: []const CountEntry = &.{},
-    templates_by_heading: []const LegacyHeadingTemplateEntry = &.{},
+    templates_by_heading: []const HeadingTemplateEntry = &.{},
 };
 
 const GeneratedHeading = struct {
@@ -313,16 +316,16 @@ pub fn sectionKindForParserKind(parser_kind: []const u8) ?SectionKind {
     return null;
 }
 
-pub fn buildDataFromLegacyAlloc(
+pub fn buildDataFromInputsAlloc(
     allocator: std.mem.Allocator,
-    legacy: LegacyBuildInputs,
+    inputs: BuildInputs,
 ) !BuildData {
     var headings: std.ArrayList(GeneratedHeading) = .empty;
     defer headings.deinit(allocator);
     var heading_indexes = std.StringHashMapUnmanaged(usize).empty;
     defer deinitOwnedStringMap(allocator, usize, &heading_indexes);
 
-    for (legacy.heading_profiles) |profile| {
+    for (inputs.heading_profiles) |profile| {
         const kind = sectionKindForParserKind(profile.parser_kind) orelse continue;
         const gop = try heading_indexes.getOrPut(allocator, profile.title);
         if (!gop.found_existing) {
@@ -344,9 +347,9 @@ pub fn buildDataFromLegacyAlloc(
         for (heading_levels.items) |entry| allocator.free(entry.title);
         heading_levels.deinit(allocator);
     }
-    for (legacy.headings_by_level) |entry| {
+    for (inputs.headings_by_level) |entry| {
         const parsed_key = parseHeadingLevelKey(entry.key) orelse continue;
-        const kind = headingKindForTitle(legacy.heading_profiles, parsed_key.title) orelse continue;
+        const kind = headingKindForTitle(inputs.heading_profiles, parsed_key.title) orelse continue;
         try heading_levels.append(allocator, .{
             .title = try allocator.dupe(u8, parsed_key.title),
             .level = parsed_key.level,
@@ -360,7 +363,7 @@ pub fn buildDataFromLegacyAlloc(
     defer labels.deinit(allocator);
     var label_indexes = std.StringHashMapUnmanaged(usize).empty;
     defer deinitOwnedStringMap(allocator, usize, &label_indexes);
-    for (legacy.translation_source_labels) |entry| {
+    for (inputs.translation_source_labels) |entry| {
         const label = std.mem.trim(u8, entry.key, " \t\r\n");
         if (label.len == 0) continue;
         const gop = try label_indexes.getOrPut(allocator, label);
@@ -385,7 +388,7 @@ pub fn buildDataFromLegacyAlloc(
     defer line_templates.deinit(allocator);
     var line_template_indexes = std.StringHashMapUnmanaged(usize).empty;
     defer deinitOwnedStringMap(allocator, usize, &line_template_indexes);
-    for (legacy.templates_by_heading) |entry| {
+    for (inputs.templates_by_heading) |entry| {
         const template_name = std.mem.trim(u8, entry.template, " \t\r\n");
         if (template_name.len == 0) continue;
         if (isTranslationHeading(entry.heading)) {
@@ -456,7 +459,7 @@ pub fn buildDataFromLegacyAlloc(
     defer target_languages.deinit(allocator);
     var target_language_indexes = std.StringHashMapUnmanaged(usize).empty;
     defer deinitOwnedStringMap(allocator, usize, &target_language_indexes);
-    for (legacy.translation_target_languages) |entry| {
+    for (inputs.translation_target_languages) |entry| {
         const value = std.mem.trim(u8, entry.key, " \t\r\n");
         if (value.len == 0) continue;
         const gop = try target_language_indexes.getOrPut(allocator, value);
@@ -784,7 +787,7 @@ fn deinitOwnedStringMap(
     map.deinit(allocator);
 }
 
-fn headingKindForTitle(profiles: []const LegacyHeadingProfile, title: []const u8) ?SectionKind {
+fn headingKindForTitle(profiles: []const HeadingProfile, title: []const u8) ?SectionKind {
     for (profiles) |profile| {
         if (std.mem.eql(u8, profile.title, title)) {
             return sectionKindForParserKind(profile.parser_kind);
@@ -928,8 +931,8 @@ fn appendZigStringLiteral(writer: *std.Io.Writer, bytes: []const u8) !void {
     try writer.writeByte('"');
 }
 
-test "buildDataFromLegacyAlloc keeps template names out of compact exact patterns" {
-    var build = try buildDataFromLegacyAlloc(std.testing.allocator, .{
+test "buildDataFromInputsAlloc keeps template names out of compact exact patterns" {
+    var build = try buildDataFromInputsAlloc(std.testing.allocator, .{
         .heading_profiles = &.{
             .{ .title = "Noun", .parser_kind = "part-of-speech", .count = 10 },
         },
@@ -944,8 +947,8 @@ test "buildDataFromLegacyAlloc keeps template names out of compact exact pattern
     try std.testing.expectEqual(@as(usize, 0), build.compact_patterns.len);
 }
 
-test "buildDataFromLegacyAlloc promotes exact heading lines into compact direct patterns" {
-    var build = try buildDataFromLegacyAlloc(std.testing.allocator, .{
+test "buildDataFromInputsAlloc promotes exact heading lines into compact direct patterns" {
+    var build = try buildDataFromInputsAlloc(std.testing.allocator, .{
         .heading_profiles = &.{
             .{ .title = "Noun", .parser_kind = "part-of-speech", .count = 10 },
         },

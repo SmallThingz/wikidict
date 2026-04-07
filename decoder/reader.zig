@@ -487,7 +487,10 @@ const ScanChunkResult = struct {
 
 pub const LookupHit = struct {
     entry_index: u32,
+    // Surface form that matched the query. This can differ from the entry word for
+    // alternative-form and alias-expansion hits.
     matched: []const u8,
+    // `decoder/format.zig` title/alternative-form kinds plus the local alias-expansion tag.
     kind: u8,
 };
 
@@ -747,7 +750,7 @@ pub const Dictionary = struct {
                 .matched = self.lookupMatched(lookup),
                 .kind = self.lookupKind(lookup),
             };
-            try appendMergedLookupHit(&hits, allocator, term, candidate);
+            try appendMergedLookupHit(&hits, allocator, self, term, candidate);
         }
 
         const direct_hit_count = hits.items.len;
@@ -769,6 +772,7 @@ pub const Dictionary = struct {
                 });
             }
         }
+        sortLookupHits(self, term, hits.items);
         return hits.toOwnedSlice(allocator);
     }
 
@@ -784,21 +788,14 @@ pub const Dictionary = struct {
         defer hits.deinit(allocator);
 
         var i = start;
-        while (i < end and hits.items.len < limit) : (i += 1) {
+        while (i < end) : (i += 1) {
             const lookup = self.lookups[i];
             const candidate = LookupHit{
                 .entry_index = lookup.entry_index,
                 .matched = self.lookupMatched(lookup),
                 .kind = self.lookupKind(lookup),
             };
-            var seen = false;
-            for (hits.items) |item| {
-                if (item.entry_index == candidate.entry_index and std.mem.eql(u8, item.matched, candidate.matched) and item.kind == candidate.kind) {
-                    seen = true;
-                    break;
-                }
-            }
-            if (!seen) try hits.append(allocator, candidate);
+            try appendRankedSuggestionHit(self, &hits, allocator, prefix, limit, candidate);
         }
         return hits.toOwnedSlice(allocator);
     }
@@ -958,22 +955,32 @@ pub const Dictionary = struct {
         return self.strings[start .. start + len];
     }
 
-    fn preferExactLookupHit(query: []const u8, candidate: LookupHit, current: LookupHit) bool {
-        const candidate_exact = std.mem.eql(u8, candidate.matched, query);
-        const current_exact = std.mem.eql(u8, current.matched, query);
-        if (candidate_exact != current_exact) return candidate_exact;
-        if (candidate.kind != current.kind) return candidate.kind < current.kind;
-        return std.mem.order(u8, candidate.matched, current.matched) == .lt;
+    fn preferExactLookupHit(self: *const Dictionary, query: []const u8, candidate: LookupHit, current: LookupHit) bool {
+        return preferRankedLookup(
+            query,
+            self.entryAt(candidate.entry_index).word(),
+            candidate.matched,
+            candidate.kind,
+            candidate.entry_index,
+            self.entryAt(current.entry_index).word(),
+            current.matched,
+            current.kind,
+            current.entry_index,
+        );
     }
 
     fn preferLinkTarget(query: []const u8, candidate: anytype, current: @TypeOf(candidate)) bool {
-        const candidate_exact = std.mem.eql(u8, candidate.word, query) or std.mem.eql(u8, candidate.matched, query);
-        const current_exact = std.mem.eql(u8, current.word, query) or std.mem.eql(u8, current.matched, query);
-        if (candidate_exact != current_exact) return candidate_exact;
-        if (candidate.kind != current.kind) return candidate.kind < current.kind;
-        const word_order = std.mem.order(u8, candidate.word, current.word);
-        if (word_order != .eq) return word_order == .lt;
-        return std.mem.order(u8, candidate.matched, current.matched) == .lt;
+        return preferRankedLookup(
+            query,
+            candidate.word,
+            candidate.matched,
+            candidate.kind,
+            candidate.entry_index,
+            current.word,
+            current.matched,
+            current.kind,
+            current.entry_index,
+        );
     }
 
     fn rawPayloadStart(self: *const Dictionary, index: u32) usize {
@@ -1020,15 +1027,110 @@ pub const Dictionary = struct {
 fn appendMergedLookupHit(
     hits: *std.ArrayList(LookupHit),
     allocator: std.mem.Allocator,
+    dict: *const Dictionary,
     query: []const u8,
     candidate: LookupHit,
 ) !void {
     for (hits.items) |*existing| {
         if (existing.entry_index != candidate.entry_index) continue;
-        if (Dictionary.preferExactLookupHit(query, candidate, existing.*)) existing.* = candidate;
+        if (dict.preferExactLookupHit(query, candidate, existing.*)) existing.* = candidate;
         return;
     }
     try hits.append(allocator, candidate);
+}
+
+fn appendRankedSuggestionHit(
+    dict: *const Dictionary,
+    hits: *std.ArrayList(LookupHit),
+    allocator: std.mem.Allocator,
+    query: []const u8,
+    limit: usize,
+    candidate: LookupHit,
+) !void {
+    if (limit == 0) return;
+
+    for (hits.items, 0..) |existing, existing_index| {
+        if (existing.entry_index != candidate.entry_index) continue;
+        if (dict.preferExactLookupHit(query, candidate, existing)) {
+            hits.items[existing_index] = candidate;
+            var index = existing_index;
+            while (index > 0 and dict.preferExactLookupHit(query, hits.items[index], hits.items[index - 1])) : (index -= 1) {
+                std.mem.swap(LookupHit, &hits.items[index], &hits.items[index - 1]);
+            }
+        }
+        if (existing.kind == candidate.kind and std.mem.eql(u8, existing.matched, candidate.matched)) {
+            return;
+        }
+        return;
+    }
+
+    var insert_at = hits.items.len;
+    for (hits.items, 0..) |existing, index| {
+        if (dict.preferExactLookupHit(query, candidate, existing)) {
+            insert_at = index;
+            break;
+        }
+    }
+
+    if (hits.items.len < limit) {
+        try hits.append(allocator, candidate);
+        var index = hits.items.len - 1;
+        while (index > insert_at) : (index -= 1) {
+            hits.items[index] = hits.items[index - 1];
+        }
+        hits.items[insert_at] = candidate;
+        return;
+    }
+
+    if (insert_at >= hits.items.len) return;
+
+    var index = hits.items.len - 1;
+    while (index > insert_at) : (index -= 1) {
+        hits.items[index] = hits.items[index - 1];
+    }
+    hits.items[insert_at] = candidate;
+}
+
+fn sortLookupHits(dict: *const Dictionary, query: []const u8, hits: []LookupHit) void {
+    const Context = struct {
+        dict: *const Dictionary,
+        query: []const u8,
+    };
+    std.mem.sort(LookupHit, hits, Context{ .dict = dict, .query = query }, struct {
+        fn lessThan(context: Context, left: LookupHit, right: LookupHit) bool {
+            return context.dict.preferExactLookupHit(context.query, left, right);
+        }
+    }.lessThan);
+}
+
+fn preferRankedLookup(
+    query: []const u8,
+    candidate_word: []const u8,
+    candidate_matched: []const u8,
+    candidate_kind: u8,
+    candidate_entry_index: u32,
+    current_word: []const u8,
+    current_matched: []const u8,
+    current_kind: u8,
+    current_entry_index: u32,
+) bool {
+    const candidate_exact_word = std.mem.eql(u8, candidate_word, query);
+    const current_exact_word = std.mem.eql(u8, current_word, query);
+    if (candidate_exact_word != current_exact_word) return candidate_exact_word;
+
+    const candidate_exact_match = std.mem.eql(u8, candidate_matched, query);
+    const current_exact_match = std.mem.eql(u8, current_matched, query);
+    if (candidate_exact_match != current_exact_match) return candidate_exact_match;
+
+    if (candidate_kind != current_kind) return candidate_kind < current_kind;
+
+    const word_order = std.mem.order(u8, candidate_word, current_word);
+    if (word_order != .eq) return word_order == .lt;
+
+    const matched_order = std.mem.order(u8, candidate_matched, current_matched);
+    if (matched_order != .eq) return matched_order == .lt;
+
+    return candidate_entry_index < current_entry_index;
 }
 
 fn containsLookupHitForEntry(hits: []const LookupHit, entry_index: u32) bool {
@@ -2812,6 +2914,82 @@ test "lookupExact appends canonical hits for alias-only entries and redirects" {
     const cycle_hits = try dict.lookupExact(std.testing.allocator, "alpha");
     defer std.testing.allocator.free(cycle_hits);
     try std.testing.expectEqual(@as(usize, 0), cycle_hits.len);
+}
+
+test "lookupExact and suggest prefer the exact case-sensitive title entry" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xml =
+        \\<mediawiki>
+        \\<page>
+        \\<title>China</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Proper noun===
+        \\# [[country]]
+        \\</text></revision>
+        \\</page>
+        \\<page>
+        \\<title>china</title>
+        \\<ns>0</ns>
+        \\<revision><text xml:space="preserve">==English==
+        \\===Alternative forms===
+        \\* {{alt|en|China||dated}}
+        \\===Noun===
+        \\# [[porcelain]]
+        \\</text></revision>
+        \\</page>
+        \\</mediawiki>
+    ;
+
+    const db_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dict.bin", .{tmp.sub_path});
+    defer std.testing.allocator.free(db_path);
+    const xml_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/sample.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(xml_path);
+    try writeXmlFixtureWithStructure(xml_path, xml);
+
+    _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_path,
+        .output_path = db_path,
+    });
+
+    var dict = try Dictionary.open(std.testing.allocator, std.testing.io, db_path, .{});
+    defer dict.deinit();
+
+    const lower_hits = try dict.lookupExact(std.testing.allocator, "china");
+    defer std.testing.allocator.free(lower_hits);
+    try std.testing.expectEqual(@as(usize, 2), lower_hits.len);
+    try std.testing.expectEqualStrings("china", dict.entryAt(lower_hits[0].entry_index).word());
+    try std.testing.expectEqualStrings("China", dict.entryAt(lower_hits[1].entry_index).word());
+
+    const upper_hits = try dict.lookupExact(std.testing.allocator, "China");
+    defer std.testing.allocator.free(upper_hits);
+    try std.testing.expectEqual(@as(usize, 2), upper_hits.len);
+    try std.testing.expectEqualStrings("China", dict.entryAt(upper_hits[0].entry_index).word());
+    try std.testing.expectEqualStrings("china", dict.entryAt(upper_hits[1].entry_index).word());
+
+    const lower_suggestions = try dict.suggest(std.testing.allocator, "china", 4);
+    defer std.testing.allocator.free(lower_suggestions);
+    try std.testing.expectEqual(@as(usize, 2), lower_suggestions.len);
+    try std.testing.expectEqualStrings("china", dict.entryAt(lower_suggestions[0].entry_index).word());
+    try std.testing.expectEqualStrings("China", dict.entryAt(lower_suggestions[1].entry_index).word());
+
+    const upper_suggestions = try dict.suggest(std.testing.allocator, "China", 4);
+    defer std.testing.allocator.free(upper_suggestions);
+    try std.testing.expectEqual(@as(usize, 2), upper_suggestions.len);
+    try std.testing.expectEqualStrings("China", dict.entryAt(upper_suggestions[0].entry_index).word());
+    try std.testing.expectEqualStrings("china", dict.entryAt(upper_suggestions[1].entry_index).word());
+
+    const lower_link_target = try dict.resolveLinkTargetAlloc(std.testing.allocator, "china");
+    defer if (lower_link_target) |value| std.testing.allocator.free(value);
+    try std.testing.expect(lower_link_target != null);
+    try std.testing.expectEqualStrings("china", lower_link_target.?);
+
+    const upper_link_target = try dict.resolveLinkTargetAlloc(std.testing.allocator, "China");
+    defer if (upper_link_target) |value| std.testing.allocator.free(value);
+    try std.testing.expect(upper_link_target != null);
+    try std.testing.expectEqualStrings("China", upper_link_target.?);
 }
 
 test "resolveLinkTargetAlloc follows alias-only form chains and breaks cycles" {

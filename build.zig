@@ -1070,7 +1070,7 @@ fn addZxmlConfigModule(b: *std.Build) std.Build.LazyPath {
 }
 
 fn generateDefaultStructureTableSource(b: *std.Build) ![]const u8 {
-    var bootstrap_build = try bootstrap_support.buildDataFromLegacyAlloc(b.allocator, .{
+    var bootstrap_build = try bootstrap_support.buildDataFromInputsAlloc(b.allocator, .{
         .heading_profiles = &bootstrap_heading_profiles,
     });
     defer bootstrap_build.deinit(b.allocator);

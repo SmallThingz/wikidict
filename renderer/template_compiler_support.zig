@@ -175,12 +175,6 @@ pub const TemplateArgs = struct {
     }
 };
 
-// Legacy generated runtimes call this to mark the argument bundle as observed.
-// Keeping the shim avoids rebuilding every previously generated template runtime.
-pub fn touchTemplateArgs(args: *const TemplateArgs) void {
-    _ = args;
-}
-
 pub const TemplateArgsBuilder = struct {
     positional: std.ArrayList([]const u8) = .empty,
     named: std.ArrayList(NamedArg) = .empty,

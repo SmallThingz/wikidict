@@ -2185,9 +2185,6 @@ fn emitTemplateFunction(
         \\    _ = args;
         \\
     );
-    if (template.manual_impl == null and !nodesUseArgs(template.nodes)) {
-        try writer.writeAll("    support.touchTemplateArgs(args);\n");
-    }
     if (template.manual_impl) |manual_impl| {
         switch (manual_impl) {
             .strlen_lite => try emitManualTemplateStrLenLite(writer),
@@ -3646,10 +3643,8 @@ fn expandReachableModulesWithLiteralRefsAlloc(
         try queue.append(allocator, gop.key_ptr.*);
     }
 
-    // These helper/data modules are required by high-frequency templates but
-    // may come from compat fallbacks rather than the dump itself. They still
-    // need stable static dispatch slots so emitted require/loadData calls never
-    // fall back to unsupported dynamic lookup.
+    // These helper/data modules need stable static dispatch slots so emitted
+    // require/loadData calls never fall back to unsupported dynamic lookup.
     for (known_dispatch_gap_modules) |name| {
         const duped = try allocator.dupe(u8, name);
         errdefer allocator.free(duped);
