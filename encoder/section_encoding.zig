@@ -308,6 +308,12 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
         errdefer allocator.free(title);
 
         const payload = readLengthPrefixedSlice(encoded, &cursor, encoded.len) catch return error.InvalidEncoding;
+        const term_records: ?[]TermRecord = if (kind == .term_list)
+            try decodeTermRecordsAlloc(allocator, payload)
+        else
+            null;
+        errdefer if (term_records) |records| deinitTermRecords(allocator, records);
+
         var body: []const u8 = undefined;
         var line_count: usize = 0;
         if (kind == .lines) {
@@ -317,7 +323,7 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
         } else {
             body = switch (kind) {
                 .pos_lines => try decodeLineStreamAlloc(allocator, payload),
-                .term_list => try decodeTermSectionAlloc(allocator, payload),
+                .term_list => try renderTermRecordsAlloc(allocator, term_records.?),
                 .translations => try decodeTranslationSectionAlloc(allocator, payload),
                 .lines => unreachable,
             };
@@ -329,11 +335,6 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
             }
         }
         errdefer allocator.free(body);
-        const term_records: ?[]TermRecord = if (kind == .term_list)
-            try decodeTermRecordsAlloc(allocator, payload)
-        else
-            null;
-        errdefer if (term_records) |records| deinitTermRecords(allocator, records);
 
         try sections.append(allocator, .{
             .level = level,
@@ -599,57 +600,41 @@ fn deinitTermRecords(allocator: std.mem.Allocator, records: []TermRecord) void {
     allocator.free(records);
 }
 
-fn decodeTermSectionAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
-    var cursor: usize = 0;
-
+fn renderTermRecordsAlloc(allocator: std.mem.Allocator, records: []const TermRecord) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
-    var first = true;
-    while (cursor < payload.len) {
-        if (!first) try out.append(allocator, '\n');
-        if (cursor >= payload.len) return error.InvalidEncoding;
-
-        if (payload[cursor] != record_column_escape) {
-            const line = try decodeEncodedLineAlloc(allocator, payload, &cursor, payload.len);
-            defer allocator.free(line);
-            try out.appendSlice(allocator, line);
-            first = false;
-            continue;
+    for (records, 0..) |record, record_index| {
+        if (record_index != 0) try out.append(allocator, '\n');
+        switch (record.kind) {
+            .line => try out.appendSlice(allocator, record.text),
+            .column => {
+                const template_code = record.columns orelse column_col;
+                try out.appendSlice(allocator, columnTemplateStart(template_code) orelse return error.InvalidEncoding);
+                for (record.items, 0..) |item, item_index| {
+                    if (!record.block_layout or item_index < record.first_line_item_count) {
+                        try out.append(allocator, '|');
+                    } else {
+                        try out.appendSlice(allocator, "\n|");
+                    }
+                    try out.appendSlice(allocator, item);
+                }
+                if (record.block_layout) {
+                    try out.appendSlice(allocator, "\n}}");
+                } else {
+                    try out.appendSlice(allocator, "}}");
+                }
+            },
         }
-
-        cursor += 1;
-        if (cursor >= payload.len) return error.InvalidEncoding;
-        const record_code = payload[cursor];
-        const template_code = columnTemplateCodeForInlineRecord(record_code) orelse columnTemplateCodeForBlockRecord(record_code) orelse return error.InvalidEncoding;
-        const is_block = columnTemplateCodeForBlockRecord(record_code) != null;
-        cursor += 1;
-        const first_line_item_count = if (is_block)
-            format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding
-        else
-            0;
-        const item_count = format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding;
-        try out.appendSlice(allocator, columnTemplateStart(template_code) orelse return error.InvalidEncoding);
-        var item_index: usize = 0;
-        while (item_index < item_count) : (item_index += 1) {
-            const item = try readCompactTerminatedAlloc(allocator, payload, &cursor, payload.len);
-            defer allocator.free(item);
-            if (!is_block or item_index < first_line_item_count) {
-                try out.append(allocator, '|');
-            } else {
-                try out.appendSlice(allocator, "\n|");
-            }
-            try out.appendSlice(allocator, item);
-        }
-        if (is_block) {
-            try out.appendSlice(allocator, "\n}}");
-        } else {
-            try out.appendSlice(allocator, "}}");
-        }
-        first = false;
     }
 
     return out.toOwnedSlice(allocator);
+}
+
+fn decodeTermSectionAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+    const records = try decodeTermRecordsAlloc(allocator, payload);
+    defer deinitTermRecords(allocator, records);
+    return renderTermRecordsAlloc(allocator, records);
 }
 
 fn encodeTranslationSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
