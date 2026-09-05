@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const zxml = @import("zxml");
 
 const encoder = @import("encoder");
-const lua = @import("lua");
 const wikitext = encoder.wikitext;
 const xml_decode = encoder.xml_decode;
 const required_path = @import("required_path.zig");
@@ -169,12 +168,7 @@ const Analyzer = struct {
     translation_target_lang_counts: std.StringHashMapUnmanaged(u64) = .empty,
     anomaly_kind_counts: std.StringHashMapUnmanaged(u64) = .empty,
     anomaly_samples: std.ArrayListUnmanaged(AnomalySample) = .empty,
-    entry_direct_modules: std.StringHashMap(void),
-    template_nodes: std.StringHashMap(lua.TemplateDependencyNode),
-    module_nodes: std.StringHashMap([]const []const u8),
     entry_page_refs: std.StringHashMap(SourcePageOffset),
-    template_page_refs: std.StringHashMap(SourcePageOffset),
-    module_page_refs: std.StringHashMap(SourcePageOffset),
     key_scratch: std.ArrayList(u8) = .empty,
     shape_scratch: std.ArrayList(u8) = .empty,
 
@@ -183,12 +177,7 @@ const Analyzer = struct {
             .gpa = gpa,
             .arena = std.heap.ArenaAllocator.init(gpa),
             .options = options,
-            .entry_direct_modules = std.StringHashMap(void).init(gpa),
-            .template_nodes = std.StringHashMap(lua.TemplateDependencyNode).init(gpa),
-            .module_nodes = std.StringHashMap([]const []const u8).init(gpa),
             .entry_page_refs = std.StringHashMap(SourcePageOffset).init(gpa),
-            .template_page_refs = std.StringHashMap(SourcePageOffset).init(gpa),
-            .module_page_refs = std.StringHashMap(SourcePageOffset).init(gpa),
         };
     }
 
@@ -215,12 +204,7 @@ const Analyzer = struct {
         self.translation_target_lang_counts.deinit(self.gpa);
         self.anomaly_kind_counts.deinit(self.gpa);
         self.anomaly_samples.deinit(self.gpa);
-        self.entry_direct_modules.deinit();
-        self.template_nodes.deinit();
-        self.module_nodes.deinit();
         self.entry_page_refs.deinit();
-        self.template_page_refs.deinit();
-        self.module_page_refs.deinit();
         self.key_scratch.deinit(self.gpa);
         self.shape_scratch.deinit(self.gpa);
         self.arena.deinit();
@@ -291,91 +275,11 @@ const Analyzer = struct {
         }
     }
 
-    fn cloneStringSlice(self: *Analyzer, values: []const []const u8) ![]const []const u8 {
-        const out = try self.keyAllocator().alloc([]const u8, values.len);
-        for (values, 0..) |value, idx| out[idx] = try self.keyAllocator().dupe(u8, value);
-        return out;
-    }
-
-    fn mergeUniqueStringSlice(self: *Analyzer, existing: []const []const u8, incoming: []const []const u8) ![]const []const u8 {
-        var additional: usize = 0;
-        for (incoming) |value| {
-            if (!stringSliceContains(existing, value)) additional += 1;
-        }
-        if (additional == 0) return existing;
-
-        const out = try self.keyAllocator().alloc([]const u8, existing.len + additional);
-        @memcpy(out[0..existing.len], existing);
-        var out_idx = existing.len;
-        for (incoming) |value| {
-            if (stringSliceContains(existing, value)) continue;
-            out[out_idx] = try self.keyAllocator().dupe(u8, value);
-            out_idx += 1;
-        }
-        return out;
-    }
-
-    fn mergeStringSet(self: *Analyzer, dst: *std.StringHashMap(void), src: *const std.StringHashMap(void)) !void {
-        var it = src.iterator();
-        while (it.next()) |entry| {
-            if (dst.contains(entry.key_ptr.*)) continue;
-            try dst.put(try self.keyAllocator().dupe(u8, entry.key_ptr.*), {});
-        }
-    }
-
-    fn mergeTemplateNodes(self: *Analyzer, src: *const std.StringHashMap(lua.TemplateDependencyNode)) !void {
-        var it = src.iterator();
-        while (it.next()) |entry| {
-            if (self.template_nodes.getPtr(entry.key_ptr.*)) |existing| {
-                existing.template_deps = try self.mergeUniqueStringSlice(existing.template_deps, entry.value_ptr.template_deps);
-                existing.direct_modules = try self.mergeUniqueStringSlice(existing.direct_modules, entry.value_ptr.direct_modules);
-                continue;
-            }
-            try self.template_nodes.put(
-                try self.keyAllocator().dupe(u8, entry.key_ptr.*),
-                .{
-                    .template_deps = try self.cloneStringSlice(entry.value_ptr.template_deps),
-                    .direct_modules = try self.cloneStringSlice(entry.value_ptr.direct_modules),
-                },
-            );
-        }
-    }
-
-    fn mergeModuleNodes(self: *Analyzer, src: *const std.StringHashMap([]const []const u8)) !void {
-        var it = src.iterator();
-        while (it.next()) |entry| {
-            if (self.module_nodes.getPtr(entry.key_ptr.*)) |existing| {
-                existing.* = try self.mergeUniqueStringSlice(existing.*, entry.value_ptr.*);
-                continue;
-            }
-            try self.module_nodes.put(
-                try self.keyAllocator().dupe(u8, entry.key_ptr.*),
-                try self.cloneStringSlice(entry.value_ptr.*),
-            );
-        }
-    }
-
     fn mergeSourcePageRefs(self: *Analyzer, dst: *std.StringHashMap(SourcePageOffset), src: *const std.StringHashMap(SourcePageOffset)) !void {
         var it = src.iterator();
         while (it.next()) |entry| {
             if (dst.contains(entry.key_ptr.*)) continue;
             try dst.put(try self.keyAllocator().dupe(u8, entry.key_ptr.*), entry.value_ptr.*);
-        }
-    }
-
-    fn rememberTemplatePage(self: *Analyzer, allocator: std.mem.Allocator, title: []const u8, source: []const u8, page_start: usize, page_end: usize) !void {
-        _ = allocator;
-        _ = source;
-        if (!std.mem.startsWith(u8, title, "Template:")) return;
-
-        const canonical = try lua.canonicalTemplateNameAlloc(self.gpa, title["Template:".len..]);
-        defer self.gpa.free(canonical);
-
-        if (!self.template_page_refs.contains(canonical)) {
-            try self.template_page_refs.put(
-                try self.keyAllocator().dupe(u8, canonical),
-                .{ .page_start = @intCast(page_start), .page_end = @intCast(page_end) },
-            );
         }
     }
 
@@ -385,41 +289,6 @@ const Analyzer = struct {
             try self.keyAllocator().dupe(u8, title),
             .{ .page_start = @intCast(page_start), .page_end = @intCast(page_end) },
         );
-    }
-
-    fn rememberModulePage(self: *Analyzer, allocator: std.mem.Allocator, title: []const u8, source: []const u8, page_start: usize, page_end: usize) !void {
-        _ = allocator;
-        _ = source;
-        if (!std.mem.startsWith(u8, title, "Module:")) return;
-
-        const canonical = try lua.canonicalModuleNameAlloc(self.gpa, title["Module:".len..]);
-        defer self.gpa.free(canonical);
-
-        if (!self.module_page_refs.contains(canonical)) {
-            try self.module_page_refs.put(
-                try self.keyAllocator().dupe(u8, canonical),
-                .{ .page_start = @intCast(page_start), .page_end = @intCast(page_end) },
-            );
-        }
-    }
-
-    fn rememberEntryInvokeModules(self: *Analyzer, line: []const u8) !void {
-        var cursor: usize = 0;
-        while (std.mem.indexOfPos(u8, line, cursor, "{{#invoke:")) |start| {
-            var name_start = start + "{{#invoke:".len;
-            while (name_start < line.len and std.ascii.isWhitespace(line[name_start])) : (name_start += 1) {}
-            var name_end = name_start;
-            while (name_end < line.len and line[name_end] != '|' and line[name_end] != '}' and line[name_end] != '\n') : (name_end += 1) {}
-            const raw_name = std.mem.trim(u8, line[name_start..name_end], " \t");
-            if (raw_name.len != 0) {
-                const canonical = try lua.canonicalModuleNameAlloc(self.gpa, raw_name);
-                defer self.gpa.free(canonical);
-                if (!self.entry_direct_modules.contains(canonical)) {
-                    try self.entry_direct_modules.put(try self.keyAllocator().dupe(u8, canonical), {});
-                }
-            }
-            cursor = name_end;
-        }
     }
 
     fn mergeFrom(self: *Analyzer, other: *const Analyzer) !void {
@@ -452,12 +321,7 @@ const Analyzer = struct {
         try self.mergeCountMap(&self.translation_source_label_counts, other.translation_source_label_counts);
         try self.mergeCountMap(&self.translation_target_lang_counts, other.translation_target_lang_counts);
         try self.mergeCountMap(&self.anomaly_kind_counts, other.anomaly_kind_counts);
-        try self.mergeStringSet(&self.entry_direct_modules, &other.entry_direct_modules);
-        try self.mergeTemplateNodes(&other.template_nodes);
-        try self.mergeModuleNodes(&other.module_nodes);
         try self.mergeSourcePageRefs(&self.entry_page_refs, &other.entry_page_refs);
-        try self.mergeSourcePageRefs(&self.template_page_refs, &other.template_page_refs);
-        try self.mergeSourcePageRefs(&self.module_page_refs, &other.module_page_refs);
 
         for (other.anomaly_samples.items) |sample| try self.appendAnomalySample(sample);
     }
@@ -493,7 +357,6 @@ const Analyzer = struct {
             }
 
             const trimmed = std.mem.trim(u8, raw_line, " \t");
-            try self.rememberEntryInvokeModules(raw_line);
             const scope = currentHeadingLabel(&active_titles, language_title);
             const profile = currentHeadingProfile(&active_titles, language_title);
             const family = profile.family;
@@ -632,11 +495,14 @@ const Analyzer = struct {
             };
 
             const body = line[open + 2 .. end];
-            const name = templateNameFromBody(body);
-            if (name.len != 0 and name.len <= 80) {
-                try self.bump(&self.template_counts, name);
-                try self.bumpComposite(&self.section_template_counts, scope, name, "\t");
-                try self.bumpComposite(&self.family_template_counts, family, name, "\t");
+            const raw_name = templateNameFromBody(body);
+            if (raw_name.len != 0 and raw_name.len <= 80) {
+                const name = try canonicalTemplateNameScratch(&self.shape_scratch, self.gpa, raw_name);
+                if (name.len != 0) {
+                    try self.bump(&self.template_counts, name);
+                    try self.bumpComposite(&self.section_template_counts, scope, name, "\t");
+                    try self.bumpComposite(&self.family_template_counts, family, name, "\t");
+                }
 
                 const shape = try templateShapeAlloc(self.gpa, body);
                 defer self.gpa.free(shape);
@@ -1095,18 +961,7 @@ fn processPageFragment(
     defer decoded_text.deinit(allocator);
     const text = decoded_text.slice();
 
-    switch (ns) {
-        0 => {},
-        10 => {
-            try analyzer.rememberTemplatePage(allocator, title, text, page_start, page_end);
-            return;
-        },
-        828 => {
-            try analyzer.rememberModulePage(allocator, title, text, page_start, page_end);
-            return;
-        },
-        else => return,
-    }
+    if (ns != 0) return;
 
     analyzer.namespace_zero_pages += 1;
     try analyzer.rememberEntryPage(title, page_start, page_end);
@@ -1171,9 +1026,12 @@ fn writeReport(io: std.Io, allocator: std.mem.Allocator, analyzer: *Analyzer) !v
 
     const build_inputs = try buildInputsAlloc(arena_allocator, analyzer);
     var build = try structure_tables_support.buildDataFromInputsAlloc(arena_allocator, build_inputs);
-    const dependencies = try buildStructureDependenciesAlloc(arena_allocator, allocator, analyzer, build);
-    try replaceBuildLineTemplatesAlloc(arena_allocator, &build, dependencies.reachable_templates);
+    const template_names = try collectSortedMapKeysAlloc(arena_allocator, analyzer.template_counts);
+    try replaceBuildLineTemplatesAlloc(arena_allocator, &build, template_names);
     build.structure_fingerprint = structure_tables_support.computeStructureFingerprint(build);
+    const dependencies: structure_tables_support.Dependencies = .{
+        .all_entry_pages = try collectAllSourceRefsAlloc(arena_allocator, analyzer.entry_page_refs),
+    };
 
     if (std.mem.eql(u8, analyzer.options.output_path, "-")) {
         var stdout_buffer: [256]u8 = undefined;
@@ -1253,319 +1111,6 @@ fn sortedCompositeCounts(allocator: std.mem.Allocator, map: std.StringHashMapUnm
     return items;
 }
 
-fn buildStructureDependenciesAlloc(
-    dest_allocator: std.mem.Allocator,
-    scratch_allocator: std.mem.Allocator,
-    analyzer: *Analyzer,
-    build: structure_tables_support.BuildData,
-) !structure_tables_support.Dependencies {
-    const all_root_templates = try collectBuildTemplateRootsAlloc(scratch_allocator, build);
-    defer freeOwnedStringSlice(scratch_allocator, all_root_templates);
-
-    const use_prebuilt_graph = analyzer.template_nodes.count() != 0 or analyzer.module_nodes.count() != 0;
-
-    const root_templates = try filterNamesPresentInMapAlloc(
-        scratch_allocator,
-        all_root_templates,
-        analyzer.template_page_refs,
-    );
-    defer freeOwnedStringSlice(scratch_allocator, root_templates);
-
-    const entry_direct_modules = try collectSortedMapKeysAlloc(scratch_allocator, analyzer.entry_direct_modules);
-    defer freeOwnedStringSlice(scratch_allocator, entry_direct_modules);
-
-    var report = if (use_prebuilt_graph) blk: {
-        break :blk try lua.analyzeRenderDependenciesFromGraphAlloc(scratch_allocator, root_templates, .{
-            .entry_direct_modules = entry_direct_modules,
-            .template_nodes = &analyzer.template_nodes,
-            .module_nodes = &analyzer.module_nodes,
-        });
-    } else blk: {
-        const template_refs = try collectBorrowedSourceRefsAlloc(scratch_allocator, analyzer.template_page_refs);
-        defer scratch_allocator.free(template_refs);
-        const module_refs = try collectBorrowedSourceRefsAlloc(scratch_allocator, analyzer.module_page_refs);
-        defer scratch_allocator.free(module_refs);
-
-        break :blk try analyzeRenderDependenciesFromPageRefsAlloc(
-            scratch_allocator,
-            analyzer.options.input_path,
-            root_templates,
-            entry_direct_modules,
-            template_refs,
-            module_refs,
-        );
-    };
-    defer report.deinit(scratch_allocator);
-
-    const reachable_templates = try filterNamesPresentInMapAlloc(
-        scratch_allocator,
-        report.reachable_templates,
-        analyzer.template_page_refs,
-    );
-    defer freeOwnedStringSlice(scratch_allocator, reachable_templates);
-
-    const transitive_modules = try filterNamesPresentInMapAlloc(
-        scratch_allocator,
-        report.transitive_modules,
-        analyzer.module_page_refs,
-    );
-    defer freeOwnedStringSlice(scratch_allocator, transitive_modules);
-
-    return .{
-        .root_templates = try dupStringSliceAlloc(dest_allocator, report.root_templates),
-        .reachable_templates = try dupStringSliceAlloc(dest_allocator, reachable_templates),
-        // Keep the structure report self-contained for codegen. This is a
-        // conservative superset of runtime-built template names, but it avoids
-        // a second dynamic-name analysis pass during template compilation.
-        .dynamic_templates = try dupStringSliceAlloc(dest_allocator, reachable_templates),
-        .unresolved_templates = try dupStringSliceAlloc(dest_allocator, report.unresolved_templates),
-        .direct_modules = try dupStringSliceAlloc(dest_allocator, report.direct_modules),
-        .transitive_modules = try dupStringSliceAlloc(dest_allocator, transitive_modules),
-        .all_entry_pages = try collectAllSourceRefsAlloc(dest_allocator, analyzer.entry_page_refs),
-        .all_template_pages = try collectAllSourceRefsAlloc(dest_allocator, analyzer.template_page_refs),
-        .all_module_pages = try collectAllSourceRefsAlloc(dest_allocator, analyzer.module_page_refs),
-        .reachable_template_pages = try collectDependencySourceRefsAlloc(dest_allocator, reachable_templates, analyzer.template_page_refs),
-        .transitive_module_pages = try collectDependencySourceRefsAlloc(dest_allocator, transitive_modules, analyzer.module_page_refs),
-        .missing_modules = try dupStringSliceAlloc(dest_allocator, report.missing_modules),
-        .compiled_failed = try dupDependencyFailuresAlloc(dest_allocator, report.compiled_failed),
-        .emitted_inconsistent = try dupDependencyFailuresAlloc(dest_allocator, report.emitted_inconsistent),
-    };
-}
-
-fn analyzeRenderDependenciesFromPageRefsAlloc(
-    allocator: std.mem.Allocator,
-    input_path: []const u8,
-    root_templates: []const []const u8,
-    entry_direct_modules: []const []const u8,
-    template_refs: []const lua.SourcePageRef,
-    module_refs: []const lua.SourcePageRef,
-) !lua.TemplateDependencyReport {
-    var sources = try collectReachableSourcesFromPageRefsAlloc(
-        allocator,
-        input_path,
-        root_templates,
-        entry_direct_modules,
-        template_refs,
-        module_refs,
-    );
-    defer sources.deinit(allocator);
-
-    return try lua.analyzeRenderDependenciesFromSourcesAlloc(
-        allocator,
-        root_templates,
-        entry_direct_modules,
-        &sources,
-    );
-}
-
-fn collectReachableSourcesFromPageRefsAlloc(
-    allocator: std.mem.Allocator,
-    input_path: []const u8,
-    root_templates: []const []const u8,
-    entry_direct_modules: []const []const u8,
-    template_refs: []const lua.SourcePageRef,
-    module_refs: []const lua.SourcePageRef,
-) !lua.TemplateSources {
-    var template_ref_map = std.StringHashMapUnmanaged(lua.SourcePageRef){};
-    defer template_ref_map.deinit(allocator);
-    for (template_refs) |ref| {
-        const gop = try template_ref_map.getOrPut(allocator, ref.name);
-        if (!gop.found_existing) gop.key_ptr.* = ref.name;
-        gop.value_ptr.* = ref;
-    }
-
-    var module_ref_map = std.StringHashMapUnmanaged(lua.SourcePageRef){};
-    defer module_ref_map.deinit(allocator);
-    for (module_refs) |ref| {
-        const gop = try module_ref_map.getOrPut(allocator, ref.name);
-        if (!gop.found_existing) gop.key_ptr.* = ref.name;
-        gop.value_ptr.* = ref;
-    }
-
-    var mapped = try mmapReadOnlyPath(std.Options.debug_io, input_path);
-    defer mapped.deinit();
-    const mapped_bytes = mapped.bytes();
-
-    var sources = lua.TemplateSources{
-        .template_sources = std.StringHashMap([]const u8).init(allocator),
-        .module_sources = std.StringHashMap([]const u8).init(allocator),
-    };
-    errdefer sources.deinit(allocator);
-
-    var pending_templates = std.StringHashMapUnmanaged(void){};
-    defer deinitOwnedStringSet(allocator, &pending_templates);
-    var pending_modules = std.StringHashMapUnmanaged(void){};
-    defer deinitOwnedStringSet(allocator, &pending_modules);
-
-    var template_stack: std.ArrayList([]const u8) = .empty;
-    defer template_stack.deinit(allocator);
-    var module_stack: std.ArrayList([]const u8) = .empty;
-    defer module_stack.deinit(allocator);
-
-    for (root_templates) |name| {
-        const canonical = try lua.canonicalTemplateNameAlloc(allocator, name);
-        defer allocator.free(canonical);
-        const gop = try pending_templates.getOrPut(allocator, canonical);
-        if (!gop.found_existing) {
-            gop.key_ptr.* = try allocator.dupe(u8, canonical);
-            try template_stack.append(allocator, gop.key_ptr.*);
-        }
-    }
-
-    for (entry_direct_modules) |name| {
-        const canonical = try lua.canonicalModuleNameAlloc(allocator, name);
-        defer allocator.free(canonical);
-        const gop = try pending_modules.getOrPut(allocator, canonical);
-        if (!gop.found_existing) {
-            gop.key_ptr.* = try allocator.dupe(u8, canonical);
-            try module_stack.append(allocator, gop.key_ptr.*);
-        }
-    }
-
-    while (template_stack.pop()) |name| {
-        if (sources.template_sources.contains(name)) continue;
-        const ref = template_ref_map.get(name) orelse continue;
-
-        const source = try loadSelectedSourceFromMappedAlloc(allocator, mapped_bytes, ref, "10");
-        errdefer allocator.free(source);
-        const key = try allocator.dupe(u8, name);
-        errdefer allocator.free(key);
-        try sources.template_sources.put(key, source);
-
-        const template_deps = try lua.extractTemplateDependenciesAlloc(allocator, source, name);
-        defer freeOwnedStringSlice(allocator, template_deps);
-        for (template_deps) |dep| {
-            if (sources.template_sources.contains(dep)) continue;
-            const gop = try pending_templates.getOrPut(allocator, dep);
-            if (!gop.found_existing) {
-                gop.key_ptr.* = try allocator.dupe(u8, dep);
-                try template_stack.append(allocator, gop.key_ptr.*);
-            }
-        }
-
-        const direct_modules = try lua.extractInvokeModulesAlloc(allocator, source);
-        defer freeOwnedStringSlice(allocator, direct_modules);
-        for (direct_modules) |module_name| {
-            if (sources.module_sources.contains(module_name)) continue;
-            const gop = try pending_modules.getOrPut(allocator, module_name);
-            if (!gop.found_existing) {
-                gop.key_ptr.* = try allocator.dupe(u8, module_name);
-                try module_stack.append(allocator, gop.key_ptr.*);
-            }
-        }
-    }
-
-    while (module_stack.pop()) |name| {
-        if (sources.module_sources.contains(name)) continue;
-        const ref = module_ref_map.get(name) orelse continue;
-
-        const source = try loadSelectedSourceFromMappedAlloc(allocator, mapped_bytes, ref, "828");
-        errdefer allocator.free(source);
-        const key = try allocator.dupe(u8, name);
-        errdefer allocator.free(key);
-        try sources.module_sources.put(key, source);
-
-        const deps = try lua.extractModuleDependencies(allocator, source);
-        defer freeOwnedStringSlice(allocator, deps);
-        for (deps) |dep| {
-            if (sources.module_sources.contains(dep)) continue;
-            const gop = try pending_modules.getOrPut(allocator, dep);
-            if (!gop.found_existing) {
-                gop.key_ptr.* = try allocator.dupe(u8, dep);
-                try module_stack.append(allocator, gop.key_ptr.*);
-            }
-        }
-    }
-
-    return sources;
-}
-
-fn collectBorrowedSourceRefsAlloc(
-    allocator: std.mem.Allocator,
-    map: std.StringHashMap(SourcePageOffset),
-) ![]const lua.SourcePageRef {
-    const out = try allocator.alloc(lua.SourcePageRef, map.count());
-    var it = map.iterator();
-    var idx: usize = 0;
-    while (it.next()) |entry| : (idx += 1) {
-        out[idx] = .{
-            .name = entry.key_ptr.*,
-            .page_start = entry.value_ptr.page_start,
-            .page_end = entry.value_ptr.page_end,
-        };
-    }
-    return out;
-}
-
-fn loadSelectedSourceFromMappedAlloc(
-    allocator: std.mem.Allocator,
-    mapped: []const u8,
-    ref: lua.SourcePageRef,
-    expected_ns: []const u8,
-) ![]u8 {
-    const start = std.math.cast(usize, ref.page_start) orelse return error.FileTooBig;
-    const end = std.math.cast(usize, ref.page_end) orelse return error.FileTooBig;
-    if (start >= end or end > mapped.len) return error.InvalidDictionaryFile;
-
-    const page_fragment = mapped[start..end];
-    const ns = extractPageTagText(page_fragment, "ns") orelse return error.InvalidDictionaryFile;
-    if (!std.mem.eql(u8, std.mem.trim(u8, ns, " \t\r\n"), expected_ns)) return error.InvalidDictionaryFile;
-
-    const text_raw = extractPageText(page_fragment) orelse return error.InvalidDictionaryFile;
-    return try xml_decode.decodeSinglePassAlloc(allocator, text_raw);
-}
-
-fn extractPageTagText(page: []const u8, tag: []const u8) ?[]const u8 {
-    var start_buf: [32]u8 = undefined;
-    var end_buf: [32]u8 = undefined;
-    const start = std.fmt.bufPrint(&start_buf, "<{s}>", .{tag}) catch return null;
-    const end = std.fmt.bufPrint(&end_buf, "</{s}>", .{tag}) catch return null;
-    const start_idx = std.mem.indexOf(u8, page, start) orelse return null;
-    const after_start = start_idx + start.len;
-    const end_idx = std.mem.indexOfPos(u8, page, after_start, end) orelse return null;
-    return page[after_start..end_idx];
-}
-
-fn extractPageText(page: []const u8) ?[]const u8 {
-    const text_tag_start = std.mem.indexOf(u8, page, "<text") orelse return null;
-    const content_start_rel = std.mem.indexOfScalarPos(u8, page, text_tag_start, '>') orelse return null;
-    const content_start = content_start_rel + 1;
-    const content_end = std.mem.indexOfPos(u8, page, content_start, "</text>") orelse return null;
-    return page[content_start..content_end];
-}
-
-fn collectBuildTemplateRootsAlloc(
-    allocator: std.mem.Allocator,
-    build: structure_tables_support.BuildData,
-) ![]const []const u8 {
-    var set = std.StringHashMapUnmanaged(void){};
-    defer {
-        var it = set.iterator();
-        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
-        set.deinit(allocator);
-    }
-
-    for (build.line_templates) |entry| {
-        const gop = try set.getOrPut(allocator, entry.name);
-        if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, entry.name);
-    }
-    for (build.translation_templates) |entry| {
-        const gop = try set.getOrPut(allocator, entry.name);
-        if (!gop.found_existing) gop.key_ptr.* = try allocator.dupe(u8, entry.name);
-    }
-
-    var out = try allocator.alloc([]const u8, set.count());
-    var it = set.iterator();
-    var idx: usize = 0;
-    while (it.next()) |entry| : (idx += 1) out[idx] = try allocator.dupe(u8, entry.key_ptr.*);
-    std.mem.sortUnstable([]const u8, out, {}, struct {
-        fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
-            return std.mem.order(u8, lhs, rhs) == .lt;
-        }
-    }.lessThan);
-    return out;
-}
-
 fn replaceBuildLineTemplatesAlloc(
     allocator: std.mem.Allocator,
     build: *structure_tables_support.BuildData,
@@ -1584,20 +1129,6 @@ fn replaceBuildLineTemplatesAlloc(
 fn dupStringSliceAlloc(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
     const out = try allocator.alloc([]const u8, values.len);
     for (values, out) |value, *slot| slot.* = try allocator.dupe(u8, value);
-    return out;
-}
-
-fn dupDependencyFailuresAlloc(
-    allocator: std.mem.Allocator,
-    failures: []const lua.ModuleCompileFailure,
-) ![]const structure_tables_support.DependencyFailure {
-    const out = try allocator.alloc(structure_tables_support.DependencyFailure, failures.len);
-    for (failures, out) |failure, *slot| {
-        slot.* = .{
-            .name = try allocator.dupe(u8, failure.name),
-            .reason = try allocator.dupe(u8, failure.reason),
-        };
-    }
     return out;
 }
 
@@ -1655,40 +1186,9 @@ fn collectAllSourceRefsAlloc(
     return collectDependencySourceRefsAlloc(allocator, names, map);
 }
 
-fn filterNamesPresentInMapAlloc(
-    allocator: std.mem.Allocator,
-    names: []const []const u8,
-    map: std.StringHashMap(SourcePageOffset),
-) ![]const []const u8 {
-    var out: std.ArrayList([]const u8) = .empty;
-    errdefer {
-        for (out.items) |name| allocator.free(name);
-        out.deinit(allocator);
-    }
-
-    for (names) |name| {
-        if (!map.contains(name)) continue;
-        try out.append(allocator, try allocator.dupe(u8, name));
-    }
-    return out.toOwnedSlice(allocator);
-}
-
-fn deinitOwnedStringSet(allocator: std.mem.Allocator, set: *std.StringHashMapUnmanaged(void)) void {
-    var it = set.iterator();
-    while (it.next()) |entry| allocator.free(entry.key_ptr.*);
-    set.deinit(allocator);
-}
-
 fn freeOwnedStringSlice(allocator: std.mem.Allocator, values: []const []const u8) void {
     for (values) |value| allocator.free(value);
     allocator.free(values);
-}
-
-fn stringSliceContains(values: []const []const u8, needle: []const u8) bool {
-    for (values) |value| {
-        if (std.mem.eql(u8, value, needle)) return true;
-    }
-    return false;
 }
 
 fn buildInputsAlloc(
@@ -2229,6 +1729,35 @@ fn templateNameFromBody(body: []const u8) []const u8 {
     return std.mem.trim(u8, trimmed[0..sep], " \t");
 }
 
+fn canonicalTemplateNameScratch(
+    scratch: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+) ![]const u8 {
+    scratch.items.len = 0;
+
+    var trimmed = std.mem.trim(u8, name, " \t\r\n");
+    while (true) {
+        if (trimmed.len >= "subst:".len and std.ascii.startsWithIgnoreCase(trimmed, "subst:")) {
+            trimmed = std.mem.trim(u8, trimmed["subst:".len..], " \t");
+            continue;
+        }
+        if (trimmed.len >= "safesubst:".len and std.ascii.startsWithIgnoreCase(trimmed, "safesubst:")) {
+            trimmed = std.mem.trim(u8, trimmed["safesubst:".len..], " \t");
+            continue;
+        }
+        break;
+    }
+    if (trimmed.len >= "Template:".len and std.ascii.startsWithIgnoreCase(trimmed, "Template:")) {
+        trimmed = std.mem.trim(u8, trimmed["Template:".len..], " \t");
+    }
+    for (trimmed) |byte| {
+        if (byte == ' ' or byte == '\t' or byte == '\r' or byte == '\n' or byte == '_') continue;
+        try scratch.append(allocator, std.ascii.toLower(byte));
+    }
+    return scratch.items;
+}
+
 fn templateShapeAlloc(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
@@ -2566,59 +2095,20 @@ test "internalLinkShapeAlloc records namespaces and pipe tricks" {
 test "binary structure report includes exact build payload" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-
-    const input_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure-fixture.xml", .{tmp.sub_path});
-    defer std.testing.allocator.free(input_path);
-    var fixture = try std.Io.Dir.cwd().createFile(std.testing.io, input_path, .{ .truncate = true });
-    defer fixture.close(std.testing.io);
-    try fixture.writeStreamingAll(std.testing.io,
-        \\<mediawiki>
-        \\  <page><title>Template:custom form of</title><ns>10</ns><revision><text xml:space="preserve">{{{1}}}</text></revision></page>
-        \\</mediawiki>
-    );
-
     const output_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure.bin", .{tmp.sub_path});
     defer std.testing.allocator.free(output_path);
-
-    var analyzer = Analyzer.init(std.testing.allocator, .{
-        .input_path = input_path,
-        .output_path = output_path,
-    });
+    var analyzer = Analyzer.init(std.testing.allocator, .{ .output_path = output_path });
     defer analyzer.deinit();
-
     analyzer.pages_seen = 3;
     analyzer.namespace_zero_pages = 2;
     analyzer.language_entries = 2;
     analyzer.heading_jumps = 1;
-    analyzer.content_before_subheading = 0;
-    analyzer.unbalanced_sections = 0;
     try analyzer.bump(&analyzer.heading_title_counts, "English");
     try analyzer.bump(&analyzer.heading_title_counts, "Noun");
     try analyzer.bump(&analyzer.heading_level_counts, "L3:Noun");
-    try analyzer.bumpComposite(&analyzer.section_template_counts, "Noun", "custom form of", "\t");
+    try analyzer.bump(&analyzer.template_counts, "customformof");
+    try analyzer.bumpComposite(&analyzer.section_template_counts, "Noun", "customformof", "\t");
     try analyzer.bumpComposite(&analyzer.section_template_counts, "Translations", "t", "\t");
-    try analyzer.template_nodes.put(
-        try analyzer.keyAllocator().dupe(u8, "customformof"),
-        .{
-            .template_deps = try analyzer.keyAllocator().alloc([]const u8, 0),
-            .direct_modules = try analyzer.keyAllocator().alloc([]const u8, 0),
-        },
-    );
-    try analyzer.template_nodes.put(
-        try analyzer.keyAllocator().dupe(u8, "t"),
-        .{
-            .template_deps = try analyzer.keyAllocator().alloc([]const u8, 0),
-            .direct_modules = try analyzer.keyAllocator().alloc([]const u8, 0),
-        },
-    );
-    try analyzer.template_page_refs.put(
-        try analyzer.keyAllocator().dupe(u8, "customformof"),
-        .{ .page_start = 10, .page_end = 20 },
-    );
-    try analyzer.template_page_refs.put(
-        try analyzer.keyAllocator().dupe(u8, "t"),
-        .{ .page_start = 21, .page_end = 30 },
-    );
     try analyzer.bump(&analyzer.translation_source_label_counts, "gloss");
     try analyzer.bump(&analyzer.translation_target_lang_counts, "French");
     try analyzer.addAnomaly("entry", "heading-jump", "bad nesting");
@@ -2626,163 +2116,27 @@ test "binary structure report includes exact build payload" {
         try analyzer.keyAllocator().dupe(u8, "entry"),
         .{ .page_start = 1, .page_end = 9 },
     );
-
     try writeReport(std.testing.io, std.testing.allocator, &analyzer);
-
     var structure = try structure_report.loadStructureFileAlloc(std.testing.io, std.testing.allocator, output_path);
     defer structure.deinit(std.testing.allocator);
-
     try std.testing.expect(structure.build.compact_direct_patterns.len != 0);
     try std.testing.expect(structure.build.heading_specs.len != 0);
     try std.testing.expectEqual(@as(usize, 1), structure.dependencies.all_entry_pages.len);
     try std.testing.expectEqualStrings("entry", structure.dependencies.all_entry_pages[0].name);
-    try std.testing.expectEqual(@as(usize, 2), structure.dependencies.all_template_pages.len);
-    try std.testing.expectEqual(@as(usize, 1), structure.dependencies.reachable_template_pages.len);
+    try std.testing.expectEqual(@as(usize, 0), structure.dependencies.all_template_pages.len);
+    try std.testing.expectEqual(@as(usize, 0), structure.dependencies.all_module_pages.len);
 }
 
-test "dependency analysis does not synthesize alias nodes" {
-    var analyzer = Analyzer.init(std.testing.allocator, .{});
+test "extractTemplates canonicalizes entry template names before counting" {
+    var analyzer = Analyzer.init(std.testing.allocator, .{ .input_path = "fixture.xml" });
     defer analyzer.deinit();
 
-    try analyzer.template_nodes.put(
-        try analyzer.keyAllocator().dupe(u8, "an-lite/node"),
-        .{
-            .template_deps = try analyzer.keyAllocator().alloc([]const u8, 0),
-            .direct_modules = try analyzer.keyAllocator().alloc([]const u8, 0),
-        },
-    );
-    try analyzer.template_page_refs.put(
-        try analyzer.keyAllocator().dupe(u8, "an-lite/node"),
-        .{ .page_start = 10, .page_end = 20 },
-    );
-    try analyzer.module_nodes.put(
-        try analyzer.keyAllocator().dupe(u8, "gender and number"),
-        try analyzer.keyAllocator().alloc([]const u8, 0),
-    );
-    try analyzer.module_page_refs.put(
-        try analyzer.keyAllocator().dupe(u8, "gender and number"),
-        .{ .page_start = 30, .page_end = 40 },
-    );
+    try analyzer.extractTemplates("Noun", "part_of_speech", "{{book of the Bible|Books of Chronicles}} {{enPR|f-u}} {{Template:given name|en}} {{subst:SI-unit|m}}");
 
-    try std.testing.expect(!analyzer.template_nodes.contains("an-lite"));
-    try std.testing.expect(!analyzer.module_nodes.contains("gender and number/templates"));
-    try std.testing.expect(!analyzer.template_page_refs.contains("an-lite"));
-    try std.testing.expect(!analyzer.module_page_refs.contains("gender and number/templates"));
-}
-
-test "buildStructureDependenciesAlloc skips root templates without source pages" {
-    var analyzer = Analyzer.init(std.testing.allocator, .{});
-    defer analyzer.deinit();
-
-    try analyzer.template_nodes.put(
-        try analyzer.keyAllocator().dupe(u8, "realtemplate"),
-        .{
-            .template_deps = try analyzer.keyAllocator().alloc([]const u8, 0),
-            .direct_modules = try analyzer.keyAllocator().alloc([]const u8, 0),
-        },
-    );
-    try analyzer.template_page_refs.put(
-        try analyzer.keyAllocator().dupe(u8, "realtemplate"),
-        .{ .page_start = 100, .page_end = 200 },
-    );
-
-    const line_templates = [_]structure_tables_support.TemplateSpec{
-        .{ .code = 1, .name = "realtemplate" },
-        .{ .code = 2, .name = "builtinonly" },
-    };
-    const build = structure_tables_support.BuildData{
-        .heading_specs = &.{},
-        .heading_level_specs = &.{},
-        .line_templates = &line_templates,
-        .compact_patterns = &.{},
-        .compact_patterns_ext = &.{},
-        .translation_templates = &.{},
-        .target_languages = &.{},
-        .language_labels = &.{},
-        .structure_fingerprint = 0,
-    };
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const deps = try buildStructureDependenciesAlloc(arena.allocator(), std.testing.allocator, &analyzer, build);
-    try std.testing.expectEqual(@as(usize, 1), deps.root_templates.len);
-    try std.testing.expectEqualStrings("realtemplate", deps.root_templates[0]);
-    try std.testing.expectEqual(@as(usize, 1), deps.reachable_templates.len);
-    try std.testing.expectEqualStrings("realtemplate", deps.reachable_templates[0]);
-    try std.testing.expectEqual(@as(usize, 1), deps.all_template_pages.len);
-    try std.testing.expectEqualStrings("realtemplate", deps.all_template_pages[0].name);
-    try std.testing.expectEqual(@as(usize, 1), deps.reachable_template_pages.len);
-    try std.testing.expectEqualStrings("realtemplate", deps.reachable_template_pages[0].name);
-    try std.testing.expectEqual(@as(u64, 100), deps.reachable_template_pages[0].page_start);
-    try std.testing.expectEqual(@as(usize, 0), deps.unresolved_templates.len);
-}
-
-test "buildStructureDependenciesAlloc loads reachable dependencies from page refs" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const input_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/structure-refs-fixture.xml", .{tmp.sub_path});
-    defer std.testing.allocator.free(input_path);
-
-    const fixture =
-        \\<mediawiki>
-        \\  <page><title>Template:realtemplate</title><ns>10</ns><revision><text xml:space="preserve">{{subtemplate}}{{#invoke:testmod|main}}</text></revision></page>
-        \\  <page><title>Template:subtemplate</title><ns>10</ns><revision><text xml:space="preserve">body</text></revision></page>
-        \\  <page><title>Module:testmod</title><ns>828</ns><revision><text xml:space="preserve">return { main = function() return "ok" end }</text></revision></page>
-        \\</mediawiki>
-    ;
-
-    var file = try std.Io.Dir.cwd().createFile(std.testing.io, input_path, .{ .truncate = true });
-    defer file.close(std.testing.io);
-    try file.writeStreamingAll(std.testing.io, fixture);
-
-    const root_start = std.mem.indexOf(u8, fixture, "<page><title>Template:realtemplate</title>") orelse unreachable;
-    const root_end_start = std.mem.indexOfPos(u8, fixture, root_start, "</page>") orelse unreachable;
-    const child_start = std.mem.indexOf(u8, fixture, "<page><title>Template:subtemplate</title>") orelse unreachable;
-    const child_end_start = std.mem.indexOfPos(u8, fixture, child_start, "</page>") orelse unreachable;
-    const module_start = std.mem.indexOf(u8, fixture, "<page><title>Module:testmod</title>") orelse unreachable;
-    const module_end_start = std.mem.indexOfPos(u8, fixture, module_start, "</page>") orelse unreachable;
-
-    var analyzer = Analyzer.init(std.testing.allocator, .{ .input_path = input_path });
-    defer analyzer.deinit();
-    try analyzer.template_page_refs.put(
-        try analyzer.keyAllocator().dupe(u8, "realtemplate"),
-        .{ .page_start = @intCast(root_start), .page_end = @intCast(root_end_start + "</page>".len) },
-    );
-    try analyzer.template_page_refs.put(
-        try analyzer.keyAllocator().dupe(u8, "subtemplate"),
-        .{ .page_start = @intCast(child_start), .page_end = @intCast(child_end_start + "</page>".len) },
-    );
-    try analyzer.module_page_refs.put(
-        try analyzer.keyAllocator().dupe(u8, "testmod"),
-        .{ .page_start = @intCast(module_start), .page_end = @intCast(module_end_start + "</page>".len) },
-    );
-
-    const line_templates = [_]structure_tables_support.TemplateSpec{
-        .{ .code = 1, .name = "realtemplate" },
-    };
-    const build = structure_tables_support.BuildData{
-        .heading_specs = &.{},
-        .heading_level_specs = &.{},
-        .line_templates = &line_templates,
-        .compact_patterns = &.{},
-        .compact_patterns_ext = &.{},
-        .translation_templates = &.{},
-        .target_languages = &.{},
-        .language_labels = &.{},
-        .structure_fingerprint = 0,
-    };
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const deps = try buildStructureDependenciesAlloc(arena.allocator(), std.testing.allocator, &analyzer, build);
-    try std.testing.expect(stringSliceContains(deps.reachable_templates, "realtemplate"));
-    try std.testing.expect(stringSliceContains(deps.reachable_templates, "subtemplate"));
-    try std.testing.expect(stringSliceContains(deps.direct_modules, "testmod"));
-    try std.testing.expect(stringSliceContains(deps.transitive_modules, "testmod"));
-    try std.testing.expectEqual(@as(usize, 2), deps.reachable_template_pages.len);
-    try std.testing.expectEqual(@as(usize, 1), deps.transitive_module_pages.len);
-    try std.testing.expectEqual(@as(usize, 0), deps.unresolved_templates.len);
+    try std.testing.expectEqual(@as(?u64, 1), analyzer.template_counts.get("bookofthebible"));
+    try std.testing.expectEqual(@as(?u64, 1), analyzer.template_counts.get("enpr"));
+    try std.testing.expectEqual(@as(?u64, 1), analyzer.template_counts.get("givenname"));
+    try std.testing.expectEqual(@as(?u64, 1), analyzer.template_counts.get("si-unit"));
+    try std.testing.expectEqual(@as(?u64, null), analyzer.template_counts.get("book of the Bible"));
+    try std.testing.expectEqual(@as(?u64, null), analyzer.template_counts.get("enPR"));
 }

@@ -180,8 +180,7 @@ fn runAllTests(
         return;
     }
 
-    const cpu_count = std.Thread.getCpuCount() catch 1;
-    var job_count = jobs orelse cpu_count;
+    var job_count = jobs orelse 1;
     if (job_count == 0) job_count = 1;
     if (job_count > tests.items.len) job_count = tests.items.len;
 
@@ -339,11 +338,11 @@ fn printTestOutput(name: []const u8, res: ChildResult) void {
 
     if (res.stdout.len > 0) {
         std.debug.print(" | out: ", .{});
-        printSingleLine(res.stdout, 200);
+        printSingleLine(res.stdout, if (res.status == .fail or res.status == .crash) 2000 else 200);
     }
     if (res.stderr.len > 0) {
         std.debug.print(" | err: ", .{});
-        printSingleLine(res.stderr, 200);
+        printSingleLine(res.stderr, if (res.status == .fail or res.status == .crash) 2000 else 200);
     }
 
     switch (res.term) {

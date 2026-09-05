@@ -124,6 +124,16 @@ pub fn binaryMappingFingerprint(mappings: RuntimeMappings) u32 {
     for (mappings.direct_patterns) |entry| fingerprintUpdateString(&hasher, entry);
     for (mappings.escaped_patterns) |entry| fingerprintUpdateString(&hasher, entry);
     for (mappings.extended_patterns) |entry| fingerprintUpdateString(&hasher, entry);
+    for (mappings.line_templates) |entry| {
+        var code_buf: [2]u8 = undefined;
+        std.mem.writeInt(u16, &code_buf, entry.code, .little);
+        hasher.update(&code_buf);
+    }
+    for (mappings.translation_templates) |entry| {
+        var code_buf: [2]u8 = undefined;
+        std.mem.writeInt(u16, &code_buf, entry.code, .little);
+        hasher.update(&code_buf);
+    }
     for (mappings.heading_levels) |entry| {
         var code_buf: [2]u8 = undefined;
         std.mem.writeInt(u16, &code_buf, entry.code, .little);

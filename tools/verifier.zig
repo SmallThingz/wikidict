@@ -674,28 +674,49 @@ fn ensureStructureReportExists(io: std.Io, allocator: std.mem.Allocator, options
 }
 
 fn ensureDictionaryExists(io: std.Io, allocator: std.mem.Allocator, options: Options) void {
-    const found = required_path.exists(io, options.db_path) catch |err| {
-        std.debug.print("failed to access dictionary at {s}: {s}\n", .{ options.db_path, @errorName(err) });
+    ensureStructureReportExists(io, allocator, options);
+    const compatibility = decoder.probeDictionaryCompatibility(io, options.db_path) catch |err| {
+        std.debug.print("failed to validate dictionary at {s}: {s}\n", .{ options.db_path, @errorName(err) });
         std.process.exit(1);
     };
-    if (found) return;
+    if (compatibility == .compatible) return;
 
-    std.debug.print("dictionary not found: {s}; building it now\n", .{options.db_path});
-    _ = encoder.buildDictionary(io, allocator, .{
-        .input_path = options.input_path,
-        .output_path = options.db_path,
-        .structure_path = options.structure_path,
-        .limit_entries = options.limit_entries,
-        .worker_threads = options.thread_count,
-    }) catch |err| {
-        std.debug.print("failed to build dictionary at {s}: {s}\n", .{ options.db_path, @errorName(err) });
-        std.process.exit(1);
-    };
+    if (compatibility == .missing) {
+        std.debug.print("dictionary not found: {s}; running {s}\n", .{ options.db_path, tool_paths.encoder_bin_path });
+    } else if (compatibility == .invalid) {
+        std.debug.print("dictionary is invalid: {s}; rebuilding with {s}\n", .{ options.db_path, tool_paths.encoder_bin_path });
+    } else {
+        std.debug.print("dictionary is stale or incompatible: {s}; rebuilding with {s}\n", .{ options.db_path, tool_paths.encoder_bin_path });
+    }
+
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+    argv.append(allocator, "--input") catch |err| exitOnArgBuildFailure(err);
+    argv.append(allocator, options.input_path) catch |err| exitOnArgBuildFailure(err);
+    argv.append(allocator, "--output") catch |err| exitOnArgBuildFailure(err);
+    argv.append(allocator, options.db_path) catch |err| exitOnArgBuildFailure(err);
+    if (options.structure_path) |path| {
+        argv.append(allocator, "--structure") catch |err| exitOnArgBuildFailure(err);
+        argv.append(allocator, path) catch |err| exitOnArgBuildFailure(err);
+    }
+    if (options.limit_entries) |limit| {
+        const limit_text = std.fmt.allocPrint(allocator, "{d}", .{limit}) catch |err| exitOnArgBuildFailure(err);
+        defer allocator.free(limit_text);
+        argv.append(allocator, "--limit") catch |err| exitOnArgBuildFailure(err);
+        argv.append(allocator, limit_text) catch |err| exitOnArgBuildFailure(err);
+    }
+    if (options.thread_count) |threads| {
+        const threads_text = std.fmt.allocPrint(allocator, "{d}", .{threads}) catch |err| exitOnArgBuildFailure(err);
+        defer allocator.free(threads_text);
+        argv.append(allocator, "--threads") catch |err| exitOnArgBuildFailure(err);
+        argv.append(allocator, threads_text) catch |err| exitOnArgBuildFailure(err);
+    }
+    required_path.runToolOrExit(io, allocator, tool_paths.encoder_bin_path, "encoder binary", argv.items);
 }
 
 fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options: Options) void {
-    const db_found = required_path.exists(io, options.db_path) catch |err| {
-        std.debug.print("failed to access dictionary at {s}: {s}\n", .{ options.db_path, @errorName(err) });
+    const compatibility = decoder.probeDictionaryCompatibility(io, options.db_path) catch |err| {
+        std.debug.print("failed to validate dictionary at {s}: {s}\n", .{ options.db_path, @errorName(err) });
         std.process.exit(1);
     };
     const idx_path = std.fmt.allocPrint(allocator, "{s}.idx", .{options.db_path}) catch |err| {
@@ -707,15 +728,19 @@ fn ensureDictionaryIndexExists(io: std.Io, allocator: std.mem.Allocator, options
         std.debug.print("failed to access dictionary index at {s}: {s}\n", .{ idx_path, @errorName(err) });
         std.process.exit(1);
     };
-    if (db_found and idx_found) return;
+    if (compatibility == .compatible and idx_found) return;
 
-    if (!db_found and !idx_found) {
+    if (compatibility == .missing and !idx_found) {
         std.debug.print(
             "dictionary and index not found: {s}, {s}; running {s} index\n",
             .{ options.db_path, idx_path, tool_paths.decoder_bin_path },
         );
-    } else if (!db_found) {
+    } else if (compatibility == .missing) {
         std.debug.print("dictionary not found: {s}; running {s} index\n", .{ options.db_path, tool_paths.decoder_bin_path });
+    } else if (compatibility == .invalid) {
+        std.debug.print("dictionary is invalid: {s}; rebuilding via {s} index\n", .{ options.db_path, tool_paths.decoder_bin_path });
+    } else if (compatibility == .stale) {
+        std.debug.print("dictionary is stale or incompatible: {s}; rebuilding via {s} index\n", .{ options.db_path, tool_paths.decoder_bin_path });
     } else {
         std.debug.print("dictionary index not found: {s}; running {s} index\n", .{ idx_path, tool_paths.decoder_bin_path });
     }
@@ -1145,6 +1170,27 @@ fn isComparisonWhitespace(codepoint: u21) bool {
         => true,
         else => false,
     };
+}
+
+test "normalizeForComparison collapses unicode whitespace without trimming inner content" {
+    const normalized = try normalizeForComparison(std.testing.allocator, "  a\u{00A0}\u{2003}b \n c\t");
+    defer std.testing.allocator.free(normalized);
+
+    try std.testing.expectEqualStrings("a b c", normalized);
+}
+
+test "normalizeForComparison falls back to byte normalization on invalid utf8" {
+    const normalized = try normalizeForComparison(std.testing.allocator, "a\xff \t b");
+    defer std.testing.allocator.free(normalized);
+
+    try std.testing.expectEqualStrings("a\xff b", normalized);
+}
+
+test "normalizeBytesForComparison collapses repeated ascii whitespace runs" {
+    const normalized = try normalizeBytesForComparison(std.testing.allocator, " \t alpha \r\n beta  ");
+    defer std.testing.allocator.free(normalized);
+
+    try std.testing.expectEqualStrings("alpha beta", normalized);
 }
 
 fn firstDiffIndex(left: []const u8, right: []const u8) usize {
@@ -1752,7 +1798,7 @@ test "verifyDictionary ignores dropped alias-only entries with invalid destinati
     try std.testing.expectEqual(@as(usize, 0), stats.failures());
 }
 
-test "ensureDictionaryExists builds the dictionary when missing" {
+test "ensureDictionaryExists accepts an existing compatible dictionary" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1775,6 +1821,12 @@ test "ensureDictionaryExists builds the dictionary when missing" {
     defer std.testing.allocator.free(db_rel);
     try writeXmlFixtureWithStructure(xml_rel, xml);
 
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .output_path = db_rel,
+        .worker_threads = 1,
+    });
+
     ensureDictionaryExists(std.testing.io, std.testing.allocator, .{
         .input_path = xml_rel,
         .db_path = db_rel,
@@ -1784,7 +1836,7 @@ test "ensureDictionaryExists builds the dictionary when missing" {
     try std.testing.expect(try required_path.exists(std.testing.io, db_rel));
 }
 
-test "verifyDictionary builds the index on first open after auto-building the dictionary" {
+test "verifyDictionary builds the index on first open when the dictionary already exists" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1810,6 +1862,12 @@ test "verifyDictionary builds the index on first open after auto-building the di
     const report_rel = try tempPath(std.testing.allocator, &tmp.sub_path, "verify-report.txt");
     defer std.testing.allocator.free(report_rel);
     try writeXmlFixtureWithStructure(xml_rel, xml);
+
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+        .input_path = xml_rel,
+        .output_path = db_rel,
+        .worker_threads = 1,
+    });
 
     ensureDictionaryExists(std.testing.io, std.testing.allocator, .{
         .input_path = xml_rel,

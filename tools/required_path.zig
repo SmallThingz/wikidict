@@ -28,9 +28,8 @@ pub fn runToolOrExit(
 ) void {
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
-
     argv.append(allocator, tool_path) catch oomExit();
-    argv.appendSlice(allocator, tool_args) catch oomExit();
+    for (tool_args) |arg| argv.append(allocator, arg) catch oomExit();
 
     var child = std.process.spawn(io, .{
         .argv = argv.items,

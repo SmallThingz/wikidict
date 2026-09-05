@@ -1,8 +1,10 @@
 const std = @import("std");
 
-pub const magic = "WIKDIC32";
+pub const magic = "WIKDIC34";
 pub const lookup_kind_title: u8 = 0;
 pub const lookup_kind_alternative_form: u8 = 1;
+pub const payload_kind_raw_compact: u8 = 0;
+pub const payload_kind_section_ir: u8 = 1;
 
 pub const LayoutError = error{ InvalidDictionaryFile, FileTooBig };
 pub const VarUIntError = error{InvalidVarUInt};
@@ -14,18 +16,20 @@ const special_heading_line_code: u8 = 0xFD;
 const extended_pattern_code: u8 = 0xFE;
 const raw_literal_code: u8 = 0xFF;
 
-// The final dictionary stores only the minimum persisted data:
-// raw titles, alias titles, alias target indices, and raw payloads.
+// The final dictionary stores titles, aliases, alias targets, and tagged payload records.
+// English-only payloads use the section IR; mixed/non-English payloads use compact raw fallback.
 pub const Header = extern struct {
     magic_bytes: [8]u8,
     raw_count: u32,
     alias_count: u32,
+    mapping_fingerprint: u32,
 
-    pub fn init(raw_count: u32, alias_count: u32) Header {
+    pub fn init(raw_count: u32, alias_count: u32, mapping_fingerprint: u32) Header {
         return .{
             .magic_bytes = magic.*,
             .raw_count = raw_count,
             .alias_count = alias_count,
+            .mapping_fingerprint = mapping_fingerprint,
         };
     }
 
@@ -73,7 +77,7 @@ pub fn inspectDictionary(bytes: []const u8) LayoutError!InspectedDictionary {
     cursor += @intCast(alias_targets_len);
 
     const raw_payloads_offset: u64 = cursor;
-    try skipCompactTerminatedFields(bytes, &cursor, bytes.len, header.raw_count);
+    try skipLengthPrefixedFields(bytes, &cursor, bytes.len, header.raw_count);
     if (cursor != bytes.len) return error.InvalidDictionaryFile;
 
     return .{
@@ -146,6 +150,22 @@ pub fn readCompactTerminatedSlice(bytes: []const u8, cursor: *usize, limit: usiz
     return error.InvalidDictionaryFile;
 }
 
+pub fn readLengthPrefixedSlice(bytes: []const u8, cursor: *usize, limit: usize) LayoutError![]const u8 {
+    const len64 = readVarUInt(bytes, cursor, limit) catch return error.InvalidDictionaryFile;
+    const len = std.math.cast(usize, len64) orelse return error.FileTooBig;
+    if (cursor.* > limit or len > limit - cursor.*) return error.InvalidDictionaryFile;
+    const start = cursor.*;
+    cursor.* += len;
+    return bytes[start..cursor.*];
+}
+
+fn skipLengthPrefixedFields(bytes: []const u8, cursor: *usize, limit: usize, count: u32) LayoutError!void {
+    var remaining = count;
+    while (remaining != 0) : (remaining -= 1) {
+        _ = try readLengthPrefixedSlice(bytes, cursor, limit);
+    }
+}
+
 fn skipCompactTerminatedFields(bytes: []const u8, cursor: *usize, limit: usize, count: u32) LayoutError!void {
     var remaining = count;
     while (remaining != 0) : (remaining -= 1) {
@@ -198,23 +218,25 @@ test "inspectDictionary parses the stripped final layout" {
         magic ++
         &[_]u8{ 2, 0, 0, 0 } ++
         &[_]u8{ 1, 0, 0, 0 } ++
+        &[_]u8{ 0x34, 0x12, 0x00, 0x00 } ++
         &[_]u8{ 'c', 'a', 't', 0, 0x81, 0x00, 0 } ++
         &[_]u8{ 'c', 'a', 't', 's', 0 } ++
         &[_]u8{ 0, 0, 0, 0 } ++
-        &[_]u8{ 0xFF, special_heading_line_code, 1, 0 } ++
-        &[_]u8{ 0xFF, extended_pattern_code, 1, 0 };
+        &[_]u8{ 4, payload_kind_section_ir, 0xFF, special_heading_line_code, 1 } ++
+        &[_]u8{ 4, payload_kind_raw_compact, 0xFF, extended_pattern_code, 1 };
 
     const inspected = try inspectDictionary(blob);
     try std.testing.expectEqual(@as(u32, 2), inspected.header.raw_count);
     try std.testing.expectEqual(@as(u32, 1), inspected.header.alias_count);
+    try std.testing.expectEqual(@as(u32, 0x1234), inspected.header.mapping_fingerprint);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 'c', 'a', 't', 0, 0x81, 0x00, 0 }, blob[@intCast(inspected.layout.raw_titles_offset)..@intCast(inspected.layout.raw_titles_offset + inspected.layout.raw_titles_len)]);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 'c', 'a', 't', 's', 0 }, blob[@intCast(inspected.layout.alias_titles_offset)..@intCast(inspected.layout.alias_titles_offset + inspected.layout.alias_titles_len)]);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xFF, special_heading_line_code, 1, 0, 0xFF, extended_pattern_code, 1, 0 }, blob[@intCast(inspected.layout.raw_payloads_offset)..@intCast(inspected.layout.raw_payloads_offset + inspected.layout.raw_payloads_len)]);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 4, payload_kind_section_ir, 0xFF, special_heading_line_code, 1, 4, payload_kind_raw_compact, 0xFF, extended_pattern_code, 1 }, blob[@intCast(inspected.layout.raw_payloads_offset)..@intCast(inspected.layout.raw_payloads_offset + inspected.layout.raw_payloads_len)]);
     try std.testing.expectEqual(@as(u32, 0), try readAliasTargetAt(blob, inspected.layout, 0));
 }
 
 test "header magic is stable" {
-    try std.testing.expectEqualStrings(magic, &Header.init(0, 0).magic_bytes);
+    try std.testing.expectEqualStrings(magic, &Header.init(0, 0, 0).magic_bytes);
 }
 
 test "varuint helpers still round-trip" {

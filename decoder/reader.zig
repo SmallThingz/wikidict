@@ -7,10 +7,11 @@ const format = @import("format.zig");
 const generated = @import("generated_structure_tables");
 const structure_report = @import("shared_structure_report");
 const wikitext = @import("wikitext_source");
-const testing_encoder = if (builtin.is_test) @import("encoder") else struct {};
+const encoder = @import("encoder");
+const section_encoding = encoder.section_encoding;
 
 const cache_magic = "DCTIDX04";
-const cache_version: u32 = 9;
+const cache_version: u32 = 10;
 const cache_alignment: u32 = 8;
 
 const StringRef = extern struct {
@@ -205,6 +206,30 @@ pub const OpenOptions = struct {
     structure_path: ?[]const u8 = null,
 };
 
+pub const DictionaryCompatibility = enum {
+    missing,
+    invalid,
+    stale,
+    compatible,
+};
+
+pub fn probeDictionaryCompatibility(io: std.Io, path: []const u8) !DictionaryCompatibility {
+    const mapped = mmapReadOnlyPath(io, path) catch |err| switch (err) {
+        error.FileNotFound => return .missing,
+        else => return err,
+    };
+    defer std.posix.munmap(mapped.mapping);
+
+    const inspected = format.inspectDictionary(mapped.mapping) catch |err| switch (err) {
+        error.InvalidDictionaryFile => return .invalid,
+        error.FileTooBig => return .invalid,
+    };
+
+    const expected_fingerprint = compact.binaryMappingFingerprint(compact.currentRuntimeMappings());
+    if (inspected.header.mapping_fingerprint != expected_fingerprint) return .stale;
+    return .compatible;
+}
+
 pub const EntryDerivedData = struct {
     summary: []const u8,
     alt_forms: std.ArrayListUnmanaged([]const u8) = .empty,
@@ -238,13 +263,15 @@ fn loadTemplateTablesIntoMappings(
     };
     errdefer template_mappings.deinit(allocator);
 
+    const generated_build = currentGeneratedBuildData();
     if (template_mappings.line_templates.len != mappings.expected_line_template_count) return error.InvalidStructureReport;
     if (template_mappings.translation_templates.len != mappings.expected_translation_template_count) return error.InvalidStructureReport;
-    const fingerprint = structure_report.templateTableFingerprint(
-        template_mappings.line_templates,
-        template_mappings.translation_templates,
-    );
-    if (fingerprint != mappings.template_table_fingerprint) return error.InvalidStructureReport;
+    for (template_mappings.line_templates, 0..) |entry, idx| {
+        if (entry.code != generated_build.line_templates[idx].code) return error.InvalidStructureReport;
+    }
+    for (template_mappings.translation_templates, 0..) |entry, idx| {
+        if (entry.code != generated_build.translation_templates[idx].code) return error.InvalidStructureReport;
+    }
 
     const line_templates = try allocator.alloc(compact.RuntimeLineTemplate, template_mappings.line_templates.len);
     errdefer allocator.free(line_templates);
@@ -271,6 +298,27 @@ fn loadTemplateTablesIntoMappings(
     mappings.line_templates = line_templates;
     mappings.translation_templates = translation_templates;
     mappings.owns_template_names = true;
+}
+
+fn initOwnedRuntimeMappingsAlloc(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    db_path: []const u8,
+    explicit_structure_path: ?[]const u8,
+) !compact.OwnedRuntimeMappings {
+    const generated_build = currentGeneratedBuildData();
+    var mappings: compact.OwnedRuntimeMappings = .{
+        .direct_patterns = try allocator.dupe([]const u8, compact.direct_patterns[0..]),
+        .escaped_patterns = try allocator.dupe([]const u8, compact.escaped_patterns[0..]),
+        .extended_patterns = try allocator.dupe([]const u8, compact.extended_escaped_patterns[0..]),
+        .heading_levels = try allocator.dupe(compact.RuntimeHeadingLevelSpec, generated_build.heading_level_specs),
+        .expected_line_template_count = @intCast(generated_build.line_templates.len),
+        .expected_translation_template_count = @intCast(generated_build.translation_templates.len),
+        .template_table_fingerprint = 0,
+    };
+    errdefer mappings.deinit(allocator);
+    try loadTemplateTablesIntoMappings(allocator, io, db_path, explicit_structure_path, &mappings);
+    return mappings;
 }
 
 fn defaultStructurePathAlloc(
@@ -485,6 +533,21 @@ const ScanChunkResult = struct {
     }
 };
 
+pub const Document = section_encoding.DecodedDocument;
+pub const DocumentSection = section_encoding.DecodedSection;
+pub const DocumentBlock = section_encoding.DecodedBlock;
+pub const BlockIterator = section_encoding.BlockIterator;
+pub const InlineSpan = section_encoding.InlineSpan;
+pub const InlineIterator = section_encoding.InlineIterator;
+pub const TermRecordKind = section_encoding.TermRecordKind;
+pub const TermRecord = section_encoding.TermRecord;
+pub const TranslationRecordKind = section_encoding.TranslationRecordKind;
+pub const TranslationSeparator = section_encoding.TranslationSeparator;
+pub const TranslationRecord = section_encoding.TranslationRecord;
+pub const SectionKind = section_encoding.SectionKind;
+pub const BlockKind = section_encoding.BlockKind;
+pub const InlineKind = section_encoding.InlineKind;
+
 pub const LookupHit = struct {
     entry_index: u32,
     // Surface form that matched the query. This can differ from the entry word for
@@ -657,22 +720,38 @@ pub const EntryView = struct {
         return self.rawStoredTextAlloc(allocator);
     }
 
+    pub fn documentAlloc(self: EntryView, allocator: std.mem.Allocator) !?Document {
+        if (!self.hasRaw()) return null;
+        const payload = try self.dict.rawPayload(self.index);
+        if (payload.len == 0) return error.InvalidDictionaryFile;
+        if (payload[0] != format.payload_kind_section_ir) return null;
+        return section_encoding.decodeDocumentAlloc(allocator, payload[1..]) catch return error.InvalidDictionaryFile;
+    }
+
+    pub fn renderDocumentAlloc(self: EntryView, allocator: std.mem.Allocator) !?Document {
+        if (!self.hasRaw()) return null;
+        const payload = try self.dict.rawPayload(self.index);
+        if (payload.len == 0) return error.InvalidDictionaryFile;
+        if (payload[0] != format.payload_kind_section_ir) return null;
+        return section_encoding.decodeRenderDocumentAlloc(allocator, payload[1..]) catch return error.InvalidDictionaryFile;
+    }
+
+    pub fn hasStructuredDocument(self: EntryView) !bool {
+        if (!self.hasRaw()) return false;
+        const payload = try self.dict.rawPayload(self.index);
+        return payload.len != 0 and payload[0] == format.payload_kind_section_ir;
+    }
+
     fn rawStoredTextAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
-        const encoded = try self.dict.rawPayload(self.index);
-        const decoded = try compact.decodeAllocWithMappings(allocator, encoded, self.dict.compact_mappings);
-        return decoded;
+        const payload = try self.dict.rawPayload(self.index);
+        return try decodeStoredPayloadAlloc(allocator, payload, self.dict.compact_mappings, false);
     }
 
     fn rawStoredTextRenderAlloc(self: EntryView, allocator: std.mem.Allocator) !?[]const u8 {
         if (!self.hasRaw()) return null;
-        const encoded = try self.dict.rawPayload(self.index);
-        const decoded: []const u8 = try compact.decodeAllocForRenderWithMappings(
-            allocator,
-            encoded,
-            self.dict.compact_mappings,
-        );
-        return decoded;
+        const payload = try self.dict.rawPayload(self.index);
+        return try decodeStoredPayloadAlloc(allocator, payload, self.dict.compact_mappings, true);
     }
 };
 
@@ -682,6 +761,7 @@ pub const Dictionary = struct {
     cache_mapping: []align(std.heap.page_size_min) const u8,
     header: format.Header,
     layout: format.DictionaryLayout,
+    owned_compact_mappings: compact.OwnedRuntimeMappings,
     compact_mappings: compact.RuntimeMappings,
     cache_header: *const CacheHeader,
     entries: []const CachedEntry,
@@ -699,7 +779,11 @@ pub const Dictionary = struct {
             error.FileTooBig => return error.FileTooBig,
         };
 
-        const compact_mappings = compact.currentRuntimeMappings();
+        var owned_compact_mappings = try initOwnedRuntimeMappingsAlloc(allocator, io, path, options.structure_path);
+        errdefer owned_compact_mappings.deinit(allocator);
+        const compact_mappings = owned_compact_mappings.view();
+        const expected_fingerprint = compact.binaryMappingFingerprint(compact_mappings);
+        if (inspected.header.mapping_fingerprint != expected_fingerprint) return error.UnsupportedDictionaryVersion;
 
         const cache = try openOrBuildCache(allocator, io, path, db.stat, db.mapping, &inspected.header, inspected.layout, compact_mappings, options);
         errdefer std.posix.munmap(cache.mapping);
@@ -710,6 +794,7 @@ pub const Dictionary = struct {
             .cache_mapping = cache.mapping,
             .header = inspected.header,
             .layout = inspected.layout,
+            .owned_compact_mappings = owned_compact_mappings,
             .compact_mappings = compact_mappings,
             .cache_header = cache.header,
             .entries = cache.entries,
@@ -721,6 +806,7 @@ pub const Dictionary = struct {
     }
 
     pub fn deinit(self: *Dictionary) void {
+        self.owned_compact_mappings.deinit(self.allocator);
         std.posix.munmap(self.cache_mapping);
         std.posix.munmap(self.mapping);
     }
@@ -992,7 +1078,7 @@ pub const Dictionary = struct {
         const start = self.rawPayloadStart(index);
         const payloads_end = std.math.cast(usize, self.layout.raw_payloads_offset + self.layout.raw_payloads_len) orelse return error.InvalidDictionaryFile;
         var cursor = start;
-        return format.readCompactTerminatedSlice(self.mapping, &cursor, payloads_end);
+        return format.readLengthPrefixedSlice(self.mapping, &cursor, payloads_end);
     }
 
     fn incomingAliasList(self: *const Dictionary, range: Range) []const u32 {
@@ -1586,13 +1672,15 @@ fn collectRecordDescriptors(
     for (descriptors[0..raw_count]) |*descriptor| {
         const title_encoded = try format.readCompactTerminatedSlice(mapped, &raw_title_cursor, raw_titles_end);
         const payload_offset = raw_payload_cursor - @as(usize, @intCast(layout.raw_payloads_offset));
-        const payload_encoded = try format.readCompactTerminatedSlice(mapped, &raw_payload_cursor, raw_payloads_end);
+        const payload_record_start = raw_payload_cursor;
+        const payload_encoded = try format.readLengthPrefixedSlice(mapped, &raw_payload_cursor, raw_payloads_end);
+        const payload_record_len = raw_payload_cursor - payload_record_start;
         descriptor.* = .{
             .has_raw = true,
             .storage_ref = std.math.cast(u32, payload_offset) orelse return error.InvalidDictionaryFile,
             .title_encoded = title_encoded,
             .payload_encoded = payload_encoded,
-            .record_len = std.math.cast(u32, title_encoded.len + payload_encoded.len + 2) orelse return error.InvalidDictionaryFile,
+            .record_len = std.math.cast(u32, title_encoded.len + 1 + payload_record_len) orelse return error.InvalidDictionaryFile,
         };
     }
 
@@ -1645,13 +1733,30 @@ const BuildRawMetadata = struct {
     canonical_targets: []const []const u8,
 };
 
+fn decodeStoredPayloadAlloc(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+    mappings: compact.RuntimeMappings,
+    for_render: bool,
+) ![]u8 {
+    if (payload.len == 0) return error.InvalidDictionaryFile;
+    return switch (payload[0]) {
+        format.payload_kind_raw_compact => if (for_render)
+            compact.decodeAllocForRenderWithMappings(allocator, payload[1..], mappings) catch return error.InvalidDictionaryFile
+        else
+            compact.decodeAllocWithMappings(allocator, payload[1..], mappings) catch return error.InvalidDictionaryFile,
+        format.payload_kind_section_ir => section_encoding.decodeEnglishAlloc(allocator, payload[1..]) catch return error.InvalidDictionaryFile,
+        else => error.InvalidDictionaryFile,
+    };
+}
+
 fn decodeBuildRawMetadataAlloc(
     allocator: std.mem.Allocator,
     word: []const u8,
     payload: []const u8,
     mappings: compact.RuntimeMappings,
 ) !BuildRawMetadata {
-    const stored = compact.decodeAllocWithMappings(allocator, payload, mappings) catch return error.InvalidDictionaryFile;
+    const stored = try decodeStoredPayloadAlloc(allocator, payload, mappings, false);
     defer allocator.free(stored);
     const raw = wikitext.extractEnglishSection(stored) orelse "";
     var metadata: wikitext.EntryMetadata = .{};
@@ -2429,15 +2534,18 @@ test "internEntryStrings reuses equivalent local refs" {
 }
 
 test "decodeBuildRawMetadataAlloc matches format metadata decode" {
-    const payload = try testing_encoder.compact_encoding.encodeAlloc(
-        std.testing.allocator,
+    const encoded = try encoder.section_encoding.encodeEnglishAlloc(std.testing.allocator,
         \\==English==
         \\===Noun===
         \\{{head|en|noun form|head=colour|head2=Co lor}}
         \\# {{alternative form of|en|color}}
         \\# {{alternative form of|en|colour}}
     );
+    defer std.testing.allocator.free(encoded);
+    const payload = try std.testing.allocator.alloc(u8, encoded.len + 1);
     defer std.testing.allocator.free(payload);
+    payload[0] = format.payload_kind_section_ir;
+    @memcpy(payload[1..], encoded);
 
     const actual = try decodeBuildRawMetadataAlloc(std.testing.allocator, "colour", payload, compact.currentRuntimeMappings());
     defer {
@@ -2459,7 +2567,7 @@ test "decodeBuildRawMetadataAlloc matches format metadata decode" {
 }
 
 test "buildEntryFromRecord keeps alias target indices" {
-    const title = try testing_encoder.compact_encoding.encodeAlloc(std.testing.allocator, "color");
+    const title = try encoder.compact_encoding.encodeAlloc(std.testing.allocator, "color");
     defer std.testing.allocator.free(title);
     const entry = try buildEntryFromRecord(std.testing.allocator, .{
         .has_raw = false,
@@ -2538,7 +2646,7 @@ test "dictionary open preserves raw etymology and pronunciation sections through
     defer std.testing.allocator.free(xml_path);
     try writeXmlFixtureWithStructure(xml_path, xml);
 
-    _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
         .output_path = db_path,
     });
@@ -2550,7 +2658,22 @@ test "dictionary open preserves raw etymology and pronunciation sections through
     defer std.testing.allocator.free(hits);
     try std.testing.expectEqual(@as(usize, 1), hits.len);
 
-    const raw = (try dict.entryAt(hits[0].entry_index).rawEnglishAlloc(std.testing.allocator)).?;
+    const entry = dict.entryAt(hits[0].entry_index);
+    try std.testing.expect(try entry.hasStructuredDocument());
+    var document = (try entry.documentAlloc(std.testing.allocator)).?;
+    defer document.deinit(std.testing.allocator);
+    try std.testing.expect(document.sections.len != 0);
+    var saw_pronunciation = false;
+    for (document.sections) |section| {
+        if (std.mem.eql(u8, section.title, "Pronunciation")) saw_pronunciation = true;
+    }
+    try std.testing.expect(saw_pronunciation);
+
+    var render_document = (try entry.renderDocumentAlloc(std.testing.allocator)).?;
+    defer render_document.deinit(std.testing.allocator);
+    try std.testing.expectEqual(document.sections.len, render_document.sections.len);
+
+    const raw = (try entry.rawEnglishAlloc(std.testing.allocator)).?;
     defer std.testing.allocator.free(raw);
     try std.testing.expectEqualStrings(raw_english, raw);
 }
@@ -2580,7 +2703,7 @@ test "dictionary open reuses an up-to-date cache file" {
     defer std.testing.allocator.free(cache_path);
     try writeXmlFixtureWithStructure(xml_path, xml);
 
-    _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
         .output_path = db_path,
     });
@@ -2625,7 +2748,7 @@ test "dictionary build drops non-English entries by default" {
     defer std.testing.allocator.free(xml_path);
     try writeXmlFixtureWithStructure(xml_path, xml);
 
-    _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
         .output_path = db_path,
     });
@@ -2671,7 +2794,7 @@ test "dictionary cache rebuild recomputes normalized alias metadata" {
     defer std.testing.allocator.free(xml_path);
     try writeXmlFixtureWithStructure(xml_path, xml);
 
-    _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
         .output_path = db_path,
     });
@@ -2740,7 +2863,7 @@ test "build drops alias entries whose destination is not stored" {
     defer std.testing.allocator.free(xml_path);
     try writeXmlFixtureWithStructure(xml_path, xml);
 
-    _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
         .output_path = db_path,
     });
@@ -2790,7 +2913,7 @@ test "lookupExact collapses duplicate entry hits and prefers the exact raw match
     defer std.testing.allocator.free(xml_path);
     try writeXmlFixtureWithStructure(xml_path, xml);
 
-    _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
         .output_path = db_path,
     });
@@ -2886,7 +3009,7 @@ test "lookupExact appends canonical hits for alias-only entries and redirects" {
     defer std.testing.allocator.free(xml_path);
     try writeXmlFixtureWithStructure(xml_path, xml);
 
-    _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
         .output_path = db_path,
     });
@@ -2949,7 +3072,7 @@ test "lookupExact and suggest prefer the exact case-sensitive title entry" {
     defer std.testing.allocator.free(xml_path);
     try writeXmlFixtureWithStructure(xml_path, xml);
 
-    _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
         .output_path = db_path,
     });
@@ -3051,7 +3174,7 @@ test "resolveLinkTargetAlloc follows alias-only form chains and breaks cycles" {
     defer std.testing.allocator.free(xml_path);
     try writeXmlFixtureWithStructure(xml_path, xml);
 
-    _ = try testing_encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
+    _ = try encoder.buildDictionary(std.testing.io, std.testing.allocator, .{
         .input_path = xml_path,
         .output_path = db_path,
     });

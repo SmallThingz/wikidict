@@ -6,21 +6,16 @@ pub fn build(b: *std.Build) void {
     b.graph.incremental = false;
 
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
-    const test_optimize: std.builtin.OptimizeMode = switch (optimize) {
-        .ReleaseFast, .ReleaseSmall => .ReleaseSafe,
-        else => optimize,
-    };
-    const codegen_optimize: std.builtin.OptimizeMode = .ReleaseFast;
+    const optimize = b.option(
+        std.builtin.OptimizeMode,
+        "optimize",
+        "Prioritize performance, safety, or binary size",
+    ) orelse .ReleaseSafe;
+    const test_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
     const structure_optimize: std.builtin.OptimizeMode = .ReleaseFast;
     const default_skip_headings = "anagrams,citations,meta,statistics,further_reading,translations";
     const skip_headings_csv = b.option([]const u8, "skip-headings", "Comma-separated headings or heading families to exclude, e.g. Anagrams,Translations") orelse default_skip_headings;
     const filter_languages_csv = b.option([]const u8, "language", "Language headings to store; defaults to English, use all for every language, or a comma-separated list such as English,Chinese") orelse "English";
-    const template_runtime_mode = b.option([]const u8, "template-runtime-mode", "Generated template runtime mode: zig or bytecode") orelse "zig";
-    if (!std.mem.eql(u8, template_runtime_mode, "zig") and !std.mem.eql(u8, template_runtime_mode, "bytecode")) {
-        std.debug.panic("invalid -Dtemplate-runtime-mode={s}; expected zig or bytecode", .{template_runtime_mode});
-    }
-    const selected_generated_template_runtime_path = templateRuntimeOutputPathForMode(template_runtime_mode);
     const config_options = b.addOptions();
     config_options.addOption([]const u8, "skip_headings_csv", skip_headings_csv);
     config_options.addOption([]const u8, "filter_languages_csv", filter_languages_csv);
@@ -37,25 +32,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = test_optimize,
     });
-    const cli_args_mod_codegen = b.createModule(.{
-        .root_source_file = b.path("tools/cli_args.zig"),
-        .target = target,
-        .optimize = codegen_optimize,
-    });
     const required_path_mod = b.createModule(.{
         .root_source_file = b.path("tools/required_path.zig"),
         .target = target,
         .optimize = optimize,
-    });
-    const required_path_mod_test = b.createModule(.{
-        .root_source_file = b.path("tools/required_path.zig"),
-        .target = target,
-        .optimize = test_optimize,
-    });
-    const required_path_mod_codegen = b.createModule(.{
-        .root_source_file = b.path("tools/required_path.zig"),
-        .target = target,
-        .optimize = codegen_optimize,
     });
     const encoder_tool_paths_options = b.addOptions();
     const decoder_tool_paths_options = b.addOptions();
@@ -83,10 +63,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = structure_optimize,
     });
-    const zhttp_dep = b.dependency("zhttp", .{
-        .target = target,
-        .optimize = optimize,
-    });
     const normalize_mod = b.createModule(.{
         .root_source_file = b.path("decoder/normalize.zig"),
         .target = target,
@@ -96,11 +72,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("decoder/normalize.zig"),
         .target = target,
         .optimize = test_optimize,
-    });
-    const normalize_mod_codegen = b.createModule(.{
-        .root_source_file = b.path("decoder/normalize.zig"),
-        .target = target,
-        .optimize = codegen_optimize,
     });
     const normalize_mod_structure = b.createModule(.{
         .root_source_file = b.path("decoder/normalize.zig"),
@@ -122,11 +93,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = test_optimize,
     });
-    const shared_xml_decode_mod_codegen = b.createModule(.{
-        .root_source_file = b.path("shared/xml_decode.zig"),
-        .target = target,
-        .optimize = codegen_optimize,
-    });
     const shared_structure_report_mod = b.createModule(.{
         .root_source_file = b.path("shared/structure_report.zig"),
         .target = target,
@@ -136,11 +102,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("shared/structure_report.zig"),
         .target = target,
         .optimize = test_optimize,
-    });
-    const shared_structure_report_mod_codegen = b.createModule(.{
-        .root_source_file = b.path("shared/structure_report.zig"),
-        .target = target,
-        .optimize = codegen_optimize,
     });
     const shared_template_dispatch_mod = b.createModule(.{
         .root_source_file = b.path("shared/template_dispatch.zig"),
@@ -152,27 +113,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = test_optimize,
     });
-    const lua_mod = b.addModule("lua", .{
-        .root_source_file = b.path("lua/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    lua_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
-    lua_mod.addImport("shared_structure_report", shared_structure_report_mod);
-    const lua_mod_test = b.createModule(.{
-        .root_source_file = b.path("lua/root.zig"),
-        .target = target,
-        .optimize = test_optimize,
-    });
-    lua_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod_test);
-    lua_mod_test.addImport("shared_structure_report", shared_structure_report_mod_test);
-    const lua_mod_codegen = b.createModule(.{
-        .root_source_file = b.path("lua/root.zig"),
-        .target = target,
-        .optimize = codegen_optimize,
-    });
-    lua_mod_codegen.addImport("shared_xml_decode", shared_xml_decode_mod_codegen);
-    lua_mod_codegen.addImport("shared_structure_report", shared_structure_report_mod_codegen);
     const compact_pattern_seed_mod = b.createModule(.{
         .root_source_file = b.path("shared/compact_pattern_seed.zig"),
         .target = target,
@@ -182,11 +122,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("shared/compact_pattern_seed.zig"),
         .target = target,
         .optimize = test_optimize,
-    });
-    const compact_pattern_seed_mod_codegen = b.createModule(.{
-        .root_source_file = b.path("shared/compact_pattern_seed.zig"),
-        .target = target,
-        .optimize = codegen_optimize,
     });
     const wikitext_source_mod = b.createModule(.{
         .root_source_file = b.path("encoder/wikitext.zig"),
@@ -202,63 +137,6 @@ pub fn build(b: *std.Build) void {
     });
     wikitext_source_mod_test.addOptions("config", config_options);
     wikitext_source_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod_test);
-    const wikitext_source_mod_codegen = b.createModule(.{
-        .root_source_file = b.path("encoder/wikitext.zig"),
-        .target = target,
-        .optimize = codegen_optimize,
-    });
-    wikitext_source_mod_codegen.addOptions("config", config_options);
-    wikitext_source_mod_codegen.addImport("shared_xml_decode", shared_xml_decode_mod_codegen);
-    const template_compiler_support_mod = b.createModule(.{
-        .root_source_file = b.path("renderer/template_compiler_support.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    template_compiler_support_mod.addImport("lua", lua_mod);
-    template_compiler_support_mod.addImport("template_dispatch", shared_template_dispatch_mod);
-    const template_compiler_support_mod_test = b.createModule(.{
-        .root_source_file = b.path("renderer/template_compiler_support.zig"),
-        .target = target,
-        .optimize = test_optimize,
-    });
-    template_compiler_support_mod_test.addImport("lua", lua_mod_test);
-    template_compiler_support_mod_test.addImport("template_dispatch", shared_template_dispatch_mod_test);
-    const generated_template_runtime_mod = addGeneratedTemplateRuntimeModule(
-        b,
-        target,
-        optimize,
-        lua_mod,
-        template_compiler_support_mod,
-        selected_generated_template_runtime_path,
-    );
-    const generated_template_runtime_mod_test = addGeneratedTemplateRuntimeModule(
-        b,
-        target,
-        test_optimize,
-        lua_mod_test,
-        template_compiler_support_mod_test,
-        selected_generated_template_runtime_path,
-    );
-    const renderer_mod = b.addModule("renderer", .{
-        .root_source_file = b.path("renderer/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    renderer_mod.addImport("shared_html_entities", shared_html_entities_mod);
-    renderer_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
-    renderer_mod.addImport("lua", lua_mod);
-    renderer_mod.addImport("template_compiler_support", template_compiler_support_mod);
-    renderer_mod.addImport("generated_template_runtime", generated_template_runtime_mod);
-    const renderer_mod_test = b.createModule(.{
-        .root_source_file = b.path("renderer/root.zig"),
-        .target = target,
-        .optimize = test_optimize,
-    });
-    renderer_mod_test.addImport("shared_html_entities", shared_html_entities_mod);
-    renderer_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod_test);
-    renderer_mod_test.addImport("lua", lua_mod_test);
-    renderer_mod_test.addImport("template_compiler_support", template_compiler_support_mod_test);
-    renderer_mod_test.addImport("generated_template_runtime", generated_template_runtime_mod_test);
     const encoder_mod_bootstrap = b.addModule("encoder_bootstrap", .{
         .root_source_file = b.path("encoder/root.zig"),
         .target = target,
@@ -292,8 +170,6 @@ pub fn build(b: *std.Build) void {
         )
     else
         bootstrap_generated_tables;
-    renderer_mod.addImport("generated_structure_tables", generated_tables.regular);
-    renderer_mod_test.addImport("generated_structure_tables", bootstrap_generated_tables.regular);
     const encoder_mod = b.addModule("encoder", .{
         .root_source_file = b.path("encoder/root.zig"),
         .target = target,
@@ -339,22 +215,8 @@ pub fn build(b: *std.Build) void {
     decoder_mod.addImport("template_dispatch", shared_template_dispatch_mod);
     decoder_mod.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     decoder_mod.addImport("wikitext_source", wikitext_source_mod);
+    decoder_mod.addImport("encoder", encoder_mod);
     decoder_mod.addImport("cli_args", cli_args_mod);
-    const decoder_mod_codegen = b.createModule(.{
-        .root_source_file = b.path("decoder/root.zig"),
-        .target = target,
-        .optimize = codegen_optimize,
-    });
-    decoder_mod_codegen.addOptions("config", config_options);
-    decoder_mod_codegen.addImport("normalize", normalize_mod_codegen);
-    decoder_mod_codegen.addImport("generated_structure_tables", generated_tables.regular);
-    decoder_mod_codegen.addImport("shared_xml_decode", shared_xml_decode_mod_codegen);
-    decoder_mod_codegen.addImport("shared_structure_report", shared_structure_report_mod_codegen);
-    decoder_mod_codegen.addImport("template_dispatch", shared_template_dispatch_mod);
-    decoder_mod_codegen.addImport("compact_pattern_seed", compact_pattern_seed_mod_codegen);
-    decoder_mod_codegen.addImport("wikitext_source", wikitext_source_mod_codegen);
-    decoder_mod_codegen.addImport("cli_args", cli_args_mod_codegen);
-
     const decoder_mod_test = b.addModule("decoder_test", .{
         .root_source_file = b.path("decoder/root.zig"),
         .target = target,
@@ -371,28 +233,6 @@ pub fn build(b: *std.Build) void {
     decoder_mod_test.addImport("wikitext_source", wikitext_source_mod_test);
     decoder_mod_test.addImport("cli_args", cli_args_mod_test);
 
-    const backend_mod = b.addModule("backend", .{
-        .root_source_file = b.path("backend/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    backend_mod.addImport("decoder", decoder_mod);
-    backend_mod.addImport("zhttp", zhttp_dep.module("zhttp"));
-    backend_mod.addImport("cli_args", cli_args_mod);
-    backend_mod.addImport("shared_html_entities", shared_html_entities_mod);
-    backend_mod.addImport("renderer", renderer_mod);
-
-    const backend_mod_test = b.addModule("backend_test", .{
-        .root_source_file = b.path("backend/root.zig"),
-        .target = target,
-        .optimize = test_optimize,
-    });
-    backend_mod_test.addImport("decoder", decoder_mod_test);
-    backend_mod_test.addImport("zhttp", zhttp_dep.module("zhttp"));
-    backend_mod_test.addImport("cli_args", cli_args_mod_test);
-    backend_mod_test.addImport("shared_html_entities", shared_html_entities_mod);
-    backend_mod_test.addImport("renderer", renderer_mod_test);
-
     const encoder_exe = addCliExecutable(b, "dict-encoder", b.path("encoder/main.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "cli_args", .module = cli_args_mod },
@@ -406,10 +246,6 @@ pub fn build(b: *std.Build) void {
         .{ .name = "required_path", .module = required_path_mod },
         .{ .name = "tool_paths", .module = decoder_tool_paths_mod },
     });
-    const backend_exe = addCliExecutable(b, "dict-backend", b.path("backend/main.zig"), target, optimize, &.{
-        .{ .name = "backend", .module = backend_mod },
-        .{ .name = "cli_args", .module = cli_args_mod },
-    });
     const verifier_exe = addCliExecutable(b, "dict-verify", b.path("tools/verifier.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "decoder", .module = decoder_mod },
@@ -417,52 +253,23 @@ pub fn build(b: *std.Build) void {
         .{ .name = "shared_structure_report", .module = shared_structure_report_mod },
         .{ .name = "tool_paths", .module = verifier_tool_paths_mod },
     });
-    const template_audit_exe = addCliExecutable(b, "dict-template-audit", b.path("tools/template_audit.zig"), target, optimize, &.{
-        .{ .name = "renderer", .module = renderer_mod },
-        .{ .name = "wikitext_source", .module = wikitext_source_mod },
-        .{ .name = "cli_args", .module = cli_args_mod },
-        .{ .name = "required_path", .module = required_path_mod },
-        .{ .name = "shared_structure_report", .module = shared_structure_report_mod },
-    });
-    const template_codegen_exe = addCliExecutable(b, "dict-template-compile", b.path("tools/template_codegen.zig"), target, codegen_optimize, &.{
-        .{ .name = "decoder", .module = decoder_mod_codegen },
-        .{ .name = "lua", .module = lua_mod_codegen },
-        .{ .name = "required_path", .module = required_path_mod_codegen },
-        .{ .name = "shared_structure_report", .module = shared_structure_report_mod_codegen },
-    });
-    const frontend_exe = addCliExecutable(b, "dict-frontend", b.path("tools/frontend.zig"), target, optimize, &.{});
-    const lua_exe = addCliExecutable(b, "dict-lua", b.path("tools/lua_translate.zig"), target, codegen_optimize, &.{
-        .{ .name = "lua", .module = lua_mod_codegen },
-        .{ .name = "decoder", .module = decoder_mod_codegen },
-        .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod_codegen },
-        .{ .name = "required_path", .module = required_path_mod_codegen },
-        .{ .name = "shared_structure_report", .module = shared_structure_report_mod_codegen },
-    });
     encoder_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
     decoder_tool_paths_options.addOption([]const u8, "encoder_bin_path", b.pathFromRoot("zig-out/bin/dict-encoder"));
     verifier_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
+    verifier_tool_paths_options.addOption([]const u8, "encoder_bin_path", b.pathFromRoot("zig-out/bin/dict-encoder"));
     verifier_tool_paths_options.addOption([]const u8, "decoder_bin_path", b.pathFromRoot("zig-out/bin/dict-decoder"));
     verifier_tool_paths_test_options.addOption([]const u8, "structure_bin_path", "dict-structure");
+    verifier_tool_paths_test_options.addOption([]const u8, "encoder_bin_path", "dict-encoder");
     verifier_tool_paths_test_options.addOption([]const u8, "decoder_bin_path", "dict-decoder");
 
     const structure_install = b.addInstallBinFile(structure_bin, "dict-structure");
     const encoder_install = b.addInstallArtifact(encoder_exe, .{});
     const decoder_install = b.addInstallArtifact(decoder_exe, .{});
-    const backend_install = b.addInstallArtifact(backend_exe, .{});
     const verifier_install = b.addInstallArtifact(verifier_exe, .{});
-    const template_audit_install = b.addInstallArtifact(template_audit_exe, .{});
-    const template_codegen_install = b.addInstallArtifact(template_codegen_exe, .{});
-    const frontend_install = b.addInstallArtifact(frontend_exe, .{});
-    const lua_install = b.addInstallArtifact(lua_exe, .{});
     b.getInstallStep().dependOn(&structure_install.step);
     b.getInstallStep().dependOn(&encoder_install.step);
     b.getInstallStep().dependOn(&decoder_install.step);
-    b.getInstallStep().dependOn(&backend_install.step);
     b.getInstallStep().dependOn(&verifier_install.step);
-    b.getInstallStep().dependOn(&template_audit_install.step);
-    b.getInstallStep().dependOn(&template_codegen_install.step);
-    b.getInstallStep().dependOn(&frontend_install.step);
-    b.getInstallStep().dependOn(&lua_install.step);
 
     const structure_run = addDirectToolRunCommand(b, structure_bin, &.{}, b.args);
     addPublicRunStep(b, "structure", "Analyze Wiktionary structure", structure_run, &.{});
@@ -473,52 +280,8 @@ pub fn build(b: *std.Build) void {
     const decode_run = addRunArtifactCommand(b, decoder_exe, &.{}, b.args);
     addPublicRunStep(b, "decode", "Run the decoder CLI", decode_run, &.{ &encoder_install.step, &structure_install.step });
 
-    const serve_run = addRunArtifactCommand(b, backend_exe, &.{}, b.args);
-    addPublicRunStep(b, "serve", "Run the backend server", serve_run, &.{});
-
     const verify_run = addRunArtifactCommand(b, verifier_exe, &.{}, b.args);
     addPublicRunStep(b, "verify", "Verify dictionary raw entries against the XML dump", verify_run, &.{ &decoder_install.step, &encoder_install.step, &structure_install.step });
-
-    const template_audit_run = addRunArtifactCommand(b, template_audit_exe, &.{}, b.args);
-    addPublicRunStep(b, "template-audit", "Audit every structure-listed template against renderer output", template_audit_run, &.{});
-
-    const request_help = passthroughArgsRequestHelp(b.args);
-    const template_codegen_run = if (request_help)
-        addPrintedTextRunCommand(b, templateCompileUsageText)
-    else
-        addRunArtifactCommand(b, template_codegen_exe, &.{
-            "--mode",
-            template_runtime_mode,
-            "--output",
-            selected_generated_template_runtime_path,
-        }, b.args);
-    addPublicRunStep(b, "template-compile", "Compile reachable template pages into the selected generated runtime mode", template_codegen_run, &.{});
-    const template_codegen_zig_run = if (request_help)
-        addPrintedTextRunCommand(b, templateCompileUsageText)
-    else
-        addRunArtifactCommand(b, template_codegen_exe, &.{
-            "--mode",
-            "zig",
-            "--output",
-            templateRuntimeOutputPathForMode("zig"),
-        }, b.args);
-    addPublicRunStep(b, "template-compile-zig", "Compile reachable template pages into the direct Zig generated runtime", template_codegen_zig_run, &.{});
-    const template_codegen_bytecode_run = if (request_help)
-        addPrintedTextRunCommand(b, templateCompileUsageText)
-    else
-        addRunArtifactCommand(b, template_codegen_exe, &.{
-            "--mode",
-            "bytecode",
-            "--output",
-            templateRuntimeOutputPathForMode("bytecode"),
-        }, b.args);
-    addPublicRunStep(b, "template-compile-bytecode", "Compile reachable template pages into the bytecode/interpreted generated runtime", template_codegen_bytecode_run, &.{});
-
-    const frontend_run = addRunArtifactCommand(b, frontend_exe, &.{}, b.args);
-    addPublicRunStep(b, "frontend", "Run the frontend CLI", frontend_run, &.{});
-
-    const lua_run = addRunArtifactCommand(b, lua_exe, &.{}, b.args);
-    addPublicRunStep(b, "lua", "Run the Lua translator CLI", lua_run, &.{});
 
     const test_runner = b.path("tools/test_runner.zig");
 
@@ -530,14 +293,6 @@ pub fn build(b: *std.Build) void {
         .root_module = decoder_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
-    const backend_tests = b.addTest(.{
-        .root_module = backend_mod_test,
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const renderer_tests = b.addTest(.{
-        .root_module = renderer_mod_test,
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
     const structure_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/structure_analyzer.zig"),
@@ -545,7 +300,6 @@ pub fn build(b: *std.Build) void {
             .optimize = test_optimize,
             .imports = &.{
                 .{ .name = "encoder", .module = encoder_mod_test },
-                .{ .name = "lua", .module = lua_mod_test },
                 .{ .name = "zxml", .module = zxml_dep_test.module("zxml") },
                 .{ .name = "shared_structure_report", .module = shared_structure_report_mod_test },
                 .{ .name = "compact_pattern_seed", .module = compact_pattern_seed_mod_test },
@@ -579,75 +333,23 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
-    const template_audit_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/template_audit.zig"),
-            .target = target,
-            .optimize = test_optimize,
-            .imports = &.{
-                .{ .name = "renderer", .module = renderer_mod_test },
-                .{ .name = "wikitext_source", .module = wikitext_source_mod_test },
-                .{ .name = "cli_args", .module = cli_args_mod_test },
-                .{ .name = "required_path", .module = required_path_mod_test },
-                .{ .name = "shared_structure_report", .module = shared_structure_report_mod_test },
-            },
-        }),
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const lua_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("lua/root.zig"),
-            .target = target,
-            .optimize = test_optimize,
-            .imports = &.{
-                .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod_test },
-                .{ .name = "shared_structure_report", .module = shared_structure_report_mod_test },
-            },
-        }),
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const template_codegen_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/template_codegen.zig"),
-            .target = target,
-            .optimize = test_optimize,
-            .imports = &.{
-                .{ .name = "decoder", .module = decoder_mod_test },
-                .{ .name = "lua", .module = lua_mod_test },
-                .{ .name = "required_path", .module = required_path_mod_test },
-                .{ .name = "shared_structure_report", .module = shared_structure_report_mod_test },
-            },
-        }),
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
     const run_encoder_tests = b.addRunArtifact(encoder_tests);
     const run_decoder_tests = b.addRunArtifact(decoder_tests);
-    const run_backend_tests = b.addRunArtifact(backend_tests);
-    const run_renderer_tests = b.addRunArtifact(renderer_tests);
     const run_structure_tests = b.addRunArtifact(structure_tests);
     const run_structure_tables_support_tests = b.addRunArtifact(structure_tables_support_tests);
     const run_verifier_tests = b.addRunArtifact(verifier_tests);
-    const run_template_audit_tests = b.addRunArtifact(template_audit_tests);
-    const run_lua_tests = b.addRunArtifact(lua_tests);
-    const run_template_codegen_tests = b.addRunArtifact(template_codegen_tests);
 
     // Running every test compile in parallel is enough to get the larger codegen-heavy
     // test binaries terminated under ReleaseFast on typical developer machines. Keep
     // the public `zig build test` step deterministic and low-memory by serializing
     // test compilation/execution through one chain.
     decoder_tests.step.dependOn(&run_encoder_tests.step);
-    lua_tests.step.dependOn(&run_decoder_tests.step);
-    backend_tests.step.dependOn(&run_lua_tests.step);
-    renderer_tests.step.dependOn(&run_backend_tests.step);
-    structure_tests.step.dependOn(&run_renderer_tests.step);
+    structure_tests.step.dependOn(&run_decoder_tests.step);
     structure_tables_support_tests.step.dependOn(&run_structure_tests.step);
     verifier_tests.step.dependOn(&run_structure_tables_support_tests.step);
-    template_audit_tests.step.dependOn(&run_verifier_tests.step);
-    template_codegen_tests.step.dependOn(&run_lua_tests.step);
-    template_codegen_tests.step.dependOn(&run_template_audit_tests.step);
 
-    const test_step = b.step("test", "Run encoder, decoder, and backend tests");
-    test_step.dependOn(&run_template_codegen_tests.step);
+    const test_step = b.step("test", "Run encoder, decoder, structure, and tooling tests");
+    test_step.dependOn(&run_verifier_tests.step);
 }
 
 fn addCliExecutable(
@@ -679,15 +381,6 @@ fn addRunArtifactCommand(
     run_cmd.setCwd(b.path("."));
     for (fixed_args) |arg| run_cmd.addArg(arg);
     if (passthrough_args) |args| run_cmd.addArgs(args);
-    return run_cmd;
-}
-
-fn addPrintedTextRunCommand(
-    b: *std.Build,
-    text: []const u8,
-) *std.Build.Step.Run {
-    const run_cmd = b.addSystemCommand(&.{ "/usr/bin/env", "printf", "%s", text });
-    run_cmd.setCwd(b.path("."));
     return run_cmd;
 }
 
@@ -738,100 +431,6 @@ fn existingValidStructureReportPath(b: *std.Build, relative_path: []const u8) ?s
     if (!valid) return null;
     return b.path(relative_path);
 }
-
-fn addGeneratedTemplateRuntimeModule(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    lua_mod: *std.Build.Module,
-    template_compiler_support_mod: *std.Build.Module,
-    relative_path: []const u8,
-) *std.Build.Module {
-    const source = loadGeneratedTemplateRuntimeSourceAlloc(b, relative_path) catch |err| {
-        std.debug.panic("failed to prepare generated template runtime: {s}", .{@errorName(err)});
-    };
-    const write_files = b.addWriteFiles();
-    const generated_path = write_files.add("generated/template_runtime.zig", source);
-    const generated_mod = b.createModule(.{
-        .root_source_file = generated_path,
-        .target = target,
-        .optimize = optimize,
-    });
-    generated_mod.addImport("lua", lua_mod);
-    generated_mod.addImport("template_compiler_support", template_compiler_support_mod);
-    return generated_mod;
-}
-
-fn loadGeneratedTemplateRuntimeSourceAlloc(b: *std.Build, relative_path: []const u8) ![]const u8 {
-    const source = std.Io.Dir.cwd().readFileAlloc(
-        b.graph.io,
-        b.pathFromRoot(relative_path),
-        b.allocator,
-        std.Io.Limit.limited(512 * 1024 * 1024),
-    ) catch |err| switch (err) {
-        error.FileNotFound => return b.allocator.dupe(u8, generatedTemplateRuntimeStubSource),
-        else => return err,
-    };
-    return rewriteTemplateRuntimeImportsAlloc(b.allocator, source);
-}
-
-fn templateRuntimeOutputPathForMode(mode: []const u8) []const u8 {
-    if (std.mem.eql(u8, mode, "bytecode")) return "data/generated_template_runtime_bytecode.zig";
-    return "data/generated_template_runtime.zig";
-}
-
-fn rewriteTemplateRuntimeImportsAlloc(allocator: std.mem.Allocator, source: []const u8) ![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(allocator);
-
-    var start: usize = 0;
-    while (std.mem.indexOfPos(u8, source, start, "template_compiler_support.zig")) |idx| {
-        try out.appendSlice(allocator, source[start..idx]);
-        try out.appendSlice(allocator, "template_compiler_support");
-        start = idx + "template_compiler_support.zig".len;
-    }
-    try out.appendSlice(allocator, source[start..]);
-    return out.toOwnedSlice(allocator);
-}
-
-const generatedTemplateRuntimeStubSource =
-    \\const std = @import("std");
-    \\const support = @import("template_compiler_support");
-    \\
-    \\pub const TemplateClass = support.TemplateClass;
-    \\pub const TemplateDispatchId = u16;
-    \\
-    \\pub fn classifyTemplateDispatchId(dispatch_id: TemplateDispatchId) ?TemplateClass {
-    \\    _ = dispatch_id;
-    \\    return .unsupported;
-    \\}
-    \\
-    \\pub fn lookupDynamicTemplateDispatchId(name: []const u8) ?TemplateDispatchId {
-    \\    _ = name;
-    \\    return null;
-    \\}
-    \\
-    \\pub fn renderTemplateByDispatchId(
-    \\    out: *std.ArrayList(u8),
-    \\    allocator: std.mem.Allocator,
-    \\    dispatch_id: TemplateDispatchId,
-    \\    args: *const support.TemplateArgs,
-    \\) !bool {
-    \\    _ = out;
-    \\    _ = allocator;
-    \\    _ = dispatch_id;
-    \\    _ = args;
-    \\    return false;
-    \\}
-    \\
-;
-
-const templateCompileUsageText =
-    \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.bin --output data/generated_template_runtime.zig
-    \\dict-template-compile --mode bytecode --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.bin --output data/generated_template_runtime.zig
-    \\dict-template-compile --mode zig --input data/wiktionary.xml --db data/wiktionary.bin --structure data/wiktionary-structure.bin --template "template name" --output /tmp/generated_templates.zig
-    \\
-;
 
 const GeneratedStructureModules = struct {
     regular: *std.Build.Module,
@@ -940,7 +539,7 @@ fn addDirectStructureBinary(
     bootstrap_tables_path: std.Build.LazyPath,
 ) std.Build.LazyPath {
     const compile = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-OReleaseFast" });
-    compile.addArgs(&.{ "--dep", "encoder", "--dep", "lua", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "wikitext_source", "--dep", "shared_structure_report" });
+    compile.addArgs(&.{ "--dep", "encoder", "--dep", "zxml", "--dep", "compact_pattern_seed", "--dep", "wikitext_source", "--dep", "shared_structure_report" });
     compile.addPrefixedFileArg("-Mroot=", b.path("tools/structure_analyzer.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{
@@ -966,9 +565,6 @@ fn addDirectStructureBinary(
         "wikitext_source",
     });
     compile.addPrefixedFileArg("-Mencoder=", b.path("encoder/root.zig"));
-    compile.addArg("-OReleaseFast");
-    compile.addArgs(&.{ "--dep", "shared_xml_decode" });
-    compile.addPrefixedFileArg("-Mlua=", b.path("lua/root.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{ "--dep", "shared_xml_decode" });
     compile.addArgs(&.{ "--dep", "config=config0" });

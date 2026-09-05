@@ -108,33 +108,21 @@ pub const TemplateMappings = struct {
 };
 
 pub const DependencySet = struct {
-    // Consumed by tools/template_codegen.zig as the runtime/template compilation roots.
     root_templates: []const []const u8 = &.{},
-    // Consumed by tools/template_codegen.zig for the precomputed reachable closure.
     reachable_templates: []const []const u8 = &.{},
-    // Consumed by tools/template_codegen.zig for narrowed dynamic dispatch support.
     dynamic_templates: []const []const u8 = &.{},
-    // Consumed by tools/template_codegen.zig and tools/lua_translate.zig diagnostics.
     unresolved_templates: []const []const u8 = &.{},
     // Consumed by tools/structure_analyzer.zig and tools/lua_translate.zig dependency reports.
     direct_modules: []const []const u8 = &.{},
-    // Consumed by tools/template_codegen.zig and tools/lua_translate.zig module closure loading.
     transitive_modules: []const []const u8 = &.{},
     // Consumed by encoder/builder.zig and tools/verifier.zig to avoid rescanning XML pages.
     all_entry_pages: []const SourcePageRef = &.{},
-    // Consumed by tools/template_codegen.zig and lua/root.zig full source loading.
     all_template_pages: []const SourcePageRef = &.{},
-    // Consumed by tools/template_codegen.zig and lua/root.zig full source loading.
     all_module_pages: []const SourcePageRef = &.{},
-    // Consumed by tools/template_codegen.zig and lua/root.zig dependency-source loading.
     reachable_template_pages: []const SourcePageRef = &.{},
-    // Consumed by tools/template_codegen.zig and lua/root.zig dependency-source loading.
     transitive_module_pages: []const SourcePageRef = &.{},
-    // Consumed by tools/template_codegen.zig and tools/lua_translate.zig diagnostics.
     missing_modules: []const []const u8 = &.{},
-    // Consumed by tools/template_codegen.zig and tools/lua_translate.zig diagnostics.
     compiled_failed: []const ModuleCompileFailure = &.{},
-    // Consumed by tools/template_codegen.zig and tools/lua_translate.zig diagnostics.
     emitted_inconsistent: []const ModuleCompileFailure = &.{},
 
     pub fn deinit(self: *DependencySet, allocator: std.mem.Allocator) void {

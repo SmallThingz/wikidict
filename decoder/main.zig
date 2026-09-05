@@ -153,13 +153,18 @@ fn ensureDictionaryExists(
     build_limit: ?usize,
     structure_path: ?[]const u8,
 ) void {
-    const found = required_path.exists(io, db_path) catch |err| {
-        std.debug.print("failed to access dictionary at {s}: {s}\n", .{ db_path, @errorName(err) });
+    const compatibility = decoder.probeDictionaryCompatibility(io, db_path) catch |err| {
+        std.debug.print("failed to validate dictionary at {s}: {s}\n", .{ db_path, @errorName(err) });
         std.process.exit(1);
     };
-    if (found) return;
 
-    std.debug.print("dictionary not found: {s}; running {s}\n", .{ db_path, tool_paths.encoder_bin_path });
+    switch (compatibility) {
+        .compatible => return,
+        .missing => std.debug.print("dictionary not found: {s}; running {s}\n", .{ db_path, tool_paths.encoder_bin_path }),
+        .invalid => std.debug.print("dictionary is invalid: {s}; rebuilding with {s}\n", .{ db_path, tool_paths.encoder_bin_path }),
+        .stale => std.debug.print("dictionary is stale or incompatible: {s}; rebuilding with {s}\n", .{ db_path, tool_paths.encoder_bin_path }),
+    }
+
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
     argv.append(allocator, "--input") catch |err| exitOnArgBuildFailure(err);

@@ -7,9 +7,6 @@
         .zxml = .{
             .path = ".deps/zxml",
         },
-        .zhttp = .{
-            .path = ".deps/zhttp",
-        },
     },
     .paths = .{
         "README.md",
@@ -17,11 +14,9 @@
         "build.zig.zon",
         "encoder",
         "decoder",
-        "backend",
-        "lua",
-        "frontend",
+        "lua2",
+        "shared",
         "tools",
         ".deps/zxml",
-        ".deps/zhttp",
     },
 }

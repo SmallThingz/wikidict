@@ -5,6 +5,7 @@ const normalize = @import("normalize");
 const generated = @import("generated_structure_tables");
 
 const compact = @import("compact_encoding.zig");
+const section_encoding = @import("section_encoding.zig");
 const format = @import("format.zig");
 const structure_report = @import("shared_structure_report");
 const wikitext = @import("wikitext_source");
@@ -542,22 +543,10 @@ fn appendChunkFileToOutput(io: std.Io, chunk_path: []const u8, output: *OutputWr
     const mapped = chunk.bytes();
     const inspected = try validateTempDictionaryHeader(mapped, chunk.stat.size);
 
-    try output.writeRawTitleBytes(mapped[
-        @as(usize, @intCast(inspected.layout.raw_titles_offset))..
-            @as(usize, @intCast(inspected.layout.raw_titles_offset + inspected.layout.raw_titles_len))
-    ]);
-    try output.writeAliasTitleBytes(mapped[
-        @as(usize, @intCast(inspected.layout.alias_titles_offset))..
-            @as(usize, @intCast(inspected.layout.alias_titles_offset + inspected.layout.alias_titles_len))
-    ]);
-    try output.writeAliasTargetTitleBytes(mapped[
-        @as(usize, @intCast(inspected.layout.alias_target_titles_offset))..
-            @as(usize, @intCast(inspected.layout.alias_target_titles_offset + inspected.layout.alias_target_titles_len))
-    ]);
-    try output.writeRawPayloadBytes(mapped[
-        @as(usize, @intCast(inspected.layout.raw_payloads_offset))..
-            @as(usize, @intCast(inspected.layout.raw_payloads_offset + inspected.layout.raw_payloads_len))
-    ]);
+    try output.writeRawTitleBytes(mapped[@as(usize, @intCast(inspected.layout.raw_titles_offset))..@as(usize, @intCast(inspected.layout.raw_titles_offset + inspected.layout.raw_titles_len))]);
+    try output.writeAliasTitleBytes(mapped[@as(usize, @intCast(inspected.layout.alias_titles_offset))..@as(usize, @intCast(inspected.layout.alias_titles_offset + inspected.layout.alias_titles_len))]);
+    try output.writeAliasTargetTitleBytes(mapped[@as(usize, @intCast(inspected.layout.alias_target_titles_offset))..@as(usize, @intCast(inspected.layout.alias_target_titles_offset + inspected.layout.alias_target_titles_len))]);
+    try output.writeRawPayloadBytes(mapped[@as(usize, @intCast(inspected.layout.raw_payloads_offset))..@as(usize, @intCast(inspected.layout.raw_payloads_offset + inspected.layout.raw_payloads_len))]);
     output.raw_entry_count += inspected.header.raw_count;
     output.redirect_count += inspected.header.alias_count;
     output.entry_count += inspected.header.entryCount();
@@ -839,11 +828,11 @@ fn collectTempRawCandidatesAlloc(
     }
     for (out) |*candidate| {
         const title_encoded = try readCompactTerminatedSlice(mapped, &title_cursor, titles_end);
-        const payload_encoded = try readCompactTerminatedSlice(mapped, &payload_cursor, payloads_end);
+        const payload_encoded = try format.readLengthPrefixedSlice(mapped, &payload_cursor, payloads_end);
 
         const decoded_title = try compact.decodeAlloc(allocator, title_encoded);
         defer allocator.free(decoded_title);
-        const decoded_payload = try compact.decodeAlloc(allocator, payload_encoded);
+        const decoded_payload = try decodeStoredPayloadAlloc(allocator, payload_encoded);
         defer allocator.free(decoded_payload);
 
         const normalized_title = try normalizeOwnedAlloc(allocator, decoded_title);
@@ -974,7 +963,7 @@ fn writeFinalDictionaryFromTempCandidates(
         if (!candidate.valid) continue;
         raw_index_map[idx] = @intCast(kept_raw_count);
         raw_titles_len += candidate.title_encoded.len + 1;
-        raw_payloads_len += candidate.payload_encoded.len + 1;
+        raw_payloads_len = try std.math.add(usize, raw_payloads_len, try payloadRecordLen(candidate.payload_encoded.len));
         if (!valid_title_map.contains(candidate.normalized_title)) {
             try valid_title_map.put(candidate.normalized_title, @intCast(kept_raw_count));
         }
@@ -1001,6 +990,7 @@ fn writeFinalDictionaryFromTempCandidates(
     const header = format.Header.init(
         std.math.cast(u32, kept_raw_count) orelse return error.FileTooBig,
         std.math.cast(u32, kept_alias_count) orelse return error.FileTooBig,
+        compact.binaryMappingFingerprint(compact.currentRuntimeMappings()),
     );
     @memcpy(out[0..format.header_len], std.mem.asBytes(&header));
 
@@ -1040,10 +1030,13 @@ fn writeFinalDictionaryFromTempCandidates(
 
     for (raw_candidates) |candidate| {
         if (!candidate.valid) continue;
+        var len_buf: [10]u8 = undefined;
+        const payload_len64 = std.math.cast(u64, candidate.payload_encoded.len) orelse return error.FileTooBig;
+        const len_bytes = format.encodeVarUInt(&len_buf, payload_len64);
+        @memcpy(out[cursor .. cursor + len_bytes.len], len_bytes);
+        cursor += len_bytes.len;
         @memcpy(out[cursor .. cursor + candidate.payload_encoded.len], candidate.payload_encoded);
         cursor += candidate.payload_encoded.len;
-        out[cursor] = 0;
-        cursor += 1;
     }
 
     std.debug.assert(cursor == total_len);
@@ -1227,6 +1220,21 @@ fn readCompactTerminatedSlice(bytes: []const u8, cursor: *usize, limit: usize) !
     return format.readCompactTerminatedSlice(bytes, cursor, limit);
 }
 
+fn decodeStoredPayloadAlloc(allocator: std.mem.Allocator, payload: []const u8) ![]u8 {
+    if (payload.len == 0) return error.InvalidDictionaryFile;
+    return switch (payload[0]) {
+        format.payload_kind_raw_compact => compact.decodeAlloc(allocator, payload[1..]) catch return error.InvalidDictionaryFile,
+        format.payload_kind_section_ir => section_encoding.decodeEnglishAlloc(allocator, payload[1..]) catch return error.InvalidDictionaryFile,
+        else => error.InvalidDictionaryFile,
+    };
+}
+
+fn payloadRecordLen(payload_len: usize) !usize {
+    const payload_len64 = std.math.cast(u64, payload_len) orelse return error.FileTooBig;
+    var len_buf: [10]u8 = undefined;
+    return std.math.add(usize, format.encodeVarUInt(&len_buf, payload_len64).len, payload_len) catch return error.FileTooBig;
+}
+
 const OutputWriter = struct {
     const flush_threshold = 1 << 20;
     const initial_capacity = 8 << 20;
@@ -1375,7 +1383,7 @@ const OutputWriter = struct {
         stored_sections: []const u8,
     ) !void {
         try self.writeEncodedString(&self.raw_title_buffer, title, flushRawTitleBuffer);
-        try self.writeEncodedString(&self.raw_payload_buffer, stored_sections, flushRawPayloadBuffer);
+        try self.writePayload(stored_sections);
         self.raw_entry_count += 1;
         self.entry_count += 1;
     }
@@ -1389,6 +1397,32 @@ const OutputWriter = struct {
         try self.writeEncodedString(&self.alias_target_title_buffer, target, flushAliasTargetTitleBuffer);
         self.redirect_count += 1;
         self.entry_count += 1;
+    }
+
+    fn writePayload(self: *OutputWriter, stored_sections: []const u8) !void {
+        if (std.mem.indexOfScalar(u8, stored_sections, 0) != null) return error.InvalidDictionaryFile;
+
+        if (wikitext.extractEnglishSection(stored_sections)) |english| {
+            if (english.ptr == stored_sections.ptr and english.len == stored_sections.len) {
+                const encoded = try section_encoding.encodeEnglishAlloc(self.allocator, english);
+                defer self.allocator.free(encoded);
+                try self.appendPayloadRecord(format.payload_kind_section_ir, encoded);
+                return;
+            }
+        }
+
+        const encoded = try compact.encodeToList(&self.encode_buf, self.allocator, stored_sections);
+        try self.appendPayloadRecord(format.payload_kind_raw_compact, encoded);
+    }
+
+    fn appendPayloadRecord(self: *OutputWriter, kind: u8, encoded: []const u8) !void {
+        const payload_len = std.math.add(usize, encoded.len, 1) catch return error.FileTooBig;
+        const payload_len64 = std.math.cast(u64, payload_len) orelse return error.FileTooBig;
+        var len_buf: [10]u8 = undefined;
+        try self.raw_payload_buffer.appendSlice(self.allocator, format.encodeVarUInt(&len_buf, payload_len64));
+        try self.raw_payload_buffer.append(self.allocator, kind);
+        try self.raw_payload_buffer.appendSlice(self.allocator, encoded);
+        if (self.raw_payload_buffer.items.len >= flush_threshold) try self.flushRawPayloadBuffer();
     }
 
     fn writeEncodedString(
