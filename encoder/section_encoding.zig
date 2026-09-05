@@ -267,7 +267,19 @@ pub fn encodeEnglishAlloc(allocator: std.mem.Allocator, english_section: []const
     return out.toOwnedSlice(allocator);
 }
 
+pub const DocumentDecodeOptions = struct {
+    materialize_structured_bodies: bool = true,
+};
+
 pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})!DecodedDocument {
+    return decodeDocumentAllocWithOptions(allocator, encoded, .{});
+}
+
+pub fn decodeRenderDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})!DecodedDocument {
+    return decodeDocumentAllocWithOptions(allocator, encoded, .{ .materialize_structured_bodies = false });
+}
+
+pub fn decodeDocumentAllocWithOptions(allocator: std.mem.Allocator, encoded: []const u8, options: DocumentDecodeOptions) (std.mem.Allocator.Error || error{InvalidEncoding})!DecodedDocument {
     if (encoded.len == 0) return error.InvalidEncoding;
 
     var cursor: usize = 1;
@@ -328,6 +340,8 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
             const joined = try decodeJoinedBodyAlloc(allocator, payload);
             body = joined.text;
             line_count = joined.line_count;
+        } else if (!options.materialize_structured_bodies and (kind == .term_list or kind == .translations)) {
+            body = try allocator.alloc(u8, 0);
         } else {
             body = switch (kind) {
                 .pos_lines => try decodeLineStreamAlloc(allocator, payload),
@@ -2540,6 +2554,53 @@ test "inline iterator preserves malformed markup as text" {
     try std.testing.expectEqual(InlineKind.text, span.kind);
     try std.testing.expectEqualStrings(block.text, span.text);
     try std.testing.expect(iterator.next() == null);
+}
+
+test "render document omits reconstructed structured bodies" {
+    const sample =
+        \\==English==
+        \\===Noun===
+        \\# [[light]]
+        \\====Derived terms====
+        \\{{col3|en|daylight|moonlight|sunlight}}
+        \\====Translations====
+        \\{{trans-top|visible light}}
+        \\* French: {{t|fr|lumière}}
+        \\{{trans-bottom}}
+        \\
+    ;
+
+    const encoded = try encodeEnglishAlloc(std.testing.allocator, sample);
+    defer std.testing.allocator.free(encoded);
+    var document = try decodeRenderDocumentAlloc(std.testing.allocator, encoded);
+    defer document.deinit(std.testing.allocator);
+
+    var saw_pos = false;
+    var saw_terms = false;
+    var saw_translations = false;
+    for (document.sections) |section| {
+        switch (section.kind) {
+            .pos_lines => {
+                saw_pos = true;
+                try std.testing.expectEqualStrings("# [[light]]", section.body);
+                try std.testing.expectEqual(@as(usize, 1), section.line_count);
+            },
+            .term_list => {
+                saw_terms = true;
+                try std.testing.expectEqual(@as(usize, 0), section.body.len);
+                try std.testing.expectEqual(@as(usize, 0), section.line_count);
+                try std.testing.expect(section.term_records != null);
+            },
+            .translations => {
+                saw_translations = true;
+                try std.testing.expectEqual(@as(usize, 0), section.body.len);
+                try std.testing.expectEqual(@as(usize, 0), section.line_count);
+                try std.testing.expect(section.translation_records != null);
+            },
+            .lines => {},
+        }
+    }
+    try std.testing.expect(saw_pos and saw_terms and saw_translations);
 }
 
 test "decoded term lists expose renderer-native column records" {
