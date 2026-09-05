@@ -4,10 +4,6 @@ zig-out/
 zig-pkg
 .worktrees/
 
-bun.lock*
-package-lock*
-node_modules/
-dist/
 
 data/
 enwiktionary.xml

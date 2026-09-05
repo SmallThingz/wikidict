@@ -112,7 +112,7 @@ pub const DependencySet = struct {
     reachable_templates: []const []const u8 = &.{},
     dynamic_templates: []const []const u8 = &.{},
     unresolved_templates: []const []const u8 = &.{},
-    // Consumed by tools/structure_analyzer.zig and tools/lua_translate.zig dependency reports.
+    // Consumed by structure analysis and compatibility tooling.
     direct_modules: []const []const u8 = &.{},
     transitive_modules: []const []const u8 = &.{},
     // Consumed by encoder/builder.zig and tools/verifier.zig to avoid rescanning XML pages.
