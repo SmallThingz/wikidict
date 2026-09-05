@@ -233,6 +233,7 @@ pub const BlockIterator = struct {
 pub const DecodedSection = struct {
     level: u8,
     title: []const u8,
+    title_owned: bool = false,
     kind: SectionKind,
     body: []const u8,
     line_count: usize,
@@ -253,7 +254,7 @@ pub const DecodedSection = struct {
     }
 
     pub fn deinit(self: *DecodedSection, allocator: std.mem.Allocator) void {
-        allocator.free(self.title);
+        if (self.title_owned) allocator.free(self.title);
         allocator.free(self.body);
         if (self.term_records) |records| {
             for (records) |*record| record.deinit(allocator);

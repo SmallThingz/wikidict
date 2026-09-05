@@ -292,7 +292,7 @@ pub fn decodeDocumentAllocWithOptions(allocator: std.mem.Allocator, encoded: []c
     while (cursor < encoded.len) {
         const heading_level_code = readTieredRef(encoded, &cursor, encoded.len) catch return error.InvalidEncoding;
 
-        const level, const title, const kind = if (heading_level_code == heading_level_generic) blk: {
+        const level, const title, const title_owned, const kind = if (heading_level_code == heading_level_generic) blk: {
             if (cursor >= encoded.len) return error.InvalidEncoding;
             const generic_level = encoded[cursor];
             cursor += 1;
@@ -304,23 +304,26 @@ pub fn decodeDocumentAllocWithOptions(allocator: std.mem.Allocator, encoded: []c
             break :blk .{
                 generic_level,
                 generic_title,
+                true,
                 sectionKindFromInt(kind_int) orelse return error.InvalidEncoding,
             };
         } else if (heading_level_code == heading_level_preamble) blk: {
             break :blk .{
                 @as(u8, 0),
-                try allocator.dupe(u8, ""),
+                @as([]const u8, ""),
+                false,
                 SectionKind.lines,
             };
         } else blk: {
             const def = headingLevelDefForCode(heading_level_code) orelse return error.InvalidEncoding;
             break :blk .{
                 def.level,
-                try allocator.dupe(u8, def.title),
+                def.title,
+                false,
                 documentSectionKind(def.kind),
             };
         };
-        errdefer allocator.free(title);
+        errdefer if (title_owned) allocator.free(title);
 
         const payload = readLengthPrefixedSlice(encoded, &cursor, encoded.len) catch return error.InvalidEncoding;
         const term_records: ?[]TermRecord = if (kind == .term_list)
@@ -361,6 +364,7 @@ pub fn decodeDocumentAllocWithOptions(allocator: std.mem.Allocator, encoded: []c
         try sections.append(allocator, .{
             .level = level,
             .title = title,
+            .title_owned = title_owned,
             .kind = kind,
             .body = body,
             .line_count = line_count,
@@ -2533,6 +2537,37 @@ test "decoded document exposes renderer-facing section structure" {
     try std.testing.expectEqual(InlineKind.template, template.kind);
     try std.testing.expectEqualStrings("t", template.target);
     try std.testing.expectEqual(TranslationRecordKind.group_end, translations[2].kind);
+}
+
+test "decoded document borrows generated headings and owns generic headings" {
+    var encoded: std.ArrayList(u8) = .empty;
+    defer encoded.deinit(std.testing.allocator);
+
+    try encoded.append(std.testing.allocator, 0);
+    try appendTieredRef(&encoded, std.testing.allocator, heading_level_generic);
+    try encoded.append(std.testing.allocator, 3);
+    try appendCompactSlice(&encoded, std.testing.allocator, "Quux Renderer Ownership Test");
+    try encoded.append(std.testing.allocator, @intFromEnum(SectionKind.lines));
+    try appendBytesSlice(&encoded, std.testing.allocator, "");
+
+    var generic_document = try decodeRenderDocumentAlloc(std.testing.allocator, encoded.items);
+    defer generic_document.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), generic_document.sections.len);
+    try std.testing.expectEqualStrings("Quux Renderer Ownership Test", generic_document.sections[0].title);
+    try std.testing.expect(generic_document.sections[0].title_owned);
+
+    if (heading_level_defs.len != 0) {
+        encoded.clearRetainingCapacity();
+        try encoded.append(std.testing.allocator, 0);
+        try appendTieredRef(&encoded, std.testing.allocator, heading_level_defs[0].code);
+        try appendBytesSlice(&encoded, std.testing.allocator, "");
+
+        var generated_document = try decodeRenderDocumentAlloc(std.testing.allocator, encoded.items);
+        defer generated_document.deinit(std.testing.allocator);
+        try std.testing.expectEqual(@as(usize, 1), generated_document.sections.len);
+        try std.testing.expectEqualStrings(heading_level_defs[0].title, generated_document.sections[0].title);
+        try std.testing.expect(!generated_document.sections[0].title_owned);
+    }
 }
 
 test "decoded translation mappings preserve generic inline values without generated tables" {
