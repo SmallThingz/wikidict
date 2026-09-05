@@ -1079,11 +1079,97 @@ fn appendEncodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, line
     try appendCompactTerminated(out, allocator, line);
 }
 
+fn encodedLineDecodedLen(bytes: []const u8, start: usize, limit: usize) error{InvalidEncoding}!usize {
+    var cursor = start;
+    if (cursor >= limit) return error.InvalidEncoding;
+    const code = bytes[cursor];
+    cursor += 1;
+
+    if (code == line_blank) return 0;
+    if (code == line_raw) return compactTerminatedDecodedLen(bytes, &cursor, limit);
+
+    var out_len: usize = 0;
+    if (code == line_template_list_prefixed or code == line_template_list_prefixed_en or code == line_template_list_prefixed_en_onearg) {
+        if (cursor >= limit) return error.InvalidEncoding;
+        const prefix_code = bytes[cursor];
+        cursor += 1;
+        const prefix = prefixForCode(prefix_code) orelse return error.InvalidEncoding;
+        try addDecodedLength(&out_len, prefix.len);
+
+        const template_code = readTieredRef(bytes, &cursor, limit) catch return error.InvalidEncoding;
+        const template_name = lineTemplateName(template_code) orelse return error.InvalidEncoding;
+        if (cursor >= limit) return error.InvalidEncoding;
+        const separator_kind = bytes[cursor];
+        cursor += 1;
+        const separator = simpleListSeparatorText(separator_kind) orelse return error.InvalidEncoding;
+        const item_count = format.readVarUInt(bytes, &cursor, limit) catch return error.InvalidEncoding;
+        const include_english_arg = code == line_template_list_prefixed_en or code == line_template_list_prefixed_en_onearg;
+        const include_english_onearg = code == line_template_list_prefixed_en_onearg;
+
+        var item_index: usize = 0;
+        while (item_index < item_count) : (item_index += 1) {
+            if (item_index != 0) try addDecodedLength(&out_len, separator.len);
+            try addDecodedLength(&out_len, 2 + template_name.len);
+            if (include_english_arg) try addDecodedLength(&out_len, 3);
+
+            if (include_english_onearg) {
+                try addDecodedLength(&out_len, 1);
+                try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit));
+            } else {
+                const arg_count = format.readVarUInt(bytes, &cursor, limit) catch return error.InvalidEncoding;
+                var arg_index: usize = 0;
+                while (arg_index < arg_count) : (arg_index += 1) {
+                    try addDecodedLength(&out_len, 1);
+                    try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit));
+                }
+            }
+            try addDecodedLength(&out_len, 2);
+        }
+        return out_len;
+    }
+
+    if (code == line_template_full or code == line_template_prefixed or code == line_template_full_en or code == line_template_prefixed_en or code == line_template_full_en_onearg or code == line_template_prefixed_en_onearg) {
+        const prefix = if (code == line_template_prefixed or code == line_template_prefixed_en or code == line_template_prefixed_en_onearg) blk: {
+            if (cursor >= limit) return error.InvalidEncoding;
+            const prefix_code = bytes[cursor];
+            cursor += 1;
+            break :blk prefixForCode(prefix_code) orelse return error.InvalidEncoding;
+        } else "";
+        try addDecodedLength(&out_len, prefix.len);
+
+        const template_code = readTieredRef(bytes, &cursor, limit) catch return error.InvalidEncoding;
+        const template_name = lineTemplateName(template_code) orelse return error.InvalidEncoding;
+        try addDecodedLength(&out_len, 2 + template_name.len);
+        const include_english_arg = code == line_template_full_en or code == line_template_prefixed_en or code == line_template_full_en_onearg or code == line_template_prefixed_en_onearg;
+        const include_english_onearg = code == line_template_full_en_onearg or code == line_template_prefixed_en_onearg;
+        if (include_english_arg) try addDecodedLength(&out_len, 3);
+        const arg_count = if (include_english_onearg)
+            @as(u64, 1)
+        else
+            format.readVarUInt(bytes, &cursor, limit) catch return error.InvalidEncoding;
+
+        var arg_index: usize = 0;
+        while (arg_index < arg_count) : (arg_index += 1) {
+            try addDecodedLength(&out_len, 1);
+            try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit));
+        }
+        try addDecodedLength(&out_len, 2);
+        return out_len;
+    }
+
+    const prefix = specialLinePrefixForCode(code) orelse prefixForCode(code) orelse return error.InvalidEncoding;
+    try addDecodedLength(&out_len, prefix.len);
+    try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit));
+    return out_len;
+}
+
 fn decodeEncodedLineAlloc(allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize, limit: usize) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
+    const decoded_len = try encodedLineDecodedLen(bytes, cursor.*, limit);
+    var out = try std.ArrayList(u8).initCapacity(allocator, decoded_len);
+    errdefer out.deinit(allocator);
     try appendDecodedLine(&out, allocator, bytes, cursor, limit);
-    return out.toOwnedSlice(allocator);
+    if (out.items.len != decoded_len) return error.InvalidEncoding;
+    return out.toOwnedSliceAssert();
 }
 
 fn appendDecodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize, limit: usize) (std.mem.Allocator.Error || error{InvalidEncoding})!void {
