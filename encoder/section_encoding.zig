@@ -8,7 +8,52 @@ const trailing_newline_flag: u8 = 1 << 0;
 const extended_ref_marker: u8 = 0xFF;
 const max_inline_ref_code: u16 = 0xFE;
 
-const SectionKind = generated.SectionKind;
+pub const SectionKind = generated.SectionKind;
+
+pub const BlockKind = enum {
+    paragraph,
+    blank,
+    definition,
+    example,
+    quotation,
+    list_item,
+    list_detail,
+    indent,
+    term,
+};
+
+pub const DecodedBlock = struct {
+    kind: BlockKind,
+    depth: u8,
+    text: []const u8,
+};
+
+pub const DecodedSection = struct {
+    level: u8,
+    title: []const u8,
+    kind: SectionKind,
+    body: []const u8,
+    line_count: usize,
+    blocks: []DecodedBlock,
+
+    pub fn deinit(self: *DecodedSection, allocator: std.mem.Allocator) void {
+        allocator.free(self.title);
+        allocator.free(self.blocks);
+        allocator.free(self.body);
+        self.* = undefined;
+    }
+};
+
+pub const DecodedDocument = struct {
+    trailing_newline: bool,
+    sections: []DecodedSection,
+
+    pub fn deinit(self: *DecodedDocument, allocator: std.mem.Allocator) void {
+        for (self.sections) |*section| section.deinit(allocator);
+        allocator.free(self.sections);
+        self.* = undefined;
+    }
+};
 
 const heading_level_generic: u16 = 0;
 const heading_level_preamble: u16 = 1;
@@ -251,6 +296,154 @@ pub fn encodeEnglishAlloc(allocator: std.mem.Allocator, english_section: []const
     }
 
     return out.toOwnedSlice(allocator);
+}
+
+pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})!DecodedDocument {
+    if (encoded.len == 0) return error.InvalidEncoding;
+
+    var cursor: usize = 1;
+    var sections: std.ArrayList(DecodedSection) = .empty;
+    errdefer {
+        for (sections.items) |*section| section.deinit(allocator);
+        sections.deinit(allocator);
+    }
+
+    while (cursor < encoded.len) {
+        const heading_level_code = readTieredRef(encoded, &cursor, encoded.len) catch return error.InvalidEncoding;
+
+        const level, const title, const kind = if (heading_level_code == heading_level_generic) blk: {
+            if (cursor >= encoded.len) return error.InvalidEncoding;
+            const generic_level = encoded[cursor];
+            cursor += 1;
+            const generic_title = try readCompactSliceAlloc(allocator, encoded, &cursor, encoded.len);
+            errdefer allocator.free(generic_title);
+            if (cursor >= encoded.len) return error.InvalidEncoding;
+            const kind_int = encoded[cursor];
+            cursor += 1;
+            break :blk .{
+                generic_level,
+                generic_title,
+                sectionKindFromInt(kind_int) orelse return error.InvalidEncoding,
+            };
+        } else if (heading_level_code == heading_level_preamble) blk: {
+            break :blk .{
+                @as(u8, 0),
+                try allocator.dupe(u8, ""),
+                SectionKind.lines,
+            };
+        } else blk: {
+            const def = headingLevelDefForCode(heading_level_code) orelse return error.InvalidEncoding;
+            break :blk .{
+                def.level,
+                try allocator.dupe(u8, def.title),
+                def.kind,
+            };
+        };
+        errdefer allocator.free(title);
+
+        const payload = readLengthPrefixedSlice(encoded, &cursor, encoded.len) catch return error.InvalidEncoding;
+        var body: []const u8 = undefined;
+        var line_count: usize = 0;
+        if (kind == .lines) {
+            const joined = try decodeJoinedBodyAlloc(allocator, payload);
+            body = joined.text;
+            line_count = joined.line_count;
+        } else {
+            body = switch (kind) {
+                .pos_lines => try decodeLineStreamAlloc(allocator, payload),
+                .term_list => try decodeTermSectionAlloc(allocator, payload),
+                .translations => try decodeTranslationSectionAlloc(allocator, payload),
+                .lines => unreachable,
+            };
+            if (body.len != 0) {
+                line_count = 1;
+                for (body) |byte| if (byte == '\n') {
+                    line_count += 1;
+                };
+            }
+        }
+        errdefer allocator.free(body);
+        const blocks = try decodeBlocksAlloc(allocator, body, line_count);
+        errdefer allocator.free(blocks);
+
+        try sections.append(allocator, .{
+            .level = level,
+            .title = title,
+            .kind = kind,
+            .body = body,
+            .line_count = line_count,
+            .blocks = blocks,
+        });
+    }
+
+    return .{
+        .trailing_newline = (encoded[0] & trailing_newline_flag) != 0,
+        .sections = try sections.toOwnedSlice(allocator),
+    };
+}
+
+fn decodeBlocksAlloc(allocator: std.mem.Allocator, body: []const u8, line_count: usize) ![]DecodedBlock {
+    if (line_count == 0) return allocator.alloc(DecodedBlock, 0);
+
+    const blocks = try allocator.alloc(DecodedBlock, line_count);
+    errdefer allocator.free(blocks);
+    if (body.len == 0) {
+        if (line_count != 1) return error.InvalidEncoding;
+        blocks[0] = .{ .kind = .blank, .depth = 0, .text = "" };
+        return blocks;
+    }
+
+    var block_index: usize = 0;
+    var line_start: usize = 0;
+    while (line_start <= body.len and block_index < blocks.len) : (block_index += 1) {
+        const line_end = std.mem.indexOfScalarPos(u8, body, line_start, '\n') orelse body.len;
+        blocks[block_index] = classifyBlock(body[line_start..line_end]);
+        if (line_end == body.len) {
+            line_start = body.len + 1;
+        } else {
+            line_start = line_end + 1;
+        }
+    }
+    if (block_index != blocks.len or line_start <= body.len) return error.InvalidEncoding;
+    return blocks;
+}
+
+fn classifyBlock(line: []const u8) DecodedBlock {
+    if (line.len == 0) return .{ .kind = .blank, .depth = 0, .text = line };
+
+    if (line[0] == '#') {
+        var depth: usize = 0;
+        while (depth < line.len and line[depth] == '#') : (depth += 1) {}
+        const rest = line[depth..];
+        if (std.mem.startsWith(u8, rest, ":* ")) return blockWithPrefix(.quotation, depth, line, depth + 3);
+        if (std.mem.startsWith(u8, rest, "* ")) return blockWithPrefix(.quotation, depth, line, depth + 2);
+        if (std.mem.startsWith(u8, rest, ": ")) return blockWithPrefix(.example, depth, line, depth + 2);
+        if (std.mem.startsWith(u8, rest, " ")) return blockWithPrefix(.definition, depth, line, depth + 1);
+    }
+
+    if (line[0] == '*') {
+        var depth: usize = 0;
+        while (depth < line.len and line[depth] == '*') : (depth += 1) {}
+        const rest = line[depth..];
+        if (std.mem.startsWith(u8, rest, ": ")) return blockWithPrefix(.list_detail, depth, line, depth + 2);
+        if (std.mem.startsWith(u8, rest, " ")) return blockWithPrefix(.list_item, depth, line, depth + 1);
+    }
+
+    if (line[0] == ':') {
+        var depth: usize = 0;
+        while (depth < line.len and line[depth] == ':') : (depth += 1) {}
+        if (depth < line.len and line[depth] == ' ') return blockWithPrefix(.indent, depth, line, depth + 1);
+    }
+    if (std.mem.startsWith(u8, line, "; ")) return .{ .kind = .term, .depth = 1, .text = line[2..] };
+    return .{ .kind = .paragraph, .depth = 0, .text = line };
+}
+
+fn blockWithPrefix(kind: BlockKind, depth: usize, line: []const u8, text_start: usize) DecodedBlock {
+    return .{
+        .kind = kind,
+        .depth = @intCast(@min(depth, std.math.maxInt(u8))),
+        .text = line[text_start..],
+    };
 }
 
 pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
@@ -2042,6 +2235,96 @@ test "section encoding round trips headings, translations, and column terms" {
     defer std.testing.allocator.free(decoded);
 
     try std.testing.expectEqualStrings(sample, decoded);
+}
+
+test "decoded document exposes renderer-facing section structure" {
+    const sample =
+        \\==English==
+        \\{{wikipedia|color}}
+        \\===Noun===
+        \\# [[light]]
+        \\====Translations====
+        \\{{trans-top|visible spectrum}}
+        \\* French: {{t|fr|couleur}}
+        \\{{trans-bottom}}
+        \\
+    ;
+
+    const encoded = try encodeEnglishAlloc(std.testing.allocator, sample);
+    defer std.testing.allocator.free(encoded);
+    var document = try decodeDocumentAlloc(std.testing.allocator, encoded);
+    defer document.deinit(std.testing.allocator);
+
+    try std.testing.expect(document.trailing_newline);
+    try std.testing.expectEqual(@as(usize, 3), document.sections.len);
+    try std.testing.expectEqual(@as(u8, 0), document.sections[0].level);
+    try std.testing.expectEqualStrings("", document.sections[0].title);
+    try std.testing.expectEqualStrings("{{wikipedia|color}}", document.sections[0].body);
+    try std.testing.expectEqual(@as(u8, 3), document.sections[1].level);
+    try std.testing.expectEqualStrings("Noun", document.sections[1].title);
+    try std.testing.expectEqual(SectionKind.pos_lines, document.sections[1].kind);
+    try std.testing.expectEqualStrings("# [[light]]", document.sections[1].body);
+    try std.testing.expectEqual(@as(usize, 1), document.sections[1].blocks.len);
+    try std.testing.expectEqual(BlockKind.definition, document.sections[1].blocks[0].kind);
+    try std.testing.expectEqual(@as(u8, 1), document.sections[1].blocks[0].depth);
+    try std.testing.expectEqualStrings("[[light]]", document.sections[1].blocks[0].text);
+    try std.testing.expectEqual(@as(u8, 4), document.sections[2].level);
+    try std.testing.expectEqualStrings("Translations", document.sections[2].title);
+    try std.testing.expectEqual(SectionKind.translations, document.sections[2].kind);
+}
+
+test "render blocks classify wiktionary line structure" {
+    const body =
+        "# definition\n" ++
+        "## nested\n" ++
+        "#: example\n" ++
+        "#* quotation\n" ++
+        "* item\n" ++
+        "**: detail\n" ++
+        ": indent\n" ++
+        "; term\n" ++
+        "paragraph\n";
+    const blocks = try decodeBlocksAlloc(std.testing.allocator, body, 10);
+    defer std.testing.allocator.free(blocks);
+
+    try std.testing.expectEqual(BlockKind.definition, blocks[0].kind);
+    try std.testing.expectEqual(@as(u8, 1), blocks[0].depth);
+    try std.testing.expectEqualStrings("definition", blocks[0].text);
+    try std.testing.expectEqual(BlockKind.definition, blocks[1].kind);
+    try std.testing.expectEqual(@as(u8, 2), blocks[1].depth);
+    try std.testing.expectEqual(BlockKind.example, blocks[2].kind);
+    try std.testing.expectEqual(BlockKind.quotation, blocks[3].kind);
+    try std.testing.expectEqual(BlockKind.list_item, blocks[4].kind);
+    try std.testing.expectEqual(BlockKind.list_detail, blocks[5].kind);
+    try std.testing.expectEqual(BlockKind.indent, blocks[6].kind);
+    try std.testing.expectEqual(BlockKind.term, blocks[7].kind);
+    try std.testing.expectEqual(BlockKind.paragraph, blocks[8].kind);
+    try std.testing.expectEqual(BlockKind.blank, blocks[9].kind);
+}
+
+test "section document encoding is smaller on a representative entry" {
+    const sample =
+        \\==English==
+        \\===Noun===
+        \\{{en-noun|s}}
+        \\# {{lb|en|countable}} [[light]]
+        \\#: {{ux|en|Humans see light.}}
+        \\====Derived terms====
+        \\{{col3|en|daylight|moonlight|sunlight|starlight|torchlight|twilight}}
+        \\====Translations====
+        \\{{trans-top|visible light}}
+        \\* French: {{t+|fr|lumière}}
+        \\* German: {{t+|de|Licht|n}}
+        \\* Spanish: {{t+|es|luz|f}}
+        \\{{trans-bottom}}
+        \\
+    ;
+
+    const structured = try encodeEnglishAlloc(std.testing.allocator, sample);
+    defer std.testing.allocator.free(structured);
+    const raw = try compact.encodeAlloc(std.testing.allocator, sample);
+    defer std.testing.allocator.free(raw);
+    try std.testing.expect(structured.len < raw.len);
 }
 
 test "section encoding falls back when simple translation lists use unsupported prefixes" {
