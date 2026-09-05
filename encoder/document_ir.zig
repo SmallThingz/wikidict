@@ -1,7 +1,10 @@
 const std = @import("std");
-const generated = @import("generated_structure_tables");
-
-pub const SectionKind = generated.SectionKind;
+pub const SectionKind = enum(u8) {
+    lines = 0,
+    pos_lines = 1,
+    term_list = 2,
+    translations = 3,
+};
 
 pub const BlockKind = enum {
     paragraph,

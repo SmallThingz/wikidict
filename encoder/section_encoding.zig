@@ -300,7 +300,7 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
             break :blk .{
                 def.level,
                 try allocator.dupe(u8, def.title),
-                def.kind,
+                documentSectionKind(def.kind),
             };
         };
         errdefer allocator.free(title);
@@ -382,7 +382,7 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
             break :blk .{
                 def.level,
                 try allocator.dupe(u8, def.title),
-                def.kind,
+                documentSectionKind(def.kind),
             };
         };
         defer allocator.free(title);
@@ -1130,14 +1130,28 @@ fn headingLevelDefForCode(code: u16) ?HeadingLevelDef {
 fn kindForHeadingLevelCode(code: u16) ?SectionKind {
     if (code == heading_level_preamble) return .lines;
     const def = headingLevelDefForCode(code) orelse return null;
-    return def.kind;
+    return documentSectionKind(def.kind);
 }
 
 fn kindForTitle(title: []const u8) ?SectionKind {
     for (heading_defs) |def| {
-        if (std.mem.eql(u8, def.title, title)) return def.kind;
+        if (std.mem.eql(u8, def.title, title)) return documentSectionKind(def.kind);
     }
     return null;
+}
+
+fn documentSectionKind(kind: generated.SectionKind) SectionKind {
+    return @enumFromInt(@intFromEnum(kind));
+}
+
+comptime {
+    if (@intFromEnum(generated.SectionKind.lines) != @intFromEnum(SectionKind.lines) or
+        @intFromEnum(generated.SectionKind.pos_lines) != @intFromEnum(SectionKind.pos_lines) or
+        @intFromEnum(generated.SectionKind.term_list) != @intFromEnum(SectionKind.term_list) or
+        @intFromEnum(generated.SectionKind.translations) != @intFromEnum(SectionKind.translations))
+    {
+        @compileError("generated and renderer section kinds must stay byte-compatible");
+    }
 }
 
 fn sectionKindFromInt(value: u8) ?SectionKind {
