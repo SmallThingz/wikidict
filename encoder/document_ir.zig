@@ -26,6 +26,31 @@ pub const InlineKind = enum {
     line_break,
 };
 
+pub const TermRecordKind = enum {
+    line,
+    column,
+};
+
+pub const TermRecord = struct {
+    kind: TermRecordKind,
+    text: []const u8 = "",
+    columns: ?u8 = null,
+    block_layout: bool = false,
+    first_line_item_count: usize = 0,
+    items: []const []const u8 = &.{},
+
+    pub fn deinit(self: *TermRecord, allocator: std.mem.Allocator) void {
+        switch (self.kind) {
+            .line => allocator.free(self.text),
+            .column => {
+                for (self.items) |item| allocator.free(item);
+                allocator.free(self.items);
+            },
+        }
+        self.* = undefined;
+    }
+};
+
 pub const InlineSpan = struct {
     kind: InlineKind,
     text: []const u8,
@@ -148,6 +173,7 @@ pub const DecodedSection = struct {
     kind: SectionKind,
     body: []const u8,
     line_count: usize,
+    term_records: ?[]TermRecord = null,
 
     pub fn blockIterator(self: *const DecodedSection) BlockIterator {
         return .{ .body = self.body, .line_count = self.line_count };
@@ -165,6 +191,10 @@ pub const DecodedSection = struct {
     pub fn deinit(self: *DecodedSection, allocator: std.mem.Allocator) void {
         allocator.free(self.title);
         allocator.free(self.body);
+        if (self.term_records) |records| {
+            for (records) |*record| record.deinit(allocator);
+            allocator.free(records);
+        }
         self.* = undefined;
     }
 };

@@ -13,6 +13,8 @@ pub const SectionKind = document_ir.SectionKind;
 pub const BlockKind = document_ir.BlockKind;
 pub const InlineKind = document_ir.InlineKind;
 pub const InlineSpan = document_ir.InlineSpan;
+pub const TermRecordKind = document_ir.TermRecordKind;
+pub const TermRecord = document_ir.TermRecord;
 pub const DecodedBlock = document_ir.DecodedBlock;
 pub const InlineIterator = document_ir.InlineIterator;
 pub const BlockIterator = document_ir.BlockIterator;
@@ -327,6 +329,11 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
             }
         }
         errdefer allocator.free(body);
+        const term_records: ?[]TermRecord = if (kind == .term_list)
+            try decodeTermRecordsAlloc(allocator, payload)
+        else
+            null;
+        errdefer if (term_records) |records| deinitTermRecords(allocator, records);
 
         try sections.append(allocator, .{
             .level = level,
@@ -334,6 +341,7 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
             .kind = kind,
             .body = body,
             .line_count = line_count,
+            .term_records = term_records,
         });
     }
 
@@ -533,6 +541,62 @@ fn encodeTermSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u
         i += 1;
     }
     return out.toOwnedSlice(allocator);
+}
+
+fn decodeTermRecordsAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]TermRecord {
+    var cursor: usize = 0;
+    var records: std.ArrayList(TermRecord) = .empty;
+    errdefer {
+        for (records.items) |*record| record.deinit(allocator);
+        records.deinit(allocator);
+    }
+
+    while (cursor < payload.len) {
+        if (payload[cursor] != record_column_escape) {
+            const line = try decodeEncodedLineAlloc(allocator, payload, &cursor, payload.len);
+            errdefer allocator.free(line);
+            try records.append(allocator, .{ .kind = .line, .text = line });
+            continue;
+        }
+
+        cursor += 1;
+        if (cursor >= payload.len) return error.InvalidEncoding;
+        const record_code = payload[cursor];
+        const inline_template_code = columnTemplateCodeForInlineRecord(record_code);
+        const block_template_code = columnTemplateCodeForBlockRecord(record_code);
+        const template_code = inline_template_code orelse block_template_code orelse return error.InvalidEncoding;
+        const block_layout = block_template_code != null;
+        cursor += 1;
+        const first_line_item_count = if (block_layout)
+            format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding
+        else
+            0;
+        const item_count_u64 = format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding;
+        const item_count = std.math.cast(usize, item_count_u64) orelse return error.InvalidEncoding;
+        const items = try allocator.alloc([]const u8, item_count);
+        var decoded_items: usize = 0;
+        errdefer {
+            for (items[0..decoded_items]) |item| allocator.free(item);
+            allocator.free(items);
+        }
+        while (decoded_items < item_count) : (decoded_items += 1) {
+            items[decoded_items] = try readCompactTerminatedAlloc(allocator, payload, &cursor, payload.len);
+        }
+        try records.append(allocator, .{
+            .kind = .column,
+            .columns = if (template_code == column_col) null else template_code,
+            .block_layout = block_layout,
+            .first_line_item_count = first_line_item_count,
+            .items = items,
+        });
+    }
+
+    return records.toOwnedSlice(allocator);
+}
+
+fn deinitTermRecords(allocator: std.mem.Allocator, records: []TermRecord) void {
+    for (records) |*record| record.deinit(allocator);
+    allocator.free(records);
 }
 
 fn decodeTermSectionAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
@@ -2353,6 +2417,47 @@ test "inline iterator preserves malformed markup as text" {
     try std.testing.expectEqual(InlineKind.text, span.kind);
     try std.testing.expectEqualStrings(block.text, span.text);
     try std.testing.expect(iterator.next() == null);
+}
+
+test "decoded term lists expose renderer-native column records" {
+    const sample =
+        \\==English==
+        \\===Noun===
+        \\# thing
+        \\====Derived terms====
+        \\{{col3|en|daylight|moonlight|sunlight}}
+        \\* [[torchlight]]
+        \\
+    ;
+
+    const encoded = try encodeEnglishAlloc(std.testing.allocator, sample);
+    defer std.testing.allocator.free(encoded);
+    var document = try decodeDocumentAlloc(std.testing.allocator, encoded);
+    defer document.deinit(std.testing.allocator);
+
+    var terms: ?*const DecodedSection = null;
+    for (document.sections) |*section| {
+        if (section.kind == .term_list) {
+            terms = section;
+            break;
+        }
+    }
+    const section = terms orelse return error.TestExpectedEqual;
+    const term_records = section.term_records orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 2), term_records.len);
+
+    const column = term_records[0];
+    try std.testing.expectEqual(TermRecordKind.column, column.kind);
+    try std.testing.expectEqual(@as(?u8, 3), column.columns);
+    try std.testing.expect(!column.block_layout);
+    try std.testing.expectEqual(@as(usize, 3), column.items.len);
+    try std.testing.expectEqualStrings("daylight", column.items[0]);
+    try std.testing.expectEqualStrings("moonlight", column.items[1]);
+    try std.testing.expectEqualStrings("sunlight", column.items[2]);
+
+    const line = term_records[1];
+    try std.testing.expectEqual(TermRecordKind.line, line.kind);
+    try std.testing.expectEqualStrings("* [[torchlight]]", line.text);
 }
 
 test "section document encoding is smaller on a representative entry" {
