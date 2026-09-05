@@ -333,11 +333,25 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const lua2_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("lua2/all_tests.zig"),
+            .target = target,
+            .optimize = test_optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "zxml", .module = zxml_dep_test.module("zxml") },
+                .{ .name = "xml_decode", .module = shared_xml_decode_mod_test },
+            },
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
     const run_encoder_tests = b.addRunArtifact(encoder_tests);
     const run_decoder_tests = b.addRunArtifact(decoder_tests);
     const run_structure_tests = b.addRunArtifact(structure_tests);
     const run_structure_tables_support_tests = b.addRunArtifact(structure_tables_support_tests);
     const run_verifier_tests = b.addRunArtifact(verifier_tests);
+    const run_lua2_tests = b.addRunArtifact(lua2_tests);
 
     // Running every test compile in parallel is enough to get the larger codegen-heavy
     // test binaries terminated under ReleaseFast on typical developer machines. Keep
@@ -347,9 +361,10 @@ pub fn build(b: *std.Build) void {
     structure_tests.step.dependOn(&run_decoder_tests.step);
     structure_tables_support_tests.step.dependOn(&run_structure_tests.step);
     verifier_tests.step.dependOn(&run_structure_tables_support_tests.step);
+    lua2_tests.step.dependOn(&run_verifier_tests.step);
 
-    const test_step = b.step("test", "Run encoder, decoder, structure, and tooling tests");
-    test_step.dependOn(&run_verifier_tests.step);
+    const test_step = b.step("test", "Run encoder, decoder, structure, Lua, and tooling tests");
+    test_step.dependOn(&run_lua2_tests.step);
 }
 
 fn addCliExecutable(
