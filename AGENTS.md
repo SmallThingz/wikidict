@@ -4,7 +4,7 @@
 - Commit completed features and bug fixes as coherent units using conventional commit types (`feat:`, `fix:`, `perf:`, `refactor:`, `test:`, `docs:`, etc.). Stage only the files/hunks belonging to that unit; never sweep unrelated dirty or pre-staged WIP into a commit. Do not push unless explicitly requested.
 - Dictionary format `WIKDIC34` keeps compact titles and aliases, fixed `u32` alias targets, and varint-length-prefixed tagged payload records.
 - Payload kind `1` is the frontend-neutral English section IR. Payload kind `0` is compact raw fallback for mixed-language or non-English storage.
-- Renderer-facing code should prefer `EntryView.documentAlloc()`, then stream `blockIterator()` and `inlineIterator()`. Inline spans expose text, templates (for Lua/Scribunto expansion), internal/external links, link trails, line breaks, and bold/italic state without allocating. Do not persist HTML or terminal-specific styling.
+- Renderer-facing code should prefer `EntryView.renderDocumentAlloc()`. Use `term_records` for term-list sections, `translation_records` for translation sections, and stream `blockIterator()` / `inlineIterator()` for general/POS text. `documentAlloc()` additionally materializes compatibility bodies for structured sections and should be reserved for callers that need them. Template spans hand off to Lua/Scribunto expansion. Do not persist HTML or terminal-specific styling.
 - Preserve exact source reconstruction through the existing raw APIs and verifier.
 - Incompatible dictionary layout changes require a magic bump. Cache reference or semantic changes require a decoder cache-version bump.
 - Reuse `encoder/section_encoding.zig` rather than introducing a second structural parser.
