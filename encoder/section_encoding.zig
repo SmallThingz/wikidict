@@ -25,12 +25,15 @@ pub const BlockKind = enum {
 pub const InlineKind = enum {
     text,
     link,
+    external_link,
+    line_break,
 };
 
 pub const InlineSpan = struct {
     kind: InlineKind,
     text: []const u8,
     target: []const u8 = "",
+    trail: []const u8 = "",
     bold: bool = false,
     italic: bool = false,
 };
@@ -59,6 +62,26 @@ pub const InlineIterator = struct {
                     .kind = .link,
                     .text = link.label,
                     .target = link.target,
+                    .trail = link.trail,
+                    .bold = self.bold,
+                    .italic = self.italic,
+                };
+            }
+            if (parseExternalLinkAt(self.input, self.cursor)) |link| {
+                self.cursor = link.end;
+                return .{
+                    .kind = .external_link,
+                    .text = link.label,
+                    .target = link.target,
+                    .bold = self.bold,
+                    .italic = self.italic,
+                };
+            }
+            if (parseLineBreakAt(self.input, self.cursor)) |end| {
+                self.cursor = end;
+                return .{
+                    .kind = .line_break,
+                    .text = "",
                     .bold = self.bold,
                     .italic = self.italic,
                 };
@@ -73,6 +96,8 @@ pub const InlineIterator = struct {
             const start = self.cursor;
             while (self.cursor < self.input.len) : (self.cursor += 1) {
                 if (parseInlineLinkAt(self.input, self.cursor) != null or
+                    parseExternalLinkAt(self.input, self.cursor) != null or
+                    parseLineBreakAt(self.input, self.cursor) != null or
                     emphasisMarkerAt(self.input, self.cursor, self.bold, self.italic) != null)
                 {
                     break;
@@ -513,6 +538,13 @@ const ParsedInlineLink = struct {
     end: usize,
     target: []const u8,
     label: []const u8,
+    trail: []const u8,
+};
+
+const ParsedExternalLink = struct {
+    end: usize,
+    target: []const u8,
+    label: []const u8,
 };
 
 const EmphasisMarker = struct {
@@ -536,9 +568,91 @@ fn parseInlineLinkAt(input: []const u8, start: usize) ?ParsedInlineLink {
         if (target.len == 0) return null;
         const raw_label = if (pipe) |index| inside[index + 1 ..] else target;
         const label = if (raw_label.len == 0) target else raw_label;
-        return .{ .end = close + 2, .target = target, .label = label };
+        var trail_end = close + 2;
+        while (trail_end < input.len and std.ascii.isAlphabetic(input[trail_end])) : (trail_end += 1) {}
+        return .{
+            .end = trail_end,
+            .target = target,
+            .label = label,
+            .trail = input[close + 2 .. trail_end],
+        };
     }
     return null;
+}
+
+fn parseExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
+    if (start + 3 > input.len or input[start] != '[' or input[start + 1] == '[') return null;
+    const body_start = start + 1;
+    if (!startsWithAsciiIgnoreCase(input[body_start..], "http://") and
+        !startsWithAsciiIgnoreCase(input[body_start..], "https://"))
+    {
+        return null;
+    }
+
+    const close = findExternalLinkClose(input, start) orelse return null;
+    const body = input[body_start..close];
+    var separator: ?usize = null;
+    for (body, 0..) |byte, index| {
+        if (byte == ' ' or byte == '\t') {
+            separator = index;
+            break;
+        }
+    }
+    const raw_target = if (separator) |index| body[0..index] else body;
+    const target = std.mem.trim(u8, raw_target, " \t");
+    if (target.len == 0) return null;
+    const raw_label = if (separator) |index| std.mem.trimStart(u8, body[index + 1 ..], " \t") else target;
+    const label = if (raw_label.len == 0) target else raw_label;
+    return .{ .end = close + 1, .target = target, .label = label };
+}
+
+fn findExternalLinkClose(input: []const u8, start: usize) ?usize {
+    var template_depth: usize = 0;
+    var link_depth: usize = 0;
+    var cursor = start + 1;
+    while (cursor < input.len) : (cursor += 1) {
+        if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "{{")) {
+            template_depth += 1;
+            cursor += 1;
+            continue;
+        }
+        if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "}}")) {
+            if (template_depth != 0) template_depth -= 1;
+            cursor += 1;
+            continue;
+        }
+        if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "[[")) {
+            link_depth += 1;
+            cursor += 1;
+            continue;
+        }
+        if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "]]")) {
+            if (link_depth != 0) link_depth -= 1;
+            cursor += 1;
+            continue;
+        }
+        if (input[cursor] == ']' and template_depth == 0 and link_depth == 0) return cursor;
+    }
+    return null;
+}
+
+fn parseLineBreakAt(input: []const u8, start: usize) ?usize {
+    if (start + 3 > input.len or input[start] != '<' or
+        std.ascii.toLower(input[start + 1]) != 'b' or std.ascii.toLower(input[start + 2]) != 'r')
+    {
+        return null;
+    }
+    if (start + 3 < input.len) {
+        const next = input[start + 3];
+        if (next != '>' and next != '/' and next != ' ' and next != '\t') return null;
+    }
+    const close = std.mem.indexOfScalarPos(u8, input, start + 3, '>') orelse return null;
+    return close + 1;
+}
+
+fn startsWithAsciiIgnoreCase(input: []const u8, prefix: []const u8) bool {
+    if (input.len < prefix.len) return false;
+    return std.ascii.eqlIgnoreCase(input[0..prefix.len], prefix);
 }
 
 fn emphasisMarkerAt(input: []const u8, start: usize, bold: bool, italic: bool) ?EmphasisMarker {
@@ -2493,6 +2607,38 @@ test "inline iterator exposes links and emphasis without allocations" {
 
     const tail = iterator.next().?;
     try std.testing.expectEqualStrings(" end", tail.text);
+    try std.testing.expect(iterator.next() == null);
+}
+
+test "inline iterator exposes link trails external links and line breaks" {
+    const block = DecodedBlock{
+        .kind = .paragraph,
+        .depth = 0,
+        .text = "[[cat]]s [https://example.com docs]<BR />tail",
+    };
+    var iterator = block.inlineIterator();
+
+    const internal = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.link, internal.kind);
+    try std.testing.expectEqualStrings("cat", internal.target);
+    try std.testing.expectEqualStrings("cat", internal.text);
+    try std.testing.expectEqualStrings("s", internal.trail);
+
+    const space = iterator.next().?;
+    try std.testing.expectEqualStrings(" ", space.text);
+
+    const external = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.external_link, external.kind);
+    try std.testing.expectEqualStrings("https://example.com", external.target);
+    try std.testing.expectEqualStrings("docs", external.text);
+
+    const line_break = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.line_break, line_break.kind);
+    try std.testing.expectEqualStrings("", line_break.text);
+
+    const tail = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.text, tail.kind);
+    try std.testing.expectEqualStrings("tail", tail.text);
     try std.testing.expect(iterator.next() == null);
 }
 
