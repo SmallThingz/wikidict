@@ -1743,80 +1743,61 @@ fn readTranslationValueAlloc(allocator: std.mem.Allocator, bytes: []const u8, cu
         cursor.* += 1;
 
         switch (kind) {
-            translation_raw_token => {
-                const text = try readCompactTerminatedAlloc(allocator, bytes, cursor, limit);
-                defer allocator.free(text);
-                try out.appendSlice(allocator, text);
-            },
+            translation_raw_token => try appendCompactTerminatedDecoded(&out, allocator, bytes, cursor, limit),
             translation_template_token => {
                 const name_code = readTieredRef(bytes, cursor, limit) catch return error.InvalidEncoding;
-
-                const name = if (name_code == template_name_raw)
-                    try readCompactTerminatedAlloc(allocator, bytes, cursor, limit)
-                else
-                    try allocator.dupe(u8, translationTemplateName(name_code) orelse return error.InvalidEncoding);
-                defer allocator.free(name);
+                try out.appendSlice(allocator, "{{");
+                if (name_code == template_name_raw) {
+                    try appendCompactTerminatedDecoded(&out, allocator, bytes, cursor, limit);
+                } else {
+                    try out.appendSlice(allocator, translationTemplateName(name_code) orelse return error.InvalidEncoding);
+                }
 
                 const arg_count = format.readVarUInt(bytes, cursor, limit) catch return error.InvalidEncoding;
-                try out.appendSlice(allocator, "{{");
-                try out.appendSlice(allocator, name);
                 var arg_index: usize = 0;
                 while (arg_index < arg_count) : (arg_index += 1) {
-                    const arg = try readCompactTerminatedAlloc(allocator, bytes, cursor, limit);
-                    defer allocator.free(arg);
                     try out.append(allocator, '|');
-                    try out.appendSlice(allocator, arg);
+                    try appendCompactTerminatedDecoded(&out, allocator, bytes, cursor, limit);
                 }
                 try out.appendSlice(allocator, "}}");
             },
             translation_template_langref_token => {
                 const name_code = readTieredRef(bytes, cursor, limit) catch return error.InvalidEncoding;
-
-                const name = if (name_code == template_name_raw)
-                    try readCompactTerminatedAlloc(allocator, bytes, cursor, limit)
-                else
-                    try allocator.dupe(u8, translationTemplateName(name_code) orelse return error.InvalidEncoding);
-                defer allocator.free(name);
+                try out.appendSlice(allocator, "{{");
+                if (name_code == template_name_raw) {
+                    try appendCompactTerminatedDecoded(&out, allocator, bytes, cursor, limit);
+                } else {
+                    try out.appendSlice(allocator, translationTemplateName(name_code) orelse return error.InvalidEncoding);
+                }
 
                 const lang_code = readTieredRef(bytes, cursor, limit) catch return error.InvalidEncoding;
-                const lang = try allocator.dupe(u8, targetLanguageValueForCode(lang_code) orelse return error.InvalidEncoding);
-                defer allocator.free(lang);
-
-                const remaining_arg_count = format.readVarUInt(bytes, cursor, limit) catch return error.InvalidEncoding;
-                try out.appendSlice(allocator, "{{");
-                try out.appendSlice(allocator, name);
+                const lang = targetLanguageValueForCode(lang_code) orelse return error.InvalidEncoding;
                 try out.append(allocator, '|');
                 try out.appendSlice(allocator, lang);
+
+                const remaining_arg_count = format.readVarUInt(bytes, cursor, limit) catch return error.InvalidEncoding;
                 var arg_index: usize = 0;
                 while (arg_index < remaining_arg_count) : (arg_index += 1) {
-                    const arg = try readCompactTerminatedAlloc(allocator, bytes, cursor, limit);
-                    defer allocator.free(arg);
                     try out.append(allocator, '|');
-                    try out.appendSlice(allocator, arg);
+                    try appendCompactTerminatedDecoded(&out, allocator, bytes, cursor, limit);
                 }
                 try out.appendSlice(allocator, "}}");
             },
             translation_template_langref_simple_token => {
                 const name_code = readTieredRef(bytes, cursor, limit) catch return error.InvalidEncoding;
-
-                const name = if (name_code == template_name_raw)
-                    try readCompactTerminatedAlloc(allocator, bytes, cursor, limit)
-                else
-                    try allocator.dupe(u8, translationTemplateName(name_code) orelse return error.InvalidEncoding);
-                defer allocator.free(name);
+                try out.appendSlice(allocator, "{{");
+                if (name_code == template_name_raw) {
+                    try appendCompactTerminatedDecoded(&out, allocator, bytes, cursor, limit);
+                } else {
+                    try out.appendSlice(allocator, translationTemplateName(name_code) orelse return error.InvalidEncoding);
+                }
 
                 const lang_code = readTieredRef(bytes, cursor, limit) catch return error.InvalidEncoding;
-                const lang = try allocator.dupe(u8, targetLanguageValueForCode(lang_code) orelse return error.InvalidEncoding);
-                defer allocator.free(lang);
-                const term = try readCompactTerminatedAlloc(allocator, bytes, cursor, limit);
-                defer allocator.free(term);
-
-                try out.appendSlice(allocator, "{{");
-                try out.appendSlice(allocator, name);
+                const lang = targetLanguageValueForCode(lang_code) orelse return error.InvalidEncoding;
                 try out.append(allocator, '|');
                 try out.appendSlice(allocator, lang);
                 try out.append(allocator, '|');
-                try out.appendSlice(allocator, term);
+                try appendCompactTerminatedDecoded(&out, allocator, bytes, cursor, limit);
                 try out.appendSlice(allocator, "}}");
             },
             else => return error.InvalidEncoding,
