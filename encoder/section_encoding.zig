@@ -1734,11 +1734,97 @@ fn appendTranslationValue(out: *std.ArrayList(u8), allocator: std.mem.Allocator,
     try out.appendSlice(allocator, token_bytes.items);
 }
 
+fn addDecodedLength(total: *usize, amount: usize) error{InvalidEncoding}!void {
+    total.* = std.math.add(usize, total.*, amount) catch return error.InvalidEncoding;
+}
+
+fn compactTerminatedDecodedLen(bytes: []const u8, cursor: *usize, limit: usize) error{InvalidEncoding}!usize {
+    const end = std.mem.indexOfScalarPos(u8, bytes[0..limit], cursor.*, 0) orelse return error.InvalidEncoding;
+    const encoded = bytes[cursor.*..end];
+    cursor.* = end + 1;
+    return compact.decodedLen(encoded) catch return error.InvalidEncoding;
+}
+
+fn translationValueDecodedLen(bytes: []const u8, start: usize, limit: usize) error{InvalidEncoding}!usize {
+    var cursor = start;
+    const token_count = format.readVarUInt(bytes, &cursor, limit) catch return error.InvalidEncoding;
+    var out_len: usize = 0;
+
+    var token_index: usize = 0;
+    while (token_index < token_count) : (token_index += 1) {
+        if (cursor >= limit) return error.InvalidEncoding;
+        const kind = bytes[cursor];
+        cursor += 1;
+
+        switch (kind) {
+            translation_raw_token => try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit)),
+            translation_template_token => {
+                const name_code = readTieredRef(bytes, &cursor, limit) catch return error.InvalidEncoding;
+                try addDecodedLength(&out_len, 2);
+                if (name_code == template_name_raw) {
+                    try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit));
+                } else {
+                    try addDecodedLength(&out_len, (translationTemplateName(name_code) orelse return error.InvalidEncoding).len);
+                }
+
+                const arg_count = format.readVarUInt(bytes, &cursor, limit) catch return error.InvalidEncoding;
+                var arg_index: usize = 0;
+                while (arg_index < arg_count) : (arg_index += 1) {
+                    try addDecodedLength(&out_len, 1);
+                    try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit));
+                }
+                try addDecodedLength(&out_len, 2);
+            },
+            translation_template_langref_token => {
+                const name_code = readTieredRef(bytes, &cursor, limit) catch return error.InvalidEncoding;
+                try addDecodedLength(&out_len, 2);
+                if (name_code == template_name_raw) {
+                    try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit));
+                } else {
+                    try addDecodedLength(&out_len, (translationTemplateName(name_code) orelse return error.InvalidEncoding).len);
+                }
+
+                const lang_code = readTieredRef(bytes, &cursor, limit) catch return error.InvalidEncoding;
+                try addDecodedLength(&out_len, 1);
+                try addDecodedLength(&out_len, (targetLanguageValueForCode(lang_code) orelse return error.InvalidEncoding).len);
+
+                const remaining_arg_count = format.readVarUInt(bytes, &cursor, limit) catch return error.InvalidEncoding;
+                var arg_index: usize = 0;
+                while (arg_index < remaining_arg_count) : (arg_index += 1) {
+                    try addDecodedLength(&out_len, 1);
+                    try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit));
+                }
+                try addDecodedLength(&out_len, 2);
+            },
+            translation_template_langref_simple_token => {
+                const name_code = readTieredRef(bytes, &cursor, limit) catch return error.InvalidEncoding;
+                try addDecodedLength(&out_len, 2);
+                if (name_code == template_name_raw) {
+                    try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit));
+                } else {
+                    try addDecodedLength(&out_len, (translationTemplateName(name_code) orelse return error.InvalidEncoding).len);
+                }
+
+                const lang_code = readTieredRef(bytes, &cursor, limit) catch return error.InvalidEncoding;
+                try addDecodedLength(&out_len, 1);
+                try addDecodedLength(&out_len, (targetLanguageValueForCode(lang_code) orelse return error.InvalidEncoding).len);
+                try addDecodedLength(&out_len, 1);
+                try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit));
+                try addDecodedLength(&out_len, 2);
+            },
+            else => return error.InvalidEncoding,
+        }
+    }
+
+    return out_len;
+}
+
 fn readTranslationValueAlloc(allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize, limit: usize) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+    const decoded_len = try translationValueDecodedLen(bytes, cursor.*, limit);
     const token_count = format.readVarUInt(bytes, cursor, limit) catch return error.InvalidEncoding;
 
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
+    var out = try std.ArrayList(u8).initCapacity(allocator, decoded_len);
+    errdefer out.deinit(allocator);
 
     var token_index: usize = 0;
     while (token_index < token_count) : (token_index += 1) {
@@ -1808,7 +1894,8 @@ fn readTranslationValueAlloc(allocator: std.mem.Allocator, bytes: []const u8, cu
         }
     }
 
-    return out.toOwnedSlice(allocator);
+    if (out.items.len != decoded_len) return error.InvalidEncoding;
+    return out.toOwnedSliceAssert();
 }
 
 const ParsedTranslationTemplate = struct {

@@ -358,7 +358,7 @@ pub fn appendDecodedWithMappings(
     std.debug.assert(written == decoded_len);
 }
 
-fn decodedLen(input: []const u8) error{InvalidEncoding}!usize {
+pub fn decodedLen(input: []const u8) error{InvalidEncoding}!usize {
     return decodedLenWithMappings(input, currentRuntimeMappings());
 }
 
