@@ -36,13 +36,13 @@ const line_blank: u8 = 254;
 const line_raw: u8 = 255;
 const line_template_full: u8 = 29;
 const line_template_prefixed: u8 = 30;
-const line_template_full_en: u8 = 31;
-const line_template_prefixed_en: u8 = 32;
+const line_template_full_lang: u8 = 31;
+const line_template_prefixed_lang: u8 = 32;
 const line_template_list_prefixed: u8 = 33;
-const line_template_list_prefixed_en: u8 = 34;
-const line_template_full_en_onearg: u8 = 35;
-const line_template_prefixed_en_onearg: u8 = 36;
-const line_template_list_prefixed_en_onearg: u8 = 37;
+const line_template_list_prefixed_lang: u8 = 34;
+const line_template_full_lang_onearg: u8 = 35;
+const line_template_prefixed_lang_onearg: u8 = 36;
+const line_template_list_prefixed_lang_onearg: u8 = 37;
 
 const LinePrefix = struct {
     code: u8,
@@ -221,7 +221,7 @@ const ParsedTemplateLineList = struct {
     prefix_code: u8,
     template_code: u16,
     separator_kind: u8,
-    include_english_arg: bool,
+    include_language_arg: bool,
     items: []const TemplateLineListItem,
 };
 
@@ -229,14 +229,25 @@ const simple_list_separator_comma: u8 = 1;
 const simple_list_separator_semicolon: u8 = 2;
 const simple_list_prefix_codes = [_]u8{ 13, 12 };
 
+pub const LanguageContext = struct {
+    heading: []const u8,
+    code: []const u8,
+};
+
+pub const english_language: LanguageContext = .{ .heading = "English", .code = "en" };
+
 pub fn encodeEnglishAlloc(allocator: std.mem.Allocator, english_section: []const u8) ![]u8 {
+    return encodeLanguageAlloc(allocator, english_section, english_language);
+}
+
+pub fn encodeLanguageAlloc(allocator: std.mem.Allocator, language_section: []const u8, language: LanguageContext) ![]u8 {
     var temp_arena = std.heap.ArenaAllocator.init(allocator);
     defer temp_arena.deinit();
     const temp_allocator = temp_arena.allocator();
 
-    const trailing_newline = english_section.len != 0 and english_section[english_section.len - 1] == '\n';
-    const sections = splitEnglishSections(temp_allocator, english_section) catch |err| switch (err) {
-        error.InvalidEnglishSection => try splitEnglishSectionsFallback(temp_allocator, english_section),
+    const trailing_newline = language_section.len != 0 and language_section[language_section.len - 1] == '\n';
+    const sections = splitLanguageSections(temp_allocator, language_section, language.heading) catch |err| switch (err) {
+        error.InvalidLanguageSection => try splitLanguageSectionsFallback(temp_allocator, language_section, language.heading),
         else => return err,
     };
 
@@ -257,9 +268,9 @@ pub fn encodeEnglishAlloc(allocator: std.mem.Allocator, english_section: []const
 
         const payload = switch (kind) {
             .lines => try encodeJoinedBodyAlloc(temp_allocator, section.lines.items),
-            .pos_lines => try encodeLineStreamAlloc(temp_allocator, section.lines.items),
-            .term_list => try encodeTermSectionAlloc(temp_allocator, section.lines.items),
-            .translations => try encodeTranslationSectionAlloc(temp_allocator, section.lines.items),
+            .pos_lines => try encodeLineStreamAlloc(temp_allocator, section.lines.items, language.code),
+            .term_list => try encodeTermSectionAlloc(temp_allocator, section.lines.items, language.code),
+            .translations => try encodeTranslationSectionAlloc(temp_allocator, section.lines.items, language.code),
         };
         try appendBytesSlice(&out, allocator, payload);
     }
@@ -272,14 +283,26 @@ pub const DocumentDecodeOptions = struct {
 };
 
 pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})!DecodedDocument {
-    return decodeDocumentAllocWithOptions(allocator, encoded, .{});
+    return decodeLanguageDocumentAlloc(allocator, encoded, english_language);
+}
+
+pub fn decodeLanguageDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8, language: LanguageContext) (std.mem.Allocator.Error || error{InvalidEncoding})!DecodedDocument {
+    return decodeLanguageDocumentAllocWithOptions(allocator, encoded, language, .{});
 }
 
 pub fn decodeRenderDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})!DecodedDocument {
-    return decodeDocumentAllocWithOptions(allocator, encoded, .{ .materialize_structured_bodies = false });
+    return decodeLanguageRenderDocumentAlloc(allocator, encoded, english_language);
+}
+
+pub fn decodeLanguageRenderDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8, language: LanguageContext) (std.mem.Allocator.Error || error{InvalidEncoding})!DecodedDocument {
+    return decodeLanguageDocumentAllocWithOptions(allocator, encoded, language, .{ .materialize_structured_bodies = false });
 }
 
 pub fn decodeDocumentAllocWithOptions(allocator: std.mem.Allocator, encoded: []const u8, options: DocumentDecodeOptions) (std.mem.Allocator.Error || error{InvalidEncoding})!DecodedDocument {
+    return decodeLanguageDocumentAllocWithOptions(allocator, encoded, english_language, options);
+}
+
+pub fn decodeLanguageDocumentAllocWithOptions(allocator: std.mem.Allocator, encoded: []const u8, language: LanguageContext, options: DocumentDecodeOptions) (std.mem.Allocator.Error || error{InvalidEncoding})!DecodedDocument {
     if (encoded.len == 0) return error.InvalidEncoding;
 
     var cursor: usize = 1;
@@ -327,12 +350,12 @@ pub fn decodeDocumentAllocWithOptions(allocator: std.mem.Allocator, encoded: []c
 
         const payload = readLengthPrefixedSlice(encoded, &cursor, encoded.len) catch return error.InvalidEncoding;
         const term_records: ?[]TermRecord = if (kind == .term_list)
-            try decodeTermRecordsAlloc(allocator, payload)
+            try decodeTermRecordsAlloc(allocator, payload, language.code)
         else
             null;
         errdefer if (term_records) |records| deinitTermRecords(allocator, records);
         const translation_records: ?[]TranslationRecord = if (kind == .translations)
-            try decodeTranslationRecordsAlloc(allocator, payload)
+            try decodeTranslationRecordsAlloc(allocator, payload, language.code)
         else
             null;
         errdefer if (translation_records) |records| deinitTranslationRecords(allocator, records);
@@ -347,8 +370,8 @@ pub fn decodeDocumentAllocWithOptions(allocator: std.mem.Allocator, encoded: []c
             body = try allocator.alloc(u8, 0);
         } else {
             body = switch (kind) {
-                .pos_lines => try decodeLineStreamAlloc(allocator, payload),
-                .term_list => try renderTermRecordsAlloc(allocator, term_records.?),
+                .pos_lines => try decodeLineStreamAlloc(allocator, payload, language.code),
+                .term_list => try renderTermRecordsAlloc(allocator, term_records.?, language.code),
                 .translations => try renderTranslationRecordsAlloc(allocator, translation_records.?),
                 .lines => unreachable,
             };
@@ -380,6 +403,10 @@ pub fn decodeDocumentAllocWithOptions(allocator: std.mem.Allocator, encoded: []c
 }
 
 pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+    return decodeLanguageAlloc(allocator, encoded, english_language);
+}
+
+pub fn decodeLanguageAlloc(allocator: std.mem.Allocator, encoded: []const u8, language: LanguageContext) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
     if (encoded.len == 0) return error.InvalidEncoding;
 
     var cursor: usize = 0;
@@ -389,7 +416,9 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
-    try out.appendSlice(allocator, "==English==");
+    try out.appendSlice(allocator, "==");
+    try out.appendSlice(allocator, language.heading);
+    try out.appendSlice(allocator, "==");
 
     while (cursor < encoded.len) {
         const heading_level_code = readTieredRef(encoded, &cursor, encoded.len) catch return error.InvalidEncoding;
@@ -440,9 +469,9 @@ pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (st
         }
 
         const body = switch (kind) {
-            .pos_lines => try decodeLineStreamAlloc(allocator, payload),
-            .term_list => try decodeTermSectionAlloc(allocator, payload),
-            .translations => try decodeTranslationSectionAlloc(allocator, payload),
+            .pos_lines => try decodeLineStreamAlloc(allocator, payload, language.code),
+            .term_list => try decodeTermSectionAlloc(allocator, payload, language.code),
+            .translations => try decodeTranslationSectionAlloc(allocator, payload, language.code),
             .lines => unreachable,
         };
         defer allocator.free(body);
@@ -485,15 +514,15 @@ fn encodeJoinedBodyAlloc(allocator: std.mem.Allocator, lines: []const []const u8
     return compact.encodeAlloc(allocator, joined.items);
 }
 
-fn encodeLineStreamAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
+fn encodeLineStreamAlloc(allocator: std.mem.Allocator, lines: []const []const u8, language_code: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
-    for (lines) |line| try appendEncodedLine(&out, allocator, line);
+    for (lines) |line| try appendEncodedLine(&out, allocator, line, language_code);
     return out.toOwnedSlice(allocator);
 }
 
-fn decodeLineStreamAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+fn decodeLineStreamAlloc(allocator: std.mem.Allocator, payload: []const u8, language_code: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
     var cursor: usize = 0;
 
     var out: std.ArrayList(u8) = .empty;
@@ -503,7 +532,7 @@ fn decodeLineStreamAlloc(allocator: std.mem.Allocator, payload: []const u8) (std
     var first = true;
     while (cursor < payload.len) {
         if (!first) try out.append(allocator, '\n');
-        try appendDecodedLine(&out, allocator, payload, &cursor, payload.len);
+        try appendDecodedLine(&out, allocator, payload, &cursor, payload.len, language_code);
         first = false;
     }
 
@@ -539,13 +568,13 @@ fn decodeJoinedBodyAlloc(allocator: std.mem.Allocator, payload: []const u8) (std
     };
 }
 
-fn encodeTermSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
+fn encodeTermSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u8, language_code: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     var i: usize = 0;
     while (i < lines.len) {
-        if (parseInlineColumnTemplate(allocator, lines[i])) |column_inline| {
+        if (parseInlineColumnTemplate(allocator, lines[i], language_code)) |column_inline| {
             try out.append(allocator, record_column_escape);
             try out.append(allocator, columnInlineRecordCode(column_inline.template_code) orelse return error.InvalidEncoding);
             try appendVarUInt(&out, allocator, column_inline.items.len);
@@ -554,7 +583,7 @@ fn encodeTermSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u
             continue;
         }
 
-        if (parseColumnBlock(allocator, lines[i..])) |block| {
+        if (parseColumnBlock(allocator, lines[i..], language_code)) |block| {
             try out.append(allocator, record_column_escape);
             try out.append(allocator, columnBlockRecordCode(block.template_code) orelse return error.InvalidEncoding);
             try appendVarUInt(&out, allocator, block.first_line_item_count);
@@ -564,13 +593,13 @@ fn encodeTermSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u
             continue;
         }
 
-        try appendEncodedLine(&out, allocator, lines[i]);
+        try appendEncodedLine(&out, allocator, lines[i], language_code);
         i += 1;
     }
     return out.toOwnedSlice(allocator);
 }
 
-fn decodeTermRecordsAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]TermRecord {
+fn decodeTermRecordsAlloc(allocator: std.mem.Allocator, payload: []const u8, language_code: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]TermRecord {
     var cursor: usize = 0;
     var records: std.ArrayList(TermRecord) = .empty;
     errdefer {
@@ -580,7 +609,7 @@ fn decodeTermRecordsAlloc(allocator: std.mem.Allocator, payload: []const u8) (st
 
     while (cursor < payload.len) {
         if (payload[cursor] != record_column_escape) {
-            const line = try decodeEncodedLineAlloc(allocator, payload, &cursor, payload.len);
+            const line = try decodeEncodedLineAlloc(allocator, payload, &cursor, payload.len, language_code);
             errdefer allocator.free(line);
             try records.append(allocator, .{ .kind = .line, .text = line });
             continue;
@@ -626,7 +655,7 @@ fn deinitTermRecords(allocator: std.mem.Allocator, records: []TermRecord) void {
     allocator.free(records);
 }
 
-fn renderTermRecordsAlloc(allocator: std.mem.Allocator, records: []const TermRecord) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+fn renderTermRecordsAlloc(allocator: std.mem.Allocator, records: []const TermRecord, language_code: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
@@ -636,7 +665,10 @@ fn renderTermRecordsAlloc(allocator: std.mem.Allocator, records: []const TermRec
             .line => try out.appendSlice(allocator, record.text),
             .column => {
                 const template_code = record.columns orelse column_col;
-                try out.appendSlice(allocator, columnTemplateStart(template_code) orelse return error.InvalidEncoding);
+                try out.appendSlice(allocator, "{{");
+                try out.appendSlice(allocator, columnTemplateName(template_code) orelse return error.InvalidEncoding);
+                try out.append(allocator, '|');
+                try out.appendSlice(allocator, language_code);
                 for (record.items, 0..) |item, item_index| {
                     if (!record.block_layout or item_index < record.first_line_item_count) {
                         try out.append(allocator, '|');
@@ -657,13 +689,13 @@ fn renderTermRecordsAlloc(allocator: std.mem.Allocator, records: []const TermRec
     return out.toOwnedSlice(allocator);
 }
 
-fn decodeTermSectionAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
-    const records = try decodeTermRecordsAlloc(allocator, payload);
+fn decodeTermSectionAlloc(allocator: std.mem.Allocator, payload: []const u8, language_code: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+    const records = try decodeTermRecordsAlloc(allocator, payload, language_code);
     defer deinitTermRecords(allocator, records);
-    return renderTermRecordsAlloc(allocator, records);
+    return renderTermRecordsAlloc(allocator, records, language_code);
 }
 
-fn encodeTranslationSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u8) ![]u8 {
+fn encodeTranslationSectionAlloc(allocator: std.mem.Allocator, lines: []const []const u8, language_code: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
@@ -729,12 +761,12 @@ fn encodeTranslationSectionAlloc(allocator: std.mem.Allocator, lines: []const []
         }
 
         try out.append(allocator, trans_raw_line);
-        try appendEncodedLine(&out, allocator, line);
+        try appendEncodedLine(&out, allocator, line, language_code);
     }
     return out.toOwnedSlice(allocator);
 }
 
-fn decodeTranslationRecordsAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]TranslationRecord {
+fn decodeTranslationRecordsAlloc(allocator: std.mem.Allocator, payload: []const u8, language_code: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]TranslationRecord {
     var cursor: usize = 0;
     var records: std.ArrayList(TranslationRecord) = .empty;
     errdefer {
@@ -743,7 +775,7 @@ fn decodeTranslationRecordsAlloc(allocator: std.mem.Allocator, payload: []const 
     }
 
     while (cursor < payload.len) {
-        var record = try decodeTranslationRecordAlloc(allocator, payload, &cursor);
+        var record = try decodeTranslationRecordAlloc(allocator, payload, &cursor, language_code);
         records.append(allocator, record) catch |err| {
             record.deinit(allocator);
             return err;
@@ -752,7 +784,7 @@ fn decodeTranslationRecordsAlloc(allocator: std.mem.Allocator, payload: []const 
     return records.toOwnedSlice(allocator);
 }
 
-fn decodeTranslationRecordAlloc(allocator: std.mem.Allocator, payload: []const u8, cursor: *usize) (std.mem.Allocator.Error || error{InvalidEncoding})!TranslationRecord {
+fn decodeTranslationRecordAlloc(allocator: std.mem.Allocator, payload: []const u8, cursor: *usize, language_code: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})!TranslationRecord {
     if (cursor.* >= payload.len) return error.InvalidEncoding;
     const record_code = payload[cursor.*];
     cursor.* += 1;
@@ -760,7 +792,7 @@ fn decodeTranslationRecordAlloc(allocator: std.mem.Allocator, payload: []const u
     switch (record_code) {
         trans_raw_line => return .{
             .kind = .raw_line,
-            .text = try decodeEncodedLineAlloc(allocator, payload, cursor, payload.len),
+            .text = try decodeEncodedLineAlloc(allocator, payload, cursor, payload.len, language_code),
         },
         trans_top, trans_check_top => return .{
             .kind = .group_start,
@@ -931,17 +963,17 @@ fn deinitTranslationRecords(allocator: std.mem.Allocator, records: []Translation
     allocator.free(records);
 }
 
-fn decodeTranslationSectionAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
-    const records = try decodeTranslationRecordsAlloc(allocator, payload);
+fn decodeTranslationSectionAlloc(allocator: std.mem.Allocator, payload: []const u8, language_code: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+    const records = try decodeTranslationRecordsAlloc(allocator, payload, language_code);
     defer deinitTranslationRecords(allocator, records);
     return renderTranslationRecordsAlloc(allocator, records);
 }
 
-fn splitEnglishSections(allocator: std.mem.Allocator, english_section: []const u8) ![]SectionSource {
-    const first_line_end = std.mem.indexOfScalar(u8, english_section, '\n') orelse english_section.len;
-    const first_line = std.mem.trimEnd(u8, english_section[0..first_line_end], "\r");
-    const first_heading = parseHeading(first_line) orelse return error.InvalidEnglishSection;
-    if (first_heading.level != 2 or !std.mem.eql(u8, first_heading.title, "English")) return error.InvalidEnglishSection;
+fn splitLanguageSections(allocator: std.mem.Allocator, language_section: []const u8, language_heading: []const u8) ![]SectionSource {
+    const first_line_end = std.mem.indexOfScalar(u8, language_section, '\n') orelse language_section.len;
+    const first_line = std.mem.trimEnd(u8, language_section[0..first_line_end], "\r");
+    const first_heading = parseHeading(first_line) orelse return error.InvalidLanguageSection;
+    if (first_heading.level != 2 or !std.mem.eql(u8, first_heading.title, language_heading)) return error.InvalidLanguageSection;
 
     var sections: std.ArrayList(SectionSource) = .empty;
     defer {
@@ -952,10 +984,10 @@ fn splitEnglishSections(allocator: std.mem.Allocator, english_section: []const u
     try sections.append(allocator, .{ .level = 0, .title = "" });
 
     var current: *SectionSource = &sections.items[0];
-    var line_start: usize = if (first_line_end == english_section.len) english_section.len else first_line_end + 1;
-    while (line_start < english_section.len) {
-        const next_newline = std.mem.indexOfScalarPos(u8, english_section, line_start, '\n') orelse english_section.len;
-        const line = std.mem.trimEnd(u8, english_section[line_start..next_newline], "\r");
+    var line_start: usize = if (first_line_end == language_section.len) language_section.len else first_line_end + 1;
+    while (line_start < language_section.len) {
+        const next_newline = std.mem.indexOfScalarPos(u8, language_section, line_start, '\n') orelse language_section.len;
+        const line = std.mem.trimEnd(u8, language_section[line_start..next_newline], "\r");
 
         if (parseHeading(line)) |heading| {
             if (heading.level >= 3 and isCanonicalHeadingLine(line, heading)) {
@@ -970,7 +1002,7 @@ fn splitEnglishSections(allocator: std.mem.Allocator, english_section: []const u
         } else {
             try current.lines.append(allocator, line);
         }
-        line_start = if (next_newline == english_section.len) english_section.len else next_newline + 1;
+        line_start = if (next_newline == language_section.len) language_section.len else next_newline + 1;
     }
 
     if (sections.items.len > 1 and sections.items[0].lines.items.len == 0) {
@@ -985,7 +1017,7 @@ fn splitEnglishSections(allocator: std.mem.Allocator, english_section: []const u
     return sections.toOwnedSlice(allocator);
 }
 
-fn splitEnglishSectionsFallback(allocator: std.mem.Allocator, english_section: []const u8) ![]SectionSource {
+fn splitLanguageSectionsFallback(allocator: std.mem.Allocator, language_section: []const u8, language_heading: []const u8) ![]SectionSource {
     var sections: std.ArrayList(SectionSource) = .empty;
     defer {
         for (sections.items) |*section| section.deinit(allocator);
@@ -997,48 +1029,48 @@ fn splitEnglishSectionsFallback(allocator: std.mem.Allocator, english_section: [
         .title = try allocator.dupe(u8, ""),
     });
 
-    const body_start = bodyStartAfterEnglishHeading(english_section) orelse 0;
+    const body_start = bodyStartAfterLanguageHeading(language_section, language_heading) orelse 0;
     var current: *SectionSource = &sections.items[0];
     var line_start: usize = body_start;
-    while (line_start < english_section.len) {
-        const next_newline = std.mem.indexOfScalarPos(u8, english_section, line_start, '\n') orelse english_section.len;
-        const line = std.mem.trimEnd(u8, english_section[line_start..next_newline], "\r");
+    while (line_start < language_section.len) {
+        const next_newline = std.mem.indexOfScalarPos(u8, language_section, line_start, '\n') orelse language_section.len;
+        const line = std.mem.trimEnd(u8, language_section[line_start..next_newline], "\r");
         try current.lines.append(allocator, line);
-        line_start = if (next_newline == english_section.len) english_section.len else next_newline + 1;
+        line_start = if (next_newline == language_section.len) language_section.len else next_newline + 1;
     }
 
     return sections.toOwnedSlice(allocator);
 }
 
-fn bodyStartAfterEnglishHeading(english_section: []const u8) ?usize {
-    const first_line_end = std.mem.indexOfScalar(u8, english_section, '\n') orelse english_section.len;
-    const first_line = std.mem.trimEnd(u8, english_section[0..first_line_end], "\r");
+fn bodyStartAfterLanguageHeading(language_section: []const u8, language_heading: []const u8) ?usize {
+    const first_line_end = std.mem.indexOfScalar(u8, language_section, '\n') orelse language_section.len;
+    const first_line = std.mem.trimEnd(u8, language_section[0..first_line_end], "\r");
     const heading = parseHeading(first_line) orelse return null;
-    if (heading.level != 2 or !std.mem.eql(u8, heading.title, "English")) return null;
-    return if (first_line_end == english_section.len) english_section.len else first_line_end + 1;
+    if (heading.level != 2 or !std.mem.eql(u8, heading.title, language_heading)) return null;
+    return if (first_line_end == language_section.len) language_section.len else first_line_end + 1;
 }
 
-fn appendEncodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, line: []const u8) !void {
+fn appendEncodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, line: []const u8, language_code: []const u8) !void {
     if (line.len == 0) {
         try out.append(allocator, line_blank);
         return;
     }
 
-    if (parseExactTemplateLineList(allocator, line)) |parsed| {
-        const use_english_onearg = parsed.include_english_arg and blk: {
+    if (parseExactTemplateLineList(allocator, line, language_code)) |parsed| {
+        const use_language_onearg = parsed.include_language_arg and blk: {
             for (parsed.items) |item| {
                 if (item.args.len != 2) break :blk false;
             }
             break :blk true;
         };
-        try out.append(allocator, if (use_english_onearg) line_template_list_prefixed_en_onearg else if (parsed.include_english_arg) line_template_list_prefixed_en else line_template_list_prefixed);
+        try out.append(allocator, if (use_language_onearg) line_template_list_prefixed_lang_onearg else if (parsed.include_language_arg) line_template_list_prefixed_lang else line_template_list_prefixed);
         try out.append(allocator, parsed.prefix_code);
         try appendTieredRef(out, allocator, parsed.template_code);
         try out.append(allocator, parsed.separator_kind);
         try appendVarUInt(out, allocator, parsed.items.len);
         for (parsed.items) |item| {
-            const stored_args = if (parsed.include_english_arg) item.args[1..] else item.args;
-            if (use_english_onearg) {
+            const stored_args = if (parsed.include_language_arg) item.args[1..] else item.args;
+            if (use_language_onearg) {
                 try appendCompactTerminated(out, allocator, stored_args[0]);
             } else {
                 try appendVarUInt(out, allocator, stored_args.len);
@@ -1049,16 +1081,16 @@ fn appendEncodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, line
     }
 
     if (parseExactTemplateLine(allocator, line)) |parsed| {
-        const use_english_arg = parsed.args.len != 0 and std.mem.eql(u8, parsed.args[0], "en");
-        const use_english_onearg = use_english_arg and parsed.args.len == 2;
+        const use_language_arg = parsed.args.len != 0 and std.mem.eql(u8, parsed.args[0], language_code);
+        const use_language_onearg = use_language_arg and parsed.args.len == 2;
         try out.append(allocator, switch (parsed.prefix_code == null) {
-            true => if (use_english_onearg) line_template_full_en_onearg else if (use_english_arg) line_template_full_en else line_template_full,
-            false => if (use_english_onearg) line_template_prefixed_en_onearg else if (use_english_arg) line_template_prefixed_en else line_template_prefixed,
+            true => if (use_language_onearg) line_template_full_lang_onearg else if (use_language_arg) line_template_full_lang else line_template_full,
+            false => if (use_language_onearg) line_template_prefixed_lang_onearg else if (use_language_arg) line_template_prefixed_lang else line_template_prefixed,
         });
         if (parsed.prefix_code) |prefix_code| try out.append(allocator, prefix_code);
         try appendTieredRef(out, allocator, parsed.template_code);
-        const stored_args = if (use_english_arg) parsed.args[1..] else parsed.args;
-        if (use_english_onearg) {
+        const stored_args = if (use_language_arg) parsed.args[1..] else parsed.args;
+        if (use_language_onearg) {
             try appendCompactTerminated(out, allocator, stored_args[0]);
         } else {
             try appendVarUInt(out, allocator, stored_args.len);
@@ -1083,7 +1115,7 @@ fn appendEncodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, line
     try appendCompactTerminated(out, allocator, line);
 }
 
-fn encodedLineDecodedLen(bytes: []const u8, start: usize, limit: usize) error{InvalidEncoding}!usize {
+fn encodedLineDecodedLen(bytes: []const u8, start: usize, limit: usize, language_code: []const u8) error{InvalidEncoding}!usize {
     var cursor = start;
     if (cursor >= limit) return error.InvalidEncoding;
     const code = bytes[cursor];
@@ -1093,7 +1125,7 @@ fn encodedLineDecodedLen(bytes: []const u8, start: usize, limit: usize) error{In
     if (code == line_raw) return compactTerminatedDecodedLen(bytes, &cursor, limit);
 
     var out_len: usize = 0;
-    if (code == line_template_list_prefixed or code == line_template_list_prefixed_en or code == line_template_list_prefixed_en_onearg) {
+    if (code == line_template_list_prefixed or code == line_template_list_prefixed_lang or code == line_template_list_prefixed_lang_onearg) {
         if (cursor >= limit) return error.InvalidEncoding;
         const prefix_code = bytes[cursor];
         cursor += 1;
@@ -1107,16 +1139,16 @@ fn encodedLineDecodedLen(bytes: []const u8, start: usize, limit: usize) error{In
         cursor += 1;
         const separator = simpleListSeparatorText(separator_kind) orelse return error.InvalidEncoding;
         const item_count = format.readVarUInt(bytes, &cursor, limit) catch return error.InvalidEncoding;
-        const include_english_arg = code == line_template_list_prefixed_en or code == line_template_list_prefixed_en_onearg;
-        const include_english_onearg = code == line_template_list_prefixed_en_onearg;
+        const include_language_arg = code == line_template_list_prefixed_lang or code == line_template_list_prefixed_lang_onearg;
+        const include_language_onearg = code == line_template_list_prefixed_lang_onearg;
 
         var item_index: usize = 0;
         while (item_index < item_count) : (item_index += 1) {
             if (item_index != 0) try addDecodedLength(&out_len, separator.len);
             try addDecodedLength(&out_len, 2 + template_name.len);
-            if (include_english_arg) try addDecodedLength(&out_len, 3);
+            if (include_language_arg) try addDecodedLength(&out_len, 1 + language_code.len);
 
-            if (include_english_onearg) {
+            if (include_language_onearg) {
                 try addDecodedLength(&out_len, 1);
                 try addDecodedLength(&out_len, try compactTerminatedDecodedLen(bytes, &cursor, limit));
             } else {
@@ -1132,8 +1164,8 @@ fn encodedLineDecodedLen(bytes: []const u8, start: usize, limit: usize) error{In
         return out_len;
     }
 
-    if (code == line_template_full or code == line_template_prefixed or code == line_template_full_en or code == line_template_prefixed_en or code == line_template_full_en_onearg or code == line_template_prefixed_en_onearg) {
-        const prefix = if (code == line_template_prefixed or code == line_template_prefixed_en or code == line_template_prefixed_en_onearg) blk: {
+    if (code == line_template_full or code == line_template_prefixed or code == line_template_full_lang or code == line_template_prefixed_lang or code == line_template_full_lang_onearg or code == line_template_prefixed_lang_onearg) {
+        const prefix = if (code == line_template_prefixed or code == line_template_prefixed_lang or code == line_template_prefixed_lang_onearg) blk: {
             if (cursor >= limit) return error.InvalidEncoding;
             const prefix_code = bytes[cursor];
             cursor += 1;
@@ -1144,10 +1176,10 @@ fn encodedLineDecodedLen(bytes: []const u8, start: usize, limit: usize) error{In
         const template_code = readTieredRef(bytes, &cursor, limit) catch return error.InvalidEncoding;
         const template_name = lineTemplateName(template_code) orelse return error.InvalidEncoding;
         try addDecodedLength(&out_len, 2 + template_name.len);
-        const include_english_arg = code == line_template_full_en or code == line_template_prefixed_en or code == line_template_full_en_onearg or code == line_template_prefixed_en_onearg;
-        const include_english_onearg = code == line_template_full_en_onearg or code == line_template_prefixed_en_onearg;
-        if (include_english_arg) try addDecodedLength(&out_len, 3);
-        const arg_count = if (include_english_onearg)
+        const include_language_arg = code == line_template_full_lang or code == line_template_prefixed_lang or code == line_template_full_lang_onearg or code == line_template_prefixed_lang_onearg;
+        const include_language_onearg = code == line_template_full_lang_onearg or code == line_template_prefixed_lang_onearg;
+        if (include_language_arg) try addDecodedLength(&out_len, 1 + language_code.len);
+        const arg_count = if (include_language_onearg)
             @as(u64, 1)
         else
             format.readVarUInt(bytes, &cursor, limit) catch return error.InvalidEncoding;
@@ -1167,16 +1199,16 @@ fn encodedLineDecodedLen(bytes: []const u8, start: usize, limit: usize) error{In
     return out_len;
 }
 
-fn decodeEncodedLineAlloc(allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize, limit: usize) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
-    const decoded_len = try encodedLineDecodedLen(bytes, cursor.*, limit);
+fn decodeEncodedLineAlloc(allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize, limit: usize, language_code: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+    const decoded_len = try encodedLineDecodedLen(bytes, cursor.*, limit, language_code);
     var out = try std.ArrayList(u8).initCapacity(allocator, decoded_len);
     errdefer out.deinit(allocator);
-    try appendDecodedLine(&out, allocator, bytes, cursor, limit);
+    try appendDecodedLine(&out, allocator, bytes, cursor, limit, language_code);
     if (out.items.len != decoded_len) return error.InvalidEncoding;
     return out.toOwnedSliceAssert();
 }
 
-fn appendDecodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize, limit: usize) (std.mem.Allocator.Error || error{InvalidEncoding})!void {
+fn appendDecodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize, limit: usize, language_code: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})!void {
     if (cursor.* >= limit) return error.InvalidEncoding;
     const code = bytes[cursor.*];
     cursor.* += 1;
@@ -1186,7 +1218,7 @@ fn appendDecodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, byte
         try appendCompactTerminatedDecoded(out, allocator, bytes, cursor, limit);
         return;
     }
-    if (code == line_template_list_prefixed or code == line_template_list_prefixed_en or code == line_template_list_prefixed_en_onearg) {
+    if (code == line_template_list_prefixed or code == line_template_list_prefixed_lang or code == line_template_list_prefixed_lang_onearg) {
         if (cursor.* >= limit) return error.InvalidEncoding;
         const prefix_code = bytes[cursor.*];
         cursor.* += 1;
@@ -1198,8 +1230,8 @@ fn appendDecodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, byte
         cursor.* += 1;
         const separator = simpleListSeparatorText(separator_kind) orelse return error.InvalidEncoding;
         const item_count = format.readVarUInt(bytes, cursor, limit) catch return error.InvalidEncoding;
-        const include_english_arg = code == line_template_list_prefixed_en or code == line_template_list_prefixed_en_onearg;
-        const include_english_onearg = code == line_template_list_prefixed_en_onearg;
+        const include_language_arg = code == line_template_list_prefixed_lang or code == line_template_list_prefixed_lang_onearg;
+        const include_language_onearg = code == line_template_list_prefixed_lang_onearg;
 
         try out.appendSlice(allocator, prefix);
         var item_index: usize = 0;
@@ -1207,9 +1239,12 @@ fn appendDecodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, byte
             if (item_index != 0) try out.appendSlice(allocator, separator);
             try out.appendSlice(allocator, "{{");
             try out.appendSlice(allocator, template_name);
-            if (include_english_arg) try out.appendSlice(allocator, "|en");
+            if (include_language_arg) {
+                try out.append(allocator, '|');
+                try out.appendSlice(allocator, language_code);
+            }
 
-            if (include_english_onearg) {
+            if (include_language_onearg) {
                 try out.append(allocator, '|');
                 try appendCompactTerminatedDecoded(out, allocator, bytes, cursor, limit);
             } else {
@@ -1225,8 +1260,8 @@ fn appendDecodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, byte
         return;
     }
 
-    if (code == line_template_full or code == line_template_prefixed or code == line_template_full_en or code == line_template_prefixed_en or code == line_template_full_en_onearg or code == line_template_prefixed_en_onearg) {
-        const prefix = if (code == line_template_prefixed or code == line_template_prefixed_en or code == line_template_prefixed_en_onearg) blk: {
+    if (code == line_template_full or code == line_template_prefixed or code == line_template_full_lang or code == line_template_prefixed_lang or code == line_template_full_lang_onearg or code == line_template_prefixed_lang_onearg) {
+        const prefix = if (code == line_template_prefixed or code == line_template_prefixed_lang or code == line_template_prefixed_lang_onearg) blk: {
             if (cursor.* >= limit) return error.InvalidEncoding;
             const prefix_code = bytes[cursor.*];
             cursor.* += 1;
@@ -1235,9 +1270,9 @@ fn appendDecodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, byte
 
         const template_code = readTieredRef(bytes, cursor, limit) catch return error.InvalidEncoding;
         const template_name = lineTemplateName(template_code) orelse return error.InvalidEncoding;
-        const include_english_arg = code == line_template_full_en or code == line_template_prefixed_en or code == line_template_full_en_onearg or code == line_template_prefixed_en_onearg;
-        const include_english_onearg = code == line_template_full_en_onearg or code == line_template_prefixed_en_onearg;
-        const arg_count = if (include_english_onearg)
+        const include_language_arg = code == line_template_full_lang or code == line_template_prefixed_lang or code == line_template_full_lang_onearg or code == line_template_prefixed_lang_onearg;
+        const include_language_onearg = code == line_template_full_lang_onearg or code == line_template_prefixed_lang_onearg;
+        const arg_count = if (include_language_onearg)
             @as(u64, 1)
         else
             format.readVarUInt(bytes, cursor, limit) catch return error.InvalidEncoding;
@@ -1245,7 +1280,10 @@ fn appendDecodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, byte
         try out.appendSlice(allocator, prefix);
         try out.appendSlice(allocator, "{{");
         try out.appendSlice(allocator, template_name);
-        if (include_english_arg) try out.appendSlice(allocator, "|en");
+        if (include_language_arg) {
+            try out.append(allocator, '|');
+            try out.appendSlice(allocator, language_code);
+        }
 
         var arg_index: usize = 0;
         while (arg_index < arg_count) : (arg_index += 1) {
@@ -1478,7 +1516,7 @@ fn parseExactTemplateLine(allocator: std.mem.Allocator, line: []const u8) ?Parse
     return parseExactTemplateBody(allocator, line);
 }
 
-fn parseExactTemplateLineList(allocator: std.mem.Allocator, line: []const u8) ?ParsedTemplateLineList {
+fn parseExactTemplateLineList(allocator: std.mem.Allocator, line: []const u8, language_code: []const u8) ?ParsedTemplateLineList {
     const matched = matchLinePrefix(line) orelse return null;
 
     const Separator = struct {
@@ -1497,7 +1535,7 @@ fn parseExactTemplateLineList(allocator: std.mem.Allocator, line: []const u8) ?P
     const items = allocator.alloc(TemplateLineListItem, parts.items.len) catch return null;
 
     var first_template_code: ?u16 = null;
-    var include_english_arg = true;
+    var include_language_arg = true;
     for (parts.items, 0..) |part, idx| {
         const parsed = parseExactTemplateBody(allocator, part) orelse return null;
         if (first_template_code == null) {
@@ -1506,7 +1544,7 @@ fn parseExactTemplateLineList(allocator: std.mem.Allocator, line: []const u8) ?P
             return null;
         }
 
-        if (parsed.args.len == 0 or !std.mem.eql(u8, parsed.args[0], "en")) include_english_arg = false;
+        if (parsed.args.len == 0 or !std.mem.eql(u8, parsed.args[0], language_code)) include_language_arg = false;
         items[idx] = .{ .args = parsed.args };
     }
 
@@ -1514,7 +1552,7 @@ fn parseExactTemplateLineList(allocator: std.mem.Allocator, line: []const u8) ?P
         .prefix_code = matched.code,
         .template_code = first_template_code.?,
         .separator_kind = separator.kind,
-        .include_english_arg = include_english_arg,
+        .include_language_arg = include_language_arg,
         .items = items,
     };
 }
@@ -1533,7 +1571,7 @@ fn parseExactTemplateBody(allocator: std.mem.Allocator, line: []const u8) ?Parse
     };
 }
 
-fn parseColumnBlock(allocator: std.mem.Allocator, lines: []const []const u8) ?ColumnBlock {
+fn parseColumnBlock(allocator: std.mem.Allocator, lines: []const []const u8, language_code: []const u8) ?ColumnBlock {
     if (lines.len == 0) return null;
 
     const first_trimmed = std.mem.trim(u8, lines[0], " \t");
@@ -1544,7 +1582,7 @@ fn parseColumnBlock(allocator: std.mem.Allocator, lines: []const []const u8) ?Co
     if (first_parts.items.len < 2) return null;
 
     const template_code = inlineColumnTemplateCode(first_parts.items[0]) orelse return null;
-    if (!std.mem.eql(u8, first_parts.items[1], "en")) return null;
+    if (!std.mem.eql(u8, first_parts.items[1], language_code)) return null;
 
     var end_index: usize = 1;
     while (end_index < lines.len) : (end_index += 1) {
@@ -1584,7 +1622,7 @@ fn parseColumnBlock(allocator: std.mem.Allocator, lines: []const []const u8) ?Co
     };
 }
 
-fn parseInlineColumnTemplate(allocator: std.mem.Allocator, line: []const u8) ?ColumnInline {
+fn parseInlineColumnTemplate(allocator: std.mem.Allocator, line: []const u8, language_code: []const u8) ?ColumnInline {
     const trimmed = std.mem.trim(u8, line, " \t");
     if (!std.mem.startsWith(u8, trimmed, "{{") or !std.mem.endsWith(u8, trimmed, "}}")) return null;
 
@@ -1593,7 +1631,7 @@ fn parseInlineColumnTemplate(allocator: std.mem.Allocator, line: []const u8) ?Co
     if (parts.items.len < 2) return null;
 
     const template_code = inlineColumnTemplateCode(parts.items[0]) orelse return null;
-    if (!std.mem.eql(u8, parts.items[1], "en")) return null;
+    if (!std.mem.eql(u8, parts.items[1], language_code)) return null;
 
     return .{
         .template_code = template_code,
@@ -1630,13 +1668,13 @@ fn columnTemplateCodeForBlockRecord(record_code: u8) ?u8 {
     return column_col + (record_code - record_column_block_base);
 }
 
-fn columnTemplateStart(code: u8) ?[]const u8 {
+fn columnTemplateName(code: u8) ?[]const u8 {
     return switch (code) {
-        column_col => "{{col|en",
-        column_col2 => "{{col2|en",
-        column_col3 => "{{col3|en",
-        column_col4 => "{{col4|en",
-        column_col5 => "{{col5|en",
+        column_col => "col",
+        column_col2 => "col2",
+        column_col3 => "col3",
+        column_col4 => "col4",
+        column_col5 => "col5",
         else => null,
     };
 }
@@ -2318,6 +2356,62 @@ fn expectEnglishSectionRoundTripExact(sample: []const u8) !void {
     defer std.testing.allocator.free(decoded);
 
     try std.testing.expectEqualStrings(sample, decoded);
+}
+
+test "language section codec derives the top heading from blob context" {
+    const english =
+        \\==English==
+        \\===Noun===
+        \\# [[light]]
+        \\
+    ;
+    const french =
+        \\==French==
+        \\===Noun===
+        \\# [[light]]
+        \\
+    ;
+    const fr_context: LanguageContext = .{ .heading = "French", .code = "fr" };
+
+    const english_encoded = try encodeEnglishAlloc(std.testing.allocator, english);
+    defer std.testing.allocator.free(english_encoded);
+    const french_encoded = try encodeLanguageAlloc(std.testing.allocator, french, fr_context);
+    defer std.testing.allocator.free(french_encoded);
+
+    try std.testing.expectEqualSlices(u8, english_encoded, french_encoded);
+    try std.testing.expect(std.mem.indexOf(u8, french_encoded, "French") == null);
+
+    const decoded = try decodeLanguageAlloc(std.testing.allocator, french_encoded, fr_context);
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqualStrings(french, decoded);
+}
+
+test "language section codec omits blob language from column records" {
+    const english =
+        \\==English==
+        \\===Derived terms===
+        \\{{col3|en|daylight|moonlight|sunlight}}
+        \\
+    ;
+    const french =
+        \\==French==
+        \\===Derived terms===
+        \\{{col3|fr|daylight|moonlight|sunlight}}
+        \\
+    ;
+    const fr_context: LanguageContext = .{ .heading = "French", .code = "fr" };
+
+    const english_encoded = try encodeEnglishAlloc(std.testing.allocator, english);
+    defer std.testing.allocator.free(english_encoded);
+    const french_encoded = try encodeLanguageAlloc(std.testing.allocator, french, fr_context);
+    defer std.testing.allocator.free(french_encoded);
+
+    try std.testing.expectEqualSlices(u8, english_encoded, french_encoded);
+    try std.testing.expect(std.mem.indexOf(u8, french_encoded, "fr") == null);
+
+    const decoded = try decodeLanguageAlloc(std.testing.allocator, french_encoded, fr_context);
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqualStrings(french, decoded);
 }
 
 fn lineTemplateSampleAlloc(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
