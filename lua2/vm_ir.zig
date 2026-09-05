@@ -620,9 +620,13 @@ const Lowerer = struct {
                 const values = try self.lowerRhsFixed(s.values, s.names.len);
                 defer self.allocator.free(values);
                 for (s.names, 0..) |name, i| {
-                    const dst = try self.newReg();
-                    try self.bindLocal(name, dst);
-                    _ = try self.emit(.{ .op = .move, .dst = dst, .a = values[i] });
+                    if (!self.isLocalReg(values[i])) {
+                        try self.bindLocal(name, values[i]);
+                    } else {
+                        const dst = try self.newReg();
+                        try self.bindLocal(name, dst);
+                        _ = try self.emit(.{ .op = .move, .dst = dst, .a = values[i] });
+                    }
                 }
                 return false;
             },
@@ -723,6 +727,9 @@ const Lowerer = struct {
             .local_function => |s| {
                 const dst = try self.newReg();
                 try self.bindLocal(s.name, dst);
+                // Lua local-function declarations bind the local before the
+                // closure is created, so recursive captures initially see nil.
+                _ = try self.emit(.{ .op = .load_nil, .dst = dst });
                 const fn_id = try compileFunction(self.program, self, s.function.function);
                 const closure = try self.newReg();
                 _ = try self.emit(.{ .op = .closure, .dst = closure, .aux = fn_id });

@@ -2,7 +2,7 @@ const std = @import("std");
 const ir = @import("vm_ir.zig");
 const codec = @import("vm_codec.zig");
 
-pub const magic = "DICTVM1\x00";
+pub const magic = "DICTVM2\x00";
 
 pub const Entry = struct {
     title: []const u8,

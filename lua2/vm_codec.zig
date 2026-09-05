@@ -2,7 +2,7 @@ const std = @import("std");
 const ir = @import("vm_ir.zig");
 const lua = @import("root.zig");
 
-const magic = "DWVM\x01";
+const magic = "DWVM\x02";
 
 fn putVar(out: *std.ArrayList(u8), a: std.mem.Allocator, value: u64) !void {
     var v = value;

@@ -360,9 +360,11 @@ pub const Vm = struct {
         const frame_allocator = frame_scratch.get();
         const regs = try frame_allocator.alloc(Value, fun.reg_count);
         defer rawFreeSlice(Value, frame_allocator, regs);
-        @memset(regs, .nil);
-        const nparams = @min(@as(usize, fun.param_count), args.len);
+        const param_count: usize = @intCast(fun.param_count);
+        if (param_count > regs.len) return error.BadBytecode;
+        const nparams = @min(param_count, args.len);
         @memcpy(regs[0..nparams], args[0..nparams]);
+        @memset(regs[nparams..param_count], .nil);
         const varargs = if (fun.is_vararg and args.len > fun.param_count) args[fun.param_count..] else &.{};
         var frame = Frame{ .regs = regs, .varargs = varargs, .upvalues = upvalues };
         defer if (frame.cells) |cells| rawFreeSlice(?*rt.Cell, std.heap.smp_allocator, cells);
@@ -374,13 +376,46 @@ pub const Vm = struct {
                 .load_nil => self.setReg(&frame, inst.dst, .nil),
                 .load_bool => self.setReg(&frame, inst.dst, .{ .boolean = inst.a != 0 }),
                 .load_number => self.setReg(&frame, inst.dst, .{ .number = try parseLuaNumber(p.strings.items[inst.aux]) }),
-                .load_string => self.setReg(&frame, inst.dst, .{ .string = p.strings.items[inst.aux] }),
+                .load_string => {
+                    const value: Value = .{ .string = p.strings.items[inst.aux] };
+                    self.setReg(&frame, inst.dst, value);
+                    if (pc < fun.insts.items.len) {
+                        const next = fun.insts.items[pc];
+                        if (next.op == .get_index and next.b == inst.dst) {
+                            pc += 1;
+                            self.setReg(&frame, next.dst, try self.getIndex(self.getReg(&frame, next.a), value));
+                        }
+                    }
+                },
                 .load_const => self.setReg(&frame, inst.dst, try self.materializeConst(p, inst.aux)),
                 .get_global => self.setReg(&frame, inst.dst, self.globals.rawGet(.{ .string = p.strings.items[inst.aux] }) orelse .nil),
                 .set_global => try self.globals.rawSet(self.allocator, .{ .string = p.strings.items[inst.aux] }, self.getReg(&frame, inst.a)),
-                .get_upvalue => self.setReg(&frame, inst.dst, upvalues[inst.a].value),
+                .get_upvalue => {
+                    const value = upvalues[inst.a].value;
+                    self.setReg(&frame, inst.dst, value);
+                    if (pc < fun.insts.items.len) {
+                        const next = fun.insts.items[pc];
+                        if ((next.op == .call or next.op == .call_vararg) and next.a == inst.dst) {
+                            pc += 1;
+                            const argv = try self.buildArgs(&frame, &fun, next, 0, next.op == .call_vararg);
+                            defer rawFreeSlice(Value, std.heap.smp_allocator, argv);
+                            const out = try self.callValue(value, argv);
+                            self.storeResults(&frame, next.dst, next.count, out, true);
+                        }
+                    }
+                },
                 .set_upvalue => upvalues[inst.a].value = self.getReg(&frame, inst.b),
-                .move => self.setReg(&frame, inst.dst, self.getReg(&frame, inst.a)),
+                .move => {
+                    const value = self.getReg(&frame, inst.a);
+                    self.setReg(&frame, inst.dst, value);
+                    if (pc < fun.insts.items.len) {
+                        const next = fun.insts.items[pc];
+                        if (next.op == .jump_if_false and next.a == inst.dst) {
+                            pc += 1;
+                            if (!value.truthy()) pc = next.aux;
+                        }
+                    }
+                },
                 .vararg => self.storeResults(&frame, inst.dst, inst.count, varargs, false),
                 .new_table => self.setReg(&frame, inst.dst, .{ .table = try rt.newTable(self.allocator) }),
                 .table_set, .set_index => try self.setIndex(self.getReg(&frame, inst.a), self.getReg(&frame, inst.b), self.getReg(&frame, inst.c)),
@@ -397,7 +432,17 @@ pub const Vm = struct {
                 .get_index => self.setReg(&frame, inst.dst, try self.getIndex(self.getReg(&frame, inst.a), self.getReg(&frame, inst.b))),
                 .closure => self.setReg(&frame, inst.dst, try self.makeClosure(p, inst.aux, &frame)),
                 .neg => self.setReg(&frame, inst.dst, try rt.unaryNeg(self.getReg(&frame, inst.a))),
-                .not_ => self.setReg(&frame, inst.dst, .{ .boolean = !self.getReg(&frame, inst.a).truthy() }),
+                .not_ => {
+                    const value: Value = .{ .boolean = !self.getReg(&frame, inst.a).truthy() };
+                    self.setReg(&frame, inst.dst, value);
+                    if (pc < fun.insts.items.len) {
+                        const next = fun.insts.items[pc];
+                        if (next.op == .jump_if_false and next.a == inst.dst) {
+                            pc += 1;
+                            if (!value.boolean) pc = next.aux;
+                        }
+                    }
+                },
                 .len => self.setReg(&frame, inst.dst, try rt.len(self.getReg(&frame, inst.a))),
                 .add, .sub, .mul, .div, .mod, .pow => self.setReg(&frame, inst.dst, try self.binaryArith(inst.op, self.getReg(&frame, inst.a), self.getReg(&frame, inst.b))),
                 .concat => {
@@ -407,7 +452,17 @@ pub const Vm = struct {
                     for (rr, 0..) |r, i| vals[i] = self.getReg(&frame, r);
                     self.setReg(&frame, inst.dst, try self.concatValues(vals));
                 },
-                .eq, .ne, .lt, .le, .gt, .ge => self.setReg(&frame, inst.dst, .{ .boolean = try self.comparison(inst.op, self.getReg(&frame, inst.a), self.getReg(&frame, inst.b)) }),
+                .eq, .ne, .lt, .le, .gt, .ge => {
+                    const result = try self.comparison(inst.op, self.getReg(&frame, inst.a), self.getReg(&frame, inst.b));
+                    self.setReg(&frame, inst.dst, .{ .boolean = result });
+                    if (pc < fun.insts.items.len) {
+                        const next = fun.insts.items[pc];
+                        if (next.op == .jump_if_false and next.a == inst.dst) {
+                            pc += 1;
+                            if (!result) pc = next.aux;
+                        }
+                    }
+                },
                 .jump => pc = inst.aux,
                 .jump_if_false => {
                     if (!self.getReg(&frame, inst.a).truthy()) pc = inst.aux;
