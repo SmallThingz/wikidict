@@ -15,6 +15,9 @@ pub const InlineKind = document_ir.InlineKind;
 pub const InlineSpan = document_ir.InlineSpan;
 pub const TermRecordKind = document_ir.TermRecordKind;
 pub const TermRecord = document_ir.TermRecord;
+pub const TranslationRecordKind = document_ir.TranslationRecordKind;
+pub const TranslationSeparator = document_ir.TranslationSeparator;
+pub const TranslationRecord = document_ir.TranslationRecord;
 pub const DecodedBlock = document_ir.DecodedBlock;
 pub const InlineIterator = document_ir.InlineIterator;
 pub const BlockIterator = document_ir.BlockIterator;
@@ -313,6 +316,11 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
         else
             null;
         errdefer if (term_records) |records| deinitTermRecords(allocator, records);
+        const translation_records: ?[]TranslationRecord = if (kind == .translations)
+            try decodeTranslationRecordsAlloc(allocator, payload)
+        else
+            null;
+        errdefer if (translation_records) |records| deinitTranslationRecords(allocator, records);
 
         var body: []const u8 = undefined;
         var line_count: usize = 0;
@@ -324,7 +332,7 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
             body = switch (kind) {
                 .pos_lines => try decodeLineStreamAlloc(allocator, payload),
                 .term_list => try renderTermRecordsAlloc(allocator, term_records.?),
-                .translations => try decodeTranslationSectionAlloc(allocator, payload),
+                .translations => try renderTranslationRecordsAlloc(allocator, translation_records.?),
                 .lines => unreachable,
             };
             if (body.len != 0) {
@@ -343,6 +351,7 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
             .body = body,
             .line_count = line_count,
             .term_records = term_records,
+            .translation_records = translation_records,
         });
     }
 
@@ -708,115 +717,183 @@ fn encodeTranslationSectionAlloc(allocator: std.mem.Allocator, lines: []const []
     return out.toOwnedSlice(allocator);
 }
 
-fn decodeTranslationSectionAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+fn decodeTranslationRecordsAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]TranslationRecord {
     var cursor: usize = 0;
+    var records: std.ArrayList(TranslationRecord) = .empty;
+    errdefer {
+        for (records.items) |*record| record.deinit(allocator);
+        records.deinit(allocator);
+    }
 
+    while (cursor < payload.len) {
+        var record = try decodeTranslationRecordAlloc(allocator, payload, &cursor);
+        records.append(allocator, record) catch |err| {
+            record.deinit(allocator);
+            return err;
+        };
+    }
+    return records.toOwnedSlice(allocator);
+}
+
+fn decodeTranslationRecordAlloc(allocator: std.mem.Allocator, payload: []const u8, cursor: *usize) (std.mem.Allocator.Error || error{InvalidEncoding})!TranslationRecord {
+    if (cursor.* >= payload.len) return error.InvalidEncoding;
+    const record_code = payload[cursor.*];
+    cursor.* += 1;
+
+    switch (record_code) {
+        trans_raw_line => return .{
+            .kind = .raw_line,
+            .text = try decodeEncodedLineAlloc(allocator, payload, cursor, payload.len),
+        },
+        trans_top, trans_check_top => return .{
+            .kind = .group_start,
+            .text = try readCompactTerminatedAlloc(allocator, payload, cursor, payload.len),
+            .check = record_code == trans_check_top,
+        },
+        trans_top_empty, trans_top_empty_pipe, trans_check_top_empty, trans_check_top_empty_pipe => return .{
+            .kind = .group_start,
+            .check = record_code == trans_check_top_empty or record_code == trans_check_top_empty_pipe,
+            .explicit_empty = record_code == trans_top_empty_pipe or record_code == trans_check_top_empty_pipe,
+        },
+        trans_mid => return .{ .kind = .group_mid },
+        trans_bottom => return .{ .kind = .group_end },
+        trans_multitrans_open => return .{ .kind = .multitrans_start },
+        trans_multitrans_close => return .{ .kind = .multitrans_end },
+        else => {},
+    }
+
+    const mapping_spec = translationMappingSpec(record_code) orelse return error.InvalidEncoding;
+    const label = try readLabelRefAlloc(allocator, payload, cursor, payload.len);
+    errdefer allocator.free(label);
+    const source_prefix = prefixForCode(mapping_spec.prefix_code) orelse return error.InvalidEncoding;
+    const block = document_ir.classifyLine(source_prefix);
+
+    if (mapping_spec.kind == .simple) {
+        const lang_code = readTieredRef(payload, cursor, payload.len) catch return error.InvalidEncoding;
+        const language = targetLanguageValueForCode(lang_code) orelse return error.InvalidEncoding;
+        const term = try readCompactTerminatedAlloc(allocator, payload, cursor, payload.len);
+        errdefer allocator.free(term);
+        const terms = try allocator.alloc([]const u8, 1);
+        errdefer allocator.free(terms);
+        terms[0] = term;
+        return .{
+            .kind = .mapping,
+            .block_kind = block.kind,
+            .depth = block.depth,
+            .source_prefix = source_prefix,
+            .label = label,
+            .language = language,
+            .template_name = simpleTranslationTemplateName(mapping_spec.simple_template_variant) orelse return error.InvalidEncoding,
+            .terms = terms,
+        };
+    }
+
+    if (mapping_spec.kind == .simple_list) {
+        const lang_code = readTieredRef(payload, cursor, payload.len) catch return error.InvalidEncoding;
+        const language = targetLanguageValueForCode(lang_code) orelse return error.InvalidEncoding;
+        const term_count_u64 = format.readVarUInt(payload, cursor, payload.len) catch return error.InvalidEncoding;
+        const term_count = std.math.cast(usize, term_count_u64) orelse return error.InvalidEncoding;
+        const terms = try allocator.alloc([]const u8, term_count);
+        var decoded_terms: usize = 0;
+        errdefer {
+            for (terms[0..decoded_terms]) |term| allocator.free(term);
+            allocator.free(terms);
+        }
+        while (decoded_terms < term_count) : (decoded_terms += 1) {
+            terms[decoded_terms] = try readCompactTerminatedAlloc(allocator, payload, cursor, payload.len);
+        }
+        return .{
+            .kind = .mapping,
+            .block_kind = block.kind,
+            .depth = block.depth,
+            .source_prefix = source_prefix,
+            .label = label,
+            .language = language,
+            .template_name = simpleTranslationTemplateName(mapping_spec.simple_template_variant) orelse return error.InvalidEncoding,
+            .terms = terms,
+            .separator = translationSeparatorFromKind(mapping_spec.separator_kind) orelse return error.InvalidEncoding,
+        };
+    }
+
+    if (mapping_spec.has_inline_value) {
+        const value = try readTranslationValueAlloc(allocator, payload, cursor, payload.len);
+        errdefer allocator.free(value);
+        return .{
+            .kind = .mapping,
+            .block_kind = block.kind,
+            .depth = block.depth,
+            .source_prefix = source_prefix,
+            .text = value,
+            .label = label,
+        };
+    }
+
+    return .{
+        .kind = .mapping,
+        .block_kind = block.kind,
+        .depth = block.depth,
+        .source_prefix = source_prefix,
+        .label = label,
+    };
+}
+
+fn translationSeparatorFromKind(kind: u8) ?TranslationSeparator {
+    return switch (kind) {
+        simple_list_separator_comma => .comma,
+        simple_list_separator_semicolon => .semicolon,
+        else => null,
+    };
+}
+
+fn translationSeparatorText(separator: TranslationSeparator) ?[]const u8 {
+    return switch (separator) {
+        .comma => ", ",
+        .semicolon => "; ",
+        .none => null,
+    };
+}
+
+fn renderTranslationRecordsAlloc(allocator: std.mem.Allocator, records: []const TranslationRecord) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
-    var first = true;
-    while (cursor < payload.len) {
-        if (!first) try out.append(allocator, '\n');
-        if (cursor >= payload.len) return error.InvalidEncoding;
-
-        const record_code = payload[cursor];
-        switch (record_code) {
-            trans_raw_line => {
-                cursor += 1;
-                const line = try decodeEncodedLineAlloc(allocator, payload, &cursor, payload.len);
-                defer allocator.free(line);
-                try out.appendSlice(allocator, line);
-            },
-            trans_top => {
-                cursor += 1;
-                const gloss = try readCompactTerminatedAlloc(allocator, payload, &cursor, payload.len);
-                defer allocator.free(gloss);
-                try out.appendSlice(allocator, "{{trans-top|");
-                try out.appendSlice(allocator, gloss);
+    for (records, 0..) |record, record_index| {
+        if (record_index != 0) try out.append(allocator, '\n');
+        switch (record.kind) {
+            .raw_line => try out.appendSlice(allocator, record.text orelse return error.InvalidEncoding),
+            .group_start => {
+                try out.appendSlice(allocator, if (record.check) "{{checktrans-top" else "{{trans-top");
+                if (record.text) |gloss| {
+                    try out.append(allocator, '|');
+                    try out.appendSlice(allocator, gloss);
+                } else if (record.explicit_empty) {
+                    try out.append(allocator, '|');
+                }
                 try out.appendSlice(allocator, "}}");
             },
-            trans_top_empty => {
-                cursor += 1;
-                try out.appendSlice(allocator, "{{trans-top}}");
-            },
-            trans_top_empty_pipe => {
-                cursor += 1;
-                try out.appendSlice(allocator, "{{trans-top|}}");
-            },
-            trans_check_top => {
-                cursor += 1;
-                const gloss = try readCompactTerminatedAlloc(allocator, payload, &cursor, payload.len);
-                defer allocator.free(gloss);
-                try out.appendSlice(allocator, "{{checktrans-top|");
-                try out.appendSlice(allocator, gloss);
-                try out.appendSlice(allocator, "}}");
-            },
-            trans_check_top_empty => {
-                cursor += 1;
-                try out.appendSlice(allocator, "{{checktrans-top}}");
-            },
-            trans_check_top_empty_pipe => {
-                cursor += 1;
-                try out.appendSlice(allocator, "{{checktrans-top|}}");
-            },
-            trans_mid => {
-                cursor += 1;
-                try out.appendSlice(allocator, "{{trans-mid}}");
-            },
-            trans_bottom => {
-                cursor += 1;
-                try out.appendSlice(allocator, "{{trans-bottom}}");
-            },
-            trans_multitrans_open => {
-                cursor += 1;
-                try out.appendSlice(allocator, "{{multitrans|data=");
-            },
-            trans_multitrans_close => {
-                cursor += 1;
-                try out.appendSlice(allocator, "}}<!-- close {{multitrans}} -->");
-            },
-            else => {
-                const mapping_spec = translationMappingSpec(record_code) orelse return error.InvalidEncoding;
-                cursor += 1;
-                const label = try readLabelRefAlloc(allocator, payload, &cursor, payload.len);
-                defer allocator.free(label);
-                const prefix = prefixForCode(mapping_spec.prefix_code) orelse return error.InvalidEncoding;
-                try out.appendSlice(allocator, prefix);
-                try out.appendSlice(allocator, label);
-                if (mapping_spec.kind == .simple) {
-                    const lang_code = readTieredRef(payload, &cursor, payload.len) catch return error.InvalidEncoding;
-                    const lang = targetLanguageValueForCode(lang_code) orelse return error.InvalidEncoding;
-                    const term = try readCompactTerminatedAlloc(allocator, payload, &cursor, payload.len);
-                    defer allocator.free(term);
-                    try out.appendSlice(allocator, ": {{");
-                    try out.appendSlice(allocator, simpleTranslationTemplateName(mapping_spec.simple_template_variant) orelse return error.InvalidEncoding);
-                    try out.append(allocator, '|');
-                    try out.appendSlice(allocator, lang);
-                    try out.append(allocator, '|');
-                    try out.appendSlice(allocator, term);
-                    try out.appendSlice(allocator, "}}");
-                } else if (mapping_spec.kind == .simple_list) {
-                    const lang_code = readTieredRef(payload, &cursor, payload.len) catch return error.InvalidEncoding;
-                    const lang = targetLanguageValueForCode(lang_code) orelse return error.InvalidEncoding;
-                    const term_count = format.readVarUInt(payload, &cursor, payload.len) catch return error.InvalidEncoding;
-                    const separator = simpleListSeparatorText(mapping_spec.separator_kind) orelse return error.InvalidEncoding;
+            .group_mid => try out.appendSlice(allocator, "{{trans-mid}}"),
+            .group_end => try out.appendSlice(allocator, "{{trans-bottom}}"),
+            .multitrans_start => try out.appendSlice(allocator, "{{multitrans|data="),
+            .multitrans_end => try out.appendSlice(allocator, "}}<!-- close {{multitrans}} -->"),
+            .mapping => {
+                try out.appendSlice(allocator, record.source_prefix);
+                try out.appendSlice(allocator, record.label orelse return error.InvalidEncoding);
+                if (record.language) |language| {
+                    const template_name = record.template_name orelse return error.InvalidEncoding;
                     try out.appendSlice(allocator, ": ");
-                    var term_index: usize = 0;
-                    while (term_index < term_count) : (term_index += 1) {
-                        const term = try readCompactTerminatedAlloc(allocator, payload, &cursor, payload.len);
-                        defer allocator.free(term);
-                        if (term_index != 0) try out.appendSlice(allocator, separator);
+                    for (record.terms, 0..) |term, term_index| {
+                        if (term_index != 0) {
+                            try out.appendSlice(allocator, translationSeparatorText(record.separator) orelse return error.InvalidEncoding);
+                        }
                         try out.appendSlice(allocator, "{{");
-                        try out.appendSlice(allocator, simpleTranslationTemplateName(mapping_spec.simple_template_variant) orelse return error.InvalidEncoding);
+                        try out.appendSlice(allocator, template_name);
                         try out.append(allocator, '|');
-                        try out.appendSlice(allocator, lang);
+                        try out.appendSlice(allocator, language);
                         try out.append(allocator, '|');
                         try out.appendSlice(allocator, term);
                         try out.appendSlice(allocator, "}}");
                     }
-                } else if (mapping_spec.has_inline_value) {
-                    const value = try readTranslationValueAlloc(allocator, payload, &cursor, payload.len);
-                    defer allocator.free(value);
+                } else if (record.text) |value| {
                     try out.appendSlice(allocator, ": ");
                     try out.appendSlice(allocator, value);
                 } else {
@@ -824,10 +901,19 @@ fn decodeTranslationSectionAlloc(allocator: std.mem.Allocator, payload: []const 
                 }
             },
         }
-        first = false;
     }
-
     return out.toOwnedSlice(allocator);
+}
+
+fn deinitTranslationRecords(allocator: std.mem.Allocator, records: []TranslationRecord) void {
+    for (records) |*record| record.deinit(allocator);
+    allocator.free(records);
+}
+
+fn decodeTranslationSectionAlloc(allocator: std.mem.Allocator, payload: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+    const records = try decodeTranslationRecordsAlloc(allocator, payload);
+    defer deinitTranslationRecords(allocator, records);
+    return renderTranslationRecordsAlloc(allocator, records);
 }
 
 fn splitEnglishSections(allocator: std.mem.Allocator, english_section: []const u8) ![]SectionSource {
@@ -2233,6 +2319,58 @@ test "decoded document exposes renderer-facing section structure" {
     try std.testing.expectEqual(@as(u8, 4), document.sections[2].level);
     try std.testing.expectEqualStrings("Translations", document.sections[2].title);
     try std.testing.expectEqual(SectionKind.translations, document.sections[2].kind);
+    const translations = document.sections[2].translation_records orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 3), translations.len);
+    try std.testing.expectEqual(TranslationRecordKind.group_start, translations[0].kind);
+    try std.testing.expectEqualStrings("visible spectrum", translations[0].text.?);
+    try std.testing.expect(!translations[0].check);
+    try std.testing.expectEqual(TranslationRecordKind.mapping, translations[1].kind);
+    try std.testing.expectEqual(BlockKind.list_item, translations[1].block_kind);
+    try std.testing.expectEqual(@as(u8, 1), translations[1].depth);
+    try std.testing.expectEqualStrings("French", translations[1].label.?);
+    try std.testing.expect(translations[1].language == null);
+    try std.testing.expect(translations[1].template_name == null);
+    try std.testing.expectEqual(@as(usize, 0), translations[1].terms.len);
+    try std.testing.expectEqualStrings("{{t|fr|couleur}}", translations[1].text.?);
+    try std.testing.expectEqual(TranslationRecordKind.group_end, translations[2].kind);
+}
+
+test "decoded translation mappings preserve generic inline values without generated tables" {
+    const sample =
+        \\==English==
+        \\===Noun===
+        \\# cat
+        \\====Translations====
+        \\{{trans-top|domestic cat}}
+        \\* French: {{t|fr|chat}}, {{t|fr|minou}}
+        \\{{trans-bottom}}
+        \\
+    ;
+
+    const encoded = try encodeEnglishAlloc(std.testing.allocator, sample);
+    defer std.testing.allocator.free(encoded);
+    var document = try decodeDocumentAlloc(std.testing.allocator, encoded);
+    defer document.deinit(std.testing.allocator);
+
+    var records: ?[]TranslationRecord = null;
+    for (document.sections) |section| {
+        if (section.translation_records) |translation_records| {
+            records = translation_records;
+            break;
+        }
+    }
+    const translations = records orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 3), translations.len);
+    const mapping = translations[1];
+    try std.testing.expectEqual(TranslationRecordKind.mapping, mapping.kind);
+    try std.testing.expectEqual(BlockKind.list_item, mapping.block_kind);
+    try std.testing.expectEqual(@as(u8, 1), mapping.depth);
+    try std.testing.expectEqual(TranslationSeparator.none, mapping.separator);
+    try std.testing.expectEqualStrings("French", mapping.label.?);
+    try std.testing.expect(mapping.language == null);
+    try std.testing.expect(mapping.template_name == null);
+    try std.testing.expectEqual(@as(usize, 0), mapping.terms.len);
+    try std.testing.expectEqualStrings("{{t|fr|chat}}, {{t|fr|minou}}", mapping.text.?);
 }
 
 test "render blocks classify wiktionary line structure" {

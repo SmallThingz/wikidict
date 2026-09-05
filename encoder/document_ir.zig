@@ -51,6 +51,53 @@ pub const TermRecord = struct {
     }
 };
 
+pub const TranslationRecordKind = enum {
+    raw_line,
+    group_start,
+    group_mid,
+    group_end,
+    multitrans_start,
+    multitrans_end,
+    mapping,
+};
+
+pub const TranslationSeparator = enum {
+    none,
+    comma,
+    semicolon,
+};
+
+pub const TranslationRecord = struct {
+    kind: TranslationRecordKind,
+    block_kind: BlockKind = .paragraph,
+    depth: u8 = 0,
+    source_prefix: []const u8 = "",
+    text: ?[]const u8 = null,
+    label: ?[]const u8 = null,
+    language: ?[]const u8 = null,
+    template_name: ?[]const u8 = null,
+    terms: []const []const u8 = &.{},
+    separator: TranslationSeparator = .none,
+    check: bool = false,
+    explicit_empty: bool = false,
+
+    pub fn deinit(self: *TranslationRecord, allocator: std.mem.Allocator) void {
+        switch (self.kind) {
+            .raw_line, .group_start => if (self.text) |text| allocator.free(text),
+            .mapping => {
+                if (self.label) |label| allocator.free(label);
+                if (self.text) |text| allocator.free(text);
+                if (self.terms.len != 0) {
+                    for (self.terms) |term| allocator.free(term);
+                    allocator.free(self.terms);
+                }
+            },
+            .group_mid, .group_end, .multitrans_start, .multitrans_end => {},
+        }
+        self.* = undefined;
+    }
+};
+
 pub const InlineSpan = struct {
     kind: InlineKind,
     text: []const u8,
@@ -161,7 +208,7 @@ pub const BlockIterator = struct {
 
         if (self.body.len == 0) return .{ .kind = .blank, .depth = 0, .text = "" };
         const line_end = std.mem.indexOfScalarPos(u8, self.body, self.line_start, '\n') orelse self.body.len;
-        const block = classifyBlock(self.body[self.line_start..line_end]);
+        const block = classifyLine(self.body[self.line_start..line_end]);
         self.line_start = if (line_end == self.body.len) self.body.len else line_end + 1;
         return block;
     }
@@ -174,6 +221,7 @@ pub const DecodedSection = struct {
     body: []const u8,
     line_count: usize,
     term_records: ?[]TermRecord = null,
+    translation_records: ?[]TranslationRecord = null,
 
     pub fn blockIterator(self: *const DecodedSection) BlockIterator {
         return .{ .body = self.body, .line_count = self.line_count };
@@ -195,6 +243,10 @@ pub const DecodedSection = struct {
             for (records) |*record| record.deinit(allocator);
             allocator.free(records);
         }
+        if (self.translation_records) |records| {
+            for (records) |*record| record.deinit(allocator);
+            allocator.free(records);
+        }
         self.* = undefined;
     }
 };
@@ -210,7 +262,7 @@ pub const DecodedDocument = struct {
     }
 };
 
-fn classifyBlock(line: []const u8) DecodedBlock {
+pub fn classifyLine(line: []const u8) DecodedBlock {
     if (line.len == 0) return .{ .kind = .blank, .depth = 0, .text = line };
 
     if (line[0] == '#') {
