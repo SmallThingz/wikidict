@@ -1,0 +1,318 @@
+const std = @import("std");
+const support = @import("blob_codec_support.zig");
+const document_ir = @import("document_ir.zig");
+
+const flag_custom_language_heading: u8 = 1 << 0;
+const op_heading: u8 = 1;
+
+pub const LanguageContext = struct {
+    heading: []const u8,
+    code: []const u8 = "",
+};
+
+pub fn reconstructionHeadingFromTitle(title: []const u8) ?[]const u8 {
+    const prefix = "Reconstruction:";
+    if (!std.mem.startsWith(u8, title, prefix)) return null;
+    const rest = title[prefix.len..];
+    const slash = std.mem.indexOfScalar(u8, rest, '/') orelse return null;
+    if (slash == 0) return null;
+    return rest[0..slash];
+}
+
+const ParsedHeading = struct {
+    level: u8,
+    raw_title: []const u8,
+    title: []const u8,
+};
+
+const Balance = struct {
+    templates: usize = 0,
+    links: usize = 0,
+    comments: usize = 0,
+
+    fn update(self: *Balance, line: []const u8) void {
+        var i: usize = 0;
+        while (i < line.len) : (i += 1) {
+            if (i + 4 <= line.len and std.mem.eql(u8, line[i .. i + 4], "<!--")) {
+                self.comments += 1;
+                i += 3;
+                continue;
+            }
+            if (i + 3 <= line.len and std.mem.eql(u8, line[i .. i + 3], "-->")) {
+                if (self.comments != 0) self.comments -= 1;
+                i += 2;
+                continue;
+            }
+            if (i + 2 <= line.len and std.mem.eql(u8, line[i .. i + 2], "{{")) {
+                self.templates += 1;
+                i += 1;
+                continue;
+            }
+            if (i + 2 <= line.len and std.mem.eql(u8, line[i .. i + 2], "}}")) {
+                if (self.templates != 0) self.templates -= 1;
+                i += 1;
+                continue;
+            }
+            if (i + 2 <= line.len and std.mem.eql(u8, line[i .. i + 2], "[[")) {
+                self.links += 1;
+                i += 1;
+                continue;
+            }
+            if (i + 2 <= line.len and std.mem.eql(u8, line[i .. i + 2], "]]")) {
+                if (self.links != 0) self.links -= 1;
+                i += 1;
+            }
+        }
+    }
+
+    fn isOpen(self: Balance) bool {
+        return self.templates != 0 or self.links != 0 or self.comments != 0;
+    }
+};
+
+pub const SectionView = struct {
+    level: u8,
+    title: []const u8,
+    raw_title: []const u8,
+    raw_body: []const u8,
+    language_code: []const u8,
+
+    pub fn content(self: SectionView) []const u8 {
+        if (std.mem.startsWith(u8, self.raw_body, "\r\n")) return self.raw_body[2..];
+        if (std.mem.startsWith(u8, self.raw_body, "\n")) return self.raw_body[1..];
+        return self.raw_body;
+    }
+
+    pub fn lineIterator(self: SectionView) LineIterator {
+        return .{ .input = self.content() };
+    }
+
+    pub fn blockIterator(self: SectionView) BlockIterator {
+        return .{ .lines = self.lineIterator() };
+    }
+};
+
+pub const LineIterator = struct {
+    input: []const u8,
+    cursor: usize = 0,
+    emitted_empty: bool = false,
+
+    pub fn next(self: *LineIterator) ?[]const u8 {
+        if (self.input.len == 0) {
+            if (self.emitted_empty) return null;
+            self.emitted_empty = true;
+            return "";
+        }
+        if (self.cursor >= self.input.len) return null;
+        const end = std.mem.indexOfScalarPos(u8, self.input, self.cursor, '\n') orelse self.input.len;
+        const line = std.mem.trimEnd(u8, self.input[self.cursor..end], "\r");
+        self.cursor = if (end == self.input.len) self.input.len else end + 1;
+        return line;
+    }
+};
+
+pub const BlockIterator = struct {
+    lines: LineIterator,
+
+    pub fn next(self: *BlockIterator) ?document_ir.DecodedBlock {
+        const line = self.lines.next() orelse return null;
+        return document_ir.classifyLine(line);
+    }
+};
+
+pub const SectionIterator = struct {
+    encoded: []const u8,
+    language: LanguageContext,
+    body_start: usize,
+    current_level: u8 = 2,
+    current_raw_title: []const u8 = "",
+    current_title: []const u8 = "",
+    done: bool = false,
+
+    pub fn init(encoded: []const u8, language: LanguageContext) error{InvalidEncoding}!SectionIterator {
+        if (encoded.len == 0) return error.InvalidEncoding;
+        const flags = encoded[0];
+        if (flags & ~flag_custom_language_heading != 0) return error.InvalidEncoding;
+        var cursor: usize = 1;
+        if (flags & flag_custom_language_heading != 0) {
+            _ = try support.readField(encoded, &cursor);
+        }
+        return .{
+            .encoded = encoded,
+            .language = language,
+            .body_start = cursor,
+            .current_level = 2,
+            .current_raw_title = language.heading,
+            .current_title = language.heading,
+        };
+    }
+
+    pub fn next(self: *SectionIterator) error{InvalidEncoding}!?SectionView {
+        if (self.done) return null;
+        const marker = std.mem.indexOfScalarPos(u8, self.encoded, self.body_start, 0) orelse self.encoded.len;
+        const result: SectionView = .{
+            .level = self.current_level,
+            .title = self.current_title,
+            .raw_title = self.current_raw_title,
+            .raw_body = self.encoded[self.body_start..marker],
+            .language_code = self.language.code,
+        };
+        if (marker == self.encoded.len) {
+            self.done = true;
+            return result;
+        }
+
+        var cursor = marker + 1;
+        if (cursor + 2 > self.encoded.len or self.encoded[cursor] != op_heading) return error.InvalidEncoding;
+        cursor += 1;
+        const level = self.encoded[cursor];
+        cursor += 1;
+        if (level < 3 or level > 6) return error.InvalidEncoding;
+        const raw_title = try support.readField(self.encoded, &cursor);
+        if (raw_title.len == 0) return error.InvalidEncoding;
+        self.current_level = level;
+        self.current_raw_title = raw_title;
+        self.current_title = std.mem.trim(u8, raw_title, " \t");
+        if (self.current_title.len == 0) return error.InvalidEncoding;
+        self.body_start = cursor;
+        return result;
+    }
+};
+
+pub fn encodeAlloc(allocator: std.mem.Allocator, source: []const u8, language: LanguageContext) ![]u8 {
+    if (std.mem.indexOfScalar(u8, source, 0) != null) return error.InvalidEncoding;
+    const first_newline = std.mem.indexOfScalar(u8, source, '\n') orelse source.len;
+    var first_content_end = first_newline;
+    if (first_content_end != 0 and source[first_content_end - 1] == '\r') first_content_end -= 1;
+    const top = parseHeading(source[0..first_content_end]) orelse return error.InvalidLanguageSection;
+    if (top.level != 2 or !std.mem.eql(u8, top.title, language.heading)) return error.InvalidLanguageSection;
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    const canonical = top.raw_title.len == language.heading.len and std.mem.eql(u8, top.raw_title, language.heading);
+    try out.append(allocator, if (canonical) 0 else flag_custom_language_heading);
+    if (!canonical) try support.appendField(&out, allocator, source[0..first_content_end]);
+
+    var segment_start = first_content_end;
+    var line_start = if (first_newline == source.len) source.len else first_newline + 1;
+    var balance: Balance = .{};
+    while (line_start < source.len) {
+        const newline = std.mem.indexOfScalarPos(u8, source, line_start, '\n') orelse source.len;
+        var content_end = newline;
+        if (content_end != line_start and source[content_end - 1] == '\r') content_end -= 1;
+        const line = source[line_start..content_end];
+        if (!balance.isOpen()) {
+            if (parseHeading(line)) |heading| {
+                if (heading.level >= 3) {
+                    try out.appendSlice(allocator, source[segment_start..line_start]);
+                    try out.append(allocator, 0);
+                    try out.append(allocator, op_heading);
+                    try out.append(allocator, heading.level);
+                    try support.appendField(&out, allocator, heading.raw_title);
+                    segment_start = content_end;
+                    line_start = if (newline == source.len) source.len else newline + 1;
+                    continue;
+                }
+            }
+        }
+        balance.update(line);
+        line_start = if (newline == source.len) source.len else newline + 1;
+    }
+    try out.appendSlice(allocator, source[segment_start..]);
+    return out.toOwnedSlice(allocator);
+}
+
+pub fn decodeAlloc(allocator: std.mem.Allocator, encoded: []const u8, language: LanguageContext) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+    if (encoded.len == 0) return error.InvalidEncoding;
+    const flags = encoded[0];
+    if (flags & ~flag_custom_language_heading != 0) return error.InvalidEncoding;
+    var cursor: usize = 1;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    if (flags & flag_custom_language_heading != 0) {
+        const heading = try support.readField(encoded, &cursor);
+        try out.appendSlice(allocator, heading);
+    } else {
+        try out.appendSlice(allocator, "==");
+        try out.appendSlice(allocator, language.heading);
+        try out.appendSlice(allocator, "==");
+    }
+
+    while (cursor < encoded.len) {
+        const marker = std.mem.indexOfScalarPos(u8, encoded, cursor, 0) orelse encoded.len;
+        try out.appendSlice(allocator, encoded[cursor..marker]);
+        if (marker == encoded.len) break;
+        cursor = marker + 1;
+        if (cursor + 2 > encoded.len or encoded[cursor] != op_heading) return error.InvalidEncoding;
+        cursor += 1;
+        const level = encoded[cursor];
+        cursor += 1;
+        if (level < 3 or level > 6) return error.InvalidEncoding;
+        const raw_title = try support.readField(encoded, &cursor);
+        if (raw_title.len == 0) return error.InvalidEncoding;
+        try out.appendNTimes(allocator, '=', level);
+        try out.appendSlice(allocator, raw_title);
+        try out.appendNTimes(allocator, '=', level);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn parseHeading(line: []const u8) ?ParsedHeading {
+    if (line.len < 5 or line[0] != '=') return null;
+    var left: usize = 0;
+    while (left < line.len and line[left] == '=') : (left += 1) {}
+    if (left < 2 or left > 6) return null;
+    var right = line.len;
+    while (right != 0 and line[right - 1] == '=') : (right -= 1) {}
+    if (line.len - right != left or right <= left) return null;
+    const raw_title = line[left..right];
+    const title = std.mem.trim(u8, raw_title, " \t");
+    if (title.len == 0) return null;
+    return .{ .level = @intCast(left), .raw_title = raw_title, .title = title };
+}
+
+test "language blob round trips sections and exposes borrowed blocks" {
+    const source = "==English==\n{{wp}}\n\n===Noun===\n{{en-noun}}\n# [[cat]]\n#: A small animal.\n\n====Synonyms====\n* {{l|en|kitty}}\n";
+    const language: LanguageContext = .{ .heading = "English", .code = "en" };
+    const encoded = try encodeAlloc(std.testing.allocator, source, language);
+    defer std.testing.allocator.free(encoded);
+    const decoded = try decodeAlloc(std.testing.allocator, encoded, language);
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqualStrings(source, decoded);
+
+    var sections = try SectionIterator.init(encoded, language);
+    const root = (try sections.next()).?;
+    try std.testing.expectEqual(@as(u8, 2), root.level);
+    try std.testing.expectEqualStrings("English", root.title);
+    const noun = (try sections.next()).?;
+    try std.testing.expectEqualStrings("Noun", noun.title);
+    var blocks = noun.blockIterator();
+    try std.testing.expectEqual(document_ir.BlockKind.paragraph, blocks.next().?.kind);
+    try std.testing.expectEqual(document_ir.BlockKind.definition, blocks.next().?.kind);
+    try std.testing.expectEqual(document_ir.BlockKind.example, blocks.next().?.kind);
+    const synonyms = (try sections.next()).?;
+    try std.testing.expectEqualStrings("Synonyms", synonyms.title);
+    try std.testing.expect((try sections.next()) == null);
+}
+
+test "language blob derives reconstruction heading from title" {
+    try std.testing.expectEqualStrings("Proto-Indo-European", reconstructionHeadingFromTitle("Reconstruction:Proto-Indo-European/h₂ep-").?);
+    try std.testing.expectEqualStrings("Old English", reconstructionHeadingFromTitle("Reconstruction:Old English/feortan").?);
+    try std.testing.expect(reconstructionHeadingFromTitle("cat") == null);
+}
+
+test "language blob preserves custom top heading bytes and multiline template headings" {
+    const source = "== English ==\r\n{{foo|\n===not a section===\nbar}}\n===Noun===\n# test\n";
+    const language: LanguageContext = .{ .heading = "English", .code = "en" };
+    const encoded = try encodeAlloc(std.testing.allocator, source, language);
+    defer std.testing.allocator.free(encoded);
+    const decoded = try decodeAlloc(std.testing.allocator, encoded, language);
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqualStrings(source, decoded);
+
+    var sections = try SectionIterator.init(encoded, language);
+    _ = (try sections.next()).?;
+    const noun = (try sections.next()).?;
+    try std.testing.expectEqualStrings("Noun", noun.title);
+    try std.testing.expect((try sections.next()) == null);
+}
