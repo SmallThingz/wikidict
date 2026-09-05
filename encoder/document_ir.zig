@@ -39,6 +39,16 @@ pub const TermRecord = struct {
     first_line_item_count: usize = 0,
     items: []const []const u8 = &.{},
 
+    pub fn block(self: TermRecord) ?DecodedBlock {
+        if (self.kind != .line) return null;
+        return classifyLine(self.text);
+    }
+
+    pub fn itemInlineIterator(self: TermRecord, index: usize) ?InlineIterator {
+        if (self.kind != .column or index >= self.items.len) return null;
+        return .{ .input = self.items[index] };
+    }
+
     pub fn deinit(self: *TermRecord, allocator: std.mem.Allocator) void {
         switch (self.kind) {
             .line => allocator.free(self.text),
@@ -80,6 +90,11 @@ pub const TranslationRecord = struct {
     separator: TranslationSeparator = .none,
     check: bool = false,
     explicit_empty: bool = false,
+
+    pub fn inlineIterator(self: TranslationRecord) ?InlineIterator {
+        const text = self.text orelse return null;
+        return .{ .input = text };
+    }
 
     pub fn deinit(self: *TranslationRecord, allocator: std.mem.Allocator) void {
         switch (self.kind) {

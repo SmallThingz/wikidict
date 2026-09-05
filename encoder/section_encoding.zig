@@ -2346,6 +2346,10 @@ test "decoded document exposes renderer-facing section structure" {
     try std.testing.expect(translations[1].template_name == null);
     try std.testing.expectEqual(@as(usize, 0), translations[1].terms.len);
     try std.testing.expectEqualStrings("{{t|fr|couleur}}", translations[1].text.?);
+    var mapping_inline = translations[1].inlineIterator() orelse return error.TestExpectedEqual;
+    const template = mapping_inline.next().?;
+    try std.testing.expectEqual(InlineKind.template, template.kind);
+    try std.testing.expectEqualStrings("t", template.target);
     try std.testing.expectEqual(TranslationRecordKind.group_end, translations[2].kind);
 }
 
@@ -2642,6 +2646,14 @@ test "decoded term lists expose renderer-native column records" {
     const line = term_records[1];
     try std.testing.expectEqual(TermRecordKind.line, line.kind);
     try std.testing.expectEqualStrings("* [[torchlight]]", line.text);
+    const line_block = line.block() orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(BlockKind.list_item, line_block.kind);
+    try std.testing.expectEqualStrings("[[torchlight]]", line_block.text);
+
+    var item_inline = column.itemInlineIterator(0) orelse return error.TestExpectedEqual;
+    const item_span = item_inline.next().?;
+    try std.testing.expectEqual(InlineKind.text, item_span.kind);
+    try std.testing.expectEqualStrings("daylight", item_span.text);
 }
 
 test "section document encoding is smaller on a representative entry" {
