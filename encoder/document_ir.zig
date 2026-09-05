@@ -84,6 +84,7 @@ pub const TranslationRecord = struct {
     source_prefix: []const u8 = "",
     text: ?[]const u8 = null,
     label: ?[]const u8 = null,
+    label_owned: bool = false,
     language: ?[]const u8 = null,
     template_name: ?[]const u8 = null,
     terms: []const []const u8 = &.{},
@@ -100,7 +101,7 @@ pub const TranslationRecord = struct {
         switch (self.kind) {
             .raw_line, .group_start => if (self.text) |text| allocator.free(text),
             .mapping => {
-                if (self.label) |label| allocator.free(label);
+                if (self.label_owned) if (self.label) |label| allocator.free(label);
                 if (self.text) |text| allocator.free(text);
                 if (self.terms.len != 0) {
                     for (self.terms) |term| allocator.free(term);

@@ -777,7 +777,7 @@ fn decodeTranslationRecordAlloc(allocator: std.mem.Allocator, payload: []const u
 
     const mapping_spec = translationMappingSpec(record_code) orelse return error.InvalidEncoding;
     const label = try readLabelRefAlloc(allocator, payload, cursor, payload.len);
-    errdefer allocator.free(label);
+    errdefer if (label.owned) allocator.free(label.text);
     const source_prefix = prefixForCode(mapping_spec.prefix_code) orelse return error.InvalidEncoding;
     const block = document_ir.classifyLine(source_prefix);
 
@@ -794,7 +794,8 @@ fn decodeTranslationRecordAlloc(allocator: std.mem.Allocator, payload: []const u
             .block_kind = block.kind,
             .depth = block.depth,
             .source_prefix = source_prefix,
-            .label = label,
+            .label = label.text,
+            .label_owned = label.owned,
             .language = language,
             .template_name = simpleTranslationTemplateName(mapping_spec.simple_template_variant) orelse return error.InvalidEncoding,
             .terms = terms,
@@ -820,7 +821,8 @@ fn decodeTranslationRecordAlloc(allocator: std.mem.Allocator, payload: []const u
             .block_kind = block.kind,
             .depth = block.depth,
             .source_prefix = source_prefix,
-            .label = label,
+            .label = label.text,
+            .label_owned = label.owned,
             .language = language,
             .template_name = simpleTranslationTemplateName(mapping_spec.simple_template_variant) orelse return error.InvalidEncoding,
             .terms = terms,
@@ -837,7 +839,8 @@ fn decodeTranslationRecordAlloc(allocator: std.mem.Allocator, payload: []const u
             .depth = block.depth,
             .source_prefix = source_prefix,
             .text = value,
-            .label = label,
+            .label = label.text,
+            .label_owned = label.owned,
         };
     }
 
@@ -846,7 +849,8 @@ fn decodeTranslationRecordAlloc(allocator: std.mem.Allocator, payload: []const u
         .block_kind = block.kind,
         .depth = block.depth,
         .source_prefix = source_prefix,
-        .label = label,
+        .label = label.text,
+        .label_owned = label.owned,
     };
 }
 
@@ -2089,11 +2093,16 @@ fn appendLabelRef(out: *std.ArrayList(u8), allocator: std.mem.Allocator, label: 
     try appendCompactTerminated(out, allocator, label);
 }
 
-fn readLabelRefAlloc(allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize, limit: usize) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+const DecodedLabelRef = struct {
+    text: []const u8,
+    owned: bool,
+};
+
+fn readLabelRefAlloc(allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize, limit: usize) (std.mem.Allocator.Error || error{InvalidEncoding})!DecodedLabelRef {
     const code = readTieredRef(bytes, cursor, limit) catch return error.InvalidEncoding;
 
-    if (code == label_raw) return readCompactTerminatedAlloc(allocator, bytes, cursor, limit);
-    return allocator.dupe(u8, languageLabelForCode(code) orelse return error.InvalidEncoding);
+    if (code == label_raw) return .{ .text = try readCompactTerminatedAlloc(allocator, bytes, cursor, limit), .owned = true };
+    return .{ .text = languageLabelForCode(code) orelse return error.InvalidEncoding, .owned = false };
 }
 
 fn languageCodeForLabel(label: []const u8) ?u16 {
@@ -2219,6 +2228,15 @@ test "simple translations reject trailing top-level markup" {
     try std.testing.expect(isSingleOuterTemplate("{{t|fr|{{l|fr|chat}}}}"));
     try std.testing.expect(!isSingleOuterTemplate("{{t|fr|chat}} {{qualifier|common noun}}"));
     try std.testing.expect(!isSingleOuterTemplate("{{t|fr|chat}} tail"));
+}
+
+test "translation record labels preserve ownership" {
+    var borrowed = TranslationRecord{ .kind = .mapping, .label = "French" };
+    borrowed.deinit(std.testing.allocator);
+
+    const raw_label = try std.testing.allocator.dupe(u8, "raw label");
+    var owned = TranslationRecord{ .kind = .mapping, .label = raw_label, .label_owned = true };
+    owned.deinit(std.testing.allocator);
 }
 
 test "tiered refs round trip inline and extended values" {
