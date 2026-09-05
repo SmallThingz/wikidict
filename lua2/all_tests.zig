@@ -34,5 +34,6 @@ test {
     _ = @import("page_store_index.zig");
     _ = @import("replay_check.zig");
     _ = @import("runtime_probe.zig");
+    _ = @import("module_extract.zig");
     _ = @import("template_extract.zig");
 }
