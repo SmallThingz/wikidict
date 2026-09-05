@@ -494,13 +494,12 @@ fn decodeLineStreamAlloc(allocator: std.mem.Allocator, payload: []const u8) (std
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
+    try out.ensureTotalCapacity(allocator, payload.len);
 
     var first = true;
     while (cursor < payload.len) {
         if (!first) try out.append(allocator, '\n');
-        const line = try decodeEncodedLineAlloc(allocator, payload, &cursor, payload.len);
-        defer allocator.free(line);
-        try out.appendSlice(allocator, line);
+        try appendDecodedLine(&out, allocator, payload, &cursor, payload.len);
         first = false;
     }
 
@@ -1077,12 +1076,24 @@ fn appendEncodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, line
 }
 
 fn decodeEncodedLineAlloc(allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize, limit: usize) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    try appendDecodedLine(&out, allocator, bytes, cursor, limit);
+    return out.toOwnedSlice(allocator);
+}
+
+fn appendDecodedLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize, limit: usize) (std.mem.Allocator.Error || error{InvalidEncoding})!void {
     if (cursor.* >= limit) return error.InvalidEncoding;
     const code = bytes[cursor.*];
     cursor.* += 1;
 
-    if (code == line_blank) return allocator.dupe(u8, "");
-    if (code == line_raw) return readCompactTerminatedAlloc(allocator, bytes, cursor, limit);
+    if (code == line_blank) return;
+    if (code == line_raw) {
+        const text = try readCompactTerminatedAlloc(allocator, bytes, cursor, limit);
+        defer allocator.free(text);
+        try out.appendSlice(allocator, text);
+        return;
+    }
     if (code == line_template_list_prefixed or code == line_template_list_prefixed_en or code == line_template_list_prefixed_en_onearg) {
         if (cursor.* >= limit) return error.InvalidEncoding;
         const prefix_code = bytes[cursor.*];
@@ -1098,10 +1109,7 @@ fn decodeEncodedLineAlloc(allocator: std.mem.Allocator, bytes: []const u8, curso
         const include_english_arg = code == line_template_list_prefixed_en or code == line_template_list_prefixed_en_onearg;
         const include_english_onearg = code == line_template_list_prefixed_en_onearg;
 
-        var out: std.ArrayList(u8) = .empty;
-        defer out.deinit(allocator);
         try out.appendSlice(allocator, prefix);
-
         var item_index: usize = 0;
         while (item_index < item_count) : (item_index += 1) {
             if (item_index != 0) try out.appendSlice(allocator, separator);
@@ -1126,8 +1134,7 @@ fn decodeEncodedLineAlloc(allocator: std.mem.Allocator, bytes: []const u8, curso
             }
             try out.appendSlice(allocator, "}}");
         }
-
-        return out.toOwnedSlice(allocator);
+        return;
     }
 
     if (code == line_template_full or code == line_template_prefixed or code == line_template_full_en or code == line_template_prefixed_en or code == line_template_full_en_onearg or code == line_template_prefixed_en_onearg) {
@@ -1147,12 +1154,9 @@ fn decodeEncodedLineAlloc(allocator: std.mem.Allocator, bytes: []const u8, curso
         else
             format.readVarUInt(bytes, cursor, limit) catch return error.InvalidEncoding;
 
-        var out: std.ArrayList(u8) = .empty;
-        defer out.deinit(allocator);
         try out.appendSlice(allocator, prefix);
         try out.appendSlice(allocator, "{{");
         try out.appendSlice(allocator, template_name);
-
         if (include_english_arg) try out.appendSlice(allocator, "|en");
 
         var arg_index: usize = 0;
@@ -1164,18 +1168,14 @@ fn decodeEncodedLineAlloc(allocator: std.mem.Allocator, bytes: []const u8, curso
         }
 
         try out.appendSlice(allocator, "}}");
-        return out.toOwnedSlice(allocator);
+        return;
     }
 
     const prefix = specialLinePrefixForCode(code) orelse prefixForCode(code) orelse return error.InvalidEncoding;
     const rest = try readCompactTerminatedAlloc(allocator, bytes, cursor, limit);
     defer allocator.free(rest);
-
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
     try out.appendSlice(allocator, prefix);
     try out.appendSlice(allocator, rest);
-    return out.toOwnedSlice(allocator);
 }
 
 fn appendHeadingLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, level: u8, title: []const u8) !void {
