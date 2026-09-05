@@ -85,6 +85,15 @@ zig build structure -- \
 
 The structure analyzer runs in `ReleaseFast` by default and writes a compact binary report. The report persists the source-page dependencies and the exact corpus-derived tables/fingerprint used to synthesize `generated/structure_tables.zig`. Passing `--output -` prints summary counters instead of writing the report.
 
+Extract Scribunto modules and template pages for the Lua/MediaWiki runtime:
+
+```bash
+zig build -Doptimize=ReleaseFast extract-modules -- data/wiktionary.xml data/wiktionary-lua
+zig build -Doptimize=ReleaseFast extract-templates -- data/wiktionary.xml data/wiktionary-lua
+```
+
+The module extractor writes `modules/<page_id>.lua` plus `manifest.jsonl`; the template extractor writes `templates/<page_id>.wiki` plus `template-manifest.tsv`. Both mmap the XML dump and parse only matching namespace pages.
+
 Run the complete test gate:
 
 ```bash

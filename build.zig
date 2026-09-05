@@ -253,6 +253,14 @@ pub fn build(b: *std.Build) void {
         .{ .name = "shared_structure_report", .module = shared_structure_report_mod },
         .{ .name = "tool_paths", .module = verifier_tool_paths_mod },
     });
+    const module_extract_exe = addCliExecutable(b, "dict-module-extract", b.path("lua2/module_extract.zig"), target, optimize, &.{
+        .{ .name = "zxml", .module = zxml_dep.module("zxml") },
+        .{ .name = "xml_decode", .module = shared_xml_decode_mod },
+    });
+    const template_extract_exe = addCliExecutable(b, "dict-template-extract", b.path("lua2/template_extract.zig"), target, optimize, &.{
+        .{ .name = "zxml", .module = zxml_dep.module("zxml") },
+        .{ .name = "xml_decode", .module = shared_xml_decode_mod },
+    });
     encoder_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
     decoder_tool_paths_options.addOption([]const u8, "encoder_bin_path", b.pathFromRoot("zig-out/bin/dict-encoder"));
     verifier_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
@@ -282,6 +290,12 @@ pub fn build(b: *std.Build) void {
 
     const verify_run = addRunArtifactCommand(b, verifier_exe, &.{}, b.args);
     addPublicRunStep(b, "verify", "Verify dictionary raw entries against the XML dump", verify_run, &.{ &decoder_install.step, &encoder_install.step, &structure_install.step });
+
+    const module_extract_run = addRunArtifactCommand(b, module_extract_exe, &.{}, b.args);
+    addPublicRunStep(b, "extract-modules", "Extract Scribunto modules from a Wiktionary XML dump", module_extract_run, &.{});
+
+    const template_extract_run = addRunArtifactCommand(b, template_extract_exe, &.{}, b.args);
+    addPublicRunStep(b, "extract-templates", "Extract template pages from a Wiktionary XML dump", template_extract_run, &.{});
 
     const test_runner = b.path("tools/test_runner.zig");
 
