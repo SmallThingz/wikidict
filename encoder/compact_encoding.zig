@@ -339,6 +339,25 @@ pub fn decodeAllocWithMappings(
     return out;
 }
 
+pub fn appendDecoded(out: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})!void {
+    return appendDecodedWithMappings(out, allocator, input, currentRuntimeMappings());
+}
+
+pub fn appendDecodedWithMappings(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    mappings: RuntimeMappings,
+) (std.mem.Allocator.Error || error{InvalidEncoding})!void {
+    const decoded_len = try decodedLenWithMappings(input, mappings);
+    const old_len = out.items.len;
+    const new_len = std.math.add(usize, old_len, decoded_len) catch return error.OutOfMemory;
+    try out.resize(allocator, new_len);
+    errdefer out.shrinkRetainingCapacity(old_len);
+    const written = try decodeIntoWithMappings(out.items[old_len..], input, mappings);
+    std.debug.assert(written == decoded_len);
+}
+
 fn decodedLen(input: []const u8) error{InvalidEncoding}!usize {
     return decodedLenWithMappings(input, currentRuntimeMappings());
 }
@@ -884,6 +903,22 @@ fn fingerprintUpdateString(hasher: *std.hash.Wyhash, value: []const u8) void {
     std.mem.writeInt(u64, &len_buf, value.len, .little);
     hasher.update(&len_buf);
     hasher.update(value);
+}
+
+test "appendDecoded extends an existing output buffer" {
+    const sample = "# [[light]] {{en-noun|s}}";
+    const encoded = try encodeAlloc(std.testing.allocator, sample);
+    defer std.testing.allocator.free(encoded);
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try out.appendSlice(std.testing.allocator, "prefix:");
+    try appendDecoded(&out, std.testing.allocator, encoded);
+    try std.testing.expectEqualStrings("prefix:# [[light]] {{en-noun|s}}", out.items);
+
+    const before_len = out.items.len;
+    try std.testing.expectError(error.InvalidEncoding, appendDecoded(&out, std.testing.allocator, &.{escape_byte}));
+    try std.testing.expectEqual(before_len, out.items.len);
 }
 
 test "compact encoding round trips" {
