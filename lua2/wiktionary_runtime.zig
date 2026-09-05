@@ -931,10 +931,48 @@ pub const Runtime = struct {
         if (value == .nil) {
             if (self.package_loaded.?.rawGet(.{ .string = slot.title })) |loaded| value = loaded else value = .{ .boolean = true };
         }
+        if (value == .table and std.mem.eql(u8, slot.title, "Module:Scribunto"))
+            try self.installScribuntoFastPaths(value.table);
+        if (std.mem.eql(u8, slot.title, "Module:memoize"))
+            value = try self.installMemoizeFastPath(value);
+        if (std.mem.eql(u8, slot.title, "Module:string/char"))
+            value = try self.installStringCharFastPath(value);
+        if (std.mem.eql(u8, slot.title, "Module:table/shallowCopy"))
+            value = try self.installShallowCopyFastPath(value);
         try self.package_loaded.?.rawSet(self.allocator, .{ .string = slot.title }, value);
         state.value = value;
         state.state = .loaded;
         return value;
+    }
+
+    fn installScribuntoFastPath(self: *Runtime, exports: *rt.Table, name: []const u8, call: rt.NativeCall) !void {
+        const original = exports.rawGet(.{ .string = name }) orelse return;
+        const ctx = try self.allocator.create(HotLuaFallbackCtx);
+        ctx.* = .{ .original = original };
+        try exports.rawSet(self.allocator, .{ .string = name }, try rt.newNative(self.allocator, ctx, call));
+    }
+
+    fn installScribuntoFastPaths(self: *Runtime, exports: *rt.Table) !void {
+        try self.installScribuntoFastPath(exports, "php_trim", scribuntoPhpTrimFastCall);
+        try self.installScribuntoFastPath(exports, "scribunto_parameter_key", scribuntoParameterKeyFastCall);
+    }
+
+    fn installShallowCopyFastPath(self: *Runtime, original: Value) !Value {
+        const ctx = try self.allocator.create(HotLuaFallbackCtx);
+        ctx.* = .{ .original = original };
+        return rt.newNative(self.allocator, ctx, shallowCopyFastCall);
+    }
+
+    fn installStringCharFastPath(self: *Runtime, original: Value) !Value {
+        const ctx = try self.allocator.create(HotLuaFallbackCtx);
+        ctx.* = .{ .original = original };
+        return rt.newNative(self.allocator, ctx, stringCharFastCall);
+    }
+
+    fn installMemoizeFastPath(self: *Runtime, original: Value) !Value {
+        const ctx = try self.allocator.create(MemoizeFactoryCtx);
+        ctx.* = .{ .original = original };
+        return rt.newNative(self.allocator, ctx, memoizeFactoryFastCall);
     }
 
     pub fn requireByName(self: *Runtime, vm: *exec.Vm, raw_name: []const u8) !Value {
@@ -1069,6 +1107,192 @@ fn mainLoaderCall(ctx: ?*anyopaque, _: *anyopaque, args: []const Value, a: std.m
     const runtime: *Runtime = @ptrCast(@alignCast(ctx.?));
     const slot = try runtime.canonicalSlot(args[0].string) orelse return one(a, .nil);
     return one(a, try runtime.loaderFor(slot));
+}
+
+const MemoizeFactoryCtx = struct { original: Value };
+
+const SimpleMemoCtx = struct {
+    func: Value,
+    memo: *rt.Table,
+    nil_key: *rt.Table,
+    neg_zero_key: *rt.Table,
+    pos_nan_key: *rt.Table,
+    neg_nan_key: *rt.Table,
+    nil_output: *rt.Table,
+};
+
+fn memoSentinel(a: std.mem.Allocator) !*rt.Table {
+    return rt.newTable(a);
+}
+
+fn memoSimpleKey(ctx: *SimpleMemoCtx, value: Value) Value {
+    return switch (value) {
+        .nil => .{ .table = ctx.nil_key },
+        .number => |n| blk: {
+            const bits: u64 = @bitCast(n);
+            if (std.math.isNan(n))
+                break :blk .{ .table = if ((bits >> 63) == 0) ctx.pos_nan_key else ctx.neg_nan_key };
+            if (n == 0 and (bits >> 63) != 0)
+                break :blk .{ .table = ctx.neg_zero_key };
+            break :blk value;
+        },
+        else => value,
+    };
+}
+
+fn simpleMemoCall(ctx_raw: ?*anyopaque, raw_vm: *anyopaque, args: []const Value, a: std.mem.Allocator) ![]const Value {
+    const ctx: *SimpleMemoCtx = @ptrCast(@alignCast(ctx_raw.?));
+    const key = memoSimpleKey(ctx, if (args.len == 0) .nil else args[0]);
+    if (ctx.memo.rawGet(key)) |cached| {
+        if (cached == .table and cached.table == ctx.nil_output) return one(a, .nil);
+        return one(a, cached);
+    }
+    const vm: *exec.Vm = @ptrCast(@alignCast(raw_vm));
+    const results = try vm.callValue(ctx.func, args);
+    defer exec.Vm.freeResults(results);
+    const output: Value = if (results.len == 0) .nil else results[0];
+    try ctx.memo.rawSet(a, key, if (output == .nil) .{ .table = ctx.nil_output } else output);
+    return one(a, output);
+}
+
+fn memoizeFactoryFastCall(ctx_raw: ?*anyopaque, raw_vm: *anyopaque, args: []const Value, a: std.mem.Allocator) ![]const Value {
+    if (args.len < 2 or !Value.truthy(args[1]))
+        return callHotFallback(ctx_raw, raw_vm, args);
+    const ctx = try a.create(SimpleMemoCtx);
+    ctx.* = .{
+        .func = if (args.len == 0) .nil else args[0],
+        .memo = try rt.newTable(a),
+        .nil_key = try memoSentinel(a),
+        .neg_zero_key = try memoSentinel(a),
+        .pos_nan_key = try memoSentinel(a),
+        .neg_nan_key = try memoSentinel(a),
+        .nil_output = try memoSentinel(a),
+    };
+    return one(a, try rt.newNative(a, ctx, simpleMemoCall));
+}
+
+const HotLuaFallbackCtx = struct { original: Value };
+
+fn callHotFallback(ctx_raw: ?*anyopaque, raw_vm: *anyopaque, args: []const Value) ![]const Value {
+    const ctx: *HotLuaFallbackCtx = @ptrCast(@alignCast(ctx_raw.?));
+    const vm: *exec.Vm = @ptrCast(@alignCast(raw_vm));
+    return vm.callValue(ctx.original, args);
+}
+
+fn isPhpTrimByte(c: u8) bool {
+    return c == 0 or c == ' ' or c == '\t' or c == '\n' or c == 0x0b or c == '\r';
+}
+
+fn phpTrimSlice(text: []const u8) []const u8 {
+    var first: usize = 0;
+    while (first < text.len and isPhpTrimByte(text[first])) : (first += 1) {}
+    var last = text.len;
+    while (last > first and isPhpTrimByte(text[last - 1])) : (last -= 1) {}
+    return text[first..last];
+}
+
+fn shallowCopyFastCall(ctx_raw: ?*anyopaque, raw_vm: *anyopaque, args: []const Value, a: std.mem.Allocator) ![]const Value {
+    if (args.len == 0) return one(a, .nil);
+    if (args[0] != .table) return one(a, args[0]);
+    const source = args[0].table;
+    const raw = args.len > 1 and Value.truthy(args[1]);
+    if (!raw and source.metatable != null) return callHotFallback(ctx_raw, raw_vm, args);
+    const copy = try rt.newTable(a);
+    var it = source.map.iterator();
+    while (it.next()) |entry|
+        try copy.rawSet(a, entry.key_ptr.*, entry.value_ptr.*);
+    return one(a, .{ .table = copy });
+}
+
+fn utf8EncodedLen(cp: u32) usize {
+    return if (cp < 0x80) 1 else if (cp < 0x800) 2 else if (cp < 0x10000) 3 else 4;
+}
+
+fn encodeRawCodepoint(out: []u8, cp: u32) usize {
+    if (cp < 0x80) {
+        out[0] = @intCast(cp);
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = @intCast(0xC0 + (cp >> 6));
+        out[1] = @intCast(0x80 + (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = @intCast(0xE0 + (cp >> 12));
+        out[1] = @intCast(0x80 + ((cp >> 6) & 0x3F));
+        out[2] = @intCast(0x80 + (cp & 0x3F));
+        return 3;
+    }
+    out[0] = @intCast(0xF0 + (cp >> 18));
+    out[1] = @intCast(0x80 + ((cp >> 12) & 0x3F));
+    out[2] = @intCast(0x80 + ((cp >> 6) & 0x3F));
+    out[3] = @intCast(0x80 + (cp & 0x3F));
+    return 4;
+}
+
+fn stringCharFastCall(ctx_raw: ?*anyopaque, raw_vm: *anyopaque, args: []const Value, a: std.mem.Allocator) ![]const Value {
+    if (args.len == 0) return &.{};
+    var bytes: usize = 0;
+    for (args) |arg| {
+        if (arg != .number) return callHotFallback(ctx_raw, raw_vm, args);
+        const n = arg.number;
+        if (!std.math.isFinite(n) or n < 0 or n > 0x10FFFF or @floor(n) != n)
+            return callHotFallback(ctx_raw, raw_vm, args);
+        bytes += utf8EncodedLen(@intFromFloat(n));
+    }
+    const out = try a.alloc(u8, bytes);
+    var pos: usize = 0;
+    for (args) |arg| {
+        const cp: u32 = @intFromFloat(arg.number);
+        pos += encodeRawCodepoint(out[pos..], cp);
+    }
+    return one(a, .{ .string = out });
+}
+
+fn scribuntoPhpTrimFastCall(ctx_raw: ?*anyopaque, raw_vm: *anyopaque, args: []const Value, a: std.mem.Allocator) ![]const Value {
+    if (args.len != 0 and args[0] == .string)
+        return one(a, .{ .string = phpTrimSlice(args[0].string) });
+    return callHotFallback(ctx_raw, raw_vm, args);
+}
+
+fn smallScribuntoInteger(text: []const u8) ?f64 {
+    if (std.mem.eql(u8, text, "0")) return 0;
+    var pos: usize = 0;
+    var negative = false;
+    if (text.len != 0 and text[0] == '-') {
+        negative = true;
+        pos = 1;
+    }
+    if (pos >= text.len or text[pos] < '1' or text[pos] > '9') return null;
+    var n: u64 = 0;
+    while (pos < text.len) : (pos += 1) {
+        const c = text[pos];
+        if (c < '0' or c > '9') return null;
+        const digit: u64 = c - '0';
+        if (n > 900719925474099 or (n == 900719925474099 and digit > 2)) return null;
+        n = n * 10 + digit;
+    }
+    const v: f64 = @floatFromInt(n);
+    return if (negative) -v else v;
+}
+
+fn scribuntoParameterKeyFastCall(ctx_raw: ?*anyopaque, raw_vm: *anyopaque, args: []const Value, a: std.mem.Allocator) ![]const Value {
+    if (args.len == 0) return one(a, .nil);
+    switch (args[0]) {
+        .string => |raw| {
+            const no_trim = args.len > 1 and Value.truthy(args[1]);
+            const text = if (no_trim) raw else phpTrimSlice(raw);
+            if (smallScribuntoInteger(text)) |n| return one(a, .{ .number = n });
+            return one(a, .{ .string = text });
+        },
+        .number => |n| {
+            if (std.math.isFinite(n) and @floor(n) == n and n >= -9007199254740992.0 and n <= 9007199254740992.0)
+                return one(a, .{ .number = n });
+            return callHotFallback(ctx_raw, raw_vm, args);
+        },
+        else => return one(a, .nil),
+    }
 }
 
 fn loadDataCall(ctx: ?*anyopaque, _: *anyopaque, args: []const Value, a: std.mem.Allocator) ![]const Value {
@@ -3325,4 +3549,199 @@ test "mw.uri encode and decode follow Scribunto modes" {
     defer exec.Vm.freeResults(decoded);
     defer a.free(decoded[0].string);
     try std.testing.expectEqualStrings("a b/c_", decoded[0].string);
+}
+
+test "native simple memoizer preserves special key and nil-output semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var vm = try exec.Vm.init(a);
+
+    const TargetCtx = struct { calls: usize = 0 };
+    var target_ctx = TargetCtx{};
+    const target = try rt.newNative(a, &target_ctx, struct {
+        fn call(raw: ?*anyopaque, _: *anyopaque, args: []const Value, alloc: std.mem.Allocator) ![]const Value {
+            const ctx: *TargetCtx = @ptrCast(@alignCast(raw.?));
+            ctx.calls += 1;
+            if (args.len != 0 and args[0] == .string and std.mem.eql(u8, args[0].string, "nil"))
+                return one(alloc, .nil);
+            if (args.len > 1) return one(alloc, args[1]);
+            return one(alloc, .{ .number = @floatFromInt(ctx.calls) });
+        }
+    }.call);
+    var factory_ctx = MemoizeFactoryCtx{ .original = .nil };
+    const factory = try rt.newNative(a, &factory_ctx, memoizeFactoryFastCall);
+    const made = try vm.callValue(factory, &.{ target, .{ .boolean = true } });
+    defer exec.Vm.freeResults(made);
+    const memo = made[0];
+
+    const Case = struct {
+        fn call(v: *exec.Vm, f: Value, args: []const Value) !Value {
+            const out = try v.callValue(f, args);
+            defer exec.Vm.freeResults(out);
+            return if (out.len == 0) .nil else out[0];
+        }
+    };
+
+    try std.testing.expectEqual(@as(f64, 1), (try Case.call(&vm, memo, &.{.nil})).number);
+    try std.testing.expectEqual(@as(f64, 1), (try Case.call(&vm, memo, &.{.nil})).number);
+    try std.testing.expectEqual(@as(usize, 1), target_ctx.calls);
+
+    const pos_zero: Value = .{ .number = 0.0 };
+    const neg_zero: Value = .{ .number = @bitCast(@as(u64, 0x8000000000000000)) };
+    try std.testing.expectEqual(@as(f64, 2), (try Case.call(&vm, memo, &.{pos_zero})).number);
+    try std.testing.expectEqual(@as(f64, 3), (try Case.call(&vm, memo, &.{neg_zero})).number);
+    try std.testing.expectEqual(@as(f64, 2), (try Case.call(&vm, memo, &.{pos_zero})).number);
+    try std.testing.expectEqual(@as(f64, 3), (try Case.call(&vm, memo, &.{neg_zero})).number);
+
+    const pos_nan1: Value = .{ .number = @bitCast(@as(u64, 0x7ff8000000000001)) };
+    const pos_nan2: Value = .{ .number = @bitCast(@as(u64, 0x7ff8000000000011)) };
+    const neg_nan: Value = .{ .number = @bitCast(@as(u64, 0xfff8000000000001)) };
+    try std.testing.expectEqual(@as(f64, 4), (try Case.call(&vm, memo, &.{pos_nan1})).number);
+    try std.testing.expectEqual(@as(f64, 4), (try Case.call(&vm, memo, &.{pos_nan2})).number);
+    try std.testing.expectEqual(@as(f64, 5), (try Case.call(&vm, memo, &.{neg_nan})).number);
+
+    const t1: Value = .{ .table = try rt.newTable(a) };
+    const t2: Value = .{ .table = try rt.newTable(a) };
+    try std.testing.expectEqual(@as(f64, 6), (try Case.call(&vm, memo, &.{t1})).number);
+    try std.testing.expectEqual(@as(f64, 6), (try Case.call(&vm, memo, &.{t1})).number);
+    try std.testing.expectEqual(@as(f64, 7), (try Case.call(&vm, memo, &.{t2})).number);
+
+    try std.testing.expect((try Case.call(&vm, memo, &.{.{ .string = "nil" }})) == .nil);
+    try std.testing.expect((try Case.call(&vm, memo, &.{.{ .string = "nil" }})) == .nil);
+    try std.testing.expectEqual(@as(usize, 8), target_ctx.calls);
+
+    const extra_a = try Case.call(&vm, memo, &.{ .{ .string = "extra" }, .{ .string = "a" } });
+    const extra_b = try Case.call(&vm, memo, &.{ .{ .string = "extra" }, .{ .string = "b" } });
+    try std.testing.expect(extra_a == .string and std.mem.eql(u8, extra_a.string, "a"));
+    try std.testing.expect(extra_b == .string and std.mem.eql(u8, extra_b.string, "a"));
+    try std.testing.expectEqual(@as(usize, 9), target_ctx.calls);
+}
+
+test "native string char fast path encodes raw Unicode codepoints" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var vm = try exec.Vm.init(a);
+    var fallback = HotLuaFallbackCtx{ .original = .nil };
+
+    const none = try stringCharFastCall(&fallback, &vm, &.{}, a);
+    try std.testing.expectEqual(@as(usize, 0), none.len);
+
+    const out = try stringCharFastCall(&fallback, &vm, &.{
+        .{ .number = 0x00 },
+        .{ .number = 0x7F },
+        .{ .number = 0x80 },
+        .{ .number = 0x7FF },
+        .{ .number = 0x800 },
+        .{ .number = 0xD800 },
+        .{ .number = 0x10000 },
+        .{ .number = 0x10FFFF },
+    }, a);
+    defer exec.Vm.freeResults(out);
+    try std.testing.expectEqual(@as(usize, 1), out.len);
+    try std.testing.expectEqualSlices(u8, &.{
+        0x00, 0x7F,
+        0xC2, 0x80,
+        0xDF, 0xBF,
+        0xE0, 0xA0,
+        0x80, 0xED,
+        0xA0, 0x80,
+        0xF0, 0x90,
+        0x80, 0x80,
+        0xF4, 0x8F,
+        0xBF, 0xBF,
+    }, out[0].string);
+}
+
+test "native shallow copy preserves raw copy and metatable fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var vm = try exec.Vm.init(a);
+
+    const source = try rt.newTable(a);
+    try source.rawSet(a, .{ .string = "x" }, .{ .number = 7 });
+    const fallback_marker = try rt.newTable(a);
+    const FallbackCtx = struct { calls: usize = 0, marker: *rt.Table };
+    var fallback_ctx = FallbackCtx{ .marker = fallback_marker };
+    const fallback = try rt.newNative(a, &fallback_ctx, struct {
+        fn call(raw: ?*anyopaque, _: *anyopaque, _: []const Value, alloc: std.mem.Allocator) ![]const Value {
+            const ctx: *FallbackCtx = @ptrCast(@alignCast(raw.?));
+            ctx.calls += 1;
+            return one(alloc, .{ .table = ctx.marker });
+        }
+    }.call);
+    var ctx = HotLuaFallbackCtx{ .original = fallback };
+
+    const plain = try shallowCopyFastCall(&ctx, &vm, &.{.{ .table = source }}, a);
+    defer exec.Vm.freeResults(plain);
+    try std.testing.expect(plain[0] == .table and plain[0].table != source);
+    try std.testing.expectEqual(@as(f64, 7), plain[0].table.rawGet(.{ .string = "x" }).?.number);
+    try std.testing.expectEqual(@as(usize, 0), fallback_ctx.calls);
+
+    const mt = try rt.newTable(a);
+    source.metatable = mt;
+    const delegated = try shallowCopyFastCall(&ctx, &vm, &.{.{ .table = source }}, a);
+    defer exec.Vm.freeResults(delegated);
+    try std.testing.expect(delegated[0] == .table and delegated[0].table == fallback_marker);
+    try std.testing.expectEqual(@as(usize, 1), fallback_ctx.calls);
+
+    const raw_copy = try shallowCopyFastCall(&ctx, &vm, &.{ .{ .table = source }, .{ .boolean = true } }, a);
+    defer exec.Vm.freeResults(raw_copy);
+    try std.testing.expect(raw_copy[0] == .table and raw_copy[0].table != source);
+    try std.testing.expectEqual(@as(f64, 7), raw_copy[0].table.rawGet(.{ .string = "x" }).?.number);
+    try std.testing.expectEqual(@as(usize, 1), fallback_ctx.calls);
+
+    const scalar = try shallowCopyFastCall(&ctx, &vm, &.{.{ .string = "same" }}, a);
+    defer exec.Vm.freeResults(scalar);
+    try std.testing.expect(scalar[0] == .string and std.mem.eql(u8, scalar[0].string, "same"));
+}
+
+test "native Scribunto trim and parameter key match module edge cases" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var vm = try exec.Vm.init(a);
+
+    const FallbackCtx = struct { calls: usize = 0 };
+    var fallback_ctx = FallbackCtx{};
+    const fallback = try rt.newNative(a, &fallback_ctx, struct {
+        fn call(raw: ?*anyopaque, _: *anyopaque, _: []const Value, alloc: std.mem.Allocator) ![]const Value {
+            const ctx: *FallbackCtx = @ptrCast(@alignCast(raw.?));
+            ctx.calls += 1;
+            return one(alloc, .{ .string = "fallback" });
+        }
+    }.call);
+    var ctx = HotLuaFallbackCtx{ .original = fallback };
+
+    const trimmed = try scribuntoPhpTrimFastCall(&ctx, &vm, &.{.{ .string = " \t\n\x0b\r\x00 hello \x00\r" }}, a);
+    defer exec.Vm.freeResults(trimmed);
+    try std.testing.expectEqualStrings("hello", trimmed[0].string);
+    const empty = try scribuntoPhpTrimFastCall(&ctx, &vm, &.{.{ .string = " \t\n\x0b\r\x00" }}, a);
+    defer exec.Vm.freeResults(empty);
+    try std.testing.expectEqualStrings("", empty[0].string);
+
+    const Case = struct {
+        fn call(v: *exec.Vm, c: *HotLuaFallbackCtx, alloc: std.mem.Allocator, args: []const Value) !Value {
+            const out = try scribuntoParameterKeyFastCall(c, v, args, alloc);
+            defer exec.Vm.freeResults(out);
+            return out[0];
+        }
+    };
+    try std.testing.expectEqual(@as(f64, 1), (try Case.call(&vm, &ctx, a, &.{.{ .string = " 1 " }})).number);
+    const raw = try Case.call(&vm, &ctx, a, &.{ .{ .string = " 1 " }, .{ .boolean = true } });
+    try std.testing.expect(raw == .string and std.mem.eql(u8, raw.string, " 1 "));
+    try std.testing.expectEqual(@as(f64, 0), (try Case.call(&vm, &ctx, a, &.{.{ .string = "0" }})).number);
+    const neg_zero = try Case.call(&vm, &ctx, a, &.{.{ .string = "-0" }});
+    try std.testing.expect(neg_zero == .string and std.mem.eql(u8, neg_zero.string, "-0"));
+    const leading_zero = try Case.call(&vm, &ctx, a, &.{.{ .string = "01" }});
+    try std.testing.expect(leading_zero == .string and std.mem.eql(u8, leading_zero.string, "01"));
+    try std.testing.expectEqual(@as(f64, 9007199254740992.0), (try Case.call(&vm, &ctx, a, &.{.{ .string = "9007199254740992" }})).number);
+    try std.testing.expectEqual(@as(f64, -9007199254740992.0), (try Case.call(&vm, &ctx, a, &.{.{ .string = "-9007199254740992" }})).number);
+    const too_large = try Case.call(&vm, &ctx, a, &.{.{ .string = "9007199254740993" }});
+    try std.testing.expect(too_large == .string and std.mem.eql(u8, too_large.string, "9007199254740993"));
+    const delegated = try Case.call(&vm, &ctx, a, &.{.{ .number = 1.5 }});
+    try std.testing.expect(delegated == .string and std.mem.eql(u8, delegated.string, "fallback"));
+    try std.testing.expectEqual(@as(usize, 1), fallback_ctx.calls);
 }
