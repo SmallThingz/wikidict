@@ -22,10 +22,73 @@ pub const BlockKind = enum {
     term,
 };
 
+pub const InlineKind = enum {
+    text,
+    link,
+};
+
+pub const InlineSpan = struct {
+    kind: InlineKind,
+    text: []const u8,
+    target: []const u8 = "",
+    bold: bool = false,
+    italic: bool = false,
+};
+
 pub const DecodedBlock = struct {
     kind: BlockKind,
     depth: u8,
     text: []const u8,
+
+    pub fn inlineIterator(self: DecodedBlock) InlineIterator {
+        return .{ .input = self.text };
+    }
+};
+
+pub const InlineIterator = struct {
+    input: []const u8,
+    cursor: usize = 0,
+    bold: bool = false,
+    italic: bool = false,
+
+    pub fn next(self: *InlineIterator) ?InlineSpan {
+        while (self.cursor < self.input.len) {
+            if (parseInlineLinkAt(self.input, self.cursor)) |link| {
+                self.cursor = link.end;
+                return .{
+                    .kind = .link,
+                    .text = link.label,
+                    .target = link.target,
+                    .bold = self.bold,
+                    .italic = self.italic,
+                };
+            }
+            if (emphasisMarkerAt(self.input, self.cursor, self.bold, self.italic)) |marker| {
+                if (marker.bold) self.bold = !self.bold;
+                if (marker.italic) self.italic = !self.italic;
+                self.cursor += marker.len;
+                continue;
+            }
+
+            const start = self.cursor;
+            while (self.cursor < self.input.len) : (self.cursor += 1) {
+                if (parseInlineLinkAt(self.input, self.cursor) != null or
+                    emphasisMarkerAt(self.input, self.cursor, self.bold, self.italic) != null)
+                {
+                    break;
+                }
+            }
+            if (self.cursor != start) {
+                return .{
+                    .kind = .text,
+                    .text = self.input[start..self.cursor],
+                    .bold = self.bold,
+                    .italic = self.italic,
+                };
+            }
+        }
+        return null;
+    }
 };
 
 pub const BlockIterator = struct {
@@ -444,6 +507,68 @@ fn blockWithPrefix(kind: BlockKind, depth: usize, line: []const u8, text_start: 
         .depth = @intCast(@min(depth, std.math.maxInt(u8))),
         .text = line[text_start..],
     };
+}
+
+const ParsedInlineLink = struct {
+    end: usize,
+    target: []const u8,
+    label: []const u8,
+};
+
+const EmphasisMarker = struct {
+    len: usize,
+    bold: bool,
+    italic: bool,
+};
+
+fn parseInlineLinkAt(input: []const u8, start: usize) ?ParsedInlineLink {
+    if (start + 4 > input.len or !std.mem.eql(u8, input[start .. start + 2], "[[")) return null;
+
+    var close = start + 2;
+    while (close + 1 < input.len) : (close += 1) {
+        if (input[close] != ']' or input[close + 1] != ']') continue;
+
+        const inside = input[start + 2 .. close];
+        if (inside.len == 0) return null;
+        const pipe = std.mem.indexOfScalar(u8, inside, '|');
+        const raw_target = if (pipe) |index| inside[0..index] else inside;
+        const target = std.mem.trim(u8, raw_target, " \t");
+        if (target.len == 0) return null;
+        const raw_label = if (pipe) |index| inside[index + 1 ..] else target;
+        const label = if (raw_label.len == 0) target else raw_label;
+        return .{ .end = close + 2, .target = target, .label = label };
+    }
+    return null;
+}
+
+fn emphasisMarkerAt(input: []const u8, start: usize, bold: bool, italic: bool) ?EmphasisMarker {
+    const run = quoteRunLength(input, start);
+    const marker: EmphasisMarker = switch (run) {
+        2 => .{ .len = 2, .bold = false, .italic = true },
+        3 => .{ .len = 3, .bold = true, .italic = false },
+        5 => .{ .len = 5, .bold = true, .italic = true },
+        else => return null,
+    };
+    const closes_active = (!marker.bold or bold) and (!marker.italic or italic);
+    if (!closes_active and !hasMatchingEmphasis(input, start + marker.len, marker.len)) return null;
+    return marker;
+}
+
+fn quoteRunLength(input: []const u8, start: usize) usize {
+    if (start >= input.len or input[start] != '\'') return 0;
+    var end = start;
+    while (end < input.len and input[end] == '\'') : (end += 1) {}
+    return end - start;
+}
+
+fn hasMatchingEmphasis(input: []const u8, start: usize, marker_len: usize) bool {
+    var cursor = start;
+    while (cursor < input.len) {
+        const run = quoteRunLength(input, cursor);
+        if (run == marker_len) return true;
+        cursor += if (run == 0) 1 else run;
+    }
+    return false;
 }
 
 pub fn decodeEnglishAlloc(allocator: std.mem.Allocator, encoded: []const u8) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
@@ -2323,6 +2448,65 @@ test "render blocks classify wiktionary line structure" {
     defer std.testing.allocator.free(blocks);
     try std.testing.expectEqual(expected.len, blocks.len);
     try std.testing.expectEqual(BlockKind.blank, blocks[blocks.len - 1].kind);
+}
+
+test "inline iterator exposes links and emphasis without allocations" {
+    const block = DecodedBlock{
+        .kind = .definition,
+        .depth = 1,
+        .text = "plain ''italic'' '''bold''' '''''both''''' [[light]] and '''[[cat|cats]]''' end",
+    };
+    var iterator = block.inlineIterator();
+
+    const plain = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.text, plain.kind);
+    try std.testing.expectEqualStrings("plain ", plain.text);
+    try std.testing.expect(!plain.bold and !plain.italic);
+
+    const italic = iterator.next().?;
+    try std.testing.expectEqualStrings("italic", italic.text);
+    try std.testing.expect(!italic.bold and italic.italic);
+    const spacer1 = iterator.next().?;
+    try std.testing.expectEqualStrings(" ", spacer1.text);
+
+    const bold = iterator.next().?;
+    try std.testing.expectEqualStrings("bold", bold.text);
+    try std.testing.expect(bold.bold and !bold.italic);
+    _ = iterator.next().?;
+
+    const both = iterator.next().?;
+    try std.testing.expectEqualStrings("both", both.text);
+    try std.testing.expect(both.bold and both.italic);
+    _ = iterator.next().?;
+
+    const light = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.link, light.kind);
+    try std.testing.expectEqualStrings("light", light.target);
+    try std.testing.expectEqualStrings("light", light.text);
+    _ = iterator.next().?;
+
+    const cats = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.link, cats.kind);
+    try std.testing.expectEqualStrings("cat", cats.target);
+    try std.testing.expectEqualStrings("cats", cats.text);
+    try std.testing.expect(cats.bold and !cats.italic);
+
+    const tail = iterator.next().?;
+    try std.testing.expectEqualStrings(" end", tail.text);
+    try std.testing.expect(iterator.next() == null);
+}
+
+test "inline iterator preserves malformed markup as text" {
+    const block = DecodedBlock{
+        .kind = .paragraph,
+        .depth = 0,
+        .text = "broken ''italic and [[open",
+    };
+    var iterator = block.inlineIterator();
+    const span = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.text, span.kind);
+    try std.testing.expectEqualStrings(block.text, span.text);
+    try std.testing.expect(iterator.next() == null);
 }
 
 test "section document encoding is smaller on a representative entry" {
