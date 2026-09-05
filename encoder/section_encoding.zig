@@ -1854,7 +1854,7 @@ fn parseTranslationTemplate(allocator: std.mem.Allocator, body: []const u8) ?Par
 const simple_translation_template_variant_count: u8 = 7;
 
 fn parseSimpleTranslationTemplate(allocator: std.mem.Allocator, value: []const u8) ?SimpleTranslationTemplate {
-    if (value.len < 4 or !std.mem.startsWith(u8, value, "{{") or !std.mem.endsWith(u8, value, "}}")) return null;
+    if (!isSingleOuterTemplate(value)) return null;
     const parsed = parseTranslationTemplate(allocator, value[2 .. value.len - 2]) orelse return null;
     const lang_code = parsed.target_language_code orelse return null;
     if (parsed.args.len != 2) return null;
@@ -1863,6 +1863,12 @@ fn parseSimpleTranslationTemplate(allocator: std.mem.Allocator, value: []const u
         .lang_code = lang_code,
         .term = parsed.args[1],
     };
+}
+
+fn isSingleOuterTemplate(value: []const u8) bool {
+    if (value.len < 4 or !std.mem.startsWith(u8, value, "{{") or !std.mem.endsWith(u8, value, "}}")) return false;
+    const close = findBalanced(value, 0, "{{", "}}") orelse return false;
+    return close + 2 == value.len;
 }
 
 fn parseSimpleTranslationTemplateList(allocator: std.mem.Allocator, value: []const u8) ?SimpleTranslationTemplateList {
@@ -2225,6 +2231,13 @@ fn blockColumnTemplateSampleAlloc(allocator: std.mem.Allocator, name: []const u8
         \\}}}}
         \\
     , .{name});
+}
+
+test "simple translations reject trailing top-level markup" {
+    try std.testing.expect(isSingleOuterTemplate("{{t|fr|chat}}"));
+    try std.testing.expect(isSingleOuterTemplate("{{t|fr|{{l|fr|chat}}}}"));
+    try std.testing.expect(!isSingleOuterTemplate("{{t|fr|chat}} {{qualifier|common noun}}"));
+    try std.testing.expect(!isSingleOuterTemplate("{{t|fr|chat}} tail"));
 }
 
 test "tiered refs round trip inline and extended values" {
