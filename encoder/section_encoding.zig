@@ -24,6 +24,7 @@ pub const BlockKind = enum {
 
 pub const InlineKind = enum {
     text,
+    template,
     link,
     external_link,
     line_break,
@@ -56,6 +57,16 @@ pub const InlineIterator = struct {
 
     pub fn next(self: *InlineIterator) ?InlineSpan {
         while (self.cursor < self.input.len) {
+            if (parseTemplateAt(self.input, self.cursor)) |template| {
+                self.cursor = template.end;
+                return .{
+                    .kind = .template,
+                    .text = template.body,
+                    .target = template.name,
+                    .bold = self.bold,
+                    .italic = self.italic,
+                };
+            }
             if (parseInlineLinkAt(self.input, self.cursor)) |link| {
                 self.cursor = link.end;
                 return .{
@@ -95,7 +106,8 @@ pub const InlineIterator = struct {
 
             const start = self.cursor;
             while (self.cursor < self.input.len) : (self.cursor += 1) {
-                if (parseInlineLinkAt(self.input, self.cursor) != null or
+                if (parseTemplateAt(self.input, self.cursor) != null or
+                    parseInlineLinkAt(self.input, self.cursor) != null or
                     parseExternalLinkAt(self.input, self.cursor) != null or
                     parseLineBreakAt(self.input, self.cursor) != null or
                     emphasisMarkerAt(self.input, self.cursor, self.bold, self.italic) != null)
@@ -534,6 +546,12 @@ fn blockWithPrefix(kind: BlockKind, depth: usize, line: []const u8, text_start: 
     };
 }
 
+const ParsedTemplate = struct {
+    end: usize,
+    name: []const u8,
+    body: []const u8,
+};
+
 const ParsedInlineLink = struct {
     end: usize,
     target: []const u8,
@@ -552,6 +570,57 @@ const EmphasisMarker = struct {
     bold: bool,
     italic: bool,
 };
+
+fn parseTemplateAt(input: []const u8, start: usize) ?ParsedTemplate {
+    if (start + 4 > input.len or !std.mem.eql(u8, input[start .. start + 2], "{{")) return null;
+    if (start != 0 and input[start - 1] == '{') return null;
+    if (start + 3 <= input.len and std.mem.eql(u8, input[start .. start + 3], "{{{")) return null;
+
+    const close = findTemplateClose(input, start) orelse return null;
+    const body = input[start + 2 .. close];
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
+    const name = std.mem.trim(u8, body[0..pipe], " \t\r\n");
+    if (name.len == 0) return null;
+    return .{ .end = close + 2, .name = name, .body = body };
+}
+
+fn findTemplateClose(input: []const u8, start: usize) ?usize {
+    var template_depth: usize = 1;
+    var parameter_depth: usize = 0;
+    var cursor = start + 2;
+    while (cursor < input.len) {
+        if (cursor + 4 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 4], "<!--")) {
+            if (std.mem.indexOfPos(u8, input, cursor + 4, "-->")) |comment_end| {
+                cursor = comment_end + 3;
+                continue;
+            }
+            return null;
+        }
+        if (cursor + 3 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 3], "{{{")) {
+            parameter_depth += 1;
+            cursor += 3;
+            continue;
+        }
+        if (parameter_depth != 0 and cursor + 3 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 3], "}}}")) {
+            parameter_depth -= 1;
+            cursor += 3;
+            continue;
+        }
+        if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "{{")) {
+            template_depth += 1;
+            cursor += 2;
+            continue;
+        }
+        if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "}}")) {
+            template_depth -= 1;
+            if (template_depth == 0 and parameter_depth == 0) return cursor;
+            cursor += 2;
+            continue;
+        }
+        cursor += 1;
+    }
+    return null;
+}
 
 fn parseInlineLinkAt(input: []const u8, start: usize) ?ParsedInlineLink {
     if (start + 4 > input.len or !std.mem.eql(u8, input[start .. start + 2], "[[")) return null;
@@ -2607,6 +2676,34 @@ test "inline iterator exposes links and emphasis without allocations" {
 
     const tail = iterator.next().?;
     try std.testing.expectEqualStrings(" end", tail.text);
+    try std.testing.expect(iterator.next() == null);
+}
+
+test "inline iterator exposes balanced templates for runtime expansion" {
+    const block = DecodedBlock{
+        .kind = .definition,
+        .depth = 1,
+        .text = "'''{{lb|en|countable}}''' {{outer|{{inner|x}}|{{{p|d}}}}} {{{param}}} {{broken",
+    };
+    var iterator = block.inlineIterator();
+
+    const label = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.template, label.kind);
+    try std.testing.expectEqualStrings("lb", label.target);
+    try std.testing.expectEqualStrings("lb|en|countable", label.text);
+    try std.testing.expect(label.bold and !label.italic);
+
+    const space = iterator.next().?;
+    try std.testing.expectEqualStrings(" ", space.text);
+
+    const nested = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.template, nested.kind);
+    try std.testing.expectEqualStrings("outer", nested.target);
+    try std.testing.expectEqualStrings("outer|{{inner|x}}|{{{p|d}}}", nested.text);
+
+    const tail = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.text, tail.kind);
+    try std.testing.expectEqualStrings(" {{{param}}} {{broken", tail.text);
     try std.testing.expect(iterator.next() == null);
 }
 
