@@ -28,17 +28,46 @@ pub const DecodedBlock = struct {
     text: []const u8,
 };
 
+pub const BlockIterator = struct {
+    body: []const u8,
+    line_count: usize,
+    line_index: usize = 0,
+    line_start: usize = 0,
+
+    pub fn next(self: *BlockIterator) ?DecodedBlock {
+        if (self.line_index >= self.line_count) return null;
+        self.line_index += 1;
+
+        if (self.body.len == 0) return .{ .kind = .blank, .depth = 0, .text = "" };
+        const line_end = std.mem.indexOfScalarPos(u8, self.body, self.line_start, '\n') orelse self.body.len;
+        const block = classifyBlock(self.body[self.line_start..line_end]);
+        self.line_start = if (line_end == self.body.len) self.body.len else line_end + 1;
+        return block;
+    }
+};
+
 pub const DecodedSection = struct {
     level: u8,
     title: []const u8,
     kind: SectionKind,
     body: []const u8,
     line_count: usize,
-    blocks: []DecodedBlock,
+
+    pub fn blockIterator(self: *const DecodedSection) BlockIterator {
+        return .{ .body = self.body, .line_count = self.line_count };
+    }
+
+    pub fn blocksAlloc(self: *const DecodedSection, allocator: std.mem.Allocator) ![]DecodedBlock {
+        const blocks = try allocator.alloc(DecodedBlock, self.line_count);
+        var iterator = self.blockIterator();
+        var index: usize = 0;
+        while (iterator.next()) |block| : (index += 1) blocks[index] = block;
+        std.debug.assert(index == blocks.len);
+        return blocks;
+    }
 
     pub fn deinit(self: *DecodedSection, allocator: std.mem.Allocator) void {
         allocator.free(self.title);
-        allocator.free(self.blocks);
         allocator.free(self.body);
         self.* = undefined;
     }
@@ -363,8 +392,6 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
             }
         }
         errdefer allocator.free(body);
-        const blocks = try decodeBlocksAlloc(allocator, body, line_count);
-        errdefer allocator.free(blocks);
 
         try sections.append(allocator, .{
             .level = level,
@@ -372,7 +399,6 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
             .kind = kind,
             .body = body,
             .line_count = line_count,
-            .blocks = blocks,
         });
     }
 
@@ -380,32 +406,6 @@ pub fn decodeDocumentAlloc(allocator: std.mem.Allocator, encoded: []const u8) (s
         .trailing_newline = (encoded[0] & trailing_newline_flag) != 0,
         .sections = try sections.toOwnedSlice(allocator),
     };
-}
-
-fn decodeBlocksAlloc(allocator: std.mem.Allocator, body: []const u8, line_count: usize) ![]DecodedBlock {
-    if (line_count == 0) return allocator.alloc(DecodedBlock, 0);
-
-    const blocks = try allocator.alloc(DecodedBlock, line_count);
-    errdefer allocator.free(blocks);
-    if (body.len == 0) {
-        if (line_count != 1) return error.InvalidEncoding;
-        blocks[0] = .{ .kind = .blank, .depth = 0, .text = "" };
-        return blocks;
-    }
-
-    var block_index: usize = 0;
-    var line_start: usize = 0;
-    while (line_start <= body.len and block_index < blocks.len) : (block_index += 1) {
-        const line_end = std.mem.indexOfScalarPos(u8, body, line_start, '\n') orelse body.len;
-        blocks[block_index] = classifyBlock(body[line_start..line_end]);
-        if (line_end == body.len) {
-            line_start = body.len + 1;
-        } else {
-            line_start = line_end + 1;
-        }
-    }
-    if (block_index != blocks.len or line_start <= body.len) return error.InvalidEncoding;
-    return blocks;
 }
 
 fn classifyBlock(line: []const u8) DecodedBlock {
@@ -2264,10 +2264,12 @@ test "decoded document exposes renderer-facing section structure" {
     try std.testing.expectEqualStrings("Noun", document.sections[1].title);
     try std.testing.expectEqual(SectionKind.pos_lines, document.sections[1].kind);
     try std.testing.expectEqualStrings("# [[light]]", document.sections[1].body);
-    try std.testing.expectEqual(@as(usize, 1), document.sections[1].blocks.len);
-    try std.testing.expectEqual(BlockKind.definition, document.sections[1].blocks[0].kind);
-    try std.testing.expectEqual(@as(u8, 1), document.sections[1].blocks[0].depth);
-    try std.testing.expectEqualStrings("[[light]]", document.sections[1].blocks[0].text);
+    var block_iterator = document.sections[1].blockIterator();
+    const definition = block_iterator.next().?;
+    try std.testing.expectEqual(BlockKind.definition, definition.kind);
+    try std.testing.expectEqual(@as(u8, 1), definition.depth);
+    try std.testing.expectEqualStrings("[[light]]", definition.text);
+    try std.testing.expect(block_iterator.next() == null);
     try std.testing.expectEqual(@as(u8, 4), document.sections[2].level);
     try std.testing.expectEqualStrings("Translations", document.sections[2].title);
     try std.testing.expectEqual(SectionKind.translations, document.sections[2].kind);
@@ -2284,22 +2286,43 @@ test "render blocks classify wiktionary line structure" {
         ": indent\n" ++
         "; term\n" ++
         "paragraph\n";
-    const blocks = try decodeBlocksAlloc(std.testing.allocator, body, 10);
-    defer std.testing.allocator.free(blocks);
+    const section = DecodedSection{
+        .level = 3,
+        .title = "Noun",
+        .kind = .pos_lines,
+        .body = body,
+        .line_count = 10,
+    };
+    const expected = [_]BlockKind{
+        .definition,
+        .definition,
+        .example,
+        .quotation,
+        .list_item,
+        .list_detail,
+        .indent,
+        .term,
+        .paragraph,
+        .blank,
+    };
 
-    try std.testing.expectEqual(BlockKind.definition, blocks[0].kind);
-    try std.testing.expectEqual(@as(u8, 1), blocks[0].depth);
-    try std.testing.expectEqualStrings("definition", blocks[0].text);
-    try std.testing.expectEqual(BlockKind.definition, blocks[1].kind);
-    try std.testing.expectEqual(@as(u8, 2), blocks[1].depth);
-    try std.testing.expectEqual(BlockKind.example, blocks[2].kind);
-    try std.testing.expectEqual(BlockKind.quotation, blocks[3].kind);
-    try std.testing.expectEqual(BlockKind.list_item, blocks[4].kind);
-    try std.testing.expectEqual(BlockKind.list_detail, blocks[5].kind);
-    try std.testing.expectEqual(BlockKind.indent, blocks[6].kind);
-    try std.testing.expectEqual(BlockKind.term, blocks[7].kind);
-    try std.testing.expectEqual(BlockKind.paragraph, blocks[8].kind);
-    try std.testing.expectEqual(BlockKind.blank, blocks[9].kind);
+    var iterator = section.blockIterator();
+    for (expected, 0..) |kind, index| {
+        const block = iterator.next().?;
+        try std.testing.expectEqual(kind, block.kind);
+        if (index == 0) {
+            try std.testing.expectEqual(@as(u8, 1), block.depth);
+            try std.testing.expectEqualStrings("definition", block.text);
+        } else if (index == 1) {
+            try std.testing.expectEqual(@as(u8, 2), block.depth);
+        }
+    }
+    try std.testing.expect(iterator.next() == null);
+
+    const blocks = try section.blocksAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(blocks);
+    try std.testing.expectEqual(expected.len, blocks.len);
+    try std.testing.expectEqual(BlockKind.blank, blocks[blocks.len - 1].kind);
 }
 
 test "section document encoding is smaller on a representative entry" {
