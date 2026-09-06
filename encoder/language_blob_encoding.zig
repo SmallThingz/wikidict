@@ -293,6 +293,46 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, source: []const u8, language: L
     return out.toOwnedSlice(allocator);
 }
 
+pub fn encodeRepeatedSectionsFallbackAlloc(
+    allocator: std.mem.Allocator,
+    sections: []const SourceLanguageSection,
+    language: LanguageContext,
+) ![]u8 {
+    var first: ?SourceLanguageSection = null;
+    var extra_len: usize = 0;
+    for (sections) |section| {
+        if (!std.mem.eql(u8, section.heading, language.heading)) continue;
+        if (std.mem.indexOfScalar(u8, section.source, 0) != null) return error.InvalidEncoding;
+        if (first == null) {
+            first = section;
+        } else {
+            extra_len = std.math.add(usize, extra_len, section.source.len) catch return error.InvalidEncoding;
+        }
+    }
+
+    const first_section = first orelse return error.InvalidLanguageSection;
+    const encoded = try encodeAlloc(allocator, first_section.source, language);
+    if (extra_len == 0) return encoded;
+    defer allocator.free(encoded);
+
+    const total_len = std.math.add(usize, encoded.len, extra_len) catch return error.InvalidEncoding;
+    const out = try allocator.alloc(u8, total_len);
+    @memcpy(out[0..encoded.len], encoded);
+    var cursor = encoded.len;
+    var skipped_first = false;
+    for (sections) |section| {
+        if (!std.mem.eql(u8, section.heading, language.heading)) continue;
+        if (!skipped_first) {
+            skipped_first = true;
+            continue;
+        }
+        @memcpy(out[cursor .. cursor + section.source.len], section.source);
+        cursor += section.source.len;
+    }
+    std.debug.assert(cursor == out.len);
+    return out;
+}
+
 pub fn decodeAlloc(allocator: std.mem.Allocator, encoded: []const u8, language: LanguageContext) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
     if (encoded.len == 0) return error.InvalidEncoding;
     const flags = encoded[0];
@@ -354,6 +394,25 @@ test "source language iterator ignores preamble and nested fake headings" {
     try std.testing.expectEqualStrings("French", french.heading);
     try std.testing.expect(std.mem.startsWith(u8, french.source, "==French=="));
     try std.testing.expect(it.next() == null);
+}
+
+test "language blob repeated-section fallback preserves every matching source fragment" {
+    const source =
+        "==English==\n===Noun===\n# first\n" ++
+        "==French==\n===Nom===\n# milieu\n" ++
+        "==English==\n===Verb===\n# second\n";
+    var it = SourceLanguageIterator.init(source);
+    const sections = [_]SourceLanguageSection{ it.next().?, it.next().?, it.next().? };
+    try std.testing.expect(it.next() == null);
+
+    const encoded = try encodeRepeatedSectionsFallbackAlloc(std.testing.allocator, &sections, .{ .heading = "English" });
+    defer std.testing.allocator.free(encoded);
+    const decoded = try decodeAlloc(std.testing.allocator, encoded, .{ .heading = "English" });
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqualStrings(
+        "==English==\n===Noun===\n# first\n==English==\n===Verb===\n# second\n",
+        decoded,
+    );
 }
 
 test "language blob round trips sections and exposes borrowed blocks" {

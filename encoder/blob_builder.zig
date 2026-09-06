@@ -413,9 +413,33 @@ fn processMain(
     stats: *BuildStats,
 ) !void {
     stats.main_pages += 1;
+    var page_sections: std.ArrayList(language_encoding.SourceLanguageSection) = .empty;
+    defer page_sections.deinit(page_allocator);
     var sections = language_encoding.SourceLanguageIterator.init(source);
-    while (sections.next()) |section| {
-        const payload = try language_encoding.encodeAlloc(page_allocator, section.source, .{ .heading = section.heading });
+    while (sections.next()) |section| try page_sections.append(page_allocator, section);
+
+    for (page_sections.items, 0..) |section, index| {
+        var seen_before = false;
+        for (page_sections.items[0..index]) |previous| {
+            if (std.mem.eql(u8, previous.heading, section.heading)) {
+                seen_before = true;
+                break;
+            }
+        }
+        if (seen_before) continue;
+
+        var repeated = false;
+        for (page_sections.items[index + 1 ..]) |later| {
+            if (std.mem.eql(u8, later.heading, section.heading)) {
+                repeated = true;
+                break;
+            }
+        }
+        const language: language_encoding.LanguageContext = .{ .heading = section.heading };
+        const payload = if (repeated)
+            try language_encoding.encodeRepeatedSectionsFallbackAlloc(page_allocator, page_sections.items, language)
+        else
+            try language_encoding.encodeAlloc(page_allocator, section.source, language);
         try spools.appendLanguage(page_allocator, section.heading, title, payload);
         stats.language_records += 1;
     }
@@ -562,7 +586,7 @@ test "blob builder routes main languages and feature namespaces into separate bl
 
     const xml =
         "<mediawiki>" ++
-        "<page><title>cat</title><ns>0</ns><revision><text xml:space=\"preserve\">==English==\n===Noun===\n# [[cat]]\n==French==\n===Nom===\n# [[chat]]\n</text></revision></page>" ++
+        "<page><title>cat</title><ns>0</ns><revision><text xml:space=\"preserve\">==English==\n===Noun===\n# [[cat]]\n==French==\n===Nom===\n# [[chat]]\n==English==\n===Verb===\n# purr\n</text></revision></page>" ++
         "<page><title>Thesaurus:cat</title><ns>110</ns><revision><text xml:space=\"preserve\">==English==\n===Noun===\n====Synonyms====\n{{ws beginlist}}\n{{ws|feline}}\n{{ws endlist}}\n</text></revision></page>" ++
         "<page><title>Rhymes:English/æt</title><ns>106</ns><revision><text xml:space=\"preserve\">==English==\n* {{l|en|cat}}\n</text></revision></page>" ++
         "<page><title>Citations:cat</title><ns>114</ns><revision><text xml:space=\"preserve\">citation raw</text></revision></page>" ++
@@ -586,7 +610,7 @@ test "blob builder routes main languages and feature namespaces into separate bl
     const cat = (try english_blob.find("cat")).?;
     const english_source = try language_encoding.decodeAlloc(std.testing.allocator, cat.payload, .{ .heading = "English" });
     defer std.testing.allocator.free(english_source);
-    try std.testing.expectEqualStrings("==English==\n===Noun===\n# [[cat]]\n", english_source);
+    try std.testing.expectEqualStrings("==English==\n===Noun===\n# [[cat]]\n==English==\n===Verb===\n# purr\n", english_source);
 
     const recon_path = try fixedBlobPathAlloc(std.testing.allocator, out_root, "reconstruction");
     defer std.testing.allocator.free(recon_path);
