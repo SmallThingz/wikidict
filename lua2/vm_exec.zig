@@ -710,3 +710,45 @@ test "make_stack function-valued __index keeps raw layers" {
     try std.testing.expectEqualStrings("P", out[1].string);
     try std.testing.expect(out[2] == .boolean and !out[2].boolean);
 }
+
+fn expectSnapshotResults(source: []const u8, expected: []const f64) !void {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, source);
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    const codec = @import("vm_codec.zig");
+    const bytes = try codec.serialize(a, &program);
+    defer a.free(bytes);
+    var restored = try codec.deserializeBorrowed(a, bytes);
+    defer restored.deinit();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var vm = try Vm.init(arena.allocator());
+    const result = try vm.executeRoot(&restored, &.{});
+    defer Vm.freeResults(result);
+    try std.testing.expectEqual(expected.len, result.len);
+    for (expected, result) |want, got| {
+        try std.testing.expect(got == .number);
+        try std.testing.expectEqual(want, got.number);
+    }
+}
+test "expression snapshots preserve argument evaluation before mutations" {
+    try expectSnapshotResults("local x=2;local function change() x=9;return 0 end;local function pair(a,b)return a,b end;local a,b=pair(x,change());return a,b,x", &.{ 2, 0, 9 });
+}
+test "method lookup precedes argument mutation including multiple results" {
+    try expectSnapshotResults("local t={};function t:f(x,y) return 1,x,y end;local function change() t.f=function() return 9 end;return 4,5 end;return t:f(change())", &.{ 1, 4, 5 });
+}
+test "callee identity precedes argument mutation" {
+    try expectSnapshotResults("local f=function()return 1 end;local function change() f=function()return 9 end;return 0 end;return f(change())", &.{1});
+}
+test "index object identity precedes key evaluation" {
+    try expectSnapshotResults("local t={7};local function change() t={9};return 1 end;local x=t[change()];return x,t[1]", &.{ 7, 9 });
+}
+test "parallel RHS and return values snapshot captured locals" {
+    try expectSnapshotResults("local x=2;local function change() x=9;return 4 end;local a,b=x,change();return a,b,x", &.{ 2, 4, 9 });
+    try expectSnapshotResults("local x=2;local function change() x=9;return 4 end;return x,change()", &.{ 2, 4 });
+}
+test "numeric loop bounds do not alias mutable locals" {
+    try expectSnapshotResults("local limit=3;local n=0;for i=1,limit do n=n+1;limit=1 end;return n,limit", &.{ 3, 1 });
+}

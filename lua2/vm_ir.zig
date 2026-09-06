@@ -223,7 +223,13 @@ const Lowerer = struct {
 
     fn loadName(self: *Lowerer, name: []const u8) CompileError!u32 {
         return switch (try self.resolve(name)) {
-            .local => |reg| reg,
+            .local => |reg| blk: {
+                // Snapshot a read before subsequent expressions can mutate its binding.
+                const snapshot = try self.newReg();
+                _ = try self.emit(.{ .op = .move, .dst = snapshot, .a = reg });
+                break :blk snapshot;
+            },
+
             .upvalue => |idx| blk: {
                 const dst = try self.newReg();
                 _ = try self.emit(.{ .op = .get_upvalue, .dst = dst, .a = idx });
@@ -486,14 +492,16 @@ const Lowerer = struct {
         if (method) |name| {
             const key = try self.newReg();
             _ = try self.emit(.{ .op = .load_string, .dst = key, .aux = try self.program.intern(name) });
-            // Method operand layout is [method-key, self, fixed user args...].
-            try regs.append(self.allocator, key);
+            // Resolve the method before evaluating arguments, retaining the receiver.
+            const target = try self.newReg();
+            _ = try self.emit(.{ .op = .get_index, .dst = target, .a = callee, .b = key });
+
             try regs.append(self.allocator, callee);
             for (fixed_args) |arg| try regs.append(self.allocator, try self.lowerExpr(arg));
             const var_base = if (has_multi_tail) try self.lowerMulti(args[args.len - 1], multi_count) else 0;
             const at = try self.appendOperands(regs.items);
             const dst = try self.newRegs(if (ret_count == multi_count or ret_count == 0) 1 else ret_count);
-            _ = try self.emit(.{ .op = if (has_multi_tail) .method_call_vararg else .method_call, .dst = dst, .a = callee, .b = @intCast(regs.items.len), .c = var_base, .aux = at, .count = ret_count });
+            _ = try self.emit(.{ .op = if (has_multi_tail) .call_vararg else .call, .dst = dst, .a = target, .b = @intCast(regs.items.len), .c = var_base, .aux = at, .count = ret_count });
             return dst;
         }
         for (fixed_args) |arg| try regs.append(self.allocator, try self.lowerExpr(arg));
