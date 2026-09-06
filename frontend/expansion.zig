@@ -102,6 +102,7 @@ pub fn fromRecord(io: std.Io, a: A, record: dec.BlobRecordView, with_source: boo
         .reconstruction => "Reconstruction:",
         .rhymes => "Rhymes:",
         .sign_gloss => "Sign gloss:",
+        .supplement => return error.InvalidEncoding,
     };
     const title = try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, record.title() });
     defer a.free(title);
@@ -110,5 +111,6 @@ pub fn fromRecord(io: std.Io, a: A, record: dec.BlobRecordView, with_source: boo
     doc.entry.title = try doc.arena.allocator().dupe(u8, record.title());
     doc.entry.kind = record.kind();
     doc.entry.language = if (language.len != 0) try doc.arena.allocator().dupe(u8, language) else null;
+    if (record == .language) doc.entry.language_code = try doc.arena.allocator().dupe(u8, record.language.metadata.code);
     return doc;
 }

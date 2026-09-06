@@ -82,6 +82,16 @@ fn word(p: anytype, t: Template, term_index: usize, alt_index: usize, style: any
 }
 pub fn render(p: anytype, t: Template, style: anytype, depth: usize) Error!bool {
     const name = t.name;
+    if (is(name, &.{ "non-gloss", "non-gloss definition", "ngd" }) and t.get(1).len != 0) {
+        var s = style;
+        s.italic = true;
+        try p.inlineText(t.get(1), s, depth + 1);
+        return true;
+    }
+    if (is(name, &.{ "defdate", "quote-gloss" }) and t.get(1).len != 0) {
+        try label(p, t.get(1), style, depth + 1);
+        return true;
+    }
     if (is(name, &.{ "l", "m", "link", "mention", "ll", "m+" })) {
         if (t.get(2).len == 0 and t.named("alt").len == 0) return false;
         var s = style;
@@ -200,6 +210,12 @@ pub fn render(p: anytype, t: Template, style: anytype, depth: usize) Error!bool 
             }
         }
         try label(p, t.named("g"), style, depth);
+        return true;
+    }
+    if (is(name, &.{ "infl of", "inflection of" }) and t.get(2).len != 0 and std.mem.eql(u8, t.get(4), "s-verb-form") and t.last() == 4) {
+        try p.text("third-person singular simple present indicative of ", style);
+        // Parameter 4 is a grammatical tag, not the gloss used by link templates.
+        try termLink(p, first(t.named("alt"), first(t.get(3), t.get(2))), t.get(2), style, depth + 1);
         return true;
     }
     const forms = .{ .{ "plural of", "plural of " }, .{ "past of", "past tense of " }, .{ "simple past of", "simple past of " }, .{ "past participle of", "past participle of " }, .{ "present participle of", "present participle of " }, .{ "alternative form of", "alternative form of " }, .{ "alternative spelling of", "alternative spelling of " }, .{ "alt form", "alternative form of " }, .{ "alt sp", "alternative spelling of " }, .{ "synonym of", "synonym of " }, .{ "diminutive of", "diminutive of " }, .{ "abbreviation of", "abbreviation of " }, .{ "initialism of", "initialism of " }, .{ "acronym of", "acronym of " } };

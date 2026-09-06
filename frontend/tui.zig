@@ -22,7 +22,7 @@ const State = struct {
     io: std.Io = undefined,
     runtime: expansion.Options = .{},
     a: std.mem.Allocator,
-    db: *const store.Store,
+    db: *store.Store,
     label: []const u8,
     query: [4096]u8 = undefined,
     len: usize = 0,
@@ -34,6 +34,7 @@ const State = struct {
     theme: Theme,
     color: bool,
     source: bool = false,
+    details: bool = false,
     help: bool = false,
     loaded: ?usize = null,
     text: []const u8 = &.{},
@@ -151,6 +152,11 @@ const State = struct {
                         .dark => .light,
                         .light => .terminal,
                     },
+                    'd' => {
+                        self.details = !self.details;
+                        self.loaded = null;
+                        self.scroll = 0;
+                    },
                     's' => {
                         self.source = !self.source;
                         self.loaded = null;
@@ -174,7 +180,9 @@ const State = struct {
             var formatted: std.Io.Writer.Allocating = .init(self.a);
             defer formatted.deinit();
             if (index) |i| {
-                const record = try self.db.index.recordAt(i);
+                var resolved = try self.db.resolveAlloc(self.a, try self.db.index.recordAt(i));
+                defer resolved.deinit();
+                const record = resolved.record;
                 if (self.source) {
                     const source = model.sourceAlloc(self.a, record) catch |err| switch (err) {
                         error.InvalidEncoding => try self.a.dupe(u8, "Invalid semantic payload. Use JSON output to inspect its original bytes."),
@@ -185,7 +193,7 @@ const State = struct {
                 } else {
                     var doc = try expansion.fromRecord(self.io, self.a, record, false, self.runtime);
                     defer doc.deinit();
-                    try output.entryText(&formatted.writer, doc.entry, self.color);
+                    try output.entryTextWithDetails(&formatted.writer, doc.entry, self.color, self.details);
                 }
             } else try formatted.writer.writeAll("No matching entries.\n\nPress / to edit the prefix; Ctrl-U clears it.\nMatching is case-sensitive UTF-8, not fuzzy search.");
             const text = try self.a.dupe(u8, formatted.written());
@@ -238,7 +246,7 @@ const State = struct {
             try self.put(w, 1, 3, 9, "dict.", p.accent);
             try self.put(w, 1, 13, sz.cols -| 15, self.label, p.muted);
             var buf: [256]u8 = undefined;
-            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "WIKBLB03  /  {d} records  /  {s} theme", .{ self.db.index.recordCount(), @tagName(self.theme) }), p.muted);
+            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "WIKBLB04  /  {d} records  /  {s} theme", .{ self.db.index.recordCount(), @tagName(self.theme) }), p.muted);
             try self.put(w, 4, 3, 10, "Search /", if (self.focus == .search) p.accent else p.muted);
             // Horizontal input viewport follows the caret, at whole-codepoint boundaries.
             var start: usize = 0;
@@ -270,7 +278,7 @@ const State = struct {
                 }
             }
             try self.put(w, sz.rows - 1, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "{s} focus  |  match {d}/{d}  |  lines {d}-{d}/{d}", .{ @tagName(self.focus), if (self.count() == 0) @as(usize, 0) else self.selected + 1, self.count(), self.scroll + 1, @min(self.scroll + self.bodyHeight(), self.rows.len), self.rows.len }), p.muted);
-            try self.put(w, sz.rows, 3, sz.cols - 4, "/ search  Tab focus  ↑↓ move  PgDn/PgUp  s source  t theme  ? help  q quit", p.muted);
+            try self.put(w, sz.rows, 3, sz.cols - 4, "/ search  Tab focus  ↑↓ move  PgDn/PgUp  s source  d details  t theme  ? help  q quit", p.muted);
             if (self.help) {
                 const help = [_][]const u8{ "KEYBOARD", "Tab: search > matches > reading", "Enter: read selected word    /: search", "Arrows or j/k: select or scroll", "PgUp/PgDn, Home/End: page or jump", "Search: UTF-8 editing, Left/Right, Delete", "Ctrl-U: clear query    Ctrl-C/D: quit", "s: exact source    t: terminal/dark/light", "q: quit outside search    any key: close", "Local wikitext renderer. s shows raw source." };
                 for (help, 0..) |line, i| {
@@ -285,7 +293,7 @@ const State = struct {
     }
 };
 
-pub fn run(io: std.Io, a: std.mem.Allocator, db: *const store.Store, label: []const u8, query: []const u8, theme: Theme, color: bool, runtime: expansion.Options) !void {
+pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8, query: []const u8, theme: Theme, color: bool, runtime: expansion.Options) !void {
     if (builtin.os.tag != .linux) return error.UnsupportedTerminalPlatform;
     if (!try std.Io.File.stdin().isTty(io) or !try std.Io.File.stdout().isTty(io)) return error.TerminalRequired;
     if (!std.unicode.utf8ValidateSlice(query) or query.len > 4096) return error.InvalidQuery;
@@ -342,7 +350,7 @@ test "terminal query editing is bounded and UTF8-aware" {
     var index = try (try dec.openTrustedBlob(bytes)).buildIndexAlloc(a);
     defer index.deinit(a);
     // Test the pure state; Store's mapping and OS handles are not used by input handling.
-    const db: store.Store = .{ .bytes = &.{}, .index = index, .allocator = a };
+    var db: store.Store = .{ .bytes = &.{}, .index = index, .allocator = a };
     var state: State = .{ .a = a, .db = &db, .label = "test", .theme = .terminal, .color = false };
     defer state.deinit();
     try state.insert("café");

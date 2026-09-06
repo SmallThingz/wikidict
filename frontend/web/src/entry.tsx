@@ -1,9 +1,10 @@
 import { createMemo, For, Show, Switch, Match } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
 import { layout, type ListNode } from './layout';
-import type { Block, Entry, Span } from './types';
+import type { Block, Entry, Lexeme, Sense, Span } from './types';
+import { kindGroups, reveal } from './organization';
 
-type Props = { entry: Entry; prefix: string; navigate: (title: string, event: MouseEvent) => void };
+type Props = { entry: Entry; prefix: string; navigate: (title: string, event: MouseEvent, language?: string) => void };
 type InlineProps = { span: Span; prefix: string; navigate: Props['navigate'] };
 function Inline(props: InlineProps) {
   const s = () => props.span;
@@ -18,7 +19,7 @@ function Inline(props: InlineProps) {
     class={`dict-inline dict-role-${s().role || 'normal'}`} classList={{ 'dict-bold': s().bold, 'dict-italic': s().italic, 'dict-strike': s().strike, 'dict-underline': s().underline }} lang={s().language || undefined}>
     <Switch fallback={<>{s().text}{s().trail}</>}>
       <Match when={s().kind === 'line_break'}><br /></Match>
-      <Match when={s().kind === 'link' || s().kind === 'external_link'}><a href={href()} rel="noopener noreferrer" onClick={event => { if (s().kind === 'link' && !s().target.startsWith('#reference-')) props.navigate(s().target, event); }}>{s().text}{s().trail}</a></Match>
+      <Match when={s().kind === 'link' || s().kind === 'external_link'}><a href={href()} rel="noopener noreferrer" onClick={event => { if (s().target.startsWith('#reference-')) { event.preventDefault(); reveal(document.getElementById(`${props.prefix}-${s().target.slice(1)}`)); } else if (s().kind === 'link') props.navigate(s().target, event, s().language); }}>{s().text}{s().trail}</a></Match>
     </Switch>
   </Dynamic>}>
     <Match when={s().kind === 'template'}><details class="dict-template"><summary title="Unsupported template; inspect original source">{s().target} <span aria-hidden="true">?</span></summary><code>{'{{' + s().text + '}}'}</code></details></Match>
@@ -43,14 +44,62 @@ function Blocks(props: { blocks: Block[]; context: Props }) {
   const groups = createMemo(() => layout(props.blocks));
   return <For each={groups()}>{group => 'list' in group ? <WikiList node={group.list} context={props.context}/> : <Show when={group.block.kind !== 'blank'}><div class={`dict-render-block dict-block-${group.block.kind}`}><Content block={group.block} context={props.context}/></div></Show>}</For>;
 }
+function Evidence(props: { indices: number[]; lexeme: Lexeme; context: Props; title: string; folded?: boolean }) {
+  const blocks = () => props.context.entry.sections[props.lexeme.section].blocks;
+  return <Show when={props.indices.length}>{_value => <Dynamic component={props.folded ? 'details' : 'div'} class={`dict-evidence ${props.folded ? 'dict-evidence-folded' : ''}`}>
+    <Dynamic component={props.folded ? 'summary' : 'h5'}>{props.title}</Dynamic>
+    <For each={props.indices}>{index => <div class="dict-evidence-item"><Content block={blocks()[index]} context={props.context}/></div>}</For>
+  </Dynamic>}</Show>;
+}
+function Senses(props: { lexeme: Lexeme; context: Props; parent: number | null }) {
+  const senses = () => props.lexeme.definitions.map((sense, index) => ({sense,index})).filter(item => item.sense.parent === props.parent);
+  const block = (sense: Sense) => props.context.entry.sections[props.lexeme.section].blocks[sense.block];
+  return <ol class="dict-senses"><For each={senses()}>{item => <li data-sense={item.index}>
+    <div class="dict-definition"><Content block={block(item.sense)} context={props.context}/></div>
+    <Show when={item.sense.form}>{form => <div class="dict-form-navigation"><span>{form().relation}</span><a href={`https://en.wiktionary.org/wiki/${encodeURIComponent(form().target)}`} onClick={event => props.context.navigate(form().target + "#" + props.lexeme.kind,event,form().language)}>Read {form().target} <span aria-hidden="true">→</span></a></div>}</Show>
+    <Evidence indices={item.sense.examples} lexeme={props.lexeme} context={props.context} title="Usage examples"/>
+    <Evidence indices={item.sense.quotations} lexeme={props.lexeme} context={props.context} title="Quotations" folded/>
+    <Evidence indices={item.sense.notes} lexeme={props.lexeme} context={props.context} title="Supporting notes" folded/>
+    <Show when={props.lexeme.definitions.some(sense => sense.parent === item.index)}><Senses lexeme={props.lexeme} context={props.context} parent={item.index}/></Show>
+  </li>}</For></ol>;
+}
+function Supplement(props: { index: number; context: Props }) {
+  const section = () => props.context.entry.sections[props.index];
+  return <details class="dict-supplement dict-section" id={`${props.context.prefix}-${props.index}`} data-section={section().title}>
+    <summary><span>{section().title}</span><small>Read section</small></summary>
+    <div class="dict-supplement-body"><Blocks blocks={section().blocks} context={props.context}/></div>
+  </details>;
+}
 export function Reading(props: Props) {
+  const groups = createMemo(() => kindGroups(props.entry));
+  const hasLexemes = () => groups().length > 0;
   return <div class="dict-reading">
     <Show when={props.entry.status === 'invalid_payload'}><div class="dict-notice" role="alert">This record has an invalid semantic payload. Its original bytes remain available in the JSON view.</div></Show>
-    <Show when={props.entry.preamble_spans?.length}><div class="dict-preamble"><Spans spans={props.entry.preamble_spans!} context={props}/></div></Show>
-    <For each={props.entry.sections}>{(section, index) => <section class="dict-section" id={`${props.prefix}-${index()}`} data-level={section.level}>
-      <Show when={section.level > 2 || props.entry.kind !== 'language'}><Dynamic component={`h${Math.max(2, Math.min(section.level - 1, 5))}`} classList={{ 'dict-subheading': section.level > 3 }}>{section.title}</Dynamic></Show>
-      <Blocks blocks={section.blocks} context={props}/>
-    </section>}</For>
-    <Show when={props.entry.references?.length}><section class="dict-section dict-references"><h2>References</h2><ol><For each={props.entry.references}>{ref => <li id={`${props.prefix}-reference-${ref.number}`}><Spans spans={ref.spans} context={props}/></li>}</For></ol></section></Show>
+    <Show when={props.entry.preamble_spans?.length}><details class="dict-preamble"><summary>Entry context</summary><Spans spans={props.entry.preamble_spans!} context={props}/></details></Show>
+    <Show when={hasLexemes()} fallback={<For each={props.entry.sections}>{(section,index) => <section class="dict-section" id={`${props.prefix}-${index()}`}><Show when={section.level > 2 || props.entry.kind !== 'language'}><h2>{section.title}</h2></Show><Blocks blocks={section.blocks} context={props}/></section>}</For>}>
+      <div class="dict-reader-intro"><span class="dict-eyebrow">MEANINGS &amp; USE</span><span>History and source evidence stay attached.</span></div>
+      <For each={groups()}>{group => <section class="dict-kind-group" data-kind={group.kind}>
+        <header class="dict-kind-header"><h2>{group.kind}<Show when={new Set(groups().map(g => g.language)).size > 1}><small class="dict-language-tag">{group.language}</small></Show></h2><span>{group.lexemes.reduce((n,l) => n + l.definitions.length, 0)} {group.lexemes.reduce((n,l) => n + l.definitions.length, 0) === 1 ? "definition" : "definitions"}<Show when={group.lexemes.length > 1}> · {group.lexemes.length} entries</Show></span></header>
+        <For each={group.lexemes}>{lexeme => <article class="dict-lexeme dict-section" id={`${props.prefix}-${lexeme.section}`}>
+          <Show when={lexeme.etymology !== null}>{_value => <div class="dict-origin"><span>{props.entry.sections[lexeme.etymology!].title.replace('Etymology','Origin')}</span><button onClick={() => reveal(document.getElementById(`${props.prefix}-${lexeme.etymology}`))}>History <span aria-hidden="true">↗</span></button></div>}</Show>
+          <Headword lexeme={lexeme} context={props}/>
+          <Senses lexeme={lexeme} context={props} parent={null}/>
+          <Show when={lexeme.other_blocks.some(index => props.entry.sections[lexeme.section].blocks[index].kind !== 'blank')}><details class="dict-extra-blocks"><summary>Additional material for this entry</summary><For each={lexeme.other_blocks}>{index => <Content block={props.entry.sections[lexeme.section].blocks[index]} context={props}/>}</For></details></Show>
+          <For each={lexeme.related_sections}>{index => <Supplement index={index} context={props}/>}</For>
+        </article>}</For>
+      </section>}</For>
+      <section class="dict-supporting"><h2>History &amp; supporting material</h2><p>All source sections are retained. Open the detail you need.</p>
+        <For each={props.entry.organization!.other_sections}>{index => <Show when={props.entry.sections[index].level > 2 || props.entry.sections[index].blocks.some(b => b.kind !== 'blank')}><Supplement index={index} context={props}/></Show>}</For>
+      </section>
+    </Show>
+    <Show when={props.entry.references?.length}><details class="dict-section dict-references"><summary>Source references <span>{props.entry.references!.length}</span></summary><ol><For each={props.entry.references}>{ref => <li id={`${props.prefix}-reference-${ref.number}`}><Spans spans={ref.spans} context={props}/></li>}</For></ol></details></Show>
   </div>;
+}
+
+function Headword(props: { lexeme: Lexeme; context: Props }) {
+  const blocks = () => props.lexeme.introduction.map(index => props.context.entry.sections[props.lexeme.section].blocks[index]).filter(b => b.kind !== 'blank');
+  const spans = () => blocks().flatMap(b => b.spans);
+  const words = () => spans().filter(span => span.role === 'headword');
+  const hasContext = () => words().length > 0 && spans().some(span => span.role !== 'headword' && span.text.trim().length > 0);
+  return <div class="dict-headword"><Show when={words().length} fallback={<Blocks blocks={blocks()} context={props.context}/>}><Spans spans={words()} context={props.context}/></Show><Show when={hasContext()}><details class="dict-headword-context"><summary>Media captions &amp; entry context</summary><Blocks blocks={blocks()} context={props.context}/></details></Show></div>;
 }

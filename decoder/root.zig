@@ -33,6 +33,7 @@ pub const BlobThesaurusRecordView = blobs.BlobThesaurusRecordView;
 pub const BlobRhymesRecordView = blobs.BlobRhymesRecordView;
 pub const BlobReconstructionRecordView = blobs.BlobReconstructionRecordView;
 pub const BlobRawRecordView = blobs.BlobRawRecordView;
+pub const BlobSupplementRecordView = blobs.BlobSupplementRecordView;
 pub const BlobCatalogEntry = blobs.BlobCatalogEntry;
 pub const BlobCatalogIterator = blobs.BlobCatalogIterator;
 pub const language_blob_filename_len = blobs.language_blob_filename_len;

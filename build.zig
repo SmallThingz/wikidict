@@ -325,9 +325,12 @@ pub fn build(b: *std.Build) void {
     const pipeline_exe = addCliExecutable(b, "dict-runtime-build", b.path("tools/runtime_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
     addPublicRunStep(b, "build-runtime", "Extract templates/modules and compile matching VM bytecode into a fresh directory", addRunArtifactCommand(b, pipeline_exe, &.{}, b.args), &.{});
     addPublicRunStep(b, "build-dictionary", "Build dictionary blobs plus their shared Lua runtime in one coordinated pipeline", addRunArtifactCommand(b, pipeline_exe, &.{"--with-blobs"}, b.args), &.{});
+    const blob_files_mod = b.createModule(.{ .root_source_file = b.path("encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
+    const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
     const blob_query_exe = addCliExecutable(b, "dict", b.path("frontend/main.zig"), target, optimize, &.{
         .{ .name = "blob_encoder", .module = blob_encoder_mod },
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
+        .{ .name = "blob_files", .module = blob_files_mod },
         .{ .name = "runtime_bridge", .module = runtime_bridge_mod },
         .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = optimize }) },
     });
@@ -452,6 +455,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "blob_encoder", .module = blob_encoder_mod_test },
                 .{ .name = "blob_decoder", .module = blob_decoder_mod_test },
+                .{ .name = "blob_files", .module = blob_files_mod_test },
                 .{ .name = "runtime_bridge", .module = runtime_bridge_mod },
                 .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = test_optimize }) },
             },

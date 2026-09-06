@@ -1,5 +1,6 @@
 import { createMemo, createSignal, createUniqueId, For, onCleanup, onMount, Show } from 'solid-js';
 import { Reading } from './entry';
+import { navigation, reveal } from './organization';
 import { useTheme } from './theme';
 import type { MountOptions, Results } from './types';
 import './style.css';
@@ -29,11 +30,19 @@ export function DictionaryApp(props: { data: Results; options?: MountOptions }) 
     setSelection(list[Math.max(0, Math.min(list.length - 1, position + delta))].index);
     queueMicrotask(() => root.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' }));
   };
-  const navigate = (title: string, event: MouseEvent) => {
+  const navigate = (raw: string, event: MouseEvent, language?: string) => {
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
-    const found = props.data.entries.findIndex(item => item.title === title);
-    if (found >= 0) { event.preventDefault(); setFilter(''); select(found); setTab('reading'); }
-    else if (props.options?.onNavigate) { event.preventDefault(); props.options.onNavigate({ title, language: entry()?.language ?? null, kind: 'language' }); }
+    const hash = raw.indexOf('#');
+    const title = (hash < 0 ? raw : raw.slice(0, hash)) || entry()?.title || '';
+    let fragment = hash < 0 ? '' : raw.slice(hash + 1);
+    try { fragment = decodeURIComponent(fragment); } catch { /* Retain a literal malformed fragment. */ }
+    const found = props.data.entries.findIndex(item => item.title === title && (!language || item.language_code === language || item.language === language));
+    if (found >= 0) {
+      event.preventDefault(); setFilter(''); select(found); setTab('reading');
+      if (fragment) queueMicrotask(() => { const section = props.data.entries[found].sections.findIndex(s => s.title === fragment); if (section >= 0) reveal(root.querySelector(`[id="${id}-section-${section}"]`)); });
+    } else if (props.options?.onNavigate) {
+      event.preventDefault(); props.options.onNavigate({ title, fragment, language: language || entry()?.language || null, kind: 'language' });
+    }
   };
   const copy = async () => {
     const value = tab() === 'json' ? entryJson() : tab() === 'source' ? entry()?.source ?? entry()?.source_base64 ?? entry()?.payload_base64 ?? '' : content.innerText;
@@ -81,8 +90,8 @@ export function DictionaryApp(props: { data: Results; options?: MountOptions }) 
         }}/><kbd>/</kbd></label>
         <nav id={`${id}-results`} class="dict-results" aria-label="Entries"><For each={filtered()}>{item => <button aria-current={item.index === current()?.index ? 'true' : undefined} onClick={() => select(item.index)}><span>{item.entry.title}</span><small>{item.entry.language ?? item.entry.kind.replaceAll('_', ' ')}</small><span class="dict-result-arrow" aria-hidden="true">↗</span></button>}</For></nav>
         <Show when={!filtered().length}><p class="dict-empty-index">No entries match this filter.</p></Show>
-        <Show when={entry()}>{selected => <nav class="dict-contents" aria-label="Entry contents"><span class="dict-eyebrow">ON THIS PAGE</span><For each={selected().sections}>{(section, index) => <Show when={section.level > 2}><a href={`#${id}-section-${index()}`} style={{ 'padding-left': `${Math.max(0, section.level - 3) * 10}px` }} onClick={event => { event.preventDefault(); setTab('reading'); setMobileIndex(false); queueMicrotask(() => root.querySelector(`[id="${id}-section-${index()}"]`)?.scrollIntoView({ block: 'start' })); }}>{section.title}</a></Show>}</For></nav>}</Show>
-        <footer class="dict-index-footer"><span>{props.data.operation === "render" ? "WIKITEXT" : "WIKBLB03"}</span><span>{props.data.operation === "render" ? "Rendered local source" : `${props.data.record_count.toLocaleString()} records in source blob`}</span><span>{props.data.total_matches.toLocaleString()} {props.data.operation === 'search' ? 'prefix matches' : 'exact match(es)'} · export is self-contained</span></footer>
+        <Show when={entry()}>{selected => <nav class="dict-contents" aria-label="Entry contents"><span class="dict-eyebrow">ON THIS PAGE</span><For each={navigation(selected())}>{item => <a href={`#${id}-section-${item.index}`} onClick={event => { event.preventDefault(); setTab('reading'); setMobileIndex(false); queueMicrotask(() => reveal(root.querySelector(`[id="${id}-section-${item.index}"]`))); }}>{item.label}</a>}</For></nav>}</Show>
+        <footer class="dict-index-footer"><span>{props.data.operation === "render" ? "WIKITEXT" : "WIKBLB04"}</span><span>{props.data.operation === "render" ? "Rendered local source" : `${props.data.record_count.toLocaleString()} records in source blob`}</span><span>{props.data.total_matches.toLocaleString()} {props.data.operation === 'search' ? 'prefix matches' : 'exact match(es)'} · export is self-contained</span></footer>
       </aside>
       <main class="dict-main"><Show when={entry()} fallback={<div class="dict-empty"><span class="dict-eyebrow">A DICTIONARY, WITHOUT THE DISTRACTIONS</span><h1>Words, in context.</h1><p>{props.data.entries.length ? 'No entries match your filter. Clear it to return to the exported words.' : 'This export contains no matching entries.'}</p><Show when={filter()}><button onClick={() => setFilter('')}>Clear filter</button></Show></div>}>{selected => <>
         <div class="dict-entry-header"><div class="dict-breadcrumb"><span>{selected().language ?? selected().kind.replaceAll('_', ' ')}</span><span aria-hidden="true">/</span><span>DICTIONARY ENTRY</span></div><h1 dir="auto">{selected().title}</h1><div class="dict-entry-meta"><span class="dict-badge">{selected().kind.replaceAll('_', ' ')}</span><span>{selected().sections.length} sections</span><span>Available offline</span><Show when={selected().expansion}>{state => <span>{state().status === "ok" ? "Lua bytecode" : "Native fallback"}</span>}</Show></div></div>

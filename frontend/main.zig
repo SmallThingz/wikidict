@@ -12,19 +12,20 @@ const usage =
     \\
     \\  dict lookup WORD [options]
     \\  dict search [PREFIX] [options]
-    \\  dict languages [--root PATH] [--format text|json]
+    \\  dict languages [WORD] [--root PATH] [--format text|json]
     \\  dict stats [options]
     \\  dict tui [PREFIX] [options]
     \\  dict render FILE [--title TITLE] [--format text|json|html|source]
     \\       Use - for stdin. No database is needed.
     \\
-    \\  --root PATH        WIKBLB03 root (default data/wiktionary-blobs)
+    \\  --root PATH        WIKBLB04 root (default data/wiktionary-blobs)
     \\  --language NAME    Exact language heading (default English)
     \\  --kind KIND        language, thesaurus, citations, reconstruction, rhymes, sign-gloss
     \\  --format FORMAT    text, json, source, html (HTML supports lookup and search)
     \\  --limit N          Search page size, 1..1000 (default 20)
     \\  --offset N         Skip N prefix matches
     \\  --with-source      Include exact source in JSON/HTML entries
+    \\  --details          Include all supporting material in human text; TUI uses d
     \\  --color MODE       auto, always, never; NO_COLOR disables automatic color
     \\  --theme THEME      TUI palette: terminal (default), dark, light
     \\  --runtime PATH     Expand through extracted templates and compiled Lua bytecode
@@ -67,7 +68,7 @@ fn run(init: std.process.Init) !u8 {
         return 0;
     }
     if (opts.command == .languages) {
-        try languages(init.io, a, opts, w);
+        try @import("languages.zig").write(init.io, a, init.gpa, opts, w);
         try w.flush();
         return 0;
     }
@@ -86,7 +87,7 @@ fn run(init: std.process.Init) !u8 {
         defer doc.deinit();
         const response: output.Response = .{ .operation = .render, .query = doc.entry.title, .kind = .language, .language = doc.entry.language, .match_mode = "render-input", .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} };
         const color = opts.color == .always or (opts.color == .auto and !init.environ_map.contains("NO_COLOR") and !(if (init.environ_map.get("TERM")) |t| std.mem.eql(u8, t, "dumb") else false) and try std.Io.File.stdout().isTty(init.io));
-        if (opts.format == .html) try html.write(w, a, response) else if (opts.format == .json) try output.json(w, response) else try output.entryText(w, doc.entry, color);
+        if (opts.format == .html) try html.write(w, a, response) else if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
         try w.flush();
         return if (renderFailed(doc.entry)) 2 else 0;
     }
@@ -114,7 +115,10 @@ fn run(init: std.process.Init) !u8 {
     switch (opts.command) {
         .lookup => {
             response.match_mode = "exact-utf8";
-            if (try db.index.find(opts.query)) |record| {
+            if (try db.index.find(opts.query)) |raw_record| {
+                var resolved = try db.resolveAlloc(init.gpa, raw_record);
+                defer resolved.deinit();
+                const record = resolved.record;
                 response.total_matches = 1;
                 if (opts.format == .source) {
                     const source = try model.sourceAlloc(a, record);
@@ -123,7 +127,7 @@ fn run(init: std.process.Init) !u8 {
                     var doc = try expansion.fromRecord(init.io, init.gpa, record, opts.with_source, runtime);
                     defer doc.deinit();
                     response.entries = &.{doc.entry};
-                    if (opts.format == .html) try html.write(w, a, response) else if (opts.format == .json) try output.json(w, response) else try output.entryText(w, doc.entry, color);
+                    if (opts.format == .html) try htmlWithLemmas(init.io, a, init.gpa, &db, w, response, opts.with_source, runtime) else if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
                     if (renderFailed(doc.entry)) {
                         try w.flush();
                         return 2;
@@ -154,7 +158,9 @@ fn run(init: std.process.Init) !u8 {
                 const entries = try a.alloc(model.Entry, end - start);
                 var invalid = false;
                 for (entries, start..) |*entry, index| {
-                    var doc = try expansion.fromRecord(init.io, init.gpa, try db.index.recordAt(index), opts.with_source, runtime);
+                    // The export arena retains resolved bodies until every borrowed document is written.
+                    const resolved = try db.resolveAlloc(a, try db.index.recordAt(index));
+                    var doc = try expansion.fromRecord(init.io, init.gpa, resolved.record, opts.with_source, runtime);
                     docs.append(init.gpa, doc) catch |err| {
                         doc.deinit();
                         return err;
@@ -193,30 +199,6 @@ fn renderFailed(entry: model.Entry) bool {
     return entry.status == .invalid_payload or (if (entry.expansion) |e| e.status == .failed else false);
 }
 
-fn languages(io: std.Io, a: std.mem.Allocator, opts: args.Options, w: *std.Io.Writer) !void {
-    const path = try std.fs.path.join(a, &.{ opts.root, store.catalog.manifest_filename });
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(16 * 1024 * 1024));
-    var it = try store.catalog.Iterator.init(bytes);
-    var headings: std.ArrayList([]const u8) = .empty;
-    var seen: std.StringHashMap(void) = .init(a);
-    while (try it.next()) |item| {
-        const result = try seen.getOrPut(item.heading);
-        if (result.found_existing) return error.InvalidManifest;
-        try headings.append(a, try model.utf8Text(a, item.heading));
-    }
-    std.mem.sort([]const u8, headings.items, {}, struct {
-        fn less(_: void, lhs: []const u8, rhs: []const u8) bool {
-            return std.mem.order(u8, lhs, rhs) == .lt;
-        }
-    }.less);
-    if (opts.format == .json) {
-        try std.json.Stringify.value(.{ .schema = "dict.languages.v1", .languages = headings.items }, .{ .whitespace = .indent_2 }, w);
-        try w.writeByte('\n');
-    } else for (headings.items) |heading| {
-        try output.terminalText(w, heading);
-        try w.writeByte('\n');
-    }
-}
 test {
     _ = args;
     _ = store;
@@ -225,4 +207,41 @@ test {
     _ = html;
     _ = tui;
     _ = @import("pipeline_tests.zig");
+}
+
+fn htmlWithLemmas(io: std.Io, arena: std.mem.Allocator, a: std.mem.Allocator, db: *store.Store, w: *std.Io.Writer, response: output.Response, with_source: bool, runtime: expansion.Options) !void {
+    var entries: std.ArrayList(model.Entry) = .empty;
+    var related_failed = false;
+    var docs: std.ArrayList(model.OwnedEntry) = .empty;
+    defer {
+        for (docs.items) |*doc| doc.deinit();
+        docs.deinit(a);
+    }
+    try entries.appendSlice(arena, response.entries);
+    const metadata = db.index.blob.languageMetadata() orelse return html.write(w, arena, response);
+    for (response.entries) |entry| for (entry.organization.lexemes) |lexeme| for (lexeme.definitions) |sense| if (sense.form) |form| {
+        if (!std.mem.eql(u8, form.language, metadata.code) or entries.items.len >= 9) continue;
+        var seen = false;
+        for (entries.items) |present| if (std.mem.eql(u8, present.title, form.target)) {
+            seen = true;
+            break;
+        };
+        if (seen) continue;
+        const raw = (try db.index.find(form.target)) orelse continue;
+        const resolved = try db.resolveAlloc(arena, raw);
+        var doc = try expansion.fromRecord(io, a, resolved.record, with_source, runtime);
+        docs.append(a, doc) catch |err| {
+            doc.deinit();
+            return err;
+        };
+        related_failed = related_failed or renderFailed(doc.entry);
+        try entries.append(arena, doc.entry);
+    };
+    var expanded = response;
+    expanded.entries = entries.items;
+    try html.write(w, arena, expanded);
+    if (related_failed) {
+        try w.flush();
+        return error.RelatedEntryRenderingFailed;
+    }
 }

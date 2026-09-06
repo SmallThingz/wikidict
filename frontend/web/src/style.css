@@ -163,3 +163,58 @@
 .dict-rule { border: 0; border-top: 1px solid var(--dict-line); margin-block: 22px; }
 .dict-references { font-size: .86em; }
 .dict-references li { scroll-margin-top: 70px; margin-block: 8px; }
+
+/* Definition-first reading. Origins stay distinct, evidence stays at its sense. */
+.dict-reader-intro { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; margin:28px 0 24px; color:var(--dict-muted); font-size:10px; }
+.dict-kind-group { margin:0 0 38px; }
+.dict-kind-header { display:flex; align-items:baseline; gap:20px; justify-content:space-between; padding-bottom:13px; border-bottom:1px solid var(--dict-line); }
+.dict-kind-header h2 { margin:0; font-size:25px; font-weight:690; letter-spacing:-.035em; }
+.dict-kind-header>span { color:var(--dict-muted); font-size:10px; white-space:nowrap; }
+.dict-kind-group .dict-lexeme { margin:0; padding:22px 0 26px; }
+.dict-lexeme+.dict-lexeme { border-top:1px dashed var(--dict-line); }
+.dict-origin { display:flex; gap:12px; align-items:center; margin-bottom:14px; color:var(--dict-muted); font-size:10px; text-transform:uppercase; letter-spacing:.07em; }
+.dict-origin>span { padding:3px 6px; background:var(--dict-soft); border-radius:3px; }
+.dict-origin button { padding:2px 4px; min-height:24px; border:0; background:transparent; font-size:10px; }
+.dict-headword { margin:0 0 18px; color:var(--dict-muted); font-size:12px; }
+.dict-headword .dict-role-headword { color:var(--dict-fg); }
+.dict-senses { margin:0; padding-left:27px; }
+.dict-senses>li { margin:0 0 22px; padding-left:9px; }
+.dict-senses>li::marker { color:var(--dict-muted); font:600 11px ui-monospace,monospace; }
+.dict-senses .dict-senses { margin-top:19px; padding-left:22px; }
+.dict-definition { color:var(--dict-fg); font-size:15px; line-height:1.85; }
+.dict-evidence { margin:11px 0 0; font-size:12px; }
+.dict-evidence h5 { margin:0 0 5px; color:var(--dict-muted); font:650 9px/1.4 var(--site-font,system-ui); letter-spacing:.07em; text-transform:uppercase; }
+.dict-evidence-item { margin:8px 0; padding-left:13px; border-left:2px solid var(--dict-line); color:var(--dict-muted); line-height:1.8; }
+.dict-evidence summary,.dict-extra-blocks summary { color:var(--dict-muted); font-size:10px; width:fit-content; padding:3px 0; }
+
+.dict-form-navigation { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin-top:12px; padding:10px 12px; border-left:2px solid var(--dict-accent); background:var(--dict-soft); font-size:11px; }
+.dict-form-navigation>span { color:var(--dict-muted); }
+.dict-form-navigation a { color:var(--dict-fg); font-weight:650; }
+.dict-supplement.dict-section { margin:8px 0; border:1px solid var(--dict-line); border-radius:6px; padding:0; }
+.dict-supplement>summary { display:flex; align-items:center; gap:12px; padding:11px 14px; font-size:12px; font-weight:600; list-style:none; }
+.dict-supplement>summary::before { content:'+'; color:var(--dict-muted); font:14px ui-monospace,monospace; }
+.dict-supplement[open]>summary::before { content:'−'; }
+.dict-supplement>summary::-webkit-details-marker { display:none; }
+.dict-supplement>summary small { margin-left:auto; color:var(--dict-muted); font-size:9px; font-weight:400; }
+.dict-supplement[open]>summary { border-bottom:1px solid var(--dict-line); }
+.dict-supplement-body { padding:14px 18px; }
+.dict-extra-blocks { margin:12px 0; font-size:12px; }
+.dict-supporting { margin:32px 0; padding-top:24px; border-top:1px solid var(--dict-line); }
+.dict-supporting>h2 { margin:0; font-size:18px; letter-spacing:-.02em; }
+.dict-supporting>p { color:var(--dict-muted); font-size:11px; margin:6px 0 18px; }
+.dict-references>summary { font-size:12px; font-weight:650; padding:12px 0; border-top:1px solid var(--dict-line); }
+.dict-references>summary span { font:10px ui-monospace,monospace; color:var(--dict-muted); margin-left:8px; }
+@media(max-width:720px) {
+ .dict-kind-header h2 { font-size:22px; }
+ .dict-senses { padding-left:19px; }
+ .dict-senses>li { padding-left:4px; }
+ .dict-senses .dict-senses { padding-left:18px; }
+ .dict-definition { font-size:14px; }
+ .dict-supplement-body { padding:12px; }
+ .dict-reader-intro>span:last-child { display:none; }
+}
+@media print { .dict-evidence-folded:not([open])>*:not(summary), .dict-supplement:not([open])>*:not(summary) { display:block !important; } }
+.dict-headword-context { margin-top:10px; font-size:11px; }
+.dict-headword-context>summary { color:var(--dict-muted); font-size:9px; }
+.dict-headword-context[open] { padding:10px; border-left:2px solid var(--dict-line); background:var(--dict-soft); }
+.dict-headword-context[open]>summary { margin-bottom:8px; }

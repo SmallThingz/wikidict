@@ -6,16 +6,19 @@ const dec = @import("blob_decoder");
 const ir = enc.document_ir;
 const wiki = @import("wikitext.zig");
 const Allocator = std.mem.Allocator;
+pub const entry_layout = @import("entry_layout.zig");
 
 pub const Feature = wiki.Feature;
 pub const Block = wiki.Block;
 pub const Section = struct { level: u8, title: []const u8, blocks: []const Block };
 pub const Expansion = struct { backend: []const u8 = "lua-vm", status: enum { ok, failed }, diagnostic: ?[]const u8 = null };
 pub const Entry = struct {
+    organization: entry_layout.Layout = .{},
     expansion: ?Expansion = null,
     title: []const u8,
     kind: enc.blob_format.BlobKind,
     language: ?[]const u8 = null,
+    language_code: []const u8 = "",
     sections: []const Section = &.{},
     preamble: []const u8 = "",
     unexpanded_templates: usize = 0,
@@ -44,6 +47,7 @@ pub fn sourceAlloc(a: Allocator, record: dec.BlobRecordView) ![]u8 {
         .rhymes => |r| enc.rhymes_encoding.decodeAlloc(a, r.payload),
         .reconstruction => |r| enc.reconstruction_encoding.decodeAlloc(a, r.payload, r.title),
         .citations, .sign_gloss => |r| a.dupe(u8, r.source),
+        .supplement => return error.InvalidEncoding,
     };
 }
 
@@ -54,6 +58,7 @@ pub fn payload(record: dec.BlobRecordView) []const u8 {
         .rhymes => |r| r.payload,
         .reconstruction => |r| r.payload,
         .citations, .sign_gloss => |r| r.source,
+        .supplement => |r| r.payload,
     };
 }
 
@@ -128,6 +133,7 @@ const Builder = struct {
     }
     fn language(self: *Builder, it_ptr: *enc.language_blob_encoding.SectionIterator) !void {
         while (try it_ptr.next()) |s| {
+            if (s.external != null) return error.InvalidEncoding;
             if (self.started) try self.flush();
             self.started = true;
             self.title = try utf8Text(self.a, s.title);
@@ -168,6 +174,7 @@ pub fn fromRecord(allocator: Allocator, record: dec.BlobRecordView, include_sour
     };
     try builder.flush();
     entry.sections = try builder.sections.toOwnedSlice(a);
+    entry.organization = try entry_layout.build(a, entry.sections);
     entry.preamble_spans = try renderer.parseSpans(entry.preamble, .{});
     entry.references = try renderer.finishReferences();
     entry.unexpanded_templates = renderer.unresolved_templates;
@@ -181,8 +188,10 @@ pub fn fromRecord(allocator: Allocator, record: dec.BlobRecordView, include_sour
 
 fn populate(b: *Builder, record: dec.BlobRecordView, entry: *Entry) !void {
     switch (record) {
+        .supplement => return error.InvalidEncoding,
         .language => |r| {
             entry.language = try utf8Text(b.a, r.metadata.heading);
+            entry.language_code = try utf8Text(b.a, r.metadata.code);
             b.renderer.context.language = entry.language.?;
             var it = try r.sectionIterator();
             entry.preamble = try utf8Text(b.a, it.preamble());
@@ -272,6 +281,7 @@ test "presentation uses semantic sections and preserves exact optional source" {
     var doc = try fromRecord(a, .{ .language = .{ .title = "cat", .payload = encoded, .metadata = .{ .code = "en", .heading = "English" } } }, true);
     defer doc.deinit();
     try std.testing.expectEqualStrings(source, doc.entry.source.?);
+    try std.testing.expectEqualStrings("en", doc.entry.language_code);
     try std.testing.expectEqual(@as(usize, 2), doc.entry.sections.len);
     try std.testing.expectEqual(wiki.Kind.definition, doc.entry.sections[1].blocks[0].kind);
     try std.testing.expectEqual(@as(usize, 1), doc.entry.unexpanded_templates);
@@ -307,6 +317,7 @@ pub fn fromWikitext(allocator: Allocator, title: []const u8, language: []const u
     try builder.raw(owned_source);
     try builder.flush();
     entry.sections = try builder.sections.toOwnedSlice(a);
+    entry.organization = try entry_layout.build(a, entry.sections);
     entry.references = try renderer.finishReferences();
     entry.rendered_templates = renderer.rendered_templates;
     entry.unexpanded_templates = renderer.unresolved_templates;
@@ -346,4 +357,51 @@ test "standalone and expanded presentation own temporary source bytes" {
     try std.testing.expectEqualStrings("mouse", doc.entry.sections[1].blocks[0].spans[0].text);
     try setExactSource(&doc, "{{original}}\xff");
     try std.testing.expect(doc.entry.source == null and doc.entry.source_base64 != null);
+}
+
+test "form entries keep noun and verb meanings rather than becoming a bare redirect" {
+    const source = "==English==\n===Noun===\n{{head|en|noun form}}\n# {{plural of|en|cat}}\n===Verb===\n{{head|en|verb form}}\n# {{infl of|en|cat||s-verb-form}}\n";
+    var doc = try fromWikitext(std.testing.allocator, "cats", "English", source, true);
+    defer doc.deinit();
+    const lexical = doc.entry.organization.lexemes;
+    try std.testing.expectEqual(@as(usize, 2), lexical.len);
+    try std.testing.expectEqualStrings("Noun", lexical[0].kind);
+    try std.testing.expectEqualStrings("Verb", lexical[1].kind);
+    try std.testing.expectEqualStrings("plural", lexical[0].definitions[0].form.?.relation);
+    try std.testing.expectEqualStrings("cat", lexical[1].definitions[0].form.?.target);
+    try std.testing.expectEqualStrings("third-person singular present", lexical[1].definitions[0].form.?.relation);
+    try std.testing.expectEqual(@as(usize, 0), doc.entry.unexpanded_templates);
+    try std.testing.expectEqualStrings(source, doc.entry.source.?);
+}
+
+test "synonym lists are not mislabeled as usage examples" {
+    const source = "==English==\n===Noun===\n# An animal.\n#: {{syn|en|feline|kitty}}\n#: The cat sat on the mat.\n#* {{quote-book|en|title=Book|passage=The cat slept.}}\n";
+    var doc = try fromWikitext(std.testing.allocator, "cat", "English", source, false);
+    defer doc.deinit();
+    const sense = doc.entry.organization.lexemes[0].definitions[0];
+    try std.testing.expectEqual(@as(usize, 1), sense.examples.len);
+    try std.testing.expectEqual(@as(usize, 1), sense.notes.len);
+    try std.testing.expectEqual(@as(usize, 1), sense.quotations.len);
+    const blocks = doc.entry.sections[1].blocks;
+    try std.testing.expect(std.mem.indexOf(u8, blocks[sense.examples[0]].text, "mat") != null);
+    try std.testing.expect(std.mem.indexOf(u8, blocks[sense.notes[0]].text, "syn") != null);
+}
+
+test "standalone multilingual source never merges equally named parts of speech" {
+    var doc = try fromWikitext(std.testing.allocator, "chat", "English", "==English==\n===Noun===\n# A conversation.\n==French==\n===Etymology===\nLatin.\n===Noun===\n# A cat.\n", true);
+    defer doc.deinit();
+    const lexical = doc.entry.organization.lexemes;
+    try std.testing.expectEqual(@as(usize, 2), lexical.len);
+    try std.testing.expectEqualStrings("English", lexical[0].language);
+    try std.testing.expectEqualStrings("French", lexical[1].language);
+    try std.testing.expect(lexical[0].etymology == null);
+    try std.testing.expectEqualStrings("Etymology", doc.entry.sections[lexical[1].etymology.?].title);
+}
+
+test "quotation continuation lines stay with quotations rather than becoming usage examples" {
+    var doc = try fromWikitext(std.testing.allocator, "cat", "English", "==English==\n===Noun===\n# An animal.\n#* 1973, A Book.\n#*: A continuation of the quoted passage.\n#: My cat sleeps.\n", false);
+    defer doc.deinit();
+    const sense = doc.entry.organization.lexemes[0].definitions[0];
+    try std.testing.expectEqual(@as(usize, 2), sense.quotations.len);
+    try std.testing.expectEqual(@as(usize, 1), sense.examples.len);
 }

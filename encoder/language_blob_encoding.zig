@@ -5,6 +5,7 @@ const document_ir = @import("document_ir.zig");
 const flag_custom_language_heading: u8 = 1 << 0;
 const flag_preamble: u8 = 1 << 1;
 const op_heading: u8 = 1;
+const parts = @import("part_kind.zig");
 
 pub const LanguageContext = struct {
     heading: []const u8,
@@ -138,6 +139,8 @@ pub const SectionView = struct {
     raw_title: []const u8,
     raw_body: []const u8,
     language_code: []const u8,
+    /// The body is in the matching per-language companion blob, not empty source.
+    external: ?parts.Kind = null,
 
     pub fn content(self: SectionView) []const u8 {
         if (std.mem.startsWith(u8, self.raw_body, "\r\n")) return self.raw_body[2..];
@@ -218,13 +221,21 @@ pub const SectionIterator = struct {
 
     pub fn next(self: *SectionIterator) error{InvalidEncoding}!?SectionView {
         if (self.done) return null;
-        const marker = std.mem.indexOfScalarPos(u8, self.encoded, self.body_start, 0) orelse self.encoded.len;
+        var marker = std.mem.indexOfScalarPos(u8, self.encoded, self.body_start, 0) orelse self.encoded.len;
+        var external: ?parts.Kind = null;
+        if (marker == self.body_start and self.encoded.len - marker >= 2 and self.encoded[marker + 1] == 2) {
+            if (self.current_level < 3) return error.InvalidEncoding;
+            external = parts.classify(self.current_title) orelse return error.InvalidEncoding;
+            marker += parts.reference.len;
+            if (marker < self.encoded.len and self.encoded[marker] != 0) return error.InvalidEncoding;
+        }
         const result: SectionView = .{
             .level = self.current_level,
             .title = self.current_title,
             .raw_title = self.current_raw_title,
-            .raw_body = self.encoded[self.body_start..marker],
+            .raw_body = self.encoded[self.body_start..if (external != null) self.body_start else marker],
             .language_code = self.language.code,
+            .external = external,
         };
         if (marker == self.encoded.len) {
             self.done = true;
@@ -567,5 +578,24 @@ test "language splitter emits sections accepted by robust encoder" {
             seen += 1;
         }
         try std.testing.expect(seen != 0);
+    }
+}
+
+test "external body references validate semantic family and fail raw source decode" {
+    const invalid = [_][]const u8{
+        "\x00\x00\x02\x01",
+        "\x00\x00\x01\x03\x04Noun\x00\x02\x01",
+        "\x00\x00\x01\x03\x09Etymology\x00\x02\x00",
+        "\x00\x00\x01\x03\x09Etymology\x00\x02\x01extra",
+        "\x00\x00\x01\x03\x09Etymology\x00",
+    };
+    for (invalid) |bytes| {
+        var it = try SectionIterator.init(bytes, .{ .heading = "English" });
+        var failed = false;
+        while (it.next() catch {
+            failed = true;
+            break;
+        }) |_| {}
+        try std.testing.expect(failed);
     }
 }

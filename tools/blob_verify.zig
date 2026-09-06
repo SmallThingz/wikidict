@@ -68,8 +68,10 @@ const BlobFile = struct {
     allocator: std.mem.Allocator,
     mapped: Mapped,
     indexed: blob_format.IndexedBlobView,
+    resolver: ?encoder.blob_files.Resolver = null,
 
     fn deinit(self: *BlobFile) void {
+        if (self.resolver) |*r| r.deinit();
         self.indexed.deinit(self.allocator);
         self.mapped.deinit();
     }
@@ -123,7 +125,7 @@ const LanguageBlobs = struct {
             errdefer indexed.deinit(allocator);
             const gop = try map.getOrPut(entry.heading);
             if (gop.found_existing) return error.InvalidManifest;
-            gop.value_ptr.* = .{ .allocator = allocator, .mapped = mapped, .indexed = indexed };
+            gop.value_ptr.* = .{ .allocator = allocator, .mapped = mapped, .indexed = indexed, .resolver = .{ .io = io, .a = allocator, .root = root, .metadata = metadata } };
             expected_records += indexed.recordCount();
         }
         return .{
@@ -133,8 +135,8 @@ const LanguageBlobs = struct {
         };
     }
 
-    fn find(self: *const LanguageBlobs, heading: []const u8) ?BlobFile {
-        return self.map.get(heading);
+    fn find(self: *const LanguageBlobs, heading: []const u8) ?*BlobFile {
+        return self.map.getPtr(heading);
     }
 };
 
@@ -295,7 +297,8 @@ fn verifyMain(
             return error.MissingLanguageRecord;
         };
         const language: language_encoding.LanguageContext = .{ .heading = section.heading };
-        const decoded = try language_encoding.decodeAlloc(page_allocator, record.payload, language);
+        const joined = try blob.resolver.?.resolveAlloc(page_allocator, title, record.payload);
+        const decoded = try language_encoding.decodeAlloc(page_allocator, joined orelse record.payload, language);
 
         var repeated = false;
         for (page_sections.items[index + 1 ..]) |later| {
@@ -432,6 +435,8 @@ pub fn main(init: std.process.Init) !void {
         _ = page_arena.reset(.retain_capacity);
     }
     try verifyCounts(&language_blobs, &fixed, stats);
+    var language_files = language_blobs.map.valueIterator();
+    while (language_files.next()) |file| try file.resolver.?.verifyCounts();
     std.debug.print(
         "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d}\n",
         .{

@@ -9,6 +9,8 @@ const thesaurus_encoding = blobs.thesaurus_encoding;
 const reconstruction_encoding = blobs.reconstruction_encoding;
 const rhymes_encoding = blobs.rhymes_encoding;
 
+const parts = blobs.language_parts;
+const Registry = blobs.language_registry.Registry;
 const language_bucket_count = 32;
 const ns_main: u32 = 0;
 const ns_rhymes: u32 = 106;
@@ -42,6 +44,8 @@ pub const BuildStats = struct {
     rhymes_records: usize = 0,
     sign_gloss_records: usize = 0,
     language_blobs: usize = 0,
+    supplement_records: [parts.count]usize = @splat(0),
+    supplement_bytes: [parts.count]usize = @splat(0),
 };
 
 const Capture = struct {
@@ -236,9 +240,13 @@ const Spools = struct {
         self.root = "";
     }
 
-    fn appendLanguage(self: *Spools, allocator: std.mem.Allocator, heading: []const u8, title: []const u8, payload: []const u8) !void {
+    fn appendLanguage(self: *Spools, allocator: std.mem.Allocator, heading: []const u8, title: []const u8, payload: []const u8, family: ?parts.Kind) !void {
         const bucket: usize = @intCast(std.hash.Wyhash.hash(0, heading) % language_bucket_count);
-        try self.language[bucket].append(self.io, allocator, heading, title, payload);
+        const key = try allocator.alloc(u8, heading.len + 1);
+        defer allocator.free(key);
+        key[0] = if (family) |kind| @intFromEnum(kind) else 0;
+        @memcpy(key[1..], heading);
+        try self.language[bucket].append(self.io, allocator, key, title, payload);
     }
 };
 
@@ -341,6 +349,7 @@ fn finalizeFixedSpool(
 
 const LanguageGroup = struct {
     heading: []const u8,
+    family: ?parts.Kind,
     records: std.ArrayListUnmanaged(blob_format.RecordInput) = .empty,
 };
 
@@ -349,7 +358,8 @@ fn finalizeLanguageBucket(
     allocator: std.mem.Allocator,
     spool: *const SpoolFile,
     output_root: []const u8,
-    manifest: *std.Io.Writer,
+    manifest: *std.ArrayList([]const u8),
+    registry: *const Registry,
 ) !usize {
     var mapped = try mmapPath(io, spool.path);
     defer mapped.deinit();
@@ -363,9 +373,9 @@ fn finalizeLanguageBucket(
     }
     var it: SpoolIterator = .{ .bytes = mapped.bytes };
     while (try it.next()) |frame| {
-        if (frame.key.len == 0) return error.InvalidSpool;
+        if (frame.key.len < 2) return error.InvalidSpool;
         const gop = try groups.getOrPut(allocator, frame.key);
-        if (!gop.found_existing) gop.value_ptr.* = .{ .heading = frame.key };
+        if (!gop.found_existing) gop.value_ptr.* = .{ .heading = frame.key[1..], .family = if (frame.key[0] == 0) null else try parts.kinds.fromByte(frame.key[0]) };
         try gop.value_ptr.records.append(allocator, .{ .title = frame.title, .payload = frame.payload });
     }
 
@@ -382,13 +392,19 @@ fn finalizeLanguageBucket(
 
     var count: usize = 0;
     for (ordered.items) |group| {
-        const metadata = try blob_format.buildLanguageMetadataAlloc(allocator, "", group.heading);
-        defer allocator.free(metadata);
-        const path = try languageBlobPathAlloc(allocator, output_root, group.heading);
+        const base_metadata = try blob_format.buildLanguageMetadataAlloc(allocator, registry.code(group.heading) orelse "", group.heading);
+        defer allocator.free(base_metadata);
+        const metadata = if (group.family) |family| try std.mem.concat(allocator, u8, &.{ base_metadata, &.{@intFromEnum(family)} }) else base_metadata;
+        defer if (group.family != null) allocator.free(metadata);
+        const path = if (group.family) |family| try blob_catalog.supplementPathAlloc(allocator, output_root, group.heading, family) else try languageBlobPathAlloc(allocator, output_root, group.heading);
         defer allocator.free(path);
-        try writeBlobFile(io, path, .language, metadata, group.records.items);
-        try blob_catalog.writeEntry(manifest, group.heading);
-        count += 1;
+        try writeBlobFile(io, path, if (group.family != null) .supplement else .language, metadata, group.records.items);
+        if (group.family == null) {
+            const heading = try allocator.dupe(u8, group.heading);
+            errdefer allocator.free(heading);
+            try manifest.append(allocator, heading);
+            count += 1;
+        }
     }
     return count;
 }
@@ -428,7 +444,15 @@ fn processMain(
             try language_encoding.encodeRepeatedSectionsFallbackAlloc(page_allocator, page_sections.items, language)
         else
             try language_encoding.encodeRobustAlloc(page_allocator, section.source, language);
-        try spools.appendLanguage(page_allocator, section.heading, title, payload);
+        var split = try parts.splitAlloc(page_allocator, payload, language);
+        defer split.deinit(page_allocator);
+        try spools.appendLanguage(page_allocator, section.heading, title, split.core, null);
+        for (split.bodies, 0..) |body, part_index| if (body.len != 0) {
+            const family: parts.Kind = @enumFromInt(part_index + 1);
+            try spools.appendLanguage(page_allocator, section.heading, title, body, family);
+            stats.supplement_records[part_index] += 1;
+            stats.supplement_bytes[part_index] += body.len;
+        };
         stats.language_records += 1;
     }
 }
@@ -477,12 +501,32 @@ fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
     };
 }
 
+pub fn registryFromDump(allocator: std.mem.Allocator, dump: []const u8, parser: *StreamParser) !Registry {
+    const needle = "<title>Module:languages/canonical names</title>";
+    const title_pos = std.mem.indexOf(u8, dump, needle) orelse return Registry.empty(allocator);
+    const begin = std.mem.lastIndexOf(u8, dump[0..title_pos], "<page>") orelse return error.InvalidLanguageRegistry;
+    const end = std.mem.indexOfPos(u8, dump, title_pos, "</page>") orelse return error.InvalidLanguageRegistry;
+    var capture: Capture = .{};
+    try parser.parse(dump[begin .. end + 7], &capture, Capture.onNode);
+    const source = try xml_decode.decodeSinglePassAlloc(allocator, capture.text_raw orelse return error.InvalidLanguageRegistry);
+    defer allocator.free(source);
+    return Registry.fromLuaAlloc(allocator, source);
+}
+
 pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !BuildStats {
     try std.Io.Dir.cwd().createDirPath(io, options.output_root);
     const languages_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ options.output_root, blob_catalog.language_directory });
     defer allocator.free(languages_dir);
     try std.Io.Dir.cwd().deleteTree(io, languages_dir);
     try std.Io.Dir.cwd().createDirPath(io, languages_dir);
+    const details_dir = try std.fs.path.join(allocator, &.{ options.output_root, "details" });
+    defer allocator.free(details_dir);
+    try std.Io.Dir.cwd().deleteTree(io, details_dir);
+    for (std.meta.tags(parts.Kind)) |family| {
+        const dir = try std.fs.path.join(allocator, &.{ details_dir, @tagName(family) });
+        defer allocator.free(dir);
+        try std.Io.Dir.cwd().createDirPath(io, dir);
+    }
     inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss" }) |name| {
         const stale = try fixedBlobPathAlloc(allocator, options.output_root, name);
         defer allocator.free(stale);
@@ -501,6 +545,8 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     defer mapped.deinit();
     var parser = StreamParser.init(allocator);
     defer parser.deinit();
+    var registry = try registryFromDump(allocator, mapped.bytes, &parser);
+    defer registry.deinit();
     var page_arena = std.heap.ArenaAllocator.init(allocator);
     defer page_arena.deinit();
 
@@ -543,8 +589,19 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     var manifest_buffer: [64 * 1024]u8 = undefined;
     var manifest_writer = manifest_file.writer(io, &manifest_buffer);
     const manifest = &manifest_writer.interface;
+    var headings: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (headings.items) |heading| allocator.free(heading);
+        headings.deinit(allocator);
+    }
+    for (&spools.language) |*spool| stats.language_blobs += try finalizeLanguageBucket(io, allocator, spool, options.output_root, &headings, &registry);
+    std.mem.sort([]const u8, headings.items, {}, struct {
+        fn less(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.less);
     try manifest.writeAll(blob_catalog.manifest_header ++ "\n");
-    for (&spools.language) |*spool| stats.language_blobs += try finalizeLanguageBucket(io, allocator, spool, options.output_root, manifest);
+    for (headings.items) |heading| try blob_catalog.writeEntry(manifest, heading);
     try manifest.flush();
 
     try finalizeFixedSpool(io, allocator, &spools.thesaurus, options.output_root, "thesaurus", .thesaurus);

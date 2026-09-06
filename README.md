@@ -32,7 +32,7 @@ zig build
 
 ### Per-language blob workflow
 
-`WIKBLB03` is the per-language / feature-blob path. It is separate from the older monolithic `wiktionary.bin` workflow documented below.
+`WIKBLB04` is the per-language / feature-blob path. It is separate from the older monolithic `wiktionary.bin` workflow documented below.
 
 Build blobs from a Wiktionary XML dump:
 
@@ -77,8 +77,8 @@ Queries validate record framing and title order while building the runtime index
 
 For browser or freestanding consumers, depend on the public `blob_decoder` module (and `blob_encoder` when codec/format definitions are needed); these modules contain no filesystem, POSIX, XML-parser, or legacy dictionary dependency. The full `decoder` module re-exports the same blob API for native applications. Library consumers can call `openTrustedBlob(bytes)` for the fast borrowed view or `inspectBlob(bytes)` for full validation. The bare view supports allocation-free sequential iteration; call `buildTrustedIndexAlloc()` after trusted open, or `buildIndexAlloc()` to validate while indexing, to construct the in-memory offsets used by `find()` and `recordAt()`. `find()` then performs binary search over sorted titles, while language records expose `sectionIterator()`, Thesaurus/Rhymes expose typed `recordIterator()` APIs, Reconstruction exposes a typed view/section iterator, and Citations/Sign gloss expose borrowed raw source slices. Catalog helpers expose `languages.tsv` iteration, language filename derivation, fixed feature filenames, and `findLanguageBlob()`.
 
-`WIKBLB03` persists no lookup index, record count, record-area length, or metadata-length field. The wire prefix is only magic plus blob kind; language metadata is self-delimited, and each sorted record is `title\0 + varint(payload_len) + payload`. The payload length is the only per-record framing that cannot be recovered from delimiters because raw payloads may contain arbitrary bytes. Sequential traversal is zero-allocation; random-access indexes are derived in memory when requested. `WIKBLB03` itself is deliberately uncompressed: storage/transport compression belongs outside the format, and consumers should decompress the finished blob before opening it.
-`WIKBLB02` files are incompatible: rebuild them with `build-blobs`. Runtime indexes own only their offset arrays; keep the borrowed blob bytes alive and unchanged until all views and indexes are no longer used, and release indexes with `deinit(allocator)`.
+`WIKBLB04` persists no lookup index, record count, record-area length, or metadata-length field. The wire prefix is only magic plus blob kind; language metadata is self-delimited, and each sorted record is `title\0 + varint(payload_len) + payload`. The payload length is the only per-record framing that cannot be recovered from delimiters because raw payloads may contain arbitrary bytes. Sequential traversal is zero-allocation; random-access indexes are derived in memory when requested. `WIKBLB04` itself is deliberately uncompressed: storage/transport compression belongs outside the format, and consumers should decompress the finished blob before opening it.
+`WIKBLB02` and `WIKBLB03` files are incompatible: rebuild them with `build-blobs`. Runtime indexes own only their offset arrays; keep the borrowed blob bytes alive and unchanged until all views and indexes are no longer used, and release indexes with `deinit(allocator)`.
 
 Framing validation cannot detect deletion at a complete-record boundary without external information. Use `verify-blobs` against the source for corpus completeness, and establish distribution integrity outside the logical format.
 
@@ -171,3 +171,11 @@ This serializes the encoder, decoder, structure, verifier, and Lua2 test targets
 `zig build build-dictionary -- DUMP.xml NEW_ROOT` builds per-language/feature blobs plus shared templates, module redirects and VM bytecode under `NEW_ROOT/runtime`. It uses the existing Lua converter and blob encoder as coordinated stages; their eventual single-pass merger remains separate work. Existing directories are refused and failed builds retain an `.incomplete` marker.
 
 Pass `--runtime NEW_ROOT/runtime` to `dict lookup`, `dict search --format html`, `dict render` or `dict tui` to enable real bytecode-backed expansion. Source output remains unexpanded and byte-exact. VM failures are explicitly labelled and CLI fallbacks exit 2. See [frontend/README.md](frontend/README.md#lua-bytecode-integration) for runtime assets, resource limits and validation. `zig build test-runtime` exercises the real converter/VM/rendering chain.
+
+### Organized reading and section companions
+
+Entries are grouped by part of speech, with definitions and usage examples first. Origins and sense-specific quotations remain associated, while long supporting sections are expandable. `cats` retains its separate noun and verb uses; exact-lookup HTML can include its base entry for offline navigation. Use `--details` for complete human output or `d` in the TUI.
+
+`WIKBLB04` moves large language-section bodies into per-language `details/{etymology,translations,relations,references,quotations}/<sha256>.wikblb` companions. Core files retain all headings and semantic external-body markers. The native resolver rejoins them before exact-source decoding or VM expansion. Missing components are errors, not empty sections. This is a storage split, not compression, and all old v3 outputs must be rebuilt.
+
+`dict languages WORD` counts only language blobs containing that exact spelling; omitting WORD counts the global catalog. Canonical codes come from the input dump, Translingual is counted separately, and catalog order is deterministic. See the frontend documentation for the full runtime model and protocol.

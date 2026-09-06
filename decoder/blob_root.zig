@@ -10,6 +10,7 @@ pub const BlobThesaurusRecordView = blob_reader.ThesaurusRecordView;
 pub const BlobRhymesRecordView = blob_reader.RhymesRecordView;
 pub const BlobReconstructionRecordView = blob_reader.ReconstructionRecordView;
 pub const BlobRawRecordView = blob_reader.RawRecordView;
+pub const BlobSupplementRecordView = blob_reader.SupplementRecordView;
 pub const BlobCatalogEntry = blob_catalog.Entry;
 pub const BlobCatalogIterator = blob_catalog.Iterator;
 pub const language_blob_filename_len = blob_catalog.language_blob_filename_len;

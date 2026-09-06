@@ -1,6 +1,6 @@
 # Dictionary frontends
 
-The native frontend consumes `WIKBLB03` through the portable encoder/decoder modules. The older monolithic dictionary commands remain separate. No VM or source codec is duplicated here.
+The native frontend consumes `WIKBLB04` through the portable encoder/decoder modules. The older monolithic dictionary commands remain separate. No VM or source codec is duplicated here.
 
 ```sh
 zig build
@@ -105,3 +105,23 @@ The integration tests extract fixture XML, invoke the real converter, execute se
 VM correctness and full MediaWiki compatibility remain separate from integration correctness. Full pages can still fail because of runtime defects or missing external page/Wikibase dependencies. Native template presentation remains the default while that work is ongoing; `--runtime` makes the choice explicit.
 
 Observed against the pinned 2026-04-01 dump: the existing converter built all 59,701 extracted Scribunto modules. Actual `en-noun` and `IPA` expansion worked. `lb` and the full `cat activation noise` entry still reported `ModuleNotFound: Module:labels/data`; that title is absent from the extracted Scribunto manifest. Do not fabricate its data or equate this integration gate with full-page compatibility.
+
+## Definition-first entries and exact language accounting
+
+The reading model now exposes `entry.organization`: lexical entries grouped by part of speech and language, each with its original section, etymology association, definition tree, examples, quotations and supporting notes. These are runtime indices into the unchanged `sections` and `blocks`, not persisted lookup tables. Synonym lists are supporting notes, not examples. Distinct origins are not merged. Unrecognized sections and unattached material remain available.
+
+HTML opens on definitions and usage examples. Quotations, history, translations, related terms and references use disclosures, with navigation opening the correct original section. Human CLI output defaults to this shorter view; `--details` includes all supporting material. In the TUI, `d` toggles details and `s` remains exact-source display.
+
+Inflected entries remain real entries. For example, `cats` retains both its noun plural and verb inflection. Form relations are explicit in the machine model. Exact-lookup HTML includes up to eight direct, same-language base entries when available, enabling offline navigation without silently redirecting, merging senses, or inventing inflections. The primary match count remains one. JSON lookup returns the requested entry and semantic base-word references without copying those related pages.
+
+`dict languages` reports the complete catalog. `dict languages cat` reports only blobs containing that exact spelling. JSON retains `dict.languages.v1` and its heading list, adding `scope`, `query`, separate language/Translingual/unverified counts and an `accounting` array of headings, canonical codes and per-blob title counts. Codes come from `Module:languages/canonical names` in the same input dump. Missing registry data remains explicitly unverified, never guessed. These counts are not Wiktionary edition counts, living-language totals, or translation-target counts.
+
+## WIKBLB04 language companions
+
+Definitions, usage examples and usage notes stay in each language's core file. Large section bodies are placed in per-language companions under `details/etymology`, `details/translations`, `details/relations`, `details/references` and `details/quotations`. Each filename is the same SHA-256 of its language heading. The original Thesaurus, Citations, Reconstruction, Rhymes and Sign gloss blobs stay independent. Quotes inside a definition's body stay with that body; the quotation companion stores standalone quotation-section bodies.
+
+Core language payloads retain every section heading and its order. An external body is represented by the two-byte semantic marker `0, 2`; its family is derived from the retained heading, not persisted again. A companion uses outer kind `supplement`, metadata `code\0heading\0family:u8`, and the usual title-sorted, length-framed records. Each record contains canonical length-framed body fragments in section occurrence order. No lookup indexes, offsets, record counts or derived filenames are persisted, and compression stays external.
+
+`blob_encoder.language_parts` splits/rejoins the portable payloads. A section iterator reports `section.external` rather than pretending that a referenced body is empty. `encoder.blob_files.Resolver` opens/maps/indexes companions lazily for selected records, validates their language/family, and reconstructs the original payload before source decoding or Lua expansion. Complete native rendering and exact-source export currently require referenced companions; missing, truncated or mismatched companions fail explicitly. Source-mode decoding must not bypass resolution. The corpus verifier also rejects orphan companion records.
+
+This split reduces the core footprint, not necessarily total storage: titles and framing in independent companions add overhead. Keep all components together for exact reconstruction. Rebuild old v3 output; it is not compatible with v4.

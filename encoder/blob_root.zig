@@ -1,3 +1,5 @@
+pub const language_parts = @import("language_parts.zig");
+pub const language_registry = @import("language_registry.zig");
 pub const document_ir = @import("document_ir.zig");
 pub const blob_codec_support = @import("blob_codec_support.zig");
 pub const thesaurus_encoding = @import("thesaurus_encoding.zig");
@@ -15,4 +17,6 @@ test "blob encoder root imports portable codecs" {
     _ = reconstruction_encoding;
     _ = blob_format;
     _ = blob_catalog;
+    _ = language_parts;
+    _ = language_registry;
 }

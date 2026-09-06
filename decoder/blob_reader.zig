@@ -56,6 +56,12 @@ pub const RawRecordView = struct {
     source: []const u8,
 };
 
+pub const SupplementRecordView = struct {
+    title: []const u8,
+    payload: []const u8,
+    metadata: format.LanguageMetadata,
+    family: format.PartKind,
+};
 pub const RecordView = union(format.BlobKind) {
     language: LanguageRecordView,
     thesaurus: ThesaurusRecordView,
@@ -63,6 +69,7 @@ pub const RecordView = union(format.BlobKind) {
     reconstruction: ReconstructionRecordView,
     rhymes: RhymesRecordView,
     sign_gloss: RawRecordView,
+    supplement: SupplementRecordView,
 
     pub fn kind(self: RecordView) format.BlobKind {
         return std.meta.activeTag(self);
@@ -76,6 +83,7 @@ pub const RecordView = union(format.BlobKind) {
             .reconstruction => |record| record.title,
             .rhymes => |record| record.title,
             .sign_gloss => |record| record.title,
+            .supplement => |record| record.title,
         };
     }
 };
@@ -125,7 +133,7 @@ pub const BlobView = struct {
     fn fromRaw(raw: format.BlobView) error{InvalidBlob}!BlobView {
         return .{
             .raw = raw,
-            .language_metadata = if (raw.kind == .language) try raw.languageMetadata() else null,
+            .language_metadata = if (raw.kind == .language or raw.kind == .supplement) try raw.languageMetadata() else null,
         };
     }
 
@@ -165,6 +173,7 @@ pub const BlobView = struct {
             .reconstruction => .{ .reconstruction = .{ .title = record.title, .payload = record.payload } },
             .rhymes => .{ .rhymes = .{ .title = record.title, .payload = record.payload } },
             .sign_gloss => .{ .sign_gloss = .{ .title = record.title, .source = record.payload } },
+            .supplement => .{ .supplement = .{ .title = record.title, .payload = record.payload, .metadata = self.language_metadata.?, .family = self.raw.supplementKind() catch unreachable } },
         };
     }
 };
@@ -286,4 +295,17 @@ test "typed blob reader keeps raw feature payloads borrowed without persistent i
     var records = blob.iterator();
     try std.testing.expect((try records.next()) != null);
     try std.testing.expect((try records.next()) == null);
+}
+
+test "typed supplement records expose language identity and family without a persisted index" {
+    const a = std.testing.allocator;
+    const bytes = try format.buildAlloc(a, .supplement, "en\x00English\x00\x01", &.{.{ .title = "cat", .payload = "\x07origin\n" }});
+    defer a.free(bytes);
+    const blob = try BlobView.inspect(bytes);
+    try std.testing.expectEqualStrings("en", blob.languageMetadata().?.code);
+    var index = try blob.buildIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("cat")).?.supplement;
+    try std.testing.expectEqual(format.PartKind.etymology, record.family);
+    try std.testing.expectEqualStrings("\x07origin\n", record.payload);
 }

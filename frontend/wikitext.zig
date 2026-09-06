@@ -354,7 +354,14 @@ pub const Renderer = struct {
     }
     fn resolveTemplate(self: *Renderer, body: []const u8, style: Style, depth: usize) Error!void {
         const t = try syntax.Template.parse(self.a, body);
-        if (try templates.render(self, t, style, depth + 1)) self.rendered_templates += 1 else {
+        const start = self.spans.items.len;
+        if (try templates.render(self, t, style, depth + 1)) {
+            self.rendered_templates += 1;
+            // Preserve the whole headword line as a semantic unit, separate from media/context.
+            if (oneOf(t.name, &.{ "head", "en-noun", "en-proper noun", "en-verb", "en-adj", "en-adv" })) {
+                for (self.spans.items[start..]) |*span| span.role = .headword;
+            }
+        } else {
             self.unresolved_templates += 1;
             var missing = style;
             missing.kind = .template;
@@ -476,7 +483,7 @@ pub const Renderer = struct {
             if (prefix != 0) {
                 const path = line[0..prefix];
                 const last = path[path.len - 1];
-                const kind: Kind = if (last == '#') .definition else if (last == '*') (if (path[0] == '#') .quotation else .list_item) else if (last == ';') .term else if (path[0] == '#') .example else .indent;
+                const kind: Kind = if (path[0] == '#' and std.mem.indexOfScalar(u8, path, '*') != null) .quotation else if (last == '#') .definition else if (last == '*') .list_item else if (last == ';') .term else if (path[0] == '#') .example else .indent;
                 var number: []const u8 = "";
                 if (last == '#' and prefix <= counts.len) {
                     counts[prefix - 1] += 1;

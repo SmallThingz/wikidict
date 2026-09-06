@@ -20,6 +20,8 @@
         "tools",
         "frontend/README.md",
         "frontend/args.zig",
+        "frontend/languages.zig",
+        "frontend/entry_layout.zig",
         "runtime_bridge.zig",
         "frontend/expansion.zig",
         "frontend/expansion_worker.zig",

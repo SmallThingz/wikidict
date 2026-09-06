@@ -1,8 +1,9 @@
 const std = @import("std");
 
 // Logical, uncompressed blob format. Storage/transport compression stays external.
-pub const magic = "WIKBLB03";
-pub const version: u8 = 3;
+pub const magic = "WIKBLB04";
+pub const version: u8 = 4;
+pub const PartKind = @import("part_kind.zig").Kind;
 pub const header_len: usize = magic.len + 1;
 pub const max_varuint_len: usize = 10;
 
@@ -13,6 +14,7 @@ pub const BlobKind = enum(u8) {
     reconstruction = 4,
     rhymes = 5,
     sign_gloss = 6,
+    supplement = 7,
 };
 
 pub const RecordInput = struct {
@@ -90,12 +92,21 @@ pub const BlobView = struct {
         return .{ .blob = self };
     }
     pub fn languageMetadata(self: BlobView) error{InvalidBlob}!LanguageMetadata {
-        if (self.kind != .language) return error.InvalidBlob;
+        if (self.kind != .language and self.kind != .supplement) return error.InvalidBlob;
         var cursor: usize = 0;
         const code = try readNulField(self.metadata, &cursor);
         const heading = try readNulField(self.metadata, &cursor);
-        if (cursor != self.metadata.len or heading.len == 0) return error.InvalidBlob;
+        if (heading.len == 0) return error.InvalidBlob;
+        if (self.kind == .supplement) {
+            if (cursor + 1 != self.metadata.len) return error.InvalidBlob;
+            _ = try self.supplementKind();
+        } else if (cursor != self.metadata.len) return error.InvalidBlob;
         return .{ .code = code, .heading = heading };
+    }
+
+    pub fn supplementKind(self: BlobView) error{InvalidBlob}!PartKind {
+        if (self.kind != .supplement or self.metadata.len == 0) return error.InvalidBlob;
+        return @import("part_kind.zig").fromByte(self.metadata[self.metadata.len - 1]) catch error.InvalidBlob;
     }
 
     pub fn validate(self: BlobView) error{InvalidBlob}!void {
@@ -110,7 +121,7 @@ pub const BlobView = struct {
             cursor = parsed.next;
         }
         if (cursor != self.records.len) return error.InvalidBlob;
-        if (self.kind == .language) _ = try self.languageMetadata();
+        if (self.kind == .language or self.kind == .supplement) _ = try self.languageMetadata();
     }
 
     pub fn buildIndexAlloc(self: BlobView, allocator: std.mem.Allocator) !IndexedBlobView {
@@ -170,6 +181,7 @@ fn decodeKind(bytes: []const u8) error{InvalidBlob}!BlobKind {
         @intFromEnum(BlobKind.reconstruction) => .reconstruction,
         @intFromEnum(BlobKind.rhymes) => .rhymes,
         @intFromEnum(BlobKind.sign_gloss) => .sign_gloss,
+        @intFromEnum(BlobKind.supplement) => .supplement,
         else => error.InvalidBlob,
     };
 }
@@ -191,7 +203,7 @@ fn varUIntLen(value: usize) usize {
     return len;
 }
 
-fn readPayloadLength(bytes: []const u8, cursor: *usize) error{InvalidBlob}!usize {
+pub fn readPayloadLength(bytes: []const u8, cursor: *usize) error{InvalidBlob}!usize {
     const start = cursor.*;
     var shift: u6 = 0;
     var value: u64 = 0;
@@ -211,14 +223,18 @@ fn readPayloadLength(bytes: []const u8, cursor: *usize) error{InvalidBlob}!usize
 }
 
 pub fn validateMetadata(kind: BlobKind, metadata: []const u8) error{InvalidMetadata}!void {
-    if (kind != .language) {
+    if (kind != .language and kind != .supplement) {
         if (metadata.len != 0) return error.InvalidMetadata;
         return;
     }
     var cursor: usize = 0;
     _ = readNulFieldMetadata(metadata, &cursor) catch return error.InvalidMetadata;
     const heading = readNulFieldMetadata(metadata, &cursor) catch return error.InvalidMetadata;
-    if (heading.len == 0 or cursor != metadata.len) return error.InvalidMetadata;
+    if (heading.len == 0) return error.InvalidMetadata;
+    if (kind == .supplement) {
+        if (cursor + 1 != metadata.len) return error.InvalidMetadata;
+        _ = @import("part_kind.zig").fromByte(metadata[cursor]) catch return error.InvalidMetadata;
+    } else if (cursor != metadata.len) return error.InvalidMetadata;
 }
 
 pub fn validateRecordInput(record: RecordInput) error{InvalidRecord}!void {
@@ -285,11 +301,16 @@ pub fn buildAlloc(
 pub fn openTrusted(bytes: []const u8) error{InvalidBlob}!BlobView {
     const kind = try decodeKind(bytes);
     var records_start = header_len;
-    if (kind == .language) {
+    if (kind == .language or kind == .supplement) {
         var cursor = records_start;
         _ = try readNulField(bytes, &cursor);
         const heading = try readNulField(bytes, &cursor);
         if (heading.len == 0) return error.InvalidBlob;
+        if (kind == .supplement) {
+            if (cursor == bytes.len) return error.InvalidBlob;
+            _ = @import("part_kind.zig").fromByte(bytes[cursor]) catch return error.InvalidBlob;
+            cursor += 1;
+        }
         records_start = cursor;
     }
     return .{
@@ -321,22 +342,22 @@ fn readNulFieldMetadata(bytes: []const u8, cursor: *usize) error{InvalidMetadata
     return field;
 }
 
-test "blob v3 header carries only magic and kind" {
+test "blob v4 header carries only magic and kind" {
     const encoded = encodeHeader(.rhymes);
     try std.testing.expectEqualSlices(u8, &.{
-        'W', 'I', 'K', 'B', 'L', 'B', '0', '3', @intFromEnum(BlobKind.rhymes),
+        'W', 'I', 'K', 'B', 'L', 'B', '0', '4', @intFromEnum(BlobKind.rhymes),
     }, &encoded);
     try std.testing.expectEqual(BlobKind.rhymes, try decodeKind(&encoded));
 }
 
-test "blob v3 stores only necessary record framing" {
+test "blob v4 stores only necessary record framing" {
     const encoded = try buildAlloc(std.testing.allocator, .citations, "", &.{
         .{ .title = "a", .payload = "x" },
     });
     defer std.testing.allocator.free(encoded);
-    try std.testing.expectEqualSlices(u8, "WIKBLB03\x03a\x00\x01x", encoded);
+    try std.testing.expectEqualSlices(u8, "WIKBLB04\x03a\x00\x01x", encoded);
 }
-test "blob v3 builds runtime index over borrowed records" {
+test "blob v4 builds runtime index over borrowed records" {
     const metadata = try buildLanguageMetadataAlloc(std.testing.allocator, "", "English");
     defer std.testing.allocator.free(metadata);
     const payload_a = [_]u8{ 0, 1, 2, 0, 3 };
@@ -362,7 +383,7 @@ test "blob v3 builds runtime index over borrowed records" {
     try std.testing.expectEqualStrings("banana", (try iterator.next()).?.title);
     try std.testing.expect((try iterator.next()) == null);
 }
-test "blob v3 rejects malformed framing and unsorted records" {
+test "blob v4 rejects malformed framing and unsorted records" {
     try std.testing.expectError(error.UnsortedRecords, buildAlloc(std.testing.allocator, .citations, "", &.{
         .{ .title = "b", .payload = "1" },
         .{ .title = "a", .payload = "2" },
@@ -396,15 +417,15 @@ test "trusted open skips title-order scan while runtime index can validate it" {
     try std.testing.expectError(error.InvalidBlob, trusted.validate());
     try std.testing.expectError(error.InvalidBlob, trusted.buildIndexAlloc(std.testing.allocator));
 }
-test "blob v3 rejects non-canonical payload lengths" {
+test "blob v4 rejects non-canonical payload lengths" {
     const broken = [_]u8{
-        'W', 'I', 'K',  'B',  'L', 'B', '0', '3', @intFromEnum(BlobKind.citations),
+        'W', 'I', 'K',  'B',  'L', 'B', '0', '4', @intFromEnum(BlobKind.citations),
         'a', 0,   0x81, 0x00, 'x',
     };
     try std.testing.expectError(error.InvalidBlob, inspect(&broken));
 }
 
-test "blob v3 metadata is semantic rather than length-indexed" {
+test "blob v4 metadata is semantic rather than length-indexed" {
     const metadata = try buildLanguageMetadataAlloc(std.testing.allocator, "en", "English");
     defer std.testing.allocator.free(metadata);
     const encoded = try buildAlloc(std.testing.allocator, .language, metadata, &.{});
@@ -417,7 +438,7 @@ test "blob v3 metadata is semantic rather than length-indexed" {
     try std.testing.expectError(error.InvalidMetadata, buildAlloc(std.testing.allocator, .citations, "x", &.{}));
 }
 
-test "blob v3 empty stream needs no runtime index storage" {
+test "blob v4 empty stream needs no runtime index storage" {
     const bytes = encodeHeader(.citations);
     const blob = try inspect(&bytes);
     var records = blob.iterator();
@@ -429,7 +450,7 @@ test "blob v3 empty stream needs no runtime index storage" {
     try std.testing.expectError(error.InvalidBlob, index.recordAt(0));
 }
 
-test "blob v3 payload lengths round trip at integer boundaries" {
+test "blob v4 payload lengths round trip at integer boundaries" {
     const values = [_]usize{ 0, 1, 127, 128, 16383, 16384, std.math.maxInt(usize) };
     for (values) |value| {
         var buffer: [max_varuint_len]u8 = undefined;
@@ -446,19 +467,20 @@ test "blob v3 payload lengths round trip at integer boundaries" {
     }
 }
 
-test "blob v3 rejects old magic and malformed record framing" {
+test "blob v4 rejects old magic and malformed record framing" {
     const invalid = [_][]const u8{
         "WIKBLB02\x03",
-        "WIKBLB03\x00",
-        "WIKBLB03\x01\x00\x00",
-        "WIKBLB03\x03unterminated",
-        "WIKBLB03\x03\x00\x00",
-        "WIKBLB03\x03a\x00",
-        "WIKBLB03\x03a\x00\x80",
-        "WIKBLB03\x03a\x00\x80\x00",
-        "WIKBLB03\x03a\x00\x02x",
-        "WIKBLB03\x03b\x00\x00a\x00\x00",
-        "WIKBLB03\x03a\x00\x00a\x00\x00",
+        "WIKBLB03\x03",
+        "WIKBLB04\x00",
+        "WIKBLB04\x01\x00\x00",
+        "WIKBLB04\x03unterminated",
+        "WIKBLB04\x03\x00\x00",
+        "WIKBLB04\x03a\x00",
+        "WIKBLB04\x03a\x00\x80",
+        "WIKBLB04\x03a\x00\x80\x00",
+        "WIKBLB04\x03a\x00\x02x",
+        "WIKBLB04\x03b\x00\x00a\x00\x00",
+        "WIKBLB04\x03a\x00\x00a\x00\x00",
     };
     for (invalid) |bytes| {
         try std.testing.expectError(error.InvalidBlob, inspect(bytes));
@@ -469,12 +491,12 @@ test "blob v3 rejects old magic and malformed record framing" {
 }
 
 fn testIndexAllocationFailures(allocator: std.mem.Allocator) !void {
-    const blob = try openTrusted("WIKBLB03\x03a\x00\x01xb\x00\x00");
+    const blob = try openTrusted("WIKBLB04\x03a\x00\x01xb\x00\x00");
     var index = try blob.buildIndexAlloc(allocator);
     defer index.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), index.recordCount());
 }
 
-test "blob v3 runtime index cleans up every allocation failure" {
+test "blob v4 runtime index cleans up every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testIndexAllocationFailures, .{});
 }

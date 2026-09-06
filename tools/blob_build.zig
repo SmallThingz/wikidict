@@ -13,6 +13,9 @@ pub fn main(init: std.process.Init) !void {
         .output_root = args[2],
         .limit_pages = limit_pages,
     });
+    for (std.meta.tags(encoder.language_parts.Kind), 0..) |family, i| {
+        std.debug.print("supplement={s} records={d} framed_body_bytes={d}\n", .{ @tagName(family), stats.supplement_records[i], stats.supplement_bytes[i] });
+    }
     std.debug.print(
         "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d}\n",
         .{

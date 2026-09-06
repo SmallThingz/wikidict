@@ -9,7 +9,7 @@ pub const language_directory = "languages";
 
 pub fn featureBlobFilename(kind: format.BlobKind) ?[]const u8 {
     return switch (kind) {
-        .language => null,
+        .language, .supplement => null,
         .thesaurus => "thesaurus.wikblb",
         .citations => "citations.wikblb",
         .reconstruction => "reconstruction.wikblb",
@@ -111,4 +111,9 @@ test "blob catalog names fixed feature blobs" {
     try std.testing.expectEqualStrings("rhymes.wikblb", featureBlobFilename(.rhymes).?);
     try std.testing.expectEqualStrings("sign-gloss.wikblb", featureBlobFilename(.sign_gloss).?);
     try std.testing.expect(featureBlobFilename(.language) == null);
+}
+
+pub fn supplementPathAlloc(a: std.mem.Allocator, root: []const u8, heading: []const u8, kind: format.PartKind) ![]u8 {
+    var name: [language_blob_filename_len]u8 = undefined;
+    return std.fs.path.join(a, &.{ root, "details", @tagName(kind), languageBlobFilename(heading, &name) });
 }

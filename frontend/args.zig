@@ -19,6 +19,7 @@ pub const Options = struct {
     limit: usize = 20,
     offset: usize = 0,
     with_source: bool = false,
+    details: bool = false,
     trusted: bool = false,
     help: bool = false,
 };
@@ -61,6 +62,10 @@ pub fn parse(argv: []const []const u8) !Options {
                 out.help = true;
                 continue;
             }
+            if (std.mem.eql(u8, arg, "--details")) {
+                out.details = true;
+                continue;
+            }
             if (std.mem.eql(u8, arg, "--with-source")) {
                 out.with_source = true;
                 continue;
@@ -88,7 +93,7 @@ pub fn parse(argv: []const []const u8) !Options {
     if (out.runtime) |root| if (root.len == 0 or out.command == .stats or out.command == .languages) return error.Usage;
     if (out.limit == 0 or out.limit > 1000 or out.root.len == 0 or out.language.len == 0) return error.Usage;
     if ((out.command == .lookup or out.command == .render) and (!has_query or out.query.len == 0)) return error.Usage;
-    if ((out.command == .stats or out.command == .languages) and has_query) return error.Usage;
+    if (out.command == .stats and has_query) return error.Usage;
     if (out.format == .source and out.command != .lookup and out.command != .render) return error.Usage;
     if (out.format == .html and out.command != .lookup and out.command != .search and out.command != .render) return error.Usage;
     if (out.command == .tui and out.format != .text) return error.Usage;
@@ -133,4 +138,10 @@ test "runtime options are bounded and excluded from metadata-only commands" {
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--runtime-timeout-ms", "0" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--runtime-timeout-ms", "60001" }));
     try std.testing.expectError(error.Usage, parse(&.{ "languages", "--runtime", "runtime" }));
+}
+
+test "language accounting can be scoped to a spelling rather than the whole catalog" {
+    const opts = try parse(&.{ "languages", "cat", "--format", "json" });
+    try std.testing.expectEqualStrings("cat", opts.query);
+    try std.testing.expectEqual(Command.languages, opts.command);
 }

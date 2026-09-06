@@ -1,4 +1,5 @@
-import type { Results } from './types';
+import type { Entry, Results } from './types';
+import { validOrganization } from './organization';
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const textOrNull = (v: unknown) => v === null || typeof v === 'string';
 const count = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
@@ -26,8 +27,9 @@ export function isResults(value: unknown): value is Results {
     && list(r.matches, m => record(m) && text(m.title))
     && list(r.entries, e => record(e) && text(e.title) && kind(e.kind) && textOrNull(e.language)
       && (e.expansion == null || (record(e.expansion) && e.expansion.backend === "lua-vm" && ["ok", "failed"].includes(e.expansion.status as string) && textOrNull(e.expansion.diagnostic)))
-      && text(e.preamble) && count(e.unexpanded_templates) && optional(e.rendered_templates, count) && ['structured', 'raw', 'invalid_payload'].includes(e.status as string)
+      && optional(e.language_code, text) && text(e.preamble) && count(e.unexpanded_templates) && optional(e.rendered_templates, count) && ['structured', 'raw', 'invalid_payload'].includes(e.status as string)
       && optional(e.preamble_spans, v => list(v, span)) && optional(e.references, v => list(v, ref => record(ref) && between(ref.number, 1, 100000) && text(ref.name) && text(ref.body) && list(ref.spans, span)))
       && textOrNull(e.source) && textOrNull(e.source_base64) && textOrNull(e.payload_base64)
-      && list(e.sections, s => record(s) && text(s.title) && between(s.level, 1, 6) && list(s.blocks, block)));
+      && list(e.sections, s => record(s) && text(s.title) && between(s.level, 1, 6) && list(s.blocks, block))
+      && optional(e.organization, value => validOrganization(value, e as unknown as Entry)));
 }

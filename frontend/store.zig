@@ -6,7 +6,8 @@ pub const catalog = enc.blob_catalog;
 
 pub fn parseKind(text: []const u8) ?Kind {
     if (std.mem.eql(u8, text, "sign-gloss")) return .sign_gloss;
-    return std.meta.stringToEnum(Kind, text);
+    const kind = std.meta.stringToEnum(Kind, text) orelse return null;
+    return if (kind == .supplement) null else kind;
 }
 pub fn pathAlloc(a: std.mem.Allocator, root: []const u8, kind: Kind, language: []const u8) ![]u8 {
     if (kind == .language) {
@@ -20,6 +21,8 @@ pub const Store = struct {
     bytes: []align(std.heap.page_size_min) const u8,
     index: dec.BlobIndexedView,
     allocator: std.mem.Allocator,
+    root: []const u8 = "",
+    resolver: ?@import("blob_files").Resolver = null,
 
     pub fn open(io: std.Io, a: std.mem.Allocator, root: []const u8, kind: Kind, language: []const u8, trusted: bool) !Store {
         const path = try pathAlloc(a, root, kind, language);
@@ -34,12 +37,33 @@ pub const Store = struct {
         if (view.kind() != kind) return error.UnexpectedBlobKind;
         if (kind == .language and !std.mem.eql(u8, view.languageMetadata().?.heading, language)) return error.UnexpectedLanguageBlob;
         const index = if (trusted) try view.buildTrustedIndexAlloc(a) else try view.buildIndexAlloc(a);
-        return .{ .bytes = bytes, .index = index, .allocator = a };
+        var owned_index = index;
+        errdefer owned_index.deinit(a);
+        const owned_root = try a.dupe(u8, root);
+        return .{ .bytes = bytes, .index = index, .allocator = a, .root = owned_root, .resolver = if (kind == .language) .{ .io = io, .a = a, .root = owned_root, .metadata = view.languageMetadata().? } else null };
     }
     pub fn deinit(self: *Store) void {
+        if (self.resolver) |*r| r.deinit();
+        self.allocator.free(self.root);
         self.index.deinit(self.allocator);
         std.posix.munmap(self.bytes);
         self.* = undefined;
+    }
+    pub const Resolved = struct {
+        record: dec.BlobRecordView,
+        a: std.mem.Allocator,
+        owned: ?[]u8 = null,
+        pub fn deinit(self: *Resolved) void {
+            if (self.owned) |bytes| self.a.free(bytes);
+        }
+    };
+    pub fn resolveAlloc(self: *Store, a: std.mem.Allocator, record: dec.BlobRecordView) !Resolved {
+        var result: Resolved = .{ .record = record, .a = a };
+        if (record == .language) if (self.resolver) |*resolver| {
+            result.owned = try resolver.resolveAlloc(a, record.title(), record.language.payload);
+            if (result.owned) |bytes| result.record.language.payload = bytes;
+        };
+        return result;
     }
     pub fn prefix(self: Store, query: []const u8) !Range {
         return prefixRange(self.index, query);
