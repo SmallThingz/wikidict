@@ -95,6 +95,7 @@ pub const Function = struct {
 pub const Program = struct {
     allocator: std.mem.Allocator,
     strings: std.ArrayList([]const u8) = .empty,
+    owned_strings: std.ArrayList([]u8) = .empty,
     interned_strings: std.StringHashMapUnmanaged(u32) = .empty,
     functions: std.ArrayList(?Function) = .empty,
     constants: std.ArrayList(ConstNode) = .empty,
@@ -107,9 +108,22 @@ pub const Program = struct {
         self.constants.deinit(self.allocator);
         self.const_entries.deinit(self.allocator);
         self.strings.deinit(self.allocator);
+        for (self.owned_strings.items) |text| self.allocator.free(text);
+        self.owned_strings.deinit(self.allocator);
         self.interned_strings.deinit(self.allocator);
     }
 
+    fn internOwned(self: *Program, text: []u8) !u32 {
+        if (self.interned_strings.get(text)) |id| {
+            self.allocator.free(text);
+            return id;
+        }
+        self.owned_strings.append(self.allocator, text) catch |err| {
+            self.allocator.free(text);
+            return err;
+        };
+        return self.intern(text);
+    }
     fn intern(self: *Program, s: []const u8) !u32 {
         if (self.interned_strings.get(s)) |id| return id;
         const id: u32 = @intCast(self.strings.items.len);
@@ -396,7 +410,7 @@ const Lowerer = struct {
             .unary => |v| if (v.op == .neg and v.expr.* == .number) blk: {
                 const raw = v.expr.number.raw;
                 const neg = try std.fmt.allocPrint(self.allocator, "-{s}", .{raw});
-                break :blk try self.appendConst(.{ .number = try self.program.intern(neg) });
+                break :blk try self.appendConst(.{ .number = try self.program.internOwned(neg) });
             } else null,
             .table => |v| try self.tryConstTable(v.fields),
             else => null,
@@ -844,4 +858,15 @@ test "lower complete syntax surface" {
     var p = try lowerChunk(std.testing.allocator, &chunk);
     defer p.deinit();
     try std.testing.expect(p.functions.items.len >= 2);
+}
+
+test "generated negative literals are interned with program ownership" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "return {-0, -0, -12, -12}");
+    defer chunk.deinit();
+    var p = try lowerChunk(a, &chunk);
+    defer p.deinit();
+    try std.testing.expectEqual(@as(usize, 2), p.owned_strings.items.len);
+    try std.testing.expectEqualStrings("-0", p.owned_strings.items[0]);
+    try std.testing.expectEqualStrings("-12", p.owned_strings.items[1]);
 }

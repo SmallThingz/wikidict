@@ -115,7 +115,12 @@ fn deserializeImpl(a: std.mem.Allocator, bytes: []const u8, copy_strings: bool) 
         const n = try asU32(try getVar(bytes, &pos));
         if (pos + n > bytes.len) return error.Truncated;
         const value = if (copy_strings) try a.dupe(u8, bytes[pos .. pos + n]) else bytes[pos .. pos + n];
+        if (copy_strings) p.owned_strings.append(a, @constCast(value)) catch |err| {
+            a.free(value);
+            return err;
+        };
         try p.strings.append(a, value);
+
         pos += n;
     }
     try p.constants.ensureTotalCapacity(a, nc);
@@ -191,4 +196,22 @@ test "full IR codec roundtrip" {
     try std.testing.expectEqual(p.functions.items.len, q.functions.items.len);
     try std.testing.expectEqual(p.constants.items.len, q.constants.items.len);
     try std.testing.expectEqual(p.strings.items.len, q.strings.items.len);
+}
+
+test "owning decode releases copied strings while borrowed decode does not own them" {
+    const a = std.testing.allocator;
+    var chunk = try @import("root.zig").parse(a, "return 'retained'");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(a, &chunk);
+    defer p.deinit();
+    const bytes = try serialize(a, &p);
+    defer a.free(bytes);
+    var owned = try deserialize(a, bytes);
+    defer owned.deinit();
+    var borrowed = try deserializeBorrowed(a, bytes);
+    defer borrowed.deinit();
+    try std.testing.expectEqual(@as(usize, 1), owned.owned_strings.items.len);
+    try std.testing.expectEqual(@as(usize, 0), borrowed.owned_strings.items.len);
+    try std.testing.expectEqualStrings(owned.strings.items[0], borrowed.strings.items[0]);
+    try std.testing.expect(owned.strings.items[0].ptr != borrowed.strings.items[0].ptr);
 }
