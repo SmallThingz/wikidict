@@ -166,6 +166,7 @@ pub fn build(b: *std.Build) void {
 
     const structure_bin = addDirectStructureBinary(
         b,
+        zxml_dep_structure.path("src/root.zig"),
         config_options.getOutput(),
         zxml_config_path,
         bootstrap_generated_tables.structure_source,
@@ -660,6 +661,7 @@ fn addDirectStructureTablesCodegenBinary(b: *std.Build) std.Build.LazyPath {
 
 fn addDirectStructureBinary(
     b: *std.Build,
+    zxml_root_path: std.Build.LazyPath,
     config_path: std.Build.LazyPath,
     config0_path: std.Build.LazyPath,
     bootstrap_tables_path: std.Build.LazyPath,
@@ -694,7 +696,7 @@ fn addDirectStructureBinary(
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{ "--dep", "shared_xml_decode" });
     compile.addArgs(&.{ "--dep", "config=config0" });
-    compile.addPrefixedFileArg("-Mzxml=", b.path(".deps/zxml/src/root.zig"));
+    compile.addPrefixedFileArg("-Mzxml=", zxml_root_path);
     compile.addPrefixedFileArg("-Mconfig=", config_path);
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mnormalize=", b.path("decoder/normalize.zig"));
@@ -720,6 +722,7 @@ fn addDirectStructureBinary(
 
 fn addDirectVerifierBinary(
     b: *std.Build,
+    zxml_root_path: std.Build.LazyPath,
     config_path: std.Build.LazyPath,
     config0_path: std.Build.LazyPath,
     regular_tables_path: std.Build.LazyPath,
@@ -757,7 +760,7 @@ fn addDirectVerifierBinary(
     compile.addPrefixedFileArg("-Mdecoder=", b.path("decoder/root.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{ "--dep", "config=config0" });
-    compile.addPrefixedFileArg("-Mzxml=", b.path(".deps/zxml/src/root.zig"));
+    compile.addPrefixedFileArg("-Mzxml=", zxml_root_path);
     compile.addPrefixedFileArg("-Mconfig=", config_path);
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mnormalize=", b.path("decoder/normalize.zig"));
