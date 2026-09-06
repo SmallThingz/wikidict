@@ -65,18 +65,32 @@ fn mmapPath(io: std.Io, path: []const u8) !Mapped {
 }
 
 const BlobFile = struct {
+    allocator: std.mem.Allocator,
     mapped: Mapped,
-    view: blob_format.BlobView,
+    indexed: blob_format.IndexedBlobView,
+
+    fn deinit(self: *BlobFile) void {
+        self.indexed.deinit(self.allocator);
+        self.mapped.deinit();
+    }
+
+    fn find(self: BlobFile, title: []const u8) error{InvalidBlob}!?blob_format.RecordView {
+        return self.indexed.find(title);
+    }
+
+    fn recordCount(self: BlobFile) usize {
+        return self.indexed.recordCount();
+    }
 };
 
 const LanguageBlobs = struct {
     manifest: Mapped,
     map: std.StringHashMap(BlobFile),
-    expected_records: u64 = 0,
+    expected_records: usize = 0,
 
     fn deinit(self: *LanguageBlobs) void {
         var it = self.map.valueIterator();
-        while (it.next()) |blob| blob.mapped.deinit();
+        while (it.next()) |blob| blob.deinit();
         self.map.deinit();
         self.manifest.deinit();
     }
@@ -88,26 +102,29 @@ const LanguageBlobs = struct {
         var map = std.StringHashMap(BlobFile).init(allocator);
         errdefer {
             var it = map.valueIterator();
-            while (it.next()) |blob| blob.mapped.deinit();
+            while (it.next()) |blob| blob.deinit();
             map.deinit();
         }
 
-        var expected_records: u64 = 0;
+        var expected_records: usize = 0;
         var entries = try blob_catalog.Iterator.init(manifest.bytes);
         while (try entries.next()) |entry| {
-            const path = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ root, blob_catalog.language_directory, entry.filename });
+            var filename_buf: [blob_catalog.language_blob_filename_len]u8 = undefined;
+            const filename = blob_catalog.languageBlobFilename(entry.heading, &filename_buf);
+            const path = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ root, blob_catalog.language_directory, filename });
             defer allocator.free(path);
             var mapped = try mmapPath(io, path);
             errdefer mapped.deinit();
-            const view = try blob_format.inspect(mapped.bytes);
+            const view = try blob_format.openTrusted(mapped.bytes);
             if (view.kind != .language) return error.InvalidLanguageBlob;
             const metadata = try view.languageMetadata();
             if (!std.mem.eql(u8, metadata.heading, entry.heading)) return error.InvalidLanguageBlob;
-            if (view.header.record_count != entry.record_count) return error.InvalidLanguageBlob;
+            var indexed = try view.buildIndexAlloc(allocator);
+            errdefer indexed.deinit(allocator);
             const gop = try map.getOrPut(entry.heading);
             if (gop.found_existing) return error.InvalidManifest;
-            gop.value_ptr.* = .{ .mapped = mapped, .view = view };
-            expected_records += entry.record_count;
+            gop.value_ptr.* = .{ .allocator = allocator, .mapped = mapped, .indexed = indexed };
+            expected_records += indexed.recordCount();
         }
         return .{
             .manifest = manifest,
@@ -116,9 +133,8 @@ const LanguageBlobs = struct {
         };
     }
 
-    fn find(self: *const LanguageBlobs, heading: []const u8) ?blob_format.BlobView {
-        const file = self.map.get(heading) orelse return null;
-        return file.view;
+    fn find(self: *const LanguageBlobs, heading: []const u8) ?BlobFile {
+        return self.map.get(heading);
     }
 };
 
@@ -130,15 +146,15 @@ const FixedBlobs = struct {
     sign_gloss: ?BlobFile,
 
     fn deinit(self: *FixedBlobs) void {
-        if (self.thesaurus) |*blob| blob.mapped.deinit();
-        if (self.citations) |*blob| blob.mapped.deinit();
-        if (self.reconstruction) |*blob| blob.mapped.deinit();
-        if (self.rhymes) |*blob| blob.mapped.deinit();
-        if (self.sign_gloss) |*blob| blob.mapped.deinit();
+        if (self.thesaurus) |*blob| blob.deinit();
+        if (self.citations) |*blob| blob.deinit();
+        if (self.reconstruction) |*blob| blob.deinit();
+        if (self.rhymes) |*blob| blob.deinit();
+        if (self.sign_gloss) |*blob| blob.deinit();
     }
 
-    fn viewForNamespace(self: *const FixedBlobs, ns: u32) ?blob_format.BlobView {
-        const file = switch (ns) {
+    fn fileForNamespace(self: *const FixedBlobs, ns: u32) ?BlobFile {
+        return switch (ns) {
             ns_thesaurus => self.thesaurus,
             ns_citations => self.citations,
             ns_reconstruction => self.reconstruction,
@@ -146,12 +162,11 @@ const FixedBlobs = struct {
             ns_sign_gloss => self.sign_gloss,
             else => unreachable,
         };
-        return if (file) |blob| blob.view else null;
     }
 
-    fn recordCount(self: *const FixedBlobs, ns: u32) u32 {
-        const view = self.viewForNamespace(ns) orelse return 0;
-        return view.header.record_count;
+    fn recordCount(self: *const FixedBlobs, ns: u32) usize {
+        const file = self.fileForNamespace(ns) orelse return 0;
+        return file.recordCount();
     }
 };
 
@@ -166,9 +181,11 @@ fn loadFixedBlob(
     defer allocator.free(path);
     var mapped = try mmapPath(io, path);
     errdefer mapped.deinit();
-    const view = try blob_format.inspect(mapped.bytes);
+    const view = try blob_format.openTrusted(mapped.bytes);
     if (view.kind != kind) return error.InvalidFeatureBlob;
-    return .{ .mapped = mapped, .view = view };
+    var indexed = try view.buildIndexAlloc(allocator);
+    errdefer indexed.deinit(allocator);
+    return .{ .allocator = allocator, .mapped = mapped, .indexed = indexed };
 }
 
 fn loadFixedBlobOptional(
@@ -186,15 +203,15 @@ fn loadFixedBlobOptional(
 
 fn loadFixedBlobs(io: std.Io, allocator: std.mem.Allocator, root: []const u8) !FixedBlobs {
     var thesaurus = try loadFixedBlobOptional(io, allocator, root, "thesaurus", .thesaurus);
-    errdefer if (thesaurus) |*blob| blob.mapped.deinit();
+    errdefer if (thesaurus) |*blob| blob.deinit();
     var citations = try loadFixedBlobOptional(io, allocator, root, "citations", .citations);
-    errdefer if (citations) |*blob| blob.mapped.deinit();
+    errdefer if (citations) |*blob| blob.deinit();
     var reconstruction = try loadFixedBlobOptional(io, allocator, root, "reconstruction", .reconstruction);
-    errdefer if (reconstruction) |*blob| blob.mapped.deinit();
+    errdefer if (reconstruction) |*blob| blob.deinit();
     var rhymes = try loadFixedBlobOptional(io, allocator, root, "rhymes", .rhymes);
-    errdefer if (rhymes) |*blob| blob.mapped.deinit();
+    errdefer if (rhymes) |*blob| blob.deinit();
     var sign_gloss = try loadFixedBlobOptional(io, allocator, root, "sign-gloss", .sign_gloss);
-    errdefer if (sign_gloss) |*blob| blob.mapped.deinit();
+    errdefer if (sign_gloss) |*blob| blob.deinit();
     return .{
         .thesaurus = thesaurus,
         .citations = citations,
@@ -311,7 +328,7 @@ fn verifyNamespace(
     stats: *Stats,
 ) !void {
     const local_title = localNamespaceTitle(title);
-    const blob = fixed.viewForNamespace(ns) orelse {
+    const blob = fixed.fileForNamespace(ns) orelse {
         std.debug.print("missing feature blob ns={d} title={s}\n", .{ ns, local_title });
         return error.MissingFeatureBlob;
     };
@@ -348,7 +365,7 @@ fn verifyNamespace(
     }
 }
 
-fn requireCount(label: []const u8, expected: u64, actual: usize) !void {
+fn requireCount(label: []const u8, expected: usize, actual: usize) !void {
     if (expected == actual) return;
     std.debug.print("blob count mismatch {s}: expected={d} actual={d}\n", .{ label, expected, actual });
     return error.RecordCountMismatch;

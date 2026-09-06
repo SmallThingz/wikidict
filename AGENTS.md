@@ -7,7 +7,10 @@
 - Renderer-facing code should prefer `EntryView.renderDocumentAlloc()`. Use `term_records` for term-list sections, `translation_records` for translation sections, and stream `blockIterator()` / `inlineIterator()` for general/POS text. `documentAlloc()` additionally materializes compatibility bodies for structured sections and should be reserved for callers that need them. Template spans hand off to Lua/Scribunto expansion. Do not persist HTML or terminal-specific styling.
 - Preserve exact source reconstruction through the existing raw APIs and verifier.
 - Incompatible dictionary layout changes require a magic bump. Cache reference or semantic changes require a decoder cache-version bump.
-- `WIKBLB02` blobs are logical uncompressed random-access artifacts. Do not bake zstd, Brotli, chunk compression, or any transport/storage compression into the blob format; compress finished blob files separately outside the format when needed.
+- `WIKBLB03` blobs are logical uncompressed artifacts. Persist semantic data plus only the minimal framing needed to recover it; do not persist derivable lookup indexes, offset tables, record counts, record-area lengths, or catalog filename/count columns. Build those at runtime.
+- Do not bake zstd, Brotli, chunk compression, or any transport/storage compression into blob formats; compress finished blob files separately outside the format when needed.
 - Reuse `encoder/section_encoding.zig` rather than introducing a second structural parser.
 - Run the stable Zig at `/home/a/zalloc-work/zalloc-next-handoff-20260904/remote-tools/zig/zig` and gate changes with `zig build test`.
 - Follow `/home/a/AGENTS.md` for shared-host benchmark and tooling rules.
+
+- Serialization work must not modify VM or VM-related code under `lua2/`; it is owned by another agent.

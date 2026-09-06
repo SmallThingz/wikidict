@@ -1,10 +1,10 @@
 const std = @import("std");
 
-// This is the decompressed logical blob format. Transport/storage compression is
-// intentionally external so terminal, browser, and cache consumers all see the
-// same byte layout after decompression.
-pub const magic = "WIKBLB02";
-pub const version: u8 = 2;
+// Logical, uncompressed blob format. Storage/transport compression stays external.
+pub const magic = "WIKBLB03";
+pub const version: u8 = 3;
+pub const header_len: usize = magic.len + 1;
+pub const max_varuint_len: usize = 10;
 
 pub const BlobKind = enum(u8) {
     language = 1,
@@ -15,58 +15,12 @@ pub const BlobKind = enum(u8) {
     sign_gloss = 6,
 };
 
-pub const Header = extern struct {
-    magic_bytes: [8]u8,
-    kind: u8,
-    flags: u8,
-    metadata_len: u16,
-    record_count: u32,
-    records_len: u32,
-
-    pub fn init(kind: BlobKind, metadata_len: u16, record_count: u32, records_len: u32) Header {
-        return .{
-            .magic_bytes = magic.*,
-            .kind = @intFromEnum(kind),
-            .flags = 0,
-            .metadata_len = metadata_len,
-            .record_count = record_count,
-            .records_len = records_len,
-        };
-    }
-};
-
-pub const header_len: usize = magic.len + 1 + 1 + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u32);
-
-pub fn encodeHeader(header: Header) [header_len]u8 {
-    var out: [header_len]u8 = undefined;
-    @memcpy(out[0..magic.len], &header.magic_bytes);
-    out[8] = header.kind;
-    out[9] = header.flags;
-    std.mem.writeInt(u16, out[10..12], header.metadata_len, .little);
-    std.mem.writeInt(u32, out[12..16], header.record_count, .little);
-    std.mem.writeInt(u32, out[16..20], header.records_len, .little);
-    return out;
-}
-
-fn decodeHeader(bytes: []const u8) error{InvalidBlob}!Header {
-    if (bytes.len < header_len) return error.InvalidBlob;
-    return .{
-        .magic_bytes = bytes[0..magic.len].*,
-        .kind = bytes[8],
-        .flags = bytes[9],
-        .metadata_len = std.mem.readInt(u16, bytes[10..12], .little),
-        .record_count = std.mem.readInt(u32, bytes[12..16], .little),
-        .records_len = std.mem.readInt(u32, bytes[16..20], .little),
-    };
-}
-
 pub const RecordInput = struct {
     title: []const u8,
     payload: []const u8,
 };
 
 pub const RecordView = struct {
-    index: u32,
     title: []const u8,
     payload: []const u8,
 };
@@ -75,49 +29,39 @@ pub const LanguageMetadata = struct {
     code: []const u8,
     heading: []const u8,
 };
-
 pub const RecordIterator = struct {
     blob: BlobView,
-    index: u32 = 0,
+    cursor: usize = 0,
 
     pub fn next(self: *RecordIterator) error{InvalidBlob}!?RecordView {
-        if (self.index >= self.blob.header.record_count) return null;
-        const record = try self.blob.recordAt(self.index);
-        self.index += 1;
-        return record;
+        if (self.cursor == self.blob.records.len) return null;
+        if (self.cursor > self.blob.records.len) return error.InvalidBlob;
+        const parsed = try self.blob.parseRecordAt(self.cursor);
+        self.cursor = parsed.next;
+        return parsed.record;
     }
 };
 
-pub const BlobView = struct {
-    bytes: []const u8,
-    header: Header,
-    kind: BlobKind,
-    metadata: []const u8,
-    offsets: []const u8,
-    records: []const u8,
+pub const IndexedBlobView = struct {
+    blob: BlobView,
+    offsets: []usize,
 
-    pub fn recordAt(self: BlobView, index: u32) error{InvalidBlob}!RecordView {
-        if (index >= self.header.record_count) return error.InvalidBlob;
-        const start = try self.offsetAt(index);
-        const end = try self.offsetAt(index + 1);
-        if (start >= end or end > self.records.len) return error.InvalidBlob;
-        const record = self.records[start..end];
-        const title_end = std.mem.indexOfScalar(u8, record, 0) orelse return error.InvalidBlob;
-        if (title_end == 0) return error.InvalidBlob;
-        return .{
-            .index = index,
-            .title = record[0..title_end],
-            .payload = record[title_end + 1 ..],
-        };
+    pub fn deinit(self: *IndexedBlobView, allocator: std.mem.Allocator) void {
+        allocator.free(self.offsets);
+        self.offsets = &.{};
     }
 
-    pub fn iterator(self: BlobView) RecordIterator {
-        return .{ .blob = self };
+    pub fn recordCount(self: IndexedBlobView) usize {
+        return self.offsets.len;
     }
 
-    pub fn find(self: BlobView, title: []const u8) error{InvalidBlob}!?RecordView {
-        var lo: u32 = 0;
-        var hi = self.header.record_count;
+    pub fn recordAt(self: IndexedBlobView, index: usize) error{InvalidBlob}!RecordView {
+        if (index >= self.offsets.len) return error.InvalidBlob;
+        return (try self.blob.parseRecordAt(self.offsets[index])).record;
+    }
+    pub fn find(self: IndexedBlobView, title: []const u8) error{InvalidBlob}!?RecordView {
+        var lo: usize = 0;
+        var hi = self.offsets.len;
         while (lo < hi) {
             const mid = lo + (hi - lo) / 2;
             const record = try self.recordAt(mid);
@@ -129,7 +73,22 @@ pub const BlobView = struct {
         }
         return null;
     }
+};
 
+const ParsedRecord = struct {
+    record: RecordView,
+    next: usize,
+};
+
+pub const BlobView = struct {
+    bytes: []const u8,
+    kind: BlobKind,
+    metadata: []const u8,
+    records: []const u8,
+
+    pub fn iterator(self: BlobView) RecordIterator {
+        return .{ .blob = self };
+    }
     pub fn languageMetadata(self: BlobView) error{InvalidBlob}!LanguageMetadata {
         if (self.kind != .language) return error.InvalidBlob;
         var cursor: usize = 0;
@@ -140,38 +99,139 @@ pub const BlobView = struct {
     }
 
     pub fn validate(self: BlobView) error{InvalidBlob}!void {
-        if (try self.offsetAt(0) != 0 or try self.offsetAt(self.header.record_count) != self.records.len) return error.InvalidBlob;
-        var previous_end: usize = 0;
+        var cursor: usize = 0;
         var previous_title: ?[]const u8 = null;
-        var index: u32 = 0;
-        while (index < self.header.record_count) : (index += 1) {
-            const start = try self.offsetAt(index);
-            const end = try self.offsetAt(index + 1);
-            if (start != previous_end or start >= end) return error.InvalidBlob;
-            const record = try self.recordAt(index);
+        while (cursor < self.records.len) {
+            const parsed = try self.parseRecordAt(cursor);
             if (previous_title) |previous| {
-                if (std.mem.order(u8, previous, record.title) != .lt) return error.InvalidBlob;
+                if (std.mem.order(u8, previous, parsed.record.title) != .lt) return error.InvalidBlob;
             }
-            previous_title = record.title;
-            previous_end = end;
+            previous_title = parsed.record.title;
+            cursor = parsed.next;
         }
+        if (cursor != self.records.len) return error.InvalidBlob;
         if (self.kind == .language) _ = try self.languageMetadata();
     }
 
-    fn offsetAt(self: BlobView, index: u32) error{InvalidBlob}!usize {
-        if (index > self.header.record_count) return error.InvalidBlob;
-        const pos = std.math.mul(usize, @as(usize, index), @sizeOf(u32)) catch return error.InvalidBlob;
-        const end = std.math.add(usize, pos, @sizeOf(u32)) catch return error.InvalidBlob;
-        if (end > self.offsets.len) return error.InvalidBlob;
-        return std.mem.readInt(u32, self.offsets[pos..end][0..4], .little);
+    pub fn buildIndexAlloc(self: BlobView, allocator: std.mem.Allocator) !IndexedBlobView {
+        return self.buildIndex(allocator, true);
+    }
+
+    pub fn buildTrustedIndexAlloc(self: BlobView, allocator: std.mem.Allocator) !IndexedBlobView {
+        return self.buildIndex(allocator, false);
+    }
+    fn buildIndex(self: BlobView, allocator: std.mem.Allocator, validate_order: bool) !IndexedBlobView {
+        var offsets: std.ArrayList(usize) = .empty;
+        defer offsets.deinit(allocator);
+        var cursor: usize = 0;
+        var previous_title: ?[]const u8 = null;
+        while (cursor < self.records.len) {
+            const parsed = try self.parseRecordAt(cursor);
+            if (validate_order) {
+                if (previous_title) |previous| {
+                    if (std.mem.order(u8, previous, parsed.record.title) != .lt) return error.InvalidBlob;
+                }
+                previous_title = parsed.record.title;
+            }
+            try offsets.append(allocator, cursor);
+            cursor = parsed.next;
+        }
+        if (cursor != self.records.len) return error.InvalidBlob;
+        return .{ .blob = self, .offsets = try offsets.toOwnedSlice(allocator) };
+    }
+
+    fn parseRecordAt(self: BlobView, start: usize) error{InvalidBlob}!ParsedRecord {
+        if (start >= self.records.len) return error.InvalidBlob;
+        const title_end = std.mem.indexOfScalarPos(u8, self.records, start, 0) orelse return error.InvalidBlob;
+        if (title_end == start) return error.InvalidBlob;
+        var cursor = title_end + 1;
+        const payload_len = try readPayloadLength(self.records, &cursor);
+        const payload_end = std.math.add(usize, cursor, payload_len) catch return error.InvalidBlob;
+        if (payload_end > self.records.len) return error.InvalidBlob;
+        return .{
+            .record = .{ .title = self.records[start..title_end], .payload = self.records[cursor..payload_end] },
+            .next = payload_end,
+        };
     }
 };
+pub fn encodeHeader(kind: BlobKind) [header_len]u8 {
+    var out: [header_len]u8 = undefined;
+    @memcpy(out[0..magic.len], magic);
+    out[magic.len] = @intFromEnum(kind);
+    return out;
+}
+
+fn decodeKind(bytes: []const u8) error{InvalidBlob}!BlobKind {
+    if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..magic.len], magic)) return error.InvalidBlob;
+    return switch (bytes[magic.len]) {
+        @intFromEnum(BlobKind.language) => .language,
+        @intFromEnum(BlobKind.thesaurus) => .thesaurus,
+        @intFromEnum(BlobKind.citations) => .citations,
+        @intFromEnum(BlobKind.reconstruction) => .reconstruction,
+        @intFromEnum(BlobKind.rhymes) => .rhymes,
+        @intFromEnum(BlobKind.sign_gloss) => .sign_gloss,
+        else => error.InvalidBlob,
+    };
+}
+
+pub fn encodePayloadLength(value: usize, out: *[max_varuint_len]u8) []const u8 {
+    var remaining: u64 = value;
+    var index: usize = 0;
+    while (remaining >= 0x80) : (index += 1) {
+        out[index] = @intCast((remaining & 0x7f) | 0x80);
+        remaining >>= 7;
+    }
+    out[index] = @intCast(remaining);
+    return out[0 .. index + 1];
+}
+fn varUIntLen(value: usize) usize {
+    var remaining: u64 = value;
+    var len: usize = 1;
+    while (remaining >= 0x80) : (len += 1) remaining >>= 7;
+    return len;
+}
+
+fn readPayloadLength(bytes: []const u8, cursor: *usize) error{InvalidBlob}!usize {
+    const start = cursor.*;
+    var shift: u6 = 0;
+    var value: u64 = 0;
+    while (true) {
+        if (cursor.* >= bytes.len) return error.InvalidBlob;
+        const byte = bytes[cursor.*];
+        cursor.* += 1;
+        if (shift == 63 and (byte & 0x7f) > 1) return error.InvalidBlob;
+        value |= @as(u64, byte & 0x7f) << shift;
+        if ((byte & 0x80) == 0) break;
+        if (shift >= 63) return error.InvalidBlob;
+        shift += 7;
+    }
+    const result = std.math.cast(usize, value) orelse return error.InvalidBlob;
+    if (cursor.* - start != varUIntLen(result)) return error.InvalidBlob;
+    return result;
+}
+
+pub fn validateMetadata(kind: BlobKind, metadata: []const u8) error{InvalidMetadata}!void {
+    if (kind != .language) {
+        if (metadata.len != 0) return error.InvalidMetadata;
+        return;
+    }
+    var cursor: usize = 0;
+    _ = readNulFieldMetadata(metadata, &cursor) catch return error.InvalidMetadata;
+    const heading = readNulFieldMetadata(metadata, &cursor) catch return error.InvalidMetadata;
+    if (heading.len == 0 or cursor != metadata.len) return error.InvalidMetadata;
+}
+
+pub fn validateRecordInput(record: RecordInput) error{InvalidRecord}!void {
+    if (record.title.len == 0 or std.mem.indexOfScalar(u8, record.title, 0) != null) return error.InvalidRecord;
+}
 
 pub fn buildLanguageMetadataAlloc(allocator: std.mem.Allocator, code: []const u8, heading: []const u8) ![]u8 {
     if (heading.len == 0 or std.mem.indexOfScalar(u8, code, 0) != null or std.mem.indexOfScalar(u8, heading, 0) != null) {
         return error.InvalidMetadata;
     }
-    const size = std.math.add(usize, code.len + 1, heading.len + 1) catch return error.BlobTooBig;
+    const code_part = std.math.add(usize, code.len, 1) catch return error.BlobTooBig;
+    const heading_part = std.math.add(usize, heading.len, 1) catch return error.BlobTooBig;
+    const size = std.math.add(usize, code_part, heading_part) catch return error.BlobTooBig;
     const out = try allocator.alloc(u8, size);
     @memcpy(out[0..code.len], code);
     out[code.len] = 0;
@@ -180,101 +240,69 @@ pub fn buildLanguageMetadataAlloc(allocator: std.mem.Allocator, code: []const u8
     out[out.len - 1] = 0;
     return out;
 }
-
 pub fn buildAlloc(
     allocator: std.mem.Allocator,
     kind: BlobKind,
     metadata: []const u8,
     records: []const RecordInput,
 ) ![]u8 {
-    const metadata_len = std.math.cast(u16, metadata.len) orelse return error.BlobTooBig;
-    const record_count = std.math.cast(u32, records.len) orelse return error.BlobTooBig;
-
-    var records_len: usize = 0;
+    try validateMetadata(kind, metadata);
+    var total_len = std.math.add(usize, header_len, metadata.len) catch return error.BlobTooBig;
     var previous_title: ?[]const u8 = null;
     for (records) |record| {
-        if (record.title.len == 0 or std.mem.indexOfScalar(u8, record.title, 0) != null) return error.InvalidRecord;
+        try validateRecordInput(record);
         if (previous_title) |previous| {
             if (std.mem.order(u8, previous, record.title) != .lt) return error.UnsortedRecords;
         }
         previous_title = record.title;
-        records_len = std.math.add(usize, records_len, record.title.len + 1) catch return error.BlobTooBig;
-        records_len = std.math.add(usize, records_len, record.payload.len) catch return error.BlobTooBig;
+        total_len = std.math.add(usize, total_len, record.title.len + 1) catch return error.BlobTooBig;
+        total_len = std.math.add(usize, total_len, varUIntLen(record.payload.len)) catch return error.BlobTooBig;
+        total_len = std.math.add(usize, total_len, record.payload.len) catch return error.BlobTooBig;
     }
-    const records_len_u32 = std.math.cast(u32, records_len) orelse return error.BlobTooBig;
-    const offset_count = std.math.add(usize, records.len, 1) catch return error.BlobTooBig;
-    const offsets_len = std.math.mul(usize, offset_count, @sizeOf(u32)) catch return error.BlobTooBig;
-    const prefix_len = std.math.add(usize, header_len + metadata.len, offsets_len) catch return error.BlobTooBig;
-    const total_len = std.math.add(usize, prefix_len, records_len) catch return error.BlobTooBig;
 
     const out = try allocator.alloc(u8, total_len);
     errdefer allocator.free(out);
-    const header = encodeHeader(Header.init(kind, metadata_len, record_count, records_len_u32));
+    const header = encodeHeader(kind);
     @memcpy(out[0..header_len], &header);
     @memcpy(out[header_len .. header_len + metadata.len], metadata);
-
-    const offsets_start = header_len + metadata.len;
-    const records_start = offsets_start + offsets_len;
-    var record_cursor: usize = 0;
-    for (records, 0..) |record, index| {
-        writeOffset(out[offsets_start .. offsets_start + offsets_len], index, record_cursor);
-        const dest = records_start + record_cursor;
-        @memcpy(out[dest .. dest + record.title.len], record.title);
-        out[dest + record.title.len] = 0;
-        const payload_start = dest + record.title.len + 1;
-        @memcpy(out[payload_start .. payload_start + record.payload.len], record.payload);
-        record_cursor += record.title.len + 1 + record.payload.len;
+    var cursor = header_len + metadata.len;
+    for (records) |record| {
+        @memcpy(out[cursor .. cursor + record.title.len], record.title);
+        cursor += record.title.len;
+        out[cursor] = 0;
+        cursor += 1;
+        var length_buf: [max_varuint_len]u8 = undefined;
+        const length_bytes = encodePayloadLength(record.payload.len, &length_buf);
+        @memcpy(out[cursor .. cursor + length_bytes.len], length_bytes);
+        cursor += length_bytes.len;
+        @memcpy(out[cursor .. cursor + record.payload.len], record.payload);
+        cursor += record.payload.len;
     }
-    writeOffset(out[offsets_start .. offsets_start + offsets_len], records.len, record_cursor);
-    std.debug.assert(record_cursor == records_len);
+    std.debug.assert(cursor == out.len);
     return out;
 }
 
-/// Opens a blob after validating framing, endpoint offsets, and language metadata.
-/// This skips the O(record_count) ordering scan; callers must already trust the
-/// blob's integrity (for example via a verified external hash) or call validate().
 pub fn openTrusted(bytes: []const u8) error{InvalidBlob}!BlobView {
-    const header = try decodeHeader(bytes);
-    if (!std.mem.eql(u8, &header.magic_bytes, magic) or header.flags != 0) return error.InvalidBlob;
-    const kind: BlobKind = switch (header.kind) {
-        @intFromEnum(BlobKind.language) => .language,
-        @intFromEnum(BlobKind.thesaurus) => .thesaurus,
-        @intFromEnum(BlobKind.citations) => .citations,
-        @intFromEnum(BlobKind.reconstruction) => .reconstruction,
-        @intFromEnum(BlobKind.rhymes) => .rhymes,
-        @intFromEnum(BlobKind.sign_gloss) => .sign_gloss,
-        else => return error.InvalidBlob,
-    };
-    const offset_count = std.math.add(usize, @as(usize, header.record_count), 1) catch return error.InvalidBlob;
-    const offsets_len = std.math.mul(usize, offset_count, @sizeOf(u32)) catch return error.InvalidBlob;
-    const metadata_end = std.math.add(usize, header_len, header.metadata_len) catch return error.InvalidBlob;
-    const records_start = std.math.add(usize, metadata_end, offsets_len) catch return error.InvalidBlob;
-    const expected_end = std.math.add(usize, records_start, header.records_len) catch return error.InvalidBlob;
-    if (expected_end != bytes.len) return error.InvalidBlob;
-
-    const view: BlobView = .{
+    const kind = try decodeKind(bytes);
+    var records_start = header_len;
+    if (kind == .language) {
+        var cursor = records_start;
+        _ = try readNulField(bytes, &cursor);
+        const heading = try readNulField(bytes, &cursor);
+        if (heading.len == 0) return error.InvalidBlob;
+        records_start = cursor;
+    }
+    return .{
         .bytes = bytes,
-        .header = header,
         .kind = kind,
-        .metadata = bytes[header_len..metadata_end],
-        .offsets = bytes[metadata_end..records_start],
-        .records = bytes[records_start..expected_end],
+        .metadata = bytes[header_len..records_start],
+        .records = bytes[records_start..],
     };
-    if (try view.offsetAt(0) != 0 or try view.offsetAt(header.record_count) != view.records.len) return error.InvalidBlob;
-    if (kind == .language) _ = try view.languageMetadata();
-    return view;
 }
-
 pub fn inspect(bytes: []const u8) error{InvalidBlob}!BlobView {
     const view = try openTrusted(bytes);
     try view.validate();
     return view;
-}
-
-fn writeOffset(bytes: []u8, index: usize, value: usize) void {
-    const value_u32: u32 = @intCast(value);
-    const pos = index * @sizeOf(u32);
-    std.mem.writeInt(u32, bytes[pos .. pos + 4][0..4], value_u32, .little);
 }
 
 fn readNulField(bytes: []const u8, cursor: *usize) error{InvalidBlob}![]const u8 {
@@ -285,21 +313,30 @@ fn readNulField(bytes: []const u8, cursor: *usize) error{InvalidBlob}![]const u8
     return field;
 }
 
-test "blob header wire encoding is explicitly little endian" {
-    const header = Header.init(.rhymes, 0x1234, 0x01020304, 0xa1b2c3d4);
-    const encoded = encodeHeader(header);
-    try std.testing.expectEqualSlices(u8, &.{
-        'W',                           'I',  'K',  'B',  'L',  'B',  '0',  '2',
-        @intFromEnum(BlobKind.rhymes), 0,    0x34, 0x12, 0x04, 0x03, 0x02, 0x01,
-        0xd4,                          0xc3, 0xb2, 0xa1,
-    }, &encoded);
-    const decoded = try decodeHeader(&encoded);
-    try std.testing.expectEqual(header.metadata_len, decoded.metadata_len);
-    try std.testing.expectEqual(header.record_count, decoded.record_count);
-    try std.testing.expectEqual(header.records_len, decoded.records_len);
+fn readNulFieldMetadata(bytes: []const u8, cursor: *usize) error{InvalidMetadata}![]const u8 {
+    if (cursor.* > bytes.len) return error.InvalidMetadata;
+    const end = std.mem.indexOfScalarPos(u8, bytes, cursor.*, 0) orelse return error.InvalidMetadata;
+    const field = bytes[cursor.*..end];
+    cursor.* = end + 1;
+    return field;
 }
 
-test "blob format exposes sorted zero-copy records and language metadata" {
+test "blob v3 header carries only magic and kind" {
+    const encoded = encodeHeader(.rhymes);
+    try std.testing.expectEqualSlices(u8, &.{
+        'W', 'I', 'K', 'B', 'L', 'B', '0', '3', @intFromEnum(BlobKind.rhymes),
+    }, &encoded);
+    try std.testing.expectEqual(BlobKind.rhymes, try decodeKind(&encoded));
+}
+
+test "blob v3 stores only necessary record framing" {
+    const encoded = try buildAlloc(std.testing.allocator, .citations, "", &.{
+        .{ .title = "a", .payload = "x" },
+    });
+    defer std.testing.allocator.free(encoded);
+    try std.testing.expectEqualSlices(u8, "WIKBLB03\x03a\x00\x01x", encoded);
+}
+test "blob v3 builds runtime index over borrowed records" {
     const metadata = try buildLanguageMetadataAlloc(std.testing.allocator, "", "English");
     defer std.testing.allocator.free(metadata);
     const payload_a = [_]u8{ 0, 1, 2, 0, 3 };
@@ -312,40 +349,37 @@ test "blob format exposes sorted zero-copy records and language metadata" {
 
     const blob = try inspect(encoded);
     const language = try blob.languageMetadata();
-    try std.testing.expectEqualStrings("", language.code);
     try std.testing.expectEqualStrings("English", language.heading);
-    const apple = (try blob.find("apple")).?;
-    try std.testing.expectEqualSlices(u8, &payload_a, apple.payload);
-    try std.testing.expect((try blob.find("absent")) == null);
-    const banana = try blob.recordAt(1);
-    try std.testing.expectEqualStrings("banana", banana.title);
-    try std.testing.expectEqualSlices(u8, &payload_b, banana.payload);
+    var index = try blob.buildTrustedIndexAlloc(std.testing.allocator);
+    defer index.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 2), index.recordCount());
+    try std.testing.expectEqualSlices(u8, &payload_a, (try index.find("apple")).?.payload);
+    try std.testing.expect((try index.find("absent")) == null);
+    try std.testing.expectEqualStrings("banana", (try index.recordAt(1)).title);
+
     var iterator = blob.iterator();
     try std.testing.expectEqualStrings("apple", (try iterator.next()).?.title);
     try std.testing.expectEqualStrings("banana", (try iterator.next()).?.title);
     try std.testing.expect((try iterator.next()) == null);
 }
-
-test "blob format rejects malformed offsets and unsorted records" {
-    const metadata = try buildLanguageMetadataAlloc(std.testing.allocator, "en", "English");
-    defer std.testing.allocator.free(metadata);
-    try std.testing.expectError(error.UnsortedRecords, buildAlloc(std.testing.allocator, .language, metadata, &.{
+test "blob v3 rejects malformed framing and unsorted records" {
+    try std.testing.expectError(error.UnsortedRecords, buildAlloc(std.testing.allocator, .citations, "", &.{
         .{ .title = "b", .payload = "1" },
         .{ .title = "a", .payload = "2" },
     }));
 
-    const encoded = try buildAlloc(std.testing.allocator, .thesaurus, "", &.{
+    const encoded = try buildAlloc(std.testing.allocator, .citations, "", &.{
         .{ .title = "a", .payload = "x" },
     });
     defer std.testing.allocator.free(encoded);
     const broken = try std.testing.allocator.dupe(u8, encoded);
     defer std.testing.allocator.free(broken);
-    const offsets_start = header_len;
-    std.mem.writeInt(u32, broken[offsets_start + 4 .. offsets_start + 8][0..4], 0, .little);
+    const length_pos = header_len + 2;
+    broken[length_pos] = 127;
     try std.testing.expectError(error.InvalidBlob, inspect(broken));
 }
 
-test "trusted blob open skips global title-order scan" {
+test "trusted open skips title-order scan while runtime index can validate it" {
     const encoded = try buildAlloc(std.testing.allocator, .citations, "", &.{
         .{ .title = "aa", .payload = "1" },
         .{ .title = "bb", .payload = "2" },
@@ -353,27 +387,94 @@ test "trusted blob open skips global title-order scan" {
     defer std.testing.allocator.free(encoded);
     const broken = try std.testing.allocator.dupe(u8, encoded);
     defer std.testing.allocator.free(broken);
-
-    const original = try openTrusted(broken);
-    const first = try original.recordAt(0);
-    const title_offset = @intFromPtr(first.title.ptr) - @intFromPtr(broken.ptr);
-    broken[title_offset] = 'z';
+    broken[header_len] = 'z';
 
     const trusted = try openTrusted(broken);
-    try std.testing.expectEqualStrings("za", (try trusted.recordAt(0)).title);
+    var trusted_index = try trusted.buildTrustedIndexAlloc(std.testing.allocator);
+    defer trusted_index.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("za", (try trusted_index.recordAt(0)).title);
     try std.testing.expectError(error.InvalidBlob, trusted.validate());
-    try std.testing.expectError(error.InvalidBlob, inspect(broken));
+    try std.testing.expectError(error.InvalidBlob, trusted.buildIndexAlloc(std.testing.allocator));
+}
+test "blob v3 rejects non-canonical payload lengths" {
+    const broken = [_]u8{
+        'W', 'I', 'K',  'B',  'L', 'B', '0', '3', @intFromEnum(BlobKind.citations),
+        'a', 0,   0x81, 0x00, 'x',
+    };
+    try std.testing.expectError(error.InvalidBlob, inspect(&broken));
 }
 
-test "blob offset bounds reject terminal 32-bit overflow" {
-    if (@sizeOf(usize) != 4) return error.SkipZigTest;
-    const view: BlobView = .{
-        .bytes = &.{},
-        .header = Header.init(.citations, 0, std.math.maxInt(u32), 0),
-        .kind = .citations,
-        .metadata = &.{},
-        .offsets = &.{},
-        .records = &.{},
+test "blob v3 metadata is semantic rather than length-indexed" {
+    const metadata = try buildLanguageMetadataAlloc(std.testing.allocator, "en", "English");
+    defer std.testing.allocator.free(metadata);
+    const encoded = try buildAlloc(std.testing.allocator, .language, metadata, &.{});
+    defer std.testing.allocator.free(encoded);
+    const blob = try inspect(encoded);
+    const language = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("en", language.code);
+    try std.testing.expectEqualStrings("English", language.heading);
+    try std.testing.expectEqual(@as(usize, header_len + metadata.len), encoded.len);
+    try std.testing.expectError(error.InvalidMetadata, buildAlloc(std.testing.allocator, .citations, "x", &.{}));
+}
+
+test "blob v3 empty stream needs no runtime index storage" {
+    const bytes = encodeHeader(.citations);
+    const blob = try inspect(&bytes);
+    var records = blob.iterator();
+    try std.testing.expect((try records.next()) == null);
+    var index = try blob.buildIndexAlloc(std.testing.allocator);
+    defer index.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), index.recordCount());
+    try std.testing.expect((try index.find("absent")) == null);
+    try std.testing.expectError(error.InvalidBlob, index.recordAt(0));
+}
+
+test "blob v3 payload lengths round trip at integer boundaries" {
+    const values = [_]usize{ 0, 1, 127, 128, 16383, 16384, std.math.maxInt(usize) };
+    for (values) |value| {
+        var buffer: [max_varuint_len]u8 = undefined;
+        const encoded = encodePayloadLength(value, &buffer);
+        var cursor: usize = 0;
+        try std.testing.expectEqual(value, try readPayloadLength(encoded, &cursor));
+        try std.testing.expectEqual(encoded.len, cursor);
+    }
+    var cursor: usize = 0;
+    try std.testing.expectError(error.InvalidBlob, readPayloadLength(&.{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02 }, &cursor));
+    if (@sizeOf(usize) == 4) {
+        cursor = 0;
+        try std.testing.expectError(error.InvalidBlob, readPayloadLength(&.{ 0x80, 0x80, 0x80, 0x80, 0x10 }, &cursor));
+    }
+}
+
+test "blob v3 rejects old magic and malformed record framing" {
+    const invalid = [_][]const u8{
+        "WIKBLB02\x03",
+        "WIKBLB03\x00",
+        "WIKBLB03\x01\x00\x00",
+        "WIKBLB03\x03unterminated",
+        "WIKBLB03\x03\x00\x00",
+        "WIKBLB03\x03a\x00",
+        "WIKBLB03\x03a\x00\x80",
+        "WIKBLB03\x03a\x00\x80\x00",
+        "WIKBLB03\x03a\x00\x02x",
+        "WIKBLB03\x03b\x00\x00a\x00\x00",
+        "WIKBLB03\x03a\x00\x00a\x00\x00",
     };
-    try std.testing.expectError(error.InvalidBlob, view.offsetAt(std.math.maxInt(u32)));
+    for (invalid) |bytes| {
+        try std.testing.expectError(error.InvalidBlob, inspect(bytes));
+        if (openTrusted(bytes)) |blob| {
+            try std.testing.expectError(error.InvalidBlob, blob.buildIndexAlloc(std.testing.allocator));
+        } else |err| try std.testing.expectEqual(error.InvalidBlob, err);
+    }
+}
+
+fn testIndexAllocationFailures(allocator: std.mem.Allocator) !void {
+    const blob = try openTrusted("WIKBLB03\x03a\x00\x01xb\x00\x00");
+    var index = try blob.buildIndexAlloc(allocator);
+    defer index.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), index.recordCount());
+}
+
+test "blob v3 runtime index cleans up every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testIndexAllocationFailures, .{});
 }

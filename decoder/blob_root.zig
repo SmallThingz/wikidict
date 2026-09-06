@@ -4,6 +4,7 @@ const blob_catalog = @import("blob_encoder").blob_catalog;
 pub const BlobView = blob_reader.BlobView;
 pub const BlobRecordView = blob_reader.RecordView;
 pub const BlobRecordIterator = blob_reader.RecordIterator;
+pub const BlobIndexedView = blob_reader.IndexedBlobView;
 pub const BlobLanguageRecordView = blob_reader.LanguageRecordView;
 pub const BlobThesaurusRecordView = blob_reader.ThesaurusRecordView;
 pub const BlobRhymesRecordView = blob_reader.RhymesRecordView;
@@ -26,7 +27,8 @@ pub fn inspectBlob(bytes: []const u8) error{InvalidBlob}!BlobView {
 }
 
 /// Fast path for blobs whose integrity was established externally.
-/// Use inspectBlob for a full record-order and offset validation pass.
+/// This parses only the blob identity/semantic metadata; build a runtime index for random access.
+/// Use inspectBlob for a full record-framing and title-order validation pass.
 pub fn openTrustedBlob(bytes: []const u8) error{InvalidBlob}!BlobView {
     return BlobView.openTrusted(bytes);
 }

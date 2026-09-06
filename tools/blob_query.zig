@@ -149,14 +149,15 @@ pub fn main(init: std.process.Init) !void {
     var mapped = try mmapPath(init.io, path);
     defer mapped.deinit();
     const blob = try decoder.openTrustedBlob(mapped.bytes);
-    if (validate) try blob.validate();
     if (blob.kind() != kind) return error.UnexpectedBlobKind;
     if (language_heading) |heading| {
         const metadata = blob.languageMetadata() orelse return error.MissingLanguageMetadata;
         if (!std.mem.eql(u8, metadata.heading, heading)) return error.UnexpectedLanguageBlob;
     }
+    var index = if (validate) try blob.buildIndexAlloc(allocator) else try blob.buildTrustedIndexAlloc(allocator);
+    defer index.deinit(allocator);
 
-    const record = (try blob.find(title)) orelse {
+    const record = (try index.find(title)) orelse {
         std.debug.print("no match kind={s} title={s}\n", .{ @tagName(kind), title });
         return;
     };
@@ -164,7 +165,7 @@ pub fn main(init: std.process.Init) !void {
         path,
         @tagName(kind),
         record.title(),
-        blob.recordCount(),
+        index.recordCount(),
         switch (record) {
             .language => |entry| entry.payload.len,
             .thesaurus => |entry| entry.payload.len,

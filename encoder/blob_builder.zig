@@ -283,28 +283,15 @@ fn sortAndValidate(records: []blob_format.RecordInput) !void {
 
 fn writeBlobFile(
     io: std.Io,
-    allocator: std.mem.Allocator,
     path: []const u8,
     kind: blob_format.BlobKind,
     metadata: []const u8,
     records: []blob_format.RecordInput,
 ) !void {
     try sortAndValidate(records);
-    const metadata_len = std.math.cast(u16, metadata.len) orelse return error.BlobTooBig;
-    const record_count = std.math.cast(u32, records.len) orelse return error.BlobTooBig;
-    const offsets_len = std.math.mul(usize, records.len + 1, @sizeOf(u32)) catch return error.BlobTooBig;
-    const offsets = try allocator.alloc(u8, offsets_len);
-    defer allocator.free(offsets);
-
-    var records_len: usize = 0;
-    for (records, 0..) |record, idx| {
-        const off = std.math.cast(u32, records_len) orelse return error.BlobTooBig;
-        std.mem.writeInt(u32, offsets[idx * 4 .. idx * 4 + 4][0..4], off, .little);
-        records_len = std.math.add(usize, records_len, record.title.len + 1 + record.payload.len) catch return error.BlobTooBig;
-    }
-    const final_off = std.math.cast(u32, records_len) orelse return error.BlobTooBig;
-    std.mem.writeInt(u32, offsets[records.len * 4 .. records.len * 4 + 4][0..4], final_off, .little);
-    const header = blob_format.encodeHeader(blob_format.Header.init(kind, metadata_len, record_count, final_off));
+    try blob_format.validateMetadata(kind, metadata);
+    for (records) |record| try blob_format.validateRecordInput(record);
+    const header = blob_format.encodeHeader(kind);
 
     var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
     defer file.close(io);
@@ -313,10 +300,11 @@ fn writeBlobFile(
     const w = &writer.interface;
     try w.writeAll(&header);
     try w.writeAll(metadata);
-    try w.writeAll(offsets);
     for (records) |record| {
         try w.writeAll(record.title);
         try w.writeByte(0);
+        var length_buf: [blob_format.max_varuint_len]u8 = undefined;
+        try w.writeAll(blob_format.encodePayloadLength(record.payload.len, &length_buf));
         try w.writeAll(record.payload);
     }
     try w.flush();
@@ -348,7 +336,7 @@ fn finalizeFixedSpool(
     if (records.len == 0) return;
     const path = try fixedBlobPathAlloc(allocator, output_root, name);
     defer allocator.free(path);
-    try writeBlobFile(io, allocator, path, kind, "", records);
+    try writeBlobFile(io, path, kind, "", records);
 }
 
 const LanguageGroup = struct {
@@ -398,9 +386,8 @@ fn finalizeLanguageBucket(
         defer allocator.free(metadata);
         const path = try languageBlobPathAlloc(allocator, output_root, group.heading);
         defer allocator.free(path);
-        try writeBlobFile(io, allocator, path, .language, metadata, group.records.items);
-        const base = std.fs.path.basename(path);
-        try blob_catalog.writeEntry(manifest, group.heading, base, @intCast(group.records.items.len));
+        try writeBlobFile(io, path, .language, metadata, group.records.items);
+        try blob_catalog.writeEntry(manifest, group.heading);
         count += 1;
     }
     return count;
@@ -607,8 +594,10 @@ test "blob builder routes main languages and feature namespaces into separate bl
     defer english_map.deinit();
     const english_blob = try blob_format.inspect(english_map.bytes);
     const english_meta = try english_blob.languageMetadata();
+    var english_index = try english_blob.buildTrustedIndexAlloc(std.testing.allocator);
+    defer english_index.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("English", english_meta.heading);
-    const cat = (try english_blob.find("cat")).?;
+    const cat = (try english_index.find("cat")).?;
     const english_source = try language_encoding.decodeAlloc(std.testing.allocator, cat.payload, .{ .heading = "English" });
     defer std.testing.allocator.free(english_source);
     try std.testing.expectEqualStrings("==English==\n===Noun===\n# [[cat]]\n==English==\n===Verb===\n# purr\n", english_source);
@@ -618,11 +607,13 @@ test "blob builder routes main languages and feature namespaces into separate bl
     var recon_map = try mmapPath(std.testing.io, recon_path);
     defer recon_map.deinit();
     const recon_blob = try blob_format.inspect(recon_map.bytes);
-    const reconstruction = (try recon_blob.find("Proto-Germanic/kattuz")).?;
+    var recon_index = try recon_blob.buildTrustedIndexAlloc(std.testing.allocator);
+    defer recon_index.deinit(std.testing.allocator);
+    const reconstruction = (try recon_index.find("Proto-Germanic/kattuz")).?;
     const recon_source = try reconstruction_encoding.decodeAlloc(std.testing.allocator, reconstruction.payload, "Proto-Germanic/kattuz");
     defer std.testing.allocator.free(recon_source);
     try std.testing.expectEqualStrings("{{reconstructed}}\n==Proto-Germanic==\n===Noun===\n# cat\n", recon_source);
-    const raw_reconstruction = (try recon_blob.find("no-slash")).?;
+    const raw_reconstruction = (try recon_index.find("no-slash")).?;
     const raw_recon_source = try reconstruction_encoding.decodeAlloc(std.testing.allocator, raw_reconstruction.payload, "no-slash");
     defer std.testing.allocator.free(raw_recon_source);
     try std.testing.expectEqualStrings("raw malformed reconstruction", raw_recon_source);
@@ -632,7 +623,9 @@ test "blob builder routes main languages and feature namespaces into separate bl
     var citations_map = try mmapPath(std.testing.io, citations_path);
     defer citations_map.deinit();
     const citations_blob = try blob_format.inspect(citations_map.bytes);
-    try std.testing.expectEqualStrings("citation raw", (try citations_blob.find("cat")).?.payload);
+    var citations_index = try citations_blob.buildTrustedIndexAlloc(std.testing.allocator);
+    defer citations_index.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("citation raw", (try citations_index.find("cat")).?.payload);
 
     const stale_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/languages/stale.wikblb", .{out_root});
     defer std.testing.allocator.free(stale_path);

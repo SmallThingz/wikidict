@@ -82,12 +82,31 @@ pub const RecordView = union(format.BlobKind) {
 
 pub const RecordIterator = struct {
     blob: BlobView,
-    index: u32 = 0,
+    raw: format.RecordIterator,
 
     pub fn next(self: *RecordIterator) error{InvalidBlob}!?RecordView {
-        if (self.index >= self.blob.raw.header.record_count) return null;
-        const raw_record = try self.blob.raw.recordAt(self.index);
-        self.index += 1;
+        const raw_record = (try self.raw.next()) orelse return null;
+        return self.blob.wrap(raw_record);
+    }
+};
+pub const IndexedBlobView = struct {
+    blob: BlobView,
+    raw: format.IndexedBlobView,
+
+    pub fn deinit(self: *IndexedBlobView, allocator: std.mem.Allocator) void {
+        self.raw.deinit(allocator);
+    }
+
+    pub fn recordCount(self: IndexedBlobView) usize {
+        return self.raw.recordCount();
+    }
+
+    pub fn recordAt(self: IndexedBlobView, index: usize) error{InvalidBlob}!RecordView {
+        return self.blob.wrap(try self.raw.recordAt(index));
+    }
+
+    pub fn find(self: IndexedBlobView, title: []const u8) error{InvalidBlob}!?RecordView {
+        const raw_record = (try self.raw.find(title)) orelse return null;
         return self.blob.wrap(raw_record);
     }
 };
@@ -103,7 +122,6 @@ pub const BlobView = struct {
     pub fn openTrusted(bytes: []const u8) error{InvalidBlob}!BlobView {
         return fromRaw(try format.openTrusted(bytes));
     }
-
     fn fromRaw(raw: format.BlobView) error{InvalidBlob}!BlobView {
         return .{
             .raw = raw,
@@ -119,25 +137,20 @@ pub const BlobView = struct {
         return self.raw.kind;
     }
 
-    pub fn recordCount(self: BlobView) u32 {
-        return self.raw.header.record_count;
-    }
-
     pub fn languageMetadata(self: BlobView) ?format.LanguageMetadata {
         return self.language_metadata;
     }
 
-    pub fn recordAt(self: BlobView, index: u32) error{InvalidBlob}!RecordView {
-        return self.wrap(try self.raw.recordAt(index));
-    }
-
-    pub fn find(self: BlobView, title: []const u8) error{InvalidBlob}!?RecordView {
-        const raw_record = (try self.raw.find(title)) orelse return null;
-        return self.wrap(raw_record);
-    }
-
     pub fn iterator(self: BlobView) RecordIterator {
-        return .{ .blob = self };
+        return .{ .blob = self, .raw = self.raw.iterator() };
+    }
+
+    pub fn buildIndexAlloc(self: BlobView, allocator: std.mem.Allocator) !IndexedBlobView {
+        return .{ .blob = self, .raw = try self.raw.buildIndexAlloc(allocator) };
+    }
+
+    pub fn buildTrustedIndexAlloc(self: BlobView, allocator: std.mem.Allocator) !IndexedBlobView {
+        return .{ .blob = self, .raw = try self.raw.buildTrustedIndexAlloc(allocator) };
     }
 
     fn wrap(self: BlobView, record: format.RecordView) RecordView {
@@ -156,7 +169,7 @@ pub const BlobView = struct {
     }
 };
 
-test "typed blob reader exposes borrowed language sections" {
+test "typed blob reader exposes borrowed language sections through runtime index" {
     const metadata = try format.buildLanguageMetadataAlloc(std.testing.allocator, "en", "English");
     defer std.testing.allocator.free(metadata);
     const source = "==English==\n===Noun===\n# [[cat]]\n";
@@ -168,15 +181,16 @@ test "typed blob reader exposes borrowed language sections" {
     defer std.testing.allocator.free(bytes);
 
     const blob = try BlobView.inspect(bytes);
+    var index = try blob.buildTrustedIndexAlloc(std.testing.allocator);
+    defer index.deinit(std.testing.allocator);
     try std.testing.expectEqual(format.BlobKind.language, blob.kind());
-    try std.testing.expectEqual(@as(u32, 1), blob.recordCount());
+    try std.testing.expectEqual(@as(usize, 1), index.recordCount());
     try std.testing.expectEqualStrings("English", blob.languageMetadata().?.heading);
-    const record = (try blob.find("cat")).?;
+    const record = (try index.find("cat")).?;
     try std.testing.expectEqual(format.BlobKind.language, record.kind());
     try std.testing.expectEqualStrings("cat", record.title());
     switch (record) {
         .language => |entry| {
-            try std.testing.expectEqualStrings("cat", entry.title);
             var sections = try entry.sectionIterator();
             try std.testing.expectEqualStrings("English", (try sections.next()).?.title);
             try std.testing.expectEqualStrings("Noun", (try sections.next()).?.title);
@@ -195,7 +209,9 @@ test "typed blob reader exposes feature-specific borrowed views" {
     });
     defer std.testing.allocator.free(thesaurus_bytes);
     const thesaurus_blob = try BlobView.inspect(thesaurus_bytes);
-    switch ((try thesaurus_blob.find("cat")).?) {
+    var thesaurus_index = try thesaurus_blob.buildTrustedIndexAlloc(std.testing.allocator);
+    defer thesaurus_index.deinit(std.testing.allocator);
+    switch ((try thesaurus_index.find("cat")).?) {
         .thesaurus => |entry| {
             var records = try entry.recordIterator();
             try std.testing.expectEqual(thesaurus.RecordKind.header, (try records.next()).?.kind);
@@ -213,7 +229,9 @@ test "typed blob reader exposes feature-specific borrowed views" {
     });
     defer std.testing.allocator.free(rhymes_bytes);
     const rhymes_blob = try BlobView.inspect(rhymes_bytes);
-    switch ((try rhymes_blob.find("English/æt")).?) {
+    var rhymes_index = try rhymes_blob.buildTrustedIndexAlloc(std.testing.allocator);
+    defer rhymes_index.deinit(std.testing.allocator);
+    switch ((try rhymes_index.find("English/æt")).?) {
         .rhymes => |entry| {
             var records = try entry.recordIterator();
             const links = (try records.next()).?;
@@ -222,7 +240,6 @@ test "typed blob reader exposes feature-specific borrowed views" {
         },
         else => return error.UnexpectedRecordKind,
     }
-
     const reconstruction_source = "{{reconstructed}}\n==Proto-Germanic==\n===Noun===\n# cat\n";
     const reconstruction_payload = try reconstruction.encodeAlloc(std.testing.allocator, reconstruction_source, "Proto-Germanic/kattuz");
     defer std.testing.allocator.free(reconstruction_payload);
@@ -231,7 +248,9 @@ test "typed blob reader exposes feature-specific borrowed views" {
     });
     defer std.testing.allocator.free(reconstruction_bytes);
     const reconstruction_blob = try BlobView.inspect(reconstruction_bytes);
-    switch ((try reconstruction_blob.find("Proto-Germanic/kattuz")).?) {
+    var reconstruction_index = try reconstruction_blob.buildTrustedIndexAlloc(std.testing.allocator);
+    defer reconstruction_index.deinit(std.testing.allocator);
+    switch ((try reconstruction_index.find("Proto-Germanic/kattuz")).?) {
         .reconstruction => |entry| {
             try std.testing.expectEqual(reconstruction.Kind.language, (try entry.inspect()).kind);
             var sections = (try entry.sectionIterator()).?;
@@ -242,16 +261,18 @@ test "typed blob reader exposes feature-specific borrowed views" {
     }
 }
 
-test "typed blob reader keeps raw feature payloads borrowed" {
+test "typed blob reader keeps raw feature payloads borrowed without persistent index" {
     const bytes = try format.buildAlloc(std.testing.allocator, .citations, "", &.{
         .{ .title = "cat", .payload = "raw citation source" },
     });
     defer std.testing.allocator.free(bytes);
     const blob = try BlobView.inspect(bytes);
     const trusted = try BlobView.openTrusted(bytes);
+    var index = try trusted.buildTrustedIndexAlloc(std.testing.allocator);
+    defer index.deinit(std.testing.allocator);
     try trusted.validate();
-    try std.testing.expectEqualStrings("cat", (try trusted.find("cat")).?.title());
-    switch ((try blob.recordAt(0))) {
+    try std.testing.expectEqualStrings("cat", (try index.find("cat")).?.title());
+    switch ((try index.recordAt(0))) {
         .citations => |entry| {
             try std.testing.expectEqualStrings("cat", entry.title);
             try std.testing.expectEqualStrings("raw citation source", entry.source);

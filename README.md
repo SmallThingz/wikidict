@@ -32,7 +32,7 @@ zig build
 
 ### Per-language blob workflow
 
-`WIKBLB02` is the per-language / feature-blob path. It is separate from the older monolithic `wiktionary.bin` workflow documented below.
+`WIKBLB03` is the per-language / feature-blob path. It is separate from the older monolithic `wiktionary.bin` workflow documented below.
 
 Build blobs from a Wiktionary XML dump:
 
@@ -51,7 +51,7 @@ zig build -Doptimize=ReleaseFast build-blobs -- \
   5000
 ```
 
-The output contains `languages.tsv`, one `languages/<sha256>.wikblb` file per language, and fixed feature blobs such as `thesaurus.wikblb`, `citations.wikblb`, `reconstruction.wikblb`, `rhymes.wikblb`, and `sign-gloss.wikblb`. A zero-record feature blob may be absent in a limited build.
+The output contains `languages.tsv`, one `languages/<sha256>.wikblb` file per language, and fixed feature blobs such as `thesaurus.wikblb`, `citations.wikblb`, `reconstruction.wikblb`, `rhymes.wikblb`, and `sign-gloss.wikblb`. `languages.tsv` stores only language headings; each filename is derived from the heading with SHA-256 and record counts are derived by scanning/building the runtime index. A zero-record feature blob may be absent in a limited build.
 
 Verify generated blobs against the source dump:
 
@@ -73,11 +73,14 @@ zig build -Doptimize=ReleaseFast query-blobs -- \
   data/wiktionary-blobs thesaurus cat
 ```
 
-Add `--validate` to make the query tool run the full record-order/offset validation pass before lookup. Without it, the tool uses the trusted fast-open path and validates individual records as they are accessed.
+Add `--validate` to make the query tool run the full record-framing/title-order validation pass before lookup. Without it, the tool trusts externally established integrity and constructs only the transient runtime index needed for binary search.
 
-For browser or freestanding consumers, depend on the public `blob_decoder` module (and `blob_encoder` when codec/format definitions are needed); these modules contain no filesystem, POSIX, XML-parser, or legacy dictionary dependency. The full `decoder` module re-exports the same blob API for native applications. Library consumers can call `openTrustedBlob(bytes)` for the fast path or `inspectBlob(bytes)` for full validation. `find()` performs binary search over sorted titles, while language records expose `sectionIterator()`, Thesaurus/Rhymes expose typed `recordIterator()` APIs, Reconstruction exposes a typed view/section iterator, and Citations/Sign gloss expose borrowed raw source slices. Catalog helpers expose `languages.tsv` iteration, language filename derivation, fixed feature filenames, and `findLanguageBlob()`.
+For browser or freestanding consumers, depend on the public `blob_decoder` module (and `blob_encoder` when codec/format definitions are needed); these modules contain no filesystem, POSIX, XML-parser, or legacy dictionary dependency. The full `decoder` module re-exports the same blob API for native applications. Library consumers can call `openTrustedBlob(bytes)` for the fast borrowed view or `inspectBlob(bytes)` for full validation. The bare view supports allocation-free sequential iteration; call `buildTrustedIndexAlloc()` after trusted open, or `buildIndexAlloc()` to validate while indexing, to construct the in-memory offsets used by `find()` and `recordAt()`. `find()` then performs binary search over sorted titles, while language records expose `sectionIterator()`, Thesaurus/Rhymes expose typed `recordIterator()` APIs, Reconstruction exposes a typed view/section iterator, and Citations/Sign gloss expose borrowed raw source slices. Catalog helpers expose `languages.tsv` iteration, language filename derivation, fixed feature filenames, and `findLanguageBlob()`.
 
-The wire layout uses `u16` metadata length plus `u32` record count, record-area length, and record offsets; builders reject values that do not fit those fields instead of truncating them. These traversal APIs are zero-allocation after the logical blob bytes are available. `WIKBLB02` itself is deliberately uncompressed: storage/transport compression belongs outside the format, and consumers should decompress the finished blob before opening it.
+`WIKBLB03` persists no lookup index, record count, record-area length, or metadata-length field. The wire prefix is only magic plus blob kind; language metadata is self-delimited, and each sorted record is `title\0 + varint(payload_len) + payload`. The payload length is the only per-record framing that cannot be recovered from delimiters because raw payloads may contain arbitrary bytes. Sequential traversal is zero-allocation; random-access indexes are derived in memory when requested. `WIKBLB03` itself is deliberately uncompressed: storage/transport compression belongs outside the format, and consumers should decompress the finished blob before opening it.
+`WIKBLB02` files are incompatible: rebuild them with `build-blobs`. Runtime indexes own only their offset arrays; keep the borrowed blob bytes alive and unchanged until all views and indexes are no longer used, and release indexes with `deinit(allocator)`.
+
+Framing validation cannot detect deletion at a complete-record boundary without external information. Use `verify-blobs` against the source for corpus completeness, and establish distribution integrity outside the logical format.
 
 Encode the dictionary:
 

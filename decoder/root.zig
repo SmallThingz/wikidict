@@ -27,6 +27,7 @@ pub const DictionaryCompatibility = reader.DictionaryCompatibility;
 pub const BlobView = blobs.BlobView;
 pub const BlobRecordView = blobs.BlobRecordView;
 pub const BlobRecordIterator = blobs.BlobRecordIterator;
+pub const BlobIndexedView = blobs.BlobIndexedView;
 pub const BlobLanguageRecordView = blobs.BlobLanguageRecordView;
 pub const BlobThesaurusRecordView = blobs.BlobThesaurusRecordView;
 pub const BlobRhymesRecordView = blobs.BlobRhymesRecordView;
