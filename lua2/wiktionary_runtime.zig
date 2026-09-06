@@ -786,6 +786,14 @@ pub const Runtime = struct {
         const page_allocator = self.allocator;
         var invoke_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
         defer invoke_arena.deinit();
+        const saved_diagnostics = self.saveDiagnostics();
+        var diagnostics_failed = false;
+        defer if (!diagnostics_failed) self.restoreDiagnostics(saved_diagnostics);
+        errdefer {
+            diagnostics_failed = true;
+            self.preserveLoadDataDiagnostics(page_allocator);
+        }
+
         self.allocator = invoke_arena.allocator();
         defer self.allocator = page_allocator;
 
@@ -802,7 +810,6 @@ pub const Runtime = struct {
         var invoke_vm = try exec.Vm.init(self.allocator);
         try self.install(&invoke_vm);
         const result = invoke(self, &invoke_vm, module_name, function_name, frame) catch |err| {
-            self.preserveLoadDataDiagnostics(page_allocator);
             vm.failure = invoke_vm.failure;
             vm.last_error = switch (invoke_vm.last_error) {
                 .string => |text| .{ .string = try page_allocator.dupe(u8, text) },
@@ -1009,6 +1016,16 @@ pub const Runtime = struct {
         };
     }
 
+    const diagnostic_fields = .{ "last_missing_module", "last_missing_template", "last_missing_wikibase", "last_malformed_wikitext", "last_unsupported_parser", "last_not_implemented" };
+    const DiagnosticState = [diagnostic_fields.len]?[]const u8;
+    fn saveDiagnostics(self: *const Runtime) DiagnosticState {
+        var saved: DiagnosticState = undefined;
+        inline for (diagnostic_fields, 0..) |field, i| saved[i] = @field(self, field);
+        return saved;
+    }
+    fn restoreDiagnostics(self: *Runtime, saved: DiagnosticState) void {
+        inline for (diagnostic_fields, 0..) |field, i| @field(self, field) = saved[i];
+    }
     fn preserveLoadDataDiagnostics(self: *Runtime, caller_allocator: std.mem.Allocator) void {
         if (self.last_missing_module) |v| self.last_missing_module = caller_allocator.dupe(u8, v) catch null;
         if (self.last_missing_template) |v| self.last_missing_template = caller_allocator.dupe(u8, v) catch null;
@@ -1031,6 +1048,14 @@ pub const Runtime = struct {
         const caller_allocator = self.allocator;
         var eval_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
         defer eval_arena.deinit();
+        const saved_diagnostics = self.saveDiagnostics();
+        var diagnostics_failed = false;
+        defer if (!diagnostics_failed) self.restoreDiagnostics(saved_diagnostics);
+        errdefer {
+            diagnostics_failed = true;
+            self.preserveLoadDataDiagnostics(caller_allocator);
+        }
+
         const saved = self.saveInvocationState();
         self.allocator = eval_arena.allocator();
         self.resetInvocationState();
@@ -1044,10 +1069,7 @@ pub const Runtime = struct {
         const empty_args = try rt.newTable(self.allocator);
         const empty_frame = try makeFrameWithArgsTable(self, "empty", empty_args, null);
         self.current_frame = empty_frame.table;
-        const raw_value = self.requireSlot(&data_vm, slot) catch |err| {
-            self.preserveLoadDataDiagnostics(caller_allocator);
-            return err;
-        };
+        const raw_value = try self.requireSlot(&data_vm, slot);
         if (raw_value != .table) return error.LoadDataExpectedTable;
         var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
         const value = try self.promoteLoadDataValue(raw_value, &seen);
@@ -3744,4 +3766,56 @@ test "native Scribunto trim and parameter key match module edge cases" {
     const delegated = try Case.call(&vm, &ctx, a, &.{.{ .number = 1.5 }});
     try std.testing.expect(delegated == .string and std.mem.eql(u8, delegated.string, "fallback"));
     try std.testing.expectEqual(@as(usize, 1), fallback_ctx.calls);
+}
+
+fn addDiagnosticTestModule(runtime: *Runtime, title: []const u8, source: []const u8) !void {
+    const a = runtime.persistent_allocator;
+    var chunk = try @import("root.zig").parse(a, source);
+    const program = try a.create(ir.Program);
+    program.* = try ir.lowerChunk(a, &chunk);
+    const slot = try a.create(ModuleSlot);
+    slot.* = .{ .page_id = 1, .title = title, .program = program };
+    try runtime.modules.put(a, title, slot);
+}
+test "successful loadData restores caller diagnostics after a caught error" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = Runtime.init(arena.allocator(), std.testing.io, "modules");
+    try addDiagnosticTestModule(&runtime, "Module:Data", "pcall(function()require('missing'..' ephemeral')end);return {x=7}");
+    const outer = "caller diagnostic";
+    runtime.last_missing_module = outer;
+    const out = try runtime.loadDataByName("Module:Data");
+    try std.testing.expectEqual(@as(f64, 7), out.table.rawGet(.{ .string = "x" }).?.number);
+    try std.testing.expectEqual(@intFromPtr(outer.ptr), @intFromPtr(runtime.last_missing_module.?.ptr));
+}
+test "successful invoke restores caller diagnostics after a caught error" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = Runtime.init(arena.allocator(), std.testing.io, "modules");
+    try addDiagnosticTestModule(&runtime, "Module:Safe", "return {main=function()pcall(function()require('missing'..' ephemeral')end);return 'ok' end}");
+    var vm = try exec.Vm.init(arena.allocator());
+    try runtime.install(&vm);
+    const outer = "caller diagnostic";
+    runtime.last_missing_module = outer;
+    try std.testing.expectEqualStrings("ok", try runtime.expandFragment(&vm, "Test", "{{#invoke:Safe|main}}"));
+    try std.testing.expectEqual(@intFromPtr(outer.ptr), @intFromPtr(runtime.last_missing_module.?.ptr));
+}
+test "escaping loadData errors promote diagnostic text before arena teardown" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = Runtime.init(arena.allocator(), std.testing.io, "modules");
+    try addDiagnosticTestModule(&runtime, "Module:BadData", "require('missing'..' transient');return {}");
+    runtime.last_missing_module = "caller diagnostic";
+    try std.testing.expectError(error.ModuleNotFound, runtime.loadDataByName("Module:BadData"));
+    try std.testing.expectEqualStrings("missing transient", runtime.last_missing_module.?);
+}
+test "escaping invoke errors promote diagnostic text before arena teardown" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = Runtime.init(arena.allocator(), std.testing.io, "modules");
+    try addDiagnosticTestModule(&runtime, "Module:BadInvoke", "return {main=function()require('missing'..' transient')end}");
+    var vm = try exec.Vm.init(arena.allocator());
+    try runtime.install(&vm);
+    try std.testing.expectError(error.ModuleNotFound, runtime.expandFragment(&vm, "Test", "{{#invoke:BadInvoke|main}}"));
+    try std.testing.expectEqualStrings("missing transient", runtime.last_missing_module.?);
 }
