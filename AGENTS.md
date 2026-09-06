@@ -14,3 +14,6 @@
 - Follow `/home/a/AGENTS.md` for shared-host benchmark and tooling rules.
 
 - Serialization work must not modify VM or VM-related code under `lua2/`; it is owned by another agent.
+
+- Frontends share `frontend/model.zig` and the portable blob readers. Keep exact source separate from presentation; unresolved templates stay explicit, and human output must neutralize terminal control sequences.
+- Machine results use the versioned `dict.results.v1` stdout protocol; diagnostics go to stderr. Do not place frontend data or theme state into blob files.

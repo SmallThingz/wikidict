@@ -73,7 +73,7 @@ zig build -Doptimize=ReleaseFast query-blobs -- \
   data/wiktionary-blobs thesaurus cat
 ```
 
-Add `--validate` to make the query tool run the full record-framing/title-order validation pass before lookup. Without it, the tool trusts externally established integrity and constructs only the transient runtime index needed for binary search.
+Queries validate record framing and title order while building the runtime index by default. `--trusted` skips the title-order check only for artifacts whose integrity has already been established externally. `--validate` explicitly selects the default.
 
 For browser or freestanding consumers, depend on the public `blob_decoder` module (and `blob_encoder` when codec/format definitions are needed); these modules contain no filesystem, POSIX, XML-parser, or legacy dictionary dependency. The full `decoder` module re-exports the same blob API for native applications. Library consumers can call `openTrustedBlob(bytes)` for the fast borrowed view or `inspectBlob(bytes)` for full validation. The bare view supports allocation-free sequential iteration; call `buildTrustedIndexAlloc()` after trusted open, or `buildIndexAlloc()` to validate while indexing, to construct the in-memory offsets used by `find()` and `recordAt()`. `find()` then performs binary search over sorted titles, while language records expose `sectionIterator()`, Thesaurus/Rhymes expose typed `recordIterator()` APIs, Reconstruction exposes a typed view/section iterator, and Citations/Sign gloss expose borrowed raw source slices. Catalog helpers expose `languages.tsv` iteration, language filename derivation, fixed feature filenames, and `findLanguageBlob()`.
 
@@ -81,6 +81,12 @@ For browser or freestanding consumers, depend on the public `blob_decoder` modul
 `WIKBLB02` files are incompatible: rebuild them with `build-blobs`. Runtime indexes own only their offset arrays; keep the borrowed blob bytes alive and unchanged until all views and indexes are no longer used, and release indexes with `deinit(allocator)`.
 
 Framing validation cannot detect deletion at a complete-record boundary without external information. Use `verify-blobs` against the source for corpus completeness, and establish distribution integrity outside the logical format.
+
+### Human and machine-readable results
+
+`zig build` installs `zig-out/bin/dict`. Use `dict lookup WORD`, `dict search PREFIX`, `dict languages`, or `dict stats`, with `--root PATH` and optional `--language HEADING` / `--kind KIND`.
+
+`--format json` emits the versioned `dict.results.v1` interface for alternative frontends; `--with-source` includes exact source alongside semantic sections and spans. `--format source` emits only the reconstructed source bytes. Human output is the default. See [frontend/README.md](frontend/README.md) for protocol, ownership, and rendering details.
 
 Encode the dictionary:
 

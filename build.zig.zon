@@ -18,5 +18,12 @@
         "lua2",
         "shared",
         "tools",
+        "frontend/README.md",
+        "frontend/args.zig",
+        "frontend/main.zig",
+        "frontend/model.zig",
+        "frontend/output.zig",
+        "frontend/pipeline_tests.zig",
+        "frontend/store.zig",
     },
 }

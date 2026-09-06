@@ -308,10 +308,11 @@ pub fn build(b: *std.Build) void {
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
     });
-    const blob_query_exe = addCliExecutable(b, "dict-blob-query", b.path("tools/blob_query.zig"), target, optimize, &.{
-        .{ .name = "encoder", .module = encoder_mod },
-        .{ .name = "decoder", .module = decoder_mod },
+    const blob_query_exe = addCliExecutable(b, "dict", b.path("frontend/main.zig"), target, optimize, &.{
+        .{ .name = "blob_encoder", .module = blob_encoder_mod },
+        .{ .name = "blob_decoder", .module = blob_decoder_mod },
     });
+    b.installArtifact(blob_query_exe);
     encoder_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
     decoder_tool_paths_options.addOption([]const u8, "encoder_bin_path", b.pathFromRoot("zig-out/bin/dict-encoder"));
     verifier_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
@@ -356,6 +357,7 @@ pub fn build(b: *std.Build) void {
 
     const blob_query_run = addRunArtifactCommand(b, blob_query_exe, &.{}, b.args);
     addPublicRunStep(b, "query-blobs", "Query per-language and feature Wiktionary blobs", blob_query_run, &.{});
+    addPublicRunStep(b, "dict", "Run the dictionary frontend CLI", blob_query_run, &.{});
 
     const test_runner = b.path("tools/test_runner.zig");
 
@@ -417,12 +419,12 @@ pub fn build(b: *std.Build) void {
     });
     const blob_query_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/blob_query.zig"),
+            .root_source_file = b.path("frontend/main.zig"),
             .target = target,
             .optimize = test_optimize,
             .imports = &.{
-                .{ .name = "encoder", .module = encoder_mod_test },
-                .{ .name = "decoder", .module = decoder_mod_test },
+                .{ .name = "blob_encoder", .module = blob_encoder_mod_test },
+                .{ .name = "blob_decoder", .module = blob_decoder_mod_test },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
