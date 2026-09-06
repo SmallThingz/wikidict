@@ -163,3 +163,5 @@ This serializes the encoder, decoder, structure, verifier, and Lua2 test targets
 ### Offline HTML reader
 
 `dict lookup cat --root PATH --format html --with-source > cat.html` writes a self-contained themed reader. Use `dict search PREFIX --limit N --format html --with-source` to export a bounded set of entries. See `frontend/README.md` for the SolidJS project, rebuilding, and embedding interface.
+
+`dict tui [PREFIX] --root PATH` opens the interactive terminal reader. It shares the same blob index and presentation model as the CLI and HTML reader. Use `Tab` for pane focus, arrows for navigation, `s` for source, `t` for theme, and `?` for help. The current TUI backend is Linux-specific.

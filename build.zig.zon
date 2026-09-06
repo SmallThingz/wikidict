@@ -27,5 +27,7 @@
         "frontend/output.zig",
         "frontend/pipeline_tests.zig",
         "frontend/store.zig",
+        "frontend/terminal.zig",
+        "frontend/tui.zig",
     },
 }

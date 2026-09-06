@@ -1,6 +1,7 @@
 const std = @import("std");
 const store = @import("store.zig");
-pub const Command = enum { lookup, search, languages, stats };
+pub const Command = enum { lookup, search, languages, stats, tui };
+pub const Theme = enum { terminal, dark, light };
 pub const Format = enum { text, json, source, html };
 pub const Color = enum { auto, always, never };
 pub const Options = struct {
@@ -11,6 +12,7 @@ pub const Options = struct {
     query: []const u8 = "",
     format: Format = .text,
     color: Color = .auto,
+    theme: Theme = .terminal,
     limit: usize = 20,
     offset: usize = 0,
     with_source: bool = false,
@@ -71,7 +73,7 @@ pub fn parse(argv: []const []const u8) !Options {
             if (pos + 1 >= argv.len) return error.Usage;
             pos += 1;
             const value = argv[pos];
-            if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
+            if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
         } else {
             if (has_query) return error.Usage;
             out.query = arg;
@@ -84,6 +86,7 @@ pub fn parse(argv: []const []const u8) !Options {
     if ((out.command == .stats or out.command == .languages) and has_query) return error.Usage;
     if (out.format == .source and out.command != .lookup) return error.Usage;
     if (out.format == .html and out.command != .lookup and out.command != .search) return error.Usage;
+    if (out.command == .tui and out.format != .text) return error.Usage;
     if (out.offset != 0 and out.command != .search) return error.Usage;
     return out;
 }
@@ -99,4 +102,12 @@ test "CLI options are strict and legacy query syntax still works" {
     try std.testing.expectError(error.Usage, parse(&.{ "search", "--limit", "0" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "unexpected" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--wat", "yes" }));
+}
+
+test "frontend formats and terminal options reject invalid combinations" {
+    try std.testing.expectEqual(Command.tui, (try parse(&.{ "tui", "cat", "--theme", "dark" })).command);
+    try std.testing.expectEqual(Format.html, (try parse(&.{ "search", "cat", "--format", "html" })).format);
+    try std.testing.expectError(error.Usage, parse(&.{ "tui", "--format", "json" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "languages", "--format", "html" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "tui", "--theme", "unknown" }));
 }

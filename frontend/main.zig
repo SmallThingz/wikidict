@@ -4,6 +4,7 @@ const store = @import("store.zig");
 const model = @import("model.zig");
 const output = @import("output.zig");
 const html = @import("html.zig");
+const tui = @import("tui.zig");
 
 const usage =
     \\dict: local Wiktionary, one language or feature blob at a time
@@ -12,6 +13,7 @@ const usage =
     \\  dict search [PREFIX] [options]
     \\  dict languages [--root PATH] [--format text|json]
     \\  dict stats [options]
+    \\  dict tui [PREFIX] [options]
     \\
     \\  --root PATH        WIKBLB03 root (default data/wiktionary-blobs)
     \\  --language NAME    Exact language heading (default English)
@@ -19,8 +21,9 @@ const usage =
     \\  --format FORMAT    text, json, source, html (HTML supports lookup and search)
     \\  --limit N          Search page size, 1..1000 (default 20)
     \\  --offset N         Skip N prefix matches
-    \\  --with-source      Include exact source in JSON entries
+    \\  --with-source      Include exact source in JSON/HTML entries
     \\  --color MODE       auto, always, never; NO_COLOR disables automatic color
+    \\  --theme THEME      TUI palette: terminal (default), dark, light
     \\  --trusted          Skip title-order checks for externally verified blobs
     \\  --validate         Validate while indexing (the default)
     \\  --                 End options, for words beginning with a dash
@@ -57,6 +60,7 @@ fn run(init: std.process.Init) !u8 {
         try w.flush();
         return 0;
     }
+    if (opts.command == .tui and (!try std.Io.File.stdin().isTty(init.io) or !try std.Io.File.stdout().isTty(init.io) or (if (init.environ_map.get("TERM")) |t| std.mem.eql(u8, t, "dumb") else false))) return error.TerminalRequired;
     var db = try store.Store.open(init.io, init.gpa, opts.root, opts.kind, opts.language, opts.trusted);
     defer db.deinit();
     const color = switch (opts.color) {
@@ -64,6 +68,11 @@ fn run(init: std.process.Init) !u8 {
         .never => false,
         .auto => !init.environ_map.contains("NO_COLOR") and !(if (init.environ_map.get("TERM")) |t| std.mem.eql(u8, t, "dumb") else false) and try std.Io.File.stdout().isTty(init.io),
     };
+    if (opts.command == .tui) {
+        const label = try std.fmt.allocPrint(a, "{s} / {s}", .{ if (opts.kind == .language) opts.language else "Features", @tagName(opts.kind) });
+        try tui.run(init.io, init.gpa, &db, label, opts.query, opts.theme, color);
+        return 0;
+    }
     var response: output.Response = .{
         .operation = opts.command,
         .query = try model.utf8Text(a, opts.query),
@@ -144,7 +153,7 @@ fn run(init: std.process.Init) !u8 {
                 try w.print(" / {s}\nrecords: {d}\nblob bytes: {d}\nruntime index bytes: {d}\n", .{ @tagName(opts.kind), db.index.recordCount(), db.bytes.len, db.index.recordCount() * @sizeOf(usize) });
             }
         },
-        .languages => unreachable,
+        .languages, .tui => unreachable,
     }
     try w.flush();
     return if (response.total_matches == 0 and opts.command != .stats) 1 else 0;
@@ -180,5 +189,6 @@ test {
     _ = model;
     _ = output;
     _ = html;
+    _ = tui;
     _ = @import("pipeline_tests.zig");
 }

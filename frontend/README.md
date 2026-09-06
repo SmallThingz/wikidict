@@ -42,3 +42,19 @@ HTML includes its complete SolidJS application, styles and safely embedded JSON.
 Appearance is handled by JavaScript with system/light/dark/cool themes, an accent picker and sans/monospace type, persisted locally when storage permits. CSS consumes the site's `--site-*` tokens. `frontend/web/src/index.tsx` exposes `mountDictionary(element, data, { inheritedTheme, onNavigate })`, returning a disposer, for later host-site integration. No host-site files are changed.
 
 The independently maintained SolidJS project is in `frontend/web`. Install its pinned dependencies with `bun install --frozen-lockfile`, then `bun run build` there (or `zig build frontend` from the repository). The build type-checks and produces exactly `dist/index.html`. That generated artifact is committed and packaged so native `zig build` requires neither Bun nor network frontend dependencies. Rebuild it when changing frontend source.
+
+## Interactive terminal reader
+
+```sh
+zig-out/bin/dict tui cat --root data/wiktionary-blobs
+zig-out/bin/dict tui --language French --root data/wiktionary-blobs --theme dark
+zig-out/bin/dict tui English/ --kind rhymes --root data/wiktionary-blobs
+```
+
+The TUI keeps one runtime index open. Search edits use binary prefix bounds; selecting a result decodes only that entry. Wide terminals show results beside the reading pane, while narrow terminals switch between them. Resize handling, word wrapping, Unicode cell widths, search editing and bracketed paste are supported. Use `terminal`, `dark` or `light` palettes; `--color never` provides monochrome output.
+
+`Tab` cycles search, results and reading; `Enter` opens reading. Arrows or `j`/`k` navigate, `PageUp`/`PageDown` page, and `Home`/`End` jump. `/` focuses search, `Ctrl-U` clears it, `s` toggles exact-source display, `t` changes palette, and `?` opens help. `q` exits outside search; `Ctrl-C`/`Ctrl-D` exits from anywhere. Pasted text is routed to search rather than interpreted as commands.
+
+The current interactive backend targets Linux VT-compatible terminals and requires real terminal stdin/stdout, not pipes or `TERM=dumb`. Cell widths use the C UTF-8 locale; complex emoji sequences can vary between terminal emulators. The build uses libc and LLVM/lld for this executable only. Portable blob modules and browser consumers remain independent of those dependencies.
+
+Terminal settings, cursor, bracketed-paste mode and alternate screen are restored on normal exit, propagated errors and handled interrupt/termination/hangup signals. Forced termination such as SIGKILL cannot run cleanup. Exact-source TUI display remains control-safe; only the CLI `--format source` intentionally emits unmodified bytes.

@@ -312,6 +312,10 @@ pub fn build(b: *std.Build) void {
         .{ .name = "blob_encoder", .module = blob_encoder_mod },
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
     });
+    // Locale-aware terminal cell widths use libc; lld supports current host crt objects.
+    blob_query_exe.root_module.link_libc = true;
+    blob_query_exe.use_llvm = true;
+    blob_query_exe.use_lld = true;
     b.installArtifact(blob_query_exe);
     encoder_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
     decoder_tool_paths_options.addOption([]const u8, "encoder_bin_path", b.pathFromRoot("zig-out/bin/dict-encoder"));
@@ -433,6 +437,9 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    blob_query_tests.root_module.link_libc = true;
+    blob_query_tests.use_llvm = true;
+    blob_query_tests.use_lld = true;
     const lua2_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("lua2/all_tests.zig"),
