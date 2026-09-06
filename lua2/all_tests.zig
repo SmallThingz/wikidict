@@ -1,4 +1,5 @@
 test {
+    _ = @import("vm_globals_tests.zig");
     _ = @import("root.zig");
     _ = @import("vm_ir.zig");
     _ = @import("vm_runtime.zig");

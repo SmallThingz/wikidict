@@ -1,3 +1,4 @@
+const global_abi = @import("vm_global_abi.zig");
 const std = @import("std");
 const lua = @import("root.zig");
 
@@ -50,6 +51,8 @@ pub const Opcode = enum(u8) {
     generic_for_next,
     ret,
     ret_var,
+    get_global_slot,
+    set_global_slot,
 };
 
 pub const Inst = struct {
@@ -251,7 +254,10 @@ const Lowerer = struct {
             },
             .global => blk: {
                 const dst = try self.newReg();
-                _ = try self.emit(.{ .op = .get_global, .dst = dst, .aux = try self.program.intern(name) });
+                if (global_abi.find(name)) |slot| {
+                    _ = try self.emit(.{ .op = .get_global_slot, .dst = dst, .aux = slot });
+                } else _ = try self.emit(.{ .op = .get_global, .dst = dst, .aux = try self.program.intern(name) });
+
                 break :blk dst;
             },
         };
@@ -261,7 +267,11 @@ const Lowerer = struct {
         switch (try self.resolve(name)) {
             .local => |dst| _ = try self.emit(.{ .op = .move, .dst = dst, .a = src }),
             .upvalue => |idx| _ = try self.emit(.{ .op = .set_upvalue, .a = idx, .b = src }),
-            .global => _ = try self.emit(.{ .op = .set_global, .a = src, .aux = try self.program.intern(name) }),
+            .global => {
+                if (global_abi.find(name)) |slot| {
+                    _ = try self.emit(.{ .op = .set_global_slot, .a = src, .aux = slot });
+                } else _ = try self.emit(.{ .op = .set_global, .a = src, .aux = try self.program.intern(name) });
+            },
         }
     }
 

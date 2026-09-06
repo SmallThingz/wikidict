@@ -24,7 +24,7 @@ fn key(names: enc.call_symbols.Names, title: []const u8, kind: enc.call_symbols.
     return text;
 }
 fn poolReferences(bytes: []const u8, names: enc.call_symbols.Names) !usize {
-    if (!std.mem.startsWith(u8, bytes, vm.linked_magic)) return error.InvalidLinkedProgram;
+    if (!vm.isLinkedProgram(bytes)) return error.InvalidLinkedProgram;
     var pos: usize = vm.linked_magic.len;
     _ = try enc.blob_format.readPayloadLength(bytes, &pos);
     const strings = try enc.blob_format.readPayloadLength(bytes, &pos);

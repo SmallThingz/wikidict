@@ -9,8 +9,10 @@ const format = enc.blob_format;
 const A = std.mem.Allocator;
 const ir = bridge.ir;
 const codec = bridge.codec;
-pub const linked_magic = "DWSY\x01";
-const source_magic = "DWVM\x02";
+pub const linked_magic = "DWSY\x02";
+pub fn isLinkedProgram(bytes: []const u8) bool {
+    return std.mem.startsWith(u8, bytes, linked_magic) or std.mem.startsWith(u8, bytes, "DWSY\x01");
+}
 
 fn mark(marked: []bool, index: u32) !void {
     if (index >= marked.len) return error.InvalidProgramString;
@@ -55,7 +57,7 @@ fn memberStrings(a: A, p: *const ir.Program) ![]bool {
                 .jump, .jump_if_false, .numeric_for_next, .generic_for_next => @memset(regs, null),
                 // Conservatively lose facts across any other write. Missing a
                 // candidate leaves a literal, never changes execution semantics.
-                .set_global, .set_upvalue, .set_index, .table_set, .table_append, .table_append_var, .ret, .ret_var => {},
+                .set_global, .set_global_slot, .set_upvalue, .set_index, .table_set, .table_append, .table_append_var, .ret, .ret_var => {},
                 .call, .call_vararg, .method_call, .method_call_vararg => @memset(regs, null),
                 else => if (x.dst < regs.len) {
                     regs[x.dst] = null;
@@ -105,10 +107,13 @@ pub fn linkProgramAlloc(a: A, bytes: []const u8, names: symbols.Names) ![]u8 {
         done += 1;
         p.strings.items[i] = strings[i];
     }
-    const result = try codec.serialize(a, &p);
+    const source_version = try codec.bytecodeVersion(bytes);
+    const result = try codec.serializeVersion(a, &p, source_version);
     errdefer a.free(result);
-    if (!std.mem.startsWith(u8, result, source_magic)) return error.UnsupportedVmCodec;
-    @memcpy(result[0..linked_magic.len], linked_magic);
+    if (try codec.bytecodeVersion(result) != source_version) return error.UnsupportedVmCodec;
+    @memcpy(result[0..4], "DWSY");
+    result[4] = source_version - 1;
+
     return result;
 }
 fn putVar(out: *std.ArrayList(u8), a: A, value: usize) !void {
@@ -118,7 +123,8 @@ fn putVar(out: *std.ArrayList(u8), a: A, value: usize) !void {
 /// Only the version-checked string-pool envelope is adapted. The instruction,
 /// constant and function body emitted by the owner codec is copied unchanged.
 pub fn bindProgramAlloc(a: A, bytes: []const u8, names: symbols.Names) ![]u8 {
-    if (!std.mem.startsWith(u8, bytes, linked_magic)) return error.UnsupportedLinkedVmCodec;
+    if (!isLinkedProgram(bytes)) return error.UnsupportedLinkedVmCodec;
+    const source_version = bytes[4] + 1;
     var pos: usize = linked_magic.len;
     _ = try format.readPayloadLength(bytes, &pos); // root function
     const strings = try format.readPayloadLength(bytes, &pos);
@@ -126,7 +132,7 @@ pub fn bindProgramAlloc(a: A, bytes: []const u8, names: symbols.Names) ![]u8 {
     if (strings > bytes.len - pos) return error.InvalidLinkedProgram;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(a);
-    try out.appendSlice(a, source_magic);
+    try out.appendSlice(a, &.{ 'D', 'W', 'V', 'M', source_version });
     try out.appendSlice(a, bytes[linked_magic.len..pos]);
     for (0..strings) |_| {
         const len = try format.readPayloadLength(bytes, &pos);
@@ -231,5 +237,24 @@ test "linked VM string envelope rejects truncated and unsupported versions" {
             std.testing.allocator.free(out);
             return error.TestUnexpectedResult;
         } else |_| {}
+    }
+}
+
+test "shared symbol envelopes preserve both supported owner codec versions" {
+    const a = std.testing.allocator;
+    for ([_]u8{ 2, 3 }) |version| {
+        var chunk = try bridge.lua.parse(a, "return 'retained'");
+        defer chunk.deinit();
+        var p = try ir.lowerChunk(a, &chunk);
+        defer p.deinit();
+        const raw = try codec.serializeVersion(a, &p, version);
+        defer a.free(raw);
+        const names: symbols.Names = .{ .keys = &.{"fretained"} };
+        const linked = try linkProgramAlloc(a, raw, names);
+        defer a.free(linked);
+        try std.testing.expectEqual(version - 1, linked[4]);
+        const bound = try bindProgramAlloc(a, linked, names);
+        defer a.free(bound);
+        try std.testing.expectEqualSlices(u8, raw, bound);
     }
 }

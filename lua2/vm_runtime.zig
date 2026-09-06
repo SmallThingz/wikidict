@@ -1,3 +1,4 @@
+const global_abi = @import("vm_global_abi.zig");
 const std = @import("std");
 const ir = @import("vm_ir.zig");
 
@@ -63,23 +64,65 @@ const ValueContext = struct {
     }
 };
 
+const Map = std.HashMapUnmanaged(Value, Value, ValueContext, 80);
 pub const Table = struct {
-    map: std.HashMapUnmanaged(Value, Value, ValueContext, 80) = .empty,
+    map: Map = .empty,
+    global_values: ?*[global_abi.count]Value = null,
     metatable: ?*Table = null,
     append_index: u32 = 1,
     read_only: bool = false,
 
     pub fn deinit(self: *Table, a: std.mem.Allocator) void {
         self.map.deinit(a);
+        if (self.global_values) |values| a.destroy(values);
+    }
+
+    pub fn globalGet(self: *const Table, id: u32) ?Value {
+        const slots = self.global_values orelse return null;
+        if (id >= global_abi.count) return null;
+        return if (slots[id] == .nil) null else slots[id];
+    }
+    pub fn globalSet(self: *Table, id: u32, value: Value) !void {
+        if (self.read_only) return error.ReadOnlyTable;
+        const slots = self.global_values orelse return error.NotGlobalEnvironment;
+        if (id >= global_abi.count) return error.BadGlobalSlot;
+        slots[id] = value;
+    }
+    pub const Iterator = struct {
+        table: *Table,
+        hash: Map.Iterator,
+        slot: u32 = 0,
+        key: Value = .nil,
+        pub const Entry = struct { key_ptr: *const Value, value_ptr: *Value };
+        pub fn next(self: *Iterator) ?Entry {
+            if (self.table.global_values) |values| while (self.slot < global_abi.count) {
+                const i = self.slot;
+                self.slot += 1;
+                if (values[i] == .nil) continue;
+                self.key = .{ .string = global_abi.names[i] };
+                return .{ .key_ptr = &self.key, .value_ptr = &values[i] };
+            };
+            if (self.hash.next()) |entry| return .{ .key_ptr = entry.key_ptr, .value_ptr = entry.value_ptr };
+            return null;
+        }
+    };
+    pub fn iterator(self: *Table) Iterator {
+        return .{ .table = self, .hash = self.map.iterator() };
     }
 
     pub fn rawGet(self: *const Table, key: Value) ?Value {
+        if (self.global_values != null and key == .string) {
+            if (global_abi.find(key.string)) |id| return self.globalGet(id);
+        }
         return self.map.getContext(key, .{});
     }
     pub fn rawSet(self: *Table, a: std.mem.Allocator, key: Value, value: Value) !void {
         if (self.read_only) return error.ReadOnlyTable;
         if (key == .nil) return error.NilTableKey;
         if (key == .number and std.math.isNan(key.number)) return error.NaNTableKey;
+        if (self.global_values != null and key == .string) {
+            if (global_abi.find(key.string)) |id| return self.globalSet(id, value);
+        }
         if (value == .nil) {
             _ = self.map.removeContext(key, .{});
             return;

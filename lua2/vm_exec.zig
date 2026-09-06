@@ -1,3 +1,4 @@
+const global_abi = @import("vm_global_abi.zig");
 const std = @import("std");
 const ir = @import("vm_ir.zig");
 const rt = @import("vm_runtime.zig");
@@ -29,11 +30,24 @@ pub const Vm = struct {
 
     pub fn init(allocator: std.mem.Allocator) !Vm {
         const globals = try rt.newTable(allocator);
+        errdefer {
+            globals.deinit(allocator);
+            allocator.destroy(globals);
+        }
+        globals.global_values = try allocator.create([global_abi.count]Value);
+        @memset(globals.global_values.?, .nil);
+
         const vm = Vm{ .allocator = allocator, .globals = globals };
-        try globals.rawSet(allocator, .{ .string = "_G" }, .{ .table = globals });
+        try globals.globalSet(global_abi.id("_G"), .{ .table = globals });
         return vm;
     }
 
+    pub fn getGlobal(self: *const Vm, comptime name: []const u8) ?Value {
+        return self.globals.globalGet(global_abi.id(name));
+    }
+    pub fn setGlobal(self: *Vm, comptime name: []const u8, value: Value) !void {
+        try self.globals.globalSet(global_abi.id(name), value);
+    }
     fn rawFreeSlice(comptime T: type, allocator: std.mem.Allocator, values: []T) void {
         if (values.len == 0) return;
         const bytes = std.mem.sliceAsBytes(values);
@@ -389,6 +403,9 @@ pub const Vm = struct {
                 },
                 .load_const => self.setReg(&frame, inst.dst, try self.materializeConst(p, inst.aux)),
                 .get_global => self.setReg(&frame, inst.dst, self.globals.rawGet(.{ .string = p.strings.items[inst.aux] }) orelse .nil),
+                .get_global_slot => self.setReg(&frame, inst.dst, self.globals.global_values.?[inst.aux]),
+                .set_global_slot => try self.globals.globalSet(inst.aux, self.getReg(&frame, inst.a)),
+
                 .set_global => try self.globals.rawSet(self.allocator, .{ .string = p.strings.items[inst.aux] }, self.getReg(&frame, inst.a)),
                 .get_upvalue => {
                     const value = upvalues[inst.a].value;
@@ -558,7 +575,7 @@ fn installMinimalGlobals(vm: *Vm) !void {
             return out;
         }
     }.call);
-    try vm.globals.rawSet(vm.allocator, .{ .string = "type" }, type_fn);
+    try vm.setGlobal("type", type_fn);
 }
 
 fn installMetatableGlobalsForTest(vm: *Vm) !void {
@@ -587,8 +604,8 @@ fn installMetatableGlobalsForTest(vm: *Vm) !void {
             return out;
         }
     }.call);
-    try vm.globals.rawSet(vm.allocator, .{ .string = "getmetatable" }, get_mt);
-    try vm.globals.rawSet(vm.allocator, .{ .string = "setmetatable" }, set_mt);
+    try vm.setGlobal("getmetatable", get_mt);
+    try vm.setGlobal("setmetatable", set_mt);
 }
 
 test "concat values intern duplicate strings" {

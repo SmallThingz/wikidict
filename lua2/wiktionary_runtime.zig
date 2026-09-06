@@ -661,7 +661,7 @@ pub const Runtime = struct {
     }
 
     fn unicodeCase(_: *Runtime, vm: *exec.Vm, text: []const u8, upper: bool) anyerror![]const u8 {
-        const mw = vm.globals.rawGet(.{ .string = "mw" }) orelse return error.MissingMw;
+        const mw = vm.getGlobal("mw") orelse return error.MissingMw;
         if (mw != .table) return error.MissingMw;
         const ustring = mw.table.rawGet(.{ .string = "ustring" }) orelse return error.MissingUstring;
         if (ustring != .table) return error.MissingUstring;
@@ -873,24 +873,24 @@ pub const Runtime = struct {
         try package.rawSet(self.allocator, .{ .string = "loaded" }, .{ .table = loaded });
         try package.rawSet(self.allocator, .{ .string = "loaders" }, .{ .table = loaders });
         try loaders.rawSet(self.allocator, .{ .number = 2 }, try rt.newNative(self.allocator, self, mainLoaderCall));
-        try vm.globals.rawSet(self.allocator, .{ .string = "package" }, .{ .table = package });
-        try vm.globals.rawSet(self.allocator, .{ .string = "require" }, try rt.newNative(self.allocator, self, requireCall));
+        try vm.setGlobal("package", .{ .table = package });
+        try vm.setGlobal("require", try rt.newNative(self.allocator, self, requireCall));
 
         const mw = try rt.newTable(self.allocator);
         try mw.rawSet(self.allocator, .{ .string = "loadData" }, try rt.newNative(self.allocator, self, loadDataCall));
         try mw.rawSet(self.allocator, .{ .string = "clone" }, try rt.newNative(self.allocator, self, cloneCall));
         try mw.rawSet(self.allocator, .{ .string = "getCurrentFrame" }, try rt.newNative(self.allocator, self, currentFrameCall));
         const ustring = try rt.newTable(self.allocator);
-        if (vm.globals.rawGet(.{ .string = "string" })) |string_value| if (string_value == .table) {
-            var it = string_value.table.map.iterator();
+        if (vm.getGlobal("string")) |string_value| if (string_value == .table) {
+            var it = string_value.table.iterator();
             while (it.next()) |entry| try ustring.rawSet(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
         };
         try ustring_lib.install(self.allocator, ustring);
-        if (vm.globals.rawGet(.{ .string = "string" })) |string_value| if (string_value == .table)
+        if (vm.getGlobal("string")) |string_value| if (string_value == .table)
             try installUstringStringAliases(self.allocator, string_value.table, ustring);
         try mw.rawSet(self.allocator, .{ .string = "ustring" }, .{ .table = ustring });
         try installMwBasics(self, vm, mw);
-        try vm.globals.rawSet(self.allocator, .{ .string = "mw" }, .{ .table = mw });
+        try vm.setGlobal("mw", .{ .table = mw });
     }
 
     fn canonicalSlot(self: *Runtime, raw_name: []const u8) !?*ModuleSlot {
@@ -1003,7 +1003,7 @@ pub const Runtime = struct {
                 if (seen.get(source)) |existing| break :blk .{ .table = existing };
                 const copy = try rt.newTable(self.page_allocator);
                 try seen.put(self.allocator, source, copy);
-                var it = source.map.iterator();
+                var it = source.iterator();
                 while (it.next()) |entry| {
                     const key = try self.promoteLoadDataValue(entry.key_ptr.*, seen);
                     const item = try self.promoteLoadDataValue(entry.value_ptr.*, seen);
@@ -1096,7 +1096,7 @@ pub const Runtime = struct {
         if (seen.get(value.table)) |old| return .{ .table = old };
         const copy = try rt.newTable(self.allocator);
         try seen.put(self.allocator, value.table, copy);
-        var it = value.table.map.iterator();
+        var it = value.table.iterator();
         while (it.next()) |entry| {
             const key = try self.cloneValueSeen(entry.key_ptr.*, seen);
             const val = try self.cloneValueSeen(entry.value_ptr.*, seen);
@@ -1220,7 +1220,7 @@ fn shallowCopyFastCall(ctx_raw: ?*anyopaque, raw_vm: *anyopaque, args: []const V
     const raw = args.len > 1 and Value.truthy(args[1]);
     if (!raw and source.metatable != null) return callHotFallback(ctx_raw, raw_vm, args);
     const copy = try rt.newTable(a);
-    var it = source.map.iterator();
+    var it = source.iterator();
     while (it.next()) |entry|
         try copy.rawSet(a, entry.key_ptr.*, entry.value_ptr.*);
     return one(a, .{ .table = copy });
@@ -1784,7 +1784,7 @@ fn serializeExtensionTag(a: std.mem.Allocator, name: []const u8, content: ?[]con
     if (attrs) |table| {
         var keys: std.ArrayList([]const u8) = .empty;
         defer keys.deinit(a);
-        var it = table.map.iterator();
+        var it = table.iterator();
         while (it.next()) |entry| if (entry.key_ptr.* == .string and entry.value_ptr.* != .nil)
             try keys.append(a, entry.key_ptr.string);
         std.mem.sort([]const u8, keys.items, {}, struct {
@@ -2304,7 +2304,7 @@ const TextGsplitCtx = struct {
 };
 
 fn textGsplitCtx(vm: *exec.Vm, source: []const u8, pattern: []const u8, plain: bool) !TextGsplitCtx {
-    const mw = vm.globals.rawGet(.{ .string = "mw" }) orelse return error.NotImplemented;
+    const mw = vm.getGlobal("mw") orelse return error.NotImplemented;
     if (mw != .table) return error.TableExpected;
     const ustring = mw.table.rawGet(.{ .string = "ustring" }) orelse return error.NotImplemented;
     if (ustring != .table) return error.TableExpected;
@@ -2795,7 +2795,7 @@ fn buildQueryArgument(runtime: *Runtime, value: Value) !?[]const u8 {
     if (value != .table) return error.WikitextScalarExpected;
     var entries: std.ArrayList(struct { key: []const u8, value: Value }) = .empty;
     defer entries.deinit(runtime.allocator);
-    var it = value.table.map.iterator();
+    var it = value.table.iterator();
     while (it.next()) |e| {
         const key = try queryScalarText(runtime.allocator, e.key_ptr.*) orelse continue;
         try entries.append(runtime.allocator, .{ .key = key, .value = e.value_ptr.* });
@@ -3279,7 +3279,7 @@ test "mw.text gsplit uses Unicode separators and empty separator semantics" {
     var vm = try exec.Vm.init(arena.allocator());
     try runtime.install(&vm);
 
-    const gsplit = vm.globals.rawGet(.{ .string = "mw" }).?.table.rawGet(.{ .string = "text" }).?.table.rawGet(.{ .string = "gsplit" }).?;
+    const gsplit = vm.getGlobal("mw").?.table.rawGet(.{ .string = "text" }).?.table.rawGet(.{ .string = "gsplit" }).?;
     const created = try vm.callValue(gsplit, &.{ .{ .string = "가나다" }, .{ .string = "" } });
     defer exec.Vm.freeResults(created);
     const iterator = created[0];
@@ -3292,7 +3292,7 @@ test "mw.text gsplit uses Unicode separators and empty separator semantics" {
     defer exec.Vm.freeResults(done);
     try std.testing.expectEqual(@as(usize, 0), done.len);
 
-    const split = vm.globals.rawGet(.{ .string = "mw" }).?.table.rawGet(.{ .string = "text" }).?.table.rawGet(.{ .string = "split" }).?;
+    const split = vm.getGlobal("mw").?.table.rawGet(.{ .string = "text" }).?.table.rawGet(.{ .string = "split" }).?;
     const pieces = try vm.callValue(split, &.{ .{ .string = "α,β,,γ" }, .{ .string = "," }, .{ .boolean = true } });
     defer exec.Vm.freeResults(pieces);
     try std.testing.expectEqualStrings("α", pieces[0].table.rawGet(.{ .number = 1 }).?.string);
@@ -3484,7 +3484,7 @@ test "Scribunto installs Unicode string aliases" {
     var runtime = Runtime.init(arena.allocator(), std.testing.io, "modules");
     var vm = try exec.Vm.init(arena.allocator());
     try runtime.install(&vm);
-    const string = vm.globals.rawGet(.{ .string = "string" }).?.table;
+    const string = vm.getGlobal("string").?.table;
     inline for (&.{ "isutf8", "byteoffset", "codepoint", "gcodepoint", "toNFC", "toNFD", "uchar", "ulen", "usub", "uupper", "ulower", "ufind", "umatch", "ugmatch", "ugsub" }) |name|
         try std.testing.expect(string.rawGet(.{ .string = name }) != null);
     const lower = try vm.getIndex(.{ .string = "ÄBC" }, .{ .string = "ulower" });
@@ -3533,7 +3533,7 @@ test "mw.uri fullUrl returns a tostring-compatible URI object" {
     const result = try uriFullUrlCall(&runtime, &vm, &.{ .{ .string = "Example" }, .{ .table = args } }, arena.allocator());
     defer exec.Vm.freeResults(result);
     try std.testing.expect(result[0] == .table);
-    const tostring_fn = vm.globals.rawGet(.{ .string = "tostring" }).?;
+    const tostring_fn = vm.getGlobal("tostring").?;
     const rendered = try vm.callValue(tostring_fn, &.{result[0]});
     defer exec.Vm.freeResults(rendered);
     try std.testing.expectEqualStrings("//en.wiktionary.org/w/index.php?title=Example&action=edit", rendered[0].string);

@@ -38,8 +38,8 @@ fn str(a: std.mem.Allocator, v: Value) ![]const u8 {
 fn setNative(vm: *exec.Vm, t: *rt.Table, name: []const u8, call: rt.NativeCall) !void {
     try t.rawSet(vm.allocator, .{ .string = name }, try rt.newNative(vm.allocator, null, call));
 }
-fn setGlobalNative(vm: *exec.Vm, name: []const u8, call: rt.NativeCall) !void {
-    try setNative(vm, vm.globals, name, call);
+fn setGlobalNative(vm: *exec.Vm, comptime name: []const u8, call: rt.NativeCall) !void {
+    try vm.setGlobal(name, try rt.newNative(vm.allocator, null, call));
 }
 
 fn baseType(_: ?*anyopaque, _: *anyopaque, args: []const Value, a: std.mem.Allocator) ![]const Value {
@@ -175,7 +175,7 @@ fn baseNext(_: ?*anyopaque, _: *anyopaque, args: []const Value, a: std.mem.Alloc
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
     const t = args[0].table;
     const key = if (args.len > 1) args[1] else Value.nil;
-    var it = t.map.iterator();
+    var it = t.iterator();
     var found = key == .nil;
     while (it.next()) |e| {
         if (found) return two(a, e.key_ptr.*, e.value_ptr.*);
@@ -206,7 +206,7 @@ fn basePairs(_: ?*anyopaque, raw: *anyopaque, args: []const Value, _: std.mem.Al
     const vm = vmCast(raw);
     if (try exposedMetamethod(vm, args[0], "__pairs")) |method|
         return iteratorTripleFromCall(vm, method, args[0]);
-    const nxt = vm.globals.rawGet(.{ .string = "next" }) orelse return error.MissingBuiltin;
+    const nxt = vm.getGlobal("next") orelse return error.MissingBuiltin;
     const out = try std.heap.smp_allocator.alloc(Value, 3);
     out[0] = nxt;
     out[1] = args[0];
@@ -311,7 +311,7 @@ fn tableConcat(_: ?*anyopaque, _: *anyopaque, args: []const Value, a: std.mem.Al
 fn tableMaxn(_: ?*anyopaque, _: *anyopaque, args: []const Value, a: std.mem.Allocator) ![]const Value {
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
     var max: f64 = 0;
-    var it = args[0].table.map.iterator();
+    var it = args[0].table.iterator();
     while (it.next()) |e| {
         if (e.key_ptr.* == .number and e.key_ptr.number > max) max = e.key_ptr.number;
     }
@@ -712,7 +712,7 @@ pub fn install(vm: *exec.Vm) !void {
             return one(a, .{ .number = @floatFromInt(args[0].table.rawLen()) });
         }
     }.f);
-    try vm.globals.rawSet(vm.allocator, .{ .string = "table" }, .{ .table = table });
+    try vm.setGlobal("table", .{ .table = table });
     const string = try rt.newTable(vm.allocator);
     try setNative(vm, string, "len", stringLen);
     try setNative(vm, string, "sub", stringSub);
@@ -727,7 +727,7 @@ pub fn install(vm: *exec.Vm) !void {
     try setNative(vm, string, "gmatch", stringGmatch);
     try setNative(vm, string, "gsub", stringGsub);
     try setNative(vm, string, "format", stringFormat);
-    try vm.globals.rawSet(vm.allocator, .{ .string = "string" }, .{ .table = string });
+    try vm.setGlobal("string", .{ .table = string });
     const smt = try rt.newTable(vm.allocator);
     try smt.rawSet(vm.allocator, .{ .string = "__index" }, .{ .table = string });
     vm.string_metatable = smt;
@@ -741,12 +741,12 @@ pub fn install(vm: *exec.Vm) !void {
     try setNative(vm, math, "modf", mathModf);
     try math.rawSet(vm.allocator, .{ .string = "pi" }, .{ .number = std.math.pi });
     try math.rawSet(vm.allocator, .{ .string = "huge" }, .{ .number = std.math.inf(f64) });
-    try vm.globals.rawSet(vm.allocator, .{ .string = "math" }, .{ .table = math });
+    try vm.setGlobal("math", .{ .table = math });
     const debug = try rt.newTable(vm.allocator);
     try setNative(vm, debug, "getmetatable", debugGetMetatable);
     try setNative(vm, debug, "traceback", debugTraceback);
     try setNative(vm, debug, "getinfo", debugGetInfo);
-    try vm.globals.rawSet(vm.allocator, .{ .string = "debug" }, .{ .table = debug });
+    try vm.setGlobal("debug", .{ .table = debug });
 }
 
 test "base and byte string library" {
@@ -754,7 +754,7 @@ test "base and byte string library" {
     defer arena.deinit();
     var vm = try exec.Vm.init(arena.allocator());
     try install(&vm);
-    const sub = try vm.getIndex(vm.globals.rawGet(.{ .string = "string" }).?, .{ .string = "sub" });
+    const sub = try vm.getIndex(vm.getGlobal("string").?, .{ .string = "sub" });
     const out = try vm.callValue(sub, &.{ .{ .string = "abcdef" }, .{ .number = 2 }, .{ .number = -2 } });
     try std.testing.expectEqualStrings("bcde", out[0].string);
 }

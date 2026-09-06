@@ -152,7 +152,7 @@ fn attrCall(ctx_raw: ?*anyopaque, _: *anyopaque, args: []const Value, a: std.mem
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
     if (args.len < 2) return returnSelf(node, a);
     if (args[1] == .table) {
-        var it = args[1].table.map.iterator();
+        var it = args[1].table.iterator();
         while (it.next()) |entry| {
             if (entry.key_ptr.* != .string) continue;
             const value = if (entry.value_ptr.* == .nil) null else try scalarText(node.html.allocator, entry.value_ptr.*);

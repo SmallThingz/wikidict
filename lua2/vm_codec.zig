@@ -2,7 +2,12 @@ const std = @import("std");
 const ir = @import("vm_ir.zig");
 const lua = @import("root.zig");
 
-const magic = "DWVM\x02";
+pub const magic = "DWVM\x03";
+pub fn bytecodeVersion(bytes: []const u8) !u8 {
+    if (bytes.len < 5 or !std.mem.eql(u8, bytes[0..4], "DWVM")) return error.BadMagic;
+    if (bytes[4] != 2 and bytes[4] != 3) return error.BadMagic;
+    return bytes[4];
+}
 
 fn putVar(out: *std.ArrayList(u8), a: std.mem.Allocator, value: u64) !void {
     var v = value;
@@ -27,9 +32,14 @@ fn asU32(v: u64) !u32 {
 }
 
 pub fn serialize(a: std.mem.Allocator, p: *const ir.Program) ![]u8 {
+    return serializeVersion(a, p, 3);
+}
+pub fn serializeVersion(a: std.mem.Allocator, p: *const ir.Program, version: u8) ![]u8 {
+    if (version != 2 and version != 3) return error.BadMagic;
+
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
-    try out.appendSlice(a, magic);
+    try out.appendSlice(a, &.{ 'D', 'W', 'V', 'M', version });
     try putVar(&out, a, p.root_function);
     try putVar(&out, a, p.strings.items.len);
     try putVar(&out, a, p.constants.items.len);
@@ -81,6 +91,7 @@ pub fn serialize(a: std.mem.Allocator, p: *const ir.Program) ![]u8 {
         for (f.operands.items) |v| try putVar(&out, a, v);
         try putVar(&out, a, f.insts.items.len);
         for (f.insts.items) |x| {
+            if (version == 2 and @intFromEnum(x.op) > @intFromEnum(ir.Opcode.ret_var)) return error.IncompatibleBytecode;
             try out.append(a, @intFromEnum(x.op));
             try putVar(&out, a, x.dst);
             try putVar(&out, a, x.a);
@@ -102,7 +113,7 @@ pub fn deserializeBorrowed(a: std.mem.Allocator, bytes: []const u8) !ir.Program 
 }
 
 fn deserializeImpl(a: std.mem.Allocator, bytes: []const u8, copy_strings: bool) !ir.Program {
-    if (bytes.len < magic.len or !std.mem.eql(u8, bytes[0..magic.len], magic)) return error.BadMagic;
+    const version = try bytecodeVersion(bytes);
     var pos: usize = magic.len;
     var p = ir.Program{ .allocator = a, .root_function = try asU32(try getVar(bytes, &pos)) };
     errdefer p.deinit();
@@ -173,8 +184,14 @@ fn deserializeImpl(a: std.mem.Allocator, bytes: []const u8, copy_strings: bool) 
             if (pos >= bytes.len) return error.Truncated;
             const ot = bytes[pos];
             pos += 1;
-            if (ot > @intFromEnum(ir.Opcode.ret_var)) return error.BadOpcode;
-            try f.insts.append(a, .{ .op = @enumFromInt(ot), .dst = try asU32(try getVar(bytes, &pos)), .a = try asU32(try getVar(bytes, &pos)), .b = try asU32(try getVar(bytes, &pos)), .c = try asU32(try getVar(bytes, &pos)), .aux = try asU32(try getVar(bytes, &pos)), .count = try asU32(try getVar(bytes, &pos)) });
+            if (ot > @intFromEnum(if (version == 2) ir.Opcode.ret_var else ir.Opcode.set_global_slot)) return error.BadOpcode;
+            const inst = ir.Inst{ .op = @enumFromInt(ot), .dst = try asU32(try getVar(bytes, &pos)), .a = try asU32(try getVar(bytes, &pos)), .b = try asU32(try getVar(bytes, &pos)), .c = try asU32(try getVar(bytes, &pos)), .aux = try asU32(try getVar(bytes, &pos)), .count = try asU32(try getVar(bytes, &pos)) };
+            if (inst.op == .get_global_slot or inst.op == .set_global_slot) {
+                if (inst.aux >= @import("vm_global_abi.zig").count) return error.BadGlobalSlot;
+                const reg = if (inst.op == .get_global_slot) inst.dst else inst.a;
+                if (reg >= f.reg_count) return error.BadRegister;
+            }
+            try f.insts.append(a, inst);
         }
         try p.functions.append(a, f);
     }
