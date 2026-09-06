@@ -213,8 +213,10 @@ zig-out/bin/dict export cats --format wikitext > cats.wiki
 static exported list. The themed Solid reader supports pagination, entry links,
 language/collection selection and browser Back/Forward. The server binds only to
 `127.0.0.1`; `--port 0` chooses an available port and prints it to stderr. Linked
-Lua rendering and locally embedded media remain available. Slow entry expansion
-does not hold the search lock. The live UI has no export toolbar; `export` is the
+Lua rendering and locally embedded media remain available. The server reuses one
+framed Lua worker across entries, so its linked runtime is not rebuilt per page;
+timeouts/crashes replace that worker. Slow entry expansion does not hold the search
+lock. The live UI has no export toolbar; `export` is the
 CLI operation for exactly one entry. Existing `lookup`/`search` exports and
 standalone `render FILE` remain available for compatibility.
 

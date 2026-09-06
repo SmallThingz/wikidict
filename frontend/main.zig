@@ -62,6 +62,10 @@ fn run(init: std.process.Init) !u8 {
         try @import("expansion_worker.zig").main(init);
         return 0;
     }
+    if (argv.len == 2 and std.mem.eql(u8, argv[1], "--internal-expand-loop")) {
+        try @import("expansion_worker.zig").loop(init);
+        return 0;
+    }
     const opts = try args.parse(argv[1..]);
     const media_root: ?[]const u8 = opts.media_dir orelse (if (opts.command == .render) null else try std.fs.path.join(a, &.{ opts.root, "media" }));
     const automatic = if (!opts.native and !opts.core_only and opts.runtime == null and (opts.command == .lookup or opts.command == .search or opts.command == .tui or opts.command == .serve)) try defaultRuntime(init.io, a, opts.root) else null;

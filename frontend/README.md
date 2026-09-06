@@ -96,7 +96,7 @@ Dictionary languages and feature blobs remain separate. Raw extraction/compiler 
 
 Builds refuse existing output directories. A failed stage leaves `.incomplete` and its intermediate files for diagnosis; runtime loading refuses incomplete outputs. `module-redirects.tsv` supplies actual XML redirect targets to the existing runtime loader. Optional legacy `usage.tsv`, `wikibase-sitelinks.tsv` and `interwiki-map.tsv` are consumed when present.
 
-Each expansion runs in a separate process with a 2 GiB address-space limit, bounded input/output and a wall deadline (`--runtime-timeout-ms`, default 60000, range 1..60000). This isolates crashes and per-page allocations while the VM evolves; it is **not a security sandbox**. Use trusted local runtime assets. The TUI waits for each selected page within that deadline, so VM mode can be less responsive than native rendering.
+CLI and TUI expansion use a fresh subprocess with a 2 GiB address-space limit, bounded input/output and a wall deadline (`--runtime-timeout-ms`, default 60000, range 1..60000). The live HTTP server instead keeps one framed VM worker: linked runtime assets and compiled programs stay loaded, while every request gets a fresh page arena and VM invocation state. Entry expansion is serialized through that worker so search remains independent without duplicating the full runtime in memory. A timeout/crash kills only the worker and the next entry request starts a clean replacement. The worker requests Linux parent-death cleanup so a crashed server does not leave an executing VM orphaned. This is **not a security sandbox**; use trusted local runtime assets. The TUI still waits for its one-shot page process within the deadline.
 
 `entry.expansion` is an additive `dict.results.v1` field: `{backend:"lua-vm",status:"ok"|"failed",diagnostic:null|string}`. Semantic VM failures/timeouts produce an explicitly marked native fallback; CLI output exits 2, and the TUI keeps the source view available. Asset, allocation and I/O failures propagate as errors. HTML visibly labels fallback rather than presenting it as successful VM expansion. Exact source always remains the original unexpanded bytes, including in HTML/JSON exports.
 
@@ -250,8 +250,9 @@ its diagnostic. The catalog lists available headings/codes, not the languages
 claimed for a particular spelling.
 
 The server keeps four language/feature stores. VM work runs outside the index
-lock; at most two expansion jobs run concurrently. The browser debounces search,
-rejects stale responses and has a bounded entry-response cache. Entry links,
+lock. One persistent expansion worker keeps linked runtime assets hot while entry
+requests are serialized; `/api/stats` exposes `vm_worker_starts` and `vm_requests`.
+The browser debounces search, rejects stale responses and has a bounded entry-response cache. Entry links,
 collection/language changes, pagination and history operate against the database.
 Cancelling a browser request does not promise immediate cancellation of an
 already-running VM; its deadline still bounds that work. SIGINT/SIGTERM stop the

@@ -24,6 +24,7 @@ fn xml(w: *std.Io.Writer, text: []const u8) !void {
 fn fixture(io: std.Io, a: std.mem.Allocator, path: []const u8, broken: bool) !void {
     const pages = [_]Page{
         .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
+        .{ .title = "loop", .ns = 0, .id = 22, .body = "==English==\n===Noun===\n{{#invoke:IntegrationLoop|main}}\n# Never completes.\n" },
         .{ .title = "Appendix:IntegrationFixture", .ns = 100, .id = 21, .body = "a real auxiliary source page" },
         .{ .title = "Template:show-forms", .ns = 10, .id = 10, .body = template_source },
         .{ .title = "Template:forms-alias", .ns = 10, .id = 11, .body = "#REDIRECT [[Template:show-forms]]", .redirect = "Template:show-forms" },
@@ -97,24 +98,38 @@ pub fn main(init: std.process.Init) !void {
     const server_log = try std.fs.path.join(a, &.{ dir, "server.log" });
     var log = try std.Io.Dir.cwd().createFile(init.io, server_log, .{});
     defer log.close(init.io);
-    var server = try std.process.spawn(init.io, .{ .argv = &.{ moving, "serve", "--root", root, "--port", "0" }, .stdin = .ignore, .stdout = .ignore, .stderr = .{ .file = log } });
+    var server = try std.process.spawn(init.io, .{ .argv = &.{ moving, "serve", "--root", root, "--port", "0", "--runtime-timeout-ms", "1000" }, .stdin = .ignore, .stdout = .ignore, .stderr = .{ .file = log } });
     defer server.kill(init.io);
-    var url: ?[]const u8 = null;
+    var base: ?[]const u8 = null;
     for (0..300) |_| {
         const text = try std.Io.Dir.cwd().readFileAlloc(init.io, server_log, a, .limited(1024 * 1024));
         if (std.mem.indexOf(u8, text, "http://127.0.0.1:")) |start| {
             const end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
-            url = try std.fmt.allocPrint(a, "{s}/api/entry?q=mouse", .{text[start..end]});
+            base = try a.dupe(u8, text[start..end]);
             break;
         }
         try std.Io.sleep(init.io, .fromMilliseconds(20), .awake);
     }
-    try h.require(url != null);
+    try h.require(base != null);
+    const url = try std.fmt.allocPrint(a, "{s}/api/entry?q=mouse", .{base.?});
+    const stats_url = try std.fmt.allocPrint(a, "{s}/api/stats", .{base.?});
+    const loop_url = try std.fmt.allocPrint(a, "{s}/api/entry?q=loop", .{base.?});
     try std.Io.Dir.cwd().deleteFile(init.io, moving);
     _ = try h.run(&.{ "/usr/bin/cp", bin, moving }, 0);
-    const after_update = try h.entry(try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "25", url.? }, 0));
+    const after_update = try h.entry(try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "25", url }, 0));
     try h.require(std.mem.eql(u8, after_update.object.get("expansion").?.object.get("status").?.string, "ok"));
     try h.require(std.mem.eql(u8, after_update.object.get("source").?.string, source));
+    const stats1 = (try std.json.parseFromSlice(std.json.Value, a, try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "5", stats_url }, 0), .{})).value.object;
+    try h.require(stats1.get("vm_worker_starts").?.integer == 1 and stats1.get("vm_requests").?.integer == 1);
+    _ = try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "25", url }, 0);
+    const stats2 = (try std.json.parseFromSlice(std.json.Value, a, try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "5", stats_url }, 0), .{})).value.object;
+    try h.require(stats2.get("vm_worker_starts").?.integer == 1 and stats2.get("vm_requests").?.integer == 2);
+    const stalled = try h.entry(try h.run(&.{ "/usr/bin/curl", "--silent", "--max-time", "5", loop_url }, 0));
+    try h.require(std.mem.eql(u8, stalled.object.get("expansion").?.object.get("status").?.string, "failed"));
+    try h.require(std.mem.indexOf(u8, stalled.object.get("expansion").?.object.get("diagnostic").?.string, "timed out") != null);
+    _ = try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "25", url }, 0);
+    const stats3 = (try std.json.parseFromSlice(std.json.Value, a, try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "5", stats_url }, 0), .{})).value.object;
+    try h.require(stats3.get("vm_worker_starts").?.integer == 2 and stats3.get("vm_requests").?.integer == 4);
     if (std.os.linux.errno(std.os.linux.kill(server.id.?, .TERM)) != .SUCCESS) return error.SignalFailed;
     const server_exit = try server.wait(init.io);
     try h.require(server_exit == .exited and server_exit.exited == 0);
@@ -161,5 +176,5 @@ pub fn main(init: std.process.Init) !void {
     _ = try h.run(&.{ pipeline, bad_dump, bad_root }, 1);
     var marker_file = try std.Io.Dir.cwd().openFile(init.io, try std.fs.path.join(a, &.{ bad_root, ".incomplete" }), .{});
     marker_file.close(init.io);
-    std.debug.print("RUNTIME_INTEGRATION_PASS checks={d}: XML extraction, real Lua conversion/serialization/VM execution, require, template transclusion, HTML tables, raw source, explicit failures, deadline, incomplete-build refusal. Artifacts: {s}\n", .{ h.checks, dir });
+    std.debug.print("RUNTIME_INTEGRATION_PASS checks={d}: XML extraction, real Lua conversion/serialization/VM execution, persistent live-worker reuse/restart, require, template transclusion, HTML tables, raw source, explicit failures, deadline, incomplete-build refusal. Artifacts: {s}\n", .{ h.checks, dir });
 }

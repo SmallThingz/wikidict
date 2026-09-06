@@ -63,7 +63,8 @@ const State = struct {
     tick: u64 = 0,
     index_builds: u64 = 0,
     index_hits: u64 = 0,
-    vm_active: std.atomic.Value(u32) = .init(0),
+    vm_lock: std.Io.Mutex = .init,
+    vm_worker: expansion.Worker,
     fn init(io: std.Io, a: A, opts: args.Options, runtime: expansion.Options, media: ?[]const u8) !State {
         const path = try std.fs.path.join(a, &.{ opts.root, enc.blob_catalog.manifest_filename });
         defer a.free(path);
@@ -97,9 +98,10 @@ const State = struct {
             errdefer a.free(code);
             try list.append(a, .{ .heading = heading, .code = code });
         }
-        return .{ .io = io, .a = a, .opts = opts, .runtime = runtime, .media = media, .languages = try list.toOwnedSlice(a) };
+        return .{ .io = io, .a = a, .opts = opts, .runtime = runtime, .media = media, .languages = try list.toOwnedSlice(a), .vm_worker = expansion.Worker.init(io, runtime) };
     }
     fn deinit(self: *State) void {
+        self.vm_worker.deinit();
         for (&self.slots) |*slot| if (slot.*) |*s| {
             s.db.deinit();
             self.a.free(s.language);
@@ -180,7 +182,7 @@ const State = struct {
             response.record_count = dbp.count();
             if (stats) {
                 const x = dbp.file.compressed;
-                return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .records = dbp.count(), .index_bytes = dbp.file.indexBytes(), .index_heap_bytes = dbp.file.indexHeapBytes(), .cache_map_bytes = dbp.file.cacheMappedBytes(), .payload_reads = dbp.file.payload_reads, .disk_cache_hit = dbp.file.cache_hit, .disk_cache_saved = dbp.file.cache_saved, .index_builds = self.index_builds, .index_cache_hits = self.index_hits, .xz_blocks = if (x) |v| v.blocks else 0, .decoded_blocks = if (x) |v| v.decoded_blocks else 0 }, .{}) };
+                return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .records = dbp.count(), .index_bytes = dbp.file.indexBytes(), .index_heap_bytes = dbp.file.indexHeapBytes(), .cache_map_bytes = dbp.file.cacheMappedBytes(), .payload_reads = dbp.file.payload_reads, .disk_cache_hit = dbp.file.cache_hit, .disk_cache_saved = dbp.file.cache_saved, .index_builds = self.index_builds, .index_cache_hits = self.index_hits, .xz_blocks = if (x) |v| v.blocks else 0, .decoded_blocks = if (x) |v| v.decoded_blocks else 0, .vm_worker_starts = self.vm_worker.startCount(), .vm_requests = self.vm_worker.requestCount() }, .{}) };
             }
             if (search) {
                 const range = try dbp.prefix(q.q);
@@ -202,18 +204,8 @@ const State = struct {
             source = try model.sourceAlloc(a, resolved.record);
             if (dbp.metadata()) |meta| language_code = try a.dupe(u8, meta.code);
         }
-        // Search requests can progress during a slow Lua expansion. At most two VM
-        // jobs run concurrently so queued browser input cannot exhaust this shared host.
-        if (self.runtime.root != null) {
-            const previous = self.vm_active.fetchAdd(1, .acq_rel);
-            if (previous >= 2) {
-                _ = self.vm_active.fetchSub(1, .acq_rel);
-                return error.ServerBusy;
-            }
-        }
-        defer if (self.runtime.root != null) {
-            _ = self.vm_active.fetchSub(1, .acq_rel);
-        };
+        // Search stays independent while one persistent VM worker serializes entry expansion.
+
         const prefix = if (kind == .language) "" else switch (kind) {
             .thesaurus => "Thesaurus:",
             .citations => "Citations:",
@@ -222,7 +214,12 @@ const State = struct {
             .sign_gloss => "Sign gloss:",
             else => return error.BadRequest,
         };
-        var doc = try expansion.fromWikitext(self.io, self.a, try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, q.q }), if (kind == .language) language else "", source, true, self.runtime);
+        const expanded_title = try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, q.q });
+        var doc = if (self.runtime.root != null) blk: {
+            try self.vm_lock.lock(self.io);
+            defer self.vm_lock.unlock(self.io);
+            break :blk try expansion.fromWikitextWorker(&self.vm_worker, self.a, expanded_title, if (kind == .language) language else "", source, true);
+        } else try expansion.fromWikitext(self.io, self.a, expanded_title, if (kind == .language) language else "", source, true, self.runtime);
         defer doc.deinit();
         doc.entry.title = q.q;
         doc.entry.kind = kind;
@@ -345,7 +342,6 @@ fn connection(state: *State, fd: i32, port: u16) !void {
         const answer = state.answer(a, req.head.target) catch |err| Answer{ .body = try std.json.Stringify.valueAlloc(a, .{ .error_name = @errorName(err) }, .{}), .status = switch (err) {
             error.BadRequest => .bad_request,
             error.UnknownLanguage, error.FileNotFound => .not_found,
-            error.ServerBusy => .service_unavailable,
             else => .internal_server_error,
         } };
         socket.deadline = std.Io.Clock.awake.now(state.io).toNanoseconds() + 30 * std.time.ns_per_s;
