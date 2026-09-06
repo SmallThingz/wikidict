@@ -219,9 +219,10 @@ CLI operation for exactly one entry. Existing `lookup`/`search` exports and
 standalone `render FILE` remain available for compatibility.
 
 Native readers retain loaded indexes and save disposable directories under
-`.dict-cache` beside each input file. New processes reuse those caches. Source
-identity, size, modification/change times, cache checksum, framing and bounds
-reject stale or damaged caches. Replacing a core file also invalidates its
+`.dict-cache` beside each input file. New processes memory-map those caches rather
+than rebuilding or copying the title directory into heap memory. Source identity,
+size, modification/change times, cache checksum, framing and endpoint bounds reject
+stale or damaged caches; strict title-order validation happens when the cache is built. Replacing a core file also invalidates its
 in-process server index. Cache files are trusted local derived artifacts, not a
 second source of dictionary content. An unavailable/read-only cache location
 falls back to an explicitly reported memory-only index. Nothing was added to
@@ -250,7 +251,9 @@ blocks use bounded-memory streaming; small decoded blocks have a bounded cache.
 
 A file compressed as one block must decode that block to read a record. Indexing
 cannot create independent boundaries; recompress with `--block-size` to change
-that tradeoff. `index-blobs` reports records, index bytes, block count and whether
-the cache was reused, written or memory-only. `zig build test-storage` and
+that tradeoff. `index-blobs` reports records, logical index bytes, heap-backed index bytes, cache
+mapping bytes, block count and whether the cache was reused, written or memory-only.
+The current cache uses compact 16-byte record rows; cache versions are disposable and
+are rebuilt once when this derived layout changes. `zig build test-storage` and
 `zig build test-http` exercise real raw/XZ files, cache recovery and the live
 backend, and are included in the native test gate.

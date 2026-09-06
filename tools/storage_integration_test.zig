@@ -40,7 +40,7 @@ pub fn main(init: std.process.Init) !void {
     {
         var f = try storage.File.open(io, init.gpa, raw);
         defer f.deinit();
-        try require(f.cache_hit);
+        try require(f.cache_hit and f.indexHeapBytes() == 0 and f.cacheMappedBytes() != 0);
     }
     const encoded = try compress(io, a, raw, true);
     const xz = try std.mem.concat(a, u8, &.{ raw, ".xz" });
@@ -55,7 +55,7 @@ pub fn main(init: std.process.Init) !void {
     {
         var f = try storage.File.open(io, init.gpa, xz);
         defer f.deinit();
-        try require(f.cache_hit and f.compressed.?.decoded_blocks == 0);
+        try require(f.cache_hit and f.indexHeapBytes() == 0 and f.cacheMappedBytes() != 0 and f.compressed.?.decoded_blocks == 0);
         const id = f.find("word-0127") orelse return error.Missing;
         var r = try f.readAlloc(init.gpa, id);
         defer r.deinit();
@@ -122,5 +122,5 @@ pub fn main(init: std.process.Init) !void {
         f.deinit();
         return error.CorruptAccepted;
     } else |err| try require(err == error.InvalidXz);
-    std.debug.print("STORAGE_INTEGRATION_PASS cached=true selective_blocks={d}/{d} single_block=true concatenated=true source_invalidation=true corrupted_cache_rebuilt=true corrupt_xz_rejected=true records={d}\nArtifacts: {s}\n", .{ block_count, total_blocks, records.len, dir });
+    std.debug.print("STORAGE_INTEGRATION_PASS cached=true mapped_cache=true zero_heap_warm_index=true selective_blocks={d}/{d} single_block=true concatenated=true source_invalidation=true corrupted_cache_rebuilt=true corrupt_xz_rejected=true records={d}\nArtifacts: {s}\n", .{ block_count, total_blocks, records.len, dir });
 }

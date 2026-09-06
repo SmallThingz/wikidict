@@ -11,6 +11,6 @@ pub fn main(init: std.process.Init) !void {
     for (argv[1..]) |path| {
         var file = try storage.File.open(init.io, init.gpa, path);
         defer file.deinit();
-        std.debug.print("{s}: records={d} index_bytes={d} cache={s} xz_blocks={d} uncompressed_bytes={d}\n", .{ path, file.recordCount(), file.indexBytes(), if (file.cache_hit) "hit" else if (file.cache_saved) "written" else "memory-only", if (file.compressed) |x| x.blocks else 0, file.size });
+        std.debug.print("{s}: records={d} index_bytes={d} index_heap_bytes={d} cache_map_bytes={d} cache={s} xz_blocks={d} uncompressed_bytes={d}\n", .{ path, file.recordCount(), file.indexBytes(), file.indexHeapBytes(), file.cacheMappedBytes(), if (file.cache_hit) "hit" else if (file.cache_saved) "written" else "memory-only", if (file.compressed) |x| x.blocks else 0, file.size });
     }
 }

@@ -203,7 +203,7 @@ fn run(init: std.process.Init) !u8 {
             response.total_matches = db.count();
             if (opts.format == .json) try output.json(w, response) else {
                 try output.terminalText(w, if (opts.kind == .language) opts.language else "All languages");
-                try w.print(" / {s}\nrecords: {d}\nblob bytes: {d}\nruntime index bytes: {d}\n", .{ @tagName(opts.kind), db.count(), db.file.size, db.file.indexBytes() });
+                try w.print(" / {s}\nrecords: {d}\nblob bytes: {d}\nruntime index bytes: {d}\nindex heap bytes: {d}\ncache map bytes: {d}\n", .{ @tagName(opts.kind), db.count(), db.file.size, db.file.indexBytes(), db.file.indexHeapBytes(), db.file.cacheMappedBytes() });
             }
         },
         .languages, .tui, .render, .serve => unreachable,

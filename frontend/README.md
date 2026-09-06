@@ -276,10 +276,12 @@ runtime pages use the same transport. A VM page-content provider retains its
 primary language store and caches existence checks during an expansion.
 
 Disk indexes are separate `.dict-cache/*.idx` files bound to source identity,
-size and modification/change times, with checksums and validated framing/bounds.
-They can be deleted safely. Opening a cache still validates its directory; a
-running server retains that index instead of reopening it per request. HTTP
-`/api/stats` reports index reuse, payload reads and selected-core XZ decode
+size and modification/change times. They can be deleted safely. A newly built
+directory validates every record and strict title order; a warm cache is checksum-
+and boundary-checked, then memory-mapped directly with compact 16-byte rows instead
+of copying its title directory into heap memory. A running server retains that
+mapping instead of reopening it per request. HTTP `/api/stats` reports logical and
+heap index bytes, cache mapping bytes, payload reads and selected-core XZ decode
 counts; those counters exclude independent VM subprocess work.
 
 Cold XZ indexing is one bounded-memory full decode. Warm title search does not

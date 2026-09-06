@@ -5,18 +5,25 @@ const enc = @import("blob_encoder");
 const format = enc.blob_format;
 const Xz = @import("xz.zig").Source;
 const A = std.mem.Allocator;
-const Row = struct { offset: u64, length: u64, title: u64 };
-const cache_magic = "DIXIDX01";
+const Row = extern struct { offset: u64, length: u32, title: u32 };
+const cache_magic = "DIXIDX03";
+const cache_row_alignment = 8;
+comptime {
+    std.debug.assert(@sizeOf(Row) == 16);
+}
 const max_index_bytes = 512 * 1024 * 1024;
 const max_record_bytes = 64 * 1024 * 1024;
 const Directory = struct {
-    header: []u8,
-    rows: []Row,
-    titles: []u8,
+    header: []const u8,
+    rows: []const Row,
+    titles: []const u8,
+    owned: bool,
     fn deinit(self: *Directory, a: A) void {
-        a.free(self.header);
-        a.free(self.rows);
-        a.free(self.titles);
+        if (self.owned) {
+            a.free(@constCast(self.header));
+            a.free(@constCast(self.rows));
+            a.free(@constCast(self.titles));
+        }
         self.* = undefined;
     }
     fn titleAt(self: Directory, i: usize) []const u8 {
@@ -113,13 +120,13 @@ const Builder = struct {
                         const previous: usize = @intCast(self.rows.items[self.rows.items.len - 1].title);
                         if (std.mem.order(u8, self.titles.items[previous .. self.titles.items.len - 1], self.title.items) != .lt) return error.InvalidBlob;
                     }
-                    try self.rows.append(self.a, .{ .offset = self.offset, .length = len, .title = self.titles.items.len });
+                    try self.rows.append(self.a, .{ .offset = self.offset, .length = std.math.cast(u32, len) orelse return error.RecordLimit, .title = std.math.cast(u32, self.titles.items.len) orelse return error.IndexLimit });
                     try self.titles.appendSlice(self.a, self.title.items);
                     try self.titles.append(self.a, 0);
                     self.title.clearRetainingCapacity();
                     self.remaining = len;
                     self.state = if (len == 0) .title else .payload;
-                    if (self.rows.items.len * 24 + self.titles.items.len > max_index_bytes) return error.IndexLimit;
+                    if (self.rows.items.len * @sizeOf(Row) + self.titles.items.len > max_index_bytes) return error.IndexLimit;
                 }
             },
             .payload => {
@@ -137,7 +144,7 @@ const Builder = struct {
         errdefer self.a.free(header);
         const rows = try self.rows.toOwnedSlice(self.a);
         errdefer self.a.free(rows);
-        return .{ .header = header, .rows = rows, .titles = try self.titles.toOwnedSlice(self.a) };
+        return .{ .header = header, .rows = rows, .titles = try self.titles.toOwnedSlice(self.a), .owned = true };
     }
 };
 fn identity(stat: std.Io.File.Stat) [32]u8 {
@@ -162,6 +169,29 @@ fn take(bytes: []const u8, pos: *usize) !u64 {
     pos.* += 8;
     return n;
 }
+fn take32(bytes: []const u8, pos: *usize) !u32 {
+    if (pos.* > bytes.len or bytes.len - pos.* < 4) return error.InvalidCache;
+    const n = std.mem.readInt(u32, bytes[pos.*..][0..4], .little);
+    pos.* += 4;
+    return n;
+}
+fn validateCached(dir: Directory, size: u64) !void {
+    _ = try format.openTrusted(dir.header);
+    if (dir.rows.len == 0) {
+        if (dir.titles.len != 0 or dir.header.len != size) return error.InvalidCache;
+        return;
+    }
+    if (dir.titles.len == 0 or dir.titles[dir.titles.len - 1] != 0 or dir.rows[0].title != 0) return error.InvalidCache;
+    const first_end = std.mem.indexOfScalar(u8, dir.titles, 0) orelse return error.InvalidCache;
+    if (first_end == 0) return error.InvalidCache;
+    var length: [format.max_varuint_len]u8 = undefined;
+    const prefix = format.encodePayloadLength(dir.rows[0].length, &length).len;
+    if (dir.rows[0].offset != dir.header.len + first_end + 1 + prefix) return error.InvalidCache;
+    const last = dir.rows[dir.rows.len - 1];
+    if (last.title >= dir.titles.len) return error.InvalidCache;
+    const last_end = std.mem.indexOfScalarPos(u8, dir.titles, last.title, 0) orelse return error.InvalidCache;
+    if (last_end + 1 != dir.titles.len or last.offset > size or last.length != size - last.offset) return error.InvalidCache;
+}
 fn cacheDecode(a: A, bytes: []const u8, fingerprint: [32]u8, size: u64) !Directory {
     if (bytes.len < 96 or !std.mem.eql(u8, bytes[0..8], cache_magic) or !std.mem.eql(u8, bytes[8..40], &fingerprint)) return error.InvalidCache;
     var hash: [32]u8 = undefined;
@@ -171,43 +201,74 @@ fn cacheDecode(a: A, bytes: []const u8, fingerprint: [32]u8, size: u64) !Directo
     const h = std.math.cast(usize, try take(bytes, &p)) orelse return error.InvalidCache;
     const n = std.math.cast(usize, try take(bytes, &p)) orelse return error.InvalidCache;
     const t = std.math.cast(usize, try take(bytes, &p)) orelse return error.InvalidCache;
-    if (h > bytes.len - p or n > (bytes.len - p - h) / 24 or t != bytes.len - p - h - n * 24) return error.InvalidCache;
-    const header = try a.dupe(u8, bytes[p..][0..h]);
-    errdefer a.free(header);
+    if (h > bytes.len - p) return error.InvalidCache;
+    const header = bytes[p..][0..h];
     p += h;
-    const rows = try a.alloc(Row, n);
-    errdefer a.free(rows);
-    for (rows) |*r| r.* = .{ .offset = try take(bytes, &p), .length = try take(bytes, &p), .title = try take(bytes, &p) };
-    var result: Directory = .{ .header = header, .rows = rows, .titles = try a.dupe(u8, bytes[p..]) };
-    errdefer a.free(result.titles);
-    try result.validate(size);
+    const row_start = std.mem.alignForward(usize, p, cache_row_alignment);
+    if (row_start > bytes.len or row_start - p > 7) return error.InvalidCache;
+    for (bytes[p..row_start]) |padding| if (padding != 0) return error.InvalidCache;
+    const row_bytes = std.math.mul(usize, n, @sizeOf(Row)) catch return error.InvalidCache;
+    if (row_bytes > bytes.len - row_start) return error.InvalidCache;
+    const titles_start = row_start + row_bytes;
+    if (t != bytes.len - titles_start) return error.InvalidCache;
+    var result: Directory = if (@import("builtin").target.cpu.arch.endian() == .little) blk: {
+        const aligned: []align(@alignOf(Row)) const u8 = @alignCast(bytes[row_start..titles_start]);
+        break :blk .{ .header = header, .rows = std.mem.bytesAsSlice(Row, aligned), .titles = bytes[titles_start..], .owned = false };
+    } else blk: {
+        const owned_header = try a.dupe(u8, header);
+        errdefer a.free(owned_header);
+        const rows = try a.alloc(Row, n);
+        errdefer a.free(rows);
+        var cursor = row_start;
+        for (rows) |*r| r.* = .{ .offset = try take(bytes, &cursor), .length = try take32(bytes, &cursor), .title = try take32(bytes, &cursor) };
+        const titles = try a.dupe(u8, bytes[titles_start..]);
+        break :blk .{ .header = owned_header, .rows = rows, .titles = titles, .owned = true };
+    };
+    errdefer result.deinit(a);
+    try validateCached(result, size);
     return result;
 }
+fn hashed(w: *std.Io.Writer, hash: *std.crypto.hash.sha2.Sha256, bytes: []const u8) !void {
+    hash.update(bytes);
+    try w.writeAll(bytes);
+}
 fn save(io: std.Io, a: A, path: []const u8, fingerprint: [32]u8, dir: Directory) !void {
-    var out: std.Io.Writer.Allocating = .init(a);
-    defer out.deinit();
-    const w = &out.writer;
-    try w.writeAll(cache_magic);
-    try w.writeAll(&fingerprint);
-    try w.splatByteAll(0, 32);
-    try put(w, dir.header.len);
-    try put(w, dir.rows.len);
-    try put(w, dir.titles.len);
-    try w.writeAll(dir.header);
-    for (dir.rows) |r| {
-        try put(w, r.offset);
-        try put(w, r.length);
-        try put(w, r.title);
-    }
-    try w.writeAll(dir.titles);
-    std.crypto.hash.sha2.Sha256.hash(out.written()[72..], out.written()[40..72], .{});
     try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(path).?);
     const temp = try std.fmt.allocPrint(a, "{s}.{d}.{d}.tmp", .{ path, std.os.linux.getpid(), std.Io.Clock.awake.now(io).toNanoseconds() });
     defer a.free(temp);
     var file = try std.Io.Dir.cwd().createFile(io, temp, .{ .exclusive = true });
     defer file.close(io);
     defer std.Io.Dir.cwd().deleteFile(io, temp) catch {};
-    try file.writePositionalAll(io, out.written(), 0);
+    var buffer: [65536]u8 = undefined;
+    var output = file.writer(io, &buffer);
+    const w = &output.interface;
+    try w.writeAll(cache_magic);
+    try w.writeAll(&fingerprint);
+    try w.splatByteAll(0, 32);
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    var word: [8]u8 = undefined;
+    for ([_]u64{ dir.header.len, dir.rows.len, dir.titles.len }) |value| {
+        std.mem.writeInt(u64, &word, value, .little);
+        try hashed(w, &hash, &word);
+    }
+    try hashed(w, &hash, dir.header);
+    const before_rows = 96 + dir.header.len;
+    const padding = std.mem.alignForward(usize, before_rows, cache_row_alignment) - before_rows;
+    var zeros: [cache_row_alignment - 1]u8 = @splat(0);
+    try hashed(w, &hash, zeros[0..padding]);
+    for (dir.rows) |r| {
+        std.mem.writeInt(u64, &word, r.offset, .little);
+        try hashed(w, &hash, &word);
+        var small: [4]u8 = undefined;
+        std.mem.writeInt(u32, &small, r.length, .little);
+        try hashed(w, &hash, &small);
+        std.mem.writeInt(u32, &small, r.title, .little);
+        try hashed(w, &hash, &small);
+    }
+    try hashed(w, &hash, dir.titles);
+    try w.flush();
+    const digest = hash.finalResult();
+    try file.writePositionalAll(io, &digest, 40);
     try file.sync(io);
     try std.Io.Dir.cwd().rename(temp, std.Io.Dir.cwd(), path, io);
 }
@@ -227,6 +288,7 @@ pub const File = struct {
     handle: std.Io.File,
     path: []u8,
     bytes: []align(std.heap.page_size_min) const u8,
+    cache_bytes: []align(std.heap.page_size_min) const u8 = &.{},
     compressed: ?Xz = null,
     directory: Directory,
     view: format.BlobView,
@@ -259,19 +321,33 @@ pub const File = struct {
         const fingerprint = identity(stat);
         const path_cache = try std.fmt.allocPrint(a, "{s}/.dict-cache/{s}.idx", .{ std.fs.path.dirname(path) orelse ".", std.fs.path.basename(path) });
         defer a.free(path_cache);
-        const cached = std.Io.Dir.cwd().readFileAlloc(io, path_cache, a, .limited(max_index_bytes + 1024 * 1024)) catch |err| switch (err) {
-            error.OutOfMemory => return err,
-            else => null,
-        };
-        defer if (cached) |b| a.free(b);
+        var cache_bytes: []align(std.heap.page_size_min) const u8 = &.{};
+        errdefer if (cache_bytes.len != 0) std.posix.munmap(cache_bytes);
+        var cache_file = std.Io.Dir.cwd().openFile(io, path_cache, .{}) catch null;
+        if (cache_file) |*f| {
+            defer f.close(io);
+            const s = f.stat(io) catch null;
+            if (s) |stat_cache| if (stat_cache.kind == .file and stat_cache.size >= 96 and stat_cache.size <= max_index_bytes + 1024 * 1024) {
+                const cache_len = std.math.cast(usize, stat_cache.size) orelse 0;
+                if (cache_len != 0) cache_bytes = std.posix.mmap(null, cache_len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, f.handle, 0) catch &.{};
+            };
+        }
         var hit = false;
         var saved = false;
         var dir: Directory = blk: {
-            if (cached) |b| {
-                if (cacheDecode(a, b, fingerprint, size)) |d| {
+            if (cache_bytes.len != 0) {
+                if (cacheDecode(a, cache_bytes, fingerprint, size)) |d| {
                     hit = true;
+                    if (d.owned) {
+                        std.posix.munmap(cache_bytes);
+                        cache_bytes = &.{};
+                    }
                     break :blk d;
-                } else |err| if (err == error.OutOfMemory) return err;
+                } else |err| {
+                    if (err == error.OutOfMemory) return err;
+                    std.posix.munmap(cache_bytes);
+                    cache_bytes = &.{};
+                }
             }
             var builder: Builder = .{ .a = a };
             defer builder.deinit();
@@ -293,12 +369,13 @@ pub const File = struct {
         const view = try format.openTrusted(dir.header);
         const owned_path = try a.dupe(u8, path);
         if (compressed == null) std.posix.munmap(bytes);
-        return .{ .io = io, .a = a, .handle = handle, .path = owned_path, .bytes = if (compressed != null) bytes else &.{}, .compressed = compressed, .directory = dir, .view = view, .size = size, .cache_hit = hit, .cache_saved = saved, .fingerprint = fingerprint };
+        return .{ .io = io, .a = a, .handle = handle, .path = owned_path, .bytes = if (compressed != null) bytes else &.{}, .cache_bytes = cache_bytes, .compressed = compressed, .directory = dir, .view = view, .size = size, .cache_hit = hit, .cache_saved = saved, .fingerprint = fingerprint };
     }
     pub fn deinit(self: *File) void {
         self.directory.deinit(self.a);
         if (self.compressed) |*x| x.deinit(self.a);
         if (self.bytes.len != 0) std.posix.munmap(self.bytes);
+        if (self.cache_bytes.len != 0) std.posix.munmap(self.cache_bytes);
         self.a.free(self.path);
         self.handle.close(self.io);
         self.* = undefined;
@@ -369,6 +446,12 @@ pub const File = struct {
     }
     pub fn indexBytes(self: File) usize {
         return self.directory.rows.len * @sizeOf(Row) + self.directory.titles.len;
+    }
+    pub fn indexHeapBytes(self: File) usize {
+        return if (self.directory.owned) self.indexBytes() + self.directory.header.len else 0;
+    }
+    pub fn cacheMappedBytes(self: File) usize {
+        return self.cache_bytes.len;
     }
 };
 test "incremental derived index accepts every byte boundary and rejects damaged framing" {
@@ -477,5 +560,8 @@ test "cached storage releases every failed allocation" {
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
     var initial = try File.open(std.testing.io, a, path);
     initial.deinit();
+    var mapped = try File.open(std.testing.io, a, path);
+    defer mapped.deinit();
+    try std.testing.expect(mapped.cache_hit and mapped.indexHeapBytes() == 0 and mapped.cacheMappedBytes() != 0);
     try std.testing.checkAllAllocationFailures(a, allocationCase, .{path});
 }

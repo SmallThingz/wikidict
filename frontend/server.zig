@@ -180,7 +180,7 @@ const State = struct {
             response.record_count = dbp.count();
             if (stats) {
                 const x = dbp.file.compressed;
-                return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .records = dbp.count(), .index_bytes = dbp.file.indexBytes(), .payload_reads = dbp.file.payload_reads, .disk_cache_hit = dbp.file.cache_hit, .disk_cache_saved = dbp.file.cache_saved, .index_builds = self.index_builds, .index_cache_hits = self.index_hits, .xz_blocks = if (x) |v| v.blocks else 0, .decoded_blocks = if (x) |v| v.decoded_blocks else 0 }, .{}) };
+                return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .records = dbp.count(), .index_bytes = dbp.file.indexBytes(), .index_heap_bytes = dbp.file.indexHeapBytes(), .cache_map_bytes = dbp.file.cacheMappedBytes(), .payload_reads = dbp.file.payload_reads, .disk_cache_hit = dbp.file.cache_hit, .disk_cache_saved = dbp.file.cache_saved, .index_builds = self.index_builds, .index_cache_hits = self.index_hits, .xz_blocks = if (x) |v| v.blocks else 0, .decoded_blocks = if (x) |v| v.decoded_blocks else 0 }, .{}) };
             }
             if (search) {
                 const range = try dbp.prefix(q.q);
