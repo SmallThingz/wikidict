@@ -116,6 +116,25 @@ pub const BlobView = struct {
         return .{ .code = code, .heading = heading };
     }
 
+    pub fn validate(self: BlobView) error{InvalidBlob}!void {
+        if (try self.offsetAt(0) != 0 or try self.offsetAt(self.header.record_count) != self.records.len) return error.InvalidBlob;
+        var previous_end: usize = 0;
+        var previous_title: ?[]const u8 = null;
+        var index: u32 = 0;
+        while (index < self.header.record_count) : (index += 1) {
+            const start = try self.offsetAt(index);
+            const end = try self.offsetAt(index + 1);
+            if (start != previous_end or start >= end) return error.InvalidBlob;
+            const record = try self.recordAt(index);
+            if (previous_title) |previous| {
+                if (std.mem.order(u8, previous, record.title) != .lt) return error.InvalidBlob;
+            }
+            previous_title = record.title;
+            previous_end = end;
+        }
+        if (self.kind == .language) _ = try self.languageMetadata();
+    }
+
     fn offsetAt(self: BlobView, index: u32) error{InvalidBlob}!usize {
         if (index > self.header.record_count) return error.InvalidBlob;
         const pos = std.math.mul(usize, @as(usize, index), @sizeOf(u32)) catch return error.InvalidBlob;
@@ -187,7 +206,10 @@ pub fn buildAlloc(
     return out;
 }
 
-pub fn inspect(bytes: []const u8) error{InvalidBlob}!BlobView {
+/// Opens a blob after validating framing, endpoint offsets, and language metadata.
+/// This skips the O(record_count) ordering scan; callers must already trust the
+/// blob's integrity (for example via a verified external hash) or call validate().
+pub fn openTrusted(bytes: []const u8) error{InvalidBlob}!BlobView {
     if (bytes.len < header_len) return error.InvalidBlob;
     const header = std.mem.bytesToValue(Header, bytes[0..header_len]);
     if (!std.mem.eql(u8, &header.magic_bytes, magic) or header.flags != 0) return error.InvalidBlob;
@@ -216,22 +238,13 @@ pub fn inspect(bytes: []const u8) error{InvalidBlob}!BlobView {
         .records = bytes[records_start..expected_end],
     };
     if (try view.offsetAt(0) != 0 or try view.offsetAt(header.record_count) != view.records.len) return error.InvalidBlob;
-
-    var previous_end: usize = 0;
-    var previous_title: ?[]const u8 = null;
-    var index: u32 = 0;
-    while (index < header.record_count) : (index += 1) {
-        const start = try view.offsetAt(index);
-        const end = try view.offsetAt(index + 1);
-        if (start != previous_end or start >= end) return error.InvalidBlob;
-        const record = try view.recordAt(index);
-        if (previous_title) |previous| {
-            if (std.mem.order(u8, previous, record.title) != .lt) return error.InvalidBlob;
-        }
-        previous_title = record.title;
-        previous_end = end;
-    }
     if (kind == .language) _ = try view.languageMetadata();
+    return view;
+}
+
+pub fn inspect(bytes: []const u8) error{InvalidBlob}!BlobView {
+    const view = try openTrusted(bytes);
+    try view.validate();
     return view;
 }
 
@@ -292,5 +305,25 @@ test "blob format rejects malformed offsets and unsorted records" {
     defer std.testing.allocator.free(broken);
     const offsets_start = header_len;
     std.mem.writeInt(u32, broken[offsets_start + 4 .. offsets_start + 8][0..4], 0, .little);
+    try std.testing.expectError(error.InvalidBlob, inspect(broken));
+}
+
+test "trusted blob open skips global title-order scan" {
+    const encoded = try buildAlloc(std.testing.allocator, .citations, "", &.{
+        .{ .title = "aa", .payload = "1" },
+        .{ .title = "bb", .payload = "2" },
+    });
+    defer std.testing.allocator.free(encoded);
+    const broken = try std.testing.allocator.dupe(u8, encoded);
+    defer std.testing.allocator.free(broken);
+
+    const original = try openTrusted(broken);
+    const first = try original.recordAt(0);
+    const title_offset = @intFromPtr(first.title.ptr) - @intFromPtr(broken.ptr);
+    broken[title_offset] = 'z';
+
+    const trusted = try openTrusted(broken);
+    try std.testing.expectEqualStrings("za", (try trusted.recordAt(0)).title);
+    try std.testing.expectError(error.InvalidBlob, trusted.validate());
     try std.testing.expectError(error.InvalidBlob, inspect(broken));
 }

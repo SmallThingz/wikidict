@@ -97,11 +97,22 @@ pub const BlobView = struct {
     language_metadata: ?format.LanguageMetadata,
 
     pub fn inspect(bytes: []const u8) error{InvalidBlob}!BlobView {
-        const raw = try format.inspect(bytes);
+        return fromRaw(try format.inspect(bytes));
+    }
+
+    pub fn openTrusted(bytes: []const u8) error{InvalidBlob}!BlobView {
+        return fromRaw(try format.openTrusted(bytes));
+    }
+
+    fn fromRaw(raw: format.BlobView) error{InvalidBlob}!BlobView {
         return .{
             .raw = raw,
             .language_metadata = if (raw.kind == .language) try raw.languageMetadata() else null,
         };
+    }
+
+    pub fn validate(self: BlobView) error{InvalidBlob}!void {
+        try self.raw.validate();
     }
 
     pub fn kind(self: BlobView) format.BlobKind {
@@ -237,6 +248,9 @@ test "typed blob reader keeps raw feature payloads borrowed" {
     });
     defer std.testing.allocator.free(bytes);
     const blob = try BlobView.inspect(bytes);
+    const trusted = try BlobView.openTrusted(bytes);
+    try trusted.validate();
+    try std.testing.expectEqualStrings("cat", (try trusted.find("cat")).?.title());
     switch ((try blob.recordAt(0))) {
         .citations => |entry| {
             try std.testing.expectEqualStrings("cat", entry.title);

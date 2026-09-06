@@ -37,6 +37,12 @@ pub fn inspectBlob(bytes: []const u8) error{InvalidBlob}!BlobView {
     return BlobView.inspect(bytes);
 }
 
+/// Fast path for blobs whose integrity was established externally.
+/// Use inspectBlob for a full record-order and offset validation pass.
+pub fn openTrustedBlob(bytes: []const u8) error{InvalidBlob}!BlobView {
+    return BlobView.openTrusted(bytes);
+}
+
 pub fn openDictionary(allocator: @import("std").mem.Allocator, io: @import("std").Io, path: []const u8) !Dictionary {
     return Dictionary.open(allocator, io, path, .{});
 }
