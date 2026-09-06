@@ -77,7 +77,7 @@ Add `--validate` to make the query tool run the full record-order/offset validat
 
 For browser or freestanding consumers, depend on the public `blob_decoder` module (and `blob_encoder` when codec/format definitions are needed); these modules contain no filesystem, POSIX, XML-parser, or legacy dictionary dependency. The full `decoder` module re-exports the same blob API for native applications. Library consumers can call `openTrustedBlob(bytes)` for the fast path or `inspectBlob(bytes)` for full validation. `find()` performs binary search over sorted titles, while language records expose `sectionIterator()`, Thesaurus/Rhymes expose typed `recordIterator()` APIs, Reconstruction exposes a typed view/section iterator, and Citations/Sign gloss expose borrowed raw source slices. Catalog helpers expose `languages.tsv` iteration, language filename derivation, fixed feature filenames, and `findLanguageBlob()`.
 
-These traversal APIs are zero-allocation after the logical blob bytes are available. `WIKBLB02` itself is deliberately uncompressed: storage/transport compression belongs outside the format, and consumers should decompress the finished blob before opening it.
+The wire layout uses `u16` metadata length plus `u32` record count, record-area length, and record offsets; builders reject values that do not fit those fields instead of truncating them. These traversal APIs are zero-allocation after the logical blob bytes are available. `WIKBLB02` itself is deliberately uncompressed: storage/transport compression belongs outside the format, and consumers should decompress the finished blob before opening it.
 
 Encode the dictionary:
 
