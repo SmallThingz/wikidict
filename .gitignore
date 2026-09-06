@@ -8,3 +8,6 @@ zig-pkg
 data/
 enwiktionary.xml
 .tmp/
+
+frontend/web/node_modules/
+frontend/web/.vite/

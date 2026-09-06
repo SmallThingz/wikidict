@@ -20,6 +20,8 @@
         "tools",
         "frontend/README.md",
         "frontend/args.zig",
+        "frontend/html.zig",
+        "frontend/web/dist/index.html",
         "frontend/main.zig",
         "frontend/model.zig",
         "frontend/output.zig",

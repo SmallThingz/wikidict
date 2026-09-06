@@ -159,3 +159,7 @@ zig build test
 ```
 
 This serializes the encoder, decoder, structure, verifier, and Lua2 test targets to keep peak build memory predictable. The Lua2 aggregate imports every committed Lua2 source, so operational tools are compile-checked alongside the parser, VM, MediaWiki, and Scribunto unit tests.
+
+### Offline HTML reader
+
+`dict lookup cat --root PATH --format html --with-source > cat.html` writes a self-contained themed reader. Use `dict search PREFIX --limit N --format html --with-source` to export a bounded set of entries. See `frontend/README.md` for the SolidJS project, rebuilding, and embedding interface.

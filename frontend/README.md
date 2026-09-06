@@ -29,3 +29,16 @@ Human output neutralizes terminal control and bidi-control sequences. `--color a
 Index construction validates framing and strict title order by default. `--trusted` skips only the order check for artifacts verified externally. No lookup table, compression metadata or frontend styling is added to the wire format.
 
 Run `zig build test` for native presentation, parser, allocation-failure and all-six-kind encoder-to-reader-to-renderer tests, alongside the existing codec and wasm gates.
+
+## Self-contained HTML
+
+```sh
+zig-out/bin/dict lookup cat --root data/wiktionary-blobs --format html --with-source > cat.html
+zig-out/bin/dict search cat --root data/wiktionary-blobs --limit 50 --format html --with-source > cats.html
+```
+
+HTML includes its complete SolidJS application, styles and safely embedded JSON. Open the file directly; no server, external assets or network is needed. Search exports materialize only the requested page, not the whole dictionary. The UI filters those exported entries, with keyboard navigation, reading/source/JSON views, template disclosures and responsive layout. External Wiktionary links require a network connection only when followed.
+
+Appearance is handled by JavaScript with system/light/dark/cool themes, an accent picker and sans/monospace type, persisted locally when storage permits. CSS consumes the site's `--site-*` tokens. `frontend/web/src/index.tsx` exposes `mountDictionary(element, data, { inheritedTheme, onNavigate })`, returning a disposer, for later host-site integration. No host-site files are changed.
+
+The independently maintained SolidJS project is in `frontend/web`. Install its pinned dependencies with `bun install --frozen-lockfile`, then `bun run build` there (or `zig build frontend` from the repository). The build type-checks and produces exactly `dist/index.html`. That generated artifact is committed and packaged so native `zig build` requires neither Bun nor network frontend dependencies. Rebuild it when changing frontend source.

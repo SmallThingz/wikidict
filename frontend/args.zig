@@ -1,7 +1,7 @@
 const std = @import("std");
 const store = @import("store.zig");
 pub const Command = enum { lookup, search, languages, stats };
-pub const Format = enum { text, json, source };
+pub const Format = enum { text, json, source, html };
 pub const Color = enum { auto, always, never };
 pub const Options = struct {
     command: Command = .lookup,
@@ -83,6 +83,7 @@ pub fn parse(argv: []const []const u8) !Options {
     if (out.command == .lookup and (!has_query or out.query.len == 0)) return error.Usage;
     if ((out.command == .stats or out.command == .languages) and has_query) return error.Usage;
     if (out.format == .source and out.command != .lookup) return error.Usage;
+    if (out.format == .html and out.command != .lookup and out.command != .search) return error.Usage;
     if (out.offset != 0 and out.command != .search) return error.Usage;
     return out;
 }

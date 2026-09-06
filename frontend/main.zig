@@ -3,6 +3,7 @@ const args = @import("args.zig");
 const store = @import("store.zig");
 const model = @import("model.zig");
 const output = @import("output.zig");
+const html = @import("html.zig");
 
 const usage =
     \\dict: local Wiktionary, one language or feature blob at a time
@@ -15,7 +16,7 @@ const usage =
     \\  --root PATH        WIKBLB03 root (default data/wiktionary-blobs)
     \\  --language NAME    Exact language heading (default English)
     \\  --kind KIND        language, thesaurus, citations, reconstruction, rhymes, sign-gloss
-    \\  --format FORMAT    text, json, source (source requires lookup)
+    \\  --format FORMAT    text, json, source, html (HTML supports lookup and search)
     \\  --limit N          Search page size, 1..1000 (default 20)
     \\  --offset N         Skip N prefix matches
     \\  --with-source      Include exact source in JSON entries
@@ -83,13 +84,13 @@ fn run(init: std.process.Init) !u8 {
                     var doc = try model.fromRecord(init.gpa, record, opts.with_source);
                     defer doc.deinit();
                     response.entries = &.{doc.entry};
-                    if (opts.format == .json) try output.json(w, response) else try output.entryText(w, doc.entry, color);
+                    if (opts.format == .html) try html.write(w, a, response) else if (opts.format == .json) try output.json(w, response) else try output.entryText(w, doc.entry, color);
                     if (doc.entry.status == .invalid_payload) {
                         try w.flush();
                         return 2;
                     }
                 }
-            } else if (opts.format == .json) try output.json(w, response) else if (opts.format == .text) {
+            } else if (opts.format == .html) try html.write(w, a, response) else if (opts.format == .json) try output.json(w, response) else if (opts.format == .text) {
                 try w.writeAll("No exact match: ");
                 try output.terminalText(w, opts.query);
                 try w.writeByte('\n');
@@ -105,7 +106,30 @@ fn run(init: std.process.Init) !u8 {
             const matches = try a.alloc(output.Match, end - start);
             for (matches, start..) |*match, index| match.* = .{ .title = try model.utf8Text(a, (try db.index.recordAt(index)).title()) };
             response.matches = matches;
-            if (opts.format == .json) try output.json(w, response) else {
+            if (opts.format == .html) {
+                var docs: std.ArrayList(model.OwnedEntry) = .empty;
+                defer {
+                    for (docs.items) |*doc| doc.deinit();
+                    docs.deinit(init.gpa);
+                }
+                const entries = try a.alloc(model.Entry, end - start);
+                var invalid = false;
+                for (entries, start..) |*entry, index| {
+                    var doc = try model.fromRecord(init.gpa, try db.index.recordAt(index), opts.with_source);
+                    docs.append(init.gpa, doc) catch |err| {
+                        doc.deinit();
+                        return err;
+                    };
+                    entry.* = doc.entry;
+                    invalid = invalid or doc.entry.status == .invalid_payload;
+                }
+                response.entries = entries;
+                try html.write(w, a, response);
+                if (invalid) {
+                    try w.flush();
+                    return 2;
+                }
+            } else if (opts.format == .json) try output.json(w, response) else {
                 for (matches) |match| {
                     try output.terminalText(w, match.title);
                     try w.writeByte('\n');
@@ -155,5 +179,6 @@ test {
     _ = store;
     _ = model;
     _ = output;
+    _ = html;
     _ = @import("pipeline_tests.zig");
 }

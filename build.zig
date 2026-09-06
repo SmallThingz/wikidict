@@ -359,6 +359,10 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "query-blobs", "Query per-language and feature Wiktionary blobs", blob_query_run, &.{});
     addPublicRunStep(b, "dict", "Run the dictionary frontend CLI", blob_query_run, &.{});
 
+    const web_build = b.addSystemCommand(&.{ "bun", "run", "build" });
+    web_build.setCwd(b.path("frontend/web"));
+    b.step("frontend", "Rebuild the self-contained web UI (bun install first)").dependOn(&web_build.step);
+
     const test_runner = b.path("tools/test_runner.zig");
 
     const encoder_tests = b.addTest(.{
