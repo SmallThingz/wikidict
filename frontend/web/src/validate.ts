@@ -27,9 +27,11 @@ export function isResults(value: unknown): value is Results {
     && list(r.matches, m => record(m) && text(m.title))
     && list(r.entries, e => record(e) && text(e.title) && kind(e.kind) && textOrNull(e.language)
       && (e.expansion == null || (record(e.expansion) && e.expansion.backend === "lua-vm" && ["ok", "failed"].includes(e.expansion.status as string) && textOrNull(e.expansion.diagnostic)))
+      && optional(e.content, v => v === 'complete' || v === 'core')
       && optional(e.language_code, text) && text(e.preamble) && count(e.unexpanded_templates) && optional(e.rendered_templates, count) && ['structured', 'raw', 'invalid_payload'].includes(e.status as string)
       && optional(e.preamble_spans, v => list(v, span)) && optional(e.references, v => list(v, ref => record(ref) && between(ref.number, 1, 100000) && text(ref.name) && text(ref.body) && list(ref.spans, span)))
       && textOrNull(e.source) && textOrNull(e.source_base64) && textOrNull(e.payload_base64)
-      && list(e.sections, s => record(s) && text(s.title) && between(s.level, 1, 6) && list(s.blocks, block))
+      && list(e.sections, s => record(s) && text(s.title) && between(s.level, 1, 6) && list(s.blocks, block) && (s.deferred == null || (['etymology','translations','relations','references','quotations'].includes(s.deferred as string) && Array.isArray(s.blocks) && s.blocks.length === 0 && e.content === 'core')))
+      && (e.content !== 'core' || (e.source === null && e.source_base64 === null && e.expansion == null))
       && optional(e.organization, value => validOrganization(value, e as unknown as Entry)));
 }

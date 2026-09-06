@@ -41,10 +41,8 @@ pub const Resolver = struct {
             const path = try enc.blob_catalog.supplementPathAlloc(self.a, self.root, self.metadata.heading, family);
             defer self.a.free(path);
             var f = File.open(self.io, self.a, path) catch |err| switch (err) {
-                error.FileNotFound => {
-                    self.attempted[i] = true;
-                    return null;
-                },
+                // A missing optional package can be installed while a reader is open.
+                error.FileNotFound => return null,
                 else => return err,
             };
             errdefer f.deinit();

@@ -5,9 +5,10 @@ export type Feature = { kind: string; language: string; data: string; tail_kind:
 export type Cell = { spans: Span[]; header: boolean; colspan: number; rowspan: number };
 export type Table = { caption: Span[]; rows: { cells: Cell[] }[] };
 export type Block = { kind: string; depth: number; text: string; spans: Span[]; feature: Feature | null; list_path?: string; number?: string; level?: number; table?: Table | null };
-export type Section = { level: number; title: string; blocks: Block[] };
+export type Section = { level: number; title: string; blocks: Block[]; deferred?: 'etymology' | 'translations' | 'relations' | 'references' | 'quotations' | null };
 export type Reference = { number: number; name: string; body: string; spans: Span[] };
 export type Entry = {
+  content?: 'complete' | 'core';
   organization?: Organization;
   language_code?: string;
   title: string; kind: string; language: string | null; sections: Section[]; preamble: string;

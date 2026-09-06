@@ -84,6 +84,9 @@ Framing validation cannot detect deletion at a complete-record boundary without 
 
 ### Human and machine-readable results
 
+Native text/TUI reading now opens only the language core. `--details` (or `d` in the TUI) loads companion sections on demand; source and VM paths remain strict. JSON/HTML include all sections by default, with explicit `--core-only` exports labelling bodies that were not included. See the frontend guide for package/recovery behavior.
+
+
 `zig build` installs `zig-out/bin/dict`. Use `dict lookup WORD`, `dict search PREFIX`, `dict languages`, or `dict stats`, with `--root PATH` and optional `--language HEADING` / `--kind KIND`.
 
 `--format json` emits the versioned `dict.results.v1` interface for alternative frontends; `--with-source` includes exact source alongside semantic sections and spans. `--format source` emits only the reconstructed source bytes. Rendered human output is the default. `dict render FILE --title TITLE --format html` also renders standalone wikitext without a database; use `-` for stdin. See [frontend/README.md](frontend/README.md) for protocol, ownership, and rendering details.

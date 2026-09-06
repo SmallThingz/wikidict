@@ -66,17 +66,18 @@ function Senses(props: { lexeme: Lexeme; context: Props; parent: number | null }
 function Supplement(props: { index: number; context: Props }) {
   const section = () => props.context.entry.sections[props.index];
   return <details class="dict-supplement dict-section" id={`${props.context.prefix}-${props.index}`} data-section={section().title}>
-    <summary><span>{section().title}</span><small>Read section</small></summary>
-    <div class="dict-supplement-body"><Blocks blocks={section().blocks} context={props.context}/></div>
+    <summary><span>{section().title}</span><small>{section().deferred ? 'Not included' : 'Read section'}</small></summary>
+    <div class="dict-supplement-body"><Show when={section().deferred} fallback={<Blocks blocks={section().blocks} context={props.context}/>}><p class="dict-deferred-note">This {section().deferred} body is in a separate language companion. It was not included in this core-only export. Re-export without --core-only after installing the companion to read it.</p></Show></div>
   </details>;
 }
 export function Reading(props: Props) {
   const groups = createMemo(() => kindGroups(props.entry));
   const hasLexemes = () => groups().length > 0;
   return <div class="dict-reading">
+    <Show when={props.entry.content === 'core'}><p class="dict-core-note" role="note">Core-only export. Definitions and usage examples are included; separate section bodies are labelled "Not included", not empty.</p></Show>
     <Show when={props.entry.status === 'invalid_payload'}><div class="dict-notice" role="alert">This record has an invalid semantic payload. Its original bytes remain available in the JSON view.</div></Show>
     <Show when={props.entry.preamble_spans?.length}><details class="dict-preamble"><summary>Entry context</summary><Spans spans={props.entry.preamble_spans!} context={props}/></details></Show>
-    <Show when={hasLexemes()} fallback={<For each={props.entry.sections}>{(section,index) => <section class="dict-section" id={`${props.prefix}-${index()}`}><Show when={section.level > 2 || props.entry.kind !== 'language'}><h2>{section.title}</h2></Show><Blocks blocks={section.blocks} context={props}/></section>}</For>}>
+    <Show when={hasLexemes()} fallback={<For each={props.entry.sections}>{(section,index) => <section class="dict-section" id={`${props.prefix}-${index()}`}><Show when={section.level > 2 || props.entry.kind !== 'language'}><h2>{section.title}</h2></Show><Show when={section.deferred} fallback={<Blocks blocks={section.blocks} context={props}/>}><p class="dict-deferred-note">Not included: {section.deferred} companion.</p></Show></section>}</For>}>
       <div class="dict-reader-intro"><span class="dict-eyebrow">MEANINGS &amp; USE</span><span>History and source evidence stay attached.</span></div>
       <For each={groups()}>{group => <section class="dict-kind-group" data-kind={group.kind}>
         <header class="dict-kind-header"><h2>{group.kind}<Show when={new Set(groups().map(g => g.language)).size > 1}><small class="dict-language-tag">{group.language}</small></Show></h2><span>{group.lexemes.reduce((n,l) => n + l.definitions.length, 0)} {group.lexemes.reduce((n,l) => n + l.definitions.length, 0) === 1 ? "definition" : "definitions"}<Show when={group.lexemes.length > 1}> · {group.lexemes.length} entries</Show></span></header>
@@ -88,7 +89,7 @@ export function Reading(props: Props) {
           <For each={lexeme.related_sections}>{index => <Supplement index={index} context={props}/>}</For>
         </article>}</For>
       </section>}</For>
-      <section class="dict-supporting"><h2>History &amp; supporting material</h2><p>All source sections are retained. Open the detail you need.</p>
+      <section class="dict-supporting"><h2>History &amp; supporting material</h2><p>{props.entry.content === 'core' ? 'Headings retain their original positions. The labelled bodies are not included in this export.' : 'All source sections are retained. Open the detail you need.'}</p>
         <For each={props.entry.organization!.other_sections}>{index => <Show when={props.entry.sections[index].level > 2 || props.entry.sections[index].blocks.some(b => b.kind !== 'blank')}><Supplement index={index} context={props}/></Show>}</For>
       </section>
     </Show>

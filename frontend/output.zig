@@ -83,6 +83,7 @@ pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, 
         try w.writeAll("\nInvalid semantic payload. JSON preserves its bytes as payload_base64.\n");
         return;
     }
+    if (entry.content == .core) try w.writeAll("\n[Core reading. Optional section bodies are not loaded; --details or d loads them.]\n");
     if (entry.preamble_spans.len != 0) {
         try spansText(w, entry.preamble_spans, color);
         try w.writeByte('\n');
@@ -204,6 +205,10 @@ fn sectionText(w: *std.Io.Writer, section: model.Section, color: bool) !void {
         try terminalText(w, section.title);
         if (color) try w.writeAll("\x1b[0m");
         try w.writeByte('\n');
+    }
+    if (section.deferred) |kind| {
+        try w.print("[Not loaded: {s} companion]\n", .{@tagName(kind)});
+        return;
     }
     try blocksText(w, section.blocks, color);
 }

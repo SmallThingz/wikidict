@@ -125,3 +125,36 @@ Core language payloads retain every section heading and its order. An external b
 `blob_encoder.language_parts` splits/rejoins the portable payloads. A section iterator reports `section.external` rather than pretending that a referenced body is empty. `encoder.blob_files.Resolver` opens/maps/indexes companions lazily for selected records, validates their language/family, and reconstructs the original payload before source decoding or Lua expansion. Complete native rendering and exact-source export currently require referenced companions; missing, truncated or mismatched companions fail explicitly. Source-mode decoding must not bypass resolution. The corpus verifier also rejects orphan companion records.
 
 This split reduces the core footprint, not necessarily total storage: titles and framing in independent companions add overhead. Keep all components together for exact reconstruction. Rebuild old v3 output; it is not compatible with v4.
+
+## Optional packages and core reading
+
+Native text lookup and the TUI start from the language core only. Etymology,
+translations, relations, references and standalone quotation-section bodies are
+not mapped or indexed until details or exact source is requested. Definitions,
+usage examples, origins and their original section positions remain available.
+`--details` loads the complete entry; the TUI uses `d` for details and `s` for source.
+VM rendering also loads complete source, never a silently shortened fragment.
+
+JSON and HTML remain complete by default. `--core-only` explicitly exports a
+partial native entry in either format, without opening companion blobs. It cannot
+be combined with `--with-source`, `--format source`, `--details` or `--runtime`.
+`entry.content: "core"` and `section.deferred` identify excluded bodies; their
+headings and origin associations remain present. A body marked deferred is **not
+an empty source section**. The HTML labels it "Not included" and explains how to
+make a complete export. `entry.content: "complete"` describes source inclusion,
+not full MediaWiki/template rendering compatibility.
+
+```sh
+zig-out/bin/dict lookup cat --core-only --format json
+zig-out/bin/dict lookup cat --core-only --format html > cat-core.html
+zig-out/bin/dict lookup cat --details
+```
+
+A missing companion does not prevent core reading. Explicit complete CLI requests
+still fail. In the TUI, a missing-package request displays an error without losing
+the search session; leaving details/source returns to the core. Installing the
+matching package and trying again works in the same session. Corrupt data, I/O and
+allocation failures still propagate. The portable `fromRecord` remains strict;
+`fromCoreRecord` is the explicit partial-presentation API. Blob bytes and the
+`WIKBLB04` wire format are unchanged. `zig build test-reader` exercises these
+paths against real freshly built files and is included in the native test gate.

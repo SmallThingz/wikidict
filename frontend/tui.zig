@@ -179,8 +179,17 @@ const State = struct {
         if (index != self.loaded or self.text.len == 0) {
             var formatted: std.Io.Writer.Allocating = .init(self.a);
             defer formatted.deinit();
-            if (index) |i| {
-                var resolved = try self.db.resolveAlloc(self.a, try self.db.index.recordAt(i));
+            if (index) |i| record_block: {
+                const raw = try self.db.index.recordAt(i);
+                const core = !self.source and !self.details and self.runtime.root == null;
+                var resolved = if (core) store.Store.Resolved{ .record = raw, .a = self.a } else self.db.resolveAlloc(self.a, raw) catch |err| switch (err) {
+                    error.MissingSupplement, error.MissingSupplementRecord => {
+                        try formatted.writer.writeAll("Supporting material is not installed.\n\nFull details and exact source need the matching companion blobs.\nPress s or d to return to core reading; other entries remain searchable.\n\n");
+                        try formatted.writer.print("Data error: {s}\n", .{@errorName(err)});
+                        break :record_block;
+                    },
+                    else => return err,
+                };
                 defer resolved.deinit();
                 const record = resolved.record;
                 if (self.source) {
@@ -191,7 +200,7 @@ const State = struct {
                     defer self.a.free(source);
                     try output.terminalText(&formatted.writer, source);
                 } else {
-                    var doc = try expansion.fromRecord(self.io, self.a, record, false, self.runtime);
+                    var doc = if (core) try model.fromCoreRecord(self.a, record) else try expansion.fromRecord(self.io, self.a, record, false, self.runtime);
                     defer doc.deinit();
                     try output.entryTextWithDetails(&formatted.writer, doc.entry, self.color, self.details);
                 }
@@ -293,11 +302,11 @@ const State = struct {
     }
 };
 
-pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8, query: []const u8, theme: Theme, color: bool, runtime: expansion.Options) !void {
+pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8, query: []const u8, theme: Theme, color: bool, runtime: expansion.Options, initial_details: bool) !void {
     if (builtin.os.tag != .linux) return error.UnsupportedTerminalPlatform;
     if (!try std.Io.File.stdin().isTty(io) or !try std.Io.File.stdout().isTty(io)) return error.TerminalRequired;
     if (!std.unicode.utf8ValidateSlice(query) or query.len > 4096) return error.InvalidQuery;
-    var state: State = .{ .a = a, .io = io, .runtime = runtime, .db = db, .label = label, .theme = theme, .color = color };
+    var state: State = .{ .a = a, .io = io, .runtime = runtime, .db = db, .label = label, .theme = theme, .color = color, .details = initial_details };
     defer state.deinit();
     @memcpy(state.query[0..query.len], query);
     state.len = query.len;

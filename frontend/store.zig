@@ -103,3 +103,50 @@ test "prefix ranges handle exact matches empty prefixes unicode and misses" {
     try std.testing.expectEqual(Range{ .start = 3, .end = 4 }, try prefixRange(index, "é"));
     try std.testing.expectEqual(Range{ .start = 3, .end = 3 }, try prefixRange(index, "missing"));
 }
+
+test "core reading opens no companions and a missing package can be installed into the same session" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const original = "==English==\n===Etymology===\nHistory\n===Noun===\n# An animal.\n";
+    const payload_bytes = try enc.language_blob_encoding.encodeAlloc(a, original, .{ .heading = "English" });
+    defer a.free(payload_bytes);
+    var split = try enc.language_parts.splitAlloc(a, payload_bytes, .{ .heading = "English" });
+    defer split.deinit(a);
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English");
+    defer a.free(metadata);
+    const core = try enc.blob_format.buildAlloc(a, .language, metadata, &.{.{ .title = "cat", .payload = split.core }});
+    defer a.free(core);
+    const core_path = try pathAlloc(a, root, .language, "English");
+    defer a.free(core_path);
+    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(core_path).?);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = core_path, .data = core });
+    var db = try Store.open(io, a, root, .language, "English", false);
+    defer db.deinit();
+    const record = (try db.index.find("cat")).?;
+    var doc = try @import("model.zig").fromCoreRecord(a, record);
+    defer doc.deinit();
+    try std.testing.expectEqual(.core, doc.entry.content);
+    for (db.resolver.?.files, db.resolver.?.attempted) |file, attempted| {
+        try std.testing.expect(file == null and !attempted);
+    }
+    try std.testing.expectError(error.MissingSupplement, db.resolveAlloc(a, record));
+    const supplement_metadata = try std.mem.concat(a, u8, &.{ metadata, &.{@intFromEnum(enc.language_parts.Kind.etymology)} });
+    defer a.free(supplement_metadata);
+    const supplement = try enc.blob_format.buildAlloc(a, .supplement, supplement_metadata, &.{.{ .title = "cat", .payload = split.bodies[0] }});
+    defer a.free(supplement);
+    const detail_path = try catalog.supplementPathAlloc(a, root, "English", .etymology);
+    defer a.free(detail_path);
+    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(detail_path).?);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = detail_path, .data = supplement });
+    var resolved = try db.resolveAlloc(a, record);
+    defer resolved.deinit();
+    const recovered = try @import("model.zig").sourceAlloc(a, resolved.record);
+    defer a.free(recovered);
+    try std.testing.expectEqualStrings(original, recovered);
+    try std.testing.expect(db.resolver.?.files[0] != null);
+    for (db.resolver.?.files[1..]) |file| try std.testing.expect(file == null);
+}

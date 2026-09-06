@@ -522,7 +522,14 @@ pub fn build(b: *std.Build) void {
     runtime_test_run.addArg(b.pathFromRoot(".zig-cache"));
     runtime_test_run.step.dependOn(&blob_wasm_smoke.step);
     b.step("test-runtime", "Exercise extraction, bytecode conversion and rendered VM output end to end").dependOn(&runtime_test_run.step);
-    if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch) test_step.dependOn(&runtime_test_run.step);
+    const reader_test_exe = addCliExecutable(b, "dict-reader-integration-test", b.path("tools/reader_integration_test.zig"), b.graph.host, test_optimize, &.{});
+    const reader_test_run = b.addRunArtifact(reader_test_exe);
+    reader_test_run.addFileArg(blob_query_exe.getEmittedBin());
+    reader_test_run.addFileArg(blob_build_exe.getEmittedBin());
+    reader_test_run.addArg(b.pathFromRoot(".zig-cache"));
+    reader_test_run.step.dependOn(&runtime_test_run.step);
+    b.step("test-reader", "Exercise optional-companion reading through the real CLI").dependOn(&reader_test_run.step);
+    if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch) test_step.dependOn(&reader_test_run.step);
 }
 
 fn addCliExecutable(

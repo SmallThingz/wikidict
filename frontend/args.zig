@@ -20,6 +20,7 @@ pub const Options = struct {
     offset: usize = 0,
     with_source: bool = false,
     details: bool = false,
+    core_only: bool = false,
     trusted: bool = false,
     help: bool = false,
 };
@@ -62,6 +63,10 @@ pub fn parse(argv: []const []const u8) !Options {
                 out.help = true;
                 continue;
             }
+            if (std.mem.eql(u8, arg, "--core-only")) {
+                out.core_only = true;
+                continue;
+            }
             if (std.mem.eql(u8, arg, "--details")) {
                 out.details = true;
                 continue;
@@ -89,6 +94,8 @@ pub fn parse(argv: []const []const u8) !Options {
         }
     }
     if (out.help) return out;
+    if (out.core_only and (out.command != .lookup and out.command != .search)) return error.Usage;
+    if (out.core_only and (out.format == .source or out.with_source or out.runtime != null or out.details)) return error.Usage;
     if (out.runtime_timeout_ms == 0 or out.runtime_timeout_ms > 60000) return error.Usage;
     if (out.runtime) |root| if (root.len == 0 or out.command == .stats or out.command == .languages) return error.Usage;
     if (out.limit == 0 or out.limit > 1000 or out.root.len == 0 or out.language.len == 0) return error.Usage;
@@ -144,4 +151,14 @@ test "language accounting can be scoped to a spelling rather than the whole cata
     const opts = try parse(&.{ "languages", "cat", "--format", "json" });
     try std.testing.expectEqualStrings("cat", opts.query);
     try std.testing.expectEqual(Command.languages, opts.command);
+}
+
+test "core-only export cannot silently replace exact source or VM expansion" {
+    try std.testing.expect((try parse(&.{ "lookup", "cat", "--core-only", "--format", "html" })).core_only);
+    try std.testing.expect((try parse(&.{ "search", "cat", "--core-only", "--format", "json" })).core_only);
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--core-only", "--format", "source" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--core-only", "--with-source" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--core-only", "--runtime", "runtime" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--core-only", "--details" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "render", "a.wiki", "--core-only" }));
 }

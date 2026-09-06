@@ -25,7 +25,8 @@ const usage =
     \\  --limit N          Search page size, 1..1000 (default 20)
     \\  --offset N         Skip N prefix matches
     \\  --with-source      Include exact source in JSON/HTML entries
-    \\  --details          Include all supporting material in human text; TUI uses d
+    \\  --details          Load all supporting material in human text; TUI uses d
+    \\  --core-only        Export native core without reading optional companion blobs
     \\  --color MODE       auto, always, never; NO_COLOR disables automatic color
     \\  --theme THEME      TUI palette: terminal (default), dark, light
     \\  --runtime PATH     Expand through extracted templates and compiled Lua bytecode
@@ -60,7 +61,7 @@ fn run(init: std.process.Init) !u8 {
     const opts = try args.parse(argv[1..]);
     const runtime: expansion.Options = .{ .root = opts.runtime, .timeout_ms = opts.runtime_timeout_ms };
     var buffer: [16384]u8 = undefined;
-    var stdout = std.Io.File.stdout().writer(init.io, &buffer);
+    var stdout = std.Io.File.stdout().writerStreaming(init.io, &buffer);
     const w = &stdout.interface;
     if (opts.help) {
         try w.writeAll(usage);
@@ -101,7 +102,7 @@ fn run(init: std.process.Init) !u8 {
     };
     if (opts.command == .tui) {
         const label = try std.fmt.allocPrint(a, "{s} / {s}", .{ if (opts.kind == .language) opts.language else "Features", @tagName(opts.kind) });
-        try tui.run(init.io, init.gpa, &db, label, opts.query, opts.theme, color, runtime);
+        try tui.run(init.io, init.gpa, &db, label, opts.query, opts.theme, color, runtime, opts.details);
         return 0;
     }
     var response: output.Response = .{
@@ -116,7 +117,8 @@ fn run(init: std.process.Init) !u8 {
         .lookup => {
             response.match_mode = "exact-utf8";
             if (try db.index.find(opts.query)) |raw_record| {
-                var resolved = try db.resolveAlloc(init.gpa, raw_record);
+                const core = opts.core_only or (opts.format == .text and !opts.details and !opts.with_source and runtime.root == null);
+                var resolved = if (core) store.Store.Resolved{ .record = raw_record, .a = init.gpa } else try db.resolveAlloc(init.gpa, raw_record);
                 defer resolved.deinit();
                 const record = resolved.record;
                 response.total_matches = 1;
@@ -124,10 +126,10 @@ fn run(init: std.process.Init) !u8 {
                     const source = try model.sourceAlloc(a, record);
                     try w.writeAll(source);
                 } else {
-                    var doc = try expansion.fromRecord(init.io, init.gpa, record, opts.with_source, runtime);
+                    var doc = if (core) try model.fromCoreRecord(init.gpa, record) else try expansion.fromRecord(init.io, init.gpa, record, opts.with_source, runtime);
                     defer doc.deinit();
                     response.entries = &.{doc.entry};
-                    if (opts.format == .html) try htmlWithLemmas(init.io, a, init.gpa, &db, w, response, opts.with_source, runtime) else if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
+                    if (opts.format == .html) try htmlWithLemmas(init.io, a, init.gpa, &db, w, response, opts.with_source, runtime, opts.core_only) else if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
                     if (renderFailed(doc.entry)) {
                         try w.flush();
                         return 2;
@@ -159,8 +161,9 @@ fn run(init: std.process.Init) !u8 {
                 var invalid = false;
                 for (entries, start..) |*entry, index| {
                     // The export arena retains resolved bodies until every borrowed document is written.
-                    const resolved = try db.resolveAlloc(a, try db.index.recordAt(index));
-                    var doc = try expansion.fromRecord(init.io, init.gpa, resolved.record, opts.with_source, runtime);
+                    const raw = try db.index.recordAt(index);
+                    const resolved = if (opts.core_only) store.Store.Resolved{ .record = raw, .a = a } else try db.resolveAlloc(a, raw);
+                    var doc = if (opts.core_only) try model.fromCoreRecord(init.gpa, resolved.record) else try expansion.fromRecord(init.io, init.gpa, resolved.record, opts.with_source, runtime);
                     docs.append(init.gpa, doc) catch |err| {
                         doc.deinit();
                         return err;
@@ -209,7 +212,7 @@ test {
     _ = @import("pipeline_tests.zig");
 }
 
-fn htmlWithLemmas(io: std.Io, arena: std.mem.Allocator, a: std.mem.Allocator, db: *store.Store, w: *std.Io.Writer, response: output.Response, with_source: bool, runtime: expansion.Options) !void {
+fn htmlWithLemmas(io: std.Io, arena: std.mem.Allocator, a: std.mem.Allocator, db: *store.Store, w: *std.Io.Writer, response: output.Response, with_source: bool, runtime: expansion.Options, core_only: bool) !void {
     var entries: std.ArrayList(model.Entry) = .empty;
     var related_failed = false;
     var docs: std.ArrayList(model.OwnedEntry) = .empty;
@@ -228,8 +231,8 @@ fn htmlWithLemmas(io: std.Io, arena: std.mem.Allocator, a: std.mem.Allocator, db
         };
         if (seen) continue;
         const raw = (try db.index.find(form.target)) orelse continue;
-        const resolved = try db.resolveAlloc(arena, raw);
-        var doc = try expansion.fromRecord(io, a, resolved.record, with_source, runtime);
+        const resolved = if (core_only) store.Store.Resolved{ .record = raw, .a = arena } else try db.resolveAlloc(arena, raw);
+        var doc = if (core_only) try model.fromCoreRecord(a, resolved.record) else try expansion.fromRecord(io, a, resolved.record, with_source, runtime);
         docs.append(a, doc) catch |err| {
             doc.deinit();
             return err;

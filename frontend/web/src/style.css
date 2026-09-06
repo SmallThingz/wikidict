@@ -218,3 +218,5 @@
 .dict-headword-context>summary { color:var(--dict-muted); font-size:9px; }
 .dict-headword-context[open] { padding:10px; border-left:2px solid var(--dict-line); background:var(--dict-soft); }
 .dict-headword-context[open]>summary { margin-bottom:8px; }
+.dict-core-note, .dict-deferred-note { color:var(--dict-muted); font-size:12px; line-height:1.7; }
+.dict-core-note { padding:10px 13px; border-left:2px solid var(--dict-accent); background:var(--dict-soft); }

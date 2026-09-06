@@ -10,9 +10,10 @@ pub const entry_layout = @import("entry_layout.zig");
 
 pub const Feature = wiki.Feature;
 pub const Block = wiki.Block;
-pub const Section = struct { level: u8, title: []const u8, blocks: []const Block };
+pub const Section = struct { level: u8, title: []const u8, blocks: []const Block, deferred: ?enc.language_parts.Kind = null };
 pub const Expansion = struct { backend: []const u8 = "lua-vm", status: enum { ok, failed }, diagnostic: ?[]const u8 = null };
 pub const Entry = struct {
+    content: enum { complete, core } = .complete,
     organization: entry_layout.Layout = .{},
     expansion: ?Expansion = null,
     title: []const u8,
@@ -94,9 +95,12 @@ const Builder = struct {
     renderer: *wiki.Renderer,
     pending_raw: std.ArrayList(u8) = .empty,
     started: bool = false,
+    allow_deferred: bool = false,
+    deferred: ?enc.language_parts.Kind = null,
 
     fn flush(self: *Builder) !void {
-        try self.sections.append(self.a, .{ .level = self.level, .title = self.title, .blocks = try self.blocks.toOwnedSlice(self.a) });
+        try self.sections.append(self.a, .{ .level = self.level, .title = self.title, .blocks = try self.blocks.toOwnedSlice(self.a), .deferred = self.deferred });
+        self.deferred = null;
     }
     fn heading(self: *Builder, level: u8, title: []const u8) !void {
         if (self.started) try self.flush();
@@ -133,12 +137,13 @@ const Builder = struct {
     }
     fn language(self: *Builder, it_ptr: *enc.language_blob_encoding.SectionIterator) !void {
         while (try it_ptr.next()) |s| {
-            if (s.external != null) return error.InvalidEncoding;
+            if (s.external != null and !self.allow_deferred) return error.InvalidEncoding;
             if (self.started) try self.flush();
             self.started = true;
             self.title = try utf8Text(self.a, s.title);
             self.level = s.level;
-            try self.raw(s.content());
+            self.deferred = s.external;
+            if (s.external == null) try self.raw(s.content());
         }
     }
     fn term(self: *Builder, text: []const u8, language_code: []const u8, tail_kind: []const u8, tail: []const u8) !void {
@@ -158,12 +163,22 @@ const Builder = struct {
 };
 
 pub fn fromRecord(allocator: Allocator, record: dec.BlobRecordView, include_source: bool) !OwnedEntry {
+    return recordDocument(allocator, record, include_source, false);
+}
+
+/// A deliberately partial presentation; unresolved section bodies are never empty source.
+/// Exact source and VM expansion must use the resolved record path instead.
+pub fn fromCoreRecord(allocator: Allocator, record: dec.BlobRecordView) !OwnedEntry {
+    return recordDocument(allocator, record, false, true);
+}
+
+fn recordDocument(allocator: Allocator, record: dec.BlobRecordView, include_source: bool, core_only: bool) !OwnedEntry {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
     var entry: Entry = .{ .title = try utf8Text(a, record.title()), .kind = record.kind() };
     var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = entry.title } };
-    var builder: Builder = .{ .a = a, .renderer = &renderer };
+    var builder: Builder = .{ .a = a, .renderer = &renderer, .allow_deferred = core_only };
     populate(&builder, record, &entry) catch |err| switch (err) {
         error.InvalidEncoding => {
             entry.status = .invalid_payload;
@@ -175,6 +190,10 @@ pub fn fromRecord(allocator: Allocator, record: dec.BlobRecordView, include_sour
     try builder.flush();
     entry.sections = try builder.sections.toOwnedSlice(a);
     entry.organization = try entry_layout.build(a, entry.sections);
+    for (entry.sections) |section| if (section.deferred != null) {
+        entry.content = .core;
+        break;
+    };
     entry.preamble_spans = try renderer.parseSpans(entry.preamble, .{});
     entry.references = try renderer.finishReferences();
     entry.unexpanded_templates = renderer.unresolved_templates;
@@ -404,4 +423,47 @@ test "quotation continuation lines stay with quotations rather than becoming usa
     const sense = doc.entry.organization.lexemes[0].definitions[0];
     try std.testing.expectEqual(@as(usize, 2), sense.quotations.len);
     try std.testing.expectEqual(@as(usize, 1), sense.examples.len);
+}
+
+test "core reading retains definitions and origin identity without pretending deferred bodies are empty" {
+    const a = std.testing.allocator;
+    const source = "==English==\n===Etymology 1===\nHistory one.\n====Noun====\n# First meaning.\n#: An example.\n=====Translations=====\nFrench: chat\n===Etymology 2===\nHistory two.\n====Verb====\n# Second meaning.\n";
+    const context: enc.language_blob_encoding.LanguageContext = .{ .heading = "English" };
+    const payload_bytes = try enc.language_blob_encoding.encodeAlloc(a, source, context);
+    defer a.free(payload_bytes);
+    var split = try enc.language_parts.splitAlloc(a, payload_bytes, context);
+    defer split.deinit(a);
+    const record: dec.BlobRecordView = .{ .language = .{ .title = "cat", .payload = split.core, .metadata = .{ .code = "en", .heading = "English" } } };
+    var doc = try fromCoreRecord(a, record);
+    defer doc.deinit();
+    try std.testing.expectEqual(.structured, doc.entry.status);
+    try std.testing.expectEqual(.core, doc.entry.content);
+    try std.testing.expect(doc.entry.source == null and doc.entry.source_base64 == null);
+    try std.testing.expectEqual(@as(usize, 6), doc.entry.sections.len);
+    try std.testing.expectEqual(enc.language_parts.Kind.etymology, doc.entry.sections[1].deferred.?);
+    try std.testing.expectEqual(enc.language_parts.Kind.translations, doc.entry.sections[3].deferred.?);
+    try std.testing.expectEqual(enc.language_parts.Kind.etymology, doc.entry.sections[4].deferred.?);
+    try std.testing.expectEqual(@as(usize, 0), doc.entry.sections[1].blocks.len);
+    try std.testing.expectEqual(@as(usize, 2), doc.entry.organization.lexemes.len);
+    try std.testing.expectEqual(@as(?usize, 1), doc.entry.organization.lexemes[0].etymology);
+    try std.testing.expectEqual(@as(?usize, 4), doc.entry.organization.lexemes[1].etymology);
+    try std.testing.expectEqual(@as(usize, 1), doc.entry.organization.lexemes[0].definitions[0].examples.len);
+    try std.testing.expectError(error.InvalidEncoding, sourceAlloc(a, record));
+    var strict = try fromRecord(a, record, false);
+    defer strict.deinit();
+    try std.testing.expectEqual(.invalid_payload, strict.entry.status);
+    var full = try fromCoreRecord(a, .{ .language = .{ .title = "cat", .payload = payload_bytes, .metadata = record.language.metadata } });
+    defer full.deinit();
+    try std.testing.expectEqual(.complete, full.entry.content);
+}
+fn coreAllocationCase(a: Allocator) !void {
+    const bytes = try enc.language_blob_encoding.encodeAlloc(a, "==English==\n===Etymology===\nOrigin\n===Noun===\n# An animal.\n", .{ .heading = "English" });
+    defer a.free(bytes);
+    var split = try enc.language_parts.splitAlloc(a, bytes, .{ .heading = "English" });
+    defer split.deinit(a);
+    var doc = try fromCoreRecord(a, .{ .language = .{ .title = "cat", .payload = split.core, .metadata = .{ .code = "en", .heading = "English" } } });
+    defer doc.deinit();
+}
+test "core rendering frees every failed allocation" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, coreAllocationCase, .{});
 }
