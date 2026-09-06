@@ -264,6 +264,10 @@ pub fn build(b: *std.Build) void {
     const blob_build_exe = addCliExecutable(b, "dict-blob-build", b.path("tools/blob_build.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
     });
+    const blob_verify_exe = addCliExecutable(b, "dict-blob-verify", b.path("tools/blob_verify.zig"), target, optimize, &.{
+        .{ .name = "encoder", .module = encoder_mod },
+        .{ .name = "zxml", .module = zxml_dep.module("zxml") },
+    });
     encoder_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
     decoder_tool_paths_options.addOption([]const u8, "encoder_bin_path", b.pathFromRoot("zig-out/bin/dict-encoder"));
     verifier_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
@@ -302,6 +306,9 @@ pub fn build(b: *std.Build) void {
 
     const blob_build_run = addRunArtifactCommand(b, blob_build_exe, &.{}, b.args);
     addPublicRunStep(b, "build-blobs", "Build per-language and feature Wiktionary blobs", blob_build_run, &.{});
+
+    const blob_verify_run = addRunArtifactCommand(b, blob_verify_exe, &.{}, b.args);
+    addPublicRunStep(b, "verify-blobs", "Verify Wiktionary blobs against the XML dump", blob_verify_run, &.{});
 
     const test_runner = b.path("tools/test_runner.zig");
 
