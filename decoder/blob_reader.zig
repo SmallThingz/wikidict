@@ -8,11 +8,13 @@ const reconstruction = encoder.reconstruction_encoding;
 const rhymes = encoder.rhymes_encoding;
 
 pub const LanguageRecordView = struct {
+    symbols_required: bool = false,
     title: []const u8,
     payload: []const u8,
     metadata: format.LanguageMetadata,
 
     pub fn sectionIterator(self: LanguageRecordView) error{InvalidEncoding}!language.SectionIterator {
+        if (self.symbols_required) return error.InvalidEncoding;
         return language.SectionIterator.init(self.payload, .{
             .heading = self.metadata.heading,
             .code = self.metadata.code,
@@ -21,28 +23,34 @@ pub const LanguageRecordView = struct {
 };
 
 pub const ThesaurusRecordView = struct {
+    symbols_required: bool = false,
     title: []const u8,
     payload: []const u8,
 
     pub fn recordIterator(self: ThesaurusRecordView) error{InvalidEncoding}!thesaurus.Iterator {
+        if (self.symbols_required) return error.InvalidEncoding;
         return thesaurus.iterator(self.payload);
     }
 };
 
 pub const RhymesRecordView = struct {
+    symbols_required: bool = false,
     title: []const u8,
     payload: []const u8,
 
     pub fn recordIterator(self: RhymesRecordView) error{InvalidEncoding}!rhymes.Iterator {
+        if (self.symbols_required) return error.InvalidEncoding;
         return rhymes.iterator(self.payload);
     }
 };
 
 pub const ReconstructionRecordView = struct {
+    symbols_required: bool = false,
     title: []const u8,
     payload: []const u8,
 
     pub fn inspect(self: ReconstructionRecordView) error{InvalidEncoding}!reconstruction.View {
+        if (self.symbols_required) return error.InvalidEncoding;
         return reconstruction.inspect(self.payload, self.title);
     }
 
@@ -52,11 +60,13 @@ pub const ReconstructionRecordView = struct {
 };
 
 pub const RawRecordView = struct {
+    symbols_required: bool = false,
     title: []const u8,
     source: []const u8,
 };
 
 pub const SupplementRecordView = struct {
+    symbols_required: bool = false,
     title: []const u8,
     payload: []const u8,
     metadata: format.LanguageMetadata,
@@ -70,7 +80,33 @@ pub const RecordView = union(format.BlobKind) {
     rhymes: RhymesRecordView,
     sign_gloss: RawRecordView,
     supplement: SupplementRecordView,
+    symbols: RawRecordView,
+    templates: RawRecordView,
+    bytecode: RawRecordView,
+    redirects: RawRecordView,
+    pages: RawRecordView,
 
+    pub fn needsSymbols(self: RecordView) bool {
+        return switch (self) {
+            inline else => |r| r.symbols_required,
+        };
+    }
+    pub fn payloadBytes(self: RecordView) []const u8 {
+        return switch (self) {
+            inline else => |r| if (@hasField(@TypeOf(r), "payload")) r.payload else r.source,
+        };
+    }
+    /// Called only after the shared catalog has validated and rebound this payload.
+    pub fn withBoundPayload(self: RecordView, bytes: []const u8) RecordView {
+        var record = self;
+        switch (record) {
+            inline else => |*r| {
+                if (@hasField(@TypeOf(r.*), "payload")) r.payload = bytes else r.source = bytes;
+                r.symbols_required = false;
+            },
+        }
+        return record;
+    }
     pub fn kind(self: RecordView) format.BlobKind {
         return std.meta.activeTag(self);
     }
@@ -83,11 +119,21 @@ pub const RecordView = union(format.BlobKind) {
             .reconstruction => |record| record.title,
             .rhymes => |record| record.title,
             .sign_gloss => |record| record.title,
+            .symbols, .templates, .bytecode, .redirects, .pages => |record| record.title,
             .supplement => |record| record.title,
         };
     }
 };
 
+pub const BoundRecord = struct {
+    allocator: std.mem.Allocator,
+    record: RecordView,
+    owned: ?[]u8 = null,
+    pub fn deinit(self: *BoundRecord) void {
+        if (self.owned) |bytes| self.allocator.free(bytes);
+        self.* = undefined;
+    }
+};
 pub const RecordIterator = struct {
     blob: BlobView,
     raw: format.RecordIterator,
@@ -137,6 +183,19 @@ pub const BlobView = struct {
         };
     }
 
+    /// Portable, explicit binding. Returned storage is transient and must outlive
+    /// its borrowed semantic views; it never becomes a persisted lookup index.
+    pub fn bindRecordAlloc(self: BlobView, a: std.mem.Allocator, record: RecordView, names: encoder.call_symbols.Names) !BoundRecord {
+        if (record.kind() != self.kind()) return error.UnexpectedBlobKind;
+        switch (record.kind()) {
+            .symbols, .templates, .bytecode, .redirects => return error.UseRuntimeArtifactReader,
+            else => {},
+        }
+        if (!record.needsSymbols()) return .{ .allocator = a, .record = record };
+        if (!std.mem.eql(u8, &self.raw.binding_id, &names.digest())) return error.SymbolIdentityMismatch;
+        const bytes = try encoder.call_symbols.decodeAlloc(a, record.payloadBytes(), names);
+        return .{ .allocator = a, .record = record.withBoundPayload(bytes orelse record.payloadBytes()), .owned = bytes };
+    }
     pub fn validate(self: BlobView) error{InvalidBlob}!void {
         try self.raw.validate();
     }
@@ -162,7 +221,7 @@ pub const BlobView = struct {
     }
 
     fn wrap(self: BlobView, record: format.RecordView) RecordView {
-        return switch (self.raw.kind) {
+        var result: RecordView = switch (self.raw.kind) {
             .language => .{ .language = .{
                 .title = record.title,
                 .payload = record.payload,
@@ -173,8 +232,20 @@ pub const BlobView = struct {
             .reconstruction => .{ .reconstruction = .{ .title = record.title, .payload = record.payload } },
             .rhymes => .{ .rhymes = .{ .title = record.title, .payload = record.payload } },
             .sign_gloss => .{ .sign_gloss = .{ .title = record.title, .source = record.payload } },
+            .symbols => .{ .symbols = .{ .title = record.title, .source = record.payload } },
+            .templates => .{ .templates = .{ .title = record.title, .source = record.payload } },
+            .bytecode => .{ .bytecode = .{ .title = record.title, .source = record.payload } },
+            .redirects => .{ .redirects = .{ .title = record.title, .source = record.payload } },
+            .pages => .{ .pages = .{ .title = record.title, .source = record.payload } },
             .supplement => .{ .supplement = .{ .title = record.title, .payload = record.payload, .metadata = self.language_metadata.?, .family = self.raw.supplementKind() catch unreachable } },
         };
+        const required = self.raw.symbolic and std.mem.indexOfScalar(u8, record.payload, encoder.call_symbols.marker) != null;
+        switch (result) {
+            inline else => |*r| {
+                r.symbols_required = required;
+            },
+        }
+        return result;
     }
 };
 
@@ -308,4 +379,36 @@ test "typed supplement records expose language identity and family without a per
     const record = (try index.find("cat")).?.supplement;
     try std.testing.expectEqual(format.PartKind.etymology, record.family);
     try std.testing.expectEqualStrings("\x07origin\n", record.payload);
+}
+
+test "portable linked reader requires explicit shared catalog binding" {
+    const a = std.testing.allocator;
+    var builder: encoder.call_symbols.Builder = .{ .a = a };
+    defer builder.deinit();
+    try builder.collect("{{en-noun}}");
+    const keys = try builder.sorted();
+    defer a.free(keys);
+    const names: encoder.call_symbols.Names = .{ .keys = keys };
+    const source = "==English==\n===Noun===\n{{en-noun}}\n# A cat.\n";
+    const payload = try language.encodeAlloc(a, source, .{ .heading = "English" });
+    defer a.free(payload);
+    const linked = try encoder.call_symbols.encodeAlloc(a, payload, names);
+    defer a.free(linked);
+    const metadata = try format.buildLanguageMetadataAlloc(a, "en", "English");
+    defer a.free(metadata);
+    const bytes = try format.buildAlloc(a, .language, metadata, &.{.{ .title = "cat", .payload = linked }});
+    defer a.free(bytes);
+    @memcpy(bytes[0..format.header_len], &format.encodeLinkedHeader(.language, names.digest()));
+    const view = try BlobView.inspect(bytes);
+    var it = view.iterator();
+    const record = (try it.next()).?;
+    try std.testing.expect(record.needsSymbols());
+    try std.testing.expectError(error.InvalidEncoding, record.language.sectionIterator());
+    try std.testing.expectError(error.SymbolIdentityMismatch, view.bindRecordAlloc(a, record, .{ .keys = &.{"twrong"} }));
+    var bound = try view.bindRecordAlloc(a, record, names);
+    defer bound.deinit();
+    try std.testing.expect(!bound.record.needsSymbols());
+    const decoded = try language.decodeAlloc(a, bound.record.language.payload, .{ .heading = "English" });
+    defer a.free(decoded);
+    try std.testing.expectEqualStrings(source, decoded);
 }

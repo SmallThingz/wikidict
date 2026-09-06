@@ -1,7 +1,7 @@
 //! One page per subprocess: contain failures and temporary allocations in the evolving VM.
 const std = @import("std");
 const bridge = @import("runtime_bridge");
-pub const Request = struct { root: []const u8, title: []const u8, source: []const u8 };
+pub const Request = struct { root: []const u8, title: []const u8, source: []const u8, dictionary_root: ?[]const u8 = null, language: []const u8 = "English" };
 pub const Reply = struct {
     schema: []const u8 = "dict.expansion.v1",
     output: ?[]const u8 = null,
@@ -26,29 +26,48 @@ fn expand(init: std.process.Init, request: Request, stage: *[]const u8, detail: 
     const a = init.arena.allocator();
     stage.* = "assets";
     if (try optionalFile(init.io, try std.fs.path.join(a, &.{ request.root, ".incomplete" }))) return error.RuntimeBuildIncomplete;
-    const modules = try std.fs.path.join(a, &.{ request.root, "modules" });
+    const linked_runtime = @import("linked_runtime.zig");
+    const root = try linked_runtime.rootAlloc(init.io, a, request.root);
+    if (try optionalFile(init.io, try std.fs.path.join(a, &.{ root, ".incomplete" }))) return error.RuntimeBuildIncomplete;
+    const modules = try std.fs.path.join(a, &.{ root, "modules" });
     var runtime = bridge.Runtime.init(a, init.io, modules);
-    try runtime.loadSiblingTemplates();
-    const manifest = try std.fs.path.join(a, &.{ request.root, "manifest.jsonl" });
-    if (try optionalFile(init.io, manifest)) {
-        try runtime.loadManifest(manifest);
-        try runtime.loadBundle(try std.fs.path.join(a, &.{ request.root, "modules.bundle" }));
+    var linked = try linked_runtime.load(&runtime, root);
+    defer if (linked) |*state| state.deinit();
+    if (linked == null) {
+        try runtime.loadSiblingTemplates();
+        const manifest = try std.fs.path.join(a, &.{ request.root, "manifest.jsonl" });
+        if (try optionalFile(init.io, manifest)) {
+            try runtime.loadManifest(manifest);
+            try runtime.loadBundle(try std.fs.path.join(a, &.{ request.root, "modules.bundle" }));
+        }
+        const dependencies = try std.fs.path.join(a, &.{ request.root, "dependencies", "manifest.jsonl" });
+        if (try optionalFile(init.io, dependencies)) {
+            try runtime.loadManifest(dependencies);
+            const bundle_bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, try std.fs.path.join(a, &.{ request.root, "dependencies", "modules.bundle" }), a, .limited(128 * 1024 * 1024));
+            try bridge.loadAdditionalBundle(&runtime, bundle_bytes);
+        }
     }
-    const extracted_redirects = try std.fs.path.join(a, &.{ request.root, "module-redirects.tsv" });
+    const extracted_redirects = try std.fs.path.join(a, &.{ root, "module-redirects.tsv" });
     if (try optionalFile(init.io, extracted_redirects)) try runtime.loadRedirects(extracted_redirects);
-    const redirects = try std.fs.path.join(a, &.{ request.root, "usage.tsv" });
+    const redirects = try std.fs.path.join(a, &.{ root, "usage.tsv" });
     if (try optionalFile(init.io, redirects)) try runtime.loadRedirects(redirects);
-    if (try optionalFile(init.io, try std.fs.path.join(a, &.{ request.root, "wikibase-sitelinks.tsv" }))) try runtime.loadSiblingWikibaseSitelinks();
-    if (try optionalFile(init.io, try std.fs.path.join(a, &.{ request.root, "interwiki-map.tsv" }))) try runtime.loadSiblingInterwikiMap();
+    if (try optionalFile(init.io, try std.fs.path.join(a, &.{ root, "wikibase-sitelinks.tsv" }))) try runtime.loadSiblingWikibaseSitelinks();
+    if (try optionalFile(init.io, try std.fs.path.join(a, &.{ root, "interwiki-map.tsv" }))) try runtime.loadSiblingInterwikiMap();
+    var page_provider = try @import("runtime_pages.zig").Provider.init(init.io, init.gpa, &runtime, root, request.dictionary_root, request.language);
+    defer page_provider.deinit();
+    page_provider.attach();
     stage.* = "install";
     runtime.beginPage(a, request.title);
     var vm = try bridge.Vm.init(a);
     try runtime.install(&vm);
     stage.* = "expand";
-    return runtime.expandFragment(&vm, request.title, request.source) catch |err| {
-        detail.* = if (vm.last_error == .string) vm.last_error.string else runtime.last_missing_module orelse runtime.last_missing_template orelse runtime.last_not_implemented orelse runtime.last_unsupported_parser;
+    const output = runtime.expandFragment(&vm, request.title, request.source) catch |err| {
+        const diagnostic: ?[]const u8 = if (vm.last_error == .string) vm.last_error.string else runtime.last_missing_module orelse runtime.last_missing_template orelse runtime.last_missing_wikibase orelse runtime.last_not_implemented orelse runtime.last_unsupported_parser;
+        detail.* = if (diagnostic) |text| try a.dupe(u8, text) else null;
         return err;
     };
+    // Reply storage must outlive the linked source/catalog mappings closed below.
+    return a.dupe(u8, output);
 }
 pub fn main(init: std.process.Init) !void {
     // These are resource limits, not a security sandbox. Runtime assets must be trusted.

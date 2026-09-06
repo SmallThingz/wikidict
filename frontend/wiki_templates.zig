@@ -1,7 +1,7 @@
 //! Native presentation of common Wiktionary templates. This does not invent Lua results.
 //! Unknown templates remain explicit; exact source stays in the source view.
 const std = @import("std");
-const syntax = @import("wiki_syntax.zig");
+const syntax = @import("blob_encoder").wikitext_syntax;
 const Template = syntax.Template;
 const Error = std.mem.Allocator.Error || error{RenderLimit};
 fn is(name: []const u8, choices: []const []const u8) bool {
@@ -183,6 +183,7 @@ pub fn render(p: anytype, t: Template, style: anytype, depth: usize) Error!bool 
     }
     if (is(name, &.{"audio"})) {
         if (t.get(2).len == 0) return false;
+        try p.mediaFile(t.get(2), first(t.get(3), first(t.named("text"), "Audio pronunciation")));
         const encoded = try p.urlEncode(t.get(2));
         const url = try std.fmt.allocPrint(p.a, "https://commons.wikimedia.org/wiki/Special:FilePath/{s}", .{encoded});
         try p.link(first(t.get(3), first(t.named("text"), "Audio pronunciation")), url, style, depth + 1, true);

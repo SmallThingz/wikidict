@@ -2,7 +2,7 @@
 //! homonyms are merged and supporting material stays attached to its own sense.
 const std = @import("std");
 const ir = @import("blob_encoder").document_ir;
-const syntax = @import("wiki_syntax.zig");
+const syntax = @import("blob_encoder").wikitext_syntax;
 const part = @import("blob_encoder").language_parts.kinds;
 const wiki = @import("wikitext.zig");
 const A = std.mem.Allocator;
@@ -45,6 +45,19 @@ fn formOf(a: A, block: wiki.Block) !?Form {
     return null;
 }
 fn isRelationNote(block: wiki.Block) bool {
+    var position: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, block.text, position, '<')) |start| {
+        const tag = syntax.tagAt(block.text, start) orelse {
+            position = start + 1;
+            continue;
+        };
+        position = tag.end;
+        if (tag.attr("class")) |classes| {
+            var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n");
+            while (tokens.next()) |name| if (std.mem.eql(u8, name, "nyms")) return true;
+        }
+    }
+
     var it: ir.InlineIterator = .{ .input = block.text };
     while (it.next()) |span| if (span.kind == .template) {
         for ([_][]const u8{ "syn", "synonyms", "ant", "antonyms", "hyper", "hypernyms", "hypo", "hyponyms", "meronyms", "holonyms", "coordinate terms", "cot", "see", "senseid", "senseno" }) |name| if (std.ascii.eqlIgnoreCase(span.target, name)) return true;

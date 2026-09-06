@@ -80,6 +80,7 @@ export function Reading(props: Props) {
     <Show when={props.entry.preamble_spans?.length}><details class="dict-preamble"><summary>Entry context</summary><Spans spans={props.entry.preamble_spans!} context={props}/></details></Show>
     <Show when={hasLexemes()} fallback={<For each={props.entry.sections}>{(section,index) => <section class="dict-section" id={`${props.prefix}-${index()}`}><Show when={section.level > 2 || props.entry.kind !== 'language'}><h2>{section.title}</h2></Show><Show when={section.deferred} fallback={<Blocks blocks={section.blocks} context={props}/>}><p class="dict-deferred-note">Not included: {section.deferred} companion.</p></Show></section>}</For>}>
       <For each={pronunciation()}>{item => <Pronunciation index={item.index} language={item.language} context={props}/>}</For>
+      <MediaGallery entry={props.entry}/>
       <div class="dict-reader-intro"><span class="dict-eyebrow">MEANINGS &amp; USE</span><span>History and source evidence stay attached.</span></div>
       <For each={groups()}>{group => <section class="dict-kind-group" data-kind={group.kind}>
         <header class="dict-kind-header"><h2>{group.kind}<Show when={new Set(groups().map(g => g.language)).size > 1}><small class="dict-language-tag">{group.language}</small></Show></h2><span>{group.lexemes.reduce((n,l) => n + l.definitions.length, 0)} {group.lexemes.reduce((n,l) => n + l.definitions.length, 0) === 1 ? "definition" : "definitions"}<Show when={group.lexemes.length > 1}> · {group.lexemes.length} entries</Show></span></header>
@@ -114,4 +115,17 @@ function Pronunciation(props: { index: number; language: string; context: Props 
     <summary><span class="dict-pronunciation-label">Pronunciation<Show when={props.language && props.language !== props.context.entry.language}> · {props.language}</Show></span><span class="dict-pronunciation-preview"><Spans spans={blocks()[0]?.spans || []} context={props.context}/></span><span class="dict-pronunciation-more">More</span></summary>
     <div class="dict-pronunciation-body"><Blocks blocks={blocks().slice(1)} context={props.context}/></div>
   </details>;
+}
+
+function MediaGallery(props: { entry: Entry }) {
+  const assets = () => props.entry.media ?? [];
+  const external = (url: string | null) => url && /^https:\/\//.test(url) ? url : undefined;
+  return <Show when={assets().length}><details class="dict-media"><summary>Images &amp; audio <small>{assets().filter(m => m.data_url).length} embedded / {assets().length} referenced</small></summary>
+    <div class="dict-media-grid"><For each={assets()}>{item => <figure>
+      <Show when={item.data_url} fallback={<p class="dict-media-unavailable">Media not included in this export.</p>}>
+        <Show when={item.kind === 'image'} fallback={<audio controls preload="metadata" src={item.data_url!} aria-label={item.caption || item.file}/> }><img src={item.data_url!} alt={item.caption || item.file} loading="lazy"/></Show>
+      </Show>
+      <figcaption><strong>{item.caption || item.file}</strong><span>{item.author}</span><a href={external(item.source_url) ?? `https://commons.wikimedia.org/wiki/${encodeURIComponent('File:' + item.file)}`} rel="noopener noreferrer">Source</a><Show when={item.license}> · <a href={external(item.license_url)} rel="license noopener noreferrer">{item.license}</a></Show><Show when={item.license_text}><details><summary>Full media license</summary><pre class="dict-license-text">{item.license_text}</pre></details></Show></figcaption>
+    </figure>}</For></div>
+  </details></Show>;
 }

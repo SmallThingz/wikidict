@@ -9,7 +9,7 @@ pub const language_directory = "languages";
 
 pub fn featureBlobFilename(kind: format.BlobKind) ?[]const u8 {
     return switch (kind) {
-        .language, .supplement => null,
+        .language, .supplement, .symbols, .templates, .bytecode, .redirects, .pages => null,
         .thesaurus => "thesaurus.wikblb",
         .citations => "citations.wikblb",
         .reconstruction => "reconstruction.wikblb",

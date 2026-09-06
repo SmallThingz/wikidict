@@ -182,7 +182,7 @@ const State = struct {
             if (index) |i| record_block: {
                 const raw = try self.db.index.recordAt(i);
                 const core = !self.source and !self.details and self.runtime.root == null;
-                var resolved = if (core) store.Store.Resolved{ .record = raw, .a = self.a } else self.db.resolveAlloc(self.a, raw) catch |err| switch (err) {
+                var resolved = if (core) try self.db.resolveCoreAlloc(self.a, raw) else self.db.resolveAlloc(self.a, raw) catch |err| switch (err) {
                     error.MissingSupplement, error.MissingSupplementRecord => {
                         try formatted.writer.writeAll("Supporting material is not installed.\n\nFull details and exact source need the matching companion blobs.\nPress s or d to return to core reading; other entries remain searchable.\n\n");
                         try formatted.writer.print("Data error: {s}\n", .{@errorName(err)});
@@ -255,7 +255,7 @@ const State = struct {
             try self.put(w, 1, 3, 9, "dict.", p.accent);
             try self.put(w, 1, 13, sz.cols -| 15, self.label, p.muted);
             var buf: [256]u8 = undefined;
-            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "WIKBLB04  /  {d} records  /  {s} theme", .{ self.db.index.recordCount(), @tagName(self.theme) }), p.muted);
+            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "WIKBLB05  /  {d} records  /  {s} theme", .{ self.db.index.recordCount(), @tagName(self.theme) }), p.muted);
             try self.put(w, 4, 3, 10, "Search /", if (self.focus == .search) p.accent else p.muted);
             // Horizontal input viewport follows the caret, at whole-codepoint boundaries.
             var start: usize = 0;
@@ -359,7 +359,7 @@ test "terminal query editing is bounded and UTF8-aware" {
     var index = try (try dec.openTrustedBlob(bytes)).buildIndexAlloc(a);
     defer index.deinit(a);
     // Test the pure state; Store's mapping and OS handles are not used by input handling.
-    var db: store.Store = .{ .bytes = &.{}, .index = index, .allocator = a };
+    var db: store.Store = .{ .bytes = &.{}, .index = index, .allocator = a, .symbols = .{ .io = std.testing.io, .a = a, .root = "" } };
     var state: State = .{ .a = a, .db = &db, .label = "test", .theme = .terminal, .color = false };
     defer state.deinit();
     try state.insert("café");

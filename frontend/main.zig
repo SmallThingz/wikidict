@@ -18,7 +18,7 @@ const usage =
     \\  dict render FILE [--title TITLE] [--format text|json|html|source]
     \\       Use - for stdin. No database is needed.
     \\
-    \\  --root PATH        WIKBLB04 root (default data/wiktionary-blobs)
+    \\  --root PATH        WIKBLB05 root (default data/wiktionary-blobs)
     \\  --language NAME    Exact language heading (default English)
     \\  --kind KIND        language, thesaurus, citations, reconstruction, rhymes, sign-gloss
     \\  --format FORMAT    text, json, source, html (HTML supports lookup and search)
@@ -29,8 +29,10 @@ const usage =
     \\  --core-only        Export native core without reading optional companion blobs
     \\  --color MODE       auto, always, never; NO_COLOR disables automatic color
     \\  --theme THEME      TUI palette: terminal (default), dark, light
-    \\  --runtime PATH     Expand through extracted templates and compiled Lua bytecode
-    \\  --runtime-timeout-ms N  Per-page VM deadline, 1..60000 (default 5000)
+    \\  --native           Use native core preview instead of the linked Lua runtime
+    \\  --media-dir PATH   Embed verified local media in HTML (default ROOT/media)
+    \\  --runtime PATH     Override auto-detected shared template/Lua runtime
+    \\  --runtime-timeout-ms N  Per-page VM deadline, 1..60000 (default 60000)
     \\  --trusted          Skip title-order checks for externally verified blobs
     \\  --validate         Validate while indexing (the default)
     \\  --                 End options, for words beginning with a dash
@@ -38,7 +40,7 @@ const usage =
     \\Search is case-sensitive UTF-8 prefix matching. Results go to stdout.
     \\Diagnostics go to stderr. Exit: 0 success, 1 no matches, 2 usage/data/I/O error.
     \\Wikitext and core Wiktionary templates render locally. Unsupported templates are marked.
-    \\No network is used. --runtime enables the optional local Lua-bytecode VM.
+    \\No network is used. Linked datasets automatically use their local Lua-bytecode VM.
     \\
 ;
 
@@ -59,7 +61,9 @@ fn run(init: std.process.Init) !u8 {
         return 0;
     }
     const opts = try args.parse(argv[1..]);
-    const runtime: expansion.Options = .{ .root = opts.runtime, .timeout_ms = opts.runtime_timeout_ms };
+    const media_root: ?[]const u8 = opts.media_dir orelse (if (opts.command == .render) null else try std.fs.path.join(a, &.{ opts.root, "media" }));
+    const automatic = if (!opts.native and !opts.core_only and opts.runtime == null and (opts.command == .lookup or opts.command == .search or opts.command == .tui)) try defaultRuntime(init.io, a, opts.root) else null;
+    const runtime: expansion.Options = .{ .root = opts.runtime orelse automatic, .timeout_ms = opts.runtime_timeout_ms, .dictionary_root = if (opts.command == .render) null else opts.root };
     var buffer: [16384]u8 = undefined;
     var stdout = std.Io.File.stdout().writerStreaming(init.io, &buffer);
     const w = &stdout.interface;
@@ -88,7 +92,7 @@ fn run(init: std.process.Init) !u8 {
         defer doc.deinit();
         const response: output.Response = .{ .operation = .render, .query = doc.entry.title, .kind = .language, .language = doc.entry.language, .match_mode = "render-input", .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} };
         const color = opts.color == .always or (opts.color == .auto and !init.environ_map.contains("NO_COLOR") and !(if (init.environ_map.get("TERM")) |t| std.mem.eql(u8, t, "dumb") else false) and try std.Io.File.stdout().isTty(init.io));
-        if (opts.format == .html) try html.write(w, a, response) else if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
+        if (opts.format == .html) try html.writeLocal(w, a, init.io, response, media_root) else if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
         try w.flush();
         return if (renderFailed(doc.entry)) 2 else 0;
     }
@@ -118,7 +122,7 @@ fn run(init: std.process.Init) !u8 {
             response.match_mode = "exact-utf8";
             if (try db.index.find(opts.query)) |raw_record| {
                 const core = opts.core_only or (opts.format == .text and !opts.details and !opts.with_source and runtime.root == null);
-                var resolved = if (core) store.Store.Resolved{ .record = raw_record, .a = init.gpa } else try db.resolveAlloc(init.gpa, raw_record);
+                var resolved = if (core) try db.resolveCoreAlloc(init.gpa, raw_record) else try db.resolveAlloc(init.gpa, raw_record);
                 defer resolved.deinit();
                 const record = resolved.record;
                 response.total_matches = 1;
@@ -129,13 +133,13 @@ fn run(init: std.process.Init) !u8 {
                     var doc = if (core) try model.fromCoreRecord(init.gpa, record) else try expansion.fromRecord(init.io, init.gpa, record, opts.with_source, runtime);
                     defer doc.deinit();
                     response.entries = &.{doc.entry};
-                    if (opts.format == .html) try htmlWithLemmas(init.io, a, init.gpa, &db, w, response, opts.with_source, runtime, opts.core_only) else if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
+                    if (opts.format == .html) try htmlWithLemmas(init.io, a, init.gpa, &db, w, response, opts.with_source, runtime, opts.core_only, media_root) else if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
                     if (renderFailed(doc.entry)) {
                         try w.flush();
                         return 2;
                     }
                 }
-            } else if (opts.format == .html) try html.write(w, a, response) else if (opts.format == .json) try output.json(w, response) else if (opts.format == .text) {
+            } else if (opts.format == .html) try html.writeLocal(w, a, init.io, response, media_root) else if (opts.format == .json) try output.json(w, response) else if (opts.format == .text) {
                 try w.writeAll("No exact match: ");
                 try output.terminalText(w, opts.query);
                 try w.writeByte('\n');
@@ -162,7 +166,7 @@ fn run(init: std.process.Init) !u8 {
                 for (entries, start..) |*entry, index| {
                     // The export arena retains resolved bodies until every borrowed document is written.
                     const raw = try db.index.recordAt(index);
-                    const resolved = if (opts.core_only) store.Store.Resolved{ .record = raw, .a = a } else try db.resolveAlloc(a, raw);
+                    const resolved = if (opts.core_only) try db.resolveCoreAlloc(a, raw) else try db.resolveAlloc(a, raw);
                     var doc = if (opts.core_only) try model.fromCoreRecord(init.gpa, resolved.record) else try expansion.fromRecord(init.io, init.gpa, resolved.record, opts.with_source, runtime);
                     docs.append(init.gpa, doc) catch |err| {
                         doc.deinit();
@@ -172,7 +176,7 @@ fn run(init: std.process.Init) !u8 {
                     invalid = invalid or renderFailed(doc.entry);
                 }
                 response.entries = entries;
-                try html.write(w, a, response);
+                try html.writeLocal(w, a, init.io, response, media_root);
                 if (invalid) {
                     try w.flush();
                     return 2;
@@ -210,9 +214,10 @@ test {
     _ = html;
     _ = tui;
     _ = @import("pipeline_tests.zig");
+    _ = @import("runtime_symbols");
 }
 
-fn htmlWithLemmas(io: std.Io, arena: std.mem.Allocator, a: std.mem.Allocator, db: *store.Store, w: *std.Io.Writer, response: output.Response, with_source: bool, runtime: expansion.Options, core_only: bool) !void {
+fn htmlWithLemmas(io: std.Io, arena: std.mem.Allocator, a: std.mem.Allocator, db: *store.Store, w: *std.Io.Writer, response: output.Response, with_source: bool, runtime: expansion.Options, core_only: bool, media_root: ?[]const u8) !void {
     var entries: std.ArrayList(model.Entry) = .empty;
     var related_failed = false;
     var docs: std.ArrayList(model.OwnedEntry) = .empty;
@@ -221,7 +226,7 @@ fn htmlWithLemmas(io: std.Io, arena: std.mem.Allocator, a: std.mem.Allocator, db
         docs.deinit(a);
     }
     try entries.appendSlice(arena, response.entries);
-    const metadata = db.index.blob.languageMetadata() orelse return html.write(w, arena, response);
+    const metadata = db.index.blob.languageMetadata() orelse return html.writeLocal(w, arena, io, response, media_root);
     for (response.entries) |entry| for (entry.organization.lexemes) |lexeme| for (lexeme.definitions) |sense| if (sense.form) |form| {
         if (!std.mem.eql(u8, form.language, metadata.code) or entries.items.len >= 9) continue;
         var seen = false;
@@ -231,7 +236,7 @@ fn htmlWithLemmas(io: std.Io, arena: std.mem.Allocator, a: std.mem.Allocator, db
         };
         if (seen) continue;
         const raw = (try db.index.find(form.target)) orelse continue;
-        const resolved = if (core_only) store.Store.Resolved{ .record = raw, .a = arena } else try db.resolveAlloc(arena, raw);
+        const resolved = if (core_only) try db.resolveCoreAlloc(arena, raw) else try db.resolveAlloc(arena, raw);
         var doc = if (core_only) try model.fromCoreRecord(a, resolved.record) else try expansion.fromRecord(io, a, resolved.record, with_source, runtime);
         docs.append(a, doc) catch |err| {
             doc.deinit();
@@ -242,9 +247,19 @@ fn htmlWithLemmas(io: std.Io, arena: std.mem.Allocator, a: std.mem.Allocator, db
     };
     var expanded = response;
     expanded.entries = entries.items;
-    try html.write(w, arena, expanded);
+    try html.writeLocal(w, arena, io, expanded, media_root);
     if (related_failed) {
         try w.flush();
         return error.RelatedEntryRenderingFailed;
     }
+}
+
+fn defaultRuntime(io: std.Io, a: std.mem.Allocator, root: []const u8) !?[]const u8 {
+    const path = try std.fs.path.join(a, &.{ root, "bytecode.wikblb" });
+    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    file.close(io);
+    return root;
 }

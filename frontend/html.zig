@@ -52,3 +52,25 @@ test "HTML export embeds one inert lossless JSON document and all assets" {
     try std.testing.expect(std.mem.indexOf(u8, bytes, "<script src=") == null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "<link rel=\"stylesheet\"") == null);
 }
+
+/// Copies only the presentation descriptors; source and shared template IDs stay unchanged.
+pub fn writeLocal(w: *std.Io.Writer, a: std.mem.Allocator, io: std.Io, response: output.Response, media_root: ?[]const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const temporary = arena.allocator();
+    var rendered = response;
+    if (media_root) |root| {
+        const entries = try temporary.dupe(@import("model.zig").Entry, response.entries);
+        for (entries) |*entry| entry.media = try @import("media_assets.zig").attach(io, temporary, root, entry.media);
+        rendered.entries = entries;
+    }
+    try write(w, a, rendered);
+}
+
+test "local media export owns all temporary attachment allocations" {
+    const a = std.testing.allocator;
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try writeLocal(&out.writer, a, std.testing.io, .{ .operation = .lookup, .query = "cat", .kind = .language, .language = "English", .record_count = 1, .total_matches = 1, .entries = &.{.{ .title = "cat", .kind = .language }} }, ".zig-cache/no-media-required");
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "dict-data") != null);
+}

@@ -4,9 +4,10 @@
 const std = @import("std");
 const ir = @import("blob_encoder").document_ir;
 const entities = @import("html_entities");
-const syntax = @import("wiki_syntax.zig");
+const syntax = @import("blob_encoder").wikitext_syntax;
 const templates = @import("wiki_templates.zig");
 const A = std.mem.Allocator;
+pub const media_types = @import("media_types.zig");
 pub const Error = A.Error || error{RenderLimit};
 pub const Context = struct { title: []const u8 = "Entry", language: []const u8 = "English" };
 pub const Role = enum { normal, label, pronunciation, headword, example, quotation, citation, reference };
@@ -83,9 +84,23 @@ pub const Renderer = struct {
     nodes: usize = 0,
     body_depth: usize = 0,
     refs: std.ArrayList(Reference) = .empty,
+    media: std.ArrayList(media_types.Media) = .empty,
+    media_depth: usize = 0,
     spans: std.ArrayList(Span) = .empty,
     in_reference: bool = false,
 
+    pub fn mediaFile(self: *Renderer, raw: []const u8, caption: []const u8) Error!void {
+        if (self.media_depth >= max_depth) return error.RenderLimit;
+        self.media_depth += 1;
+        defer self.media_depth -= 1;
+        const file = try self.a.dupe(u8, std.mem.trim(u8, raw, " \t\r\n"));
+        std.mem.replaceScalar(u8, file, '_', ' ');
+        const kind = media_types.kind(file) orelse return;
+        for (self.media.items) |item| if (std.mem.eql(u8, item.file, file)) return;
+        if (self.media.items.len >= 128) return error.RenderLimit;
+        const description = try plainText(self.a, try self.parseSpans(caption, .{}));
+        try self.media.append(self.a, .{ .file = file, .kind = kind, .caption = description });
+    }
     fn spend(self: *Renderer) Error!void {
         self.nodes += 1;
         if (self.nodes > max_nodes) return error.RenderLimit;
@@ -193,6 +208,7 @@ pub const Renderer = struct {
     fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize) Error!?usize {
         if (starts(input[at..], "<!--")) return syntax.protectedEnd(input, at);
         const tag = syntax.tagAt(input, at) orelse return null;
+        if (tag.is("templatestyles")) return tag.end;
         if (tag.is("br")) {
             try self.lineBreak(style);
             return tag.end;
@@ -223,7 +239,7 @@ pub const Renderer = struct {
             try self.text(try std.fmt.allocPrint(self.a, "[unsupported HTML: {s}]", .{tag.name}), style);
             return pair.end;
         }
-        const known = oneOf(tag.name, &.{ "b", "strong", "i", "em", "u", "s", "del", "strike", "sup", "sub", "small", "big", "span", "font", "code", "tt", "kbd", "a", "div", "p", "blockquote", "ul", "ol", "li", "dl", "dt", "dd", "onlyinclude", "includeonly", "noinclude" });
+        const known = oneOf(tag.name, &.{ "b", "strong", "i", "em", "u", "s", "del", "strike", "sup", "sub", "small", "big", "span", "font", "code", "tt", "kbd", "a", "div", "p", "blockquote", "ul", "ol", "li", "dl", "dt", "dd", "onlyinclude", "includeonly", "noinclude", "table", "tbody", "thead", "tfoot", "tr", "td", "th", "caption" });
         if (!known) return null;
         if (tag.closing or tag.self_closing) return tag.end;
         const pair = syntax.matchingTag(input, tag) orelse return tag.end;
@@ -236,6 +252,14 @@ pub const Renderer = struct {
         if (tag.is("sub")) s.subscript = true;
         if (tag.is("small")) s.small = true;
         if (oneOf(tag.name, &.{ "code", "tt", "kbd" })) s.code = true;
+        if (tag.attr("class")) |classes| {
+            var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n");
+            while (tokens.next()) |class| {
+                if (std.mem.eql(u8, class, "headword-line") or std.mem.eql(u8, class, "headword")) s.role = .headword;
+                if (s.role != .headword and (std.mem.eql(u8, class, "label-content") or std.mem.eql(u8, class, "qualifier-content"))) s.role = .label;
+                if (std.mem.eql(u8, class, "IPA")) s.role = .pronunciation;
+            }
+        }
         if (tag.attr("lang")) |lang| s.language = lang;
         const content = input[tag.end..pair.inner_end];
         if (tag.is("a")) {
@@ -250,7 +274,7 @@ pub const Renderer = struct {
         }
         if (tag.is("li")) try self.text("• ", style);
         try self.inlineText(content, s, depth + 1);
-        if (oneOf(tag.name, &.{ "p", "div", "blockquote", "li", "dt", "dd" })) try self.lineBreak(style);
+        if (oneOf(tag.name, &.{ "p", "div", "blockquote", "li", "dt", "dd", "tr" })) try self.lineBreak(style);
         return pair.end;
     }
     fn entityText(self: *Renderer, value: []const u8) Error![]const u8 {
@@ -334,7 +358,15 @@ pub const Renderer = struct {
                         var start: usize = 0;
                         while (syntax.delimiter(label_value, "|", start)) |n| start = n + 1;
                         label_value = label_value[start..];
-                        try self.text("[Image: ", s);
+                        const file_name = target[(std.mem.indexOfScalar(u8, target, ':').? + 1)..];
+                        var width_option = std.mem.endsWith(u8, label_value, "px");
+                        if (width_option) for (label_value[0 .. label_value.len - 2]) |ch| if (!std.ascii.isDigit(ch) and ch != 'x') {
+                            width_option = false;
+                            break;
+                        };
+                        if (width_option or oneOf(label_value, &.{ "noicon", "thumb", "thumbnail", "frameless", "frame" })) label_value = file_name;
+                        try self.mediaFile(file_name, label_value);
+                        try self.text(if (media_types.kind(file_name) == .audio) "[Audio: " else "[Image: ", s);
                         try self.inlineText(label_value, s, depth + 1);
                         try self.text("]", s);
                     } else {
@@ -821,4 +853,27 @@ test "explicit positional anagrams do not turn language or ordering keys into wo
     const spans = try r.parseSpans("{{anagrams|1=en|2=acts|4=cast|a=acst}}", .{});
     try std.testing.expectEqualStrings("acts, cast", try flattened(a, spans));
     try std.testing.expectEqual(@as(usize, 0), r.unresolved_templates);
+}
+
+test "generated audio layout is rendered and media stays typed rather than emitted as HTML" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("<templatestyles src='audio/styles.css'/><table><tr><td>Audio</td><td>[[File:Voice.ogg|noicon|175px]]</td></tr></table> [[File:Cat.jpg|thumb|A [[cat]]]]", .{});
+    const text_value = try flattened(a, spans);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "table") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "templatestyles") == null);
+    try std.testing.expectEqual(@as(usize, 2), r.media.items.len);
+    try std.testing.expectEqual(media_types.Kind.audio, r.media.items[0].kind);
+    try std.testing.expectEqualStrings("A cat", r.media.items[1].caption);
+}
+
+test "audio layout width is not mistaken for its caption" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    _ = try r.parseSpans("[[File:En-us-cat.ogg|noicon|175px]]", .{});
+    try std.testing.expectEqualStrings("En-us-cat.ogg", r.media.items[0].caption);
 }

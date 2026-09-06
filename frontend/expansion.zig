@@ -3,8 +3,8 @@ const std = @import("std");
 const model = @import("model.zig");
 const dec = @import("blob_decoder");
 const A = std.mem.Allocator;
-pub const Options = struct { root: ?[]const u8 = null, timeout_ms: u32 = 5000 };
-const Request = struct { root: []const u8, title: []const u8, source: []const u8 };
+pub const Options = struct { root: ?[]const u8 = null, timeout_ms: u32 = 5000, dictionary_root: ?[]const u8 = null };
+const Request = struct { root: []const u8, title: []const u8, source: []const u8, dictionary_root: ?[]const u8 = null, language: []const u8 = "English" };
 const Reply = struct { schema: []const u8, output: ?[]const u8, stage: []const u8, error_name: ?[]const u8, detail: ?[]const u8 };
 const Result = struct {
     parsed: ?std.json.Parsed(Reply) = null,
@@ -13,10 +13,10 @@ const Result = struct {
         if (self.parsed) |*p| p.deinit();
     }
 };
-fn call(io: std.Io, a: A, options: Options, title: []const u8, source: []const u8) !Result {
+fn call(io: std.Io, a: A, options: Options, title: []const u8, language: []const u8, source: []const u8) !Result {
     const exe = try std.process.executablePathAlloc(io, a);
     defer a.free(exe);
-    const request = try std.json.Stringify.valueAlloc(a, Request{ .root = options.root.?, .title = title, .source = source }, .{});
+    const request = try std.json.Stringify.valueAlloc(a, Request{ .root = options.root.?, .title = title, .source = source, .dictionary_root = options.dictionary_root, .language = language }, .{});
     defer a.free(request);
     if (request.len >= 32 * 1024 * 1024) return error.RuntimeRequestTooLarge;
     const timeout = (std.Io.Timeout{ .duration = .{ .raw = .fromMilliseconds(options.timeout_ms), .clock = .awake } }).toDeadline(io);
@@ -70,11 +70,12 @@ fn applyFailure(doc: *model.OwnedEntry, result: Result) !void {
 }
 pub fn fromWikitext(io: std.Io, a: A, title: []const u8, language: []const u8, source: []const u8, with_source: bool, options: Options) !model.OwnedEntry {
     if (options.root == null) return model.fromWikitext(a, title, language, source, with_source);
-    var result = try call(io, a, options, title, source);
+    var result = try call(io, a, options, title, language, source);
     defer result.deinit();
     if (result.parsed) |parsed| if (parsed.value.output) |expanded| {
         var doc = try model.fromWikitext(a, title, language, expanded, false);
         errdefer doc.deinit();
+        try model.restoreFormRelations(a, &doc, source);
         if (with_source) try model.setExactSource(&doc, source);
         doc.entry.expansion = .{ .status = .ok };
         return doc;
@@ -102,7 +103,7 @@ pub fn fromRecord(io: std.Io, a: A, record: dec.BlobRecordView, with_source: boo
         .reconstruction => "Reconstruction:",
         .rhymes => "Rhymes:",
         .sign_gloss => "Sign gloss:",
-        .supplement => return error.InvalidEncoding,
+        .supplement, .symbols, .templates, .bytecode, .redirects, .pages => return error.InvalidEncoding,
     };
     const title = try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, record.title() });
     defer a.free(title);

@@ -7,7 +7,7 @@ pub const catalog = enc.blob_catalog;
 pub fn parseKind(text: []const u8) ?Kind {
     if (std.mem.eql(u8, text, "sign-gloss")) return .sign_gloss;
     const kind = std.meta.stringToEnum(Kind, text) orelse return null;
-    return if (kind == .supplement) null else kind;
+    return if ((kind == .supplement or kind == .symbols or kind == .templates or kind == .bytecode or kind == .redirects or kind == .pages)) null else kind;
 }
 pub fn pathAlloc(a: std.mem.Allocator, root: []const u8, kind: Kind, language: []const u8) ![]u8 {
     if (kind == .language) {
@@ -23,8 +23,10 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
     root: []const u8 = "",
     resolver: ?@import("blob_files").Resolver = null,
+    symbols: @import("blob_files").SymbolSource,
 
     pub fn open(io: std.Io, a: std.mem.Allocator, root: []const u8, kind: Kind, language: []const u8, trusted: bool) !Store {
+        try @import("blob_files").requireComplete(io, a, root);
         const path = try pathAlloc(a, root, kind, language);
         defer a.free(path);
         var file = try std.Io.Dir.cwd().openFile(io, path, .{});
@@ -40,10 +42,11 @@ pub const Store = struct {
         var owned_index = index;
         errdefer owned_index.deinit(a);
         const owned_root = try a.dupe(u8, root);
-        return .{ .bytes = bytes, .index = index, .allocator = a, .root = owned_root, .resolver = if (kind == .language) .{ .io = io, .a = a, .root = owned_root, .metadata = view.languageMetadata().? } else null };
+        return .{ .bytes = bytes, .index = index, .allocator = a, .root = owned_root, .symbols = .{ .io = io, .a = a, .root = owned_root }, .resolver = if (kind == .language) .{ .io = io, .a = a, .root = owned_root, .metadata = view.languageMetadata().?, .symbolic = view.raw.symbolic, .binding_id = view.raw.binding_id } else null };
     }
     pub fn deinit(self: *Store) void {
         if (self.resolver) |*r| r.deinit();
+        self.symbols.deinit();
         self.allocator.free(self.root);
         self.index.deinit(self.allocator);
         std.posix.munmap(self.bytes);
@@ -57,11 +60,20 @@ pub const Store = struct {
             if (self.owned) |bytes| self.a.free(bytes);
         }
     };
+    pub fn resolveCoreAlloc(self: *Store, a: std.mem.Allocator, record: dec.BlobRecordView) !Resolved {
+        var result: Resolved = .{ .record = record, .a = a };
+        const bytes = @import("model.zig").payload(record);
+        result.owned = try self.symbols.bindAlloc(a, bytes, self.index.blob.raw.symbolic, self.index.blob.raw.binding_id);
+        if (result.owned) |value| result.record = result.record.withBoundPayload(value);
+        return result;
+    }
     pub fn resolveAlloc(self: *Store, a: std.mem.Allocator, record: dec.BlobRecordView) !Resolved {
+        if (record != .language) return self.resolveCoreAlloc(a, record);
         var result: Resolved = .{ .record = record, .a = a };
         if (record == .language) if (self.resolver) |*resolver| {
+            resolver.symbols = &self.symbols;
             result.owned = try resolver.resolveAlloc(a, record.title(), record.language.payload);
-            if (result.owned) |bytes| result.record.language.payload = bytes;
+            if (result.owned) |bytes| result.record = result.record.withBoundPayload(bytes);
         };
         return result;
     }

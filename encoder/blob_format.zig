@@ -1,10 +1,13 @@
 const std = @import("std");
 
 // Logical, uncompressed blob format. Storage/transport compression stays external.
-pub const magic = "WIKBLB04";
-pub const version: u8 = 4;
+pub const magic = "WIKBLB05";
+pub const legacy_magic = "WIKBLB04";
+pub const version: u8 = 5;
 pub const PartKind = @import("part_kind.zig").Kind;
-pub const header_len: usize = magic.len + 1;
+pub const legacy_header_len: usize = magic.len + 1;
+// Cross-file symbol identity prevents a valid but wrong catalog from rebinding IDs.
+pub const header_len: usize = legacy_header_len + 32;
 pub const max_varuint_len: usize = 10;
 
 pub const BlobKind = enum(u8) {
@@ -15,6 +18,11 @@ pub const BlobKind = enum(u8) {
     rhymes = 5,
     sign_gloss = 6,
     supplement = 7,
+    symbols = 8,
+    templates = 9,
+    bytecode = 10,
+    redirects = 11,
+    pages = 12,
 };
 
 pub const RecordInput = struct {
@@ -83,6 +91,8 @@ const ParsedRecord = struct {
 };
 
 pub const BlobView = struct {
+    symbolic: bool = false,
+    binding_id: [32]u8 = @splat(0),
     bytes: []const u8,
     kind: BlobKind,
     metadata: []const u8,
@@ -166,14 +176,26 @@ pub const BlobView = struct {
     }
 };
 pub fn encodeHeader(kind: BlobKind) [header_len]u8 {
+    return encodeLinkedHeader(kind, @splat(0));
+}
+pub fn encodeLinkedHeader(kind: BlobKind, binding: [32]u8) [header_len]u8 {
     var out: [header_len]u8 = undefined;
+    @memcpy(out[legacy_header_len..], &binding);
     @memcpy(out[0..magic.len], magic);
     out[magic.len] = @intFromEnum(kind);
     return out;
 }
 
+pub fn encodeUnlinkedHeader(kind: BlobKind) [legacy_header_len]u8 {
+    var out: [legacy_header_len]u8 = undefined;
+    @memcpy(out[0..magic.len], legacy_magic);
+    out[magic.len] = @intFromEnum(kind);
+    return out;
+}
+
 fn decodeKind(bytes: []const u8) error{InvalidBlob}!BlobKind {
-    if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..magic.len], magic)) return error.InvalidBlob;
+    if (bytes.len < legacy_header_len or (!std.mem.eql(u8, bytes[0..magic.len], magic) and !std.mem.eql(u8, bytes[0..magic.len], legacy_magic))) return error.InvalidBlob;
+    if (std.mem.eql(u8, bytes[0..magic.len], magic) and bytes.len < header_len) return error.InvalidBlob;
     return switch (bytes[magic.len]) {
         @intFromEnum(BlobKind.language) => .language,
         @intFromEnum(BlobKind.thesaurus) => .thesaurus,
@@ -182,6 +204,11 @@ fn decodeKind(bytes: []const u8) error{InvalidBlob}!BlobKind {
         @intFromEnum(BlobKind.rhymes) => .rhymes,
         @intFromEnum(BlobKind.sign_gloss) => .sign_gloss,
         @intFromEnum(BlobKind.supplement) => .supplement,
+        @intFromEnum(BlobKind.symbols) => .symbols,
+        @intFromEnum(BlobKind.templates) => .templates,
+        @intFromEnum(BlobKind.bytecode) => .bytecode,
+        @intFromEnum(BlobKind.redirects) => .redirects,
+        @intFromEnum(BlobKind.pages) => .pages,
         else => error.InvalidBlob,
     };
 }
@@ -300,7 +327,8 @@ pub fn buildAlloc(
 
 pub fn openTrusted(bytes: []const u8) error{InvalidBlob}!BlobView {
     const kind = try decodeKind(bytes);
-    var records_start = header_len;
+    const prefix: usize = if (std.mem.eql(u8, bytes[0..magic.len], magic)) header_len else legacy_header_len;
+    var records_start = prefix;
     if (kind == .language or kind == .supplement) {
         var cursor = records_start;
         _ = try readNulField(bytes, &cursor);
@@ -315,8 +343,10 @@ pub fn openTrusted(bytes: []const u8) error{InvalidBlob}!BlobView {
     }
     return .{
         .bytes = bytes,
+        .symbolic = std.mem.eql(u8, bytes[0..magic.len], magic),
+        .binding_id = if (prefix == header_len) bytes[legacy_header_len..header_len].* else @splat(0),
         .kind = kind,
-        .metadata = bytes[header_len..records_start],
+        .metadata = bytes[prefix..records_start],
         .records = bytes[records_start..],
     };
 }
@@ -345,8 +375,8 @@ fn readNulFieldMetadata(bytes: []const u8, cursor: *usize) error{InvalidMetadata
 test "blob v4 header carries only magic and kind" {
     const encoded = encodeHeader(.rhymes);
     try std.testing.expectEqualSlices(u8, &.{
-        'W', 'I', 'K', 'B', 'L', 'B', '0', '4', @intFromEnum(BlobKind.rhymes),
-    }, &encoded);
+        'W', 'I', 'K', 'B', 'L', 'B', '0', '5', @intFromEnum(BlobKind.rhymes),
+    }, encoded[0..legacy_header_len]);
     try std.testing.expectEqual(BlobKind.rhymes, try decodeKind(&encoded));
 }
 
@@ -355,7 +385,7 @@ test "blob v4 stores only necessary record framing" {
         .{ .title = "a", .payload = "x" },
     });
     defer std.testing.allocator.free(encoded);
-    try std.testing.expectEqualSlices(u8, "WIKBLB04\x03a\x00\x01x", encoded);
+    try std.testing.expectEqualSlices(u8, "WIKBLB05\x03" ++ ("\x00" ** 32) ++ "a\x00\x01x", encoded);
 }
 test "blob v4 builds runtime index over borrowed records" {
     const metadata = try buildLanguageMetadataAlloc(std.testing.allocator, "", "English");
@@ -419,7 +449,7 @@ test "trusted open skips title-order scan while runtime index can validate it" {
 }
 test "blob v4 rejects non-canonical payload lengths" {
     const broken = [_]u8{
-        'W', 'I', 'K',  'B',  'L', 'B', '0', '4', @intFromEnum(BlobKind.citations),
+        'W', 'I', 'K',  'B',  'L', 'B', '0', '5', @intFromEnum(BlobKind.citations),
         'a', 0,   0x81, 0x00, 'x',
     };
     try std.testing.expectError(error.InvalidBlob, inspect(&broken));

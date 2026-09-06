@@ -1,6 +1,6 @@
 # Dictionary frontends
 
-The native frontend consumes `WIKBLB04` through the portable encoder/decoder modules. The older monolithic dictionary commands remain separate. No VM or source codec is duplicated here.
+The native frontend consumes `WIKBLB05` through the portable encoder/decoder modules. The older monolithic dictionary commands remain separate. No VM or source codec is duplicated here.
 
 ```sh
 zig build
@@ -16,7 +16,7 @@ zig-out/bin/dict stats --root data/wiktionary-blobs
 
 ## Runtime model and machine interface
 
-`store.zig` owns one read-only mapping and its validated runtime index. `model.zig` constructs an arena-owned view of semantic sections, blocks, inline spans and feature records. Most text borrows the mapping. Destroy presentation models before closing their store. Nothing in this model is persisted into blobs. Standalone library callers must likewise keep the input source, title and language alive until the returned model is destroyed; the CLI manages these lifetimes.
+`store.zig` owns one read-only mapping and its validated runtime index. `model.zig` constructs an arena-owned view of semantic sections, blocks, inline spans and feature records. Most text borrows the mapping. Destroy presentation models before closing their store. Nothing in this model is persisted into blobs. Standalone `fromWikitext` owns its input copy; record-based models borrow their resolved payload, so destroy them before freeing the bound record or closing its store.
 
 `dict.results.v1` JSON includes operation, query, kind, language, record_count, total_matches, offset, has_more, matches and entries. Search uses **case-sensitive UTF-8 byte prefixes**, returns title-only matches and supports bounded pagination. Lookup returns the complete semantic entry. `dict.languages.v1` returns sorted language headings. Results are written only to stdout; diagnostics use stderr. Exit codes: 0 success, 1 no matching titles, 2 usage, data, allocation or I/O error. An offset beyond the final search page returns an empty page with the original total.
 
@@ -70,13 +70,13 @@ The file/stdin command accepts at most 16 MiB. It supports paragraphs, headings,
 
 Common Wiktionary templates have native presentation handlers: headwords/POS, labels and qualifiers, mentions/links, explicit form-of descriptions, supplied IPA/pronunciation/audio links, etymology terms, synonyms, translations/columns, usage examples and multiline quotation passages with citations. No inflections, pronunciations or quotations are fabricated. `wiki_templates.zig` is the explicit supported set. Unknown templates are marked in reading mode; their full syntax is available through JSON, HTML disclosure or exact source.
 
-This is a local Wikitext renderer, not a full MediaWiki/Scribunto installation. Arbitrary Lua modules, template transclusion, generated language-specific inflection tables, nested wiki tables, math typesetting and fetched images are not implemented. Native template handlers render supplied arguments and may not reproduce every MediaWiki-specific option. Depth, 512-argument and node budgets bound rendering; allocation/resource-limit failures propagate instead of being disguised as successful content. Unclosed/empty wiki tables fall back to literal preformatted text.
+This is a local Wikitext renderer, not a full MediaWiki/Scribunto installation. The native-only fallback does not execute arbitrary Lua or generate language morphology. Linked runtime mode below supplies Lua/module transclusion and generated tables. Nested wiki tables and math typesetting are not fully implemented. Local attributed media can be embedded in HTML. Native template handlers render supplied arguments and may not reproduce every MediaWiki-specific option. Depth, 512-argument and node budgets bound rendering; allocation/resource-limit failures propagate instead of being disguised as successful content. Unclosed/empty wiki tables fall back to literal preformatted text.
 
 Renderer validation checks actual visible content and semantic DOM, not only executable exit codes. Tests cover nested/template syntax, HTML inertness, exact source, allocation failures and deterministic malformed input. Browser and PTY integration checks must assert that known templates become readable content and that Source retains the original wikitext.
 
 ## Lua bytecode integration
 
-`--runtime PATH` opts into the VM-backed path for lookup, HTML exports, standalone rendering and the TUI. It executes the existing `lua2` compiler/codec/runtime, not native guesses about Lua output. `runtime_bridge.zig` is the narrow integration adapter; no VM implementation is copied into the frontend.
+A dataset containing `bytecode.wikblb` automatically selects the VM-backed path. `--runtime PATH` overrides its location and enables it for standalone rendering. `--native` selects the explicitly limited native preview. The VM-backed path is used for lookup, HTML exports, standalone rendering and the TUI. It executes the existing `lua2` compiler/codec/runtime, not native guesses about Lua output. `runtime_bridge.zig` is the narrow integration adapter; no VM implementation is copied into the frontend.
 
 ```sh
 # Coordinated build: extract templates/modules/redirects, compile bytecode, encode blobs.
@@ -92,19 +92,19 @@ zig build compile-bytecode -- data/runtime/manifest.jsonl data/runtime/modules d
 zig build test-runtime
 ```
 
-Dictionary languages and feature blobs remain separate. Shared templates, module source, semantic module redirects and bytecode live in `runtime/`. No compression metadata or runtime lookup index is added to `.wikblb`. The coordinated build currently delegates to the existing independent passes. A single-pass encoder/bytecode-generator merge is still future work, after the VM interface stabilizes. Converter and executor are built from the same checkout; rebuild assets after incompatible VM codec changes.
+Dictionary languages and feature blobs remain separate. Raw extraction/compiler inputs remain in `runtime/`; the final shared-ID `symbols.wikblb`, `templates.wikblb`, `bytecode.wikblb`, `redirects.wikblb` and `pages.wikblb` live at the dataset root. The linked runtime works without the raw `.lua`/`.wiki` inputs. No compression metadata or runtime lookup index is added to `.wikblb`. The coordinated build currently delegates to the existing independent passes. A single-pass encoder/bytecode-generator merge is still future work, after the VM interface stabilizes. Converter and executor are built from the same checkout; rebuild assets after incompatible VM codec changes.
 
 Builds refuse existing output directories. A failed stage leaves `.incomplete` and its intermediate files for diagnosis; runtime loading refuses incomplete outputs. `module-redirects.tsv` supplies actual XML redirect targets to the existing runtime loader. Optional legacy `usage.tsv`, `wikibase-sitelinks.tsv` and `interwiki-map.tsv` are consumed when present.
 
-Each expansion runs in a separate process with a 2 GiB address-space limit, bounded input/output and a wall deadline (`--runtime-timeout-ms`, default 5000, range 1..60000). This isolates crashes and per-page allocations while the VM evolves; it is **not a security sandbox**. Use trusted local runtime assets. The TUI waits for each selected page within that deadline, so VM mode can be less responsive than native rendering.
+Each expansion runs in a separate process with a 2 GiB address-space limit, bounded input/output and a wall deadline (`--runtime-timeout-ms`, default 60000, range 1..60000). This isolates crashes and per-page allocations while the VM evolves; it is **not a security sandbox**. Use trusted local runtime assets. The TUI waits for each selected page within that deadline, so VM mode can be less responsive than native rendering.
 
 `entry.expansion` is an additive `dict.results.v1` field: `{backend:"lua-vm",status:"ok"|"failed",diagnostic:null|string}`. Semantic VM failures/timeouts produce an explicitly marked native fallback; CLI output exits 2, and the TUI keeps the source view available. Asset, allocation and I/O failures propagate as errors. HTML visibly labels fallback rather than presenting it as successful VM expansion. Exact source always remains the original unexpanded bytes, including in HTML/JSON exports.
 
 The integration tests extract fixture XML, invoke the real converter, execute serialized bytecode with `require` through a module redirect and template parameters, and assert rendered inflections/tables. They also exercise timeout, missing module/assets, failed conversion, existing-output refusal and incomplete-build refusal. They run in the native `zig build test` gate as well as `test-runtime`.
 
-VM correctness and full MediaWiki compatibility remain separate from integration correctness. Full pages can still fail because of runtime defects or missing external page/Wikibase dependencies. Native template presentation remains the default while that work is ongoing; `--runtime` makes the choice explicit.
+VM correctness and full MediaWiki compatibility remain separate from integration correctness. Full pages can still fail because of runtime defects or missing external page/Wikibase dependencies. Linked datasets use their runtime automatically; `--native` and `--core-only` make fallback/partial reading explicit. Unlinked legacy datasets still use native rendering by default.
 
-Observed against the pinned 2026-04-01 dump: the existing converter built all 59,701 extracted Scribunto modules. Actual `en-noun` and `IPA` expansion worked. `lb` and the full `cat activation noise` entry still reported `ModuleNotFound: Module:labels/data`; that title is absent from the extracted Scribunto manifest. Do not fabricate its data or equate this integration gate with full-page compatibility.
+The real `cat` and `cats` entries are validated with zero unresolved calls through linked bytecode. Their runtime includes revision-pinned dependencies missing from the dump and actual auxiliary page source (including `Appendix:Glossary`), rather than native stubs. Success on these entries is not proof that every source template in the corpus can execute: fresh builds still need their external page/Wikibase dependencies, and missing data fails explicitly.
 
 ## Definition-first entries and exact language accounting
 
@@ -116,7 +116,7 @@ Inflected entries remain real entries. For example, `cats` retains both its noun
 
 `dict languages` reports the complete catalog. `dict languages cat` reports only blobs containing that exact spelling. JSON retains `dict.languages.v1` and its heading list, adding `scope`, `query`, separate language/Translingual/unverified counts and an `accounting` array of headings, canonical codes and per-blob title counts. Codes come from `Module:languages/canonical names` in the same input dump. Missing registry data remains explicitly unverified, never guessed. These counts are not Wiktionary edition counts, living-language totals, or translation-target counts.
 
-## WIKBLB04 language companions
+## WIKBLB05 language companions
 
 Definitions, usage examples and usage notes stay in each language's core file. Large section bodies are placed in per-language companions under `details/etymology`, `details/translations`, `details/relations`, `details/references` and `details/quotations`. Each filename is the same SHA-256 of its language heading. The original Thesaurus, Citations, Reconstruction, Rhymes and Sign gloss blobs stay independent. Quotes inside a definition's body stay with that body; the quotation companion stores standalone quotation-section bodies.
 
@@ -124,11 +124,11 @@ Core language payloads retain every section heading and its order. An external b
 
 `blob_encoder.language_parts` splits/rejoins the portable payloads. A section iterator reports `section.external` rather than pretending that a referenced body is empty. `encoder.blob_files.Resolver` opens/maps/indexes companions lazily for selected records, validates their language/family, and reconstructs the original payload before source decoding or Lua expansion. Complete native rendering and exact-source export currently require referenced companions; missing, truncated or mismatched companions fail explicitly. Source-mode decoding must not bypass resolution. The corpus verifier also rejects orphan companion records.
 
-This split reduces the core footprint, not necessarily total storage: titles and framing in independent companions add overhead. Keep all components together for exact reconstruction. Rebuild old v3 output; it is not compatible with v4.
+This split reduces the core footprint, not necessarily total storage: titles and framing in independent companions add overhead. Keep all components together for exact reconstruction. Rebuild or link old outputs to produce v5. The reader still accepts v4 staging artifacts, without pretending they are symbol-linked.
 
 ## Optional packages and core reading
 
-Native text lookup and the TUI start from the language core only. Etymology,
+Explicit `--native` text lookup and the native-only TUI start from the language core only. Etymology,
 translations, relations, references and standalone quotation-section bodies are
 not mapped or indexed until details or exact source is requested. Definitions,
 usage examples, origins and their original section positions remain available.
@@ -155,8 +155,7 @@ still fail. In the TUI, a missing-package request displays an error without losi
 the search session; leaving details/source returns to the core. Installing the
 matching package and trying again works in the same session. Corrupt data, I/O and
 allocation failures still propagate. The portable `fromRecord` remains strict;
-`fromCoreRecord` is the explicit partial-presentation API. Blob bytes and the
-`WIKBLB04` wire format are unchanged. `zig build test-reader` exercises these
+`fromCoreRecord` is the explicit partial-presentation API. Core mode does not rewrite or drop stored source. `zig build test-reader` exercises these
 paths against real freshly built files and is included in the native test gate.
 
 ## Reading layout and supplied quotations
@@ -174,3 +173,63 @@ For an unsupported `RQ:*` citation template with a named `passage`, the supplied
 passage and named translation render visibly, but its original citation template
 remains marked unexpanded and inspectable. This does not infer publication data,
 claim a successful Lua expansion, or change the exact source.
+
+## Shared template/function IDs and linked programs
+
+`WIKBLB05` replaces static call-name occurrences with `0xfe + canonical varint(ID)`.
+A literal `0xfe` is escaped with ID zero. IDs are one-based ordinals in the sorted,
+typed `symbols.wikblb` catalog: template, parser function, module, and callable/member
+atom. The same function ID occurs in an `#invoke` operand and the compiled program's
+string-pool operand. Templates and module programs are themselves keyed by numeric
+IDs, not names. Other dictionary titles remain ordinary words, not opaque identifiers.
+
+The 41-byte outer header is eight-byte magic, kind and 32-byte catalog identity.
+That identity is a cross-file semantic binding, not a lookup index. Mismatched
+catalogs/artifacts and `.binding-incomplete` builds are rejected. Counts, offsets
+and lookup maps are derived at runtime. Per-language separation and external
+compression policy are unchanged. A spelling is retained once in the symbol catalog
+for byte-exact source reconstruction and reflective Lua; this is not blind renaming
+of prose, ordinary strings or dynamically computed names.
+
+`DWSY01` is the linked envelope over the existing `DWVM02` codec. The link adapter
+uses the owner's serializer, substitutes symbol operands in the string pool and
+preserves every function/instruction body. At the VM boundary it binds shared atoms
+back to the existing runtime API, preserving `require`, methods, constructed table
+keys and Lua reflection. The executing VM was not rewritten for direct global-ID
+dispatch. Internal local-function/register operands were already numeric.
+
+Portable clients call `BlobView.bindRecordAlloc(allocator, record, names)` and retain
+that transient owned result while inspecting its semantic views. Attempting semantic
+iteration on a record that still needs symbol binding fails rather than treating its
+ID bytes as source. Native `Store` and the verifier manage binding automatically.
+
+```sh
+# Existing build pipelines finish with the shared encoder/bytecode link step.
+zig build build-dictionary -- DUMP.xml NEW_DIRECTORY
+# Or link a fresh copy of v4 data and separately prepared runtime inputs.
+zig build link-blobs -- STAGED_DIRECTORY RUNTIME_INPUTS
+zig build audit-symbols -- LINKED_DIRECTORY RUNTIME_INPUTS
+```
+
+Linking refuses published outputs. `audit-symbols` checks every program against its
+exact original compiled bytes, every template against original source, typed IDs,
+and shared catalog identity. Duplicate module titles in the source manifest retain
+the original loader's last-row-wins semantics, with a diagnostic; conflicting extra
+modules are rejected. Dependencies not present in a dump must be supplied from a
+compatible, provenance-recorded revision rather than fabricated during rendering.
+
+## Embedded offline images and audio
+
+```sh
+zig-out/bin/dict lookup cat --format json > cat.json
+zig build fetch-media -- cat.json data/wiktionary-blobs/media
+zig-out/bin/dict lookup cat --format html --with-source > cat.html
+```
+
+The explicit fetch step reads official Wikimedia image metadata, bounds each asset,
+verifies its passive MIME type and saves a hash plus attribution/license metadata.
+The renderer reads only local assets (default `ROOT/media`, or `--media-dir PATH`)
+and embeds data URIs. Images and audio work with all HTTP(S) blocked. No SVG/HTML
+media is executable. Missing assets remain labelled, not represented as embedded.
+GFDL 1.2 assets retain the original image and an embedded full license copy. Source
+and license links are for attribution, not dependencies needed for offline playback.

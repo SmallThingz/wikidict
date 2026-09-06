@@ -19,4 +19,9 @@ test "blob encoder root imports portable codecs" {
     _ = blob_catalog;
     _ = language_parts;
     _ = language_registry;
+    _ = call_symbols;
 }
+
+pub const wikitext_syntax = @import("wikitext_syntax.zig");
+
+pub const call_symbols = @import("call_symbols.zig");

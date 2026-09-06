@@ -24,7 +24,62 @@ pub const File = struct {
         self.* = undefined;
     }
 };
+pub const SymbolSource = struct {
+    io: std.Io,
+    a: std.mem.Allocator,
+    root: []const u8,
+    file: ?File = null,
+    keys: []const []const u8 = &.{},
+    pub fn deinit(self: *SymbolSource) void {
+        self.a.free(self.keys);
+        if (self.file) |*file| file.deinit();
+        self.file = null;
+        self.keys = &.{};
+    }
+    pub fn load(self: *SymbolSource) !enc.call_symbols.Names {
+        if (self.file == null) {
+            const path = try std.fs.path.join(self.a, &.{ self.root, enc.call_symbols.filename });
+            defer self.a.free(path);
+            var file = try File.open(self.io, self.a, path);
+            errdefer file.deinit();
+            if (file.index.blob.kind != .symbols or !file.index.blob.symbolic) return error.InvalidSymbols;
+            const keys = try self.a.alloc([]const u8, file.index.recordCount());
+            errdefer self.a.free(keys);
+            for (keys, 0..) |*key, i| {
+                const r = try file.index.recordAt(i);
+                if (!enc.call_symbols.validKey(r.title) or r.payload.len != 0) return error.InvalidSymbols;
+                key.* = r.title;
+            }
+            const names: enc.call_symbols.Names = .{ .keys = keys };
+            if (!std.mem.eql(u8, &names.digest(), &file.index.blob.binding_id)) return error.SymbolIdentityMismatch;
+            self.file = file;
+            self.keys = keys;
+        }
+        return .{ .keys = self.keys };
+    }
+    pub fn bindAlloc(self: *SymbolSource, a: std.mem.Allocator, bytes: []const u8, encoded: bool, binding: [32]u8) !?[]u8 {
+        if (!encoded or std.mem.indexOfScalar(u8, bytes, enc.call_symbols.marker) == null) return null;
+        const names = try self.load();
+        if (!std.mem.eql(u8, &self.file.?.index.blob.binding_id, &binding)) return error.SymbolIdentityMismatch;
+        return enc.call_symbols.decodeAlloc(a, bytes, names);
+    }
+};
+
+pub fn requireComplete(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+    const path = try std.fs.path.join(a, &.{ root, ".binding-incomplete" });
+    defer a.free(path);
+    var marker = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    marker.close(io);
+    return error.BlobBindingIncomplete;
+}
+
 pub const Resolver = struct {
+    symbols: ?*SymbolSource = null,
+    symbolic: bool = false,
+    binding_id: [32]u8 = @splat(0),
     io: std.Io,
     a: std.mem.Allocator,
     root: []const u8,
@@ -58,18 +113,26 @@ pub const Resolver = struct {
     /// Null means payload is already complete and may remain borrowed.
     pub fn resolveAlloc(self: *Resolver, a: std.mem.Allocator, title: []const u8, payload: []const u8) !?[]u8 {
         const context: enc.language_blob_encoding.LanguageContext = .{ .heading = self.metadata.heading, .code = self.metadata.code };
-        const required = try parts.required(payload, context);
+        const bound = if (self.symbols) |symbols| try symbols.bindAlloc(a, payload, self.symbolic, self.binding_id) else if (self.symbolic and std.mem.indexOfScalar(u8, payload, enc.call_symbols.marker) != null) return error.MissingSymbols else null;
+        errdefer if (bound) |b| a.free(b);
+        const core = bound orelse payload;
+        const required = try parts.required(core, context);
+        var owned: [parts.count]?[]u8 = @splat(null);
+        defer for (owned) |b| if (b) |bytes| a.free(bytes);
         var bodies: parts.Bodies = @splat(null);
         var any = false;
         for (required, 0..) |needed, i| if (needed) {
             any = true;
             const f = (try self.load(i)) orelse return error.MissingSupplement;
             const body = (try f.index.find(title)) orelse return error.MissingSupplementRecord;
-            bodies[i] = body.payload;
+            owned[i] = if (self.symbols) |symbols| try symbols.bindAlloc(a, body.payload, f.index.blob.symbolic, f.index.blob.binding_id) else if (f.index.blob.symbolic and std.mem.indexOfScalar(u8, body.payload, enc.call_symbols.marker) != null) return error.MissingSymbols else null;
+            bodies[i] = owned[i] orelse body.payload;
             self.used[i] += 1;
         };
-        if (!any) return null;
-        return try parts.joinAlloc(a, payload, context, bodies);
+        if (!any) return bound;
+        const joined = try parts.joinAlloc(a, core, context, bodies);
+        if (bound) |b| a.free(b);
+        return joined;
     }
     /// For the corpus verifier, which visits each core title once.
     pub fn verifyCounts(self: *Resolver) !void {

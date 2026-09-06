@@ -45,3 +45,5 @@ test "encoder root imports module tests" {
     _ = wikitext;
     _ = builder;
 }
+
+pub const name_linker = @import("name_linker.zig");

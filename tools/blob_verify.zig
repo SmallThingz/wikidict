@@ -325,6 +325,7 @@ fn verifyMain(
 fn verifyNamespace(
     page_allocator: std.mem.Allocator,
     fixed: *const FixedBlobs,
+    symbols: *encoder.blob_files.SymbolSource,
     ns: u32,
     title: []const u8,
     source: []const u8,
@@ -340,28 +341,30 @@ fn verifyNamespace(
         return error.MissingFeatureRecord;
     };
 
+    const bound = try symbols.bindAlloc(page_allocator, record.payload, blob.indexed.blob.symbolic, blob.indexed.blob.binding_id);
+    const payload = bound orelse record.payload;
     switch (ns) {
         ns_thesaurus => {
-            const decoded = try thesaurus_encoding.decodeAlloc(page_allocator, record.payload);
+            const decoded = try thesaurus_encoding.decodeAlloc(page_allocator, payload);
             try requireEqual(local_title, "thesaurus", source, decoded);
             stats.thesaurus_records += 1;
         },
         ns_citations => {
-            try requireEqual(local_title, "citations", source, record.payload);
+            try requireEqual(local_title, "citations", source, payload);
             stats.citations_records += 1;
         },
         ns_reconstruction => {
-            const decoded = try reconstruction_encoding.decodeAlloc(page_allocator, record.payload, local_title);
+            const decoded = try reconstruction_encoding.decodeAlloc(page_allocator, payload, local_title);
             try requireEqual(local_title, "reconstruction", source, decoded);
             stats.reconstruction_records += 1;
         },
         ns_rhymes => {
-            const decoded = try rhymes_encoding.decodeAlloc(page_allocator, record.payload);
+            const decoded = try rhymes_encoding.decodeAlloc(page_allocator, payload);
             try requireEqual(local_title, "rhymes", source, decoded);
             stats.rhymes_records += 1;
         },
         ns_sign_gloss => {
-            try requireEqual(local_title, "sign-gloss", source, record.payload);
+            try requireEqual(local_title, "sign-gloss", source, payload);
             stats.sign_gloss_records += 1;
         },
         else => unreachable,
@@ -391,7 +394,16 @@ pub fn main(init: std.process.Init) !void {
     const limit_pages = if (args.len == 4) try std.fmt.parseInt(usize, args[3], 10) else null;
 
     const allocator = std.heap.smp_allocator;
+    try encoder.blob_files.requireComplete(init.io, allocator, args[2]);
+    var symbols: encoder.blob_files.SymbolSource = .{ .io = init.io, .a = allocator, .root = args[2] };
+    defer symbols.deinit();
     var language_blobs = try LanguageBlobs.init(init.io, allocator, args[2]);
+    var symbol_files = language_blobs.map.valueIterator();
+    while (symbol_files.next()) |file| {
+        file.resolver.?.symbols = &symbols;
+        file.resolver.?.symbolic = file.indexed.blob.symbolic;
+        file.resolver.?.binding_id = file.indexed.blob.binding_id;
+    }
     defer language_blobs.deinit();
     var fixed = try loadFixedBlobs(init.io, allocator, args[2]);
     defer fixed.deinit();
@@ -430,7 +442,7 @@ pub fn main(init: std.process.Init) !void {
         if (ns == ns_main) {
             try verifyMain(page_allocator, &language_blobs, title, source, &stats);
         } else {
-            try verifyNamespace(page_allocator, &fixed, ns, title, source, &stats);
+            try verifyNamespace(page_allocator, &fixed, &symbols, ns, title, source, &stats);
         }
         _ = page_arena.reset(.retain_capacity);
     }

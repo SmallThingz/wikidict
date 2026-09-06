@@ -3,6 +3,7 @@ const blob_catalog = @import("blob_encoder").blob_catalog;
 
 pub const BlobView = blob_reader.BlobView;
 pub const BlobRecordView = blob_reader.RecordView;
+pub const BlobBoundRecord = blob_reader.BoundRecord;
 pub const BlobRecordIterator = blob_reader.RecordIterator;
 pub const BlobIndexedView = blob_reader.IndexedBlobView;
 pub const BlobLanguageRecordView = blob_reader.LanguageRecordView;

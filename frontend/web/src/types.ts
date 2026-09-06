@@ -7,7 +7,9 @@ export type Table = { caption: Span[]; rows: { cells: Cell[] }[] };
 export type Block = { kind: string; depth: number; text: string; spans: Span[]; feature: Feature | null; list_path?: string; number?: string; level?: number; table?: Table | null };
 export type Section = { level: number; title: string; blocks: Block[]; deferred?: 'etymology' | 'translations' | 'relations' | 'references' | 'quotations' | null };
 export type Reference = { number: number; name: string; body: string; spans: Span[] };
+export type Media = { file:string;kind:'image'|'audio';caption:string;data_url:string|null;author:string|null;license:string|null;license_url:string|null;source_url:string|null;license_text?:string|null };
 export type Entry = {
+  media?: Media[];
   content?: 'complete' | 'core';
   organization?: Organization;
   language_code?: string;

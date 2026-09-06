@@ -6,7 +6,9 @@ pub const Format = enum { text, json, source, html };
 pub const Color = enum { auto, always, never };
 pub const Options = struct {
     runtime: ?[]const u8 = null,
-    runtime_timeout_ms: u32 = 5000,
+    media_dir: ?[]const u8 = null,
+    runtime_timeout_ms: u32 = 60000,
+    native: bool = false,
     command: Command = .lookup,
     root: []const u8 = "data/wiktionary-blobs",
     kind: store.Kind = .language,
@@ -67,6 +69,10 @@ pub fn parse(argv: []const []const u8) !Options {
                 out.core_only = true;
                 continue;
             }
+            if (std.mem.eql(u8, arg, "--native")) {
+                out.native = true;
+                continue;
+            }
             if (std.mem.eql(u8, arg, "--details")) {
                 out.details = true;
                 continue;
@@ -86,7 +92,7 @@ pub fn parse(argv: []const []const u8) !Options {
             if (pos + 1 >= argv.len) return error.Usage;
             pos += 1;
             const value = argv[pos];
-            if (std.mem.eql(u8, arg, "--runtime")) out.runtime = value else if (std.mem.eql(u8, arg, "--runtime-timeout-ms")) out.runtime_timeout_ms = std.fmt.parseInt(u32, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--title")) out.title = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
+            if (std.mem.eql(u8, arg, "--media-dir")) out.media_dir = value else if (std.mem.eql(u8, arg, "--runtime")) out.runtime = value else if (std.mem.eql(u8, arg, "--runtime-timeout-ms")) out.runtime_timeout_ms = std.fmt.parseInt(u32, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--title")) out.title = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
         } else {
             if (has_query) return error.Usage;
             out.query = arg;
@@ -96,6 +102,8 @@ pub fn parse(argv: []const []const u8) !Options {
     if (out.help) return out;
     if (out.core_only and (out.command != .lookup and out.command != .search)) return error.Usage;
     if (out.core_only and (out.format == .source or out.with_source or out.runtime != null or out.details)) return error.Usage;
+    if (out.native and out.runtime != null) return error.Usage;
+    if (out.media_dir) |path| if (path.len == 0) return error.Usage;
     if (out.runtime_timeout_ms == 0 or out.runtime_timeout_ms > 60000) return error.Usage;
     if (out.runtime) |root| if (root.len == 0 or out.command == .stats or out.command == .languages) return error.Usage;
     if (out.limit == 0 or out.limit > 1000 or out.root.len == 0 or out.language.len == 0) return error.Usage;
@@ -161,4 +169,10 @@ test "core-only export cannot silently replace exact source or VM expansion" {
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--core-only", "--runtime", "runtime" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--core-only", "--details" }));
     try std.testing.expectError(error.Usage, parse(&.{ "render", "a.wiki", "--core-only" }));
+}
+
+test "explicit native rendering cannot accidentally enable a configured VM" {
+    try std.testing.expect((try parse(&.{ "lookup", "cat", "--native" })).native);
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--native", "--runtime", "runtime" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--media-dir", "" }));
 }

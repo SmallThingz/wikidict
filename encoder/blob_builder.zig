@@ -299,7 +299,7 @@ fn writeBlobFile(
     try sortAndValidate(records);
     try blob_format.validateMetadata(kind, metadata);
     for (records) |record| try blob_format.validateRecordInput(record);
-    const header = blob_format.encodeHeader(kind);
+    const header = blob_format.encodeUnlinkedHeader(kind);
 
     var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
     defer file.close(io);
@@ -527,7 +527,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
         defer allocator.free(dir);
         try std.Io.Dir.cwd().createDirPath(io, dir);
     }
-    inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss" }) |name| {
+    inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss", "symbols", "templates", "bytecode", "redirects", "pages" }) |name| {
         const stale = try fixedBlobPathAlloc(allocator, options.output_root, name);
         defer allocator.free(stale);
         try deleteFileIfExists(io, stale);
@@ -609,6 +609,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     try finalizeFixedSpool(io, allocator, &spools.reconstruction, options.output_root, "reconstruction", .reconstruction);
     try finalizeFixedSpool(io, allocator, &spools.rhymes, options.output_root, "rhymes", .rhymes);
     try finalizeFixedSpool(io, allocator, &spools.sign_gloss, options.output_root, "sign-gloss", .sign_gloss);
+    _ = try @import("name_linker.zig").linkRoot(io, allocator, options.output_root, null);
     return stats;
 }
 
@@ -645,6 +646,8 @@ test "blob builder routes main languages and feature namespaces into separate bl
     try std.testing.expectEqual(@as(usize, 2), stats.language_records);
     try std.testing.expectEqual(@as(usize, 2), stats.reconstruction_records);
 
+    var symbols: @import("blob_files.zig").SymbolSource = .{ .io = std.testing.io, .a = std.testing.allocator, .root = out_root };
+    defer symbols.deinit();
     const english_path = try languageBlobPathAlloc(std.testing.allocator, out_root, "English");
     defer std.testing.allocator.free(english_path);
     var english_map = try mmapPath(std.testing.io, english_path);
@@ -667,7 +670,9 @@ test "blob builder routes main languages and feature namespaces into separate bl
     var recon_index = try recon_blob.buildTrustedIndexAlloc(std.testing.allocator);
     defer recon_index.deinit(std.testing.allocator);
     const reconstruction = (try recon_index.find("Proto-Germanic/kattuz")).?;
-    const recon_source = try reconstruction_encoding.decodeAlloc(std.testing.allocator, reconstruction.payload, "Proto-Germanic/kattuz");
+    const bound_recon = try symbols.bindAlloc(std.testing.allocator, reconstruction.payload, recon_blob.symbolic, recon_blob.binding_id);
+    defer if (bound_recon) |b| std.testing.allocator.free(b);
+    const recon_source = try reconstruction_encoding.decodeAlloc(std.testing.allocator, bound_recon orelse reconstruction.payload, "Proto-Germanic/kattuz");
     defer std.testing.allocator.free(recon_source);
     try std.testing.expectEqualStrings("{{reconstructed}}\n==Proto-Germanic==\n===Noun===\n# cat\n", recon_source);
     const raw_reconstruction = (try recon_index.find("no-slash")).?;

@@ -1,16 +1,17 @@
 //! End-to-end tests use the real converter and VM, never a mocked expansion response.
 const std = @import("std");
-const source = "==English==\n===Noun===\n{{show-forms|mouse}}\n# A small rodent.\n";
+const source = "==English==\n===Noun===\n{{forms-alias|mouse}}\n# A small rodent.\n{{Template:Template:nested}}\n{{nested}}\n";
 const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
-    \\return { main = function(frame)
+    \\return { render_dictionary_fixture = function(frame)
+    \\    assert(mw.title.new('Appendix:IntegrationFixture'):getContent() == 'a real auxiliary source page')
     \\    local word = frame.args[1]
     \\    local plural = forms[word]
     \\    if not plural then error('No supplied plural for '..word) end
     \\    return "'''"..word.."''' (plural ''"..plural.."'')\n\n<div><table><caption>Forms from bytecode</caption><tr><th>Singular</th><th>Plural</th></tr><tr><td>"..word.."</td><td>"..plural.."</td></tr></table></div>\n"
     \\end }
 ;
-const template_source = "<includeonly>{{#invoke:IntegrationForms|main|{{{1}}}}}</includeonly><noinclude>Documentation must not leak.</noinclude>";
+const template_source = "<includeonly>{{#invoke:IntegrationForms|render_dictionary_fixture|{{{1}}}}}</includeonly><noinclude>Documentation must not leak.</noinclude>";
 const Page = struct { title: []const u8, ns: u16, id: u32, body: []const u8, redirect: ?[]const u8 = null };
 fn xml(w: *std.Io.Writer, text: []const u8) !void {
     for (text) |ch| switch (ch) {
@@ -23,7 +24,11 @@ fn xml(w: *std.Io.Writer, text: []const u8) !void {
 fn fixture(io: std.Io, a: std.mem.Allocator, path: []const u8, broken: bool) !void {
     const pages = [_]Page{
         .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
+        .{ .title = "Appendix:IntegrationFixture", .ns = 100, .id = 21, .body = "a real auxiliary source page" },
         .{ .title = "Template:show-forms", .ns = 10, .id = 10, .body = template_source },
+        .{ .title = "Template:forms-alias", .ns = 10, .id = 11, .body = "#REDIRECT [[Template:show-forms]]", .redirect = "Template:show-forms" },
+        .{ .title = "Template:Template:nested", .ns = 10, .id = 12, .body = "nested namespace retained" },
+        .{ .title = "Template:nested", .ns = 10, .id = 13, .body = "ordinary namespace distinct" },
         .{ .title = "Module:IntegrationForms", .ns = 828, .id = 1, .body = if (broken) "function {{{ invalid" else module_source },
         .{ .title = "Module:IntegrationFormsData", .ns = 828, .id = 2, .body = "return { mouse = 'mice', child = 'children' }" },
         .{ .title = "Module:IntegrationFormsAlias", .ns = 828, .id = 4, .body = "#REDIRECT [[Module:IntegrationFormsData]]", .redirect = "Module:IntegrationFormsData" },
@@ -56,8 +61,11 @@ const Harness = struct {
         self.checks += 1;
         return result.stdout;
     }
-    fn require(_: *Harness, condition: bool) !void {
-        if (!condition) return error.AssertionFailed;
+    fn require(self: *Harness, condition: bool) !void {
+        if (!condition) {
+            std.debug.print("Runtime assertion failed after check {d}\n", .{self.checks});
+            return error.AssertionFailed;
+        }
     }
     fn entry(self: *Harness, bytes: []const u8) !std.json.Value {
         const parsed = try std.json.parseFromSlice(std.json.Value, self.a, bytes, .{});
@@ -79,13 +87,28 @@ pub fn main(init: std.process.Init) !void {
     const input = try std.fs.path.join(a, &.{ dir, "input.wiki" });
     try fixture(init.io, a, dump, false);
     _ = try h.run(&.{ pipeline, "--with-blobs", dump, root }, 0);
+    // Published runtime is self-sufficient: remove only this fixture's owned
+    // extraction/build inputs, leaving the linked .wikblb artifacts at root.
+    try std.Io.Dir.cwd().deleteTree(init.io, runtime);
+    try std.Io.Dir.cwd().createDir(init.io, runtime, .default_dir);
     const data = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--runtime", runtime, "--format", "json", "--with-source" }, 0);
     const entry = try h.entry(data);
     try h.require(std.mem.eql(u8, entry.object.get("expansion").?.object.get("status").?.string, "ok"));
     try h.require(std.mem.eql(u8, entry.object.get("source").?.string, source));
-    const text = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--runtime", runtime }, 0);
+    const text = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--runtime", runtime, "--details" }, 0);
     try h.require(std.mem.indexOf(u8, text, "mouse (plural mice)") != null);
     try h.require(std.mem.indexOf(u8, text, "Forms from bytecode") != null);
+    try h.require(std.mem.indexOf(u8, text, "nested namespace retained") != null and std.mem.indexOf(u8, text, "ordinary namespace distinct") != null);
+    const automatic = try h.entry(try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--format", "json" }, 0));
+    try h.require(std.mem.eql(u8, automatic.object.get("expansion").?.object.get("status").?.string, "ok"));
+    const bytecode_path = try std.fs.path.join(a, &.{ root, "bytecode.wikblb" });
+    const bytecode = try std.Io.Dir.cwd().readFileAlloc(init.io, bytecode_path, a, .limited(1024 * 1024));
+    try h.require(std.mem.indexOf(u8, bytecode, "render_dictionary_fixture") == null and std.mem.indexOf(u8, bytecode, "Module:IntegrationForms") == null);
+    const wrong = try a.dupe(u8, bytecode);
+    wrong[9] ^= 1;
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = bytecode_path, .data = wrong });
+    _ = try h.run(&.{ bin, "lookup", "mouse", "--root", root }, 2);
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = bytecode_path, .data = bytecode });
     try h.require(std.mem.indexOf(u8, text, "show-forms") == null and std.mem.indexOf(u8, text, "Documentation") == null);
     const page = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--runtime", runtime, "--format", "html", "--with-source" }, 0);
     try h.require(std.mem.indexOf(u8, page, "dict-data") != null and std.mem.indexOf(u8, page, "Forms from bytecode") != null);

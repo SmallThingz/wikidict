@@ -15,6 +15,7 @@ pub const Expansion = struct { backend: []const u8 = "lua-vm", status: enum { ok
 pub const Entry = struct {
     content: enum { complete, core } = .complete,
     organization: entry_layout.Layout = .{},
+    media: []const wiki.media_types.Media = &.{},
     expansion: ?Expansion = null,
     title: []const u8,
     kind: enc.blob_format.BlobKind,
@@ -42,13 +43,14 @@ pub const OwnedEntry = struct {
 };
 
 pub fn sourceAlloc(a: Allocator, record: dec.BlobRecordView) ![]u8 {
+    if (record.needsSymbols()) return error.InvalidEncoding;
     return switch (record) {
         .language => |r| enc.language_blob_encoding.decodeAlloc(a, r.payload, .{ .heading = r.metadata.heading, .code = r.metadata.code }),
         .thesaurus => |r| enc.thesaurus_encoding.decodeAlloc(a, r.payload),
         .rhymes => |r| enc.rhymes_encoding.decodeAlloc(a, r.payload),
         .reconstruction => |r| enc.reconstruction_encoding.decodeAlloc(a, r.payload, r.title),
         .citations, .sign_gloss => |r| a.dupe(u8, r.source),
-        .supplement => return error.InvalidEncoding,
+        .supplement, .symbols, .templates, .bytecode, .redirects, .pages => return error.InvalidEncoding,
     };
 }
 
@@ -60,6 +62,7 @@ pub fn payload(record: dec.BlobRecordView) []const u8 {
         .reconstruction => |r| r.payload,
         .citations, .sign_gloss => |r| r.source,
         .supplement => |r| r.payload,
+        .symbols, .templates, .bytecode, .redirects, .pages => |r| r.source,
     };
 }
 
@@ -196,6 +199,7 @@ fn recordDocument(allocator: Allocator, record: dec.BlobRecordView, include_sour
     };
     entry.preamble_spans = try renderer.parseSpans(entry.preamble, .{});
     entry.references = try renderer.finishReferences();
+    entry.media = try renderer.media.toOwnedSlice(a);
     entry.unexpanded_templates = renderer.unresolved_templates;
     entry.rendered_templates = renderer.rendered_templates;
     if (include_source) {
@@ -206,8 +210,9 @@ fn recordDocument(allocator: Allocator, record: dec.BlobRecordView, include_sour
 }
 
 fn populate(b: *Builder, record: dec.BlobRecordView, entry: *Entry) !void {
+    if (record.needsSymbols()) return error.InvalidEncoding;
     switch (record) {
-        .supplement => return error.InvalidEncoding,
+        .supplement, .symbols, .templates, .bytecode, .redirects, .pages => return error.InvalidEncoding,
         .language => |r| {
             entry.language = try utf8Text(b.a, r.metadata.heading);
             entry.language_code = try utf8Text(b.a, r.metadata.code);
@@ -338,6 +343,7 @@ pub fn fromWikitext(allocator: Allocator, title: []const u8, language: []const u
     entry.sections = try builder.sections.toOwnedSlice(a);
     entry.organization = try entry_layout.build(a, entry.sections);
     entry.references = try renderer.finishReferences();
+    entry.media = try renderer.media.toOwnedSlice(a);
     entry.rendered_templates = renderer.rendered_templates;
     entry.unexpanded_templates = renderer.unresolved_templates;
     if (include_source) {
@@ -466,4 +472,43 @@ fn coreAllocationCase(a: Allocator) !void {
 }
 test "core rendering frees every failed allocation" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, coreAllocationCase, .{});
+}
+
+/// Retain direct grammatical relations supplied by the original source when the
+/// expanded document has the same lexical/sense structure and matching target.
+pub fn restoreFormRelations(allocator: Allocator, doc: *OwnedEntry, source: []const u8) !void {
+    var original = try fromWikitext(allocator, doc.entry.title, doc.entry.language orelse "", source, false);
+    defer original.deinit();
+    const old = original.entry.organization.lexemes;
+    const rendered = doc.entry.organization.lexemes;
+    if (old.len != rendered.len) return;
+    const a = doc.arena.allocator();
+    const lexemes = try a.dupe(entry_layout.Lexeme, rendered);
+    for (old, lexemes) |before, *after| {
+        if (!std.mem.eql(u8, before.kind, after.kind) or before.definitions.len != after.definitions.len) continue;
+        const senses = try a.dupe(entry_layout.Sense, after.definitions);
+        for (before.definitions, senses) |first, *last| if (first.form) |form| {
+            var matches = false;
+            for (doc.entry.sections[after.section].blocks[last.block].spans) |span| if (span.kind == .link and (std.mem.eql(u8, span.target, form.target) or (span.target.len > form.target.len and std.mem.startsWith(u8, span.target, form.target) and span.target[form.target.len] == '#'))) {
+                matches = true;
+                break;
+            };
+            if (matches) last.form = .{ .relation = try a.dupe(u8, form.relation), .target = try a.dupe(u8, form.target), .language = try a.dupe(u8, form.language) };
+        };
+        after.definitions = senses;
+    }
+    doc.entry.organization.lexemes = lexemes;
+}
+
+test "expanded headwords and lexical relations keep their presentation semantics" {
+    var doc = try fromWikitext(std.testing.allocator, "cat", "English", "==English==\n===Noun===\n[[File:Cat.jpg|thumb|A cat]] <span class='headword-line'><strong class='headword'>cat</strong> (plural cats)</span>\n# An animal.\n#: <span class='nyms synonym'><span>Synonyms:</span> [[feline]]</span>\n#: My cat sleeps.\n", false);
+    defer doc.deinit();
+    const sense = doc.entry.organization.lexemes[0].definitions[0];
+    try std.testing.expectEqual(@as(usize, 1), sense.examples.len);
+    try std.testing.expectEqual(@as(usize, 1), sense.notes.len);
+    var headword = false;
+    for (doc.entry.sections[1].blocks[0].spans) |span| if (span.role == .headword and std.mem.eql(u8, span.text, "cat")) {
+        headword = true;
+    };
+    try std.testing.expect(headword);
 }

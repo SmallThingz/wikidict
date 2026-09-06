@@ -147,6 +147,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = test_optimize,
     });
+    const runtime_bridge_mod = b.createModule(.{ .root_source_file = b.path("runtime_bridge.zig"), .target = target, .optimize = optimize });
+    const runtime_symbols_mod = b.createModule(.{ .root_source_file = b.path("runtime_symbols.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "runtime_bridge", .module = runtime_bridge_mod }, .{ .name = "blob_encoder", .module = blob_encoder_mod } } });
+    const runtime_symbols_mod_test = b.createModule(.{ .root_source_file = b.path("runtime_symbols.zig"), .target = target, .optimize = test_optimize, .imports = &.{ .{ .name = "runtime_bridge", .module = runtime_bridge_mod }, .{ .name = "blob_encoder", .module = blob_encoder_mod_test } } });
     const encoder_mod_bootstrap = b.addModule("encoder_bootstrap", .{
         .root_source_file = b.path("encoder/root.zig"),
         .target = target,
@@ -163,6 +166,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod_bootstrap.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     encoder_mod_bootstrap.addImport("wikitext_source", wikitext_source_mod);
     encoder_mod_bootstrap.addImport("blob_encoder", blob_encoder_mod);
+    encoder_mod_bootstrap.addImport("runtime_symbols", runtime_symbols_mod);
 
     const structure_bin = addDirectStructureBinary(
         b,
@@ -198,6 +202,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     encoder_mod.addImport("wikitext_source", wikitext_source_mod);
     encoder_mod.addImport("blob_encoder", blob_encoder_mod);
+    encoder_mod.addImport("runtime_symbols", runtime_symbols_mod);
 
     const encoder_mod_test = b.addModule("encoder_test", .{
         .root_source_file = b.path("encoder/root.zig"),
@@ -215,6 +220,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod_test.addImport("compact_pattern_seed", compact_pattern_seed_mod_test);
     encoder_mod_test.addImport("wikitext_source", wikitext_source_mod_test);
     encoder_mod_test.addImport("blob_encoder", blob_encoder_mod_test);
+    encoder_mod_test.addImport("runtime_symbols", runtime_symbols_mod_test);
 
     const decoder_mod = b.addModule("decoder", .{
         .root_source_file = b.path("decoder/root.zig"),
@@ -308,7 +314,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
     });
-    const runtime_bridge_mod = b.createModule(.{ .root_source_file = b.path("runtime_bridge.zig"), .target = target, .optimize = optimize });
+    const link_blobs_exe = addCliExecutable(b, "dict-link-blobs", b.path("tools/link_blobs.zig"), target, optimize, &.{.{ .name = "encoder", .module = encoder_mod }});
+    addPublicRunStep(b, "link-blobs", "Replace static call names with shared symbolic operands", addRunArtifactCommand(b, link_blobs_exe, &.{}, b.args), &.{});
     const bytecode_exe = addCliExecutable(b, "dict-bytecode-build", b.path("tools/bytecode_build.zig"), target, optimize, &.{.{ .name = "runtime_bridge", .module = runtime_bridge_mod }});
     bytecode_exe.root_module.link_libc = true;
     bytecode_exe.use_llvm = true;
@@ -316,7 +323,11 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "compile-bytecode", "Compile extracted Lua through the VM bytecode converter", addRunArtifactCommand(b, bytecode_exe, &.{}, b.args), &.{});
     const redirects_exe = addCliExecutable(b, "dict-runtime-redirects", b.path("tools/runtime_redirects.zig"), target, optimize, &.{ .{ .name = "zxml", .module = zxml_dep.module("zxml") }, .{ .name = "xml_decode", .module = shared_xml_decode_mod } });
     addPublicRunStep(b, "extract-runtime-redirects", "Extract semantic module redirect dependencies", addRunArtifactCommand(b, redirects_exe, &.{}, b.args), &.{});
+    const pages_exe = addCliExecutable(b, "dict-runtime-pages", b.path("tools/runtime_pages.zig"), target, optimize, &.{ .{ .name = "encoder", .module = encoder_mod }, .{ .name = "zxml", .module = zxml_dep.module("zxml") } });
+    addPublicRunStep(b, "extract-runtime-pages", "Extract auxiliary wiki source dependencies", addRunArtifactCommand(b, pages_exe, &.{}, b.args), &.{});
     const pipeline_paths = b.addOptions();
+    pipeline_paths.addOptionPath("pages", pages_exe.getEmittedBin());
+    pipeline_paths.addOptionPath("linker", link_blobs_exe.getEmittedBin());
     pipeline_paths.addOptionPath("redirects", redirects_exe.getEmittedBin());
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
     pipeline_paths.addOptionPath("templates", template_extract_exe.getEmittedBin());
@@ -331,6 +342,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "blob_encoder", .module = blob_encoder_mod },
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
         .{ .name = "blob_files", .module = blob_files_mod },
+        .{ .name = "runtime_symbols", .module = runtime_symbols_mod },
         .{ .name = "runtime_bridge", .module = runtime_bridge_mod },
         .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = optimize }) },
     });
@@ -456,6 +468,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "blob_encoder", .module = blob_encoder_mod_test },
                 .{ .name = "blob_decoder", .module = blob_decoder_mod_test },
                 .{ .name = "blob_files", .module = blob_files_mod_test },
+                .{ .name = "runtime_symbols", .module = runtime_symbols_mod_test },
                 .{ .name = "runtime_bridge", .module = runtime_bridge_mod },
                 .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = test_optimize }) },
             },
@@ -515,6 +528,10 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run encoder, decoder, structure, Lua, and tooling tests");
     blob_wasm_smoke.step.dependOn(&run_lua2_tests.step);
     test_step.dependOn(&blob_wasm_smoke.step);
+    const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "encoder", .module = encoder_mod } });
+    addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}, b.args), &.{});
+    const symbol_audit_exe = addCliExecutable(b, "dict-symbol-audit", b.path("tools/symbol_audit.zig"), target, optimize, &.{ .{ .name = "blob_encoder", .module = blob_encoder_mod }, .{ .name = "blob_files", .module = blob_files_mod }, .{ .name = "runtime_symbols", .module = runtime_symbols_mod } });
+    addPublicRunStep(b, "audit-symbols", "Verify shared symbol IDs and exact owner-bytecode reconstruction", addRunArtifactCommand(b, symbol_audit_exe, &.{}, b.args), &.{});
     const runtime_test_exe = addCliExecutable(b, "dict-runtime-integration-test", b.path("tools/runtime_integration_test.zig"), b.graph.host, test_optimize, &.{});
     const runtime_test_run = b.addRunArtifact(runtime_test_exe);
     runtime_test_run.addFileArg(blob_query_exe.getEmittedBin());

@@ -36,11 +36,12 @@ pub fn main(init: std.process.Init) !void {
     try stage(init.io, a, marker, "extract modules", &.{ paths.modules, dump, runtime });
     try stage(init.io, a, marker, "extract templates", &.{ paths.templates, dump, runtime });
     try stage(init.io, a, marker, "extract module redirects", &.{ paths.redirects, dump, runtime });
+    try stage(init.io, a, marker, "extract auxiliary source pages", &.{ paths.pages, dump, runtime });
     const manifest = try std.fs.path.join(a, &.{ runtime, "manifest.jsonl" });
     const modules = try std.fs.path.join(a, &.{ runtime, "modules" });
     const bundle = try std.fs.path.join(a, &.{ runtime, "modules.bundle" });
     try stage(init.io, a, marker, "compile bytecode", &.{ paths.bytecode, manifest, modules, bundle });
-    if (full) try stage(init.io, a, marker, "encode dictionary blobs", &.{ paths.blobs, dump, root });
+    if (full) try stage(init.io, a, marker, "encode dictionary blobs", &.{ paths.blobs, dump, root }) else try stage(init.io, a, marker, "link shared symbols and bytecode", &.{ paths.linker, root, runtime });
     try std.Io.Dir.cwd().deleteFile(init.io, runtime_marker);
     if (full) try std.Io.Dir.cwd().deleteFile(init.io, marker);
     std.debug.print("dictionary build complete: {s}\n", .{root});

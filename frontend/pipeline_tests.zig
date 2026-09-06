@@ -17,7 +17,7 @@ test "all six encoded blob kinds survive typed decoding and human and machine re
     };
     inline for (fixtures) |fixture| {
         const payload = switch (fixture.kind) {
-            .supplement => unreachable,
+            .supplement, .symbols, .templates, .bytecode, .redirects, .pages => unreachable,
             .language => try enc.language_blob_encoding.encodeAlloc(a, fixture.source, .{ .heading = "English" }),
             .thesaurus => try enc.thesaurus_encoding.encodeAlloc(a, fixture.source),
             .rhymes => try enc.rhymes_encoding.encodeAlloc(a, fixture.source),
