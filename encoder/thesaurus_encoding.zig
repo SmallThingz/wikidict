@@ -477,3 +477,24 @@ test "thesaurus payload preserves redirect pages through raw records" {
     defer std.testing.allocator.free(decoded);
     try std.testing.expectEqualStrings(source, decoded);
 }
+
+test "thesaurus unsupported syntax always round trips through raw records" {
+    const alphabet = "{}[]=|*#\n\r<>/ abcXYZ0123456789_:-'\"";
+    var storage: [320]u8 = undefined;
+    var state: u64 = 0x52ab_7041_ee39_c618;
+    var case_index: usize = 0;
+    while (case_index < 2048) : (case_index += 1) {
+        state = state *% 6364136223846793005 +% 1442695040888963407;
+        const len: usize = @intCast(state % storage.len);
+        for (storage[0..len]) |*byte| {
+            state = state *% 6364136223846793005 +% 1442695040888963407;
+            byte.* = alphabet[@intCast(state % alphabet.len)];
+        }
+        const source = storage[0..len];
+        const encoded = try encodeAlloc(std.testing.allocator, source);
+        const decoded = try decodeAlloc(std.testing.allocator, encoded);
+        try std.testing.expectEqualStrings(source, decoded);
+        std.testing.allocator.free(decoded);
+        std.testing.allocator.free(encoded);
+    }
+}

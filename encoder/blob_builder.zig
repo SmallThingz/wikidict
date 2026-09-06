@@ -439,7 +439,7 @@ fn processMain(
         const payload = if (repeated)
             try language_encoding.encodeRepeatedSectionsFallbackAlloc(page_allocator, page_sections.items, language)
         else
-            try language_encoding.encodeAlloc(page_allocator, section.source, language);
+            try language_encoding.encodeRobustAlloc(page_allocator, section.source, language);
         try spools.appendLanguage(page_allocator, section.heading, title, payload);
         stats.language_records += 1;
     }

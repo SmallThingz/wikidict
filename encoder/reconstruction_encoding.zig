@@ -35,13 +35,16 @@ pub fn inspect(encoded: []const u8, local_title: []const u8) error{InvalidEncodi
 
 pub fn encodeAlloc(allocator: std.mem.Allocator, source: []const u8, local_title: []const u8) ![]u8 {
     if (language.reconstructionHeadingFromTitle(local_title)) |heading| {
-        if (language.encodeAlloc(allocator, source, .{ .heading = heading })) |structured| {
+        if (language.encodeRobustAlloc(allocator, source, .{ .heading = heading })) |structured| {
             defer allocator.free(structured);
             const out = try allocator.alloc(u8, structured.len + 1);
             out[0] = kind_language;
             @memcpy(out[1..], structured);
             return out;
-        } else |_| {}
+        } else |err| switch (err) {
+            error.OutOfMemory => return err,
+            error.InvalidEncoding, error.InvalidLanguageSection => {},
+        }
     }
     const out = try allocator.alloc(u8, source.len + 1);
     out[0] = kind_raw;

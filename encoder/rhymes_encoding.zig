@@ -218,7 +218,9 @@ fn appendLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, line: []con
         }
     }
     if (parseLinkList(line)) |list| {
-        const same = current_language.*.len != 0 and std.mem.eql(u8, current_language.*, list.language);
+        const checkpoint = out.items.len;
+        const previous_language = current_language.*;
+        const same = previous_language.len != 0 and std.mem.eql(u8, previous_language, list.language);
         const has_tail = list.tail.len != 0;
         try out.append(allocator, if (same)
             (if (has_tail) op_link_list_same_tail else op_link_list_same)
@@ -232,9 +234,22 @@ fn appendLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, line: []con
         var pos: usize = 2;
         var emitted: usize = 0;
         while (emitted < list.count) : (emitted += 1) {
-            const close = support.findBalancedTemplateEnd(line, pos) orelse unreachable;
+            const close = support.findBalancedTemplateEnd(line, pos) orelse {
+                out.items.len = checkpoint;
+                current_language.* = previous_language;
+                return appendRawLine(out, allocator, line);
+            };
             const args = line[pos + 4 .. close];
-            const parsed = splitLanguageRest(args) orelse unreachable;
+            const parsed = splitLanguageRest(args) orelse {
+                out.items.len = checkpoint;
+                current_language.* = previous_language;
+                return appendRawLine(out, allocator, line);
+            };
+            if (!std.mem.eql(u8, parsed.language, list.language)) {
+                out.items.len = checkpoint;
+                current_language.* = previous_language;
+                return appendRawLine(out, allocator, line);
+            }
             try support.appendField(out, allocator, parsed.rest);
             pos = close + 2;
             if (emitted + 1 < list.count) pos += 2;
@@ -258,6 +273,10 @@ fn appendLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, line: []con
         return;
     }
 
+    try appendRawLine(out, allocator, line);
+}
+
+fn appendRawLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, line: []const u8) !void {
     try out.append(allocator, op_raw);
     try support.appendField(out, allocator, line);
 }
@@ -553,4 +572,25 @@ test "rhymes payload changes language only on explicit link language" {
     const decoded = try decodeAlloc(std.testing.allocator, encoded);
     defer std.testing.allocator.free(decoded);
     try std.testing.expectEqualStrings(source, decoded);
+}
+
+test "rhymes unsupported syntax always round trips through raw records" {
+    const alphabet = "{}[]=|*#\n\r<>/ abcXYZ0123456789_:-'\"";
+    var storage: [320]u8 = undefined;
+    var state: u64 = 0xf462_18cd_70a5_39be;
+    var case_index: usize = 0;
+    while (case_index < 2048) : (case_index += 1) {
+        state = state *% 6364136223846793005 +% 1442695040888963407;
+        const len: usize = @intCast(state % storage.len);
+        for (storage[0..len]) |*byte| {
+            state = state *% 6364136223846793005 +% 1442695040888963407;
+            byte.* = alphabet[@intCast(state % alphabet.len)];
+        }
+        const source = storage[0..len];
+        const encoded = try encodeAlloc(std.testing.allocator, source);
+        const decoded = try decodeAlloc(std.testing.allocator, encoded);
+        try std.testing.expectEqualStrings(source, decoded);
+        std.testing.allocator.free(decoded);
+        std.testing.allocator.free(encoded);
+    }
 }

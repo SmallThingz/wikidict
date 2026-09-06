@@ -11,6 +11,11 @@ pub const LanguageContext = struct {
     code: []const u8 = "",
 };
 
+pub const EncodeError = std.mem.Allocator.Error || error{
+    InvalidEncoding,
+    InvalidLanguageSection,
+};
+
 pub fn reconstructionHeadingFromTitle(title: []const u8) ?[]const u8 {
     const prefix = "Reconstruction:";
     const rest = if (std.mem.startsWith(u8, title, prefix)) title[prefix.len..] else title;
@@ -243,7 +248,15 @@ pub const SectionIterator = struct {
     }
 };
 
-pub fn encodeAlloc(allocator: std.mem.Allocator, source: []const u8, language: LanguageContext) ![]u8 {
+const SourceLayout = struct {
+    preamble: []const u8,
+    section_source: []const u8,
+    first_newline: usize,
+    first_content_end: usize,
+    top: ParsedHeading,
+};
+
+fn sourceLayout(source: []const u8, language: LanguageContext) EncodeError!SourceLayout {
     if (std.mem.indexOfScalar(u8, source, 0) != null) return error.InvalidEncoding;
     var source_sections = SourceLanguageIterator.init(source);
     const language_source = source_sections.next() orelse return error.InvalidLanguageSection;
@@ -254,14 +267,29 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, source: []const u8, language: L
     var first_content_end = first_newline;
     if (first_content_end != 0 and section_source[first_content_end - 1] == '\r') first_content_end -= 1;
     const top = parseHeading(section_source[0..first_content_end]) orelse return error.InvalidLanguageSection;
+    return .{
+        .preamble = source[0..preamble_len],
+        .section_source = section_source,
+        .first_newline = first_newline,
+        .first_content_end = first_content_end,
+        .top = top,
+    };
+}
+
+pub fn encodeAlloc(allocator: std.mem.Allocator, source: []const u8, language: LanguageContext) EncodeError![]u8 {
+    const layout = try sourceLayout(source, language);
+    const section_source = layout.section_source;
+    const first_newline = layout.first_newline;
+    const first_content_end = layout.first_content_end;
+    const top = layout.top;
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
     const canonical = top.raw_title.len == language.heading.len and std.mem.eql(u8, top.raw_title, language.heading);
     var flags: u8 = if (canonical) 0 else flag_custom_language_heading;
-    if (preamble_len != 0) flags |= flag_preamble;
+    if (layout.preamble.len != 0) flags |= flag_preamble;
     try out.append(allocator, flags);
-    if (preamble_len != 0) try support.appendField(&out, allocator, source[0..preamble_len]);
+    if (layout.preamble.len != 0) try support.appendField(&out, allocator, layout.preamble);
     if (!canonical) try support.appendField(&out, allocator, section_source[0..first_content_end]);
 
     var segment_start = first_content_end;
@@ -293,11 +321,34 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, source: []const u8, language: L
     return out.toOwnedSlice(allocator);
 }
 
+// A language payload may consist of one raw body segment, so fallback needs no new tag or format version.
+pub fn encodeRawFallbackAlloc(allocator: std.mem.Allocator, source: []const u8, language: LanguageContext) EncodeError![]u8 {
+    const layout = try sourceLayout(source, language);
+    const canonical = layout.top.raw_title.len == language.heading.len and std.mem.eql(u8, layout.top.raw_title, language.heading);
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    var flags: u8 = if (canonical) 0 else flag_custom_language_heading;
+    if (layout.preamble.len != 0) flags |= flag_preamble;
+    try out.append(allocator, flags);
+    if (layout.preamble.len != 0) try support.appendField(&out, allocator, layout.preamble);
+    if (!canonical) try support.appendField(&out, allocator, layout.section_source[0..layout.first_content_end]);
+    try out.appendSlice(allocator, layout.section_source[layout.first_content_end..]);
+    return out.toOwnedSlice(allocator);
+}
+
+pub fn encodeRobustAlloc(allocator: std.mem.Allocator, source: []const u8, language: LanguageContext) EncodeError![]u8 {
+    return encodeAlloc(allocator, source, language) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.InvalidEncoding, error.InvalidLanguageSection => encodeRawFallbackAlloc(allocator, source, language),
+    };
+}
+
 pub fn encodeRepeatedSectionsFallbackAlloc(
     allocator: std.mem.Allocator,
     sections: []const SourceLanguageSection,
     language: LanguageContext,
-) ![]u8 {
+) EncodeError![]u8 {
     var first: ?SourceLanguageSection = null;
     var extra_len: usize = 0;
     for (sections) |section| {
@@ -311,7 +362,7 @@ pub fn encodeRepeatedSectionsFallbackAlloc(
     }
 
     const first_section = first orelse return error.InvalidLanguageSection;
-    const encoded = try encodeAlloc(allocator, first_section.source, language);
+    const encoded = try encodeRobustAlloc(allocator, first_section.source, language);
     if (extra_len == 0) return encoded;
     defer allocator.free(encoded);
 
@@ -472,4 +523,49 @@ test "language blob preserves custom top heading bytes and multiline template he
     const noun = (try sections.next()).?;
     try std.testing.expectEqualStrings("Noun", noun.title);
     try std.testing.expect((try sections.next()) == null);
+}
+
+test "language raw fallback stays inside existing payload grammar" {
+    const source = "{{also|foo}}\n== English ==\r\n===Noun===\n{{broken|\n# still raw\n";
+    const language: LanguageContext = .{ .heading = "English" };
+    const encoded = try encodeRawFallbackAlloc(std.testing.allocator, source, language);
+    defer std.testing.allocator.free(encoded);
+    const decoded = try decodeAlloc(std.testing.allocator, encoded, language);
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqualStrings(source, decoded);
+
+    var sections = try SectionIterator.init(encoded, language);
+    try std.testing.expectEqualStrings("{{also|foo}}\n", sections.preamble());
+    try std.testing.expectEqualStrings("English", (try sections.next()).?.title);
+    try std.testing.expect((try sections.next()) == null);
+}
+
+test "language splitter emits sections accepted by robust encoder" {
+    const alphabet = "{}[]=|*#\n\r<>/ abcXYZ0123456789_:-'\"";
+    const prefix = "==English==\n";
+    var storage: [384]u8 = undefined;
+    var state: u64 = 0x91c4_d38a_2b75_6e10;
+    var case_index: usize = 0;
+    while (case_index < 1024) : (case_index += 1) {
+        state = state *% 6364136223846793005 +% 1442695040888963407;
+        const body_len: usize = @intCast(state % (storage.len - prefix.len));
+        @memcpy(storage[0..prefix.len], prefix);
+        for (storage[prefix.len .. prefix.len + body_len]) |*byte| {
+            state = state *% 6364136223846793005 +% 1442695040888963407;
+            byte.* = alphabet[@intCast(state % alphabet.len)];
+        }
+        const source = storage[0 .. prefix.len + body_len];
+        var it = SourceLanguageIterator.init(source);
+        var seen: usize = 0;
+        while (it.next()) |section| {
+            const language: LanguageContext = .{ .heading = section.heading };
+            const encoded = try encodeRobustAlloc(std.testing.allocator, section.source, language);
+            const decoded = try decodeAlloc(std.testing.allocator, encoded, language);
+            try std.testing.expectEqualStrings(section.source, decoded);
+            std.testing.allocator.free(decoded);
+            std.testing.allocator.free(encoded);
+            seen += 1;
+        }
+        try std.testing.expect(seen != 0);
+    }
 }
