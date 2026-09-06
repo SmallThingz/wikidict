@@ -81,7 +81,7 @@ const LanguageBlobs = struct {
         self.manifest.deinit();
     }
     fn init(io: std.Io, allocator: std.mem.Allocator, root: []const u8) !LanguageBlobs {
-        const manifest_path = try std.fmt.allocPrint(allocator, "{s}/languages.tsv", .{root});
+        const manifest_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ root, blob_catalog.manifest_filename });
         defer allocator.free(manifest_path);
         var manifest = try mmapPath(io, manifest_path);
         errdefer manifest.deinit();
@@ -95,7 +95,7 @@ const LanguageBlobs = struct {
         var expected_records: u64 = 0;
         var entries = try blob_catalog.Iterator.init(manifest.bytes);
         while (try entries.next()) |entry| {
-            const path = try std.fmt.allocPrint(allocator, "{s}/languages/{s}", .{ root, entry.filename });
+            const path = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ root, blob_catalog.language_directory, entry.filename });
             defer allocator.free(path);
             var mapped = try mmapPath(io, path);
             errdefer mapped.deinit();

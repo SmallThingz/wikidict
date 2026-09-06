@@ -262,7 +262,7 @@ fn localNamespaceTitle(title: []const u8) []const u8 {
 pub fn languageBlobPathAlloc(allocator: std.mem.Allocator, output_root: []const u8, heading: []const u8) ![]u8 {
     var filename_buf: [blob_catalog.language_blob_filename_len]u8 = undefined;
     const filename = blob_catalog.languageBlobFilename(heading, &filename_buf);
-    return std.fmt.allocPrint(allocator, "{s}/languages/{s}", .{ output_root, filename });
+    return std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ output_root, blob_catalog.language_directory, filename });
 }
 
 fn fixedBlobPathAlloc(allocator: std.mem.Allocator, output_root: []const u8, name: []const u8) ![]u8 {
@@ -399,7 +399,7 @@ fn finalizeLanguageBucket(
         defer allocator.free(path);
         try writeBlobFile(io, allocator, path, .language, metadata, group.records.items);
         const base = std.fs.path.basename(path);
-        try manifest.print("{s}\t{s}\t{d}\n", .{ group.heading, base, group.records.items.len });
+        try blob_catalog.writeEntry(manifest, group.heading, base, @intCast(group.records.items.len));
         count += 1;
     }
     return count;
@@ -491,7 +491,7 @@ fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
 
 pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !BuildStats {
     try std.Io.Dir.cwd().createDirPath(io, options.output_root);
-    const languages_dir = try std.fmt.allocPrint(allocator, "{s}/languages", .{options.output_root});
+    const languages_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ options.output_root, blob_catalog.language_directory });
     defer allocator.free(languages_dir);
     try std.Io.Dir.cwd().deleteTree(io, languages_dir);
     try std.Io.Dir.cwd().createDirPath(io, languages_dir);
@@ -500,7 +500,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
         defer allocator.free(stale);
         try deleteFileIfExists(io, stale);
     }
-    const stale_manifest = try std.fmt.allocPrint(allocator, "{s}/languages.tsv", .{options.output_root});
+    const stale_manifest = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ options.output_root, blob_catalog.manifest_filename });
     defer allocator.free(stale_manifest);
     try deleteFileIfExists(io, stale_manifest);
 
@@ -548,7 +548,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     spools.close();
     spools_closed = true;
 
-    const manifest_path = try std.fmt.allocPrint(allocator, "{s}/languages.tsv", .{options.output_root});
+    const manifest_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ options.output_root, blob_catalog.manifest_filename });
     defer allocator.free(manifest_path);
     var manifest_file = try std.Io.Dir.cwd().createFile(io, manifest_path, .{ .truncate = true });
     defer manifest_file.close(io);
