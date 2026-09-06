@@ -242,3 +242,9 @@
 .dict-media figcaption strong,.dict-media figcaption>span { display:block;font-weight:400; }
 .dict-media-unavailable { font-size:11px;color:var(--dict-muted); }
 .dict-license-text { white-space:pre-wrap;max-height:240px;overflow:auto;font:10px/1.6 ui-monospace,monospace; }
+.dict-live-selectors {display:grid; gap:12px; margin:0 0 18px;}
+.dict-live-selectors label {display:grid;gap:5px;font-size:10px;color:var(--dict-muted);}
+.dict-live-selectors select {max-width:100%;width:100%;min-height:35px;background:var(--dict-bg);color:var(--dict-fg);border:1px solid var(--dict-line);border-radius:4px;padding:6px;font:inherit;}
+.dict-live-status {margin:0 0 18px;padding:9px 13px;border-left:2px solid var(--dict-accent);background:var(--dict-soft);font-size:12px;}
+.dict-live-hint {color:var(--dict-muted);font-size:10px;line-height:1.6;}
+.dict-more-results {width:100%;margin:12px 0;font-size:11px;}

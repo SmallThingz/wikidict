@@ -150,11 +150,16 @@ pub fn build(b: *std.Build) void {
     const runtime_bridge_mod = b.createModule(.{ .root_source_file = b.path("runtime_bridge.zig"), .target = target, .optimize = optimize });
     const runtime_symbols_mod = b.createModule(.{ .root_source_file = b.path("runtime_symbols.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "runtime_bridge", .module = runtime_bridge_mod }, .{ .name = "blob_encoder", .module = blob_encoder_mod } } });
     const runtime_symbols_mod_test = b.createModule(.{ .root_source_file = b.path("runtime_symbols.zig"), .target = target, .optimize = test_optimize, .imports = &.{ .{ .name = "runtime_bridge", .module = runtime_bridge_mod }, .{ .name = "blob_encoder", .module = blob_encoder_mod_test } } });
+    const storage_mod = b.createModule(.{ .root_source_file = b.path("native/storage.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
+    storage_mod.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
+    const storage_test = b.createModule(.{ .root_source_file = b.path("native/storage.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
+    storage_test.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
     const encoder_mod_bootstrap = b.addModule("encoder_bootstrap", .{
         .root_source_file = b.path("encoder/root.zig"),
         .target = target,
         .optimize = structure_optimize,
     });
+    encoder_mod_bootstrap.addImport("blob_storage", storage_mod);
     encoder_mod_bootstrap.addOptions("config", config_options);
     encoder_mod_bootstrap.addImport("normalize", normalize_mod_structure);
     encoder_mod_bootstrap.addImport("zxml", zxml_dep_structure.module("zxml"));
@@ -191,6 +196,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    encoder_mod.addImport("blob_storage", storage_mod);
     encoder_mod.addOptions("config", config_options);
     encoder_mod.addImport("normalize", normalize_mod);
     encoder_mod.addImport("zxml", zxml_dep.module("zxml"));
@@ -209,6 +215,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = test_optimize,
     });
+    encoder_mod_test.addImport("blob_storage", storage_test);
     encoder_mod_test.addOptions("config", config_options);
     encoder_mod_test.addImport("normalize", normalize_mod_test);
     encoder_mod_test.addImport("zxml", zxml_dep_test.module("zxml"));
@@ -338,10 +345,13 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "build-dictionary", "Build dictionary blobs plus their shared Lua runtime in one coordinated pipeline", addRunArtifactCommand(b, pipeline_exe, &.{"--with-blobs"}, b.args), &.{});
     const blob_files_mod = b.createModule(.{ .root_source_file = b.path("encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
     const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
+    blob_files_mod.addImport("blob_storage", storage_mod);
+    blob_files_mod_test.addImport("blob_storage", storage_test);
     const blob_query_exe = addCliExecutable(b, "dict", b.path("frontend/main.zig"), target, optimize, &.{
         .{ .name = "blob_encoder", .module = blob_encoder_mod },
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
         .{ .name = "blob_files", .module = blob_files_mod },
+        .{ .name = "blob_storage", .module = storage_mod },
         .{ .name = "runtime_symbols", .module = runtime_symbols_mod },
         .{ .name = "runtime_bridge", .module = runtime_bridge_mod },
         .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = optimize }) },
@@ -468,6 +478,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "blob_encoder", .module = blob_encoder_mod_test },
                 .{ .name = "blob_decoder", .module = blob_decoder_mod_test },
                 .{ .name = "blob_files", .module = blob_files_mod_test },
+                .{ .name = "blob_storage", .module = storage_test },
                 .{ .name = "runtime_symbols", .module = runtime_symbols_mod_test },
                 .{ .name = "runtime_bridge", .module = runtime_bridge_mod },
                 .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = test_optimize }) },
@@ -546,7 +557,35 @@ pub fn build(b: *std.Build) void {
     reader_test_run.addArg(b.pathFromRoot(".zig-cache"));
     reader_test_run.step.dependOn(&runtime_test_run.step);
     b.step("test-reader", "Exercise optional-companion reading through the real CLI").dependOn(&reader_test_run.step);
-    if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch) test_step.dependOn(&reader_test_run.step);
+    const index_blobs_exe = addCliExecutable(b, "dict-index-blobs", b.path("tools/index_blobs.zig"), target, optimize, &.{.{ .name = "blob_storage", .module = storage_mod }});
+    index_blobs_exe.root_module.link_libc = true;
+    index_blobs_exe.use_llvm = true;
+    index_blobs_exe.use_lld = true;
+    addPublicRunStep(b, "index-blobs", "Build or reuse external raw/XZ record indexes after compression", addRunArtifactCommand(b, index_blobs_exe, &.{}, b.args), &.{});
+    const storage_exe = addCliExecutable(b, "dict-storage-integration-test", b.path("tools/storage_integration_test.zig"), target, test_optimize, &.{ .{ .name = "blob_encoder", .module = blob_encoder_mod_test }, .{ .name = "blob_storage", .module = storage_test } });
+    storage_exe.root_module.link_libc = true;
+    storage_exe.use_llvm = true;
+    storage_exe.use_lld = true;
+    const storage_run = b.addRunArtifact(storage_exe);
+    storage_run.addArg(b.pathFromRoot(".zig-cache"));
+    const storage_unit = b.addTest(.{ .root_module = storage_test, .test_runner = .{ .path = test_runner, .mode = .simple } });
+    storage_unit.root_module.link_libc = true;
+    storage_unit.use_llvm = true;
+    storage_unit.use_lld = true;
+    const storage_unit_run = b.addRunArtifact(storage_unit);
+    storage_unit_run.step.dependOn(&reader_test_run.step);
+    storage_run.step.dependOn(&storage_unit_run.step);
+    b.step("test-storage", "Exercise after-compression indexes and selective real XZ block decoding").dependOn(&storage_run.step);
+    const http_exe = addCliExecutable(b, "dict-http-integration-test", b.path("tools/http_integration_test.zig"), target, test_optimize, &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }});
+    http_exe.root_module.link_libc = true;
+    http_exe.use_llvm = true;
+    http_exe.use_lld = true;
+    const http_run = b.addRunArtifact(http_exe);
+    http_run.addFileArg(blob_query_exe.getEmittedBin());
+    http_run.addArg(b.pathFromRoot(".zig-cache"));
+    http_run.step.dependOn(&storage_run.step);
+    b.step("test-http", "Exercise live HTTP/1.1 against raw, compressed and cached data").dependOn(&http_run.step);
+    if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch) test_step.dependOn(&http_run.step);
 }
 
 fn addCliExecutable(

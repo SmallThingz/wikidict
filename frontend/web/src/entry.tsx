@@ -84,7 +84,7 @@ export function Reading(props: Props) {
       <div class="dict-reader-intro"><span class="dict-eyebrow">MEANINGS &amp; USE</span><span>History and source evidence stay attached.</span></div>
       <For each={groups()}>{group => <section class="dict-kind-group" data-kind={group.kind}>
         <header class="dict-kind-header"><h2>{group.kind}<Show when={new Set(groups().map(g => g.language)).size > 1}><small class="dict-language-tag">{group.language}</small></Show></h2><span>{group.lexemes.reduce((n,l) => n + l.definitions.length, 0)} {group.lexemes.reduce((n,l) => n + l.definitions.length, 0) === 1 ? "definition" : "definitions"}<Show when={group.lexemes.length > 1}> · {group.lexemes.length} entries</Show></span></header>
-        <For each={group.lexemes}>{lexeme => <article class="dict-lexeme dict-section" id={`${props.prefix}-${lexeme.section}`}>
+        <For each={group.lexemes}>{lexeme => <article class="dict-lexeme dict-section" id={`${props.prefix}-${lexeme.section}`} data-section={props.entry.sections[lexeme.section].title}>
           <Show when={lexeme.etymology !== null}>{_value => <div class="dict-origin"><span>{props.entry.sections[lexeme.etymology!].title.replace('Etymology','Origin')}</span><button onClick={() => reveal(document.getElementById(`${props.prefix}-${lexeme.etymology}`))}>History <span aria-hidden="true">↗</span></button></div>}</Show>
           <Headword lexeme={lexeme} context={props}/>
           <Senses lexeme={lexeme} context={props} parent={null}/>

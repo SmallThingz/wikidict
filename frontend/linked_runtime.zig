@@ -6,11 +6,12 @@ const files = @import("blob_files");
 const bridge = @import("runtime_bridge");
 const vm_symbols = @import("runtime_symbols");
 const A = std.mem.Allocator;
+const storage = @import("blob_storage");
 pub const Session = struct {
     symbols: files.SymbolSource,
-    templates: ?files.File = null,
-    bytecode: ?files.File = null,
-    redirects: ?files.File = null,
+    templates: ?storage.File = null,
+    bytecode: ?storage.File = null,
+    redirects: ?storage.File = null,
     pub fn deinit(self: *Session) void {
         if (self.templates) |*f| f.deinit();
         if (self.bytecode) |*f| f.deinit();
@@ -20,7 +21,17 @@ pub const Session = struct {
 };
 fn pathExists(io: std.Io, path: []const u8) !bool {
     var f = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return false,
+        error.FileNotFound => {
+            const a = std.heap.smp_allocator;
+            const compressed = try std.mem.concat(a, u8, &.{ path, ".xz" });
+            defer a.free(compressed);
+            var zipped = std.Io.Dir.cwd().openFile(io, compressed, .{}) catch |e| switch (e) {
+                error.FileNotFound => return false,
+                else => return e,
+            };
+            zipped.close(io);
+            return true;
+        },
         else => return err,
     };
     f.close(io);
@@ -38,12 +49,12 @@ pub fn rootAlloc(io: std.Io, a: A, requested: []const u8) ![]const u8 {
     };
     return a.dupe(u8, requested);
 }
-fn artifact(io: std.Io, a: A, root: []const u8, name: []const u8, kind: enc.blob_format.BlobKind, identity: [32]u8) !files.File {
+fn artifact(io: std.Io, a: A, root: []const u8, name: []const u8, kind: enc.blob_format.BlobKind, identity: [32]u8) !storage.File {
     const path = try std.fs.path.join(a, &.{ root, name });
     defer a.free(path);
-    var file = try files.File.open(io, a, path);
+    var file = try storage.File.open(io, a, path);
     errdefer file.deinit();
-    const view = file.index.blob;
+    const view = file.view;
     if (!view.symbolic or view.kind != kind) return error.InvalidRuntimeArtifact;
     if (!std.mem.eql(u8, &view.binding_id, &identity)) return error.SymbolIdentityMismatch;
     return file;
@@ -83,8 +94,9 @@ pub fn load(runtime: *bridge.Runtime, root: []const u8) !?Session {
     const ModuleSlot = @typeInfo(@TypeOf(runtime.modules.get("").?)).pointer.child;
     const TemplateSlot = @typeInfo(@TypeOf(runtime.templates.get("").?)).pointer.child;
     runtime.bundle_index = .{};
-    var modules = session.bytecode.?.index.blob.iterator();
-    while (try modules.next()) |r| {
+    for (0..session.bytecode.?.recordCount()) |record_index| {
+        var r = try session.bytecode.?.readAlloc(std.heap.smp_allocator, record_index);
+        defer r.deinit();
         const title = try symbol(names, r.title, .module);
         const bound = try vm_symbols.bindProgramAlloc(a, r.payload, names);
         errdefer a.free(bound);
@@ -101,8 +113,8 @@ pub fn load(runtime: *bridge.Runtime, root: []const u8) !?Session {
     session.bytecode.?.deinit();
     session.bytecode = null;
     runtime.templates_dir = ""; // Bodies already loaded. Never read source .wiki files.
-    var templates = session.templates.?.index.blob.iterator();
-    while (try templates.next()) |r| {
+    for (0..session.templates.?.recordCount()) |record_index| {
+        const r = try session.templates.?.readAlloc(a, record_index);
         const title = try templateName(a, try symbol(names, r.title, .template));
         var pos: usize = 0;
         const redirect_id = try enc.blob_format.readPayloadLength(r.payload, &pos);
@@ -121,8 +133,8 @@ pub fn load(runtime: *bridge.Runtime, root: []const u8) !?Session {
         }
         item.value_ptr.* = slot;
     }
-    var redirects = session.redirects.?.index.blob.iterator();
-    while (try redirects.next()) |r| {
+    for (0..session.redirects.?.recordCount()) |record_index| {
+        const r = try session.redirects.?.readAlloc(a, record_index);
         const from = try symbol(names, r.title, .module);
         var pos: usize = 0;
         const id = try enc.blob_format.readPayloadLength(r.payload, &pos);

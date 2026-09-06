@@ -18,67 +18,83 @@ pub fn pathAlloc(a: std.mem.Allocator, root: []const u8, kind: Kind, language: [
 }
 
 pub const Store = struct {
-    bytes: []align(std.heap.page_size_min) const u8,
-    index: dec.BlobIndexedView,
+    file: @import("blob_storage").File,
     allocator: std.mem.Allocator,
     root: []const u8 = "",
     resolver: ?@import("blob_files").Resolver = null,
     symbols: @import("blob_files").SymbolSource,
-
     pub fn open(io: std.Io, a: std.mem.Allocator, root: []const u8, kind: Kind, language: []const u8, trusted: bool) !Store {
+        _ = trusted; // A reusable disk cache is always built from validated source.
         try @import("blob_files").requireComplete(io, a, root);
         const path = try pathAlloc(a, root, kind, language);
         defer a.free(path);
-        var file = try std.Io.Dir.cwd().openFile(io, path, .{});
-        defer file.close(io);
-        const len = std.math.cast(usize, (try file.stat(io)).size) orelse return error.FileTooBig;
-        if (len == 0) return error.InvalidBlob;
-        const bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0);
-        errdefer std.posix.munmap(bytes);
-        const view = try dec.openTrustedBlob(bytes);
-        if (view.kind() != kind) return error.UnexpectedBlobKind;
-        if (kind == .language and !std.mem.eql(u8, view.languageMetadata().?.heading, language)) return error.UnexpectedLanguageBlob;
-        const index = if (trusted) try view.buildTrustedIndexAlloc(a) else try view.buildIndexAlloc(a);
-        var owned_index = index;
-        errdefer owned_index.deinit(a);
+        var file = try @import("blob_storage").File.open(io, a, path);
+        errdefer file.deinit();
+        if (file.view.kind != kind) return error.UnexpectedBlobKind;
+        const meta = if (kind == .language) try file.view.languageMetadata() else null;
+        if (meta) |m| if (!std.mem.eql(u8, m.heading, language)) return error.UnexpectedLanguageBlob;
         const owned_root = try a.dupe(u8, root);
-        return .{ .bytes = bytes, .index = index, .allocator = a, .root = owned_root, .symbols = .{ .io = io, .a = a, .root = owned_root }, .resolver = if (kind == .language) .{ .io = io, .a = a, .root = owned_root, .metadata = view.languageMetadata().?, .symbolic = view.raw.symbolic, .binding_id = view.raw.binding_id } else null };
+        return .{ .file = file, .allocator = a, .root = owned_root, .symbols = .{ .io = io, .a = a, .root = owned_root }, .resolver = if (meta) |m| .{ .io = io, .a = a, .root = owned_root, .metadata = m, .symbolic = file.view.symbolic, .binding_id = file.view.binding_id } else null };
     }
     pub fn deinit(self: *Store) void {
         if (self.resolver) |*r| r.deinit();
         self.symbols.deinit();
+        self.file.deinit();
         self.allocator.free(self.root);
-        self.index.deinit(self.allocator);
-        std.posix.munmap(self.bytes);
         self.* = undefined;
+    }
+    pub fn count(self: Store) usize {
+        return self.file.recordCount();
+    }
+    pub fn titleAt(self: Store, index: usize) ![]const u8 {
+        return self.file.titleAt(index);
+    }
+    pub fn find(self: Store, title: []const u8) !?usize {
+        return self.file.find(title);
+    }
+    pub fn metadata(self: Store) ?enc.blob_format.LanguageMetadata {
+        return if (self.file.view.kind == .language) self.file.view.languageMetadata() catch null else null;
+    }
+    pub const Raw = struct {
+        record: dec.BlobRecordView,
+        storage: @import("blob_storage").Record,
+        pub fn deinit(self: *Raw) void {
+            self.storage.deinit();
+        }
+    };
+    pub fn recordAlloc(self: *Store, a: std.mem.Allocator, index: usize) !Raw {
+        var r = try self.file.readAlloc(a, index);
+        errdefer r.deinit();
+        const view = try dec.openTrustedBlob(self.file.directory.header);
+        return .{ .record = view.wrapRecord(.{ .title = r.title, .payload = r.payload }), .storage = r };
     }
     pub const Resolved = struct {
         record: dec.BlobRecordView,
         a: std.mem.Allocator,
         owned: ?[]u8 = null,
         pub fn deinit(self: *Resolved) void {
-            if (self.owned) |bytes| self.a.free(bytes);
+            if (self.owned) |b| self.a.free(b);
         }
     };
     pub fn resolveCoreAlloc(self: *Store, a: std.mem.Allocator, record: dec.BlobRecordView) !Resolved {
-        var result: Resolved = .{ .record = record, .a = a };
-        const bytes = @import("model.zig").payload(record);
-        result.owned = try self.symbols.bindAlloc(a, bytes, self.index.blob.raw.symbolic, self.index.blob.raw.binding_id);
-        if (result.owned) |value| result.record = result.record.withBoundPayload(value);
-        return result;
+        var r: Resolved = .{ .record = record, .a = a };
+        r.owned = try self.symbols.bindAlloc(a, @import("model.zig").payload(record), self.file.view.symbolic, self.file.view.binding_id);
+        if (r.owned) |b| r.record = r.record.withBoundPayload(b);
+        return r;
     }
     pub fn resolveAlloc(self: *Store, a: std.mem.Allocator, record: dec.BlobRecordView) !Resolved {
         if (record != .language) return self.resolveCoreAlloc(a, record);
-        var result: Resolved = .{ .record = record, .a = a };
-        if (record == .language) if (self.resolver) |*resolver| {
+        var r: Resolved = .{ .record = record, .a = a };
+        if (self.resolver) |*resolver| {
             resolver.symbols = &self.symbols;
-            result.owned = try resolver.resolveAlloc(a, record.title(), record.language.payload);
-            if (result.owned) |bytes| result.record = result.record.withBoundPayload(bytes);
-        };
-        return result;
+            r.owned = try resolver.resolveAlloc(a, record.title(), record.language.payload);
+            if (r.owned) |b| r.record = r.record.withBoundPayload(b);
+        }
+        return r;
     }
-    pub fn prefix(self: Store, query: []const u8) !Range {
-        return prefixRange(self.index, query);
+    pub fn prefix(self: Store, text: []const u8) !Range {
+        const p = self.file.prefix(text);
+        return .{ .start = p.start, .end = p.end };
     }
 };
 pub const Range = struct { start: usize, end: usize };
@@ -138,7 +154,9 @@ test "core reading opens no companions and a missing package can be installed in
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = core_path, .data = core });
     var db = try Store.open(io, a, root, .language, "English", false);
     defer db.deinit();
-    const record = (try db.index.find("cat")).?;
+    var raw = try db.recordAlloc(a, (try db.find("cat")).?);
+    defer raw.deinit();
+    const record = raw.record;
     var doc = try @import("model.zig").fromCoreRecord(a, record);
     defer doc.deinit();
     try std.testing.expectEqual(.core, doc.entry.content);

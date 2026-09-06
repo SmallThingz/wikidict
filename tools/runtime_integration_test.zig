@@ -91,6 +91,33 @@ pub fn main(init: std.process.Init) !void {
     // extraction/build inputs, leaving the linked .wikblb artifacts at root.
     try std.Io.Dir.cwd().deleteTree(init.io, runtime);
     try std.Io.Dir.cwd().createDir(init.io, runtime, .default_dir);
+    // A live process must still spawn the matching VM after an atomic binary update.
+    const moving = try std.fs.path.join(a, &.{ dir, "movable-dict" });
+    _ = try h.run(&.{ "/usr/bin/cp", bin, moving }, 0);
+    const server_log = try std.fs.path.join(a, &.{ dir, "server.log" });
+    var log = try std.Io.Dir.cwd().createFile(init.io, server_log, .{});
+    defer log.close(init.io);
+    var server = try std.process.spawn(init.io, .{ .argv = &.{ moving, "serve", "--root", root, "--port", "0" }, .stdin = .ignore, .stdout = .ignore, .stderr = .{ .file = log } });
+    defer server.kill(init.io);
+    var url: ?[]const u8 = null;
+    for (0..300) |_| {
+        const text = try std.Io.Dir.cwd().readFileAlloc(init.io, server_log, a, .limited(1024 * 1024));
+        if (std.mem.indexOf(u8, text, "http://127.0.0.1:")) |start| {
+            const end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
+            url = try std.fmt.allocPrint(a, "{s}/api/entry?q=mouse", .{text[start..end]});
+            break;
+        }
+        try std.Io.sleep(init.io, .fromMilliseconds(20), .awake);
+    }
+    try h.require(url != null);
+    try std.Io.Dir.cwd().deleteFile(init.io, moving);
+    _ = try h.run(&.{ "/usr/bin/cp", bin, moving }, 0);
+    const after_update = try h.entry(try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "25", url.? }, 0));
+    try h.require(std.mem.eql(u8, after_update.object.get("expansion").?.object.get("status").?.string, "ok"));
+    try h.require(std.mem.eql(u8, after_update.object.get("source").?.string, source));
+    if (std.os.linux.errno(std.os.linux.kill(server.id.?, .TERM)) != .SUCCESS) return error.SignalFailed;
+    const server_exit = try server.wait(init.io);
+    try h.require(server_exit == .exited and server_exit.exited == 0);
     const data = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--runtime", runtime, "--format", "json", "--with-source" }, 0);
     const entry = try h.entry(data);
     try h.require(std.mem.eql(u8, entry.object.get("expansion").?.object.get("status").?.string, "ok"));

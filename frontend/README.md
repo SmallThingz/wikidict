@@ -16,7 +16,7 @@ zig-out/bin/dict stats --root data/wiktionary-blobs
 
 ## Runtime model and machine interface
 
-`store.zig` owns one read-only mapping and its validated runtime index. `model.zig` constructs an arena-owned view of semantic sections, blocks, inline spans and feature records. Most text borrows the mapping. Destroy presentation models before closing their store. Nothing in this model is persisted into blobs. Standalone `fromWikitext` owns its input copy; record-based models borrow their resolved payload, so destroy them before freeing the bound record or closing its store.
+`store.zig` owns a native storage handle and its validated runtime directory; raw and XZ record reads have explicit ownership. `model.zig` constructs an arena-owned view of semantic sections, blocks, inline spans and feature records. Text may borrow the selected record buffer. Destroy presentation models before releasing that record or closing its store. Nothing in this model is persisted into blobs. Standalone `fromWikitext` owns its input copy; record-based models borrow their resolved payload, so destroy them before freeing the bound record or closing its store.
 
 `dict.results.v1` JSON includes operation, query, kind, language, record_count, total_matches, offset, has_more, matches and entries. Search uses **case-sensitive UTF-8 byte prefixes**, returns title-only matches and supports bounded pagination. Lookup returns the complete semantic entry. `dict.languages.v1` returns sorted language headings. Results are written only to stdout; diagnostics use stderr. Exit codes: 0 success, 1 no matching titles, 2 usage, data, allocation or I/O error. An offset beyond the final search page returns an empty page with the original total.
 
@@ -26,7 +26,7 @@ Entry sections preserve heading levels. `wikitext.zig` renders semantic bodies t
 
 Human output neutralizes terminal control and bidi-control sequences. `--color auto|always|never` controls renderer-owned ANSI styling; automatic mode honors `NO_COLOR`, `TERM=dumb`, and output redirection. The `source` format intentionally bypasses display sanitization.
 
-Index construction validates framing and strict title order by default. `--trusted` skips only the order check for artifacts verified externally. No lookup table, compression metadata or frontend styling is added to the wire format.
+Native directory construction and cache loading validate framing and strict title order. The legacy `--trusted` argument remains accepted, but does not bypass these checks on persistent native caches. No lookup table, compression metadata or frontend styling is added to the wire format.
 
 Run `zig build test` for native presentation, parser, allocation-failure and all-six-kind encoder-to-reader-to-renderer tests, alongside the existing codec and wasm gates.
 
@@ -233,3 +233,58 @@ and embeds data URIs. Images and audio work with all HTTP(S) blocked. No SVG/HTM
 media is executable. Missing assets remain labelled, not represented as embedded.
 GFDL 1.2 assets retain the original image and an embedded full license copy. Source
 and license links are for attribution, not dependencies needed for offline playback.
+
+## Live HTTP application
+
+`dict serve --root ROOT --port 8787` serves the embedded Solid application and a
+local read-only HTTP/1.1 API. Same-origin requests use fixed routes, not arbitrary
+filesystem paths. There is no remote-bind option or CORS wildcard. This is not
+an authenticated public-deployment server.
+
+Routes are `/api/languages`, `/api/search`, `/api/entry`, `/api/stats` and
+`/api/health`. Search and entry return `dict.results.v1`. Parameters are `q`,
+`language` (heading or code), `kind`, `offset` and `limit` (1–100). Search returns
+titles; entry returns rendered content with original source. Unknown entries
+return 404, malformed queries 400, and a failed VM expansion returns 422 with
+its diagnostic. The catalog lists available headings/codes, not the languages
+claimed for a particular spelling.
+
+The server keeps four language/feature stores. VM work runs outside the index
+lock; at most two expansion jobs run concurrently. The browser debounces search,
+rejects stale responses and has a bounded entry-response cache. Entry links,
+collection/language changes, pagination and history operate against the database.
+Cancelling a browser request does not promise immediate cancellation of an
+already-running VM; its deadline still bounds that work. SIGINT/SIGTERM stop the
+server and join its workers. Running servers can spawn their matching VM worker
+through `/proc/self/exe` even after an atomic executable replacement.
+
+The live reader has no JSON/HTML/wikitext export controls. Use `dict export WORD
+--format json|html|wikitext` for exactly one entry. `--with-source` includes source
+in JSON/HTML. A single-entry HTML file does not silently bundle other entries.
+The older `lookup --format html` compatibility path can still include direct
+base entries. `render FILE` remains standalone Wikitext input.
+
+## Native storage ownership and caches
+
+`native/storage.zig` owns derived title/offset directories, retained file handles
+and optional XZ transport. Raw payloads use owned positional reads rather than
+permanently mapping complete source files. Compressed files retain a read-only
+mapping; selected records decode intersecting independently compressed blocks.
+Store record reads own their bytes: keep them alive while borrowed presentation
+data is used, then call `deinit`. Core data, companions, symbols and auxiliary
+runtime pages use the same transport. A VM page-content provider retains its
+primary language store and caches existence checks during an expansion.
+
+Disk indexes are separate `.dict-cache/*.idx` files bound to source identity,
+size and modification/change times, with checksums and validated framing/bounds.
+They can be deleted safely. Opening a cache still validates its directory; a
+running server retains that index instead of reopening it per request. HTTP
+`/api/stats` reports index reuse, payload reads and selected-core XZ decode
+counts; those counters exclude independent VM subprocess work.
+
+Cold XZ indexing is one bounded-memory full decode. Warm title search does not
+decode payload blocks; reading a record decodes its intersecting blocks. A
+single-block file remains correct but expensive to seek. Large block decoding
+does not require a full-block allocation. Bytecode/template initialization in
+the existing VM adapter still visits all program records; compressed storage
+does not make that adapter a demand-loaded VM.

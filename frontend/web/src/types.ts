@@ -25,10 +25,17 @@ export type Results = {
 };
 export const emptyResults: Results = { schema: 'dict.results.v1', operation: 'lookup', query: '', kind: 'language', language: null, match_mode: 'exact-utf8', record_count: 0, total_matches: 0, offset: 0, has_more: false, matches: [], entries: [] };
 export type Navigation = { title: string; language: string | null; kind: string; fragment?: string };
-export type MountOptions = { onNavigate?: (target: Navigation) => void; inheritedTheme?: boolean };
+export type MountOptions = { live?: LiveOptions; onNavigate?: (target: Navigation) => void; inheritedTheme?: boolean };
 
 /** Indices refer to source sections/blocks. The complete source-order model is retained. */
 export type FormRelation = { relation: string; target: string; language: string };
 export type Sense = { block: number; parent: number | null; examples: number[]; quotations: number[]; notes: number[]; form: FormRelation | null };
 export type Lexeme = { language?: string; kind: string; section: number; etymology: number | null; definitions: Sense[]; introduction: number[]; other_blocks: number[]; related_sections: number[] };
 export type Organization = { lexemes: Lexeme[]; other_sections: number[] };
+
+export type LiveOptions = {
+ query: string; language: string; kind: string; languages: {heading: string; code: string}[];
+ matches: {title: string}[]; total: number; hasMore: boolean; searching: boolean; loading: boolean; error: string;
+ onQuery: (value:string)=>void; onLanguage:(value:string)=>void; onKind:(value:string)=>void;
+ onSelect:(title:string)=>void; onMore:()=>void;
+};

@@ -74,3 +74,15 @@ test "local media export owns all temporary attachment allocations" {
     try writeLocal(&out.writer, a, std.testing.io, .{ .operation = .lookup, .query = "cat", .kind = .language, .language = "English", .record_count = 1, .total_matches = 1, .entries = &.{.{ .title = "cat", .kind = .language }} }, ".zig-cache/no-media-required");
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "dict-data") != null);
 }
+
+/// HTTP application shell. Single-entry files keep using the normal inert results slot.
+pub fn live(w: *std.Io.Writer, a: std.mem.Allocator, language: []const u8, kind: @import("blob_encoder").blob_format.BlobKind) !void {
+    const at = std.mem.indexOf(u8, template, slot) orelse return error.InvalidHtmlTemplate;
+    try w.writeAll(template[0..at]);
+    try w.writeAll("<script id=\"dict-data\" type=\"application/json\">");
+    const data = try std.json.Stringify.valueAlloc(a, .{ .mode = "live", .language = language, .kind = @tagName(kind) }, .{});
+    defer a.free(data);
+    try scriptJson(w, data);
+    try w.writeAll("</script>");
+    try w.writeAll(template[at + slot.len ..]);
+}

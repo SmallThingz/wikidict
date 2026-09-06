@@ -2,6 +2,7 @@
 const std = @import("std");
 const enc = @import("blob_encoder");
 const parts = enc.language_parts;
+const storage = @import("blob_storage");
 const format = enc.blob_format;
 pub const File = struct {
     a: std.mem.Allocator,
@@ -28,7 +29,7 @@ pub const SymbolSource = struct {
     io: std.Io,
     a: std.mem.Allocator,
     root: []const u8,
-    file: ?File = null,
+    file: ?storage.File = null,
     keys: []const []const u8 = &.{},
     pub fn deinit(self: *SymbolSource) void {
         self.a.free(self.keys);
@@ -40,18 +41,18 @@ pub const SymbolSource = struct {
         if (self.file == null) {
             const path = try std.fs.path.join(self.a, &.{ self.root, enc.call_symbols.filename });
             defer self.a.free(path);
-            var file = try File.open(self.io, self.a, path);
+            var file = try storage.File.open(self.io, self.a, path);
             errdefer file.deinit();
-            if (file.index.blob.kind != .symbols or !file.index.blob.symbolic) return error.InvalidSymbols;
-            const keys = try self.a.alloc([]const u8, file.index.recordCount());
+            if (file.view.kind != .symbols or !file.view.symbolic) return error.InvalidSymbols;
+            const keys = try self.a.alloc([]const u8, file.recordCount());
             errdefer self.a.free(keys);
             for (keys, 0..) |*key, i| {
-                const r = try file.index.recordAt(i);
-                if (!enc.call_symbols.validKey(r.title) or r.payload.len != 0) return error.InvalidSymbols;
-                key.* = r.title;
+                const title = try file.titleAt(i);
+                if (!enc.call_symbols.validKey(title) or file.directory.rows[i].length != 0) return error.InvalidSymbols;
+                key.* = title;
             }
             const names: enc.call_symbols.Names = .{ .keys = keys };
-            if (!std.mem.eql(u8, &names.digest(), &file.index.blob.binding_id)) return error.SymbolIdentityMismatch;
+            if (!std.mem.eql(u8, &names.digest(), &file.view.binding_id)) return error.SymbolIdentityMismatch;
             self.file = file;
             self.keys = keys;
         }
@@ -60,7 +61,7 @@ pub const SymbolSource = struct {
     pub fn bindAlloc(self: *SymbolSource, a: std.mem.Allocator, bytes: []const u8, encoded: bool, binding: [32]u8) !?[]u8 {
         if (!encoded or std.mem.indexOfScalar(u8, bytes, enc.call_symbols.marker) == null) return null;
         const names = try self.load();
-        if (!std.mem.eql(u8, &self.file.?.index.blob.binding_id, &binding)) return error.SymbolIdentityMismatch;
+        if (!std.mem.eql(u8, &self.file.?.view.binding_id, &binding)) return error.SymbolIdentityMismatch;
         return enc.call_symbols.decodeAlloc(a, bytes, names);
     }
 };
@@ -84,24 +85,24 @@ pub const Resolver = struct {
     a: std.mem.Allocator,
     root: []const u8,
     metadata: format.LanguageMetadata,
-    files: [parts.count]?File = @splat(null),
+    files: [parts.count]?storage.File = @splat(null),
     attempted: [parts.count]bool = @splat(false),
     used: [parts.count]usize = @splat(0),
     pub fn deinit(self: *Resolver) void {
         for (&self.files) |*file| if (file.*) |*f| f.deinit();
     }
-    fn load(self: *Resolver, i: usize) !?*File {
+    fn load(self: *Resolver, i: usize) !?*storage.File {
         if (!self.attempted[i]) {
             const family: parts.Kind = @enumFromInt(i + 1);
             const path = try enc.blob_catalog.supplementPathAlloc(self.a, self.root, self.metadata.heading, family);
             defer self.a.free(path);
-            var f = File.open(self.io, self.a, path) catch |err| switch (err) {
+            var f = storage.File.open(self.io, self.a, path) catch |err| switch (err) {
                 // A missing optional package can be installed while a reader is open.
                 error.FileNotFound => return null,
                 else => return err,
             };
             errdefer f.deinit();
-            const view = f.index.blob;
+            const view = f.view;
             if (view.kind != .supplement or try view.supplementKind() != family) return error.InvalidSupplement;
             const meta = try view.languageMetadata();
             if (!std.mem.eql(u8, meta.heading, self.metadata.heading) or !std.mem.eql(u8, meta.code, self.metadata.code)) return error.InvalidSupplement;
@@ -124,9 +125,18 @@ pub const Resolver = struct {
         for (required, 0..) |needed, i| if (needed) {
             any = true;
             const f = (try self.load(i)) orelse return error.MissingSupplement;
-            const body = (try f.index.find(title)) orelse return error.MissingSupplementRecord;
-            owned[i] = if (self.symbols) |symbols| try symbols.bindAlloc(a, body.payload, f.index.blob.symbolic, f.index.blob.binding_id) else if (f.index.blob.symbolic and std.mem.indexOfScalar(u8, body.payload, enc.call_symbols.marker) != null) return error.MissingSymbols else null;
+            const record_index = f.find(title) orelse return error.MissingSupplementRecord;
+            var body = try f.readAlloc(a, record_index);
+            errdefer body.deinit();
+            owned[i] = if (self.symbols) |symbols| try symbols.bindAlloc(a, body.payload, f.view.symbolic, f.view.binding_id) else if (f.view.symbolic and std.mem.indexOfScalar(u8, body.payload, enc.call_symbols.marker) != null) return error.MissingSymbols else null;
             bodies[i] = owned[i] orelse body.payload;
+            if (owned[i] == null) {
+                owned[i] = body.owned;
+                body.owned = null;
+            } else {
+                body.deinit();
+                body.owned = null;
+            }
             self.used[i] += 1;
         };
         if (!any) return bound;
@@ -138,7 +148,7 @@ pub const Resolver = struct {
     pub fn verifyCounts(self: *Resolver) !void {
         for (0..parts.count) |i| {
             const file = try self.load(i);
-            const count = if (file) |f| f.index.recordCount() else 0;
+            const count = if (file) |f| f.recordCount() else 0;
             if (count != self.used[i]) return error.OrphanSupplementRecord;
         }
     }

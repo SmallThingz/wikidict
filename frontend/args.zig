@@ -1,10 +1,12 @@
 const std = @import("std");
 const store = @import("store.zig");
-pub const Command = enum { lookup, search, languages, stats, tui, render };
+pub const Command = enum { lookup, search, languages, stats, tui, render, serve };
 pub const Theme = enum { terminal, dark, light };
 pub const Format = enum { text, json, source, html };
 pub const Color = enum { auto, always, never };
 pub const Options = struct {
+    port: u16 = 8787,
+    single_page: bool = false,
     runtime: ?[]const u8 = null,
     media_dir: ?[]const u8 = null,
     runtime_timeout_ms: u32 = 60000,
@@ -38,7 +40,11 @@ pub fn parse(argv: []const []const u8) !Options {
     }
     var pos: usize = 1;
     var has_query = false;
-    if (std.meta.stringToEnum(Command, argv[0])) |command| out.command = command else {
+    if (std.mem.eql(u8, argv[0], "export")) {
+        out.command = .lookup;
+        out.single_page = true;
+        out.format = .html;
+    } else if (std.meta.stringToEnum(Command, argv[0])) |command| out.command = command else {
         // Retain the documented query-blobs positional entrypoint; remove its old diagnostic renderer.
         if (argv.len < 3) return error.Usage;
         out.root = argv[0];
@@ -92,7 +98,7 @@ pub fn parse(argv: []const []const u8) !Options {
             if (pos + 1 >= argv.len) return error.Usage;
             pos += 1;
             const value = argv[pos];
-            if (std.mem.eql(u8, arg, "--media-dir")) out.media_dir = value else if (std.mem.eql(u8, arg, "--runtime")) out.runtime = value else if (std.mem.eql(u8, arg, "--runtime-timeout-ms")) out.runtime_timeout_ms = std.fmt.parseInt(u32, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--title")) out.title = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
+            if (std.mem.eql(u8, arg, "--media-dir")) out.media_dir = value else if (std.mem.eql(u8, arg, "--port")) out.port = std.fmt.parseInt(u16, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--runtime")) out.runtime = value else if (std.mem.eql(u8, arg, "--runtime-timeout-ms")) out.runtime_timeout_ms = std.fmt.parseInt(u32, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--title")) out.title = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = if (std.mem.eql(u8, value, "wikitext")) .source else std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
         } else {
             if (has_query) return error.Usage;
             out.query = arg;
@@ -108,6 +114,8 @@ pub fn parse(argv: []const []const u8) !Options {
     if (out.runtime) |root| if (root.len == 0 or out.command == .stats or out.command == .languages) return error.Usage;
     if (out.limit == 0 or out.limit > 1000 or out.root.len == 0 or out.language.len == 0) return error.Usage;
     if ((out.command == .lookup or out.command == .render) and (!has_query or out.query.len == 0)) return error.Usage;
+    if (out.command == .serve and (has_query or out.format != .text or out.core_only or out.with_source)) return error.Usage;
+    if (out.port != 8787 and out.command != .serve) return error.Usage;
     if (out.command == .stats and has_query) return error.Usage;
     if (out.format == .source and out.command != .lookup and out.command != .render) return error.Usage;
     if (out.format == .html and out.command != .lookup and out.command != .search and out.command != .render) return error.Usage;
@@ -175,4 +183,15 @@ test "explicit native rendering cannot accidentally enable a configured VM" {
     try std.testing.expect((try parse(&.{ "lookup", "cat", "--native" })).native);
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--native", "--runtime", "runtime" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--media-dir", "" }));
+}
+
+test "live server and single-entry exports are distinct CLI operations" {
+    const serve = try parse(&.{ "serve", "--port", "0" });
+    try std.testing.expectEqual(Command.serve, serve.command);
+    try std.testing.expectEqual(@as(u16, 0), serve.port);
+    const single = try parse(&.{ "export", "cats", "--format", "wikitext" });
+    try std.testing.expect(single.single_page and single.format == .source and single.command == .lookup);
+    try std.testing.expectError(error.Usage, parse(&.{ "serve", "cat" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "serve", "--format", "html" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--port", "5" }));
 }

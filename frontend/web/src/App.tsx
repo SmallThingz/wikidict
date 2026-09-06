@@ -13,17 +13,20 @@ export function DictionaryApp(props: { data: Results; options?: MountOptions }) 
   let content!: HTMLDivElement;
   let appearanceMenu!: HTMLDetailsElement;
   const id = createUniqueId();
-  const [filter, setFilter] = createSignal('');
+  const [localFilter, setLocalFilter] = createSignal('');
+  const live = () => props.options?.live;
+  const filter = () => live()?.query ?? localFilter();
+  const setFilter = (value: string) => {setSelection(0); if(live()) live()!.onQuery(value); else setLocalFilter(value);};
   const [selection, setSelection] = createSignal(Math.max(0, props.data.entries.findIndex(e => e.title === props.data.query)));
   const [tab, setTab] = createSignal<Tab>('reading');
   const [mobileIndex, setMobileIndex] = createSignal(false);
   const [notice, setNotice] = createSignal('');
   const theme = useTheme(() => root, !!props.options?.inheritedTheme);
-  const filtered = createMemo(() => props.data.entries.map((entry, index) => ({ entry, index })).filter(item => item.entry.title.toLocaleLowerCase().includes(filter().toLocaleLowerCase())));
+  const filtered = createMemo(() => live() ? live()!.matches.map((m,index) => ({entry: {title:m.title,language:live()!.kind==='language' ? live()!.language : null,kind:live()!.kind},index})) : props.data.entries.map((entry, index) => ({ entry, index })).filter(item => item.entry.title.toLocaleLowerCase().includes(filter().toLocaleLowerCase())));
   const current = createMemo(() => filtered().find(item => item.index === selection()) ?? filtered()[0]);
-  const entry = () => current()?.entry;
+  const entry = () => live() ? props.data.entries[0] : props.data.entries[current()?.index ?? -1];
   const entryJson = () => JSON.stringify({ ...props.data, operation: 'lookup', match_mode: 'exact-utf8', query: entry()?.title ?? '', total_matches: entry() ? 1 : 0, offset: 0, has_more: false, matches: [], entries: entry() ? [entry()] : [] }, null, 2);
-  const select = (index: number) => { setSelection(index); setMobileIndex(false); setNotice(''); queueMicrotask(() => root.scrollIntoView({ block: 'start' })); };
+  const select = (index: number) => { if (live()) { const match=live()!.matches[index]; if(match) live()!.onSelect(match.title); setMobileIndex(false); setTab('reading'); return; } setSelection(index); setMobileIndex(false); setNotice(''); queueMicrotask(() => root.scrollIntoView({ block: 'start' })); };
   const step = (delta: number) => {
     const list = filtered(); if (!list.length) return;
     const position = list.findIndex(item => item.index === current()?.index);
@@ -36,6 +39,7 @@ export function DictionaryApp(props: { data: Results; options?: MountOptions }) 
     const title = (hash < 0 ? raw : raw.slice(0, hash)) || entry()?.title || '';
     let fragment = hash < 0 ? '' : raw.slice(hash + 1);
     try { fragment = decodeURIComponent(fragment); } catch { /* Retain a literal malformed fragment. */ }
+    if (live() && props.options?.onNavigate) { if (/^(?:w|wikipedia|d|commons|s|wikisource|File|Image|Template|Module|Appendix|Wiktionary|Category):/i.test(title)) return; event.preventDefault();setTab('reading');setMobileIndex(false);props.options.onNavigate({title,fragment,language:language || live()!.language,kind:'language'});return; }
     const found = props.data.entries.findIndex(item => item.title === title && (!language || item.language_code === language || item.language === language));
     if (found >= 0) {
       event.preventDefault(); setFilter(''); select(found); setTab('reading');
@@ -82,28 +86,30 @@ export function DictionaryApp(props: { data: Results; options?: MountOptions }) 
       </div>
     </div></header>
     <div class="dict-workspace">
-      <aside class="dict-index" id={`${id}-index`} classList={{ 'dict-index-open': mobileIndex() }} aria-label="Export index">
-        <div class="dict-index-header"><span class="dict-eyebrow">IN THIS EXPORT</span><span class="dict-count">{props.data.entries.length.toLocaleString()}</span></div>
-        <label class="dict-search"><span class="dict-sr">Filter exported entries</span><span aria-hidden="true">⌕</span><input ref={search} value={filter()} placeholder="Find a word…" spellcheck={false} aria-label="Filter exported entries" aria-controls={`${id}-results`} onInput={event => setFilter(event.currentTarget.value)} onKeyDown={event => {
+      <aside class="dict-index" id={`${id}-index`} classList={{ 'dict-index-open': mobileIndex() }} aria-label={live() ? 'Dictionary search' : 'Export index'}>
+        <div class="dict-index-header"><span class="dict-eyebrow">{live() ? 'DICTIONARY' : 'IN THIS EXPORT'}</span><span class="dict-count">{(live()?.total ?? props.data.entries.length).toLocaleString()}</span></div>
+        <Show when={live()}>{state => <div class="dict-live-selectors"><label>Collection<select aria-label="Dictionary collection" value={state().kind} onChange={event => state().onKind(event.currentTarget.value)}><option value="language">Dictionary</option><option value="thesaurus">Thesaurus</option><option value="citations">Citations</option><option value="reconstruction">Reconstruction</option><option value="rhymes">Rhymes</option><option value="sign_gloss">Sign gloss</option></select></label><Show when={state().kind==='language'}><label>Language<select aria-label="Dictionary language" value={state().language} onChange={event => state().onLanguage(event.currentTarget.value)}><For each={state().languages}>{lang => <option value={lang.heading} selected={lang.heading === state().language}>{lang.heading}</option>}</For></select></label></Show></div>}</Show>
+        <label class="dict-search"><span class="dict-sr">Filter exported entries</span><span aria-hidden="true">⌕</span><input ref={search} value={filter()} placeholder="Find a word…" spellcheck={false} aria-label={live() ? 'Search dictionary' : 'Filter exported entries'} aria-controls={`${id}-results`} onInput={event => setFilter(event.currentTarget.value)} onKeyDown={event => {
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); step(event.key === 'ArrowDown' ? 1 : -1); }
-          if (event.key === 'Enter') { setMobileIndex(false); content.focus(); }
+          if (event.key === 'Enter') { if(live()) select(current()?.index ?? 0); else {setMobileIndex(false);content?.focus();} }
         }}/><kbd>/</kbd></label>
         <nav id={`${id}-results`} class="dict-results" aria-label="Entries"><For each={filtered()}>{item => <button aria-current={item.index === current()?.index ? 'true' : undefined} onClick={() => select(item.index)}><span>{item.entry.title}</span><small>{item.entry.language ?? item.entry.kind.replaceAll('_', ' ')}</small><span class="dict-result-arrow" aria-hidden="true">↗</span></button>}</For></nav>
-        <Show when={!filtered().length}><p class="dict-empty-index">No entries match this filter.</p></Show>
+        <Show when={live()?.hasMore}><button class="dict-more-results" disabled={live()?.searching} onClick={() => live()?.onMore()}>More matches</button></Show>
+        <Show when={!filtered().length && !live()?.searching}><p class="dict-empty-index">No entries match this filter.</p></Show>
         <Show when={entry()}>{selected => <nav class="dict-contents" aria-label="Entry contents"><span class="dict-eyebrow">ON THIS PAGE</span><For each={navigation(selected())}>{item => <a href={`#${id}-section-${item.index}`} onClick={event => { event.preventDefault(); setTab('reading'); setMobileIndex(false); queueMicrotask(() => reveal(root.querySelector(`[id="${id}-section-${item.index}"]`))); }}>{item.label}</a>}</For></nav>}</Show>
-        <footer class="dict-index-footer"><span>{props.data.operation === "render" ? "WIKITEXT" : "WIKBLB05"}</span><span>{props.data.operation === "render" ? "Rendered local source" : `${props.data.record_count.toLocaleString()} records in source blob`}</span><span>{props.data.total_matches.toLocaleString()} {props.data.operation === 'search' ? 'prefix matches' : 'exact match(es)'} · export is self-contained</span></footer>
+        <Show when={live()}><p class="dict-live-hint">Case-sensitive prefix search across the selected collection.</p></Show><footer class="dict-index-footer"><span>{props.data.operation === "render" ? "WIKITEXT" : "WIKBLB05"}</span><span>{props.data.operation === "render" ? "Rendered local source" : `${props.data.record_count.toLocaleString()} records in source blob`}</span><span>{props.data.total_matches.toLocaleString()} {props.data.operation === 'search' ? 'prefix matches' : 'exact match(es)'} · {live() ? 'live local database' : 'export is self-contained'}</span></footer>
       </aside>
-      <main class="dict-main"><Show when={entry()} fallback={<div class="dict-empty"><span class="dict-eyebrow">A DICTIONARY, WITHOUT THE DISTRACTIONS</span><h1>Words, in context.</h1><p>{props.data.entries.length ? 'No entries match your filter. Clear it to return to the exported words.' : 'This export contains no matching entries.'}</p><Show when={filter()}><button onClick={() => setFilter('')}>Clear filter</button></Show></div>}>{selected => <>
-        <div class="dict-entry-header"><div class="dict-breadcrumb"><span>{selected().language ?? selected().kind.replaceAll('_', ' ')}</span><span aria-hidden="true">/</span><span>DICTIONARY ENTRY</span></div><h1 dir="auto">{selected().title}</h1><div class="dict-entry-meta"><span class="dict-badge">{selected().kind.replaceAll('_', ' ')}</span><span>{selected().sections.length} sections</span><span>Available offline</span><Show when={selected().expansion}>{state => <span>{state().status === "ok" ? "Lua bytecode" : "Native fallback"}</span>}</Show></div></div>
-        <div class="dict-toolbar"><div role="tablist" aria-label="Entry view"><For each={tabs}>{value => <button id={`${id}-tab-${value}`} role="tab" aria-selected={tab() === value} aria-controls={`${id}-content`} tabIndex={tab() === value ? 0 : -1} onClick={() => setTab(value)} onKeyDown={event => {
+      <main class="dict-main"><Show when={live()?.loading || live()?.searching}><p class="dict-live-status" role="status">{live()?.loading ? 'Rendering entry… Search remains available.' : 'Searching…'}</p></Show><Show when={live()?.error}><p class="dict-notice" role="alert">{live()?.error}</p></Show><Show when={entry()} fallback={<div class="dict-empty"><span class="dict-eyebrow">A DICTIONARY, WITHOUT THE DISTRACTIONS</span><h1>Words, in context.</h1><p>{live() ? 'Search the full local dictionary. Select a result to read definitions, examples and history.' : props.data.entries.length ? 'No entries match your filter. Clear it to return to the exported words.' : 'This export contains no matching entries.'}</p><Show when={filter()}><button onClick={() => setFilter('')}>Clear filter</button></Show></div>}>{selected => <>
+        <div class="dict-entry-header"><div class="dict-breadcrumb"><span>{selected().language ?? selected().kind.replaceAll('_', ' ')}</span><span aria-hidden="true">/</span><span>DICTIONARY ENTRY</span></div><h1 dir="auto">{selected().title}</h1><div class="dict-entry-meta"><span class="dict-badge">{selected().kind.replaceAll('_', ' ')}</span><span>{selected().sections.length} sections</span><span>{live() ? 'Local database' : 'Available offline'}</span><Show when={selected().expansion}>{state => <span>{state().status === "ok" ? "Lua bytecode" : "Native fallback"}</span>}</Show></div></div>
+        <Show when={!live()}><div class="dict-toolbar"><div role="tablist" aria-label="Entry view"><For each={tabs}>{value => <button id={`${id}-tab-${value}`} role="tab" aria-selected={tab() === value} aria-controls={`${id}-content`} tabIndex={tab() === value ? 0 : -1} onClick={() => setTab(value)} onKeyDown={event => {
           if (event.key === 'ArrowRight' || event.key === 'ArrowLeft' || event.key === 'Home' || event.key === 'End') {
             event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (tabs.indexOf(value) + (event.key === 'ArrowRight' ? 1 : 2)) % 3;
             setTab(tabs[next]); (root.querySelector(`[id="${id}-tab-${tabs[next]}"]`) as HTMLButtonElement)?.focus();
           }
-        }}>{value === 'json' ? 'JSON' : value[0].toUpperCase() + value.slice(1)}</button>}</For></div><div class="dict-tools"><button onClick={copy}>Copy</button><button onClick={download}>Export JSON <span aria-hidden="true">↓</span></button></div></div>
+        }}>{value === 'json' ? 'JSON' : value[0].toUpperCase() + value.slice(1)}</button>}</For></div><div class="dict-tools"><button onClick={copy}>Copy</button><button onClick={download}>Export JSON <span aria-hidden="true">↓</span></button></div></div></Show>
         <Show when={selected().unexpanded_templates > 0 && tab() === 'reading'}><p class="dict-render-note">{selected().unexpanded_templates} unsupported templates need additional definitions. Their source remains inspectable; supported templates and wikitext are rendered.</p></Show>
         <Show when={selected().expansion?.status === "failed"}><p class="dict-notice" role="alert">Lua VM expansion failed. This is native fallback rendering: {selected().expansion?.diagnostic}</p></Show>
-        <div class="dict-entry-content" id={`${id}-content`} ref={content} role="tabpanel" aria-labelledby={`${id}-tab-${tab()}`} tabIndex={0}>
+        <div class="dict-entry-content" id={`${id}-content`} ref={content} role={live() ? 'region' : 'tabpanel'} aria-label={live() ? 'Dictionary entry' : undefined} aria-labelledby={live() ? undefined : `${id}-tab-${tab()}`} tabIndex={0}>
           <Show when={tab() === 'reading'}><Reading entry={selected()} prefix={`${id}-section`} navigate={navigate}/></Show>
           <Show when={tab() === 'source'}><div class="dict-source-label">{selected().source != null ? 'EXACT WIKITEXT · UNMODIFIED' : selected().source_base64 != null ? 'EXACT SOURCE BYTES · BASE64' : selected().payload_base64 != null ? 'INVALID PAYLOAD · BASE64' : 'SOURCE NOT INCLUDED'}</div><pre class="dict-source" dir="auto">{selected().source ?? selected().source_base64 ?? selected().payload_base64 ?? (selected().content === 'core' ? 'This core-only export does not contain the complete source. Re-export without --core-only and with --with-source after installing the matching companions.' : 'Export with --with-source to include the original wikitext.')}</pre></Show>
           <Show when={tab() === 'json'}><div class="dict-source-label">DICT.RESULTS.V1 · FRONTEND-NEUTRAL DATA</div><pre class="dict-source">{entryJson()}</pre></Show>

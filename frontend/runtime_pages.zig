@@ -14,15 +14,17 @@ pub const Provider = struct {
     root: []const u8,
     dictionary_root: ?[]const u8,
     language: []const u8,
-    pages: ?PageFile = null,
+    pages: ?@import("blob_storage").File = null,
     symbols: files.SymbolSource,
+    primary: ?store.Store = null,
+    existence: std.StringHashMapUnmanaged(bool) = .empty,
     pub fn init(io: std.Io, a: A, runtime: *bridge.Runtime, root: []const u8, dictionary_root: ?[]const u8, language: []const u8) !Provider {
         var self: Provider = .{ .io = io, .a = a, .runtime = runtime, .root = root, .dictionary_root = dictionary_root, .language = language, .symbols = .{ .io = io, .a = a, .root = root } };
         errdefer self.deinit();
         for ([_][]const u8{ "pages.wikblb", "pages.source.wikblb" }) |name| {
             const path = try std.fs.path.join(a, &.{ root, name });
             defer a.free(path);
-            var file = PageFile.open(io, a, path) catch |err| switch (err) {
+            var file = @import("blob_storage").File.open(io, a, path) catch |err| switch (err) {
                 error.FileNotFound => continue,
                 else => return err,
             };
@@ -36,19 +38,36 @@ pub const Provider = struct {
     pub fn deinit(self: *Provider) void {
         if (self.pages) |*p| p.deinit();
         self.symbols.deinit();
+        if (self.primary) |*db| db.deinit();
+        var keys = self.existence.keyIterator();
+        while (keys.next()) |key| self.a.free(key.*);
+        self.existence.deinit(self.a);
     }
     pub fn attach(self: *Provider) void {
         self.runtime.setPageContentProvider(.{ .ctx = self, .get = get, .exists = exists });
     }
     fn languageRecord(self: *Provider, a: A, title: []const u8, language: []const u8, content: bool) !?[]const u8 {
         const root = self.dictionary_root orelse return null;
+        if (std.mem.eql(u8, language, self.language)) {
+            if (self.primary == null) self.primary = store.Store.open(self.io, self.a, root, .language, language, false) catch |err| switch (err) {
+                error.FileNotFound => return null,
+                else => return err,
+            };
+            return self.fromStore(a, &self.primary.?, title, content);
+        }
         var db = store.Store.open(self.io, self.a, root, .language, language, false) catch |err| switch (err) {
             error.FileNotFound => return null,
             else => return err,
         };
         defer db.deinit();
-        const raw = (try db.index.find(title)) orelse return null;
+        return self.fromStore(a, &db, title, content);
+    }
+    fn fromStore(self: *Provider, a: A, db: *store.Store, title: []const u8, content: bool) !?[]const u8 {
+        const record_index = (try db.find(title)) orelse return null;
         if (!content) return "";
+        var input = try db.recordAlloc(self.a, record_index);
+        defer input.deinit();
+        const raw = input.record;
         var resolved = try db.resolveAlloc(self.a, raw);
         defer resolved.deinit();
         return try model.sourceAlloc(a, resolved.record);
@@ -57,17 +76,12 @@ pub const Provider = struct {
         if (raw_title.len > 4096) return error.InvalidPageTitle;
         const title = try a.dupe(u8, raw_title);
         std.mem.replaceScalar(u8, title, '_', ' ');
-        if (self.pages) |*file| if (file.records.get(title)) |r| {
+        if (self.pages) |*file| if (file.find(title)) |record_index| {
             if (!content) return "";
-            const payload = try a.alloc(u8, r.length);
-            errdefer a.free(payload);
-            if (try file.handle.readPositionalAll(self.io, payload, r.offset) != payload.len) return error.TruncatedSourcePage;
-            const decoded = try self.symbols.bindAlloc(a, payload, file.symbolic, file.binding_id);
-            if (decoded) |bound| {
-                a.free(payload);
-                return bound;
-            }
-            return payload;
+            var r = try file.readAlloc(a, record_index);
+            defer r.deinit();
+            const decoded = try self.symbols.bindAlloc(a, r.payload, file.view.symbolic, file.view.binding_id);
+            return decoded orelse try a.dupe(u8, r.payload);
         };
         if (self.runtime.templates.get(title)) |slot| {
             if (!content) return "";
@@ -96,8 +110,6 @@ pub const Provider = struct {
             }
             return null;
         }
-        // Known namespaces are completely captured by the runtime-page extractor.
-        if (std.mem.startsWith(u8, title, "Appendix:") or std.mem.startsWith(u8, title, "Wiktionary:") or std.mem.startsWith(u8, title, "MediaWiki:")) return null;
         self.runtime.last_not_implemented = try self.runtime.allocator.dupe(u8, title);
         return error.PageContentUnavailable;
     }
@@ -107,39 +119,11 @@ pub const Provider = struct {
     }
     fn exists(ctx: *anyopaque, a: A, title: []const u8) anyerror!bool {
         const self: *Provider = @ptrCast(@alignCast(ctx));
-        return (try self.lookup(a, title, false)) != null;
-    }
-};
-
-/// Derive a small in-memory page directory, then release the large source mapping.
-/// Payloads are read only when needed. No offsets/index are serialized.
-const PageFile = struct {
-    io: std.Io,
-    a: A,
-    handle: std.Io.File,
-    records: std.StringHashMapUnmanaged(struct { offset: u64, length: usize }) = .empty,
-    symbolic: bool,
-    binding_id: [32]u8,
-    fn open(io: std.Io, a: A, path: []const u8) !PageFile {
-        var input = try files.File.open(io, a, path);
-        defer input.deinit();
-        if (input.index.blob.kind != .pages) return error.InvalidSourcePages;
-        var file: PageFile = .{ .io = io, .a = a, .handle = try std.Io.Dir.cwd().openFile(io, path, .{}), .symbolic = input.index.blob.symbolic, .binding_id = input.index.blob.binding_id };
-        errdefer file.deinit();
-        var it = input.index.blob.iterator();
-        while (try it.next()) |record| {
-            const title = try a.dupe(u8, record.title);
-            errdefer a.free(title);
-            const slot = try file.records.getOrPut(a, title);
-            if (slot.found_existing) return error.DuplicatePage;
-            slot.value_ptr.* = .{ .offset = @intFromPtr(record.payload.ptr) - @intFromPtr(input.bytes.ptr), .length = record.payload.len };
-        }
-        return file;
-    }
-    fn deinit(self: *PageFile) void {
-        var it = self.records.keyIterator();
-        while (it.next()) |key| self.a.free(key.*);
-        self.records.deinit(self.a);
-        self.handle.close(self.io);
+        if (self.existence.get(title)) |known| return known;
+        const result = (try self.lookup(a, title, false)) != null;
+        const owned = try self.a.dupe(u8, title);
+        errdefer self.a.free(owned);
+        try self.existence.put(self.a, owned, result);
+        return result;
     }
 };

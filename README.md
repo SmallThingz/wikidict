@@ -196,3 +196,61 @@ selects the limited preview, and `--core-only` selects partial native content.
 `zig build fetch-media -- RESULTS.json ROOT/media` explicitly acquires attributed
 assets; subsequent HTML exports embed them without network access. See
 `frontend/README.md` for the APIs, format identity and runtime compatibility boundary.
+
+## Live dictionary, single-entry exports and XZ storage
+
+```sh
+zig build
+zig-out/bin/dict serve --port 8787
+# Open http://127.0.0.1:8787 on the same computer.
+
+zig-out/bin/dict export cats --format json --with-source > cats.json
+zig-out/bin/dict export cats --format html --with-source > cats.html
+zig-out/bin/dict export cats --format wikitext > cats.wiki
+```
+
+`serve` searches the complete selected language or feature collection, not a
+static exported list. The themed Solid reader supports pagination, entry links,
+language/collection selection and browser Back/Forward. The server binds only to
+`127.0.0.1`; `--port 0` chooses an available port and prints it to stderr. Linked
+Lua rendering and locally embedded media remain available. Slow entry expansion
+does not hold the search lock. The live UI has no export toolbar; `export` is the
+CLI operation for exactly one entry. Existing `lookup`/`search` exports and
+standalone `render FILE` remain available for compatibility.
+
+Native readers retain loaded indexes and save disposable directories under
+`.dict-cache` beside each input file. New processes reuse those caches. Source
+identity, size, modification/change times, cache checksum, framing and bounds
+reject stale or damaged caches. Replacing a core file also invalidates its
+in-process server index. Cache files are trusted local derived artifacts, not a
+second source of dictionary content. An unavailable/read-only cache location
+falls back to an explicitly reported memory-only index. Nothing was added to
+the logical `WIKBLB05` format.
+
+When a `.wikblb` file is absent, native readers try `.wikblb.xz`, including
+companions, symbols and runtime artifacts. Building the native tools requires
+liblzma headers; reading XZ requires `liblzma.so.5`. Portable blob codecs and the
+browser have no liblzma dependency and still consume uncompressed logical bytes.
+
+Compress finished files externally with independent XZ blocks for useful random
+access. On a copy of the dataset, for example:
+
+```sh
+xz -0 -T1 --block-size=1MiB --check=crc64 path/language.wikblb
+zig build index-blobs -- path/language.wikblb.xz
+zig-out/bin/dict serve --root path/to/dataset
+```
+
+`index-blobs` accepts files compressed beforehand. The first directory build
+streams and validates the decompressed data once without saving a decompressed
+copy. Subsequent opens reuse the record directory and XZ's own block index;
+selected records decode only intersecting blocks and verify their integrity
+checks. Block-crossing records and concatenated XZ streams are supported. Large
+blocks use bounded-memory streaming; small decoded blocks have a bounded cache.
+
+A file compressed as one block must decode that block to read a record. Indexing
+cannot create independent boundaries; recompress with `--block-size` to change
+that tradeoff. `index-blobs` reports records, index bytes, block count and whether
+the cache was reused, written or memory-only. `zig build test-storage` and
+`zig build test-http` exercise real raw/XZ files, cache recovery and the live
+backend, and are included in the native test gate.

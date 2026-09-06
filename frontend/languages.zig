@@ -1,6 +1,6 @@
 //! Explicit catalog-versus-entry accounting. Counts are derived from actual blob records.
 const std = @import("std");
-const files = @import("blob_files");
+const files = @import("blob_storage");
 const store = @import("store.zig");
 const output = @import("output.zig");
 const args = @import("args.zig");
@@ -19,11 +19,11 @@ pub fn write(io: std.Io, a: std.mem.Allocator, scratch: std.mem.Allocator, opts:
         defer scratch.free(file_path);
         var file = try files.File.open(io, scratch, file_path);
         defer file.deinit();
-        if (file.index.blob.kind != .language) return error.UnexpectedBlobKind;
-        const meta = try file.index.blob.languageMetadata();
+        if (file.view.kind != .language) return error.UnexpectedBlobKind;
+        const meta = try file.view.languageMetadata();
         if (!std.mem.eql(u8, meta.heading, entry.heading)) return error.UnexpectedLanguageBlob;
-        if (opts.query.len != 0 and try file.index.find(opts.query) == null) continue;
-        try items.append(a, .{ .heading = entry.heading, .code = try a.dupe(u8, meta.code), .classification = if (std.mem.eql(u8, meta.code, "mul")) .translingual else if (meta.code.len == 0) .unverified else .language, .records = file.index.recordCount() });
+        if (opts.query.len != 0 and file.find(opts.query) == null) continue;
+        try items.append(a, .{ .heading = entry.heading, .code = try a.dupe(u8, meta.code), .classification = if (std.mem.eql(u8, meta.code, "mul")) .translingual else if (meta.code.len == 0) .unverified else .language, .records = file.recordCount() });
     }
     std.mem.sort(Item, items.items, {}, struct {
         fn less(_: void, x: Item, y: Item) bool {

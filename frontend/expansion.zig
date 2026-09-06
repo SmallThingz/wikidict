@@ -14,7 +14,9 @@ const Result = struct {
     }
 };
 fn call(io: std.Io, a: A, options: Options, title: []const u8, language: []const u8, source: []const u8) !Result {
-    const exe = try std.process.executablePathAlloc(io, a);
+    // A long-running reader must still start matching workers after its binary
+    // is atomically replaced by an install. Linux keeps the running inode here.
+    const exe = if (@import("builtin").os.tag == .linux) try a.dupe(u8, "/proc/self/exe") else try std.process.executablePathAlloc(io, a);
     defer a.free(exe);
     const request = try std.json.Stringify.valueAlloc(a, Request{ .root = options.root.?, .title = title, .source = source, .dictionary_root = options.dictionary_root, .language = language }, .{});
     defer a.free(request);

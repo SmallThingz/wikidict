@@ -180,7 +180,9 @@ const State = struct {
             var formatted: std.Io.Writer.Allocating = .init(self.a);
             defer formatted.deinit();
             if (index) |i| record_block: {
-                const raw = try self.db.index.recordAt(i);
+                var source_record = try self.db.recordAlloc(self.a, i);
+                defer source_record.deinit();
+                const raw = source_record.record;
                 const core = !self.source and !self.details and self.runtime.root == null;
                 var resolved = if (core) try self.db.resolveCoreAlloc(self.a, raw) else self.db.resolveAlloc(self.a, raw) catch |err| switch (err) {
                     error.MissingSupplement, error.MissingSupplementRecord => {
@@ -255,7 +257,7 @@ const State = struct {
             try self.put(w, 1, 3, 9, "dict.", p.accent);
             try self.put(w, 1, 13, sz.cols -| 15, self.label, p.muted);
             var buf: [256]u8 = undefined;
-            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "WIKBLB05  /  {d} records  /  {s} theme", .{ self.db.index.recordCount(), @tagName(self.theme) }), p.muted);
+            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "WIKBLB05  /  {d} records  /  {s} theme", .{ self.db.count(), @tagName(self.theme) }), p.muted);
             try self.put(w, 4, 3, 10, "Search /", if (self.focus == .search) p.accent else p.muted);
             // Horizontal input viewport follows the caret, at whole-codepoint boundaries.
             var start: usize = 0;
@@ -270,7 +272,7 @@ const State = struct {
                 for (0..self.bodyHeight()) |i| {
                     const n = offset + i;
                     if (n >= self.count()) break;
-                    const title = (try self.db.index.recordAt(self.range.start + n)).title();
+                    const title = try self.db.titleAt(self.range.start + n);
                     try self.put(w, 7 + i, 3, cols, title, if (n == self.selected) p.selected else p.base);
                 }
             }
@@ -359,7 +361,13 @@ test "terminal query editing is bounded and UTF8-aware" {
     var index = try (try dec.openTrustedBlob(bytes)).buildIndexAlloc(a);
     defer index.deinit(a);
     // Test the pure state; Store's mapping and OS handles are not used by input handling.
-    var db: store.Store = .{ .bytes = &.{}, .index = index, .allocator = a, .symbols = .{ .io = std.testing.io, .a = a, .root = "" } };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sample", .{tmp.sub_path});
+    defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a, .symbols = .{ .io = std.testing.io, .a = a, .root = "" } };
+    defer db.file.deinit();
     var state: State = .{ .a = a, .db = &db, .label = "test", .theme = .terminal, .color = false };
     defer state.deinit();
     try state.insert("café");

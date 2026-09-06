@@ -220,6 +220,9 @@ pub const BlobView = struct {
         return .{ .blob = self, .raw = try self.raw.buildTrustedIndexAlloc(allocator) };
     }
 
+    pub fn wrapRecord(self: BlobView, record: format.RecordView) RecordView {
+        return self.wrap(record);
+    }
     fn wrap(self: BlobView, record: format.RecordView) RecordView {
         var result: RecordView = switch (self.raw.kind) {
             .language => .{ .language = .{
