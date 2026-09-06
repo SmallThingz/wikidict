@@ -30,6 +30,55 @@ Build the installed dictionary executables:
 zig build
 ```
 
+### Per-language blob workflow
+
+`WIKBLB02` is the per-language / feature-blob path. It is separate from the older monolithic `wiktionary.bin` workflow documented below.
+
+Build blobs from a Wiktionary XML dump:
+
+```bash
+zig build -Doptimize=ReleaseFast build-blobs -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs
+```
+
+Use an optional page limit for a smaller deterministic build:
+
+```bash
+zig build -Doptimize=ReleaseFast build-blobs -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs \
+  5000
+```
+
+The output contains `languages.tsv`, one `languages/<sha256>.wikblb` file per language, and fixed feature blobs such as `thesaurus.wikblb`, `citations.wikblb`, `reconstruction.wikblb`, `rhymes.wikblb`, and `sign-gloss.wikblb`. A zero-record feature blob may be absent in a limited build.
+
+Verify generated blobs against the source dump:
+
+```bash
+zig build -Doptimize=ReleaseFast verify-blobs -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs
+```
+
+`verify-blobs` accepts the same optional trailing page limit as `build-blobs`, which is useful for validating a limited build against the same XML prefix.
+
+Query blobs without reconstructing source wikitext:
+
+```bash
+zig build -Doptimize=ReleaseFast query-blobs -- \
+  data/wiktionary-blobs language English cat
+
+zig build -Doptimize=ReleaseFast query-blobs -- \
+  data/wiktionary-blobs thesaurus cat
+```
+
+Add `--validate` to make the query tool run the full record-order/offset validation pass before lookup. Without it, the tool uses the trusted fast-open path and validates individual records as they are accessed.
+
+Library consumers can call `decoder.openTrustedBlob(bytes)` for the fast path or `decoder.inspectBlob(bytes)` for full validation. `find()` performs binary search over sorted titles, while language records expose `sectionIterator()`, Thesaurus/Rhymes expose typed `recordIterator()` APIs, Reconstruction exposes a typed view/section iterator, and Citations/Sign gloss expose borrowed raw source slices. Catalog helpers expose `languages.tsv` iteration, language filename derivation, fixed feature filenames, and `findLanguageBlob()`.
+
+These traversal APIs are zero-allocation after the logical blob bytes are available. `WIKBLB02` itself is deliberately uncompressed: storage/transport compression belongs outside the format, and consumers should decompress the finished blob before opening it.
+
 Encode the dictionary:
 
 ```bash
