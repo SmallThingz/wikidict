@@ -5,6 +5,7 @@ const model = @import("model.zig");
 const output = @import("output.zig");
 const html = @import("html.zig");
 const tui = @import("tui.zig");
+const expansion = @import("expansion.zig");
 
 const usage =
     \\dict: local Wiktionary, one language or feature blob at a time
@@ -26,6 +27,8 @@ const usage =
     \\  --with-source      Include exact source in JSON/HTML entries
     \\  --color MODE       auto, always, never; NO_COLOR disables automatic color
     \\  --theme THEME      TUI palette: terminal (default), dark, light
+    \\  --runtime PATH     Expand through extracted templates and compiled Lua bytecode
+    \\  --runtime-timeout-ms N  Per-page VM deadline, 1..60000 (default 5000)
     \\  --trusted          Skip title-order checks for externally verified blobs
     \\  --validate         Validate while indexing (the default)
     \\  --                 End options, for words beginning with a dash
@@ -33,7 +36,7 @@ const usage =
     \\Search is case-sensitive UTF-8 prefix matching. Results go to stdout.
     \\Diagnostics go to stderr. Exit: 0 success, 1 no matches, 2 usage/data/I/O error.
     \\Wikitext and core Wiktionary templates render locally. Unsupported templates are marked.
-    \\No network or template VM is used.
+    \\No network is used. --runtime enables the optional local Lua-bytecode VM.
     \\
 ;
 
@@ -49,7 +52,12 @@ pub fn main(init: std.process.Init) void {
 fn run(init: std.process.Init) !u8 {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
+    if (argv.len == 2 and std.mem.eql(u8, argv[1], "--internal-expand")) {
+        try @import("expansion_worker.zig").main(init);
+        return 0;
+    }
     const opts = try args.parse(argv[1..]);
+    const runtime: expansion.Options = .{ .root = opts.runtime, .timeout_ms = opts.runtime_timeout_ms };
     var buffer: [16384]u8 = undefined;
     var stdout = std.Io.File.stdout().writer(init.io, &buffer);
     const w = &stdout.interface;
@@ -74,13 +82,13 @@ fn run(init: std.process.Init) !u8 {
             try w.flush();
             return 0;
         }
-        var doc = try model.fromWikitext(init.gpa, opts.title, opts.language, source, opts.with_source);
+        var doc = try expansion.fromWikitext(init.io, init.gpa, opts.title, opts.language, source, opts.with_source, runtime);
         defer doc.deinit();
         const response: output.Response = .{ .operation = .render, .query = doc.entry.title, .kind = .language, .language = doc.entry.language, .match_mode = "render-input", .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} };
         const color = opts.color == .always or (opts.color == .auto and !init.environ_map.contains("NO_COLOR") and !(if (init.environ_map.get("TERM")) |t| std.mem.eql(u8, t, "dumb") else false) and try std.Io.File.stdout().isTty(init.io));
         if (opts.format == .html) try html.write(w, a, response) else if (opts.format == .json) try output.json(w, response) else try output.entryText(w, doc.entry, color);
         try w.flush();
-        return 0;
+        return if (renderFailed(doc.entry)) 2 else 0;
     }
     if (opts.command == .tui and (!try std.Io.File.stdin().isTty(init.io) or !try std.Io.File.stdout().isTty(init.io) or (if (init.environ_map.get("TERM")) |t| std.mem.eql(u8, t, "dumb") else false))) return error.TerminalRequired;
     var db = try store.Store.open(init.io, init.gpa, opts.root, opts.kind, opts.language, opts.trusted);
@@ -92,7 +100,7 @@ fn run(init: std.process.Init) !u8 {
     };
     if (opts.command == .tui) {
         const label = try std.fmt.allocPrint(a, "{s} / {s}", .{ if (opts.kind == .language) opts.language else "Features", @tagName(opts.kind) });
-        try tui.run(init.io, init.gpa, &db, label, opts.query, opts.theme, color);
+        try tui.run(init.io, init.gpa, &db, label, opts.query, opts.theme, color, runtime);
         return 0;
     }
     var response: output.Response = .{
@@ -112,11 +120,11 @@ fn run(init: std.process.Init) !u8 {
                     const source = try model.sourceAlloc(a, record);
                     try w.writeAll(source);
                 } else {
-                    var doc = try model.fromRecord(init.gpa, record, opts.with_source);
+                    var doc = try expansion.fromRecord(init.io, init.gpa, record, opts.with_source, runtime);
                     defer doc.deinit();
                     response.entries = &.{doc.entry};
                     if (opts.format == .html) try html.write(w, a, response) else if (opts.format == .json) try output.json(w, response) else try output.entryText(w, doc.entry, color);
-                    if (doc.entry.status == .invalid_payload) {
+                    if (renderFailed(doc.entry)) {
                         try w.flush();
                         return 2;
                     }
@@ -146,13 +154,13 @@ fn run(init: std.process.Init) !u8 {
                 const entries = try a.alloc(model.Entry, end - start);
                 var invalid = false;
                 for (entries, start..) |*entry, index| {
-                    var doc = try model.fromRecord(init.gpa, try db.index.recordAt(index), opts.with_source);
+                    var doc = try expansion.fromRecord(init.io, init.gpa, try db.index.recordAt(index), opts.with_source, runtime);
                     docs.append(init.gpa, doc) catch |err| {
                         doc.deinit();
                         return err;
                     };
                     entry.* = doc.entry;
-                    invalid = invalid or doc.entry.status == .invalid_payload;
+                    invalid = invalid or renderFailed(doc.entry);
                 }
                 response.entries = entries;
                 try html.write(w, a, response);
@@ -179,6 +187,10 @@ fn run(init: std.process.Init) !u8 {
     }
     try w.flush();
     return if (response.total_matches == 0 and opts.command != .stats) 1 else 0;
+}
+
+fn renderFailed(entry: model.Entry) bool {
+    return entry.status == .invalid_payload or (if (entry.expansion) |e| e.status == .failed else false);
 }
 
 fn languages(io: std.Io, a: std.mem.Allocator, opts: args.Options, w: *std.Io.Writer) !void {

@@ -416,7 +416,8 @@ pub const Renderer = struct {
             };
             var prefix: usize = 0;
             while (prefix < line.len and std.mem.indexOfScalar(u8, "#*:;", line[prefix]) != null) : (prefix += 1) {}
-            const special = multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or starts(line, " ") or starts(clean, "{|") or starts(clean, "----") or starts(clean, "<pre") or starts(clean, "<syntaxhighlight");
+            const html_tag = if (syntax.tagAt(clean, 0)) |tag| (if (!tag.closing and (tag.is("table") or tag.is("div")) and syntax.matchingTag(clean, tag) != null) tag else null) else null;
+            const special = html_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or starts(line, " ") or starts(clean, "{|") or starts(clean, "----") or starts(clean, "<pre") or starts(clean, "<syntaxhighlight");
             if (!special) {
                 if (para == null) para = start;
                 continue;
@@ -424,6 +425,18 @@ pub const Renderer = struct {
             if (para) |p| {
                 try self.paragraph(&blocks, input[p..start]);
                 para = null;
+            }
+            if (html_tag) |tag| {
+                const pair = syntax.matchingTag(clean, tag).?;
+                if (tag.is("table")) {
+                    if (try self.htmlTable(clean[tag.end..pair.inner_end])) |table_value| {
+                        try self.spend();
+                        try blocks.append(self.a, .{ .kind = .table, .table = table_value });
+                    } else try self.block(&blocks, .preformatted, clean[0..pair.end], "", "", 0);
+                } else try blocks.appendSlice(self.a, try self.renderBody(clean[tag.end..pair.inner_end]));
+                pos = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + pair.end;
+                if (pos < input.len and input[pos] == '\n') pos += 1;
+                continue;
             }
             if (multiline_data) |data| {
                 self.rendered_templates += 1;
@@ -480,6 +493,41 @@ pub const Renderer = struct {
         }
         if (para) |p| try self.paragraph(&blocks, input[p..]);
         return try blocks.toOwnedSlice(self.a);
+    }
+    fn htmlTable(self: *Renderer, input: []const u8) Error!?Table {
+        var rows: std.ArrayList(Row) = .empty;
+        var caption: []const Span = &.{};
+        var pos: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, input, pos, '<')) |open| {
+            const tag = syntax.tagAt(input, open) orelse {
+                pos = open + 1;
+                continue;
+            };
+            pos = tag.end;
+            if (tag.closing or !(tag.is("tr") or tag.is("caption"))) continue;
+            const pair = syntax.matchingTag(input, tag) orelse return null;
+            pos = pair.end;
+            if (tag.is("caption")) {
+                caption = try self.parseSpans(input[tag.end..pair.inner_end], .{});
+                continue;
+            }
+            var cells: std.ArrayList(Cell) = .empty;
+            var at = tag.end;
+            while (std.mem.indexOfScalarPos(u8, input[0..pair.inner_end], at, '<')) |cell_open| {
+                const cell_tag = syntax.tagAt(input, cell_open) orelse {
+                    at = cell_open + 1;
+                    continue;
+                };
+                at = cell_tag.end;
+                if (cell_tag.closing or !(cell_tag.is("td") or cell_tag.is("th"))) continue;
+                const cell_pair = syntax.matchingTag(input[0..pair.inner_end], cell_tag) orelse return null;
+                at = cell_pair.end;
+                try self.spend();
+                try cells.append(self.a, .{ .spans = try self.parseSpans(input[cell_tag.end..cell_pair.inner_end], .{}), .header = cell_tag.is("th"), .colspan = @max(1, @min(100, std.fmt.parseInt(u16, cell_tag.attr("colspan") orelse "1", 10) catch 1)), .rowspan = @max(1, @min(100, std.fmt.parseInt(u16, cell_tag.attr("rowspan") orelse "1", 10) catch 1)) });
+            }
+            if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
+        }
+        return .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) };
     }
     const TableResult = struct { table: Table, end: usize, closed: bool };
     fn parseTable(self: *Renderer, input: []const u8, start: usize) Error!TableResult {
@@ -681,4 +729,27 @@ test "bounded malformed wikitext stress never traps and preserves allocator owne
         _ = try r.renderBody(bytes[0..len]);
         _ = try r.finishReferences();
     }
+}
+
+test "compiled template HTML tables retain cells and supplied inflections" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<div><table class=inflection>\n<caption>Forms</caption><tbody><tr><th>Singular</th><th>Plural</th></tr>\n<tr><td>mouse</td><td><b>mice</b></td></tr></tbody></table></div>\n# After table\n");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    const t = blocks[0].table.?;
+    try std.testing.expectEqualStrings("Forms", try flattened(a, t.caption));
+    try std.testing.expectEqualStrings("mice", try flattened(a, t.rows[1].cells[1].spans));
+    try std.testing.expect(t.rows[1].cells[1].spans[0].bold);
+    try std.testing.expectEqual(Kind.definition, blocks[1].kind);
+}
+
+test "malformed generated tables retain source rather than abort rendering" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const blocks = try r.renderBody("<table><tr><td>valuable content</tr></table>");
+    try std.testing.expectEqual(Kind.preformatted, blocks[0].kind);
+    try std.testing.expect(std.mem.indexOf(u8, blocks[0].text, "valuable content") != null);
 }

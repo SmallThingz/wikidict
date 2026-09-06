@@ -69,6 +69,13 @@ pub fn entryText(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
     try w.writeAll("  / ");
     try terminalText(w, entry.language orelse @tagName(entry.kind));
     try w.writeByte('\n');
+    if (entry.expansion) |e| {
+        if (e.status == .failed) {
+            try w.writeAll("\n[Lua VM expansion failed; displaying native fallback: ");
+            try terminalText(w, e.diagnostic orelse "unknown failure");
+            try w.writeAll("]\n");
+        }
+    }
     if (entry.status == .invalid_payload) {
         try w.writeAll("\nInvalid semantic payload. JSON preserves its bytes as payload_base64.\n");
         return;

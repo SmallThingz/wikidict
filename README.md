@@ -165,3 +165,9 @@ This serializes the encoder, decoder, structure, verifier, and Lua2 test targets
 `dict lookup cat --root PATH --format html --with-source > cat.html` writes a self-contained themed reader. Use `dict search PREFIX --limit N --format html --with-source` to export a bounded set of entries. See `frontend/README.md` for the SolidJS project, rebuilding, and embedding interface.
 
 `dict tui [PREFIX] --root PATH` opens the interactive terminal reader. It shares the same blob index and presentation model as the CLI and HTML reader. Use `Tab` for pane focus, arrows for navigation, `s` for source, `t` for theme, and `?` for help. The current TUI backend is Linux-specific.
+
+### Shared Lua runtime and coordinated builds
+
+`zig build build-dictionary -- DUMP.xml NEW_ROOT` builds per-language/feature blobs plus shared templates, module redirects and VM bytecode under `NEW_ROOT/runtime`. It uses the existing Lua converter and blob encoder as coordinated stages; their eventual single-pass merger remains separate work. Existing directories are refused and failed builds retain an `.incomplete` marker.
+
+Pass `--runtime NEW_ROOT/runtime` to `dict lookup`, `dict search --format html`, `dict render` or `dict tui` to enable real bytecode-backed expansion. Source output remains unexpanded and byte-exact. VM failures are explicitly labelled and CLI fallbacks exit 2. See [frontend/README.md](frontend/README.md#lua-bytecode-integration) for runtime assets, resource limits and validation. `zig build test-runtime` exercises the real converter/VM/rendering chain.

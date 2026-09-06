@@ -73,3 +73,35 @@ Common Wiktionary templates have native presentation handlers: headwords/POS, la
 This is a local Wikitext renderer, not a full MediaWiki/Scribunto installation. Arbitrary Lua modules, template transclusion, generated language-specific inflection tables, nested wiki tables, math typesetting and fetched images are not implemented. Native template handlers render supplied arguments and may not reproduce every MediaWiki-specific option. Depth, 512-argument and node budgets bound rendering; allocation/resource-limit failures propagate instead of being disguised as successful content. Unclosed/empty wiki tables fall back to literal preformatted text.
 
 Renderer validation checks actual visible content and semantic DOM, not only executable exit codes. Tests cover nested/template syntax, HTML inertness, exact source, allocation failures and deterministic malformed input. Browser and PTY integration checks must assert that known templates become readable content and that Source retains the original wikitext.
+
+## Lua bytecode integration
+
+`--runtime PATH` opts into the VM-backed path for lookup, HTML exports, standalone rendering and the TUI. It executes the existing `lua2` compiler/codec/runtime, not native guesses about Lua output. `runtime_bridge.zig` is the narrow integration adapter; no VM implementation is copied into the frontend.
+
+```sh
+# Coordinated build: extract templates/modules/redirects, compile bytecode, encode blobs.
+# The output directory must not already exist; parent directories are created as needed.
+zig build build-dictionary -- DUMP.xml data/dictionary
+zig-out/bin/dict lookup mouse --root data/dictionary --runtime data/dictionary/runtime
+zig-out/bin/dict tui mouse --root data/dictionary --runtime data/dictionary/runtime
+zig-out/bin/dict render article.wiki --runtime data/dictionary/runtime --format html --with-source > article.html
+
+# Build only shared runtime assets, or call the existing converter directly.
+zig build build-runtime -- DUMP.xml data/runtime
+zig build compile-bytecode -- data/runtime/manifest.jsonl data/runtime/modules data/runtime/modules.bundle
+zig build test-runtime
+```
+
+Dictionary languages and feature blobs remain separate. Shared templates, module source, semantic module redirects and bytecode live in `runtime/`. No compression metadata or runtime lookup index is added to `.wikblb`. The coordinated build currently delegates to the existing independent passes. A single-pass encoder/bytecode-generator merge is still future work, after the VM interface stabilizes. Converter and executor are built from the same checkout; rebuild assets after incompatible VM codec changes.
+
+Builds refuse existing output directories. A failed stage leaves `.incomplete` and its intermediate files for diagnosis; runtime loading refuses incomplete outputs. `module-redirects.tsv` supplies actual XML redirect targets to the existing runtime loader. Optional legacy `usage.tsv`, `wikibase-sitelinks.tsv` and `interwiki-map.tsv` are consumed when present.
+
+Each expansion runs in a separate process with a 2 GiB address-space limit, bounded input/output and a wall deadline (`--runtime-timeout-ms`, default 5000, range 1..60000). This isolates crashes and per-page allocations while the VM evolves; it is **not a security sandbox**. Use trusted local runtime assets. The TUI waits for each selected page within that deadline, so VM mode can be less responsive than native rendering.
+
+`entry.expansion` is an additive `dict.results.v1` field: `{backend:"lua-vm",status:"ok"|"failed",diagnostic:null|string}`. Semantic VM failures/timeouts produce an explicitly marked native fallback; CLI output exits 2, and the TUI keeps the source view available. Asset, allocation and I/O failures propagate as errors. HTML visibly labels fallback rather than presenting it as successful VM expansion. Exact source always remains the original unexpanded bytes, including in HTML/JSON exports.
+
+The integration tests extract fixture XML, invoke the real converter, execute serialized bytecode with `require` through a module redirect and template parameters, and assert rendered inflections/tables. They also exercise timeout, missing module/assets, failed conversion, existing-output refusal and incomplete-build refusal. They run in the native `zig build test` gate as well as `test-runtime`.
+
+VM correctness and full MediaWiki compatibility remain separate from integration correctness. Full pages can still fail because of runtime defects or missing external page/Wikibase dependencies. Native template presentation remains the default while that work is ongoing; `--runtime` makes the choice explicit.
+
+Observed against the pinned 2026-04-01 dump: the existing converter built all 59,701 extracted Scribunto modules. Actual `en-noun` and `IPA` expansion worked. `lb` and the full `cat activation noise` entry still reported `ModuleNotFound: Module:labels/data`; that title is absent from the extracted Scribunto manifest. Do not fabricate its data or equate this integration gate with full-page compatibility.

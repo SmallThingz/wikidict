@@ -5,6 +5,7 @@ const term = @import("terminal.zig");
 const store = @import("store.zig");
 const model = @import("model.zig");
 const output = @import("output.zig");
+const expansion = @import("expansion.zig");
 const L = std.os.linux;
 pub const Theme = @import("args.zig").Theme;
 const Focus = enum { search, matches, entry };
@@ -18,6 +19,8 @@ fn palette(theme: Theme, color: bool) Palette {
     };
 }
 const State = struct {
+    io: std.Io = undefined,
+    runtime: expansion.Options = .{},
     a: std.mem.Allocator,
     db: *const store.Store,
     label: []const u8,
@@ -180,7 +183,7 @@ const State = struct {
                     defer self.a.free(source);
                     try output.terminalText(&formatted.writer, source);
                 } else {
-                    var doc = try model.fromRecord(self.a, record, false);
+                    var doc = try expansion.fromRecord(self.io, self.a, record, false, self.runtime);
                     defer doc.deinit();
                     try output.entryText(&formatted.writer, doc.entry, self.color);
                 }
@@ -282,11 +285,11 @@ const State = struct {
     }
 };
 
-pub fn run(io: std.Io, a: std.mem.Allocator, db: *const store.Store, label: []const u8, query: []const u8, theme: Theme, color: bool) !void {
+pub fn run(io: std.Io, a: std.mem.Allocator, db: *const store.Store, label: []const u8, query: []const u8, theme: Theme, color: bool, runtime: expansion.Options) !void {
     if (builtin.os.tag != .linux) return error.UnsupportedTerminalPlatform;
     if (!try std.Io.File.stdin().isTty(io) or !try std.Io.File.stdout().isTty(io)) return error.TerminalRequired;
     if (!std.unicode.utf8ValidateSlice(query) or query.len > 4096) return error.InvalidQuery;
-    var state: State = .{ .a = a, .db = db, .label = label, .theme = theme, .color = color };
+    var state: State = .{ .a = a, .io = io, .runtime = runtime, .db = db, .label = label, .theme = theme, .color = color };
     defer state.deinit();
     @memcpy(state.query[0..query.len], query);
     state.len = query.len;

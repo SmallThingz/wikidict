@@ -19,3 +19,5 @@
 - Machine results use the versioned `dict.results.v1` stdout protocol; diagnostics go to stderr. Do not place frontend data or theme state into blob files.
 - Rebuild and commit `frontend/web/dist/index.html` after editing web source; native builds embed it and must not fetch Node dependencies. Test terminal cleanup using a real PTY, including resize and handled signals.
 - Rendering gates must assert visible semantic content, not just process startup. Keep native template support explicit; never label an argument projection as full Scribunto expansion or fabricate language morphology.
+- `runtime_bridge.zig` is the integration boundary for the VM-owned compiler/codec/runtime. Keep changes to `lua2/` with its owning agent; test the actual converter-to-renderer path through `zig build test-runtime`. `build-dictionary` coordinates existing passes, not a new wire format or a completed single-pass merger.
+- VM expansion must preserve original source, expose failures in `entry.expansion`, return nonzero for CLI fallbacks, and reject incomplete runtime builds. Never treat a successful corpus compile as proof that all compiled modules execute correctly.

@@ -142,7 +142,7 @@ pub fn logicalEnd(text: []const u8, start: usize) usize {
                 i = end;
                 continue;
             }
-            if (tagAt(text, i)) |tag| if (!tag.closing and tag.is("ref")) {
+            if (tagAt(text, i)) |tag| if (!tag.closing and (tag.is("ref") or tag.is("table") or tag.is("div"))) {
                 if (matchingTag(text, tag)) |pair| {
                     i = pair.end;
                     continue;

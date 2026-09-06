@@ -10,7 +10,9 @@ const Allocator = std.mem.Allocator;
 pub const Feature = wiki.Feature;
 pub const Block = wiki.Block;
 pub const Section = struct { level: u8, title: []const u8, blocks: []const Block };
+pub const Expansion = struct { backend: []const u8 = "lua-vm", status: enum { ok, failed }, diagnostic: ?[]const u8 = null };
 pub const Entry = struct {
+    expansion: ?Expansion = null,
     title: []const u8,
     kind: enc.blob_format.BlobKind,
     language: ?[]const u8 = null,
@@ -298,17 +300,18 @@ pub fn fromWikitext(allocator: Allocator, title: []const u8, language: []const u
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
-    var entry: Entry = .{ .title = try utf8Text(a, title), .kind = .language, .language = try utf8Text(a, language) };
+    const owned_source = try a.dupe(u8, source);
+    var entry: Entry = .{ .title = try utf8Text(a, try a.dupe(u8, title)), .kind = .language, .language = try utf8Text(a, try a.dupe(u8, language)) };
     var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = entry.title, .language = entry.language.? } };
     var builder: Builder = .{ .a = a, .renderer = &renderer, .title = entry.language.? };
-    try builder.raw(source);
+    try builder.raw(owned_source);
     try builder.flush();
     entry.sections = try builder.sections.toOwnedSlice(a);
     entry.references = try renderer.finishReferences();
     entry.rendered_templates = renderer.rendered_templates;
     entry.unexpanded_templates = renderer.unresolved_templates;
     if (include_source) {
-        if (std.unicode.utf8ValidateSlice(source)) entry.source = source else entry.source_base64 = try base64(a, source);
+        if (std.unicode.utf8ValidateSlice(owned_source)) entry.source = owned_source else entry.source_base64 = try base64(a, owned_source);
     }
     return .{ .arena = arena, .entry = entry };
 }
@@ -322,4 +325,25 @@ test "standalone wikitext produces a rendered document while retaining byte-exac
     try std.testing.expectEqual(@as(usize, 2), doc.entry.rendered_templates);
     try std.testing.expectEqual(@as(usize, 0), doc.entry.unexpanded_templates);
     try std.testing.expectEqual(@as(usize, 1), doc.entry.references.len);
+}
+
+/// Keep raw source independent of the temporary expansion response.
+pub fn setExactSource(doc: *OwnedEntry, source: []const u8) !void {
+    const a = doc.arena.allocator();
+    doc.entry.source = null;
+    doc.entry.source_base64 = null;
+    if (std.unicode.utf8ValidateSlice(source)) doc.entry.source = try a.dupe(u8, source) else doc.entry.source_base64 = try base64(a, source);
+}
+
+test "standalone and expanded presentation own temporary source bytes" {
+    const expected = "==English==\n===Noun===\n# [[mouse]]\n";
+    var buffer: [expected.len]u8 = undefined;
+    @memcpy(&buffer, expected);
+    var doc = try fromWikitext(std.testing.allocator, "mouse", "English", &buffer, true);
+    defer doc.deinit();
+    @memset(&buffer, 'x');
+    try std.testing.expectEqualStrings(expected, doc.entry.source.?);
+    try std.testing.expectEqualStrings("mouse", doc.entry.sections[1].blocks[0].spans[0].text);
+    try setExactSource(&doc, "{{original}}\xff");
+    try std.testing.expect(doc.entry.source == null and doc.entry.source_base64 != null);
 }

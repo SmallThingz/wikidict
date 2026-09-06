@@ -9,6 +9,7 @@ export type Section = { level: number; title: string; blocks: Block[] };
 export type Reference = { number: number; name: string; body: string; spans: Span[] };
 export type Entry = {
   title: string; kind: string; language: string | null; sections: Section[]; preamble: string;
+  expansion?: { backend: string; status: "ok" | "failed"; diagnostic: string | null } | null;
   unexpanded_templates: number; rendered_templates?: number; preamble_spans?: Span[]; references?: Reference[]; status: 'structured' | 'raw' | 'invalid_payload';
   source: string | null; source_base64: string | null; payload_base64: string | null;
 };

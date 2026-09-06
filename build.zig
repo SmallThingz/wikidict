@@ -308,9 +308,27 @@ pub fn build(b: *std.Build) void {
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
     });
+    const runtime_bridge_mod = b.createModule(.{ .root_source_file = b.path("runtime_bridge.zig"), .target = target, .optimize = optimize });
+    const bytecode_exe = addCliExecutable(b, "dict-bytecode-build", b.path("tools/bytecode_build.zig"), target, optimize, &.{.{ .name = "runtime_bridge", .module = runtime_bridge_mod }});
+    bytecode_exe.root_module.link_libc = true;
+    bytecode_exe.use_llvm = true;
+    bytecode_exe.use_lld = true;
+    addPublicRunStep(b, "compile-bytecode", "Compile extracted Lua through the VM bytecode converter", addRunArtifactCommand(b, bytecode_exe, &.{}, b.args), &.{});
+    const redirects_exe = addCliExecutable(b, "dict-runtime-redirects", b.path("tools/runtime_redirects.zig"), target, optimize, &.{ .{ .name = "zxml", .module = zxml_dep.module("zxml") }, .{ .name = "xml_decode", .module = shared_xml_decode_mod } });
+    addPublicRunStep(b, "extract-runtime-redirects", "Extract semantic module redirect dependencies", addRunArtifactCommand(b, redirects_exe, &.{}, b.args), &.{});
+    const pipeline_paths = b.addOptions();
+    pipeline_paths.addOptionPath("redirects", redirects_exe.getEmittedBin());
+    pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
+    pipeline_paths.addOptionPath("templates", template_extract_exe.getEmittedBin());
+    pipeline_paths.addOptionPath("bytecode", bytecode_exe.getEmittedBin());
+    pipeline_paths.addOptionPath("blobs", blob_build_exe.getEmittedBin());
+    const pipeline_exe = addCliExecutable(b, "dict-runtime-build", b.path("tools/runtime_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
+    addPublicRunStep(b, "build-runtime", "Extract templates/modules and compile matching VM bytecode into a fresh directory", addRunArtifactCommand(b, pipeline_exe, &.{}, b.args), &.{});
+    addPublicRunStep(b, "build-dictionary", "Build dictionary blobs plus their shared Lua runtime in one coordinated pipeline", addRunArtifactCommand(b, pipeline_exe, &.{"--with-blobs"}, b.args), &.{});
     const blob_query_exe = addCliExecutable(b, "dict", b.path("frontend/main.zig"), target, optimize, &.{
         .{ .name = "blob_encoder", .module = blob_encoder_mod },
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
+        .{ .name = "runtime_bridge", .module = runtime_bridge_mod },
         .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = optimize }) },
     });
     // Locale-aware terminal cell widths use libc; lld supports current host crt objects.
@@ -434,6 +452,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "blob_encoder", .module = blob_encoder_mod_test },
                 .{ .name = "blob_decoder", .module = blob_decoder_mod_test },
+                .{ .name = "runtime_bridge", .module = runtime_bridge_mod },
                 .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = test_optimize }) },
             },
         }),
@@ -492,6 +511,14 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run encoder, decoder, structure, Lua, and tooling tests");
     blob_wasm_smoke.step.dependOn(&run_lua2_tests.step);
     test_step.dependOn(&blob_wasm_smoke.step);
+    const runtime_test_exe = addCliExecutable(b, "dict-runtime-integration-test", b.path("tools/runtime_integration_test.zig"), b.graph.host, test_optimize, &.{});
+    const runtime_test_run = b.addRunArtifact(runtime_test_exe);
+    runtime_test_run.addFileArg(blob_query_exe.getEmittedBin());
+    runtime_test_run.addFileArg(pipeline_exe.getEmittedBin());
+    runtime_test_run.addArg(b.pathFromRoot(".zig-cache"));
+    runtime_test_run.step.dependOn(&blob_wasm_smoke.step);
+    b.step("test-runtime", "Exercise extraction, bytecode conversion and rendered VM output end to end").dependOn(&runtime_test_run.step);
+    if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch) test_step.dependOn(&runtime_test_run.step);
 }
 
 fn addCliExecutable(
