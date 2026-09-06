@@ -138,8 +138,9 @@ pub const BlobView = struct {
     fn offsetAt(self: BlobView, index: u32) error{InvalidBlob}!usize {
         if (index > self.header.record_count) return error.InvalidBlob;
         const pos = std.math.mul(usize, @as(usize, index), @sizeOf(u32)) catch return error.InvalidBlob;
-        if (pos + 4 > self.offsets.len) return error.InvalidBlob;
-        return std.mem.readInt(u32, self.offsets[pos .. pos + 4][0..4], .little);
+        const end = std.math.add(usize, pos, @sizeOf(u32)) catch return error.InvalidBlob;
+        if (end > self.offsets.len) return error.InvalidBlob;
+        return std.mem.readInt(u32, self.offsets[pos..end][0..4], .little);
     }
 };
 
@@ -326,4 +327,17 @@ test "trusted blob open skips global title-order scan" {
     try std.testing.expectEqualStrings("za", (try trusted.recordAt(0)).title);
     try std.testing.expectError(error.InvalidBlob, trusted.validate());
     try std.testing.expectError(error.InvalidBlob, inspect(broken));
+}
+
+test "blob offset bounds reject terminal 32-bit overflow" {
+    if (@sizeOf(usize) != 4) return error.SkipZigTest;
+    const view: BlobView = .{
+        .bytes = &.{},
+        .header = Header.init(.citations, 0, std.math.maxInt(u32), 0),
+        .kind = .citations,
+        .metadata = &.{},
+        .offsets = &.{},
+        .records = &.{},
+    };
+    try std.testing.expectError(error.InvalidBlob, view.offsetAt(std.math.maxInt(u32)));
 }
