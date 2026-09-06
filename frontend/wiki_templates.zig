@@ -163,6 +163,15 @@ pub fn render(p: anytype, t: Template, style: anytype, depth: usize) Error!bool 
         if (any) try p.lineBreak(style);
         return true;
     }
+    if (is(name, &.{"anagrams"})) {
+        if (t.get(1).len == 0 or t.get(2).len == 0) return false;
+        // The optional alphabetization key is not a word. Never invent anagrams.
+        for (t.params) |param| if (param.position == 0 and param.key.len != 0 and !std.mem.eql(u8, param.key, "a")) return false;
+        var s = style;
+        s.language = t.get(1);
+        try join(p, t, 2, ", ", s, depth, true);
+        return true;
+    }
     if (is(name, &.{ "IPA", "IPAchar", "enPR" })) {
         var s = style;
         s.role = .pronunciation;

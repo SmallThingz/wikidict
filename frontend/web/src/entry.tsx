@@ -2,7 +2,7 @@ import { createMemo, For, Show, Switch, Match } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
 import { layout, type ListNode } from './layout';
 import type { Block, Entry, Lexeme, Sense, Span } from './types';
-import { kindGroups, reveal } from './organization';
+import { kindGroups, commonPronunciations, reveal } from './organization';
 
 type Props = { entry: Entry; prefix: string; navigate: (title: string, event: MouseEvent, language?: string) => void };
 type InlineProps = { span: Span; prefix: string; navigate: Props['navigate'] };
@@ -54,8 +54,8 @@ function Evidence(props: { indices: number[]; lexeme: Lexeme; context: Props; ti
 function Senses(props: { lexeme: Lexeme; context: Props; parent: number | null }) {
   const senses = () => props.lexeme.definitions.map((sense, index) => ({sense,index})).filter(item => item.sense.parent === props.parent);
   const block = (sense: Sense) => props.context.entry.sections[props.lexeme.section].blocks[sense.block];
-  return <ol class="dict-senses"><For each={senses()}>{item => <li data-sense={item.index}>
-    <div class="dict-definition"><Content block={block(item.sense)} context={props.context}/></div>
+  return <ol class="dict-senses" role="list"><For each={senses()}>{(item, ordinal) => <li data-sense={item.index}>
+    <div class="dict-sense-heading"><span class="dict-sense-number" aria-label={`Definition ${block(item.sense).number || ordinal() + 1}`}>{block(item.sense).number || ordinal() + 1}</span><div class="dict-definition"><Content block={block(item.sense)} context={props.context}/></div></div>
     <Show when={item.sense.form}>{form => <div class="dict-form-navigation"><span>{form().relation}</span><a href={`https://en.wiktionary.org/wiki/${encodeURIComponent(form().target)}`} onClick={event => props.context.navigate(form().target + "#" + props.lexeme.kind,event,form().language)}>Read {form().target} <span aria-hidden="true">→</span></a></div>}</Show>
     <Evidence indices={item.sense.examples} lexeme={props.lexeme} context={props.context} title="Usage examples"/>
     <Evidence indices={item.sense.quotations} lexeme={props.lexeme} context={props.context} title="Quotations" folded/>
@@ -73,11 +73,13 @@ function Supplement(props: { index: number; context: Props }) {
 export function Reading(props: Props) {
   const groups = createMemo(() => kindGroups(props.entry));
   const hasLexemes = () => groups().length > 0;
+  const pronunciation = createMemo(() => commonPronunciations(props.entry));
   return <div class="dict-reading">
     <Show when={props.entry.content === 'core'}><p class="dict-core-note" role="note">Core-only export. Definitions and usage examples are included; separate section bodies are labelled "Not included", not empty.</p></Show>
     <Show when={props.entry.status === 'invalid_payload'}><div class="dict-notice" role="alert">This record has an invalid semantic payload. Its original bytes remain available in the JSON view.</div></Show>
     <Show when={props.entry.preamble_spans?.length}><details class="dict-preamble"><summary>Entry context</summary><Spans spans={props.entry.preamble_spans!} context={props}/></details></Show>
     <Show when={hasLexemes()} fallback={<For each={props.entry.sections}>{(section,index) => <section class="dict-section" id={`${props.prefix}-${index()}`}><Show when={section.level > 2 || props.entry.kind !== 'language'}><h2>{section.title}</h2></Show><Show when={section.deferred} fallback={<Blocks blocks={section.blocks} context={props}/>}><p class="dict-deferred-note">Not included: {section.deferred} companion.</p></Show></section>}</For>}>
+      <For each={pronunciation()}>{item => <Pronunciation index={item.index} language={item.language} context={props}/>}</For>
       <div class="dict-reader-intro"><span class="dict-eyebrow">MEANINGS &amp; USE</span><span>History and source evidence stay attached.</span></div>
       <For each={groups()}>{group => <section class="dict-kind-group" data-kind={group.kind}>
         <header class="dict-kind-header"><h2>{group.kind}<Show when={new Set(groups().map(g => g.language)).size > 1}><small class="dict-language-tag">{group.language}</small></Show></h2><span>{group.lexemes.reduce((n,l) => n + l.definitions.length, 0)} {group.lexemes.reduce((n,l) => n + l.definitions.length, 0) === 1 ? "definition" : "definitions"}<Show when={group.lexemes.length > 1}> · {group.lexemes.length} entries</Show></span></header>
@@ -90,7 +92,7 @@ export function Reading(props: Props) {
         </article>}</For>
       </section>}</For>
       <section class="dict-supporting"><h2>History &amp; supporting material</h2><p>{props.entry.content === 'core' ? 'Headings retain their original positions. The labelled bodies are not included in this export.' : 'All source sections are retained. Open the detail you need.'}</p>
-        <For each={props.entry.organization!.other_sections}>{index => <Show when={props.entry.sections[index].level > 2 || props.entry.sections[index].blocks.some(b => b.kind !== 'blank')}><Supplement index={index} context={props}/></Show>}</For>
+        <For each={props.entry.organization!.other_sections.filter(index => !pronunciation().some(item => item.index === index))}>{index => <Show when={props.entry.sections[index].level > 2 || props.entry.sections[index].blocks.some(b => b.kind !== 'blank')}><Supplement index={index} context={props}/></Show>}</For>
       </section>
     </Show>
     <Show when={props.entry.references?.length}><details class="dict-section dict-references"><summary>Source references <span>{props.entry.references!.length}</span></summary><ol><For each={props.entry.references}>{ref => <li id={`${props.prefix}-reference-${ref.number}`}><Spans spans={ref.spans} context={props}/></li>}</For></ol></details></Show>
@@ -103,4 +105,13 @@ function Headword(props: { lexeme: Lexeme; context: Props }) {
   const words = () => spans().filter(span => span.role === 'headword');
   const hasContext = () => words().length > 0 && spans().some(span => span.role !== 'headword' && span.text.trim().length > 0);
   return <div class="dict-headword"><Show when={words().length} fallback={<Blocks blocks={blocks()} context={props.context}/>}><Spans spans={words()} context={props.context}/></Show><Show when={hasContext()}><details class="dict-headword-context"><summary>Media captions &amp; entry context</summary><Blocks blocks={blocks()} context={props.context}/></details></Show></div>;
+}
+
+function Pronunciation(props: { index: number; language: string; context: Props }) {
+  const section = () => props.context.entry.sections[props.index];
+  const blocks = () => section().blocks.filter(b => b.kind !== 'blank');
+  return <details class="dict-pronunciation" id={`${props.context.prefix}-${props.index}`} data-section={section().title}>
+    <summary><span class="dict-pronunciation-label">Pronunciation<Show when={props.language && props.language !== props.context.entry.language}> · {props.language}</Show></span><span class="dict-pronunciation-preview"><Spans spans={blocks()[0]?.spans || []} context={props.context}/></span><span class="dict-pronunciation-more">More</span></summary>
+    <div class="dict-pronunciation-body"><Blocks blocks={blocks().slice(1)} context={props.context}/></div>
+  </details>;
 }

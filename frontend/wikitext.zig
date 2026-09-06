@@ -363,6 +363,20 @@ pub const Renderer = struct {
             }
         } else {
             self.unresolved_templates += 1;
+            // A named passage is actual supplied content even when its citation
+            // template cannot run. Keep that template unresolved and inspectable.
+            const passage = t.named("passage");
+            if (std.ascii.startsWithIgnoreCase(t.name, "RQ:") and passage.len != 0) {
+                var quotation = style;
+                quotation.role = .quotation;
+                try self.inlineText(passage, quotation, depth + 1);
+                if (t.named("translation").len != 0) {
+                    try self.lineBreak(style);
+                    try self.inlineText(t.named("translation"), style, depth + 1);
+                }
+                try self.lineBreak(style);
+                try self.text("Unexpanded source citation: ", .{ .small = true, .role = .citation });
+            }
             var missing = style;
             missing.kind = .template;
             missing.target = t.name;
@@ -759,4 +773,52 @@ test "malformed generated tables retain source rather than abort rendering" {
     const blocks = try r.renderBody("<table><tr><td>valuable content</tr></table>");
     try std.testing.expectEqual(Kind.preformatted, blocks[0].kind);
     try std.testing.expect(std.mem.indexOf(u8, blocks[0].text, "valuable content") != null);
+}
+
+test "anagrams render only supplied terms with language and preserve unsupported options" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("{{anagrams|en|a=acst|acts|cast|scat}}", .{});
+    try std.testing.expectEqualStrings("acts, cast, scat", try flattened(a, spans));
+    try std.testing.expectEqual(@as(usize, 1), r.rendered_templates);
+    try std.testing.expectEqual(@as(usize, 0), r.unresolved_templates);
+    var links: usize = 0;
+    for (spans) |s| if (s.kind == .link) {
+        links += 1;
+        try std.testing.expectEqualStrings("en", s.language);
+    };
+    try std.testing.expectEqual(@as(usize, 3), links);
+    const unknown = try r.parseSpans("{{anagrams|en|acts|unknown=something}}", .{});
+    try std.testing.expectEqual(ir.InlineKind.template, unknown[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), r.unresolved_templates);
+}
+test "supplied RQ passage is visible without claiming its citation template was expanded" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("{{RQ:Unknown Work|page=17|passage=The '''[[cat]]''' sleeps.|translation=Le chat dort.}}", .{});
+    const text = try flattened(a, spans);
+    try std.testing.expect(std.mem.startsWith(u8, text, "The cat sleeps.\nLe chat dort.\nUnexpanded source citation: "));
+    try std.testing.expectEqual(@as(usize, 1), r.unresolved_templates);
+    try std.testing.expectEqual(@as(usize, 0), r.rendered_templates);
+    try std.testing.expectEqual(ir.InlineKind.template, spans[spans.len - 1].kind);
+    try std.testing.expect(std.mem.indexOf(u8, spans[spans.len - 1].text, "page=17") != null);
+    var bold_link = false;
+    for (spans) |s| if (s.kind == .link and s.bold and std.mem.eql(u8, s.target, "cat")) {
+        bold_link = true;
+    };
+    try std.testing.expect(bold_link);
+}
+
+test "explicit positional anagrams do not turn language or ordering keys into words" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("{{anagrams|1=en|2=acts|4=cast|a=acst}}", .{});
+    try std.testing.expectEqualStrings("acts, cast", try flattened(a, spans));
+    try std.testing.expectEqual(@as(usize, 0), r.unresolved_templates);
 }

@@ -158,3 +158,19 @@ allocation failures still propagate. The portable `fromRecord` remains strict;
 `fromCoreRecord` is the explicit partial-presentation API. Blob bytes and the
 `WIKBLB04` wire format are unchanged. `zig build test-reader` exercises these
 paths against real freshly built files and is included in the native test gate.
+
+## Reading layout and supplied quotations
+
+HTML uses the original hierarchical definition numbers rather than restarting
+visually at `1` at every nesting level. A compact pronunciation panel shows the
+first supplied pronunciation and expands to the remaining variants. Only a
+pronunciation section preceding every origin and part of speech within its
+language is promoted; origin-specific pronunciations remain in their scope.
+Sections are moved in the reading layout, not duplicated or rewritten in source.
+
+Anagram templates render their supplied words as language-aware links; the
+alphabetization key is not displayed as a word. Unknown options remain explicit.
+For an unsupported `RQ:*` citation template with a named `passage`, the supplied
+passage and named translation render visibly, but its original citation template
+remains marked unexpanded and inspectable. This does not infer publication data,
+claim a successful Lua expansion, or change the exact source.

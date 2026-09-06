@@ -37,3 +37,23 @@ export function validOrganization(value: unknown, entry: Entry): value is Organi
     return list(l.introduction, size) && list(l.other_blocks, size) && l.definitions.every((s, at) => object(s) && index(s.block, size) && (s.parent === null || index(s.parent, at)) && ((depths[at] = s.parent === null ? 1 : depths[s.parent as number] + 1) <= 255) && list(s.examples, size) && list(s.quotations, size) && list(s.notes, size) && (s.form === null || (object(s.form) && typeof s.form.target === 'string' && typeof s.form.relation === 'string' && typeof s.form.language === 'string')));
   });
 }
+
+/** Only source-level pronunciation before any origin/POS is shared by an entry.
+ * Later pronunciation sections remain attached to their original scope. */
+export function commonPronunciations(entry: Entry): { index: number; language: string }[] {
+  if (!entry.organization?.lexemes.length) return [];
+  const lexical = new Set(entry.organization.lexemes.map(l => l.section));
+  const supporting = new Set(entry.organization.other_sections);
+  const result: { index: number; language: string }[] = [];
+  let language = entry.language || '';
+  let scoped = false;
+  entry.sections.forEach((section, index) => {
+    if (section.level <= 2) { language = section.title; scoped = false; }
+    if (/^Etymology(?: [0-9]+)?$/i.test(section.title) || lexical.has(index)) scoped = true;
+    const preview = section.blocks.find(b => b.kind !== "blank");
+    if (!scoped && supporting.has(index) && /^Pronunciation(?: [0-9]+)?$/i.test(section.title)
+        && !section.deferred && preview && preview.spans.length > 0 && !preview.table
+        && preview.kind !== "preformatted" && preview.kind !== "rule") result.push({ index, language });
+  });
+  return result;
+}
