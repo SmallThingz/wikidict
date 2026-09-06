@@ -268,6 +268,10 @@ pub fn build(b: *std.Build) void {
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
     });
+    const blob_query_exe = addCliExecutable(b, "dict-blob-query", b.path("tools/blob_query.zig"), target, optimize, &.{
+        .{ .name = "encoder", .module = encoder_mod },
+        .{ .name = "decoder", .module = decoder_mod },
+    });
     encoder_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
     decoder_tool_paths_options.addOption([]const u8, "encoder_bin_path", b.pathFromRoot("zig-out/bin/dict-encoder"));
     verifier_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
@@ -309,6 +313,9 @@ pub fn build(b: *std.Build) void {
 
     const blob_verify_run = addRunArtifactCommand(b, blob_verify_exe, &.{}, b.args);
     addPublicRunStep(b, "verify-blobs", "Verify Wiktionary blobs against the XML dump", blob_verify_run, &.{});
+
+    const blob_query_run = addRunArtifactCommand(b, blob_query_exe, &.{}, b.args);
+    addPublicRunStep(b, "query-blobs", "Query per-language and feature Wiktionary blobs", blob_query_run, &.{});
 
     const test_runner = b.path("tools/test_runner.zig");
 
@@ -360,6 +367,18 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const blob_query_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/blob_query.zig"),
+            .target = target,
+            .optimize = test_optimize,
+            .imports = &.{
+                .{ .name = "encoder", .module = encoder_mod_test },
+                .{ .name = "decoder", .module = decoder_mod_test },
+            },
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
     const lua2_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("lua2/all_tests.zig"),
@@ -378,6 +397,7 @@ pub fn build(b: *std.Build) void {
     const run_structure_tests = b.addRunArtifact(structure_tests);
     const run_structure_tables_support_tests = b.addRunArtifact(structure_tables_support_tests);
     const run_verifier_tests = b.addRunArtifact(verifier_tests);
+    const run_blob_query_tests = b.addRunArtifact(blob_query_tests);
     const run_lua2_tests = b.addRunArtifact(lua2_tests);
 
     // Running every test compile in parallel is enough to get the larger codegen-heavy
@@ -388,7 +408,8 @@ pub fn build(b: *std.Build) void {
     structure_tests.step.dependOn(&run_decoder_tests.step);
     structure_tables_support_tests.step.dependOn(&run_structure_tests.step);
     verifier_tests.step.dependOn(&run_structure_tables_support_tests.step);
-    lua2_tests.step.dependOn(&run_verifier_tests.step);
+    blob_query_tests.step.dependOn(&run_verifier_tests.step);
+    lua2_tests.step.dependOn(&run_blob_query_tests.step);
 
     const test_step = b.step("test", "Run encoder, decoder, structure, Lua, and tooling tests");
     test_step.dependOn(&run_lua2_tests.step);

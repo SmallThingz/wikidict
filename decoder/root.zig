@@ -36,7 +36,10 @@ pub const BlobRawRecordView = blob_reader.RawRecordView;
 pub const BlobCatalogEntry = blob_catalog.Entry;
 pub const BlobCatalogIterator = blob_catalog.Iterator;
 pub const language_blob_filename_len = blob_catalog.language_blob_filename_len;
+pub const blob_manifest_filename = blob_catalog.manifest_filename;
+pub const blob_language_directory = blob_catalog.language_directory;
 pub const languageBlobFilename = blob_catalog.languageBlobFilename;
+pub const featureBlobFilename = blob_catalog.featureBlobFilename;
 
 pub fn findLanguageBlob(manifest_bytes: []const u8, heading: []const u8) error{InvalidManifest}!?BlobCatalogEntry {
     return blob_catalog.find(manifest_bytes, heading);

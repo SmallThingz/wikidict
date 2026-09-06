@@ -1,8 +1,22 @@
 const std = @import("std");
+const format = @import("blob_format.zig");
 
 pub const manifest_header = "heading\tfile\trecords";
 pub const language_blob_extension = ".wikblb";
 pub const language_blob_filename_len = 64 + language_blob_extension.len;
+pub const manifest_filename = "languages.tsv";
+pub const language_directory = "languages";
+
+pub fn featureBlobFilename(kind: format.BlobKind) ?[]const u8 {
+    return switch (kind) {
+        .language => null,
+        .thesaurus => "thesaurus.wikblb",
+        .citations => "citations.wikblb",
+        .reconstruction => "reconstruction.wikblb",
+        .rhymes => "rhymes.wikblb",
+        .sign_gloss => "sign-gloss.wikblb",
+    };
+}
 
 pub const Entry = struct {
     heading: []const u8,
@@ -95,4 +109,13 @@ test "blob catalog rejects mismatched filenames" {
     const manifest = manifest_header ++ "\nEnglish\twrong.wikblb\t1\n";
     var it = try Iterator.init(manifest);
     try std.testing.expectError(error.InvalidManifest, it.next());
+}
+
+test "blob catalog names fixed feature blobs" {
+    try std.testing.expectEqualStrings("thesaurus.wikblb", featureBlobFilename(.thesaurus).?);
+    try std.testing.expectEqualStrings("citations.wikblb", featureBlobFilename(.citations).?);
+    try std.testing.expectEqualStrings("reconstruction.wikblb", featureBlobFilename(.reconstruction).?);
+    try std.testing.expectEqualStrings("rhymes.wikblb", featureBlobFilename(.rhymes).?);
+    try std.testing.expectEqualStrings("sign-gloss.wikblb", featureBlobFilename(.sign_gloss).?);
+    try std.testing.expect(featureBlobFilename(.language) == null);
 }
