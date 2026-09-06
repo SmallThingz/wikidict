@@ -1,12 +1,13 @@
 const std = @import("std");
 const zxml = @import("zxml");
 const xml_decode = @import("shared_xml_decode");
-const blob_format = @import("blob_format.zig");
-const blob_catalog = @import("blob_catalog.zig");
-const language_encoding = @import("language_blob_encoding.zig");
-const thesaurus_encoding = @import("thesaurus_encoding.zig");
-const reconstruction_encoding = @import("reconstruction_encoding.zig");
-const rhymes_encoding = @import("rhymes_encoding.zig");
+const blobs = @import("blob_encoder");
+const blob_format = blobs.blob_format;
+const blob_catalog = blobs.blob_catalog;
+const language_encoding = blobs.language_blob_encoding;
+const thesaurus_encoding = blobs.thesaurus_encoding;
+const reconstruction_encoding = blobs.reconstruction_encoding;
+const rhymes_encoding = blobs.rhymes_encoding;
 
 const language_bucket_count = 32;
 const ns_main: u32 = 0;

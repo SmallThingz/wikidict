@@ -1,5 +1,5 @@
 const std = @import("std");
-const encoder = @import("encoder");
+const encoder = @import("blob_encoder");
 
 const format = encoder.blob_format;
 const language = encoder.language_blob_encoding;

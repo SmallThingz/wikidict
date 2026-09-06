@@ -137,6 +137,16 @@ pub fn build(b: *std.Build) void {
     });
     wikitext_source_mod_test.addOptions("config", config_options);
     wikitext_source_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod_test);
+    const blob_encoder_mod = b.addModule("blob_encoder", .{
+        .root_source_file = b.path("encoder/blob_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const blob_encoder_mod_test = b.createModule(.{
+        .root_source_file = b.path("encoder/blob_root.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
     const encoder_mod_bootstrap = b.addModule("encoder_bootstrap", .{
         .root_source_file = b.path("encoder/root.zig"),
         .target = target,
@@ -152,6 +162,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod_bootstrap.addImport("shared_structure_report", shared_structure_report_mod);
     encoder_mod_bootstrap.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     encoder_mod_bootstrap.addImport("wikitext_source", wikitext_source_mod);
+    encoder_mod_bootstrap.addImport("blob_encoder", blob_encoder_mod);
 
     const structure_bin = addDirectStructureBinary(
         b,
@@ -185,6 +196,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("shared_structure_report", shared_structure_report_mod);
     encoder_mod.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     encoder_mod.addImport("wikitext_source", wikitext_source_mod);
+    encoder_mod.addImport("blob_encoder", blob_encoder_mod);
 
     const encoder_mod_test = b.addModule("encoder_test", .{
         .root_source_file = b.path("encoder/root.zig"),
@@ -201,12 +213,25 @@ pub fn build(b: *std.Build) void {
     encoder_mod_test.addImport("shared_structure_report", shared_structure_report_mod_test);
     encoder_mod_test.addImport("compact_pattern_seed", compact_pattern_seed_mod_test);
     encoder_mod_test.addImport("wikitext_source", wikitext_source_mod_test);
+    encoder_mod_test.addImport("blob_encoder", blob_encoder_mod_test);
 
     const decoder_mod = b.addModule("decoder", .{
         .root_source_file = b.path("decoder/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    const blob_decoder_mod = b.addModule("blob_decoder", .{
+        .root_source_file = b.path("decoder/blob_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    blob_decoder_mod.addImport("blob_encoder", blob_encoder_mod);
+    const blob_decoder_mod_test = b.createModule(.{
+        .root_source_file = b.path("decoder/blob_root.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    blob_decoder_mod_test.addImport("blob_encoder", blob_encoder_mod_test);
     decoder_mod.addOptions("config", config_options);
     decoder_mod.addImport("normalize", normalize_mod);
     decoder_mod.addImport("generated_structure_tables", generated_tables.regular);
@@ -216,6 +241,7 @@ pub fn build(b: *std.Build) void {
     decoder_mod.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     decoder_mod.addImport("wikitext_source", wikitext_source_mod);
     decoder_mod.addImport("encoder", encoder_mod);
+    decoder_mod.addImport("blob_decoder", blob_decoder_mod);
     decoder_mod.addImport("cli_args", cli_args_mod);
     const decoder_mod_test = b.addModule("decoder_test", .{
         .root_source_file = b.path("decoder/root.zig"),
@@ -225,6 +251,7 @@ pub fn build(b: *std.Build) void {
     decoder_mod_test.addOptions("config", config_options);
     decoder_mod_test.addImport("normalize", normalize_mod_test);
     decoder_mod_test.addImport("encoder", encoder_mod_test);
+    decoder_mod_test.addImport("blob_decoder", blob_decoder_mod_test);
     decoder_mod_test.addImport("generated_structure_tables", bootstrap_generated_tables.regular);
     decoder_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod_test);
     decoder_mod_test.addImport("shared_structure_report", shared_structure_report_mod_test);
@@ -323,8 +350,16 @@ pub fn build(b: *std.Build) void {
         .root_module = encoder_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const blob_encoder_tests = b.addTest(.{
+        .root_module = blob_encoder_mod_test,
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
     const decoder_tests = b.addTest(.{
         .root_module = decoder_mod_test,
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const blob_decoder_tests = b.addTest(.{
+        .root_module = blob_decoder_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const structure_tests = b.addTest(.{
@@ -393,7 +428,9 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const run_encoder_tests = b.addRunArtifact(encoder_tests);
+    const run_blob_encoder_tests = b.addRunArtifact(blob_encoder_tests);
     const run_decoder_tests = b.addRunArtifact(decoder_tests);
+    const run_blob_decoder_tests = b.addRunArtifact(blob_decoder_tests);
     const run_structure_tests = b.addRunArtifact(structure_tests);
     const run_structure_tables_support_tests = b.addRunArtifact(structure_tables_support_tests);
     const run_verifier_tests = b.addRunArtifact(verifier_tests);
@@ -404,8 +441,10 @@ pub fn build(b: *std.Build) void {
     // test binaries terminated under ReleaseFast on typical developer machines. Keep
     // the public `zig build test` step deterministic and low-memory by serializing
     // test compilation/execution through one chain.
-    decoder_tests.step.dependOn(&run_encoder_tests.step);
-    structure_tests.step.dependOn(&run_decoder_tests.step);
+    blob_encoder_tests.step.dependOn(&run_encoder_tests.step);
+    decoder_tests.step.dependOn(&run_blob_encoder_tests.step);
+    blob_decoder_tests.step.dependOn(&run_decoder_tests.step);
+    structure_tests.step.dependOn(&run_blob_decoder_tests.step);
     structure_tables_support_tests.step.dependOn(&run_structure_tests.step);
     verifier_tests.step.dependOn(&run_structure_tables_support_tests.step);
     blob_query_tests.step.dependOn(&run_verifier_tests.step);

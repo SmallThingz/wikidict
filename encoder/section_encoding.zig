@@ -8,7 +8,7 @@ const trailing_newline_flag: u8 = 1 << 0;
 const extended_ref_marker: u8 = 0xFF;
 const max_inline_ref_code: u16 = 0xFE;
 
-pub const document_ir = @import("document_ir.zig");
+pub const document_ir = @import("blob_encoder").document_ir;
 pub const SectionKind = document_ir.SectionKind;
 pub const BlockKind = document_ir.BlockKind;
 pub const InlineKind = document_ir.InlineKind;

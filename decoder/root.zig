@@ -2,8 +2,7 @@ pub const format = @import("format.zig");
 pub const compact_encoding = @import("compact_runtime.zig");
 pub const normalize = @import("normalize");
 const reader = @import("reader.zig");
-const blob_reader = @import("blob_reader.zig");
-const blob_catalog = @import("encoder").blob_catalog;
+const blobs = @import("blob_decoder");
 
 pub const Dictionary = reader.Dictionary;
 pub const LookupHit = reader.LookupHit;
@@ -25,35 +24,24 @@ pub const BlockKind = reader.BlockKind;
 pub const InlineKind = reader.InlineKind;
 pub const OpenOptions = reader.OpenOptions;
 pub const DictionaryCompatibility = reader.DictionaryCompatibility;
-pub const BlobView = blob_reader.BlobView;
-pub const BlobRecordView = blob_reader.RecordView;
-pub const BlobRecordIterator = blob_reader.RecordIterator;
-pub const BlobLanguageRecordView = blob_reader.LanguageRecordView;
-pub const BlobThesaurusRecordView = blob_reader.ThesaurusRecordView;
-pub const BlobRhymesRecordView = blob_reader.RhymesRecordView;
-pub const BlobReconstructionRecordView = blob_reader.ReconstructionRecordView;
-pub const BlobRawRecordView = blob_reader.RawRecordView;
-pub const BlobCatalogEntry = blob_catalog.Entry;
-pub const BlobCatalogIterator = blob_catalog.Iterator;
-pub const language_blob_filename_len = blob_catalog.language_blob_filename_len;
-pub const blob_manifest_filename = blob_catalog.manifest_filename;
-pub const blob_language_directory = blob_catalog.language_directory;
-pub const languageBlobFilename = blob_catalog.languageBlobFilename;
-pub const featureBlobFilename = blob_catalog.featureBlobFilename;
-
-pub fn findLanguageBlob(manifest_bytes: []const u8, heading: []const u8) error{InvalidManifest}!?BlobCatalogEntry {
-    return blob_catalog.find(manifest_bytes, heading);
-}
-
-pub fn inspectBlob(bytes: []const u8) error{InvalidBlob}!BlobView {
-    return BlobView.inspect(bytes);
-}
-
-/// Fast path for blobs whose integrity was established externally.
-/// Use inspectBlob for a full record-order and offset validation pass.
-pub fn openTrustedBlob(bytes: []const u8) error{InvalidBlob}!BlobView {
-    return BlobView.openTrusted(bytes);
-}
+pub const BlobView = blobs.BlobView;
+pub const BlobRecordView = blobs.BlobRecordView;
+pub const BlobRecordIterator = blobs.BlobRecordIterator;
+pub const BlobLanguageRecordView = blobs.BlobLanguageRecordView;
+pub const BlobThesaurusRecordView = blobs.BlobThesaurusRecordView;
+pub const BlobRhymesRecordView = blobs.BlobRhymesRecordView;
+pub const BlobReconstructionRecordView = blobs.BlobReconstructionRecordView;
+pub const BlobRawRecordView = blobs.BlobRawRecordView;
+pub const BlobCatalogEntry = blobs.BlobCatalogEntry;
+pub const BlobCatalogIterator = blobs.BlobCatalogIterator;
+pub const language_blob_filename_len = blobs.language_blob_filename_len;
+pub const blob_manifest_filename = blobs.blob_manifest_filename;
+pub const blob_language_directory = blobs.blob_language_directory;
+pub const languageBlobFilename = blobs.languageBlobFilename;
+pub const featureBlobFilename = blobs.featureBlobFilename;
+pub const findLanguageBlob = blobs.findLanguageBlob;
+pub const inspectBlob = blobs.inspectBlob;
+pub const openTrustedBlob = blobs.openTrustedBlob;
 
 pub fn openDictionary(allocator: @import("std").mem.Allocator, io: @import("std").Io, path: []const u8) !Dictionary {
     return Dictionary.open(allocator, io, path, .{});
@@ -75,6 +63,5 @@ pub fn probeDictionaryCompatibility(io: @import("std").Io, path: []const u8) !Di
 test "decoder root imports module tests" {
     _ = normalize;
     _ = reader;
-    _ = blob_reader;
-    _ = blob_catalog;
+    _ = blobs;
 }

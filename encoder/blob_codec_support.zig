@@ -1,5 +1,4 @@
 const std = @import("std");
-const format = @import("format.zig");
 
 pub const trailing_newline_flag: u8 = 1 << 0;
 
@@ -11,11 +10,29 @@ pub fn appendField(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value:
 
 pub fn appendVarUInt(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: usize) !void {
     var buf: [10]u8 = undefined;
-    try out.appendSlice(allocator, format.encodeVarUInt(&buf, value));
+    var remaining: u64 = value;
+    var index: usize = 0;
+    while (remaining >= 0x80) : (index += 1) {
+        buf[index] = @intCast((remaining & 0x7f) | 0x80);
+        remaining >>= 7;
+    }
+    buf[index] = @intCast(remaining);
+    try out.appendSlice(allocator, buf[0 .. index + 1]);
 }
 
 pub fn readVarUInt(bytes: []const u8, cursor: *usize) error{InvalidEncoding}!usize {
-    const value = format.readVarUInt(bytes, cursor, bytes.len) catch return error.InvalidEncoding;
+    var shift: u6 = 0;
+    var value: u64 = 0;
+    while (true) {
+        if (cursor.* >= bytes.len) return error.InvalidEncoding;
+        const byte = bytes[cursor.*];
+        cursor.* += 1;
+        if (shift == 63 and (byte & 0x7f) > 1) return error.InvalidEncoding;
+        value |= @as(u64, byte & 0x7f) << shift;
+        if ((byte & 0x80) == 0) break;
+        if (shift >= 63) return error.InvalidEncoding;
+        shift += 7;
+    }
     return std.math.cast(usize, value) orelse return error.InvalidEncoding;
 }
 
@@ -61,4 +78,18 @@ test "blob fields are borrowed nul-terminated utf8" {
     const decoded = try readField(out.items, &cursor);
     try std.testing.expectEqualStrings(source, decoded);
     try std.testing.expectEqual(out.items.len, cursor);
+}
+
+test "blob varuint codec is stable and rejects overflow" {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try appendVarUInt(&out, std.testing.allocator, 0x12345);
+    try std.testing.expectEqualSlices(u8, &.{ 0xc5, 0xc6, 0x04 }, out.items);
+
+    var cursor: usize = 0;
+    try std.testing.expectEqual(@as(usize, 0x12345), try readVarUInt(out.items, &cursor));
+    try std.testing.expectEqual(out.items.len, cursor);
+
+    cursor = 0;
+    try std.testing.expectError(error.InvalidEncoding, readVarUInt(&.{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02 }, &cursor));
 }
