@@ -232,6 +232,18 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
     });
     blob_decoder_mod_test.addImport("blob_encoder", blob_encoder_mod_test);
+    const blob_wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+    const blob_encoder_mod_wasm = b.createModule(.{
+        .root_source_file = b.path("encoder/blob_root.zig"),
+        .target = blob_wasm_target,
+        .optimize = test_optimize,
+    });
+    const blob_decoder_mod_wasm = b.createModule(.{
+        .root_source_file = b.path("decoder/blob_root.zig"),
+        .target = blob_wasm_target,
+        .optimize = test_optimize,
+    });
+    blob_decoder_mod_wasm.addImport("blob_encoder", blob_encoder_mod_wasm);
     decoder_mod.addOptions("config", config_options);
     decoder_mod.addImport("normalize", normalize_mod);
     decoder_mod.addImport("generated_structure_tables", generated_tables.regular);
@@ -427,6 +439,17 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const blob_wasm_smoke = b.addObject(.{
+        .name = "dict-blob-wasm-smoke",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/blob_wasm_smoke.zig"),
+            .target = blob_wasm_target,
+            .optimize = test_optimize,
+            .imports = &.{
+                .{ .name = "blob_decoder", .module = blob_decoder_mod_wasm },
+            },
+        }),
+    });
     const run_encoder_tests = b.addRunArtifact(encoder_tests);
     const run_blob_encoder_tests = b.addRunArtifact(blob_encoder_tests);
     const run_decoder_tests = b.addRunArtifact(decoder_tests);
@@ -451,7 +474,8 @@ pub fn build(b: *std.Build) void {
     lua2_tests.step.dependOn(&run_blob_query_tests.step);
 
     const test_step = b.step("test", "Run encoder, decoder, structure, Lua, and tooling tests");
-    test_step.dependOn(&run_lua2_tests.step);
+    blob_wasm_smoke.step.dependOn(&run_lua2_tests.step);
+    test_step.dependOn(&blob_wasm_smoke.step);
 }
 
 fn addCliExecutable(
