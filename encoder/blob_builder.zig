@@ -303,14 +303,14 @@ fn writeBlobFile(
     }
     const final_off = std.math.cast(u32, records_len) orelse return error.BlobTooBig;
     std.mem.writeInt(u32, offsets[records.len * 4 .. records.len * 4 + 4][0..4], final_off, .little);
-    const header = blob_format.Header.init(kind, metadata_len, record_count, final_off);
+    const header = blob_format.encodeHeader(blob_format.Header.init(kind, metadata_len, record_count, final_off));
 
     var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
     defer file.close(io);
     var buffer: [256 * 1024]u8 = undefined;
     var writer = file.writer(io, &buffer);
     const w = &writer.interface;
-    try w.writeAll(std.mem.asBytes(&header));
+    try w.writeAll(&header);
     try w.writeAll(metadata);
     try w.writeAll(offsets);
     for (records) |record| {

@@ -35,7 +35,30 @@ pub const Header = extern struct {
     }
 };
 
-pub const header_len = @sizeOf(Header);
+pub const header_len: usize = magic.len + 1 + 1 + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u32);
+
+pub fn encodeHeader(header: Header) [header_len]u8 {
+    var out: [header_len]u8 = undefined;
+    @memcpy(out[0..magic.len], &header.magic_bytes);
+    out[8] = header.kind;
+    out[9] = header.flags;
+    std.mem.writeInt(u16, out[10..12], header.metadata_len, .little);
+    std.mem.writeInt(u32, out[12..16], header.record_count, .little);
+    std.mem.writeInt(u32, out[16..20], header.records_len, .little);
+    return out;
+}
+
+fn decodeHeader(bytes: []const u8) error{InvalidBlob}!Header {
+    if (bytes.len < header_len) return error.InvalidBlob;
+    return .{
+        .magic_bytes = bytes[0..magic.len].*,
+        .kind = bytes[8],
+        .flags = bytes[9],
+        .metadata_len = std.mem.readInt(u16, bytes[10..12], .little),
+        .record_count = std.mem.readInt(u32, bytes[12..16], .little),
+        .records_len = std.mem.readInt(u32, bytes[16..20], .little),
+    };
+}
 
 pub const RecordInput = struct {
     title: []const u8,
@@ -186,8 +209,8 @@ pub fn buildAlloc(
 
     const out = try allocator.alloc(u8, total_len);
     errdefer allocator.free(out);
-    const header = Header.init(kind, metadata_len, record_count, records_len_u32);
-    @memcpy(out[0..header_len], std.mem.asBytes(&header));
+    const header = encodeHeader(Header.init(kind, metadata_len, record_count, records_len_u32));
+    @memcpy(out[0..header_len], &header);
     @memcpy(out[header_len .. header_len + metadata.len], metadata);
 
     const offsets_start = header_len + metadata.len;
@@ -211,8 +234,7 @@ pub fn buildAlloc(
 /// This skips the O(record_count) ordering scan; callers must already trust the
 /// blob's integrity (for example via a verified external hash) or call validate().
 pub fn openTrusted(bytes: []const u8) error{InvalidBlob}!BlobView {
-    if (bytes.len < header_len) return error.InvalidBlob;
-    const header = std.mem.bytesToValue(Header, bytes[0..header_len]);
+    const header = try decodeHeader(bytes);
     if (!std.mem.eql(u8, &header.magic_bytes, magic) or header.flags != 0) return error.InvalidBlob;
     const kind: BlobKind = switch (header.kind) {
         @intFromEnum(BlobKind.language) => .language,
@@ -261,6 +283,20 @@ fn readNulField(bytes: []const u8, cursor: *usize) error{InvalidBlob}![]const u8
     const field = bytes[cursor.*..end];
     cursor.* = end + 1;
     return field;
+}
+
+test "blob header wire encoding is explicitly little endian" {
+    const header = Header.init(.rhymes, 0x1234, 0x01020304, 0xa1b2c3d4);
+    const encoded = encodeHeader(header);
+    try std.testing.expectEqualSlices(u8, &.{
+        'W',                           'I',  'K',  'B',  'L',  'B',  '0',  '2',
+        @intFromEnum(BlobKind.rhymes), 0,    0x34, 0x12, 0x04, 0x03, 0x02, 0x01,
+        0xd4,                          0xc3, 0xb2, 0xa1,
+    }, &encoded);
+    const decoded = try decodeHeader(&encoded);
+    try std.testing.expectEqual(header.metadata_len, decoded.metadata_len);
+    try std.testing.expectEqual(header.record_count, decoded.record_count);
+    try std.testing.expectEqual(header.records_len, decoded.records_len);
 }
 
 test "blob format exposes sorted zero-copy records and language metadata" {
