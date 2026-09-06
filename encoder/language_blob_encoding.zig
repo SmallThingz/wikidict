@@ -3,6 +3,7 @@ const support = @import("blob_codec_support.zig");
 const document_ir = @import("document_ir.zig");
 
 const flag_custom_language_heading: u8 = 1 << 0;
+const flag_preamble: u8 = 1 << 1;
 const op_heading: u8 = 1;
 
 pub const LanguageContext = struct {
@@ -12,8 +13,7 @@ pub const LanguageContext = struct {
 
 pub fn reconstructionHeadingFromTitle(title: []const u8) ?[]const u8 {
     const prefix = "Reconstruction:";
-    if (!std.mem.startsWith(u8, title, prefix)) return null;
-    const rest = title[prefix.len..];
+    const rest = if (std.mem.startsWith(u8, title, prefix)) title[prefix.len..] else title;
     const slash = std.mem.indexOfScalar(u8, rest, '/') orelse return null;
     if (slash == 0) return null;
     return rest[0..slash];
@@ -23,6 +23,63 @@ const ParsedHeading = struct {
     level: u8,
     raw_title: []const u8,
     title: []const u8,
+};
+
+pub const SourceLanguageSection = struct {
+    heading: []const u8,
+    source: []const u8,
+};
+
+pub const SourceLanguageIterator = struct {
+    source: []const u8,
+    cursor: usize = 0,
+    active_start: ?usize = null,
+    active_heading: []const u8 = "",
+    balance: Balance = .{},
+    done: bool = false,
+
+    pub fn init(source: []const u8) SourceLanguageIterator {
+        return .{ .source = source };
+    }
+
+    pub fn next(self: *SourceLanguageIterator) ?SourceLanguageSection {
+        if (self.done) return null;
+        while (self.cursor < self.source.len) {
+            const line_start = self.cursor;
+            const newline = std.mem.indexOfScalarPos(u8, self.source, line_start, '\n') orelse self.source.len;
+            var content_end = newline;
+            if (content_end != line_start and self.source[content_end - 1] == '\r') content_end -= 1;
+            const line = self.source[line_start..content_end];
+            self.cursor = if (newline == self.source.len) self.source.len else newline + 1;
+
+            if (!self.balance.isOpen()) {
+                if (parseHeading(line)) |heading| {
+                    if (heading.level == 2) {
+                        if (self.active_start) |start| {
+                            const result: SourceLanguageSection = .{
+                                .heading = self.active_heading,
+                                .source = self.source[start..line_start],
+                            };
+                            self.active_start = line_start;
+                            self.active_heading = heading.title;
+                            return result;
+                        }
+                        self.active_start = line_start;
+                        self.active_heading = heading.title;
+                        continue;
+                    }
+                }
+            }
+            self.balance.update(line);
+        }
+
+        self.done = true;
+        if (self.active_start) |start| {
+            self.active_start = null;
+            return .{ .heading = self.active_heading, .source = self.source[start..] };
+        }
+        return null;
+    }
 };
 
 const Balance = struct {
@@ -124,6 +181,7 @@ pub const SectionIterator = struct {
     encoded: []const u8,
     language: LanguageContext,
     body_start: usize,
+    preamble_bytes: []const u8 = "",
     current_level: u8 = 2,
     current_raw_title: []const u8 = "",
     current_title: []const u8 = "",
@@ -132,8 +190,9 @@ pub const SectionIterator = struct {
     pub fn init(encoded: []const u8, language: LanguageContext) error{InvalidEncoding}!SectionIterator {
         if (encoded.len == 0) return error.InvalidEncoding;
         const flags = encoded[0];
-        if (flags & ~flag_custom_language_heading != 0) return error.InvalidEncoding;
+        if (flags & ~(flag_custom_language_heading | flag_preamble) != 0) return error.InvalidEncoding;
         var cursor: usize = 1;
+        const preamble_bytes = if (flags & flag_preamble != 0) try support.readField(encoded, &cursor) else "";
         if (flags & flag_custom_language_heading != 0) {
             _ = try support.readField(encoded, &cursor);
         }
@@ -141,10 +200,15 @@ pub const SectionIterator = struct {
             .encoded = encoded,
             .language = language,
             .body_start = cursor,
+            .preamble_bytes = preamble_bytes,
             .current_level = 2,
             .current_raw_title = language.heading,
             .current_title = language.heading,
         };
+    }
+
+    pub fn preamble(self: SectionIterator) []const u8 {
+        return self.preamble_bytes;
     }
 
     pub fn next(self: *SectionIterator) error{InvalidEncoding}!?SectionView {
@@ -181,54 +245,62 @@ pub const SectionIterator = struct {
 
 pub fn encodeAlloc(allocator: std.mem.Allocator, source: []const u8, language: LanguageContext) ![]u8 {
     if (std.mem.indexOfScalar(u8, source, 0) != null) return error.InvalidEncoding;
-    const first_newline = std.mem.indexOfScalar(u8, source, '\n') orelse source.len;
+    var source_sections = SourceLanguageIterator.init(source);
+    const language_source = source_sections.next() orelse return error.InvalidLanguageSection;
+    if (!std.mem.eql(u8, language_source.heading, language.heading) or source_sections.next() != null) return error.InvalidLanguageSection;
+    const preamble_len = @intFromPtr(language_source.source.ptr) - @intFromPtr(source.ptr);
+    const section_source = language_source.source;
+    const first_newline = std.mem.indexOfScalar(u8, section_source, '\n') orelse section_source.len;
     var first_content_end = first_newline;
-    if (first_content_end != 0 and source[first_content_end - 1] == '\r') first_content_end -= 1;
-    const top = parseHeading(source[0..first_content_end]) orelse return error.InvalidLanguageSection;
-    if (top.level != 2 or !std.mem.eql(u8, top.title, language.heading)) return error.InvalidLanguageSection;
+    if (first_content_end != 0 and section_source[first_content_end - 1] == '\r') first_content_end -= 1;
+    const top = parseHeading(section_source[0..first_content_end]) orelse return error.InvalidLanguageSection;
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
     const canonical = top.raw_title.len == language.heading.len and std.mem.eql(u8, top.raw_title, language.heading);
-    try out.append(allocator, if (canonical) 0 else flag_custom_language_heading);
-    if (!canonical) try support.appendField(&out, allocator, source[0..first_content_end]);
+    var flags: u8 = if (canonical) 0 else flag_custom_language_heading;
+    if (preamble_len != 0) flags |= flag_preamble;
+    try out.append(allocator, flags);
+    if (preamble_len != 0) try support.appendField(&out, allocator, source[0..preamble_len]);
+    if (!canonical) try support.appendField(&out, allocator, section_source[0..first_content_end]);
 
     var segment_start = first_content_end;
-    var line_start = if (first_newline == source.len) source.len else first_newline + 1;
+    var line_start = if (first_newline == section_source.len) section_source.len else first_newline + 1;
     var balance: Balance = .{};
-    while (line_start < source.len) {
-        const newline = std.mem.indexOfScalarPos(u8, source, line_start, '\n') orelse source.len;
+    while (line_start < section_source.len) {
+        const newline = std.mem.indexOfScalarPos(u8, section_source, line_start, '\n') orelse section_source.len;
         var content_end = newline;
-        if (content_end != line_start and source[content_end - 1] == '\r') content_end -= 1;
-        const line = source[line_start..content_end];
+        if (content_end != line_start and section_source[content_end - 1] == '\r') content_end -= 1;
+        const line = section_source[line_start..content_end];
         if (!balance.isOpen()) {
             if (parseHeading(line)) |heading| {
                 if (heading.level >= 3) {
-                    try out.appendSlice(allocator, source[segment_start..line_start]);
+                    try out.appendSlice(allocator, section_source[segment_start..line_start]);
                     try out.append(allocator, 0);
                     try out.append(allocator, op_heading);
                     try out.append(allocator, heading.level);
                     try support.appendField(&out, allocator, heading.raw_title);
                     segment_start = content_end;
-                    line_start = if (newline == source.len) source.len else newline + 1;
+                    line_start = if (newline == section_source.len) section_source.len else newline + 1;
                     continue;
                 }
             }
         }
         balance.update(line);
-        line_start = if (newline == source.len) source.len else newline + 1;
+        line_start = if (newline == section_source.len) section_source.len else newline + 1;
     }
-    try out.appendSlice(allocator, source[segment_start..]);
+    try out.appendSlice(allocator, section_source[segment_start..]);
     return out.toOwnedSlice(allocator);
 }
 
 pub fn decodeAlloc(allocator: std.mem.Allocator, encoded: []const u8, language: LanguageContext) (std.mem.Allocator.Error || error{InvalidEncoding})![]u8 {
     if (encoded.len == 0) return error.InvalidEncoding;
     const flags = encoded[0];
-    if (flags & ~flag_custom_language_heading != 0) return error.InvalidEncoding;
+    if (flags & ~(flag_custom_language_heading | flag_preamble) != 0) return error.InvalidEncoding;
     var cursor: usize = 1;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
+    if (flags & flag_preamble != 0) try out.appendSlice(allocator, try support.readField(encoded, &cursor));
     if (flags & flag_custom_language_heading != 0) {
         const heading = try support.readField(encoded, &cursor);
         try out.appendSlice(allocator, heading);
@@ -271,6 +343,19 @@ fn parseHeading(line: []const u8) ?ParsedHeading {
     return .{ .level = @intCast(left), .raw_title = raw_title, .title = title };
 }
 
+test "source language iterator ignores preamble and nested fake headings" {
+    const source = "{{also|cat}}\n==English==\n{{foo|\n==not French==\n}}\n===Noun===\n# cat\n==French==\r\n===Nom===\n# chat\n";
+    var it = SourceLanguageIterator.init(source);
+    const english = it.next().?;
+    try std.testing.expectEqualStrings("English", english.heading);
+    try std.testing.expect(std.mem.startsWith(u8, english.source, "==English=="));
+    try std.testing.expect(std.mem.indexOf(u8, english.source, "==not French==") != null);
+    const french = it.next().?;
+    try std.testing.expectEqualStrings("French", french.heading);
+    try std.testing.expect(std.mem.startsWith(u8, french.source, "==French=="));
+    try std.testing.expect(it.next() == null);
+}
+
 test "language blob round trips sections and exposes borrowed blocks" {
     const source = "==English==\n{{wp}}\n\n===Noun===\n{{en-noun}}\n# [[cat]]\n#: A small animal.\n\n====Synonyms====\n* {{l|en|kitty}}\n";
     const language: LanguageContext = .{ .heading = "English", .code = "en" };
@@ -295,9 +380,22 @@ test "language blob round trips sections and exposes borrowed blocks" {
     try std.testing.expect((try sections.next()) == null);
 }
 
+test "language blob preserves reconstruction preamble" {
+    const source = "{{reconstructed}}\n{{also|foo}}\n==Proto-Germanic==\n===Etymology===\nFrom foo.\n===Noun===\n# test\n====Descendants====\n* bar\n";
+    const language: LanguageContext = .{ .heading = "Proto-Germanic" };
+    const encoded = try encodeAlloc(std.testing.allocator, source, language);
+    defer std.testing.allocator.free(encoded);
+    const decoded = try decodeAlloc(std.testing.allocator, encoded, language);
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqualStrings(source, decoded);
+    const sections = try SectionIterator.init(encoded, language);
+    try std.testing.expectEqualStrings("{{reconstructed}}\n{{also|foo}}\n", sections.preamble());
+}
+
 test "language blob derives reconstruction heading from title" {
     try std.testing.expectEqualStrings("Proto-Indo-European", reconstructionHeadingFromTitle("Reconstruction:Proto-Indo-European/h₂ep-").?);
     try std.testing.expectEqualStrings("Old English", reconstructionHeadingFromTitle("Reconstruction:Old English/feortan").?);
+    try std.testing.expectEqualStrings("Proto-Germanic", reconstructionHeadingFromTitle("Proto-Germanic/kattuz").?);
     try std.testing.expect(reconstructionHeadingFromTitle("cat") == null);
 }
 

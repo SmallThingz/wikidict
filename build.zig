@@ -261,6 +261,9 @@ pub fn build(b: *std.Build) void {
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
     });
+    const blob_build_exe = addCliExecutable(b, "dict-blob-build", b.path("tools/blob_build.zig"), target, optimize, &.{
+        .{ .name = "encoder", .module = encoder_mod },
+    });
     encoder_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
     decoder_tool_paths_options.addOption([]const u8, "encoder_bin_path", b.pathFromRoot("zig-out/bin/dict-encoder"));
     verifier_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
@@ -296,6 +299,9 @@ pub fn build(b: *std.Build) void {
 
     const template_extract_run = addRunArtifactCommand(b, template_extract_exe, &.{}, b.args);
     addPublicRunStep(b, "extract-templates", "Extract template pages from a Wiktionary XML dump", template_extract_run, &.{});
+
+    const blob_build_run = addRunArtifactCommand(b, blob_build_exe, &.{}, b.args);
+    addPublicRunStep(b, "build-blobs", "Build per-language and feature Wiktionary blobs", blob_build_run, &.{});
 
     const test_runner = b.path("tools/test_runner.zig");
 

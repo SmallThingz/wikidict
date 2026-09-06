@@ -5,7 +5,9 @@ pub const blob_codec_support = @import("blob_codec_support.zig");
 pub const thesaurus_encoding = @import("thesaurus_encoding.zig");
 pub const rhymes_encoding = @import("rhymes_encoding.zig");
 pub const language_blob_encoding = @import("language_blob_encoding.zig");
+pub const reconstruction_encoding = @import("reconstruction_encoding.zig");
 pub const blob_format = @import("blob_format.zig");
+pub const blob_builder = @import("blob_builder.zig");
 pub const xml_decode = @import("shared_xml_decode");
 pub const wikitext = @import("wikitext_source");
 
@@ -30,7 +32,9 @@ test "encoder root imports module tests" {
     _ = thesaurus_encoding;
     _ = rhymes_encoding;
     _ = language_blob_encoding;
+    _ = reconstruction_encoding;
     _ = blob_format;
+    _ = blob_builder;
     _ = xml_decode;
     _ = wikitext;
     _ = builder;

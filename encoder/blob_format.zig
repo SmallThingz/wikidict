@@ -3,8 +3,8 @@ const std = @import("std");
 // This is the decompressed logical blob format. Transport/storage compression is
 // intentionally external so terminal, browser, and cache consumers all see the
 // same byte layout after decompression.
-pub const magic = "WIKBLB01";
-pub const version: u8 = 1;
+pub const magic = "WIKBLB02";
+pub const version: u8 = 2;
 
 pub const BlobKind = enum(u8) {
     language = 1,
@@ -112,7 +112,7 @@ pub const BlobView = struct {
         var cursor: usize = 0;
         const code = try readNulField(self.metadata, &cursor);
         const heading = try readNulField(self.metadata, &cursor);
-        if (cursor != self.metadata.len or code.len == 0 or heading.len == 0) return error.InvalidBlob;
+        if (cursor != self.metadata.len or heading.len == 0) return error.InvalidBlob;
         return .{ .code = code, .heading = heading };
     }
 
@@ -125,7 +125,7 @@ pub const BlobView = struct {
 };
 
 pub fn buildLanguageMetadataAlloc(allocator: std.mem.Allocator, code: []const u8, heading: []const u8) ![]u8 {
-    if (code.len == 0 or heading.len == 0 or std.mem.indexOfScalar(u8, code, 0) != null or std.mem.indexOfScalar(u8, heading, 0) != null) {
+    if (heading.len == 0 or std.mem.indexOfScalar(u8, code, 0) != null or std.mem.indexOfScalar(u8, heading, 0) != null) {
         return error.InvalidMetadata;
     }
     const size = std.math.add(usize, code.len + 1, heading.len + 1) catch return error.BlobTooBig;
@@ -250,7 +250,7 @@ fn readNulField(bytes: []const u8, cursor: *usize) error{InvalidBlob}![]const u8
 }
 
 test "blob format exposes sorted zero-copy records and language metadata" {
-    const metadata = try buildLanguageMetadataAlloc(std.testing.allocator, "en", "English");
+    const metadata = try buildLanguageMetadataAlloc(std.testing.allocator, "", "English");
     defer std.testing.allocator.free(metadata);
     const payload_a = [_]u8{ 0, 1, 2, 0, 3 };
     const payload_b = [_]u8{ 9, 8, 7 };
@@ -262,7 +262,7 @@ test "blob format exposes sorted zero-copy records and language metadata" {
 
     const blob = try inspect(encoded);
     const language = try blob.languageMetadata();
-    try std.testing.expectEqualStrings("en", language.code);
+    try std.testing.expectEqualStrings("", language.code);
     try std.testing.expectEqualStrings("English", language.heading);
     const apple = (try blob.find("apple")).?;
     try std.testing.expectEqualSlices(u8, &payload_a, apple.payload);
