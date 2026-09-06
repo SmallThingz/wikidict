@@ -1,11 +1,15 @@
-/** Public dict.results.v1 protocol. Exact source and presentation are separate. */
-export type Span = { kind: 'text' | 'template' | 'link' | 'external_link' | 'line_break'; text: string; target: string; trail: string; bold: boolean; italic: boolean };
+/** Public dict.results.v1 protocol. Original source and rendered presentation are separate. */
+export type Span = { kind: 'text' | 'template' | 'link' | 'external_link' | 'line_break'; text: string; target: string; trail: string; bold: boolean; italic: boolean;
+  language?: string; code?: boolean; small?: boolean; superscript?: boolean; subscript?: boolean; strike?: boolean; underline?: boolean; role?: string };
 export type Feature = { kind: string; language: string; data: string; tail_kind: string; tail: string };
-export type Block = { kind: string; depth: number; text: string; spans: Span[]; feature: Feature | null };
+export type Cell = { spans: Span[]; header: boolean; colspan: number; rowspan: number };
+export type Table = { caption: Span[]; rows: { cells: Cell[] }[] };
+export type Block = { kind: string; depth: number; text: string; spans: Span[]; feature: Feature | null; list_path?: string; number?: string; level?: number; table?: Table | null };
 export type Section = { level: number; title: string; blocks: Block[] };
+export type Reference = { number: number; name: string; body: string; spans: Span[] };
 export type Entry = {
   title: string; kind: string; language: string | null; sections: Section[]; preamble: string;
-  unexpanded_templates: number; status: 'structured' | 'raw' | 'invalid_payload';
+  unexpanded_templates: number; rendered_templates?: number; preamble_spans?: Span[]; references?: Reference[]; status: 'structured' | 'raw' | 'invalid_payload';
   source: string | null; source_base64: string | null; payload_base64: string | null;
 };
 export type Results = {

@@ -16,6 +16,10 @@ pub fn prefixBytes(text: []const u8, cells: usize) usize {
     var pos: usize = 0;
     var used: usize = 0;
     while (pos < text.len) {
+        if (sgrLength(text[pos..])) |n| {
+            pos += n;
+            continue;
+        }
         const n: usize = std.unicode.utf8ByteSequenceLength(text[pos]) catch return pos;
         if (n > text.len - pos) break;
         const cp = std.unicode.utf8Decode(text[pos..][0..n]) catch return pos;
@@ -27,9 +31,18 @@ pub fn prefixBytes(text: []const u8, cells: usize) usize {
     return pos;
 }
 pub fn cellWidth(text: []const u8) usize {
-    var it = (std.unicode.Utf8View.init(text) catch return text.len).iterator();
+    var pos: usize = 0;
     var result: usize = 0;
-    while (it.nextCodepoint()) |cp| result += width(cp);
+    while (pos < text.len) {
+        if (sgrLength(text[pos..])) |n| {
+            pos += n;
+            continue;
+        }
+        const n: usize = std.unicode.utf8ByteSequenceLength(text[pos]) catch 1;
+        if (n > text.len - pos) break;
+        result += width(std.unicode.utf8Decode(text[pos..][0..n]) catch 0xfffd);
+        pos += n;
+    }
     return result;
 }
 pub fn wrap(a: std.mem.Allocator, text: []const u8, columns: usize) ![][]const u8 {
@@ -230,4 +243,97 @@ test "cell wrapping preserves CJK and combining marks without splitting UTF8" {
         try std.testing.expect(std.unicode.utf8ValidateSlice(row));
         try std.testing.expect(cellWidth(row) <= 5);
     }
+}
+
+// Only use styled rows for output produced by the renderer, after terminalText
+// neutralizes source controls. SGR is zero-width; no cursor/OSC/DCS sequence is accepted.
+pub fn sgrLength(text: []const u8) ?usize {
+    if (!std.mem.startsWith(u8, text, "\x1b[")) return null;
+    var i: usize = 2;
+    while (i < @min(text.len, 32)) : (i += 1) {
+        if (text[i] == 'm') return i + 1;
+        if (!std.ascii.isDigit(text[i]) and text[i] != ';') return null;
+    }
+    return null;
+}
+pub const TextStyle = struct {
+    bold: bool = false,
+    italic: bool = false,
+    dim: bool = false,
+    underline: bool = false,
+    strike: bool = false,
+    link: bool = false,
+    fn scan(self: *TextStyle, text: []const u8) void {
+        var i: usize = 0;
+        while (i < text.len) {
+            if (sgrLength(text[i..])) |n| {
+                var parts = std.mem.splitScalar(u8, text[i + 2 .. i + n - 1], ';');
+                while (parts.next()) |part| switch (std.fmt.parseInt(u8, part, 10) catch 0) {
+                    0 => self.* = .{},
+                    1 => self.bold = true,
+                    2 => self.dim = true,
+                    3 => self.italic = true,
+                    4 => self.underline = true,
+                    9 => self.strike = true,
+                    36 => self.link = true,
+                    22 => {
+                        self.bold = false;
+                        self.dim = false;
+                    },
+                    23 => self.italic = false,
+                    24 => self.underline = false,
+                    29 => self.strike = false,
+                    39 => self.link = false,
+                    else => {},
+                };
+                i += n;
+            } else i += 1;
+        }
+    }
+    pub fn write(self: TextStyle, w: *std.Io.Writer) !void {
+        if (self.bold) try w.writeAll("\x1b[1m");
+        if (self.italic) try w.writeAll("\x1b[3m");
+        if (self.dim) try w.writeAll("\x1b[2m");
+        if (self.underline) try w.writeAll("\x1b[4m");
+        if (self.strike) try w.writeAll("\x1b[9m");
+        if (self.link) try w.writeAll("\x1b[36m");
+    }
+};
+pub const RenderRow = struct { bytes: []const u8, carry: TextStyle };
+pub fn wrapStyled(a: std.mem.Allocator, text: []const u8, columns: usize) ![]RenderRow {
+    const slices = try wrap(a, text, columns);
+    defer a.free(slices);
+    const rows = try a.alloc(RenderRow, slices.len);
+    var style: TextStyle = .{};
+    for (slices, rows) |slice, *row| {
+        row.* = .{ .bytes = slice, .carry = style };
+        style.scan(slice);
+    }
+    return rows;
+}
+test "styled wrapping preserves generated emphasis across Unicode cell boundaries" {
+    initLocale();
+    const rows = try wrapStyled(std.testing.allocator, "\x1b[1;36m猫abcd\x1b[0m", 3);
+    defer std.testing.allocator.free(rows);
+    try std.testing.expect(rows.len >= 2);
+    try std.testing.expect(rows[1].carry.bold and rows[1].carry.link);
+    for (rows) |row| try std.testing.expect(cellWidth(row.bytes) <= 3);
+    try std.testing.expect(sgrLength("\x1b[2J") == null);
+    try std.testing.expect(sgrLength("\x1b]0;unsafe\x07") == null);
+}
+
+/// Keep palette background/foreground after a renderer-owned reset inside a row.
+pub fn writeStyled(w: *std.Io.Writer, text: []const u8, base: []const u8) !void {
+    var pos: usize = 0;
+    var start: usize = 0;
+    while (pos < text.len) {
+        if (sgrLength(text[pos..])) |n| {
+            try w.writeAll(text[start..pos]);
+            const sgr = text[pos .. pos + n];
+            if (std.mem.eql(u8, sgr, "\x1b[0m") or std.mem.eql(u8, sgr, "\x1b[m")) try w.writeAll(base) else try w.writeAll(sgr);
+            pos += n;
+            start = pos;
+        } else pos += 1;
+    }
+    try w.writeAll(text[start..]);
 }

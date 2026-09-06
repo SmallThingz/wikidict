@@ -311,6 +311,7 @@ pub fn build(b: *std.Build) void {
     const blob_query_exe = addCliExecutable(b, "dict", b.path("frontend/main.zig"), target, optimize, &.{
         .{ .name = "blob_encoder", .module = blob_encoder_mod },
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
+        .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = optimize }) },
     });
     // Locale-aware terminal cell widths use libc; lld supports current host crt objects.
     blob_query_exe.root_module.link_libc = true;
@@ -433,6 +434,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "blob_encoder", .module = blob_encoder_mod_test },
                 .{ .name = "blob_decoder", .module = blob_decoder_mod_test },
+                .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = test_optimize }) },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },

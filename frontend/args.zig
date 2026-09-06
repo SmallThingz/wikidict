@@ -1,6 +1,6 @@
 const std = @import("std");
 const store = @import("store.zig");
-pub const Command = enum { lookup, search, languages, stats, tui };
+pub const Command = enum { lookup, search, languages, stats, tui, render };
 pub const Theme = enum { terminal, dark, light };
 pub const Format = enum { text, json, source, html };
 pub const Color = enum { auto, always, never };
@@ -10,6 +10,7 @@ pub const Options = struct {
     kind: store.Kind = .language,
     language: []const u8 = "English",
     query: []const u8 = "",
+    title: []const u8 = "Entry",
     format: Format = .text,
     color: Color = .auto,
     theme: Theme = .terminal,
@@ -53,7 +54,7 @@ pub fn parse(argv: []const []const u8) !Options {
             positional_only = true;
             continue;
         }
-        if (!positional_only and std.mem.startsWith(u8, arg, "-")) {
+        if (!positional_only and std.mem.startsWith(u8, arg, "-") and !std.mem.eql(u8, arg, "-")) {
             if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
                 out.help = true;
                 continue;
@@ -73,7 +74,7 @@ pub fn parse(argv: []const []const u8) !Options {
             if (pos + 1 >= argv.len) return error.Usage;
             pos += 1;
             const value = argv[pos];
-            if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
+            if (std.mem.eql(u8, arg, "--title")) out.title = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
         } else {
             if (has_query) return error.Usage;
             out.query = arg;
@@ -82,10 +83,10 @@ pub fn parse(argv: []const []const u8) !Options {
     }
     if (out.help) return out;
     if (out.limit == 0 or out.limit > 1000 or out.root.len == 0 or out.language.len == 0) return error.Usage;
-    if (out.command == .lookup and (!has_query or out.query.len == 0)) return error.Usage;
+    if ((out.command == .lookup or out.command == .render) and (!has_query or out.query.len == 0)) return error.Usage;
     if ((out.command == .stats or out.command == .languages) and has_query) return error.Usage;
-    if (out.format == .source and out.command != .lookup) return error.Usage;
-    if (out.format == .html and out.command != .lookup and out.command != .search) return error.Usage;
+    if (out.format == .source and out.command != .lookup and out.command != .render) return error.Usage;
+    if (out.format == .html and out.command != .lookup and out.command != .search and out.command != .render) return error.Usage;
     if (out.command == .tui and out.format != .text) return error.Usage;
     if (out.offset != 0 and out.command != .search) return error.Usage;
     return out;
@@ -110,4 +111,13 @@ test "frontend formats and terminal options reject invalid combinations" {
     try std.testing.expectError(error.Usage, parse(&.{ "tui", "--format", "json" }));
     try std.testing.expectError(error.Usage, parse(&.{ "languages", "--format", "html" }));
     try std.testing.expectError(error.Usage, parse(&.{ "tui", "--theme", "unknown" }));
+}
+
+test "standalone render accepts stdin and needs no blob path" {
+    const stdin = try parse(&.{ "render", "-", "--title", "Example", "--format", "html" });
+    try std.testing.expectEqual(Command.render, stdin.command);
+    try std.testing.expectEqualStrings("-", stdin.query);
+    try std.testing.expectEqualStrings("Example", stdin.title);
+    try std.testing.expectError(error.Usage, parse(&.{"render"}));
+    try std.testing.expectError(error.Usage, parse(&.{ "render", "a", "b" }));
 }

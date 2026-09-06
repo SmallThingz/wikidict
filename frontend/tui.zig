@@ -34,7 +34,7 @@ const State = struct {
     help: bool = false,
     loaded: ?usize = null,
     text: []const u8 = &.{},
-    rows: [][]const u8 = &.{},
+    rows: []term.RenderRow = &.{},
     wrap_width: usize = 0,
     screen: term.Size = .{},
 
@@ -182,7 +182,7 @@ const State = struct {
                 } else {
                     var doc = try model.fromRecord(self.a, record, false);
                     defer doc.deinit();
-                    try output.entryText(&formatted.writer, doc.entry, false);
+                    try output.entryText(&formatted.writer, doc.entry, self.color);
                 }
             } else try formatted.writer.writeAll("No matching entries.\n\nPress / to edit the prefix; Ctrl-U clears it.\nMatching is case-sensitive UTF-8, not fuzzy search.");
             const text = try self.a.dupe(u8, formatted.written());
@@ -198,7 +198,7 @@ const State = struct {
             self.scroll = 0;
         }
         if (self.wrap_width != width) {
-            const rows = try term.wrap(self.a, self.text, width);
+            const rows = try term.wrapStyled(self.a, self.text, width);
             self.a.free(self.rows);
             self.rows = rows;
             self.wrap_width = width;
@@ -256,16 +256,20 @@ const State = struct {
             }
             if (split_at != 0) for (5..sz.rows - 1) |row| try self.put(w, row, split_at, 1, "│", p.muted);
             if (split_at != 0 or self.focus == .entry) {
-                try self.put(w, 6, content_col, content_width, if (self.source) "EXACT SOURCE  /  DISPLAY-SAFE" else "READING  /  TEMPLATES PRESERVED", if (self.focus == .entry) p.accent else p.muted);
+                try self.put(w, 6, content_col, content_width, if (self.source) "EXACT SOURCE  /  DISPLAY-SAFE" else "READING  /  RENDERED WIKITEXT", if (self.focus == .entry) p.accent else p.muted);
                 for (0..self.bodyHeight()) |i| {
                     if (self.scroll + i >= self.rows.len) break;
-                    try self.put(w, 7 + i, content_col, content_width, self.rows[self.scroll + i], if (self.scroll + i == 0 and !self.source) p.accent else p.base);
+                    const row = self.rows[self.scroll + i];
+                    try w.print("\x1b[{d};{d}H{s}", .{ 7 + i, content_col, p.base });
+                    try row.carry.write(w);
+                    try term.writeStyled(w, row.bytes[0..term.prefixBytes(row.bytes, content_width)], p.base);
+                    try w.writeAll(p.base);
                 }
             }
             try self.put(w, sz.rows - 1, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "{s} focus  |  match {d}/{d}  |  lines {d}-{d}/{d}", .{ @tagName(self.focus), if (self.count() == 0) @as(usize, 0) else self.selected + 1, self.count(), self.scroll + 1, @min(self.scroll + self.bodyHeight(), self.rows.len), self.rows.len }), p.muted);
             try self.put(w, sz.rows, 3, sz.cols - 4, "/ search  Tab focus  ↑↓ move  PgDn/PgUp  s source  t theme  ? help  q quit", p.muted);
             if (self.help) {
-                const help = [_][]const u8{ "KEYBOARD", "Tab: search > matches > reading", "Enter: read selected word    /: search", "Arrows or j/k: select or scroll", "PgUp/PgDn, Home/End: page or jump", "Search: UTF-8 editing, Left/Right, Delete", "Ctrl-U: clear query    Ctrl-C/D: quit", "s: exact source    t: terminal/dark/light", "q: quit outside search    any key: close", "No network. Template syntax is preserved." };
+                const help = [_][]const u8{ "KEYBOARD", "Tab: search > matches > reading", "Enter: read selected word    /: search", "Arrows or j/k: select or scroll", "PgUp/PgDn, Home/End: page or jump", "Search: UTF-8 editing, Left/Right, Delete", "Ctrl-U: clear query    Ctrl-C/D: quit", "s: exact source    t: terminal/dark/light", "q: quit outside search    any key: close", "Local wikitext renderer. s shows raw source." };
                 for (help, 0..) |line, i| {
                     if (6 + i >= sz.rows - 1) break;
                     try w.print("\x1b[{d};1H{s}\x1b[2K", .{ 6 + i, p.base });

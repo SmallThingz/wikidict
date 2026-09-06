@@ -41,6 +41,27 @@ pub fn terminalText(w: *std.Io.Writer, text: []const u8) !void {
     }
 }
 
+pub fn spansText(w: *std.Io.Writer, spans: []const @import("wikitext.zig").Span, color: bool) !void {
+    for (spans) |span| {
+        if (color and span.bold) try w.writeAll("\x1b[1m");
+        if (color and span.italic) try w.writeAll("\x1b[3m");
+        if (color and span.underline) try w.writeAll("\x1b[4m");
+        if (color and span.strike) try w.writeAll("\x1b[9m");
+        if (color and (span.small or span.role == .label or span.role == .citation)) try w.writeAll("\x1b[2m");
+        if (color and (span.kind == .link or span.kind == .external_link)) try w.writeAll("\x1b[36m");
+        if (span.kind == .template) {
+            try w.writeAll("[unavailable template: ");
+            try terminalText(w, span.target);
+            try w.writeByte(']');
+        } else if (span.kind == .line_break) try w.writeByte('\n') else {
+            if (span.superscript and span.role != .reference) try w.writeByte('^');
+            if (span.subscript) try w.writeByte('_');
+            try terminalText(w, span.text);
+        }
+        try terminalText(w, span.trail);
+        if (color) try w.writeAll("\x1b[0m");
+    }
+}
 pub fn entryText(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
     if (color) try w.writeAll("\x1b[1;36m");
     try terminalText(w, entry.title);
@@ -52,8 +73,8 @@ pub fn entryText(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
         try w.writeAll("\nInvalid semantic payload. JSON preserves its bytes as payload_base64.\n");
         return;
     }
-    if (entry.preamble.len != 0) {
-        try terminalText(w, entry.preamble);
+    if (entry.preamble_spans.len != 0) {
+        try spansText(w, entry.preamble_spans, color);
         try w.writeByte('\n');
     }
     for (entry.sections) |section| {
@@ -67,37 +88,61 @@ pub fn entryText(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
         var ordinal: usize = 0;
         for (section.blocks) |block| {
             if (block.kind == .blank) continue;
+            if (block.kind == .rule) {
+                try w.writeAll("────────────────────────\n");
+                continue;
+            }
+            if (block.table) |table| {
+                if (table.caption.len != 0) {
+                    try spansText(w, table.caption, color);
+                    try w.writeByte('\n');
+                }
+                for (table.rows) |row| {
+                    try w.writeAll("  │ ");
+                    for (row.cells, 0..) |cell, i| {
+                        if (i != 0) try w.writeAll(" │ ");
+                        if (color and cell.header) try w.writeAll("\x1b[1m");
+                        try spansText(w, cell.spans, color);
+                        if (color) try w.writeAll("\x1b[0m");
+                    }
+                    try w.writeAll(" │\n");
+                }
+                try w.writeByte('\n');
+                continue;
+            }
             try w.splatByteAll(' ', @as(usize, @min(block.depth, 12)) * 2);
             switch (block.kind) {
                 .definition => {
                     ordinal += 1;
-                    try w.print("{d}. ", .{ordinal});
+                    if (block.number.len != 0) {
+                        try terminalText(w, block.number);
+                        try w.writeAll(". ");
+                    } else try w.print("{d}. ", .{ordinal});
                 },
                 .example, .quotation => try w.writeAll("│ "),
                 .list_item => try w.writeAll("• "),
+                .preformatted => try w.writeAll("    "),
                 else => {},
             }
-            for (block.spans) |span| {
-                if (color and span.bold) try w.writeAll("\x1b[1m");
-                if (color and span.italic) try w.writeAll("\x1b[3m");
-                if (color and (span.kind == .link or span.kind == .external_link)) try w.writeAll("\x1b[36m");
-                if (span.kind == .template) try w.writeAll("{{");
-                if (span.kind == .line_break) try w.writeAll("\n    ") else try terminalText(w, span.text);
-                if (span.kind == .template) try w.writeAll("}}");
-                try terminalText(w, span.trail);
-                if (color) try w.writeAll("\x1b[0m");
-            }
-            if (block.feature) |f| {
-                if (f.language.len != 0) {
-                    try w.writeAll("  [");
-                    try terminalText(w, f.language);
-                    try w.writeByte(']');
-                }
-            }
+            try spansText(w, block.spans, color);
+            if (block.feature) |f| if (f.language.len != 0) {
+                try w.writeAll("  [");
+                try terminalText(w, f.language);
+                try w.writeByte(']');
+            };
+            try w.writeByte('\n');
+            if (block.kind == .paragraph or block.kind == .quotation) try w.writeByte('\n');
+        }
+    }
+    if (entry.references.len != 0) {
+        try w.writeAll("\nReferences\n");
+        for (entry.references) |ref| {
+            try w.print("[{d}] ", .{ref.number});
+            try spansText(w, ref.spans, color);
             try w.writeByte('\n');
         }
     }
-    if (entry.unexpanded_templates != 0) try w.print("\n[{d} template(s) preserved, not expanded. Use --format source for exact wikitext.]\n", .{entry.unexpanded_templates});
+    if (entry.unexpanded_templates != 0) try w.print("\n[{d} unsupported template(s). Exact syntax is available in Source or JSON.]\n", .{entry.unexpanded_templates});
 }
 pub fn json(w: *std.Io.Writer, response: Response) !void {
     try std.json.Stringify.value(response, .{ .whitespace = .indent_2 }, w);
@@ -118,4 +163,24 @@ test "JSON output is a complete versioned machine response" {
     defer parsed.deinit();
     try std.testing.expectEqualStrings("dict.results.v1", parsed.value.object.get("schema").?.string);
     try std.testing.expectEqualStrings("a\"", parsed.value.object.get("query").?.string);
+}
+
+test "human renderer displays definitions and supplied template data instead of wikitext" {
+    const a = std.testing.allocator;
+    const source = "==English==\n===Noun===\n{{en-noun}}\n#{{lb|en|informal}} A '''small''' [[cat|feline]].<ref>''Book''</ref>\n\n{{quote-text|en|year=2020|title=Book\n|passage=A {{m|en|cat}} appeared.}}\n";
+    var doc = try model.fromWikitext(a, "cat", "English", source, true);
+    defer doc.deinit();
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try entryText(&out.writer, doc.entry, true);
+    const bytes = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "{{") == null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "[[") == null);
+    var plain_output: std.Io.Writer.Allocating = .init(a);
+    defer plain_output.deinit();
+    try entryText(&plain_output.writer, doc.entry, false);
+    try std.testing.expect(std.mem.indexOf(u8, plain_output.written(), "(informal) A small feline.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "References") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[1msmall") != null);
+    try std.testing.expectEqualStrings(source, doc.entry.source.?);
 }

@@ -4,22 +4,11 @@ const std = @import("std");
 const enc = @import("blob_encoder");
 const dec = @import("blob_decoder");
 const ir = enc.document_ir;
+const wiki = @import("wikitext.zig");
 const Allocator = std.mem.Allocator;
 
-pub const Feature = struct {
-    kind: []const u8,
-    language: []const u8 = "",
-    data: []const u8 = "",
-    tail_kind: []const u8 = "none",
-    tail: []const u8 = "",
-};
-pub const Block = struct {
-    kind: ir.BlockKind,
-    depth: u8,
-    text: []const u8,
-    spans: []const ir.InlineSpan,
-    feature: ?Feature = null,
-};
+pub const Feature = wiki.Feature;
+pub const Block = wiki.Block;
 pub const Section = struct { level: u8, title: []const u8, blocks: []const Block };
 pub const Entry = struct {
     title: []const u8,
@@ -28,6 +17,9 @@ pub const Entry = struct {
     sections: []const Section = &.{},
     preamble: []const u8 = "",
     unexpanded_templates: usize = 0,
+    rendered_templates: usize = 0,
+    preamble_spans: []const wiki.Span = &.{},
+    references: []const wiki.Reference = &.{},
     status: enum { structured, raw, invalid_payload } = .structured,
     source: ?[]const u8 = null,
     source_base64: ?[]const u8 = null,
@@ -92,7 +84,8 @@ const Builder = struct {
     blocks: std.ArrayList(Block) = .empty,
     title: []const u8 = "Entry",
     level: u8 = 2,
-    templates: usize = 0,
+    renderer: *wiki.Renderer,
+    pending_raw: std.ArrayList(u8) = .empty,
     started: bool = false,
 
     fn flush(self: *Builder) !void {
@@ -107,33 +100,44 @@ const Builder = struct {
     fn block(self: *Builder, input: ir.DecodedBlock, feature: ?Feature) !void {
         self.started = true;
         const text = try utf8Text(self.a, input.text);
-        var spans: std.ArrayList(ir.InlineSpan) = .empty;
-        var it: ir.InlineIterator = .{ .input = text };
-        while (it.next()) |span| {
-            try spans.append(self.a, span);
-            if (span.kind == .template) self.templates += 1;
-        }
-        try self.blocks.append(self.a, .{ .kind = input.kind, .depth = input.depth, .text = text, .spans = try spans.toOwnedSlice(self.a), .feature = feature });
+        try self.blocks.append(self.a, .{ .kind = std.meta.stringToEnum(wiki.Kind, @tagName(input.kind)).?, .depth = input.depth, .text = text, .spans = try self.renderer.parseSpans(text, .{}), .feature = feature });
     }
-    fn raw(self: *Builder, text: []const u8) !void {
-        var lines: enc.language_blob_encoding.LineIterator = .{ .input = text };
-        while (lines.next()) |line| try self.block(ir.classifyLine(line), null);
+    fn raw(self: *Builder, source: []const u8) !void {
+        for (try self.renderer.renderBody(try utf8Text(self.a, source))) |item| {
+            if (item.kind == .heading) {
+                if (self.started) try self.flush();
+                self.started = true;
+                self.title = try wiki.plainText(self.a, item.spans);
+                self.level = item.level;
+            } else {
+                self.started = true;
+                try self.blocks.append(self.a, item);
+            }
+        }
+    }
+    fn rawLine(self: *Builder, line: []const u8) !void {
+        try self.pending_raw.appendSlice(self.a, line);
+        try self.pending_raw.append(self.a, '\n');
+    }
+    fn flushRaw(self: *Builder) !void {
+        if (self.pending_raw.items.len == 0) return;
+        try self.raw(self.pending_raw.items);
+        self.pending_raw = .empty;
     }
     fn language(self: *Builder, it_ptr: *enc.language_blob_encoding.SectionIterator) !void {
         while (try it_ptr.next()) |s| {
-            // Preserve even empty semantic sections and their original levels.
             if (self.started) try self.flush();
             self.started = true;
             self.title = try utf8Text(self.a, s.title);
             self.level = s.level;
-            var blocks = s.blockIterator();
-            while (blocks.next()) |b| try self.block(b, null);
+            try self.raw(s.content());
         }
     }
     fn term(self: *Builder, text: []const u8, language_code: []const u8, tail_kind: []const u8, tail: []const u8) !void {
         const data = try utf8Text(self.a, text);
         const suffix = try utf8Text(self.a, tail);
-        const stem = if (std.mem.startsWith(u8, tail_kind, "plural_")) try std.fmt.allocPrint(self.a, "{s}s", .{data}) else data;
+        const link = try std.fmt.allocPrint(self.a, "{{{{l|{s}|{s}}}}}", .{ language_code, data });
+        const stem = if (std.mem.startsWith(u8, tail_kind, "plural_")) try std.fmt.allocPrint(self.a, "{s}s", .{link}) else link;
         const display = if (suffix.len == 0) stem else try std.fmt.allocPrint(self.a, "{s} ({s})", .{ stem, suffix });
         try self.block(.{ .kind = .list_item, .depth = 1, .text = display }, .{
             .kind = "term",
@@ -150,7 +154,8 @@ pub fn fromRecord(allocator: Allocator, record: dec.BlobRecordView, include_sour
     errdefer arena.deinit();
     const a = arena.allocator();
     var entry: Entry = .{ .title = try utf8Text(a, record.title()), .kind = record.kind() };
-    var builder: Builder = .{ .a = a };
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = entry.title } };
+    var builder: Builder = .{ .a = a, .renderer = &renderer };
     populate(&builder, record, &entry) catch |err| switch (err) {
         error.InvalidEncoding => {
             entry.status = .invalid_payload;
@@ -161,7 +166,10 @@ pub fn fromRecord(allocator: Allocator, record: dec.BlobRecordView, include_sour
     };
     try builder.flush();
     entry.sections = try builder.sections.toOwnedSlice(a);
-    entry.unexpanded_templates = builder.templates;
+    entry.preamble_spans = try renderer.parseSpans(entry.preamble, .{});
+    entry.references = try renderer.finishReferences();
+    entry.unexpanded_templates = renderer.unresolved_templates;
+    entry.rendered_templates = renderer.rendered_templates;
     if (include_source) {
         const source = try sourceAlloc(a, record);
         if (std.unicode.utf8ValidateSlice(source)) entry.source = source else entry.source_base64 = try base64(a, source);
@@ -173,6 +181,7 @@ fn populate(b: *Builder, record: dec.BlobRecordView, entry: *Entry) !void {
     switch (record) {
         .language => |r| {
             entry.language = try utf8Text(b.a, r.metadata.heading);
+            b.renderer.context.language = entry.language.?;
             var it = try r.sectionIterator();
             entry.preamble = try utf8Text(b.a, it.preamble());
             try b.language(&it);
@@ -194,37 +203,61 @@ fn populate(b: *Builder, record: dec.BlobRecordView, entry: *Entry) !void {
         },
         .thesaurus => |r| {
             var it = try r.recordIterator();
-            while (try it.next()) |item| switch (item.kind) {
-                .raw_line => try b.raw(item.data),
-                .relation => try b.heading(3, @tagName(item.relation.?)),
-                .sense => try b.heading(3, item.data),
-                .header => if (item.data.len != 0) {
-                    try b.heading(2, item.data);
-                },
-                .term => try b.term(item.data, item.language, @tagName(item.tail_kind), item.tail),
-                .topic => try b.block(.{ .kind = .paragraph, .depth = 0, .text = item.data }, .{ .kind = "topic", .language = try utf8Text(b.a, item.language), .data = try utf8Text(b.a, item.data) }),
-                .blank, .list_begin, .list_end => {},
-            };
+            while (try it.next()) |item| {
+                if (item.kind == .raw_line) {
+                    try b.rawLine(item.data);
+                    continue;
+                }
+                if (item.kind == .blank) {
+                    try b.rawLine("");
+                    continue;
+                }
+                try b.flushRaw();
+                switch (item.kind) {
+                    .raw_line => unreachable,
+                    .relation => try b.heading(3, @tagName(item.relation.?)),
+                    .sense => try b.heading(3, item.data),
+                    .header => if (item.data.len != 0) {
+                        try b.heading(2, item.data);
+                    },
+                    .term => try b.term(item.data, item.language, @tagName(item.tail_kind), item.tail),
+                    .topic => try b.block(.{ .kind = .paragraph, .depth = 0, .text = item.data }, .{ .kind = "topic", .language = try utf8Text(b.a, item.language), .data = try utf8Text(b.a, item.data) }),
+                    .blank, .list_begin, .list_end => {},
+                }
+            }
+            try b.flushRaw();
         },
         .rhymes => |r| {
             var it = try r.recordIterator();
-            while (try it.next()) |item| switch (item.kind) {
-                .raw_line => try b.raw(item.data),
-                .heading => try b.heading(3, switch (item.heading.?) {
-                    .pronunciation => "Pronunciation",
-                    .rhymes => "Rhymes",
-                    .partial_rhymes => "Partial rhymes",
-                    .notes => "Notes",
-                    .see_also => "See also",
-                    .syllable => |n| try std.fmt.allocPrint(b.a, "{d} syllable(s)", .{n}),
-                }),
-                .links => {
-                    var links = item.linkIterator().?;
-                    while (try links.next()) |link| try b.term(link, item.language, @tagName(item.tail_kind), item.tail);
-                },
-                .navigation => try b.block(.{ .kind = .paragraph, .depth = 0, .text = item.data }, .{ .kind = "navigation", .language = try utf8Text(b.a, item.language), .data = try utf8Text(b.a, item.data) }),
-                .blank, .list_boundary => {},
-            };
+            while (try it.next()) |item| {
+                if (item.kind == .raw_line) {
+                    try b.rawLine(item.data);
+                    continue;
+                }
+                if (item.kind == .blank) {
+                    try b.rawLine("");
+                    continue;
+                }
+                try b.flushRaw();
+                switch (item.kind) {
+                    .raw_line => unreachable,
+                    .heading => try b.heading(3, switch (item.heading.?) {
+                        .pronunciation => "Pronunciation",
+                        .rhymes => "Rhymes",
+                        .partial_rhymes => "Partial rhymes",
+                        .notes => "Notes",
+                        .see_also => "See also",
+                        .syllable => |n| try std.fmt.allocPrint(b.a, "{d} syllable(s)", .{n}),
+                    }),
+                    .links => {
+                        var links = item.linkIterator().?;
+                        while (try links.next()) |link| try b.term(link, item.language, @tagName(item.tail_kind), item.tail);
+                    },
+                    .navigation => try b.block(.{ .kind = .paragraph, .depth = 0, .text = item.data }, .{ .kind = "navigation", .language = try utf8Text(b.a, item.language), .data = try utf8Text(b.a, item.data) }),
+                    .blank, .list_boundary => {},
+                }
+            }
+            try b.flushRaw();
         },
     }
 }
@@ -238,7 +271,7 @@ test "presentation uses semantic sections and preserves exact optional source" {
     defer doc.deinit();
     try std.testing.expectEqualStrings(source, doc.entry.source.?);
     try std.testing.expectEqual(@as(usize, 2), doc.entry.sections.len);
-    try std.testing.expectEqual(ir.BlockKind.definition, doc.entry.sections[1].blocks[0].kind);
+    try std.testing.expectEqual(wiki.Kind.definition, doc.entry.sections[1].blocks[0].kind);
     try std.testing.expectEqual(@as(usize, 1), doc.entry.unexpanded_templates);
 }
 test "presentation keeps arbitrary raw bytes lossless and invalid semantic payload explicit" {
@@ -258,4 +291,35 @@ fn allocationCase(a: Allocator) !void {
 }
 test "presentation frees every failed allocation" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationCase, .{});
+}
+
+/// Render a standalone wikitext fragment without building/loading any dictionary blob.
+pub fn fromWikitext(allocator: Allocator, title: []const u8, language: []const u8, source: []const u8, include_source: bool) !OwnedEntry {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    var entry: Entry = .{ .title = try utf8Text(a, title), .kind = .language, .language = try utf8Text(a, language) };
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = entry.title, .language = entry.language.? } };
+    var builder: Builder = .{ .a = a, .renderer = &renderer, .title = entry.language.? };
+    try builder.raw(source);
+    try builder.flush();
+    entry.sections = try builder.sections.toOwnedSlice(a);
+    entry.references = try renderer.finishReferences();
+    entry.rendered_templates = renderer.rendered_templates;
+    entry.unexpanded_templates = renderer.unresolved_templates;
+    if (include_source) {
+        if (std.unicode.utf8ValidateSlice(source)) entry.source = source else entry.source_base64 = try base64(a, source);
+    }
+    return .{ .arena = arena, .entry = entry };
+}
+
+test "standalone wikitext produces a rendered document while retaining byte-exact source" {
+    const source = "==English==\n===Noun===\n#{{lb|en|rare}} A '''{{m|en|cat}}''' &amp; a dog.<ref>''Book'', 2020.</ref>\n";
+    var doc = try fromWikitext(std.testing.allocator, "feline", "English", source, true);
+    defer doc.deinit();
+    try std.testing.expectEqualStrings(source, doc.entry.source.?);
+    try std.testing.expectEqualStrings("Noun", doc.entry.sections[1].title);
+    try std.testing.expectEqual(@as(usize, 2), doc.entry.rendered_templates);
+    try std.testing.expectEqual(@as(usize, 0), doc.entry.unexpanded_templates);
+    try std.testing.expectEqual(@as(usize, 1), doc.entry.references.len);
 }

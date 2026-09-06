@@ -81,14 +81,7 @@
 .dict-section h2 { font-size: 19px; letter-spacing: -.025em; font-weight: 630; margin: 0 0 16px; padding-bottom: 10px; border-bottom: 1px solid var(--dict-line); }
 .dict-section .dict-subheading { font-size: 13px; margin: 22px 0 10px; font-weight: 650; }
 .dict-reading { font-size: 14px; line-height: 1.9; overflow-wrap: anywhere; }
-.dict-blocks { counter-reset: definition; }
-.dict-block { display: flex; margin: 7px 0 7px calc(var(--depth, 0) * 16px); gap: 12px; min-width: 0; }
 .dict-block-content { min-width: 0; }
-.dict-block-definition { counter-increment: definition; }
-.dict-block-definition::before { content: counter(definition, decimal-leading-zero); color: var(--dict-muted); flex: 0 0 18px; padding-top: 5px; font: 10px/1.9 ui-monospace, monospace; }
-.dict-block-example, .dict-block-quotation { color: var(--dict-muted); font-style: italic; font-size: 13px; padding-left: 16px; border-left: 1px solid var(--dict-line); margin-left: 30px; }
-.dict-block-list_item::before, .dict-block-term::before { content: '·'; flex: 0 0 8px; color: var(--dict-muted); }
-.dict-block-indent, .dict-block-list_detail { padding-left: 18px; }
 .dict-bold { font-weight: 650; }
 .dict-italic { font-style: italic; }
 .dict-language-tag { font: 9px ui-monospace, monospace; color: var(--dict-muted); padding: 3px 5px; border: 1px solid var(--dict-line); border-radius: 3px; margin-left: 8px; white-space: nowrap; }
@@ -140,3 +133,33 @@
 @media print { .dict-topbar, .dict-index, .dict-toolbar, .dict-toast, .dict-render-note { display: none !important; } .dict-workspace { display: block; } .dict-app { --site-bg: white; --site-fg: black; --site-accent: black; } .dict-main { padding: 0; } }
 .dict-appearance > summary { white-space: nowrap; }
 @media (max-width: 420px) { .dict-topbar-context { display: none; } }
+
+/* Wikitext is rendered as semantic DOM, not a source-text projection. */
+.dict-render-block { margin: 10px 0; }
+.dict-role-label, .dict-role-citation { color: var(--dict-muted); }
+.dict-role-label { font-size: .87em; }
+.dict-role-headword { font-weight: 700; }
+.dict-role-pronunciation { font-family: "Charis SIL", "Doulos SIL", system-ui, sans-serif; }
+.dict-role-reference { font-style: normal; padding-inline: 2px; }
+.dict-strike { text-decoration: line-through; }
+.dict-underline { text-decoration: underline; }
+.dict-inline code, code.dict-inline { font: .88em/1.7 ui-monospace, monospace; background: var(--dict-soft); padding: 1px 4px; border-radius: 3px; }
+.dict-wiki-list { margin: 10px 0; padding-left: 1.7em; }
+.dict-wiki-list li { padding-left: .3em; margin: 8px 0; }
+.dict-wiki-list li::marker { color: var(--dict-muted); font-size: .85em; font-variant-numeric: tabular-nums; }
+.dict-wiki-list .dict-wiki-list { margin: 7px 0 12px; }
+.dict-wiki-list dl { padding-left: 0; }
+.dict-wiki-list dt { font-weight: 650; margin-top: 10px; }
+.dict-wiki-list dd { margin-left: 0; }
+.dict-content-example, .dict-content-quotation { padding-left: 15px; border-left: 2px solid var(--dict-line); font-size: .95em; }
+.dict-content-example { font-style: italic; }
+.dict-block-quotation, .dict-block-example { margin-left: 0; padding-left: 0; border-left: 0; color: inherit; font-style: normal; }
+.dict-table-scroll { max-width: 100%; overflow-x: auto; margin-block: 18px; }
+.dict-table { border-collapse: collapse; font-size: .92em; min-width: 60%; }
+.dict-table caption { font-weight: 650; text-align: left; padding: 5px 10px 10px 0; }
+.dict-table th, .dict-table td { border: 1px solid var(--dict-line); padding: 9px 14px; text-align: start; vertical-align: top; }
+.dict-table th { font-weight: 650; background: var(--dict-soft); }
+.dict-pre { overflow-x: auto; padding: 14px; background: var(--dict-soft); border: 1px solid var(--dict-line); font: 12px/1.7 ui-monospace, monospace; white-space: pre; }
+.dict-rule { border: 0; border-top: 1px solid var(--dict-line); margin-block: 22px; }
+.dict-references { font-size: .86em; }
+.dict-references li { scroll-margin-top: 70px; margin-block: 8px; }

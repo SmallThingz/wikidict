@@ -14,6 +14,8 @@ const usage =
     \\  dict languages [--root PATH] [--format text|json]
     \\  dict stats [options]
     \\  dict tui [PREFIX] [options]
+    \\  dict render FILE [--title TITLE] [--format text|json|html|source]
+    \\       Use - for stdin. No database is needed.
     \\
     \\  --root PATH        WIKBLB03 root (default data/wiktionary-blobs)
     \\  --language NAME    Exact language heading (default English)
@@ -30,7 +32,8 @@ const usage =
     \\
     \\Search is case-sensitive UTF-8 prefix matching. Results go to stdout.
     \\Diagnostics go to stderr. Exit: 0 success, 1 no matches, 2 usage/data/I/O error.
-    \\Unexpanded templates remain explicit. No network or template VM is used.
+    \\Wikitext and core Wiktionary templates render locally. Unsupported templates are marked.
+    \\No network or template VM is used.
     \\
 ;
 
@@ -57,6 +60,25 @@ fn run(init: std.process.Init) !u8 {
     }
     if (opts.command == .languages) {
         try languages(init.io, a, opts, w);
+        try w.flush();
+        return 0;
+    }
+    if (opts.command == .render) {
+        const source = if (std.mem.eql(u8, opts.query, "-")) blk: {
+            var input_buffer: [8192]u8 = undefined;
+            var reader = std.Io.File.stdin().readerStreaming(init.io, &input_buffer);
+            break :blk try reader.interface.allocRemaining(a, .limited(16 * 1024 * 1024));
+        } else try std.Io.Dir.cwd().readFileAlloc(init.io, opts.query, a, .limited(16 * 1024 * 1024));
+        if (opts.format == .source) {
+            try w.writeAll(source);
+            try w.flush();
+            return 0;
+        }
+        var doc = try model.fromWikitext(init.gpa, opts.title, opts.language, source, opts.with_source);
+        defer doc.deinit();
+        const response: output.Response = .{ .operation = .render, .query = doc.entry.title, .kind = .language, .language = doc.entry.language, .match_mode = "render-input", .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} };
+        const color = opts.color == .always or (opts.color == .auto and !init.environ_map.contains("NO_COLOR") and !(if (init.environ_map.get("TERM")) |t| std.mem.eql(u8, t, "dumb") else false) and try std.Io.File.stdout().isTty(init.io));
+        if (opts.format == .html) try html.write(w, a, response) else if (opts.format == .json) try output.json(w, response) else try output.entryText(w, doc.entry, color);
         try w.flush();
         return 0;
     }
@@ -153,7 +175,7 @@ fn run(init: std.process.Init) !u8 {
                 try w.print(" / {s}\nrecords: {d}\nblob bytes: {d}\nruntime index bytes: {d}\n", .{ @tagName(opts.kind), db.index.recordCount(), db.bytes.len, db.index.recordCount() * @sizeOf(usize) });
             }
         },
-        .languages, .tui => unreachable,
+        .languages, .tui, .render => unreachable,
     }
     try w.flush();
     return if (response.total_matches == 0 and opts.command != .stats) 1 else 0;

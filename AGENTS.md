@@ -15,6 +15,7 @@
 
 - Serialization work must not modify VM or VM-related code under `lua2/`; it is owned by another agent.
 
-- Frontends share `frontend/model.zig` and the portable blob readers. Keep exact source separate from presentation; unresolved templates stay explicit, and human output must neutralize terminal control sequences.
+- Frontends share `frontend/model.zig`, the runtime wikitext renderer and the portable blob readers. Keep exact source separate from presentation; unresolved templates stay explicit, and human output must neutralize terminal control sequences.
 - Machine results use the versioned `dict.results.v1` stdout protocol; diagnostics go to stderr. Do not place frontend data or theme state into blob files.
 - Rebuild and commit `frontend/web/dist/index.html` after editing web source; native builds embed it and must not fetch Node dependencies. Test terminal cleanup using a real PTY, including resize and handled signals.
+- Rendering gates must assert visible semantic content, not just process startup. Keep native template support explicit; never label an argument projection as full Scribunto expansion or fabricate language morphology.
