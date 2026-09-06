@@ -3,6 +3,7 @@ const zxml = @import("zxml");
 const encoder = @import("encoder");
 
 const blob_format = encoder.blob_format;
+const blob_catalog = encoder.blob_catalog;
 const language_encoding = encoder.language_blob_encoding;
 const reconstruction_encoding = encoder.reconstruction_encoding;
 const thesaurus_encoding = encoder.thesaurus_encoding;
@@ -69,7 +70,6 @@ const BlobFile = struct {
 };
 
 const LanguageBlobs = struct {
-    allocator: std.mem.Allocator,
     manifest: Mapped,
     map: std.StringHashMap(BlobFile),
     expected_records: u64 = 0,
@@ -93,31 +93,23 @@ const LanguageBlobs = struct {
         }
 
         var expected_records: u64 = 0;
-        var lines = std.mem.splitScalar(u8, manifest.bytes, '\n');
-        const header = lines.next() orelse return error.EmptyManifest;
-        if (!std.mem.eql(u8, header, "heading\tfile\trecords")) return error.InvalidManifest;
-        while (lines.next()) |line| {
-            if (line.len == 0) continue;
-            var fields = std.mem.splitScalar(u8, line, '\t');
-            const heading = fields.next() orelse return error.InvalidManifest;
-            const filename = fields.next() orelse return error.InvalidManifest;
-            const count_text = fields.next() orelse return error.InvalidManifest;
-            if (fields.next() != null) return error.InvalidManifest;
-            const expected = try std.fmt.parseInt(u32, count_text, 10);
-            const path = try std.fmt.allocPrint(allocator, "{s}/languages/{s}", .{ root, filename });
+        var entries = try blob_catalog.Iterator.init(manifest.bytes);
+        while (try entries.next()) |entry| {
+            const path = try std.fmt.allocPrint(allocator, "{s}/languages/{s}", .{ root, entry.filename });
             defer allocator.free(path);
             var mapped = try mmapPath(io, path);
             errdefer mapped.deinit();
             const view = try blob_format.inspect(mapped.bytes);
             if (view.kind != .language) return error.InvalidLanguageBlob;
             const metadata = try view.languageMetadata();
-            if (!std.mem.eql(u8, metadata.heading, heading)) return error.InvalidLanguageBlob;
-            if (view.header.record_count != expected) return error.InvalidLanguageBlob;
-            try map.putNoClobber(heading, .{ .mapped = mapped, .view = view });
-            expected_records += expected;
+            if (!std.mem.eql(u8, metadata.heading, entry.heading)) return error.InvalidLanguageBlob;
+            if (view.header.record_count != entry.record_count) return error.InvalidLanguageBlob;
+            const gop = try map.getOrPut(entry.heading);
+            if (gop.found_existing) return error.InvalidManifest;
+            gop.value_ptr.* = .{ .mapped = mapped, .view = view };
+            expected_records += entry.record_count;
         }
         return .{
-            .allocator = allocator,
             .manifest = manifest,
             .map = map,
             .expected_records = expected_records,
@@ -131,17 +123,35 @@ const LanguageBlobs = struct {
 };
 
 const FixedBlobs = struct {
-    thesaurus: BlobFile,
-    citations: BlobFile,
-    reconstruction: BlobFile,
-    rhymes: BlobFile,
-    sign_gloss: BlobFile,
+    thesaurus: ?BlobFile,
+    citations: ?BlobFile,
+    reconstruction: ?BlobFile,
+    rhymes: ?BlobFile,
+    sign_gloss: ?BlobFile,
+
     fn deinit(self: *FixedBlobs) void {
-        self.thesaurus.mapped.deinit();
-        self.citations.mapped.deinit();
-        self.reconstruction.mapped.deinit();
-        self.rhymes.mapped.deinit();
-        self.sign_gloss.mapped.deinit();
+        if (self.thesaurus) |*blob| blob.mapped.deinit();
+        if (self.citations) |*blob| blob.mapped.deinit();
+        if (self.reconstruction) |*blob| blob.mapped.deinit();
+        if (self.rhymes) |*blob| blob.mapped.deinit();
+        if (self.sign_gloss) |*blob| blob.mapped.deinit();
+    }
+
+    fn viewForNamespace(self: *const FixedBlobs, ns: u32) ?blob_format.BlobView {
+        const file = switch (ns) {
+            ns_thesaurus => self.thesaurus,
+            ns_citations => self.citations,
+            ns_reconstruction => self.reconstruction,
+            ns_rhymes => self.rhymes,
+            ns_sign_gloss => self.sign_gloss,
+            else => unreachable,
+        };
+        return if (file) |blob| blob.view else null;
+    }
+
+    fn recordCount(self: *const FixedBlobs, ns: u32) u32 {
+        const view = self.viewForNamespace(ns) orelse return 0;
+        return view.header.record_count;
     }
 };
 
@@ -161,17 +171,30 @@ fn loadFixedBlob(
     return .{ .mapped = mapped, .view = view };
 }
 
+fn loadFixedBlobOptional(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    root: []const u8,
+    name: []const u8,
+    kind: blob_format.BlobKind,
+) !?BlobFile {
+    return loadFixedBlob(io, allocator, root, name, kind) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+}
+
 fn loadFixedBlobs(io: std.Io, allocator: std.mem.Allocator, root: []const u8) !FixedBlobs {
-    var thesaurus = try loadFixedBlob(io, allocator, root, "thesaurus", .thesaurus);
-    errdefer thesaurus.mapped.deinit();
-    var citations = try loadFixedBlob(io, allocator, root, "citations", .citations);
-    errdefer citations.mapped.deinit();
-    var reconstruction = try loadFixedBlob(io, allocator, root, "reconstruction", .reconstruction);
-    errdefer reconstruction.mapped.deinit();
-    var rhymes = try loadFixedBlob(io, allocator, root, "rhymes", .rhymes);
-    errdefer rhymes.mapped.deinit();
-    var sign_gloss = try loadFixedBlob(io, allocator, root, "sign-gloss", .sign_gloss);
-    errdefer sign_gloss.mapped.deinit();
+    var thesaurus = try loadFixedBlobOptional(io, allocator, root, "thesaurus", .thesaurus);
+    errdefer if (thesaurus) |*blob| blob.mapped.deinit();
+    var citations = try loadFixedBlobOptional(io, allocator, root, "citations", .citations);
+    errdefer if (citations) |*blob| blob.mapped.deinit();
+    var reconstruction = try loadFixedBlobOptional(io, allocator, root, "reconstruction", .reconstruction);
+    errdefer if (reconstruction) |*blob| blob.mapped.deinit();
+    var rhymes = try loadFixedBlobOptional(io, allocator, root, "rhymes", .rhymes);
+    errdefer if (rhymes) |*blob| blob.mapped.deinit();
+    var sign_gloss = try loadFixedBlobOptional(io, allocator, root, "sign-gloss", .sign_gloss);
+    errdefer if (sign_gloss) |*blob| blob.mapped.deinit();
     return .{
         .thesaurus = thesaurus,
         .citations = citations,
@@ -288,13 +311,9 @@ fn verifyNamespace(
     stats: *Stats,
 ) !void {
     const local_title = localNamespaceTitle(title);
-    const blob = switch (ns) {
-        ns_thesaurus => fixed.thesaurus.view,
-        ns_citations => fixed.citations.view,
-        ns_reconstruction => fixed.reconstruction.view,
-        ns_rhymes => fixed.rhymes.view,
-        ns_sign_gloss => fixed.sign_gloss.view,
-        else => unreachable,
+    const blob = fixed.viewForNamespace(ns) orelse {
+        std.debug.print("missing feature blob ns={d} title={s}\n", .{ ns, local_title });
+        return error.MissingFeatureBlob;
     };
     const record = (try blob.find(local_title)) orelse {
         std.debug.print("missing feature record ns={d} title={s}\n", .{ ns, local_title });
@@ -336,19 +355,20 @@ fn requireCount(label: []const u8, expected: u64, actual: usize) !void {
 }
 fn verifyCounts(language_blobs: *const LanguageBlobs, fixed: *const FixedBlobs, stats: Stats) !void {
     try requireCount("languages", language_blobs.expected_records, stats.language_records);
-    try requireCount("thesaurus", fixed.thesaurus.view.header.record_count, stats.thesaurus_records);
-    try requireCount("citations", fixed.citations.view.header.record_count, stats.citations_records);
-    try requireCount("reconstruction", fixed.reconstruction.view.header.record_count, stats.reconstruction_records);
-    try requireCount("rhymes", fixed.rhymes.view.header.record_count, stats.rhymes_records);
-    try requireCount("sign-gloss", fixed.sign_gloss.view.header.record_count, stats.sign_gloss_records);
+    try requireCount("thesaurus", fixed.recordCount(ns_thesaurus), stats.thesaurus_records);
+    try requireCount("citations", fixed.recordCount(ns_citations), stats.citations_records);
+    try requireCount("reconstruction", fixed.recordCount(ns_reconstruction), stats.reconstruction_records);
+    try requireCount("rhymes", fixed.recordCount(ns_rhymes), stats.rhymes_records);
+    try requireCount("sign-gloss", fixed.recordCount(ns_sign_gloss), stats.sign_gloss_records);
 }
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len != 3) {
-        std.debug.print("usage: dict-blob-verify <wiktionary.xml> <output-root>\n", .{});
+    if (args.len < 3 or args.len > 4) {
+        std.debug.print("usage: dict-blob-verify <wiktionary.xml> <output-root> [limit-pages]\n", .{});
         return error.Usage;
     }
+    const limit_pages = if (args.len == 4) try std.fmt.parseInt(usize, args[3], 10) else null;
 
     const allocator = std.heap.smp_allocator;
     var language_blobs = try LanguageBlobs.init(init.io, allocator, args[2]);
@@ -365,6 +385,7 @@ pub fn main(init: std.process.Init) !void {
     var stats: Stats = .{};
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, dump.bytes, pos, "<page>")) |start| {
+        if (limit_pages) |limit| if (stats.pages_seen >= limit) break;
         const end_start = std.mem.indexOfPos(u8, dump.bytes, start, "</page>") orelse return error.TruncatedXml;
         const page_end = end_start + "</page>".len;
         const page = dump.bytes[start..page_end];

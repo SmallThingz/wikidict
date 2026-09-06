@@ -3,6 +3,7 @@ pub const compact_encoding = @import("compact_runtime.zig");
 pub const normalize = @import("normalize");
 const reader = @import("reader.zig");
 const blob_reader = @import("blob_reader.zig");
+const blob_catalog = @import("encoder").blob_catalog;
 
 pub const Dictionary = reader.Dictionary;
 pub const LookupHit = reader.LookupHit;
@@ -32,6 +33,14 @@ pub const BlobThesaurusRecordView = blob_reader.ThesaurusRecordView;
 pub const BlobRhymesRecordView = blob_reader.RhymesRecordView;
 pub const BlobReconstructionRecordView = blob_reader.ReconstructionRecordView;
 pub const BlobRawRecordView = blob_reader.RawRecordView;
+pub const BlobCatalogEntry = blob_catalog.Entry;
+pub const BlobCatalogIterator = blob_catalog.Iterator;
+pub const language_blob_filename_len = blob_catalog.language_blob_filename_len;
+pub const languageBlobFilename = blob_catalog.languageBlobFilename;
+
+pub fn findLanguageBlob(manifest_bytes: []const u8, heading: []const u8) error{InvalidManifest}!?BlobCatalogEntry {
+    return blob_catalog.find(manifest_bytes, heading);
+}
 
 pub fn inspectBlob(bytes: []const u8) error{InvalidBlob}!BlobView {
     return BlobView.inspect(bytes);
@@ -64,4 +73,5 @@ test "decoder root imports module tests" {
     _ = normalize;
     _ = reader;
     _ = blob_reader;
+    _ = blob_catalog;
 }

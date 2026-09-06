@@ -2,6 +2,7 @@ const std = @import("std");
 const zxml = @import("zxml");
 const xml_decode = @import("shared_xml_decode");
 const blob_format = @import("blob_format.zig");
+const blob_catalog = @import("blob_catalog.zig");
 const language_encoding = @import("language_blob_encoding.zig");
 const thesaurus_encoding = @import("thesaurus_encoding.zig");
 const reconstruction_encoding = @import("reconstruction_encoding.zig");
@@ -259,10 +260,9 @@ fn localNamespaceTitle(title: []const u8) []const u8 {
 }
 
 pub fn languageBlobPathAlloc(allocator: std.mem.Allocator, output_root: []const u8, heading: []const u8) ![]u8 {
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(heading, &digest, .{});
-    const hex = std.fmt.bytesToHex(digest, .lower);
-    return std.fmt.allocPrint(allocator, "{s}/languages/{s}.wikblb", .{ output_root, &hex });
+    var filename_buf: [blob_catalog.language_blob_filename_len]u8 = undefined;
+    const filename = blob_catalog.languageBlobFilename(heading, &filename_buf);
+    return std.fmt.allocPrint(allocator, "{s}/languages/{s}", .{ output_root, filename });
 }
 
 fn fixedBlobPathAlloc(allocator: std.mem.Allocator, output_root: []const u8, name: []const u8) ![]u8 {
@@ -555,7 +555,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
     var manifest_buffer: [64 * 1024]u8 = undefined;
     var manifest_writer = manifest_file.writer(io, &manifest_buffer);
     const manifest = &manifest_writer.interface;
-    try manifest.writeAll("heading\tfile\trecords\n");
+    try manifest.writeAll(blob_catalog.manifest_header ++ "\n");
     for (&spools.language) |*spool| stats.language_blobs += try finalizeLanguageBucket(io, allocator, spool, options.output_root, manifest);
     try manifest.flush();
 
