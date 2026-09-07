@@ -10,6 +10,7 @@ const link_symbols = @import("vm_link_symbols.zig");
 const numeric_link = @import("vm_numeric_link.zig");
 const module_model = @import("module_model.zig");
 const aot = @import("zig_aot.zig");
+const aot_stats = @import("zig_aot_stats.zig");
 
 const ManifestRow = struct {
     page_id: u64,
@@ -107,6 +108,7 @@ pub fn main(init: std.process.Init) !void {
     _ = try cleanup.compactStrings(std.heap.smp_allocator, &image.program);
     try verify.run(std.heap.smp_allocator, &image.program);
 
+    const classified = aot_stats.collect(&image.program);
     const generated = try aot.generate(std.heap.smp_allocator, &image.program);
     defer std.heap.smp_allocator.free(generated.source);
     try writeAll(init.io, args[3], generated.source);
@@ -122,4 +124,5 @@ pub fn main(init: std.process.Init) !void {
         "AOT_CODE functions={d} instructions={d} dynamic_calls={d} dynamic_indexes={d} string_fields={d}\n",
         .{ generated.stats.functions, generated.stats.instructions, generated.stats.dynamic_calls, generated.stats.dynamic_indexes, generated.stats.string_fields },
     );
+    std.debug.print("AOT_DYNAMIC {any}\n", .{classified});
 }
