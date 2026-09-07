@@ -158,6 +158,25 @@ fn stringLiteral(out: *std.ArrayList(u8), a: A, value: []const u8) !void {
     };
     try out.append(a, '"');
 }
+
+fn finishSource(a: A, out: *std.ArrayList(u8)) ![]u8 {
+    var read: usize = 0;
+    var write: usize = 0;
+    var line_start = true;
+    while (read < out.items.len) {
+        if (line_start) {
+            while (read < out.items.len and (out.items[read] == ' ' or out.items[read] == '\t')) read += 1;
+            if (read == out.items.len) break;
+        }
+        const byte = out.items[read];
+        out.items[write] = byte;
+        write += 1;
+        read += 1;
+        line_start = byte == '\n';
+    }
+    out.items.len = write;
+    return out.toOwnedSlice(a);
+}
 fn scalarNodeExpr(out: *std.ArrayList(u8), a: A, p: *const ir.Program, node: ir.ConstNode) !void {
     switch (node) {
         .nil => try text(out, a, ".nil"),
@@ -970,8 +989,18 @@ pub fn generate(a: A, p: *const ir.Program) !struct { source: []u8, stats: Stats
     for (p.functions.items, 0..) |_, id| try emitFunction(&out, a, p, @intCast(id), &stats, null);
     try emitProgramTables(&out, a, p);
     try emitRuntimeEntry(&out, a, p);
-    return .{ .source = try out.toOwnedSlice(a), .stats = stats };
+    return .{ .source = try finishSource(a, &out), .stats = stats };
 }
+
+test "generated source strips indentation without changing line structure" {
+    const allocator = std.testing.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(allocator, "  alpha\n\tbeta\n    gamma\n");
+    const compact = try finishSource(allocator, &out);
+    defer allocator.free(compact);
+    try std.testing.expectEqualStrings("alpha\nbeta\ngamma\n", compact);
+}
+
 test "finalized IR emits native Zig without bytecode dispatch" {
     const lua = @import("root.zig");
     const opt = @import("vm_optimize.zig");
@@ -1064,7 +1093,7 @@ pub fn generateFunctionShard(a: A, p: *const ir.Program, config: ShardConfig, sh
     try text(&out, a, "pub const functions = [_]rt.FunctionFn{\n");
     for (bounds.first..bounds.end) |id| try print(&out, a, "    f_{d},\n", .{id});
     try text(&out, a, "};\n");
-    return out.toOwnedSlice(a);
+    return finishSource(a, &out);
 }
 
 pub fn generateConstantShard(a: A, p: *const ir.Program, config: ShardConfig, shard_index: usize) ![]u8 {
@@ -1082,7 +1111,7 @@ pub fn generateConstantShard(a: A, p: *const ir.Program, config: ShardConfig, sh
         try text(&out, a, ",\n");
     }
     try text(&out, a, "};\n");
-    return out.toOwnedSlice(a);
+    return finishSource(a, &out);
 }
 
 pub fn generateEntryShard(a: A, p: *const ir.Program, config: ShardConfig, shard_index: usize) ![]u8 {
@@ -1096,7 +1125,7 @@ pub fn generateEntryShard(a: A, p: *const ir.Program, config: ShardConfig, shard
         try print(&out, a, "    0x{x:0>16},\n", .{encoded});
     }
     try text(&out, a, "};\n");
-    return out.toOwnedSlice(a);
+    return finishSource(a, &out);
 }
 
 pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u8 {
@@ -1164,7 +1193,7 @@ pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u
     }
     try text(&out, a, "    return ctx;\n}\n\n");
     try text(&out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {\n    return ctx.invokeKnown(root_function, .{ .direct = &.{} }, args);\n}\n");
-    return out.toOwnedSlice(a);
+    return finishSource(a, &out);
 }
 
 test "sharded AOT splits code and data while preserving numeric cross-shard calls" {
