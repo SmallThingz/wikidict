@@ -2,6 +2,7 @@ const std = @import("std");
 const lua = @import("root.zig");
 const ir = @import("vm_ir.zig");
 const codec = @import("vm_codec.zig");
+const pool = @import("vm_pool_compact.zig");
 const bundle = @import("vm_bundle.zig");
 
 const ManifestRow = struct { page_id: u64, title: []const u8 };
@@ -32,7 +33,9 @@ pub fn main(init: std.process.Init) !void {
     const manifest_bytes = try readAll(init.io, init.arena.allocator(), args[1]);
     var count: u32 = 0;
     var count_it = std.mem.splitScalar(u8, manifest_bytes, '\n');
-    while (count_it.next()) |line| if (line.len != 0) { count += 1; };
+    while (count_it.next()) |line| if (line.len != 0) {
+        count += 1;
+    };
 
     var output = try std.Io.Dir.cwd().createFile(init.io, args[3], .{ .truncate = true });
     defer output.close(init.io);
@@ -47,6 +50,8 @@ pub fn main(init: std.process.Init) !void {
     var lines = std.mem.splitScalar(u8, manifest_bytes, '\n');
     var done: u32 = 0;
     var total_blob: u64 = 0;
+    var removed_scalars: u64 = 0;
+    var saved_string_indexes: u64 = 0;
     while (lines.next()) |line| {
         if (line.len == 0) continue;
         const a = module_arena.allocator();
@@ -55,6 +60,9 @@ pub fn main(init: std.process.Init) !void {
         const source = try readAll(init.io, a, path);
         var chunk = try lua.parse(a, source);
         var program = try ir.lowerChunk(a, &chunk);
+        const compacted = try pool.run(&program);
+        removed_scalars += compacted.scalar_nodes_removed;
+        saved_string_indexes += compacted.string_index_bytes_saved;
         const blob = try codec.serialize(a, &program);
 
         try putU32(w, @intCast(row.title.len));
@@ -71,4 +79,5 @@ pub fn main(init: std.process.Init) !void {
     }
     try w.flush();
     std.debug.print("TOTAL modules={d} payload={d}\n", .{ done, total_blob });
+    std.debug.print("POOL scalar_nodes_removed={d} string_index_bytes_saved={d}\n", .{ removed_scalars, saved_string_indexes });
 }
