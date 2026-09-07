@@ -333,7 +333,7 @@ fn emitDeclarations(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
 
 fn emitRootDeclarations(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
     try emitDeclarations(out, a, p);
-    try text(out, a, "const lua_stdlib = @import(\"zig_stdlib\");\n\n");
+    try text(out, a, "const lua_stdlib = @import(\"zig_stdlib\");\nconst lua_scribunto = @import(\"zig_scribunto\");\n\n");
 }
 fn emitArgs(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, first: u32, count: u32, skip: usize) !void {
     if (@as(usize, first) + count > function.operands.items.len or skip > count) return error.BadOperandRange;
@@ -1010,7 +1010,9 @@ fn emitRuntimeEntry(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
             try print(out, a, "    try rt.bindGlobalTable(&ctx, &native_global_shape, {d});\n", .{env_slot});
         }
     }
-    try text(out, a, "    try lua_stdlib.install(&ctx);\n    return ctx;\n}\n\n");
+    try text(out, a, "    try lua_stdlib.install(&ctx);\n");
+    try print(out, a, "    try lua_scribunto.install(&ctx, {d}, {d}, {d});\n", .{ global_abi.id("_G"), global_abi.id("string"), global_abi.id("mw") });
+    try text(out, a, "    return ctx;\n}\n\n");
     try print(out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {{\n    return f_{d}(ctx, .{{ .direct = &.{{}} }}, args);\n}}\n\n", .{p.root_function});
 }
 pub fn generate(a: A, p: *const ir.Program) !struct { source: []u8, stats: Stats } {
@@ -1054,7 +1056,9 @@ test "finalized IR emits native Zig without bytecode dispatch" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "vm_codec") == null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "inst.op") == null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const lua_stdlib = @import(\"zig_stdlib\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const lua_scribunto = @import(\"zig_scribunto\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "try lua_stdlib.install(&ctx)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "try lua_scribunto.install(&ctx, 0, 18, 23)") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const native_global_keys") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "&native_global_shape") != null);
     try std.testing.expect(globalCount(&p) >= global_abi.count);
@@ -1237,6 +1241,7 @@ pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u
         }
     }
     try text(&out, a, "    try lua_stdlib.install(&ctx);\n");
+    try print(&out, a, "    try lua_scribunto.install(&ctx, {d}, {d}, {d});\n", .{ global_abi.id("_G"), global_abi.id("string"), global_abi.id("mw") });
     if (config.module_registry) try text(&out, a, "    module_registry.registry.configure(&ctx);\n");
     try text(&out, a, "    return ctx;\n}\n\n");
     try text(&out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {\n    return ctx.invokeKnown(root_function, .{ .direct = &.{} }, args);\n}\n");

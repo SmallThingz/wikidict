@@ -517,6 +517,29 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const aot_ustring_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("lua2/zig_ustring.zig"),
+            .target = target,
+            .optimize = test_optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "zig_runtime", .module = zig_runtime_test_mod }},
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const aot_scribunto_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("lua2/zig_scribunto.zig"),
+            .target = target,
+            .optimize = test_optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "zig_runtime", .module = zig_runtime_test_mod },
+                .{ .name = "zig_stdlib", .module = aot_stdlib_tests.root_module },
+            },
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
     const aot_module_registry_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("lua2/zig_module_registry_tests.zig"),
@@ -547,6 +570,8 @@ pub fn build(b: *std.Build) void {
     const run_blob_query_tests = b.addRunArtifact(blob_query_tests);
     const run_lua2_tests = b.addRunArtifact(lua2_tests);
     const run_aot_stdlib_tests = b.addRunArtifact(aot_stdlib_tests);
+    const run_aot_ustring_tests = b.addRunArtifact(aot_ustring_tests);
+    const run_aot_scribunto_tests = b.addRunArtifact(aot_scribunto_tests);
     const run_aot_module_registry_tests = b.addRunArtifact(aot_module_registry_tests);
 
     // Running every test compile in parallel is enough to get the larger codegen-heavy
@@ -562,7 +587,9 @@ pub fn build(b: *std.Build) void {
     blob_query_tests.step.dependOn(&run_verifier_tests.step);
     lua2_tests.step.dependOn(&run_blob_query_tests.step);
     aot_stdlib_tests.step.dependOn(&run_lua2_tests.step);
-    aot_module_registry_tests.step.dependOn(&run_aot_stdlib_tests.step);
+    aot_ustring_tests.step.dependOn(&run_aot_stdlib_tests.step);
+    aot_scribunto_tests.step.dependOn(&run_aot_ustring_tests.step);
+    aot_module_registry_tests.step.dependOn(&run_aot_scribunto_tests.step);
 
     const test_step = b.step("test", "Run encoder, decoder, structure, Lua, and tooling tests");
     blob_wasm_smoke.step.dependOn(&run_aot_module_registry_tests.step);
