@@ -68,7 +68,9 @@ pub fn build(allocator: std.mem.Allocator, program: *const ir.Program) !Graph {
         var value_calls: std.AutoHashMapUnmanaged(u32, u32) = .empty;
         defer value_calls.deinit(allocator);
         for (caller.insts.items, 0..) |inst, pc_usize| {
-            if (inst.op == .call_local or inst.op == .call_local_vararg) {
+            if (inst.op == .call_local or inst.op == .call_local_vararg or
+                inst.op == .call_scoped or inst.op == .call_scoped_vararg or
+                inst.op == .direct_call or inst.op == .direct_call_vararg) {
                 if (inst.a >= program.functions.items.len) return error.BadFunctionReference;
                 graph.static_call_count[inst.a] +|= 1;
                 try graph.calls.append(allocator, .{ .caller = caller_id, .pc = @intCast(pc_usize), .callee = inst.a, .callee_value = ssa.invalid_value });
@@ -102,7 +104,7 @@ pub fn build(allocator: std.mem.Allocator, program: *const ir.Program) !Graph {
                 });
             }
         }
-        for (caller.insts.items, 0..) |inst, pc| if (inst.op == .closure) {
+        for (caller.insts.items, 0..) |inst, pc| if (inst.op == .closure or inst.op == .load_function) {
             const raw = graph_function.def_ids.get((@as(u64, pc) << 32) | inst.dst) orelse {
                 graph.closed[inst.aux] = false;
                 continue;
@@ -174,4 +176,24 @@ test "recursive local closure is not a mandatory-inline candidate" {
     var graph = try build(std.testing.allocator, &program);
     defer graph.deinit();
     try std.testing.expectEqual(@as(usize, 0), graph.candidates.items.len);
+}
+
+test "module function values remain escaping after numeric direct calls" {
+    const source = "local function f(x)return x+1 end;local keep=f;return keep";
+    var chunk = try lua.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(std.testing.allocator, &chunk);
+    defer program.deinit();
+    const root = &program.functions.items[program.root_function].?;
+    var target: ?u32 = null;
+    for (root.insts.items) |*inst| {
+        if (inst.op != .closure) continue;
+        target = inst.aux;
+        inst.op = .load_function;
+        break;
+    }
+    const callee = target orelse return error.MissingFunction;
+    var graph = try build(std.testing.allocator, &program);
+    defer graph.deinit();
+    try std.testing.expect(!graph.closed[callee]);
 }

@@ -82,6 +82,7 @@ pub fn finalize(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     try verify.run(allocator, program);
     if (program.references_lowered) return stats;
     stats.direct = try devirtualize.runScoped(allocator, program);
+    addStats(shape_flow.Stats, &stats.layouts, try shape_flow.run(allocator, program));
     stats.module_functions = try module_function.run(allocator, program);
     stats.globals = try global_lower.run(allocator, program);
     stats.references = try ref_lower.run(allocator, program);
@@ -100,6 +101,7 @@ pub fn finalizeAot(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     try verify.run(allocator, program);
     if (program.references_lowered) return stats;
     stats.direct = try devirtualize.runScoped(allocator, program);
+    addStats(shape_flow.Stats, &stats.layouts, try shape_flow.run(allocator, program));
     stats.module_functions = try module_function.run(allocator, program);
     stats.globals = try global_lower.run(allocator, program);
     stats.references = try ref_lower.run(allocator, program);

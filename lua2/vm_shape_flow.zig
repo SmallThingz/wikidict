@@ -50,7 +50,7 @@ fn analyze(a: std.mem.Allocator, p: *const ir.Program, f: *const ir.Function, si
             const inst = f.insts.items[node.pc];
             switch (inst.op) {
                 .new_table_shape => shapes[id] = canonical[inst.aux],
-                .call, .call_vararg, .call_local, .call_local_vararg => if (node.reg == inst.dst and targets[node.pc] != none) {
+                .call, .call_vararg, .call_local, .call_local_vararg, .call_scoped, .call_scoped_vararg, .direct_call, .direct_call_vararg => if (node.reg == inst.dst and targets[node.pc] != none) {
                     shapes[id] = returns[targets[node.pc]];
                 },
                 else => {},
@@ -333,4 +333,27 @@ test "escaping helpers do not assume only observed caller layouts" {
         &.{5},
     );
     try std.testing.expectEqual(@as(u64, 0), stats.parameters);
+}
+
+test "direct calls retain return layout summaries after linking" {
+    const a = std.testing.allocator;
+    const lua_mod = @import("root.zig");
+    var chunk = try lua_mod.parse(a, "local function make(x)local t={};t.x=x;return t end;local v=make(4);return v.x");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(a, &chunk);
+    defer p.deinit();
+    _ = try @import("vm_flow.zig").run(a, &p);
+    _ = try @import("vm_shape_opt.zig").run(a, &p);
+    _ = try @import("vm_devirtualize.zig").run(a, &p);
+    const root = &p.functions.items[p.root_function].?;
+    var converted = false;
+    for (root.insts.items) |*inst| {
+        if (inst.op != .call_local) continue;
+        inst.op = .direct_call;
+        converted = true;
+        break;
+    }
+    try std.testing.expect(converted);
+    const stats = try run(a, &p);
+    try std.testing.expectEqual(@as(u64, 1), stats.slot_reads);
 }
