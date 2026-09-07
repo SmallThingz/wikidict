@@ -310,6 +310,16 @@ fn emitArgs(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *cons
     try text(out, a, "}");
 }
 
+fn moduleCaptureSlot(function: *const ir.Function, upvalue: u32) !u32 {
+    if (upvalue >= function.upvalues.items.len) return error.BadUpvalue;
+    const desc = function.upvalues.items[upvalue];
+    return if (desc.source == .local) desc.index else std.math.maxInt(u32);
+}
+
+fn emitUpvalueCellExpr(out: *std.ArrayList(u8), a: A, function: *const ir.Function, upvalue: u32) !void {
+    try print(out, a, "(try upvalues.cell({d}, {d}))", .{ upvalue, try moduleCaptureSlot(function, upvalue) });
+}
+
 fn emitCaptures(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, target_id: u32, pc: usize) !void {
     if (target_id >= p.functions.items.len) return error.BadFunctionReference;
     const target = p.functions.items[target_id] orelse return error.IncompleteProgram;
@@ -317,8 +327,9 @@ fn emitCaptures(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *
     for (target.upvalues.items, 0..) |up, index| switch (up.source) {
         .local => try print(out, a, "            captures_{d}[{d}] = try frame.ensureCell(ctx, {d});\n", .{ pc, index, up.index }),
         .upvalue => {
-            if (up.index >= function.upvalues.items.len) return error.BadUpvalue;
-            try print(out, a, "            captures_{d}[{d}] = upvalues[{d}];\n", .{ pc, index, up.index });
+            try print(out, a, "            captures_{d}[{d}] = ", .{ pc, index });
+            try emitUpvalueCellExpr(out, a, function, up.index);
+            try text(out, a, ";\n");
         },
     };
 }
@@ -376,9 +387,15 @@ fn emitSimple(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *co
             try text(out, a, ");\n");
         },
         .get_global, .set_global => return error.UnresolvedStringGlobal,
-        .get_upvalue => try print(out, a, "            frame.set({d}, upvalues[{d}].value);\n", .{ inst.dst, inst.a }),
+        .get_upvalue => {
+            try print(out, a, "            frame.set({d}, ", .{inst.dst});
+            try emitUpvalueCellExpr(out, a, function, inst.a);
+            try text(out, a, ".value);\n");
+        },
         .set_upvalue => {
-            try print(out, a, "            upvalues[{d}].value = ", .{inst.a});
+            try text(out, a, "            ");
+            try emitUpvalueCellExpr(out, a, function, inst.a);
+            try text(out, a, ".value = ");
             try valueExpr(out, a, p, plan, inst.b);
             try text(out, a, ";\n");
         },
@@ -483,9 +500,22 @@ fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
             try valueExpr(out, a, p, plan, inst.a);
             try print(out, a, "; if (object != .table) return error.TableExpected; for (frame.multiAt({d})) |value| try object.table.append(ctx.allocator, value); }}\n", .{inst.b});
         },
-        .closure, .load_function => {
+        .closure => {
             try emitCaptures(out, a, p, function, inst.aux, pc);
             try print(out, a, "            frame.set({d}, try ctx.makeFunction({d}, &captures_{d}));\n", .{ inst.dst, inst.aux, pc });
+        },
+        .load_function => {
+            if (inst.aux >= p.functions.items.len) return error.BadFunctionReference;
+            const target = p.functions.items[inst.aux] orelse return error.IncompleteProgram;
+            if (target.upvalues.items.len == 0) {
+                try print(out, a, "            frame.set({d}, try ctx.makeFunction({d}, &.{{}}));\n", .{ inst.dst, inst.aux });
+            } else {
+                for (target.upvalues.items) |up| {
+                    if (up.source != .local) return error.BadStaticEnvironment;
+                    try print(out, a, "            _ = try frame.ensureCell(ctx, {d});\n", .{up.index});
+                }
+                try print(out, a, "            frame.set({d}, ctx.makeModuleFunction({d}, try frame.ensureModuleEnv(ctx)));\n", .{ inst.dst, inst.aux });
+            }
         },
         .register_function => {
             try print(out, a, "            if ({d} >= ctx.static_functions.len) return error.BadFunctionId; ctx.static_functions[{d}] = ", .{ inst.aux, inst.aux });
@@ -669,16 +699,16 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
         .call_local, .call_local_vararg => {
             if (inst.a >= p.functions.items.len) return error.BadFunctionReference;
             if (range == null or range.?.contains(inst.a))
-                try print(out, a, "            const result_{d} = try f_{d}(ctx, &.{{}}, argv_{d});\n", .{ pc, inst.a, pc })
+                try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, inst.a, pc })
             else
-                try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, &.{{}}, argv_{d});\n", .{ pc, inst.a, pc });
+                try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, inst.a, pc });
         },
         .call_scoped, .call_scoped_vararg => {
             try emitCaptures(out, a, p, function, inst.a, pc);
             if (range == null or range.?.contains(inst.a))
-                try print(out, a, "            const result_{d} = try f_{d}(ctx, &captures_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc })
+                try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, inst.a, pc, pc })
             else
-                try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, &captures_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc });
+                try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, inst.a, pc, pc });
         },
         .direct_call, .direct_call_vararg => {
             if (inst.a >= p.functions.items.len or p.function_modules.items.len != p.functions.items.len) return error.BadFunctionReference;
@@ -686,7 +716,7 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
             try print(out, a, "            try ctx.ensureModule({d});\n", .{module_id});
             try print(out, a, "            if ({d} >= ctx.static_functions.len or ctx.static_functions[{d}] != .function) return error.UnregisteredStaticFunction;\n", .{ inst.a, inst.a });
             try print(out, a, "            const static_{d} = ctx.static_functions[{d}].function;\n", .{ pc, inst.a });
-            try print(out, a, "            const static_caps_{d}: []const *rt.Cell = if (static_{d}.env) |env| env.captures else &.{{}};\n", .{ pc, pc });
+            try print(out, a, "            const static_caps_{d} = static_{d}.captures();\n", .{ pc, pc });
             if (range == null or range.?.contains(inst.a))
                 try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc })
             else
@@ -853,11 +883,11 @@ fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, st
     var graph = try graph_mod.build(a, &function);
     defer graph.deinit();
     const needs_frame = try requiresFrame(&function, &plan);
-    try print(out, a, "{s}fn f_{d}(ctx: *rt.Context, upvalues: []const *rt.Cell, args: []const rt.Value) anyerror![]const rt.Value {{\n", .{ if (range == null) "" else "pub ", id });
+    try print(out, a, "{s}fn f_{d}(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value) anyerror![]const rt.Value {{\n", .{ if (range == null) "" else "pub ", id });
     try text(out, a, "    rt.touch(ctx);\n    rt.touch(upvalues);\n    rt.touch(args);\n");
     if (needs_frame) {
         try print(out, a, "    var regs: [{d}]rt.Value = undefined;\n    var cells: [{d}]?*rt.Cell = undefined;\n", .{ function.reg_count, function.reg_count });
-        try print(out, a, "    var frame = try rt.Frame.init(&regs, &cells, upvalues, args, {d}, {});\n    defer frame.deinit();\n", .{ function.param_count, function.is_vararg });
+        try print(out, a, "    var frame = try rt.Frame.init(&regs, &cells, args, {d}, {});\n    defer frame.deinit();\n", .{ function.param_count, function.is_vararg });
     }
     for (plan.reps, 0..) |rep, reg| if (rep == .number) {
         try print(out, a, "    var n_{d}: f64 = undefined;\n", .{reg});
@@ -923,7 +953,7 @@ fn emitRuntimeEntry(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
         }
     }
     try text(out, a, "    return ctx;\n}\n\n");
-    try print(out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {{\n    return f_{d}(ctx, &.{{}}, args);\n}}\n\n", .{p.root_function});
+    try print(out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {{\n    return f_{d}(ctx, .{{ .direct = &.{{}} }}, args);\n}}\n\n", .{p.root_function});
 }
 pub fn generate(a: A, p: *const ir.Program) !struct { source: []u8, stats: Stats } {
     if (!p.references_lowered) return error.ProgramNotFinalized;
@@ -1130,7 +1160,7 @@ pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u
         }
     }
     try text(&out, a, "    return ctx;\n}\n\n");
-    try text(&out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {\n    return ctx.invokeKnown(root_function, &.{}, args);\n}\n");
+    try text(&out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {\n    return ctx.invokeKnown(root_function, .{ .direct = &.{} }, args);\n}\n");
     return out.toOwnedSlice(a);
 }
 
@@ -1168,6 +1198,28 @@ test "sharded AOT splits code and data while preserving numeric cross-shard call
         defer allocator.free(entries);
         try std.testing.expect(std.mem.indexOf(u8, entries, "pub const entries") != null);
     }
+}
+
+test "captured module functions share one generated activation environment" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const link = @import("vm_link_image.zig");
+    const allocator = std.testing.allocator;
+    var chunk = try lua.parse(allocator, "local n=1;local function add(x)n=n+x;return n end;local function get()return n end;return add,get");
+    defer chunk.deinit();
+    var module = try ir.lowerChunk(allocator, &chunk);
+    defer module.deinit();
+    _ = try opt.runSemantics(allocator, &module);
+    var image = link.Image.init(allocator);
+    defer image.deinit();
+    _ = try image.appendModule(&module);
+    _ = try opt.finalizeAot(allocator, &image.program);
+    const generated = try generate(allocator, &image.program);
+    defer allocator.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.makeModuleFunction(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "try frame.ensureModuleEnv(ctx)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "upvalues.cell(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "var captures_") == null);
 }
 
 test "numeric bit constants are explicitly typed in native expressions" {

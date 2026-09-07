@@ -39,4 +39,5 @@
 - Immutable constant/template deduplication must still create distinct mutable Lua objects on every materialization; entry pooling compares every logical sequence before replacement.
 - Numeric export linking remains experimental until export mutation/escape proofs and exact Wiktionary replay pass. Do not remove observable names or enable speculative direct calls to satisfy a size target.
 - Function-entry phis include the implicit entry edge. Inlined closure factories need distinct capture cells for every dynamic activation, including loop calls.
+- AOT module-singleton functions share one activation capture environment; do not duplicate capture slices per `load_function`. Loop and factory closures still require fresh environments and identities.
 - Register-address operands (such as `detach_cell`) are not value reads. Keep their bounds, remapping and physical storage reservation in the shared opcode semantics.

@@ -2,12 +2,64 @@ const std = @import("std");
 
 pub const Cell = struct { value: Value };
 pub const Env = struct { captures: []const *Cell };
+pub const ModuleEnv = struct { cells: []?*Cell };
+
+pub const FunctionEnv = struct {
+    raw: usize = 0,
+    const module_tag: usize = 1;
+
+    pub fn closure(env: *Env) FunctionEnv {
+        comptime std.debug.assert(@alignOf(Env) >= 2);
+        const raw = @intFromPtr(env);
+        std.debug.assert(raw & module_tag == 0);
+        return .{ .raw = raw };
+    }
+
+    pub fn module(env: *ModuleEnv) FunctionEnv {
+        comptime std.debug.assert(@alignOf(ModuleEnv) >= 2);
+        const raw = @intFromPtr(env);
+        std.debug.assert(raw & module_tag == 0);
+        return .{ .raw = raw | module_tag };
+    }
+
+    pub fn closurePtr(self: FunctionEnv) ?*Env {
+        if (self.raw == 0 or self.raw & module_tag != 0) return null;
+        return @ptrFromInt(self.raw);
+    }
+
+    pub fn modulePtr(self: FunctionEnv) ?*ModuleEnv {
+        if (self.raw & module_tag == 0) return null;
+        return @ptrFromInt(self.raw & ~module_tag);
+    }
+};
+
+pub const Captures = union(enum) {
+    direct: []const *Cell,
+    module: *ModuleEnv,
+
+    pub fn cell(self: Captures, ordinal: u32, module_slot: u32) !*Cell {
+        return switch (self) {
+            .direct => |cells| if (ordinal < cells.len) cells[ordinal] else error.BadUpvalue,
+            .module => |env| blk: {
+                if (module_slot >= env.cells.len) return error.BadModuleCapture;
+                break :blk env.cells[module_slot] orelse return error.BadModuleCapture;
+            },
+        };
+    }
+};
+
 pub const FunctionValue = struct {
     id: u32,
-    env: ?*Env = null,
+    env: FunctionEnv = .{},
     identity: u64,
+
+    pub fn captures(self: FunctionValue) Captures {
+        if (self.env.modulePtr()) |env| return .{ .module = env };
+        if (self.env.closurePtr()) |env| return .{ .direct = env.captures };
+        return .{ .direct = &.{} };
+    }
 };
-pub const FunctionFn = *const fn (*Context, []const *Cell, []const Value) anyerror![]const Value;
+pub const FunctionFn = *const fn (*Context, Captures, []const Value) anyerror![]const Value;
 pub const NativeFn = *const fn (*Context, []const Value) anyerror![]const Value;
 pub const NativeFunction = struct { call: NativeFn };
 
@@ -226,20 +278,20 @@ pub fn freeResults(values: []const Value) void {
 pub const Frame = struct {
     regs: []Value,
     cells: []?*Cell,
-    upvalues: []const *Cell,
+    module_env: ?*ModuleEnv = null,
     varargs: []const Value = &.{},
     multi: []const Value = &.{},
     multi_base: u32 = std.math.maxInt(u32),
     multi_owned: bool = false,
 
-    pub fn init(regs: []Value, cells: []?*Cell, upvalues: []const *Cell, args: []const Value, param_count: u32, is_vararg: bool) !Frame {
+    pub fn init(regs: []Value, cells: []?*Cell, args: []const Value, param_count: u32, is_vararg: bool) !Frame {
         if (param_count > regs.len or cells.len != regs.len) return error.BadFrame;
         @memset(regs, .nil);
         @memset(cells, null);
         const n = @min(@as(usize, param_count), args.len);
         @memcpy(regs[0..n], args[0..n]);
         const tail = if (is_vararg and args.len > param_count) args[param_count..] else &.{};
-        return .{ .regs = regs, .cells = cells, .upvalues = upvalues, .varargs = tail };
+        return .{ .regs = regs, .cells = cells, .varargs = tail };
     }
 
     pub fn deinit(self: *Frame) void {
@@ -260,6 +312,18 @@ pub const Frame = struct {
         cell.* = .{ .value = self.regs[reg] };
         self.cells[reg] = cell;
         return cell;
+    }
+
+    pub fn ensureModuleEnv(self: *Frame, ctx: *Context) !*ModuleEnv {
+        if (self.module_env) |env| return env;
+        const env = try ctx.allocator.create(ModuleEnv);
+        errdefer ctx.allocator.destroy(env);
+        const cells = try ctx.allocator.alloc(?*Cell, self.cells.len);
+        @memcpy(cells, self.cells);
+        env.* = .{ .cells = cells };
+        self.cells = cells;
+        self.module_env = env;
+        return env;
     }
 
     pub fn detachCell(self: *Frame, reg: u32) void {
@@ -348,13 +412,19 @@ pub const Context = struct {
     pub fn makeFunction(self: *Context, id: u32, captures: []const *Cell) !Value {
         const identity = self.next_identity;
         self.next_identity +%= 1;
-        const env = if (captures.len == 0) null else blk: {
+        const env: FunctionEnv = if (captures.len == 0) .{} else blk: {
             const owned = try self.allocator.dupe(*Cell, captures);
             const value = try self.allocator.create(Env);
             value.* = .{ .captures = owned };
-            break :blk value;
+            break :blk FunctionEnv.closure(value);
         };
         return .{ .function = .{ .id = id, .env = env, .identity = identity } };
+    }
+
+    pub fn makeModuleFunction(self: *Context, id: u32, env: *ModuleEnv) Value {
+        const identity = self.next_identity;
+        self.next_identity +%= 1;
+        return .{ .function = .{ .id = id, .env = FunctionEnv.module(env), .identity = identity } };
     }
 
     fn functionById(self: *const Context, id: u32) ?FunctionFn {
@@ -374,7 +444,7 @@ pub const Context = struct {
         return null;
     }
 
-    pub fn invokeKnown(self: *Context, id: u32, captures: []const *Cell, args: []const Value) anyerror![]const Value {
+    pub fn invokeKnown(self: *Context, id: u32, captures: Captures, args: []const Value) anyerror![]const Value {
         const function = self.functionById(id) orelse return error.BadFunctionId;
         return function(self, captures, args);
     }
@@ -383,8 +453,7 @@ pub const Context = struct {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
-        const captures = if (value.env) |env| env.captures else &.{};
-        return self.invokeKnown(value.id, captures, args);
+        return self.invokeKnown(value.id, value.captures(), args);
     }
 
     pub fn ensureModule(self: *Context, module_id: u32) anyerror!void {
@@ -393,7 +462,7 @@ pub const Context = struct {
         if (self.module_state[module_id] == 1) return error.ModuleLoadLoop;
         self.module_state[module_id] = 1;
         errdefer self.module_state[module_id] = 0;
-        const values = try self.invokeKnown(self.module_roots[module_id], &.{}, &.{});
+        const values = try self.invokeKnown(self.module_roots[module_id], .{ .direct = &.{} }, &.{});
         freeResults(values);
         self.module_state[module_id] = 2;
     }
@@ -724,6 +793,30 @@ test "AOT constant templates preserve fresh table identity across blocks" {
     const nested_left = outer_left.table.rawGet(.{ .string = "x" }).?;
     const nested_right = outer_right.table.rawGet(.{ .string = "x" }).?;
     try std.testing.expect(nested_left == .table and nested_right == .table and nested_left.table != nested_right.table);
+}
+
+test "AOT module functions share one activation environment" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    var regs: [3]Value = undefined;
+    var cells: [3]?*Cell = undefined;
+    var frame = try Frame.init(&regs, &cells, &.{}, 0, false);
+    frame.set(1, .{ .number = 7 });
+    _ = try frame.ensureCell(&ctx, 1);
+    const env = try frame.ensureModuleEnv(&ctx);
+    try std.testing.expect(env == try frame.ensureModuleEnv(&ctx));
+    const first = ctx.makeModuleFunction(4, env);
+    const second = ctx.makeModuleFunction(5, env);
+    try std.testing.expect(first.function.env.modulePtr() == second.function.env.modulePtr());
+    try std.testing.expect(first.function.env.closurePtr() == null);
+    try std.testing.expect(!rawEqual(first, second));
+    const capture = try first.function.captures().cell(0, 1);
+    try std.testing.expectEqual(@as(f64, 7), capture.value.number);
+    frame.set(1, .{ .number = 9 });
+    try std.testing.expectEqual(@as(f64, 9), capture.value.number);
+    if (@sizeOf(usize) == 8) try std.testing.expectEqual(@as(usize, 24), @sizeOf(FunctionValue));
 }
 
 pub fn mergeValues(prefix: []const Value, tail: []const Value) ![]Value {
