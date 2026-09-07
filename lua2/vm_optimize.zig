@@ -95,6 +95,36 @@ pub fn finalize(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     return stats;
 }
 
+pub fn finalizeAot(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
+    var stats = Stats{};
+    try verify.run(allocator, program);
+    if (program.references_lowered) return stats;
+    stats.direct = try devirtualize.runScoped(allocator, program);
+    stats.module_functions = try module_function.run(allocator, program);
+    stats.globals = try global_lower.run(allocator, program);
+    stats.references = try ref_lower.run(allocator, program);
+    addStats(simplify.Stats, &stats.cleanup, try simplify.run(allocator, program));
+    stats.data = try data.run(allocator, program);
+    addStats(simplify.Stats, &stats.cleanup, try simplify.run(allocator, program));
+    stats.comparisons = try compare_fuse.run(allocator, program);
+    try verify.run(allocator, program);
+    return stats;
+}
+
+pub fn runAot(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
+    if (program.references_lowered) return finalizeAot(allocator, program);
+    var stats = try runSemantics(allocator, program);
+    const lowered = try finalizeAot(allocator, program);
+    stats.references = lowered.references;
+    stats.globals = lowered.globals;
+    addStats(devirtualize.Stats, &stats.direct, lowered.direct);
+    stats.module_functions = lowered.module_functions;
+    stats.data = lowered.data;
+    stats.comparisons = lowered.comparisons;
+    addStats(simplify.Stats, &stats.cleanup, lowered.cleanup);
+    return stats;
+}
+
 pub fn run(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     if (program.references_lowered) return finalize(allocator, program);
     var stats = try runSemantics(allocator, program);
