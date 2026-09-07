@@ -9,17 +9,51 @@ const format = enc.blob_format;
 const A = std.mem.Allocator;
 const ir = bridge.ir;
 const codec = bridge.codec;
+const refs = bridge.refs;
 pub const linked_magic = "DWSY\x02";
-pub fn isLinkedProgram(bytes: []const u8) bool {
-    return std.mem.startsWith(u8, bytes, linked_magic) or std.mem.startsWith(u8, bytes, "DWSY\x01");
+const linked_header_len = 5;
+fn linkedSourceVersion(bytes: []const u8) ?u8 {
+    if (bytes.len < linked_header_len or !std.mem.eql(u8, bytes[0..4], "DWSY")) return null;
+    const source: u8 = bytes[4] +| 1;
+    return switch (source) {
+        2, 3, 14 => source,
+        else => null,
+    };
 }
-
+pub fn isLinkedProgram(bytes: []const u8) bool {
+    return linkedSourceVersion(bytes) != null;
+}
+pub fn countLinkedPoolReferences(a: A, bytes: []const u8, names: symbols.Names) !usize {
+    const source_version = linkedSourceVersion(bytes) orelse return error.UnsupportedLinkedVmCodec;
+    const owner = try a.dupe(u8, bytes);
+    defer a.free(owner);
+    @memcpy(owner[0..4], "DWVM");
+    owner[4] = source_version;
+    var p = try codec.deserializeBorrowed(a, owner);
+    defer p.deinit();
+    var refs_count: usize = 0;
+    for (p.strings.items) |text| {
+        var at: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, text, at, symbols.marker)) |start| {
+            at = start + 1;
+            const id = try format.readPayloadLength(text, &at);
+            if (id != 0) {
+                _ = try names.get(id);
+                refs_count += 1;
+            }
+        }
+    }
+    return refs_count;
+}
 fn mark(marked: []bool, index: u32) !void {
     if (index >= marked.len) return error.InvalidProgramString;
     marked[index] = true;
 }
 /// Static global/member names can also be observed as ordinary Lua strings.
 /// They are interned, not alpha-renamed, so reflection sees the original spelling.
+fn refString(value: u32) ?u32 {
+    return if (refs.tag(value) == .string) refs.index(value) else null;
+}
 fn memberStrings(a: A, p: *const ir.Program) ![]bool {
     const marked = try a.alloc(bool, p.strings.items.len);
     errdefer a.free(marked);
@@ -32,35 +66,37 @@ fn memberStrings(a: A, p: *const ir.Program) ![]bool {
         @memset(regs, null);
         for (f.insts.items) |x| {
             switch (x.op) {
-                .get_global, .set_global => try mark(marked, x.aux),
+                .get_global, .set_global, .get_field, .set_field => try mark(marked, x.aux),
+                .method_call_field, .method_call_field_vararg => try mark(marked, x.a),
                 .get_index, .set_index, .table_set => {
-                    if (x.b >= regs.len) return error.InvalidProgramRegister;
-                    if (regs[x.b]) |s| try mark(marked, s);
+                    if (refString(x.b)) |sid| try mark(marked, sid) else if (refs.isRegister(x.b)) {
+                        if (x.b >= regs.len) return error.InvalidProgramRegister;
+                        if (regs[x.b]) |sid| try mark(marked, sid);
+                    }
                 },
                 .method_call, .method_call_vararg => {
                     if (x.aux >= f.operands.items.len) return error.InvalidProgramOperand;
-                    const reg = f.operands.items[x.aux];
-                    if (reg >= regs.len) return error.InvalidProgramRegister;
-                    if (regs[reg]) |s| try mark(marked, s);
+                    const key = f.operands.items[x.aux];
+                    if (refString(key)) |sid| try mark(marked, sid) else if (refs.isRegister(key)) {
+                        if (key >= regs.len) return error.InvalidProgramRegister;
+                        if (regs[key]) |sid| try mark(marked, sid);
+                    }
                 },
                 else => {},
             }
-            switch (x.op) {
-                .load_string => {
-                    if (x.dst >= regs.len or x.aux >= marked.len) return error.InvalidProgramRegister;
-                    regs[x.dst] = x.aux;
-                },
-                .move => {
-                    if (x.dst >= regs.len or x.a >= regs.len) return error.InvalidProgramRegister;
+            if (x.op == .load_string and x.dst < regs.len) {
+                regs[x.dst] = x.aux;
+            } else if (x.op == .move and x.dst < regs.len) {
+                if (refString(x.a)) |sid| {
+                    regs[x.dst] = sid;
+                } else if (refs.isRegister(x.a)) {
+                    if (x.a >= regs.len) return error.InvalidProgramRegister;
                     regs[x.dst] = regs[x.a];
-                },
+                } else regs[x.dst] = null;
+            } else switch (x.op) {
                 .jump, .jump_if_false, .numeric_for_next, .generic_for_next => @memset(regs, null),
-                // Conservatively lose facts across any other write. Missing a
-                // candidate leaves a literal, never changes execution semantics.
-                .set_global, .set_global_slot, .set_upvalue, .set_index, .table_set, .table_append, .table_append_var, .ret, .ret_var => {},
-                .call, .call_vararg, .method_call, .method_call_vararg => @memset(regs, null),
-                else => if (x.dst < regs.len) {
-                    regs[x.dst] = null;
+                else => {
+                    if (x.dst < regs.len) regs[x.dst] = null;
                 },
             }
         }
@@ -123,29 +159,30 @@ fn putVar(out: *std.ArrayList(u8), a: A, value: usize) !void {
 /// Only the version-checked string-pool envelope is adapted. The instruction,
 /// constant and function body emitted by the owner codec is copied unchanged.
 pub fn bindProgramAlloc(a: A, bytes: []const u8, names: symbols.Names) ![]u8 {
-    if (!isLinkedProgram(bytes)) return error.UnsupportedLinkedVmCodec;
-    const source_version = bytes[4] + 1;
-    var pos: usize = linked_magic.len;
-    _ = try format.readPayloadLength(bytes, &pos); // root function
-    const strings = try format.readPayloadLength(bytes, &pos);
-    for (0..3) |_| _ = try format.readPayloadLength(bytes, &pos); // codec counts
-    if (strings > bytes.len - pos) return error.InvalidLinkedProgram;
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(a);
-    try out.appendSlice(a, &.{ 'D', 'W', 'V', 'M', source_version });
-    try out.appendSlice(a, bytes[linked_magic.len..pos]);
-    for (0..strings) |_| {
-        const len = try format.readPayloadLength(bytes, &pos);
-        if (len > bytes.len - pos) return error.InvalidLinkedProgram;
-        const bound = try symbols.decodeAlloc(a, bytes[pos..][0..len], names);
-        defer if (bound) |s| a.free(s);
-        const value = bound orelse bytes[pos..][0..len];
-        try putVar(&out, a, value.len);
-        try out.appendSlice(a, value);
-        pos += len;
+    const source_version = linkedSourceVersion(bytes) orelse return error.UnsupportedLinkedVmCodec;
+    const owner = try a.dupe(u8, bytes);
+    defer a.free(owner);
+    @memcpy(owner[0..4], "DWVM");
+    owner[4] = source_version;
+
+    var p = try codec.deserializeBorrowed(a, owner);
+    defer p.deinit();
+    const decoded = try a.alloc(?[]u8, p.strings.items.len);
+    defer {
+        for (decoded) |item| if (item) |text| a.free(text);
+        a.free(decoded);
     }
-    try out.appendSlice(a, bytes[pos..]);
-    return out.toOwnedSlice(a);
+    @memset(decoded, null);
+    for (p.strings.items, 0..) |text, i| {
+        if (try symbols.decodeAlloc(a, text, names)) |plain| {
+            decoded[i] = plain;
+            p.strings.items[i] = plain;
+        }
+    }
+    const result = try codec.serializeVersion(a, &p, source_version);
+    errdefer a.free(result);
+    if (try codec.bytecodeVersion(result) != source_version) return error.UnsupportedVmCodec;
+    return result;
 }
 
 pub const BundleRecord = struct { title: []const u8, program: []const u8 };
@@ -242,7 +279,7 @@ test "linked VM string envelope rejects truncated and unsupported versions" {
 
 test "shared symbol envelopes preserve both supported owner codec versions" {
     const a = std.testing.allocator;
-    for ([_]u8{ 2, 3 }) |version| {
+    for ([_]u8{ 2, 3, 14 }) |version| {
         var chunk = try bridge.lua.parse(a, "return 'retained'");
         defer chunk.deinit();
         var p = try ir.lowerChunk(a, &chunk);

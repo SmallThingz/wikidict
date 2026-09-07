@@ -36,5 +36,6 @@ pub fn preprocess(runtime: *Runtime, vm: *Vm, text: []const u8) ![]const u8 {
 }
 
 pub const ir = @import("lua2/vm_ir.zig");
+pub const refs = @import("lua2/vm_ref.zig");
 pub const codec = @import("lua2/vm_codec.zig");
 pub const lua = @import("lua2/root.zig");

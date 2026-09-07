@@ -23,29 +23,8 @@ fn key(names: enc.call_symbols.Names, title: []const u8, kind: enc.call_symbols.
     if (names.keys[id - 1][0] != @intFromEnum(kind)) return error.WrongSymbolKind;
     return text;
 }
-fn poolReferences(bytes: []const u8, names: enc.call_symbols.Names) !usize {
-    if (!vm.isLinkedProgram(bytes)) return error.InvalidLinkedProgram;
-    var pos: usize = vm.linked_magic.len;
-    _ = try enc.blob_format.readPayloadLength(bytes, &pos);
-    const strings = try enc.blob_format.readPayloadLength(bytes, &pos);
-    for (0..3) |_| _ = try enc.blob_format.readPayloadLength(bytes, &pos);
-    var refs: usize = 0;
-    for (0..strings) |_| {
-        const length = try enc.blob_format.readPayloadLength(bytes, &pos);
-        if (length > bytes.len - pos) return error.InvalidLinkedProgram;
-        const text = bytes[pos..][0..length];
-        pos += length;
-        var at: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, text, at, enc.call_symbols.marker)) |start| {
-            at = start + 1;
-            const id = try enc.blob_format.readPayloadLength(text, &at);
-            if (id != 0) {
-                _ = try names.get(id);
-                refs += 1;
-            }
-        }
-    }
-    return refs;
+fn poolReferences(a: A, bytes: []const u8, names: enc.call_symbols.Names) !usize {
+    return vm.countLinkedPoolReferences(a, bytes, names);
 }
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
@@ -82,7 +61,7 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("Mismatched module {s}\n", .{title});
             return error.ProgramMismatch;
         }
-        operands += try poolReferences(r.payload, names);
+        operands += try poolReferences(init.gpa, r.payload, names);
         n += 1;
     }
     if (n != original.count()) return error.MissingLinkedProgram;
