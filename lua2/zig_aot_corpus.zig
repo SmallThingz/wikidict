@@ -121,6 +121,7 @@ pub fn main(init: std.process.Init) !void {
     const linked = try numeric_link.run(std.heap.smp_allocator, &image.program, &symbols);
     const linked_cleanup = try cleanup.run(std.heap.smp_allocator, &image.program);
     const origins = try aot_stats.collectOrigins(std.heap.smp_allocator, &image.program);
+    const upvalue_origins = try aot_stats.collectUpvalueOrigins(std.heap.smp_allocator, &image.program);
     const final = try optimizer.finalizeAot(std.heap.smp_allocator, &image.program);
     _ = try cleanup.compactStrings(std.heap.smp_allocator, &image.program);
     try verify.run(std.heap.smp_allocator, &image.program);
@@ -194,4 +195,5 @@ pub fn main(init: std.process.Init) !void {
     );
     std.debug.print("AOT_DYNAMIC {any}\n", .{classified});
     std.debug.print("AOT_ORIGINS {any}\n", .{origins});
+    std.debug.print("AOT_UPVALUE_ORIGINS {any}\n", .{upvalue_origins});
 }

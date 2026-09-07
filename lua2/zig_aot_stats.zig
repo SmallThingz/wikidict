@@ -1,10 +1,12 @@
 const std = @import("std");
 const ir = @import("vm_ir.zig");
+const aot_hint = @import("vm_aot_hint.zig");
 
 pub const Stats = struct {
     functions: u64 = 0,
     instructions: u64 = 0,
     dynamic_calls: u64 = 0,
+    guarded_calls: u64 = 0,
     calls: u64 = 0,
     call_varargs: u64 = 0,
     method_calls: u64 = 0,
@@ -39,6 +41,7 @@ pub fn collect(program: *const ir.Program) Stats {
             .call => {
                 stats.calls += 1;
                 stats.dynamic_calls += 1;
+                if (aot_hint.target(inst) != null) stats.guarded_calls += 1;
             },
             .call_vararg => {
                 stats.call_varargs += 1;
@@ -211,6 +214,189 @@ pub fn collectOrigins(allocator: std.mem.Allocator, program: *const ir.Program) 
                     .get_index, .set_index, .table_set => noteOrigin(&result.indexes, classifyOrigin(&function, &analysis, state, inst.a)),
                     else => {},
                 }
+                try ssa.applyWrites(&analysis, &function, state, pc, null);
+            }
+        }
+    };
+    return result;
+}
+
+const sem = @import("vm_semantics.zig");
+const no_parent = std.math.maxInt(u32);
+const bad_parent = no_parent - 1;
+
+pub const UpvalueOrigins = struct {
+    calls: ValueOrigins = .{},
+    fields: ValueOrigins = .{},
+    indexes: ValueOrigins = .{},
+};
+
+fn directDefinitionOrigin(op: ir.Opcode) Origin {
+    return switch (op) {
+        .closure, .load_function => .function,
+        .get_upvalue => .get_upvalue,
+        .call, .call_vararg, .call_local, .call_local_vararg, .call_scoped, .call_scoped_vararg, .direct_call, .direct_call_vararg => .call_result,
+        .get_field, .get_slot => .field_result,
+        .get_index, .get_choice_slot => .index_result,
+        .get_global, .get_global_slot => .global,
+        .new_table, .new_table_shape => .table,
+        else => .other_instruction,
+    };
+}
+
+fn noteWriteOrigin(origins: []Origin, writes: []u8, flat: usize, origin: Origin) void {
+    writes[flat] +|= 1;
+    origins[flat] = if (writes[flat] == 1) origin else .unknown;
+}
+fn producerUpvalue(function: *const ir.Function, analysis: *const ssa.Function, state: []const ssa.ValueId, reg: u32) ?u32 {
+    if (reg >= state.len or analysis.captured[reg]) return null;
+    const id = analysis.canonicalValue(state[reg]);
+    if (id == ssa.invalid_value or id >= analysis.values.items.len) return null;
+    const node = analysis.values.items[id];
+    if (node.kind != .instruction or node.pc >= function.insts.items.len) return null;
+    const inst = function.insts.items[node.pc];
+    return if (inst.op == .get_upvalue) inst.a else null;
+}
+
+fn invalidateLoopWrites(function: *const ir.Function, inst: ir.Inst, base: usize, origins: []Origin, writes: []u8) void {
+    switch (inst.op) {
+        .numeric_for_init => if (inst.dst < function.reg_count)
+            noteWriteOrigin(origins, writes, base + inst.dst, .unknown),
+        .numeric_for_next => {
+            if (inst.a < function.reg_count) noteWriteOrigin(origins, writes, base + inst.a, .unknown);
+            if (inst.dst < function.reg_count) noteWriteOrigin(origins, writes, base + inst.dst, .unknown);
+        },
+        .generic_for_init, .generic_for_next => {
+            if (inst.c < function.reg_count) noteWriteOrigin(origins, writes, base + inst.c, .unknown);
+        },
+        else => {},
+    }
+}
+
+pub fn collectUpvalueOrigins(allocator: std.mem.Allocator, program: *const ir.Program) !UpvalueOrigins {
+    if (program.references_lowered) return error.OriginsRequireSsaProgram;
+    const function_count = program.functions.items.len;
+    const parents = try allocator.alloc(u32, function_count);
+    defer allocator.free(parents);
+    @memset(parents, no_parent);
+    for (program.functions.items, 0..) |maybe, parent_usize| if (maybe) |function| {
+        const parent: u32 = @intCast(parent_usize);
+        for (function.insts.items) |inst| {
+            if (inst.op != .closure and inst.op != .load_function) continue;
+            if (inst.aux >= parents.len) continue;
+            const old = parents[inst.aux];
+            if (old == no_parent) parents[inst.aux] = parent else if (old != parent) parents[inst.aux] = bad_parent;
+        }
+    };
+
+    const reg_offsets = try allocator.alloc(usize, function_count + 1);
+    defer allocator.free(reg_offsets);
+    const up_offsets = try allocator.alloc(usize, function_count + 1);
+    defer allocator.free(up_offsets);
+    reg_offsets[0] = 0;
+    up_offsets[0] = 0;
+    for (program.functions.items, 0..) |maybe, id| {
+        reg_offsets[id + 1] = reg_offsets[id] + if (maybe) |function| function.reg_count else 0;
+        up_offsets[id + 1] = up_offsets[id] + if (maybe) |function| function.upvalues.items.len else 0;
+    }
+    const local_origins = try allocator.alloc(Origin, reg_offsets[function_count]);
+    defer if (local_origins.len != 0) allocator.free(local_origins);
+    @memset(local_origins, .unknown);
+    const writes = try allocator.alloc(u8, local_origins.len);
+    defer if (writes.len != 0) allocator.free(writes);
+    @memset(writes, 0);
+    for (program.functions.items, 0..) |maybe, function_id| if (maybe) |function| {
+        const base = reg_offsets[function_id];
+        for (0..@min(@as(usize, function.param_count), function.reg_count)) |reg|
+            noteWriteOrigin(local_origins, writes, base + reg, .parameter);
+        var analysis = try ssa.build(allocator, program, &function);
+        defer analysis.deinit();
+        const state = try allocator.alloc(ssa.ValueId, function.reg_count);
+        defer if (state.len != 0) allocator.free(state);
+        for (analysis.graph.blocks.items, 0..) |block, block_id| {
+            const entry = analysis.entry_states[block_id] orelse continue;
+            @memcpy(state, entry);
+            for (block.start..block.end) |pc_usize| {
+                const pc: u32 = @intCast(pc_usize);
+                const inst = function.insts.items[pc];
+                const info = sem.info(inst.op);
+                if (info.defines and inst.dst < function.reg_count) {
+                    const origin = if (inst.op == .move)
+                        classifyOrigin(&function, &analysis, state, inst.a)
+                    else
+                        directDefinitionOrigin(inst.op);
+                    noteWriteOrigin(local_origins, writes, base + inst.dst, origin);
+                }
+                if (info.results) {
+                    const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
+                    for (0..width) |i| if (inst.dst + i < function.reg_count)
+                        noteWriteOrigin(local_origins, writes, base + inst.dst + i, directDefinitionOrigin(inst.op));
+                }
+                invalidateLoopWrites(&function, inst, base, local_origins, writes);
+                try ssa.applyWrites(&analysis, &function, state, pc, null);
+            }
+        }
+    };
+
+    const up_origins = try allocator.alloc(Origin, up_offsets[function_count]);
+    defer if (up_origins.len != 0) allocator.free(up_origins);
+    @memset(up_origins, .unknown);
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (program.functions.items, 0..) |maybe, child_id| if (maybe) |child| {
+            const parent = parents[child_id];
+            if (parent == no_parent or parent == bad_parent or parent >= function_count) continue;
+            for (child.upvalues.items, 0..) |upvalue, up_index| {
+                const candidate = switch (upvalue.source) {
+                    .local => blk: {
+                        const parent_function = program.functions.items[parent] orelse break :blk Origin.unknown;
+                        if (upvalue.index >= parent_function.reg_count) break :blk Origin.unknown;
+                        break :blk local_origins[reg_offsets[parent] + upvalue.index];
+                    },
+                    .upvalue => blk: {
+                        const parent_function = program.functions.items[parent] orelse break :blk Origin.unknown;
+                        if (upvalue.index >= parent_function.upvalues.items.len) break :blk Origin.unknown;
+                        break :blk up_origins[up_offsets[parent] + upvalue.index];
+                    },
+                };
+                const slot = up_offsets[child_id] + up_index;
+                if (up_origins[slot] == .unknown and candidate != .unknown) {
+                    up_origins[slot] = candidate;
+                    changed = true;
+                }
+            }
+        };
+    }
+
+    var result = UpvalueOrigins{};
+    for (program.functions.items, 0..) |maybe, function_id| if (maybe) |function| {
+        var analysis = try ssa.build(allocator, program, &function);
+        defer analysis.deinit();
+        const state = try allocator.alloc(ssa.ValueId, function.reg_count);
+        defer if (state.len != 0) allocator.free(state);
+        for (analysis.graph.blocks.items, 0..) |block, block_id| {
+            const entry = analysis.entry_states[block_id] orelse continue;
+            @memcpy(state, entry);
+            for (block.start..block.end) |pc_usize| {
+                const pc: u32 = @intCast(pc_usize);
+                const inst = function.insts.items[pc];
+                const observed_reg: ?u32 = switch (inst.op) {
+                    .call, .call_vararg => inst.a,
+                    .get_field, .set_field, .get_index, .set_index, .table_set => inst.a,
+                    else => null,
+                };
+                if (observed_reg) |reg| if (producerUpvalue(&function, &analysis, state, reg)) |up_index| {
+                    if (up_index < function.upvalues.items.len) {
+                        const origin = up_origins[up_offsets[function_id] + up_index];
+                        switch (inst.op) {
+                            .call, .call_vararg => noteOrigin(&result.calls, origin),
+                            .get_field, .set_field => noteOrigin(&result.fields, origin),
+                            .get_index, .set_index, .table_set => noteOrigin(&result.indexes, origin),
+                            else => unreachable,
+                        }
+                    }
+                };
                 try ssa.applyWrites(&analysis, &function, state, pc, null);
             }
         }
