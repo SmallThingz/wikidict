@@ -3,6 +3,7 @@ const rt = @import("zig_runtime");
 const stdlib = @import("zig_stdlib");
 const ustring_lib = @import("zig_ustring.zig");
 const html_lib = @import("zig_html.zig");
+const text_lib = @import("zig_text.zig");
 const Value = rt.Value;
 
 const State = struct {
@@ -94,6 +95,7 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try html_lib.install(runtime, mw);
     try installStringAliases(runtime, string.table, ustring);
     try mw.rawSet(runtime.allocator, .{ .string = "ustring" }, .{ .table = ustring });
+    try text_lib.install(runtime, mw);
     try mw.rawSet(runtime.allocator, .{ .string = "loadData" }, try runtime.newNative(state, loadDataCall));
     try mw.rawSet(runtime.allocator, .{ .string = "clone" }, try runtime.newNative(null, cloneCall));
     try runtime.setGlobal(state.mw_slot, .{ .table = mw });
@@ -255,4 +257,64 @@ test "AOT host survives Context return by value" {
     const rendered = try runtime.callValue(tostring, &.{made[0]});
     defer rt.freeResults(rendered);
     try std.testing.expectEqualStrings("<b>ok</b>", rendered[0].string);
+}
+
+test "AOT mw.text split and gsplit preserve Unicode and empty fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try makeMovedHostContext(arena.allocator());
+    defer runtime.deinit();
+    const mw = runtime.getGlobal(23);
+    const text = try runtime.getIndex(mw, .{ .string = "text" });
+    const split = try callField(&runtime, text, "split", &.{
+        .{ .string = "α,β,,γ" },
+        .{ .string = "," },
+        .{ .boolean = true },
+    });
+    defer rt.freeResults(split);
+    inline for (.{ "α", "β", "", "γ" }, 1..) |expected, index|
+        try std.testing.expectEqualStrings(expected, split[0].table.rawGet(.{ .number = @floatFromInt(index) }).?.string);
+
+    const created = try callField(&runtime, text, "gsplit", &.{ .{ .string = "가나다" }, .{ .string = "" } });
+    defer rt.freeResults(created);
+    const iterator = created[0];
+    inline for (.{ "가", "나", "다" }) |expected| {
+        const item = try runtime.callValue(iterator, &.{});
+        defer rt.freeResults(item);
+        try std.testing.expectEqualStrings(expected, item[0].string);
+    }
+    const done = try runtime.callValue(iterator, &.{});
+    defer rt.freeResults(done);
+    try std.testing.expectEqual(@as(usize, 0), done.len);
+}
+
+test "AOT mw.text trim listToText and nowiki match Scribunto behavior" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try makeMovedHostContext(arena.allocator());
+    defer runtime.deinit();
+    const text = try runtime.getIndex(runtime.getGlobal(23), .{ .string = "text" });
+    const trimmed = try callField(&runtime, text, "trim", &.{.{ .string = " \tword\n" }});
+    defer rt.freeResults(trimmed);
+    try std.testing.expectEqualStrings("word", trimmed[0].string);
+
+    const list = try runtime.newTable();
+    try list.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "a" });
+    try list.rawSet(runtime.allocator, .{ .number = 2 }, .{ .string = "b" });
+    try list.rawSet(runtime.allocator, .{ .number = 3 }, .{ .string = "c" });
+    const joined = try callField(&runtime, text, "listToText", &.{.{ .table = list }});
+    defer rt.freeResults(joined);
+    try std.testing.expectEqualStrings("a, b and c", joined[0].string);
+    inline for (.{
+        .{ "[[x|y]]", "&#91;&#91;x&#124;y&#93;&#93;" },
+        .{ "# item\n* two", "&#35; item\n&#42; two" },
+        .{ "----\n__TOC__", "&#45;---\n_&#95;TOC_&#95;" },
+        .{ "http://x ISBN 1", "http&#58;//x ISBN&#32;1" },
+        .{ "mailto:x@y", "mailto&#58;x@y" },
+        .{ "~abc_", "&#126;abc&#95;" },
+    }) |case| {
+        const escaped = try callField(&runtime, text, "nowiki", &.{.{ .string = case[0] }});
+        defer rt.freeResults(escaped);
+        try std.testing.expectEqualStrings(case[1], escaped[0].string);
+    }
 }
