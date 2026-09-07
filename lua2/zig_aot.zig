@@ -14,6 +14,15 @@ pub const Stats = struct {
     dynamic_indexes: u64 = 0,
     string_fields: u64 = 0,
 };
+const FunctionRange = struct {
+    first: u32,
+    end: u32,
+
+    fn contains(self: FunctionRange, id: u32) bool {
+        return id >= self.first and id < self.end;
+    }
+};
+
 const Rep = enum { unknown, value, number };
 
 const FunctionPlan = struct {
@@ -205,7 +214,7 @@ fn numberExpr(out: *std.ArrayList(u8), a: A, p: *const ir.Program, plan: *const 
             const id = refs.index(value);
             if (id >= p.constants.items.len) return error.BadConstantReference;
             switch (p.constants.items[id]) {
-                .number_bits => |bits| try print(out, a, "@bitCast(@as(u64, 0x{x}))", .{bits}),
+                .number_bits => |bits| try print(out, a, "@as(f64, @bitCast(@as(u64, 0x{x})))", .{bits}),
                 .integer => |v| try print(out, a, "{d}.0", .{v}),
                 else => return error.NonNumericReference,
             }
@@ -252,7 +261,9 @@ fn emitConstants(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
         const encoded = (@as(u64, entry.key) << 32) | entry.value;
         try print(out, a, "    0x{x:0>16},\n", .{encoded});
     }
-    try text(out, a, "};\n\n");
+    try text(out, a, "};\n" ++
+        "const constant_blocks = [_]rt.ConstantBlock{.{ .first = 0, .values = &constants }};\n" ++
+        "const constant_entry_blocks = [_]rt.ConstantEntryBlock{.{ .first = 0, .values = &constant_entries }};\n\n");
 }
 fn globalCount(p: *const ir.Program) u32 {
     if (p.global_shape) |shape_id| {
@@ -335,7 +346,7 @@ fn compareName(op: ir.Opcode) ![]const u8 {
         else => error.NotComparison,
     };
 }
-fn emitSimple(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats) !void {
+fn emitSimple(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
         .load_nil => try print(out, a, "            frame.set({d}, .nil);\n", .{inst.dst}),
         .load_bool => try print(out, a, "            frame.set({d}, .{{ .boolean = {} }});\n", .{ inst.dst, inst.a != 0 }),
@@ -357,7 +368,7 @@ fn emitSimple(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *co
             try print(out, a, "            n_{d} = ", .{inst.dst});
             try numberExpr(out, a, p, plan, try refs.constant(inst.aux));
             try text(out, a, ";\n");
-        } else try print(out, a, "            frame.set({d}, try ctx.materializeConstant(&constants, &constant_entries, {d}));\n", .{ inst.dst, inst.aux }),
+        } else try print(out, a, "            frame.set({d}, try ctx.materializeConstant({d}));\n", .{ inst.dst, inst.aux }),
         .get_global_slot => try print(out, a, "            frame.set({d}, ctx.getGlobal({d}));\n", .{ inst.dst, inst.aux }),
         .set_global_slot => {
             try print(out, a, "            try ctx.setGlobal({d}, ", .{inst.aux});
@@ -381,10 +392,10 @@ fn emitSimple(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *co
             try text(out, a, ");\n");
         },
         .detach_cell => try print(out, a, "            frame.detachCell({d});\n", .{inst.a}),
-        else => try emitSimple2(out, a, p, function, plan, inst, pc, stats),
+        else => try emitSimple2(out, a, p, function, plan, inst, pc, stats, range),
     }
 }
-fn emitSimple2(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats) !void {
+fn emitSimple2(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
         .vararg => try print(out, a, "            frame.storeResults({d}, {d}, frame.varargs, false);\n", .{ inst.dst, inst.count }),
         .new_table => try print(out, a, "            frame.set({d}, .{{ .table = try ctx.newTable() }});\n", .{inst.dst}),
@@ -435,10 +446,10 @@ fn emitSimple2(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
             try valueExpr(out, a, p, plan, inst.c);
             try text(out, a, ");\n");
         },
-        else => try emitSimple3(out, a, p, function, plan, inst, pc, stats),
+        else => try emitSimple3(out, a, p, function, plan, inst, pc, stats, range),
     }
 }
-fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats) !void {
+fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
         .get_field => {
             if (inst.aux >= p.strings.items.len) return error.BadStringReference;
@@ -486,10 +497,10 @@ fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
             try valueExpr(out, a, p, plan, inst.a);
             try text(out, a, ");\n");
         },
-        else => try emitSimple4(out, a, p, function, plan, inst, pc, stats),
+        else => try emitSimple4(out, a, p, function, plan, inst, pc, stats, range),
     }
 }
-fn emitSimple4(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats) !void {
+fn emitSimple4(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
         .not_ => {
             try print(out, a, "            frame.set({d}, .{{ .boolean = !(", .{inst.dst});
@@ -553,10 +564,10 @@ fn emitSimple4(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
             }
             try text(out, a, if (native_dst) ";\n" else " });\n");
         },
-        else => try emitSimple5(out, a, p, function, plan, inst, pc, stats),
+        else => try emitSimple5(out, a, p, function, plan, inst, pc, stats, range),
     }
 }
-fn emitSimple5(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats) !void {
+fn emitSimple5(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
         .neg_number => {
             const native_dst = plan.rep(inst.dst) == .number;
@@ -598,8 +609,8 @@ fn emitSimple5(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
             try emitArgs(out, a, p, function, plan, inst.aux, inst.count, 0);
             try text(out, a, "));\n");
         },
-        .call, .call_vararg, .call_local, .call_local_vararg, .call_scoped, .call_scoped_vararg, .direct_call, .direct_call_vararg, .method_call, .method_call_vararg, .method_call_field, .method_call_field_vararg => try emitCall(out, a, p, function, plan, inst, pc, stats),
-        .init_module => try print(out, a, "            try ensureModule(ctx, {d});\n", .{inst.aux}),
+        .call, .call_vararg, .call_local, .call_local_vararg, .call_scoped, .call_scoped_vararg, .direct_call, .direct_call_vararg, .method_call, .method_call_vararg, .method_call_field, .method_call_field_vararg => try emitCall(out, a, p, function, plan, inst, pc, stats, range),
+        .init_module => try print(out, a, "            try ctx.ensureModule({d});\n", .{inst.aux}),
         .jump, .jump_if_false, .branch_compare, .numeric_for_init, .numeric_for_next, .generic_for_init, .generic_for_next, .ret, .ret_var => return error.ControlInstructionInBody,
         else => return error.UnsupportedOpcode,
     }
@@ -616,7 +627,7 @@ fn emitCallArgs(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *
     }
 }
 
-fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats) !void {
+fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     const vararg = switch (inst.op) {
         .call_vararg, .call_local_vararg, .call_scoped_vararg, .direct_call_vararg, .method_call_vararg, .method_call_field_vararg => true,
         else => false,
@@ -643,11 +654,11 @@ fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *cons
         try print(out, a, "            const result_{d} = try ctx.callValue(method_{d}, argv_{d});\n", .{ pc, pc, pc });
         stats.dynamic_calls += 1;
         stats.string_fields += 1;
-    } else try emitPlainCall(out, a, p, function, plan, inst, pc, stats);
+    } else try emitPlainCall(out, a, p, function, plan, inst, pc, stats, range);
     try print(out, a, "            frame.storeResults({d}, {d}, result_{d}, true);\n", .{ inst.dst, inst.count, pc });
     try text(out, a, "            }\n");
 }
-fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats) !void {
+fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
         .call, .call_vararg => {
             try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
@@ -657,20 +668,29 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
         },
         .call_local, .call_local_vararg => {
             if (inst.a >= p.functions.items.len) return error.BadFunctionReference;
-            try print(out, a, "            const result_{d} = try f_{d}(ctx, &.{{}}, argv_{d});\n", .{ pc, inst.a, pc });
+            if (range == null or range.?.contains(inst.a))
+                try print(out, a, "            const result_{d} = try f_{d}(ctx, &.{{}}, argv_{d});\n", .{ pc, inst.a, pc })
+            else
+                try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, &.{{}}, argv_{d});\n", .{ pc, inst.a, pc });
         },
         .call_scoped, .call_scoped_vararg => {
             try emitCaptures(out, a, p, function, inst.a, pc);
-            try print(out, a, "            const result_{d} = try f_{d}(ctx, &captures_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc });
+            if (range == null or range.?.contains(inst.a))
+                try print(out, a, "            const result_{d} = try f_{d}(ctx, &captures_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc })
+            else
+                try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, &captures_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc });
         },
         .direct_call, .direct_call_vararg => {
             if (inst.a >= p.functions.items.len or p.function_modules.items.len != p.functions.items.len) return error.BadFunctionReference;
             const module_id = p.function_modules.items[inst.a];
-            try print(out, a, "            try ensureModule(ctx, {d});\n", .{module_id});
+            try print(out, a, "            try ctx.ensureModule({d});\n", .{module_id});
             try print(out, a, "            if ({d} >= ctx.static_functions.len or ctx.static_functions[{d}] != .function) return error.UnregisteredStaticFunction;\n", .{ inst.a, inst.a });
             try print(out, a, "            const static_{d} = ctx.static_functions[{d}].function;\n", .{ pc, inst.a });
             try print(out, a, "            const static_caps_{d}: []const *rt.Cell = if (static_{d}.env) |env| env.captures else &.{{}};\n", .{ pc, pc });
-            try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc });
+            if (range == null or range.?.contains(inst.a))
+                try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc })
+            else
+                try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, static_caps_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc });
         },
         else => return error.NotPlainCall,
     }
@@ -825,7 +845,7 @@ fn requiresFrame(function: *const ir.Function, plan: *const FunctionPlan) !bool 
     }
     return false;
 }
-fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, stats: *Stats) !void {
+fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, stats: *Stats, range: ?FunctionRange) !void {
     if (id >= p.functions.items.len) return error.BadFunctionReference;
     const function = p.functions.items[id] orelse return error.IncompleteProgram;
     var plan = try analyzePlan(a, p, &function);
@@ -833,7 +853,7 @@ fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, st
     var graph = try graph_mod.build(a, &function);
     defer graph.deinit();
     const needs_frame = try requiresFrame(&function, &plan);
-    try print(out, a, "fn f_{d}(ctx: *rt.Context, upvalues: []const *rt.Cell, args: []const rt.Value) anyerror![]const rt.Value {{\n", .{id});
+    try print(out, a, "{s}fn f_{d}(ctx: *rt.Context, upvalues: []const *rt.Cell, args: []const rt.Value) anyerror![]const rt.Value {{\n", .{ if (range == null) "" else "pub ", id });
     try text(out, a, "    rt.touch(ctx);\n    rt.touch(upvalues);\n    rt.touch(args);\n");
     if (needs_frame) {
         try print(out, a, "    var regs: [{d}]rt.Value = undefined;\n    var cells: [{d}]?*rt.Cell = undefined;\n", .{ function.reg_count, function.reg_count });
@@ -851,7 +871,7 @@ fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, st
             if (pc + 1 == basic.end and isControl(inst.op))
                 try emitTerminator(out, a, p, &function, &plan, &graph, inst, pc)
             else
-                try emitSimple(out, a, p, &function, &plan, inst, pc, stats);
+                try emitSimple(out, a, p, &function, &plan, inst, pc, stats, range);
         }
         const last = if (basic.end != 0) function.insts.items[basic.end - 1] else null;
         if (last == null or !isControl(last.?.op)) {
@@ -873,7 +893,7 @@ fn emitProgramTables(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void 
         if (maybe == null) return error.IncompleteProgram;
         try print(out, a, "    f_{d},\n", .{id});
     }
-    try text(out, a, "};\n");
+    try text(out, a, "};\nconst function_blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &function_table }};\n");
     try text(out, a, "const module_roots = [_]u32{");
     for (p.module_roots.items, 0..) |root, index| {
         if (index != 0) try text(out, a, ", ");
@@ -889,7 +909,10 @@ fn emitRuntimeEntry(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
     try text(out, a, "pub fn initContext(allocator: std.mem.Allocator) !rt.Context {\n" ++
         "    var ctx = try rt.Context.initProgram(allocator, global_count, module_roots.len, function_table.len);\n" ++
         "    ctx.shapes = &shapes;\n" ++
-        "    ctx.functions = &function_table;\n");
+        "    ctx.function_blocks = &function_blocks;\n" ++
+        "    ctx.constant_blocks = &constant_blocks;\n" ++
+        "    ctx.constant_entry_blocks = &constant_entry_blocks;\n" ++
+        "    ctx.module_roots = &module_roots;\n");
     const env_slot = global_abi.id("_G");
     if (globals > env_slot) {
         if (p.global_shape) |shape_id| {
@@ -902,21 +925,6 @@ fn emitRuntimeEntry(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
     try text(out, a, "    return ctx;\n}\n\n");
     try print(out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {{\n    return f_{d}(ctx, &.{{}}, args);\n}}\n\n", .{p.root_function});
 }
-fn emitEnsureModule(out: *std.ArrayList(u8), a: A) !void {
-    try text(out, a, "fn ensureModule(ctx: *rt.Context, module_id: u32) anyerror!void {\n" ++
-        "    if (module_id >= module_roots.len or module_id >= ctx.module_state.len) return error.BadModuleId;\n" ++
-        "    if (ctx.module_state[module_id] == 2) return;\n" ++
-        "    if (ctx.module_state[module_id] == 1) return error.ModuleLoadLoop;\n" ++
-        "    ctx.module_state[module_id] = 1;\n" ++
-        "    errdefer ctx.module_state[module_id] = 0;\n" ++
-        "    const root = module_roots[module_id];\n" ++
-        "    if (root >= function_table.len) return error.BadFunctionId;\n" ++
-        "    const values = try function_table[root](ctx, &.{}, &.{});\n" ++
-        "    rt.freeResults(values);\n" ++
-        "    ctx.module_state[module_id] = 2;\n" ++
-        "}\n\n");
-}
-
 pub fn generate(a: A, p: *const ir.Program) !struct { source: []u8, stats: Stats } {
     if (!p.references_lowered) return error.ProgramNotFinalized;
     if (p.root_function >= p.functions.items.len) return error.BadFunctionReference;
@@ -926,9 +934,8 @@ pub fn generate(a: A, p: *const ir.Program) !struct { source: []u8, stats: Stats
     try emitDeclarations(&out, a, p);
     try emitShapes(&out, a, p);
     try emitConstants(&out, a, p);
-    for (p.functions.items, 0..) |_, id| try emitFunction(&out, a, p, @intCast(id), &stats);
+    for (p.functions.items, 0..) |_, id| try emitFunction(&out, a, p, @intCast(id), &stats, null);
     try emitProgramTables(&out, a, p);
-    try emitEnsureModule(&out, a);
     try emitRuntimeEntry(&out, a, p);
     return .{ .source = try out.toOwnedSlice(a), .stats = stats };
 }
@@ -977,6 +984,202 @@ test "constant templates emit static data instead of generated materializer func
     const generated = try generate(a, &p);
     defer a.free(generated.source);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const constants = [_]rt.Constant") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.materializeConstant(&constants, &constant_entries") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.materializeConstant") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn c_") == null);
+}
+
+pub const ShardConfig = struct {
+    functions_per_shard: usize = 1024,
+    constants_per_shard: usize = 131072,
+    entries_per_shard: usize = 262144,
+};
+
+fn shardCount(total: usize, per_shard: usize) !usize {
+    if (per_shard == 0) return error.InvalidShardSize;
+    return if (total == 0) 0 else 1 + (total - 1) / per_shard;
+}
+
+fn shardBounds(total: usize, per_shard: usize, shard_index: usize) !struct { first: usize, end: usize } {
+    const count = try shardCount(total, per_shard);
+    if (shard_index >= count) return error.BadShardIndex;
+    const first = std.math.mul(usize, shard_index, per_shard) catch return error.BadShardIndex;
+    return .{ .first = first, .end = @min(first + per_shard, total) };
+}
+
+pub fn functionShardCount(p: *const ir.Program, config: ShardConfig) !usize {
+    return shardCount(p.functions.items.len, config.functions_per_shard);
+}
+
+pub fn constantShardCount(p: *const ir.Program, config: ShardConfig) !usize {
+    return shardCount(p.constants.items.len, config.constants_per_shard);
+}
+
+pub fn entryShardCount(p: *const ir.Program, config: ShardConfig) !usize {
+    return shardCount(p.const_entries.items.len, config.entries_per_shard);
+}
+
+pub fn generateFunctionShard(a: A, p: *const ir.Program, config: ShardConfig, shard_index: usize, stats: *Stats) ![]u8 {
+    if (!p.references_lowered) return error.ProgramNotFinalized;
+    const bounds = try shardBounds(p.functions.items.len, config.functions_per_shard, shard_index);
+    const first: u32 = std.math.cast(u32, bounds.first) orelse return error.ProgramTooLarge;
+    const end: u32 = std.math.cast(u32, bounds.end) orelse return error.ProgramTooLarge;
+    const range = FunctionRange{ .first = first, .end = end };
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    try emitDeclarations(&out, a, p);
+    for (bounds.first..bounds.end) |id| try emitFunction(&out, a, p, @intCast(id), stats, range);
+    try text(&out, a, "pub const functions = [_]rt.FunctionFn{\n");
+    for (bounds.first..bounds.end) |id| try print(&out, a, "    f_{d},\n", .{id});
+    try text(&out, a, "};\n");
+    return out.toOwnedSlice(a);
+}
+
+pub fn generateConstantShard(a: A, p: *const ir.Program, config: ShardConfig, shard_index: usize) ![]u8 {
+    if (!p.references_lowered) return error.ProgramNotFinalized;
+    const bounds = try shardBounds(p.constants.items.len, config.constants_per_shard, shard_index);
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    try text(&out, a, "const rt = @import(\"zig_runtime\");\n\npub const constants = [_]rt.Constant{\n");
+    for (p.constants.items[bounds.first..bounds.end]) |node| {
+        try text(&out, a, "    ");
+        switch (node) {
+            .table => |table| try print(&out, a, ".{{ .table = .{{ .first = {d}, .count = {d} }} }}", .{ table.first, table.count }),
+            else => try scalarNodeExpr(&out, a, p, node),
+        }
+        try text(&out, a, ",\n");
+    }
+    try text(&out, a, "};\n");
+    return out.toOwnedSlice(a);
+}
+
+pub fn generateEntryShard(a: A, p: *const ir.Program, config: ShardConfig, shard_index: usize) ![]u8 {
+    if (!p.references_lowered) return error.ProgramNotFinalized;
+    const bounds = try shardBounds(p.const_entries.items.len, config.entries_per_shard, shard_index);
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    try text(&out, a, "const rt = @import(\"zig_runtime\");\n\npub const entries = [_]rt.ConstantEntry{\n");
+    for (p.const_entries.items[bounds.first..bounds.end]) |entry| {
+        const encoded = (@as(u64, entry.key) << 32) | entry.value;
+        try print(&out, a, "    0x{x:0>16},\n", .{encoded});
+    }
+    try text(&out, a, "};\n");
+    return out.toOwnedSlice(a);
+}
+
+pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u8 {
+    if (!p.references_lowered) return error.ProgramNotFinalized;
+    if (p.root_function >= p.functions.items.len) return error.BadFunctionReference;
+    const function_shards = try functionShardCount(p, config);
+    const constant_shards = try constantShardCount(p, config);
+    const entry_shards = try entryShardCount(p, config);
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    try emitDeclarations(&out, a, p);
+    for (0..function_shards) |index|
+        try print(&out, a, "const functions_{d:0>4} = @import(\"functions_{d:0>4}.zig\");\n", .{ index, index });
+    for (0..constant_shards) |index|
+        try print(&out, a, "const constants_{d:0>4} = @import(\"constants_{d:0>4}.zig\");\n", .{ index, index });
+    for (0..entry_shards) |index|
+        try print(&out, a, "const entries_{d:0>4} = @import(\"entries_{d:0>4}.zig\");\n", .{ index, index });
+    try text(&out, a, "\n");
+    try emitShapes(&out, a, p);
+
+    try text(&out, a, "const function_blocks = [_]rt.FunctionBlock{\n");
+    for (0..function_shards) |index| {
+        const bounds = try shardBounds(p.functions.items.len, config.functions_per_shard, index);
+        try print(&out, a, "    .{{ .first = {d}, .values = &functions_{d:0>4}.functions }},\n", .{ bounds.first, index });
+    }
+    try text(&out, a, "};\nconst constant_blocks = [_]rt.ConstantBlock{\n");
+    for (0..constant_shards) |index| {
+        const bounds = try shardBounds(p.constants.items.len, config.constants_per_shard, index);
+        try print(&out, a, "    .{{ .first = {d}, .values = &constants_{d:0>4}.constants }},\n", .{ bounds.first, index });
+    }
+    try text(&out, a, "};\nconst constant_entry_blocks = [_]rt.ConstantEntryBlock{\n");
+    for (0..entry_shards) |index| {
+        const bounds = try shardBounds(p.const_entries.items.len, config.entries_per_shard, index);
+        try print(&out, a, "    .{{ .first = {d}, .values = &entries_{d:0>4}.entries }},\n", .{ bounds.first, index });
+    }
+    try text(&out, a, "};\nconst module_roots = [_]u32{");
+    for (p.module_roots.items, 0..) |root, index| {
+        if (index != 0) try text(&out, a, ", ");
+        try print(&out, a, "{d}", .{root});
+    }
+    try text(&out, a, "};\n\n");
+
+    const globals = globalCount(p);
+    try print(&out, a, "pub const global_count: u32 = {d};\n", .{globals});
+    try print(&out, a, "pub const root_function: u32 = {d};\n\n", .{p.root_function});
+    try text(&out, a, "pub fn initContext(allocator: std.mem.Allocator) !rt.Context {\n");
+    try print(&out, a, "    var ctx = try rt.Context.initProgram(allocator, global_count, module_roots.len, {d});\n", .{p.functions.items.len});
+    try text(
+        &out,
+        a,
+        "    ctx.shapes = &shapes;\n" ++
+            "    ctx.function_blocks = &function_blocks;\n" ++
+            "    ctx.constant_blocks = &constant_blocks;\n" ++
+            "    ctx.constant_entry_blocks = &constant_entry_blocks;\n" ++
+            "    ctx.module_roots = &module_roots;\n",
+    );
+    const env_slot = global_abi.id("_G");
+    if (globals > env_slot) {
+        if (p.global_shape) |shape_id| {
+            if (shape_id >= p.shapes.items.len) return error.BadGlobalLayout;
+            try print(&out, a, "    try rt.bindGlobalTable(&ctx, &shapes[{d}], {d});\n", .{ shape_id, env_slot });
+        } else {
+            try print(&out, a, "    try rt.bindGlobalTable(&ctx, null, {d});\n", .{env_slot});
+        }
+    }
+    try text(&out, a, "    return ctx;\n}\n\n");
+    try text(&out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {\n    return ctx.invokeKnown(root_function, &.{}, args);\n}\n");
+    return out.toOwnedSlice(a);
+}
+
+test "sharded AOT splits code and data while preserving numeric cross-shard calls" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const allocator = std.testing.allocator;
+    var chunk = try lua.parse(allocator, "local function make() return {x=4,{y=7}} end; local a=make(); local b=make(); return a.x,a[1].y,a==b,a[1]==b[1]");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(allocator, &chunk);
+    defer program.deinit();
+    _ = try opt.runAot(allocator, &program);
+    const config = ShardConfig{ .functions_per_shard = 1, .constants_per_shard = 2, .entries_per_shard = 1 };
+    try std.testing.expect(try functionShardCount(&program, config) >= 2);
+    try std.testing.expect(try constantShardCount(&program, config) >= 2);
+
+    const root = try generateShardedRoot(allocator, &program, config);
+    defer allocator.free(root);
+    try std.testing.expect(std.mem.indexOf(u8, root, "functions_0000.zig") != null);
+    try std.testing.expect(std.mem.indexOf(u8, root, "constant_blocks") != null);
+    try std.testing.expect(std.mem.indexOf(u8, root, "ctx.invokeKnown(root_function") != null);
+
+    var stats = Stats{};
+    const first = try generateFunctionShard(allocator, &program, config, 0, &stats);
+    defer allocator.free(first);
+    try std.testing.expect(std.mem.indexOf(u8, first, "pub fn f_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "ctx.invokeKnown(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "vm_codec") == null);
+
+    const constants = try generateConstantShard(allocator, &program, config, 0);
+    defer allocator.free(constants);
+    try std.testing.expect(std.mem.indexOf(u8, constants, "pub const constants") != null);
+    if (try entryShardCount(&program, config) != 0) {
+        const entries = try generateEntryShard(allocator, &program, config, 0);
+        defer allocator.free(entries);
+        try std.testing.expect(std.mem.indexOf(u8, entries, "pub const entries") != null);
+    }
+}
+
+test "numeric bit constants are explicitly typed in native expressions" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const allocator = std.testing.allocator;
+    var chunk = try lua.parse(allocator, "local s=0;for i=1,4,0.25 do s=s+i end;return s");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(allocator, &chunk);
+    defer program.deinit();
+    _ = try opt.runAot(allocator, &program);
+    const generated = try generate(allocator, &program);
+    defer allocator.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "@as(f64, @bitCast(@as(u64, 0x3fd0000000000000)))") != null);
 }

@@ -51,8 +51,12 @@ fn writeAll(io: std.Io, path: []const u8, bytes: []const u8) !void {
 }
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len < 4 or args.len > 5) return error.Usage;
-    const limit = if (args.len == 5)
+    if (args.len < 4 or args.len > 6) return error.Usage;
+    const sharded = args.len >= 5 and std.mem.eql(u8, args[4], "--sharded");
+    if (!sharded and args.len > 5) return error.Usage;
+    const limit = if (sharded)
+        if (args.len == 6) try std.fmt.parseInt(usize, args[5], 10) else std.math.maxInt(usize)
+    else if (args.len == 5)
         try std.fmt.parseInt(usize, args[4], 10)
     else
         std.math.maxInt(usize);
@@ -109,12 +113,55 @@ pub fn main(init: std.process.Init) !void {
     try verify.run(std.heap.smp_allocator, &image.program);
 
     const classified = aot_stats.collect(&image.program);
-    const generated = try aot.generate(std.heap.smp_allocator, &image.program);
-    defer std.heap.smp_allocator.free(generated.source);
-    try writeAll(init.io, args[3], generated.source);
+    var generated_stats = aot.Stats{};
+    var generated_bytes: u64 = 0;
+    if (sharded) {
+        const config = aot.ShardConfig{};
+        const root = try aot.generateShardedRoot(std.heap.smp_allocator, &image.program, config);
+        defer std.heap.smp_allocator.free(root);
+        const root_path = try std.fmt.allocPrint(std.heap.smp_allocator, "{s}/root.zig", .{args[3]});
+        defer std.heap.smp_allocator.free(root_path);
+        try writeAll(init.io, root_path, root);
+        generated_bytes += root.len;
+
+        const function_shards = try aot.functionShardCount(&image.program, config);
+        for (0..function_shards) |index| {
+            const source = try aot.generateFunctionShard(std.heap.smp_allocator, &image.program, config, index, &generated_stats);
+            defer std.heap.smp_allocator.free(source);
+            const path = try std.fmt.allocPrint(std.heap.smp_allocator, "{s}/functions_{d:0>4}.zig", .{ args[3], index });
+            defer std.heap.smp_allocator.free(path);
+            try writeAll(init.io, path, source);
+            generated_bytes += source.len;
+        }
+        const constant_shards = try aot.constantShardCount(&image.program, config);
+        for (0..constant_shards) |index| {
+            const source = try aot.generateConstantShard(std.heap.smp_allocator, &image.program, config, index);
+            defer std.heap.smp_allocator.free(source);
+            const path = try std.fmt.allocPrint(std.heap.smp_allocator, "{s}/constants_{d:0>4}.zig", .{ args[3], index });
+            defer std.heap.smp_allocator.free(path);
+            try writeAll(init.io, path, source);
+            generated_bytes += source.len;
+        }
+        const entry_shards = try aot.entryShardCount(&image.program, config);
+        for (0..entry_shards) |index| {
+            const source = try aot.generateEntryShard(std.heap.smp_allocator, &image.program, config, index);
+            defer std.heap.smp_allocator.free(source);
+            const path = try std.fmt.allocPrint(std.heap.smp_allocator, "{s}/entries_{d:0>4}.zig", .{ args[3], index });
+            defer std.heap.smp_allocator.free(path);
+            try writeAll(init.io, path, source);
+            generated_bytes += source.len;
+        }
+        std.debug.print("AOT_SHARDS functions={d} constants={d} entries={d}\n", .{ function_shards, constant_shards, entry_shards });
+    } else {
+        const generated = try aot.generate(std.heap.smp_allocator, &image.program);
+        defer std.heap.smp_allocator.free(generated.source);
+        generated_stats = generated.stats;
+        generated_bytes = generated.source.len;
+        try writeAll(init.io, args[3], generated.source);
+    }
     std.debug.print(
         "AOT_DONE modules={d} functions={d} local_inlined={d} bytes={d}\n",
-        .{ modules, image.program.functions.items.len, local_inlined, generated.source.len },
+        .{ modules, image.program.functions.items.len, local_inlined, generated_bytes },
     );
     std.debug.print(
         "AOT_LINK numeric={any} cleanup={any} globals={any} module_functions={any}\n",
@@ -122,7 +169,7 @@ pub fn main(init: std.process.Init) !void {
     );
     std.debug.print(
         "AOT_CODE functions={d} instructions={d} dynamic_calls={d} dynamic_indexes={d} string_fields={d}\n",
-        .{ generated.stats.functions, generated.stats.instructions, generated.stats.dynamic_calls, generated.stats.dynamic_indexes, generated.stats.string_fields },
+        .{ generated_stats.functions, generated_stats.instructions, generated_stats.dynamic_calls, generated_stats.dynamic_indexes, generated_stats.string_fields },
     );
     std.debug.print("AOT_DYNAMIC {any}\n", .{classified});
 }

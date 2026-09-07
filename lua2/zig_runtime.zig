@@ -47,6 +47,9 @@ fn constantEntryKey(entry: ConstantEntry) u32 {
 fn constantEntryValue(entry: ConstantEntry) u32 {
     return @truncate(entry);
 }
+pub const ConstantBlock = struct { first: u32, values: []const Constant };
+pub const ConstantEntryBlock = struct { first: u32, values: []const ConstantEntry };
+pub const FunctionBlock = struct { first: u32, values: []const FunctionFn };
 
 pub const Shape = struct {
     field_keys: []const []const u8 = &.{},
@@ -291,7 +294,10 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     globals: []Value,
     shapes: []const Shape = &.{},
-    functions: []const FunctionFn = &.{},
+    function_blocks: []const FunctionBlock = &.{},
+    constant_blocks: []const ConstantBlock = &.{},
+    constant_entry_blocks: []const ConstantEntryBlock = &.{},
+    module_roots: []const u32 = &.{},
     string_metatable: ?*Table = null,
     string_intern: std.StringHashMapUnmanaged([]const u8) = .empty,
     depth: usize = 0,
@@ -351,13 +357,45 @@ pub const Context = struct {
         return .{ .function = .{ .id = id, .env = env, .identity = identity } };
     }
 
+    fn functionById(self: *const Context, id: u32) ?FunctionFn {
+        var low: usize = 0;
+        var high = self.function_blocks.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const block = self.function_blocks[mid];
+            if (id < block.first) {
+                high = mid;
+            } else {
+                const offset = @as(usize, id - block.first);
+                if (offset < block.values.len) return block.values[offset];
+                low = mid + 1;
+            }
+        }
+        return null;
+    }
+
+    pub fn invokeKnown(self: *Context, id: u32, captures: []const *Cell, args: []const Value) anyerror![]const Value {
+        const function = self.functionById(id) orelse return error.BadFunctionId;
+        return function(self, captures, args);
+    }
+
     pub fn callFunction(self: *Context, value: FunctionValue, args: []const Value) anyerror![]const Value {
-        if (value.id >= self.functions.len) return error.BadFunctionId;
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
         const captures = if (value.env) |env| env.captures else &.{};
-        return self.functions[value.id](self, captures, args);
+        return self.invokeKnown(value.id, captures, args);
+    }
+
+    pub fn ensureModule(self: *Context, module_id: u32) anyerror!void {
+        if (module_id >= self.module_roots.len or module_id >= self.module_state.len) return error.BadModuleId;
+        if (self.module_state[module_id] == 2) return;
+        if (self.module_state[module_id] == 1) return error.ModuleLoadLoop;
+        self.module_state[module_id] = 1;
+        errdefer self.module_state[module_id] = 0;
+        const values = try self.invokeKnown(self.module_roots[module_id], &.{}, &.{});
+        freeResults(values);
+        self.module_state[module_id] = 2;
     }
 
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
@@ -398,28 +436,61 @@ pub const Context = struct {
         return table;
     }
 
-    pub fn materializeConstant(self: *Context, constants: []const Constant, entries: []const ConstantEntry, id: u32) anyerror!Value {
-        if (id >= constants.len) return error.BadConstantReference;
-        return switch (constants[id]) {
+    fn constantById(self: *const Context, id: u32) ?Constant {
+        var low: usize = 0;
+        var high = self.constant_blocks.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const block = self.constant_blocks[mid];
+            if (id < block.first) {
+                high = mid;
+            } else {
+                const offset = @as(usize, id - block.first);
+                if (offset < block.values.len) return block.values[offset];
+                low = mid + 1;
+            }
+        }
+        return null;
+    }
+
+    fn constantEntryAt(self: *const Context, id: u32) ?ConstantEntry {
+        var low: usize = 0;
+        var high = self.constant_entry_blocks.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const block = self.constant_entry_blocks[mid];
+            if (id < block.first) {
+                high = mid;
+            } else {
+                const offset = @as(usize, id - block.first);
+                if (offset < block.values.len) return block.values[offset];
+                low = mid + 1;
+            }
+        }
+        return null;
+    }
+
+    pub fn materializeConstant(self: *Context, id: u32) anyerror!Value {
+        return switch (self.constantById(id) orelse return error.BadConstantReference) {
             .nil => .nil,
             .boolean => |value| .{ .boolean = value },
             .number => |value| .{ .number = value },
             .string => |value| .{ .string = value },
             .table => |table| blk: {
-                const first: usize = table.first;
-                const count: usize = table.count;
-                if (first > entries.len or count > entries.len - first) return error.BadConstantEntryRange;
+                if (table.count > std.math.maxInt(u32) - table.first) return error.BadConstantEntryRange;
                 const object = try self.newTable();
                 var list_index: u32 = 1;
-                for (entries[first .. first + count]) |entry| {
+                for (0..table.count) |offset| {
+                    const entry_id = table.first + @as(u32, @intCast(offset));
+                    const entry = self.constantEntryAt(entry_id) orelse return error.BadConstantEntryRange;
                     const key_id = constantEntryKey(entry);
                     const value_id = constantEntryValue(entry);
                     const key: Value = if (key_id == implicit_list_key) list: {
                         const value: Value = .{ .number = @floatFromInt(list_index) };
                         list_index += 1;
                         break :list value;
-                    } else try self.materializeConstant(constants, entries, key_id);
-                    const value = try self.materializeConstant(constants, entries, value_id);
+                    } else try self.materializeConstant(key_id);
+                    const value = try self.materializeConstant(value_id);
                     try object.rawSet(self.allocator, key, value);
                 }
                 break :blk .{ .table = object };
@@ -618,29 +689,38 @@ test "AOT runtime globals are numeric slots without hash storage" {
     try ctx.setGlobal(3, .{ .number = 7 });
     try std.testing.expectEqual(@as(f64, 7), ctx.getGlobal(3).number);
 }
-test "AOT constant templates preserve fresh table identity" {
+test "AOT constant templates preserve fresh table identity across blocks" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var ctx = try Context.init(arena.allocator(), 0);
     defer ctx.deinit();
-    const constants = [_]Constant{
-        .{ .number = 4 },
-        .{ .string = "x" },
+    const constants_a = [_]Constant{ .{ .number = 4 }, .{ .string = "x" } };
+    const constants_b = [_]Constant{
         .{ .table = .{ .first = 0, .count = 2 } },
         .{ .table = .{ .first = 2, .count = 1 } },
     };
-    const entries = [_]ConstantEntry{
+    const entries_a = [_]ConstantEntry{
         packConstantEntry(1, 0),
         packConstantEntry(implicit_list_key, 0),
-        packConstantEntry(1, 2),
     };
-    const left = try ctx.materializeConstant(&constants, &entries, 2);
-    const right = try ctx.materializeConstant(&constants, &entries, 2);
+    const entries_b = [_]ConstantEntry{packConstantEntry(1, 2)};
+    const constant_blocks = [_]ConstantBlock{
+        .{ .first = 0, .values = &constants_a },
+        .{ .first = 2, .values = &constants_b },
+    };
+    const entry_blocks = [_]ConstantEntryBlock{
+        .{ .first = 0, .values = &entries_a },
+        .{ .first = 2, .values = &entries_b },
+    };
+    ctx.constant_blocks = &constant_blocks;
+    ctx.constant_entry_blocks = &entry_blocks;
+    const left = try ctx.materializeConstant(2);
+    const right = try ctx.materializeConstant(2);
     try std.testing.expect(left == .table and right == .table and left.table != right.table);
     try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .string = "x" }).?.number);
     try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .number = 1 }).?.number);
-    const outer_left = try ctx.materializeConstant(&constants, &entries, 3);
-    const outer_right = try ctx.materializeConstant(&constants, &entries, 3);
+    const outer_left = try ctx.materializeConstant(3);
+    const outer_right = try ctx.materializeConstant(3);
     const nested_left = outer_left.table.rawGet(.{ .string = "x" }).?;
     const nested_right = outer_right.table.rawGet(.{ .string = "x" }).?;
     try std.testing.expect(nested_left == .table and nested_right == .table and nested_left.table != nested_right.table);
