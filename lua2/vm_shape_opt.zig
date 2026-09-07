@@ -214,7 +214,7 @@ fn fieldSlot(fields: []const u32, sid: u32) ?u32 {
     for (fields, 0..) |field, slot| if (field == sid) return @intCast(slot);
     return null;
 }
-fn findOrAddShape(a: std.mem.Allocator, program: *ir.Program, field_count: u32, keys: []const u32, choice_count: u32, open: bool) !u32 {
+pub fn findOrAddShape(a: std.mem.Allocator, program: *ir.Program, field_count: u32, keys: []const u32, choice_count: u32, open: bool) !u32 {
     for (program.shapes.items, 0..) |shape, index| {
         if (shape.field_count != field_count or shape.choice_count != choice_count or shape.open != open) continue;
         if (!std.mem.eql(u32, shape.field_keys.items, keys)) continue;

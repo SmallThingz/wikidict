@@ -11,6 +11,7 @@ const dce = @import("vm_dce.zig");
 const regalloc = @import("vm_regalloc.zig");
 const flow = @import("vm_flow.zig");
 const shape = @import("vm_shape_opt.zig");
+const capture_shape = @import("vm_capture_shape.zig");
 const scalar = @import("vm_scalar_replace.zig");
 const data = @import("vm_data.zig");
 const numbering = @import("vm_value_numbering.zig");
@@ -27,6 +28,7 @@ pub const Stats = struct {
     registers: regalloc.Stats = .{},
     flow: flow.Stats = .{},
     shapes: shape.Stats = .{},
+    captured_shapes: capture_shape.Stats = .{},
     layouts: shape_flow.Stats = .{},
     scalar: scalar.Stats = .{},
     data: data.Stats = .{},
@@ -62,6 +64,8 @@ pub fn runSemantics(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
         addStats(interproc.Stats, &stats.interproc, summaries);
         const shapes = try shape.run(allocator, program);
         addStats(shape.Stats, &stats.shapes, shapes);
+        const captures = try capture_shape.run(allocator, program);
+        addStats(capture_shape.Stats, &stats.captured_shapes, captures);
         const layouts = try shape_flow.run(allocator, program);
         addStats(shape_flow.Stats, &stats.layouts, layouts);
         const scalar_stats = try scalar.run(allocator, program);
@@ -71,7 +75,7 @@ pub fn runSemantics(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
         const clean = try simplify.run(allocator, program);
         addStats(simplify.Stats, &stats.cleanup, clean);
         try verify.run(allocator, program);
-        if (layouts.slot_reads + layouts.slot_writes + direct.calls + facts.folded + facts.branches + facts.removed_control + facts.specialized + inlined.inlined + removed + shapes.shaped_tables + summaries.folded + summaries.branches + summaries.specialized + summaries.removed_control + scalar_stats.objects + numbered.expressions + numbered.forwarded_reads + clean.removed_instructions == 0) break;
+        if (layouts.slot_reads + layouts.slot_writes + captures.captured_tables + captures.slot_reads + captures.slot_writes + direct.calls + facts.folded + facts.branches + facts.removed_control + facts.specialized + inlined.inlined + removed + shapes.shaped_tables + summaries.folded + summaries.branches + summaries.specialized + summaries.removed_control + scalar_stats.objects + numbered.expressions + numbered.forwarded_reads + clean.removed_instructions == 0) break;
     }
     return stats;
 }
