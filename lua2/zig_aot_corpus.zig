@@ -108,6 +108,7 @@ pub fn main(init: std.process.Init) !void {
     _ = try data.run(std.heap.smp_allocator, &image.program);
     const linked = try numeric_link.run(std.heap.smp_allocator, &image.program, &symbols);
     const linked_cleanup = try cleanup.run(std.heap.smp_allocator, &image.program);
+    const origins = try aot_stats.collectOrigins(std.heap.smp_allocator, &image.program);
     const final = try optimizer.finalizeAot(std.heap.smp_allocator, &image.program);
     _ = try cleanup.compactStrings(std.heap.smp_allocator, &image.program);
     try verify.run(std.heap.smp_allocator, &image.program);
@@ -172,4 +173,5 @@ pub fn main(init: std.process.Init) !void {
         .{ generated_stats.functions, generated_stats.instructions, generated_stats.dynamic_calls, generated_stats.dynamic_indexes, generated_stats.string_fields },
     );
     std.debug.print("AOT_DYNAMIC {any}\n", .{classified});
+    std.debug.print("AOT_ORIGINS {any}\n", .{origins});
 }

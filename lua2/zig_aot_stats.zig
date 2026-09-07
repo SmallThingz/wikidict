@@ -68,3 +68,95 @@ test "AOT stats classify string fields indexes and calls" {
     try std.testing.expectEqual(@as(u64, 2), stats.dynamic_indexes);
     try std.testing.expectEqual(@as(u64, 1), stats.dynamic_calls);
 }
+
+const ssa = @import("vm_ssa.zig");
+
+pub const ValueOrigins = struct {
+    captured_reg: u64 = 0,
+    parameter: u64 = 0,
+    phi: u64 = 0,
+    get_upvalue: u64 = 0,
+    call_result: u64 = 0,
+    field_result: u64 = 0,
+    index_result: u64 = 0,
+    global: u64 = 0,
+    table: u64 = 0,
+    other_instruction: u64 = 0,
+    unknown: u64 = 0,
+};
+
+pub const Origins = struct {
+    fields: ValueOrigins = .{},
+    indexes: ValueOrigins = .{},
+};
+
+const Origin = enum {
+    captured_reg, parameter, phi, get_upvalue, call_result, field_result,
+    index_result, global, table, other_instruction, unknown,
+};
+fn classifyOrigin(function: *const ir.Function, analysis: *const ssa.Function, state: []const ssa.ValueId, reg: u32) Origin {
+    if (reg >= state.len) return .unknown;
+    if (analysis.captured[reg]) return .captured_reg;
+    const id = analysis.canonicalValue(state[reg]);
+    if (id == ssa.invalid_value or id >= analysis.values.items.len) return .unknown;
+    const node = analysis.values.items[id];
+    return switch (node.kind) {
+        .parameter => .parameter,
+        .phi => .phi,
+        .instruction => blk: {
+            if (node.pc >= function.insts.items.len) break :blk .unknown;
+            break :blk switch (function.insts.items[node.pc].op) {
+                .get_upvalue => .get_upvalue,
+                .call, .call_vararg, .call_local, .call_local_vararg,
+                .call_scoped, .call_scoped_vararg, .direct_call, .direct_call_vararg => .call_result,
+                .get_field, .get_slot => .field_result,
+                .get_index, .get_choice_slot => .index_result,
+                .get_global, .get_global_slot => .global,
+                .new_table, .new_table_shape => .table,
+                else => .other_instruction,
+            };
+        },
+        else => .unknown,
+    };
+}
+
+fn noteOrigin(stats: *ValueOrigins, origin: Origin) void {
+    switch (origin) {
+        .captured_reg => stats.captured_reg += 1,
+        .parameter => stats.parameter += 1,
+        .phi => stats.phi += 1,
+        .get_upvalue => stats.get_upvalue += 1,
+        .call_result => stats.call_result += 1,
+        .field_result => stats.field_result += 1,
+        .index_result => stats.index_result += 1,
+        .global => stats.global += 1,
+        .table => stats.table += 1,
+        .other_instruction => stats.other_instruction += 1,
+        .unknown => stats.unknown += 1,
+    }
+}
+pub fn collectOrigins(allocator: std.mem.Allocator, program: *const ir.Program) !Origins {
+    if (program.references_lowered) return error.OriginsRequireSsaProgram;
+    var result = Origins{};
+    for (program.functions.items) |maybe| if (maybe) |function| {
+        var analysis = try ssa.build(allocator, program, &function);
+        defer analysis.deinit();
+        const state = try allocator.alloc(ssa.ValueId, function.reg_count);
+        defer if (state.len != 0) allocator.free(state);
+        for (analysis.graph.blocks.items, 0..) |block, block_id| {
+            const entry = analysis.entry_states[block_id] orelse continue;
+            @memcpy(state, entry);
+            for (block.start..block.end) |pc_usize| {
+                const pc: u32 = @intCast(pc_usize);
+                const inst = function.insts.items[pc];
+                switch (inst.op) {
+                    .get_field, .set_field => noteOrigin(&result.fields, classifyOrigin(&function, &analysis, state, inst.a)),
+                    .get_index, .set_index, .table_set => noteOrigin(&result.indexes, classifyOrigin(&function, &analysis, state, inst.a)),
+                    else => {},
+                }
+                try ssa.applyWrites(&analysis, &function, state, pc, null);
+            }
+        }
+    };
+    return result;
+}
