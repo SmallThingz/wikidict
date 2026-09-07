@@ -368,24 +368,24 @@ pub const Context = struct {
     max_depth: usize = 1000,
     next_identity: u64 = 1,
     module_state: []u8 = &.{},
-    static_functions: []Value = &.{},
+    module_envs: []?*ModuleEnv = &.{},
     global_table: ?*Table = null,
 
     pub fn init(allocator: std.mem.Allocator, global_count: usize) !Context {
-        return initProgram(allocator, global_count, 0, 0);
+        return initProgram(allocator, global_count, 0);
     }
 
-    pub fn initProgram(allocator: std.mem.Allocator, global_count: usize, module_count: usize, function_count: usize) !Context {
+    pub fn initProgram(allocator: std.mem.Allocator, global_count: usize, module_count: usize) !Context {
         const globals = try allocator.alloc(Value, global_count);
         errdefer allocator.free(globals);
         @memset(globals, .nil);
         const module_state = try allocator.alloc(u8, module_count);
         errdefer allocator.free(module_state);
         @memset(module_state, 0);
-        const static_functions = try allocator.alloc(Value, function_count);
-        errdefer allocator.free(static_functions);
-        @memset(static_functions, .nil);
-        return .{ .allocator = allocator, .globals = globals, .module_state = module_state, .static_functions = static_functions };
+        const module_envs = try allocator.alloc(?*ModuleEnv, module_count);
+        errdefer allocator.free(module_envs);
+        @memset(module_envs, null);
+        return .{ .allocator = allocator, .globals = globals, .module_state = module_state, .module_envs = module_envs };
     }
 
     pub fn deinit(self: *Context) void {
@@ -398,7 +398,7 @@ pub const Context = struct {
         }
         self.allocator.free(self.globals);
         if (self.module_state.len != 0) self.allocator.free(self.module_state);
-        if (self.static_functions.len != 0) self.allocator.free(self.static_functions);
+        if (self.module_envs.len != 0) self.allocator.free(self.module_envs);
     }
 
     pub fn getGlobal(self: *const Context, slot: u32) Value {
@@ -454,6 +454,22 @@ pub const Context = struct {
         self.depth += 1;
         defer self.depth -= 1;
         return self.invokeKnown(value.id, value.captures(), args);
+    }
+
+    pub fn registerModuleFunction(self: *Context, module_id: u32, value: Value) !void {
+        if (module_id >= self.module_envs.len) return error.BadModuleId;
+        if (value != .function) return error.FunctionExpected;
+        const env = value.function.env.modulePtr() orelse return;
+        if (self.module_envs[module_id]) |existing| {
+            if (existing != env) return error.ModuleEnvironmentMismatch;
+        } else {
+            self.module_envs[module_id] = env;
+        }
+    }
+
+    pub fn moduleCaptures(self: *const Context, module_id: u32) !Captures {
+        if (module_id >= self.module_envs.len) return error.BadModuleId;
+        return .{ .module = self.module_envs[module_id] orelse return error.UnregisteredModuleEnvironment };
     }
 
     pub fn ensureModule(self: *Context, module_id: u32) anyerror!void {
@@ -798,7 +814,7 @@ test "AOT constant templates preserve fresh table identity across blocks" {
 test "AOT module functions share one activation environment" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 0);
+    var ctx = try Context.initProgram(arena.allocator(), 0, 2);
     defer ctx.deinit();
     var regs: [3]Value = undefined;
     var cells: [3]?*Cell = undefined;
@@ -812,10 +828,20 @@ test "AOT module functions share one activation environment" {
     try std.testing.expect(first.function.env.modulePtr() == second.function.env.modulePtr());
     try std.testing.expect(first.function.env.closurePtr() == null);
     try std.testing.expect(!rawEqual(first, second));
-    const capture = try first.function.captures().cell(0, 1);
+    try ctx.registerModuleFunction(1, first);
+    try ctx.registerModuleFunction(1, second);
+    const registered = try ctx.moduleCaptures(1);
+    try std.testing.expect(registered.module == env);
+    const capture = try registered.cell(0, 1);
     try std.testing.expectEqual(@as(f64, 7), capture.value.number);
     frame.set(1, .{ .number = 9 });
     try std.testing.expectEqual(@as(f64, 9), capture.value.number);
+    var other_regs: [1]Value = undefined;
+    var other_cells: [1]?*Cell = undefined;
+    var other_frame = try Frame.init(&other_regs, &other_cells, &.{}, 0, false);
+    const other_env = try other_frame.ensureModuleEnv(&ctx);
+    const other = ctx.makeModuleFunction(6, other_env);
+    try std.testing.expectError(error.ModuleEnvironmentMismatch, ctx.registerModuleFunction(1, other));
     if (@sizeOf(usize) == 8) try std.testing.expectEqual(@as(usize, 24), @sizeOf(FunctionValue));
 }
 

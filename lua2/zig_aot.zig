@@ -518,9 +518,10 @@ fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
             }
         },
         .register_function => {
-            try print(out, a, "            if ({d} >= ctx.static_functions.len) return error.BadFunctionId; ctx.static_functions[{d}] = ", .{ inst.aux, inst.aux });
+            if (inst.aux >= p.function_modules.items.len) return error.BadFunctionReference;
+            try print(out, a, "            try ctx.registerModuleFunction({d}, ", .{p.function_modules.items[inst.aux]});
             try valueExpr(out, a, p, plan, inst.a);
-            try text(out, a, ";\n");
+            try text(out, a, ");\n");
         },
         .check_table_key => {
             try text(out, a, "            try rt.validateTableKey(");
@@ -713,10 +714,12 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
         .direct_call, .direct_call_vararg => {
             if (inst.a >= p.functions.items.len or p.function_modules.items.len != p.functions.items.len) return error.BadFunctionReference;
             const module_id = p.function_modules.items[inst.a];
+            const target = p.functions.items[inst.a] orelse return error.IncompleteProgram;
             try print(out, a, "            try ctx.ensureModule({d});\n", .{module_id});
-            try print(out, a, "            if ({d} >= ctx.static_functions.len or ctx.static_functions[{d}] != .function) return error.UnregisteredStaticFunction;\n", .{ inst.a, inst.a });
-            try print(out, a, "            const static_{d} = ctx.static_functions[{d}].function;\n", .{ pc, inst.a });
-            try print(out, a, "            const static_caps_{d} = static_{d}.captures();\n", .{ pc, pc });
+            if (target.upvalues.items.len == 0)
+                try print(out, a, "            const static_caps_{d}: rt.Captures = .{{ .direct = &.{{}} }};\n", .{pc})
+            else
+                try print(out, a, "            const static_caps_{d} = try ctx.moduleCaptures({d});\n", .{ pc, module_id });
             if (range == null or range.?.contains(inst.a))
                 try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc })
             else
@@ -937,7 +940,7 @@ fn emitRuntimeEntry(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
     try print(out, a, "pub const global_count: u32 = {d};\n", .{globals});
     try print(out, a, "pub const root_function: u32 = {d};\n\n", .{p.root_function});
     try text(out, a, "pub fn initContext(allocator: std.mem.Allocator) !rt.Context {\n" ++
-        "    var ctx = try rt.Context.initProgram(allocator, global_count, module_roots.len, function_table.len);\n" ++
+        "    var ctx = try rt.Context.initProgram(allocator, global_count, module_roots.len);\n" ++
         "    ctx.shapes = &shapes;\n" ++
         "    ctx.function_blocks = &function_blocks;\n" ++
         "    ctx.constant_blocks = &constant_blocks;\n" ++
@@ -1140,7 +1143,7 @@ pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u
     try print(&out, a, "pub const global_count: u32 = {d};\n", .{globals});
     try print(&out, a, "pub const root_function: u32 = {d};\n\n", .{p.root_function});
     try text(&out, a, "pub fn initContext(allocator: std.mem.Allocator) !rt.Context {\n");
-    try print(&out, a, "    var ctx = try rt.Context.initProgram(allocator, global_count, module_roots.len, {d});\n", .{p.functions.items.len});
+    try text(&out, a, "    var ctx = try rt.Context.initProgram(allocator, global_count, module_roots.len);\n");
     try text(
         &out,
         a,
@@ -1220,6 +1223,7 @@ test "captured module functions share one generated activation environment" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "try frame.ensureModuleEnv(ctx)") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "upvalues.cell(") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "var captures_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "static_functions") == null);
 }
 
 test "numeric bit constants are explicitly typed in native expressions" {
