@@ -8,12 +8,18 @@ const lua = @import("root.zig");
 const model = @import("module_model.zig");
 const exec = @import("vm_exec.zig");
 const simplify = @import("vm_ir_simplify.zig");
+const capture_link = @import("vm_capture_link.zig");
+const aot_hint = @import("vm_aot_hint.zig");
 
 pub const Stats = struct {
     direct_calls: u32 = 0,
     numeric_imports: u32 = 0,
     removed_lookup_insts: u32 = 0,
     registrations: u32 = 0,
+    guarded_calls: u32 = 0,
+    predicted_upvalues: u32 = 0,
+    predicted_module_upvalues: u32 = 0,
+    predicted_function_upvalues: u32 = 0,
 };
 
 fn factOf(analysis: *const facts_mod.Analysis, raw: ssa.ValueId) facts_mod.Fact {
@@ -213,6 +219,44 @@ fn insertRegistrations(allocator: std.mem.Allocator, program: *ir.Program, targe
     return inserted;
 }
 
+fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: *const symbols_mod.Index, stats: *Stats) !u32 {
+    var captures = try capture_link.build(allocator, program, symbols);
+    defer captures.deinit();
+    stats.predicted_upvalues = @intCast(captures.stats.known_upvalues);
+    stats.predicted_module_upvalues = @intCast(captures.stats.module_upvalues);
+    stats.predicted_function_upvalues = @intCast(captures.stats.function_upvalues);
+    var tagged: u32 = 0;
+    var function_id: u32 = 0;
+    while (function_id < program.functions.items.len) : (function_id += 1) {
+        const function = &(program.functions.items[function_id] orelse continue);
+        // This is prediction only: native code guards the actual runtime function
+        // identity and falls back to the original dynamic call on any mismatch.
+        var analysis = try facts_mod.buildFunctionWithUpvalues(allocator, program, symbols, function_id, true, captures.forFunction(program, function_id));
+        defer analysis.deinit();
+        const state = try allocator.alloc(ssa.ValueId, function.reg_count);
+        defer if (state.len != 0) allocator.free(state);
+        for (analysis.ssa_function.graph.blocks.items, 0..) |block, block_index| {
+            const entry = analysis.ssa_function.entry_states[block_index] orelse continue;
+            @memcpy(state, entry);
+            for (block.start..block.end) |pc_usize| {
+                const pc: u32 = @intCast(pc_usize);
+                const inst = &function.insts.items[pc];
+                if (inst.op == .call and inst.a < state.len) {
+                    switch (factOf(&analysis, state[inst.a])) {
+                        .function => |target| if (target < program.functions.items.len) {
+                            try aot_hint.set(inst, target);
+                            tagged += 1;
+                        },
+                        else => {},
+                    }
+                }
+                try ssa.applyWrites(&analysis.ssa_function, function, state, pc, null);
+            }
+        }
+    }
+    return tagged;
+}
+
 pub fn run(allocator: std.mem.Allocator, program: *ir.Program, symbols: *const symbols_mod.Index) !Stats {
     if (program.function_modules.items.len != program.functions.items.len) return error.NotLinkedProgram;
     const registerable = try registerableTargets(allocator, program, symbols);
@@ -231,6 +275,7 @@ pub fn run(allocator: std.mem.Allocator, program: *ir.Program, symbols: *const s
         stats.removed_lookup_insts += one.removed_lookup_insts;
     }
     stats.registrations = try insertRegistrations(allocator, program, used_targets);
+    stats.guarded_calls = try tagGuardedCalls(allocator, program, symbols, &stats);
     return stats;
 }
 
@@ -269,4 +314,31 @@ test "numeric link preserves captured module state" {
     defer exec.Vm.freeResults(out);
     try std.testing.expectEqual(@as(f64, 14), out[0].number);
     try std.testing.expectEqual(@as(f64, 19), out[1].number);
+}
+
+fn countGuardHints(program: *const ir.Program) u32 {
+    var count: u32 = 0;
+    for (program.functions.items) |maybe| if (maybe) |function| {
+        for (function.insts.items) |inst| {
+            if (aot_hint.target(inst) != null) count += 1;
+        }
+    };
+    return count;
+}
+
+test "guarded import calls survive whole-image require mutation" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:B", "local e={}; function e.add(x)return x+1 end; return e");
+    _ = try addSource(a, &image, &symbols, "Module:A", "local m=require('Module:B');local f=m.add;local function run(x)return f(x)end;return run");
+    _ = try addSource(a, &image, &symbols, "Module:Mutator", "require=function()return {}end;return {}");
+    try std.testing.expect(!facts_mod.requireBuiltinSafe(&image.program));
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), stats.direct_calls);
+    try std.testing.expectEqual(@as(u32, 0), stats.numeric_imports);
+    try std.testing.expect(stats.guarded_calls != 0);
+    try std.testing.expect(countGuardHints(&image.program) != 0);
 }

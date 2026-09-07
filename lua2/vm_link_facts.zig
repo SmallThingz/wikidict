@@ -118,6 +118,7 @@ fn instructionFact(
     state: []const ssa.ValueId,
     inst: ir.Inst,
     require_safe: bool,
+    upvalue_facts: []const Fact,
 ) Fact {
     return switch (inst.op) {
         .load_string => .{ .string = inst.aux },
@@ -134,6 +135,8 @@ fn instructionFact(
             break :blk .unknown;
         },
         .get_global_slot => if (require_safe and inst.aux == global_abi.id("require")) .require_builtin else .unknown,
+        .get_upvalue => if (inst.a < upvalue_facts.len) upvalue_facts[inst.a] else .unknown,
+        .move => regFact(analysis, state, inst.a),
         .closure, .load_function => .{ .function = inst.aux },
         .call, .call_vararg => callResultFact(analysis, function, state, inst),
         .get_index => blk: {
@@ -167,6 +170,7 @@ fn propagate(
     symbols: *const symbols_mod.Index,
     function: *const ir.Function,
     require_safe: bool,
+    upvalue_facts: []const Fact,
 ) !void {
     const state = try analysis.allocator.alloc(ssa.ValueId, function.reg_count);
     defer if (state.len != 0) analysis.allocator.free(state);
@@ -183,7 +187,7 @@ fn propagate(
             for (block.start..block.end) |pc_usize| {
                 const pc: u32 = @intCast(pc_usize);
                 const inst = function.insts.items[pc];
-                const fact = instructionFact(analysis, program, symbols, function, state, inst, require_safe);
+                const fact = instructionFact(analysis, program, symbols, function, state, inst, require_safe, upvalue_facts);
                 try ssa.applyWrites(&analysis.ssa_function, function, state, pc, null);
                 if (inst.dst < state.len and !analysis.ssa_function.captured[inst.dst]) {
                     changed = setFact(analysis, state[inst.dst], fact) or changed;
@@ -257,12 +261,13 @@ fn collectEdges(
     }
 }
 
-pub fn buildFunction(
+pub fn buildFunctionWithUpvalues(
     allocator: std.mem.Allocator,
     program: *const ir.Program,
     symbols: *const symbols_mod.Index,
     function_id: u32,
     require_safe: bool,
+    upvalue_facts: []const Fact,
 ) !Analysis {
     if (function_id >= program.functions.items.len) return error.BadFunctionId;
     const function = &(program.functions.items[function_id] orelse return error.IncompleteProgram);
@@ -277,9 +282,32 @@ pub fn buildFunction(
         .facts = facts,
     };
     errdefer analysis.deinit();
-    try propagate(&analysis, program, symbols, function, require_safe);
+    try propagate(&analysis, program, symbols, function, require_safe, upvalue_facts);
     try collectEdges(&analysis, program, symbols, function_id, function);
     return analysis;
+}
+
+pub fn buildFunction(
+    allocator: std.mem.Allocator,
+    program: *const ir.Program,
+    symbols: *const symbols_mod.Index,
+    function_id: u32,
+    require_safe: bool,
+) !Analysis {
+    return buildFunctionWithUpvalues(allocator, program, symbols, function_id, require_safe, &.{});
+}
+
+pub fn predictInstruction(
+    analysis: *const Analysis,
+    program: *const ir.Program,
+    symbols: *const symbols_mod.Index,
+    function: *const ir.Function,
+    state: []const ssa.ValueId,
+    inst: ir.Inst,
+    require_safe: bool,
+    upvalue_facts: []const Fact,
+) Fact {
+    return instructionFact(analysis, program, symbols, function, state, inst, require_safe, upvalue_facts);
 }
 
 fn addSource(
