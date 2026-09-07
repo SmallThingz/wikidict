@@ -450,6 +450,20 @@ pub const Context = struct {
         return .{ .allocator = allocator, .globals = globals, .module_state = module_state, .module_envs = module_envs, .module_value_slots = module_value_slots };
     }
 
+    pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
+        var child = try initProgram(allocator, self.globals.len, self.module_roots.len);
+        child.shapes = self.shapes;
+        child.function_blocks = self.function_blocks;
+        child.constant_blocks = self.constant_blocks;
+        child.constant_entry_blocks = self.constant_entry_blocks;
+        child.module_roots = self.module_roots;
+        child.module_lookup_ctx = self.module_lookup_ctx;
+        child.module_lookup = self.module_lookup;
+        child.module_name = self.module_name;
+        child.max_depth = self.max_depth;
+        return child;
+    }
+
     pub fn deinit(self: *Context) void {
         var it = self.string_intern.keyIterator();
         while (it.next()) |text| self.allocator.free(text.*);
@@ -583,10 +597,14 @@ pub const Context = struct {
         _ = try self.loadModule(module_id, null);
     }
 
+    pub fn resolveModule(self: *const Context, raw_name: []const u8) !u32 {
+        const lookup = self.module_lookup orelse return error.ModuleNotFound;
+        return lookup(self.module_lookup_ctx, raw_name) orelse error.ModuleNotFound;
+    }
+
     pub fn requireByName(self: *Context, raw_name: []const u8) anyerror!Value {
         if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
-        const lookup = self.module_lookup orelse return error.ModuleNotFound;
-        const module_id = lookup(self.module_lookup_ctx, raw_name) orelse return error.ModuleNotFound;
+        const module_id = try self.resolveModule(raw_name);
         const value = try self.loadModule(module_id, raw_name);
         if (self.package_loaded) |loaded| try loaded.rawSet(self.allocator, .{ .string = raw_name }, value);
         return value;
@@ -1143,4 +1161,27 @@ test "guarded call falls back to the actual function on an id mismatch" {
     const out = try ctx.callKnown(callable, 0, &.{.{ .number = 3 }});
     defer freeResults(out);
     try std.testing.expectEqual(@as(f64, 110), out[0].number);
+}
+
+test "forked AOT context shares program metadata but resets runtime state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var parent = try Context.initProgram(arena.allocator(), 2, 1);
+    defer parent.deinit();
+    const functions = [_]FunctionFn{ModuleRuntimeProbe.named};
+    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
+    const roots = [_]u32{0};
+    parent.function_blocks = &blocks;
+    parent.module_roots = &roots;
+    parent.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
+    try parent.setGlobal(1, .{ .number = 9 });
+    parent.module_state[0] = 2;
+
+    var child = try parent.forkProgram(arena.allocator());
+    defer child.deinit();
+    try std.testing.expect(child.function_blocks.ptr == parent.function_blocks.ptr);
+    try std.testing.expect(child.module_roots.ptr == parent.module_roots.ptr);
+    try std.testing.expect(child.getGlobal(1) == .nil);
+    try std.testing.expectEqual(@as(u8, 0), child.module_state[0]);
+    try std.testing.expectEqual(@as(u32, 0), try child.resolveModule("Module:A"));
 }
