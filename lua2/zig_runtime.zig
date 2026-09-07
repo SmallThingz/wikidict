@@ -60,8 +60,11 @@ pub const FunctionValue = struct {
     }
 };
 pub const FunctionFn = *const fn (*Context, Captures, []const Value) anyerror![]const Value;
-pub const NativeFn = *const fn (*Context, []const Value) anyerror![]const Value;
-pub const NativeFunction = struct { call: NativeFn };
+pub const NativeFn = *const fn (?*anyopaque, *Context, []const Value) anyerror![]const Value;
+pub const NativeFunction = struct {
+    ctx: ?*anyopaque = null,
+    call: NativeFn,
+};
 
 pub const Value = union(enum) {
     nil,
@@ -235,6 +238,37 @@ pub const Table = struct {
         self.append_index +%= 1;
     }
 
+    pub const Iterator = struct {
+        table: *Table,
+        hash: Map.Iterator,
+        slot: u32 = 0,
+        choice: u32 = 0,
+        key: Value = .nil,
+        pub const Entry = struct { key_ptr: *const Value, value_ptr: *Value };
+        pub fn next(self: *Iterator) ?Entry {
+            while (self.slot < self.table.slots.len) {
+                const index = self.slot;
+                self.slot += 1;
+                if (self.table.slots[index] == .nil) continue;
+                self.key = self.table.fieldKey(index) orelse continue;
+                return .{ .key_ptr = &self.key, .value_ptr = &self.table.slots[index] };
+            }
+            while (self.choice < self.table.choices.len) {
+                const index = self.choice;
+                self.choice += 1;
+                const cell = &self.table.choices[index];
+                if (cell.value == .nil) continue;
+                return .{ .key_ptr = &cell.key, .value_ptr = &cell.value };
+            }
+            if (self.hash.next()) |entry| return .{ .key_ptr = entry.key_ptr, .value_ptr = entry.value_ptr };
+            return null;
+        }
+    };
+
+    pub fn iterator(self: *Table) Iterator {
+        return .{ .table = self, .hash = self.map.iterator() };
+    }
+
     pub fn rawLen(self: *const Table) usize {
         var n: usize = 0;
         while (self.rawGet(.{ .number = @floatFromInt(n + 1) }) != null) n += 1;
@@ -264,6 +298,22 @@ pub fn toNumber(value: Value) ?f64 {
         .number => |v| v,
         .string => |v| std.fmt.parseFloat(f64, v) catch null,
         else => null,
+    };
+}
+
+pub fn numberToString(allocator: std.mem.Allocator, number: f64) ![]const u8 {
+    if (std.math.isNan(number)) return "nan";
+    if (std.math.isInf(number)) return if (number < 0) "-inf" else "inf";
+    if (@floor(number) == number and number >= @as(f64, @floatFromInt(std.math.minInt(i64))) and number <= @as(f64, @floatFromInt(std.math.maxInt(i64))))
+        return std.fmt.allocPrint(allocator, "{d}", .{@as(i64, @intFromFloat(number))});
+    return std.fmt.allocPrint(allocator, "{d}", .{number});
+}
+
+pub fn toConcatString(allocator: std.mem.Allocator, value: Value) ![]const u8 {
+    return switch (value) {
+        .string => |text| text,
+        .number => |number| numberToString(allocator, number),
+        else => error.ConcatType,
     };
 }
 
@@ -364,6 +414,7 @@ pub const Context = struct {
     module_roots: []const u32 = &.{},
     string_metatable: ?*Table = null,
     string_intern: std.StringHashMapUnmanaged([]const u8) = .empty,
+    last_error: Value = .nil,
     depth: usize = 0,
     max_depth: usize = 1000,
     next_identity: u64 = 1,
@@ -484,7 +535,7 @@ pub const Context = struct {
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
         return switch (callable) {
             .function => |value| self.callFunction(value, args),
-            .native => |value| value.call(self, args),
+            .native => |value| value.call(value.ctx, self, args),
             .table => blk: {
                 const method = self.metamethod(callable, "__call") orelse return error.NotCallable;
                 const all = try std.heap.smp_allocator.alloc(Value, args.len + 1);
@@ -496,6 +547,12 @@ pub const Context = struct {
             else => error.NotCallable,
         };
     }
+    pub fn newNative(self: *Context, host: ?*anyopaque, call: NativeFn) !Value {
+        const native = try self.allocator.create(NativeFunction);
+        native.* = .{ .ctx = host, .call = call };
+        return .{ .native = native };
+    }
+
     pub fn newTable(self: *Context) !*Table {
         const table = try self.allocator.create(Table);
         table.* = .{};
@@ -763,6 +820,29 @@ pub fn stringCompare(op: CompareOp, a: []const u8, b: []const u8) bool {
         .gt => order == .gt,
         .ge => order != .lt,
     };
+}
+
+const NativeHostProbe = struct {
+    value: f64,
+    fn call(raw: ?*anyopaque, ctx: *Context, args: []const Value) ![]const Value {
+        const host: *NativeHostProbe = @ptrCast(@alignCast(raw orelse return error.MissingHost));
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .number = host.value + @as(f64, @floatFromInt(args.len)) + ctx.getGlobal(1).number };
+        return out;
+    }
+};
+
+test "AOT native calls carry independent host context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 2);
+    defer ctx.deinit();
+    try ctx.setGlobal(1, .{ .number = 4 });
+    var host = NativeHostProbe{ .value = 7 };
+    const callable = try ctx.newNative(&host, NativeHostProbe.call);
+    const out = try ctx.callValue(callable, &.{ .nil, .nil });
+    defer freeResults(out);
+    try std.testing.expectEqual(@as(f64, 13), out[0].number);
 }
 
 test "AOT runtime globals are numeric slots without hash storage" {

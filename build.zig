@@ -502,6 +502,21 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const zig_runtime_test_mod = b.createModule(.{
+        .root_source_file = b.path("lua2/zig_runtime.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    const aot_stdlib_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("lua2/zig_stdlib.zig"),
+            .target = target,
+            .optimize = test_optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "zig_runtime", .module = zig_runtime_test_mod }},
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
     const blob_wasm_smoke = b.addObject(.{
         .name = "dict-blob-wasm-smoke",
         .root_module = b.createModule(.{
@@ -522,6 +537,7 @@ pub fn build(b: *std.Build) void {
     const run_verifier_tests = b.addRunArtifact(verifier_tests);
     const run_blob_query_tests = b.addRunArtifact(blob_query_tests);
     const run_lua2_tests = b.addRunArtifact(lua2_tests);
+    const run_aot_stdlib_tests = b.addRunArtifact(aot_stdlib_tests);
 
     // Running every test compile in parallel is enough to get the larger codegen-heavy
     // test binaries terminated under ReleaseFast on typical developer machines. Keep
@@ -535,9 +551,10 @@ pub fn build(b: *std.Build) void {
     verifier_tests.step.dependOn(&run_structure_tables_support_tests.step);
     blob_query_tests.step.dependOn(&run_verifier_tests.step);
     lua2_tests.step.dependOn(&run_blob_query_tests.step);
+    aot_stdlib_tests.step.dependOn(&run_lua2_tests.step);
 
     const test_step = b.step("test", "Run encoder, decoder, structure, Lua, and tooling tests");
-    blob_wasm_smoke.step.dependOn(&run_lua2_tests.step);
+    blob_wasm_smoke.step.dependOn(&run_aot_stdlib_tests.step);
     test_step.dependOn(&blob_wasm_smoke.step);
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "encoder", .module = encoder_mod } });
     addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}, b.args), &.{});

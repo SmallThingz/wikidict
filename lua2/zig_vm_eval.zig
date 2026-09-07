@@ -3,6 +3,7 @@ const lua = @import("root.zig");
 const ir = @import("vm_ir.zig");
 const opt = @import("vm_optimize.zig");
 const exec = @import("vm_exec.zig");
+const lua_stdlib = @import("lua_stdlib.zig");
 
 fn readAll(io: std.Io, a: std.mem.Allocator, path: []const u8) ![]u8 {
     var file = try std.Io.Dir.cwd().openFile(io, path, .{});
@@ -28,6 +29,7 @@ pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
     var vm = try exec.Vm.init(arena.allocator());
+    try lua_stdlib.install(&vm);
     const out = try vm.executeRoot(&program, &.{});
     defer exec.Vm.freeResults(out);
     for (out, 0..) |value, index| switch (value) {

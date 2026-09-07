@@ -286,9 +286,9 @@ fn emitConstants(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
 }
 fn globalCount(p: *const ir.Program) u32 {
     if (p.global_shape) |shape_id| {
-        if (shape_id < p.shapes.items.len) return p.shapes.items[shape_id].field_count;
+        if (shape_id < p.shapes.items.len) return @max(p.shapes.items[shape_id].field_count, global_abi.count);
     }
-    var count: u32 = 0;
+    var count: u32 = global_abi.count;
     for (p.functions.items) |maybe| if (maybe) |function| {
         for (function.insts.items) |inst| switch (inst.op) {
             .get_global_slot, .set_global_slot => count = @max(count, inst.aux + 1),
@@ -296,6 +296,15 @@ fn globalCount(p: *const ir.Program) u32 {
         };
     };
     return count;
+}
+
+fn emitNativeGlobalShape(out: *std.ArrayList(u8), a: A) !void {
+    try text(out, a, "const native_global_keys = [_][]const u8{");
+    for (global_abi.names, 0..) |name, index| {
+        if (index != 0) try text(out, a, ", ");
+        try stringLiteral(out, a, name);
+    }
+    try print(out, a, "}};\nconst native_global_shape = rt.Shape{{ .field_keys = &native_global_keys, .field_count = {d}, .open = false }};\n\n", .{global_abi.count});
 }
 
 fn emitShapes(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
@@ -318,6 +327,11 @@ fn emitShapes(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
 fn emitDeclarations(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
     _ = p;
     try text(out, a, "const std = @import(\"std\");\nconst rt = @import(\"zig_runtime\");\n\n");
+}
+
+fn emitRootDeclarations(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
+    try emitDeclarations(out, a, p);
+    try text(out, a, "const lua_stdlib = @import(\"zig_stdlib\");\n\n");
 }
 fn emitArgs(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, first: u32, count: u32, skip: usize) !void {
     if (@as(usize, first) + count > function.operands.items.len or skip > count) return error.BadOperandRange;
@@ -971,10 +985,10 @@ fn emitRuntimeEntry(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
             if (shape_id >= p.shapes.items.len) return error.BadGlobalLayout;
             try print(out, a, "    try rt.bindGlobalTable(&ctx, &shapes[{d}], {d});\n", .{ shape_id, env_slot });
         } else {
-            try print(out, a, "    try rt.bindGlobalTable(&ctx, null, {d});\n", .{env_slot});
+            try print(out, a, "    try rt.bindGlobalTable(&ctx, &native_global_shape, {d});\n", .{env_slot});
         }
     }
-    try text(out, a, "    return ctx;\n}\n\n");
+    try text(out, a, "    try lua_stdlib.install(&ctx);\n    return ctx;\n}\n\n");
     try print(out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {{\n    return f_{d}(ctx, .{{ .direct = &.{{}} }}, args);\n}}\n\n", .{p.root_function});
 }
 pub fn generate(a: A, p: *const ir.Program) !struct { source: []u8, stats: Stats } {
@@ -983,7 +997,8 @@ pub fn generate(a: A, p: *const ir.Program) !struct { source: []u8, stats: Stats
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     var stats = Stats{};
-    try emitDeclarations(&out, a, p);
+    try emitRootDeclarations(&out, a, p);
+    try emitNativeGlobalShape(&out, a);
     try emitShapes(&out, a, p);
     try emitConstants(&out, a, p);
     for (p.functions.items, 0..) |_, id| try emitFunction(&out, a, p, @intCast(id), &stats, null);
@@ -1016,6 +1031,11 @@ test "finalized IR emits native Zig without bytecode dispatch" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "while (true)") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "vm_codec") == null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "inst.op") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const lua_stdlib = @import(\"zig_stdlib\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "try lua_stdlib.install(&ctx)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const native_global_keys") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "&native_global_shape") != null);
+    try std.testing.expect(globalCount(&p) >= global_abi.count);
 }
 
 test "numeric hot loop emits native scalars without a Lua frame" {
@@ -1136,7 +1156,8 @@ pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u
     const entry_shards = try entryShardCount(p, config);
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
-    try emitDeclarations(&out, a, p);
+    try emitRootDeclarations(&out, a, p);
+    try emitNativeGlobalShape(&out, a);
     for (0..function_shards) |index|
         try print(&out, a, "const functions_{d:0>4} = @import(\"functions_{d:0>4}.zig\");\n", .{ index, index });
     for (0..constant_shards) |index|
@@ -1188,10 +1209,10 @@ pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u
             if (shape_id >= p.shapes.items.len) return error.BadGlobalLayout;
             try print(&out, a, "    try rt.bindGlobalTable(&ctx, &shapes[{d}], {d});\n", .{ shape_id, env_slot });
         } else {
-            try print(&out, a, "    try rt.bindGlobalTable(&ctx, null, {d});\n", .{env_slot});
+            try print(&out, a, "    try rt.bindGlobalTable(&ctx, &native_global_shape, {d});\n", .{env_slot});
         }
     }
-    try text(&out, a, "    return ctx;\n}\n\n");
+    try text(&out, a, "    try lua_stdlib.install(&ctx);\n    return ctx;\n}\n\n");
     try text(&out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {\n    return ctx.invokeKnown(root_function, .{ .direct = &.{} }, args);\n}\n");
     return finishSource(a, &out);
 }

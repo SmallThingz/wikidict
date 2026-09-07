@@ -41,4 +41,5 @@
 - Function-entry phis include the implicit entry edge. Inlined closure factories need distinct capture cells for every dynamic activation, including loop calls.
 - AOT module-singleton functions share one activation capture environment; do not duplicate capture slices per `load_function`. Direct linked calls recover captured state by numeric module ID; do not restore an O(function-count) static `Value` registry. Loop and factory closures still require fresh environments and identities.
 - Generated AOT Zig is whitespace-compacted after emission. Lua string bytes must stay escaped onto one Zig source line; do not make codegen semantics depend on indentation.
+- Native AOT runtime and stdlib must not import the VM/interpreter/bytecode codec. Core globals stay numeric slots; `_G` reflection uses fixed shape metadata, and host-bound natives carry only an opaque host pointer plus the AOT context.
 - Register-address operands (such as `detach_cell`) are not value reads. Keep their bounds, remapping and physical storage reservation in the shared opcode semantics.
