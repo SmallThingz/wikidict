@@ -1074,6 +1074,7 @@ pub const ShardConfig = struct {
     functions_per_shard: usize = 1024,
     constants_per_shard: usize = 131072,
     entries_per_shard: usize = 262144,
+    module_registry: bool = false,
 };
 
 fn shardCount(total: usize, per_shard: usize) !usize {
@@ -1157,6 +1158,7 @@ pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     try emitRootDeclarations(&out, a, p);
+    if (config.module_registry) try text(&out, a, "const module_registry = @import(\"module_registry.zig\");\n\n");
     try emitNativeGlobalShape(&out, a);
     for (0..function_shards) |index|
         try print(&out, a, "const functions_{d:0>4} = @import(\"functions_{d:0>4}.zig\");\n", .{ index, index });
@@ -1212,7 +1214,9 @@ pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u
             try print(&out, a, "    try rt.bindGlobalTable(&ctx, &native_global_shape, {d});\n", .{env_slot});
         }
     }
-    try text(&out, a, "    try lua_stdlib.install(&ctx);\n    return ctx;\n}\n\n");
+    try text(&out, a, "    try lua_stdlib.install(&ctx);\n");
+    if (config.module_registry) try text(&out, a, "    module_registry.registry.configure(&ctx);\n");
+    try text(&out, a, "    return ctx;\n}\n\n");
     try text(&out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {\n    return ctx.invokeKnown(root_function, .{ .direct = &.{} }, args);\n}\n");
     return finishSource(a, &out);
 }
@@ -1235,6 +1239,10 @@ test "sharded AOT splits code and data while preserving numeric cross-shard call
     try std.testing.expect(std.mem.indexOf(u8, root, "functions_0000.zig") != null);
     try std.testing.expect(std.mem.indexOf(u8, root, "constant_blocks") != null);
     try std.testing.expect(std.mem.indexOf(u8, root, "ctx.invokeKnown(root_function") != null);
+    const registry_root = try generateShardedRoot(allocator, &program, .{ .functions_per_shard = 1, .constants_per_shard = 2, .entries_per_shard = 1, .module_registry = true });
+    defer allocator.free(registry_root);
+    try std.testing.expect(std.mem.indexOf(u8, registry_root, "@import(\"module_registry.zig\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, registry_root, "module_registry.registry.configure(&ctx)") != null);
 
     var stats = Stats{};
     const first = try generateFunctionShard(allocator, &program, config, 0, &stats);

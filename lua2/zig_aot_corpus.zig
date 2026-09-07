@@ -11,6 +11,7 @@ const numeric_link = @import("vm_numeric_link.zig");
 const module_model = @import("module_model.zig");
 const aot = @import("zig_aot.zig");
 const aot_stats = @import("zig_aot_stats.zig");
+const module_registry_gen = @import("zig_module_registry_gen.zig");
 
 const ManifestRow = struct {
     page_id: u64,
@@ -68,6 +69,11 @@ pub fn main(init: std.process.Init) !void {
     var symbols = link_symbols.Index.init(std.heap.smp_allocator);
     defer symbols.deinit();
     var scratch = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    var module_names: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (module_names.items) |name| std.heap.smp_allocator.free(@constCast(name));
+        module_names.deinit(std.heap.smp_allocator);
+    }
     defer scratch.deinit();
 
     var modules: usize = 0;
@@ -92,7 +98,13 @@ pub fn main(init: std.process.Init) !void {
         _ = try cleanup.compactStrings(allocator, &program);
 
         const module_index = try image.appendModule(&program);
+        if (module_index != module_names.items.len) return error.ModuleRegistryMismatch;
         try symbols.addModule(row.title, &image, module_index, &model);
+        const title_copy = try std.heap.smp_allocator.dupe(u8, row.title);
+        module_names.append(std.heap.smp_allocator, title_copy) catch |err| {
+            std.heap.smp_allocator.free(title_copy);
+            return err;
+        };
         program.deinit();
         model.deinit();
         chunk.deinit();
@@ -117,7 +129,15 @@ pub fn main(init: std.process.Init) !void {
     var generated_stats = aot.Stats{};
     var generated_bytes: u64 = 0;
     if (sharded) {
-        const config = aot.ShardConfig{};
+        if (module_names.items.len != image.program.module_roots.items.len) return error.ModuleRegistryMismatch;
+        const registry_source = try module_registry_gen.generate(std.heap.smp_allocator, module_names.items);
+        defer std.heap.smp_allocator.free(registry_source);
+        const registry_path = try std.fmt.allocPrint(std.heap.smp_allocator, "{s}/module_registry.zig", .{args[3]});
+        defer std.heap.smp_allocator.free(registry_path);
+        try writeAll(init.io, registry_path, registry_source);
+        generated_bytes += registry_source.len;
+
+        const config = aot.ShardConfig{ .module_registry = true };
         const root = try aot.generateShardedRoot(std.heap.smp_allocator, &image.program, config);
         defer std.heap.smp_allocator.free(root);
         const root_path = try std.fmt.allocPrint(std.heap.smp_allocator, "{s}/root.zig", .{args[3]});
