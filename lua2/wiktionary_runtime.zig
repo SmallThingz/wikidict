@@ -814,7 +814,7 @@ pub const Runtime = struct {
             vm.last_error = switch (invoke_vm.last_error) {
                 .string => |text| .{ .string = try page_allocator.dupe(u8, text) },
                 .nil, .boolean, .number => invoke_vm.last_error,
-                .table, .closure, .native => .nil,
+                .table, .closure, .function, .native => .nil,
             };
             return err;
         };
@@ -997,7 +997,7 @@ pub const Runtime = struct {
         return switch (value) {
             .nil, .boolean, .number => value,
             .string => |text| .{ .string = try self.page_allocator.dupe(u8, text) },
-            .closure, .native => error.LoadDataUnsupportedValue,
+            .closure, .function, .native => error.LoadDataUnsupportedValue,
             .table => |source| blk: {
                 if (source.metatable != null) return error.LoadDataMetatable;
                 if (seen.get(source)) |existing| break :blk .{ .table = existing };
@@ -1683,7 +1683,7 @@ fn valueToWikitext(a: std.mem.Allocator, value: Value) ![]const u8 {
         .string => |text| text,
         .number => |number| try rt.numberToString(a, number),
         .boolean => |b| if (b) "true" else "false",
-        .table, .closure, .native => error.WikitextScalarExpected,
+        .table, .closure, .function, .native => error.WikitextScalarExpected,
     };
 }
 
@@ -2062,7 +2062,7 @@ fn dumpObjectCall(_: ?*anyopaque, _: *anyopaque, args: []const Value, a: std.mem
         .number => |n| try rt.numberToString(a, n),
         .string => |s| s,
         .table => "table",
-        .closure, .native => "function",
+        .closure, .function, .native => "function",
     };
     return one(a, .{ .string = text });
 }
@@ -3767,7 +3767,6 @@ test "native Scribunto trim and parameter key match module edge cases" {
     try std.testing.expect(delegated == .string and std.mem.eql(u8, delegated.string, "fallback"));
     try std.testing.expectEqual(@as(usize, 1), fallback_ctx.calls);
 }
-
 fn addDiagnosticTestModule(runtime: *Runtime, title: []const u8, source: []const u8) !void {
     const a = runtime.persistent_allocator;
     var chunk = try @import("root.zig").parse(a, source);

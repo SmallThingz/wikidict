@@ -32,3 +32,11 @@
 - Media acquisition is explicit and bounded. HTML uses verified local raster/audio bytes, embedded attribution/license data and no automatic network requests. Rebuild the single-file bundle after web changes.
 - Native `blob_storage` owns disposable `.dict-cache` indexes and raw/XZ record lifetimes, outside portable codecs and wire formats. Warm caches are source-bound/checksummed mappings with no copied title directory; full order validation happens when they are built. Title search must not decode payloads. Destroy presentations before their owned record buffers. Test cold/warm caches, replaced inputs, corruption, block crossings and concatenated XZ streams.
 - `dict serve` is a loopback-only read-only HTTP/1.1 app, not a public authenticated service. Keep fixed routes and search separate from serialized persistent VM expansion. The VM worker may retain runtime assets, but each request gets fresh page state; timeout/crash must kill and restart only that child, and server death must not orphan it. `dict export` emits one entry; export controls do not belong in live reading. Test real HTTP, browser navigation and executable replacement while a server runs.
+
+## Lua compiler invariants
+- Keep CFG/type/SSA optimization before `vm_ref_lower`; tagged literal references are final operands, never SSA register numbers.
+- Table-key exclusivity must hold for each allocation lifetime, not merely share one syntactic SSA definition across loop iterations.
+- Immutable constant/template deduplication must still create distinct mutable Lua objects on every materialization; entry pooling compares every logical sequence before replacement.
+- Numeric export linking remains experimental until export mutation/escape proofs and exact Wiktionary replay pass. Do not remove observable names or enable speculative direct calls to satisfy a size target.
+- Function-entry phis include the implicit entry edge. Inlined closure factories need distinct capture cells for every dynamic activation, including loop calls.
+- Register-address operands (such as `detach_cell`) are not value reads. Keep their bounds, remapping and physical storage reservation in the shared opcode semantics.

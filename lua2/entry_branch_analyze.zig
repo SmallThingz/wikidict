@@ -73,13 +73,11 @@ const Env = struct {
     }
 };
 
-
 fn mergeEnvInto(dst: *Env, src: *const Env) !void {
     var sit = src.map.iterator();
     while (sit.next()) |entry| {
         const gop = try dst.map.getOrPut(dst.allocator, entry.key_ptr.*);
-        if (gop.found_existing) gop.value_ptr.* = mergeValues(dst.allocator, gop.value_ptr.*, entry.value_ptr.*)
-        else gop.value_ptr.* = mergeValues(dst.allocator, nilValue(), entry.value_ptr.*);
+        if (gop.found_existing) gop.value_ptr.* = mergeValues(dst.allocator, gop.value_ptr.*, entry.value_ptr.*) else gop.value_ptr.* = mergeValues(dst.allocator, nilValue(), entry.value_ptr.*);
     }
     var dit = dst.map.iterator();
     while (dit.next()) |entry| {
@@ -114,7 +112,9 @@ const Evaluator = struct {
         try collectNestedWrites(self.allocator, f.body, &self.unstable_names);
         if (self.entry.page_id == 6884586) {
             std.debug.print("PALI_UNSTABLE passages={} frame={} count={d}", .{ self.unstable_names.contains("passages"), self.unstable_names.contains("frame"), self.unstable_names.count() });
-            var uit = self.unstable_names.iterator(); while (uit.next()) |ue| std.debug.print(" {s}", .{ue.key_ptr.*}); std.debug.print("\n", .{});
+            var uit = self.unstable_names.iterator();
+            while (uit.next()) |ue| std.debug.print(" {s}", .{ue.key_ptr.*});
+            std.debug.print("\n", .{});
         }
         var env = try self.module_env.clone();
         if (f.params.len != 0) {
@@ -172,7 +172,10 @@ const Evaluator = struct {
                 };
                 break :blk .continues;
             },
-            .call => |s| blk: { _ = try self.eval(s.expr, env); break :blk .continues; },
+            .call => |s| blk: {
+                _ = try self.eval(s.expr, env);
+                break :blk .continues;
+            },
             .do_block => |s| try self.walkBlock(s.body, env, allow_proof),
             .if_stmt => |s| try self.walkIf(s, env, allow_proof),
             .while_loop => |s| blk: {
@@ -203,12 +206,22 @@ const Evaluator = struct {
                 try self.invalidateAssigned(s.body, env);
                 break :blk .continues;
             },
-            .function_assign => |s| blk: { switch (s.target) { .name => |name| try env.put(name, .{ .function_ref = s.function }), .index => {}, }
-                break :blk .continues; },
-            .local_function => |s| blk: { try self.declareLocal(env, s.name, .{ .function_ref = s.function }, locals, olds); break :blk .continues; },
+            .function_assign => |s| blk: {
+                switch (s.target) {
+                    .name => |name| try env.put(name, .{ .function_ref = s.function }),
+                    .index => {},
+                }
+                break :blk .continues;
+            },
+            .local_function => |s| blk: {
+                try self.declareLocal(env, s.name, .{ .function_ref = s.function }, locals, olds);
+                break :blk .continues;
+            },
             .return_stmt => |s| blk: {
                 const values = if (s.values.len == 0) blk2: {
-                    const one = try self.allocator.alloc(Value, 1); one[0] = nilValue(); break :blk2 one;
+                    const one = try self.allocator.alloc(Value, 1);
+                    one[0] = nilValue();
+                    break :blk2 one;
                 } else try self.evalValueList(s.values, null, env);
                 self.return_values = if (self.return_values) |old| try mergeValueLists(self.allocator, old, values) else values;
                 break :blk .terminates;
@@ -268,7 +281,10 @@ const Evaluator = struct {
 
     fn invalidateAssigned(self: *Evaluator, body: lua.Block, env: *Env) anyerror!void {
         for (body) |stmt| switch (stmt.*) {
-            .assign => |s| for (s.targets) |target| switch (target) { .name => |name| if (env.map.contains(name)) try env.put(name, .unknown), .index => {} },
+            .assign => |s| for (s.targets) |target| switch (target) {
+                .name => |name| if (env.map.contains(name)) try env.put(name, .unknown),
+                .index => {},
+            },
             .do_block => |s| try self.invalidateAssigned(s.body, env),
             .if_stmt => |s| {
                 for (s.branches) |b| try self.invalidateAssigned(b.body, env);
@@ -278,7 +294,10 @@ const Evaluator = struct {
             .repeat_loop => |s| try self.invalidateAssigned(s.body, env),
             .numeric_for => |s| try self.invalidateAssigned(s.body, env),
             .generic_for => |s| try self.invalidateAssigned(s.body, env),
-            .function_assign => |s| switch (s.target) { .name => |name| if (env.map.contains(name)) try env.put(name, .unknown), .index => {} },
+            .function_assign => |s| switch (s.target) {
+                .name => |name| if (env.map.contains(name)) try env.put(name, .unknown),
+                .index => {},
+            },
             else => {},
         };
     }
@@ -290,7 +309,11 @@ const Evaluator = struct {
 
     fn reportBranchResult(self: *Evaluator, cond: *const lua.Expr, stmt_start: u32, result: Truth, kind: []const u8) !void {
         self.stats.sites += 1;
-        switch (result) { .yes => self.stats.yes += 1, .no => self.stats.no += 1, .maybe => self.stats.maybe += 1 }
+        switch (result) {
+            .yes => self.stats.yes += 1,
+            .no => self.stats.no += 1,
+            .maybe => self.stats.maybe += 1,
+        }
         if (result == .maybe) return;
         const span = cond.span();
         try self.writer.print("B\t{d}\t{d}\t{d}\t{d}\t{s}\t{s}\t", .{ self.entry.page_id, self.current_fn_start, stmt_start, span.start, kind, if (result == .yes) "true" else "false" });
@@ -323,9 +346,10 @@ const Evaluator = struct {
         const object = try self.eval(object_expr, env);
         const key = try self.eval(key_expr, env);
         if (self.entry.page_id == 6884586) {
-            const os = object_expr.span(); const ks = key_expr.span();
-            const ot = std.mem.trim(u8,self.source[os.start..os.end]," \t\r\n");
-            if (std.mem.indexOf(u8, ot, "frame") != null) std.debug.print("PALI_INDEX object={s} tag={s} key={s} keytag={s}\n", .{ot,@tagName(object),std.mem.trim(u8,self.source[ks.start..ks.end]," \t\r\n"),@tagName(key)});
+            const os = object_expr.span();
+            const ks = key_expr.span();
+            const ot = std.mem.trim(u8, self.source[os.start..os.end], " \t\r\n");
+            if (std.mem.indexOf(u8, ot, "frame") != null) std.debug.print("PALI_INDEX object={s} tag={s} key={s} keytag={s}\n", .{ ot, @tagName(object), std.mem.trim(u8, self.source[ks.start..ks.end], " \t\r\n"), @tagName(key) });
         }
         return switch (object) {
             .frame => |frame| blk: {
@@ -367,15 +391,14 @@ const Evaluator = struct {
         const map = if (which == .current) &self.entry.current else &self.entry.parent;
         const dynamic_keys = if (which == .current) self.entry.current_dynamic_keys else self.entry.parent_dynamic_keys;
         const domain = map.get(key) orelse {
-            if (self.entry.page_id == 6884586) std.debug.print("PALI_LOOKUP miss which={s} key={s} dyn={} count={d}\n", .{@tagName(which),key,dynamic_keys,map.count()});
+            if (self.entry.page_id == 6884586) std.debug.print("PALI_LOOKUP miss which={s} key={s} dyn={} count={d}\n", .{ @tagName(which), key, dynamic_keys, map.count() });
             return if (dynamic_keys) .unknown else nilValue();
         };
-        if (self.entry.page_id == 6884586 and std.mem.eql(u8,key,"passages")) std.debug.print("PALI_LOOKUP hit top={} missing={} vals={d}\n", .{domain.top,domain.missing,domain.values.items.len});
+        if (self.entry.page_id == 6884586 and std.mem.eql(u8, key, "passages")) std.debug.print("PALI_LOOKUP hit top={} missing={} vals={d}\n", .{ domain.top, domain.missing, domain.values.items.len });
         const strings = self.allocator.alloc([]const u8, domain.values.items.len) catch return .unknown;
         @memcpy(strings, domain.values.items);
         return .{ .scalar = .{ .any_string = domain.top, .may_nil = domain.missing, .strings = strings } };
     }
-
 
     fn evalTable(self: *Evaluator, fields: []const lua.TableField, env: *const Env) anyerror!Value {
         const table = try self.allocator.create(AbsTable);
@@ -432,7 +455,6 @@ const Evaluator = struct {
         if (std.mem.eql(u8, name, "tostring") and args.len != 0) return tostringValue(self.allocator, try self.eval(args[0], env));
         return .unknown;
     }
-
 
     fn evalValueList(self: *Evaluator, exprs: []const *lua.Expr, desired: ?usize, env: *const Env) anyerror![]const Value {
         var out: std.ArrayList(Value) = .empty;
@@ -491,7 +513,9 @@ const Evaluator = struct {
         }
         _ = try self.walkBlock(f.body, &child, true);
         if (self.return_values) |values| return values;
-        const one = try self.allocator.alloc(Value, 1); one[0] = nilValue(); return one;
+        const one = try self.allocator.alloc(Value, 1);
+        one[0] = nilValue();
+        return one;
     }
 
     fn reportDependency(self: *Evaluator, span: lua.Span, kind: []const u8, value: Value) !void {
@@ -537,7 +561,11 @@ const Evaluator = struct {
     fn evalUnary(self: *Evaluator, op: lua.UnaryOp, operand: *const lua.Expr, env: *const Env) !Value {
         const v = try self.eval(operand, env);
         return switch (op) {
-            .not_ => switch (truth(v)) { .yes => falseValue(), .no => trueValue(), .maybe => boolValue() },
+            .not_ => switch (truth(v)) {
+                .yes => falseValue(),
+                .no => trueValue(),
+                .maybe => boolValue(),
+            },
             else => .unknown,
         };
     }
@@ -550,23 +578,32 @@ const Evaluator = struct {
             .ne => boolFromTruth(invert(compareEq(lhs, rhs))),
             .concat => blk: {
                 if (self.entry.page_id == 6884586) {
-                    const ls = lhs_expr.span(); const rs = rhs_expr.span();
+                    const ls = lhs_expr.span();
+                    const rs = rhs_expr.span();
                     std.debug.print("PALI_CONCAT lhs={s} tag={s} rhs={s} tag={s}\n", .{ std.mem.trim(u8, self.source[ls.start..ls.end], " \t\r\n"), @tagName(lhs), std.mem.trim(u8, self.source[rs.start..rs.end], " \t\r\n"), @tagName(rhs) });
-                    if (rhs == .scalar) std.debug.print(" PALI_R any={} nil={} strings={d} pats={d}\n", .{rhs.scalar.any_string,rhs.scalar.may_nil,rhs.scalar.strings.len,rhs.scalar.patterns.len});
+                    if (rhs == .scalar) std.debug.print(" PALI_R any={} nil={} strings={d} pats={d}\n", .{ rhs.scalar.any_string, rhs.scalar.may_nil, rhs.scalar.strings.len, rhs.scalar.patterns.len });
                 }
                 break :blk concatValue(self.allocator, lhs, rhs);
             },
-            .and_ => switch (truth(lhs)) { .yes => rhs, .no => lhs, .maybe => mergeValues(self.allocator, falsyPart(lhs), rhs) },
+            .and_ => switch (truth(lhs)) {
+                .yes => rhs,
+                .no => lhs,
+                .maybe => mergeValues(self.allocator, falsyPart(lhs), rhs),
+            },
             .or_ => blk: {
                 if (self.entry.page_id == 6884586) {
                     const bs = lhs_expr.span();
                     const text = std.mem.trim(u8, self.source[bs.start..bs.end], " \t\r\n");
                     if (std.mem.indexOf(u8, text, "passages") != null) {
-                        std.debug.print("PALI_OR lhs={s} tag={s} truth={s} rhs_tag={s}\n", .{text,@tagName(lhs),@tagName(truth(lhs)),@tagName(rhs)});
-                        if (lhs == .scalar) std.debug.print(" PALI_L any={} nil={} str={d} pat={d}\n", .{lhs.scalar.any_string,lhs.scalar.may_nil,lhs.scalar.strings.len,lhs.scalar.patterns.len});
+                        std.debug.print("PALI_OR lhs={s} tag={s} truth={s} rhs_tag={s}\n", .{ text, @tagName(lhs), @tagName(truth(lhs)), @tagName(rhs) });
+                        if (lhs == .scalar) std.debug.print(" PALI_L any={} nil={} str={d} pat={d}\n", .{ lhs.scalar.any_string, lhs.scalar.may_nil, lhs.scalar.strings.len, lhs.scalar.patterns.len });
                     }
                 }
-                break :blk switch (truth(lhs)) { .yes => lhs, .no => rhs, .maybe => mergeValues(self.allocator, truthyPart(lhs), rhs) };
+                break :blk switch (truth(lhs)) {
+                    .yes => lhs,
+                    .no => rhs,
+                    .maybe => mergeValues(self.allocator, truthyPart(lhs), rhs),
+                };
             },
             .lt, .le, .gt, .ge => compareNumbers(op, lhs, rhs),
             else => .unknown,
@@ -622,7 +659,10 @@ fn collectNestedWritesStmt(a: std.mem.Allocator, stmt: *const lua.Stmt, out: *st
             for (s.body) |child| try collectNestedWritesStmt(a, child, out, in_nested);
         },
         .function_assign => |s| {
-            if (in_nested) switch (s.target) { .name => |name| try out.put(a, name, {}), .index => {} };
+            if (in_nested) switch (s.target) {
+                .name => |name| try out.put(a, name, {}),
+                .index => {},
+            };
             try collectNestedWritesExpr(a, s.function, out, true);
         },
         .local_function => |s| {
@@ -666,13 +706,35 @@ fn collectNestedWritesExpr(a: std.mem.Allocator, expr: *const lua.Expr, out: *st
     }
 }
 
-fn nilValue() Value { return .{ .scalar = .{ .may_nil = true } }; }
-fn trueValue() Value { return .{ .scalar = .{ .may_true = true } }; }
-fn falseValue() Value { return .{ .scalar = .{ .may_false = true } }; }
-fn boolValue() Value { return .{ .scalar = .{ .may_false = true, .may_true = true } }; }
-fn boolFromTruth(t: Truth) Value { return switch (t) { .yes => trueValue(), .no => falseValue(), .maybe => boolValue() }; }
-fn numberValue(a: std.mem.Allocator, n: f64) Value { const out = a.alloc(f64, 1) catch return .unknown; out[0] = n; return .{ .scalar = .{ .numbers = out } }; }
-fn stringValueScalar(a: std.mem.Allocator, s: []const u8) Value { const out = a.alloc([]const u8, 1) catch return .unknown; out[0] = s; return .{ .scalar = .{ .strings = out } }; }
+fn nilValue() Value {
+    return .{ .scalar = .{ .may_nil = true } };
+}
+fn trueValue() Value {
+    return .{ .scalar = .{ .may_true = true } };
+}
+fn falseValue() Value {
+    return .{ .scalar = .{ .may_false = true } };
+}
+fn boolValue() Value {
+    return .{ .scalar = .{ .may_false = true, .may_true = true } };
+}
+fn boolFromTruth(t: Truth) Value {
+    return switch (t) {
+        .yes => trueValue(),
+        .no => falseValue(),
+        .maybe => boolValue(),
+    };
+}
+fn numberValue(a: std.mem.Allocator, n: f64) Value {
+    const out = a.alloc(f64, 1) catch return .unknown;
+    out[0] = n;
+    return .{ .scalar = .{ .numbers = out } };
+}
+fn stringValueScalar(a: std.mem.Allocator, s: []const u8) Value {
+    const out = a.alloc([]const u8, 1) catch return .unknown;
+    out[0] = s;
+    return .{ .scalar = .{ .strings = out } };
+}
 
 fn truth(v: Value) Truth {
     if (v == .unknown or v == .frame or v == .args) return .maybe;
@@ -686,9 +748,19 @@ fn truth(v: Value) Truth {
     return .maybe;
 }
 
-fn invert(t: Truth) Truth { return switch (t) { .yes => .no, .no => .yes, .maybe => .maybe }; }
-fn singletonString(v: Value) ?[]const u8 { return if (v == .scalar and !v.scalar.unknown and !v.scalar.any_string and !v.scalar.may_nil and !v.scalar.may_false and !v.scalar.may_true and v.scalar.numbers.len == 0 and v.scalar.patterns.len == 0 and v.scalar.strings.len == 1) v.scalar.strings[0] else null; }
-fn singletonNumber(v: Value) ?f64 { return if (v == .scalar and !v.scalar.unknown and !v.scalar.any_string and !v.scalar.may_nil and !v.scalar.may_false and !v.scalar.may_true and v.scalar.strings.len == 0 and v.scalar.patterns.len == 0 and v.scalar.numbers.len == 1) v.scalar.numbers[0] else null; }
+fn invert(t: Truth) Truth {
+    return switch (t) {
+        .yes => .no,
+        .no => .yes,
+        .maybe => .maybe,
+    };
+}
+fn singletonString(v: Value) ?[]const u8 {
+    return if (v == .scalar and !v.scalar.unknown and !v.scalar.any_string and !v.scalar.may_nil and !v.scalar.may_false and !v.scalar.may_true and v.scalar.numbers.len == 0 and v.scalar.patterns.len == 0 and v.scalar.strings.len == 1) v.scalar.strings[0] else null;
+}
+fn singletonNumber(v: Value) ?f64 {
+    return if (v == .scalar and !v.scalar.unknown and !v.scalar.any_string and !v.scalar.may_nil and !v.scalar.may_false and !v.scalar.may_true and v.scalar.strings.len == 0 and v.scalar.patterns.len == 0 and v.scalar.numbers.len == 1) v.scalar.numbers[0] else null;
+}
 
 fn keyText(a: std.mem.Allocator, v: Value) ?[]const u8 {
     if (singletonString(v)) |s| return s;
@@ -726,7 +798,8 @@ fn typeMask(s: Scalar) u8 {
 
 fn compareEq(a: Value, b: Value) Truth {
     if (a != .scalar or b != .scalar) return .maybe;
-    const x = a.scalar; const y = b.scalar;
+    const x = a.scalar;
+    const y = b.scalar;
     if (x.unknown or y.unknown) return .maybe;
     if ((typeMask(x) & typeMask(y)) == 0) return .no;
     if (singletonString(a)) |xs| if (singletonString(b)) |ys| return if (std.mem.eql(u8, xs, ys)) .yes else .no;
@@ -736,7 +809,10 @@ fn compareEq(a: Value, b: Value) Truth {
     if (x.may_false and !x.may_true and typeMask(x) == 2 and y.may_false and !y.may_true and typeMask(y) == 2) return .yes;
     if (!x.any_string and !y.any_string and typeMask(x) == 4 and typeMask(y) == 4) {
         var overlap = false;
-        for (x.strings) |xs| for (y.strings) |ys| if (std.mem.eql(u8, xs, ys)) { overlap = true; break; };
+        for (x.strings) |xs| for (y.strings) |ys| if (std.mem.eql(u8, xs, ys)) {
+            overlap = true;
+            break;
+        };
         if (!overlap) return .no;
     }
     return .maybe;
@@ -745,7 +821,13 @@ fn compareEq(a: Value, b: Value) Truth {
 fn compareNumbers(op: lua.BinaryOp, a: Value, b: Value) Value {
     const x = singletonNumber(a) orelse return boolValue();
     const y = singletonNumber(b) orelse return boolValue();
-    const result = switch (op) { .lt => x < y, .le => x <= y, .gt => x > y, .ge => x >= y, else => unreachable };
+    const result = switch (op) {
+        .lt => x < y,
+        .le => x <= y,
+        .gt => x > y,
+        .ge => x >= y,
+        else => unreachable,
+    };
     return if (result) trueValue() else falseValue();
 }
 
@@ -813,7 +895,8 @@ fn mergeValues(a: std.mem.Allocator, lhs: Value, rhs: Value) Value {
     if (lhs == .module_ref and rhs == .module_ref) return if (std.mem.eql(u8, lhs.module_ref, rhs.module_ref)) lhs else .unknown;
     if (lhs == .external_function and rhs == .external_function) return if (std.mem.eql(u8, lhs.external_function.module, rhs.external_function.module) and std.mem.eql(u8, lhs.external_function.name, rhs.external_function.name)) lhs else .unknown;
     if (lhs != .scalar or rhs != .scalar) return .unknown;
-    const l = lhs.scalar; const r = rhs.scalar;
+    const l = lhs.scalar;
+    const r = rhs.scalar;
     if (l.unknown or r.unknown) return .unknown;
     var strings: std.ArrayList([]const u8) = .empty;
     var patterns: std.ArrayList([]const u8) = .empty;
@@ -851,7 +934,10 @@ fn tonumberValue(a: std.mem.Allocator, v: Value) Value {
     var nums: std.ArrayList(f64) = .empty;
     var may_nil = false;
     for (s.strings) |text| {
-        const n = std.fmt.parseFloat(f64, std.mem.trim(u8, text, " \t\r\n")) catch { may_nil = true; continue; };
+        const n = std.fmt.parseFloat(f64, std.mem.trim(u8, text, " \t\r\n")) catch {
+            may_nil = true;
+            continue;
+        };
         nums.append(a, n) catch return .unknown;
     }
     return .{ .scalar = .{ .may_nil = may_nil, .numbers = nums.toOwnedSlice(a) catch return .unknown } };
@@ -877,16 +963,18 @@ fn substringValue(a: std.mem.Allocator, s: Scalar, start_num: f64, end_num: ?f64
         const len: isize = @intCast(text.len);
         var lo = if (start_i > 0) start_i - 1 else len + start_i;
         var hi = if (end_i) |e| (if (e > 0) e else len + e + 1) else len;
-        lo = @max(0, @min(lo, len)); hi = @max(lo, @min(hi, len));
+        lo = @max(0, @min(lo, len));
+        hi = @max(lo, @min(hi, len));
         const piece = text[@intCast(lo)..@intCast(hi)];
         var exists = false;
-        for (out.items) |old| if (std.mem.eql(u8, old, piece)) { exists = true; break; };
+        for (out.items) |old| if (std.mem.eql(u8, old, piece)) {
+            exists = true;
+            break;
+        };
         if (!exists) out.append(a, piece) catch return .unknown;
     }
     return .{ .scalar = .{ .strings = out.toOwnedSlice(a) catch return .unknown } };
 }
-
-
 
 fn addUniqueString(a: std.mem.Allocator, list: *std.ArrayList([]const u8), value: []const u8) !void {
     for (list.items) |old| if (std.mem.eql(u8, old, value)) return;
@@ -896,22 +984,40 @@ fn addUniqueString(a: std.mem.Allocator, list: *std.ArrayList([]const u8), value
 
 fn usefulPattern(pattern: []const u8) bool {
     var literals: usize = 0;
-    for (pattern) |c| if (c != '*') { literals += 1; };
+    for (pattern) |c| if (c != '*') {
+        literals += 1;
+    };
     return literals >= 8 and std.mem.indexOfScalar(u8, pattern, '*') != null;
 }
 
 fn wildcardMatch(pattern: []const u8, text: []const u8) bool {
-    var pi: usize = 0; var ti: usize = 0; var star: ?usize = null; var retry: usize = 0;
+    var pi: usize = 0;
+    var ti: usize = 0;
+    var star: ?usize = null;
+    var retry: usize = 0;
     while (ti < text.len) {
-        if (pi < pattern.len and pattern[pi] == '*') { star = pi; pi += 1; retry = ti; continue; }
-        if (pi < pattern.len and pattern[pi] == text[ti]) { pi += 1; ti += 1; continue; }
-        if (star) |sp| { retry += 1; ti = retry; pi = sp + 1; continue; }
+        if (pi < pattern.len and pattern[pi] == '*') {
+            star = pi;
+            pi += 1;
+            retry = ti;
+            continue;
+        }
+        if (pi < pattern.len and pattern[pi] == text[ti]) {
+            pi += 1;
+            ti += 1;
+            continue;
+        }
+        if (star) |sp| {
+            retry += 1;
+            ti = retry;
+            pi = sp + 1;
+            continue;
+        }
         return false;
     }
     while (pi < pattern.len and pattern[pi] == '*') pi += 1;
     return pi == pattern.len;
 }
-
 
 fn dependencyPatternValue(a: std.mem.Allocator, expr: *const lua.Expr) Value {
     const pattern = dependencyPatternAlloc(a, expr) orelse return .unknown;
@@ -957,7 +1063,8 @@ fn exprPath(expr: *const lua.Expr) ?[]const u8 {
         .paren => |pval| exprPath(pval.expr),
         .index => |idx| blk: {
             if (idx.object.* == .name and idx.key.* == .string) {
-                const base = idx.object.name.value; const key = idx.key.string.value;
+                const base = idx.object.name.value;
+                const key = idx.key.string.value;
                 if (std.mem.eql(u8, base, "mw") and std.mem.eql(u8, key, "text")) break :blk "mw.text";
                 if (std.mem.eql(u8, base, "mw") and std.mem.eql(u8, key, "loadData")) break :blk "mw.loadData";
             }
@@ -966,7 +1073,6 @@ fn exprPath(expr: *const lua.Expr) ?[]const u8 {
         else => null,
     };
 }
-
 
 fn evalModuleInit(a: std.mem.Allocator, expr: *const lua.Expr, env: *const Env) anyerror!Value {
     return switch (expr.*) {
@@ -987,7 +1093,8 @@ fn evalModuleInit(a: std.mem.Allocator, expr: *const lua.Expr, env: *const Env) 
                     .{ .builtin = .parameters_process }
                 else if (std.mem.eql(u8, module, "Module:languages") and std.mem.eql(u8, key, "getByCode"))
                     .{ .builtin = .languages_get_by_code }
-                else .{ .external_function = .{ .module = module, .name = key } },
+                else
+                    .{ .external_function = .{ .module = module, .name = key } },
                 else => .unknown,
             };
         },
@@ -1001,18 +1108,25 @@ fn evalModuleInit(a: std.mem.Allocator, expr: *const lua.Expr, env: *const Env) 
             .concat => concatValue(a, try evalModuleInit(a, b.lhs, env), try evalModuleInit(a, b.rhs, env)),
             .or_ => blk: {
                 const lhs = try evalModuleInit(a, b.lhs, env);
-                break :blk switch (truth(lhs)) { .yes => lhs, .no => try evalModuleInit(a, b.rhs, env), .maybe => mergeValues(a, truthyPart(lhs), try evalModuleInit(a, b.rhs, env)) };
+                break :blk switch (truth(lhs)) {
+                    .yes => lhs,
+                    .no => try evalModuleInit(a, b.rhs, env),
+                    .maybe => mergeValues(a, truthyPart(lhs), try evalModuleInit(a, b.rhs, env)),
+                };
             },
             .and_ => blk: {
                 const lhs = try evalModuleInit(a, b.lhs, env);
-                break :blk switch (truth(lhs)) { .yes => try evalModuleInit(a, b.rhs, env), .no => lhs, .maybe => mergeValues(a, falsyPart(lhs), try evalModuleInit(a, b.rhs, env)) };
+                break :blk switch (truth(lhs)) {
+                    .yes => try evalModuleInit(a, b.rhs, env),
+                    .no => lhs,
+                    .maybe => mergeValues(a, falsyPart(lhs), try evalModuleInit(a, b.rhs, env)),
+                };
             },
             else => .unknown,
         },
         else => .unknown,
     };
 }
-
 
 fn evalModuleTable(a: std.mem.Allocator, fields: []const lua.TableField, env: *const Env) anyerror!Value {
     const table = try a.create(AbsTable);
@@ -1035,12 +1149,21 @@ fn evalModuleTable(a: std.mem.Allocator, fields: []const lua.TableField, env: *c
 
 fn invalidateModuleWrites(block: lua.Block, env: *Env) anyerror!void {
     for (block) |stmt| switch (stmt.*) {
-        .assign => |v| for (v.targets) |target| switch (target) { .name => |name| if (env.map.contains(name)) try env.put(name, .unknown), .index => {} },
-        .function_assign => |v| switch (v.target) { .name => |name| if (env.map.contains(name)) try env.put(name, .unknown), .index => {} },
+        .assign => |v| for (v.targets) |target| switch (target) {
+            .name => |name| if (env.map.contains(name)) try env.put(name, .unknown),
+            .index => {},
+        },
+        .function_assign => |v| switch (v.target) {
+            .name => |name| if (env.map.contains(name)) try env.put(name, .unknown),
+            .index => {},
+        },
         .do_block => |v| try invalidateModuleWrites(v.body, env),
         .while_loop => |v| try invalidateModuleWrites(v.body, env),
         .repeat_loop => |v| try invalidateModuleWrites(v.body, env),
-        .if_stmt => |v| { for (v.branches) |b| try invalidateModuleWrites(b.body, env); if (v.else_body) |b| try invalidateModuleWrites(b, env); },
+        .if_stmt => |v| {
+            for (v.branches) |b| try invalidateModuleWrites(b.body, env);
+            if (v.else_body) |b| try invalidateModuleWrites(b, env);
+        },
         .numeric_for => |v| try invalidateModuleWrites(v.body, env),
         .generic_for => |v| try invalidateModuleWrites(v.body, env),
         else => {},
@@ -1058,7 +1181,10 @@ fn buildModuleEnv(a: std.mem.Allocator, body: lua.Block) anyerror!Env {
         .assign => |v| {
             const values = try a.alloc(Value, v.targets.len);
             for (v.targets, 0..) |_, i| values[i] = if (i < v.values.len) try evalModuleInit(a, v.values[i], &env) else nilValue();
-            for (v.targets, 0..) |target, i| switch (target) { .name => |name| try env.put(name, values[i]), .index => {} };
+            for (v.targets, 0..) |target, i| switch (target) {
+                .name => |name| try env.put(name, values[i]),
+                .index => {},
+            };
         },
         .local_function => |v| try env.put(v.name, .{ .function_ref = v.function }),
         .function_assign => |v| switch (v.target) {
@@ -1072,7 +1198,10 @@ fn buildModuleEnv(a: std.mem.Allocator, body: lua.Block) anyerror!Env {
         .do_block => |v| try invalidateModuleWrites(v.body, &env),
         .while_loop => |v| try invalidateModuleWrites(v.body, &env),
         .repeat_loop => |v| try invalidateModuleWrites(v.body, &env),
-        .if_stmt => |v| { for (v.branches) |b| try invalidateModuleWrites(b.body, &env); if (v.else_body) |b| try invalidateModuleWrites(b, &env); },
+        .if_stmt => |v| {
+            for (v.branches) |b| try invalidateModuleWrites(b.body, &env);
+            if (v.else_body) |b| try invalidateModuleWrites(b, &env);
+        },
         .numeric_for => |v| try invalidateModuleWrites(v.body, &env),
         .generic_for => |v| try invalidateModuleWrites(v.body, &env),
         else => {},
@@ -1080,7 +1209,9 @@ fn buildModuleEnv(a: std.mem.Allocator, body: lua.Block) anyerror!Env {
     return env;
 }
 
-fn parseBool(s: []const u8) bool { return std.mem.eql(u8, s, "true"); }
+fn parseBool(s: []const u8) bool {
+    return std.mem.eql(u8, s, "true");
+}
 
 fn entryKeyAlloc(a: std.mem.Allocator, module: []const u8, function: []const u8) ![]u8 {
     return std.fmt.allocPrint(a, "{s}\x1f{s}", .{ module, function });
@@ -1098,21 +1229,44 @@ fn unescape(a: std.mem.Allocator, s: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     var i: usize = 0;
     while (i < s.len) {
-        if (s[i] != '\\' or i + 1 >= s.len) { try out.append(a, s[i]); i += 1; continue; }
-        switch (s[i + 1]) { 't' => try out.append(a, '\t'), 'n' => try out.append(a, '\n'), 'r' => try out.append(a, '\r'), '\\' => try out.append(a, '\\'), else => { try out.append(a, '\\'); try out.append(a, s[i + 1]); } }
+        if (s[i] != '\\' or i + 1 >= s.len) {
+            try out.append(a, s[i]);
+            i += 1;
+            continue;
+        }
+        switch (s[i + 1]) {
+            't' => try out.append(a, '\t'),
+            'n' => try out.append(a, '\n'),
+            'r' => try out.append(a, '\r'),
+            '\\' => try out.append(a, '\\'),
+            else => {
+                try out.append(a, '\\');
+                try out.append(a, s[i + 1]);
+            },
+        }
         i += 2;
     }
     return out.toOwnedSlice(a);
 }
 
 fn writeField(w: *std.Io.Writer, s: []const u8) !void {
-    for (s) |c| switch (c) { '\\' => try w.writeAll("\\\\"), '\t' => try w.writeAll("\\t"), '\n' => try w.writeAll("\\n"), '\r' => try w.writeAll("\\r"), else => try w.writeByte(c) };
+    for (s) |c| switch (c) {
+        '\\' => try w.writeAll("\\\\"),
+        '\t' => try w.writeAll("\\t"),
+        '\n' => try w.writeAll("\\n"),
+        '\r' => try w.writeAll("\\r"),
+        else => try w.writeByte(c),
+    };
 }
 
 fn readAll(io: std.Io, a: std.mem.Allocator, path: []const u8) ![]u8 {
-    var f = try std.Io.Dir.cwd().openFile(io, path, .{}); defer f.close(io);
-    const st = try f.stat(io); const n = std.math.cast(usize, st.size) orelse return error.FileTooBig;
-    const out = try a.alloc(u8, n); _ = try f.readPositionalAll(io, out, 0); return out;
+    var f = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer f.close(io);
+    const st = try f.stat(io);
+    const n = std.math.cast(usize, st.size) orelse return error.FileTooBig;
+    const out = try a.alloc(u8, n);
+    _ = try f.readPositionalAll(io, out, 0);
+    return out;
 }
 
 fn parseReach(a: std.mem.Allocator, bytes: []const u8, entries: *std.StringHashMapUnmanaged(*Entry), groups: *std.AutoHashMapUnmanaged(u64, std.ArrayList(*Entry)), module_titles: *std.ArrayList([]const u8)) !void {
@@ -1125,13 +1279,19 @@ fn parseReach(a: std.mem.Allocator, bytes: []const u8, entries: *std.StringHashM
             continue;
         }
         if (line[0] != 'F') continue;
-        const f = try parseFields(a, line); if (f.len < 5) continue;
+        const f = try parseFields(a, line);
+        if (f.len < 5) continue;
         const page_id = std.fmt.parseInt(u64, f[1], 10) catch continue;
         const fn_start = std.fmt.parseInt(u32, f[2], 10) catch continue;
-        const module = try unescape(a, f[3]); const function = try unescape(a, f[4]);
-        const entry = try a.create(Entry); entry.* = .{ .page_id = page_id, .fn_start = fn_start, .module = module, .function = function };
-        const key = try entryKeyAlloc(a, module, function); try entries.put(a, key, entry);
-        const g = try groups.getOrPut(a, page_id); if (!g.found_existing) g.value_ptr.* = .empty; try g.value_ptr.append(a, entry);
+        const module = try unescape(a, f[3]);
+        const function = try unescape(a, f[4]);
+        const entry = try a.create(Entry);
+        entry.* = .{ .page_id = page_id, .fn_start = fn_start, .module = module, .function = function };
+        const key = try entryKeyAlloc(a, module, function);
+        try entries.put(a, key, entry);
+        const g = try groups.getOrPut(a, page_id);
+        if (!g.found_existing) g.value_ptr.* = .empty;
+        try g.value_ptr.append(a, entry);
     }
 }
 
@@ -1140,19 +1300,26 @@ fn parseUsage(a: std.mem.Allocator, bytes: []const u8, entries: *std.StringHashM
     while (lines.next()) |line| {
         if (line.len < 2 or line[1] != '\t') continue;
         if (line[0] == 'W') {
-            const f = try parseFields(a, line); if (f.len < 5) continue;
-            const module = try unescape(a, f[1]); const function = try unescape(a, f[2]);
-            const key = try entryKeyAlloc(a, module, function); const entry = entries.get(key) orelse continue;
+            const f = try parseFields(a, line);
+            if (f.len < 5) continue;
+            const module = try unescape(a, f[1]);
+            const function = try unescape(a, f[2]);
+            const key = try entryKeyAlloc(a, module, function);
+            const entry = entries.get(key) orelse continue;
             entry.current_dynamic_keys = parseBool(f[3]);
             entry.parent_dynamic_keys = parseBool(f[4]);
             continue;
         }
         if (line[0] != 'P' and line[0] != 'Q') continue;
-        const f = try parseFields(a, line); if (f.len < 7) continue;
-        const module = try unescape(a, f[1]); const function = try unescape(a, f[2]);
-        const key = try entryKeyAlloc(a, module, function); const entry = entries.get(key) orelse continue;
+        const f = try parseFields(a, line);
+        if (f.len < 7) continue;
+        const module = try unescape(a, f[1]);
+        const function = try unescape(a, f[2]);
+        const key = try entryKeyAlloc(a, module, function);
+        const entry = entries.get(key) orelse continue;
         const name = try unescape(a, f[3]);
-        const domain = try a.create(ParamDomain); domain.* = .{ .top = parseBool(f[4]), .missing = parseBool(f[5]) };
+        const domain = try a.create(ParamDomain);
+        domain.* = .{ .top = parseBool(f[4]), .missing = parseBool(f[5]) };
         for (f[6..]) |raw| try domain.values.append(a, try unescape(a, raw));
         if (line[0] == 'P') try entry.current.put(a, name, domain) else try entry.parent.put(a, name, domain);
     }
@@ -1161,20 +1328,30 @@ fn parseUsage(a: std.mem.Allocator, bytes: []const u8, entries: *std.StringHashM
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 4) return error.MissingInput;
-    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator); defer arena.deinit(); const a = arena.allocator();
-    const reach = try readAll(init.io, a, args[1]); const usage = try readAll(init.io, a, args[2]);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const reach = try readAll(init.io, a, args[1]);
+    const usage = try readAll(init.io, a, args[2]);
     var entries: std.StringHashMapUnmanaged(*Entry) = .empty;
     var groups: std.AutoHashMapUnmanaged(u64, std.ArrayList(*Entry)) = .empty;
     var module_titles: std.ArrayList([]const u8) = .empty;
-    try parseReach(a, reach, &entries, &groups, &module_titles); try parseUsage(a, usage, &entries);
-    var out_buf: [1024 * 1024]u8 = undefined; var stdout = std.Io.File.stdout().writer(init.io, &out_buf); const w = &stdout.interface;
-    var stats = Stats{}; var git = groups.iterator();
+    try parseReach(a, reach, &entries, &groups, &module_titles);
+    try parseUsage(a, usage, &entries);
+    var out_buf: [1024 * 1024]u8 = undefined;
+    var stdout = std.Io.File.stdout().writer(init.io, &out_buf);
+    const w = &stdout.interface;
+    var stats = Stats{};
+    var git = groups.iterator();
     while (git.next()) |g| {
-        var page_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator); defer page_arena.deinit(); const pa = page_arena.allocator();
+        var page_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        defer page_arena.deinit();
+        const pa = page_arena.allocator();
         const path = try std.fmt.allocPrint(pa, "{s}/{d}.lua", .{ args[3], g.key_ptr.* });
         const source = readAll(init.io, pa, path) catch continue;
         var chunk = lua.parse(pa, source) catch continue;
-        var b = model.Builder{ .allocator = pa, .source = chunk.source }; try b.build(chunk.body);
+        var b = model.Builder{ .allocator = pa, .source = chunk.source };
+        try b.build(chunk.body);
         var module_env = try buildModuleEnv(pa, chunk.body);
         var active_functions: std.AutoHashMapUnmanaged(u32, void) = .empty;
         for (g.value_ptr.items) |entry| {
@@ -1183,7 +1360,8 @@ pub fn main(init: std.process.Init) !void {
             var ev = Evaluator{ .allocator = pa, .entry = entry, .source = chunk.source, .writer = w, .stats = &stats, .module_env = &module_env, .active_functions = &active_functions, .module_titles = &module_titles };
             try ev.run(fn_expr.function);
         }
-        b.deinit(); chunk.deinit();
+        b.deinit();
+        chunk.deinit();
     }
     try w.print("S\tentrypoints\t{d}\nS\tbranch_sites\t{d}\nS\tproven_true\t{d}\nS\tproven_false\t{d}\nS\tunknown\t{d}\nS\tdependency_sites_observed\t{d}\nS\tdependency_sites_finite\t{d}\nS\tdependency_sites_unknown\t{d}\n", .{ entries.count(), stats.sites, stats.yes, stats.no, stats.maybe, stats.dependency_sites, stats.dependency_resolved, stats.dependency_unknown });
     try w.flush();

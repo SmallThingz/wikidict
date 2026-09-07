@@ -2,23 +2,27 @@ const std = @import("std");
 const ir = @import("vm_ir.zig");
 
 pub const Stats = struct { scalar_nodes_removed: usize = 0, string_index_bytes_saved: u64 = 0 };
-const Scalar = struct { kind: u8, value: u32 };
+const Scalar = struct { kind: u8, value: u64 };
 fn scalar(node: ir.ConstNode) ?Scalar {
     return switch (node) {
         .nil => .{ .kind = 0, .value = 0 },
         .boolean => |v| .{ .kind = 1, .value = @intFromBool(v) },
         .number => |v| .{ .kind = 2, .value = v },
-        .string => |v| .{ .kind = 3, .value = v },
-        .integer => |v| .{ .kind = 4, .value = v },
+        .number_bits => |v| .{ .kind = 3, .value = v },
+        .string => |v| .{ .kind = 4, .value = v },
+        .integer => |v| .{ .kind = 5, .value = v },
         .table => null,
     };
 }
 // Exhaustive: a new opcode cannot silently omit relocation of its string IDs.
-fn hasStringOperand(op: ir.Opcode) bool {
+fn hasAuxStringOperand(op: ir.Opcode) bool {
     return switch (op) {
-        .load_number, .load_string, .get_global, .set_global => true,
-        .load_nil, .load_bool, .load_const, .get_upvalue, .set_upvalue, .move, .vararg, .new_table, .table_set, .table_append, .table_append_var, .get_index, .set_index, .closure, .neg, .not_, .len, .add, .sub, .mul, .div, .mod, .pow, .concat, .eq, .ne, .lt, .le, .gt, .ge, .jump, .jump_if_false, .call, .call_vararg, .method_call, .method_call_vararg, .numeric_for_init, .numeric_for_next, .generic_for_init, .generic_for_next, .ret, .ret_var, .get_global_slot, .set_global_slot => false,
+        .load_number, .load_string, .get_global, .set_global, .get_field, .set_field => true,
+        else => false,
     };
+}
+fn hasAStringOperand(op: ir.Opcode) bool {
+    return op == .method_call_field or op == .method_call_field_vararg;
 }
 fn compactScalars(p: *ir.Program) !usize {
     const a = p.allocator;
@@ -40,12 +44,14 @@ fn compactScalars(p: *ir.Program) !usize {
         remap[old] = @intCast(nodes.items.len);
         try nodes.append(a, node);
     }
-    for (p.const_entries.items) |entry|
-        if (entry.key >= remap.len or entry.value >= remap.len) return error.BadConstantReference;
+    for (p.const_entries.items) |entry| {
+        if (entry.key != ir.implicit_list_key and entry.key >= remap.len) return error.BadConstantReference;
+        if (entry.value >= remap.len) return error.BadConstantReference;
+    }
     for (p.functions.items) |maybe| if (maybe) |f| for (f.insts.items) |inst|
         if (inst.op == .load_const and inst.aux >= remap.len) return error.BadConstantReference;
     for (p.const_entries.items) |*entry| {
-        entry.key = remap[entry.key];
+        if (entry.key != ir.implicit_list_key) entry.key = remap[entry.key];
         entry.value = remap[entry.value];
     }
     for (p.functions.items) |*maybe| if (maybe.*) |*f| for (f.insts.items) |*inst|
@@ -84,7 +90,8 @@ fn orderStrings(p: *ir.Program) !u64 {
         else => {},
     };
     for (p.functions.items) |maybe| if (maybe) |f| for (f.insts.items) |inst|
-        if (hasStringOperand(inst.op)) try note(uses, inst.aux);
+        if (hasAuxStringOperand(inst.op)) try note(uses, inst.aux) else if (hasAStringOperand(inst.op)) try note(uses, inst.a);
+    for (p.shapes.items) |shape| for (shape.field_keys.items) |sid| try note(uses, sid);
     std.mem.sort(u32, ids, uses, struct {
         fn less(counts: []const u64, x: u32, y: u32) bool {
             return counts[x] > counts[y] or (counts[x] == counts[y] and x < y);
@@ -113,10 +120,12 @@ fn orderStrings(p: *ir.Program) !u64 {
         .string => |sid| node.* = .{ .string = remap[sid] },
         else => {},
     };
-    for (p.functions.items) |*maybe| if (maybe.*) |*f| for (f.insts.items) |*inst|
-        if (hasStringOperand(inst.op)) {
-            inst.aux = remap[inst.aux];
-        };
+    for (p.functions.items) |*maybe| if (maybe.*) |*f| for (f.insts.items) |*inst| {
+        if (hasAuxStringOperand(inst.op)) inst.aux = remap[inst.aux] else if (hasAStringOperand(inst.op)) inst.a = remap[inst.a];
+    };
+    for (p.shapes.items) |*shape| {
+        for (shape.field_keys.items) |*sid| sid.* = remap[sid.*];
+    }
     p.strings.deinit(a);
     p.strings = strings;
     p.interned_strings.deinit(a);

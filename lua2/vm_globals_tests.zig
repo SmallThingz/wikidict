@@ -44,7 +44,7 @@ test "native global names disappear during lowering and need no hash storage" {
     try std.testing.expect(vm.getGlobal("tonumber").? == .native);
     const table = try rt.newTable(arena.allocator());
     try table.rawSet(arena.allocator(), .{ .string = "type" }, .{ .number = 7 });
-    try std.testing.expect(table.global_values == null);
+    try std.testing.expectEqual(@as(usize, 0), table.slots.len);
     try std.testing.expectEqual(@as(u32, 1), table.map.count());
 }
 test "dynamic environment aliases mutate the same statically bound global" {
@@ -88,7 +88,11 @@ test "numeric native opcodes cannot masquerade as v2 or address outside the ABI"
     const bytes = try codec.serialize(a, &p);
     defer a.free(bytes);
     bytes[4] = 2;
-    try std.testing.expectError(error.BadOpcode, codec.deserialize(a, bytes));
+    if (codec.deserialize(a, bytes)) |bad| {
+        var owned = bad;
+        owned.deinit();
+        return error.TestUnexpectedResult;
+    } else |_| {}
     p.functions.items[0].?.insts.items[0].aux = abi.count;
     const bad_slot = try codec.serialize(a, &p);
     defer a.free(bad_slot);

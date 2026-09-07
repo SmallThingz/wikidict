@@ -15,17 +15,47 @@ pub const Error = error{
 };
 
 const Op = enum {
-    negative, positive, plus, minus, times, divide, mod, fmod,
-    open, and_, or_, not_, equality, less, greater, less_eq, greater_eq, not_eq,
-    round, exponent, sine, cosine, tangens, arcsine, arccos, arctan, exp, ln,
-    abs, floor, trunc, ceil, pow, pi, sqrt,
+    negative,
+    positive,
+    plus,
+    minus,
+    times,
+    divide,
+    mod,
+    fmod,
+    open,
+    and_,
+    or_,
+    not_,
+    equality,
+    less,
+    greater,
+    less_eq,
+    greater_eq,
+    not_eq,
+    round,
+    exponent,
+    sine,
+    cosine,
+    tangens,
+    arcsine,
+    arccos,
+    arctan,
+    exp,
+    ln,
+    abs,
+    floor,
+    trunc,
+    ceil,
+    pow,
+    pi,
+    sqrt,
 };
 
 fn precedence(op: Op) i8 {
     return switch (op) {
         .negative, .positive, .exponent => 10,
-        .sine, .cosine, .tangens, .arcsine, .arccos, .arctan, .exp, .ln,
-        .abs, .floor, .trunc, .ceil, .not_, .sqrt => 9,
+        .sine, .cosine, .tangens, .arcsine, .arccos, .arctan, .exp, .ln, .abs, .floor, .trunc, .ceil, .not_, .sqrt => 9,
         .pow => 8,
         .times, .divide, .mod, .fmod => 7,
         .plus, .minus => 6,
@@ -40,12 +70,12 @@ fn precedence(op: Op) i8 {
 
 fn wordOp(word: []const u8) ?Op {
     const words = .{
-        .{ "mod", Op.mod }, .{ "fmod", Op.fmod }, .{ "and", Op.and_ }, .{ "or", Op.or_ },
-        .{ "not", Op.not_ }, .{ "round", Op.round }, .{ "div", Op.divide }, .{ "e", Op.exponent },
-        .{ "sin", Op.sine }, .{ "cos", Op.cosine }, .{ "tan", Op.tangens }, .{ "asin", Op.arcsine },
-        .{ "acos", Op.arccos }, .{ "atan", Op.arctan }, .{ "exp", Op.exp }, .{ "ln", Op.ln },
-        .{ "abs", Op.abs }, .{ "trunc", Op.trunc }, .{ "floor", Op.floor }, .{ "ceil", Op.ceil },
-        .{ "pi", Op.pi }, .{ "sqrt", Op.sqrt },
+        .{ "mod", Op.mod },     .{ "fmod", Op.fmod },   .{ "and", Op.and_ },    .{ "or", Op.or_ },
+        .{ "not", Op.not_ },    .{ "round", Op.round }, .{ "div", Op.divide },  .{ "e", Op.exponent },
+        .{ "sin", Op.sine },    .{ "cos", Op.cosine },  .{ "tan", Op.tangens }, .{ "asin", Op.arcsine },
+        .{ "acos", Op.arccos }, .{ "atan", Op.arctan }, .{ "exp", Op.exp },     .{ "ln", Op.ln },
+        .{ "abs", Op.abs },     .{ "trunc", Op.trunc }, .{ "floor", Op.floor }, .{ "ceil", Op.ceil },
+        .{ "pi", Op.pi },       .{ "sqrt", Op.sqrt },
     };
     inline for (words) |entry| if (std.ascii.eqlIgnoreCase(word, entry[0])) return entry[1];
     return null;
@@ -53,8 +83,7 @@ fn wordOp(word: []const u8) ?Op {
 
 fn isUnary(op: Op) bool {
     return switch (op) {
-        .negative, .positive, .not_, .sine, .cosine, .tangens, .arcsine, .arccos, .arctan,
-        .exp, .ln, .abs, .floor, .trunc, .ceil, .sqrt => true,
+        .negative, .positive, .not_, .sine, .cosine, .tangens, .arcsine, .arccos, .arctan, .exp, .ln, .abs, .floor, .trunc, .ceil, .sqrt => true,
         else => false,
     };
 }
@@ -141,7 +170,10 @@ fn parsePhpFloat(raw: []const u8) !f64 {
     while (end < raw.len) : (end += 1) {
         const c = raw[end];
         if (c >= '0' and c <= '9') continue;
-        if (c == '.' and !seen_dot) { seen_dot = true; continue; }
+        if (c == '.' and !seen_dot) {
+            seen_dot = true;
+            continue;
+        }
         break;
     }
     if (end == 0 or (end == 1 and raw[0] == '.')) return Error.InvalidNumber;
@@ -151,10 +183,26 @@ fn parsePhpFloat(raw: []const u8) !f64 {
 fn appendNormalized(a: std.mem.Allocator, out: *std.ArrayList(u8), raw: []const u8) !void {
     var i: usize = 0;
     while (i < raw.len) {
-        if (std.mem.startsWith(u8, raw[i..], "&lt;")) { try out.append(a, '<'); i += 4; continue; }
-        if (std.mem.startsWith(u8, raw[i..], "&gt;")) { try out.append(a, '>'); i += 4; continue; }
-        if (std.mem.startsWith(u8, raw[i..], "&minus;")) { try out.append(a, '-'); i += 7; continue; }
-        if (std.mem.startsWith(u8, raw[i..], "−")) { try out.append(a, '-'); i += "−".len; continue; }
+        if (std.mem.startsWith(u8, raw[i..], "&lt;")) {
+            try out.append(a, '<');
+            i += 4;
+            continue;
+        }
+        if (std.mem.startsWith(u8, raw[i..], "&gt;")) {
+            try out.append(a, '>');
+            i += 4;
+            continue;
+        }
+        if (std.mem.startsWith(u8, raw[i..], "&minus;")) {
+            try out.append(a, '-');
+            i += 7;
+            continue;
+        }
+        if (std.mem.startsWith(u8, raw[i..], "−")) {
+            try out.append(a, '-');
+            i += "−".len;
+            continue;
+        }
         try out.append(a, raw[i]);
         i += 1;
     }
@@ -174,7 +222,10 @@ pub fn eval(a: std.mem.Allocator, raw: []const u8) !f64 {
     while (p < expr.len) {
         if (operands.items.len > 100 or operators.items.len > 100) return Error.StackExhausted;
         const c = expr[p];
-        if (std.ascii.isWhitespace(c)) { p += 1; continue; }
+        if (std.ascii.isWhitespace(c)) {
+            p += 1;
+            continue;
+        }
         if ((c >= '0' and c <= '9') or c == '.') {
             if (!expecting_expression) return Error.UnexpectedNumber;
             var n = p;
@@ -207,26 +258,78 @@ pub fn eval(a: std.mem.Allocator, raw: []const u8) !f64 {
                 try operators.append(a, op);
                 continue;
             }
-        } else if (p + 1 < expr.len and std.mem.eql(u8, expr[p..p+2], "<=")) { op = .less_eq; p += 2;
-        } else if (p + 1 < expr.len and std.mem.eql(u8, expr[p..p+2], ">=")) { op = .greater_eq; p += 2;
-        } else if (p + 1 < expr.len and (std.mem.eql(u8, expr[p..p+2], "<>") or std.mem.eql(u8, expr[p..p+2], "!="))) { op = .not_eq; p += 2;
+        } else if (p + 1 < expr.len and std.mem.eql(u8, expr[p .. p + 2], "<=")) {
+            op = .less_eq;
+            p += 2;
+        } else if (p + 1 < expr.len and std.mem.eql(u8, expr[p .. p + 2], ">=")) {
+            op = .greater_eq;
+            p += 2;
+        } else if (p + 1 < expr.len and (std.mem.eql(u8, expr[p .. p + 2], "<>") or std.mem.eql(u8, expr[p .. p + 2], "!="))) {
+            op = .not_eq;
+            p += 2;
         } else {
             switch (c) {
-            '+' => { p += 1; if (expecting_expression) { try operators.append(a, .positive); continue; } else op = .plus; },
-            '-' => { p += 1; if (expecting_expression) { try operators.append(a, .negative); continue; } else op = .minus; },
-            '*' => { op = .times; p += 1; }, '/' => { op = .divide; p += 1; }, '^' => { op = .pow; p += 1; },
-            '(' => { if (!expecting_expression) return Error.UnexpectedOperator; try operators.append(a, .open); p += 1; continue; },
-            ')' => {
-                var found_open = false;
-                while (operators.items.len != 0) {
-                    const top = operators.items[operators.items.len - 1];
-                    if (top == .open) { _ = operators.pop(); found_open = true; break; }
-                    _ = operators.pop(); try apply(a, top, &operands);
-                }
-                if (!found_open) return Error.UnexpectedClosingBracket;
-                expecting_expression = false; p += 1; continue;
-            },
-            '=' => { op = .equality; p += 1; }, '<' => { op = .less; p += 1; }, '>' => { op = .greater; p += 1; },
+                '+' => {
+                    p += 1;
+                    if (expecting_expression) {
+                        try operators.append(a, .positive);
+                        continue;
+                    } else op = .plus;
+                },
+                '-' => {
+                    p += 1;
+                    if (expecting_expression) {
+                        try operators.append(a, .negative);
+                        continue;
+                    } else op = .minus;
+                },
+                '*' => {
+                    op = .times;
+                    p += 1;
+                },
+                '/' => {
+                    op = .divide;
+                    p += 1;
+                },
+                '^' => {
+                    op = .pow;
+                    p += 1;
+                },
+                '(' => {
+                    if (!expecting_expression) return Error.UnexpectedOperator;
+                    try operators.append(a, .open);
+                    p += 1;
+                    continue;
+                },
+                ')' => {
+                    var found_open = false;
+                    while (operators.items.len != 0) {
+                        const top = operators.items[operators.items.len - 1];
+                        if (top == .open) {
+                            _ = operators.pop();
+                            found_open = true;
+                            break;
+                        }
+                        _ = operators.pop();
+                        try apply(a, top, &operands);
+                    }
+                    if (!found_open) return Error.UnexpectedClosingBracket;
+                    expecting_expression = false;
+                    p += 1;
+                    continue;
+                },
+                '=' => {
+                    op = .equality;
+                    p += 1;
+                },
+                '<' => {
+                    op = .less;
+                    p += 1;
+                },
+                '>' => {
+                    op = .greater;
+                    p += 1;
+                },
                 else => return Error.UnrecognisedPunctuation,
             }
         }

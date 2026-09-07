@@ -361,7 +361,7 @@ fn replacementValue(vm: *exec.Vm, replacement: Value, search: *const upat.Search
             defer exec.Vm.freeResults(captures);
             break :blk try vm.getIndex(.{ .table = table }, captures[0]);
         },
-        .closure, .native => blk: {
+        .closure, .function, .native => blk: {
             const captures = try unicodeCaptureResults(search, m, true);
             defer exec.Vm.freeResults(captures);
             const result = try vm.callValue(replacement, captures);

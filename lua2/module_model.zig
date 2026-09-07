@@ -20,8 +20,14 @@ pub const Builder = struct {
     return_binding: Binding = .unknown,
     functions: std.AutoHashMapUnmanaged(u32, *const lua.Expr) = .empty,
     dynamic_top_level: bool = false,
+    owned_tables: std.ArrayList(*TableInfo) = .empty,
 
     pub fn deinit(self: *Builder) void {
+        for (self.owned_tables.items) |table| {
+            table.fields.deinit(self.allocator);
+            self.allocator.destroy(table);
+        }
+        self.owned_tables.deinit(self.allocator);
         self.env.deinit(self.allocator);
         self.functions.deinit(self.allocator);
     }
@@ -45,14 +51,31 @@ pub const Builder = struct {
             .assign => |s| for (s.values) |v| try self.collectExprFunctions(v),
             .call => |s| try self.collectExprFunctions(s.expr),
             .do_block => |s| try self.collectFunctions(s.body),
-            .while_loop => |s| { try self.collectExprFunctions(s.cond); try self.collectFunctions(s.body); },
-            .repeat_loop => |s| { try self.collectFunctions(s.body); try self.collectExprFunctions(s.cond); },
+            .while_loop => |s| {
+                try self.collectExprFunctions(s.cond);
+                try self.collectFunctions(s.body);
+            },
+            .repeat_loop => |s| {
+                try self.collectFunctions(s.body);
+                try self.collectExprFunctions(s.cond);
+            },
             .if_stmt => |s| {
-                for (s.branches) |b| { try self.collectExprFunctions(b.cond); try self.collectFunctions(b.body); }
+                for (s.branches) |b| {
+                    try self.collectExprFunctions(b.cond);
+                    try self.collectFunctions(b.body);
+                }
                 if (s.else_body) |b| try self.collectFunctions(b);
             },
-            .numeric_for => |s| { try self.collectExprFunctions(s.start); try self.collectExprFunctions(s.limit); if (s.step) |v| try self.collectExprFunctions(v); try self.collectFunctions(s.body); },
-            .generic_for => |s| { for (s.values) |v| try self.collectExprFunctions(v); try self.collectFunctions(s.body); },
+            .numeric_for => |s| {
+                try self.collectExprFunctions(s.start);
+                try self.collectExprFunctions(s.limit);
+                if (s.step) |v| try self.collectExprFunctions(v);
+                try self.collectFunctions(s.body);
+            },
+            .generic_for => |s| {
+                for (s.values) |v| try self.collectExprFunctions(v);
+                try self.collectFunctions(s.body);
+            },
             .return_stmt => |s| for (s.values) |v| try self.collectExprFunctions(v),
             .empty, .break_stmt => {},
         };
@@ -64,16 +87,31 @@ pub const Builder = struct {
                 try self.functions.put(self.allocator, f.span.start, expr);
                 try self.collectFunctions(f.body);
             },
-            .index => |e| { try self.collectExprFunctions(e.object); try self.collectExprFunctions(e.key); },
-            .call => |e| { try self.collectExprFunctions(e.callee); for (e.args) |a| try self.collectExprFunctions(a); },
-            .method_call => |e| { try self.collectExprFunctions(e.object); for (e.args) |a| try self.collectExprFunctions(a); },
+            .index => |e| {
+                try self.collectExprFunctions(e.object);
+                try self.collectExprFunctions(e.key);
+            },
+            .call => |e| {
+                try self.collectExprFunctions(e.callee);
+                for (e.args) |a| try self.collectExprFunctions(a);
+            },
+            .method_call => |e| {
+                try self.collectExprFunctions(e.object);
+                for (e.args) |a| try self.collectExprFunctions(a);
+            },
             .table => |e| for (e.fields) |field| switch (field) {
                 .list => |v| try self.collectExprFunctions(v),
                 .named => |v| try self.collectExprFunctions(v.value),
-                .keyed => |v| { try self.collectExprFunctions(v.key); try self.collectExprFunctions(v.value); },
+                .keyed => |v| {
+                    try self.collectExprFunctions(v.key);
+                    try self.collectExprFunctions(v.value);
+                },
             },
             .unary => |e| try self.collectExprFunctions(e.expr),
-            .binary => |e| { try self.collectExprFunctions(e.lhs); try self.collectExprFunctions(e.rhs); },
+            .binary => |e| {
+                try self.collectExprFunctions(e.lhs);
+                try self.collectExprFunctions(e.rhs);
+            },
             else => {},
         }
     }
@@ -102,14 +140,19 @@ pub const Builder = struct {
             },
             .local_function => |s| try self.env.put(self.allocator, s.name, .{ .function = s.function.function.span.start }),
             .function_assign => |s| try self.assign(s.target, .{ .function = s.function.function.span.start }),
-            .return_stmt => |s| if (s.values.len != 0) { self.return_binding = try self.eval(s.values[0]); },
+            .return_stmt => |s| if (s.values.len != 0) {
+                self.return_binding = try self.eval(s.values[0]);
+            },
             .call => {},
             .empty => {},
             // `do ... end` is unconditional. Evaluate it in an isolated lexical
             // environment so table mutations (notably export.foo assignments) are
             // visible while block-local names do not escape. Keep the dynamic bit
             // conservative because scalar outer-variable writes are not modeled.
-            .do_block => |s| { self.dynamic_top_level = true; try self.topScopedBlock(s.body); },
+            .do_block => |s| {
+                self.dynamic_top_level = true;
+                try self.topScopedBlock(s.body);
+            },
             // Runtime-dependent top-level control flow is not guessed.
             .while_loop, .repeat_loop, .if_stmt, .numeric_for, .generic_for, .break_stmt => self.dynamic_top_level = true,
         }
@@ -149,6 +192,10 @@ pub const Builder = struct {
     fn evalTable(self: *Builder, fields: []const lua.TableField) anyerror!Binding {
         const table = try self.allocator.create(TableInfo);
         table.* = .{};
+        self.owned_tables.append(self.allocator, table) catch |err| {
+            self.allocator.destroy(table);
+            return err;
+        };
         for (fields) |field| switch (field) {
             .named => |v| try table.fields.put(self.allocator, v.name, try self.eval(v.value)),
             .keyed => |v| if (stringConst(v.key)) |key| try table.fields.put(self.allocator, key, try self.eval(v.value)),
@@ -162,7 +209,10 @@ pub const Builder = struct {
             .name => |name| try self.env.put(self.allocator, name, value),
             .index => |idx| {
                 const object = try self.eval(idx.object);
-                const key = stringConst(idx.key) orelse { self.dynamic_top_level = true; return; };
+                const key = stringConst(idx.key) orelse {
+                    self.dynamic_top_level = true;
+                    return;
+                };
                 if (object == .table) try object.table.fields.put(self.allocator, key, value) else self.dynamic_top_level = true;
             },
         }
@@ -170,7 +220,10 @@ pub const Builder = struct {
 };
 
 fn stringConst(expr: *const lua.Expr) ?[]const u8 {
-    return switch (expr.*) { .string => |s| s.value, else => null };
+    return switch (expr.*) {
+        .string => |s| s.value,
+        else => null,
+    };
 }
 
 fn exprPath(expr: *const lua.Expr) ?[]const u8 {
@@ -188,9 +241,13 @@ fn exprPath(expr: *const lua.Expr) ?[]const u8 {
 }
 
 fn readAll(io: std.Io, a: std.mem.Allocator, path: []const u8) ![]u8 {
-    var f = try std.Io.Dir.cwd().openFile(io, path, .{}); defer f.close(io);
-    const st = try f.stat(io); const n = std.math.cast(usize, st.size) orelse return error.FileTooBig;
-    const b = try a.alloc(u8, n); _ = try f.readPositionalAll(io, b, 0); return b;
+    var f = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer f.close(io);
+    const st = try f.stat(io);
+    const n = std.math.cast(usize, st.size) orelse return error.FileTooBig;
+    const b = try a.alloc(u8, n);
+    _ = try f.readPositionalAll(io, b, 0);
+    return b;
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -198,8 +255,10 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(a);
     if (args.len < 2) return error.MissingInput;
     const source = try readAll(init.io, a, args[1]);
-    var chunk = try lua.parse(a, source); defer chunk.deinit();
-    var b = Builder{ .allocator = a, .source = chunk.source }; defer b.deinit();
+    var chunk = try lua.parse(a, source);
+    defer chunk.deinit();
+    var b = Builder{ .allocator = a, .source = chunk.source };
+    defer b.deinit();
     try b.build(chunk.body);
 
     std.debug.print("functions={d} dynamic_top_level={} return={s}\n", .{ b.functions.count(), b.dynamic_top_level, @tagName(b.return_binding) });

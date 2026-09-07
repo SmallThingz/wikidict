@@ -1,11 +1,17 @@
 test {
     _ = @import("vm_globals_tests.zig");
     _ = @import("vm_pool_compact.zig");
+    _ = @import("vm_static_bindings_tests.zig");
+    _ = @import("vm_entry_pool.zig");
     _ = @import("root.zig");
     _ = @import("vm_ir.zig");
     _ = @import("vm_runtime.zig");
     _ = @import("vm_exec.zig");
     _ = @import("vm_codec.zig");
+    _ = @import("vm_optimize.zig");
+    _ = @import("vm_shape_integration.zig");
+    _ = @import("vm_numeric_link.zig");
+    _ = @import("vm_global_callgraph.zig");
     _ = @import("vm_bundle.zig");
     _ = @import("lua_pattern.zig");
     _ = @import("lua_format.zig");

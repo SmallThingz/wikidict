@@ -10,10 +10,9 @@ fn printValue(w: *std.Io.Writer, v: rt.Value) !void {
         .number => |n| try w.print("{d}", .{n}),
         .string => |s| try w.writeAll(s),
         .table => try w.writeAll("<table>"),
-        .closure, .native => try w.writeAll("<function>"),
+        .closure, .function, .native => try w.writeAll("<function>"),
     }
 }
-
 
 fn parseArg(raw: []const u8) !rt.Value {
     if (std.mem.startsWith(u8, raw, "n:")) return .{ .number = try std.fmt.parseFloat(f64, raw[2..]) };

@@ -2,8 +2,9 @@ const std = @import("std");
 const lua = @import("root.zig");
 const ir = @import("vm_ir.zig");
 const codec = @import("vm_codec.zig");
-const pool = @import("vm_pool_compact.zig");
 const bundle = @import("vm_bundle.zig");
+const optimizer = @import("vm_optimize.zig");
+const pool = @import("vm_pool_compact.zig");
 
 const ManifestRow = struct { page_id: u64, title: []const u8 };
 
@@ -29,7 +30,11 @@ fn putU64(w: *std.Io.Writer, value: u64) !void {
 }
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len < 4) return error.Usage;
+    if (args.len < 4 or args.len > 5) return error.Usage;
+    const optimize = if (args.len == 5) blk: {
+        if (!std.mem.eql(u8, args[4], "--no-optimize")) return error.UnknownOption;
+        break :blk false;
+    } else true;
     const manifest_bytes = try readAll(init.io, init.arena.allocator(), args[1]);
     var count: u32 = 0;
     var count_it = std.mem.splitScalar(u8, manifest_bytes, '\n');
@@ -50,8 +55,6 @@ pub fn main(init: std.process.Init) !void {
     var lines = std.mem.splitScalar(u8, manifest_bytes, '\n');
     var done: u32 = 0;
     var total_blob: u64 = 0;
-    var removed_scalars: u64 = 0;
-    var saved_string_indexes: u64 = 0;
     while (lines.next()) |line| {
         if (line.len == 0) continue;
         const a = module_arena.allocator();
@@ -60,9 +63,11 @@ pub fn main(init: std.process.Init) !void {
         const source = try readAll(init.io, a, path);
         var chunk = try lua.parse(a, source);
         var program = try ir.lowerChunk(a, &chunk);
-        const compacted = try pool.run(&program);
-        removed_scalars += compacted.scalar_nodes_removed;
-        saved_string_indexes += compacted.string_index_bytes_saved;
+        _ = try pool.run(&program);
+        if (optimize) _ = optimizer.run(a, &program) catch |err| {
+            std.debug.print("OPTIMIZE_FAIL module={s} error={s}\n", .{ row.title, @errorName(err) });
+            return err;
+        };
         const blob = try codec.serialize(a, &program);
 
         try putU32(w, @intCast(row.title.len));
@@ -75,9 +80,10 @@ pub fn main(init: std.process.Init) !void {
             try w.flush();
             std.debug.print("modules={d}/{d} payload={d}\n", .{ done, count, total_blob });
         }
+        program.deinit();
+        chunk.deinit();
         _ = module_arena.reset(.retain_capacity);
     }
     try w.flush();
     std.debug.print("TOTAL modules={d} payload={d}\n", .{ done, total_blob });
-    std.debug.print("POOL scalar_nodes_removed={d} string_index_bytes_saved={d}\n", .{ removed_scalars, saved_string_indexes });
 }

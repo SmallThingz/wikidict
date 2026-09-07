@@ -27,7 +27,8 @@ fn numberValue(v: Value) !f64 {
 
 fn integerValue(v: Value) !i64 {
     return @intFromFloat(@trunc(try numberValue(v)));
-}fn appendPadding(out: *std.ArrayList(u8), a: std.mem.Allocator, count: usize, byte: u8) !void {
+}
+fn appendPadding(out: *std.ArrayList(u8), a: std.mem.Allocator, count: usize, byte: u8) !void {
     try out.ensureUnusedCapacity(a, count);
     for (0..count) |_| out.appendAssumeCapacity(byte);
 }
@@ -54,7 +55,8 @@ fn appendPadded(out: *std.ArrayList(u8), a: std.mem.Allocator, raw: []const u8, 
 
 fn digit(c: u8) ?usize {
     return if (c >= '0' and c <= '9') c - '0' else null;
-}fn parseSpec(fmt: []const u8, index: *usize) !Spec {
+}
+fn parseSpec(fmt: []const u8, index: *usize) !Spec {
     var spec: Spec = undefined;
     spec = .{ .code = 0 };
     while (index.* < fmt.len) {
@@ -87,7 +89,8 @@ fn digit(c: u8) ?usize {
     spec.code = fmt[index.*];
     index.* += 1;
     return spec;
-}fn unsignedDigits(buf: []u8, value: u64, base: u8, upper: bool) []const u8 {
+}
+fn unsignedDigits(buf: []u8, value: u64, base: u8, upper: bool) []const u8 {
     const alphabet = if (upper) "0123456789ABCDEF" else "0123456789abcdef";
     var n = value;
     var pos = buf.len;
@@ -102,7 +105,11 @@ fn digit(c: u8) ?usize {
 
 fn formatInteger(a: std.mem.Allocator, value: i64, spec: Spec) ![]const u8 {
     const signed = spec.code == 'd' or spec.code == 'i';
-    const base: u8 = switch (spec.code) { 'o' => 8, 'x', 'X' => 16, else => 10 };
+    const base: u8 = switch (spec.code) {
+        'o' => 8,
+        'x', 'X' => 16,
+        else => 10,
+    };
     const negative = signed and value < 0;
     const magnitude: u64 = if (negative) @as(u64, @intCast(-(value + 1))) + 1 else @bitCast(value);
     var digits_buf: [64]u8 = undefined;
@@ -118,12 +125,16 @@ fn formatInteger(a: std.mem.Allocator, value: i64, spec: Spec) ![]const u8 {
     };
     const out = try a.alloc(u8, prefix.len + alt.len + zero_count + digits.len);
     var pos: usize = 0;
-    @memcpy(out[pos..][0..prefix.len], prefix); pos += prefix.len;
-    @memcpy(out[pos..][0..alt.len], alt); pos += alt.len;
-    @memset(out[pos..][0..zero_count], '0'); pos += zero_count;
+    @memcpy(out[pos..][0..prefix.len], prefix);
+    pos += prefix.len;
+    @memcpy(out[pos..][0..alt.len], alt);
+    pos += alt.len;
+    @memset(out[pos..][0..zero_count], '0');
+    pos += zero_count;
     @memcpy(out[pos..][0..digits.len], digits);
     return out;
-}fn normalizeExponent(a: std.mem.Allocator, raw: []const u8, upper: bool) ![]const u8 {
+}
+fn normalizeExponent(a: std.mem.Allocator, raw: []const u8, upper: bool) ![]const u8 {
     const epos = std.mem.indexOfAny(u8, raw, "eE") orelse return a.dupe(u8, raw);
     const mantissa = raw[0..epos];
     const exp_raw = raw[epos + 1 ..];
@@ -155,7 +166,8 @@ fn trimGeneral(raw: []u8) []u8 {
     const exp_len = raw.len - epos;
     std.mem.copyForwards(u8, raw[end .. end + exp_len], raw[epos..]);
     return raw[0 .. end + exp_len];
-}fn signedFloatAlloc(a: std.mem.Allocator, raw: []const u8, value: f64, spec: Spec) ![]const u8 {
+}
+fn signedFloatAlloc(a: std.mem.Allocator, raw: []const u8, value: f64, spec: Spec) ![]const u8 {
     if (std.math.signbit(value) or (!spec.plus and !spec.space)) return a.dupe(u8, raw);
     const prefix: u8 = if (spec.plus) '+' else ' ';
     const out = try a.alloc(u8, raw.len + 1);
@@ -222,18 +234,24 @@ fn formatFloat(a: std.mem.Allocator, value: f64, spec: Spec) ![]const u8 {
     }
     const mutable = try a.dupe(u8, rendered);
     if (!lower) {
-        for (mutable) |*c| { if (c.* >= 'a' and c.* <= 'z') c.* = std.ascii.toUpper(c.*); }
+        for (mutable) |*c| {
+            if (c.* >= 'a' and c.* <= 'z') c.* = std.ascii.toUpper(c.*);
+        }
     }
     var owned: []const u8 = if (general and !spec.alternate) trimGeneral(mutable) else mutable;
     if (spec.alternate) owned = try ensureDecimalPoint(a, owned);
     if (spec.code == 'e' or spec.code == 'E' or ((spec.code == 'g' or spec.code == 'G') and std.mem.indexOfAny(u8, owned, "eE") != null))
         owned = try normalizeExponent(a, owned, !lower);
     return signedFloatAlloc(a, owned, value, spec);
-}fn quoteLua(a: std.mem.Allocator, text: []const u8) ![]const u8 {
+}
+fn quoteLua(a: std.mem.Allocator, text: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     try out.append(a, '"');
     for (text) |c| switch (c) {
-        '"', '\\' => { try out.append(a, '\\'); try out.append(a, c); },
+        '"', '\\' => {
+            try out.append(a, '\\');
+            try out.append(a, c);
+        },
         '\n' => try out.appendSlice(a, "\\n"),
         '\r' => try out.appendSlice(a, "\\r"),
         0 => try out.appendSlice(a, "\\000"),
@@ -257,7 +275,9 @@ fn formatOne(a: std.mem.Allocator, value: Value, spec: Spec) ![]const u8 {
         'c' => blk: {
             const n = try integerValue(value);
             if (n < 0 or n > 255) return error.InvalidCharacter;
-            const out = try a.alloc(u8, 1); out[0] = @intCast(n); break :blk out;
+            const out = try a.alloc(u8, 1);
+            out[0] = @intCast(n);
+            break :blk out;
         },
         'd', 'i', 'o', 'u', 'x', 'X' => try formatInteger(a, try integerValue(value), spec),
         'e', 'E', 'f', 'g', 'G' => try formatFloat(a, try numberValue(value), spec),
@@ -270,7 +290,8 @@ fn appendPaddedOwned(a: std.mem.Allocator, raw: []const u8, spec: Spec, numeric:
     var out: std.ArrayList(u8) = .empty;
     try appendPadded(&out, a, raw, spec, numeric and spec.precision == null);
     return out.toOwnedSlice(a);
-}pub fn format(a: std.mem.Allocator, args: []const Value) ![]const u8 {
+}
+pub fn format(a: std.mem.Allocator, args: []const Value) ![]const u8 {
     if (args.len == 0) return error.MissingArgument;
     const fmt = try stringValue(a, args[0]);
     var out: std.ArrayList(u8) = .empty;
@@ -298,14 +319,16 @@ fn appendPaddedOwned(a: std.mem.Allocator, raw: []const u8, spec: Spec, numeric:
 }
 
 fn expectFormat(expected: []const u8, fmt: []const u8, args: []const Value) !void {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
     const all = try arena.allocator().alloc(Value, args.len + 1);
-    all[0] = .{ .string = fmt }; @memcpy(all[1..], args);
+    all[0] = .{ .string = fmt };
+    @memcpy(all[1..], args);
     try std.testing.expectEqualStrings(expected, try format(arena.allocator(), all));
 }
 test "Lua string.format core conversions" {
     try expectFormat("x 12 0x1f 00007 1.23 1.234e+03 1234 %", "%s %d %#x %05d %.2f %.3e %.4g %%", &.{
-        .{ .string = "x" }, .{ .number = 12 }, .{ .number = 31 }, .{ .number = 7 },
+        .{ .string = "x" },   .{ .number = 12 },     .{ .number = 31 },     .{ .number = 7 },
         .{ .number = 1.234 }, .{ .number = 1234.5 }, .{ .number = 1234.5 },
     });
     try expectFormat("   +1.50", "%+8.2f", &.{.{ .number = 1.5 }});

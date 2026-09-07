@@ -158,7 +158,9 @@ const Analyzer = struct {
             const id = entry.key_ptr.*;
             const m = entry.value_ptr.*;
             functions_total += m.functions.items.len;
-            for (m.functions.items) |f| { if (self.reachable.contains(.{ .page_id = id, .start = f.start })) functions_live += 1; }
+            for (m.functions.items) |f| {
+                if (self.reachable.contains(.{ .page_id = id, .start = f.start })) functions_live += 1;
+            }
             var dit = m.dynamic_sites.iterator();
             while (dit.next()) |sites| {
                 dyn_total += sites.value_ptr.items.len;
@@ -168,7 +170,9 @@ const Analyzer = struct {
             while (cit.next()) |calls| {
                 if (!self.reachable.contains(.{ .page_id = id, .start = calls.key_ptr.* })) continue;
                 calls_live += calls.value_ptr.items.len;
-                for (calls.value_ptr.items) |call| if (m.names.contains(call.callee)) { calls_resolved_local += 1; };
+                for (calls.value_ptr.items) |call| if (m.names.contains(call.callee)) {
+                    calls_resolved_local += 1;
+                };
             }
         }
 
@@ -191,7 +195,8 @@ const Analyzer = struct {
             for (m.functions.items) |f| {
                 try w.writeAll(if (self.reachable.contains(.{ .page_id = id, .start = f.start })) "K\t" else "N\t");
                 try w.print("{d}\t{d}\t{d}\t", .{ id, f.start, f.end });
-                try writeField(w, f.name); try w.writeByte('\n');
+                try writeField(w, f.name);
+                try w.writeByte('\n');
             }
             var dit = m.dynamic_sites.iterator();
             while (dit.next()) |sites| for (sites.value_ptr.items) |site| {
@@ -207,13 +212,20 @@ fn unescape(a: std.mem.Allocator, s: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     var i: usize = 0;
     while (i < s.len) {
-        if (s[i] != '\\' or i + 1 >= s.len) { try out.append(a, s[i]); i += 1; continue; }
+        if (s[i] != '\\' or i + 1 >= s.len) {
+            try out.append(a, s[i]);
+            i += 1;
+            continue;
+        }
         switch (s[i + 1]) {
             't' => try out.append(a, '\t'),
             'n' => try out.append(a, '\n'),
             'r' => try out.append(a, '\r'),
             '\\' => try out.append(a, '\\'),
-            else => { try out.append(a, '\\'); try out.append(a, s[i + 1]); },
+            else => {
+                try out.append(a, '\\');
+                try out.append(a, s[i + 1]);
+            },
         }
         i += 2;
     }
@@ -242,9 +254,12 @@ fn mmapPath(path: []const u8) ![]align(std.heap.page_size_min) const u8 {
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3) return error.MissingInput;
-    const reach_bytes = try mmapPath(args[1]); defer std.posix.munmap(reach_bytes);
-    const map_bytes = try mmapPath(args[2]); defer std.posix.munmap(map_bytes);
-    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator); defer arena.deinit();
+    const reach_bytes = try mmapPath(args[1]);
+    defer std.posix.munmap(reach_bytes);
+    const map_bytes = try mmapPath(args[2]);
+    defer std.posix.munmap(map_bytes);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
     var analyzer = Analyzer{ .allocator = arena.allocator() };
     try analyzer.parseReach(reach_bytes);
     try analyzer.parseMap(map_bytes);

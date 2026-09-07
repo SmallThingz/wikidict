@@ -2,7 +2,9 @@ const std = @import("std");
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
-    fn deinit(self: *Mapped) void { std.posix.munmap(self.bytes); }
+    fn deinit(self: *Mapped) void {
+        std.posix.munmap(self.bytes);
+    }
 };
 
 fn mmapPath(path: []const u8) !Mapped {
@@ -210,7 +212,9 @@ const Analyzer = struct {
         if (self.title_to_id.get(redirected)) |id| return id;
         const normalized = if (std.mem.indexOfScalar(u8, redirected, '_') != null) blk: {
             const copy = try self.allocator.dupe(u8, redirected);
-            for (copy) |*c| { if (c.* == '_') c.* = ' '; }
+            for (copy) |*c| {
+                if (c.* == '_') c.* = ' ';
+            }
             break :blk copy;
         } else try self.allocator.dupe(u8, redirected);
         const final = self.redirect(normalized);
@@ -328,22 +332,31 @@ const Analyzer = struct {
 
         for (self.fn_roots.items) |root| {
             try w.print("F\t{d}\t{d}\t", .{ root.page_id, root.function_start });
-            try writeField(w, root.module); try w.writeByte('\t');
-            try writeField(w, root.function); try w.writeByte('\n');
+            try writeField(w, root.module);
+            try w.writeByte('\t');
+            try writeField(w, root.function);
+            try w.writeByte('\n');
         }
         for (self.unresolved_exports.items) |root| {
-            try w.writeAll("G\t"); try writeField(w, root.module); try w.writeByte('\t');
-            try writeField(w, root.function); try w.writeByte('\n');
+            try w.writeAll("G\t");
+            try writeField(w, root.module);
+            try w.writeByte('\t');
+            try writeField(w, root.function);
+            try w.writeByte('\n');
         }
         for (self.missing_roots.items) |root| {
-            try w.writeAll("H\t"); try writeField(w, root.module); try w.writeByte('\t');
-            try writeField(w, root.function); try w.writeByte('\n');
+            try w.writeAll("H\t");
+            try writeField(w, root.module);
+            try w.writeByte('\t');
+            try writeField(w, root.function);
+            try w.writeByte('\n');
         }
         for (self.missing_static.items) |item| {
             try w.print("J\t{d}\t{c}\t{d}\t{d}\t{d}\t", .{
                 item.source, item.dep.kind, item.dep.function_start, item.dep.span_start, item.dep.span_end,
             });
-            try writeField(w, item.dep.target); try w.writeByte('\n');
+            try writeField(w, item.dep.target);
+            try w.writeByte('\n');
         }
         var dit = self.dynamic_sites.iterator();
         while (dit.next()) |entry| {

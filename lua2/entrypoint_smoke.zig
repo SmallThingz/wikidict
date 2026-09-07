@@ -26,9 +26,21 @@ fn unescape(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     var i: usize = 0;
     while (i < raw.len) {
-        if (raw[i] != '\\' or i + 1 >= raw.len) { try out.append(a, raw[i]); i += 1; continue; }
-        i += 1; const c = raw[i]; i += 1;
-        try out.append(a, switch (c) { 't' => '\t', 'n' => '\n', 'r' => '\r', '\\' => '\\', else => c });
+        if (raw[i] != '\\' or i + 1 >= raw.len) {
+            try out.append(a, raw[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        const c = raw[i];
+        i += 1;
+        try out.append(a, switch (c) {
+            't' => '\t',
+            'n' => '\n',
+            'r' => '\r',
+            '\\' => '\\',
+            else => c,
+        });
     }
     return out.toOwnedSlice(a);
 }
@@ -61,14 +73,16 @@ fn parseUsage(a: std.mem.Allocator, bytes: []const u8, map: *std.StringHashMapUn
         const function = try unescape(a, fields.items[2]);
         const entry = try getEntry(a, map, module, function);
         if (kind == 'U') {
-            if (!entry.is_root) { entry.is_root = true; try roots.append(a, entry); }
+            if (!entry.is_root) {
+                entry.is_root = true;
+                try roots.append(a, entry);
+            }
             continue;
         }
         if (fields.items.len < 6) continue;
         const missing = std.mem.eql(u8, fields.items[5], "true");
         var chosen: ?[]const u8 = null;
-        if (fields.items.len > 6) chosen = try unescape(a, fields.items[6])
-        else if (!missing and std.mem.eql(u8, fields.items[4], "true")) chosen = "";
+        if (fields.items.len > 6) chosen = try unescape(a, fields.items[6]) else if (!missing and std.mem.eql(u8, fields.items[4], "true")) chosen = "";
         if (chosen) |value| {
             const arg = Arg{ .name = try unescape(a, fields.items[3]), .value = value };
             if (kind == 'P') try entry.current.append(a, arg) else try entry.parent.append(a, arg);
@@ -81,7 +95,8 @@ fn frameArgs(a: std.mem.Allocator, args: []const Arg) ![]host.FrameArg {
     for (args, 0..) |arg, i| {
         const key: rt.Value = if (std.fmt.parseInt(u32, arg.name, 10)) |n|
             .{ .number = @floatFromInt(n) }
-        else |_| .{ .string = arg.name };
+        else |_|
+            .{ .string = arg.name };
         out[i] = .{ .key = key, .value = .{ .string = arg.value } };
     }
     return out;

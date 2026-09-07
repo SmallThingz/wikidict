@@ -23,17 +23,15 @@ const Capture = struct {
         if (node.kind != .element) return true;
         if (node.depth < self.names_by_depth.len) self.names_by_depth[node.depth] = node.nameSlice();
         const name = node.nameSlice();
-        if (node.depth == 1 and std.mem.eql(u8, name, "title")) self.title_raw = node.leadingTextRaw()
-        else if (node.depth == 1 and std.mem.eql(u8, name, "ns")) self.ns_raw = node.leadingTextRaw()
-        else if (node.depth == 1 and std.mem.eql(u8, name, "id")) self.id_raw = node.leadingTextRaw()
-        else if (node.depth == 1 and std.mem.eql(u8, name, "redirect")) self.redirect_raw = node.getAttributeValueRaw("title")
-        else if (node.depth == 2 and std.mem.eql(u8, name, "text") and std.mem.eql(u8, self.names_by_depth[1], "revision")) self.text_raw = node.leadingTextRaw();
+        if (node.depth == 1 and std.mem.eql(u8, name, "title")) self.title_raw = node.leadingTextRaw() else if (node.depth == 1 and std.mem.eql(u8, name, "ns")) self.ns_raw = node.leadingTextRaw() else if (node.depth == 1 and std.mem.eql(u8, name, "id")) self.id_raw = node.leadingTextRaw() else if (node.depth == 1 and std.mem.eql(u8, name, "redirect")) self.redirect_raw = node.getAttributeValueRaw("title") else if (node.depth == 2 and std.mem.eql(u8, name, "text") and std.mem.eql(u8, self.names_by_depth[1], "revision")) self.text_raw = node.leadingTextRaw();
         return true;
     }
 };
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
-    fn deinit(self: *Mapped) void { std.posix.munmap(self.bytes); }
+    fn deinit(self: *Mapped) void {
+        std.posix.munmap(self.bytes);
+    }
 };
 
 fn mmapPath(path: []const u8) !Mapped {
@@ -116,9 +114,9 @@ pub fn main(init: std.process.Init) !void {
         }
         try mw.writeByte('\n');
         templates += 1;
-        if (templates % 5000 == 0) std.debug.print("templates={d} pages={d}\n", .{templates, pages});
+        if (templates % 5000 == 0) std.debug.print("templates={d} pages={d}\n", .{ templates, pages });
         _ = arena.reset(.retain_capacity);
     }
     try mw.flush();
-    std.debug.print("TOTAL pages={d} templates={d}\n", .{pages, templates});
+    std.debug.print("TOTAL pages={d} templates={d}\n", .{ pages, templates });
 }

@@ -66,7 +66,10 @@ const Matcher = struct {
     fn bracketClass(self: *const Matcher, c: u8, p: usize, ep: usize) bool {
         var i = p + 1;
         var sig = true;
-        if (i < ep and self.pattern[i] == '^') { sig = false; i += 1; }
+        if (i < ep and self.pattern[i] == '^') {
+            sig = false;
+            i += 1;
+        }
         while (i + 1 < ep) {
             if (self.pattern[i] == '%') {
                 if (i + 1 < ep and matchClass(c, self.pattern[i + 1])) return sig;
@@ -301,8 +304,7 @@ pub const Iterator = struct {
             return null;
         };
         if (found.end == found.start) {
-            if (found.end >= self.source.len) self.done = true
-            else self.next_start = found.end + 1;
+            if (found.end >= self.source.len) self.done = true else self.next_start = found.end + 1;
         } else self.next_start = found.end;
         self.last_end = found.end;
         return found;

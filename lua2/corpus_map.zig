@@ -67,7 +67,8 @@ const Analyzer = struct {
                 if (s.else_body) |b| try self.walkBlock(b, fn_start);
             },
             .numeric_for => |s| {
-                try self.walkExpr(s.start, fn_start); try self.walkExpr(s.limit, fn_start);
+                try self.walkExpr(s.start, fn_start);
+                try self.walkExpr(s.limit, fn_start);
                 if (s.step) |v| try self.walkExpr(v, fn_start);
                 try self.walkBlock(s.body, fn_start);
             },
@@ -89,7 +90,10 @@ const Analyzer = struct {
     fn walkLValue(self: *Analyzer, lv: lua.LValue, fn_start: u32) anyerror!void {
         switch (lv) {
             .name => {},
-            .index => |i| { try self.walkExpr(i.object, fn_start); try self.walkExpr(i.key, fn_start); },
+            .index => |i| {
+                try self.walkExpr(i.object, fn_start);
+                try self.walkExpr(i.key, fn_start);
+            },
         }
     }
 
@@ -101,7 +105,10 @@ const Analyzer = struct {
         switch (expr.*) {
             .nil_lit, .bool_lit, .number, .string, .vararg, .name => {},
             .paren => |e| try self.walkExpr(e.expr, fn_start),
-            .index => |e| { try self.walkExpr(e.object, fn_start); try self.walkExpr(e.key, fn_start); },
+            .index => |e| {
+                try self.walkExpr(e.object, fn_start);
+                try self.walkExpr(e.key, fn_start);
+            },
             .call => |e| {
                 try self.emitCall(expr, e.callee, e.args, fn_start);
                 try self.walkExpr(e.callee, fn_start);
@@ -128,13 +135,18 @@ const Analyzer = struct {
             .table => |e| for (e.fields) |field| switch (field) {
                 .list => |v| try self.walkExpr(v, fn_start),
                 .named => |v| {
-                    if (v.value.* == .function) try self.walkExprLabeled(v.value, fn_start, v.name)
-                    else try self.walkExpr(v.value, fn_start);
+                    if (v.value.* == .function) try self.walkExprLabeled(v.value, fn_start, v.name) else try self.walkExpr(v.value, fn_start);
                 },
-                .keyed => |v| { try self.walkExpr(v.key, fn_start); try self.walkExpr(v.value, fn_start); },
+                .keyed => |v| {
+                    try self.walkExpr(v.key, fn_start);
+                    try self.walkExpr(v.value, fn_start);
+                },
             },
             .unary => |e| try self.walkExpr(e.expr, fn_start),
-            .binary => |e| { try self.walkExpr(e.lhs, fn_start); try self.walkExpr(e.rhs, fn_start); },
+            .binary => |e| {
+                try self.walkExpr(e.lhs, fn_start);
+                try self.walkExpr(e.rhs, fn_start);
+            },
         }
     }
 
@@ -170,7 +182,10 @@ const Analyzer = struct {
         try self.writer.print("F\t{s}\t{d}\t{d}\t", .{ self.page_id, f.span.start, f.span.end });
         try writeEscaped(self.writer, name);
         try self.writer.print("\t{}\t", .{f.is_vararg});
-        for (f.params, 0..) |p, i| { if (i != 0) try self.writer.writeByte(','); try self.writer.writeAll(p); }
+        for (f.params, 0..) |p, i| {
+            if (i != 0) try self.writer.writeByte(',');
+            try self.writer.writeAll(p);
+        }
         try self.writer.writeByte('\n');
     }
 
@@ -181,7 +196,10 @@ const Analyzer = struct {
     fn row(self: *Analyzer, kind: []const u8, fn_start: u32, span: lua.Span, text: []const u8, extra: ?[]const u8) !void {
         try self.writer.print("{s}\t{s}\t{d}\t{d}\t{d}\t", .{ kind, self.page_id, fn_start, span.start, span.end });
         try writeEscaped(self.writer, text);
-        if (extra) |e| { try self.writer.writeByte('\t'); try writeEscaped(self.writer, e); }
+        if (extra) |e| {
+            try self.writer.writeByte('\t');
+            try writeEscaped(self.writer, e);
+        }
         try self.writer.writeByte('\n');
     }
 
@@ -278,7 +296,9 @@ const Analyzer = struct {
         };
     }
 
-    fn freeMaybe(_: *Analyzer, s: []const u8) void { std.heap.page_allocator.free(@constCast(s)); }
+    fn freeMaybe(_: *Analyzer, s: []const u8) void {
+        std.heap.page_allocator.free(@constCast(s));
+    }
 };
 
 fn exprStaticPathAlloc(expr: *const lua.Expr) !?[]u8 {
@@ -327,14 +347,29 @@ fn collectWriteCounts(block: lua.Block, out: *std.StringHashMapUnmanaged(u32)) a
     for (block) |stmt| switch (stmt.*) {
         .assign => |s| for (s.targets) |target| try bumpLValueWrite(out, target),
         .local_assign => |s| for (s.names) |name| try bumpWrite(out, name),
-        .local_function => |s| { try bumpWrite(out, s.name); try collectWriteCounts(s.function.function.body, out); },
-        .function_assign => |s| { try bumpLValueWrite(out, s.target); try collectWriteCounts(s.function.function.body, out); },
+        .local_function => |s| {
+            try bumpWrite(out, s.name);
+            try collectWriteCounts(s.function.function.body, out);
+        },
+        .function_assign => |s| {
+            try bumpLValueWrite(out, s.target);
+            try collectWriteCounts(s.function.function.body, out);
+        },
         .do_block => |s| try collectWriteCounts(s.body, out),
         .while_loop => |s| try collectWriteCounts(s.body, out),
         .repeat_loop => |s| try collectWriteCounts(s.body, out),
-        .if_stmt => |s| { for (s.branches) |b| try collectWriteCounts(b.body, out); if (s.else_body) |b| try collectWriteCounts(b, out); },
-        .numeric_for => |s| { try bumpWrite(out, s.name); try collectWriteCounts(s.body, out); },
-        .generic_for => |s| { for (s.names) |name| try bumpWrite(out, name); try collectWriteCounts(s.body, out); },
+        .if_stmt => |s| {
+            for (s.branches) |b| try collectWriteCounts(b.body, out);
+            if (s.else_body) |b| try collectWriteCounts(b, out);
+        },
+        .numeric_for => |s| {
+            try bumpWrite(out, s.name);
+            try collectWriteCounts(s.body, out);
+        },
+        .generic_for => |s| {
+            for (s.names) |name| try bumpWrite(out, name);
+            try collectWriteCounts(s.body, out);
+        },
         .call, .return_stmt, .empty, .break_stmt => {},
     };
 }
@@ -346,16 +381,37 @@ fn collectLocalNames(block: lua.Block, out: *ShadowMap) anyerror!void {
         .do_block => |s| try collectLocalNames(s.body, out),
         .while_loop => |s| try collectLocalNames(s.body, out),
         .repeat_loop => |s| try collectLocalNames(s.body, out),
-        .if_stmt => |s| { for (s.branches) |b| try collectLocalNames(b.body, out); if (s.else_body) |b| try collectLocalNames(b, out); },
-        .numeric_for => |s| { try out.put(std.heap.smp_allocator, s.name, {}); try collectLocalNames(s.body, out); },
-        .generic_for => |s| { for (s.names) |name| try out.put(std.heap.smp_allocator, name, {}); try collectLocalNames(s.body, out); },
+        .if_stmt => |s| {
+            for (s.branches) |b| try collectLocalNames(b.body, out);
+            if (s.else_body) |b| try collectLocalNames(b, out);
+        },
+        .numeric_for => |s| {
+            try out.put(std.heap.smp_allocator, s.name, {});
+            try collectLocalNames(s.body, out);
+        },
+        .generic_for => |s| {
+            for (s.names) |name| try out.put(std.heap.smp_allocator, name, {});
+            try collectLocalNames(s.body, out);
+        },
         .assign, .function_assign, .call, .return_stmt, .empty, .break_stmt => {},
     };
 }
 
-fn stringValue(expr: *const lua.Expr) ?[]const u8 { return switch (expr.*) { .string => |sval| sval.value, .paren => |pval| stringValue(pval.expr), else => null }; }
+fn stringValue(expr: *const lua.Expr) ?[]const u8 {
+    return switch (expr.*) {
+        .string => |sval| sval.value,
+        .paren => |pval| stringValue(pval.expr),
+        else => null,
+    };
+}
 fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
-    for (s) |c| switch (c) { '\t' => try w.writeAll("\\t"), '\n' => try w.writeAll("\\n"), '\r' => try w.writeAll("\\r"), '\\' => try w.writeAll("\\\\"), else => try w.writeByte(c) };
+    for (s) |c| switch (c) {
+        '\t' => try w.writeAll("\\t"),
+        '\n' => try w.writeAll("\\n"),
+        '\r' => try w.writeAll("\\r"),
+        '\\' => try w.writeAll("\\\\"),
+        else => try w.writeByte(c),
+    };
 }
 
 fn pageId(name: []const u8) ?[]const u8 {
@@ -381,12 +437,15 @@ pub fn main(init: std.process.Init) !void {
         const id = pageId(entry.name) orelse continue;
         const path = try std.fmt.allocPrint(arena, "{s}/{s}", .{ base, entry.name });
         defer arena.free(path);
-        var file = try std.Io.Dir.cwd().openFile(init.io, path, .{}); defer file.close(init.io);
+        var file = try std.Io.Dir.cwd().openFile(init.io, path, .{});
+        defer file.close(init.io);
         const stat = try file.stat(init.io);
         const len = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
-        const source = try arena.alloc(u8, len); defer arena.free(source);
+        const source = try arena.alloc(u8, len);
+        defer arena.free(source);
         _ = try file.readPositionalAll(init.io, source, 0);
-        var chunk = try lua.parse(arena, source); defer chunk.deinit();
+        var chunk = try lua.parse(arena, source);
+        defer chunk.deinit();
         var a = Analyzer{ .source = chunk.source, .writer = w, .page_id = id };
         defer a.deinit();
         try a.run(chunk.body);

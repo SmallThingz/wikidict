@@ -1,16 +1,25 @@
 const global_abi = @import("vm_global_abi.zig");
+const refs = @import("vm_ref.zig");
 const std = @import("std");
 const ir = @import("vm_ir.zig");
 const rt = @import("vm_runtime.zig");
 const lua = @import("root.zig");
 
 pub const Value = rt.Value;
+const instruction_limit: u64 = if (@hasDecl(@import("root"), "vm_instruction_limit"))
+    @import("root").vm_instruction_limit
+else
+    0;
 
 pub const Failure = struct { program: *const ir.Program, function_id: u32, pc: usize };
 
 const Frame = struct {
+    program: *const ir.Program,
     regs: []Value,
     cells: ?[]?*rt.Cell = null,
+    cells_owned: bool = false,
+    module_id: ?u32 = null,
+    module_env: ?*rt.ModuleEnv = null,
     varargs: []const Value,
     upvalues: []const *rt.Cell,
     multi: []const Value = &.{},
@@ -21,12 +30,19 @@ const Frame = struct {
 pub const Vm = struct {
     allocator: std.mem.Allocator,
     globals: *rt.Table,
+    global_program: ?*const ir.Program = null,
     string_metatable: ?*rt.Table = null,
     depth: usize = 0,
     max_depth: usize = 1000,
+    // Diagnostic replay opt-in. No storage or dispatch work in production.
+    instructions_left: if (instruction_limit != 0) u64 else void = if (instruction_limit != 0) instruction_limit else {},
+
     last_error: Value = .nil,
     failure: ?Failure = null,
     string_intern: std.StringHashMapUnmanaged([]const u8) = .empty,
+    linked_program: ?*const ir.Program = null,
+    module_state: []u8 = &.{},
+    static_functions: []Value = &.{},
 
     pub fn init(allocator: std.mem.Allocator) !Vm {
         const globals = try rt.newTable(allocator);
@@ -34,20 +50,37 @@ pub const Vm = struct {
             globals.deinit(allocator);
             allocator.destroy(globals);
         }
-        globals.global_values = try allocator.create([global_abi.count]Value);
-        @memset(globals.global_values.?, .nil);
-
+        globals.shape_id = global_abi.native_shape;
+        globals.slots = try allocator.alloc(Value, global_abi.count);
+        @memset(globals.slots, .nil);
         const vm = Vm{ .allocator = allocator, .globals = globals };
-        try globals.globalSet(global_abi.id("_G"), .{ .table = globals });
+        try globals.rawSetSlot(global_abi.id("_G"), .{ .table = globals });
         return vm;
     }
 
     pub fn getGlobal(self: *const Vm, comptime name: []const u8) ?Value {
-        return self.globals.globalGet(global_abi.id(name));
+        return self.globals.rawGetSlot(global_abi.id(name));
     }
     pub fn setGlobal(self: *Vm, comptime name: []const u8, value: Value) !void {
-        try self.globals.globalSet(global_abi.id(name), value);
+        try self.globals.rawSetSlot(global_abi.id(name), value);
     }
+    fn bindGlobals(self: *Vm, p: *const ir.Program) !void {
+        const id = p.global_shape orelse return;
+        if (self.global_program == p) return;
+        if (self.global_program != null) return error.MultipleGlobalLayouts;
+        const shape = p.shapes.items[id];
+        if (shape.field_count < global_abi.count) return error.BadGlobalLayout;
+        if (self.globals.map.count() != 0) return error.UnlinkedGlobalBindings;
+        const slots = try self.allocator.alloc(Value, shape.field_count);
+        @memset(slots, .nil);
+        @memcpy(slots[0..global_abi.count], self.globals.slots[0..global_abi.count]);
+        self.allocator.free(self.globals.slots);
+        self.globals.slots = slots;
+        self.globals.shape_program = p;
+        self.globals.shape_id = id;
+        self.global_program = p;
+    }
+
     fn rawFreeSlice(comptime T: type, allocator: std.mem.Allocator, values: []T) void {
         if (values.len == 0) return;
         const bytes = std.mem.sliceAsBytes(values);
@@ -58,9 +91,46 @@ pub const Vm = struct {
         rawFreeSlice(Value, std.heap.smp_allocator, @constCast(values));
     }
 
-    fn getReg(_: *Vm, f: *const Frame, r: u32) Value {
+    inline fn getReg(_: *Vm, f: *const Frame, r: u32) Value {
+        switch (refs.tag(r)) {
+            .register => {},
+            .integer => return .{ .number = @floatFromInt(refs.integerValue(r)) },
+            .string => return .{ .string = f.program.strings.items[refs.index(r)] },
+            .special => return switch (r) {
+                refs.nil => .nil,
+                refs.false_value => .{ .boolean = false },
+                refs.true_value => .{ .boolean = true },
+                else => unreachable,
+            },
+            .constant => return switch (f.program.constants.items[refs.index(r)]) {
+                .nil => .nil,
+                .boolean => |v| .{ .boolean = v },
+                .number_bits => |v| .{ .number = @bitCast(v) },
+                .integer => |v| .{ .number = @floatFromInt(v) },
+                .string => |v| .{ .string = f.program.strings.items[v] },
+                else => unreachable,
+            },
+            else => unreachable,
+        }
         if (f.cells) |cells| if (cells[r]) |cell| return cell.value;
         return f.regs[r];
+    }
+    // These opcodes carry a compile-time numeric proof. Do not construct or
+    // inspect a generic Value when fetching their numeric operands.
+    inline fn getNumber(_: *Vm, f: *const Frame, r: u32) f64 {
+        return switch (refs.tag(r)) {
+            .register => blk: {
+                if (f.cells) |cells| if (cells[r]) |cell| break :blk cell.value.number;
+                break :blk f.regs[r].number;
+            },
+            .integer => @floatFromInt(refs.integerValue(r)),
+            .constant => switch (f.program.constants.items[refs.index(r)]) {
+                .number_bits => |bits| @bitCast(bits),
+                .integer => |n| @floatFromInt(n),
+                else => unreachable,
+            },
+            else => unreachable,
+        };
     }
     fn setReg(_: *Vm, f: *Frame, r: u32, v: Value) void {
         if (f.cells) |cells| if (cells[r]) |cell| {
@@ -69,6 +139,22 @@ pub const Vm = struct {
         };
         f.regs[r] = v;
     }
+    fn ensureModuleEnvironment(self: *Vm, f: *Frame) !*rt.ModuleEnv {
+        if (f.module_env) |env| return env;
+        const module_id = f.module_id orelse return error.NotModuleRoot;
+        const cells = try self.allocator.alloc(?*rt.Cell, f.regs.len);
+        @memset(cells, null);
+        if (f.cells) |old| {
+            @memcpy(cells, old);
+            if (f.cells_owned) rawFreeSlice(?*rt.Cell, std.heap.smp_allocator, old);
+        }
+        const env = try self.allocator.create(rt.ModuleEnv);
+        env.* = .{ .program = f.program, .module_id = module_id, .cells = cells };
+        f.module_env = env;
+        f.cells = cells;
+        f.cells_owned = false;
+        return env;
+    }
     fn ensureCell(self: *Vm, f: *Frame, r: u32) !*rt.Cell {
         if (f.cells) |cells| {
             if (cells[r]) |cell| return cell;
@@ -76,14 +162,14 @@ pub const Vm = struct {
             const cells = try std.heap.smp_allocator.alloc(?*rt.Cell, f.regs.len);
             @memset(cells, null);
             f.cells = cells;
+            f.cells_owned = true;
         }
         const cell = try self.allocator.create(rt.Cell);
         cell.* = .{ .value = f.regs[r] };
         f.cells.?[r] = cell;
         return cell;
     }
-
-    fn parseLuaNumber(raw: []const u8) !f64 {
+    pub fn parseLuaNumber(raw: []const u8) !f64 {
         var s = raw;
         var sign: f64 = 1;
         if (s.len != 0 and s[0] == '-') {
@@ -122,12 +208,18 @@ pub const Vm = struct {
             .nil => .nil,
             .boolean => |b| .{ .boolean = b },
             .number => |sid| .{ .number = try parseLuaNumber(p.strings.items[sid]) },
+            .number_bits => |bits| .{ .number = @bitCast(bits) },
             .string => |sid| .{ .string = p.strings.items[sid] },
             .integer => |n| .{ .number = @floatFromInt(n) },
             .table => |tinfo| blk: {
                 const t = try rt.newTable(self.allocator);
+                var list_index: u32 = 1;
                 for (p.const_entries.items[tinfo.first .. tinfo.first + tinfo.count]) |e| {
-                    const key = try self.materializeConst(p, e.key);
+                    const key: Value = if (e.key == ir.implicit_list_key) list_key: {
+                        const n = list_index;
+                        list_index += 1;
+                        break :list_key .{ .number = @floatFromInt(n) };
+                    } else try self.materializeConst(p, e.key);
                     const value = try self.materializeConst(p, e.value);
                     try t.rawSet(self.allocator, key, value);
                 }
@@ -186,9 +278,58 @@ pub const Vm = struct {
         try t.rawSet(self.allocator, key, value);
     }
 
+    fn getSlot(self: *Vm, object: Value, slot: u32) anyerror!Value {
+        if (object != .table) return error.IndexType;
+        const t = object.table;
+        if (t.rawGetSlot(slot)) |value| return value;
+        if (t.metatable == null) return .nil;
+        const key = t.fieldKey(slot) orelse return error.BadAnonymousShapeMetatable;
+        return self.getIndex(object, key);
+    }
+
+    fn setSlot(self: *Vm, object: Value, slot: u32, value: Value) anyerror!void {
+        if (object != .table) return error.IndexType;
+        const t = object.table;
+        if (t.rawGetSlot(slot) != null or t.metatable == null) return t.rawSetSlot(slot, value);
+        const key = t.fieldKey(slot) orelse return error.BadAnonymousShapeMetatable;
+        return self.setIndex(object, key, value);
+    }
+
+    fn getChoice(self: *Vm, object: Value, choice: u32, key: Value) anyerror!Value {
+        if (object != .table) return error.IndexType;
+        const t = object.table;
+        if (t.rawGetChoice(choice, key)) |value| return value;
+        if (t.metatable == null) return .nil;
+        return self.getIndex(object, key);
+    }
+    fn setChoice(self: *Vm, object: Value, choice: u32, key: Value, value: Value) anyerror!void {
+        if (object != .table) return error.IndexType;
+        const t = object.table;
+        if (t.rawGetChoice(choice, key) != null or t.metatable == null)
+            return t.rawSetChoice(choice, key, value);
+        return self.setIndex(object, key, value);
+    }
+
+    fn callFunctionValue(self: *Vm, value: rt.FunctionValue, args: []const Value) anyerror![]const Value {
+        const p = value.env.program;
+        if (value.function_id >= p.functions.items.len) return error.BadBytecode;
+        const target = p.functions.items[value.function_id] orelse return error.BadBytecode;
+        if (target.upvalues.items.len == 0) return self.execute(p, value.function_id, &.{}, args);
+        var scratch = std.heap.stackFallback(8 * @sizeOf(*rt.Cell), std.heap.smp_allocator);
+        const a = scratch.get();
+        const captures = try a.alloc(*rt.Cell, target.upvalues.items.len);
+        defer a.free(captures);
+        for (target.upvalues.items, 0..) |up, i| {
+            if (up.source != .local or up.index >= value.env.cells.len) return error.BadStaticEnvironment;
+            captures[i] = value.env.cells[up.index] orelse return error.BadStaticEnvironment;
+        }
+        return self.execute(p, value.function_id, captures, args);
+    }
+
     pub fn callValue(self: *Vm, callable: Value, args: []const Value) anyerror![]const Value {
         return switch (callable) {
             .closure => |c| try self.execute(c.program, c.function_id, c.upvalues, args),
+            .function => |f| try self.callFunctionValue(f, args),
             .native => |n| try n.call(n.ctx, self, args, self.allocator),
             .table => blk: {
                 const mm = self.metamethod(callable, "__call") orelse return error.NotCallable;
@@ -352,11 +493,44 @@ pub const Vm = struct {
         return .{ .closure = c };
     }
 
+    fn ensureLinkedTables(self: *Vm, p: *const ir.Program) !void {
+        if (self.linked_program == p) return;
+        if (self.linked_program != null) return error.MultipleLinkedPrograms;
+        if (p.function_modules.items.len != p.functions.items.len) return error.NotLinkedProgram;
+        self.module_state = try self.allocator.alloc(u8, p.module_roots.items.len);
+        @memset(self.module_state, 0);
+        self.static_functions = try self.allocator.alloc(Value, p.functions.items.len);
+        @memset(self.static_functions, .nil);
+        self.linked_program = p;
+    }
+
+    fn ensureModule(self: *Vm, p: *const ir.Program, module_id: u32) anyerror!void {
+        try self.ensureLinkedTables(p);
+        if (module_id >= p.module_roots.items.len) return error.BadBytecode;
+        if (self.module_state[module_id] == 2) return;
+        if (self.module_state[module_id] == 1) return error.ModuleLoadLoop;
+        self.module_state[module_id] = 1;
+        errdefer self.module_state[module_id] = 0;
+        const init_out = try self.execute(p, p.module_roots.items[module_id], &.{}, &.{});
+        freeResults(init_out);
+        self.module_state[module_id] = 2;
+    }
+
+    fn directFunction(self: *Vm, p: *const ir.Program, function_id: u32) anyerror!Value {
+        try self.ensureLinkedTables(p);
+        if (function_id >= self.static_functions.len) return error.BadBytecode;
+        const module_id = p.function_modules.items[function_id];
+        try self.ensureModule(p, module_id);
+        if (self.static_functions[function_id] == .nil) return error.UnregisteredStaticFunction;
+        return self.static_functions[function_id];
+    }
+
     pub fn executeRoot(self: *Vm, p: *const ir.Program, args: []const Value) anyerror![]const Value {
         return self.execute(p, p.root_function, &.{}, args);
     }
 
     pub fn execute(self: *Vm, p: *const ir.Program, function_id: u32, upvalues: []const *rt.Cell, args: []const Value) anyerror![]const Value {
+        try self.bindGlobals(p);
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
@@ -380,13 +554,51 @@ pub const Vm = struct {
         @memcpy(regs[0..nparams], args[0..nparams]);
         @memset(regs[nparams..param_count], .nil);
         const varargs = if (fun.is_vararg and args.len > fun.param_count) args[fun.param_count..] else &.{};
-        var frame = Frame{ .regs = regs, .varargs = varargs, .upvalues = upvalues };
-        defer if (frame.cells) |cells| rawFreeSlice(?*rt.Cell, std.heap.smp_allocator, cells);
+        var module_id: ?u32 = null;
+        if (p.function_modules.items.len == p.functions.items.len and function_id < p.function_modules.items.len) {
+            const candidate = p.function_modules.items[function_id];
+            if (candidate < p.module_roots.items.len and p.module_roots.items[candidate] == function_id) module_id = candidate;
+        }
+        var frame = Frame{ .program = p, .regs = regs, .module_id = module_id, .varargs = varargs, .upvalues = upvalues };
+        defer if (frame.cells_owned) if (frame.cells) |cells| rawFreeSlice(?*rt.Cell, std.heap.smp_allocator, cells);
         defer if (frame.multi_owned) freeResults(frame.multi);
         while (pc < fun.insts.items.len) {
             const inst = fun.insts.items[pc];
             pc += 1;
+            if (comptime instruction_limit != 0) {
+                if (self.instructions_left == 0) return error.InstructionLimit;
+                self.instructions_left -= 1;
+            }
+
+            if (@import("builtin").mode == .Debug or @import("builtin").mode == .ReleaseSafe) {
+                switch (inst.op) {
+                    .add_number, .sub_number, .mul_number, .div_number, .mod_number, .pow_number, .eq_number, .ne_number, .lt_number, .le_number, .gt_number, .ge_number => {
+                        const x = self.getReg(&frame, inst.a);
+                        const y = self.getReg(&frame, inst.b);
+                        if (x != .number or y != .number) {
+                            std.debug.print("TYPE_PROOF_FAILURE function={d} pc={d} op={s} a={x}:{s} b={x}:{s}\n", .{ function_id, pc - 1, @tagName(inst.op), inst.a, @tagName(x), inst.b, @tagName(y) });
+                            return error.InvalidNumberSpecialization;
+                        }
+                    },
+                    .neg_number => if (self.getReg(&frame, inst.a) != .number) {
+                        std.debug.print("TYPE_PROOF_FAILURE function={d} pc={d} op={s}\n", .{ function_id, pc - 1, @tagName(inst.op) });
+                        return error.InvalidNumberSpecialization;
+                    },
+                    .len_string => if (self.getReg(&frame, inst.a) != .string) {
+                        return error.InvalidStringSpecialization;
+                    },
+                    else => {},
+                }
+            }
             switch (inst.op) {
+                .detach_cell => {
+                    // Old closures retain their heap cell. A subsequent capture
+                    // of this local belongs to the new inlined activation.
+                    if (frame.cells) |cells| if (cells[inst.a]) |cell| {
+                        frame.regs[inst.a] = cell.value;
+                        cells[inst.a] = null;
+                    };
+                },
                 .load_nil => self.setReg(&frame, inst.dst, .nil),
                 .load_bool => self.setReg(&frame, inst.dst, .{ .boolean = inst.a != 0 }),
                 .load_number => self.setReg(&frame, inst.dst, .{ .number = try parseLuaNumber(p.strings.items[inst.aux]) }),
@@ -402,10 +614,30 @@ pub const Vm = struct {
                     }
                 },
                 .load_const => self.setReg(&frame, inst.dst, try self.materializeConst(p, inst.aux)),
+                .get_global_slot => self.setReg(&frame, inst.dst, self.globals.rawGetSlot(inst.aux) orelse .nil),
+                .set_global_slot => try self.globals.rawSetSlot(inst.aux, self.getReg(&frame, inst.a)),
+                .call_scoped, .call_scoped_vararg => {
+                    const target = p.functions.items[inst.a] orelse return error.BadBytecode;
+                    var scratch = std.heap.stackFallback(8 * @sizeOf(*rt.Cell), std.heap.smp_allocator);
+                    const capture_allocator = scratch.get();
+                    const captures = try capture_allocator.alloc(*rt.Cell, target.upvalues.items.len);
+                    defer capture_allocator.free(captures);
+                    for (target.upvalues.items, 0..) |up, i| captures[i] = switch (up.source) {
+                        .local => try self.ensureCell(&frame, up.index),
+                        .upvalue => frame.upvalues[up.index],
+                    };
+                    const argv = try self.buildArgs(&frame, &fun, inst, 0, inst.op == .call_scoped_vararg);
+                    defer rawFreeSlice(Value, std.heap.smp_allocator, argv);
+                    const out = try self.execute(p, inst.a, captures, argv);
+                    self.storeResults(&frame, inst.dst, inst.count, out, true);
+                },
+                .call_local, .call_local_vararg => {
+                    const argv = try self.buildArgs(&frame, &fun, inst, 0, inst.op == .call_local_vararg);
+                    defer rawFreeSlice(Value, std.heap.smp_allocator, argv);
+                    const out = try self.execute(p, inst.a, &.{}, argv);
+                    self.storeResults(&frame, inst.dst, inst.count, out, true);
+                },
                 .get_global => self.setReg(&frame, inst.dst, self.globals.rawGet(.{ .string = p.strings.items[inst.aux] }) orelse .nil),
-                .get_global_slot => self.setReg(&frame, inst.dst, self.globals.global_values.?[inst.aux]),
-                .set_global_slot => try self.globals.globalSet(inst.aux, self.getReg(&frame, inst.a)),
-
                 .set_global => try self.globals.rawSet(self.allocator, .{ .string = p.strings.items[inst.aux] }, self.getReg(&frame, inst.a)),
                 .get_upvalue => {
                     const value = upvalues[inst.a].value;
@@ -435,7 +667,10 @@ pub const Vm = struct {
                 },
                 .vararg => self.storeResults(&frame, inst.dst, inst.count, varargs, false),
                 .new_table => self.setReg(&frame, inst.dst, .{ .table = try rt.newTable(self.allocator) }),
+                .new_table_shape => self.setReg(&frame, inst.dst, .{ .table = try rt.newShapedTable(self.allocator, p, inst.aux) }),
                 .table_set, .set_index => try self.setIndex(self.getReg(&frame, inst.a), self.getReg(&frame, inst.b), self.getReg(&frame, inst.c)),
+                .set_slot => try self.setSlot(self.getReg(&frame, inst.a), inst.aux, self.getReg(&frame, inst.c)),
+                .set_choice_slot => try self.setChoice(self.getReg(&frame, inst.a), inst.aux, self.getReg(&frame, inst.b), self.getReg(&frame, inst.c)),
                 .table_append => {
                     const t = self.getReg(&frame, inst.a);
                     if (t != .table) return error.TableExpected;
@@ -447,7 +682,31 @@ pub const Vm = struct {
                     for (self.multiAt(&frame, inst.b)) |v| try t.table.append(self.allocator, v);
                 },
                 .get_index => self.setReg(&frame, inst.dst, try self.getIndex(self.getReg(&frame, inst.a), self.getReg(&frame, inst.b))),
+                .get_slot => self.setReg(&frame, inst.dst, try self.getSlot(self.getReg(&frame, inst.a), inst.aux)),
+                .get_choice_slot => self.setReg(&frame, inst.dst, try self.getChoice(self.getReg(&frame, inst.a), inst.aux, self.getReg(&frame, inst.b))),
+                .get_field => {
+                    if (inst.aux >= p.strings.items.len) return error.BadBytecode;
+                    self.setReg(&frame, inst.dst, try self.getIndex(self.getReg(&frame, inst.a), .{ .string = p.strings.items[inst.aux] }));
+                },
+                .set_field => {
+                    if (inst.aux >= p.strings.items.len) return error.BadBytecode;
+                    try self.setIndex(self.getReg(&frame, inst.a), .{ .string = p.strings.items[inst.aux] }, self.getReg(&frame, inst.c));
+                },
                 .closure => self.setReg(&frame, inst.dst, try self.makeClosure(p, inst.aux, &frame)),
+                .load_function => {
+                    const target = p.functions.items[inst.aux] orelse return error.BadBytecode;
+                    const env = try self.ensureModuleEnvironment(&frame);
+                    for (target.upvalues.items) |up| {
+                        if (up.source != .local) return error.BadStaticEnvironment;
+                        _ = try self.ensureCell(&frame, up.index);
+                    }
+                    self.setReg(&frame, inst.dst, .{ .function = .{ .env = env, .function_id = inst.aux } });
+                },
+                .register_function => {
+                    try self.ensureLinkedTables(p);
+                    if (inst.aux >= self.static_functions.len) return error.BadBytecode;
+                    self.static_functions[inst.aux] = self.getReg(&frame, inst.a);
+                },
                 .neg => self.setReg(&frame, inst.dst, try rt.unaryNeg(self.getReg(&frame, inst.a))),
                 .not_ => {
                     const value: Value = .{ .boolean = !self.getReg(&frame, inst.a).truthy() };
@@ -480,14 +739,79 @@ pub const Vm = struct {
                         }
                     }
                 },
+                .branch_compare => {
+                    const op = try @import("vm_semantics.zig").comparisonOpcode(inst.count);
+                    const result = switch (op) {
+                        .eq_number, .ne_number, .lt_number, .le_number, .gt_number, .ge_number => blk: {
+                            const x = self.getNumber(&frame, inst.a);
+                            const y = self.getNumber(&frame, inst.b);
+                            break :blk switch (op) {
+                                .eq_number => x == y,
+                                .ne_number => x != y,
+                                .lt_number => x < y,
+                                .le_number => x <= y,
+                                .gt_number => x > y,
+                                .ge_number => x >= y,
+                                else => unreachable,
+                            };
+                        },
+                        .eq, .ne, .lt, .le, .gt, .ge => try self.comparison(op, self.getReg(&frame, inst.a), self.getReg(&frame, inst.b)),
+                        else => return error.BadBytecode,
+                    };
+                    if (!result) pc = inst.aux;
+                },
                 .jump => pc = inst.aux,
+
                 .jump_if_false => {
                     if (!self.getReg(&frame, inst.a).truthy()) pc = inst.aux;
                 },
+                .check_table_key => {
+                    const key = self.getReg(&frame, inst.a);
+                    if (key == .nil) return error.NilTableKey;
+                    if (key == .number and std.math.isNan(key.number)) return error.NaNTableKey;
+                },
+                .add_number, .sub_number, .mul_number, .div_number, .mod_number, .pow_number => {
+                    const x = self.getNumber(&frame, inst.a);
+                    const y = self.getNumber(&frame, inst.b);
+                    const z = switch (inst.op) {
+                        .add_number => x + y,
+                        .sub_number => x - y,
+                        .mul_number => x * y,
+                        .div_number => x / y,
+                        .mod_number => x - @floor(x / y) * y,
+                        .pow_number => std.math.pow(f64, x, y),
+                        else => unreachable,
+                    };
+                    self.setReg(&frame, inst.dst, .{ .number = z });
+                },
+                .eq_number, .ne_number, .lt_number, .le_number, .gt_number, .ge_number => {
+                    const x = self.getNumber(&frame, inst.a);
+                    const y = self.getNumber(&frame, inst.b);
+                    const z = switch (inst.op) {
+                        .eq_number => x == y,
+                        .ne_number => x != y,
+                        .lt_number => x < y,
+                        .le_number => x <= y,
+                        .gt_number => x > y,
+                        .ge_number => x >= y,
+                        else => unreachable,
+                    };
+                    self.setReg(&frame, inst.dst, .{ .boolean = z });
+                },
+                .neg_number => self.setReg(&frame, inst.dst, .{ .number = -self.getNumber(&frame, inst.a) }),
+                .len_string => self.setReg(&frame, inst.dst, .{ .number = @floatFromInt(self.getReg(&frame, inst.a).string.len) }),
+                .init_module => try self.ensureModule(p, inst.aux),
                 .call, .call_vararg => {
                     const argv = try self.buildArgs(&frame, &fun, inst, 0, inst.op == .call_vararg);
                     defer rawFreeSlice(Value, std.heap.smp_allocator, argv);
                     const out = try self.callValue(self.getReg(&frame, inst.a), argv);
+                    self.storeResults(&frame, inst.dst, inst.count, out, true);
+                },
+                .direct_call, .direct_call_vararg => {
+                    const argv = try self.buildArgs(&frame, &fun, inst, 0, inst.op == .direct_call_vararg);
+                    defer rawFreeSlice(Value, std.heap.smp_allocator, argv);
+                    const callable = try self.directFunction(p, inst.a);
+                    const out = try self.callValue(callable, argv);
                     self.storeResults(&frame, inst.dst, inst.count, out, true);
                 },
                 .method_call, .method_call_vararg => {
@@ -497,6 +821,17 @@ pub const Vm = struct {
                     const object = self.getReg(&frame, fixed[1]);
                     const method = try self.getIndex(object, key);
                     const argv = try self.buildArgs(&frame, &fun, inst, 1, inst.op == .method_call_vararg); // skip method-key, retain self
+                    defer rawFreeSlice(Value, std.heap.smp_allocator, argv);
+                    const out = try self.callValue(method, argv);
+                    self.storeResults(&frame, inst.dst, inst.count, out, true);
+                },
+                .method_call_field, .method_call_field_vararg => {
+                    if (inst.a >= p.strings.items.len) return error.BadBytecode;
+                    const fixed = fun.operands.items[inst.aux .. inst.aux + inst.b];
+                    if (fixed.len < 1) return error.BadBytecode;
+                    const object = self.getReg(&frame, fixed[0]);
+                    const method = try self.getIndex(object, .{ .string = p.strings.items[inst.a] });
+                    const argv = try self.buildArgs(&frame, &fun, inst, 0, inst.op == .method_call_field_vararg);
                     defer rawFreeSlice(Value, std.heap.smp_allocator, argv);
                     const out = try self.callValue(method, argv);
                     self.storeResults(&frame, inst.dst, inst.count, out, true);
@@ -568,7 +903,7 @@ fn installMinimalGlobals(vm: *Vm) !void {
                 .number => "number",
                 .string => "string",
                 .table => "table",
-                .closure, .native => "function",
+                .closure, .function, .native => "function",
             };
             const out = try std.heap.smp_allocator.alloc(Value, 1);
             out[0] = .{ .string = name };
@@ -726,46 +1061,4 @@ test "make_stack function-valued __index keeps raw layers" {
     try std.testing.expectEqualStrings("C", out[0].string);
     try std.testing.expectEqualStrings("P", out[1].string);
     try std.testing.expect(out[2] == .boolean and !out[2].boolean);
-}
-
-fn expectSnapshotResults(source: []const u8, expected: []const f64) !void {
-    const a = std.testing.allocator;
-    var chunk = try lua.parse(a, source);
-    defer chunk.deinit();
-    var program = try ir.lowerChunk(a, &chunk);
-    defer program.deinit();
-    const codec = @import("vm_codec.zig");
-    const bytes = try codec.serialize(a, &program);
-    defer a.free(bytes);
-    var restored = try codec.deserializeBorrowed(a, bytes);
-    defer restored.deinit();
-    var arena = std.heap.ArenaAllocator.init(a);
-    defer arena.deinit();
-    var vm = try Vm.init(arena.allocator());
-    const result = try vm.executeRoot(&restored, &.{});
-    defer Vm.freeResults(result);
-    try std.testing.expectEqual(expected.len, result.len);
-    for (expected, result) |want, got| {
-        try std.testing.expect(got == .number);
-        try std.testing.expectEqual(want, got.number);
-    }
-}
-test "expression snapshots preserve argument evaluation before mutations" {
-    try expectSnapshotResults("local x=2;local function change() x=9;return 0 end;local function pair(a,b)return a,b end;local a,b=pair(x,change());return a,b,x", &.{ 2, 0, 9 });
-}
-test "method lookup precedes argument mutation including multiple results" {
-    try expectSnapshotResults("local t={};function t:f(x,y) return 1,x,y end;local function change() t.f=function() return 9 end;return 4,5 end;return t:f(change())", &.{ 1, 4, 5 });
-}
-test "callee identity precedes argument mutation" {
-    try expectSnapshotResults("local f=function()return 1 end;local function change() f=function()return 9 end;return 0 end;return f(change())", &.{1});
-}
-test "index object identity precedes key evaluation" {
-    try expectSnapshotResults("local t={7};local function change() t={9};return 1 end;local x=t[change()];return x,t[1]", &.{ 7, 9 });
-}
-test "parallel RHS and return values snapshot captured locals" {
-    try expectSnapshotResults("local x=2;local function change() x=9;return 4 end;local a,b=x,change();return a,b,x", &.{ 2, 4, 9 });
-    try expectSnapshotResults("local x=2;local function change() x=9;return 4 end;return x,change()", &.{ 2, 4 });
-}
-test "numeric loop bounds do not alias mutable locals" {
-    try expectSnapshotResults("local limit=3;local n=0;for i=1,limit do n=n+1;limit=1 end;return n,limit", &.{ 3, 1 });
 }

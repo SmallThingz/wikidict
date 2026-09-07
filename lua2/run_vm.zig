@@ -22,7 +22,7 @@ fn printValue(w: *std.Io.Writer, v: rt.Value) !void {
         .number => |n| try w.print("{d}", .{n}),
         .string => |s| try w.print("{f}", .{std.zig.fmtString(s)}),
         .table => try w.writeAll("<table>"),
-        .closure, .native => try w.writeAll("<function>"),
+        .closure, .function, .native => try w.writeAll("<function>"),
     }
 }
 

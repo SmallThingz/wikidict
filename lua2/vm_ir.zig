@@ -1,5 +1,5 @@
-const global_abi = @import("vm_global_abi.zig");
 const std = @import("std");
+const global_abi = @import("vm_global_abi.zig");
 const lua = @import("root.zig");
 
 pub const multi_count: u32 = std.math.maxInt(u32);
@@ -51,8 +51,43 @@ pub const Opcode = enum(u8) {
     generic_for_next,
     ret,
     ret_var,
+    init_module,
+    register_function,
+    direct_call,
+    direct_call_vararg,
+    get_field,
+    set_field,
+    method_call_field,
+    method_call_field_vararg,
+    new_table_shape,
+    get_slot,
+    set_slot,
+    get_choice_slot,
+    set_choice_slot,
+    add_number,
+    sub_number,
+    mul_number,
+    div_number,
+    mod_number,
+    pow_number,
+    eq_number,
+    ne_number,
+    lt_number,
+    le_number,
+    gt_number,
+    ge_number,
+    neg_number,
+    len_string,
+    check_table_key,
+    branch_compare,
+    detach_cell,
     get_global_slot,
     set_global_slot,
+    call_local,
+    call_local_vararg,
+    call_scoped,
+    call_scoped_vararg,
+    load_function,
 };
 
 pub const Inst = struct {
@@ -68,12 +103,25 @@ pub const Inst = struct {
 pub const ConstNode = union(enum) {
     nil,
     boolean: bool,
-    number: u32, // string-pool id containing exact Lua spelling
+    number: u32, // legacy source spelling; removed by final scalar compaction
+    number_bits: u64,
     string: u32,
     integer: u32,
     table: struct { first: u32, count: u32 },
 };
+pub const implicit_list_key: u32 = std.math.maxInt(u32);
 pub const ConstEntry = struct { key: u32, value: u32 };
+
+pub const Shape = struct {
+    field_count: u32 = 0,
+    field_keys: std.ArrayList(u32) = .empty,
+    choice_count: u32 = 0,
+    open: bool = false,
+
+    pub fn deinit(self: *Shape, a: std.mem.Allocator) void {
+        self.field_keys.deinit(a);
+    }
+};
 
 pub const UpvalueSource = enum(u8) { local, upvalue };
 pub const Upvalue = struct { source: UpvalueSource, index: u32 };
@@ -99,24 +147,44 @@ pub const Program = struct {
     allocator: std.mem.Allocator,
     strings: std.ArrayList([]const u8) = .empty,
     owned_strings: std.ArrayList([]u8) = .empty,
+    folded_numbers: std.AutoHashMapUnmanaged(u64, u32) = .empty,
     interned_strings: std.StringHashMapUnmanaged(u32) = .empty,
     functions: std.ArrayList(?Function) = .empty,
     constants: std.ArrayList(ConstNode) = .empty,
     const_entries: std.ArrayList(ConstEntry) = .empty,
+    shapes: std.ArrayList(Shape) = .empty,
+    module_roots: std.ArrayList(u32) = .empty,
+    function_modules: std.ArrayList(u32) = .empty,
     root_function: u32 = 0,
+    global_shape: ?u32 = null,
+    references_lowered: bool = false, // compiler phase, not runtime type metadata
 
     pub fn deinit(self: *Program) void {
         for (self.functions.items) |*maybe| if (maybe.*) |*f| f.deinit(self.allocator);
         self.functions.deinit(self.allocator);
         self.constants.deinit(self.allocator);
         self.const_entries.deinit(self.allocator);
+        for (self.shapes.items) |*shape| shape.deinit(self.allocator);
+        self.shapes.deinit(self.allocator);
+        self.module_roots.deinit(self.allocator);
+        self.function_modules.deinit(self.allocator);
         self.strings.deinit(self.allocator);
         for (self.owned_strings.items) |text| self.allocator.free(text);
         self.owned_strings.deinit(self.allocator);
+        self.folded_numbers.deinit(self.allocator);
         self.interned_strings.deinit(self.allocator);
     }
 
-    fn internOwned(self: *Program, text: []u8) !u32 {
+    pub fn internOwned(self: *Program, text: []const u8) !u32 {
+        if (self.interned_strings.get(text)) |id| return id;
+        const owned = try self.allocator.dupe(u8, text);
+        self.owned_strings.append(self.allocator, owned) catch |err| {
+            self.allocator.free(owned);
+            return err;
+        };
+        return self.intern(owned);
+    }
+    fn internTaking(self: *Program, text: []u8) !u32 {
         if (self.interned_strings.get(text)) |id| {
             self.allocator.free(text);
             return id;
@@ -126,6 +194,13 @@ pub const Program = struct {
             return err;
         };
         return self.intern(text);
+    }
+    pub fn numberConstant(self: *Program, bits: u64) !u32 {
+        if (self.folded_numbers.get(bits)) |id| return id;
+        const id: u32 = @intCast(self.constants.items.len);
+        try self.constants.append(self.allocator, .{ .number_bits = bits });
+        try self.folded_numbers.put(self.allocator, bits, id);
+        return id;
     }
     fn intern(self: *Program, s: []const u8) !u32 {
         if (self.interned_strings.get(s)) |id| return id;
@@ -241,12 +316,12 @@ const Lowerer = struct {
     fn loadName(self: *Lowerer, name: []const u8) CompileError!u32 {
         return switch (try self.resolve(name)) {
             .local => |reg| blk: {
-                // Snapshot a read before subsequent expressions can mutate its binding.
-                const snapshot = try self.newReg();
-                _ = try self.emit(.{ .op = .move, .dst = snapshot, .a = reg });
-                break :blk snapshot;
+                // Read an expression before later arguments can mutate its binding.
+                // Ordinary immutable aliases disappear in SSA optimization.
+                const dst = try self.newReg();
+                _ = try self.emit(.{ .op = .move, .dst = dst, .a = reg });
+                break :blk dst;
             },
-
             .upvalue => |idx| blk: {
                 const dst = try self.newReg();
                 _ = try self.emit(.{ .op = .get_upvalue, .dst = dst, .a = idx });
@@ -256,8 +331,9 @@ const Lowerer = struct {
                 const dst = try self.newReg();
                 if (global_abi.find(name)) |slot| {
                     _ = try self.emit(.{ .op = .get_global_slot, .dst = dst, .aux = slot });
-                } else _ = try self.emit(.{ .op = .get_global, .dst = dst, .aux = try self.program.intern(name) });
-
+                } else {
+                    _ = try self.emit(.{ .op = .get_global, .dst = dst, .aux = try self.program.intern(name) });
+                }
                 break :blk dst;
             },
         };
@@ -270,7 +346,9 @@ const Lowerer = struct {
             .global => {
                 if (global_abi.find(name)) |slot| {
                     _ = try self.emit(.{ .op = .set_global_slot, .a = src, .aux = slot });
-                } else _ = try self.emit(.{ .op = .set_global, .a = src, .aux = try self.program.intern(name) });
+                } else {
+                    _ = try self.emit(.{ .op = .set_global, .a = src, .aux = try self.program.intern(name) });
+                }
             },
         }
     }
@@ -308,9 +386,13 @@ const Lowerer = struct {
             },
             .index => |v| blk: {
                 const obj = try self.lowerExpr(v.object);
-                const key = try self.lowerExpr(v.key);
                 const r = try self.newReg();
-                _ = try self.emit(.{ .op = .get_index, .dst = r, .a = obj, .b = key });
+                if (v.key.* == .string) {
+                    _ = try self.emit(.{ .op = .get_field, .dst = r, .a = obj, .aux = try self.program.intern(v.key.string.value) });
+                } else {
+                    const key = try self.lowerExpr(v.key);
+                    _ = try self.emit(.{ .op = .get_index, .dst = r, .a = obj, .b = key });
+                }
                 break :blk r;
             },
             .call => |v| try self.lowerCall(v.callee, null, v.args, 1),
@@ -322,10 +404,12 @@ const Lowerer = struct {
                 break :blk r;
             },
             .table => |v| blk: {
-                if (try self.tryConstTable(v.fields)) |id| {
-                    const r = try self.newReg();
-                    _ = try self.emit(.{ .op = .load_const, .dst = r, .aux = id });
-                    break :blk r;
+                if (v.fields.len != 0) {
+                    if (try self.tryConstTable(v.fields)) |id| {
+                        const r = try self.newReg();
+                        _ = try self.emit(.{ .op = .load_const, .dst = r, .aux = id });
+                        break :blk r;
+                    }
                 }
                 break :blk try self.lowerTable(v.fields);
             },
@@ -420,7 +504,7 @@ const Lowerer = struct {
             .unary => |v| if (v.op == .neg and v.expr.* == .number) blk: {
                 const raw = v.expr.number.raw;
                 const neg = try std.fmt.allocPrint(self.allocator, "-{s}", .{raw});
-                break :blk try self.appendConst(.{ .number = try self.program.internOwned(neg) });
+                break :blk try self.appendConst(.{ .number = try self.program.internTaking(neg) });
             } else null,
             .table => |v| try self.tryConstTable(v.fields),
             else => null,
@@ -436,14 +520,14 @@ const Lowerer = struct {
             self.program.constants.shrinkRetainingCapacity(node_mark);
             self.program.const_entries.shrinkRetainingCapacity(entry_mark);
         }
-        var list_index: u32 = 1;
+
         for (fields) |field| {
             var key_id: u32 = undefined;
             var value_id: u32 = undefined;
             switch (field) {
                 .list => |v| {
-                    key_id = try self.appendConst(.{ .integer = list_index });
-                    list_index += 1;
+                    key_id = implicit_list_key;
+
                     value_id = (try self.tryConstExpr(v)) orelse {
                         self.program.constants.shrinkRetainingCapacity(node_mark);
                         self.program.const_entries.shrinkRetainingCapacity(entry_mark);
@@ -484,10 +568,8 @@ const Lowerer = struct {
         _ = try self.emit(.{ .op = .new_table, .dst = table });
         for (fields, 0..) |field, i| switch (field) {
             .named => |v| {
-                const key = try self.newReg();
-                _ = try self.emit(.{ .op = .load_string, .dst = key, .aux = try self.program.intern(v.name) });
                 const value = try self.lowerExpr(v.value);
-                _ = try self.emit(.{ .op = .table_set, .a = table, .b = key, .c = value });
+                _ = try self.emit(.{ .op = .set_field, .a = table, .c = value, .aux = try self.program.intern(v.name) });
             },
             .keyed => |v| {
                 const key = try self.lowerExpr(v.key);
@@ -514,12 +596,9 @@ const Lowerer = struct {
         const has_multi_tail = args.len != 0 and isMultiExpr(args[args.len - 1]);
         const fixed_args = if (has_multi_tail) args[0 .. args.len - 1] else args;
         if (method) |name| {
-            const key = try self.newReg();
-            _ = try self.emit(.{ .op = .load_string, .dst = key, .aux = try self.program.intern(name) });
-            // Resolve the method before evaluating arguments, retaining the receiver.
+            // Method lookup must precede argument evaluation.
             const target = try self.newReg();
-            _ = try self.emit(.{ .op = .get_index, .dst = target, .a = callee, .b = key });
-
+            _ = try self.emit(.{ .op = .get_field, .dst = target, .a = callee, .aux = try self.program.intern(name) });
             try regs.append(self.allocator, callee);
             for (fixed_args) |arg| try regs.append(self.allocator, try self.lowerExpr(arg));
             const var_base = if (has_multi_tail) try self.lowerMulti(args[args.len - 1], multi_count) else 0;
@@ -583,6 +662,7 @@ const Lowerer = struct {
 
     const PreparedLValue = union(enum) {
         name: []const u8,
+        field: struct { object: u32, key: u32 },
         index: struct { object: u32, key: u32 },
     };
 
@@ -602,16 +682,24 @@ const Lowerer = struct {
     fn prepareLValue(self: *Lowerer, target: lua.LValue) CompileError!PreparedLValue {
         return switch (target) {
             .name => |name| .{ .name = name },
-            .index => |v| .{ .index = .{
-                .object = try self.snapshotLocalReg(try self.lowerExpr(v.object)),
-                .key = try self.snapshotLocalReg(try self.lowerExpr(v.key)),
-            } },
+            .index => |v| blk: {
+                const object = try self.snapshotLocalReg(try self.lowerExpr(v.object));
+                if (v.key.* == .string) break :blk .{ .field = .{
+                    .object = object,
+                    .key = try self.program.intern(v.key.string.value),
+                } };
+                break :blk .{ .index = .{
+                    .object = object,
+                    .key = try self.snapshotLocalReg(try self.lowerExpr(v.key)),
+                } };
+            },
         };
     }
 
     fn storePreparedLValue(self: *Lowerer, target: PreparedLValue, value: u32) CompileError!void {
         switch (target) {
             .name => |name| try self.storeName(name, value),
+            .field => |v| _ = try self.emit(.{ .op = .set_field, .a = v.object, .c = value, .aux = v.key }),
             .index => |v| _ = try self.emit(.{ .op = .set_index, .a = v.object, .b = v.key, .c = value }),
         }
     }
@@ -869,7 +957,6 @@ test "lower complete syntax surface" {
     defer p.deinit();
     try std.testing.expect(p.functions.items.len >= 2);
 }
-
 test "generated negative literals are interned with program ownership" {
     const a = std.testing.allocator;
     var chunk = try lua.parse(a, "return {-0, -0, -12, -12}");

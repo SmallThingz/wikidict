@@ -9,6 +9,7 @@ pub const names = [_][]const u8{
     "package",      "require",      "mw",
 };
 pub const count: u32 = names.len;
+pub const native_shape: u32 = std.math.maxInt(u32) - 1;
 pub fn find(name: []const u8) ?u32 {
     for (names, 0..) |text, index| if (std.mem.eql(u8, name, text)) return @intCast(index);
     return null;

@@ -100,15 +100,57 @@ pub const Chunk = struct {
 };
 
 const Tag = enum {
-    eof, identifier, number, string,
-    kw_and, kw_break, kw_do, kw_else, kw_elseif, kw_end, kw_false, kw_for,
-    kw_function, kw_if, kw_in, kw_local, kw_nil, kw_not, kw_or, kw_repeat,
-    kw_return, kw_then, kw_true, kw_until, kw_while,
-    plus, minus, star, slash, percent, caret, hash,
-    eq, eqeq, ne, lt, le, gt, ge,
-    dot, dotdot, ellipsis,
-    comma, semi, colon,
-    lparen, rparen, lbrace, rbrace, lbracket, rbracket,
+    eof,
+    identifier,
+    number,
+    string,
+    kw_and,
+    kw_break,
+    kw_do,
+    kw_else,
+    kw_elseif,
+    kw_end,
+    kw_false,
+    kw_for,
+    kw_function,
+    kw_if,
+    kw_in,
+    kw_local,
+    kw_nil,
+    kw_not,
+    kw_or,
+    kw_repeat,
+    kw_return,
+    kw_then,
+    kw_true,
+    kw_until,
+    kw_while,
+    plus,
+    minus,
+    star,
+    slash,
+    percent,
+    caret,
+    hash,
+    eq,
+    eqeq,
+    ne,
+    lt,
+    le,
+    gt,
+    ge,
+    dot,
+    dotdot,
+    ellipsis,
+    comma,
+    semi,
+    colon,
+    lparen,
+    rparen,
+    lbrace,
+    rbrace,
+    lbracket,
+    rbracket,
 };
 
 const Token = struct {
@@ -170,7 +212,9 @@ const Lexer = struct {
 
         self.pos += 1;
         const single = struct {
-            fn t(tag: Tag, text: []const u8, span: Span) Token { return .{ .tag = tag, .text = text, .span = span }; }
+            fn t(tag: Tag, text: []const u8, span: Span) Token {
+                return .{ .tag = tag, .text = text, .span = span };
+            }
         }.t;
         switch (c) {
             '+' => return single(.plus, self.source[start..self.pos], self.mkSpan(start, self.pos)),
@@ -354,11 +398,16 @@ const Lexer = struct {
     }
 
     fn take(self: *Lexer, c: u8) bool {
-        if (self.pos < self.source.len and self.source[self.pos] == c) { self.pos += 1; return true; }
+        if (self.pos < self.source.len and self.source[self.pos] == c) {
+            self.pos += 1;
+            return true;
+        }
         return false;
     }
 
-    fn mkSpan(_: *const Lexer, a: usize, b: usize) Span { return .{ .start = @intCast(a), .end = @intCast(b) }; }
+    fn mkSpan(_: *const Lexer, a: usize, b: usize) Span {
+        return .{ .start = @intCast(a), .end = @intCast(b) };
+    }
 };
 
 const LongOpen = struct { eqs: usize, width: usize };
@@ -416,7 +465,10 @@ const Parser = struct {
     fn statement(self: *Parser) Error!*Stmt {
         const start = self.peek().span.start;
         return switch (self.peek().tag) {
-            .semi => blk: { const t = self.advance(); break :blk try self.newStmt(.{ .empty = t.span }); },
+            .semi => blk: {
+                const t = self.advance();
+                break :blk try self.newStmt(.{ .empty = t.span });
+            },
             .kw_do => self.doStmt(start),
             .kw_while => self.whileStmt(start),
             .kw_repeat => self.repeatStmt(start),
@@ -425,7 +477,10 @@ const Parser = struct {
             .kw_function => self.functionStmt(start),
             .kw_local => self.localStmt(start),
             .kw_return => self.returnStmt(start),
-            .kw_break => blk: { const t = self.advance(); break :blk try self.newStmt(.{ .break_stmt = t.span }); },
+            .kw_break => blk: {
+                const t = self.advance();
+                break :blk try self.newStmt(.{ .break_stmt = t.span });
+            },
             else => self.assignOrCallStmt(start),
         };
     }
@@ -587,7 +642,12 @@ const Parser = struct {
     }
 
     fn unaryExpr(self: *Parser) Error!*Expr {
-        const op: ?UnaryOp = switch (self.peek().tag) { .minus => .neg, .kw_not => .not_, .hash => .len, else => null };
+        const op: ?UnaryOp = switch (self.peek().tag) {
+            .minus => .neg,
+            .kw_not => .not_,
+            .hash => .len,
+            else => null,
+        };
         if (op) |u| {
             const start = self.advance().span.start;
             const inner = try self.expr(7);
@@ -601,12 +661,30 @@ const Parser = struct {
     fn simpleExpr(self: *Parser) Error!*Expr {
         const t = self.peek();
         switch (t.tag) {
-            .kw_nil => { _ = self.advance(); return self.newExpr(.{ .nil_lit = t.span }); },
-            .kw_false, .kw_true => { _ = self.advance(); return self.newExpr(.{ .bool_lit = .{ .value = t.tag == .kw_true, .span = t.span } }); },
-            .number => { _ = self.advance(); return self.newExpr(.{ .number = .{ .raw = t.text, .span = t.span } }); },
-            .string => { _ = self.advance(); return self.newExpr(.{ .string = .{ .value = t.decoded.?, .span = t.span } }); },
-            .ellipsis => { _ = self.advance(); return self.newExpr(.{ .vararg = t.span }); },
-            .kw_function => { _ = self.advance(); return self.functionBody(t.span.start, false); },
+            .kw_nil => {
+                _ = self.advance();
+                return self.newExpr(.{ .nil_lit = t.span });
+            },
+            .kw_false, .kw_true => {
+                _ = self.advance();
+                return self.newExpr(.{ .bool_lit = .{ .value = t.tag == .kw_true, .span = t.span } });
+            },
+            .number => {
+                _ = self.advance();
+                return self.newExpr(.{ .number = .{ .raw = t.text, .span = t.span } });
+            },
+            .string => {
+                _ = self.advance();
+                return self.newExpr(.{ .string = .{ .value = t.decoded.?, .span = t.span } });
+            },
+            .ellipsis => {
+                _ = self.advance();
+                return self.newExpr(.{ .vararg = t.span });
+            },
+            .kw_function => {
+                _ = self.advance();
+                return self.functionBody(t.span.start, false);
+            },
             .lbrace => return self.tableCtor(),
             .identifier, .lparen => return self.prefixExpr(),
             else => return error.UnexpectedToken,
@@ -712,10 +790,17 @@ const Parser = struct {
         var is_vararg = false;
         if (!self.match(.rparen)) {
             while (true) {
-                if (self.match(.ellipsis)) { is_vararg = true; break; }
+                if (self.match(.ellipsis)) {
+                    is_vararg = true;
+                    break;
+                }
                 try params.append(self.allocator, (try self.expect(.identifier)).text);
                 if (!self.match(.comma)) break;
-                if (self.peek().tag == .ellipsis) { _ = self.advance(); is_vararg = true; break; }
+                if (self.peek().tag == .ellipsis) {
+                    _ = self.advance();
+                    is_vararg = true;
+                    break;
+                }
             }
             _ = try self.expect(.rparen);
         }
@@ -735,15 +820,40 @@ const Parser = struct {
         return self.newExpr(.{ .string = .{ .value = value, .span = span } });
     }
 
-    fn newExpr(self: *Parser, value: Expr) Error!*Expr { const p = try self.allocator.create(Expr); p.* = value; return p; }
-    fn newStmt(self: *Parser, value: Stmt) Error!*Stmt { const p = try self.allocator.create(Stmt); p.* = value; return p; }
+    fn newExpr(self: *Parser, value: Expr) Error!*Expr {
+        const p = try self.allocator.create(Expr);
+        p.* = value;
+        return p;
+    }
+    fn newStmt(self: *Parser, value: Stmt) Error!*Stmt {
+        const p = try self.allocator.create(Stmt);
+        p.* = value;
+        return p;
+    }
 
-    fn peek(self: *const Parser) Token { return self.tokens[@min(self.pos, self.tokens.len - 1)]; }
-    fn peekN(self: *const Parser, n: usize) Token { return self.tokens[@min(self.pos + n, self.tokens.len - 1)]; }
-    fn prev(self: *const Parser) Token { return self.tokens[self.pos - 1]; }
-    fn advance(self: *Parser) Token { const t = self.peek(); if (self.pos < self.tokens.len) self.pos += 1; return t; }
-    fn match(self: *Parser, tag: Tag) bool { if (self.peek().tag != tag) return false; _ = self.advance(); return true; }
-    fn expect(self: *Parser, tag: Tag) Error!Token { if (self.peek().tag != tag) return if (self.peek().tag == .eof) error.UnexpectedEof else error.UnexpectedToken; return self.advance(); }
+    fn peek(self: *const Parser) Token {
+        return self.tokens[@min(self.pos, self.tokens.len - 1)];
+    }
+    fn peekN(self: *const Parser, n: usize) Token {
+        return self.tokens[@min(self.pos + n, self.tokens.len - 1)];
+    }
+    fn prev(self: *const Parser) Token {
+        return self.tokens[self.pos - 1];
+    }
+    fn advance(self: *Parser) Token {
+        const t = self.peek();
+        if (self.pos < self.tokens.len) self.pos += 1;
+        return t;
+    }
+    fn match(self: *Parser, tag: Tag) bool {
+        if (self.peek().tag != tag) return false;
+        _ = self.advance();
+        return true;
+    }
+    fn expect(self: *Parser, tag: Tag) Error!Token {
+        if (self.peek().tag != tag) return if (self.peek().tag == .eof) error.UnexpectedEof else error.UnexpectedToken;
+        return self.advance();
+    }
 };
 
 fn exprToLValue(expr: *Expr) Error!LValue {
@@ -753,19 +863,40 @@ fn exprToLValue(expr: *Expr) Error!LValue {
         else => error.InvalidAssignment,
     };
 }
-fn isCall(expr: *const Expr) bool { return switch (expr.*) { .call, .method_call => true, else => false }; }
-fn isBlockEnd(tag: Tag) bool { return switch (tag) { .eof, .kw_end, .kw_else, .kw_elseif, .kw_until => true, else => false }; }
-fn containsTag(tags: []const Tag, tag: Tag) bool { for (tags) |t| if (t == tag) return true; return false; }
+fn isCall(expr: *const Expr) bool {
+    return switch (expr.*) {
+        .call, .method_call => true,
+        else => false,
+    };
+}
+fn isBlockEnd(tag: Tag) bool {
+    return switch (tag) {
+        .eof, .kw_end, .kw_else, .kw_elseif, .kw_until => true,
+        else => false,
+    };
+}
+fn containsTag(tags: []const Tag, tag: Tag) bool {
+    for (tags) |t| if (t == tag) return true;
+    return false;
+}
 
 const BinInfo = struct { op: BinaryOp, prec: u8, right_assoc: bool = false };
 fn binaryInfo(tag: Tag) ?BinInfo {
     return switch (tag) {
         .kw_or => .{ .op = .or_, .prec = 1 },
         .kw_and => .{ .op = .and_, .prec = 2 },
-        .lt => .{ .op = .lt, .prec = 3 }, .le => .{ .op = .le, .prec = 3 }, .gt => .{ .op = .gt, .prec = 3 }, .ge => .{ .op = .ge, .prec = 3 }, .eqeq => .{ .op = .eq, .prec = 3 }, .ne => .{ .op = .ne, .prec = 3 },
+        .lt => .{ .op = .lt, .prec = 3 },
+        .le => .{ .op = .le, .prec = 3 },
+        .gt => .{ .op = .gt, .prec = 3 },
+        .ge => .{ .op = .ge, .prec = 3 },
+        .eqeq => .{ .op = .eq, .prec = 3 },
+        .ne => .{ .op = .ne, .prec = 3 },
         .dotdot => .{ .op = .concat, .prec = 4, .right_assoc = true },
-        .plus => .{ .op = .add, .prec = 5 }, .minus => .{ .op = .sub, .prec = 5 },
-        .star => .{ .op = .mul, .prec = 6 }, .slash => .{ .op = .div, .prec = 6 }, .percent => .{ .op = .mod, .prec = 6 },
+        .plus => .{ .op = .add, .prec = 5 },
+        .minus => .{ .op = .sub, .prec = 5 },
+        .star => .{ .op = .mul, .prec = 6 },
+        .slash => .{ .op = .div, .prec = 6 },
+        .percent => .{ .op = .mod, .prec = 6 },
         .caret => .{ .op = .pow, .prec = 8, .right_assoc = true },
         else => null,
     };
@@ -778,11 +909,21 @@ fn keyword(s: []const u8) ?Tag {
     inline for (pairs) |p| if (std.mem.eql(u8, s, p[0])) return p[1];
     return null;
 }
-fn isIdentStart(c: u8) bool { return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_'; }
-fn isIdentContinue(c: u8) bool { return isIdentStart(c) or isDigit(c); }
-fn isDigit(c: u8) bool { return c >= '0' and c <= '9'; }
-fn isHex(c: u8) bool { return isDigit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F'); }
-fn isSpace(c: u8) bool { return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0b or c == 0x0c; }
+fn isIdentStart(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_';
+}
+fn isIdentContinue(c: u8) bool {
+    return isIdentStart(c) or isDigit(c);
+}
+fn isDigit(c: u8) bool {
+    return c >= '0' and c <= '9';
+}
+fn isHex(c: u8) bool {
+    return isDigit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
+}
+fn isSpace(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0b or c == 0x0c;
+}
 
 test "Lua 5.1 unknown escapes are accepted" {
     var chunk = try parse(std.testing.allocator, "return '\\q\\['");
@@ -808,9 +949,9 @@ test "parses representative Lua 5.1 syntax" {
     try std.testing.expect(chunk.body.len >= 7);
 }
 
-
 test "parentheses preserve single-result semantics" {
-    var chunk = try parse(std.testing.allocator, "return (f())"); defer chunk.deinit();
+    var chunk = try parse(std.testing.allocator, "return (f())");
+    defer chunk.deinit();
     const e = chunk.body[0].return_stmt.values[0];
     try std.testing.expect(e.* == .paren);
     try std.testing.expect(e.paren.expr.* == .call);

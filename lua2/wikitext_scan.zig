@@ -2,7 +2,9 @@ const std = @import("std");
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
-    fn deinit(self: *Mapped) void { std.posix.munmap(self.bytes); }
+    fn deinit(self: *Mapped) void {
+        std.posix.munmap(self.bytes);
+    }
 };
 
 fn mmapPath(path: []const u8) !Mapped {
@@ -102,7 +104,7 @@ fn appendTranscludedRange(a: std.mem.Allocator, out: *std.ArrayList(u8), text: [
             pos = @min(e, end);
             continue;
         }
-        try out.appendSlice(a, text[lt .. @min(lt + 4, end)]);
+        try out.appendSlice(a, text[lt..@min(lt + 4, end)]);
         pos = @min(lt + 4, end);
     }
 }
@@ -164,10 +166,15 @@ const Scanner = struct {
                 }
                 continue;
             }
-            if (stack.items.len == 0) { i += 2; continue; }
+            if (stack.items.len == 0) {
+                i += 2;
+                continue;
+            }
             const top = stack.items[stack.items.len - 1];
             if (top.kind == .param and i + 2 < text.len and text[i + 2] == '}') {
-                _ = stack.pop(); i += 3; continue;
+                _ = stack.pop();
+                i += 3;
+                continue;
             }
             if (top.kind == .template) {
                 _ = stack.pop();
@@ -207,8 +214,10 @@ const Scanner = struct {
             const function_expr = if (parts.items.len > 1) trim(parts.items[1]) else "";
             try self.writer.writeAll("I\t");
             try self.writer.print("{d}\t", .{host_kind});
-            try writeField(self.writer, host); try self.writer.writeByte('\t');
-            try writeField(self.writer, module_expr); try self.writer.writeByte('\t');
+            try writeField(self.writer, host);
+            try self.writer.writeByte('\t');
+            try writeField(self.writer, module_expr);
+            try self.writer.writeByte('\t');
             try writeField(self.writer, function_expr);
             if (parts.items.len > 2) for (parts.items[2..]) |arg| {
                 try self.writer.writeByte('\t');
@@ -227,9 +236,15 @@ const Scanner = struct {
         if (target.len == 0) return;
 
         try self.writer.writeAll(if (host_kind == 0) "Q\t" else "E\t");
-        if (host_kind == 1) { try writeField(self.writer, host); try self.writer.writeByte('\t'); }
+        if (host_kind == 1) {
+            try writeField(self.writer, host);
+            try self.writer.writeByte('\t');
+        }
         try writeField(self.writer, target);
-        for (parts.items[1..]) |arg| { try self.writer.writeByte('\t'); try writeField(self.writer, trim(arg)); }
+        for (parts.items[1..]) |arg| {
+            try self.writer.writeByte('\t');
+            try writeField(self.writer, trim(arg));
+        }
         try self.writer.writeByte('\n');
         self.template_calls += 1;
     }
@@ -241,29 +256,57 @@ fn splitTop(a: std.mem.Allocator, s: []const u8, out: *std.ArrayList([]const u8)
     var start: usize = 0;
     var i: usize = 0;
     while (i < s.len) {
-        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "{{{")) { curly += 3; i += 3; continue; }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "{{")) { curly += 2; i += 2; continue; }
-        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "}}}") and curly >= 3) { curly -= 3; i += 3; continue; }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "}}") and curly >= 2) { curly -= 2; i += 2; continue; }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "[[")) { square += 2; i += 2; continue; }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "]]" ) and square >= 2) { square -= 2; i += 2; continue; }
+        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "{{{")) {
+            curly += 3;
+            i += 3;
+            continue;
+        }
+        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "{{")) {
+            curly += 2;
+            i += 2;
+            continue;
+        }
+        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "}}}") and curly >= 3) {
+            curly -= 3;
+            i += 3;
+            continue;
+        }
+        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "}}") and curly >= 2) {
+            curly -= 2;
+            i += 2;
+            continue;
+        }
+        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "[[")) {
+            square += 2;
+            i += 2;
+            continue;
+        }
+        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "]]") and square >= 2) {
+            square -= 2;
+            i += 2;
+            continue;
+        }
         if (s[i] == '|' and curly == 0 and square == 0) {
-            try out.append(a, s[start..i]); start = i + 1;
+            try out.append(a, s[start..i]);
+            start = i + 1;
         }
         i += 1;
     }
     try out.append(a, s[start..]);
 }
 
-fn trim(s: []const u8) []const u8 { return std.mem.trim(u8, s, " \t\r\n"); }
-fn startsIgnoreCase(s: []const u8, p: []const u8) bool { return s.len >= p.len and std.ascii.eqlIgnoreCase(s[0..p.len], p); }
-
+fn trim(s: []const u8) []const u8 {
+    return std.mem.trim(u8, s, " \t\r\n");
+}
+fn startsIgnoreCase(s: []const u8, p: []const u8) bool {
+    return s.len >= p.len and std.ascii.eqlIgnoreCase(s[0..p.len], p);
+}
 
 fn redirectTarget(text: []const u8, namespace_prefix: []const u8) ?[]const u8 {
     const body = trim(text);
     if (!startsIgnoreCase(body, "#redirect")) return null;
     const open = std.mem.indexOf(u8, body, "[[") orelse return null;
-    const close = std.mem.indexOfPos(u8, body, open + 2, "]]" ) orelse return null;
+    const close = std.mem.indexOfPos(u8, body, open + 2, "]]") orelse return null;
     var target = trim(body[open + 2 .. close]);
     if (startsIgnoreCase(target, namespace_prefix)) target = trim(target[namespace_prefix.len..]);
     if (target.len == 0) return null;
@@ -272,7 +315,10 @@ fn redirectTarget(text: []const u8, namespace_prefix: []const u8) ?[]const u8 {
 
 fn writeField(w: *std.Io.Writer, s: []const u8) !void {
     for (s) |c| switch (c) {
-        '\\' => try w.writeAll("\\\\"), '\t' => try w.writeAll("\\t"), '\n' => try w.writeAll("\\n"), '\r' => try w.writeAll("\\r"),
+        '\\' => try w.writeAll("\\\\"),
+        '\t' => try w.writeAll("\\t"),
+        '\n' => try w.writeAll("\\n"),
+        '\r' => try w.writeAll("\\r"),
         else => try w.writeByte(c),
     };
 }
@@ -282,7 +328,8 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(arena);
     if (args.len < 2) return error.MissingInput;
     const replay_roots = args.len >= 3 and std.mem.eql(u8, args[2], "--replay-roots");
-    var mapped = try mmapPath(args[1]); defer mapped.deinit();
+    var mapped = try mmapPath(args[1]);
+    defer mapped.deinit();
     var out_buf: [1024 * 1024]u8 = undefined;
     var stdout = std.Io.File.stdout().writer(init.io, &out_buf);
     const w = &stdout.interface;
@@ -290,11 +337,15 @@ pub fn main(init: std.process.Init) !void {
 
     var pos: usize = 0;
     var released: usize = 0;
-    var pages: u64 = 0; var entries: u64 = 0; var templates: u64 = 0;
+    var pages: u64 = 0;
+    var entries: u64 = 0;
+    var templates: u64 = 0;
     while (std.mem.indexOfPos(u8, mapped.bytes, pos, "<page>")) |ps| {
         const pe0 = std.mem.indexOfPos(u8, mapped.bytes, ps + 6, "</page>") orelse break;
         const pe = pe0 + 7;
-        const page = mapped.bytes[ps..pe]; pos = pe; pages += 1;
+        const page = mapped.bytes[ps..pe];
+        pos = pe;
+        pages += 1;
         if (pos - released >= 64 * 1024 * 1024) {
             const page_size = std.heap.page_size_min;
             const release_end = (ps / page_size) * page_size;
@@ -313,15 +364,25 @@ pub fn main(init: std.process.Init) !void {
         const text = pageText(page) orelse continue;
         if (kind == 2) {
             if (redirectTarget(text, "Module:")) |target| {
-                try w.writeAll("M\t"); try writeField(w, host); try w.writeByte('\t'); try writeField(w, target); try w.writeByte('\n');
+                try w.writeAll("M\t");
+                try writeField(w, host);
+                try w.writeByte('\t');
+                try writeField(w, target);
+                try w.writeByte('\n');
             }
             continue;
         }
         if (kind == 0) entries += 1 else {
             templates += 1;
-            try w.writeAll("T\t"); try writeField(w, host); try w.writeByte('\n');
+            try w.writeAll("T\t");
+            try writeField(w, host);
+            try w.writeByte('\n');
             if (redirectTarget(text, "Template:")) |target| {
-                try w.writeAll("X\t"); try writeField(w, host); try w.writeByte('\t'); try writeField(w, target); try w.writeByte('\n');
+                try w.writeAll("X\t");
+                try writeField(w, host);
+                try w.writeByte('\t');
+                try writeField(w, target);
+                try w.writeByte('\n');
             }
         }
         if (kind == 1) {

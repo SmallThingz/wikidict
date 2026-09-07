@@ -49,7 +49,7 @@ fn baseType(_: ?*anyopaque, _: *anyopaque, args: []const Value, a: std.mem.Alloc
         .number => "number",
         .string => "string",
         .table => "table",
-        .closure, .native => "function",
+        .closure, .function, .native => "function",
     };
     return one(a, .{ .string = name });
 }
@@ -119,6 +119,7 @@ fn baseToString(_: ?*anyopaque, raw: *anyopaque, args: []const Value, a: std.mem
         .string => |x| x,
         .table => |p| try std.fmt.allocPrint(a, "table: 0x{x}", .{@intFromPtr(p)}),
         .closure => |p| try std.fmt.allocPrint(a, "function: 0x{x}", .{@intFromPtr(p)}),
+        .function => |f| try std.fmt.allocPrint(a, "function: 0x{x}", .{@intFromPtr(f.env) ^ f.function_id}),
         .native => |p| try std.fmt.allocPrint(a, "function: 0x{x}", .{@intFromPtr(p)}),
     };
     return one(a, .{ .string = s });
@@ -554,7 +555,7 @@ fn replacementValue(vm: *exec.Vm, replacement: Value, source: []const u8, m: pat
             const key = if (captures.len == 0) Value{ .string = original } else captures[0];
             break :blk try vm.getIndex(.{ .table = table }, key);
         },
-        .closure, .native => blk: {
+        .closure, .function, .native => blk: {
             const captures = try replacementArgs(a, source, m);
             defer exec.Vm.freeResults(captures);
             const result = try vm.callValue(replacement, captures);

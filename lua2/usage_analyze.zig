@@ -5,7 +5,9 @@ const cap_values = 4096;
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
-    fn deinit(self: *Mapped) void { std.posix.munmap(self.bytes); }
+    fn deinit(self: *Mapped) void {
+        std.posix.munmap(self.bytes);
+    }
 };
 
 fn mmapPath(path: []const u8) !Mapped {
@@ -22,7 +24,9 @@ const Interner = struct {
     allocator: std.mem.Allocator,
     strings: std.StringHashMapUnmanaged(void) = .empty,
 
-    fn deinit(self: *Interner) void { self.strings.deinit(self.allocator); }
+    fn deinit(self: *Interner) void {
+        self.strings.deinit(self.allocator);
+    }
 
     fn intern(self: *Interner, s: []const u8) ![]const u8 {
         if (self.strings.getKey(s)) |key| return key;
@@ -82,7 +86,9 @@ const ArgContext = struct {
     values: std.StringHashMapUnmanaged(*Domain) = .empty,
     dynamic_keys: bool = false,
 
-    fn deinit(self: *ArgContext, a: std.mem.Allocator) void { self.values.deinit(a); }
+    fn deinit(self: *ArgContext, a: std.mem.Allocator) void {
+        self.values.deinit(a);
+    }
 };
 
 const State = struct {
@@ -108,7 +114,10 @@ const State = struct {
             var all = self.params.iterator();
             while (all.next()) |entry| {
                 changed = entry.value_ptr.*.setTop(a) or changed;
-                if (!entry.value_ptr.*.missing) { entry.value_ptr.*.missing = true; changed = true; }
+                if (!entry.value_ptr.*.missing) {
+                    entry.value_ptr.*.missing = true;
+                    changed = true;
+                }
             }
         }
         var existing = self.params.iterator();
@@ -123,7 +132,10 @@ const State = struct {
             const dst = try self.getOrCreate(a, entry.key_ptr.*);
             if (self.dynamic_keys) {
                 changed = dst.setTop(a) or changed;
-                if (!dst.missing) { dst.missing = true; changed = true; }
+                if (!dst.missing) {
+                    dst.missing = true;
+                    changed = true;
+                }
             } else {
                 changed = (try dst.merge(a, entry.value_ptr.*)) or changed;
             }
@@ -131,7 +143,6 @@ const State = struct {
         self.contexts += 1;
         return changed;
     }
-
 };
 
 const Edge = struct {
@@ -197,10 +208,26 @@ const Analyzer = struct {
         while (i < raw.len) {
             if (raw[i] == '\\' and i + 1 < raw.len) {
                 switch (raw[i + 1]) {
-                    '\\' => { try unescaped.append(self.allocator, '\\'); i += 2; continue; },
-                    't' => { try unescaped.append(self.allocator, '\t'); i += 2; continue; },
-                    'n' => { try unescaped.append(self.allocator, '\n'); i += 2; continue; },
-                    'r' => { try unescaped.append(self.allocator, '\r'); i += 2; continue; },
+                    '\\' => {
+                        try unescaped.append(self.allocator, '\\');
+                        i += 2;
+                        continue;
+                    },
+                    't' => {
+                        try unescaped.append(self.allocator, '\t');
+                        i += 2;
+                        continue;
+                    },
+                    'n' => {
+                        try unescaped.append(self.allocator, '\n');
+                        i += 2;
+                        continue;
+                    },
+                    'r' => {
+                        try unescaped.append(self.allocator, '\r');
+                        i += 2;
+                        continue;
+                    },
                     else => {},
                 }
             }
@@ -225,7 +252,9 @@ const Analyzer = struct {
     fn stateFor(self: *Analyzer, template: []const u8) !*State {
         const gop = try self.states.getOrPut(self.allocator, template);
         if (!gop.found_existing) {
-            const s = try self.allocator.create(State); s.* = .{}; gop.value_ptr.* = s;
+            const s = try self.allocator.create(State);
+            s.* = .{};
+            gop.value_ptr.* = s;
         }
         return gop.value_ptr.*;
     }
@@ -234,7 +263,8 @@ const Analyzer = struct {
         const gop = try self.needed.getOrPut(self.allocator, template);
         if (!gop.found_existing) {
             const set = try self.allocator.create(std.StringHashMapUnmanaged(void));
-            set.* = .empty; gop.value_ptr.* = set;
+            set.* = .empty;
+            gop.value_ptr.* = set;
         }
         return gop.value_ptr.*;
     }
@@ -258,7 +288,8 @@ const Analyzer = struct {
         var pos: usize = 0;
         while (pos < bytes.len) {
             const nl = std.mem.indexOfScalarPos(u8, bytes, pos, '\n') orelse bytes.len;
-            const line = bytes[pos..nl]; pos = @min(nl + 1, bytes.len);
+            const line = bytes[pos..nl];
+            pos = @min(nl + 1, bytes.len);
             if (line.len == 0) continue;
             var fields: std.ArrayList([]const u8) = .empty;
             defer fields.deinit(self.allocator);
@@ -307,7 +338,11 @@ const Analyzer = struct {
                     const args = try self.allocator.alloc([]const u8, fields.items.len - 3);
                     for (fields.items[3..], 0..) |raw, j| args[j] = try self.decode(raw);
                     const gop = try self.edges.getOrPut(self.allocator, caller);
-                    if (!gop.found_existing) { const list = try self.allocator.create(std.ArrayList(Edge)); list.* = .empty; gop.value_ptr.* = list; }
+                    if (!gop.found_existing) {
+                        const list = try self.allocator.create(std.ArrayList(Edge));
+                        list.* = .empty;
+                        gop.value_ptr.* = list;
+                    }
                     try gop.value_ptr.*.append(self.allocator, .{ .target_expr = target, .args = args });
                     try self.addNeeded(caller, target);
                     for (args) |arg| try self.addNeeded(caller, arg);
@@ -334,7 +369,11 @@ const Analyzer = struct {
                     const inv: Invoke = .{ .host_kind = host_kind, .host = host, .module_expr = module_expr, .function_expr = function_expr, .args = args };
                     if (host_kind == 0) try self.direct_invokes.append(self.allocator, inv) else {
                         const gop = try self.invokes.getOrPut(self.allocator, host);
-                        if (!gop.found_existing) { const list = try self.allocator.create(std.ArrayList(Invoke)); list.* = .empty; gop.value_ptr.* = list; }
+                        if (!gop.found_existing) {
+                            const list = try self.allocator.create(std.ArrayList(Invoke));
+                            list.* = .empty;
+                            gop.value_ptr.* = list;
+                        }
                         try gop.value_ptr.*.append(self.allocator, inv);
                         try self.addNeeded(host, module_expr);
                         try self.addNeeded(host, function_expr);
@@ -347,7 +386,9 @@ const Analyzer = struct {
                     for (fields.items[2..], 0..) |raw, j| args[j] = try self.decode(raw);
                     try self.dynamic_root_calls.append(self.allocator, .{ .target_expr = target, .args = args });
                 },
-                'Z' => { if (fields.items.len >= 4) self.dynamic_roots = std.fmt.parseInt(u64, fields.items[2], 10) catch 0; },
+                'Z' => {
+                    if (fields.items.len >= 4) self.dynamic_roots = std.fmt.parseInt(u64, fields.items[2], 10) catch 0;
+                },
                 else => {},
             }
         }
@@ -406,7 +447,10 @@ const Analyzer = struct {
         var queued: std.StringHashMapUnmanaged(void) = .empty;
         defer queued.deinit(self.allocator);
         var rit = self.reachable.iterator();
-        while (rit.next()) |entry| { try queue.append(self.allocator, entry.key_ptr.*); try queued.put(self.allocator, entry.key_ptr.*, {}); }
+        while (rit.next()) |entry| {
+            try queue.append(self.allocator, entry.key_ptr.*);
+            try queued.put(self.allocator, entry.key_ptr.*, {});
+        }
 
         var cursor: usize = 0;
         while (cursor < queue.items.len) : (cursor += 1) {
@@ -575,7 +619,10 @@ const Analyzer = struct {
 
     fn staticExpr(self: *Analyzer, expr: []const u8) !Domain {
         var d: Domain = .{};
-        if (isDynamicText(expr)) { d.top = true; return d; }
+        if (isDynamicText(expr)) {
+            d.top = true;
+            return d;
+        }
         _ = try d.add(self.allocator, try self.interner.intern(expr));
         return d;
     }
@@ -701,28 +748,34 @@ const Analyzer = struct {
 
     fn evalIfEq(self: *Analyzer, lhs_expr: []const u8, args: []const []const u8, state: *State, host: []const u8) anyerror!Domain {
         if (args.len == 0) return .{ .top = true };
-        var lhs = try self.evalExpr(lhs_expr, state, host); defer lhs.values.deinit(self.allocator);
-        var rhs = try self.evalExpr(args[0], state, host); defer rhs.values.deinit(self.allocator);
+        var lhs = try self.evalExpr(lhs_expr, state, host);
+        defer lhs.values.deinit(self.allocator);
+        var rhs = try self.evalExpr(args[0], state, host);
+        defer rhs.values.deinit(self.allocator);
         const eq = domainEquality(&lhs, &rhs);
         var out: Domain = .{};
         if (eq.yes) {
-            var yes = try self.evalExpr(if (args.len > 1) args[1] else "", state, host); defer yes.values.deinit(self.allocator);
+            var yes = try self.evalExpr(if (args.len > 1) args[1] else "", state, host);
+            defer yes.values.deinit(self.allocator);
             _ = try out.merge(self.allocator, &yes);
         }
         if (eq.no) {
-            var no = try self.evalExpr(if (args.len > 2) args[2] else "", state, host); defer no.values.deinit(self.allocator);
+            var no = try self.evalExpr(if (args.len > 2) args[2] else "", state, host);
+            defer no.values.deinit(self.allocator);
             _ = try out.merge(self.allocator, &no);
         }
         return out;
     }
 
     fn evalSwitch(self: *Analyzer, key_expr: []const u8, args: []const []const u8, state: *State, host: []const u8) anyerror!Domain {
-        var key_domain = try self.evalExpr(key_expr, state, host); defer key_domain.values.deinit(self.allocator);
+        var key_domain = try self.evalExpr(key_expr, state, host);
+        defer key_domain.values.deinit(self.allocator);
         if (key_domain.top or key_domain.missing) return .{ .top = true };
         var out: Domain = .{};
         var kit = key_domain.values.iterator();
         while (kit.next()) |ke| {
-            var one = try self.evalSwitchKey(ke.key_ptr.*, args, state, host); defer one.values.deinit(self.allocator);
+            var one = try self.evalSwitchKey(ke.key_ptr.*, args, state, host);
+            defer one.values.deinit(self.allocator);
             _ = try out.merge(self.allocator, &one);
             if (out.top) break;
         }
@@ -743,14 +796,16 @@ const Analyzer = struct {
                     if (pending_match) return self.evalExpr(result_expr, state, host);
                     continue;
                 }
-                var label = try self.evalExpr(label_expr, state, host); defer label.values.deinit(self.allocator);
+                var label = try self.evalExpr(label_expr, state, host);
+                defer label.values.deinit(self.allocator);
                 const matches = domainContainsTrimmed(&label, key);
                 if (pending_match or matches.yes) return self.evalExpr(result_expr, state, host);
                 if (matches.maybe) return .{ .top = true };
                 pending_match = false;
             } else {
                 trailing_value = raw_case;
-                var label = try self.evalExpr(raw_case, state, host); defer label.values.deinit(self.allocator);
+                var label = try self.evalExpr(raw_case, state, host);
+                defer label.values.deinit(self.allocator);
                 const matches = domainContainsTrimmed(&label, key);
                 if (matches.yes) pending_match = true;
                 if (matches.maybe) return .{ .top = true };
@@ -764,7 +819,8 @@ const Analyzer = struct {
     }
 
     fn evalCaseTransform(self: *Analyzer, name: []const u8, arg: []const u8, state: *State, host: []const u8) anyerror!Domain {
-        var input = try self.evalExpr(arg, state, host); defer input.values.deinit(self.allocator);
+        var input = try self.evalExpr(arg, state, host);
+        defer input.values.deinit(self.allocator);
         if (input.top or input.missing) return .{ .top = true };
         var out: Domain = .{};
         var it = input.values.iterator();
@@ -786,9 +842,12 @@ const Analyzer = struct {
 
     fn evalPad(self: *Analyzer, name: []const u8, first: []const u8, args: []const []const u8, state: *State, host: []const u8) anyerror!Domain {
         if (args.len == 0) return .{ .top = true };
-        var values = try self.evalExpr(first, state, host); defer values.values.deinit(self.allocator);
-        var widths = try self.evalExpr(args[0], state, host); defer widths.values.deinit(self.allocator);
-        var pads = try self.evalExpr(if (args.len > 1) args[1] else "0", state, host); defer pads.values.deinit(self.allocator);
+        var values = try self.evalExpr(first, state, host);
+        defer values.values.deinit(self.allocator);
+        var widths = try self.evalExpr(args[0], state, host);
+        defer widths.values.deinit(self.allocator);
+        var pads = try self.evalExpr(if (args.len > 1) args[1] else "0", state, host);
+        defer pads.values.deinit(self.allocator);
         if (values.top or widths.top or pads.top or values.missing or widths.missing or pads.missing) return .{ .top = true };
         var out: Domain = .{};
         var vit = values.values.iterator();
@@ -801,14 +860,18 @@ const Analyzer = struct {
                     const pad = pe.key_ptr.*;
                     if (pad.len == 0) return .{ .top = true };
                     const src = ve.key_ptr.*;
-                    if (src.len >= width) { _ = try out.add(self.allocator, src); continue; }
+                    if (src.len >= width) {
+                        _ = try out.add(self.allocator, src);
+                        continue;
+                    }
                     const need = width - src.len;
                     if (need > 4096) return .{ .top = true };
                     const fill = try self.allocator.alloc(u8, need);
                     for (fill, 0..) |*c, i| c.* = pad[i % pad.len];
                     const joined = if (std.ascii.eqlIgnoreCase(name, "padleft"))
                         try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ fill, src })
-                    else try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ src, fill });
+                    else
+                        try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ src, fill });
                     _ = try out.add(self.allocator, try self.interner.intern(joined));
                 }
             }
@@ -821,7 +884,10 @@ const Analyzer = struct {
         var positional: usize = 1;
         for (args) |raw| {
             const parsed = try parseArg(self, raw, &positional);
-            if (isDynamicText(parsed.key)) { out.dynamic_keys = true; continue; }
+            if (isDynamicText(parsed.key)) {
+                out.dynamic_keys = true;
+                continue;
+            }
             const d = try self.allocator.create(Domain);
             d.* = try self.evalExpr(parsed.value, state, host);
             try out.values.put(self.allocator, parsed.key, d);
@@ -834,7 +900,10 @@ const Analyzer = struct {
         var positional: usize = 1;
         for (args) |raw| {
             const parsed = try parseArg(self, raw, &positional);
-            if (isDynamicText(parsed.key)) { out.dynamic_keys = true; continue; }
+            if (isDynamicText(parsed.key)) {
+                out.dynamic_keys = true;
+                continue;
+            }
             const d = try self.allocator.create(Domain);
             d.* = try self.staticExpr(parsed.value);
             try out.values.put(self.allocator, parsed.key, d);
@@ -862,54 +931,92 @@ const Analyzer = struct {
         while (rit.next()) |entry| : (ri += 1) redirect_names[ri] = entry.key_ptr.*;
         std.mem.sort([]const u8, redirect_names, {}, lessStr);
         for (redirect_names) |from| {
-            try w.writeAll("M\t"); try writeField(w, from); try w.writeByte('\t');
-            try writeField(w, self.module_redirects.get(from).?); try w.writeByte('\n');
+            try w.writeAll("M\t");
+            try writeField(w, from);
+            try w.writeByte('\t');
+            try writeField(w, self.module_redirects.get(from).?);
+            try w.writeByte('\n');
         }
 
         var keys = try self.allocator.alloc([]const u8, self.invocation_domains.count());
         defer self.allocator.free(keys);
-        var i: usize = 0; var it = self.invocation_domains.iterator();
+        var i: usize = 0;
+        var it = self.invocation_domains.iterator();
         while (it.next()) |entry| : (i += 1) keys[i] = entry.key_ptr.*;
         std.mem.sort([]const u8, keys, {}, lessStr);
         for (keys) |key| {
             const ctx = self.invocation_domains.get(key).?;
-            try w.writeAll("U\t"); try writeField(w, ctx.module); try w.writeByte('\t'); try writeField(w, ctx.function); try w.writeByte('\n');
-            try w.writeAll("W\t"); try writeField(w, ctx.module); try w.writeByte('\t'); try writeField(w, ctx.function); try w.print("\t{}\t{}\n", .{ ctx.state.dynamic_keys, ctx.parent.dynamic_keys });
-            var pnames = try self.allocator.alloc([]const u8, ctx.state.params.count()); defer self.allocator.free(pnames);
-            i = 0; var pit = ctx.state.params.iterator(); while (pit.next()) |p| : (i += 1) pnames[i] = p.key_ptr.*;
+            try w.writeAll("U\t");
+            try writeField(w, ctx.module);
+            try w.writeByte('\t');
+            try writeField(w, ctx.function);
+            try w.writeByte('\n');
+            try w.writeAll("W\t");
+            try writeField(w, ctx.module);
+            try w.writeByte('\t');
+            try writeField(w, ctx.function);
+            try w.print("\t{}\t{}\n", .{ ctx.state.dynamic_keys, ctx.parent.dynamic_keys });
+            var pnames = try self.allocator.alloc([]const u8, ctx.state.params.count());
+            defer self.allocator.free(pnames);
+            i = 0;
+            var pit = ctx.state.params.iterator();
+            while (pit.next()) |p| : (i += 1) pnames[i] = p.key_ptr.*;
             std.mem.sort([]const u8, pnames, {}, lessStr);
             for (pnames) |pname| {
                 const d = ctx.state.params.get(pname).?;
-                try w.writeAll("P\t"); try writeField(w, ctx.module); try w.writeByte('\t'); try writeField(w, ctx.function); try w.writeByte('\t'); try writeField(w, pname);
+                try w.writeAll("P\t");
+                try writeField(w, ctx.module);
+                try w.writeByte('\t');
+                try writeField(w, ctx.function);
+                try w.writeByte('\t');
+                try writeField(w, pname);
                 try w.print("\t{}\t{}", .{ d.top, d.missing });
                 if (!d.top) {
-                    var vals = try self.allocator.alloc([]const u8, d.values.count()); defer self.allocator.free(vals);
-                    var vi: usize = 0; var vit = d.values.iterator(); while (vit.next()) |v| : (vi += 1) vals[vi] = v.key_ptr.*;
+                    var vals = try self.allocator.alloc([]const u8, d.values.count());
+                    defer self.allocator.free(vals);
+                    var vi: usize = 0;
+                    var vit = d.values.iterator();
+                    while (vit.next()) |v| : (vi += 1) vals[vi] = v.key_ptr.*;
                     std.mem.sort([]const u8, vals, {}, lessStr);
-                    for (vals) |v| { try w.writeByte('\t'); try writeField(w, v); }
+                    for (vals) |v| {
+                        try w.writeByte('\t');
+                        try writeField(w, v);
+                    }
                 }
                 try w.writeByte('\n');
             }
-            var parent_names = try self.allocator.alloc([]const u8, ctx.parent.params.count()); defer self.allocator.free(parent_names);
-            i = 0; var qit = ctx.parent.params.iterator(); while (qit.next()) |p| : (i += 1) parent_names[i] = p.key_ptr.*;
+            var parent_names = try self.allocator.alloc([]const u8, ctx.parent.params.count());
+            defer self.allocator.free(parent_names);
+            i = 0;
+            var qit = ctx.parent.params.iterator();
+            while (qit.next()) |p| : (i += 1) parent_names[i] = p.key_ptr.*;
             std.mem.sort([]const u8, parent_names, {}, lessStr);
             for (parent_names) |pname| {
                 const d = ctx.parent.params.get(pname).?;
-                try w.writeAll("Q\t"); try writeField(w, ctx.module); try w.writeByte('\t'); try writeField(w, ctx.function); try w.writeByte('\t'); try writeField(w, pname);
+                try w.writeAll("Q\t");
+                try writeField(w, ctx.module);
+                try w.writeByte('\t');
+                try writeField(w, ctx.function);
+                try w.writeByte('\t');
+                try writeField(w, pname);
                 try w.print("\t{}\t{}", .{ d.top, d.missing });
                 if (!d.top) {
-                    var vals = try self.allocator.alloc([]const u8, d.values.count()); defer self.allocator.free(vals);
-                    var vi: usize = 0; var vit = d.values.iterator(); while (vit.next()) |v| : (vi += 1) vals[vi] = v.key_ptr.*;
+                    var vals = try self.allocator.alloc([]const u8, d.values.count());
+                    defer self.allocator.free(vals);
+                    var vi: usize = 0;
+                    var vit = d.values.iterator();
+                    while (vit.next()) |v| : (vi += 1) vals[vi] = v.key_ptr.*;
                     std.mem.sort([]const u8, vals, {}, lessStr);
-                    for (vals) |v| { try w.writeByte('\t'); try writeField(w, v); }
+                    for (vals) |v| {
+                        try w.writeByte('\t');
+                        try writeField(w, v);
+                    }
                 }
                 try w.writeByte('\n');
             }
         }
     }
 };
-
-
 
 fn containsInvalidTitleMarkup(s: []const u8) bool {
     for (s) |c| switch (c) {
@@ -925,18 +1032,31 @@ fn wildcardTargetPatternAlloc(a: std.mem.Allocator, raw: []const u8) ![]u8 {
     var pos: usize = 0;
     var star = false;
     while (pos < s.len) {
-        if (pos + 2 < s.len and std.mem.eql(u8, s[pos..pos+3], "{{{")) {
-            const close = findParamEnd(s, pos) orelse { if (!star) try out.append(a, '*'); break; };
+        if (pos + 2 < s.len and std.mem.eql(u8, s[pos .. pos + 3], "{{{")) {
+            const close = findParamEnd(s, pos) orelse {
+                if (!star) try out.append(a, '*');
+                break;
+            };
             if (!star) try out.append(a, '*');
-            star = true; pos = close + 3; continue;
+            star = true;
+            pos = close + 3;
+            continue;
         }
-        if (pos + 1 < s.len and std.mem.eql(u8, s[pos..pos+2], "{{")) {
-            const close = findTemplateEnd(s, pos) orelse { if (!star) try out.append(a, '*'); break; };
+        if (pos + 1 < s.len and std.mem.eql(u8, s[pos .. pos + 2], "{{")) {
+            const close = findTemplateEnd(s, pos) orelse {
+                if (!star) try out.append(a, '*');
+                break;
+            };
             if (!star) try out.append(a, '*');
-            star = true; pos = close + 2; continue;
+            star = true;
+            pos = close + 2;
+            continue;
         }
-        if (pos + 1 < s.len and std.mem.eql(u8, s[pos..pos+2], "[[")) {
-            const close = std.mem.indexOfPos(u8, s, pos + 2, "]]" ) orelse { if (!star) try out.append(a, '*'); break; };
+        if (pos + 1 < s.len and std.mem.eql(u8, s[pos .. pos + 2], "[[")) {
+            const close = std.mem.indexOfPos(u8, s, pos + 2, "]]") orelse {
+                if (!star) try out.append(a, '*');
+                break;
+            };
             const inside = s[pos + 2 .. close];
             const pipe = std.mem.lastIndexOfScalar(u8, inside, '|');
             var display = if (pipe) |cut| inside[cut + 1 ..] else inside;
@@ -947,7 +1067,9 @@ fn wildcardTargetPatternAlloc(a: std.mem.Allocator, raw: []const u8) ![]u8 {
                 if (dc == '_') dc = ' ';
                 try out.append(a, dc);
             }
-            star = false; pos = close + 2; continue;
+            star = false;
+            pos = close + 2;
+            continue;
         }
         var c = s[pos];
         if (c == '_') c = ' ';
@@ -972,13 +1094,21 @@ fn globTitleMatch(pattern: []const u8, text: []const u8) bool {
     var retry: usize = 0;
     while (t < text.len) {
         if (p < pattern.len and pattern[p] != '*' and titleCharEq(pattern[p], text[t])) {
-            p += 1; t += 1; continue;
+            p += 1;
+            t += 1;
+            continue;
         }
         if (p < pattern.len and pattern[p] == '*') {
-            star = p; p += 1; retry = t; continue;
+            star = p;
+            p += 1;
+            retry = t;
+            continue;
         }
         if (star) |sp| {
-            retry += 1; t = retry; p = sp + 1; continue;
+            retry += 1;
+            t = retry;
+            p = sp + 1;
+            continue;
         }
         return false;
     }
@@ -1056,19 +1186,28 @@ fn findTemplateEnd(s: []const u8, start: usize) ?usize {
     while (i < s.len) {
         if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "{{{")) {
             if (depth == stack.len) return null;
-            stack[depth] = 3; depth += 1; i += 3; continue;
+            stack[depth] = 3;
+            depth += 1;
+            i += 3;
+            continue;
         }
         if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "{{")) {
             if (depth == stack.len) return null;
-            stack[depth] = 2; depth += 1; i += 2; continue;
+            stack[depth] = 2;
+            depth += 1;
+            i += 2;
+            continue;
         }
         if (depth != 0 and stack[depth - 1] == 3 and i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "}}}")) {
-            depth -= 1; i += 3; continue;
+            depth -= 1;
+            i += 3;
+            continue;
         }
         if (depth != 0 and stack[depth - 1] == 2 and i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "}}")) {
             depth -= 1;
             if (depth == 0) return i;
-            i += 2; continue;
+            i += 2;
+            continue;
         }
         i += 1;
     }
@@ -1080,12 +1219,36 @@ fn findTopDelimiter(s: []const u8, needle: u8) ?usize {
     var square: i32 = 0;
     var i: usize = 0;
     while (i < s.len) {
-        if (i + 2 < s.len and std.mem.eql(u8, s[i..i+3], "{{{")) { curly += 3; i += 3; continue; }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i..i+2], "{{")) { curly += 2; i += 2; continue; }
-        if (i + 2 < s.len and std.mem.eql(u8, s[i..i+3], "}}}") and curly >= 3) { curly -= 3; i += 3; continue; }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i..i+2], "}}") and curly >= 2) { curly -= 2; i += 2; continue; }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i..i+2], "[[")) { square += 2; i += 2; continue; }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i..i+2], "]]" ) and square >= 2) { square -= 2; i += 2; continue; }
+        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "{{{")) {
+            curly += 3;
+            i += 3;
+            continue;
+        }
+        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "{{")) {
+            curly += 2;
+            i += 2;
+            continue;
+        }
+        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "}}}") and curly >= 3) {
+            curly -= 3;
+            i += 3;
+            continue;
+        }
+        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "}}") and curly >= 2) {
+            curly -= 2;
+            i += 2;
+            continue;
+        }
+        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "[[")) {
+            square += 2;
+            i += 2;
+            continue;
+        }
+        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "]]") and square >= 2) {
+            square -= 2;
+            i += 2;
+            continue;
+        }
         if (s[i] == needle and curly == 0 and square == 0) return i;
         i += 1;
     }
@@ -1122,22 +1285,39 @@ fn magicWordValue(self: *Analyzer, head: []const u8, host: []const u8) ?[]const 
 
 const ParamSplit = struct { key: []const u8, default: ?[]const u8 };
 fn splitParam(s: []const u8) ParamSplit {
-    var depth: usize = 0; var i: usize = 0;
+    var depth: usize = 0;
+    var i: usize = 0;
     while (i < s.len) {
-        if (i + 2 < s.len and std.mem.eql(u8, s[i..i+3], "{{{")) { depth += 1; i += 3; continue; }
-        if (i + 2 < s.len and std.mem.eql(u8, s[i..i+3], "}}}") and depth != 0) { depth -= 1; i += 3; continue; }
-        if (s[i] == '|' and depth == 0) return .{ .key = s[0..i], .default = s[i+1..] };
+        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "{{{")) {
+            depth += 1;
+            i += 3;
+            continue;
+        }
+        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "}}}") and depth != 0) {
+            depth -= 1;
+            i += 3;
+            continue;
+        }
+        if (s[i] == '|' and depth == 0) return .{ .key = s[0..i], .default = s[i + 1 ..] };
         i += 1;
     }
     return .{ .key = s, .default = null };
 }
 
 fn findParamEnd(s: []const u8, start: usize) ?usize {
-    var depth: usize = 1; var i = start + 3;
+    var depth: usize = 1;
+    var i = start + 3;
     while (i < s.len) {
-        if (i + 2 < s.len and std.mem.eql(u8, s[i..i+3], "{{{")) { depth += 1; i += 3; continue; }
-        if (i + 2 < s.len and std.mem.eql(u8, s[i..i+3], "}}}")) {
-            depth -= 1; if (depth == 0) return i; i += 3; continue;
+        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "{{{")) {
+            depth += 1;
+            i += 3;
+            continue;
+        }
+        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "}}}")) {
+            depth -= 1;
+            if (depth == 0) return i;
+            i += 3;
+            continue;
         }
         i += 1;
     }
@@ -1154,30 +1334,29 @@ fn containsNonParamTemplate(s: []const u8) bool {
     return std.mem.indexOf(u8, s, "[[") != null;
 }
 
-
 fn isParserOrMagicHead(raw: []const u8) bool {
     const s = std.mem.trim(u8, raw, " \\t\\r\\n");
     if (s.len == 0) return false;
     if (s[0] == '#') return true;
     const exact = [_][]const u8{
-        "PAGENAME", "PAGENAMEE", "FULLPAGENAME", "FULLPAGENAMEE",
-        "BASEPAGENAME", "BASEPAGENAMEE", "SUBPAGENAME", "SUBPAGENAMEE",
-        "NAMESPACE", "NAMESPACEE", "NAMESPACENUMBER", "TALKSPACE", "SUBJECTSPACE",
-        "TALKPAGENAME", "SUBJECTPAGENAME", "ARTICLEPAGENAME", "ROOTPAGENAME",
-        "CURRENTYEAR", "CURRENTMONTH", "CURRENTMONTH1", "CURRENTMONTHNAME",
-        "CURRENTDAY", "CURRENTDAY2", "CURRENTDOW", "CURRENTTIME", "CURRENTHOUR",
-        "REVISIONID", "REVISIONUSER", "REVISIONTIMESTAMP", "SITENAME", "SERVER", "SERVERNAME",
+        "PAGENAME",          "PAGENAMEE",     "FULLPAGENAME",    "FULLPAGENAMEE",
+        "BASEPAGENAME",      "BASEPAGENAMEE", "SUBPAGENAME",     "SUBPAGENAMEE",
+        "NAMESPACE",         "NAMESPACEE",    "NAMESPACENUMBER", "TALKSPACE",
+        "SUBJECTSPACE",      "TALKPAGENAME",  "SUBJECTPAGENAME", "ARTICLEPAGENAME",
+        "ROOTPAGENAME",      "CURRENTYEAR",   "CURRENTMONTH",    "CURRENTMONTH1",
+        "CURRENTMONTHNAME",  "CURRENTDAY",    "CURRENTDAY2",     "CURRENTDOW",
+        "CURRENTTIME",       "CURRENTHOUR",   "REVISIONID",      "REVISIONUSER",
+        "REVISIONTIMESTAMP", "SITENAME",      "SERVER",          "SERVERNAME",
     };
     for (exact) |name| if (std.ascii.eqlIgnoreCase(s, name)) return true;
     const prefixes = [_][]const u8{
-        "lc:", "uc:", "lcfirst:", "ucfirst:", "urlencode:", "anchorencode:",
-        "fullurl:", "fullurle:", "localurl:", "filepath:", "formatnum:", "padleft:", "padright:",
-        "pagename:", "pagenamee:", "fullpagename:", "fullpagenamee:",
-        "basepagename:", "basepagenamee:", "subpagename:", "subpagenamee:",
-        "namespace:", "namespacee:", "talkpagename:", "subjectpagename:", "rootpagename:",
-        "plural:", "grammar:", "gender:", "int:", "ns:", "nse:", "canonicalurl:",
-        "displaytitle:", "defaultsort:", "defaultcategorysort:", "pagesincategory:",
-        "pagesinnamespace:", "numberofpages:", "numberofarticles:", "numberoffiles:",
+        "lc:",              "uc:",               "lcfirst:",       "ucfirst:",          "urlencode:",     "anchorencode:",
+        "fullurl:",         "fullurle:",         "localurl:",      "filepath:",         "formatnum:",     "padleft:",
+        "padright:",        "pagename:",         "pagenamee:",     "fullpagename:",     "fullpagenamee:", "basepagename:",
+        "basepagenamee:",   "subpagename:",      "subpagenamee:",  "namespace:",        "namespacee:",    "talkpagename:",
+        "subjectpagename:", "rootpagename:",     "plural:",        "grammar:",          "gender:",        "int:",
+        "ns:",              "nse:",              "canonicalurl:",  "displaytitle:",     "defaultsort:",   "defaultcategorysort:",
+        "pagesincategory:", "pagesinnamespace:", "numberofpages:", "numberofarticles:", "numberoffiles:",
     };
     for (prefixes) |prefix| {
         if (s.len >= prefix.len and std.ascii.eqlIgnoreCase(s[0..prefix.len], prefix)) return true;
@@ -1185,7 +1364,9 @@ fn isParserOrMagicHead(raw: []const u8) bool {
     return false;
 }
 
-fn isDynamicText(s: []const u8) bool { return std.mem.indexOf(u8, s, "{{") != null or std.mem.indexOf(u8, s, "[[") != null; }
+fn isDynamicText(s: []const u8) bool {
+    return std.mem.indexOf(u8, s, "{{") != null or std.mem.indexOf(u8, s, "[[") != null;
+}
 
 fn appendLiteral(a: std.mem.Allocator, values: *std.ArrayList([]const u8), literal: []const u8) !void {
     if (literal.len == 0) return;
@@ -1194,39 +1375,73 @@ fn appendLiteral(a: std.mem.Allocator, values: *std.ArrayList([]const u8), liter
 
 const ParsedArg = struct { key: []const u8, value: []const u8 };
 fn parseArg(self: *Analyzer, raw: []const u8, positional: *usize) !ParsedArg {
-    var curly: i32 = 0; var square: i32 = 0; var i: usize = 0;
+    var curly: i32 = 0;
+    var square: i32 = 0;
+    var i: usize = 0;
     while (i < raw.len) {
-        if (i + 2 < raw.len and std.mem.eql(u8, raw[i..i+3], "{{{")) { curly += 3; i += 3; continue; }
-        if (i + 1 < raw.len and std.mem.eql(u8, raw[i..i+2], "{{")) { curly += 2; i += 2; continue; }
-        if (i + 2 < raw.len and std.mem.eql(u8, raw[i..i+3], "}}}") and curly >= 3) { curly -= 3; i += 3; continue; }
-        if (i + 1 < raw.len and std.mem.eql(u8, raw[i..i+2], "}}") and curly >= 2) { curly -= 2; i += 2; continue; }
-        if (i + 1 < raw.len and std.mem.eql(u8, raw[i..i+2], "[[")) { square += 2; i += 2; continue; }
-        if (i + 1 < raw.len and std.mem.eql(u8, raw[i..i+2], "]]" ) and square >= 2) { square -= 2; i += 2; continue; }
+        if (i + 2 < raw.len and std.mem.eql(u8, raw[i .. i + 3], "{{{")) {
+            curly += 3;
+            i += 3;
+            continue;
+        }
+        if (i + 1 < raw.len and std.mem.eql(u8, raw[i .. i + 2], "{{")) {
+            curly += 2;
+            i += 2;
+            continue;
+        }
+        if (i + 2 < raw.len and std.mem.eql(u8, raw[i .. i + 3], "}}}") and curly >= 3) {
+            curly -= 3;
+            i += 3;
+            continue;
+        }
+        if (i + 1 < raw.len and std.mem.eql(u8, raw[i .. i + 2], "}}") and curly >= 2) {
+            curly -= 2;
+            i += 2;
+            continue;
+        }
+        if (i + 1 < raw.len and std.mem.eql(u8, raw[i .. i + 2], "[[")) {
+            square += 2;
+            i += 2;
+            continue;
+        }
+        if (i + 1 < raw.len and std.mem.eql(u8, raw[i .. i + 2], "]]") and square >= 2) {
+            square -= 2;
+            i += 2;
+            continue;
+        }
         if (raw[i] == '=' and curly == 0 and square == 0) {
             const key = std.mem.trim(u8, raw[0..i], " \t\r\n");
-            if (key.len != 0) return .{ .key = try self.interner.intern(key), .value = std.mem.trim(u8, raw[i+1..], " \t\r\n") };
+            if (key.len != 0) return .{ .key = try self.interner.intern(key), .value = std.mem.trim(u8, raw[i + 1 ..], " \t\r\n") };
             break;
         }
         i += 1;
     }
     var buf: [32]u8 = undefined;
-    const key = try std.fmt.bufPrint(&buf, "{d}", .{positional.*}); positional.* += 1;
+    const key = try std.fmt.bufPrint(&buf, "{d}", .{positional.*});
+    positional.* += 1;
     return .{ .key = try self.interner.intern(key), .value = std.mem.trim(u8, raw, " \t\r\n") };
 }
 
 fn writeField(w: *std.Io.Writer, s: []const u8) !void {
     for (s) |c| switch (c) {
-        '\\' => try w.writeAll("\\\\"), '\t' => try w.writeAll("\\t"), '\n' => try w.writeAll("\\n"), '\r' => try w.writeAll("\\r"),
+        '\\' => try w.writeAll("\\\\"),
+        '\t' => try w.writeAll("\\t"),
+        '\n' => try w.writeAll("\\n"),
+        '\r' => try w.writeAll("\\r"),
         else => try w.writeByte(c),
     };
 }
-fn lessStr(_: void, a: []const u8, b: []const u8) bool { return std.mem.order(u8, a, b) == .lt; }
+fn lessStr(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.order(u8, a, b) == .lt;
+}
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 2) return error.MissingInput;
-    var mapped = try mmapPath(args[1]); defer mapped.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator); defer arena.deinit();
+    var mapped = try mmapPath(args[1]);
+    defer mapped.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
     const a = arena.allocator();
     var analyzer = Analyzer.init(a);
     try analyzer.parseReduced(mapped.bytes);
