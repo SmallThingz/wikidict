@@ -456,10 +456,8 @@ pub const Context = struct {
         return self.invokeKnown(value.id, value.captures(), args);
     }
 
-    pub fn registerModuleFunction(self: *Context, module_id: u32, value: Value) !void {
+    pub fn bindModuleEnv(self: *Context, module_id: u32, env: *ModuleEnv) !void {
         if (module_id >= self.module_envs.len) return error.BadModuleId;
-        if (value != .function) return error.FunctionExpected;
-        const env = value.function.env.modulePtr() orelse return;
         if (self.module_envs[module_id]) |existing| {
             if (existing != env) return error.ModuleEnvironmentMismatch;
         } else {
@@ -828,8 +826,8 @@ test "AOT module functions share one activation environment" {
     try std.testing.expect(first.function.env.modulePtr() == second.function.env.modulePtr());
     try std.testing.expect(first.function.env.closurePtr() == null);
     try std.testing.expect(!rawEqual(first, second));
-    try ctx.registerModuleFunction(1, first);
-    try ctx.registerModuleFunction(1, second);
+    try ctx.bindModuleEnv(1, env);
+    try ctx.bindModuleEnv(1, env);
     const registered = try ctx.moduleCaptures(1);
     try std.testing.expect(registered.module == env);
     const capture = try registered.cell(0, 1);
@@ -840,8 +838,7 @@ test "AOT module functions share one activation environment" {
     var other_cells: [1]?*Cell = undefined;
     var other_frame = try Frame.init(&other_regs, &other_cells, &.{}, 0, false);
     const other_env = try other_frame.ensureModuleEnv(&ctx);
-    const other = ctx.makeModuleFunction(6, other_env);
-    try std.testing.expectError(error.ModuleEnvironmentMismatch, ctx.registerModuleFunction(1, other));
+    try std.testing.expectError(error.ModuleEnvironmentMismatch, ctx.bindModuleEnv(1, other_env));
     if (@sizeOf(usize) == 8) try std.testing.expectEqual(@as(usize, 24), @sizeOf(FunctionValue));
 }
 

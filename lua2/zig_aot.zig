@@ -518,10 +518,10 @@ fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
             }
         },
         .register_function => {
-            if (inst.aux >= p.function_modules.items.len) return error.BadFunctionReference;
-            try print(out, a, "            try ctx.registerModuleFunction({d}, ", .{p.function_modules.items[inst.aux]});
-            try valueExpr(out, a, p, plan, inst.a);
-            try text(out, a, ");\n");
+            if (inst.aux >= p.function_modules.items.len or inst.aux >= p.functions.items.len) return error.BadFunctionReference;
+            const target = p.functions.items[inst.aux] orelse return error.IncompleteProgram;
+            if (target.upvalues.items.len != 0)
+                try print(out, a, "            try ctx.bindModuleEnv({d}, try frame.ensureModuleEnv(ctx));\n", .{p.function_modules.items[inst.aux]});
         },
         .check_table_key => {
             try text(out, a, "            try rt.validateTableKey(");
