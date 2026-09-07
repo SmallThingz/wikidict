@@ -61,6 +61,8 @@ pub const FunctionValue = struct {
 };
 pub const FunctionFn = *const fn (*Context, Captures, []const Value) anyerror![]const Value;
 pub const NativeFn = *const fn (?*anyopaque, *Context, []const Value) anyerror![]const Value;
+pub const ModuleLookupFn = *const fn (?*const anyopaque, []const u8) ?u32;
+pub const ModuleNameFn = *const fn (?*const anyopaque, u32) ?[]const u8;
 pub const NativeFunction = struct {
     ctx: ?*anyopaque = null,
     call: NativeFn,
@@ -420,6 +422,12 @@ pub const Context = struct {
     next_identity: u64 = 1,
     module_state: []u8 = &.{},
     module_envs: []?*ModuleEnv = &.{},
+    module_value_slots: []u32 = &.{},
+    module_values: std.ArrayList(Value) = .empty,
+    module_lookup_ctx: ?*const anyopaque = null,
+    module_lookup: ?ModuleLookupFn = null,
+    module_name: ?ModuleNameFn = null,
+    package_loaded: ?*Table = null,
     global_table: ?*Table = null,
 
     pub fn init(allocator: std.mem.Allocator, global_count: usize) !Context {
@@ -436,13 +444,18 @@ pub const Context = struct {
         const module_envs = try allocator.alloc(?*ModuleEnv, module_count);
         errdefer allocator.free(module_envs);
         @memset(module_envs, null);
-        return .{ .allocator = allocator, .globals = globals, .module_state = module_state, .module_envs = module_envs };
+        const module_value_slots = try allocator.alloc(u32, module_count);
+        errdefer allocator.free(module_value_slots);
+        @memset(module_value_slots, std.math.maxInt(u32));
+        return .{ .allocator = allocator, .globals = globals, .module_state = module_state, .module_envs = module_envs, .module_value_slots = module_value_slots };
     }
 
     pub fn deinit(self: *Context) void {
         var it = self.string_intern.keyIterator();
         while (it.next()) |text| self.allocator.free(text.*);
         self.string_intern.deinit(self.allocator);
+        self.module_values.deinit(self.allocator);
+        if (self.module_value_slots.len != 0) self.allocator.free(self.module_value_slots);
         if (self.global_table) |table| {
             table.deinit(self.allocator);
             self.allocator.destroy(table);
@@ -521,15 +534,62 @@ pub const Context = struct {
         return .{ .module = self.module_envs[module_id] orelse return error.UnregisteredModuleEnvironment };
     }
 
-    pub fn ensureModule(self: *Context, module_id: u32) anyerror!void {
+    pub fn configureModules(self: *Context, host: ?*const anyopaque, lookup: ModuleLookupFn, name: ModuleNameFn) void {
+        self.module_lookup_ctx = host;
+        self.module_lookup = lookup;
+        self.module_name = name;
+    }
+
+    fn canonicalModuleName(self: *const Context, module_id: u32, requested: ?[]const u8) ?[]const u8 {
+        if (self.module_name) |name| if (name(self.module_lookup_ctx, module_id)) |text| return text;
+        return requested;
+    }
+
+    pub fn loadModule(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!Value {
         if (module_id >= self.module_roots.len or module_id >= self.module_state.len) return error.BadModuleId;
-        if (self.module_state[module_id] == 2) return;
+        if (self.module_state[module_id] == 2) {
+            const slot = self.module_value_slots[module_id];
+            if (slot >= self.module_values.items.len) return error.MissingModuleValue;
+            return self.module_values.items[slot];
+        }
         if (self.module_state[module_id] == 1) return error.ModuleLoadLoop;
+        const value_slot = std.math.cast(u32, self.module_values.items.len) orelse return error.TooManyLoadedModules;
+        try self.module_values.ensureUnusedCapacity(self.allocator, 1);
         self.module_state[module_id] = 1;
-        errdefer self.module_state[module_id] = 0;
-        const values = try self.invokeKnown(self.module_roots[module_id], .{ .direct = &.{} }, &.{});
-        freeResults(values);
+        errdefer {
+            if (self.module_state[module_id] != 2) self.module_state[module_id] = 0;
+        }
+
+        const canonical = self.canonicalModuleName(module_id, requested);
+        const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
+        const values = try self.invokeKnown(self.module_roots[module_id], .{ .direct = &.{} }, argv);
+        defer freeResults(values);
+        var value: Value = if (values.len == 0) .nil else values[0];
+        if (value == .nil) {
+            if (canonical) |text| if (self.package_loaded) |loaded| {
+                if (loaded.rawGet(.{ .string = text })) |existing| value = existing;
+            };
+            if (value == .nil) value = .{ .boolean = true };
+        }
+        if (canonical) |text| if (self.package_loaded) |loaded|
+            try loaded.rawSet(self.allocator, .{ .string = text }, value);
+        self.module_value_slots[module_id] = value_slot;
+        self.module_values.appendAssumeCapacity(value);
         self.module_state[module_id] = 2;
+        return value;
+    }
+
+    pub fn ensureModule(self: *Context, module_id: u32) anyerror!void {
+        _ = try self.loadModule(module_id, null);
+    }
+
+    pub fn requireByName(self: *Context, raw_name: []const u8) anyerror!Value {
+        if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
+        const lookup = self.module_lookup orelse return error.ModuleNotFound;
+        const module_id = lookup(self.module_lookup_ctx, raw_name) orelse return error.ModuleNotFound;
+        const value = try self.loadModule(module_id, raw_name);
+        if (self.package_loaded) |loaded| try loaded.rawSet(self.allocator, .{ .string = raw_name }, value);
+        return value;
     }
 
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
@@ -820,6 +880,77 @@ pub fn stringCompare(op: CompareOp, a: []const u8, b: []const u8) bool {
         .gt => order == .gt,
         .ge => order != .lt,
     };
+}
+
+const ModuleRuntimeProbe = struct {
+    fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+        if (std.mem.eql(u8, raw_name, "Module:A") or std.mem.eql(u8, raw_name, "Alias:A")) return 0;
+        if (std.mem.eql(u8, raw_name, "Module:B")) return 1;
+        if (std.mem.eql(u8, raw_name, "Module:Loop")) return 2;
+        return null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return switch (id) {
+            0 => "Module:A",
+            1 => "Module:B",
+            2 => "Module:Loop",
+            else => null,
+        };
+    }
+    fn named(ctx: *Context, _: Captures, args: []const Value) ![]const Value {
+        const count = switch (ctx.getGlobal(0)) {
+            .number => |n| n,
+            else => 0,
+        };
+        try ctx.setGlobal(0, .{ .number = count + 1 });
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = if (args.len == 0) .nil else args[0];
+        return out;
+    }
+    fn packageOverride(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        const loaded = ctx.package_loaded orelse return error.MissingPackageLoaded;
+        try loaded.rawSet(ctx.allocator, .{ .string = "Module:B" }, .{ .string = "override" });
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .nil;
+        return out;
+    }
+    fn loop(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        _ = try ctx.requireByName("Module:Loop");
+        return &.{};
+    }
+};
+
+test "AOT module resolver caches numeric identities and exposes package.loaded aliases" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 1, 3);
+    defer ctx.deinit();
+    const functions = [_]FunctionFn{ ModuleRuntimeProbe.named, ModuleRuntimeProbe.packageOverride, ModuleRuntimeProbe.loop };
+    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
+    const roots = [_]u32{ 0, 1, 2 };
+    ctx.function_blocks = &blocks;
+    ctx.module_roots = &roots;
+    ctx.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
+    ctx.package_loaded = try ctx.newTable();
+    try ctx.ensureModule(0);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
+    try std.testing.expectEqualStrings("Module:A", ctx.package_loaded.?.rawGet(.{ .string = "Module:A" }).?.string);
+
+    const alias = try ctx.requireByName("Alias:A");
+    try std.testing.expectEqualStrings("Module:A", alias.string);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
+    const canonical = try ctx.requireByName("Module:A");
+    try std.testing.expectEqualStrings("Module:A", canonical.string);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
+    try std.testing.expectEqualStrings("Module:A", ctx.package_loaded.?.rawGet(.{ .string = "Alias:A" }).?.string);
+    try std.testing.expectEqualStrings("Module:A", ctx.package_loaded.?.rawGet(.{ .string = "Module:A" }).?.string);
+
+    const overridden = try ctx.requireByName("Module:B");
+    try std.testing.expectEqualStrings("override", overridden.string);
+    try std.testing.expectError(error.ModuleLoadLoop, ctx.requireByName("Module:Loop"));
+    try std.testing.expectEqual(@as(u8, 0), ctx.module_state[2]);
+    try std.testing.expectEqual(std.math.maxInt(u32), ctx.module_value_slots[2]);
+    try std.testing.expectError(error.ModuleNotFound, ctx.requireByName("Module:Missing"));
 }
 
 const NativeHostProbe = struct {

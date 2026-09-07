@@ -38,6 +38,11 @@ fn setGlobalNative(vm: *rt.Context, comptime name: []const u8, call: rt.NativeFn
     try vm.setGlobal(global_abi.id(name), try vm.newNative(null, call));
 }
 
+fn baseRequire(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    return one(ctx.allocator, try ctx.requireByName(args[0].string));
+}
+
 fn baseType(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     const a = ctx.allocator;
     const name = if (args.len == 0) "nil" else switch (args[0]) {
@@ -729,6 +734,16 @@ pub fn install(vm: *rt.Context) !void {
     try setGlobalNative(vm, "pairs", basePairs);
     try setGlobalNative(vm, "ipairs", baseIpairs);
     try setGlobalNative(vm, "pcall", basePcall);
+
+    const package = try vm.newTable();
+    const loaded = try vm.newTable();
+    const loaders = try vm.newTable();
+    try package.rawSet(vm.allocator, .{ .string = "loaded" }, .{ .table = loaded });
+    try package.rawSet(vm.allocator, .{ .string = "loaders" }, .{ .table = loaders });
+    vm.package_loaded = loaded;
+    try vm.setGlobal(global_abi.id("package"), .{ .table = package });
+    try setGlobalNative(vm, "require", baseRequire);
+
     const table = try vm.newTable();
     try setNative(vm, table, "insert", tableInsert);
     try setNative(vm, table, "remove", tableRemove);
@@ -791,6 +806,14 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     defer ctx.deinit();
     try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
     try install(&ctx);
+
+    const package = ctx.getGlobal(global_abi.id("package"));
+    try std.testing.expect(package == .table);
+    const loaded = try ctx.getIndex(package, .{ .string = "loaded" });
+    try std.testing.expect(loaded == .table and ctx.package_loaded == loaded.table);
+    const require = ctx.getGlobal(global_abi.id("require"));
+    try std.testing.expect(require == .native);
+    try std.testing.expectError(error.ModuleNotFound, ctx.callValue(require, &.{.{ .string = "Module:Missing" }}));
 
     const string = ctx.getGlobal(global_abi.id("string"));
     const sub = try callField(&ctx, string, "sub", &.{ .{ .string = "abcdef" }, .{ .number = 2 }, .{ .number = -2 } });
