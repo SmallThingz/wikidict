@@ -2,6 +2,8 @@ const std = @import("std");
 const ir = @import("vm_ir.zig");
 
 pub const Stats = struct {
+    functions: u64 = 0,
+    instructions: u64 = 0,
     dynamic_calls: u64 = 0,
     calls: u64 = 0,
     call_varargs: u64 = 0,
@@ -31,18 +33,57 @@ pub const Stats = struct {
 pub fn collect(program: *const ir.Program) Stats {
     var stats = Stats{};
     for (program.functions.items) |maybe| if (maybe) |function| {
+        stats.functions += 1;
+        stats.instructions += function.insts.items.len;
         for (function.insts.items) |inst| switch (inst.op) {
-            .call => { stats.calls += 1; stats.dynamic_calls += 1; },
-            .call_vararg => { stats.call_varargs += 1; stats.dynamic_calls += 1; },
-            .method_call => { stats.method_calls += 1; stats.dynamic_calls += 1; stats.dynamic_indexes += 1; },
-            .method_call_vararg => { stats.method_call_varargs += 1; stats.dynamic_calls += 1; stats.dynamic_indexes += 1; },
-            .method_call_field => { stats.method_field_calls += 1; stats.dynamic_calls += 1; stats.string_fields += 1; },
-            .method_call_field_vararg => { stats.method_field_varargs += 1; stats.dynamic_calls += 1; stats.string_fields += 1; },
-            .get_index => { stats.get_indexes += 1; stats.dynamic_indexes += 1; },
-            .set_index => { stats.set_indexes += 1; stats.dynamic_indexes += 1; },
-            .table_set => { stats.table_sets += 1; stats.dynamic_indexes += 1; },
-            .get_field => { stats.get_fields += 1; stats.string_fields += 1; },
-            .set_field => { stats.set_fields += 1; stats.string_fields += 1; },
+            .call => {
+                stats.calls += 1;
+                stats.dynamic_calls += 1;
+            },
+            .call_vararg => {
+                stats.call_varargs += 1;
+                stats.dynamic_calls += 1;
+            },
+            .method_call => {
+                stats.method_calls += 1;
+                stats.dynamic_calls += 1;
+                stats.dynamic_indexes += 1;
+            },
+            .method_call_vararg => {
+                stats.method_call_varargs += 1;
+                stats.dynamic_calls += 1;
+                stats.dynamic_indexes += 1;
+            },
+            .method_call_field => {
+                stats.method_field_calls += 1;
+                stats.dynamic_calls += 1;
+                stats.string_fields += 1;
+            },
+            .method_call_field_vararg => {
+                stats.method_field_varargs += 1;
+                stats.dynamic_calls += 1;
+                stats.string_fields += 1;
+            },
+            .get_index => {
+                stats.get_indexes += 1;
+                stats.dynamic_indexes += 1;
+            },
+            .set_index => {
+                stats.set_indexes += 1;
+                stats.dynamic_indexes += 1;
+            },
+            .table_set => {
+                stats.table_sets += 1;
+                stats.dynamic_indexes += 1;
+            },
+            .get_field => {
+                stats.get_fields += 1;
+                stats.string_fields += 1;
+            },
+            .set_field => {
+                stats.set_fields += 1;
+                stats.string_fields += 1;
+            },
             .get_slot => stats.slot_reads += 1,
             .set_slot => stats.slot_writes += 1,
             .get_choice_slot => stats.choice_reads += 1,
@@ -64,6 +105,8 @@ test "AOT stats classify string fields indexes and calls" {
     var program = try ir.lowerChunk(a, &chunk);
     defer program.deinit();
     const stats = collect(&program);
+    try std.testing.expectEqual(@as(u64, 1), stats.functions);
+    try std.testing.expect(stats.instructions != 0);
     try std.testing.expectEqual(@as(u64, 2), stats.string_fields);
     try std.testing.expectEqual(@as(u64, 2), stats.dynamic_indexes);
     try std.testing.expectEqual(@as(u64, 1), stats.dynamic_calls);
@@ -72,6 +115,7 @@ test "AOT stats classify string fields indexes and calls" {
 const ssa = @import("vm_ssa.zig");
 
 pub const ValueOrigins = struct {
+    function: u64 = 0,
     captured_reg: u64 = 0,
     parameter: u64 = 0,
     phi: u64 = 0,
@@ -86,13 +130,24 @@ pub const ValueOrigins = struct {
 };
 
 pub const Origins = struct {
+    calls: ValueOrigins = .{},
     fields: ValueOrigins = .{},
     indexes: ValueOrigins = .{},
 };
 
 const Origin = enum {
-    captured_reg, parameter, phi, get_upvalue, call_result, field_result,
-    index_result, global, table, other_instruction, unknown,
+    function,
+    captured_reg,
+    parameter,
+    phi,
+    get_upvalue,
+    call_result,
+    field_result,
+    index_result,
+    global,
+    table,
+    other_instruction,
+    unknown,
 };
 fn classifyOrigin(function: *const ir.Function, analysis: *const ssa.Function, state: []const ssa.ValueId, reg: u32) Origin {
     if (reg >= state.len) return .unknown;
@@ -106,9 +161,9 @@ fn classifyOrigin(function: *const ir.Function, analysis: *const ssa.Function, s
         .instruction => blk: {
             if (node.pc >= function.insts.items.len) break :blk .unknown;
             break :blk switch (function.insts.items[node.pc].op) {
+                .closure, .load_function => .function,
                 .get_upvalue => .get_upvalue,
-                .call, .call_vararg, .call_local, .call_local_vararg,
-                .call_scoped, .call_scoped_vararg, .direct_call, .direct_call_vararg => .call_result,
+                .call, .call_vararg, .call_local, .call_local_vararg, .call_scoped, .call_scoped_vararg, .direct_call, .direct_call_vararg => .call_result,
                 .get_field, .get_slot => .field_result,
                 .get_index, .get_choice_slot => .index_result,
                 .get_global, .get_global_slot => .global,
@@ -122,6 +177,7 @@ fn classifyOrigin(function: *const ir.Function, analysis: *const ssa.Function, s
 
 fn noteOrigin(stats: *ValueOrigins, origin: Origin) void {
     switch (origin) {
+        .function => stats.function += 1,
         .captured_reg => stats.captured_reg += 1,
         .parameter => stats.parameter += 1,
         .phi => stats.phi += 1,
@@ -150,6 +206,7 @@ pub fn collectOrigins(allocator: std.mem.Allocator, program: *const ir.Program) 
                 const pc: u32 = @intCast(pc_usize);
                 const inst = function.insts.items[pc];
                 switch (inst.op) {
+                    .call, .call_vararg => noteOrigin(&result.calls, classifyOrigin(&function, &analysis, state, inst.a)),
                     .get_field, .set_field => noteOrigin(&result.fields, classifyOrigin(&function, &analysis, state, inst.a)),
                     .get_index, .set_index, .table_set => noteOrigin(&result.indexes, classifyOrigin(&function, &analysis, state, inst.a)),
                     else => {},

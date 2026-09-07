@@ -173,7 +173,7 @@ pub fn main(init: std.process.Init) !void {
             generated_bytes += source.len;
         }
         std.debug.print("AOT_SHARDS functions={d} constants={d} entries={d}\n", .{ function_shards, constant_shards, entry_shards });
-    } else {
+    } else if (!std.mem.eql(u8, args[3], "-")) {
         const generated = try aot.generate(std.heap.smp_allocator, &image.program);
         defer std.heap.smp_allocator.free(generated.source);
         generated_stats = generated.stats;
@@ -190,7 +190,7 @@ pub fn main(init: std.process.Init) !void {
     );
     std.debug.print(
         "AOT_CODE functions={d} instructions={d} dynamic_calls={d} dynamic_indexes={d} string_fields={d}\n",
-        .{ generated_stats.functions, generated_stats.instructions, generated_stats.dynamic_calls, generated_stats.dynamic_indexes, generated_stats.string_fields },
+        .{ classified.functions, classified.instructions, classified.dynamic_calls, classified.dynamic_indexes, classified.string_fields },
     );
     std.debug.print("AOT_DYNAMIC {any}\n", .{classified});
     std.debug.print("AOT_ORIGINS {any}\n", .{origins});
