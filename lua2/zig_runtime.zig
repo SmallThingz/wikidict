@@ -592,6 +592,18 @@ pub const Context = struct {
         return value;
     }
 
+    pub inline fn callKnown(self: *Context, callable: Value, expected: u32, args: []const Value) anyerror![]const Value {
+        if (callable == .function and callable.function.id == expected) {
+            if (expected >= self.functions.len) return error.BadFunctionId;
+            if (self.depth >= self.max_depth) return error.CallDepth;
+            self.depth += 1;
+            defer self.depth -= 1;
+            const captures = if (callable.function.env) |env| env.captures else &.{};
+            return self.functions[expected](self, captures, args);
+        }
+        return self.callValue(callable, args);
+    }
+
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
         return switch (callable) {
             .function => |value| self.callFunction(value, args),
@@ -1072,4 +1084,43 @@ pub fn bindGlobalTable(ctx: *Context, shape: ?*const Shape, env_slot: u32) !void
     table.* = .{ .shape = shape, .slots = ctx.globals, .owns_slots = false };
     ctx.global_table = table;
     try ctx.setGlobal(env_slot, .{ .table = table });
+}
+
+fn guardTestExpected(_: *Context, captures: []const *Cell, args: []const Value) ![]const Value {
+    const out = try std.heap.smp_allocator.alloc(Value, 1);
+    const captured = if (captures.len == 0) 0 else captures[0].value.number;
+    const arg = if (args.len == 0) 0 else args[0].number;
+    out[0] = .{ .number = captured + arg };
+    return out;
+}
+
+fn guardTestOther(_: *Context, captures: []const *Cell, args: []const Value) ![]const Value {
+    const out = try std.heap.smp_allocator.alloc(Value, 1);
+    const captured = if (captures.len == 0) 0 else captures[0].value.number;
+    const arg = if (args.len == 0) 0 else args[0].number;
+    out[0] = .{ .number = 100 + captured + arg };
+    return out;
+}
+test "guarded call uses the runtime capture environment on a match" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 0, 2);
+    ctx.functions = &.{ guardTestExpected, guardTestOther };
+    var cell = Cell{ .value = .{ .number = 7 } };
+    const callable = try ctx.makeFunction(0, &.{&cell});
+    const out = try ctx.callKnown(callable, 0, &.{.{ .number = 3 }});
+    defer freeResults(out);
+    try std.testing.expectEqual(@as(f64, 10), out[0].number);
+}
+
+test "guarded call falls back to the actual function on an id mismatch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 0, 2);
+    ctx.functions = &.{ guardTestExpected, guardTestOther };
+    var cell = Cell{ .value = .{ .number = 7 } };
+    const callable = try ctx.makeFunction(1, &.{&cell});
+    const out = try ctx.callKnown(callable, 0, &.{.{ .number = 3 }});
+    defer freeResults(out);
+    try std.testing.expectEqual(@as(f64, 110), out[0].number);
 }

@@ -11,6 +11,7 @@ test {
     _ = @import("vm_optimize.zig");
     _ = @import("zig_runtime.zig");
     _ = @import("zig_aot.zig");
+    _ = @import("zig_aot_guard_test.zig");
     _ = @import("vm_shape_integration.zig");
     _ = @import("vm_numeric_link.zig");
     _ = @import("vm_global_callgraph.zig");

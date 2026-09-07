@@ -4,6 +4,7 @@ const refs = @import("vm_ref.zig");
 const global_abi = @import("vm_global_abi.zig");
 const graph_mod = @import("vm_graph.zig");
 const sem = @import("vm_semantics.zig");
+const aot_hint = @import("vm_aot_hint.zig");
 
 const A = std.mem.Allocator;
 
@@ -11,6 +12,7 @@ pub const Stats = struct {
     functions: u32 = 0,
     instructions: u64 = 0,
     dynamic_calls: u64 = 0,
+    guarded_calls: u64 = 0,
     dynamic_indexes: u64 = 0,
     string_fields: u64 = 0,
 };
@@ -724,7 +726,21 @@ fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *cons
 }
 fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
-        .call, .call_vararg => {
+        .call => {
+            if (aot_hint.target(inst)) |target| {
+                if (target >= p.functions.items.len) return error.BadFunctionReference;
+                try print(out, a, "            const result_{d} = try ctx.callKnown(", .{pc});
+                try valueExpr(out, a, p, plan, inst.a);
+                try print(out, a, ", {d}, argv_{d});\n", .{ target, pc });
+                stats.guarded_calls += 1;
+            } else {
+                try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
+                try valueExpr(out, a, p, plan, inst.a);
+                try print(out, a, ", argv_{d});\n", .{pc});
+            }
+            stats.dynamic_calls += 1;
+        },
+        .call_vararg => {
             try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
             try valueExpr(out, a, p, plan, inst.a);
             try print(out, a, ", argv_{d});\n", .{pc});
