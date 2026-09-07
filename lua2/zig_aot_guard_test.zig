@@ -54,7 +54,7 @@ test "guarded AOT hint preserves VM semantics and emits one guard" {
     const generated = try aot.generate(a, &program);
     defer a.free(generated.source);
     try std.testing.expectEqual(@as(u64, 1), generated.stats.guarded_calls);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".callKnown(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".callKnownDirect(") != null);
 }
 
 test "AOT call hints are not serialized into VM bytecode" {

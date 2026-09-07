@@ -38,6 +38,7 @@
 - Table-key exclusivity must hold for each allocation lifetime, not merely share one syntactic SSA definition across loop iterations.
 - Immutable constant/template deduplication must still create distinct mutable Lua objects on every materialization; entry pooling compares every logical sequence before replacement.
 - Numeric export linking remains experimental until export mutation/escape proofs and exact Wiktionary replay pass. Do not remove observable names or enable speculative direct calls to satisfy a size target.
+- AOT call predictions are guards, never semantic assumptions: guard the runtime function ID, use that value's actual capture environment, and fall back to ordinary dynamic dispatch on mismatch. Keep prediction hints compiler-only and out of serialized bytecode.
 - Function-entry phis include the implicit entry edge. Inlined closure factories need distinct capture cells for every dynamic activation, including loop calls.
 - AOT module-singleton functions share one activation capture environment; do not duplicate capture slices per `load_function`. Direct linked calls recover captured state by numeric module ID; do not restore an O(function-count) static `Value` registry. Loop and factory closures still require fresh environments and identities.
 - Generated AOT Zig is whitespace-compacted after emission. Lua string bytes must stay escaped onto one Zig source line; do not make codegen semantics depend on indentation.

@@ -729,9 +729,15 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
         .call => {
             if (aot_hint.target(inst)) |target| {
                 if (target >= p.functions.items.len) return error.BadFunctionReference;
-                try print(out, a, "            const result_{d} = try ctx.callKnown(", .{pc});
-                try valueExpr(out, a, p, plan, inst.a);
-                try print(out, a, ", {d}, argv_{d});\n", .{ target, pc });
+                if (p.functions.items[target] != null and (range == null or range.?.contains(target))) {
+                    try print(out, a, "            const result_{d} = try ctx.callKnownDirect(", .{pc});
+                    try valueExpr(out, a, p, plan, inst.a);
+                    try print(out, a, ", {d}, f_{d}, argv_{d});\n", .{ target, target, pc });
+                } else {
+                    try print(out, a, "            const result_{d} = try ctx.callKnown(", .{pc});
+                    try valueExpr(out, a, p, plan, inst.a);
+                    try print(out, a, ", {d}, argv_{d});\n", .{ target, pc });
+                }
                 stats.guarded_calls += 1;
             } else {
                 try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
