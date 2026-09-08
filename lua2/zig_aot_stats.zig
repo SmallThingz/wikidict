@@ -7,6 +7,7 @@ pub const Stats = struct {
     instructions: u64 = 0,
     dynamic_calls: u64 = 0,
     guarded_calls: u64 = 0,
+    guarded_global_calls: u64 = 0,
     calls: u64 = 0,
     call_varargs: u64 = 0,
     method_calls: u64 = 0,
@@ -42,6 +43,7 @@ pub fn collect(program: *const ir.Program) Stats {
                 stats.calls += 1;
                 stats.dynamic_calls += 1;
                 if (aot_hint.target(inst) != null) stats.guarded_calls += 1;
+                if (aot_hint.nativeGlobal(inst) != null) stats.guarded_global_calls += 1;
             },
             .call_vararg => {
                 stats.call_varargs += 1;

@@ -10,6 +10,7 @@ const exec = @import("vm_exec.zig");
 const simplify = @import("vm_ir_simplify.zig");
 const capture_link = @import("vm_capture_link.zig");
 const aot_hint = @import("vm_aot_hint.zig");
+const global_abi = @import("vm_global_abi.zig");
 
 pub const Stats = struct {
     direct_calls: u32 = 0,
@@ -17,6 +18,7 @@ pub const Stats = struct {
     removed_lookup_insts: u32 = 0,
     registrations: u32 = 0,
     guarded_calls: u32 = 0,
+    guarded_global_calls: u32 = 0,
     predicted_upvalues: u32 = 0,
     predicted_module_upvalues: u32 = 0,
     predicted_function_upvalues: u32 = 0,
@@ -219,6 +221,28 @@ fn insertRegistrations(allocator: std.mem.Allocator, program: *ir.Program, targe
     return inserted;
 }
 
+fn guardableNativeGlobal(
+    program: *const ir.Program,
+    function: *const ir.Function,
+    analysis: *const facts_mod.Analysis,
+    state: []const ssa.ValueId,
+    reg: u32,
+) ?u32 {
+    if (reg >= state.len) return null;
+    const id = analysis.ssa_function.canonicalValue(state[reg]);
+    if (id == ssa.invalid_value or id >= analysis.ssa_function.values.items.len) return null;
+    const node = analysis.ssa_function.values.items[id];
+    if (node.kind != .instruction or node.pc >= function.insts.items.len) return null;
+    const producer = function.insts.items[node.pc];
+    const slot = switch (producer.op) {
+        .get_global_slot => producer.aux,
+        .get_global => if (producer.aux < program.strings.items.len) global_abi.find(program.strings.items[producer.aux]) orelse return null else return null,
+        else => return null,
+    };
+    if (slot < global_abi.id("type") or slot > global_abi.id("pcall")) return null;
+    return slot;
+}
+
 fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: *const symbols_mod.Index, stats: *Stats) !u32 {
     var captures = try capture_link.build(allocator, program, symbols);
     defer captures.deinit();
@@ -242,13 +266,19 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
                 const pc: u32 = @intCast(pc_usize);
                 const inst = &function.insts.items[pc];
                 if (inst.op == .call and inst.a < state.len) {
+                    var tagged_function = false;
                     switch (factOf(&analysis, state[inst.a])) {
                         .function => |target| if (target < program.functions.items.len) {
                             try aot_hint.set(inst, target);
                             tagged += 1;
+                            tagged_function = true;
                         },
                         else => {},
                     }
+                    if (!tagged_function) if (guardableNativeGlobal(program, function, &analysis, state, inst.a)) |slot| {
+                        try aot_hint.setNativeGlobal(inst, slot);
+                        stats.guarded_global_calls += 1;
+                    };
                 }
                 try ssa.applyWrites(&analysis.ssa_function, function, state, pc, null);
             }
@@ -324,6 +354,46 @@ fn countGuardHints(program: *const ir.Program) u32 {
         }
     };
     return count;
+}
+
+fn countGlobalGuardHints(program: *const ir.Program) u32 {
+    var count: u32 = 0;
+    for (program.functions.items) |maybe| if (maybe) |function| {
+        for (function.insts.items) |inst| {
+            if (aot_hint.nativeGlobal(inst) != null) count += 1;
+        }
+    };
+    return count;
+}
+
+test "base native global calls carry guarded AOT hints" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    const module = try addSource(a, &image, &symbols, "Module:A", "local f=type;return f(1),type('x')");
+    _ = module;
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 2), stats.guarded_global_calls);
+    try std.testing.expectEqual(@as(u32, 2), countGlobalGuardHints(&image.program));
+}
+
+test "native global hint leaves rebinding semantics to runtime guard" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    const module = try addSource(a, &image, &symbols, "Module:A", "type=function()return 'patched' end;return type(1)");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_global_calls);
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var vm = try exec.Vm.init(arena.allocator());
+    const out = try vm.execute(&image.program, image.modules.items[module].root_function, &.{}, &.{});
+    defer exec.Vm.freeResults(out);
+    try std.testing.expectEqualStrings("patched", out[0].string);
 }
 
 test "guarded import calls survive whole-image require mutation" {
