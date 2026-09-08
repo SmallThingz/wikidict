@@ -347,7 +347,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     if (ustring_value != .table) return error.MissingUstringLibrary;
     const host = try runtime.allocator.create(Host);
     host.* = .{ .ustring = ustring_value.table };
-    const text = try runtime.newTable();
+    const text = try runtime.newNativeNamespace(.text);
     try setNative(runtime, text, "split", host, textSplitCall);
     try setNative(runtime, text, "gsplit", host, textGsplitCall);
     try setNative(runtime, text, "trim", null, textTrimCall);

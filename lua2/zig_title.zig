@@ -208,7 +208,7 @@ fn getContentCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]c
 
 fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !Value {
     const title = try runtime.allocator.dupe(u8, raw_title);
-    const table = try runtime.newTable();
+    const table = try runtime.newNativeNamespace(.title_value);
     const hash = std.mem.indexOfScalar(u8, title, '#');
     const base_title = if (hash) |pos| title[0..pos] else title;
     const fragment_raw = if (hash) |pos| title[pos + 1 ..] else "";
@@ -270,7 +270,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const state = try runtime.allocator.create(State);
     state.* = .{};
     _ = try ensureMetatable(runtime, state);
-    const title = try runtime.newTable();
+    const title = try runtime.newNativeNamespace(.title);
     try title.rawSet(runtime.allocator, .{ .string = "equals" }, state.equals.?);
     try title.rawSet(runtime.allocator, .{ .string = "compare" }, try runtime.newNative(null, compareCall));
     try title.rawSet(runtime.allocator, .{ .string = "new" }, try runtime.newNative(state, newCall));

@@ -105,7 +105,7 @@ fn currentFrameCall(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]c
     return one(if (runtime.current_frame) |frame| .{ .table = frame } else .nil);
 }
 fn makeFrameWithArgs(runtime: *rt.Context, title: []const u8, arg_table: *rt.Table, parent: ?Value) !Value {
-    const frame = try runtime.newTable();
+    const frame = try runtime.newNativeNamespace(.frame);
     const parent_table: ?*rt.Table = if (parent) |value| switch (value) {
         .nil => null,
         .table => |table| table,

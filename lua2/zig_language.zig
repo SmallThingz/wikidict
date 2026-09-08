@@ -417,7 +417,7 @@ fn languageParseFormattedNumber(_: ?*anyopaque, runtime: *rt.Context, args: []co
 
 fn makeLanguage(runtime: *rt.Context, code: []const u8) !*rt.Table {
     const a = runtime.allocator;
-    const table = try runtime.newTable();
+    const table = try runtime.newNativeNamespace(.language_value);
     const ctx = try a.create(LanguageCtx);
     ctx.* = .{ .code = code };
     try table.rawSet(a, .{ .string = "code" }, .{ .string = code });
@@ -470,7 +470,7 @@ fn getFallbacksFor(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]co
 }
 
 pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
-    const language = try runtime.newTable();
+    const language = try runtime.newNativeNamespace(.language);
     try setNative(runtime, language, "new", null, languageNew);
     try setNative(runtime, language, "getContentLanguage", null, getContentLanguage);
     try setNative(runtime, language, "getFallbacksFor", null, getFallbacksFor);

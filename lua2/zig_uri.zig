@@ -294,7 +294,7 @@ fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, call: rt.
 }
 
 pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
-    const uri = try runtime.newTable();
+    const uri = try runtime.newNativeNamespace(.uri);
     try setNative(runtime, uri, "fullUrl", uriFullUrlCall);
     try setNative(runtime, uri, "localUrl", uriLocalUrlCall);
     try setNative(runtime, uri, "canonicalUrl", uriCanonicalUrlCall);

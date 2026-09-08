@@ -338,3 +338,37 @@ test "AOT mw.text trim listToText and nowiki match Scribunto behavior" {
         try std.testing.expectEqualStrings(case[1], escaped[0].string);
     }
 }
+
+test "AOT Scribunto compiler-known namespaces use native slots" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try makeMovedHostContext(arena.allocator());
+    defer runtime.deinit();
+    const mw = runtime.getGlobal(23);
+    try std.testing.expect(mw == .table and mw.table.native_namespace.? == .mw);
+    inline for (.{
+        .{ "title", "title" },
+        .{ "text", "text" },
+        .{ "uri", "uri" },
+        .{ "html", "html" },
+        .{ "language", "language" },
+        .{ "ustring", "ustring" },
+    }) |entry| {
+        const value = try runtime.getIndex(mw, .{ .string = entry[0] });
+        try std.testing.expect(value == .table and std.mem.eql(u8, @tagName(value.table.native_namespace.?), entry[1]));
+    }
+
+    const title_api = try runtime.getIndex(mw, .{ .string = "title" });
+    const title_value = try callField(&runtime, title_api, "new", &.{.{ .string = "Template:X" }});
+    defer rt.freeResults(title_value);
+    try std.testing.expectEqualStrings("title_value", @tagName(title_value[0].table.native_namespace.?));
+    const language_value = try callField(&runtime, mw, "getContentLanguage", &.{});
+    defer rt.freeResults(language_value);
+    try std.testing.expectEqualStrings("language_value", @tagName(language_value[0].table.native_namespace.?));
+    const html_api = try runtime.getIndex(mw, .{ .string = "html" });
+    const html_node = try callField(&runtime, html_api, "create", &.{.{ .string = "b" }});
+    defer rt.freeResults(html_node);
+    try std.testing.expectEqualStrings("html_node", @tagName(html_node[0].table.native_namespace.?));
+    const frame = try makeFrame(&runtime, "Module:X", &.{}, null);
+    try std.testing.expectEqualStrings("frame", @tagName(frame.table.native_namespace.?));
+}

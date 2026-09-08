@@ -52,7 +52,7 @@ fn returnSelf(node: *Node, a: std.mem.Allocator) ![]const Value {
 
 fn newNode(html: *Html, runtime: *rt.Context, parent: ?*Node, tag_name: ?[]const u8) !*Node {
     const node = try html.allocator.create(Node);
-    const table = try runtime.newTable();
+    const table = try runtime.newNativeNamespace(.html_node);
     node.* = .{ .html = html, .table = table, .parent = parent, .tag_name = tag_name };
     try html.nodes.put(html.allocator, table, node);
     return node;
@@ -263,7 +263,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const a = runtime.allocator;
     const html_ctx = try a.create(Html);
     html_ctx.* = .{ .allocator = a };
-    const html = try runtime.newTable();
+    const html = try runtime.newNativeNamespace(.html);
     try html.rawSet(a, .{ .string = "create" }, try runtime.newNative(html_ctx, createCall));
     try mw.rawSet(a, .{ .string = "html" }, .{ .table = html });
 }
