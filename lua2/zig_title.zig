@@ -14,79 +14,10 @@ fn one(value: Value) ![]const Value {
     return out;
 }
 
-const NamespaceSpec = struct {
-    id: i32,
-    name: []const u8,
-    canonical_name: []const u8,
-    has_subpages: bool,
-    aliases: []const []const u8 = &.{},
-};
-const wiktionary_namespaces = [_]NamespaceSpec{
-    .{ .id = -2, .name = "Media", .canonical_name = "Media", .has_subpages = false },
-    .{ .id = -1, .name = "Special", .canonical_name = "Special", .has_subpages = false },
-    .{ .id = 0, .name = "", .canonical_name = "", .has_subpages = false },
-    .{ .id = 1, .name = "Talk", .canonical_name = "Talk", .has_subpages = true },
-    .{ .id = 2, .name = "User", .canonical_name = "User", .has_subpages = true },
-    .{ .id = 3, .name = "User talk", .canonical_name = "User talk", .has_subpages = true },
-    .{ .id = 4, .name = "Wiktionary", .canonical_name = "Project", .has_subpages = true, .aliases = &.{"WT"} },
-    .{ .id = 5, .name = "Wiktionary talk", .canonical_name = "Project talk", .has_subpages = true },
-    .{ .id = 6, .name = "File", .canonical_name = "File", .has_subpages = false, .aliases = &.{"Image"} },
-    .{ .id = 7, .name = "File talk", .canonical_name = "File talk", .has_subpages = true, .aliases = &.{"Image talk"} },
-    .{ .id = 8, .name = "MediaWiki", .canonical_name = "MediaWiki", .has_subpages = true },
-    .{ .id = 9, .name = "MediaWiki talk", .canonical_name = "MediaWiki talk", .has_subpages = true },
-    .{ .id = 10, .name = "Template", .canonical_name = "Template", .has_subpages = true, .aliases = &.{"T"} },
-    .{ .id = 11, .name = "Template talk", .canonical_name = "Template talk", .has_subpages = true },
-    .{ .id = 12, .name = "Help", .canonical_name = "Help", .has_subpages = true },
-    .{ .id = 13, .name = "Help talk", .canonical_name = "Help talk", .has_subpages = true },
-    .{ .id = 14, .name = "Category", .canonical_name = "Category", .has_subpages = false, .aliases = &.{"CAT"} },
-    .{ .id = 15, .name = "Category talk", .canonical_name = "Category talk", .has_subpages = true },
-    .{ .id = 90, .name = "Thread", .canonical_name = "Thread", .has_subpages = false },
-    .{ .id = 91, .name = "Thread talk", .canonical_name = "Thread talk", .has_subpages = false },
-    .{ .id = 92, .name = "Summary", .canonical_name = "Summary", .has_subpages = false },
-    .{ .id = 93, .name = "Summary talk", .canonical_name = "Summary talk", .has_subpages = false },
-    .{ .id = 100, .name = "Appendix", .canonical_name = "Appendix", .has_subpages = true, .aliases = &.{"AP"} },
-    .{ .id = 101, .name = "Appendix talk", .canonical_name = "Appendix talk", .has_subpages = true },
-    .{ .id = 106, .name = "Rhymes", .canonical_name = "Rhymes", .has_subpages = true },
-    .{ .id = 107, .name = "Rhymes talk", .canonical_name = "Rhymes talk", .has_subpages = true },
-    .{ .id = 108, .name = "Transwiki", .canonical_name = "Transwiki", .has_subpages = true },
-    .{ .id = 109, .name = "Transwiki talk", .canonical_name = "Transwiki talk", .has_subpages = true },
-    .{ .id = 110, .name = "Thesaurus", .canonical_name = "Thesaurus", .has_subpages = true, .aliases = &.{ "WS", "Wikisaurus" } },
-    .{ .id = 111, .name = "Thesaurus talk", .canonical_name = "Thesaurus talk", .has_subpages = true, .aliases = &.{"Wikisaurus talk"} },
-    .{ .id = 114, .name = "Citations", .canonical_name = "Citations", .has_subpages = true },
-    .{ .id = 115, .name = "Citations talk", .canonical_name = "Citations talk", .has_subpages = true },
-    .{ .id = 116, .name = "Sign gloss", .canonical_name = "Sign gloss", .has_subpages = true },
-    .{ .id = 117, .name = "Sign gloss talk", .canonical_name = "Sign gloss talk", .has_subpages = true },
-    .{ .id = 118, .name = "Reconstruction", .canonical_name = "Reconstruction", .has_subpages = true, .aliases = &.{"RC"} },
-    .{ .id = 119, .name = "Reconstruction talk", .canonical_name = "Reconstruction talk", .has_subpages = true },
-    .{ .id = 710, .name = "TimedText", .canonical_name = "TimedText", .has_subpages = false },
-    .{ .id = 711, .name = "TimedText talk", .canonical_name = "TimedText talk", .has_subpages = false },
-    .{ .id = 828, .name = "Module", .canonical_name = "Module", .has_subpages = true, .aliases = &.{"MOD"} },
-    .{ .id = 829, .name = "Module talk", .canonical_name = "Module talk", .has_subpages = true },
-    .{ .id = 1728, .name = "Event", .canonical_name = "Event", .has_subpages = true },
-    .{ .id = 1729, .name = "Event talk", .canonical_name = "Event talk", .has_subpages = true },
-    .{ .id = 2600, .name = "Topic", .canonical_name = "Topic", .has_subpages = false },
-};
-fn namespaceSpecById(id: i32) ?NamespaceSpec {
-    for (wiktionary_namespaces) |spec| if (spec.id == id) return spec;
-    return null;
-}
-
-fn namespaceSpecByName(name: []const u8) ?NamespaceSpec {
-    if (name.len == 0) return namespaceSpecById(0);
-    for (wiktionary_namespaces) |spec| {
-        if (std.ascii.eqlIgnoreCase(name, spec.name) or std.ascii.eqlIgnoreCase(name, spec.canonical_name)) return spec;
-        for (spec.aliases) |alias| if (std.ascii.eqlIgnoreCase(name, alias)) return spec;
-    }
-    return null;
-}
-
-fn namespaceOf(title: []const u8) struct { id: i32, name: []const u8, text: []const u8 } {
-    if (std.mem.indexOfScalar(u8, title, ':')) |colon| {
-        if (namespaceSpecByName(title[0..colon])) |spec|
-            return .{ .id = spec.id, .name = spec.name, .text = title[colon + 1 ..] };
-    }
-    return .{ .id = 0, .name = "", .text = title };
-}
+const namespace_lib = @import("zig_namespaces.zig");
+const namespaceSpecById = namespace_lib.byId;
+const namespaceSpecByName = namespace_lib.byName;
+const namespaceOf = namespace_lib.ofTitle;
 fn normalizeName(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
     if (std.mem.indexOfScalar(u8, trimmed, '_') == null) return trimmed;
