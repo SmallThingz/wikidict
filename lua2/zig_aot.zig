@@ -1013,6 +1013,7 @@ fn emitRuntimeEntry(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
     try text(out, a, "    try lua_stdlib.install(&ctx);\n");
     try print(out, a, "    try lua_scribunto.install(&ctx, {d}, {d}, {d});\n", .{ global_abi.id("_G"), global_abi.id("string"), global_abi.id("mw") });
     try text(out, a, "    return ctx;\n}\n\n");
+    try text(out, a, "pub const Host = lua_scribunto.Host;\npub fn setHost(ctx: *rt.Context, host: ?*Host) void { lua_scribunto.setHost(ctx, host); }\n\n");
     try print(out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {{\n    return f_{d}(ctx, .{{ .direct = &.{{}} }}, args);\n}}\n\n", .{p.root_function});
 }
 pub fn generate(a: A, p: *const ir.Program) !struct { source: []u8, stats: Stats } {
@@ -1059,6 +1060,8 @@ test "finalized IR emits native Zig without bytecode dispatch" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const lua_scribunto = @import(\"zig_scribunto\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "try lua_stdlib.install(&ctx)") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "try lua_scribunto.install(&ctx, 0, 18, 23)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "pub const Host = lua_scribunto.Host") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "pub fn setHost(ctx: *rt.Context, host: ?*Host)") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const native_global_keys") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "&native_global_shape") != null);
     try std.testing.expect(globalCount(&p) >= global_abi.count);
@@ -1244,6 +1247,7 @@ pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u
     try print(&out, a, "    try lua_scribunto.install(&ctx, {d}, {d}, {d});\n", .{ global_abi.id("_G"), global_abi.id("string"), global_abi.id("mw") });
     if (config.module_registry) try text(&out, a, "    module_registry.registry.configure(&ctx);\n");
     try text(&out, a, "    return ctx;\n}\n\n");
+    try text(&out, a, "pub const Host = lua_scribunto.Host;\npub fn setHost(ctx: *rt.Context, host: ?*Host) void { lua_scribunto.setHost(ctx, host); }\n\n");
     try text(&out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {\n    return ctx.invokeKnown(root_function, .{ .direct = &.{} }, args);\n}\n");
     return finishSource(a, &out);
 }

@@ -4,6 +4,12 @@ const stdlib = @import("zig_stdlib");
 const ustring_lib = @import("zig_ustring.zig");
 const html_lib = @import("zig_html.zig");
 const text_lib = @import("zig_text.zig");
+const title_lib = @import("zig_title.zig");
+const host_api = @import("zig_host.zig");
+pub const Host = host_api.Host;
+pub fn setHost(runtime: *rt.Context, host: ?*Host) void {
+    host_api.set(runtime, host);
+}
 const Value = rt.Value;
 
 const State = struct {
@@ -96,6 +102,7 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try installStringAliases(runtime, string.table, ustring);
     try mw.rawSet(runtime.allocator, .{ .string = "ustring" }, .{ .table = ustring });
     try text_lib.install(runtime, mw);
+    try title_lib.install(runtime, mw);
     try mw.rawSet(runtime.allocator, .{ .string = "loadData" }, try runtime.newNative(state, loadDataCall));
     try mw.rawSet(runtime.allocator, .{ .string = "clone" }, try runtime.newNative(null, cloneCall));
     try runtime.setGlobal(state.mw_slot, .{ .table = mw });
