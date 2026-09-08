@@ -112,6 +112,7 @@ fn collectGraph(
     up_offsets: []const usize,
     captured: []bool,
     detached: []bool,
+    mutated_upvalue: []bool,
     edges: *std.ArrayList(Edge),
 ) !void {
     for (program.functions.items, 0..) |maybe, parent_usize| {
@@ -120,6 +121,10 @@ fn collectGraph(
         for (function.insts.items) |inst| {
             if (inst.op == .detach_cell and inst.a < function.reg_count)
                 detached[reg_offsets[parent] + inst.a] = true;
+            if (inst.op == .set_upvalue) {
+                if (inst.a >= function.upvalues.items.len) return error.BadUpvalue;
+                mutated_upvalue[up_offsets[parent] + inst.a] = true;
+            }
             const child_id = sem.captureTarget(inst) orelse continue;
             if (child_id >= program.functions.items.len) return error.BadFunctionReference;
             const child = program.functions.items[child_id] orelse return error.IncompleteProgram;
@@ -139,6 +144,39 @@ fn collectGraph(
         }
     }
 }
+
+fn propagateMutations(
+    edges: []const Edge,
+    reg_offsets: []const usize,
+    up_offsets: []const usize,
+    mutated_local: []bool,
+    mutated_upvalue: []bool,
+) void {
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (edges) |edge| {
+            if (!mutated_upvalue[edge.child_upvalue]) continue;
+            switch (edge.source.source) {
+                .local => {
+                    const flat = reg_offsets[edge.parent] + edge.source.index;
+                    if (!mutated_local[flat]) {
+                        mutated_local[flat] = true;
+                        changed = true;
+                    }
+                },
+                .upvalue => {
+                    const flat = up_offsets[edge.parent] + edge.source.index;
+                    if (!mutated_upvalue[flat]) {
+                        mutated_upvalue[flat] = true;
+                        changed = true;
+                    }
+                },
+            }
+        }
+    }
+}
+
 fn collectWrites(
     program: *const ir.Program,
     reg_offsets: []const usize,
@@ -185,9 +223,16 @@ pub fn build(
     const detached = try a.alloc(bool, total_regs);
     defer if (detached.len != 0) a.free(detached);
     @memset(detached, false);
+    const mutated_local = try a.alloc(bool, total_regs);
+    defer if (mutated_local.len != 0) a.free(mutated_local);
+    @memset(mutated_local, false);
+    const mutated_upvalue = try a.alloc(bool, total_upvalues);
+    defer if (mutated_upvalue.len != 0) a.free(mutated_upvalue);
+    @memset(mutated_upvalue, false);
     var edges: std.ArrayList(Edge) = .empty;
     defer edges.deinit(a);
-    try collectGraph(a, program, reg_offsets, up_offsets, captured, detached, &edges);
+    try collectGraph(a, program, reg_offsets, up_offsets, captured, detached, mutated_upvalue, &edges);
+    propagateMutations(edges.items, reg_offsets, up_offsets, mutated_local, mutated_upvalue);
 
     const write_counts = try a.alloc(u8, total_regs);
     defer if (write_counts.len != 0) a.free(write_counts);
@@ -221,7 +266,7 @@ pub fn build(
             for (0..function.reg_count) |reg| {
                 const flat = reg_offsets[function_usize] + reg;
                 if (captured[flat] and write_counts[flat] == 1 and
-                    !detached[flat] and !hasFact(local_facts[flat]))
+                    !detached[flat] and !mutated_local[flat] and !hasFact(local_facts[flat]))
                 {
                     needs_analysis = true;
                     break;
@@ -242,7 +287,7 @@ pub fn build(
             defer if (state.len != 0) a.free(state);
             for (0..function.reg_count) |reg| {
                 const flat = reg_offsets[function_usize] + reg;
-                if (!captured[flat] or write_counts[flat] != 1 or detached[flat] or hasFact(local_facts[flat])) continue;
+                if (!captured[flat] or write_counts[flat] != 1 or detached[flat] or mutated_local[flat] or hasFact(local_facts[flat])) continue;
                 const pc = write_pcs[flat];
                 if (pc >= function.insts.items.len) continue;
                 try ssa.stateBefore(&analysis.ssa_function, &function, pc, state);
@@ -269,7 +314,7 @@ pub fn build(
         @memset(seen, false);
         for (edges.items) |edge| {
             const child = edge.child_upvalue;
-            if (child >= upvalue_facts.len or hasFact(upvalue_facts[child])) continue;
+            if (child >= upvalue_facts.len or mutated_upvalue[child] or hasFact(upvalue_facts[child])) continue;
             const source_fact = switch (edge.source.source) {
                 .local => local_facts[reg_offsets[edge.parent] + edge.source.index],
                 .upvalue => upvalue_facts[up_offsets[edge.parent] + edge.source.index],
@@ -278,7 +323,7 @@ pub fn build(
             mergeCandidate(&candidates[child], &bad[child], source_fact);
         }
         for (upvalue_facts, 0..) |*fact, index| {
-            if (hasFact(fact.*) or !seen[index] or bad[index] or !hasFact(candidates[index])) continue;
+            if (mutated_upvalue[index] or hasFact(fact.*) or !seen[index] or bad[index] or !hasFact(candidates[index])) continue;
             fact.* = candidates[index];
             changed = true;
         }
@@ -386,4 +431,26 @@ test "captured imported function survives a stable local alias" {
         };
     }
     try std.testing.expect(found);
+}
+
+test "descendant upvalue mutation invalidates sibling capture facts" {
+    const a = std.testing.allocator;
+    var image = test_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addTestModule(a, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;return e");
+    const module = try addTestModule(a, &image, &symbols, "Module:A", "local m=require('Module:B');local f=m.add;local function mutate()f=function(x)return x+9 end end;local function run(x)return f(x)end;return run");
+    var result = try build(a, &image.program, &symbols);
+    defer result.deinit();
+    const linked = image.modules.items[module];
+    var captured = false;
+    for (linked.function_base..linked.function_base + linked.function_count) |function_id| {
+        const function = image.program.functions.items[function_id] orelse continue;
+        if (function.upvalues.items.len == 0) continue;
+        captured = true;
+        for (result.forFunction(&image.program, @intCast(function_id))) |fact|
+            try std.testing.expect(fact == .unknown);
+    }
+    try std.testing.expect(captured);
 }
