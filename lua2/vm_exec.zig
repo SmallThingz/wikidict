@@ -4,6 +4,7 @@ const std = @import("std");
 const ir = @import("vm_ir.zig");
 const rt = @import("vm_runtime.zig");
 const static_fields = @import("vm_static_field_abi.zig");
+const static_keys = @import("vm_static_key_abi.zig");
 const lua = @import("root.zig");
 
 pub const Value = rt.Value;
@@ -292,6 +293,11 @@ pub const Vm = struct {
     }
 
     fn getSlot(self: *Vm, object: Value, slot: u32) anyerror!Value {
+        if (static_keys.integerForRef(slot)) |integer| {
+            const key: Value = .{ .number = @floatFromInt(integer) };
+            if (object == .table) if (object.table.slotForKey(key)) |local| return self.getLocalSlot(object, local);
+            return self.getIndex(object, key);
+        }
         if (static_fields.nameForRef(slot)) |name| {
             if (object == .table) if (object.table.native_namespace) |namespace| {
                 if (static_fields.slotForRef(namespace, slot)) |local| return self.getLocalSlot(object, local);
@@ -310,6 +316,11 @@ pub const Vm = struct {
     }
 
     fn setSlot(self: *Vm, object: Value, slot: u32, value: Value) anyerror!void {
+        if (static_keys.integerForRef(slot)) |integer| {
+            const key: Value = .{ .number = @floatFromInt(integer) };
+            if (object == .table) if (object.table.slotForKey(key)) |local| return self.setLocalSlot(object, local, value);
+            return self.setIndex(object, key, value);
+        }
         if (static_fields.nameForRef(slot)) |name| {
             if (object == .table) if (object.table.native_namespace) |namespace| {
                 if (static_fields.slotForRef(namespace, slot)) |local| return self.setLocalSlot(object, local, value);

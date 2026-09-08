@@ -101,7 +101,7 @@ pub const Table = struct {
         return &p.shapes.items[self.shape_id];
     }
 
-    fn slotForKey(self: *const Table, key: Value) ?u32 {
+    pub fn slotForKey(self: *const Table, key: Value) ?u32 {
         if (key == .string) {
             if (self.native_namespace) |namespace| return static_fields.slotForName(namespace, key.string);
             if (self.shape_program == null and self.shape_id == global_abi.native_shape) return global_abi.find(key.string);

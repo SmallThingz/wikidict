@@ -2,6 +2,7 @@ const module_function = @import("vm_module_function.zig");
 const shape_flow = @import("vm_shape_flow.zig");
 const global_lower = @import("vm_global_lower.zig");
 const static_fields = @import("vm_static_fields.zig");
+const static_index = @import("vm_static_index.zig");
 const devirtualize = @import("vm_devirtualize.zig");
 const ref_lower = @import("vm_ref_lower.zig");
 const compare_fuse = @import("vm_compare_fuse.zig");
@@ -43,6 +44,7 @@ pub const Stats = struct {
     comparisons: compare_fuse.Stats = .{},
     globals: global_lower.Stats = .{},
     static_fields: static_fields.Stats = .{},
+    static_indexes: static_index.Stats = .{},
     direct: devirtualize.Stats = .{},
     module_functions: module_function.Stats = .{},
 };
@@ -83,6 +85,7 @@ pub fn runSemantics(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
         try verify.run(allocator, program);
         if (layouts.slot_reads + layouts.slot_writes + const_shapes.shaped_templates + const_shapes.slot_reads + const_shapes.slot_writes + captures.captured_tables + captures.slot_reads + captures.slot_writes + direct.calls + facts.folded + facts.branches + facts.removed_control + facts.specialized + inlined.inlined + removed + shapes.shaped_tables + summaries.folded + summaries.branches + summaries.specialized + summaries.removed_control + scalar_stats.objects + numbered.expressions + numbered.forwarded_reads + clean.removed_instructions == 0) break;
     }
+    stats.static_indexes = try static_index.run(allocator, program);
     return stats;
 }
 
