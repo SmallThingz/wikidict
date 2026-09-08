@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const Namespace = enum(u8) { table, string, math, debug, mw, ustring };
+pub const Namespace = enum(u8) { table, string, math, debug, mw, ustring, title, text, uri, html, language };
 pub const marker: u32 = @as(u32, 1) << 31;
 const index_mask = marker - 1;
 
@@ -17,6 +17,11 @@ pub const names = [_][]const u8{
     "text",         "site",       "uri",       "wikibase",   "message",    "hash",
     "ext",          "html",       "language",  "isutf8",     "byteoffset", "codepoint",
     "gcodepoint",   "toNFC",      "toNFD",     "toNFKC",     "toNFKD",
+    "equals",       "compare",    "new",       "makeTitle",   "getCurrentTitle", "newBatch",
+    "trim",         "split",      "gsplit",    "unstrip",     "unstripNoWiki",   "listToText",
+    "nowiki",       "jsonEncode", "jsonDecode", "tag",       "truncate",         "encode",
+    "decode",       "fullUrl",    "localUrl",  "canonicalUrl", "anchorEncode",     "create",
+    "getContentLanguage", "getFallbacksFor", "isKnownLanguageTag", "fetchLanguageName", "getLanguage",
 };
 
 const table_names = names[0..6];
@@ -26,13 +31,19 @@ const debug_names = names[42..45];
 const mw_names = [_][]const u8{
     "loadData",   "clone",      "getCurrentFrame", "ustring", "dumpObject", "log", "logObject",
     "addWarning", "isSubsting", "title",           "text",    "site",       "uri", "wikibase",
-    "message",    "hash",       "ext",             "html",    "language",
+    "message",    "hash",       "ext",             "html",    "language",   "getContentLanguage",
+    "getLanguage",
 };
 const ustring_names = [_][]const u8{
     "len",    "sub",  "lower",  "upper",  "reverse",    "rep",       "char",       "byte",  "find",  "match",
     "gmatch", "gsub", "format", "isutf8", "byteoffset", "codepoint", "gcodepoint", "toNFC", "toNFD", "toNFKC",
     "toNFKD",
 };
+const title_names = names[71..77];
+const text_names = names[77..90];
+const uri_names = [_][]const u8{ "fullUrl", "localUrl", "canonicalUrl", "encode", "decode", "anchorEncode" };
+const html_names = names[94..95];
+const language_names = [_][]const u8{ "new", "getContentLanguage", "getFallbacksFor", "isKnownLanguageTag", "fetchLanguageName" };
 
 fn namespaceNames(namespace: Namespace) []const []const u8 {
     return switch (namespace) {
@@ -42,6 +53,11 @@ fn namespaceNames(namespace: Namespace) []const []const u8 {
         .debug => debug_names,
         .mw => &mw_names,
         .ustring => &ustring_names,
+        .title => title_names,
+        .text => text_names,
+        .uri => &uri_names,
+        .html => html_names,
+        .language => &language_names,
     };
 }
 pub fn find(field_name: []const u8) ?u32 {
@@ -73,27 +89,29 @@ pub fn fieldCount(namespace: Namespace) u32 {
     return @intCast(namespaceNames(namespace).len);
 }
 
+fn slotForNames(comptime field_names: []const []const u8, id: u32) ?u32 {
+    comptime @setEvalBranchQuota(20_000);
+    inline for (field_names, 0..) |field_name, slot| {
+        const field_id = comptime find(field_name) orelse @compileError("static field missing from ABI");
+        if (id == field_id) return @intCast(slot);
+    }
+    return null;
+}
+
 pub fn slotForRef(namespace: Namespace, value: u32) ?u32 {
     const id = indexFromRef(value) orelse return null;
     return switch (namespace) {
-        .table => if (id < 6) id else null,
-        .string => if (id >= 6 and id < 19) id - 6 else null,
-        .math => if (id >= 19 and id < 42) id - 19 else null,
-        .debug => if (id >= 42 and id < 45) id - 42 else null,
-        .mw => if (id >= 45 and id <= 49)
-            id - 45
-        else if (id == 24)
-            5
-        else if (id >= 50 and id <= 62)
-            id - 44
-        else
-            null,
-        .ustring => if (id >= 6 and id < 19)
-            id - 6
-        else if (id >= 63 and id <= 70)
-            id - 50
-        else
-            null,
+        .table => slotForNames(table_names, id),
+        .string => slotForNames(string_names, id),
+        .math => slotForNames(math_names, id),
+        .debug => slotForNames(debug_names, id),
+        .mw => slotForNames(&mw_names, id),
+        .ustring => slotForNames(&ustring_names, id),
+        .title => slotForNames(title_names, id),
+        .text => slotForNames(text_names, id),
+        .uri => slotForNames(&uri_names, id),
+        .html => slotForNames(html_names, id),
+        .language => slotForNames(&language_names, id),
     };
 }
 

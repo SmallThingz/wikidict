@@ -42,7 +42,13 @@ fn namespaceForReg(analysis: *const ssa.Function, facts: []const ?fields.Namespa
 }
 
 fn childNamespace(parent: fields.Namespace, field_name: []const u8) ?fields.Namespace {
-    if (parent == .mw and std.mem.eql(u8, field_name, "ustring")) return .ustring;
+    if (parent != .mw) return null;
+    if (std.mem.eql(u8, field_name, "ustring")) return .ustring;
+    if (std.mem.eql(u8, field_name, "title")) return .title;
+    if (std.mem.eql(u8, field_name, "text")) return .text;
+    if (std.mem.eql(u8, field_name, "uri")) return .uri;
+    if (std.mem.eql(u8, field_name, "html")) return .html;
+    if (std.mem.eql(u8, field_name, "language")) return .language;
     return null;
 }
 
@@ -295,4 +301,18 @@ test "known child namespace propagates through field result aliases" {
     _ = try simplify.run(a, &program);
     try std.testing.expect(!hasString(&program, "ustring"));
     try std.testing.expect(!hasString(&program, "gsub"));
+}
+
+test "known nested Scribunto namespaces lower to static slots" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a,
+        "return mw.text.split,mw.title.new,mw.uri.encode,mw.html.create,mw.language.new,mw.getLanguage");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    const stats = try run(a, &program);
+    try std.testing.expectEqual(@as(u64, 11), stats.reads);
+    _ = try simplify.run(a, &program);
+    inline for (&.{ "text", "split", "title", "new", "uri", "encode", "html", "create", "language", "getLanguage" }) |name|
+        try std.testing.expect(!hasString(&program, name));
 }

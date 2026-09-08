@@ -462,7 +462,7 @@ fn getFallbacksFor(_: ?*anyopaque, _: *anyopaque, _: []const Value, a: std.mem.A
 pub fn install(a: std.mem.Allocator, io: std.Io, mw: *rt.Table) !void {
     const ctx = try a.create(Context);
     ctx.* = .{ .io = io };
-    const language = try rt.newTable(a);
+    const language = try rt.newNativeNamespace(a, .language);
     try setNative(a, language, "new", ctx, languageNew);
     try setNative(a, language, "getContentLanguage", ctx, getContentLanguage);
     try setNative(a, language, "getFallbacksFor", ctx, getFallbacksFor);

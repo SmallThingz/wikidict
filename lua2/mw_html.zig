@@ -250,7 +250,7 @@ fn tostringCall(ctx_raw: ?*anyopaque, _: *anyopaque, _: []const Value, a: std.me
 pub fn install(a: std.mem.Allocator, mw: *rt.Table) !void {
     const html_ctx = try a.create(Html);
     html_ctx.* = .{ .allocator = a };
-    const html = try rt.newTable(a);
+    const html = try rt.newNativeNamespace(a, .html);
     try html.rawSet(a, .{ .string = "create" }, try rt.newNative(a, html_ctx, createCall));
     try mw.rawSet(a, .{ .string = "html" }, .{ .table = html });
 }

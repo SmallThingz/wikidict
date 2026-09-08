@@ -3021,7 +3021,7 @@ fn installMwBasics(runtime: *Runtime, _: *exec.Vm, mw: *rt.Table) !void {
     try hostSetNative(runtime, mw, "addWarning", noOpCall, runtime);
     try hostSetNative(runtime, mw, "isSubsting", falseCall, runtime);
 
-    const title = try rt.newTable(runtime.allocator);
+    const title = try rt.newNativeNamespace(runtime.allocator, .title);
     _ = try ensureTitleMetatable(runtime);
     try title.rawSet(runtime.allocator, .{ .string = "equals" }, runtime.title_equals.?);
     try hostSetNative(runtime, title, "compare", titleCompareCall, runtime);
@@ -3031,7 +3031,7 @@ fn installMwBasics(runtime: *Runtime, _: *exec.Vm, mw: *rt.Table) !void {
     try hostSetNotImplemented(runtime, title, "newBatch", "mw.title.newBatch");
     try mw.rawSet(runtime.allocator, .{ .string = "title" }, .{ .table = title });
 
-    const text = try rt.newTable(runtime.allocator);
+    const text = try rt.newNativeNamespace(runtime.allocator, .text);
     try hostSetNative(runtime, text, "trim", textTrimCall, runtime);
     try hostSetNative(runtime, text, "split", textSplitCall, runtime);
     try hostSetNative(runtime, text, "gsplit", textGsplitCall, runtime);
@@ -3053,7 +3053,8 @@ fn installMwBasics(runtime: *Runtime, _: *exec.Vm, mw: *rt.Table) !void {
     try hostSetNative(runtime, site, "interwikiMap", interwikiMapCall, runtime);
     try mw.rawSet(runtime.allocator, .{ .string = "site" }, .{ .table = site });
 
-    const uri = try installStubTable(runtime, mw, "uri", &.{});
+    const uri = try rt.newNativeNamespace(runtime.allocator, .uri);
+    try mw.rawSet(runtime.allocator, .{ .string = "uri" }, .{ .table = uri });
     try hostSetNative(runtime, uri, "fullUrl", uriFullUrlCall, runtime);
     try hostSetNative(runtime, uri, "localUrl", uriLocalUrlCall, runtime);
     try hostSetNative(runtime, uri, "canonicalUrl", uriCanonicalUrlCall, runtime);
