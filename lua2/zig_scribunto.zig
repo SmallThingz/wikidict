@@ -7,6 +7,7 @@ const text_lib = @import("zig_text.zig");
 const title_lib = @import("zig_title.zig");
 const language_lib = @import("zig_language.zig");
 const frame_lib = @import("zig_frame.zig");
+const uri_lib = @import("zig_uri.zig");
 pub const FrameArg = frame_lib.FrameArg;
 pub fn makeFrame(runtime: *rt.Context, title: []const u8, args: []const FrameArg, parent: ?Value) !Value {
     return frame_lib.makeFrame(runtime, title, args, parent);
@@ -114,6 +115,7 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try title_lib.install(runtime, mw);
     try language_lib.install(runtime, mw);
     try frame_lib.install(runtime, mw);
+    try uri_lib.install(runtime, mw);
     try mw.rawSet(runtime.allocator, .{ .string = "loadData" }, try runtime.newNative(state, loadDataCall));
     try mw.rawSet(runtime.allocator, .{ .string = "clone" }, try runtime.newNative(null, cloneCall));
     try runtime.setGlobal(state.mw_slot, .{ .table = mw });
