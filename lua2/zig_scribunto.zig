@@ -90,8 +90,8 @@ fn installStringAliases(runtime: *rt.Context, string: *rt.Table, ustring: *rt.Ta
 }
 
 fn installInto(runtime: *rt.Context, state: *State) !void {
-    const mw = try runtime.newTable();
-    const ustring = try runtime.newTable();
+    const mw = try runtime.newNativeNamespace(.mw);
+    const ustring = try runtime.newNativeNamespace(.ustring);
     const string = runtime.getGlobal(state.string_slot);
     if (string != .table) return error.MissingStringLibrary;
     var it = string.table.iterator();

@@ -744,7 +744,7 @@ pub fn install(vm: *rt.Context) !void {
     try vm.setGlobal(global_abi.id("package"), .{ .table = package });
     try setGlobalNative(vm, "require", baseRequire);
 
-    const table = try vm.newTable();
+    const table = try vm.newNativeNamespace(.table);
     try setNative(vm, table, "insert", tableInsert);
     try setNative(vm, table, "remove", tableRemove);
     try setNative(vm, table, "concat", tableConcat);
@@ -758,7 +758,7 @@ pub fn install(vm: *rt.Context) !void {
         }
     }.f);
     try vm.setGlobal(global_abi.id("table"), .{ .table = table });
-    const string = try vm.newTable();
+    const string = try vm.newNativeNamespace(.string);
     try setNative(vm, string, "len", stringLen);
     try setNative(vm, string, "sub", stringSub);
     try setNative(vm, string, "lower", stringLower);
@@ -776,7 +776,7 @@ pub fn install(vm: *rt.Context) !void {
     const smt = try vm.newTable();
     try smt.rawSet(vm.allocator, .{ .string = "__index" }, .{ .table = string });
     vm.string_metatable = smt;
-    const math = try vm.newTable();
+    const math = try vm.newNativeNamespace(.math);
     inline for (.{ .{ "abs", MathOp.abs }, .{ "ceil", .ceil }, .{ "floor", .floor }, .{ "sqrt", .sqrt }, .{ "exp", .exp }, .{ "log", .log }, .{ "log10", .log10 }, .{ "sin", .sin }, .{ "cos", .cos }, .{ "tan", .tan }, .{ "asin", .asin }, .{ "acos", .acos }, .{ "atan", .atan }, .{ "deg", .deg }, .{ "rad", .rad } }) |x| try addMath(vm, math, x[0], x[1]);
     try setNative(vm, math, "min", mathMin);
     try setNative(vm, math, "max", mathMax);
@@ -787,7 +787,7 @@ pub fn install(vm: *rt.Context) !void {
     try math.rawSet(vm.allocator, .{ .string = "pi" }, .{ .number = std.math.pi });
     try math.rawSet(vm.allocator, .{ .string = "huge" }, .{ .number = std.math.inf(f64) });
     try vm.setGlobal(global_abi.id("math"), .{ .table = math });
-    const debug = try vm.newTable();
+    const debug = try vm.newNativeNamespace(.debug);
     try setNative(vm, debug, "getmetatable", debugGetMetatable);
     try setNative(vm, debug, "traceback", debugTraceback);
     try setNative(vm, debug, "getinfo", debugGetInfo);
