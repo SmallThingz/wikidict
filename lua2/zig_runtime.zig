@@ -1,5 +1,6 @@
 const std = @import("std");
 const static_fields = @import("vm_static_field_abi.zig");
+const static_keys = @import("vm_static_key_abi.zig");
 
 pub const Cell = struct { value: Value };
 pub const Env = struct { captures: []const *Cell };
@@ -822,6 +823,11 @@ pub const Context = struct {
     }
 
     pub fn getSlot(self: *Context, object: Value, slot: u32) anyerror!Value {
+        if (static_keys.integerForRef(slot)) |integer| {
+            const key: Value = .{ .number = @floatFromInt(integer) };
+            if (object == .table) if (object.table.slotForKey(key)) |local| return self.getLocalSlot(object, local);
+            return self.getIndex(object, key);
+        }
         if (static_fields.nameForRef(slot)) |name| {
             if (object == .table) if (object.table.native_namespace) |namespace| {
                 if (static_fields.slotForRef(namespace, slot)) |local| return self.getLocalSlot(object, local);
@@ -840,6 +846,11 @@ pub const Context = struct {
     }
 
     pub fn setSlot(self: *Context, object: Value, slot: u32, value: Value) anyerror!void {
+        if (static_keys.integerForRef(slot)) |integer| {
+            const key: Value = .{ .number = @floatFromInt(integer) };
+            if (object == .table) if (object.table.slotForKey(key)) |local| return self.setLocalSlot(object, local, value);
+            return self.setIndex(object, key, value);
+        }
         if (static_fields.nameForRef(slot)) |name| {
             if (object == .table) if (object.table.native_namespace) |namespace| {
                 if (static_fields.slotForRef(namespace, slot)) |local| return self.setLocalSlot(object, local, value);
@@ -1275,4 +1286,25 @@ test "numeric shape keys share slot raw length and iteration semantics" {
     try ctx.setSlot(.{ .table = table }, 0, .{ .number = 4 });
     try std.testing.expectEqual(@as(f64, 4), table.rawGet(.{ .number = 1 }).?.number);
     try std.testing.expectEqual(@as(usize, 1), table.rawLen());
+}
+
+test "static numeric key refs use shaped slots and generic fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const one_ref = static_keys.refForInteger(1) orelse return error.MissingStaticKey;
+    const keys = [_]Value{.{ .number = 1 }};
+    const shapes = [_]Shape{.{ .field_keys = &keys, .field_count = 1, .open = true }};
+    ctx.shapes = &shapes;
+    const shaped = try ctx.newShape(0);
+    try shaped.rawSet(ctx.allocator, .{ .number = 1 }, .{ .number = 3 });
+    try std.testing.expectEqual(@as(f64, 3), (try ctx.getSlot(.{ .table = shaped }, one_ref)).number);
+    try ctx.setSlot(.{ .table = shaped }, one_ref, .{ .number = 4 });
+    try std.testing.expectEqual(@as(f64, 4), shaped.rawGet(.{ .number = 1 }).?.number);
+    const generic = try ctx.newTable();
+    try generic.rawSet(ctx.allocator, .{ .number = 1 }, .{ .number = 7 });
+    try std.testing.expectEqual(@as(f64, 7), (try ctx.getSlot(.{ .table = generic }, one_ref)).number);
+    try ctx.setSlot(.{ .table = generic }, one_ref, .{ .number = 8 });
+    try std.testing.expectEqual(@as(f64, 8), generic.rawGet(.{ .number = 1 }).?.number);
 }
