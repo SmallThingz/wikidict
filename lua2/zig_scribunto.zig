@@ -6,6 +6,14 @@ const html_lib = @import("zig_html.zig");
 const text_lib = @import("zig_text.zig");
 const title_lib = @import("zig_title.zig");
 const language_lib = @import("zig_language.zig");
+const frame_lib = @import("zig_frame.zig");
+pub const FrameArg = frame_lib.FrameArg;
+pub fn makeFrame(runtime: *rt.Context, title: []const u8, args: []const FrameArg, parent: ?Value) !Value {
+    return frame_lib.makeFrame(runtime, title, args, parent);
+}
+pub fn invoke(runtime: *rt.Context, module_name: []const u8, function_name: []const u8, frame: Value) anyerror![]const Value {
+    return frame_lib.invoke(runtime, module_name, function_name, frame);
+}
 const host_api = @import("zig_host.zig");
 pub const Host = host_api.Host;
 pub fn setHost(runtime: *rt.Context, host: ?*Host) void {
@@ -105,6 +113,7 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try text_lib.install(runtime, mw);
     try title_lib.install(runtime, mw);
     try language_lib.install(runtime, mw);
+    try frame_lib.install(runtime, mw);
     try mw.rawSet(runtime.allocator, .{ .string = "loadData" }, try runtime.newNative(state, loadDataCall));
     try mw.rawSet(runtime.allocator, .{ .string = "clone" }, try runtime.newNative(null, cloneCall));
     try runtime.setGlobal(state.mw_slot, .{ .table = mw });
