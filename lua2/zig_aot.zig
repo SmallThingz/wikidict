@@ -273,7 +273,12 @@ fn emitConstants(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
     for (p.constants.items) |node| {
         try text(out, a, "    ");
         switch (node) {
-            .table => |table| try print(out, a, ".{{ .table = .{{ .first = {d}, .count = {d} }} }}", .{ table.first, table.count }),
+            .table => |table| {
+                if (table.shape == ir.no_shape)
+                    try print(out, a, ".{{ .table = .{{ .first = {d}, .count = {d} }} }}", .{ table.first, table.count })
+                else
+                    try print(out, a, ".{{ .table = .{{ .first = {d}, .count = {d}, .shape = {d} }} }}", .{ table.first, table.count, table.shape });
+            },
             else => try scalarNodeExpr(out, a, p, node),
         }
         try text(out, a, ",\n");
@@ -1099,7 +1104,7 @@ test "constant templates emit static data instead of generated materializer func
     const lua = @import("root.zig");
     const opt = @import("vm_optimize.zig");
     const a = std.testing.allocator;
-    var chunk = try lua.parse(a, "return {x=1,{2}}");
+    var chunk = try lua.parse(a, "local e={numbers={}};e.numbers[1]=4;e.numbers[2]=5;return e.numbers[1],e.numbers[2]");
     defer chunk.deinit();
     var p = try ir.lowerChunk(a, &chunk);
     defer p.deinit();
@@ -1108,6 +1113,7 @@ test "constant templates emit static data instead of generated materializer func
     defer a.free(generated.source);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const constants = [_]rt.Constant") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.materializeConstant") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".shape = ") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn c_") == null);
 }
 
@@ -1167,7 +1173,12 @@ pub fn generateConstantShard(a: A, p: *const ir.Program, config: ShardConfig, sh
     for (p.constants.items[bounds.first..bounds.end]) |node| {
         try text(&out, a, "    ");
         switch (node) {
-            .table => |table| try print(&out, a, ".{{ .table = .{{ .first = {d}, .count = {d} }} }}", .{ table.first, table.count }),
+            .table => |table| {
+                if (table.shape == ir.no_shape)
+                    try print(&out, a, ".{{ .table = .{{ .first = {d}, .count = {d} }} }}", .{ table.first, table.count })
+                else
+                    try print(&out, a, ".{{ .table = .{{ .first = {d}, .count = {d}, .shape = {d} }} }}", .{ table.first, table.count, table.shape });
+            },
             else => try scalarNodeExpr(&out, a, p, node),
         }
         try text(&out, a, ",\n");

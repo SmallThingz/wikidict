@@ -86,7 +86,8 @@ pub const Value = union(enum) {
         };
     }
 };
-pub const TableConstant = struct { first: u32, count: u32 };
+pub const no_shape = std.math.maxInt(u32);
+pub const TableConstant = struct { first: u32, count: u32, shape: u32 = no_shape };
 pub const Constant = union(enum) {
     nil,
     boolean: bool,
@@ -741,7 +742,7 @@ pub const Context = struct {
             .string => |value| .{ .string = value },
             .table => |table| blk: {
                 if (table.count > std.math.maxInt(u32) - table.first) return error.BadConstantEntryRange;
-                const object = try self.newTable();
+                const object = if (table.shape == no_shape) try self.newTable() else try self.newShape(table.shape);
                 var list_index: u32 = 1;
                 for (0..table.count) |offset| {
                     const entry_id = table.first + @as(u32, @intCast(offset));
@@ -1071,9 +1072,12 @@ test "AOT constant templates preserve fresh table identity across blocks" {
     defer arena.deinit();
     var ctx = try Context.init(arena.allocator(), 0);
     defer ctx.deinit();
+    const shape_keys = [_]Value{.{ .string = "x" }};
+    const shapes = [_]Shape{.{ .field_keys = &shape_keys, .field_count = 1, .open = true }};
+    ctx.shapes = &shapes;
     const constants_a = [_]Constant{ .{ .number = 4 }, .{ .string = "x" } };
     const constants_b = [_]Constant{
-        .{ .table = .{ .first = 0, .count = 2 } },
+        .{ .table = .{ .first = 0, .count = 2, .shape = 0 } },
         .{ .table = .{ .first = 2, .count = 1 } },
     };
     const entries_a = [_]ConstantEntry{
@@ -1094,6 +1098,7 @@ test "AOT constant templates preserve fresh table identity across blocks" {
     const left = try ctx.materializeConstant(2);
     const right = try ctx.materializeConstant(2);
     try std.testing.expect(left == .table and right == .table and left.table != right.table);
+    try std.testing.expect(left.table.shape == &shapes[0] and left.table.slots.len == 1);
     try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .string = "x" }).?.number);
     try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .number = 1 }).?.number);
     const outer_left = try ctx.materializeConstant(3);
