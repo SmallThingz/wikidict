@@ -434,6 +434,7 @@ pub const Context = struct {
     module_lookup: ?ModuleLookupFn = null,
     module_name: ?ModuleNameFn = null,
     host: ?*anyopaque = null,
+    current_frame: ?*Table = null,
     package_loaded: ?*Table = null,
     global_table: ?*Table = null,
 
@@ -1220,6 +1221,7 @@ test "forked AOT context shares program metadata but resets runtime state" {
     parent.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
     var host_marker: u8 = 0;
     parent.setHost(&host_marker);
+    parent.current_frame = try parent.newTable();
     try parent.setGlobal(1, .{ .number = 9 });
     parent.module_state[0] = 2;
 
@@ -1230,6 +1232,7 @@ test "forked AOT context shares program metadata but resets runtime state" {
     try std.testing.expect(child.getGlobal(1) == .nil);
     try std.testing.expectEqual(@as(u8, 0), child.module_state[0]);
     try std.testing.expect(child.host == parent.host);
+    try std.testing.expect(child.current_frame == null);
     try std.testing.expectEqual(@as(u32, 0), try child.resolveModule("Module:A"));
 }
 
