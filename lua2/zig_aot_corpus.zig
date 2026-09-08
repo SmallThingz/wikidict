@@ -12,6 +12,7 @@ const module_model = @import("module_model.zig");
 const aot = @import("zig_aot.zig");
 const aot_stats = @import("zig_aot_stats.zig");
 const module_registry_gen = @import("zig_module_registry_gen.zig");
+const global_abi = @import("vm_global_abi.zig");
 
 const ManifestRow = struct {
     page_id: u64,
@@ -121,6 +122,7 @@ pub fn main(init: std.process.Init) !void {
     const linked = try numeric_link.run(std.heap.smp_allocator, &image.program, &symbols);
     const linked_cleanup = try cleanup.run(std.heap.smp_allocator, &image.program);
     const origins = try aot_stats.collectOrigins(std.heap.smp_allocator, &image.program);
+    const global_fields = try aot_stats.collectGlobalFields(std.heap.smp_allocator, &image.program);
     const upvalue_origins = try aot_stats.collectUpvalueOrigins(std.heap.smp_allocator, &image.program);
     const final = try optimizer.finalizeAot(std.heap.smp_allocator, &image.program);
     _ = try cleanup.compactStrings(std.heap.smp_allocator, &image.program);
@@ -186,14 +188,22 @@ pub fn main(init: std.process.Init) !void {
         .{ modules, image.program.functions.items.len, local_inlined, generated_bytes },
     );
     std.debug.print(
-        "AOT_LINK numeric={any} cleanup={any} globals={any} module_functions={any}\n",
-        .{ linked, linked_cleanup, final.globals, final.module_functions },
+        "AOT_LINK numeric={any} cleanup={any} globals={any} static_fields={any} module_functions={any}\n",
+        .{ linked, linked_cleanup, final.globals, final.static_fields, final.module_functions },
     );
     std.debug.print(
         "AOT_CODE functions={d} instructions={d} dynamic_calls={d} dynamic_indexes={d} string_fields={d}\n",
         .{ classified.functions, classified.instructions, classified.dynamic_calls, classified.dynamic_indexes, classified.string_fields },
     );
     std.debug.print("AOT_DYNAMIC {any}\n", .{classified});
+    std.debug.print("AOT_GLOBAL_FIELDS", .{});
+    for (global_abi.names, global_fields.slots) |name, count| if (count != 0)
+        std.debug.print(" {s}={d}", .{ name, count });
+    std.debug.print(" other={d}\n", .{global_fields.named_other});
+    std.debug.print("AOT_GLOBAL_STORES", .{});
+    for (global_abi.names, global_fields.stores) |name, count| if (count != 0)
+        std.debug.print(" {s}={d}", .{ name, count });
+    std.debug.print(" env_reads={d}\n", .{global_fields.env_reads});
     std.debug.print("AOT_ORIGINS {any}\n", .{origins});
     std.debug.print("AOT_UPVALUE_ORIGINS {any}\n", .{upvalue_origins});
 }

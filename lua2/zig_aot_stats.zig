@@ -194,6 +194,74 @@ fn noteOrigin(stats: *ValueOrigins, origin: Origin) void {
         .unknown => stats.unknown += 1,
     }
 }
+const global_abi = @import("vm_global_abi.zig");
+
+pub const GlobalFieldCounts = struct {
+    slots: [global_abi.names.len]u64 = [_]u64{0} ** global_abi.names.len,
+    stores: [global_abi.names.len]u64 = [_]u64{0} ** global_abi.names.len,
+    env_reads: u64 = 0,
+    named_other: u64 = 0,
+};
+
+fn globalSlotForValue(program: *const ir.Program, function: *const ir.Function, analysis: *const ssa.Function, state: []const ssa.ValueId, reg: u32) ?u32 {
+    if (reg >= state.len or analysis.captured[reg]) return null;
+    const id = analysis.canonicalValue(state[reg]);
+    if (id == ssa.invalid_value or id >= analysis.values.items.len) return null;
+    const node = analysis.values.items[id];
+    if (node.kind != .instruction or node.pc >= function.insts.items.len) return null;
+    const producer = function.insts.items[node.pc];
+    return switch (producer.op) {
+        .get_global_slot => producer.aux,
+        .get_global => if (producer.aux < program.strings.items.len) global_abi.find(program.strings.items[producer.aux]) else null,
+        else => null,
+    };
+}
+
+pub fn collectGlobalFields(allocator: std.mem.Allocator, program: *const ir.Program) !GlobalFieldCounts {
+    if (program.references_lowered) return error.OriginsRequireSsaProgram;
+    var result = GlobalFieldCounts{};
+    for (program.functions.items) |maybe| if (maybe) |function| {
+        for (function.insts.items) |inst| switch (inst.op) {
+            .get_global_slot => if (inst.aux == global_abi.id("_G")) {
+                result.env_reads += 1;
+            },
+            .get_global => if (inst.aux < program.strings.items.len and std.mem.eql(u8, program.strings.items[inst.aux], "_G")) {
+                result.env_reads += 1;
+            },
+            .set_global_slot => {
+                if (inst.aux < result.stores.len) result.stores[inst.aux] += 1;
+            },
+            .set_global => {
+                if (inst.aux < program.strings.items.len) {
+                    if (global_abi.find(program.strings.items[inst.aux])) |slot| {
+                        if (slot < result.stores.len) result.stores[slot] += 1;
+                    }
+                }
+            },
+            else => {},
+        };
+        var analysis = try ssa.build(allocator, program, &function);
+        defer analysis.deinit();
+        const state = try allocator.alloc(ssa.ValueId, function.reg_count);
+        defer if (state.len != 0) allocator.free(state);
+        for (analysis.graph.blocks.items, 0..) |block, block_id| {
+            const entry = analysis.entry_states[block_id] orelse continue;
+            @memcpy(state, entry);
+            for (block.start..block.end) |pc_usize| {
+                const pc: u32 = @intCast(pc_usize);
+                const inst = function.insts.items[pc];
+                if (inst.op == .get_field or inst.op == .set_field) {
+                    if (globalSlotForValue(program, &function, &analysis, state, inst.a)) |slot| {
+                        if (slot < result.slots.len) result.slots[slot] += 1 else result.named_other += 1;
+                    }
+                }
+                try ssa.applyWrites(&analysis, &function, state, pc, null);
+            }
+        }
+    };
+    return result;
+}
+
 pub fn collectOrigins(allocator: std.mem.Allocator, program: *const ir.Program) !Origins {
     if (program.references_lowered) return error.OriginsRequireSsaProgram;
     var result = Origins{};
