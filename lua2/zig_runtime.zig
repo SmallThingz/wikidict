@@ -1,4 +1,5 @@
 const std = @import("std");
+const static_fields = @import("vm_static_field_abi.zig");
 
 pub const Cell = struct { value: Value };
 pub const Env = struct { captures: []const *Cell };
@@ -155,6 +156,7 @@ const Map = std.HashMapUnmanaged(Value, Value, ValueContext, 80);
 
 pub const Table = struct {
     shape: ?*const Shape = null,
+    native_namespace: ?static_fields.Namespace = null,
     slots: []Value = &.{},
     owns_slots: bool = true,
     choices: []ChoiceCell = &.{},
@@ -171,6 +173,7 @@ pub const Table = struct {
 
     fn slotForKey(self: *const Table, key: Value) ?u32 {
         if (key != .string) return null;
+        if (self.native_namespace) |namespace| return static_fields.slotForName(namespace, key.string);
         const shape = self.shape orelse return null;
         if (shape.field_keys.len != shape.field_count) return null;
         for (shape.field_keys, 0..) |name, slot| {
@@ -179,6 +182,9 @@ pub const Table = struct {
         return null;
     }
     pub fn fieldKey(self: *const Table, slot: u32) ?Value {
+        if (self.native_namespace) |namespace| {
+            return .{ .string = static_fields.nameAt(namespace, slot) orelse return null };
+        }
         const shape = self.shape orelse return null;
         if (shape.field_keys.len != shape.field_count or slot >= shape.field_count) return null;
         return .{ .string = shape.field_keys[slot] };
@@ -663,6 +669,18 @@ pub const Context = struct {
         return table;
     }
 
+    pub fn newNativeNamespace(self: *Context, namespace: static_fields.Namespace) !*Table {
+        const table = try self.allocator.create(Table);
+        errdefer self.allocator.destroy(table);
+        table.* = .{ .native_namespace = namespace };
+        const count = static_fields.fieldCount(namespace);
+        if (count != 0) {
+            table.slots = try self.allocator.alloc(Value, count);
+            @memset(table.slots, .nil);
+        }
+        return table;
+    }
+
     pub fn newShape(self: *Context, shape_id: u32) !*Table {
         if (shape_id >= self.shapes.len) return error.BadShape;
         const desc = &self.shapes[shape_id];
@@ -793,7 +811,7 @@ pub const Context = struct {
         try table.rawSet(self.allocator, key, value);
     }
 
-    pub fn getSlot(self: *Context, object: Value, slot: u32) anyerror!Value {
+    fn getLocalSlot(self: *Context, object: Value, slot: u32) anyerror!Value {
         if (object != .table) return error.IndexType;
         if (object.table.rawGetSlot(slot)) |value| return value;
         if (object.table.metatable == null) return .nil;
@@ -801,12 +819,32 @@ pub const Context = struct {
         return self.getIndex(object, key);
     }
 
-    pub fn setSlot(self: *Context, object: Value, slot: u32, value: Value) anyerror!void {
+    pub fn getSlot(self: *Context, object: Value, slot: u32) anyerror!Value {
+        if (static_fields.nameForRef(slot)) |name| {
+            if (object == .table) if (object.table.native_namespace) |namespace| {
+                if (static_fields.slotForRef(namespace, slot)) |local| return self.getLocalSlot(object, local);
+            };
+            return self.getIndex(object, .{ .string = name });
+        }
+        return self.getLocalSlot(object, slot);
+    }
+
+    fn setLocalSlot(self: *Context, object: Value, slot: u32, value: Value) anyerror!void {
         if (object != .table) return error.IndexType;
         if (object.table.rawGetSlot(slot) != null or object.table.metatable == null)
             return object.table.rawSetSlot(slot, value);
         const key = object.table.fieldKey(slot) orelse return error.BadAnonymousShapeMetatable;
         return self.setIndex(object, key, value);
+    }
+
+    pub fn setSlot(self: *Context, object: Value, slot: u32, value: Value) anyerror!void {
+        if (static_fields.nameForRef(slot)) |name| {
+            if (object == .table) if (object.table.native_namespace) |namespace| {
+                if (static_fields.slotForRef(namespace, slot)) |local| return self.setLocalSlot(object, local, value);
+            };
+            return self.setIndex(object, .{ .string = name }, value);
+        }
+        return self.setLocalSlot(object, slot, value);
     }
     pub fn getChoice(self: *Context, object: Value, choice: u32, key: Value) anyerror!Value {
         if (object != .table) return error.IndexType;
@@ -1193,4 +1231,24 @@ test "forked AOT context shares program metadata but resets runtime state" {
     try std.testing.expectEqual(@as(u8, 0), child.module_state[0]);
     try std.testing.expect(child.host == parent.host);
     try std.testing.expectEqual(@as(u32, 0), try child.resolveModule("Module:A"));
+}
+
+test "static field refs use native slots and generic fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const insert_ref = static_fields.refForName("insert") orelse return error.MissingStaticField;
+
+    const native = try ctx.newNativeNamespace(.table);
+    try native.rawSet(ctx.allocator, .{ .string = "insert" }, .{ .number = 3 });
+    try std.testing.expectEqual(@as(f64, 3), (try ctx.getSlot(.{ .table = native }, insert_ref)).number);
+    try ctx.setSlot(.{ .table = native }, insert_ref, .{ .number = 4 });
+    try std.testing.expectEqual(@as(f64, 4), native.rawGet(.{ .string = "insert" }).?.number);
+
+    const generic = try ctx.newTable();
+    try generic.rawSet(ctx.allocator, .{ .string = "insert" }, .{ .number = 7 });
+    try std.testing.expectEqual(@as(f64, 7), (try ctx.getSlot(.{ .table = generic }, insert_ref)).number);
+    try ctx.setSlot(.{ .table = generic }, insert_ref, .{ .number = 8 });
+    try std.testing.expectEqual(@as(f64, 8), generic.rawGet(.{ .string = "insert" }).?.number);
 }
