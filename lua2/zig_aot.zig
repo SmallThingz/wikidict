@@ -5,6 +5,7 @@ const global_abi = @import("vm_global_abi.zig");
 const graph_mod = @import("vm_graph.zig");
 const sem = @import("vm_semantics.zig");
 const aot_hint = @import("vm_aot_hint.zig");
+const shape_key = @import("vm_shape_key.zig");
 
 const A = std.mem.Allocator;
 
@@ -311,11 +312,17 @@ fn emitNativeGlobalShape(out: *std.ArrayList(u8), a: A) !void {
 
 fn emitShapes(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
     for (p.shapes.items, 0..) |shape, id| {
-        try print(out, a, "const shape_{d}_keys = [_][]const u8{{", .{id});
-        for (shape.field_keys.items, 0..) |sid, index| {
-            if (sid >= p.strings.items.len) return error.BadStringReference;
+        try print(out, a, "const shape_{d}_keys = [_]rt.Value{{", .{id});
+        for (shape.field_keys.items, 0..) |key, index| {
             if (index != 0) try text(out, a, ", ");
-            try stringLiteral(out, a, p.strings.items[sid]);
+            if (shape_key.stringId(key)) |sid| {
+                if (sid >= p.strings.items.len) return error.BadStringReference;
+                try text(out, a, ".{ .string = ");
+                try stringLiteral(out, a, p.strings.items[sid]);
+                try text(out, a, " }");
+            } else if (shape_key.integerValue(key)) |integer| {
+                try print(out, a, ".{{ .number = {d} }}", .{integer});
+            } else return error.BadShapeKey;
         }
         try text(out, a, "};\n");
     }

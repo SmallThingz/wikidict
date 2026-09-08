@@ -110,7 +110,7 @@ pub const ConstantEntryBlock = struct { first: u32, values: []const ConstantEntr
 pub const FunctionBlock = struct { first: u32, values: []const FunctionFn };
 
 pub const Shape = struct {
-    field_keys: []const []const u8 = &.{},
+    field_keys: []const Value = &.{},
     field_count: u32 = 0,
     choice_count: u32 = 0,
     open: bool = false,
@@ -172,12 +172,12 @@ pub const Table = struct {
     }
 
     fn slotForKey(self: *const Table, key: Value) ?u32 {
-        if (key != .string) return null;
-        if (self.native_namespace) |namespace| return static_fields.slotForName(namespace, key.string);
+        if (key == .string) if (self.native_namespace) |namespace|
+            return static_fields.slotForName(namespace, key.string);
         const shape = self.shape orelse return null;
         if (shape.field_keys.len != shape.field_count) return null;
-        for (shape.field_keys, 0..) |name, slot| {
-            if (std.mem.eql(u8, name, key.string)) return @intCast(slot);
+        for (shape.field_keys, 0..) |field_key, slot| {
+            if (rawEqual(field_key, key)) return @intCast(slot);
         }
         return null;
     }
@@ -187,7 +187,7 @@ pub const Table = struct {
         }
         const shape = self.shape orelse return null;
         if (shape.field_keys.len != shape.field_count or slot >= shape.field_count) return null;
-        return .{ .string = shape.field_keys[slot] };
+        return shape.field_keys[slot];
     }
 
     pub fn rawGetSlot(self: *const Table, slot: u32) ?Value {
@@ -1254,4 +1254,20 @@ test "static field refs use native slots and generic fallback" {
     try std.testing.expectEqual(@as(f64, 7), (try ctx.getSlot(.{ .table = generic }, insert_ref)).number);
     try ctx.setSlot(.{ .table = generic }, insert_ref, .{ .number = 8 });
     try std.testing.expectEqual(@as(f64, 8), generic.rawGet(.{ .string = "insert" }).?.number);
+}
+
+test "numeric shape keys share slot raw length and iteration semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{ .{ .number = 1 }, .{ .string = "x" } };
+    const shapes = [_]Shape{.{ .field_keys = &keys, .field_count = 2, .open = true }};
+    ctx.shapes = &shapes;
+    const table = try ctx.newShape(0);
+    try table.rawSet(ctx.allocator, .{ .number = 1 }, .{ .number = 3 });
+    try std.testing.expectEqual(@as(f64, 3), (try ctx.getSlot(.{ .table = table }, 0)).number);
+    try ctx.setSlot(.{ .table = table }, 0, .{ .number = 4 });
+    try std.testing.expectEqual(@as(f64, 4), table.rawGet(.{ .number = 1 }).?.number);
+    try std.testing.expectEqual(@as(usize, 1), table.rawLen());
 }
