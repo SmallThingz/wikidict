@@ -374,3 +374,16 @@ test "AOT Scribunto compiler-known namespaces use native slots" {
     const frame = try makeFrame(&runtime, "Module:X", &.{}, null);
     try std.testing.expectEqualStrings("frame", @tagName(frame.table.native_namespace.?));
 }
+
+pub const WikitextProvider = @import("zig_wikitext.zig").Provider;
+pub const WikitextExpander = @import("zig_wikitext.zig").Expander;
+pub fn makeWikitextExpander(runtime: *rt.Context, env_slot: u32, string_slot: u32, mw_slot: u32, provider: WikitextProvider) WikitextExpander {
+    return .{
+        .runtime = runtime,
+        .env_slot = env_slot,
+        .string_slot = string_slot,
+        .mw_slot = mw_slot,
+        .provider = provider,
+        .install_scribunto = install,
+    };
+}

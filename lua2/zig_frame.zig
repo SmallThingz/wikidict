@@ -123,6 +123,10 @@ fn makeFrameWithArgs(runtime: *rt.Context, title: []const u8, arg_table: *rt.Tab
     return .{ .table = frame };
 }
 
+pub fn makeFrameFromTable(runtime: *rt.Context, title: []const u8, args: *rt.Table, parent: ?Value) !Value {
+    return makeFrameWithArgs(runtime, title, args, parent);
+}
+
 pub fn makeFrame(runtime: *rt.Context, title: []const u8, args: []const FrameArg, parent: ?Value) !Value {
     const table = try runtime.newTable();
     for (args) |arg| try table.rawSet(runtime.allocator, arg.key, arg.value);

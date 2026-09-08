@@ -540,6 +540,19 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const aot_wikitext_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("lua2/zig_wikitext.zig"),
+            .target = target,
+            .optimize = test_optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "zig_runtime", .module = zig_runtime_test_mod },
+                .{ .name = "zig_stdlib", .module = aot_stdlib_tests.root_module },
+            },
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
     const aot_module_registry_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("lua2/zig_module_registry_tests.zig"),
@@ -572,6 +585,7 @@ pub fn build(b: *std.Build) void {
     const run_aot_stdlib_tests = b.addRunArtifact(aot_stdlib_tests);
     const run_aot_ustring_tests = b.addRunArtifact(aot_ustring_tests);
     const run_aot_scribunto_tests = b.addRunArtifact(aot_scribunto_tests);
+    const run_aot_wikitext_tests = b.addRunArtifact(aot_wikitext_tests);
     const run_aot_module_registry_tests = b.addRunArtifact(aot_module_registry_tests);
 
     // Running every test compile in parallel is enough to get the larger codegen-heavy
@@ -589,7 +603,8 @@ pub fn build(b: *std.Build) void {
     aot_stdlib_tests.step.dependOn(&run_lua2_tests.step);
     aot_ustring_tests.step.dependOn(&run_aot_stdlib_tests.step);
     aot_scribunto_tests.step.dependOn(&run_aot_ustring_tests.step);
-    aot_module_registry_tests.step.dependOn(&run_aot_scribunto_tests.step);
+    aot_wikitext_tests.step.dependOn(&run_aot_scribunto_tests.step);
+    aot_module_registry_tests.step.dependOn(&run_aot_wikitext_tests.step);
 
     const test_step = b.step("test", "Run encoder, decoder, structure, Lua, and tooling tests");
     blob_wasm_smoke.step.dependOn(&run_aot_module_registry_tests.step);

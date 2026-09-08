@@ -62,7 +62,7 @@ fn appendAnchorEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []
     }
 }
 
-const WikiUrlKind = enum { local, full, canonical };
+pub const WikiUrlKind = enum { local, full, canonical };
 
 fn appendWikiEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []const u8) !void {
     for (source) |c| {
@@ -89,7 +89,7 @@ fn appendAmpEscaped(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []con
     try out.appendSlice(a, source[start..]);
 }
 
-fn buildWikiUrlRawQuery(a: std.mem.Allocator, raw_title: []const u8, query: ?[]const u8, kind: WikiUrlKind, escaped: bool, proto_override: ?[]const u8) ![]const u8 {
+pub fn buildWikiUrlRawQuery(a: std.mem.Allocator, raw_title: []const u8, query: ?[]const u8, kind: WikiUrlKind, escaped: bool, proto_override: ?[]const u8) ![]const u8 {
     const title = std.mem.trim(u8, raw_title, " \t\r\n");
     const hash = std.mem.indexOfScalar(u8, title, '#');
     const base_title = if (hash) |i| title[0..i] else title;
