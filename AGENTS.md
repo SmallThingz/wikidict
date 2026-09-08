@@ -53,3 +53,4 @@
 - AOT host time is explicit page state: `Host.now_unix` supplies MediaWiki "now" semantics for deterministic native execution. Do not read the process wall clock from generated AOT helpers; callers own the page timestamp.
 - AOT frame state is page-local Context state: `current_frame` is saved/restored around native module invocation and is intentionally not inherited by `forkProgram`/`mw.loadData`. Preprocess/template/extension/parser work crosses only the typed application Host callbacks.
 - Native AOT frame objects never retain `*Context`; they keep only frame/table/parent/title data and receive the live Context on callback. Generated roots expose `FrameArg`, `makeFrame`, and `invoke`; `invoke` scopes `current_frame` around the call and restores it on every exit.
+- VM-oracle and native-AOT page expansion share `wikitext_preprocess.zig` for comments, transclusion tags, brace matching and top-level delimiters; do not fork a second parser for these semantics.
