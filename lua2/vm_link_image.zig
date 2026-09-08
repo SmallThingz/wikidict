@@ -8,6 +8,7 @@ fn relocateReference(ctx: anytype, value: u32) !u32 {
 }
 const std = @import("std");
 const ir = @import("vm_ir.zig");
+const shape_key = @import("vm_shape_key.zig");
 const lua = @import("root.zig");
 const exec = @import("vm_exec.zig");
 
@@ -66,9 +67,13 @@ pub const Image = struct {
         for (source.shapes.items) |original| {
             var shape = ir.Shape{ .field_count = original.field_count, .choice_count = original.choice_count, .open = original.open };
             errdefer shape.deinit(self.allocator);
-            for (original.field_keys.items) |sid| {
-                if (sid >= string_map.len) return error.BadStringReference;
-                try shape.field_keys.append(self.allocator, string_map[sid]);
+            for (original.field_keys.items) |key| {
+                if (shape_key.stringId(key)) |sid| {
+                    if (sid >= string_map.len) return error.BadStringReference;
+                    try shape.field_keys.append(self.allocator, try shape_key.string(string_map[sid]));
+                } else {
+                    try shape.field_keys.append(self.allocator, key);
+                }
             }
             try self.program.shapes.append(self.allocator, shape);
         }
@@ -314,4 +319,25 @@ test "linking rejects mixed compiler phases without modifying the image" {
     try std.testing.expectEqual(functions, image.program.functions.items.len);
     try std.testing.expectEqual(strings, image.program.strings.items.len);
     try std.testing.expectEqual(@as(usize, 1), image.modules.items.len);
+}
+
+test "linker preserves numeric shape keys across string rebasing" {
+    const a = std.testing.allocator;
+    const shape_pass = @import("vm_shape_opt.zig");
+    var chunk = try lua.parse(a, "local t={};t[1]=4;t[2]=5;return t[1],t[2],#t");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(a, &chunk);
+    defer p.deinit();
+    _ = try shape_pass.run(a, &p);
+    var image = Image.init(a);
+    defer image.deinit();
+    const module = try image.appendModule(&p);
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var vm = try exec.Vm.init(arena.allocator());
+    const out = try vm.execute(&image.program, image.modules.items[module].root_function, &.{}, &.{});
+    defer exec.Vm.freeResults(out);
+    try std.testing.expectEqual(@as(f64, 4), out[0].number);
+    try std.testing.expectEqual(@as(f64, 5), out[1].number);
+    try std.testing.expectEqual(@as(f64, 2), out[2].number);
 }

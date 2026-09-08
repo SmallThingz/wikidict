@@ -1,5 +1,6 @@
 const std = @import("std");
 const ir = @import("vm_ir.zig");
+const shape_key = @import("vm_shape_key.zig");
 
 pub const Stats = struct { scalar_nodes_removed: usize = 0, string_index_bytes_saved: u64 = 0 };
 const Scalar = struct { kind: u8, value: u64 };
@@ -91,7 +92,7 @@ fn orderStrings(p: *ir.Program) !u64 {
     };
     for (p.functions.items) |maybe| if (maybe) |f| for (f.insts.items) |inst|
         if (hasAuxStringOperand(inst.op)) try note(uses, inst.aux) else if (hasAStringOperand(inst.op)) try note(uses, inst.a);
-    for (p.shapes.items) |shape| for (shape.field_keys.items) |sid| try note(uses, sid);
+    for (p.shapes.items) |shape| for (shape.field_keys.items) |key| if (shape_key.stringId(key)) |sid| try note(uses, sid);
     std.mem.sort(u32, ids, uses, struct {
         fn less(counts: []const u64, x: u32, y: u32) bool {
             return counts[x] > counts[y] or (counts[x] == counts[y] and x < y);
@@ -124,7 +125,9 @@ fn orderStrings(p: *ir.Program) !u64 {
         if (hasAuxStringOperand(inst.op)) inst.aux = remap[inst.aux] else if (hasAStringOperand(inst.op)) inst.a = remap[inst.a];
     };
     for (p.shapes.items) |*shape| {
-        for (shape.field_keys.items) |*sid| sid.* = remap[sid.*];
+        for (shape.field_keys.items) |*key| {
+            if (shape_key.stringId(key.*)) |sid| key.* = try shape_key.string(remap[sid]);
+        }
     }
     p.strings.deinit(a);
     p.strings = strings;

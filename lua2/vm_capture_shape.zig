@@ -3,6 +3,7 @@ const ir = @import("vm_ir.zig");
 const sem = @import("vm_semantics.zig");
 const cfg = @import("vm_graph.zig");
 const shape_opt = @import("vm_shape_opt.zig");
+const shape_key = @import("vm_shape_key.zig");
 
 const none = std.math.maxInt(u32);
 const unseen = none - 1;
@@ -452,7 +453,7 @@ fn collectFields(analysis: *Analysis) !void {
                 const inst = function.insts.items[pc];
                 if ((inst.op == .get_field or inst.op == .set_field) and inst.a < state.len) {
                     const source_id = state[inst.a];
-                    if (source_id != none) try addField(analysis.allocator, &analysis.sources.items[source_id], inst.aux);
+                    if (source_id != none) try addField(analysis.allocator, &analysis.sources.items[source_id], try shape_key.string(inst.aux));
                 }
                 try transfer(analysis, function_id, &function, pc, state);
             }
@@ -527,7 +528,7 @@ fn rewriteFields(analysis: *Analysis, stats: *Stats) !void {
                         const source = analysis.sources.items[source_id];
                         if (source.shape_id != none) {
                             const fields = analysis.program.shapes.items[source.shape_id].field_keys.items;
-                            if (fieldSlot(fields, inst.aux)) |slot| {
+                            if (fieldSlot(fields, try shape_key.string(inst.aux))) |slot| {
                                 if (inst.op == .get_field) {
                                     inst.op = .get_slot;
                                     stats.slot_reads += 1;

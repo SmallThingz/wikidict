@@ -2,6 +2,8 @@ const sem = @import("vm_semantics.zig");
 const std = @import("std");
 const ir = @import("vm_ir.zig");
 const ssa = @import("vm_ssa.zig");
+const shape_key = @import("vm_shape_key.zig");
+const exec = @import("vm_exec.zig");
 
 pub const Stats = struct {
     shaped_tables: u32 = 0,
@@ -44,16 +46,26 @@ fn noteDynamic(alloc: *Allocation, key: ssa.ValueId) void {
     }
 }
 
-fn stringForValue(program: *const ir.Program, function: *const ir.Function, analysis: *const ssa.Function, raw: ssa.ValueId) ?u32 {
+fn shapeKeyForValue(program: *const ir.Program, function: *const ir.Function, analysis: *const ssa.Function, raw: ssa.ValueId) ?u32 {
     const id = analysis.canonicalValue(raw);
     if (id == ssa.invalid_value or id >= analysis.values.items.len) return null;
     const value = analysis.values.items[id];
     if (value.kind != .instruction or value.pc >= function.insts.items.len) return null;
     const inst = function.insts.items[value.pc];
     return switch (inst.op) {
-        .load_string => inst.aux,
+        .load_string => shape_key.string(inst.aux) catch null,
+        .load_number => if (inst.aux < program.strings.items.len)
+            shape_key.number(exec.Vm.parseLuaNumber(program.strings.items[inst.aux]) catch return null)
+        else
+            null,
         .load_const => if (inst.aux < program.constants.items.len) switch (program.constants.items[inst.aux]) {
-            .string => |sid| sid,
+            .string => |sid| shape_key.string(sid) catch null,
+            .number_bits => |bits| shape_key.number(@bitCast(bits)),
+            .number => |sid| if (sid < program.strings.items.len)
+                shape_key.number(exec.Vm.parseLuaNumber(program.strings.items[sid]) catch return null)
+            else
+                null,
+            .integer => |n| shape_key.integer(n),
             else => null,
         } else null,
         else => null,
@@ -76,8 +88,8 @@ fn markOperandsEscape(map: *const std.AutoHashMapUnmanaged(ssa.ValueId, u32), al
 fn noteKey(a: std.mem.Allocator, program: *const ir.Program, function: *const ir.Function, analysis: *const ssa.Function, alloc: *Allocation, state: []const ssa.ValueId, key_reg: u32) !void {
     if (key_reg >= state.len) return;
     const raw = analysis.canonicalValue(state[key_reg]);
-    if (stringForValue(program, function, analysis, raw)) |sid| {
-        try addField(a, alloc, sid);
+    if (shapeKeyForValue(program, function, analysis, raw)) |key| {
+        try addField(a, alloc, key);
     } else {
         noteDynamic(alloc, raw);
     }
@@ -118,9 +130,11 @@ fn scanUses(a: std.mem.Allocator, program: *const ir.Program, function: *const i
             const pc: u32 = @intCast(pc_usize);
             const inst = function.insts.items[pc];
             switch (inst.op) {
-                .get_field => if (allocIndex(map, analysis, state, inst.a)) |index| try addField(a, &allocations[index], inst.aux),
+                .get_field => if (allocIndex(map, analysis, state, inst.a)) |index|
+                    try addField(a, &allocations[index], try shape_key.string(inst.aux)),
                 .set_field => {
-                    if (allocIndex(map, analysis, state, inst.a)) |index| try addField(a, &allocations[index], inst.aux);
+                    if (allocIndex(map, analysis, state, inst.a)) |index|
+                        try addField(a, &allocations[index], try shape_key.string(inst.aux));
                     markEscape(map, allocations, analysis, state, inst.c);
                 },
                 .get_index => {
@@ -294,7 +308,8 @@ fn rewriteFunction(a: std.mem.Allocator, program: *ir.Program, function: *ir.Fun
             switch (inst.op) {
                 .get_field, .set_field => if (allocIndex(map, analysis, state, inst.a)) |index| {
                     const alloc = &allocations[index];
-                    if (alloc.shape_id != std.math.maxInt(u32)) if (fieldSlot(alloc.fields.items, inst.aux)) |slot| {
+                    const key = try shape_key.string(inst.aux);
+                    if (alloc.shape_id != std.math.maxInt(u32)) if (fieldSlot(alloc.fields.items, key)) |slot| {
                         if (inst.op == .get_field) {
                             inst.op = .get_slot;
                             stats.field_reads += 1;
@@ -312,8 +327,8 @@ fn rewriteFunction(a: std.mem.Allocator, program: *ir.Program, function: *ir.Fun
                     const alloc = &allocations[index];
                     if (alloc.shape_id != std.math.maxInt(u32) and inst.b < state.len) {
                         const key_value = analysis.canonicalValue(state[inst.b]);
-                        if (stringForValue(program, function, analysis, key_value)) |sid| {
-                            if (fieldSlot(alloc.fields.items, sid)) |slot| {
+                        if (shapeKeyForValue(program, function, analysis, key_value)) |key| {
+                            if (fieldSlot(alloc.fields.items, key)) |slot| {
                                 if (inst.op == .get_index) {
                                     inst.op = .get_slot;
                                     stats.field_reads += 1;
@@ -363,7 +378,6 @@ pub fn run(a: std.mem.Allocator, program: *ir.Program) !Stats {
 }
 
 const lua = @import("root.zig");
-const exec = @import("vm_exec.zig");
 const simplify = @import("vm_ir_simplify.zig");
 fn execute(source: []const u8) !struct { program: ir.Program, values: []const exec.Value, arena: std.heap.ArenaAllocator } {
     var chunk = try lua.parse(std.testing.allocator, source);
@@ -442,4 +456,82 @@ test "key changes without object recreation must preserve older keys" {
     defer p.deinit();
     const stats = try run(a, &p);
     try std.testing.expectEqual(@as(u32, 0), stats.choice_slots);
+}
+
+test "dynamic key that may be a string cannot share fixed field storage" {
+    const source = "local function f(k,v)local t={};t.fixed=3;t[k]=v;return t.fixed,t[k] end;return f('fixed',7)";
+    var chunk = try lua.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(std.testing.allocator, &chunk);
+    defer program.deinit();
+    const stats = try run(std.testing.allocator, &program);
+    try std.testing.expectEqual(@as(u32, 0), stats.choice_slots);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var vm = try exec.Vm.init(arena.allocator());
+    const out = try vm.executeRoot(&program, &.{});
+    defer exec.Vm.freeResults(out);
+    try std.testing.expectEqual(@as(f64, 7), out[0].number);
+    try std.testing.expectEqual(@as(f64, 7), out[1].number);
+}
+
+test "constant integer table keys become canonical slots" {
+    var result = try execute("local t={};t[1]=4;t[3]=7;return t[1],t[3],t");
+    defer result.program.deinit();
+    defer result.arena.deinit();
+    defer exec.Vm.freeResults(result.values);
+    try std.testing.expectEqual(@as(f64, 4), result.values[0].number);
+    try std.testing.expectEqual(@as(f64, 7), result.values[1].number);
+    const table = result.values[2].table;
+    try std.testing.expectEqual(@as(f64, 4), table.rawGet(.{ .number = 1 }).?.number);
+    try std.testing.expectEqual(@as(f64, 7), table.rawGet(.{ .number = 3 }).?.number);
+    var dynamic_indexes: u32 = 0;
+    for (result.program.functions.items) |maybe| if (maybe) |function| {
+        for (function.insts.items) |inst| dynamic_indexes += @intFromBool(inst.op == .get_index or inst.op == .set_index);
+    };
+    try std.testing.expectEqual(@as(u32, 0), dynamic_indexes);
+}
+
+test "generic numeric writes reconcile with a fixed numeric slot" {
+    var result = try execute("local function f(k,v)local t={};t[1]=3;t[k]=v;return t[1],t[k]end;return f(1,7)");
+    defer result.program.deinit();
+    defer result.arena.deinit();
+    defer exec.Vm.freeResults(result.values);
+    try std.testing.expectEqual(@as(f64, 7), result.values[0].number);
+    try std.testing.expectEqual(@as(f64, 7), result.values[1].number);
+}
+
+test "list appends populate numeric slots and preserve raw length" {
+    var result = try execute("local t={10,20,30};return t[2],#t,t");
+    defer result.program.deinit();
+    defer result.arena.deinit();
+    defer exec.Vm.freeResults(result.values);
+    try std.testing.expectEqual(@as(f64, 20), result.values[0].number);
+    try std.testing.expectEqual(@as(f64, 3), result.values[1].number);
+    const table = result.values[2].table;
+    try std.testing.expectEqual(@as(usize, 3), table.rawLen());
+    var seen_two = false;
+    var it = table.iterator();
+    while (it.next()) |entry| if (entry.key_ptr.* == .number and entry.key_ptr.number == 2) {
+        try std.testing.expectEqual(@as(f64, 20), entry.value_ptr.number);
+        seen_two = true;
+    };
+    try std.testing.expect(seen_two);
+}
+test "numeric slots preserve index and newindex metamethod semantics" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a,
+        "local seen=0;local t={};setmetatable(t,{__newindex=function(_,k,v)seen=k+v end,__index=function(_,k)return k+10 end});t[2]=7;return seen,t[2]");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    _ = try run(a, &program);
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var vm = try exec.Vm.init(arena.allocator());
+    try @import("lua_stdlib.zig").install(&vm);
+    const values = try vm.executeRoot(&program, &.{});
+    defer exec.Vm.freeResults(values);
+    try std.testing.expectEqual(@as(f64, 9), values[0].number);
+    try std.testing.expectEqual(@as(f64, 12), values[1].number);
 }

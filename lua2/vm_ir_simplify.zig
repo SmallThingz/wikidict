@@ -8,6 +8,7 @@ fn markStringReference(used: []bool, value: u32) !u32 {
 }
 const std = @import("std");
 const ir = @import("vm_ir.zig");
+const shape_key = @import("vm_shape_key.zig");
 const sem = @import("vm_semantics.zig");
 const cfg = @import("vm_graph.zig");
 const liveness = @import("vm_liveness.zig");
@@ -175,9 +176,11 @@ pub fn compactStrings(allocator: std.mem.Allocator, program: *ir.Program) !u32 {
         };
     };
     for (program.functions.items) |*maybe| if (maybe.*) |*f| try refs.visit(f, used, markStringReference);
-    for (program.shapes.items) |shape| for (shape.field_keys.items) |sid| {
-        if (sid >= used.len) return error.BadStringReference;
-        used[sid] = true;
+    for (program.shapes.items) |shape| for (shape.field_keys.items) |key| {
+        if (shape_key.stringId(key)) |sid| {
+            if (sid >= used.len) return error.BadStringReference;
+            used[sid] = true;
+        }
     };
     for (program.constants.items) |node| switch (node) {
         .number, .string => |sid| {
@@ -203,8 +206,8 @@ pub fn compactStrings(allocator: std.mem.Allocator, program: *ir.Program) !u32 {
             else => {},
         };
     };
-    for (program.shapes.items) |*shape| for (shape.field_keys.items) |*sid| {
-        sid.* = remap[sid.*];
+    for (program.shapes.items) |*shape| for (shape.field_keys.items) |*key| {
+        if (shape_key.stringId(key.*)) |sid| key.* = try shape_key.string(remap[sid]);
     };
     for (program.constants.items) |*node| switch (node.*) {
         .number => |sid| node.* = .{ .number = remap[sid] },

@@ -8,7 +8,8 @@ const legacy_v3 = @import("vm_codec_v3.zig");
 const exec = @import("vm_exec.zig");
 const verify = @import("vm_verify.zig");
 const static_fields = @import("vm_static_field_abi.zig");
-pub const magic = "DWVM\x0f";
+const shape_key = @import("vm_shape_key.zig");
+pub const magic = "DWVM\x10";
 const putVar = wire.putVar;
 const getVar = wire.getVar;
 const asU32 = wire.asU32;
@@ -16,7 +17,7 @@ const asU32 = wire.asU32;
 pub fn bytecodeVersion(bytes: []const u8) !u8 {
     if (bytes.len < 5 or !std.mem.eql(u8, bytes[0..4], "DWVM")) return error.BadMagic;
     return switch (bytes[4]) {
-        2, 3, 9, 10, 11, 12, 13, 14, 15 => bytes[4],
+        2, 3, 9, 10, 11, 12, 13, 14, 15, 16 => bytes[4],
         else => error.BadMagic,
     };
 }
@@ -42,11 +43,23 @@ fn hasStaticFieldRefs(p: *const ir.Program) bool {
     return false;
 }
 
+fn hasNumericShapeKeys(p: *const ir.Program) bool {
+    for (p.shapes.items) |shape| for (shape.field_keys.items) |key|
+        if (shape_key.integerValue(key) != null) return true;
+    return false;
+}
+
 pub fn serializeVersion(allocator: std.mem.Allocator, p: *const ir.Program, version: u8) ![]u8 {
     if (version == 2 or version == 3) return legacy_v3.serializeVersion(allocator, p, version);
-    if (version == 15) return serialize(allocator, p);
+    if (version == 16) return serialize(allocator, p);
+    if (version == 15) {
+        if (hasNumericShapeKeys(p)) return error.BadShapeKeyVersion;
+        const out = try serialize(allocator, p);
+        out[4] = 15;
+        return out;
+    }
     if (version == 14) {
-        if (hasStaticFieldRefs(p)) return error.BadOpcodeVersion;
+        if (hasStaticFieldRefs(p) or hasNumericShapeKeys(p)) return error.BadOpcodeVersion;
         const out = try serialize(allocator, p);
         out[4] = 14;
         return out;
@@ -156,7 +169,7 @@ fn deserializeImpl(a: std.mem.Allocator, bytes: []const u8, copy: bool) !ir.Prog
         return if (copy) legacy.deserialize(a, bytes) else legacy.deserializeBorrowed(a, bytes);
     if (bytes.len >= 5 and std.mem.eql(u8, bytes[0..5], "DWVM\x03"))
         return if (copy) legacy_v3.deserialize(a, bytes) else legacy_v3.deserializeBorrowed(a, bytes);
-    const has_reference_format = bytes.len >= 5 and (std.mem.eql(u8, bytes[0..5], magic) or std.mem.eql(u8, bytes[0..5], "DWVM\x0e") or std.mem.eql(u8, bytes[0..5], "DWVM\x0d") or std.mem.eql(u8, bytes[0..5], "DWVM\x0c") or std.mem.eql(u8, bytes[0..5], "DWVM\x0b") or std.mem.eql(u8, bytes[0..5], "DWVM\x0a"));
+    const has_reference_format = bytes.len >= 5 and (std.mem.eql(u8, bytes[0..5], magic) or std.mem.eql(u8, bytes[0..5], "DWVM\x0f") or std.mem.eql(u8, bytes[0..5], "DWVM\x0e") or std.mem.eql(u8, bytes[0..5], "DWVM\x0d") or std.mem.eql(u8, bytes[0..5], "DWVM\x0c") or std.mem.eql(u8, bytes[0..5], "DWVM\x0b") or std.mem.eql(u8, bytes[0..5], "DWVM\x0a"));
     const old_v9 = bytes.len >= 5 and std.mem.eql(u8, bytes[0..5], "DWVM\x09");
     if (!has_reference_format and !old_v9) return error.BadMagic;
     var pos: usize = magic.len;
@@ -230,7 +243,11 @@ fn deserializeImpl(a: std.mem.Allocator, bytes: []const u8, copy: bool) !ir.Prog
         shape.open = flags & 1 != 0;
         if (flags & 2 != 0) {
             if (shape.field_count > bytes.len - pos) return error.Truncated;
-            for (0..shape.field_count) |_| try shape.field_keys.append(a, try asU32(try getVar(bytes, &pos)));
+            for (0..shape.field_count) |_| {
+                const key = try asU32(try getVar(bytes, &pos));
+                if (bytes[4] < 16 and shape_key.integerValue(key) != null) return error.BadShapeKeyVersion;
+                try shape.field_keys.append(a, key);
+            }
         }
         try p.shapes.append(a, shape);
     }
@@ -384,10 +401,51 @@ test "v14 cannot silently decode v15 static field refs" {
     try std.testing.expect(hasStaticFieldRefs(&p));
     const bytes = try serialize(a, &p);
     defer a.free(bytes);
-    try std.testing.expectEqual(@as(u8, 15), try bytecodeVersion(bytes));
+    try std.testing.expectEqual(@as(u8, 16), try bytecodeVersion(bytes));
     const old = try a.dupe(u8, bytes);
     defer a.free(old);
     old[4] = 14;
     try std.testing.expectError(error.BadOpcodeVersion, deserialize(a, old));
     try std.testing.expectError(error.BadOpcodeVersion, serializeVersion(a, &p, 14));
+}
+
+test "v15 cannot silently decode v16 numeric shape keys" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local t={};t[2]=7;return t");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(a, &chunk);
+    defer p.deinit();
+    _ = try opt.run(a, &p);
+    try std.testing.expect(hasNumericShapeKeys(&p));
+    const bytes = try serialize(a, &p);
+    defer a.free(bytes);
+    try std.testing.expectEqual(@as(u8, 16), try bytecodeVersion(bytes));
+    const old = try a.dupe(u8, bytes);
+    defer a.free(old);
+    old[4] = 15;
+    try std.testing.expectError(error.BadShapeKeyVersion, deserialize(a, old));
+    try std.testing.expectError(error.BadShapeKeyVersion, serializeVersion(a, &p, 15));
+}
+
+test "v16 numeric shape keys roundtrip and execute" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local t={};t[1]=4;t[2]=5;return t[1],t[2],#t");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(a, &chunk);
+    defer p.deinit();
+    _ = try opt.run(a, &p);
+    try std.testing.expect(hasNumericShapeKeys(&p));
+    const bytes = try serialize(a, &p);
+    defer a.free(bytes);
+    var restored = try deserialize(a, bytes);
+    defer restored.deinit();
+    try std.testing.expect(hasNumericShapeKeys(&restored));
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var vm = try exec.Vm.init(arena.allocator());
+    const out = try vm.executeRoot(&restored, &.{});
+    defer exec.Vm.freeResults(out);
+    try std.testing.expectEqual(@as(f64, 4), out[0].number);
+    try std.testing.expectEqual(@as(f64, 5), out[1].number);
+    try std.testing.expectEqual(@as(f64, 2), out[2].number);
 }

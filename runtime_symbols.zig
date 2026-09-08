@@ -16,7 +16,7 @@ fn linkedSourceVersion(bytes: []const u8) ?u8 {
     if (bytes.len < linked_header_len or !std.mem.eql(u8, bytes[0..4], "DWSY")) return null;
     const source: u8 = bytes[4] +| 1;
     return switch (source) {
-        2, 3, 14, 15 => source,
+        2, 3, 14, 15, 16 => source,
         else => null,
     };
 }
@@ -285,7 +285,7 @@ test "linked VM string envelope rejects truncated and unsupported versions" {
 
 test "shared symbol envelopes preserve supported owner codec versions" {
     const a = std.testing.allocator;
-    for ([_]u8{ 2, 3, 14, 15 }) |version| {
+    for ([_]u8{ 2, 3, 14, 15, 16 }) |version| {
         var chunk = try bridge.lua.parse(a, "return 'retained'");
         defer chunk.deinit();
         var p = try ir.lowerChunk(a, &chunk);

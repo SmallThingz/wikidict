@@ -1,5 +1,6 @@
 const global_abi = @import("vm_global_abi.zig");
 const static_fields = @import("vm_static_field_abi.zig");
+const shape_key = @import("vm_shape_key.zig");
 const std = @import("std");
 const ir = @import("vm_ir.zig");
 
@@ -101,15 +102,20 @@ pub const Table = struct {
     }
 
     fn slotForKey(self: *const Table, key: Value) ?u32 {
-        if (key != .string) return null;
-        if (self.native_namespace) |namespace| return static_fields.slotForName(namespace, key.string);
-        if (self.shape_program == null and self.shape_id == global_abi.native_shape) return global_abi.find(key.string);
+        if (key == .string) {
+            if (self.native_namespace) |namespace| return static_fields.slotForName(namespace, key.string);
+            if (self.shape_program == null and self.shape_id == global_abi.native_shape) return global_abi.find(key.string);
+        }
         const desc = self.shape() orelse return null;
         if (desc.field_keys.items.len != desc.field_count) return null;
         const p = self.shape_program.?;
-        for (desc.field_keys.items, 0..) |sid, slot| {
-            if (sid >= p.strings.items.len) continue;
-            if (std.mem.eql(u8, p.strings.items[sid], key.string)) return @intCast(slot);
+        for (desc.field_keys.items, 0..) |encoded, slot| {
+            if (shape_key.stringId(encoded)) |sid| {
+                if (key != .string or sid >= p.strings.items.len) continue;
+                if (std.mem.eql(u8, p.strings.items[sid], key.string)) return @intCast(slot);
+            } else if (shape_key.integerValue(encoded)) |integer| {
+                if (key == .number and key.number == @as(f64, @floatFromInt(integer))) return @intCast(slot);
+            }
         }
         return null;
     }
@@ -122,7 +128,9 @@ pub const Table = struct {
             return .{ .string = global_abi.names[slot] };
         const desc = self.shape() orelse return null;
         if (desc.field_keys.items.len != desc.field_count or slot >= desc.field_count) return null;
-        const sid = desc.field_keys.items[slot];
+        const encoded = desc.field_keys.items[slot];
+        if (shape_key.integerValue(encoded)) |integer| return .{ .number = @floatFromInt(integer) };
+        const sid = shape_key.stringId(encoded) orelse return null;
         const p = self.shape_program.?;
         if (sid >= p.strings.items.len) return null;
         return .{ .string = p.strings.items[sid] };

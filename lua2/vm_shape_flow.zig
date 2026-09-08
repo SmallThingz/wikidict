@@ -1,5 +1,6 @@
 const std = @import("std");
 const ir = @import("vm_ir.zig");
+const shape_key = @import("vm_shape_key.zig");
 const ssa = @import("vm_ssa.zig");
 const cg = @import("vm_callgraph.zig");
 const sem = @import("vm_semantics.zig");
@@ -146,7 +147,8 @@ fn rewrite(p: *const ir.Program, f: *ir.Function, facts: *Facts, stats: *Stats) 
                 const shape = facts.reg(facts.shapes, state, inst.a);
                 if (shape != none) {
                     const fields = p.shapes.items[shape].field_keys.items;
-                    if (std.mem.indexOfScalar(u32, fields, inst.aux)) |slot| {
+                    const key = try shape_key.string(inst.aux);
+                    if (std.mem.indexOfScalar(u32, fields, key)) |slot| {
                         replacement.aux = @intCast(slot);
                         if (inst.op == .get_field) {
                             replacement.op = .get_slot;

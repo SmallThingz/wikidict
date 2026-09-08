@@ -3,6 +3,7 @@ const ir = @import("vm_ir.zig");
 const cfg = @import("vm_graph.zig");
 const sem = @import("vm_semantics.zig");
 const static_fields = @import("vm_static_field_abi.zig");
+const shape_key = @import("vm_shape_key.zig");
 const Bits = sem.Bits;
 
 pub fn function(allocator: std.mem.Allocator, program: *const ir.Program, id: u32) !void {
@@ -163,8 +164,8 @@ pub fn run(allocator: std.mem.Allocator, program: *const ir.Program) !void {
     }
     for (program.shapes.items) |shape| {
         if (shape.field_keys.items.len != 0 and shape.field_keys.items.len != shape.field_count) return error.BadShape;
-        for (shape.field_keys.items) |sid| if (sid >= program.strings.items.len) {
-            return error.BadStringReference;
+        for (shape.field_keys.items) |key| if (!shape_key.valid(key, program.strings.items.len)) {
+            return error.BadShapeKey;
         };
     }
     for (program.functions.items, 0..) |_, id| try function(allocator, program, @intCast(id));
