@@ -1952,7 +1952,7 @@ fn frameCallParserFunctionCall(ctx_raw: ?*anyopaque, _: *anyopaque, args: []cons
 }
 
 fn makeFrameWithArgsTable(runtime: *Runtime, title: []const u8, arg_table: *rt.Table, parent: ?Value) !Value {
-    const frame = try rt.newTable(runtime.allocator);
+    const frame = try rt.newNativeNamespace(runtime.allocator, .frame);
     const parent_table: ?*rt.Table = if (parent) |p| switch (p) {
         .table => |t| t,
         else => return error.ParentFrameExpected,
@@ -2231,7 +2231,7 @@ fn ensureTitleMetatable(runtime: *Runtime) !*rt.Table {
 }
 
 fn makeTitleValue(runtime: *Runtime, title: []const u8) !Value {
-    const t = try rt.newTable(runtime.allocator);
+    const t = try rt.newNativeNamespace(runtime.allocator, .title_value);
     const hash = std.mem.indexOfScalar(u8, title, '#');
     const base_title = if (hash) |p| title[0..p] else title;
     const fragment_raw = if (hash) |p| title[p + 1 ..] else "";

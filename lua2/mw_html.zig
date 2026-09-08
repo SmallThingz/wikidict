@@ -52,7 +52,7 @@ fn returnSelf(node: *Node, a: std.mem.Allocator) ![]const Value {
 
 fn newNode(html: *Html, parent: ?*Node, tag_name: ?[]const u8) !*Node {
     const node = try html.allocator.create(Node);
-    const table = try rt.newTable(html.allocator);
+    const table = try rt.newNativeNamespace(html.allocator, .html_node);
     node.* = .{ .html = html, .table = table, .parent = parent, .tag_name = tag_name };
     try html.nodes.put(html.allocator, table, node);
     return node;

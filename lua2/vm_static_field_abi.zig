@@ -1,6 +1,9 @@
 const std = @import("std");
 
-pub const Namespace = enum(u8) { table, string, math, debug, mw, ustring, title, text, uri, html, language };
+pub const Namespace = enum(u8) {
+    table, string, math, debug, mw, ustring, title, text, uri, html, language,
+    frame, title_value, language_value, html_node,
+};
 pub const marker: u32 = @as(u32, 1) << 31;
 const index_mask = marker - 1;
 
@@ -22,6 +25,13 @@ pub const names = [_][]const u8{
     "nowiki",       "jsonEncode", "jsonDecode", "tag",       "truncate",         "encode",
     "decode",       "fullUrl",    "localUrl",  "canonicalUrl", "anchorEncode",     "create",
     "getContentLanguage", "getFallbacksFor", "isKnownLanguageTag", "fetchLanguageName", "getLanguage",
+    "args",          "getParent",  "getTitle",  "expandTemplate", "preprocess",        "extensionTag",
+    "callParserFunction", "prefixedText", "__fragment", "namespace", "nsText",          "subpageText",
+    "baseText",      "rootText",   "isSubpage", "interwiki",     "exists",            "getContent",
+    "code",          "getCode",    "formatDate", "uc",            "lc",                "ucfirst",
+    "lcfirst",       "getDir",     "getFallbackLanguages", "getArrow", "gender",       "formatNum",
+    "parseFormattedNumber", "done", "allDone", "wikitext", "node", "css", "cssText", "addClass",
+    "attr",          "newline",
 };
 
 const table_names = names[0..6];
@@ -44,6 +54,16 @@ const text_names = names[77..90];
 const uri_names = [_][]const u8{ "fullUrl", "localUrl", "canonicalUrl", "encode", "decode", "anchorEncode" };
 const html_names = names[94..95];
 const language_names = [_][]const u8{ "new", "getContentLanguage", "getFallbacksFor", "isKnownLanguageTag", "fetchLanguageName" };
+const frame_names = [_][]const u8{ "args", "getParent", "getTitle", "expandTemplate", "preprocess", "extensionTag", "callParserFunction" };
+const title_value_names = [_][]const u8{
+    "text", "prefixedText", "__fragment", "namespace", "nsText", "subpageText", "baseText", "rootText",
+    "isSubpage", "interwiki", "exists", "getContent", "fullUrl", "localUrl", "canonicalUrl",
+};
+const language_value_names = [_][]const u8{
+    "code", "getCode", "formatDate", "uc", "lc", "ucfirst", "lcfirst", "getDir", "getFallbackLanguages",
+    "getArrow", "gender", "formatNum", "parseFormattedNumber",
+};
+const html_node_names = [_][]const u8{ "tag", "done", "allDone", "wikitext", "node", "css", "cssText", "addClass", "attr", "newline" };
 
 fn namespaceNames(namespace: Namespace) []const []const u8 {
     return switch (namespace) {
@@ -58,6 +78,10 @@ fn namespaceNames(namespace: Namespace) []const []const u8 {
         .uri => &uri_names,
         .html => html_names,
         .language => &language_names,
+        .frame => &frame_names,
+        .title_value => &title_value_names,
+        .language_value => &language_value_names,
+        .html_node => &html_node_names,
     };
 }
 pub fn find(field_name: []const u8) ?u32 {
@@ -112,6 +136,10 @@ pub fn slotForRef(namespace: Namespace, value: u32) ?u32 {
         .uri => slotForNames(&uri_names, id),
         .html => slotForNames(html_names, id),
         .language => slotForNames(&language_names, id),
+        .frame => slotForNames(&frame_names, id),
+        .title_value => slotForNames(&title_value_names, id),
+        .language_value => slotForNames(&language_value_names, id),
+        .html_node => slotForNames(&html_node_names, id),
     };
 }
 

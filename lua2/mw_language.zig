@@ -410,7 +410,7 @@ fn languageParseFormattedNumber(_: ?*anyopaque, _: *anyopaque, args: []const Val
 }
 
 fn makeLanguage(a: std.mem.Allocator, host: *Context, code: []const u8) !*rt.Table {
-    const table = try rt.newTable(a);
+    const table = try rt.newNativeNamespace(a, .language_value);
     const ctx = try a.create(LanguageCtx);
     ctx.* = .{ .host = host, .code = code };
     try table.rawSet(a, .{ .string = "code" }, .{ .string = code });

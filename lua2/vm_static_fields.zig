@@ -52,6 +52,23 @@ fn childNamespace(parent: fields.Namespace, field_name: []const u8) ?fields.Name
     return null;
 }
 
+fn callResultNamespace(parent: fields.Namespace, field_name: []const u8) ?fields.Namespace {
+    return switch (parent) {
+        .mw => if (std.mem.eql(u8, field_name, "getCurrentFrame"))
+            .frame
+        else if (std.mem.eql(u8, field_name, "getContentLanguage") or std.mem.eql(u8, field_name, "getLanguage"))
+            .language_value
+        else
+            null,
+        .title => if (std.mem.eql(u8, field_name, "new") or std.mem.eql(u8, field_name, "makeTitle") or std.mem.eql(u8, field_name, "getCurrentTitle")) .title_value else null,
+        .language => if (std.mem.eql(u8, field_name, "new") or std.mem.eql(u8, field_name, "getContentLanguage")) .language_value else null,
+        .html => if (std.mem.eql(u8, field_name, "create")) .html_node else null,
+        .html_node => if (fields.slotForName(.html_node, field_name) != null) .html_node else null,
+        .frame => if (std.mem.eql(u8, field_name, "getParent")) .frame else null,
+        else => null,
+    };
+}
+
 fn instructionFieldName(program: *const ir.Program, inst: ir.Inst) ?[]const u8 {
     return switch (inst.op) {
         .get_field => if (inst.aux < program.strings.items.len) program.strings.items[inst.aux] else null,
@@ -74,6 +91,9 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
     const facts = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
     defer if (facts.len != 0) allocator.free(facts);
     @memset(facts, null);
+    const call_results = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
+    defer if (call_results.len != 0) allocator.free(call_results);
+    @memset(call_results, null);
     for (analysis.values.items, 0..) |node, id| if (node.kind == .instruction and node.pc < function.insts.items.len) {
         const inst = function.insts.items[node.pc];
         if (inst.op == .get_global_slot) facts[id] = globalNamespace(inst.aux);
@@ -85,11 +105,15 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
         changed = false;
         for (analysis.phis.items) |phi| {
             const id = analysis.canonicalValue(phi.value);
-            if (id != phi.value or facts[id] != null) continue;
-            if (mergePhi(&analysis, facts, phi)) |namespace| {
+            if (id != phi.value) continue;
+            if (facts[id] == null) if (mergePhi(&analysis, facts, phi)) |namespace| {
                 facts[id] = namespace;
                 changed = true;
-            }
+            };
+            if (call_results[id] == null) if (mergePhi(&analysis, call_results, phi)) |namespace| {
+                call_results[id] = namespace;
+                changed = true;
+            };
         }
         for (analysis.graph.blocks.items, 0..) |block, block_id| {
             const entry = analysis.entry_states[block_id] orelse continue;
@@ -97,21 +121,34 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
             for (block.start..block.end) |pc_usize| {
                 const pc: u32 = @intCast(pc_usize);
                 const inst = function.insts.items[pc];
-                var child: ?fields.Namespace = null;
+                var result_namespace: ?fields.Namespace = null;
+                var callable_result: ?fields.Namespace = null;
                 if (inst.op == .get_field or inst.op == .get_slot) {
                     if (namespaceForReg(&analysis, facts, state, inst.a)) |parent| {
-                        if (instructionFieldName(program, inst)) |field_name|
-                            child = childNamespace(parent, field_name);
+                        if (instructionFieldName(program, inst)) |field_name| {
+                            result_namespace = childNamespace(parent, field_name);
+                            callable_result = callResultNamespace(parent, field_name);
+                        }
                     }
+                } else if ((inst.op == .call or inst.op == .call_vararg) and inst.a < state.len) {
+                    const callee = analysis.canonicalValue(state[inst.a]);
+                    if (callee != ssa.invalid_value and callee < call_results.len)
+                        result_namespace = call_results[callee];
                 }
                 try ssa.applyWrites(&analysis, function, state, pc, null);
-                if (child) |namespace| if (inst.dst < state.len) {
+                if (inst.dst < state.len) {
                     const value = analysis.canonicalValue(state[inst.dst]);
-                    if (value != ssa.invalid_value and value < facts.len and facts[value] == null) {
-                        facts[value] = namespace;
-                        changed = true;
+                    if (value != ssa.invalid_value and value < facts.len) {
+                        if (result_namespace) |namespace| if (facts[value] == null) {
+                            facts[value] = namespace;
+                            changed = true;
+                        };
+                        if (callable_result) |namespace| if (call_results[value] == null) {
+                            call_results[value] = namespace;
+                            changed = true;
+                        };
                     }
-                };
+                }
             }
         }
     }
@@ -157,6 +194,7 @@ pub fn run(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
 
 const lua = @import("root.zig");
 const exec = @import("vm_exec.zig");
+const rt = @import("vm_runtime.zig");
 const stdlib = @import("lua_stdlib.zig");
 const simplify = @import("vm_ir_simplify.zig");
 
@@ -315,4 +353,56 @@ test "known nested Scribunto namespaces lower to static slots" {
     _ = try simplify.run(a, &program);
     inline for (&.{ "text", "split", "title", "new", "uri", "encode", "html", "create", "language", "getLanguage" }) |name|
         try std.testing.expect(!hasString(&program, name));
+}
+
+test "known Scribunto call results retain static object layouts" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a,
+        "local f=mw.getCurrentFrame();local t=mw.title.new('x');local l=mw.language.new('en');local h=mw.html.create('div');return f.args,t.text,l.getCode,h.tag");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    const stats = try run(a, &program);
+    try std.testing.expectEqual(@as(u64, 11), stats.reads);
+    _ = try simplify.run(a, &program);
+    inline for (&.{ "getCurrentFrame", "args", "title", "new", "text", "language", "getCode", "html", "create", "tag" }) |name|
+        try std.testing.expect(!hasString(&program, name));
+}
+
+fn returnStaticFieldTestTable(ctx_raw: ?*anyopaque, _: *anyopaque, _: []const rt.Value, _: std.mem.Allocator) ![]const rt.Value {
+    const table: *rt.Table = @ptrCast(@alignCast(ctx_raw.?));
+    const out = try std.heap.smp_allocator.alloc(rt.Value, 1);
+    out[0] = .{ .table = table };
+    return out;
+}
+
+test "call result layout uses slots and falls back after constructor mutation" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local f=mw.getCurrentFrame();return f.args");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    const stats = try run(a, &program);
+    try std.testing.expectEqual(@as(u64, 2), stats.reads);
+    _ = try simplify.run(a, &program);
+
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var vm = try exec.Vm.init(arena.allocator());
+    try stdlib.install(&vm);
+    const mw = try rt.newNativeNamespace(arena.allocator(), .mw);
+    try vm.setGlobal("mw", .{ .table = mw });
+    const shaped = try rt.newNativeNamespace(arena.allocator(), .frame);
+    try shaped.rawSet(arena.allocator(), .{ .string = "args" }, .{ .number = 7 });
+    try mw.rawSet(arena.allocator(), .{ .string = "getCurrentFrame" }, try rt.newNative(arena.allocator(), shaped, returnStaticFieldTestTable));
+    const fast = try vm.executeRoot(&program, &.{});
+    defer exec.Vm.freeResults(fast);
+    try std.testing.expectEqual(@as(f64, 7), fast[0].number);
+
+    const generic = try rt.newTable(arena.allocator());
+    try generic.rawSet(arena.allocator(), .{ .string = "args" }, .{ .number = 9 });
+    try mw.rawSet(arena.allocator(), .{ .string = "getCurrentFrame" }, try rt.newNative(arena.allocator(), generic, returnStaticFieldTestTable));
+    const fallback = try vm.executeRoot(&program, &.{});
+    defer exec.Vm.freeResults(fallback);
+    try std.testing.expectEqual(@as(f64, 9), fallback[0].number);
 }
