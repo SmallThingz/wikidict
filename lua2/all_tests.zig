@@ -9,6 +9,7 @@ test {
     _ = @import("vm_exec.zig");
     _ = @import("vm_codec.zig");
     _ = @import("vm_optimize.zig");
+    _ = @import("vm_static_fields.zig");
     _ = @import("zig_runtime.zig");
     _ = @import("zig_aot.zig");
     _ = @import("zig_aot_guard_test.zig");

@@ -7,7 +7,8 @@ const legacy = @import("vm_codec_v2.zig");
 const legacy_v3 = @import("vm_codec_v3.zig");
 const exec = @import("vm_exec.zig");
 const verify = @import("vm_verify.zig");
-pub const magic = "DWVM\x0e";
+const static_fields = @import("vm_static_field_abi.zig");
+pub const magic = "DWVM\x0f";
 const putVar = wire.putVar;
 const getVar = wire.getVar;
 const asU32 = wire.asU32;
@@ -15,7 +16,7 @@ const asU32 = wire.asU32;
 pub fn bytecodeVersion(bytes: []const u8) !u8 {
     if (bytes.len < 5 or !std.mem.eql(u8, bytes[0..4], "DWVM")) return error.BadMagic;
     return switch (bytes[4]) {
-        2, 3, 9, 10, 11, 12, 13, 14 => bytes[4],
+        2, 3, 9, 10, 11, 12, 13, 14, 15 => bytes[4],
         else => error.BadMagic,
     };
 }
@@ -32,9 +33,24 @@ fn putNumber(out: *std.ArrayList(u8), allocator: std.mem.Allocator, bits: u64) !
         try out.appendSlice(allocator, &bytes);
     }
 }
+fn hasStaticFieldRefs(p: *const ir.Program) bool {
+    for (p.functions.items) |maybe| if (maybe) |f| {
+        for (f.insts.items) |inst| {
+            if ((inst.op == .get_slot or inst.op == .set_slot) and static_fields.nameForRef(inst.aux) != null) return true;
+        }
+    };
+    return false;
+}
+
 pub fn serializeVersion(allocator: std.mem.Allocator, p: *const ir.Program, version: u8) ![]u8 {
     if (version == 2 or version == 3) return legacy_v3.serializeVersion(allocator, p, version);
-    if (version == 14) return serialize(allocator, p);
+    if (version == 15) return serialize(allocator, p);
+    if (version == 14) {
+        if (hasStaticFieldRefs(p)) return error.BadOpcodeVersion;
+        const out = try serialize(allocator, p);
+        out[4] = 14;
+        return out;
+    }
     return error.BadMagic;
 }
 
@@ -140,7 +156,7 @@ fn deserializeImpl(a: std.mem.Allocator, bytes: []const u8, copy: bool) !ir.Prog
         return if (copy) legacy.deserialize(a, bytes) else legacy.deserializeBorrowed(a, bytes);
     if (bytes.len >= 5 and std.mem.eql(u8, bytes[0..5], "DWVM\x03"))
         return if (copy) legacy_v3.deserialize(a, bytes) else legacy_v3.deserializeBorrowed(a, bytes);
-    const has_reference_format = bytes.len >= 5 and (std.mem.eql(u8, bytes[0..5], magic) or std.mem.eql(u8, bytes[0..5], "DWVM\x0d") or std.mem.eql(u8, bytes[0..5], "DWVM\x0c") or std.mem.eql(u8, bytes[0..5], "DWVM\x0b") or std.mem.eql(u8, bytes[0..5], "DWVM\x0a"));
+    const has_reference_format = bytes.len >= 5 and (std.mem.eql(u8, bytes[0..5], magic) or std.mem.eql(u8, bytes[0..5], "DWVM\x0e") or std.mem.eql(u8, bytes[0..5], "DWVM\x0d") or std.mem.eql(u8, bytes[0..5], "DWVM\x0c") or std.mem.eql(u8, bytes[0..5], "DWVM\x0b") or std.mem.eql(u8, bytes[0..5], "DWVM\x0a"));
     const old_v9 = bytes.len >= 5 and std.mem.eql(u8, bytes[0..5], "DWVM\x09");
     if (!has_reference_format and !old_v9) return error.BadMagic;
     var pos: usize = magic.len;
@@ -254,6 +270,8 @@ fn deserializeImpl(a: std.mem.Allocator, bytes: []const u8, copy: bool) !ir.Prog
             const inst = try wire.readInstVersion(bytes, &pos, @intCast(pc), ni, has_reference_format);
             if (bytes[4] < 13 and @intFromEnum(inst.op) >= @intFromEnum(ir.Opcode.get_global_slot)) return error.BadOpcodeVersion;
             if (bytes[4] < 14 and inst.op == .load_function) return error.BadOpcodeVersion;
+            if (bytes[4] < 15 and (inst.op == .get_slot or inst.op == .set_slot) and static_fields.nameForRef(inst.aux) != null)
+                return error.BadOpcodeVersion;
             try f.insts.append(a, inst);
         }
         for (f.operands.items) |value| if (!refs.isRegister(value)) {
@@ -354,4 +372,22 @@ test "v13 cannot silently decode v14 static function opcodes" {
     defer a.free(old);
     old[4] = 13;
     try std.testing.expectError(error.BadOpcodeVersion, deserialize(a, old));
+}
+
+test "v14 cannot silently decode v15 static field refs" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "return type(table.insert)");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(a, &chunk);
+    defer p.deinit();
+    _ = try opt.run(a, &p);
+    try std.testing.expect(hasStaticFieldRefs(&p));
+    const bytes = try serialize(a, &p);
+    defer a.free(bytes);
+    try std.testing.expectEqual(@as(u8, 15), try bytecodeVersion(bytes));
+    const old = try a.dupe(u8, bytes);
+    defer a.free(old);
+    old[4] = 14;
+    try std.testing.expectError(error.BadOpcodeVersion, deserialize(a, old));
+    try std.testing.expectError(error.BadOpcodeVersion, serializeVersion(a, &p, 14));
 }

@@ -16,7 +16,7 @@ fn linkedSourceVersion(bytes: []const u8) ?u8 {
     if (bytes.len < linked_header_len or !std.mem.eql(u8, bytes[0..4], "DWSY")) return null;
     const source: u8 = bytes[4] +| 1;
     return switch (source) {
-        2, 3, 14 => source,
+        2, 3, 14, 15 => source,
         else => null,
     };
 }
@@ -231,7 +231,13 @@ test "linked bytecode uses shared function IDs and preserves reflective executio
     const names: symbols.Names = .{ .keys = keys };
     const linked = try linkProgramAlloc(a, raw, names);
     defer a.free(linked);
-    try std.testing.expect(std.mem.indexOf(u8, linked, "show") == null);
+    const linked_owner = try a.dupe(u8, linked);
+    defer a.free(linked_owner);
+    @memcpy(linked_owner[0..4], "DWVM");
+    linked_owner[4] += 1;
+    var linked_program = try codec.deserializeBorrowed(temp, linked_owner);
+    defer linked_program.deinit();
+    for (linked_program.strings.items) |text| try std.testing.expect(!std.mem.eql(u8, text, "show"));
     const bound = try bindProgramAlloc(a, linked, names);
     defer a.free(bound);
     try std.testing.expectEqualSlices(u8, raw, bound);
@@ -277,9 +283,9 @@ test "linked VM string envelope rejects truncated and unsupported versions" {
     }
 }
 
-test "shared symbol envelopes preserve both supported owner codec versions" {
+test "shared symbol envelopes preserve supported owner codec versions" {
     const a = std.testing.allocator;
-    for ([_]u8{ 2, 3, 14 }) |version| {
+    for ([_]u8{ 2, 3, 14, 15 }) |version| {
         var chunk = try bridge.lua.parse(a, "return 'retained'");
         defer chunk.deinit();
         var p = try ir.lowerChunk(a, &chunk);

@@ -3,6 +3,7 @@ const refs = @import("vm_ref.zig");
 const std = @import("std");
 const ir = @import("vm_ir.zig");
 const rt = @import("vm_runtime.zig");
+const static_fields = @import("vm_static_field_abi.zig");
 const lua = @import("root.zig");
 
 pub const Value = rt.Value;
@@ -278,7 +279,7 @@ pub const Vm = struct {
         try t.rawSet(self.allocator, key, value);
     }
 
-    fn getSlot(self: *Vm, object: Value, slot: u32) anyerror!Value {
+    fn getLocalSlot(self: *Vm, object: Value, slot: u32) anyerror!Value {
         if (object != .table) return error.IndexType;
         const t = object.table;
         if (t.rawGetSlot(slot)) |value| return value;
@@ -287,12 +288,32 @@ pub const Vm = struct {
         return self.getIndex(object, key);
     }
 
-    fn setSlot(self: *Vm, object: Value, slot: u32, value: Value) anyerror!void {
+    fn getSlot(self: *Vm, object: Value, slot: u32) anyerror!Value {
+        if (static_fields.nameForRef(slot)) |name| {
+            if (object == .table) if (object.table.native_namespace) |namespace| {
+                if (static_fields.slotForRef(namespace, slot)) |local| return self.getLocalSlot(object, local);
+            };
+            return self.getIndex(object, .{ .string = name });
+        }
+        return self.getLocalSlot(object, slot);
+    }
+
+    fn setLocalSlot(self: *Vm, object: Value, slot: u32, value: Value) anyerror!void {
         if (object != .table) return error.IndexType;
         const t = object.table;
         if (t.rawGetSlot(slot) != null or t.metatable == null) return t.rawSetSlot(slot, value);
         const key = t.fieldKey(slot) orelse return error.BadAnonymousShapeMetatable;
         return self.setIndex(object, key, value);
+    }
+
+    fn setSlot(self: *Vm, object: Value, slot: u32, value: Value) anyerror!void {
+        if (static_fields.nameForRef(slot)) |name| {
+            if (object == .table) if (object.table.native_namespace) |namespace| {
+                if (static_fields.slotForRef(namespace, slot)) |local| return self.setLocalSlot(object, local, value);
+            };
+            return self.setIndex(object, .{ .string = name }, value);
+        }
+        return self.setLocalSlot(object, slot, value);
     }
 
     fn getChoice(self: *Vm, object: Value, choice: u32, key: Value) anyerror!Value {

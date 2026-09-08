@@ -701,7 +701,7 @@ pub fn install(vm: *exec.Vm) !void {
     try setGlobalNative(vm, "pairs", basePairs);
     try setGlobalNative(vm, "ipairs", baseIpairs);
     try setGlobalNative(vm, "pcall", basePcall);
-    const table = try rt.newTable(vm.allocator);
+    const table = try rt.newNativeNamespace(vm.allocator, .table);
     try setNative(vm, table, "insert", tableInsert);
     try setNative(vm, table, "remove", tableRemove);
     try setNative(vm, table, "concat", tableConcat);
@@ -714,7 +714,7 @@ pub fn install(vm: *exec.Vm) !void {
         }
     }.f);
     try vm.setGlobal("table", .{ .table = table });
-    const string = try rt.newTable(vm.allocator);
+    const string = try rt.newNativeNamespace(vm.allocator, .string);
     try setNative(vm, string, "len", stringLen);
     try setNative(vm, string, "sub", stringSub);
     try setNative(vm, string, "lower", stringLower);
@@ -732,7 +732,7 @@ pub fn install(vm: *exec.Vm) !void {
     const smt = try rt.newTable(vm.allocator);
     try smt.rawSet(vm.allocator, .{ .string = "__index" }, .{ .table = string });
     vm.string_metatable = smt;
-    const math = try rt.newTable(vm.allocator);
+    const math = try rt.newNativeNamespace(vm.allocator, .math);
     inline for (.{ .{ "abs", MathOp.abs }, .{ "ceil", .ceil }, .{ "floor", .floor }, .{ "sqrt", .sqrt }, .{ "exp", .exp }, .{ "log", .log }, .{ "log10", .log10 }, .{ "sin", .sin }, .{ "cos", .cos }, .{ "tan", .tan }, .{ "asin", .asin }, .{ "acos", .acos }, .{ "atan", .atan }, .{ "deg", .deg }, .{ "rad", .rad } }) |x| try addMath(vm, math, x[0], x[1]);
     try setNative(vm, math, "min", mathMin);
     try setNative(vm, math, "max", mathMax);
@@ -743,7 +743,7 @@ pub fn install(vm: *exec.Vm) !void {
     try math.rawSet(vm.allocator, .{ .string = "pi" }, .{ .number = std.math.pi });
     try math.rawSet(vm.allocator, .{ .string = "huge" }, .{ .number = std.math.inf(f64) });
     try vm.setGlobal("math", .{ .table = math });
-    const debug = try rt.newTable(vm.allocator);
+    const debug = try rt.newNativeNamespace(vm.allocator, .debug);
     try setNative(vm, debug, "getmetatable", debugGetMetatable);
     try setNative(vm, debug, "traceback", debugTraceback);
     try setNative(vm, debug, "getinfo", debugGetInfo);

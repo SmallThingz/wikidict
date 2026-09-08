@@ -2,6 +2,7 @@ const std = @import("std");
 const ir = @import("vm_ir.zig");
 const cfg = @import("vm_graph.zig");
 const sem = @import("vm_semantics.zig");
+const static_fields = @import("vm_static_field_abi.zig");
 const Bits = sem.Bits;
 
 pub fn function(allocator: std.mem.Allocator, program: *const ir.Program, id: u32) !void {
@@ -82,6 +83,10 @@ pub fn function(allocator: std.mem.Allocator, program: *const ir.Program, id: u3
                 .get_global_slot, .set_global_slot => {
                     const count = if (program.global_shape) |sid| program.shapes.items[sid].field_count else @import("vm_global_abi.zig").count;
                     if (inst.aux >= count) return error.BadGlobalSlot;
+                },
+                .get_slot, .set_slot => {
+                    if (inst.aux & static_fields.marker != 0 and static_fields.nameForRef(inst.aux) == null)
+                        return error.BadStaticField;
                 },
                 .branch_compare => {
                     const op = try @import("vm_semantics.zig").comparisonOpcode(inst.count);
@@ -172,4 +177,22 @@ test "verifier accepts loop edge definitions" {
     var p = try ir.lowerChunk(std.testing.allocator, &chunk);
     defer p.deinit();
     try run(std.testing.allocator, &p);
+}
+
+test "verifier rejects unknown static field refs" {
+    const lua = @import("root.zig");
+    var chunk = try lua.parse(std.testing.allocator, "local t=...;return t.insert");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(std.testing.allocator, &chunk);
+    defer p.deinit();
+    var changed = false;
+    for (p.functions.items) |*maybe| if (maybe.*) |*f| {
+        for (f.insts.items) |*inst| if (inst.op == .get_field) {
+            inst.op = .get_slot;
+            inst.aux = static_fields.marker | 999;
+            changed = true;
+        };
+    };
+    try std.testing.expect(changed);
+    try std.testing.expectError(error.BadStaticField, run(std.testing.allocator, &p));
 }

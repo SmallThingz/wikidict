@@ -876,11 +876,11 @@ pub const Runtime = struct {
         try vm.setGlobal("package", .{ .table = package });
         try vm.setGlobal("require", try rt.newNative(self.allocator, self, requireCall));
 
-        const mw = try rt.newTable(self.allocator);
+        const mw = try rt.newNativeNamespace(self.allocator, .mw);
         try mw.rawSet(self.allocator, .{ .string = "loadData" }, try rt.newNative(self.allocator, self, loadDataCall));
         try mw.rawSet(self.allocator, .{ .string = "clone" }, try rt.newNative(self.allocator, self, cloneCall));
         try mw.rawSet(self.allocator, .{ .string = "getCurrentFrame" }, try rt.newNative(self.allocator, self, currentFrameCall));
-        const ustring = try rt.newTable(self.allocator);
+        const ustring = try rt.newNativeNamespace(self.allocator, .ustring);
         if (vm.getGlobal("string")) |string_value| if (string_value == .table) {
             var it = string_value.table.iterator();
             while (it.next()) |entry| try ustring.rawSet(self.allocator, entry.key_ptr.*, entry.value_ptr.*);

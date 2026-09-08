@@ -1,4 +1,5 @@
 const global_abi = @import("vm_global_abi.zig");
+const static_fields = @import("vm_static_field_abi.zig");
 const std = @import("std");
 const ir = @import("vm_ir.zig");
 
@@ -81,6 +82,7 @@ pub const Table = struct {
     metatable: ?*Table = null,
     append_index: u32 = 1,
     read_only: bool = false,
+    native_namespace: ?static_fields.Namespace = null,
     shape_program: ?*const ir.Program = null,
     shape_id: u32 = std.math.maxInt(u32),
     slots: []Value = &.{},
@@ -100,6 +102,7 @@ pub const Table = struct {
 
     fn slotForKey(self: *const Table, key: Value) ?u32 {
         if (key != .string) return null;
+        if (self.native_namespace) |namespace| return static_fields.slotForName(namespace, key.string);
         if (self.shape_program == null and self.shape_id == global_abi.native_shape) return global_abi.find(key.string);
         const desc = self.shape() orelse return null;
         if (desc.field_keys.items.len != desc.field_count) return null;
@@ -112,6 +115,9 @@ pub const Table = struct {
     }
 
     pub fn fieldKey(self: *const Table, slot: u32) ?Value {
+        if (self.native_namespace) |namespace| {
+            return .{ .string = static_fields.nameAt(namespace, slot) orelse return null };
+        }
         if (self.shape_program == null and self.shape_id == global_abi.native_shape and slot < global_abi.count)
             return .{ .string = global_abi.names[slot] };
         const desc = self.shape() orelse return null;
@@ -219,6 +225,18 @@ pub const Table = struct {
 pub fn newTable(a: std.mem.Allocator) !*Table {
     const t = try a.create(Table);
     t.* = .{};
+    return t;
+}
+
+pub fn newNativeNamespace(a: std.mem.Allocator, namespace: static_fields.Namespace) !*Table {
+    const t = try a.create(Table);
+    errdefer a.destroy(t);
+    t.* = .{ .native_namespace = namespace };
+    const count = static_fields.fieldCount(namespace);
+    if (count != 0) {
+        t.slots = try a.alloc(Value, count);
+        @memset(t.slots, .nil);
+    }
     return t;
 }
 

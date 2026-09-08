@@ -1,6 +1,7 @@
 const module_function = @import("vm_module_function.zig");
 const shape_flow = @import("vm_shape_flow.zig");
 const global_lower = @import("vm_global_lower.zig");
+const static_fields = @import("vm_static_fields.zig");
 const devirtualize = @import("vm_devirtualize.zig");
 const ref_lower = @import("vm_ref_lower.zig");
 const compare_fuse = @import("vm_compare_fuse.zig");
@@ -39,6 +40,7 @@ pub const Stats = struct {
     references: ref_lower.Stats = .{},
     comparisons: compare_fuse.Stats = .{},
     globals: global_lower.Stats = .{},
+    static_fields: static_fields.Stats = .{},
     direct: devirtualize.Stats = .{},
     module_functions: module_function.Stats = .{},
 };
@@ -89,6 +91,7 @@ pub fn finalize(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     addStats(shape_flow.Stats, &stats.layouts, try shape_flow.run(allocator, program));
     stats.module_functions = try module_function.run(allocator, program);
     stats.globals = try global_lower.run(allocator, program);
+    stats.static_fields = try static_fields.run(allocator, program);
     stats.references = try ref_lower.run(allocator, program);
 
     addStats(simplify.Stats, &stats.cleanup, try simplify.run(allocator, program));
@@ -108,6 +111,7 @@ pub fn finalizeAot(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     addStats(shape_flow.Stats, &stats.layouts, try shape_flow.run(allocator, program));
     stats.module_functions = try module_function.run(allocator, program);
     stats.globals = try global_lower.run(allocator, program);
+    stats.static_fields = try static_fields.run(allocator, program);
     stats.references = try ref_lower.run(allocator, program);
     addStats(simplify.Stats, &stats.cleanup, try simplify.run(allocator, program));
     stats.data = try data.run(allocator, program);
@@ -123,6 +127,7 @@ pub fn runAot(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     const lowered = try finalizeAot(allocator, program);
     stats.references = lowered.references;
     stats.globals = lowered.globals;
+    stats.static_fields = lowered.static_fields;
     addStats(devirtualize.Stats, &stats.direct, lowered.direct);
     stats.module_functions = lowered.module_functions;
     stats.data = lowered.data;
@@ -137,6 +142,7 @@ pub fn run(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     const lowered = try finalize(allocator, program);
     stats.references = lowered.references;
     stats.globals = lowered.globals;
+    stats.static_fields = lowered.static_fields;
     addStats(devirtualize.Stats, &stats.direct, lowered.direct);
     stats.module_functions = lowered.module_functions;
     stats.data = lowered.data;
