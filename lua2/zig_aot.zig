@@ -307,10 +307,12 @@ fn globalCount(p: *const ir.Program) u32 {
 }
 
 fn emitNativeGlobalShape(out: *std.ArrayList(u8), a: A) !void {
-    try text(out, a, "const native_global_keys = [_][]const u8{");
+    try text(out, a, "const native_global_keys = [_]rt.Value{");
     for (global_abi.names, 0..) |name, index| {
         if (index != 0) try text(out, a, ", ");
+        try text(out, a, ".{ .string = ");
         try stringLiteral(out, a, name);
+        try text(out, a, " }");
     }
     try print(out, a, "}};\nconst native_global_shape = rt.Shape{{ .field_keys = &native_global_keys, .field_count = {d}, .open = false }};\n\n", .{global_abi.count});
 }
