@@ -427,6 +427,7 @@ pub const Context = struct {
     module_lookup_ctx: ?*const anyopaque = null,
     module_lookup: ?ModuleLookupFn = null,
     module_name: ?ModuleNameFn = null,
+    host: ?*anyopaque = null,
     package_loaded: ?*Table = null,
     global_table: ?*Table = null,
 
@@ -461,6 +462,7 @@ pub const Context = struct {
         child.module_lookup = self.module_lookup;
         child.module_name = self.module_name;
         child.max_depth = self.max_depth;
+        child.host = self.host;
         return child;
     }
 
@@ -477,6 +479,10 @@ pub const Context = struct {
         self.allocator.free(self.globals);
         if (self.module_state.len != 0) self.allocator.free(self.module_state);
         if (self.module_envs.len != 0) self.allocator.free(self.module_envs);
+    }
+
+    pub fn setHost(self: *Context, host: ?*anyopaque) void {
+        self.host = host;
     }
 
     pub fn getGlobal(self: *const Context, slot: u32) Value {
@@ -1174,6 +1180,8 @@ test "forked AOT context shares program metadata but resets runtime state" {
     parent.function_blocks = &blocks;
     parent.module_roots = &roots;
     parent.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
+    var host_marker: u8 = 0;
+    parent.setHost(&host_marker);
     try parent.setGlobal(1, .{ .number = 9 });
     parent.module_state[0] = 2;
 
@@ -1183,5 +1191,6 @@ test "forked AOT context shares program metadata but resets runtime state" {
     try std.testing.expect(child.module_roots.ptr == parent.module_roots.ptr);
     try std.testing.expect(child.getGlobal(1) == .nil);
     try std.testing.expectEqual(@as(u8, 0), child.module_state[0]);
+    try std.testing.expect(child.host == parent.host);
     try std.testing.expectEqual(@as(u32, 0), try child.resolveModule("Module:A"));
 }
