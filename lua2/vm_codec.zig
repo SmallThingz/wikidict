@@ -9,7 +9,7 @@ const exec = @import("vm_exec.zig");
 const verify = @import("vm_verify.zig");
 const static_fields = @import("vm_static_field_abi.zig");
 const shape_key = @import("vm_shape_key.zig");
-pub const magic = "DWVM\x10";
+pub const magic = "DWVM\x11";
 const putVar = wire.putVar;
 const getVar = wire.getVar;
 const asU32 = wire.asU32;
@@ -17,7 +17,7 @@ const asU32 = wire.asU32;
 pub fn bytecodeVersion(bytes: []const u8) !u8 {
     if (bytes.len < 5 or !std.mem.eql(u8, bytes[0..4], "DWVM")) return error.BadMagic;
     return switch (bytes[4]) {
-        2, 3, 9, 10, 11, 12, 13, 14, 15, 16 => bytes[4],
+        2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 17 => bytes[4],
         else => error.BadMagic,
     };
 }
@@ -49,28 +49,32 @@ fn hasNumericShapeKeys(p: *const ir.Program) bool {
     return false;
 }
 
+fn hasConstTableShapes(p: *const ir.Program) bool {
+    for (p.constants.items) |node| if (node == .table and node.table.shape != ir.no_shape) return true;
+    return false;
+}
+
 pub fn serializeVersion(allocator: std.mem.Allocator, p: *const ir.Program, version: u8) ![]u8 {
-    if (version == 2 or version == 3) return legacy_v3.serializeVersion(allocator, p, version);
-    if (version == 16) return serialize(allocator, p);
-    if (version == 15) {
-        if (hasNumericShapeKeys(p)) return error.BadShapeKeyVersion;
-        const out = try serialize(allocator, p);
-        out[4] = 15;
-        return out;
+    if (version == 2 or version == 3) {
+        if (hasConstTableShapes(p)) return error.BadConstShapeVersion;
+        return legacy_v3.serializeVersion(allocator, p, version);
     }
-    if (version == 14) {
-        if (hasStaticFieldRefs(p) or hasNumericShapeKeys(p)) return error.BadOpcodeVersion;
-        const out = try serialize(allocator, p);
-        out[4] = 14;
-        return out;
-    }
-    return error.BadMagic;
+    if (version < 14 or version > 17) return error.BadMagic;
+    if (version < 17 and hasConstTableShapes(p)) return error.BadConstShapeVersion;
+    if (version < 16 and hasNumericShapeKeys(p)) return error.BadShapeKeyVersion;
+    if (version < 15 and hasStaticFieldRefs(p)) return error.BadOpcodeVersion;
+    return serializeImpl(allocator, p, version);
 }
 
 pub fn serialize(allocator: std.mem.Allocator, p: *const ir.Program) ![]u8 {
+    return serializeImpl(allocator, p, 17);
+}
+
+fn serializeImpl(allocator: std.mem.Allocator, p: *const ir.Program, version: u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, magic);
+    try out.appendSlice(allocator, "DWVM");
+    try out.append(allocator, version);
     try putVar(&out, allocator, p.root_function);
     try putVar(&out, allocator, p.strings.items.len);
     try putVar(&out, allocator, p.constants.items.len);
@@ -99,9 +103,17 @@ pub fn serialize(allocator: std.mem.Allocator, p: *const ir.Program) ![]u8 {
             try putVar(&out, allocator, n);
         },
         .table => |table| {
-            try out.append(allocator, 5);
-            try putVar(&out, allocator, table.first);
-            try putVar(&out, allocator, table.count);
+            if (table.shape == ir.no_shape) {
+                try out.append(allocator, 5);
+                try putVar(&out, allocator, table.first);
+                try putVar(&out, allocator, table.count);
+            } else {
+                if (version < 17) return error.BadConstShapeVersion;
+                try out.append(allocator, 8);
+                try putVar(&out, allocator, table.first);
+                try putVar(&out, allocator, table.count);
+                try putVar(&out, allocator, table.shape);
+            }
         },
     };
     for (p.const_entries.items) |entry| {
@@ -169,7 +181,7 @@ fn deserializeImpl(a: std.mem.Allocator, bytes: []const u8, copy: bool) !ir.Prog
         return if (copy) legacy.deserialize(a, bytes) else legacy.deserializeBorrowed(a, bytes);
     if (bytes.len >= 5 and std.mem.eql(u8, bytes[0..5], "DWVM\x03"))
         return if (copy) legacy_v3.deserialize(a, bytes) else legacy_v3.deserializeBorrowed(a, bytes);
-    const has_reference_format = bytes.len >= 5 and (std.mem.eql(u8, bytes[0..5], magic) or std.mem.eql(u8, bytes[0..5], "DWVM\x0f") or std.mem.eql(u8, bytes[0..5], "DWVM\x0e") or std.mem.eql(u8, bytes[0..5], "DWVM\x0d") or std.mem.eql(u8, bytes[0..5], "DWVM\x0c") or std.mem.eql(u8, bytes[0..5], "DWVM\x0b") or std.mem.eql(u8, bytes[0..5], "DWVM\x0a"));
+    const has_reference_format = bytes.len >= 5 and (std.mem.eql(u8, bytes[0..5], magic) or std.mem.eql(u8, bytes[0..5], "DWVM\x10") or std.mem.eql(u8, bytes[0..5], "DWVM\x0f") or std.mem.eql(u8, bytes[0..5], "DWVM\x0e") or std.mem.eql(u8, bytes[0..5], "DWVM\x0d") or std.mem.eql(u8, bytes[0..5], "DWVM\x0c") or std.mem.eql(u8, bytes[0..5], "DWVM\x0b") or std.mem.eql(u8, bytes[0..5], "DWVM\x0a"));
     const old_v9 = bytes.len >= 5 and std.mem.eql(u8, bytes[0..5], "DWVM\x09");
     if (!has_reference_format and !old_v9) return error.BadMagic;
     var pos: usize = magic.len;
@@ -216,7 +228,10 @@ fn deserializeImpl(a: std.mem.Allocator, bytes: []const u8, copy: bool) !ir.Prog
             },
             3 => .{ .string = try asU32(try getVar(bytes, &pos)) },
             4 => .{ .integer = try asU32(try getVar(bytes, &pos)) },
-            5 => .{ .table = .{ .first = try asU32(try getVar(bytes, &pos)), .count = try asU32(try getVar(bytes, &pos)) } },
+            5 => .{ .table = .{
+                .first = try asU32(try getVar(bytes, &pos)),
+                .count = try asU32(try getVar(bytes, &pos)),
+            } },
             6 => blk: {
                 if (bytes.len - pos < 8) return error.Truncated;
                 const bits = std.mem.readInt(u64, bytes[pos..][0..8], .little);
@@ -226,6 +241,14 @@ fn deserializeImpl(a: std.mem.Allocator, bytes: []const u8, copy: bool) !ir.Prog
             7 => blk: {
                 const n: f64 = @floatFromInt(wire.unzigzag(try getVar(bytes, &pos)));
                 break :blk .{ .number_bits = @bitCast(n) };
+            },
+            8 => blk: {
+                if (bytes[4] < 17) return error.BadConstShapeVersion;
+                const first = try asU32(try getVar(bytes, &pos));
+                const count = try asU32(try getVar(bytes, &pos));
+                const shape = try asU32(try getVar(bytes, &pos));
+                if (shape >= nsh) return error.BadShape;
+                break :blk .{ .table = .{ .first = first, .count = count, .shape = shape } };
             },
             else => return error.BadConstTag,
         };
@@ -399,7 +422,7 @@ test "v14 cannot silently decode v15 static field refs" {
     defer p.deinit();
     _ = try opt.run(a, &p);
     try std.testing.expect(hasStaticFieldRefs(&p));
-    const bytes = try serialize(a, &p);
+    const bytes = try serializeVersion(a, &p, 16);
     defer a.free(bytes);
     try std.testing.expectEqual(@as(u8, 16), try bytecodeVersion(bytes));
     const old = try a.dupe(u8, bytes);
@@ -417,7 +440,7 @@ test "v15 cannot silently decode v16 numeric shape keys" {
     defer p.deinit();
     _ = try opt.run(a, &p);
     try std.testing.expect(hasNumericShapeKeys(&p));
-    const bytes = try serialize(a, &p);
+    const bytes = try serializeVersion(a, &p, 16);
     defer a.free(bytes);
     try std.testing.expectEqual(@as(u8, 16), try bytecodeVersion(bytes));
     const old = try a.dupe(u8, bytes);
@@ -435,8 +458,9 @@ test "v16 numeric shape keys roundtrip and execute" {
     defer p.deinit();
     _ = try opt.run(a, &p);
     try std.testing.expect(hasNumericShapeKeys(&p));
-    const bytes = try serialize(a, &p);
+    const bytes = try serializeVersion(a, &p, 16);
     defer a.free(bytes);
+    try std.testing.expectEqual(@as(u8, 16), try bytecodeVersion(bytes));
     var restored = try deserialize(a, bytes);
     defer restored.deinit();
     try std.testing.expect(hasNumericShapeKeys(&restored));
@@ -448,4 +472,46 @@ test "v16 numeric shape keys roundtrip and execute" {
     try std.testing.expectEqual(@as(f64, 4), out[0].number);
     try std.testing.expectEqual(@as(f64, 5), out[1].number);
     try std.testing.expectEqual(@as(f64, 2), out[2].number);
+}
+
+test "v17 constant table shapes roundtrip and reject v16 downgrade" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local e={numbers={}};e.numbers[1]=4;e.numbers[2]=5;return e.numbers[1],e.numbers[2]");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(a, &chunk);
+    defer p.deinit();
+    _ = try opt.run(a, &p);
+    try std.testing.expect(hasConstTableShapes(&p));
+    try std.testing.expectError(error.BadConstShapeVersion, serializeVersion(a, &p, 16));
+    const bytes = try serialize(a, &p);
+    defer a.free(bytes);
+    try std.testing.expectEqual(@as(u8, 17), try bytecodeVersion(bytes));
+    var restored = try deserialize(a, bytes);
+    defer restored.deinit();
+    try std.testing.expect(hasConstTableShapes(&restored));
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var vm = try exec.Vm.init(arena.allocator());
+    const out = try vm.executeRoot(&restored, &.{});
+    defer exec.Vm.freeResults(out);
+    try std.testing.expectEqual(@as(f64, 4), out[0].number);
+    try std.testing.expectEqual(@as(f64, 5), out[1].number);
+}
+
+test "v17 leaves unshaped table payload size unchanged" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "return {1,2,3}");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(a, &chunk);
+    defer p.deinit();
+    try std.testing.expect(!hasConstTableShapes(&p));
+    const v16 = try serializeVersion(a, &p, 16);
+    defer a.free(v16);
+    const v17 = try serializeVersion(a, &p, 17);
+    defer a.free(v17);
+    try std.testing.expectEqual(v16.len, v17.len);
+    const saved = v17[4];
+    v17[4] = v16[4];
+    defer v17[4] = saved;
+    try std.testing.expectEqualSlices(u8, v16, v17);
 }

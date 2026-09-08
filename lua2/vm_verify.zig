@@ -154,8 +154,10 @@ pub fn run(allocator: std.mem.Allocator, program: *const ir.Program) !void {
         .number, .string => |sid| if (sid >= program.strings.items.len) {
             return error.BadStringReference;
         },
-        .table => |table| if (table.first > program.const_entries.items.len or table.count > program.const_entries.items.len - table.first) {
-            return error.BadConstantReference;
+        .table => |table| {
+            if (table.first > program.const_entries.items.len or table.count > program.const_entries.items.len - table.first)
+                return error.BadConstantReference;
+            if (table.shape != ir.no_shape and table.shape >= program.shapes.items.len) return error.BadShape;
         },
         else => {},
     };

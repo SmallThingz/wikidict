@@ -100,6 +100,7 @@ pub const Inst = struct {
     count: u32 = 0,
 };
 
+pub const no_shape: u32 = std.math.maxInt(u32);
 pub const ConstNode = union(enum) {
     nil,
     boolean: bool,
@@ -107,7 +108,7 @@ pub const ConstNode = union(enum) {
     number_bits: u64,
     string: u32,
     integer: u32,
-    table: struct { first: u32, count: u32 },
+    table: struct { first: u32, count: u32, shape: u32 = no_shape },
 };
 pub const implicit_list_key: u32 = std.math.maxInt(u32);
 pub const ConstEntry = struct { key: u32, value: u32 };

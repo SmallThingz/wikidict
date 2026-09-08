@@ -6,14 +6,17 @@ fn markReference(ctx: anytype, value: u32) !u32 {
 const std = @import("std");
 const ir = @import("vm_ir.zig");
 const exec = @import("vm_exec.zig");
-pub const TableKey = struct { first: u32, count: u32 };
+pub const TableKey = struct { first: u32, count: u32, shape: u32 };
 pub const TableContext = struct {
     entries: *const std.ArrayList(ir.ConstEntry),
     pub fn hash(self: @This(), key: TableKey) u64 {
-        return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(self.entries.items[key.first..][0..key.count]));
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.sliceAsBytes(self.entries.items[key.first..][0..key.count]));
+        h.update(std.mem.asBytes(&key.shape));
+        return h.final();
     }
     pub fn eql(self: @This(), a: TableKey, b: TableKey) bool {
-        if (a.count != b.count) return false;
+        if (a.count != b.count or a.shape != b.shape) return false;
         return std.mem.eql(u8, std.mem.sliceAsBytes(self.entries.items[a.first..][0..a.count]), std.mem.sliceAsBytes(self.entries.items[b.first..][0..b.count]));
     }
 };
@@ -92,13 +95,13 @@ pub fn run(a: std.mem.Allocator, p: *ir.Program) !Stats {
                 if (value == ir.implicit_list_key or (entry.key != ir.implicit_list_key and key == ir.implicit_list_key)) return error.NonTopologicalConstant;
                 try entries.append(a, .{ .key = key, .value = value });
             }
-            const key = TableKey{ .first = first, .count = table.count };
+            const key = TableKey{ .first = first, .count = table.count, .shape = table.shape };
             if (tables.getContext(key, table_context)) |id| {
                 remap[old] = id;
                 entries.shrinkRetainingCapacity(first);
             } else {
                 remap[old] = @intCast(constants.items.len);
-                try constants.append(a, .{ .table = .{ .first = first, .count = table.count } });
+                try constants.append(a, .{ .table = .{ .first = first, .count = table.count, .shape = table.shape } });
                 try tables.putContext(a, key, remap[old], table_context);
             }
         }
@@ -119,6 +122,10 @@ pub fn run(a: std.mem.Allocator, p: *ir.Program) !Stats {
     defer a.free(shape_used);
     @memset(shape_used, false);
     if (p.global_shape) |id| shape_used[id] = true;
+    for (p.constants.items) |node| if (node == .table and node.table.shape != ir.no_shape) {
+        if (node.table.shape >= shape_used.len) return error.BadShape;
+        shape_used[node.table.shape] = true;
+    };
     for (p.functions.items) |maybe| if (maybe) |f| for (f.insts.items) |inst| if (inst.op == .new_table_shape) {
         shape_used[inst.aux] = true;
     };
@@ -138,6 +145,9 @@ pub fn run(a: std.mem.Allocator, p: *ir.Program) !Stats {
     }
     for (p.functions.items) |*maybe| if (maybe.*) |*f| for (f.insts.items) |*inst| if (inst.op == .new_table_shape) {
         inst.aux = shape_map[inst.aux];
+    };
+    for (p.constants.items) |*node| if (node.* == .table and node.table.shape != ir.no_shape) {
+        node.table.shape = shape_map[node.table.shape];
     };
     if (p.global_shape) |id| p.global_shape = shape_map[id];
     p.shapes.deinit(a);
@@ -186,4 +196,27 @@ test "deduplicated table templates still materialize distinct mutable objects" {
     try std.testing.expectEqual(@as(f64, 9), values[0].number);
     try std.testing.expectEqual(@as(f64, 1), values[1].number);
     try std.testing.expect(!values[2].boolean);
+}
+
+test "constant-table shapes survive constant and shape compaction" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local e={numbers={}};e.numbers[1]=4;e.numbers[2]=5;return e.numbers[1],e.numbers[2]");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(a, &chunk);
+    defer p.deinit();
+    _ = try @import("vm_const_shape.zig").run(a, &p);
+    _ = try run(a, &p);
+    var saw_shape = false;
+    for (p.constants.items) |node| {
+        if (node == .table and node.table.shape != ir.no_shape) saw_shape = true;
+    }
+    try std.testing.expect(saw_shape);
+    try @import("vm_verify.zig").run(a, &p);
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var vm = try exec.Vm.init(arena.allocator());
+    const out = try vm.executeRoot(&p, &.{});
+    defer exec.Vm.freeResults(out);
+    try std.testing.expectEqual(@as(f64, 4), out[0].number);
+    try std.testing.expectEqual(@as(f64, 5), out[1].number);
 }

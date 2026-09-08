@@ -213,7 +213,10 @@ pub const Vm = struct {
             .string => |sid| .{ .string = p.strings.items[sid] },
             .integer => |n| .{ .number = @floatFromInt(n) },
             .table => |tinfo| blk: {
-                const t = try rt.newTable(self.allocator);
+                const t = if (tinfo.shape == ir.no_shape)
+                    try rt.newTable(self.allocator)
+                else
+                    try rt.newShapedTable(self.allocator, p, tinfo.shape);
                 var list_index: u32 = 1;
                 for (p.const_entries.items[tinfo.first .. tinfo.first + tinfo.count]) |e| {
                     const key: Value = if (e.key == ir.implicit_list_key) list_key: {

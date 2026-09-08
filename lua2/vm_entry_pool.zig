@@ -27,18 +27,18 @@ pub fn run(a: std.mem.Allocator, p: *ir.Program) !Stats {
         while (overlap != 0 and !equal(entries.items[mark - overlap ..], rows[0..overlap])) overlap -= 1;
         var first: u32 = @intCast(mark - overlap);
         try entries.appendSlice(a, rows[overlap..]);
-        const key = Key{ .first = first, .count = t.count };
+        const key = Key{ .first = first, .count = t.count, .shape = 0 };
         if (slices.getContext(key, context)) |existing| {
             first = existing;
             entries.shrinkRetainingCapacity(mark);
             stats.shared_ranges += 1;
         }
         firsts[id] = first;
-        try indexSlice(a, &slices, context, .{ .first = first, .count = t.count });
+        try indexSlice(a, &slices, context, .{ .first = first, .count = t.count, .shape = 0 });
         for (1..@min(t.count, 8) + 1) |length| {
             const n: u32 = @intCast(length);
-            try indexSlice(a, &slices, context, .{ .first = first, .count = n });
-            try indexSlice(a, &slices, context, .{ .first = first + t.count - n, .count = n });
+            try indexSlice(a, &slices, context, .{ .first = first, .count = n, .shape = 0 });
+            try indexSlice(a, &slices, context, .{ .first = first + t.count - n, .count = n, .shape = 0 });
         }
     };
     // Compare all logical records exactly before replacing the old backing store.

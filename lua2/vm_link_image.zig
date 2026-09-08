@@ -79,7 +79,7 @@ pub const Image = struct {
         }
         const module_index: u32 = @intCast(self.modules.items.len);
         for (source.constants.items) |node| {
-            try self.program.constants.append(self.allocator, try remapConst(node, string_map, entry_base));
+            try self.program.constants.append(self.allocator, try remapConst(node, string_map, entry_base, shape_base));
         }
         for (source.const_entries.items) |entry| {
             if ((entry.key != ir.implicit_list_key and entry.key >= source.constants.items.len) or entry.value >= source.constants.items.len)
@@ -129,7 +129,7 @@ fn intern(image: *Image, text: []const u8) !u32 {
     return id;
 }
 
-fn remapConst(node: ir.ConstNode, string_map: []const u32, entry_base: u32) !ir.ConstNode {
+fn remapConst(node: ir.ConstNode, string_map: []const u32, entry_base: u32, shape_base: u32) !ir.ConstNode {
     return switch (node) {
         .nil => .nil,
         .boolean => |value| .{ .boolean = value },
@@ -140,6 +140,7 @@ fn remapConst(node: ir.ConstNode, string_map: []const u32, entry_base: u32) !ir.
         .table => |table| .{ .table = .{
             .first = entry_base + table.first,
             .count = table.count,
+            .shape = if (table.shape == ir.no_shape) ir.no_shape else shape_base + table.shape,
         } },
     };
 }
