@@ -902,11 +902,11 @@ fn emitGenericFor(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function:
     if (inst.aux >= function.insts.items.len) return error.BadJump;
     const target = graph.block_of_pc[inst.aux];
     const fall = try fallthroughBlock(graph, function, pc);
-    try text(out, a, "            { const iter = ");
+    try text(out, a, "            { const iter: rt.Value = ");
     try valueExpr(out, a, p, plan, inst.a);
-    try text(out, a, "; const state = ");
+    try text(out, a, "; const state: rt.Value = ");
     try valueExpr(out, a, p, plan, inst.b);
-    try text(out, a, "; const control = ");
+    try text(out, a, "; const control: rt.Value = ");
     try valueExpr(out, a, p, plan, inst.c);
     try print(out, a, "; const values_{d} = try ctx.callValue(iter, &[_]rt.Value{{ state, control }}); defer rt.freeResults(values_{d}); ", .{ pc, pc });
     try print(out, a, "const first = if (values_{d}.len == 0) rt.Value.nil else values_{d}[0]; ", .{ pc, pc });
@@ -1100,6 +1100,22 @@ test "numeric hot loop emits native scalars without a Lua frame" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "var n_") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "var regs:") == null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "rt.toNumber(.{ .number") == null);
+}
+
+test "generic for boxes numeric scalar iterator operands as runtime values" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local function f(t) if #t == 1 then return t end; for x in #t do return x end end; return f");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(a, &chunk);
+    defer p.deinit();
+    _ = try opt.runAot(a, &p);
+    const generated = try generate(a, &p);
+    defer a.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const iter: rt.Value = .{ .number = n_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const state: rt.Value =") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const control: rt.Value =") != null);
 }
 
 test "constant templates emit static data instead of generated materializer functions" {
