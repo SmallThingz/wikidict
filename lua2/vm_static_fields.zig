@@ -3,10 +3,12 @@ const ir = @import("vm_ir.zig");
 const ssa = @import("vm_ssa.zig");
 const global_abi = @import("vm_global_abi.zig");
 const fields = @import("vm_static_field_abi.zig");
+const aot_hint = @import("vm_aot_hint.zig");
 
 pub const Stats = struct {
     reads: u64 = 0,
     writes: u64 = 0,
+    guarded_calls: u64 = 0,
 };
 
 fn globalNamespace(slot: u32) ?fields.Namespace {
@@ -40,6 +42,26 @@ fn mergePhi(analysis: *const ssa.Function, facts: []const ?fields.Namespace, phi
         any = true;
         if (selected) |old| {
             if (old != incoming) return null;
+        } else selected = incoming;
+    }
+    return if (any) selected else null;
+}
+
+fn mergeNativeFieldPhi(
+    analysis: *const ssa.Function,
+    facts: []const ?aot_hint.NativeField,
+    phi: ssa.Phi,
+) ?aot_hint.NativeField {
+    var selected: ?aot_hint.NativeField = null;
+    var any = false;
+    for (phi.inputs.items) |raw| {
+        const id = analysis.canonicalValue(raw);
+        if (id == phi.value) continue;
+        if (id == ssa.invalid_value or id >= facts.len) return null;
+        const incoming = facts[id] orelse return null;
+        any = true;
+        if (selected) |old| {
+            if (!std.meta.eql(old, incoming)) return null;
         } else selected = incoming;
     }
     return if (any) selected else null;
@@ -102,9 +124,11 @@ fn populateFacts(
     analysis: *ssa.Function,
     facts: []?fields.Namespace,
     call_results: []?fields.Namespace,
+    native_fields: []?aot_hint.NativeField,
 ) !void {
     @memset(facts, null);
     @memset(call_results, null);
+    @memset(native_fields, null);
     for (analysis.values.items, 0..) |node, id| if (node.kind == .instruction and node.pc < function.insts.items.len) {
         facts[id] = instructionGlobalNamespace(program, function.insts.items[node.pc]);
     };
@@ -124,6 +148,10 @@ fn populateFacts(
                 call_results[id] = namespace;
                 changed = true;
             };
+            if (native_fields[id] == null) if (mergeNativeFieldPhi(analysis, native_fields, phi)) |field| {
+                native_fields[id] = field;
+                changed = true;
+            };
         }
         for (analysis.graph.blocks.items, 0..) |block, block_id| {
             const entry = analysis.entry_states[block_id] orelse continue;
@@ -133,11 +161,14 @@ fn populateFacts(
                 const inst = function.insts.items[pc];
                 var result_namespace: ?fields.Namespace = null;
                 var callable_result: ?fields.Namespace = null;
+                var native_field: ?aot_hint.NativeField = null;
                 if (inst.op == .get_field or inst.op == .get_slot) {
                     if (namespaceForReg(analysis, facts, state, inst.a)) |parent| {
                         if (instructionFieldName(program, inst)) |field_name| {
                             result_namespace = childNamespace(parent, field_name);
                             callable_result = callResultNamespace(parent, field_name);
+                            if (fields.slotForName(parent, field_name)) |slot|
+                                native_field = .{ .namespace = parent, .slot = slot };
                         }
                     }
                 } else if ((inst.op == .call or inst.op == .call_vararg) and inst.a < state.len) {
@@ -157,78 +188,15 @@ fn populateFacts(
                             call_results[value] = namespace;
                             changed = true;
                         };
+                        if (native_field) |field| if (native_fields[value] == null) {
+                            native_fields[value] = field;
+                            changed = true;
+                        };
                     }
                 }
             }
         }
     }
-}
-
-pub const NativeFieldCall = struct {
-    namespace: fields.Namespace,
-    slot: u32,
-};
-
-pub const NativeCallAnalysis = struct {
-    allocator: std.mem.Allocator,
-    by_pc: []?NativeFieldCall,
-
-    pub fn deinit(self: *NativeCallAnalysis) void {
-        if (self.by_pc.len != 0) self.allocator.free(self.by_pc);
-    }
-};
-
-pub fn analyzeNativeCalls(
-    allocator: std.mem.Allocator,
-    program: *const ir.Program,
-    function: *const ir.Function,
-) !NativeCallAnalysis {
-    const by_pc = try allocator.alloc(?NativeFieldCall, function.insts.items.len);
-    errdefer if (by_pc.len != 0) allocator.free(by_pc);
-    @memset(by_pc, null);
-    var result = NativeCallAnalysis{ .allocator = allocator, .by_pc = by_pc };
-    if (!hasNamespaceRoot(program, function)) return result;
-
-    var analysis = try ssa.build(allocator, program, function);
-    defer analysis.deinit();
-    const facts = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
-    defer if (facts.len != 0) allocator.free(facts);
-    const call_results = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
-    defer if (call_results.len != 0) allocator.free(call_results);
-    try populateFacts(allocator, program, function, &analysis, facts, call_results);
-    const state = try allocator.alloc(ssa.ValueId, function.reg_count);
-    defer if (state.len != 0) allocator.free(state);
-    const producer_state = try allocator.alloc(ssa.ValueId, function.reg_count);
-    defer if (producer_state.len != 0) allocator.free(producer_state);
-
-    for (analysis.graph.blocks.items, 0..) |block, block_id| {
-        const entry = analysis.entry_states[block_id] orelse continue;
-        @memcpy(state, entry);
-        for (block.start..block.end) |pc_usize| {
-            const pc: u32 = @intCast(pc_usize);
-            const inst = function.insts.items[pc];
-            if (inst.op == .call and inst.a < state.len) {
-                const callee = analysis.canonicalValue(state[inst.a]);
-                if (callee != ssa.invalid_value and callee < analysis.values.items.len) {
-                    const node = analysis.values.items[callee];
-                    if (node.kind == .instruction and node.pc < function.insts.items.len) {
-                        const producer = function.insts.items[node.pc];
-                        if (producer.op == .get_field or producer.op == .get_slot) {
-                            try ssa.stateBefore(&analysis, function, node.pc, producer_state);
-                            if (namespaceForReg(&analysis, facts, producer_state, producer.a)) |namespace| {
-                                if (instructionFieldName(program, producer)) |name| {
-                                    if (fields.slotForName(namespace, name)) |slot|
-                                        result.by_pc[pc] = .{ .namespace = namespace, .slot = slot };
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            try ssa.applyWrites(&analysis, function, state, pc, null);
-        }
-    }
-    return result;
 }
 
 fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir.Function) !Stats {
@@ -239,7 +207,9 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
     defer if (facts.len != 0) allocator.free(facts);
     const call_results = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
     defer if (call_results.len != 0) allocator.free(call_results);
-    try populateFacts(allocator, program, function, &analysis, facts, call_results);
+    const native_fields = try allocator.alloc(?aot_hint.NativeField, analysis.values.items.len);
+    defer if (native_fields.len != 0) allocator.free(native_fields);
+    try populateFacts(allocator, program, function, &analysis, facts, call_results, native_fields);
     const state = try allocator.alloc(ssa.ValueId, function.reg_count);
     defer if (state.len != 0) allocator.free(state);
     var stats = Stats{};
@@ -265,6 +235,13 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
                     }
                 };
             }
+            if (inst.op == .call and inst.a < state.len and aot_hint.target(inst.*) == null and aot_hint.nativeGlobal(inst.*) == null and aot_hint.nativeField(inst.*) == null) {
+                const value = analysis.canonicalValue(state[inst.a]);
+                if (value != ssa.invalid_value and value < native_fields.len) if (native_fields[value]) |field| {
+                    try aot_hint.setNativeField(inst, field.namespace, field.slot);
+                    stats.guarded_calls += 1;
+                };
+            }
             try ssa.applyWrites(&analysis, function, state, pc, null);
         }
     }
@@ -278,6 +255,7 @@ pub fn run(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
         const one = try runFunction(allocator, program, function);
         stats.reads += one.reads;
         stats.writes += one.writes;
+        stats.guarded_calls += one.guarded_calls;
     };
     return stats;
 }
@@ -308,6 +286,17 @@ fn hasString(program: *const ir.Program, needle: []const u8) bool {
     for (program.strings.items) |text| if (std.mem.eql(u8, text, needle)) return true;
     return false;
 }
+
+fn countNativeFieldGuardHints(program: *const ir.Program) u64 {
+    var count: u64 = 0;
+    for (program.functions.items) |maybe| if (maybe) |function| {
+        for (function.insts.items) |inst| {
+            if (aot_hint.nativeField(inst) != null) count += 1;
+        }
+    };
+    return count;
+}
+
 test "known library field becomes a static numeric ref" {
     var result = try execute("return type(table.insert)");
     defer result.program.deinit();
@@ -341,6 +330,8 @@ test "static field ref falls back after global namespace rebind" {
     defer exec.Vm.freeResults(result.values);
     try std.testing.expectEqual(@as(f64, 7), result.values[0].number);
     try std.testing.expectEqual(@as(u64, 1), result.stats.reads);
+    try std.testing.expectEqual(@as(u64, 1), result.stats.guarded_calls);
+    try std.testing.expectEqual(@as(u64, 1), countNativeFieldGuardHints(&result.program));
     try std.testing.expect(hasString(&result.program, "insert"));
 }
 
@@ -405,6 +396,22 @@ test "namespace provenance follows local aliases" {
     try std.testing.expectEqual(@as(u64, 1), result.stats.reads);
     try std.testing.expect(!hasString(&result.program, "insert"));
     try std.testing.expectEqualStrings("function", result.values[0].string);
+}
+
+test "native field provenance follows callable aliases and phis" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(
+        a,
+        "local g=mw.ustring.gsub;" ++
+            "local function pick(b)local f;if b then f=table.insert else f=table.insert end;return f({},1) end;" ++
+            "return pick(true),g('a','a','b')",
+    );
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    const stats = try run(a, &program);
+    try std.testing.expectEqual(@as(u64, 2), stats.guarded_calls);
+    try std.testing.expectEqual(@as(u64, 2), countNativeFieldGuardHints(&program));
 }
 
 test "unproven and wrong-namespace fields remain string operations" {

@@ -11,7 +11,6 @@ const simplify = @import("vm_ir_simplify.zig");
 const capture_link = @import("vm_capture_link.zig");
 const aot_hint = @import("vm_aot_hint.zig");
 const global_abi = @import("vm_global_abi.zig");
-const static_fields = @import("vm_static_fields.zig");
 
 pub const Stats = struct {
     direct_calls: u32 = 0,
@@ -20,7 +19,6 @@ pub const Stats = struct {
     registrations: u32 = 0,
     guarded_calls: u32 = 0,
     guarded_global_calls: u32 = 0,
-    guarded_native_field_calls: u32 = 0,
     predicted_upvalues: u32 = 0,
     predicted_module_upvalues: u32 = 0,
     predicted_function_upvalues: u32 = 0,
@@ -255,8 +253,6 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
     var function_id: u32 = 0;
     while (function_id < program.functions.items.len) : (function_id += 1) {
         const function = &(program.functions.items[function_id] orelse continue);
-        var native_calls = try static_fields.analyzeNativeCalls(allocator, program, function);
-        defer native_calls.deinit();
         // This is prediction only: native code guards the actual runtime function
         // identity and falls back to the original dynamic call on any mismatch.
         var analysis = try facts_mod.buildFunctionWithUpvalues(allocator, program, symbols, function_id, true, captures.forFunction(program, function_id));
@@ -279,11 +275,6 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
                         },
                         else => {},
                     }
-                    if (!tagged_any and pc < native_calls.by_pc.len) if (native_calls.by_pc[pc]) |field| {
-                        try aot_hint.setNativeField(inst, field.namespace, field.slot);
-                        stats.guarded_native_field_calls += 1;
-                        tagged_any = true;
-                    };
                     if (!tagged_any) if (guardableNativeGlobal(program, function, &analysis, state, inst.a)) |slot| {
                         try aot_hint.setNativeGlobal(inst, slot);
                         stats.guarded_global_calls += 1;
@@ -375,16 +366,6 @@ fn countGlobalGuardHints(program: *const ir.Program) u32 {
     return count;
 }
 
-fn countNativeFieldGuardHints(program: *const ir.Program) u32 {
-    var count: u32 = 0;
-    for (program.functions.items) |maybe| if (maybe) |function| {
-        for (function.insts.items) |inst| {
-            if (aot_hint.nativeField(inst) != null) count += 1;
-        }
-    };
-    return count;
-}
-
 test "base native global calls carry guarded AOT hints" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
@@ -430,28 +411,4 @@ test "guarded import calls survive whole-image require mutation" {
     try std.testing.expectEqual(@as(u32, 0), stats.numeric_imports);
     try std.testing.expect(stats.guarded_calls != 0);
     try std.testing.expect(countGuardHints(&image.program) != 0);
-}
-
-test "native namespace field calls carry guarded AOT hints" {
-    const a = std.testing.allocator;
-    var image = link_image.Image.init(a);
-    defer image.deinit();
-    var symbols = symbols_mod.Index.init(a);
-    defer symbols.deinit();
-    _ = try addSource(a, &image, &symbols, "Module:A", "local i=table.insert;local g=mw.ustring.gsub;return i({},1),g('a','a','b')");
-    const stats = try run(a, &image.program, &symbols);
-    try std.testing.expectEqual(@as(u32, 2), stats.guarded_native_field_calls);
-    try std.testing.expectEqual(@as(u32, 2), countNativeFieldGuardHints(&image.program));
-}
-
-test "native namespace field hint remains advisory after rebinding" {
-    const a = std.testing.allocator;
-    var image = link_image.Image.init(a);
-    defer image.deinit();
-    var symbols = symbols_mod.Index.init(a);
-    defer symbols.deinit();
-    _ = try addSource(a, &image, &symbols, "Module:A", "table={insert=function()return 9 end};return table.insert()");
-    const stats = try run(a, &image.program, &symbols);
-    try std.testing.expectEqual(@as(u32, 1), stats.guarded_native_field_calls);
-    try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
 }
