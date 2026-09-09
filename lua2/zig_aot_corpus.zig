@@ -53,15 +53,29 @@ fn writeAll(io: std.Io, path: []const u8, bytes: []const u8) !void {
 }
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len < 4 or args.len > 6) return error.Usage;
-    const sharded = args.len >= 5 and std.mem.eql(u8, args[4], "--sharded");
-    if (!sharded and args.len > 5) return error.Usage;
-    const limit = if (sharded)
-        if (args.len == 6) try std.fmt.parseInt(usize, args[5], 10) else std.math.maxInt(usize)
-    else if (args.len == 5)
-        try std.fmt.parseInt(usize, args[4], 10)
-    else
-        std.math.maxInt(usize);
+    if (args.len < 4 or args.len > 8) return error.Usage;
+    var sharded = false;
+    var external_data = false;
+    var external_functions = false;
+    var limit: usize = std.math.maxInt(usize);
+    var have_limit = false;
+    for (args[4..]) |arg| {
+        if (std.mem.eql(u8, arg, "--sharded")) {
+            if (sharded) return error.Usage;
+            sharded = true;
+        } else if (std.mem.eql(u8, arg, "--external-data")) {
+            if (external_data) return error.Usage;
+            external_data = true;
+        } else if (std.mem.eql(u8, arg, "--external-functions")) {
+            if (external_functions) return error.Usage;
+            external_functions = true;
+        } else {
+            if (have_limit) return error.Usage;
+            limit = try std.fmt.parseInt(usize, arg, 10);
+            have_limit = true;
+        }
+    }
+    if ((external_data or external_functions) and !sharded) return error.Usage;
 
     var manifest = try mmapPath(args[1]);
     defer manifest.deinit();
@@ -140,7 +154,16 @@ pub fn main(init: std.process.Init) !void {
         try writeAll(init.io, registry_path, registry_source);
         generated_bytes += registry_source.len;
 
-        const config = aot.ShardConfig{ .module_registry = true };
+        const config = aot.ShardConfig{ .module_registry = true, .external_data = external_data, .external_functions = external_functions };
+        if (external_data) {
+            const program_data = try aot.generateProgramData(std.heap.smp_allocator, &image.program);
+            defer std.heap.smp_allocator.free(program_data);
+            const data_path = try std.fmt.allocPrint(std.heap.smp_allocator, "{s}/aot-data.bin", .{args[3]});
+            defer std.heap.smp_allocator.free(data_path);
+            try writeAll(init.io, data_path, program_data);
+            std.debug.print("AOT_DATA bytes={d} constants={d} entries={d}\n", .{ program_data.len, image.program.constants.items.len, image.program.const_entries.items.len });
+        }
+
         const descriptor_roots = try aot.analyzeModuleRootDescriptors(std.heap.smp_allocator, &image.program, true);
         defer std.heap.smp_allocator.free(descriptor_roots);
         var descriptor_root_count: usize = 0;
@@ -161,7 +184,7 @@ pub fn main(init: std.process.Init) !void {
             try writeAll(init.io, path, source);
             generated_bytes += source.len;
         }
-        const constant_shards = try aot.constantShardCount(&image.program, config);
+        const constant_shards = if (external_data) 0 else try aot.constantShardCount(&image.program, config);
         for (0..constant_shards) |index| {
             const source = try aot.generateConstantShard(std.heap.smp_allocator, &image.program, config, index);
             defer std.heap.smp_allocator.free(source);
@@ -170,7 +193,7 @@ pub fn main(init: std.process.Init) !void {
             try writeAll(init.io, path, source);
             generated_bytes += source.len;
         }
-        const entry_shards = try aot.entryShardCount(&image.program, config);
+        const entry_shards = if (external_data) 0 else try aot.entryShardCount(&image.program, config);
         for (0..entry_shards) |index| {
             const source = try aot.generateEntryShard(std.heap.smp_allocator, &image.program, config, index);
             defer std.heap.smp_allocator.free(source);
@@ -179,7 +202,7 @@ pub fn main(init: std.process.Init) !void {
             try writeAll(init.io, path, source);
             generated_bytes += source.len;
         }
-        std.debug.print("AOT_SHARDS functions={d} constants={d} entries={d} descriptor_roots={d}\n", .{ function_shards, constant_shards, entry_shards, descriptor_root_count });
+        std.debug.print("AOT_SHARDS functions={d} constants={d} entries={d} descriptor_roots={d} external_functions={}\n", .{ function_shards, constant_shards, entry_shards, descriptor_root_count, external_functions });
     } else if (!std.mem.eql(u8, args[3], "-")) {
         const generated = try aot.generate(std.heap.smp_allocator, &image.program);
         defer std.heap.smp_allocator.free(generated.source);

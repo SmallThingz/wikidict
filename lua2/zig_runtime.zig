@@ -1,4 +1,5 @@
 const std = @import("std");
+const aot_data = @import("zig_aot_data.zig");
 const static_fields = @import("vm_static_field_abi.zig");
 const static_keys = @import("vm_static_key_abi.zig");
 
@@ -110,6 +111,7 @@ fn constantEntryValue(entry: ConstantEntry) u32 {
 pub const ConstantBlock = struct { first: u32, values: []const Constant };
 pub const ConstantEntryBlock = struct { first: u32, values: []const ConstantEntry };
 pub const FunctionBlock = struct { first: u32, values: []const FunctionFn };
+pub const ProgramData = aot_data.View;
 pub const module_root_function = std.math.maxInt(u32);
 pub const module_root_empty = module_root_function - 1;
 pub fn descriptorModuleRootStub(_: *Context, _: Captures, _: []const Value) anyerror![]const Value {
@@ -426,6 +428,7 @@ pub const Context = struct {
     function_blocks: []const FunctionBlock = &.{},
     constant_blocks: []const ConstantBlock = &.{},
     constant_entry_blocks: []const ConstantEntryBlock = &.{},
+    program_data: ?ProgramData = null,
     module_roots: []const u32 = &.{},
     module_root_values: []const u32 = &.{},
     string_metatable: ?*Table = null,
@@ -472,6 +475,7 @@ pub const Context = struct {
         child.function_blocks = self.function_blocks;
         child.constant_blocks = self.constant_blocks;
         child.constant_entry_blocks = self.constant_entry_blocks;
+        child.program_data = self.program_data;
         child.module_roots = self.module_roots;
         child.module_root_values = self.module_root_values;
         child.module_lookup_ctx = self.module_lookup_ctx;
@@ -714,7 +718,16 @@ pub const Context = struct {
         return table;
     }
 
-    fn constantById(self: *const Context, id: u32) ?Constant {
+    fn constantById(self: *const Context, id: u32) anyerror!Constant {
+        if (self.program_data) |view| {
+            return switch (try view.constant(id)) {
+                .nil => .nil,
+                .boolean => |value| .{ .boolean = value },
+                .number_bits => |bits| .{ .number = @bitCast(bits) },
+                .string => |value| .{ .string = value },
+                .table => |table| .{ .table = .{ .first = table.first, .count = table.count, .shape = table.shape } },
+            };
+        }
         var low: usize = 0;
         var high = self.constant_blocks.len;
         while (low < high) {
@@ -728,10 +741,11 @@ pub const Context = struct {
                 low = mid + 1;
             }
         }
-        return null;
+        return error.BadConstantReference;
     }
 
-    fn constantEntryAt(self: *const Context, id: u32) ?ConstantEntry {
+    fn constantEntryAt(self: *const Context, id: u32) anyerror!ConstantEntry {
+        if (self.program_data) |view| return view.entry(id);
         var low: usize = 0;
         var high = self.constant_entry_blocks.len;
         while (low < high) {
@@ -745,11 +759,11 @@ pub const Context = struct {
                 low = mid + 1;
             }
         }
-        return null;
+        return error.BadConstantEntryRange;
     }
 
     pub fn materializeConstant(self: *Context, id: u32) anyerror!Value {
-        return switch (self.constantById(id) orelse return error.BadConstantReference) {
+        return switch (try self.constantById(id)) {
             .nil => .nil,
             .boolean => |value| .{ .boolean = value },
             .number => |value| .{ .number = value },
@@ -760,7 +774,7 @@ pub const Context = struct {
                 var list_index: u32 = 1;
                 for (0..table.count) |offset| {
                     const entry_id = table.first + @as(u32, @intCast(offset));
-                    const entry = self.constantEntryAt(entry_id) orelse return error.BadConstantEntryRange;
+                    const entry = try self.constantEntryAt(entry_id);
                     const key_id = constantEntryKey(entry);
                     const value_id = constantEntryValue(entry);
                     const key: Value = if (key_id == implicit_list_key) list: {
@@ -1157,6 +1171,68 @@ test "AOT constant templates preserve fresh table identity across blocks" {
     const nested_left = outer_left.table.rawGet(.{ .string = "x" }).?;
     const nested_right = outer_right.table.rawGet(.{ .string = "x" }).?;
     try std.testing.expect(nested_left == .table and nested_right == .table and nested_left.table != nested_right.table);
+}
+
+test "external AOT data materializes fresh shaped tables" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const shape_keys = [_]Value{.{ .string = "x" }};
+    const shapes = [_]Shape{.{ .field_keys = &shape_keys, .field_count = 1, .open = true }};
+    ctx.shapes = &shapes;
+
+    const l = try aot_data.layout(4, 3, 1);
+    const bytes = try arena.allocator().alloc(u8, l.total);
+    @memset(bytes, 0);
+    try aot_data.writeHeader(bytes, l);
+    try aot_data.writeRecord(bytes, l, 0, .number, @bitCast(@as(f64, 4)), 0);
+    try aot_data.writeRecord(bytes, l, 1, .string, 0, 1);
+    try aot_data.writeRecord(bytes, l, 2, .table, (@as(u64, 2) << 32), 0);
+    try aot_data.writeRecord(bytes, l, 3, .table, (@as(u64, 1) << 32) | 2, no_shape);
+    try aot_data.writeEntry(bytes, l, 0, packConstantEntry(1, 0));
+    try aot_data.writeEntry(bytes, l, 1, packConstantEntry(implicit_list_key, 0));
+    try aot_data.writeEntry(bytes, l, 2, packConstantEntry(1, 2));
+    bytes[l.strings_offset] = 'x';
+    ctx.program_data = try ProgramData.parse(bytes);
+
+    const left = try ctx.materializeConstant(2);
+    const right = try ctx.materializeConstant(2);
+    try std.testing.expect(left == .table and right == .table and left.table != right.table);
+    try std.testing.expect(left.table.shape == &shapes[0]);
+    try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .string = "x" }).?.number);
+    try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .number = 1 }).?.number);
+    const outer_left = try ctx.materializeConstant(3);
+    const outer_right = try ctx.materializeConstant(3);
+    try std.testing.expect(outer_left.table.rawGet(.{ .string = "x" }).?.table != outer_right.table.rawGet(.{ .string = "x" }).?.table);
+}
+
+test "AOT external program data preserves fresh table materialization" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const shape_keys = [_]Value{.{ .string = "x" }};
+    const shapes = [_]Shape{.{ .field_keys = &shape_keys, .field_count = 1, .open = true }};
+    ctx.shapes = &shapes;
+
+    const l = try aot_data.layout(3, 2, 1);
+    const bytes = try arena.allocator().alloc(u8, l.total);
+    @memset(bytes, 0);
+    try aot_data.writeHeader(bytes, l);
+    try aot_data.writeRecord(bytes, l, 0, .number, @bitCast(@as(f64, 4)), 0);
+    try aot_data.writeRecord(bytes, l, 1, .string, 0, 1);
+    try aot_data.writeRecord(bytes, l, 2, .table, (@as(u64, 2) << 32), 0);
+    try aot_data.writeEntry(bytes, l, 0, packConstantEntry(1, 0));
+    try aot_data.writeEntry(bytes, l, 1, packConstantEntry(implicit_list_key, 0));
+    bytes[l.strings_offset] = 'x';
+    ctx.program_data = try aot_data.View.parse(bytes);
+
+    const left = try ctx.materializeConstant(2);
+    const right = try ctx.materializeConstant(2);
+    try std.testing.expect(left == .table and right == .table and left.table != right.table);
+    try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .string = "x" }).?.number);
+    try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .number = 1 }).?.number);
 }
 
 test "AOT module functions share one activation environment" {

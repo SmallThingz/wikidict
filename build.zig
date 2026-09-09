@@ -328,6 +328,11 @@ pub fn build(b: *std.Build) void {
     bytecode_exe.use_llvm = true;
     bytecode_exe.use_lld = true;
     addPublicRunStep(b, "compile-bytecode", "Compile extracted Lua through the VM bytecode converter", addRunArtifactCommand(b, bytecode_exe, &.{}, b.args), &.{});
+    const aot_exe = addCliExecutable(b, "dict-aot-build", b.path("lua2/zig_aot_corpus.zig"), target, optimize, &.{});
+    aot_exe.root_module.link_libc = true;
+    aot_exe.use_llvm = true;
+    aot_exe.use_lld = true;
+    addPublicRunStep(b, "compile-aot", "Compile extracted Lua into sharded native AOT source", addRunArtifactCommand(b, aot_exe, &.{}, b.args), &.{});
     const redirects_exe = addCliExecutable(b, "dict-runtime-redirects", b.path("tools/runtime_redirects.zig"), target, optimize, &.{ .{ .name = "zxml", .module = zxml_dep.module("zxml") }, .{ .name = "xml_decode", .module = shared_xml_decode_mod } });
     addPublicRunStep(b, "extract-runtime-redirects", "Extract semantic module redirect dependencies", addRunArtifactCommand(b, redirects_exe, &.{}, b.args), &.{});
     const pages_exe = addCliExecutable(b, "dict-runtime-pages", b.path("tools/runtime_pages.zig"), target, optimize, &.{ .{ .name = "encoder", .module = encoder_mod }, .{ .name = "zxml", .module = zxml_dep.module("zxml") } });
@@ -339,10 +344,13 @@ pub fn build(b: *std.Build) void {
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
     pipeline_paths.addOptionPath("templates", template_extract_exe.getEmittedBin());
     pipeline_paths.addOptionPath("bytecode", bytecode_exe.getEmittedBin());
+    pipeline_paths.addOptionPath("aot", aot_exe.getEmittedBin());
+    pipeline_paths.addOption([]const u8, "zig", b.graph.zig_exe);
+    pipeline_paths.addOption([]const u8, "project_root", b.pathFromRoot("."));
     pipeline_paths.addOptionPath("blobs", blob_build_exe.getEmittedBin());
     const pipeline_exe = addCliExecutable(b, "dict-runtime-build", b.path("tools/runtime_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
-    addPublicRunStep(b, "build-runtime", "Extract templates/modules and compile matching VM bytecode into a fresh directory", addRunArtifactCommand(b, pipeline_exe, &.{}, b.args), &.{});
-    addPublicRunStep(b, "build-dictionary", "Build dictionary blobs plus their shared Lua runtime in one coordinated pipeline", addRunArtifactCommand(b, pipeline_exe, &.{"--with-blobs"}, b.args), &.{});
+    addPublicRunStep(b, "build-runtime", "Extract templates/modules and build matching VM oracle plus native AOT worker", addRunArtifactCommand(b, pipeline_exe, &.{}, b.args), &.{});
+    addPublicRunStep(b, "build-dictionary", "Build dictionary blobs plus their shared native Lua runtime in one coordinated pipeline", addRunArtifactCommand(b, pipeline_exe, &.{"--with-blobs"}, b.args), &.{});
     const blob_files_mod = b.createModule(.{ .root_source_file = b.path("encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
     const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
     blob_files_mod.addImport("blob_storage", storage_mod);

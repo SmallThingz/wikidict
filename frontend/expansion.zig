@@ -1,4 +1,4 @@
-//! Optional Lua-bytecode rendering. Source and expanded presentation have distinct lifetimes.
+//! Optional linked Lua rendering. Source and expanded presentation have distinct lifetimes.
 const std = @import("std");
 const model = @import("model.zig");
 const dec = @import("blob_decoder");
@@ -11,6 +11,7 @@ const Reply = protocol.Reply;
 const Result = struct {
     parsed: ?std.json.Parsed(Reply) = null,
     failure: ?[]const u8 = null,
+    backend: []const u8 = "lua-vm",
     fn deinit(self: *Result) void {
         if (self.parsed) |*p| p.deinit();
     }
@@ -20,6 +21,26 @@ fn executable(io: std.Io, a: A) ![]u8 {
     // is atomically replaced by an install. Linux keeps the running inode here.
     return if (@import("builtin").os.tag == .linux) a.dupe(u8, "/proc/self/exe") else std.process.executablePathAlloc(io, a);
 }
+const WorkerExecutable = struct { path: []u8, backend: []const u8 };
+fn workerExecutable(io: std.Io, a: A, root: []const u8) !WorkerExecutable {
+    for ([_][]const u8{ "dict-native-expansion-worker", "runtime/dict-native-expansion-worker" }) |relative| {
+        const candidate = try std.fs.path.join(a, &.{ root, relative });
+        var file = std.Io.Dir.cwd().openFile(io, candidate, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                a.free(candidate);
+                continue;
+            },
+            else => {
+                a.free(candidate);
+                return err;
+            },
+        };
+        file.close(io);
+        return .{ .path = candidate, .backend = "lua-aot" };
+    }
+    return .{ .path = try executable(io, a), .backend = "lua-vm" };
+}
+
 fn parseReply(a: A, bytes: []const u8) !Result {
     var parsed = try std.json.parseFromSlice(Reply, a, bytes, .{ .allocate = .alloc_always });
     errdefer parsed.deinit();
@@ -32,37 +53,12 @@ fn parseReply(a: A, bytes: []const u8) !Result {
             return error.RuntimeAssetsFailed;
         }
     }
-    return .{ .parsed = parsed };
+    return .{ .parsed = parsed, .backend = reply.backend };
 }
 fn call(io: std.Io, a: A, options: Options, title: []const u8, language: []const u8, source: []const u8) !Result {
-    const exe = try executable(io, a);
-    defer a.free(exe);
-    const request = try std.json.Stringify.valueAlloc(a, Request{ .root = options.root.?, .title = title, .source = source, .dictionary_root = options.dictionary_root, .language = language }, .{});
-    defer a.free(request);
-    if (request.len >= 32 * 1024 * 1024) return error.RuntimeRequestTooLarge;
-    const timeout = (std.Io.Timeout{ .duration = .{ .raw = .fromMilliseconds(options.timeout_ms), .clock = .awake } }).toDeadline(io);
-    var child = try std.process.spawn(io, .{ .argv = &.{ exe, "--internal-expand" }, .stdin = .pipe, .stdout = .pipe, .stderr = .pipe });
-    defer child.kill(io);
-    var writer = child.stdin.?.writer(io, &.{});
-    const write_result = writer.interface.writeAll(request);
-    child.stdin.?.close(io);
-    child.stdin = null;
-    var storage: std.Io.File.MultiReader.Buffer(2) = undefined;
-    var readers: std.Io.File.MultiReader = undefined;
-    readers.init(a, io, storage.toStreams(), &.{ child.stdout.?, child.stderr.? });
-    defer readers.deinit();
-    while (readers.fill(8192, timeout)) |_| {
-        if (readers.reader(0).buffered().len > 32 * 1024 * 1024 or readers.reader(1).buffered().len > 64 * 1024) return .{ .failure = "VM output limit exceeded" };
-    } else |err| switch (err) {
-        error.EndOfStream => {},
-        error.Timeout => return .{ .failure = "VM expansion timed out" },
-        else => return err,
-    }
-    try readers.checkAnyError();
-    const exited = try child.wait(io);
-    if (exited != .exited or exited.exited != 0) return .{ .failure = "VM worker failed or crashed" };
-    try write_result;
-    return parseReply(a, readers.reader(0).buffered());
+    var worker = Worker.init(io, options);
+    defer worker.deinit();
+    return worker.request(a, title, language, source);
 }
 fn isIoError(name: []const u8) bool {
     for ([_][]const u8{ "FileNotFound", "AccessDenied", "InputOutput", "ReadFailed", "WriteFailed", "SystemResources", "ProcessFdQuotaExceeded", "SystemFdQuotaExceeded" }) |e| if (std.mem.eql(u8, name, e)) return true;
@@ -74,7 +70,7 @@ fn applyFailure(doc: *model.OwnedEntry, result: Result) !void {
         const reply = result.parsed.?.value;
         break :blk try std.fmt.allocPrint(owned, "{s}: {s}{s}{s}", .{ reply.stage, reply.error_name.?, if (reply.detail != null) ": " else "", reply.detail orelse "" });
     };
-    doc.entry.expansion = .{ .status = .failed, .diagnostic = diagnostic };
+    doc.entry.expansion = .{ .backend = result.backend, .status = .failed, .diagnostic = diagnostic };
 }
 fn documentFromResult(a: A, title: []const u8, language: []const u8, source: []const u8, with_source: bool, result: Result) !model.OwnedEntry {
     if (result.parsed) |parsed| if (parsed.value.output) |expanded| {
@@ -82,7 +78,7 @@ fn documentFromResult(a: A, title: []const u8, language: []const u8, source: []c
         errdefer doc.deinit();
         try model.restoreFormRelations(a, &doc, source);
         if (with_source) try model.setExactSource(&doc, source);
-        doc.entry.expansion = .{ .status = .ok };
+        doc.entry.expansion = .{ .backend = parsed.value.backend, .status = .ok };
         return doc;
     };
     var doc = try model.fromWikitext(a, title, language, source, with_source);
@@ -96,6 +92,7 @@ pub const Worker = struct {
     child: ?std.process.Child = null,
     starts: std.atomic.Value(u64) = .init(0),
     requests: std.atomic.Value(u64) = .init(0),
+    backend: []const u8 = "lua-vm",
     pub fn init(io: std.Io, options: Options) Worker {
         return .{ .io = io, .options = options };
     }
@@ -108,9 +105,11 @@ pub const Worker = struct {
     }
     fn ensure(self: *Worker, a: A) !*std.process.Child {
         if (self.child == null) {
-            const exe = try executable(self.io, a);
-            defer a.free(exe);
-            self.child = try std.process.spawn(self.io, .{ .argv = &.{ exe, "--internal-expand-loop" }, .stdin = .pipe, .stdout = .pipe, .stderr = .ignore });
+            const root = self.options.root orelse return error.RuntimeAssetsFailed;
+            const selected = try workerExecutable(self.io, a, root);
+            defer a.free(selected.path);
+            self.backend = selected.backend;
+            self.child = try std.process.spawn(self.io, .{ .argv = &.{ selected.path, "--internal-expand-loop" }, .stdin = .pipe, .stdout = .pipe, .stderr = .ignore });
             _ = self.starts.fetchAdd(1, .monotonic);
         }
         return &self.child.?;
@@ -145,22 +144,22 @@ pub const Worker = struct {
         var writer = child.stdin.?.writer(self.io, &.{});
         writer.interface.writeAll(&length) catch {
             self.reset();
-            return .{ .failure = "VM worker failed or crashed" };
+            return .{ .failure = "runtime worker failed or crashed", .backend = self.backend };
         };
         writer.interface.writeAll(bytes) catch {
             self.reset();
-            return .{ .failure = "VM worker failed or crashed" };
+            return .{ .failure = "runtime worker failed or crashed", .backend = self.backend };
         };
         writer.interface.flush() catch {
             self.reset();
-            return .{ .failure = "VM worker failed or crashed" };
+            return .{ .failure = "runtime worker failed or crashed", .backend = self.backend };
         };
         _ = self.requests.fetchAdd(1, .monotonic);
         const deadline = std.Io.Clock.awake.now(self.io).toNanoseconds() + @as(i128, self.options.timeout_ms) * std.time.ns_per_ms;
         var raw_length: [4]u8 = undefined;
         self.readExact(child.stdout.?, &raw_length, deadline) catch |err| {
             self.reset();
-            return .{ .failure = if (err == error.Timeout) "VM expansion timed out" else "VM worker failed or crashed" };
+            return .{ .failure = if (err == error.Timeout) "Lua expansion timed out" else "runtime worker failed or crashed", .backend = self.backend };
         };
         const response_len = std.mem.readInt(u32, &raw_length, .little);
         if (response_len == 0 or response_len > 32 * 1024 * 1024) {
@@ -171,7 +170,7 @@ pub const Worker = struct {
         defer a.free(response);
         self.readExact(child.stdout.?, response, deadline) catch |err| {
             self.reset();
-            return .{ .failure = if (err == error.Timeout) "VM expansion timed out" else "VM worker failed or crashed" };
+            return .{ .failure = if (err == error.Timeout) "Lua expansion timed out" else "runtime worker failed or crashed", .backend = self.backend };
         };
         return parseReply(a, response);
     }

@@ -204,7 +204,7 @@ const State = struct {
             source = try model.sourceAlloc(a, resolved.record);
             if (dbp.metadata()) |meta| language_code = try a.dupe(u8, meta.code);
         }
-        // Search stays independent while one persistent VM worker serializes entry expansion.
+        // Search stays independent while one persistent runtime worker serializes entry expansion.
 
         const prefix = if (kind == .language) "" else switch (kind) {
             .thesaurus => "Thesaurus:",

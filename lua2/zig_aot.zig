@@ -6,6 +6,7 @@ const graph_mod = @import("vm_graph.zig");
 const sem = @import("vm_semantics.zig");
 const aot_hint = @import("vm_aot_hint.zig");
 const shape_key = @import("vm_shape_key.zig");
+const aot_data = @import("zig_aot_data.zig");
 
 const A = std.mem.Allocator;
 
@@ -1180,11 +1181,57 @@ test "constant templates emit static data instead of generated materializer func
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "fn c_") == null);
 }
 
+pub fn generateProgramData(a: A, p: *const ir.Program) ![]u8 {
+    if (!p.references_lowered) return error.ProgramNotFinalized;
+    var string_bytes: usize = 0;
+    for (p.constants.items) |node| switch (node) {
+        .string => |sid| {
+            if (sid >= p.strings.items.len) return error.BadStringReference;
+            string_bytes = std.math.add(usize, string_bytes, p.strings.items[sid].len) catch return error.ProgramDataTooLarge;
+        },
+        .number => return error.LegacyNumberConstant,
+        else => {},
+    };
+    const l = try aot_data.layout(p.constants.items.len, p.const_entries.items.len, string_bytes);
+    const out = try a.alloc(u8, l.total);
+    errdefer a.free(out);
+    @memset(out, 0);
+    try aot_data.writeHeader(out, l);
+
+    var string_at: usize = 0;
+    for (p.constants.items, 0..) |node, id| {
+        switch (node) {
+            .nil => try aot_data.writeRecord(out, l, id, .nil, 0, 0),
+            .boolean => |value| try aot_data.writeRecord(out, l, id, .boolean, @intFromBool(value), 0),
+            .number_bits => |bits| try aot_data.writeRecord(out, l, id, .number, bits, 0),
+            .integer => |value| try aot_data.writeRecord(out, l, id, .number, @bitCast(@as(f64, @floatFromInt(value))), 0),
+            .string => |sid| {
+                if (sid >= p.strings.items.len) return error.BadStringReference;
+                const value = p.strings.items[sid];
+                try aot_data.writeRecord(out, l, id, .string, string_at, value.len);
+                @memcpy(out[l.strings_offset + string_at ..][0..value.len], value);
+                string_at += value.len;
+            },
+            .table => |table| {
+                const encoded = (@as(u64, table.count) << 32) | table.first;
+                try aot_data.writeRecord(out, l, id, .table, encoded, table.shape);
+            },
+            .number => return error.LegacyNumberConstant,
+        }
+    }
+    if (string_at != string_bytes) return error.ProgramDataSizeMismatch;
+    for (p.const_entries.items, 0..) |entry, id|
+        try aot_data.writeEntry(out, l, id, (@as(u64, entry.key) << 32) | entry.value);
+    return out;
+}
+
 pub const ShardConfig = struct {
     functions_per_shard: usize = 1024,
     constants_per_shard: usize = 131072,
     entries_per_shard: usize = 262144,
     module_registry: bool = false,
+    external_data: bool = false,
+    external_functions: bool = false,
 };
 
 fn shardCount(total: usize, per_shard: usize) !usize {
@@ -1243,6 +1290,10 @@ pub fn generateFunctionShardWithDescriptors(a: A, p: *const ir.Program, config: 
             try print(&out, a, "    f_{d},\n", .{id});
     }
     try text(&out, a, "};\n");
+    if (config.external_functions) {
+        try print(&out, a, "pub export const dict_aot_functions_{d:0>4}: [functions.len]*const anyopaque = blk: {{\n", .{shard_index});
+        try text(&out, a, "    @setEvalBranchQuota(functions.len * 4 + 1000);\n    var values: [functions.len]*const anyopaque = undefined;\n    for (functions, 0..) |function, index| values[index] = @ptrCast(function);\n    break :blk values;\n};\n");
+    }
     return finishSource(a, &out);
 }
 
@@ -1295,14 +1346,21 @@ pub fn generateShardedRootWithDescriptors(a: A, p: *const ir.Program, config: Sh
     if (p.root_function >= p.functions.items.len) return error.BadFunctionReference;
     if (descriptor_roots.len != p.functions.items.len) return error.BadDescriptorRootMask;
     const function_shards = try functionShardCount(p, config);
-    const constant_shards = try constantShardCount(p, config);
-    const entry_shards = try entryShardCount(p, config);
+    const constant_shards = if (config.external_data) 0 else try constantShardCount(p, config);
+    const entry_shards = if (config.external_data) 0 else try entryShardCount(p, config);
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     try emitRootDeclarations(&out, a, p);
     if (config.module_registry) try text(&out, a, "const module_registry = @import(\"module_registry.zig\");\n\n");
     try emitNativeGlobalShape(&out, a);
-    for (0..function_shards) |index|
+    if (config.external_functions) {
+        for (0..function_shards) |index| {
+            const bounds = try shardBounds(p.functions.items.len, config.functions_per_shard, index);
+            const count = bounds.end - bounds.first;
+            try print(&out, a, "extern const dict_aot_functions_{d:0>4}: [{d}]*const anyopaque;\n", .{ index, count });
+            try print(&out, a, "const function_values_{d:0>4}: *const [{d}]rt.FunctionFn = @ptrCast(&dict_aot_functions_{d:0>4});\n", .{ index, count, index });
+        }
+    } else for (0..function_shards) |index|
         try print(&out, a, "const functions_{d:0>4} = @import(\"functions_{d:0>4}.zig\");\n", .{ index, index });
     for (0..constant_shards) |index|
         try print(&out, a, "const constants_{d:0>4} = @import(\"constants_{d:0>4}.zig\");\n", .{ index, index });
@@ -1314,7 +1372,10 @@ pub fn generateShardedRootWithDescriptors(a: A, p: *const ir.Program, config: Sh
     try text(&out, a, "const function_blocks = [_]rt.FunctionBlock{\n");
     for (0..function_shards) |index| {
         const bounds = try shardBounds(p.functions.items.len, config.functions_per_shard, index);
-        try print(&out, a, "    .{{ .first = {d}, .values = &functions_{d:0>4}.functions }},\n", .{ bounds.first, index });
+        if (config.external_functions)
+            try print(&out, a, "    .{{ .first = {d}, .values = function_values_{d:0>4} }},\n", .{ bounds.first, index })
+        else
+            try print(&out, a, "    .{{ .first = {d}, .values = &functions_{d:0>4}.functions }},\n", .{ bounds.first, index });
     }
     try text(&out, a, "};\nconst constant_blocks = [_]rt.ConstantBlock{\n");
     for (0..constant_shards) |index| {
@@ -1351,9 +1412,14 @@ pub fn generateShardedRootWithDescriptors(a: A, p: *const ir.Program, config: Sh
 
     const globals = globalCount(p);
     try print(&out, a, "pub const global_count: u32 = {d};\n", .{globals});
-    try print(&out, a, "pub const root_function: u32 = {d};\n\n", .{p.root_function});
-    try text(&out, a, "pub fn initContext(allocator: std.mem.Allocator) !rt.Context {\n");
+    try print(&out, a, "pub const root_function: u32 = {d};\n", .{p.root_function});
+    try print(&out, a, "pub const requires_program_data = {};\n\n", .{config.external_data});
+    try text(&out, a, "fn initContextImpl(allocator: std.mem.Allocator, program_data: ?rt.ProgramData) !rt.Context {\n");
     try text(&out, a, "    var ctx = try rt.Context.initProgram(allocator, global_count, module_roots.len);\n");
+    if (config.external_data)
+        try text(&out, a, "    ctx.program_data = program_data orelse return error.ExternalProgramDataRequired;\n")
+    else
+        try text(&out, a, "    if (program_data) |value| ctx.program_data = value;\n");
     try text(
         &out,
         a,
@@ -1376,7 +1442,12 @@ pub fn generateShardedRootWithDescriptors(a: A, p: *const ir.Program, config: Sh
     try text(&out, a, "    try lua_stdlib.install(&ctx);\n");
     try print(&out, a, "    try lua_scribunto.install(&ctx, {d}, {d}, {d});\n", .{ global_abi.id("_G"), global_abi.id("string"), global_abi.id("mw") });
     if (config.module_registry) try text(&out, a, "    module_registry.registry.configure(&ctx);\n");
-    try text(&out, a, "    return ctx;\n}\n\n");
+    try text(&out, a, "    return ctx;\n}\n");
+    if (config.external_data)
+        try text(&out, a, "pub fn initContext(_: std.mem.Allocator) !rt.Context { return error.ExternalProgramDataRequired; }\n")
+    else
+        try text(&out, a, "pub fn initContext(allocator: std.mem.Allocator) !rt.Context { return initContextImpl(allocator, null); }\n");
+    try text(&out, a, "pub fn initContextWithData(allocator: std.mem.Allocator, program_data: rt.ProgramData) !rt.Context { return initContextImpl(allocator, program_data); }\n\n");
     try text(&out, a, "pub const Host = lua_scribunto.Host;\npub const FrameArg = lua_scribunto.FrameArg;\npub const WikitextProvider = lua_scribunto.WikitextProvider;\npub const WikitextExpander = lua_scribunto.WikitextExpander;\npub fn setHost(ctx: *rt.Context, host: ?*Host) void { lua_scribunto.setHost(ctx, host); }\npub fn makeFrame(ctx: *rt.Context, title: []const u8, args: []const FrameArg, parent: ?rt.Value) !rt.Value { return lua_scribunto.makeFrame(ctx, title, args, parent); }\npub fn invoke(ctx: *rt.Context, module_name: []const u8, function_name: []const u8, frame: rt.Value) anyerror![]const rt.Value { return lua_scribunto.invoke(ctx, module_name, function_name, frame); }\npub fn initExpander(ctx: *rt.Context, provider: WikitextProvider) WikitextExpander { return lua_scribunto.makeWikitextExpander(ctx, 0, 18, 23, provider); }\n\n");
     try text(&out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {\n    return ctx.invokeKnown(root_function, .{ .direct = &.{} }, args);\n}\n");
     return finishSource(a, &out);
@@ -1407,12 +1478,32 @@ test "sharded AOT splits code and data while preserving numeric cross-shard call
     try std.testing.expect(std.mem.indexOf(u8, registry_root, "module_root_values") != null);
     try std.testing.expect(std.mem.indexOf(u8, registry_root, "module_registry.registry.configure(&ctx)") != null);
 
+    const external_config = ShardConfig{ .functions_per_shard = 1, .constants_per_shard = 2, .entries_per_shard = 1, .module_registry = true, .external_data = true, .external_functions = true };
+    const external_root = try generateShardedRoot(allocator, &program, external_config);
+    defer allocator.free(external_root);
+    try std.testing.expect(std.mem.indexOf(u8, external_root, "constants_0000.zig") == null);
+    try std.testing.expect(std.mem.indexOf(u8, external_root, "entries_0000.zig") == null);
+    try std.testing.expect(std.mem.indexOf(u8, external_root, "@import(\"functions_0000.zig\")") == null);
+    try std.testing.expect(std.mem.indexOf(u8, external_root, "extern const dict_aot_functions_0000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, external_root, "function_values_0000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, external_root, "pub const requires_program_data = true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, external_root, "pub fn initContextWithData") != null);
+    const external_data = try generateProgramData(allocator, &program);
+    defer allocator.free(external_data);
+    const external_view = try aot_data.View.parse(external_data);
+    try std.testing.expectEqual(program.constants.items.len, external_view.layout.constant_count);
+    try std.testing.expectEqual(program.const_entries.items.len, external_view.layout.entry_count);
+
     var stats = Stats{};
     const first = try generateFunctionShard(allocator, &program, config, 0, &stats);
     defer allocator.free(first);
     try std.testing.expect(std.mem.indexOf(u8, first, "pub fn f_") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "ctx.invokeKnown(") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "vm_codec") == null);
+    var external_stats = Stats{};
+    const external_first = try generateFunctionShard(allocator, &program, external_config, 0, &external_stats);
+    defer allocator.free(external_first);
+    try std.testing.expect(std.mem.indexOf(u8, external_first, "pub export const dict_aot_functions_0000") != null);
 
     const constants = try generateConstantShard(allocator, &program, config, 0);
     defer allocator.free(constants);

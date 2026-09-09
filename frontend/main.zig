@@ -31,10 +31,10 @@ const usage =
     \\  --core-only        Export native core without reading optional companion blobs
     \\  --color MODE       auto, always, never; NO_COLOR disables automatic color
     \\  --theme THEME      TUI palette: terminal (default), dark, light
-    \\  --native           Use native core preview instead of the linked Lua runtime
+    \\  --native           Use native core preview instead of Lua expansion
     \\  --media-dir PATH   Embed verified local media in HTML (default ROOT/media)
     \\  --runtime PATH     Override auto-detected shared template/Lua runtime
-    \\  --runtime-timeout-ms N  Per-page VM deadline, 1..60000 (default 60000)
+    \\  --runtime-timeout-ms N  Per-page Lua expansion deadline, 1..60000 (default 60000)
     \\  --trusted          Legacy flag; native cached directories remain validated
     \\  --validate         Validate while indexing (the default)
     \\  --                 End options, for words beginning with a dash
@@ -42,7 +42,7 @@ const usage =
     \\Search is case-sensitive UTF-8 prefix matching. Results go to stdout.
     \\Diagnostics go to stderr. Exit: 0 success, 1 no matches, 2 usage/data/I/O error.
     \\Wikitext and core Wiktionary templates render locally. Unsupported templates are marked.
-    \\No network is used. Linked datasets automatically use their local Lua-bytecode VM.
+    \\No network is used. Linked datasets prefer their runtime-specific native Lua AOT worker; older runtimes fall back to the embedded VM.
     \\
 ;
 

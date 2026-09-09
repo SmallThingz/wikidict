@@ -26,7 +26,7 @@ export function isResults(value: unknown): value is Results {
     && count(r.record_count) && count(r.total_matches) && count(r.offset) && typeof r.has_more === 'boolean'
     && list(r.matches, m => record(m) && text(m.title))
     && list(r.entries, e => record(e) && text(e.title) && kind(e.kind) && textOrNull(e.language)
-      && (e.expansion == null || (record(e.expansion) && e.expansion.backend === "lua-vm" && ["ok", "failed"].includes(e.expansion.status as string) && textOrNull(e.expansion.diagnostic)))
+      && (e.expansion == null || (record(e.expansion) && ["lua-aot", "lua-vm"].includes(e.expansion.backend as string) && ["ok", "failed"].includes(e.expansion.status as string) && textOrNull(e.expansion.diagnostic)))
       && optional(e.media, value => list(value, m => record(m) && text(m.file) && text(m.caption) && ['image','audio'].includes(m.kind as string) && ['author','license','license_url','source_url'].every(k=>textOrNull(m[k])) && (m.license_text == null || text(m.license_text)) && (m.data_url === null || (typeof m.data_url === 'string' && (m.kind === 'image' ? /^data:image\/(jpeg|png|gif|webp);base64,[A-Za-z0-9+/=]+$/ : /^data:audio\/(ogg|wav|mpeg|flac);base64,[A-Za-z0-9+/=]+$/).test(m.data_url)))))
       && optional(e.content, v => v === 'complete' || v === 'core')
       && optional(e.language_code, text) && text(e.preamble) && count(e.unexpanded_templates) && optional(e.rendered_templates, count) && ['structured', 'raw', 'invalid_payload'].includes(e.status as string)

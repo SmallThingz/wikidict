@@ -74,7 +74,7 @@ pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, 
     try w.writeByte('\n');
     if (entry.expansion) |e| {
         if (e.status == .failed) {
-            try w.writeAll("\n[Lua VM expansion failed; displaying native fallback: ");
+            try w.writeAll("\n[Lua expansion failed; displaying native fallback: ");
             try terminalText(w, e.diagnostic orelse "unknown failure");
             try w.writeAll("]\n");
         }

@@ -92,19 +92,19 @@ zig build compile-bytecode -- data/runtime/manifest.jsonl data/runtime/modules d
 zig build test-runtime
 ```
 
-Dictionary languages and feature blobs remain separate. Raw extraction/compiler inputs remain in `runtime/`; the final shared-ID `symbols.wikblb`, `templates.wikblb`, `bytecode.wikblb`, `redirects.wikblb` and `pages.wikblb` live at the dataset root. The linked runtime works without the raw `.lua`/`.wiki` inputs. No compression metadata or runtime lookup index is added to `.wikblb`. The coordinated build currently delegates to the existing independent passes. A single-pass encoder/bytecode-generator merge is still future work, after the VM interface stabilizes. Converter and executor are built from the same checkout; rebuild assets after incompatible VM codec changes.
+Dictionary languages and feature blobs remain separate. Raw extraction/compiler inputs remain in `runtime/`; the final shared-ID `symbols.wikblb`, `templates.wikblb`, `bytecode.wikblb`, `redirects.wikblb` and `pages.wikblb` live at the dataset root. The published native worker works without the raw `.lua`/`.wiki` inputs; linked VM bytecode remains an oracle/legacy fallback. No compression metadata or runtime lookup index is added to `.wikblb`. The coordinated build currently delegates to the existing independent passes. A single-pass encoder/runtime build merge is still future work. AOT compiler and native worker are built from the same checkout; rebuild runtime assets after incompatible compiler or runtime changes.
 
-Builds refuse existing output directories. A failed stage leaves `.incomplete` and its intermediate files for diagnosis; runtime loading refuses incomplete outputs. `module-redirects.tsv` supplies actual XML redirect targets to the existing runtime loader. Optional legacy `usage.tsv`, `wikibase-sitelinks.tsv` and `interwiki-map.tsv` are consumed when present.
+Builds refuse existing output directories. A failed stage leaves `.incomplete` and its intermediate files for diagnosis; runtime loading refuses incomplete outputs. `module-redirects.tsv` supplies actual XML redirect targets to both native and legacy runtime loaders. Optional legacy `usage.tsv`, `wikibase-sitelinks.tsv` and `interwiki-map.tsv` are consumed when present.
 
-CLI and TUI expansion use a fresh subprocess with a 2 GiB address-space limit, bounded input/output and a wall deadline (`--runtime-timeout-ms`, default 60000, range 1..60000). The live HTTP server instead keeps one framed VM worker: linked runtime assets and compiled programs stay loaded, while every request gets a fresh page arena and VM invocation state. Entry expansion is serialized through that worker so search remains independent without duplicating the full runtime in memory. A timeout/crash kills only the worker and the next entry request starts a clean replacement. The worker requests Linux parent-death cleanup so a crashed server does not leave an executing VM orphaned. This is **not a security sandbox**; use trusted local runtime assets. The TUI still waits for its one-shot page process within the deadline.
+CLI and TUI expansion use a subprocess with a 2 GiB address-space limit, bounded input/output and a wall deadline (`--runtime-timeout-ms`, default 60000, range 1..60000). New runtime builds publish a dump-specific native AOT worker; older runtimes fall back to the embedded VM. The live HTTP server keeps one framed expansion worker and gives every request fresh page state. A timeout/crash kills only that worker and the next entry request starts a clean replacement. The worker requests Linux parent-death cleanup. This is **not a security sandbox**; use trusted local runtime assets.
 
-`entry.expansion` is an additive `dict.results.v1` field: `{backend:"lua-vm",status:"ok"|"failed",diagnostic:null|string}`. Semantic VM failures/timeouts produce an explicitly marked native fallback; CLI output exits 2, and the TUI keeps the source view available. Asset, allocation and I/O failures propagate as errors. HTML visibly labels fallback rather than presenting it as successful VM expansion. Exact source always remains the original unexpanded bytes, including in HTML/JSON exports.
+`entry.expansion` is an additive `dict.results.v1` field: `{backend:"lua-aot"|"lua-vm",status:"ok"|"failed",diagnostic:null|string}`. Lua expansion failures/timeouts produce an explicitly marked native fallback; CLI output exits 2, and the TUI keeps the source view available. Asset, allocation and I/O failures propagate as errors. HTML visibly labels fallback rather than presenting it as successful Lua expansion. Exact source always remains the original unexpanded bytes, including in HTML/JSON exports.
 
-The integration tests extract fixture XML, invoke the real converter, execute serialized bytecode with `require` through a module redirect and template parameters, and assert rendered inflections/tables. They also exercise timeout, missing module/assets, failed conversion, existing-output refusal and incomplete-build refusal. They run in the native `zig build test` gate as well as `test-runtime`.
+The integration tests extract fixture XML, build and execute the native AOT worker, exercise the VM oracle fallback, resolve `require` through a module redirect and template parameters, and assert rendered inflections/tables. They also exercise timeout, missing module/assets, failed conversion, existing-output refusal and incomplete-build refusal. They run in the native `zig build test` gate as well as `test-runtime`.
 
-VM correctness and full MediaWiki compatibility remain separate from integration correctness. Full pages can still fail because of runtime defects or missing external page/Wikibase dependencies. Linked datasets use their runtime automatically; `--native` and `--core-only` make fallback/partial reading explicit. Unlinked legacy datasets still use native rendering by default.
+Native AOT correctness and full MediaWiki compatibility remain separate from integration correctness. Full pages can still fail because of runtime defects or missing external page/Wikibase dependencies. Linked datasets use their runtime automatically; `--native` and `--core-only` make fallback/partial reading explicit. Unlinked legacy datasets still use native rendering by default.
 
-The real `cat` and `cats` entries are validated with zero unresolved calls through linked bytecode. Their runtime includes revision-pinned dependencies missing from the dump and actual auxiliary page source (including `Appendix:Glossary`), rather than native stubs. Success on these entries is not proof that every source template in the corpus can execute: fresh builds still need their external page/Wikibase dependencies, and missing data fails explicitly.
+The real `cat` and `cats` entries are validated with zero unresolved calls through the linked runtime. Their runtime includes revision-pinned dependencies missing from the dump and actual auxiliary page source (including `Appendix:Glossary`), rather than native stubs. Success on these entries is not proof that every source template in the corpus can execute: fresh builds still need their external page/Wikibase dependencies, and missing data fails explicitly.
 
 ## Definition-first entries and exact language accounting
 
@@ -245,18 +245,18 @@ Routes are `/api/languages`, `/api/search`, `/api/entry`, `/api/stats` and
 `/api/health`. Search and entry return `dict.results.v1`. Parameters are `q`,
 `language` (heading or code), `kind`, `offset` and `limit` (1–100). Search returns
 titles; entry returns rendered content with original source. Unknown entries
-return 404, malformed queries 400, and a failed VM expansion returns 422 with
+return 404, malformed queries 400, and a failed Lua expansion returns 422 with
 its diagnostic. The catalog lists available headings/codes, not the languages
 claimed for a particular spelling.
 
-The server keeps four language/feature stores. VM work runs outside the index
+The server keeps four language/feature stores. Lua expansion runs outside the index
 lock. One persistent expansion worker keeps linked runtime assets hot while entry
 requests are serialized; `/api/stats` exposes `vm_worker_starts` and `vm_requests`.
 The browser debounces search, rejects stale responses and has a bounded entry-response cache. Entry links,
 collection/language changes, pagination and history operate against the database.
 Cancelling a browser request does not promise immediate cancellation of an
-already-running VM; its deadline still bounds that work. SIGINT/SIGTERM stop the
-server and join its workers. Running servers can spawn their matching VM worker
+already-running expansion; its deadline still bounds that work. SIGINT/SIGTERM stop the
+server and join its workers. Running servers can spawn their matching runtime worker
 through `/proc/self/exe` even after an atomic executable replacement.
 
 The live reader has no JSON/HTML/wikitext export controls. Use `dict export WORD
