@@ -19,9 +19,11 @@ pub const Stats = struct {
     registrations: u32 = 0,
     guarded_calls: u32 = 0,
     guarded_global_calls: u32 = 0,
+    guarded_captured_native_field_calls: u32 = 0,
     predicted_upvalues: u32 = 0,
     predicted_module_upvalues: u32 = 0,
     predicted_function_upvalues: u32 = 0,
+    predicted_native_field_upvalues: u32 = 0,
 };
 
 fn factOf(analysis: *const facts_mod.Analysis, raw: ssa.ValueId) facts_mod.Fact {
@@ -249,6 +251,7 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
     stats.predicted_upvalues = @intCast(captures.stats.known_upvalues);
     stats.predicted_module_upvalues = @intCast(captures.stats.module_upvalues);
     stats.predicted_function_upvalues = @intCast(captures.stats.function_upvalues);
+    stats.predicted_native_field_upvalues = @intCast(captures.stats.native_field_upvalues);
     var tagged: u32 = 0;
     var function_id: u32 = 0;
     while (function_id < program.functions.items.len) : (function_id += 1) {
@@ -271,6 +274,11 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
                         .function => |target| if (target < program.functions.items.len) {
                             try aot_hint.set(inst, target);
                             tagged += 1;
+                            tagged_any = true;
+                        },
+                        .captured_native_field => |field| {
+                            try aot_hint.setNativeField(inst, field.namespace, field.slot);
+                            stats.guarded_captured_native_field_calls += 1;
                             tagged_any = true;
                         },
                         else => {},
@@ -366,6 +374,16 @@ fn countGlobalGuardHints(program: *const ir.Program) u32 {
     return count;
 }
 
+fn countNativeFieldGuardHints(program: *const ir.Program) u32 {
+    var count: u32 = 0;
+    for (program.functions.items) |maybe| if (maybe) |function| {
+        for (function.insts.items) |inst| {
+            if (aot_hint.nativeField(inst) != null) count += 1;
+        }
+    };
+    return count;
+}
+
 test "base native global calls carry guarded AOT hints" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
@@ -411,4 +429,76 @@ test "guarded import calls survive whole-image require mutation" {
     try std.testing.expectEqual(@as(u32, 0), stats.numeric_imports);
     try std.testing.expect(stats.guarded_calls != 0);
     try std.testing.expect(countGuardHints(&image.program) != 0);
+}
+
+test "captured native field carries a guarded AOT hint" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=table.insert; local function run(t,x)return f(t,x)end; return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
+}
+
+test "captured native namespace field carries a guarded AOT hint" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local lib=table; local function run(x)return lib.insert({},x)end; return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
+}
+
+test "mutated captured native field remains unpredicted" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(
+        a,
+        &image,
+        &symbols,
+        "Module:A",
+        "local f=table.insert; local function run(t,x)return f(t,x)end; f=function()return 9 end; return run",
+    );
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 0), countNativeFieldGuardHints(&image.program));
+}
+
+test "mutated captured native namespace remains unpredicted" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(
+        a,
+        &image,
+        &symbols,
+        "Module:A",
+        "local lib=table; local function run(x)return lib.insert({},x)end; lib={insert=function()return 9 end}; return run",
+    );
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 0), countNativeFieldGuardHints(&image.program));
+}
+
+test "captured native field fact propagates through nested closures" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=table.insert; local function outer() local function inner(t,x)return f(t,x)end return inner end; return outer");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
 }

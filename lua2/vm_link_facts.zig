@@ -4,6 +4,8 @@ const global_abi = @import("vm_global_abi.zig");
 const ssa = @import("vm_ssa.zig");
 const symbols_mod = @import("vm_link_symbols.zig");
 const link_image = @import("vm_link_image.zig");
+const field_abi = @import("vm_static_field_abi.zig");
+const aot_hint = @import("vm_aot_hint.zig");
 const lua = @import("root.zig");
 const model = @import("module_model.zig");
 
@@ -11,6 +13,10 @@ pub const Fact = union(enum) {
     unknown,
     string: u32,
     require_builtin,
+    native_namespace: field_abi.Namespace,
+    captured_native_namespace: field_abi.Namespace,
+    native_field: aot_hint.NativeField,
+    captured_native_field: aot_hint.NativeField,
     module: u32,
     function: u32,
 };
@@ -93,6 +99,52 @@ fn stringFact(program: *const ir.Program, fact: Fact) ?[]const u8 {
     };
 }
 
+fn nativeGlobalNamespace(slot: u32) ?field_abi.Namespace {
+    if (slot == global_abi.id("table")) return .table;
+    if (slot == global_abi.id("string")) return .string;
+    if (slot == global_abi.id("math")) return .math;
+    if (slot == global_abi.id("debug")) return .debug;
+    if (slot == global_abi.id("mw")) return .mw;
+    return null;
+}
+
+fn childNativeNamespace(parent: field_abi.Namespace, name: []const u8) ?field_abi.Namespace {
+    if (parent != .mw) return null;
+    if (std.mem.eql(u8, name, "ustring")) return .ustring;
+    if (std.mem.eql(u8, name, "title")) return .title;
+    if (std.mem.eql(u8, name, "text")) return .text;
+    if (std.mem.eql(u8, name, "uri")) return .uri;
+    if (std.mem.eql(u8, name, "html")) return .html;
+    if (std.mem.eql(u8, name, "language")) return .language;
+    return null;
+}
+
+fn fieldName(program: *const ir.Program, inst: ir.Inst) ?[]const u8 {
+    return switch (inst.op) {
+        .get_field => if (inst.aux < program.strings.items.len) program.strings.items[inst.aux] else null,
+        .get_slot => field_abi.nameForRef(inst.aux),
+        else => null,
+    };
+}
+
+fn nativeFieldFact(namespace: field_abi.Namespace, name: []const u8, captured: bool) Fact {
+    if (childNativeNamespace(namespace, name)) |child|
+        return if (captured) .{ .captured_native_namespace = child } else .{ .native_namespace = child };
+    const slot = field_abi.slotForName(namespace, name) orelse return .unknown;
+    const field = aot_hint.NativeField{ .namespace = namespace, .slot = slot };
+    return if (captured) .{ .captured_native_field = field } else .{ .native_field = field };
+}
+
+fn capturedUpvalueFact(fact: Fact) Fact {
+    return switch (fact) {
+        .native_namespace => |namespace| .{ .captured_native_namespace = namespace },
+        .captured_native_namespace => fact,
+        .native_field => |field| .{ .captured_native_field = field },
+        .captured_native_field => fact,
+        else => fact,
+    };
+}
+
 fn callResultFact(
     analysis: *const Analysis,
     function: *const ir.Function,
@@ -130,12 +182,20 @@ fn instructionFact(
             };
         },
         .get_global => blk: {
-            if (!require_safe or inst.aux >= program.strings.items.len) break :blk .unknown;
-            if (std.mem.eql(u8, program.strings.items[inst.aux], "require")) break :blk .require_builtin;
+            if (inst.aux >= program.strings.items.len) break :blk .unknown;
+            const name = program.strings.items[inst.aux];
+            if (require_safe and std.mem.eql(u8, name, "require")) break :blk .require_builtin;
+            const slot = global_abi.find(name) orelse break :blk .unknown;
+            if (nativeGlobalNamespace(slot)) |namespace| break :blk .{ .native_namespace = namespace };
             break :blk .unknown;
         },
-        .get_global_slot => if (require_safe and inst.aux == global_abi.id("require")) .require_builtin else .unknown,
-        .get_upvalue => if (inst.a < upvalue_facts.len) upvalue_facts[inst.a] else .unknown,
+        .get_global_slot => if (require_safe and inst.aux == global_abi.id("require"))
+            .require_builtin
+        else if (nativeGlobalNamespace(inst.aux)) |namespace|
+            .{ .native_namespace = namespace }
+        else
+            .unknown,
+        .get_upvalue => if (inst.a < upvalue_facts.len) capturedUpvalueFact(upvalue_facts[inst.a]) else .unknown,
         .move => regFact(analysis, state, inst.a),
         .closure, .load_function => .{ .function = inst.aux },
         .call, .call_vararg => callResultFact(analysis, function, state, inst),
@@ -151,13 +211,20 @@ fn instructionFact(
             const target = symbols.resolveExport(module_name, export_name) orelse break :blk .unknown;
             break :blk .{ .function = target };
         },
-        .get_field => blk: {
-            const module_sid = switch (regFact(analysis, state, inst.a)) {
+        .get_field, .get_slot => blk: {
+            const object = regFact(analysis, state, inst.a);
+            const name = fieldName(program, inst) orelse break :blk .unknown;
+            switch (object) {
+                .native_namespace => |namespace| break :blk nativeFieldFact(namespace, name, false),
+                .captured_native_namespace => |namespace| break :blk nativeFieldFact(namespace, name, true),
+                else => {},
+            }
+            const module_sid = switch (object) {
                 .module => |sid| sid,
                 else => break :blk .unknown,
             };
-            if (module_sid >= program.strings.items.len or inst.aux >= program.strings.items.len) break :blk .unknown;
-            const target = symbols.resolveExport(program.strings.items[module_sid], program.strings.items[inst.aux]) orelse break :blk .unknown;
+            if (module_sid >= program.strings.items.len) break :blk .unknown;
+            const target = symbols.resolveExport(program.strings.items[module_sid], name) orelse break :blk .unknown;
             break :blk .{ .function = target };
         },
         else => .unknown,
