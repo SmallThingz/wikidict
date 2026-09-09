@@ -669,6 +669,21 @@ pub const Context = struct {
         return self.callValue(callable, args);
     }
 
+    pub inline fn callKnownNativeField(self: *Context, callable: Value, namespace: static_fields.Namespace, slot: u32, root: Value, child_slot: ?u32, args: []const Value) anyerror![]const Value {
+        if (root != .table) return self.callValue(callable, args);
+        var table = root.table;
+        if (child_slot) |child_index| {
+            if (table.native_namespace != .mw or child_index >= table.slots.len) return self.callValue(callable, args);
+            const child = table.slots[child_index];
+            if (child != .table or child.table.native_namespace != namespace) return self.callValue(callable, args);
+            table = child.table;
+        } else if (table.native_namespace != namespace) {
+            return self.callValue(callable, args);
+        }
+        if (slot >= table.slots.len) return self.callValue(callable, args);
+        return self.callKnownNative(callable, table.slots[slot], args);
+    }
+
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
         return switch (callable) {
             .function => |value| self.callFunction(value, args),
@@ -1169,6 +1184,43 @@ test "guarded native call falls back on callback mismatch" {
     const out = try ctx.callKnownNative(actual, expected, &.{});
     defer freeResults(out);
     try std.testing.expectEqual(@as(f64, 109), out[0].number);
+}
+
+test "guarded native field resolves root namespace callback identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 2);
+    defer ctx.deinit();
+    try ctx.setGlobal(1, .{ .number = 4 });
+    const table = try ctx.newNativeNamespace(.table);
+    var expected_host = NativeHostProbe{ .value = 90 };
+    var actual_host = NativeHostProbe{ .value = 7 };
+    try table.rawSet(ctx.allocator, .{ .string = "insert" }, try ctx.newNative(&expected_host, NativeHostProbe.call));
+    const actual = try ctx.newNative(&actual_host, NativeHostProbe.call);
+    const insert_slot = static_fields.slotForName(.table, "insert") orelse return error.MissingStaticField;
+    const out = try ctx.callKnownNativeField(actual, .table, insert_slot, .{ .table = table }, null, &.{ .nil, .nil });
+    defer freeResults(out);
+    try std.testing.expectEqual(@as(f64, 13), out[0].number);
+}
+
+test "guarded native field resolves canonical nested namespace" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 2);
+    defer ctx.deinit();
+    try ctx.setGlobal(1, .{ .number = 4 });
+    const mw = try ctx.newNativeNamespace(.mw);
+    const ustring = try ctx.newNativeNamespace(.ustring);
+    try mw.rawSet(ctx.allocator, .{ .string = "ustring" }, .{ .table = ustring });
+    var expected_host = NativeHostProbe{ .value = 90 };
+    var actual_host = NativeHostProbe{ .value = 7 };
+    try ustring.rawSet(ctx.allocator, .{ .string = "gsub" }, try ctx.newNative(&expected_host, NativeHostProbe.call));
+    const actual = try ctx.newNative(&actual_host, NativeHostProbe.call);
+    const child_slot = static_fields.slotForName(.mw, "ustring") orelse return error.MissingStaticField;
+    const gsub_slot = static_fields.slotForName(.ustring, "gsub") orelse return error.MissingStaticField;
+    const out = try ctx.callKnownNativeField(actual, .ustring, gsub_slot, .{ .table = mw }, child_slot, &.{ .nil, .nil });
+    defer freeResults(out);
+    try std.testing.expectEqual(@as(f64, 13), out[0].number);
 }
 
 test "AOT runtime globals are numeric slots without hash storage" {

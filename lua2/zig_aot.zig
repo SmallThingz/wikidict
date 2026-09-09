@@ -5,6 +5,7 @@ const global_abi = @import("vm_global_abi.zig");
 const graph_mod = @import("vm_graph.zig");
 const sem = @import("vm_semantics.zig");
 const aot_hint = @import("vm_aot_hint.zig");
+const static_fields = @import("vm_static_field_abi.zig");
 const shape_key = @import("vm_shape_key.zig");
 const aot_data = @import("zig_aot_data.zig");
 
@@ -784,6 +785,22 @@ fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *cons
     try print(out, a, "            frame.storeResults({d}, {d}, result_{d}, true);\n", .{ inst.dst, inst.count, pc });
     try text(out, a, "            }\n");
 }
+const NativeFieldPath = struct { root_slot: u32, child_slot: ?u32 = null };
+fn nativeFieldPath(namespace: static_fields.Namespace) ?NativeFieldPath {
+    return switch (namespace) {
+        .table => .{ .root_slot = global_abi.id("table") },
+        .string => .{ .root_slot = global_abi.id("string") },
+        .math => .{ .root_slot = global_abi.id("math") },
+        .debug => .{ .root_slot = global_abi.id("debug") },
+        .mw => .{ .root_slot = global_abi.id("mw") },
+        .ustring, .title, .text, .uri, .html, .language => .{
+            .root_slot = global_abi.id("mw"),
+            .child_slot = static_fields.slotForName(.mw, @tagName(namespace)) orelse return null,
+        },
+        .frame, .title_value, .language_value, .html_node => null,
+    };
+}
+
 fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
         .call => {
@@ -805,6 +822,20 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                 try valueExpr(out, a, p, plan, inst.a);
                 try print(out, a, ", ctx.getGlobal({d}), argv_{d});\n", .{ slot, pc });
                 stats.guarded_calls += 1;
+            } else if (aot_hint.nativeField(inst)) |field| {
+                if (field.slot >= static_fields.fieldCount(field.namespace)) return error.BadStaticField;
+                if (nativeFieldPath(field.namespace)) |path| {
+                    try print(out, a, "            const result_{d} = try ctx.callKnownNativeField(", .{pc});
+                    try valueExpr(out, a, p, plan, inst.a);
+                    try print(out, a, ", .{s}, {d}, ctx.getGlobal({d}), ", .{ @tagName(field.namespace), field.slot, path.root_slot });
+                    if (path.child_slot) |child| try print(out, a, "{d}", .{child}) else try text(out, a, "null");
+                    try print(out, a, ", argv_{d});\n", .{pc});
+                    stats.guarded_calls += 1;
+                } else {
+                    try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
+                    try valueExpr(out, a, p, plan, inst.a);
+                    try print(out, a, ", argv_{d});\n", .{pc});
+                }
             } else {
                 try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
                 try valueExpr(out, a, p, plan, inst.a);
@@ -1633,4 +1664,56 @@ test "native global call hints emit guarded native dispatch" {
     defer allocator.free(generated.source);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNative(") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.getGlobal(1)") != null);
+}
+
+test "canonical native field hints emit guarded native dispatch" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const allocator = std.testing.allocator;
+    var chunk = try lua.parse(allocator, "local f=type;return f(1)");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(allocator, &chunk);
+    defer program.deinit();
+    _ = try opt.runAot(allocator, &program);
+    var hinted = false;
+    for (program.functions.items) |*maybe| if (maybe.*) |*function| {
+        for (function.insts.items) |*inst| if (inst.op == .call) {
+            const slot = static_fields.slotForName(.table, "insert") orelse return error.MissingStaticField;
+            try aot_hint.setNativeField(inst, .table, slot);
+            hinted = true;
+            break;
+        };
+        if (hinted) break;
+    };
+    try std.testing.expect(hinted);
+    const generated = try generate(allocator, &program);
+    defer allocator.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNativeField(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ", .table, 0, ctx.getGlobal(17), null, argv_") != null);
+}
+
+test "return object native field hints stay on generic dispatch" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const allocator = std.testing.allocator;
+    var chunk = try lua.parse(allocator, "local f=type;return f(1)");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(allocator, &chunk);
+    defer program.deinit();
+    _ = try opt.runAot(allocator, &program);
+    var hinted = false;
+    for (program.functions.items) |*maybe| if (maybe.*) |*function| {
+        for (function.insts.items) |*inst| if (inst.op == .call) {
+            const slot = static_fields.slotForName(.frame, "getParent") orelse return error.MissingStaticField;
+            try aot_hint.setNativeField(inst, .frame, slot);
+            hinted = true;
+            break;
+        };
+        if (hinted) break;
+    };
+    try std.testing.expect(hinted);
+    const generated = try generate(allocator, &program);
+    defer allocator.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNativeField(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValue(") != null);
 }
