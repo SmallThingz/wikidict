@@ -19,6 +19,7 @@ pub const Stats = struct {
     known_upvalues: u64 = 0,
     module_upvalues: u64 = 0,
     function_upvalues: u64 = 0,
+    native_global_upvalues: u64 = 0,
     native_namespace_upvalues: u64 = 0,
     native_field_upvalues: u64 = 0,
 };
@@ -336,6 +337,7 @@ pub fn build(
         switch (fact) {
             .module => stats.module_upvalues += 1,
             .function => stats.function_upvalues += 1,
+            .native_global, .captured_native_global => stats.native_global_upvalues += 1,
             .native_namespace, .captured_native_namespace => stats.native_namespace_upvalues += 1,
             .native_field, .captured_native_field => stats.native_field_upvalues += 1,
             else => {},

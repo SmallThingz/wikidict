@@ -19,10 +19,12 @@ pub const Stats = struct {
     registrations: u32 = 0,
     guarded_calls: u32 = 0,
     guarded_global_calls: u32 = 0,
+    guarded_captured_native_global_calls: u32 = 0,
     guarded_captured_native_field_calls: u32 = 0,
     predicted_upvalues: u32 = 0,
     predicted_module_upvalues: u32 = 0,
     predicted_function_upvalues: u32 = 0,
+    predicted_native_global_upvalues: u32 = 0,
     predicted_native_field_upvalues: u32 = 0,
 };
 
@@ -251,6 +253,7 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
     stats.predicted_upvalues = @intCast(captures.stats.known_upvalues);
     stats.predicted_module_upvalues = @intCast(captures.stats.module_upvalues);
     stats.predicted_function_upvalues = @intCast(captures.stats.function_upvalues);
+    stats.predicted_native_global_upvalues = @intCast(captures.stats.native_global_upvalues);
     stats.predicted_native_field_upvalues = @intCast(captures.stats.native_field_upvalues);
     var tagged: u32 = 0;
     var function_id: u32 = 0;
@@ -274,6 +277,11 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
                         .function => |target| if (target < program.functions.items.len) {
                             try aot_hint.set(inst, target);
                             tagged += 1;
+                            tagged_any = true;
+                        },
+                        .captured_native_global => |slot| {
+                            try aot_hint.setNativeGlobal(inst, slot);
+                            stats.guarded_captured_native_global_calls += 1;
                             tagged_any = true;
                         },
                         .captured_native_field => |field| {
@@ -501,4 +509,46 @@ test "captured native field fact propagates through nested closures" {
     const stats = try run(a, &image.program, &symbols);
     try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_field_calls);
     try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
+}
+
+test "captured native global carries a guarded AOT hint" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=type; local function run(x)return f(x)end; return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_global_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGlobalGuardHints(&image.program));
+}
+
+test "mutated captured native global remains unpredicted" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=type; local function run(x)return f(x)end; f=function()return 'patched' end; return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), stats.guarded_captured_native_global_calls);
+    try std.testing.expectEqual(@as(u32, 0), countGlobalGuardHints(&image.program));
+}
+
+test "captured native global hint remains advisory after rebinding" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(
+        a,
+        &image,
+        &symbols,
+        "Module:A",
+        "type=function()return 'patched' end; local f=type; local function run(x)return f(x)end; return run",
+    );
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_global_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGlobalGuardHints(&image.program));
 }

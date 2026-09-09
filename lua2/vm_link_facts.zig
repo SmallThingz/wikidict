@@ -13,6 +13,8 @@ pub const Fact = union(enum) {
     unknown,
     string: u32,
     require_builtin,
+    native_global: u32,
+    captured_native_global: u32,
     native_namespace: field_abi.Namespace,
     captured_native_namespace: field_abi.Namespace,
     native_field: aot_hint.NativeField,
@@ -99,6 +101,10 @@ fn stringFact(program: *const ir.Program, fact: Fact) ?[]const u8 {
     };
 }
 
+fn nativeGlobalCallable(slot: u32) bool {
+    return slot >= global_abi.id("type") and slot <= global_abi.id("pcall");
+}
+
 fn nativeGlobalNamespace(slot: u32) ?field_abi.Namespace {
     if (slot == global_abi.id("table")) return .table;
     if (slot == global_abi.id("string")) return .string;
@@ -137,6 +143,8 @@ fn nativeFieldFact(namespace: field_abi.Namespace, name: []const u8, captured: b
 
 fn capturedUpvalueFact(fact: Fact) Fact {
     return switch (fact) {
+        .native_global => |slot| .{ .captured_native_global = slot },
+        .captured_native_global => fact,
         .native_namespace => |namespace| .{ .captured_native_namespace = namespace },
         .captured_native_namespace => fact,
         .native_field => |field| .{ .captured_native_field = field },
@@ -187,12 +195,15 @@ fn instructionFact(
             if (require_safe and std.mem.eql(u8, name, "require")) break :blk .require_builtin;
             const slot = global_abi.find(name) orelse break :blk .unknown;
             if (nativeGlobalNamespace(slot)) |namespace| break :blk .{ .native_namespace = namespace };
+            if (nativeGlobalCallable(slot)) break :blk .{ .native_global = slot };
             break :blk .unknown;
         },
         .get_global_slot => if (require_safe and inst.aux == global_abi.id("require"))
             .require_builtin
         else if (nativeGlobalNamespace(inst.aux)) |namespace|
             .{ .native_namespace = namespace }
+        else if (nativeGlobalCallable(inst.aux))
+            .{ .native_global = inst.aux }
         else
             .unknown,
         .get_upvalue => if (inst.a < upvalue_facts.len) capturedUpvalueFact(upvalue_facts[inst.a]) else .unknown,
