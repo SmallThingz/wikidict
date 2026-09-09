@@ -799,6 +799,12 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                     try print(out, a, ", {d}, argv_{d});\n", .{ target, pc });
                 }
                 stats.guarded_calls += 1;
+            } else if (aot_hint.nativeGlobal(inst)) |slot| {
+                if (slot >= global_abi.count) return error.BadGlobalReference;
+                try print(out, a, "            const result_{d} = try ctx.callKnownNative(", .{pc});
+                try valueExpr(out, a, p, plan, inst.a);
+                try print(out, a, ", ctx.getGlobal({d}), argv_{d});\n", .{ slot, pc });
+                stats.guarded_calls += 1;
             } else {
                 try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
                 try valueExpr(out, a, p, plan, inst.a);
@@ -1602,4 +1608,29 @@ test "numeric bit constants are explicitly typed in native expressions" {
     const generated = try generate(allocator, &program);
     defer allocator.free(generated.source);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "@as(f64, @bitCast(@as(u64, 0x3fd0000000000000)))") != null);
+}
+
+test "native global call hints emit guarded native dispatch" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const allocator = std.testing.allocator;
+    var chunk = try lua.parse(allocator, "local f=type;return f(1)");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(allocator, &chunk);
+    defer program.deinit();
+    _ = try opt.runAot(allocator, &program);
+    var hinted = false;
+    for (program.functions.items) |*maybe| if (maybe.*) |*function| {
+        for (function.insts.items) |*inst| if (inst.op == .call) {
+            try aot_hint.setNativeGlobal(inst, global_abi.id("type"));
+            hinted = true;
+            break;
+        };
+        if (hinted) break;
+    };
+    try std.testing.expect(hinted);
+    const generated = try generate(allocator, &program);
+    defer allocator.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNative(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.getGlobal(1)") != null);
 }

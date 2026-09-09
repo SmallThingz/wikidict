@@ -662,6 +662,13 @@ pub const Context = struct {
         return self.callValue(callable, args);
     }
 
+    pub inline fn callKnownNative(self: *Context, callable: Value, expected: Value, args: []const Value) anyerror![]const Value {
+        if (callable == .native and expected == .native and callable.native.call == expected.native.call) {
+            return callable.native.call(callable.native.ctx, self, args);
+        }
+        return self.callValue(callable, args);
+    }
+
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
         return switch (callable) {
             .function => |value| self.callFunction(value, args),
@@ -1112,6 +1119,16 @@ const NativeHostProbe = struct {
     }
 };
 
+const OtherNativeHostProbe = struct {
+    value: f64,
+    fn call(raw: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+        const host: *OtherNativeHostProbe = @ptrCast(@alignCast(raw.?));
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .number = 100 + host.value };
+        return out;
+    }
+};
+
 test "AOT native calls carry independent host context" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1123,6 +1140,35 @@ test "AOT native calls carry independent host context" {
     const out = try ctx.callValue(callable, &.{ .nil, .nil });
     defer freeResults(out);
     try std.testing.expectEqual(@as(f64, 13), out[0].number);
+}
+
+test "guarded native call matches callback identity and uses actual context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 2);
+    defer ctx.deinit();
+    try ctx.setGlobal(1, .{ .number = 4 });
+    var expected_host = NativeHostProbe{ .value = 90 };
+    var actual_host = NativeHostProbe{ .value = 7 };
+    const expected = try ctx.newNative(&expected_host, NativeHostProbe.call);
+    const actual = try ctx.newNative(&actual_host, NativeHostProbe.call);
+    const out = try ctx.callKnownNative(actual, expected, &.{ .nil, .nil });
+    defer freeResults(out);
+    try std.testing.expectEqual(@as(f64, 13), out[0].number);
+}
+
+test "guarded native call falls back on callback mismatch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 2);
+    defer ctx.deinit();
+    var expected_host = NativeHostProbe{ .value = 1 };
+    var actual_host = OtherNativeHostProbe{ .value = 9 };
+    const expected = try ctx.newNative(&expected_host, NativeHostProbe.call);
+    const actual = try ctx.newNative(&actual_host, OtherNativeHostProbe.call);
+    const out = try ctx.callKnownNative(actual, expected, &.{});
+    defer freeResults(out);
+    try std.testing.expectEqual(@as(f64, 109), out[0].number);
 }
 
 test "AOT runtime globals are numeric slots without hash storage" {
