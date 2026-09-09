@@ -18,6 +18,17 @@ fn globalNamespace(slot: u32) ?fields.Namespace {
     return null;
 }
 
+fn instructionGlobalNamespace(program: *const ir.Program, inst: ir.Inst) ?fields.Namespace {
+    return switch (inst.op) {
+        .get_global_slot => globalNamespace(inst.aux),
+        .get_global => if (inst.aux < program.strings.items.len)
+            globalNamespace(global_abi.find(program.strings.items[inst.aux]) orelse return null)
+        else
+            null,
+        else => null,
+    };
+}
+
 fn mergePhi(analysis: *const ssa.Function, facts: []const ?fields.Namespace, phi: ssa.Phi) ?fields.Namespace {
     var selected: ?fields.Namespace = null;
     var any = false;
@@ -77,26 +88,25 @@ fn instructionFieldName(program: *const ir.Program, inst: ir.Inst) ?[]const u8 {
     };
 }
 
-fn hasNamespaceRoot(function: *const ir.Function) bool {
+fn hasNamespaceRoot(program: *const ir.Program, function: *const ir.Function) bool {
     for (function.insts.items) |inst| {
-        if (inst.op == .get_global_slot and globalNamespace(inst.aux) != null) return true;
+        if (instructionGlobalNamespace(program, inst) != null) return true;
     }
     return false;
 }
 
-fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir.Function) !Stats {
-    if (!hasNamespaceRoot(function)) return .{};
-    var analysis = try ssa.build(allocator, program, function);
-    defer analysis.deinit();
-    const facts = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
-    defer if (facts.len != 0) allocator.free(facts);
+fn populateFacts(
+    allocator: std.mem.Allocator,
+    program: *const ir.Program,
+    function: *const ir.Function,
+    analysis: *ssa.Function,
+    facts: []?fields.Namespace,
+    call_results: []?fields.Namespace,
+) !void {
     @memset(facts, null);
-    const call_results = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
-    defer if (call_results.len != 0) allocator.free(call_results);
     @memset(call_results, null);
     for (analysis.values.items, 0..) |node, id| if (node.kind == .instruction and node.pc < function.insts.items.len) {
-        const inst = function.insts.items[node.pc];
-        if (inst.op == .get_global_slot) facts[id] = globalNamespace(inst.aux);
+        facts[id] = instructionGlobalNamespace(program, function.insts.items[node.pc]);
     };
     const state = try allocator.alloc(ssa.ValueId, function.reg_count);
     defer if (state.len != 0) allocator.free(state);
@@ -106,11 +116,11 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
         for (analysis.phis.items) |phi| {
             const id = analysis.canonicalValue(phi.value);
             if (id != phi.value) continue;
-            if (facts[id] == null) if (mergePhi(&analysis, facts, phi)) |namespace| {
+            if (facts[id] == null) if (mergePhi(analysis, facts, phi)) |namespace| {
                 facts[id] = namespace;
                 changed = true;
             };
-            if (call_results[id] == null) if (mergePhi(&analysis, call_results, phi)) |namespace| {
+            if (call_results[id] == null) if (mergePhi(analysis, call_results, phi)) |namespace| {
                 call_results[id] = namespace;
                 changed = true;
             };
@@ -124,7 +134,7 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
                 var result_namespace: ?fields.Namespace = null;
                 var callable_result: ?fields.Namespace = null;
                 if (inst.op == .get_field or inst.op == .get_slot) {
-                    if (namespaceForReg(&analysis, facts, state, inst.a)) |parent| {
+                    if (namespaceForReg(analysis, facts, state, inst.a)) |parent| {
                         if (instructionFieldName(program, inst)) |field_name| {
                             result_namespace = childNamespace(parent, field_name);
                             callable_result = callResultNamespace(parent, field_name);
@@ -135,7 +145,7 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
                     if (callee != ssa.invalid_value and callee < call_results.len)
                         result_namespace = call_results[callee];
                 }
-                try ssa.applyWrites(&analysis, function, state, pc, null);
+                try ssa.applyWrites(analysis, function, state, pc, null);
                 if (inst.dst < state.len) {
                     const value = analysis.canonicalValue(state[inst.dst]);
                     if (value != ssa.invalid_value and value < facts.len) {
@@ -152,6 +162,86 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
             }
         }
     }
+}
+
+pub const NativeFieldCall = struct {
+    namespace: fields.Namespace,
+    slot: u32,
+};
+
+pub const NativeCallAnalysis = struct {
+    allocator: std.mem.Allocator,
+    by_pc: []?NativeFieldCall,
+
+    pub fn deinit(self: *NativeCallAnalysis) void {
+        if (self.by_pc.len != 0) self.allocator.free(self.by_pc);
+    }
+};
+
+pub fn analyzeNativeCalls(
+    allocator: std.mem.Allocator,
+    program: *const ir.Program,
+    function: *const ir.Function,
+) !NativeCallAnalysis {
+    const by_pc = try allocator.alloc(?NativeFieldCall, function.insts.items.len);
+    errdefer if (by_pc.len != 0) allocator.free(by_pc);
+    @memset(by_pc, null);
+    var result = NativeCallAnalysis{ .allocator = allocator, .by_pc = by_pc };
+    if (!hasNamespaceRoot(program, function)) return result;
+
+    var analysis = try ssa.build(allocator, program, function);
+    defer analysis.deinit();
+    const facts = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
+    defer if (facts.len != 0) allocator.free(facts);
+    const call_results = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
+    defer if (call_results.len != 0) allocator.free(call_results);
+    try populateFacts(allocator, program, function, &analysis, facts, call_results);
+    const state = try allocator.alloc(ssa.ValueId, function.reg_count);
+    defer if (state.len != 0) allocator.free(state);
+    const producer_state = try allocator.alloc(ssa.ValueId, function.reg_count);
+    defer if (producer_state.len != 0) allocator.free(producer_state);
+
+    for (analysis.graph.blocks.items, 0..) |block, block_id| {
+        const entry = analysis.entry_states[block_id] orelse continue;
+        @memcpy(state, entry);
+        for (block.start..block.end) |pc_usize| {
+            const pc: u32 = @intCast(pc_usize);
+            const inst = function.insts.items[pc];
+            if (inst.op == .call and inst.a < state.len) {
+                const callee = analysis.canonicalValue(state[inst.a]);
+                if (callee != ssa.invalid_value and callee < analysis.values.items.len) {
+                    const node = analysis.values.items[callee];
+                    if (node.kind == .instruction and node.pc < function.insts.items.len) {
+                        const producer = function.insts.items[node.pc];
+                        if (producer.op == .get_field or producer.op == .get_slot) {
+                            try ssa.stateBefore(&analysis, function, node.pc, producer_state);
+                            if (namespaceForReg(&analysis, facts, producer_state, producer.a)) |namespace| {
+                                if (instructionFieldName(program, producer)) |name| {
+                                    if (fields.slotForName(namespace, name)) |slot|
+                                        result.by_pc[pc] = .{ .namespace = namespace, .slot = slot };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            try ssa.applyWrites(&analysis, function, state, pc, null);
+        }
+    }
+    return result;
+}
+
+fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir.Function) !Stats {
+    if (!hasNamespaceRoot(program, function)) return .{};
+    var analysis = try ssa.build(allocator, program, function);
+    defer analysis.deinit();
+    const facts = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
+    defer if (facts.len != 0) allocator.free(facts);
+    const call_results = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
+    defer if (call_results.len != 0) allocator.free(call_results);
+    try populateFacts(allocator, program, function, &analysis, facts, call_results);
+    const state = try allocator.alloc(ssa.ValueId, function.reg_count);
+    defer if (state.len != 0) allocator.free(state);
     var stats = Stats{};
     for (analysis.graph.blocks.items, 0..) |block, block_id| {
         const entry = analysis.entry_states[block_id] orelse continue;
@@ -343,8 +433,7 @@ test "known child namespace propagates through field result aliases" {
 
 test "known nested Scribunto namespaces lower to static slots" {
     const a = std.testing.allocator;
-    var chunk = try lua.parse(a,
-        "return mw.text.split,mw.title.new,mw.uri.encode,mw.html.create,mw.language.new,mw.getLanguage");
+    var chunk = try lua.parse(a, "return mw.text.split,mw.title.new,mw.uri.encode,mw.html.create,mw.language.new,mw.getLanguage");
     defer chunk.deinit();
     var program = try ir.lowerChunk(a, &chunk);
     defer program.deinit();
@@ -357,8 +446,7 @@ test "known nested Scribunto namespaces lower to static slots" {
 
 test "known Scribunto call results retain static object layouts" {
     const a = std.testing.allocator;
-    var chunk = try lua.parse(a,
-        "local f=mw.getCurrentFrame();local t=mw.title.new('x');local l=mw.language.new('en');local h=mw.html.create('div');return f.args,t.text,l.getCode,h.tag");
+    var chunk = try lua.parse(a, "local f=mw.getCurrentFrame();local t=mw.title.new('x');local l=mw.language.new('en');local h=mw.html.create('div');return f.args,t.text,l.getCode,h.tag");
     defer chunk.deinit();
     var program = try ir.lowerChunk(a, &chunk);
     defer program.deinit();
