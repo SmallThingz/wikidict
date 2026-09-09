@@ -19,6 +19,7 @@ pub const Stats = struct {
     registrations: u32 = 0,
     guarded_calls: u32 = 0,
     guarded_global_calls: u32 = 0,
+    guarded_require_calls: u32 = 0,
     guarded_captured_native_global_calls: u32 = 0,
     guarded_captured_native_field_calls: u32 = 0,
     predicted_upvalues: u32 = 0,
@@ -277,6 +278,11 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
                         .function => |target| if (target < program.functions.items.len) {
                             try aot_hint.set(inst, target);
                             tagged += 1;
+                            tagged_any = true;
+                        },
+                        .require_builtin => {
+                            try aot_hint.setNativeGlobal(inst, global_abi.id("require"));
+                            stats.guarded_require_calls += 1;
                             tagged_any = true;
                         },
                         .captured_native_global => |slot| {
@@ -550,5 +556,34 @@ test "captured native global hint remains advisory after rebinding" {
     );
     const stats = try run(a, &image.program, &symbols);
     try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_global_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGlobalGuardHints(&image.program));
+}
+test "require calls stay advisory when whole image mutates require" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:B", "return {}");
+    _ = try addSource(a, &image, &symbols, "Module:A", "return require('Module:B')");
+    _ = try addSource(a, &image, &symbols, "Module:Mutator", "require=function()return {}end;return {}");
+    try std.testing.expect(!facts_mod.requireBuiltinSafe(&image.program));
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), stats.direct_calls);
+    try std.testing.expectEqual(@as(u32, 0), stats.numeric_imports);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_require_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGlobalGuardHints(&image.program));
+}
+
+test "captured require remains a guard only across global rebinding" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local r=require;local function run(x)return r(x)end;require=function()return 9 end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), stats.direct_calls);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_require_calls);
     try std.testing.expectEqual(@as(u32, 1), countGlobalGuardHints(&image.program));
 }
