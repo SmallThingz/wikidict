@@ -26,6 +26,51 @@ const FunctionRange = struct {
     }
 };
 
+const module_root_function = std.math.maxInt(u32);
+const module_root_empty = module_root_function - 1;
+
+fn moduleRootValue(p: *const ir.Program, function_id: u32) u32 {
+    if (function_id == p.root_function or function_id >= p.functions.items.len) return module_root_function;
+    const function = p.functions.items[function_id] orelse return module_root_function;
+    if (function.insts.items.len == 1) {
+        const ret = function.insts.items[0];
+        if (ret.op == .ret and ret.count == 0) return module_root_empty;
+        return module_root_function;
+    }
+    if (function.insts.items.len != 2) return module_root_function;
+    const load = function.insts.items[0];
+    const ret = function.insts.items[1];
+    if (load.op != .load_const or ret.op != .ret or ret.count != 1) return module_root_function;
+    if (@as(usize, ret.aux) >= function.operands.items.len or function.operands.items[ret.aux] != load.dst) return module_root_function;
+    return if (load.aux < module_root_empty) load.aux else module_root_function;
+}
+
+pub fn analyzeModuleRootDescriptors(a: A, p: *const ir.Program, enabled: bool) ![]bool {
+    const mask = try a.alloc(bool, p.functions.items.len);
+    errdefer a.free(mask);
+    @memset(mask, false);
+    if (!enabled) return mask;
+    for (p.module_roots.items) |root| {
+        if (root >= mask.len) return error.BadFunctionReference;
+        if (moduleRootValue(p, root) != module_root_function) mask[root] = true;
+    }
+    for (p.functions.items) |maybe| if (maybe) |function| {
+        for (function.insts.items) |inst| if (descriptorTarget(inst)) |target| {
+            if (target < mask.len) mask[target] = false;
+        };
+    };
+    return mask;
+}
+
+fn descriptorTarget(inst: ir.Inst) ?u32 {
+    return switch (inst.op) {
+        .closure, .load_function, .register_function => inst.aux,
+        .call_local, .call_local_vararg, .call_scoped, .call_scoped_vararg, .direct_call, .direct_call_vararg => inst.a,
+        .call => aot_hint.target(inst),
+        else => null,
+    };
+}
+
 const Rep = enum { unknown, value, number };
 
 const FunctionPlan = struct {
@@ -1168,6 +1213,14 @@ pub fn entryShardCount(p: *const ir.Program, config: ShardConfig) !usize {
 
 pub fn generateFunctionShard(a: A, p: *const ir.Program, config: ShardConfig, shard_index: usize, stats: *Stats) ![]u8 {
     if (!p.references_lowered) return error.ProgramNotFinalized;
+    const descriptor_roots = try analyzeModuleRootDescriptors(a, p, config.module_registry);
+    defer a.free(descriptor_roots);
+    return generateFunctionShardWithDescriptors(a, p, config, descriptor_roots, shard_index, stats);
+}
+
+pub fn generateFunctionShardWithDescriptors(a: A, p: *const ir.Program, config: ShardConfig, descriptor_roots: []const bool, shard_index: usize, stats: *Stats) ![]u8 {
+    if (!p.references_lowered) return error.ProgramNotFinalized;
+    if (descriptor_roots.len != p.functions.items.len) return error.BadDescriptorRootMask;
     const bounds = try shardBounds(p.functions.items.len, config.functions_per_shard, shard_index);
     const first: u32 = std.math.cast(u32, bounds.first) orelse return error.ProgramTooLarge;
     const end: u32 = std.math.cast(u32, bounds.end) orelse return error.ProgramTooLarge;
@@ -1175,9 +1228,20 @@ pub fn generateFunctionShard(a: A, p: *const ir.Program, config: ShardConfig, sh
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     try emitDeclarations(&out, a, p);
-    for (bounds.first..bounds.end) |id| try emitFunction(&out, a, p, @intCast(id), stats, range);
+    for (bounds.first..bounds.end) |id| {
+        if (config.module_registry and descriptor_roots[id]) {
+            const function = p.functions.items[id] orelse return error.IncompleteProgram;
+            stats.functions += 1;
+            stats.instructions += function.insts.items.len;
+        } else try emitFunction(&out, a, p, @intCast(id), stats, range);
+    }
     try text(&out, a, "pub const functions = [_]rt.FunctionFn{\n");
-    for (bounds.first..bounds.end) |id| try print(&out, a, "    f_{d},\n", .{id});
+    for (bounds.first..bounds.end) |id| {
+        if (config.module_registry and descriptor_roots[id])
+            try text(&out, a, "    rt.descriptorModuleRootStub,\n")
+        else
+            try print(&out, a, "    f_{d},\n", .{id});
+    }
     try text(&out, a, "};\n");
     return finishSource(a, &out);
 }
@@ -1221,7 +1285,15 @@ pub fn generateEntryShard(a: A, p: *const ir.Program, config: ShardConfig, shard
 
 pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u8 {
     if (!p.references_lowered) return error.ProgramNotFinalized;
+    const descriptor_roots = try analyzeModuleRootDescriptors(a, p, config.module_registry);
+    defer a.free(descriptor_roots);
+    return generateShardedRootWithDescriptors(a, p, config, descriptor_roots);
+}
+
+pub fn generateShardedRootWithDescriptors(a: A, p: *const ir.Program, config: ShardConfig, descriptor_roots: []const bool) ![]u8 {
+    if (!p.references_lowered) return error.ProgramNotFinalized;
     if (p.root_function >= p.functions.items.len) return error.BadFunctionReference;
+    if (descriptor_roots.len != p.functions.items.len) return error.BadDescriptorRootMask;
     const function_shards = try functionShardCount(p, config);
     const constant_shards = try constantShardCount(p, config);
     const entry_shards = try entryShardCount(p, config);
@@ -1259,7 +1331,23 @@ pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u
         if (index != 0) try text(&out, a, ", ");
         try print(&out, a, "{d}", .{root});
     }
-    try text(&out, a, "};\n\n");
+    try text(&out, a, "};\n");
+    if (config.module_registry) {
+        try text(&out, a, "const module_root_values = [_]u32{");
+        for (p.module_roots.items, 0..) |root, index| {
+            if (root >= descriptor_roots.len) return error.BadFunctionReference;
+            if (index != 0) try text(&out, a, ", ");
+            const value = if (descriptor_roots[root]) moduleRootValue(p, root) else module_root_function;
+            if (value == module_root_function)
+                try text(&out, a, "rt.module_root_function")
+            else if (value == module_root_empty)
+                try text(&out, a, "rt.module_root_empty")
+            else
+                try print(&out, a, "{d}", .{value});
+        }
+        try text(&out, a, "};\n");
+    }
+    try text(&out, a, "\n");
 
     const globals = globalCount(p);
     try print(&out, a, "pub const global_count: u32 = {d};\n", .{globals});
@@ -1275,6 +1363,7 @@ pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u
             "    ctx.constant_entry_blocks = &constant_entry_blocks;\n" ++
             "    ctx.module_roots = &module_roots;\n",
     );
+    if (config.module_registry) try text(&out, a, "    ctx.module_root_values = &module_root_values;\n");
     const env_slot = global_abi.id("_G");
     if (globals > env_slot) {
         if (p.global_shape) |shape_id| {
@@ -1310,10 +1399,12 @@ test "sharded AOT splits code and data while preserving numeric cross-shard call
     defer allocator.free(root);
     try std.testing.expect(std.mem.indexOf(u8, root, "functions_0000.zig") != null);
     try std.testing.expect(std.mem.indexOf(u8, root, "constant_blocks") != null);
+    try std.testing.expect(std.mem.indexOf(u8, root, "module_root_values") == null);
     try std.testing.expect(std.mem.indexOf(u8, root, "ctx.invokeKnown(root_function") != null);
     const registry_root = try generateShardedRoot(allocator, &program, .{ .functions_per_shard = 1, .constants_per_shard = 2, .entries_per_shard = 1, .module_registry = true });
     defer allocator.free(registry_root);
     try std.testing.expect(std.mem.indexOf(u8, registry_root, "@import(\"module_registry.zig\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, registry_root, "module_root_values") != null);
     try std.testing.expect(std.mem.indexOf(u8, registry_root, "module_registry.registry.configure(&ctx)") != null);
 
     var stats = Stats{};
@@ -1331,6 +1422,58 @@ test "sharded AOT splits code and data while preserving numeric cross-shard call
         defer allocator.free(entries);
         try std.testing.expect(std.mem.indexOf(u8, entries, "pub const entries") != null);
     }
+}
+
+test "sharded module registry replaces constant-only roots with descriptors" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const data = @import("vm_data.zig");
+    const link = @import("vm_link_image.zig");
+    const allocator = std.testing.allocator;
+    var image = link.Image.init(allocator);
+    defer image.deinit();
+
+    for ([_][]const u8{ "local function f() return 1 end; return f", "return {x=1,y=2}" }) |source| {
+        var chunk = try lua.parse(allocator, source);
+        defer chunk.deinit();
+        var module = try ir.lowerChunk(allocator, &chunk);
+        defer module.deinit();
+        _ = try opt.runSemantics(allocator, &module);
+        _ = try data.run(allocator, &module);
+        _ = try image.appendModule(&module);
+    }
+    _ = try data.run(allocator, &image.program);
+    _ = try opt.finalizeAot(allocator, &image.program);
+    const descriptor_id = image.program.module_roots.items[1];
+    const descriptor_value = moduleRootValue(&image.program, descriptor_id);
+    try std.testing.expect(descriptor_value != module_root_function and descriptor_value != module_root_empty);
+
+    const config = ShardConfig{ .functions_per_shard = 64, .constants_per_shard = 64, .entries_per_shard = 64, .module_registry = true };
+    const descriptor_roots = try analyzeModuleRootDescriptors(allocator, &image.program, true);
+    defer allocator.free(descriptor_roots);
+    try std.testing.expect(descriptor_roots[descriptor_id]);
+    const root = try generateShardedRootWithDescriptors(allocator, &image.program, config, descriptor_roots);
+    defer allocator.free(root);
+    try std.testing.expect(std.mem.indexOf(u8, root, "const module_root_values") != null);
+    try std.testing.expect(std.mem.indexOf(u8, root, "ctx.module_root_values = &module_root_values") != null);
+
+    var stats = Stats{};
+    const shard = try generateFunctionShardWithDescriptors(allocator, &image.program, config, descriptor_roots, 0, &stats);
+    defer allocator.free(shard);
+    const declaration = try std.fmt.allocPrint(allocator, "pub fn f_{d}(", .{descriptor_id});
+    defer allocator.free(declaration);
+    try std.testing.expect(std.mem.indexOf(u8, shard, declaration) == null);
+    try std.testing.expect(std.mem.indexOf(u8, shard, "rt.descriptorModuleRootStub") != null);
+
+    const observer_id = image.program.module_roots.items[0];
+    try image.program.functions.items[observer_id].?.insts.append(allocator, .{ .op = .register_function, .a = 0, .aux = descriptor_id });
+    const fallback_mask = try analyzeModuleRootDescriptors(allocator, &image.program, true);
+    defer allocator.free(fallback_mask);
+    try std.testing.expect(!fallback_mask[descriptor_id]);
+    var fallback_stats = Stats{};
+    const fallback_shard = try generateFunctionShardWithDescriptors(allocator, &image.program, config, fallback_mask, 0, &fallback_stats);
+    defer allocator.free(fallback_shard);
+    try std.testing.expect(std.mem.indexOf(u8, fallback_shard, declaration) != null);
 }
 
 test "captured module functions share one generated activation environment" {

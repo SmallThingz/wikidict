@@ -141,7 +141,11 @@ pub fn main(init: std.process.Init) !void {
         generated_bytes += registry_source.len;
 
         const config = aot.ShardConfig{ .module_registry = true };
-        const root = try aot.generateShardedRoot(std.heap.smp_allocator, &image.program, config);
+        const descriptor_roots = try aot.analyzeModuleRootDescriptors(std.heap.smp_allocator, &image.program, true);
+        defer std.heap.smp_allocator.free(descriptor_roots);
+        var descriptor_root_count: usize = 0;
+        for (descriptor_roots) |descriptor| descriptor_root_count += @intFromBool(descriptor);
+        const root = try aot.generateShardedRootWithDescriptors(std.heap.smp_allocator, &image.program, config, descriptor_roots);
         defer std.heap.smp_allocator.free(root);
         const root_path = try std.fmt.allocPrint(std.heap.smp_allocator, "{s}/root.zig", .{args[3]});
         defer std.heap.smp_allocator.free(root_path);
@@ -150,7 +154,7 @@ pub fn main(init: std.process.Init) !void {
 
         const function_shards = try aot.functionShardCount(&image.program, config);
         for (0..function_shards) |index| {
-            const source = try aot.generateFunctionShard(std.heap.smp_allocator, &image.program, config, index, &generated_stats);
+            const source = try aot.generateFunctionShardWithDescriptors(std.heap.smp_allocator, &image.program, config, descriptor_roots, index, &generated_stats);
             defer std.heap.smp_allocator.free(source);
             const path = try std.fmt.allocPrint(std.heap.smp_allocator, "{s}/functions_{d:0>4}.zig", .{ args[3], index });
             defer std.heap.smp_allocator.free(path);
@@ -175,7 +179,7 @@ pub fn main(init: std.process.Init) !void {
             try writeAll(init.io, path, source);
             generated_bytes += source.len;
         }
-        std.debug.print("AOT_SHARDS functions={d} constants={d} entries={d}\n", .{ function_shards, constant_shards, entry_shards });
+        std.debug.print("AOT_SHARDS functions={d} constants={d} entries={d} descriptor_roots={d}\n", .{ function_shards, constant_shards, entry_shards, descriptor_root_count });
     } else if (!std.mem.eql(u8, args[3], "-")) {
         const generated = try aot.generate(std.heap.smp_allocator, &image.program);
         defer std.heap.smp_allocator.free(generated.source);

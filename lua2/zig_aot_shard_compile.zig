@@ -39,8 +39,10 @@ pub fn main(init: std.process.Init) !void {
     var config = aot.ShardConfig{};
     if (args.len == 4) config.functions_per_shard = try std.fmt.parseInt(usize, args[3], 10);
     var stats = aot.Stats{};
+    const descriptor_roots = try aot.analyzeModuleRootDescriptors(allocator, &program, config.module_registry);
+    defer allocator.free(descriptor_roots);
 
-    const root = try aot.generateShardedRoot(allocator, &program, config);
+    const root = try aot.generateShardedRootWithDescriptors(allocator, &program, config, descriptor_roots);
     defer allocator.free(root);
     const root_path = try std.fmt.allocPrint(allocator, "{s}/root.zig", .{args[2]});
     defer allocator.free(root_path);
@@ -48,7 +50,7 @@ pub fn main(init: std.process.Init) !void {
 
     const function_shards = try aot.functionShardCount(&program, config);
     for (0..function_shards) |index| {
-        const generated = try aot.generateFunctionShard(allocator, &program, config, index, &stats);
+        const generated = try aot.generateFunctionShardWithDescriptors(allocator, &program, config, descriptor_roots, index, &stats);
         defer allocator.free(generated);
         const path = try shardPath(allocator, args[2], "functions", index);
         defer allocator.free(path);

@@ -110,6 +110,11 @@ fn constantEntryValue(entry: ConstantEntry) u32 {
 pub const ConstantBlock = struct { first: u32, values: []const Constant };
 pub const ConstantEntryBlock = struct { first: u32, values: []const ConstantEntry };
 pub const FunctionBlock = struct { first: u32, values: []const FunctionFn };
+pub const module_root_function = std.math.maxInt(u32);
+pub const module_root_empty = module_root_function - 1;
+pub fn descriptorModuleRootStub(_: *Context, _: Captures, _: []const Value) anyerror![]const Value {
+    return error.DescriptorModuleRootInvoked;
+}
 
 pub const Shape = struct {
     field_keys: []const Value = &.{},
@@ -422,6 +427,7 @@ pub const Context = struct {
     constant_blocks: []const ConstantBlock = &.{},
     constant_entry_blocks: []const ConstantEntryBlock = &.{},
     module_roots: []const u32 = &.{},
+    module_root_values: []const u32 = &.{},
     string_metatable: ?*Table = null,
     string_intern: std.StringHashMapUnmanaged([]const u8) = .empty,
     last_error: Value = .nil,
@@ -467,6 +473,7 @@ pub const Context = struct {
         child.constant_blocks = self.constant_blocks;
         child.constant_entry_blocks = self.constant_entry_blocks;
         child.module_roots = self.module_roots;
+        child.module_root_values = self.module_root_values;
         child.module_lookup_ctx = self.module_lookup_ctx;
         child.module_lookup = self.module_lookup;
         child.module_name = self.module_name;
@@ -590,10 +597,16 @@ pub const Context = struct {
         }
 
         const canonical = self.canonicalModuleName(module_id, requested);
-        const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
-        const values = try self.invokeKnown(self.module_roots[module_id], .{ .direct = &.{} }, argv);
-        defer freeResults(values);
-        var value: Value = if (values.len == 0) .nil else values[0];
+        const root_value = if (module_id < self.module_root_values.len) self.module_root_values[module_id] else module_root_function;
+        var value: Value = if (root_value == module_root_function) blk: {
+            const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
+            const values = try self.invokeKnown(self.module_roots[module_id], .{ .direct = &.{} }, argv);
+            defer freeResults(values);
+            break :blk if (values.len == 0) .nil else values[0];
+        } else if (root_value == module_root_empty)
+            .nil
+        else
+            try self.materializeConstant(root_value);
         if (value == .nil) {
             if (canonical) |text| if (self.package_loaded) |loaded| {
                 if (loaded.rawGet(.{ .string = text })) |existing| value = existing;
@@ -1048,6 +1061,33 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     try std.testing.expectError(error.ModuleNotFound, ctx.requireByName("Module:Missing"));
 }
 
+test "descriptor module roots materialize constants without generated functions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 2);
+    defer ctx.deinit();
+    const functions = [_]FunctionFn{descriptorModuleRootStub};
+    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
+    const roots = [_]u32{ 0, 0 };
+    const root_values = [_]u32{ 0, module_root_empty };
+    const constants = [_]Constant{.{ .table = .{ .first = 0, .count = 0 } }};
+    const constant_blocks = [_]ConstantBlock{.{ .first = 0, .values = &constants }};
+    ctx.function_blocks = &blocks;
+    ctx.constant_blocks = &constant_blocks;
+    ctx.module_roots = &roots;
+    ctx.module_root_values = &root_values;
+
+    const first = try ctx.loadModule(0, null);
+    const second = try ctx.loadModule(0, null);
+    try std.testing.expect(first == .table and second == .table and first.table == second.table);
+    var child = try ctx.forkProgram(arena.allocator());
+    defer child.deinit();
+    const fresh = try child.loadModule(0, null);
+    try std.testing.expect(fresh == .table and fresh.table != first.table);
+    const empty = try ctx.loadModule(1, null);
+    try std.testing.expect(empty == .boolean and empty.boolean);
+}
+
 const NativeHostProbe = struct {
     value: f64,
     fn call(raw: ?*anyopaque, ctx: *Context, args: []const Value) ![]const Value {
@@ -1232,8 +1272,10 @@ test "forked AOT context shares program metadata but resets runtime state" {
     const functions = [_]FunctionFn{ModuleRuntimeProbe.named};
     const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{0};
+    const root_values = [_]u32{module_root_function};
     parent.function_blocks = &blocks;
     parent.module_roots = &roots;
+    parent.module_root_values = &root_values;
     parent.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
     var host_marker: u8 = 0;
     parent.setHost(&host_marker);
@@ -1245,6 +1287,7 @@ test "forked AOT context shares program metadata but resets runtime state" {
     defer child.deinit();
     try std.testing.expect(child.function_blocks.ptr == parent.function_blocks.ptr);
     try std.testing.expect(child.module_roots.ptr == parent.module_roots.ptr);
+    try std.testing.expect(child.module_root_values.ptr == parent.module_root_values.ptr);
     try std.testing.expect(child.getGlobal(1) == .nil);
     try std.testing.expectEqual(@as(u8, 0), child.module_state[0]);
     try std.testing.expect(child.host == parent.host);
