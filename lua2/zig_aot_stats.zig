@@ -9,6 +9,8 @@ pub const Stats = struct {
     dynamic_calls: u64 = 0,
     guarded_calls: u64 = 0,
     guarded_global_calls: u64 = 0,
+    guarded_native_field_calls: u64 = 0,
+    guarded_native_candidate_calls: u64 = 0,
     calls: u64 = 0,
     call_varargs: u64 = 0,
     method_calls: u64 = 0,
@@ -45,6 +47,8 @@ pub fn collect(program: *const ir.Program) Stats {
                 stats.dynamic_calls += 1;
                 if (aot_hint.target(inst) != null) stats.guarded_calls += 1;
                 if (aot_hint.nativeGlobal(inst) != null) stats.guarded_global_calls += 1;
+                if (aot_hint.nativeField(inst) != null) stats.guarded_native_field_calls += 1;
+                if (aot_hint.nativeFieldCandidate(inst) != null) stats.guarded_native_candidate_calls += 1;
             },
             .call_vararg => {
                 stats.call_varargs += 1;
@@ -294,7 +298,7 @@ pub fn collectOrigins(allocator: std.mem.Allocator, program: *const ir.Program) 
 
 fn isUnguardedCall(inst: ir.Inst) bool {
     return switch (inst.op) {
-        .call => aot_hint.target(inst) == null and aot_hint.nativeGlobal(inst) == null and aot_hint.nativeField(inst) == null,
+        .call => aot_hint.target(inst) == null and aot_hint.nativeGlobal(inst) == null and aot_hint.nativeField(inst) == null and aot_hint.nativeFieldCandidate(inst) == null,
         .call_vararg => true,
         else => false,
     };
@@ -639,4 +643,13 @@ test "unguarded call origins exclude compiler-only AOT hints" {
     var after_total: u64 = 0;
     inline for (std.meta.fields(ValueOrigins)) |field| after_total += @field(after, field.name);
     try std.testing.expectEqual(@as(u64, 0), after_total);
+
+    const field_id = static_fields.find("gsub") orelse return error.MissingStaticField;
+    for (program.functions.items) |*maybe| if (maybe.*) |*function| {
+        for (function.insts.items) |*inst| if (inst.op == .call) try aot_hint.setNativeFieldCandidate(inst, field_id);
+    };
+    const candidate_after = try collectUnguardedCallOrigins(a, &program);
+    var candidate_total: u64 = 0;
+    inline for (std.meta.fields(ValueOrigins)) |field| candidate_total += @field(candidate_after, field.name);
+    try std.testing.expectEqual(@as(u64, 0), candidate_total);
 }

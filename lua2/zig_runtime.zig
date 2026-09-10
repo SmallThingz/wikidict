@@ -95,6 +95,12 @@ pub const Value = union(enum) {
         };
     }
 };
+pub const NativeFieldGuard = struct {
+    namespace: static_fields.Namespace,
+    slot: u32,
+    root: Value,
+    child_slot: ?u32 = null,
+};
 
 pub const stable_error_name_capacity = 128;
 pub const StableErrorName = struct {
@@ -739,19 +745,35 @@ pub const Context = struct {
         return self.callValue(callable, args);
     }
 
-    pub inline fn callKnownNativeField(self: *Context, callable: Value, namespace: static_fields.Namespace, slot: u32, root: Value, child_slot: ?u32, args: []const Value) anyerror![]const Value {
-        if (root != .table) return self.callValue(callable, args);
-        var table = root.table;
-        if (child_slot) |child_index| {
-            if (table.native_namespace != .mw or child_index >= table.slots.len) return self.callValue(callable, args);
+    fn expectedNativeField(_: *Context, guard: NativeFieldGuard) ?Value {
+        if (guard.root != .table) return null;
+        var table = guard.root.table;
+        if (guard.child_slot) |child_index| {
+            if (table.native_namespace != .mw or child_index >= table.slots.len) return null;
             const child = table.slots[child_index];
-            if (child != .table or child.table.native_namespace != namespace) return self.callValue(callable, args);
+            if (child != .table or child.table.native_namespace != guard.namespace) return null;
             table = child.table;
-        } else if (table.native_namespace != namespace) {
-            return self.callValue(callable, args);
+        } else if (table.native_namespace != guard.namespace) {
+            return null;
         }
-        if (slot >= table.slots.len) return self.callValue(callable, args);
-        return self.callKnownNative(callable, table.slots[slot], args);
+        if (guard.slot >= table.slots.len) return null;
+        return table.slots[guard.slot];
+    }
+
+    pub inline fn callKnownNativeField(self: *Context, callable: Value, namespace: static_fields.Namespace, slot: u32, root: Value, child_slot: ?u32, args: []const Value) anyerror![]const Value {
+        const expected = self.expectedNativeField(.{ .namespace = namespace, .slot = slot, .root = root, .child_slot = child_slot }) orelse return self.callValue(callable, args);
+        return self.callKnownNative(callable, expected, args);
+    }
+
+    pub inline fn callKnownNativeFieldCandidates(self: *Context, callable: Value, guards: []const NativeFieldGuard, args: []const Value) anyerror![]const Value {
+        if (callable == .native) {
+            for (guards) |guard| {
+                const expected = self.expectedNativeField(guard) orelse continue;
+                if (expected == .native and callable.native.call == expected.native.call)
+                    return callable.native.call(callable.native.ctx, self, args);
+            }
+        }
+        return self.callValue(callable, args);
     }
 
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
@@ -1217,6 +1239,12 @@ const OtherNativeHostProbe = struct {
     }
 };
 
+fn candidateLuaFallback(_: *Context, _: Captures, _: []const Value) ![]const Value {
+    const out = try std.heap.smp_allocator.alloc(Value, 1);
+    out[0] = .{ .number = 7 };
+    return out;
+}
+
 test "AOT native calls carry independent host context" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1294,6 +1322,94 @@ test "guarded native field resolves canonical nested namespace" {
     const out = try ctx.callKnownNativeField(actual, .ustring, gsub_slot, .{ .table = mw }, child_slot, &.{ .nil, .nil });
     defer freeResults(out);
     try std.testing.expectEqual(@as(f64, 13), out[0].number);
+}
+
+test "candidate native field guard matches shared canonical callbacks and uses actual context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 2);
+    defer ctx.deinit();
+    try ctx.setGlobal(1, .{ .number = 4 });
+    const string = try ctx.newNativeNamespace(.string);
+    const mw = try ctx.newNativeNamespace(.mw);
+    const ustring = try ctx.newNativeNamespace(.ustring);
+    try mw.rawSet(ctx.allocator, .{ .string = "ustring" }, .{ .table = ustring });
+    var string_host = OtherNativeHostProbe{ .value = 1 };
+    var ustring_host = NativeHostProbe{ .value = 90 };
+    var actual_string_host = OtherNativeHostProbe{ .value = 9 };
+    var actual_ustring_host = NativeHostProbe{ .value = 7 };
+    const string_slot = static_fields.slotForName(.string, "gsub") orelse return error.MissingStaticField;
+    const ustring_slot = static_fields.slotForName(.ustring, "gsub") orelse return error.MissingStaticField;
+    const child_slot = static_fields.slotForName(.mw, "ustring") orelse return error.MissingStaticField;
+    try string.rawSet(ctx.allocator, .{ .string = "gsub" }, try ctx.newNative(&string_host, OtherNativeHostProbe.call));
+    try ustring.rawSet(ctx.allocator, .{ .string = "gsub" }, try ctx.newNative(&ustring_host, NativeHostProbe.call));
+    const guards = [_]NativeFieldGuard{
+        .{ .namespace = .string, .slot = string_slot, .root = .{ .table = string } },
+        .{ .namespace = .ustring, .slot = ustring_slot, .root = .{ .table = mw }, .child_slot = child_slot },
+    };
+
+    const actual_string = try ctx.newNative(&actual_string_host, OtherNativeHostProbe.call);
+    const string_out = try ctx.callKnownNativeFieldCandidates(actual_string, &guards, &.{});
+    defer freeResults(string_out);
+    try std.testing.expectEqual(@as(f64, 109), string_out[0].number);
+
+    const actual_ustring = try ctx.newNative(&actual_ustring_host, NativeHostProbe.call);
+    const ustring_out = try ctx.callKnownNativeFieldCandidates(actual_ustring, &guards, &.{ .nil, .nil });
+    defer freeResults(ustring_out);
+    try std.testing.expectEqual(@as(f64, 13), ustring_out[0].number);
+}
+
+test "candidate native field guard falls back to Lua and mismatched native callables" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 0);
+    defer ctx.deinit();
+    const functions = [_]FunctionFn{stabilize(candidateLuaFallback)};
+    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
+    ctx.function_blocks = &blocks;
+    const table = try ctx.newNativeNamespace(.table);
+    var expected_host = NativeHostProbe{ .value = 1 };
+    var mismatch_host = OtherNativeHostProbe{ .value = 9 };
+    const insert_slot = static_fields.slotForName(.table, "insert") orelse return error.MissingStaticField;
+    try table.rawSet(ctx.allocator, .{ .string = "insert" }, try ctx.newNative(&expected_host, NativeHostProbe.call));
+    const guards = [_]NativeFieldGuard{.{ .namespace = .table, .slot = insert_slot, .root = .{ .table = table } }};
+
+    const lua_callable = try ctx.makeFunction(0, &.{});
+    const lua_out = try ctx.callKnownNativeFieldCandidates(lua_callable, &guards, &.{});
+    defer freeResults(lua_out);
+    try std.testing.expectEqual(@as(f64, 7), lua_out[0].number);
+
+    const mismatch = try ctx.newNative(&mismatch_host, OtherNativeHostProbe.call);
+    const mismatch_out = try ctx.callKnownNativeFieldCandidates(mismatch, &guards, &.{});
+    defer freeResults(mismatch_out);
+    try std.testing.expectEqual(@as(f64, 109), mismatch_out[0].number);
+}
+
+test "candidate native field guard observes namespace and field rebinding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 2);
+    defer ctx.deinit();
+    try ctx.setGlobal(1, .{ .number = 4 });
+    const string = try ctx.newNativeNamespace(.string);
+    var original_host = NativeHostProbe{ .value = 90 };
+    var rebound_host = OtherNativeHostProbe{ .value = 1 };
+    var actual_host = NativeHostProbe{ .value = 7 };
+    const gsub_slot = static_fields.slotForName(.string, "gsub") orelse return error.MissingStaticField;
+    try string.rawSet(ctx.allocator, .{ .string = "gsub" }, try ctx.newNative(&original_host, NativeHostProbe.call));
+    const actual = try ctx.newNative(&actual_host, NativeHostProbe.call);
+
+    try string.rawSet(ctx.allocator, .{ .string = "gsub" }, try ctx.newNative(&rebound_host, OtherNativeHostProbe.call));
+    const field_rebound = [_]NativeFieldGuard{.{ .namespace = .string, .slot = gsub_slot, .root = .{ .table = string } }};
+    const field_out = try ctx.callKnownNativeFieldCandidates(actual, &field_rebound, &.{ .nil, .nil });
+    defer freeResults(field_out);
+    try std.testing.expectEqual(@as(f64, 13), field_out[0].number);
+
+    const replacement = try ctx.newTable();
+    const namespace_rebound = [_]NativeFieldGuard{.{ .namespace = .string, .slot = gsub_slot, .root = .{ .table = replacement } }};
+    const namespace_out = try ctx.callKnownNativeFieldCandidates(actual, &namespace_rebound, &.{ .nil, .nil });
+    defer freeResults(namespace_out);
+    try std.testing.expectEqual(@as(f64, 13), namespace_out[0].number);
 }
 
 test "AOT runtime globals are numeric slots without hash storage" {

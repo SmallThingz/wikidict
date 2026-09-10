@@ -801,6 +801,35 @@ fn nativeFieldPath(namespace: static_fields.Namespace) ?NativeFieldPath {
     };
 }
 
+fn nativeFieldCandidateCount(field_id: u32) !u32 {
+    const field_ref = try static_fields.encode(field_id);
+    var count: u32 = 0;
+    inline for (std.meta.fields(static_fields.Namespace)) |field| {
+        const namespace: static_fields.Namespace = @enumFromInt(field.value);
+        if (comptime !static_fields.isCanonicalLibrary(namespace)) continue;
+        if (static_fields.slotForRef(namespace, field_ref) != null) count += 1;
+    }
+    return count;
+}
+
+fn emitNativeFieldCandidateGuards(out: *std.ArrayList(u8), a: A, field_id: u32) !void {
+    const field_ref = try static_fields.encode(field_id);
+    var first = true;
+    inline for (std.meta.fields(static_fields.Namespace)) |field| {
+        const namespace: static_fields.Namespace = @enumFromInt(field.value);
+        if (comptime !static_fields.isCanonicalLibrary(namespace)) continue;
+        const slot = static_fields.slotForRef(namespace, field_ref);
+        if (slot != null) {
+            const path = comptime nativeFieldPath(namespace).?;
+            if (!first) try text(out, a, ", ");
+            first = false;
+            try print(out, a, ".{{ .namespace = .{s}, .slot = {d}, .root = ctx.getGlobal({d}), .child_slot = ", .{ @tagName(namespace), slot.?, path.root_slot });
+            if (path.child_slot) |child| try print(out, a, "{d}", .{child}) else try text(out, a, "null");
+            try text(out, a, " }");
+        }
+    }
+}
+
 fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
         .call => {
@@ -830,6 +859,20 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                     try print(out, a, ", .{s}, {d}, ctx.getGlobal({d}), ", .{ @tagName(field.namespace), field.slot, path.root_slot });
                     if (path.child_slot) |child| try print(out, a, "{d}", .{child}) else try text(out, a, "null");
                     try print(out, a, ", argv_{d});\n", .{pc});
+                    stats.guarded_calls += 1;
+                } else {
+                    try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
+                    try valueExpr(out, a, p, plan, inst.a);
+                    try print(out, a, ", argv_{d});\n", .{pc});
+                }
+            } else if (aot_hint.nativeFieldCandidate(inst)) |field_id| {
+                if (field_id >= static_fields.names.len) return error.BadStaticField;
+                if (try nativeFieldCandidateCount(field_id) != 0) {
+                    try print(out, a, "            const result_{d} = try ctx.callKnownNativeFieldCandidates(", .{pc});
+                    try valueExpr(out, a, p, plan, inst.a);
+                    try text(out, a, ", &.{");
+                    try emitNativeFieldCandidateGuards(out, a, field_id);
+                    try print(out, a, "}}, argv_{d});\n", .{pc});
                     stats.guarded_calls += 1;
                 } else {
                     try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
@@ -1718,4 +1761,32 @@ test "return object native field hints stay on generic dispatch" {
     defer allocator.free(generated.source);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNativeField(") == null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValue(") != null);
+}
+
+test "native field candidates emit live multi-identity guards" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const allocator = std.testing.allocator;
+    var chunk = try lua.parse(allocator, "local f=type;return f(1)");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(allocator, &chunk);
+    defer program.deinit();
+    _ = try opt.runAot(allocator, &program);
+    const field_id = static_fields.find("gsub") orelse return error.MissingStaticField;
+    var candidate = false;
+    for (program.functions.items) |*maybe| if (maybe.*) |*function| {
+        for (function.insts.items) |*inst| if (inst.op == .call) {
+            try aot_hint.setNativeFieldCandidate(inst, field_id);
+            candidate = true;
+            break;
+        };
+        if (candidate) break;
+    };
+    try std.testing.expect(candidate);
+    const generated = try generate(allocator, &program);
+    defer allocator.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNativeFieldCandidates(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".namespace = .string") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".namespace = .ustring") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".root = ctx.getGlobal(") != null);
 }
