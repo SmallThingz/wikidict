@@ -98,6 +98,7 @@ pub const Inst = struct {
     c: u32 = 0,
     aux: u32 = 0,
     count: u32 = 0,
+    aot_hint: u32 = 0, // compiler-only; never serialized
 };
 
 pub const no_shape: u32 = std.math.maxInt(u32);

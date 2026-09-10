@@ -53,6 +53,10 @@ pub fn collect(program: *const ir.Program) Stats {
             .call_vararg => {
                 stats.call_varargs += 1;
                 stats.dynamic_calls += 1;
+                if (aot_hint.target(inst) != null) stats.guarded_calls += 1;
+                if (aot_hint.nativeGlobal(inst) != null) stats.guarded_global_calls += 1;
+                if (aot_hint.nativeField(inst) != null) stats.guarded_native_field_calls += 1;
+                if (aot_hint.nativeFieldCandidate(inst) != null) stats.guarded_native_candidate_calls += 1;
             },
             .method_call => {
                 stats.method_calls += 1;
@@ -299,7 +303,7 @@ pub fn collectOrigins(allocator: std.mem.Allocator, program: *const ir.Program) 
 fn isUnguardedCall(inst: ir.Inst) bool {
     return switch (inst.op) {
         .call => aot_hint.target(inst) == null and aot_hint.nativeGlobal(inst) == null and aot_hint.nativeField(inst) == null and aot_hint.nativeFieldCandidate(inst) == null,
-        .call_vararg => true,
+        .call_vararg => aot_hint.target(inst) == null and aot_hint.nativeGlobal(inst) == null and aot_hint.nativeField(inst) == null and aot_hint.nativeFieldCandidate(inst) == null,
         else => false,
     };
 }

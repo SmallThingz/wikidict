@@ -423,7 +423,7 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
             for (block.start..block.end) |pc_usize| {
                 const pc: u32 = @intCast(pc_usize);
                 const inst = &function.insts.items[pc];
-                if (inst.op == .call and inst.a < state.len) {
+                if ((inst.op == .call or inst.op == .call_vararg) and inst.a < state.len) {
                     var tagged_any = try tagCallFact(program, inst, factOf(&analysis, state[inst.a]), stats, &tagged);
                     if (!tagged_any) {
                         if (guardableNativeGlobal(program, function, &analysis, state, inst.a)) |slot| {
@@ -437,10 +437,6 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
                         noteUnresolvedUpvalueCall(stats, reason);
                     };
                 }
-                if (inst.op == .call_vararg and inst.a < state.len) if (producerUpvalue(function, &analysis, state, inst.a)) |up_index| {
-                    const reason = if (up_index < capture_reasons.len) capture_reasons[up_index] else capture_link.UnknownReason.unresolved_chain;
-                    noteUnresolvedUpvalueCall(stats, reason);
-                };
                 try ssa.applyWrites(&analysis.ssa_function, function, state, pc, null);
             }
         }
@@ -630,6 +626,30 @@ test "recursive local function calls carry guarded AOT hints" {
     try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
     try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
     try std.testing.expect(stats.predicted_function_upvalues != 0);
+}
+
+test "captured local function vararg calls carry guarded AOT hints" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local function f(...)return select('#',...),... end;local function run(...)return f(...)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
+}
+
+test "captured native field vararg calls carry guarded AOT hints" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=string.format;local function run(...)return f(...)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
 }
 
 test "ordinary nil initialization gets only an advisory captured call guard" {

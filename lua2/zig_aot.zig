@@ -832,7 +832,7 @@ fn emitNativeFieldCandidateGuards(out: *std.ArrayList(u8), a: A, field_id: u32) 
 
 fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
-        .call => {
+        .call, .call_vararg => {
             if (aot_hint.target(inst)) |target| {
                 if (target >= p.functions.items.len) return error.BadFunctionReference;
                 if (p.functions.items[target] != null and (range == null or range.?.contains(target))) {
@@ -884,12 +884,6 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                 try valueExpr(out, a, p, plan, inst.a);
                 try print(out, a, ", argv_{d});\n", .{pc});
             }
-            stats.dynamic_calls += 1;
-        },
-        .call_vararg => {
-            try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
-            try valueExpr(out, a, p, plan, inst.a);
-            try print(out, a, ", argv_{d});\n", .{pc});
             stats.dynamic_calls += 1;
         },
         .call_local, .call_local_vararg => {
@@ -1709,6 +1703,31 @@ test "native global call hints emit guarded native dispatch" {
     defer allocator.free(generated.source);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNative(") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.getGlobal(1)") != null);
+}
+
+test "vararg call hints emit guards after merging the dynamic tail" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const allocator = std.testing.allocator;
+    var chunk = try lua.parse(allocator, "local f=type;return f(...)");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(allocator, &chunk);
+    defer program.deinit();
+    _ = try opt.runAot(allocator, &program);
+    var hinted = false;
+    for (program.functions.items) |*maybe| if (maybe.*) |*function| {
+        for (function.insts.items) |*inst| if (inst.op == .call_vararg) {
+            try aot_hint.setNativeGlobal(inst, global_abi.id("type"));
+            hinted = true;
+            break;
+        };
+        if (hinted) break;
+    };
+    try std.testing.expect(hinted);
+    const generated = try generate(allocator, &program);
+    defer allocator.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "rt.mergeValues(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNative(") != null);
 }
 
 test "canonical native field hints emit guarded native dispatch" {
