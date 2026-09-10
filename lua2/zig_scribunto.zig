@@ -361,7 +361,9 @@ test "AOT mw.text trim listToText and nowiki match Scribunto behavior" {
     defer rt.freeResults(unstrip);
     try std.testing.expectEqualStrings("plain", unstrip[0].string);
     const unstrip_fn = try runtime.getIndex(text, .{ .string = "unstrip" });
-    try std.testing.expectError(error.NotImplemented, runtime.callValue(unstrip_fn, &.{.{ .string = "x\x7fy" }}));
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(unstrip_fn, &.{.{ .string = "x\x7fy" }}));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
 }
 
 test "AOT Scribunto compiler-known namespaces use native slots" {

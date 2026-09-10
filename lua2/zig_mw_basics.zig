@@ -93,7 +93,9 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     const wikibase = mw.rawGet(.{ .string = "wikibase" }).?.table;
     try std.testing.expect(wikibase.rawGet(.{ .string = "getEntity" }).? == .native);
     try std.testing.expect(wikibase.rawGet(.{ .string = "getEntityIdForTitle" }) == null);
-    try std.testing.expectError(error.NotImplemented, callField(&runtime, .{ .table = wikibase }, "getEntity", &.{.{ .string = "Q1" }}));
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, "getEntity", &.{.{ .string = "Q1" }}));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
 
     const site = mw.rawGet(.{ .string = "site" }).?.table;
     const namespaces = site.rawGet(.{ .string = "namespaces" }).?.table;
