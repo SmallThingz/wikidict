@@ -9,6 +9,7 @@ const native_field_marker: u32 = @as(u32, 1) << 30;
 const native_payload_mask = native_field_marker - 1;
 const namespace_shift = 16;
 const field_slot_mask: u32 = (@as(u32, 1) << namespace_shift) - 1;
+const candidate_namespace_encoded: u32 = (@as(u32, 1) << (30 - namespace_shift)) - 1;
 
 pub const NativeField = struct {
     namespace: static_fields.Namespace,
@@ -37,6 +38,16 @@ pub fn nativeField(inst: ir.Inst) ?NativeField {
     return .{ .namespace = @enumFromInt(namespace_raw), .slot = slot_encoded - 1 };
 }
 
+pub fn nativeFieldCandidate(inst: ir.Inst) ?u32 {
+    if (inst.op != .call or inst.c & (native_marker | native_field_marker) != (native_marker | native_field_marker)) return null;
+    const payload = inst.c & native_payload_mask;
+    const namespace_encoded = payload >> namespace_shift;
+    const field_encoded = payload & field_slot_mask;
+    if (namespace_encoded != candidate_namespace_encoded or field_encoded == 0) return null;
+    const field_id = field_encoded - 1;
+    return if (field_id < static_fields.names.len) field_id else null;
+}
+
 pub fn set(inst: *ir.Inst, function_id: u32) !void {
     if (inst.op != .call) return error.UnsupportedAotCallHint;
     const encoded = std.math.add(u32, function_id, 1) catch return error.FunctionReferenceOverflow;
@@ -59,6 +70,14 @@ pub fn setNativeField(inst: *ir.Inst, namespace: static_fields.Namespace, slot: 
         return error.NativeFieldReferenceOverflow;
     const payload = (namespace_encoded << namespace_shift) | slot_encoded;
     inst.c = native_marker | native_field_marker | payload;
+}
+
+pub fn setNativeFieldCandidate(inst: *ir.Inst, field_id: u32) !void {
+    if (inst.op != .call) return error.UnsupportedAotCallHint;
+    if (field_id >= static_fields.names.len) return error.NativeFieldReferenceOverflow;
+    const field_encoded = std.math.add(u32, field_id, 1) catch return error.NativeFieldReferenceOverflow;
+    if (field_encoded > field_slot_mask) return error.NativeFieldReferenceOverflow;
+    inst.c = native_marker | native_field_marker | (candidate_namespace_encoded << namespace_shift) | field_encoded;
 }
 
 pub fn clear(inst: *ir.Inst) void {
@@ -107,4 +126,21 @@ test "native field call hint is distinct and omitted from wire format" {
     var pos: usize = 0;
     const restored = try wire.readInst(bytes.items, &pos, 0, 1);
     try std.testing.expectEqual(@as(?NativeField, null), nativeField(restored));
+}
+
+test "native field candidate hint is distinct and omitted from wire format" {
+    const wire = @import("vm_wire.zig");
+    const field_id = static_fields.find("gsub") orelse return error.MissingStaticField;
+    var inst = ir.Inst{ .op = .call, .dst = 1, .a = 2, .count = 1 };
+    try setNativeFieldCandidate(&inst, field_id);
+    try std.testing.expectEqual(@as(?u32, field_id), nativeFieldCandidate(inst));
+    try std.testing.expectEqual(@as(?NativeField, null), nativeField(inst));
+    try std.testing.expectEqual(@as(?u32, null), nativeGlobal(inst));
+    try std.testing.expectEqual(@as(?u32, null), target(inst));
+    var bytes: std.ArrayList(u8) = .empty;
+    defer bytes.deinit(std.testing.allocator);
+    try wire.writeInst(&bytes, std.testing.allocator, 0, inst);
+    var pos: usize = 0;
+    const restored = try wire.readInst(bytes.items, &pos, 0, 1);
+    try std.testing.expectEqual(@as(?u32, null), nativeFieldCandidate(restored));
 }

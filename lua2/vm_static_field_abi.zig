@@ -113,6 +113,21 @@ pub fn fieldCount(namespace: Namespace) u32 {
     return @intCast(namespaceNames(namespace).len);
 }
 
+pub fn isCanonicalLibrary(namespace: Namespace) bool {
+    return switch (namespace) {
+        .table, .string, .math, .debug, .mw, .ustring, .title, .text, .uri, .html, .language => true,
+        .frame, .title_value, .language_value, .html_node => false,
+    };
+}
+
+pub fn hasCanonicalLibraryField(field_name: []const u8) bool {
+    inline for (std.meta.fields(Namespace)) |field| {
+        const namespace: Namespace = @enumFromInt(field.value);
+        if (isCanonicalLibrary(namespace) and slotForName(namespace, field_name) != null) return true;
+    }
+    return false;
+}
+
 fn slotForNames(comptime field_names: []const []const u8, id: u32) ?u32 {
     comptime @setEvalBranchQuota(20_000);
     inline for (field_names, 0..) |field_name, slot| {
@@ -189,4 +204,12 @@ test "numeric namespace mappings match their name layouts" {
             try std.testing.expectEqualStrings(field_name, nameAt(namespace, @intCast(expected)).?);
         }
     }
+}
+
+test "canonical library fields exclude per-object namespaces" {
+    try std.testing.expect(hasCanonicalLibraryField("gsub"));
+    try std.testing.expect(hasCanonicalLibraryField("insert"));
+    try std.testing.expect(!hasCanonicalLibraryField("getParent"));
+    try std.testing.expect(isCanonicalLibrary(.ustring));
+    try std.testing.expect(!isCanonicalLibrary(.frame));
 }

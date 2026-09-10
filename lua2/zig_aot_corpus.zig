@@ -147,6 +147,7 @@ pub fn main(init: std.process.Init) !void {
     const unguarded_upvalue_call_origins = try aot_stats.collectUnguardedUpvalueCallOrigins(std.heap.smp_allocator, &image.program);
     var final = try optimizer.finalizeAot(std.heap.smp_allocator, &image.program);
     final.static_fields.guarded_calls += staged_static_fields.guarded_calls;
+    final.static_fields.candidate_calls += staged_static_fields.candidate_calls;
     _ = try cleanup.compactStrings(std.heap.smp_allocator, &image.program);
     try verify.run(std.heap.smp_allocator, &image.program);
 

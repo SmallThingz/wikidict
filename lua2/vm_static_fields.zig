@@ -9,6 +9,7 @@ pub const Stats = struct {
     reads: u64 = 0,
     writes: u64 = 0,
     guarded_calls: u64 = 0,
+    candidate_calls: u64 = 0,
 };
 
 fn globalNamespace(slot: u32) ?fields.Namespace {
@@ -117,6 +118,24 @@ fn hasNamespaceRoot(program: *const ir.Program, function: *const ir.Function) bo
     return false;
 }
 
+fn hasCandidateField(program: *const ir.Program, function: *const ir.Function) bool {
+    for (function.insts.items) |inst| {
+        if (inst.op != .get_field and inst.op != .get_slot) continue;
+        const name = instructionFieldName(program, inst) orelse continue;
+        if (fields.hasCanonicalLibraryField(name)) return true;
+    }
+    return false;
+}
+
+fn candidateFieldForValue(program: *const ir.Program, function: *const ir.Function, analysis: *const ssa.Function, value: ssa.ValueId) ?u32 {
+    if (value == ssa.invalid_value or value >= analysis.values.items.len) return null;
+    const node = analysis.values.items[value];
+    if (node.kind != .instruction or node.pc >= function.insts.items.len) return null;
+    const name = instructionFieldName(program, function.insts.items[node.pc]) orelse return null;
+    if (!fields.hasCanonicalLibraryField(name)) return null;
+    return fields.find(name);
+}
+
 fn populateFacts(
     allocator: std.mem.Allocator,
     program: *const ir.Program,
@@ -200,7 +219,7 @@ fn populateFacts(
 }
 
 fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir.Function, rewrite_fields: bool) !Stats {
-    if (!hasNamespaceRoot(program, function)) return .{};
+    if (!hasNamespaceRoot(program, function) and !hasCandidateField(program, function)) return .{};
     var analysis = try ssa.build(allocator, program, function);
     defer analysis.deinit();
     const facts = try allocator.alloc(?fields.Namespace, analysis.values.items.len);
@@ -235,12 +254,17 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
                     }
                 };
             }
-            if (inst.op == .call and inst.a < state.len and aot_hint.target(inst.*) == null and aot_hint.nativeGlobal(inst.*) == null and aot_hint.nativeField(inst.*) == null) {
+            if (inst.op == .call and inst.a < state.len and aot_hint.target(inst.*) == null and aot_hint.nativeGlobal(inst.*) == null and aot_hint.nativeField(inst.*) == null and aot_hint.nativeFieldCandidate(inst.*) == null) {
                 const value = analysis.canonicalValue(state[inst.a]);
-                if (value != ssa.invalid_value and value < native_fields.len) if (native_fields[value]) |field| {
-                    try aot_hint.setNativeField(inst, field.namespace, field.slot);
-                    stats.guarded_calls += 1;
-                };
+                if (value != ssa.invalid_value and value < native_fields.len) {
+                    if (native_fields[value]) |field| {
+                        try aot_hint.setNativeField(inst, field.namespace, field.slot);
+                        stats.guarded_calls += 1;
+                    } else if (candidateFieldForValue(program, function, &analysis, value)) |field_id| {
+                        try aot_hint.setNativeFieldCandidate(inst, field_id);
+                        stats.candidate_calls += 1;
+                    }
+                }
             }
             try ssa.applyWrites(&analysis, function, state, pc, null);
         }
@@ -254,6 +278,7 @@ pub fn tagCallHints(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     for (program.functions.items) |*maybe| if (maybe.*) |*function| {
         const one = try runFunction(allocator, program, function, false);
         stats.guarded_calls += one.guarded_calls;
+        stats.candidate_calls += one.candidate_calls;
     };
     return stats;
 }
@@ -266,6 +291,7 @@ pub fn run(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
         stats.reads += one.reads;
         stats.writes += one.writes;
         stats.guarded_calls += one.guarded_calls;
+        stats.candidate_calls += one.candidate_calls;
     };
     return stats;
 }
@@ -524,4 +550,23 @@ test "staged native call hints preserve later field rewriting" {
     try std.testing.expect(rewritten.reads >= 2);
     try std.testing.expectEqual(@as(u64, 0), rewritten.guarded_calls);
     try std.testing.expectEqual(staged.guarded_calls, countNativeFieldGuardHints(&program));
+}
+
+test "unproven field names carry candidate-only native hints" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local t={gsub=function()return 7 end};return t.gsub()");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    const stats = try tagCallHints(a, &program);
+    try std.testing.expectEqual(@as(u64, 0), stats.guarded_calls);
+    try std.testing.expectEqual(@as(u64, 1), stats.candidate_calls);
+    const field_id = fields.find("gsub") orelse return error.MissingStaticField;
+    var found = false;
+    for (program.functions.items) |maybe| if (maybe) |function| {
+        for (function.insts.items) |inst| {
+            if (aot_hint.nativeFieldCandidate(inst) == field_id) found = true;
+        }
+    };
+    try std.testing.expect(found);
 }
