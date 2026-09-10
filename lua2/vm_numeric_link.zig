@@ -23,6 +23,7 @@ pub const Stats = struct {
     guarded_captured_native_global_calls: u32 = 0,
     guarded_captured_native_field_calls: u32 = 0,
     predicted_upvalues: u32 = 0,
+    predicted_multiwrite_locals: u32 = 0,
     predicted_module_upvalues: u32 = 0,
     predicted_function_upvalues: u32 = 0,
     predicted_native_global_upvalues: u32 = 0,
@@ -252,6 +253,7 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
     var captures = try capture_link.build(allocator, program, symbols);
     defer captures.deinit();
     stats.predicted_upvalues = @intCast(captures.stats.known_upvalues);
+    stats.predicted_multiwrite_locals = @intCast(captures.stats.stable_multiwrite_locals);
     stats.predicted_module_upvalues = @intCast(captures.stats.module_upvalues);
     stats.predicted_function_upvalues = @intCast(captures.stats.function_upvalues);
     stats.predicted_native_global_upvalues = @intCast(captures.stats.native_global_upvalues);
@@ -467,6 +469,57 @@ test "captured native namespace field carries a guarded AOT hint" {
     const stats = try run(a, &image.program, &symbols);
     try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_field_calls);
     try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
+}
+
+test "equal multi-write captured native field carries one guarded hint" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=table.insert;if ... then f=table.insert end;local function run(t,x)return f(t,x)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
+    try std.testing.expect(stats.predicted_multiwrite_locals != 0);
+}
+
+test "different multi-write captured native fields remain unpredicted" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=table.insert;if ... then f=table.remove end;local function run(t,x)return f(t,x)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 0), countNativeFieldGuardHints(&image.program));
+}
+
+test "equal multi-write captured native field propagates through nested closures" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=table.insert;if ... then f=table.insert end;local function outer()local function inner(t,x)return f(t,x)end;return inner end;return outer");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
+    try std.testing.expect(stats.predicted_multiwrite_locals != 0);
+}
+
+test "descendant mutation invalidates equal multi-write native field facts" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=table.insert;if ... then f=table.insert end;local function mutate()f=function()return 9 end end;local function run(t,x)return f(t,x)end;return run,mutate");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 0), countNativeFieldGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.predicted_multiwrite_locals);
 }
 
 test "mutated captured native field remains unpredicted" {

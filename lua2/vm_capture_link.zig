@@ -6,7 +6,6 @@ const facts_mod = @import("vm_link_facts.zig");
 const symbols_mod = @import("vm_link_symbols.zig");
 
 const Fact = facts_mod.Fact;
-const none = std.math.maxInt(u32);
 
 const Edge = struct {
     parent: u32,
@@ -16,6 +15,7 @@ const Edge = struct {
 
 pub const Stats = struct {
     stable_locals: u64 = 0,
+    stable_multiwrite_locals: u64 = 0,
     known_upvalues: u64 = 0,
     module_upvalues: u64 = 0,
     function_upvalues: u64 = 0,
@@ -58,35 +58,32 @@ fn makeOffsets(a: std.mem.Allocator, program: *const ir.Program, upvalues: bool)
     return out;
 }
 
-fn noteWrite(captured: []const bool, counts: []u8, pcs: []u32, flat: usize, pc: u32) void {
+fn noteWrite(captured: []const bool, counts: []u8, flat: usize) void {
     if (flat >= captured.len or !captured[flat]) return;
     counts[flat] +|= 1;
-    if (counts[flat] == 1) pcs[flat] = pc;
 }
 fn noteInstructionWrites(
     function: *const ir.Function,
     base: usize,
     captured: []const bool,
     counts: []u8,
-    pcs: []u32,
-    pc: u32,
     inst: ir.Inst,
 ) void {
     const info = sem.info(inst.op);
     if (info.defines and inst.dst < function.reg_count)
-        noteWrite(captured, counts, pcs, base + inst.dst, pc);
+        noteWrite(captured, counts, base + inst.dst);
     if (info.results) {
         const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
         var i: u32 = 0;
         while (i < width and inst.dst + i < function.reg_count) : (i += 1)
-            noteWrite(captured, counts, pcs, base + inst.dst + i, pc);
+            noteWrite(captured, counts, base + inst.dst + i);
     }
     switch (inst.op) {
         .numeric_for_init => if (inst.dst < function.reg_count)
-            noteWrite(captured, counts, pcs, base + inst.dst, pc),
+            noteWrite(captured, counts, base + inst.dst),
         .numeric_for_next => {
-            if (inst.a < function.reg_count) noteWrite(captured, counts, pcs, base + inst.a, pc);
-            if (inst.dst < function.reg_count) noteWrite(captured, counts, pcs, base + inst.dst, pc);
+            if (inst.a < function.reg_count) noteWrite(captured, counts, base + inst.a);
+            if (inst.dst < function.reg_count) noteWrite(captured, counts, base + inst.dst);
         },
         else => {},
     }
@@ -96,16 +93,14 @@ fn noteLoopWrites(
     base: usize,
     captured: []const bool,
     counts: []u8,
-    pcs: []u32,
-    pc: u32,
     inst: ir.Inst,
 ) void {
     if (inst.op != .generic_for_init and inst.op != .generic_for_next) return;
-    if (inst.c < function.reg_count) noteWrite(captured, counts, pcs, base + inst.c, pc);
+    if (inst.c < function.reg_count) noteWrite(captured, counts, base + inst.c);
     const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
     var i: u32 = 0;
     while (i < width and inst.dst + i < function.reg_count) : (i += 1)
-        noteWrite(captured, counts, pcs, base + inst.dst + i, pc);
+        noteWrite(captured, counts, base + inst.dst + i);
 }
 
 fn collectGraph(
@@ -185,14 +180,12 @@ fn collectWrites(
     reg_offsets: []const usize,
     captured: []const bool,
     counts: []u8,
-    pcs: []u32,
 ) void {
     for (program.functions.items, 0..) |maybe, function_id| if (maybe) |function| {
         const base = reg_offsets[function_id];
-        for (function.insts.items, 0..) |inst, pc_usize| {
-            const pc: u32 = @intCast(pc_usize);
-            noteInstructionWrites(&function, base, captured, counts, pcs, pc, inst);
-            noteLoopWrites(&function, base, captured, counts, pcs, pc, inst);
+        for (function.insts.items) |inst| {
+            noteInstructionWrites(&function, base, captured, counts, inst);
+            noteLoopWrites(&function, base, captured, counts, inst);
         }
     };
 }
@@ -206,6 +199,79 @@ fn mergeCandidate(candidate: *Fact, bad: *bool, incoming: Fact) void {
         candidate.* = incoming;
     } else if (!std.meta.eql(candidate.*, incoming)) {
         bad.* = true;
+    }
+}
+
+fn mergeLocalWrite(
+    flat: usize,
+    incoming: Fact,
+    captured: []const bool,
+    detached: []const bool,
+    mutated: []const bool,
+    facts: []const Fact,
+    candidates: []Fact,
+    bad: []bool,
+    seen: []bool,
+) void {
+    if (flat >= captured.len or !captured[flat] or detached[flat] or mutated[flat] or hasFact(facts[flat])) return;
+    seen[flat] = true;
+    mergeCandidate(&candidates[flat], &bad[flat], incoming);
+}
+
+fn collectLocalCandidates(
+    program: *const ir.Program,
+    symbols: *const symbols_mod.Index,
+    function: *const ir.Function,
+    analysis: *facts_mod.Analysis,
+    upvalues: []const Fact,
+    base: usize,
+    captured: []const bool,
+    detached: []const bool,
+    mutated: []const bool,
+    facts: []const Fact,
+    candidates: []Fact,
+    bad: []bool,
+    seen: []bool,
+) !void {
+    const state = try analysis.allocator.alloc(ssa.ValueId, function.reg_count);
+    defer if (state.len != 0) analysis.allocator.free(state);
+    for (analysis.ssa_function.graph.blocks.items, 0..) |block, block_index| {
+        const entry = analysis.ssa_function.entry_states[block_index] orelse continue;
+        @memcpy(state, entry);
+        for (block.start..block.end) |pc_usize| {
+            const pc: u32 = @intCast(pc_usize);
+            const inst = function.insts.items[pc];
+            const fact = facts_mod.predictInstruction(analysis, program, symbols, function, state, inst, true, upvalues);
+            const info = sem.info(inst.op);
+            if (info.defines and inst.dst < function.reg_count)
+                mergeLocalWrite(base + inst.dst, fact, captured, detached, mutated, facts, candidates, bad, seen);
+            if (info.results) {
+                const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
+                var i: u32 = 0;
+                while (i < width and inst.dst + i < function.reg_count) : (i += 1)
+                    mergeLocalWrite(base + inst.dst + i, fact, captured, detached, mutated, facts, candidates, bad, seen);
+            }
+            switch (inst.op) {
+                .numeric_for_init => if (inst.dst < function.reg_count)
+                    mergeLocalWrite(base + inst.dst, .unknown, captured, detached, mutated, facts, candidates, bad, seen),
+                .numeric_for_next => {
+                    if (inst.a < function.reg_count)
+                        mergeLocalWrite(base + inst.a, .unknown, captured, detached, mutated, facts, candidates, bad, seen);
+                    if (inst.dst < function.reg_count)
+                        mergeLocalWrite(base + inst.dst, .unknown, captured, detached, mutated, facts, candidates, bad, seen);
+                },
+                .generic_for_init, .generic_for_next => {
+                    if (inst.c < function.reg_count)
+                        mergeLocalWrite(base + inst.c, .unknown, captured, detached, mutated, facts, candidates, bad, seen);
+                    const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
+                    var i: u32 = 0;
+                    while (i < width and inst.dst + i < function.reg_count) : (i += 1)
+                        mergeLocalWrite(base + inst.dst + i, .unknown, captured, detached, mutated, facts, candidates, bad, seen);
+                },
+                else => {},
+            }
+            try ssa.applyWrites(&analysis.ssa_function, function, state, pc, null);
+        }
     }
 }
 pub fn build(
@@ -240,14 +306,17 @@ pub fn build(
     const write_counts = try a.alloc(u8, total_regs);
     defer if (write_counts.len != 0) a.free(write_counts);
     @memset(write_counts, 0);
-    const write_pcs = try a.alloc(u32, total_regs);
-    defer if (write_pcs.len != 0) a.free(write_pcs);
-    @memset(write_pcs, none);
-    collectWrites(program, reg_offsets, captured, write_counts, write_pcs);
+    collectWrites(program, reg_offsets, captured, write_counts);
 
     const local_facts = try a.alloc(Fact, total_regs);
     defer if (local_facts.len != 0) a.free(local_facts);
     for (local_facts) |*fact| fact.* = .unknown;
+    const local_candidates = try a.alloc(Fact, total_regs);
+    defer if (local_candidates.len != 0) a.free(local_candidates);
+    const local_bad = try a.alloc(bool, total_regs);
+    defer if (local_bad.len != 0) a.free(local_bad);
+    const local_seen = try a.alloc(bool, total_regs);
+    defer if (local_seen.len != 0) a.free(local_seen);
     const upvalue_facts = try a.alloc(Fact, total_upvalues);
     errdefer if (upvalue_facts.len != 0) a.free(upvalue_facts);
     for (upvalue_facts) |*fact| fact.* = .unknown;
@@ -262,13 +331,16 @@ pub fn build(
     var changed = true;
     while (changed) {
         changed = false;
+        for (local_candidates) |*fact| fact.* = .unknown;
+        @memset(local_bad, false);
+        @memset(local_seen, false);
         for (program.functions.items, 0..) |maybe, function_usize| {
             const function = maybe orelse continue;
             const function_id: u32 = @intCast(function_usize);
             var needs_analysis = false;
             for (0..function.reg_count) |reg| {
                 const flat = reg_offsets[function_usize] + reg;
-                if (captured[flat] and write_counts[flat] == 1 and
+                if (captured[flat] and write_counts[flat] != 0 and
                     !detached[flat] and !mutated_local[flat] and !hasFact(local_facts[flat]))
                 {
                     needs_analysis = true;
@@ -286,30 +358,28 @@ pub fn build(
                 upvalues,
             );
             defer analysis.deinit();
-            const state = try a.alloc(ssa.ValueId, function.reg_count);
-            defer if (state.len != 0) a.free(state);
-            for (0..function.reg_count) |reg| {
-                const flat = reg_offsets[function_usize] + reg;
-                if (!captured[flat] or write_counts[flat] != 1 or detached[flat] or mutated_local[flat] or hasFact(local_facts[flat])) continue;
-                const pc = write_pcs[flat];
-                if (pc >= function.insts.items.len) continue;
-                try ssa.stateBefore(&analysis.ssa_function, &function, pc, state);
-                const fact = facts_mod.predictInstruction(
-                    &analysis,
-                    program,
-                    symbols,
-                    &function,
-                    state,
-                    function.insts.items[pc],
-                    true,
-                    upvalues,
-                );
-                if (hasFact(fact)) {
-                    local_facts[flat] = fact;
-                    stats.stable_locals += 1;
-                    changed = true;
-                }
-            }
+            try collectLocalCandidates(
+                program,
+                symbols,
+                &function,
+                &analysis,
+                upvalues,
+                reg_offsets[function_usize],
+                captured,
+                detached,
+                mutated_local,
+                local_facts,
+                local_candidates,
+                local_bad,
+                local_seen,
+            );
+        }
+        for (local_facts, 0..) |*fact, flat| {
+            if (hasFact(fact.*) or !local_seen[flat] or local_bad[flat] or !hasFact(local_candidates[flat])) continue;
+            fact.* = local_candidates[flat];
+            stats.stable_locals += 1;
+            if (write_counts[flat] > 1) stats.stable_multiwrite_locals += 1;
+            changed = true;
         }
 
         for (candidates) |*fact| fact.* = .unknown;
@@ -437,6 +507,51 @@ test "captured imported function survives a stable local alias" {
         };
     }
     try std.testing.expect(found);
+}
+
+test "equal multi-write captured imports preserve one guarded target" {
+    const a = std.testing.allocator;
+    var image = test_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addTestModule(a, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;return e");
+    const module = try addTestModule(a, &image, &symbols, "Module:A", "local m=require('Module:B');local f=m.add;if ... then f=m.add end;local function run(x)return f(x)end;return run");
+    const target = symbols.resolveExport("Module:B", "add") orelse return error.MissingExport;
+    var result = try build(a, &image.program, &symbols);
+    defer result.deinit();
+    const linked = image.modules.items[module];
+    var found = false;
+    for (linked.function_base..linked.function_base + linked.function_count) |function_id| {
+        for (result.forFunction(&image.program, @intCast(function_id))) |fact| switch (fact) {
+            .function => |id| found = found or id == target,
+            else => {},
+        };
+    }
+    try std.testing.expect(found);
+    try std.testing.expect(result.stats.stable_multiwrite_locals != 0);
+}
+
+test "different multi-write captured imports remain unpredicted" {
+    const a = std.testing.allocator;
+    var image = test_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addTestModule(a, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;function e.sub(x)return x-1 end;return e");
+    const module = try addTestModule(a, &image, &symbols, "Module:A", "local m=require('Module:B');local f=m.add;if ... then f=m.sub end;local function run(x)return f(x)end;return run");
+    var result = try build(a, &image.program, &symbols);
+    defer result.deinit();
+    const linked = image.modules.items[module];
+    var saw_capture = false;
+    for (linked.function_base..linked.function_base + linked.function_count) |function_id| {
+        const function = image.program.functions.items[function_id] orelse continue;
+        if (function.upvalues.items.len == 0) continue;
+        saw_capture = true;
+        for (result.forFunction(&image.program, @intCast(function_id))) |fact|
+            try std.testing.expect(fact == .unknown);
+    }
+    try std.testing.expect(saw_capture);
 }
 
 test "descendant upvalue mutation invalidates sibling capture facts" {
