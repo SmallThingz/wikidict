@@ -19,6 +19,8 @@ pub const Fact = union(enum) {
     captured_native_namespace: field_abi.Namespace,
     native_field: aot_hint.NativeField,
     captured_native_field: aot_hint.NativeField,
+    native_field_candidate: u32,
+    captured_native_field_candidate: u32,
     module: u32,
     function: u32,
 };
@@ -141,6 +143,12 @@ fn nativeFieldFact(namespace: field_abi.Namespace, name: []const u8, captured: b
     return if (captured) .{ .captured_native_field = field } else .{ .native_field = field };
 }
 
+fn nativeFieldCandidateFact(name: []const u8, captured: bool) Fact {
+    if (!field_abi.hasCanonicalLibraryField(name)) return .unknown;
+    const field_id = field_abi.find(name) orelse return .unknown;
+    return if (captured) .{ .captured_native_field_candidate = field_id } else .{ .native_field_candidate = field_id };
+}
+
 fn capturedUpvalueFact(fact: Fact) Fact {
     return switch (fact) {
         .native_global => |slot| .{ .captured_native_global = slot },
@@ -149,6 +157,8 @@ fn capturedUpvalueFact(fact: Fact) Fact {
         .captured_native_namespace => fact,
         .native_field => |field| .{ .captured_native_field = field },
         .captured_native_field => fact,
+        .native_field_candidate => |field_id| .{ .captured_native_field_candidate = field_id },
+        .captured_native_field_candidate => fact,
         else => fact,
     };
 }
@@ -225,18 +235,27 @@ fn instructionFact(
         .get_field, .get_slot => blk: {
             const object = regFact(analysis, state, inst.a);
             const name = fieldName(program, inst) orelse break :blk .unknown;
+            var captured_candidate = false;
             switch (object) {
-                .native_namespace => |namespace| break :blk nativeFieldFact(namespace, name, false),
-                .captured_native_namespace => |namespace| break :blk nativeFieldFact(namespace, name, true),
+                .native_namespace => |namespace| {
+                    const fact = nativeFieldFact(namespace, name, false);
+                    if (known(fact)) break :blk fact;
+                },
+                .captured_native_namespace => |namespace| {
+                    captured_candidate = true;
+                    const fact = nativeFieldFact(namespace, name, true);
+                    if (known(fact)) break :blk fact;
+                },
                 else => {},
             }
-            const module_sid = switch (object) {
-                .module => |sid| sid,
-                else => break :blk .unknown,
-            };
-            if (module_sid >= program.strings.items.len) break :blk .unknown;
-            const target = symbols.resolveExport(program.strings.items[module_sid], name) orelse break :blk .unknown;
-            break :blk .{ .function = target };
+            if (object == .module) {
+                const module_sid = object.module;
+                if (module_sid < program.strings.items.len) {
+                    if (symbols.resolveExport(program.strings.items[module_sid], name)) |target|
+                        break :blk .{ .function = target };
+                }
+            }
+            break :blk nativeFieldCandidateFact(name, captured_candidate);
         },
         else => .unknown,
     };

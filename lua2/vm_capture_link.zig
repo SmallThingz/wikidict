@@ -34,6 +34,7 @@ pub const Stats = struct {
     native_global_upvalues: u64 = 0,
     native_namespace_upvalues: u64 = 0,
     native_field_upvalues: u64 = 0,
+    native_field_candidate_upvalues: u64 = 0,
 };
 
 pub const Result = struct {
@@ -451,6 +452,7 @@ pub fn build(
             .native_global, .captured_native_global => stats.native_global_upvalues += 1,
             .native_namespace, .captured_native_namespace => stats.native_namespace_upvalues += 1,
             .native_field, .captured_native_field => stats.native_field_upvalues += 1,
+            .native_field_candidate, .captured_native_field_candidate => stats.native_field_candidate_upvalues += 1,
             else => {},
         }
     };
