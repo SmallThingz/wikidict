@@ -19,6 +19,21 @@ pub const UnresolvedUpvalueCalls = struct {
     detached: u32 = 0,
     no_writes: u32 = 0,
     unknown_write: u32 = 0,
+    unknown_write_upvalue: u32 = 0,
+    unknown_write_call: u32 = 0,
+    unknown_write_field: u32 = 0,
+    unknown_write_index: u32 = 0,
+    unknown_write_global: u32 = 0,
+    unknown_write_move: u32 = 0,
+    unknown_write_loop: u32 = 0,
+    unknown_write_nil: u32 = 0,
+    unknown_write_literal: u32 = 0,
+    unknown_write_vararg: u32 = 0,
+    unknown_write_table: u32 = 0,
+    unknown_write_unary: u32 = 0,
+    unknown_write_binary: u32 = 0,
+    unknown_write_concat: u32 = 0,
+    unknown_write_other: u32 = 0,
     conflicting_writes: u32 = 0,
     conflicting_sources: u32 = 0,
     unresolved_chain: u32 = 0,
@@ -282,6 +297,66 @@ fn noteUnresolvedUpvalueCall(stats: *Stats, reason: capture_link.UnknownReason) 
         .detached => stats.unresolved_upvalue_calls.detached += 1,
         .no_writes => stats.unresolved_upvalue_calls.no_writes += 1,
         .unknown_write => stats.unresolved_upvalue_calls.unknown_write += 1,
+        .unknown_write_upvalue => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_upvalue += 1;
+        },
+        .unknown_write_call => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_call += 1;
+        },
+        .unknown_write_field => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_field += 1;
+        },
+        .unknown_write_index => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_index += 1;
+        },
+        .unknown_write_global => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_global += 1;
+        },
+        .unknown_write_move => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_move += 1;
+        },
+        .unknown_write_loop => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_loop += 1;
+        },
+        .unknown_write_nil => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_nil += 1;
+        },
+        .unknown_write_literal => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_literal += 1;
+        },
+        .unknown_write_vararg => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_vararg += 1;
+        },
+        .unknown_write_table => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_table += 1;
+        },
+        .unknown_write_unary => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_unary += 1;
+        },
+        .unknown_write_binary => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_binary += 1;
+        },
+        .unknown_write_concat => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_concat += 1;
+        },
+        .unknown_write_other => {
+            stats.unresolved_upvalue_calls.unknown_write += 1;
+            stats.unresolved_upvalue_calls.unknown_write_other += 1;
+        },
         .conflicting_writes => stats.unresolved_upvalue_calls.conflicting_writes += 1,
         .conflicting_sources => stats.unresolved_upvalue_calls.conflicting_sources += 1,
         .none, .unresolved_chain => stats.unresolved_upvalue_calls.unresolved_chain += 1,

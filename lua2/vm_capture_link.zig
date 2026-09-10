@@ -14,6 +14,21 @@ pub const UnknownReason = enum {
     detached,
     no_writes,
     unknown_write,
+    unknown_write_upvalue,
+    unknown_write_call,
+    unknown_write_field,
+    unknown_write_index,
+    unknown_write_global,
+    unknown_write_move,
+    unknown_write_loop,
+    unknown_write_nil,
+    unknown_write_literal,
+    unknown_write_vararg,
+    unknown_write_table,
+    unknown_write_unary,
+    unknown_write_binary,
+    unknown_write_concat,
+    unknown_write_other,
     conflicting_writes,
     conflicting_sources,
     unresolved_chain,
@@ -222,6 +237,37 @@ fn mergeCandidate(candidate: *Fact, bad: *bool, incoming: Fact) void {
     }
 }
 
+fn unknownWriteReason(op: ir.Opcode) UnknownReason {
+    return switch (op) {
+        .get_upvalue => .unknown_write_upvalue,
+        .call, .call_vararg, .call_local, .call_local_vararg, .call_scoped, .call_scoped_vararg, .direct_call, .direct_call_vararg, .method_call, .method_call_vararg, .method_call_field, .method_call_field_vararg => .unknown_write_call,
+        .get_field, .get_slot => .unknown_write_field,
+        .get_index, .get_choice_slot => .unknown_write_index,
+        .get_global, .get_global_slot => .unknown_write_global,
+        .move => .unknown_write_move,
+        .numeric_for_init, .numeric_for_next, .generic_for_init, .generic_for_next => .unknown_write_loop,
+        .load_nil => .unknown_write_nil,
+        .load_bool, .load_number, .load_string, .load_const => .unknown_write_literal,
+        .vararg => .unknown_write_vararg,
+        .new_table, .new_table_shape => .unknown_write_table,
+        .neg, .not_, .len, .neg_number, .len_string => .unknown_write_unary,
+        .add, .sub, .mul, .div, .mod, .pow, .eq, .ne, .lt, .le, .gt, .ge, .add_number, .sub_number, .mul_number, .div_number, .mod_number, .pow_number, .eq_number, .ne_number, .lt_number, .le_number, .gt_number, .ge_number => .unknown_write_binary,
+        .concat => .unknown_write_concat,
+        else => .unknown_write_other,
+    };
+}
+
+fn isUnknownWriteReason(reason: UnknownReason) bool {
+    return switch (reason) {
+        .unknown_write, .unknown_write_upvalue, .unknown_write_call, .unknown_write_field, .unknown_write_index, .unknown_write_global, .unknown_write_move, .unknown_write_loop, .unknown_write_nil, .unknown_write_literal, .unknown_write_vararg, .unknown_write_table, .unknown_write_unary, .unknown_write_binary, .unknown_write_concat, .unknown_write_other => true,
+        else => false,
+    };
+}
+
+fn mergeUnknownWriteReason(slot: *UnknownReason, incoming: UnknownReason) void {
+    if (slot.* == .none) slot.* = incoming else if (slot.* != incoming) slot.* = .unknown_write;
+}
+
 fn mergeLocalWrite(
     flat: usize,
     incoming: Fact,
@@ -231,15 +277,16 @@ fn mergeLocalWrite(
     facts: []const Fact,
     candidates: []Fact,
     bad: []bool,
-    unknown_write: []bool,
+    unknown_write: []UnknownReason,
     conflicting_write: []bool,
     seen: []bool,
+    unknown_reason: UnknownReason,
 ) void {
     if (flat >= captured.len or !captured[flat] or detached[flat] or mutated[flat] or hasFact(facts[flat])) return;
     seen[flat] = true;
     if (!hasFact(incoming)) {
         bad[flat] = true;
-        unknown_write[flat] = true;
+        mergeUnknownWriteReason(&unknown_write[flat], unknown_reason);
         return;
     }
     if (!hasFact(candidates[flat])) {
@@ -263,7 +310,7 @@ fn collectLocalCandidates(
     facts: []const Fact,
     candidates: []Fact,
     bad: []bool,
-    unknown_write: []bool,
+    unknown_write: []UnknownReason,
     conflicting_write: []bool,
     seen: []bool,
 ) !void {
@@ -278,29 +325,29 @@ fn collectLocalCandidates(
             const fact = facts_mod.predictInstruction(analysis, program, symbols, function, state, inst, true, upvalues);
             const info = sem.info(inst.op);
             if (info.defines and inst.dst < function.reg_count)
-                mergeLocalWrite(base + inst.dst, fact, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
+                mergeLocalWrite(base + inst.dst, fact, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
             if (info.results) {
                 const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
                 var i: u32 = 0;
                 while (i < width and inst.dst + i < function.reg_count) : (i += 1)
-                    mergeLocalWrite(base + inst.dst + i, fact, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
+                    mergeLocalWrite(base + inst.dst + i, fact, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
             }
             switch (inst.op) {
                 .numeric_for_init => if (inst.dst < function.reg_count)
-                    mergeLocalWrite(base + inst.dst, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen),
+                    mergeLocalWrite(base + inst.dst, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op)),
                 .numeric_for_next => {
                     if (inst.a < function.reg_count)
-                        mergeLocalWrite(base + inst.a, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
+                        mergeLocalWrite(base + inst.a, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
                     if (inst.dst < function.reg_count)
-                        mergeLocalWrite(base + inst.dst, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
+                        mergeLocalWrite(base + inst.dst, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
                 },
                 .generic_for_init, .generic_for_next => {
                     if (inst.c < function.reg_count)
-                        mergeLocalWrite(base + inst.c, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
+                        mergeLocalWrite(base + inst.c, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
                     const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
                     var i: u32 = 0;
                     while (i < width and inst.dst + i < function.reg_count) : (i += 1)
-                        mergeLocalWrite(base + inst.dst + i, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
+                        mergeLocalWrite(base + inst.dst + i, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
                 },
                 else => {},
             }
@@ -349,7 +396,7 @@ pub fn build(
     defer if (local_candidates.len != 0) a.free(local_candidates);
     const local_bad = try a.alloc(bool, total_regs);
     defer if (local_bad.len != 0) a.free(local_bad);
-    const local_unknown_write = try a.alloc(bool, total_regs);
+    const local_unknown_write = try a.alloc(UnknownReason, total_regs);
     defer if (local_unknown_write.len != 0) a.free(local_unknown_write);
     const local_conflicting_write = try a.alloc(bool, total_regs);
     defer if (local_conflicting_write.len != 0) a.free(local_conflicting_write);
@@ -371,7 +418,7 @@ pub fn build(
         changed = false;
         for (local_candidates) |*fact| fact.* = .unknown;
         @memset(local_bad, false);
-        @memset(local_unknown_write, false);
+        @memset(local_unknown_write, .none);
         @memset(local_conflicting_write, false);
         @memset(local_seen, false);
         for (program.functions.items, 0..) |maybe, function_usize| {
@@ -494,7 +541,7 @@ pub fn build(
                             break :blk UnknownReason.no_writes;
                         }
                         if (local_conflicting_write[flat]) break :blk UnknownReason.conflicting_writes;
-                        if (local_unknown_write[flat]) break :blk UnknownReason.unknown_write;
+                        if (local_unknown_write[flat] != .none) break :blk local_unknown_write[flat];
                         break :blk UnknownReason.unresolved_chain;
                     },
                     .upvalue => blk: {
@@ -502,7 +549,11 @@ pub fn build(
                         break :blk if (reasons[parent] != .none) reasons[parent] else UnknownReason.unresolved_chain;
                     },
                 };
-                if (source_reason == .none) source_reason = reason else if (source_reason != reason) source_reason = .unresolved_chain;
+                if (source_reason == .none) {
+                    source_reason = reason;
+                } else if (source_reason != reason) {
+                    source_reason = if (isUnknownWriteReason(source_reason) and isUnknownWriteReason(reason)) .unknown_write else .unresolved_chain;
+                }
             }
             const next: UnknownReason = if (conflict)
                 .conflicting_sources
