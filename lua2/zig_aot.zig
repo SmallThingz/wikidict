@@ -68,7 +68,7 @@ fn descriptorTarget(inst: ir.Inst) ?u32 {
     return switch (inst.op) {
         .closure, .load_function, .register_function => inst.aux,
         .call_local, .call_local_vararg, .call_scoped, .call_scoped_vararg, .direct_call, .direct_call_vararg => inst.a,
-        .call => aot_hint.target(inst),
+        .call, .call_vararg => aot_hint.target(inst),
         else => null,
     };
 }
@@ -1633,6 +1633,14 @@ test "sharded module registry replaces constant-only roots with descriptors" {
     try std.testing.expect(std.mem.indexOf(u8, shard, "rt.descriptorModuleRootStub") != null);
 
     const observer_id = image.program.module_roots.items[0];
+    const observer = &image.program.functions.items[observer_id].?;
+    var vararg_call = ir.Inst{ .op = .call_vararg, .a = 0, .c = 0 };
+    try aot_hint.set(&vararg_call, descriptor_id);
+    try observer.insts.append(allocator, vararg_call);
+    const vararg_mask = try analyzeModuleRootDescriptors(allocator, &image.program, true);
+    defer allocator.free(vararg_mask);
+    try std.testing.expect(!vararg_mask[descriptor_id]);
+    _ = observer.insts.pop();
     try image.program.functions.items[observer_id].?.insts.append(allocator, .{ .op = .register_function, .a = 0, .aux = descriptor_id });
     const fallback_mask = try analyzeModuleRootDescriptors(allocator, &image.program, true);
     defer allocator.free(fallback_mask);
