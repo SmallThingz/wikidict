@@ -50,6 +50,7 @@ pub const Stats = struct {
     guarded_captured_native_global_calls: u32 = 0,
     guarded_captured_native_field_calls: u32 = 0,
     guarded_captured_native_candidate_calls: u32 = 0,
+    guarded_function_candidate_calls: u32 = 0,
     predicted_upvalues: u32 = 0,
     predicted_multiwrite_locals: u32 = 0,
     predicted_module_upvalues: u32 = 0,
@@ -57,6 +58,7 @@ pub const Stats = struct {
     predicted_native_global_upvalues: u32 = 0,
     predicted_native_field_upvalues: u32 = 0,
     predicted_native_field_candidate_upvalues: u32 = 0,
+    predicted_function_candidate_upvalues: u32 = 0,
     predicted_guard_only_upvalues: u32 = 0,
     unresolved_upvalue_calls: UnresolvedUpvalueCalls = .{},
 };
@@ -391,6 +393,13 @@ fn tagCallFact(program: *const ir.Program, inst: *ir.Inst, fact: facts_mod.Fact,
             stats.guarded_captured_native_candidate_calls += 1;
             return true;
         },
+        .function_candidate, .captured_function_candidate => |target| {
+            if (target >= program.functions.items.len) return false;
+            try aot_hint.set(inst, target);
+            tagged.* += 1;
+            stats.guarded_function_candidate_calls += 1;
+            return true;
+        },
         else => {},
     }
     return false;
@@ -405,6 +414,7 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
     stats.predicted_native_global_upvalues = @intCast(captures.stats.native_global_upvalues);
     stats.predicted_native_field_upvalues = @intCast(captures.stats.native_field_upvalues);
     stats.predicted_native_field_candidate_upvalues = @intCast(captures.stats.native_field_candidate_upvalues);
+    stats.predicted_function_candidate_upvalues = @intCast(captures.stats.function_candidate_upvalues);
     stats.predicted_guard_only_upvalues = @intCast(captures.stats.guard_only_upvalues);
     var tagged: u32 = 0;
     var function_id: u32 = 0;
@@ -986,4 +996,58 @@ test "captured require remains a guard only across global rebinding" {
     try std.testing.expectEqual(@as(u32, 0), stats.direct_calls);
     try std.testing.expectEqual(@as(u32, 1), stats.guarded_require_calls);
     try std.testing.expectEqual(@as(u32, 1), countGlobalGuardHints(&image.program));
+}
+
+test "unique linked export field carries a guarded function candidate" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;return e");
+    _ = try addSource(a, &image, &symbols, "Module:A", "return function(obj)return obj.add(4)end");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_function_candidate_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
+}
+
+test "captured unique linked export field carries the same guarded candidate" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;return e");
+    _ = try addSource(a, &image, &symbols, "Module:A", "return function(obj)local f=obj.add;local function run(x)return f(x)end;return run end");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_function_candidate_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
+    try std.testing.expect(stats.predicted_function_candidate_upvalues != 0);
+}
+
+test "ambiguous linked export field names remain unguarded" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;return e");
+    _ = try addSource(a, &image, &symbols, "Module:C", "local e={};function e.add(x)return x+2 end;return e");
+    _ = try addSource(a, &image, &symbols, "Module:A", "return function(obj)return obj.add(4)end");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), stats.guarded_function_candidate_calls);
+    try std.testing.expectEqual(@as(u32, 0), countGuardHints(&image.program));
+}
+
+test "linked export candidates never preempt static ABI field names" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:B", "local e={};function e.getCode()return 'lua' end;return e");
+    _ = try addSource(a, &image, &symbols, "Module:A", "return function(obj)return obj.getCode()end");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), stats.guarded_function_candidate_calls);
+    try std.testing.expectEqual(@as(u32, 0), countGuardHints(&image.program));
 }

@@ -21,6 +21,8 @@ pub const Fact = union(enum) {
     captured_native_field: aot_hint.NativeField,
     native_field_candidate: u32,
     captured_native_field_candidate: u32,
+    function_candidate: u32,
+    captured_function_candidate: u32,
     module: u32,
     function: u32,
 };
@@ -159,6 +161,8 @@ fn capturedUpvalueFact(fact: Fact) Fact {
         .captured_native_field => fact,
         .native_field_candidate => |field_id| .{ .captured_native_field_candidate = field_id },
         .captured_native_field_candidate => fact,
+        .function_candidate => |function_id| .{ .captured_function_candidate = function_id },
+        .captured_function_candidate => fact,
         else => fact,
     };
 }
@@ -255,7 +259,12 @@ fn instructionFact(
                         break :blk .{ .function = target };
                 }
             }
-            break :blk nativeFieldCandidateFact(name, captured_candidate);
+            const native_candidate = nativeFieldCandidateFact(name, captured_candidate);
+            if (known(native_candidate)) break :blk native_candidate;
+            if (field_abi.find(name) != null) break :blk .unknown;
+            if (symbols.fieldFunctionCandidate(name)) |target|
+                break :blk .{ .function_candidate = target };
+            break :blk .unknown;
         },
         else => .unknown,
     };

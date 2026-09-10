@@ -9,6 +9,8 @@ const ExportTarget = union(enum) {
     module_export: struct { module: []const u8, name: []const u8 },
 };
 
+const FieldFunctionCandidate = union(enum) { target: u32, ambiguous };
+
 const ModuleSymbols = struct {
     exports: std.StringHashMapUnmanaged(ExportTarget) = .empty,
     proxy: ?[]const u8 = null,
@@ -25,6 +27,7 @@ pub const Index = struct {
     modules: std.ArrayList(ModuleSymbols) = .empty,
     owned_strings: std.ArrayList([]u8) = .empty,
     exported_functions: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    field_function_candidates: std.StringHashMapUnmanaged(FieldFunctionCandidate) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Index {
         return .{ .allocator = allocator };
@@ -35,6 +38,7 @@ pub const Index = struct {
         self.modules.deinit(self.allocator);
         self.by_title.deinit(self.allocator);
         self.exported_functions.deinit(self.allocator);
+        self.field_function_candidates.deinit(self.allocator);
         for (self.owned_strings.items) |text| self.allocator.free(text);
         self.owned_strings.deinit(self.allocator);
     }
@@ -81,8 +85,16 @@ pub const Index = struct {
                 while (it.next()) |entry| switch (entry.value_ptr.*) {
                     .function => |start| {
                         const function_id = findFunction(&image.program, linked_module, start) orelse continue;
-                        try symbols.exports.put(self.allocator, try self.own(entry.key_ptr.*), .{ .function = function_id });
+                        const export_name = try self.own(entry.key_ptr.*);
+                        try symbols.exports.put(self.allocator, export_name, .{ .function = function_id });
                         try self.exported_functions.put(self.allocator, function_id, {});
+                        if (!builder.dynamic_top_level) {
+                            if (self.field_function_candidates.getPtr(export_name)) |candidate| {
+                                if (candidate.* == .target and candidate.target != function_id) candidate.* = .ambiguous;
+                            } else {
+                                try self.field_function_candidates.put(self.allocator, export_name, .{ .target = function_id });
+                            }
+                        }
                     },
                     .module_export => |target| {
                         try symbols.exports.put(self.allocator, try self.own(entry.key_ptr.*), .{ .module_export = .{
@@ -101,6 +113,14 @@ pub const Index = struct {
 
     pub fn isExportedFunction(self: *const Index, function_id: u32) bool {
         return self.exported_functions.contains(function_id);
+    }
+
+    pub fn fieldFunctionCandidate(self: *const Index, name: []const u8) ?u32 {
+        const candidate = self.field_function_candidates.get(name) orelse return null;
+        return switch (candidate) {
+            .target => |function_id| function_id,
+            .ambiguous => null,
+        };
     }
 
     pub fn moduleId(self: *const Index, title: []const u8) ?u32 {
@@ -164,4 +184,18 @@ test "linked symbols resolve exported functions and proxies" {
     try std.testing.expectEqual(direct, proxy);
     try std.testing.expect(direct >= image.modules.items[0].function_base);
     try std.testing.expect(direct < image.modules.items[0].function_base + image.modules.items[0].function_count);
+}
+
+test "field function candidates require one static export target" {
+    var image = link_image.Image.init(std.testing.allocator);
+    defer image.deinit();
+    var symbols = Index.init(std.testing.allocator);
+    defer symbols.deinit();
+    try addSource(std.testing.allocator, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;return e");
+    const first = symbols.resolveExport("Module:B", "add") orelse return error.MissingExport;
+    try std.testing.expectEqual(@as(?u32, first), symbols.fieldFunctionCandidate("add"));
+    try addSource(std.testing.allocator, &image, &symbols, "Module:C", "local e={};function e.sub(x)return x-1 end;return e");
+    try std.testing.expectEqual(@as(?u32, first), symbols.fieldFunctionCandidate("add"));
+    try addSource(std.testing.allocator, &image, &symbols, "Module:D", "local e={};function e.add(x)return x+2 end;return e");
+    try std.testing.expectEqual(@as(?u32, null), symbols.fieldFunctionCandidate("add"));
 }
