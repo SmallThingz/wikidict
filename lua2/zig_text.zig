@@ -305,6 +305,17 @@ fn textNowikiCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     return one(a, .{ .string = text });
 }
 
+fn textUnstripCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const source = args[0].string;
+    if (std.mem.indexOfScalar(u8, source, 0x7f) != null) return error.NotImplemented;
+    return one(runtime.allocator, .{ .string = source });
+}
+
+fn textUnstripNoWikiCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    return textUnstripCall(null, runtime, args);
+}
+
 fn textTrimCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
@@ -351,6 +362,8 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setNative(runtime, text, "split", host, textSplitCall);
     try setNative(runtime, text, "gsplit", host, textGsplitCall);
     try setNative(runtime, text, "trim", null, textTrimCall);
+    try setNative(runtime, text, "unstrip", null, textUnstripCall);
+    try setNative(runtime, text, "unstripNoWiki", null, textUnstripNoWikiCall);
     try setNative(runtime, text, "listToText", null, textListToTextCall);
     try setNative(runtime, text, "nowiki", null, textNowikiCall);
     try mw.rawSet(runtime.allocator, .{ .string = "text" }, .{ .table = text });

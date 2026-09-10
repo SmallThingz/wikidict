@@ -263,7 +263,7 @@ test "AOT frame invoke binds current frame around numeric module call" {
     defer arena.deinit();
     var runtime = try rt.Context.initProgram(arena.allocator(), 0, 1);
     defer runtime.deinit();
-    const functions = [_]rt.FunctionFn{ InvokeProbe.root, InvokeProbe.run };
+    const functions = [_]rt.FunctionFn{ rt.stabilize(InvokeProbe.root), rt.stabilize(InvokeProbe.run) };
     const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{0};
     runtime.function_blocks = &blocks;

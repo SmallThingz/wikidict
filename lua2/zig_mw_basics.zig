@@ -17,6 +17,10 @@ fn falseCall(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
     return one(.{ .boolean = false });
 }
 
+fn notImplementedCall(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+    return error.NotImplemented;
+}
+
 fn dumpObjectCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const text: []const u8 = if (args.len == 0) "nil" else switch (args[0]) {
         .nil => "nil",
@@ -44,6 +48,23 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const namespaces = try namespace_lib.makeTable(runtime);
     try site.rawSet(runtime.allocator, .{ .string = "namespaces" }, .{ .table = namespaces });
     try mw.rawSet(runtime.allocator, .{ .string = "site" }, .{ .table = site });
+
+    const wikibase = try runtime.newTable();
+    inline for (.{
+        "getEntity",
+        "getDescription",
+        "getLabel",
+        "getEntityIdForCurrentPage",
+        "getSitelink",
+        "getEntityUrl",
+        "getBestStatements",
+        "getLabelWithLang",
+        "getLabelByLang",
+        "isValidEntityId",
+        "entityExists",
+        "sitelink",
+    }) |name| try setNative(runtime, wikibase, name, notImplementedCall);
+    try mw.rawSet(runtime.allocator, .{ .string = "wikibase" }, .{ .table = wikibase });
 }
 
 fn callField(runtime: *rt.Context, object: Value, name: []const u8, args: []const Value) ![]const Value {
@@ -68,6 +89,11 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     const substing = try callField(&runtime, .{ .table = mw }, "isSubsting", &.{});
     defer rt.freeResults(substing);
     try std.testing.expect(!substing[0].boolean);
+
+    const wikibase = mw.rawGet(.{ .string = "wikibase" }).?.table;
+    try std.testing.expect(wikibase.rawGet(.{ .string = "getEntity" }).? == .native);
+    try std.testing.expect(wikibase.rawGet(.{ .string = "getEntityIdForTitle" }) == null);
+    try std.testing.expectError(error.NotImplemented, callField(&runtime, .{ .table = wikibase }, "getEntity", &.{.{ .string = "Q1" }}));
 
     const site = mw.rawGet(.{ .string = "site" }).?.table;
     const namespaces = site.rawGet(.{ .string = "namespaces" }).?.table;

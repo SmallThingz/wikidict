@@ -139,7 +139,13 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     try rt.bindGlobalTable(&child, global_shape, state.env_slot);
     try stdlib.install(&child);
     try installInto(&child, state);
-    const source = try child.requireByName(args[0].string);
+    const empty_args = try child.newTable();
+    const empty_frame = try frame_lib.makeFrameFromTable(&child, "empty", empty_args, null);
+    child.current_frame = empty_frame.table;
+    const source = child.requireByName(args[0].string) catch |err| {
+        runtime.adoptFailure(&child);
+        return err;
+    };
 
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
     defer seen.deinit(eval_arena.allocator());
@@ -189,12 +195,19 @@ test "AOT Scribunto installs mw.ustring, html, loadData, clone, and string alias
 
 const DataProbe = struct {
     fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
-        return if (std.mem.eql(u8, raw_name, "Module:Data")) 0 else null;
+        if (std.mem.eql(u8, raw_name, "Module:Data")) return 0;
+        if (std.mem.eql(u8, raw_name, "Module:DataFail")) return 1;
+        return null;
     }
     fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
-        return if (id == 0) "Module:Data" else null;
+        return switch (id) {
+            0 => "Module:Data",
+            1 => "Module:DataFail",
+            else => null,
+        };
     }
     fn root(runtime: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        if (runtime.current_frame == null) return error.MissingLoadDataFrame;
         const count = runtime.getGlobal(1);
         try runtime.setGlobal(1, .{ .number = if (count == .number) count.number + 1 else 1 });
         const nested = try runtime.newTable();
@@ -205,16 +218,19 @@ const DataProbe = struct {
         out[0] = .{ .table = table };
         return out;
     }
+    fn fail(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        return error.NotCallable;
+    }
 };
 
 test "AOT loadData runs in an isolated context and promotes a cached read-only graph" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 2);
     defer runtime.deinit();
-    const functions = [_]rt.FunctionFn{DataProbe.root};
+    const functions = [_]rt.FunctionFn{ rt.stabilize(DataProbe.root), rt.stabilize(DataProbe.fail) };
     const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
-    const roots = [_]u32{0};
+    const roots = [_]u32{ 0, 1 };
     runtime.function_blocks = &blocks;
     runtime.module_roots = &roots;
     runtime.configureModules(null, DataProbe.lookup, DataProbe.name);
@@ -228,6 +244,8 @@ test "AOT loadData runs in an isolated context and promotes a cached read-only g
     const second = try callField(&runtime, mw, "loadData", &.{.{ .string = "Module:Data" }});
     defer rt.freeResults(second);
     try std.testing.expect(first[0] == .table and second[0] == .table);
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, mw, "loadData", &.{.{ .string = "Module:DataFail" }}));
+    try std.testing.expectEqualStrings("NotCallable", runtime.aotErrorName().?);
     try std.testing.expect(first[0].table == second[0].table);
     try std.testing.expect(first[0].table.read_only);
     const nested = first[0].table.rawGet(.{ .string = "nested" }) orelse return error.MissingNestedData;
@@ -339,6 +357,11 @@ test "AOT mw.text trim listToText and nowiki match Scribunto behavior" {
         defer rt.freeResults(escaped);
         try std.testing.expectEqualStrings(case[1], escaped[0].string);
     }
+    const unstrip = try callField(&runtime, text, "unstrip", &.{.{ .string = "plain" }});
+    defer rt.freeResults(unstrip);
+    try std.testing.expectEqualStrings("plain", unstrip[0].string);
+    const unstrip_fn = try runtime.getIndex(text, .{ .string = "unstrip" });
+    try std.testing.expectError(error.NotImplemented, runtime.callValue(unstrip_fn, &.{.{ .string = "x\x7fy" }}));
 }
 
 test "AOT Scribunto compiler-known namespaces use native slots" {

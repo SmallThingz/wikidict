@@ -1073,12 +1073,12 @@ fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, st
     stats.functions += 1;
 }
 fn emitProgramTables(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
-    try text(out, a, "const function_table = [_]rt.FunctionFn{\n");
+    try print(out, a, "const function_table = blk: {{\n    @setEvalBranchQuota({d});\n    break :blk [_]rt.FunctionFn{{\n", .{p.functions.items.len * 4 + 1000});
     for (p.functions.items, 0..) |maybe, id| {
         if (maybe == null) return error.IncompleteProgram;
-        try print(out, a, "    f_{d},\n", .{id});
+        try print(out, a, "        rt.stabilize(f_{d}),\n", .{id});
     }
-    try text(out, a, "};\nconst function_blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &function_table }};\n");
+    try text(out, a, "    };\n};\nconst function_blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &function_table }};\n");
     try text(out, a, "const module_roots = [_]u32{");
     for (p.module_roots.items, 0..) |root, index| {
         if (index != 0) try text(out, a, ", ");
@@ -1319,14 +1319,14 @@ pub fn generateFunctionShardWithDescriptors(a: A, p: *const ir.Program, config: 
             stats.instructions += function.insts.items.len;
         } else try emitFunction(&out, a, p, @intCast(id), stats, range);
     }
-    try text(&out, a, "pub const functions = [_]rt.FunctionFn{\n");
+    try print(&out, a, "pub const functions = blk: {{\n    @setEvalBranchQuota({d});\n    break :blk [_]rt.FunctionFn{{\n", .{(bounds.end - bounds.first) * 4 + 1000});
     for (bounds.first..bounds.end) |id| {
         if (config.module_registry and descriptor_roots[id])
-            try text(&out, a, "    rt.descriptorModuleRootStub,\n")
+            try text(&out, a, "        rt.stabilize(rt.descriptorModuleRootStub),\n")
         else
-            try print(&out, a, "    f_{d},\n", .{id});
+            try print(&out, a, "        rt.stabilize(f_{d}),\n", .{id});
     }
-    try text(&out, a, "};\n");
+    try text(&out, a, "    };\n};\n");
     if (config.external_functions) {
         try print(&out, a, "pub export const dict_aot_functions_{d:0>4}: [functions.len]*const anyopaque = blk: {{\n", .{shard_index});
         try text(&out, a, "    @setEvalBranchQuota(functions.len * 4 + 1000);\n    var values: [functions.len]*const anyopaque = undefined;\n    for (functions, 0..) |function, index| values[index] = @ptrCast(function);\n    break :blk values;\n};\n");
@@ -1535,6 +1535,8 @@ test "sharded AOT splits code and data while preserving numeric cross-shard call
     const first = try generateFunctionShard(allocator, &program, config, 0, &stats);
     defer allocator.free(first);
     try std.testing.expect(std.mem.indexOf(u8, first, "pub fn f_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "rt.stabilize(f_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "@setEvalBranchQuota") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "ctx.invokeKnown(") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "vm_codec") == null);
     var external_stats = Stats{};

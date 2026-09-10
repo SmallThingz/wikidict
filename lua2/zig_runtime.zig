@@ -62,7 +62,14 @@ pub const FunctionValue = struct {
         return .{ .direct = &.{} };
     }
 };
-pub const FunctionFn = *const fn (*Context, Captures, []const Value) anyerror![]const Value;
+pub const DirectFunctionFn = *const fn (*Context, Captures, []const Value) anyerror![]const Value;
+pub const FunctionResult = extern struct {
+    values_ptr: ?[*]const Value,
+    values_len: usize,
+    status: u32,
+    reserved: u32,
+};
+pub const FunctionFn = *const fn (*Context, *const Captures, [*]const Value, usize) callconv(.c) FunctionResult;
 pub const NativeFn = *const fn (?*anyopaque, *Context, []const Value) anyerror![]const Value;
 pub const ModuleLookupFn = *const fn (?*const anyopaque, []const u8) ?u32;
 pub const ModuleNameFn = *const fn (?*const anyopaque, u32) ?[]const u8;
@@ -88,6 +95,44 @@ pub const Value = union(enum) {
         };
     }
 };
+
+pub const stable_error_name_capacity = 128;
+pub const StableErrorName = struct {
+    bytes: [stable_error_name_capacity]u8 = [_]u8{0} ** stable_error_name_capacity,
+    len: u16 = 0,
+
+    pub fn clear(self: *StableErrorName) void {
+        self.len = 0;
+    }
+
+    pub fn set(self: *StableErrorName, name: []const u8) void {
+        const source = if (name.len <= self.bytes.len) name else "AotErrorNameTooLong";
+        @memcpy(self.bytes[0..source.len], source);
+        self.len = @intCast(source.len);
+    }
+
+    pub fn get(self: *const StableErrorName) ?[]const u8 {
+        return if (self.len == 0) null else self.bytes[0..self.len];
+    }
+};
+
+pub fn stabilize(comptime function: DirectFunctionFn) FunctionFn {
+    return struct {
+        fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
+            const values = function(ctx, captures.*, args_ptr[0..args_len]) catch |err| {
+                if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
+                return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
+            };
+            return .{
+                .values_ptr = if (values.len == 0) null else values.ptr,
+                .values_len = values.len,
+                .status = 0,
+                .reserved = 0,
+            };
+        }
+    }.call;
+}
+
 pub const no_shape = std.math.maxInt(u32);
 pub const TableConstant = struct { first: u32, count: u32, shape: u32 = no_shape };
 pub const Constant = union(enum) {
@@ -434,6 +479,7 @@ pub const Context = struct {
     string_metatable: ?*Table = null,
     string_intern: std.StringHashMapUnmanaged([]const u8) = .empty,
     last_error: Value = .nil,
+    aot_error_name: StableErrorName = .{},
     depth: usize = 0,
     max_depth: usize = 1000,
     next_identity: u64 = 1,
@@ -505,6 +551,22 @@ pub const Context = struct {
         self.host = host;
     }
 
+    pub fn setAotErrorName(self: *Context, name: []const u8) void {
+        self.aot_error_name.set(name);
+    }
+
+    pub fn clearAotErrorName(self: *Context) void {
+        self.aot_error_name.clear();
+    }
+
+    pub fn aotErrorName(self: *const Context) ?[]const u8 {
+        return self.aot_error_name.get();
+    }
+
+    pub fn adoptFailure(self: *Context, child: *const Context) void {
+        if (child.aotErrorName()) |name| self.setAotErrorName(name) else self.clearAotErrorName();
+    }
+
     pub fn getGlobal(self: *const Context, slot: u32) Value {
         return if (slot < self.globals.len) self.globals[slot] else .nil;
     }
@@ -550,7 +612,15 @@ pub const Context = struct {
 
     pub fn invokeKnown(self: *Context, id: u32, captures: Captures, args: []const Value) anyerror![]const Value {
         const function = self.functionById(id) orelse return error.BadFunctionId;
-        return function(self, captures, args);
+        const result = function(self, &captures, args.ptr, args.len);
+        if (result.reserved != 0 or result.status > 1) return error.BadAotFunctionResult;
+        if (result.status == 1) {
+            if (self.aotErrorName() == null) self.setAotErrorName("AotCallFailed");
+            return error.AotCallFailed;
+        }
+        if (result.values_len == 0) return &.{};
+        const values_ptr = result.values_ptr orelse return error.BadAotFunctionResult;
+        return values_ptr[0..result.values_len];
     }
 
     pub fn callFunction(self: *Context, value: FunctionValue, args: []const Value) anyerror![]const Value {
@@ -642,7 +712,7 @@ pub const Context = struct {
         return value;
     }
 
-    pub inline fn callKnownDirect(self: *Context, callable: Value, expected: u32, direct: FunctionFn, args: []const Value) anyerror![]const Value {
+    pub inline fn callKnownDirect(self: *Context, callable: Value, expected: u32, direct: DirectFunctionFn, args: []const Value) anyerror![]const Value {
         if (callable == .function and callable.function.id == expected) {
             if (self.depth >= self.max_depth) return error.CallDepth;
             self.depth += 1;
@@ -1069,7 +1139,7 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     defer arena.deinit();
     var ctx = try Context.initProgram(arena.allocator(), 1, 3);
     defer ctx.deinit();
-    const functions = [_]FunctionFn{ ModuleRuntimeProbe.named, ModuleRuntimeProbe.packageOverride, ModuleRuntimeProbe.loop };
+    const functions = [_]FunctionFn{ stabilize(ModuleRuntimeProbe.named), stabilize(ModuleRuntimeProbe.packageOverride), stabilize(ModuleRuntimeProbe.loop) };
     const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{ 0, 1, 2 };
     ctx.function_blocks = &blocks;
@@ -1091,7 +1161,10 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
 
     const overridden = try ctx.requireByName("Module:B");
     try std.testing.expectEqualStrings("override", overridden.string);
-    try std.testing.expectError(error.ModuleLoadLoop, ctx.requireByName("Module:Loop"));
+    try std.testing.expectError(error.AotCallFailed, ctx.requireByName("Module:Loop"));
+    try std.testing.expectEqualStrings("ModuleLoadLoop", ctx.aotErrorName().?);
+    ctx.clearAotErrorName();
+    ctx.last_error = .nil;
     try std.testing.expectEqual(@as(u8, 0), ctx.module_state[2]);
     try std.testing.expectEqual(std.math.maxInt(u32), ctx.module_value_slots[2]);
     try std.testing.expectError(error.ModuleNotFound, ctx.requireByName("Module:Missing"));
@@ -1102,7 +1175,7 @@ test "descriptor module roots materialize constants without generated functions"
     defer arena.deinit();
     var ctx = try Context.initProgram(arena.allocator(), 0, 2);
     defer ctx.deinit();
-    const functions = [_]FunctionFn{descriptorModuleRootStub};
+    const functions = [_]FunctionFn{stabilize(descriptorModuleRootStub)};
     const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{ 0, 0 };
     const root_values = [_]u32{ 0, module_root_empty };
@@ -1413,7 +1486,7 @@ test "guarded call uses the runtime capture environment on a match" {
     defer arena.deinit();
     var ctx = try Context.initProgram(arena.allocator(), 0, 0);
     defer ctx.deinit();
-    const functions = [_]FunctionFn{ guardTestExpected, guardTestOther };
+    const functions = [_]FunctionFn{ stabilize(guardTestExpected), stabilize(guardTestOther) };
     const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
     ctx.function_blocks = &blocks;
     var cell = Cell{ .value = .{ .number = 7 } };
@@ -1428,7 +1501,7 @@ test "guarded call falls back to the actual function on an id mismatch" {
     defer arena.deinit();
     var ctx = try Context.initProgram(arena.allocator(), 0, 0);
     defer ctx.deinit();
-    const functions = [_]FunctionFn{ guardTestExpected, guardTestOther };
+    const functions = [_]FunctionFn{ stabilize(guardTestExpected), stabilize(guardTestOther) };
     const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
     ctx.function_blocks = &blocks;
     var cell = Cell{ .value = .{ .number = 7 } };
@@ -1443,7 +1516,7 @@ test "forked AOT context shares program metadata but resets runtime state" {
     defer arena.deinit();
     var parent = try Context.initProgram(arena.allocator(), 2, 1);
     defer parent.deinit();
-    const functions = [_]FunctionFn{ModuleRuntimeProbe.named};
+    const functions = [_]FunctionFn{stabilize(ModuleRuntimeProbe.named)};
     const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{0};
     const root_values = [_]u32{module_root_function};

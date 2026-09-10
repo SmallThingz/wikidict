@@ -400,7 +400,7 @@ fn uGsub(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     const pat = try stringArg(a, args[1]);
     var replacement = args[2];
     if (replacement == .number) replacement = .{ .string = try rt.numberToString(a, replacement.number) };
-    if (replacement != .string and replacement != .table and replacement != .native)
+    if (replacement != .string and replacement != .table and replacement != .function and replacement != .native)
         return error.InvalidReplacement;
     const max_count: usize = if (args.len > 3 and args[3] != .nil)
         @intCast(@max(@as(i64, 0), try integer(args[3])))
@@ -532,6 +532,13 @@ fn replacementUpper(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
     return one(runtime.allocator, .{ .string = out });
 }
 
+fn replacementUpperFunction(runtime: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const out = try runtime.allocator.dupe(u8, args[0].string);
+    for (out) |*byte| byte.* = std.ascii.toUpper(byte.*);
+    return one(runtime.allocator, .{ .string = out });
+}
+
 test "AOT Unicode gsub supports table and callable replacements" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -552,4 +559,13 @@ test "AOT Unicode gsub supports table and callable replacements" {
     defer rt.freeResults(call_out);
     try std.testing.expectEqualStrings("AB", call_out[0].string);
     try std.testing.expectEqual(@as(f64, 2), call_out[1].number);
+
+    const functions = [_]rt.FunctionFn{rt.stabilize(replacementUpperFunction)};
+    const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
+    runtime.function_blocks = &blocks;
+    const lua_callable = try runtime.makeFunction(0, &.{});
+    const lua_out = try runtime.callValue(gsub, &.{ .{ .string = "cd" }, .{ .string = "." }, lua_callable });
+    defer rt.freeResults(lua_out);
+    try std.testing.expectEqualStrings("CD", lua_out[0].string);
+    try std.testing.expectEqual(@as(f64, 2), lua_out[1].number);
 }

@@ -403,7 +403,10 @@ pub const Expander = struct {
         const parent_args = try copyArgsTable(&child, params);
         const parent = try frame_lib.makeFrameFromTable(&child, host_title, parent_args, null);
         const frame = try frame_lib.makeFrameFromTable(&child, module_name, invoke_args, parent);
-        const result = try frame_lib.invoke(&child, module_name, function_name, frame);
+        const result = frame_lib.invoke(&child, module_name, function_name, frame) catch |err| {
+            parent_runtime.adoptFailure(&child);
+            return err;
+        };
         defer rt.freeResults(result);
         if (result.len == 0) return "";
         const rendered = try self.valueToWikitext(result[0]);
@@ -627,6 +630,7 @@ const TestModule = struct {
     fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
         const exports = try ctx.newTable();
         try exports.rawSet(ctx.allocator, .{ .string = "run" }, try ctx.makeFunction(1, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "fail" }, try ctx.makeFunction(2, &.{}));
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
         return out;
@@ -639,6 +643,9 @@ const TestModule = struct {
         out[0] = value;
         return out;
     }
+    fn fail(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        return error.NotCallable;
+    }
 };
 
 test "native AOT wikitext expands templates parser functions and invoke" {
@@ -646,7 +653,7 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     defer arena.deinit();
     var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
     defer runtime.deinit();
-    const functions = [_]rt.FunctionFn{ TestModule.root, TestModule.run };
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail) };
     const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{0};
     runtime.function_blocks = &blocks;
@@ -661,6 +668,8 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|yes|yes|14|E|HÉ|øøé|2022|<ref name=\"n\">body</ref>|ok", got);
     try std.testing.expect(runtime.current_frame == null);
+    try std.testing.expectError(error.AotCallFailed, expander.expandFragment("Page", "{{#invoke:Test|fail}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("NotCallable", runtime.aotErrorName().?);
 }
 
 test "native AOT frame callbacks recurse through the same page expander" {

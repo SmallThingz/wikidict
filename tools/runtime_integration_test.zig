@@ -25,6 +25,7 @@ fn fixture(io: std.Io, a: std.mem.Allocator, path: []const u8, broken: bool) !vo
     const pages = [_]Page{
         .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
         .{ .title = "loop", .ns = 0, .id = 22, .body = "==English==\n===Noun===\n{{#invoke:IntegrationLoop|main}}\n# Never completes.\n" },
+        .{ .title = "badcall", .ns = 0, .id = 23, .body = "==English==\n===Noun===\n{{#invoke:IntegrationBadCall|main}}\n" },
         .{ .title = "Appendix:IntegrationFixture", .ns = 100, .id = 21, .body = "a real auxiliary source page" },
         .{ .title = "Template:show-forms", .ns = 10, .id = 10, .body = template_source },
         .{ .title = "Template:forms-alias", .ns = 10, .id = 11, .body = "#REDIRECT [[Template:show-forms]]", .redirect = "Template:show-forms" },
@@ -34,6 +35,7 @@ fn fixture(io: std.Io, a: std.mem.Allocator, path: []const u8, broken: bool) !vo
         .{ .title = "Module:IntegrationFormsData", .ns = 828, .id = 2, .body = "return { mouse = 'mice', child = 'children' }" },
         .{ .title = "Module:IntegrationFormsAlias", .ns = 828, .id = 4, .body = "#REDIRECT [[Module:IntegrationFormsData]]", .redirect = "Module:IntegrationFormsData" },
         .{ .title = "Module:IntegrationLoop", .ns = 828, .id = 3, .body = "return { main = function() while true do end end }" },
+        .{ .title = "Module:IntegrationBadCall", .ns = 828, .id = 5, .body = "return { main = function() local missing = nil; return missing() end }" },
     };
     var out: std.Io.Writer.Allocating = .init(a);
     defer out.deinit();
@@ -114,6 +116,7 @@ pub fn main(init: std.process.Init) !void {
     const url = try std.fmt.allocPrint(a, "{s}/api/entry?q=mouse", .{base.?});
     const stats_url = try std.fmt.allocPrint(a, "{s}/api/stats", .{base.?});
     const loop_url = try std.fmt.allocPrint(a, "{s}/api/entry?q=loop", .{base.?});
+    const badcall_url = try std.fmt.allocPrint(a, "{s}/api/entry?q=badcall", .{base.?});
     try std.Io.Dir.cwd().deleteFile(init.io, moving);
     _ = try h.run(&.{ "/usr/bin/cp", bin, moving }, 0);
     const after_update = try h.entry(try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "25", url }, 0));
@@ -125,13 +128,19 @@ pub fn main(init: std.process.Init) !void {
     _ = try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "25", url }, 0);
     const stats2 = (try std.json.parseFromSlice(std.json.Value, a, try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "5", stats_url }, 0), .{})).value.object;
     try h.require(stats2.get("vm_worker_starts").?.integer == 1 and stats2.get("vm_requests").?.integer == 2);
+    const badcall = try h.entry(try h.run(&.{ "/usr/bin/curl", "--silent", "--max-time", "25", badcall_url }, 0));
+    try h.require(std.mem.eql(u8, badcall.object.get("expansion").?.object.get("status").?.string, "failed"));
+    try h.require(std.mem.eql(u8, badcall.object.get("expansion").?.object.get("backend").?.string, "lua-aot"));
+    const badcall_diagnostic = badcall.object.get("expansion").?.object.get("diagnostic").?.string;
+    try h.require(std.mem.indexOf(u8, badcall_diagnostic, "NotCallable") != null);
+    try h.require(std.mem.indexOf(u8, badcall_diagnostic, "AotCallFailed") == null);
     const stalled = try h.entry(try h.run(&.{ "/usr/bin/curl", "--silent", "--max-time", "5", loop_url }, 0));
     try h.require(std.mem.eql(u8, stalled.object.get("expansion").?.object.get("status").?.string, "failed"));
     try h.require(std.mem.eql(u8, stalled.object.get("expansion").?.object.get("backend").?.string, "lua-aot"));
     try h.require(std.mem.indexOf(u8, stalled.object.get("expansion").?.object.get("diagnostic").?.string, "timed out") != null);
     _ = try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "25", url }, 0);
     const stats3 = (try std.json.parseFromSlice(std.json.Value, a, try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "5", stats_url }, 0), .{})).value.object;
-    try h.require(stats3.get("vm_worker_starts").?.integer == 2 and stats3.get("vm_requests").?.integer == 4);
+    try h.require(stats3.get("vm_worker_starts").?.integer == 2 and stats3.get("vm_requests").?.integer == 5);
     if (std.os.linux.errno(std.os.linux.kill(server.id.?, .TERM)) != .SUCCESS) return error.SignalFailed;
     const server_exit = try server.wait(init.io);
     try h.require(server_exit == .exited and server_exit.exited == 0);
@@ -184,5 +193,5 @@ pub fn main(init: std.process.Init) !void {
     _ = try h.run(&.{ pipeline, bad_dump, bad_root }, 1);
     var marker_file = try std.Io.Dir.cwd().openFile(init.io, try std.fs.path.join(a, &.{ bad_root, ".incomplete" }), .{});
     marker_file.close(init.io);
-    std.debug.print("RUNTIME_INTEGRATION_PASS checks={d}: XML extraction, real Lua conversion, native AOT execution, VM oracle fallback, persistent live-worker reuse/restart, require, template transclusion, HTML tables, raw source, explicit failures, deadline, incomplete-build refusal. Artifacts: {s}\n", .{ h.checks, dir });
+    std.debug.print("RUNTIME_INTEGRATION_PASS checks={d}: XML extraction, real Lua conversion, native AOT execution, VM oracle fallback, persistent live-worker reuse/restart, require, stable cross-shard errors, template transclusion, HTML tables, raw source, explicit failures, deadline, incomplete-build refusal. Artifacts: {s}\n", .{ h.checks, dir });
 }

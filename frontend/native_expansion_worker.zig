@@ -216,7 +216,7 @@ const Engine = struct {
         stage.* = "expand";
         const now = std.Io.Clock.real.now(self.io).toSeconds();
         return expander.expandFragment(request.title, request.source, now) catch |err| {
-            detail.* = try page_a.dupe(u8, @errorName(err));
+            detail.* = try page_a.dupe(u8, ctx.aotErrorName() orelse @errorName(err));
             return err;
         };
     }
@@ -279,7 +279,7 @@ pub fn main(init: std.process.Init) !void {
             };
         }
         reply.output = engine.?.expand(page_a, request, &reply.stage, &reply.detail) catch |err| blk: {
-            reply.error_name = @errorName(err);
+            reply.error_name = reply.detail orelse @errorName(err);
             break :blk null;
         };
         if (reply.output) |text| if (text.len > 16 * 1024 * 1024) {

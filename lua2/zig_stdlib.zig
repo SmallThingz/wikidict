@@ -43,6 +43,27 @@ fn baseRequire(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const V
     return one(ctx.allocator, try ctx.requireByName(args[0].string));
 }
 
+const ModuleLoaderCtx = struct { module_id: u32 };
+const MainModuleLoaderCtx = struct { cache: *rt.Table };
+
+fn moduleLoader(raw: ?*anyopaque, ctx: *rt.Context, _: []const Value) ![]const Value {
+    const loader: *ModuleLoaderCtx = @ptrCast(@alignCast(raw orelse return error.MissingModuleLoader));
+    return one(ctx.allocator, try ctx.loadModule(loader.module_id, null));
+}
+
+fn mainModuleLoader(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const state: *MainModuleLoaderCtx = @ptrCast(@alignCast(raw orelse return error.MissingModuleLoader));
+    const module_id = ctx.resolveModule(args[0].string) catch return one(ctx.allocator, .nil);
+    const key: Value = .{ .number = @floatFromInt(module_id) };
+    if (state.cache.rawGet(key)) |loader| return one(ctx.allocator, loader);
+    const loader_ctx = try ctx.allocator.create(ModuleLoaderCtx);
+    loader_ctx.* = .{ .module_id = module_id };
+    const loader = try ctx.newNative(loader_ctx, moduleLoader);
+    try state.cache.rawSet(ctx.allocator, key, loader);
+    return one(ctx.allocator, loader);
+}
+
 fn baseType(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     const a = ctx.allocator;
     const name = if (args.len == 0) "nil" else switch (args[0]) {
@@ -246,15 +267,24 @@ fn baseIpairs(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
 fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0) return error.MissingArgument;
     const saved_error = ctx.last_error;
+    const saved_aot_error_name = ctx.aot_error_name;
     ctx.last_error = .nil;
+    ctx.clearAotErrorName();
     const result = ctx.callValue(args[0], args[1..]) catch |err| {
         const out = try std.heap.smp_allocator.alloc(Value, 2);
         out[0] = .{ .boolean = false };
-        out[1] = if (ctx.last_error != .nil) ctx.last_error else .{ .string = @errorName(err) };
+        out[1] = if (ctx.last_error != .nil)
+            ctx.last_error
+        else if (ctx.aotErrorName()) |name|
+            .{ .string = try ctx.allocator.dupe(u8, name) }
+        else
+            .{ .string = @errorName(err) };
         ctx.last_error = saved_error;
+        ctx.aot_error_name = saved_aot_error_name;
         return out;
     };
     ctx.last_error = saved_error;
+    ctx.aot_error_name = saved_aot_error_name;
     defer rt.freeResults(result);
     const out = try std.heap.smp_allocator.alloc(Value, result.len + 1);
     out[0] = .{ .boolean = true };
@@ -740,6 +770,9 @@ pub fn install(vm: *rt.Context) !void {
     const loaders = try vm.newTable();
     try package.rawSet(vm.allocator, .{ .string = "loaded" }, .{ .table = loaded });
     try package.rawSet(vm.allocator, .{ .string = "loaders" }, .{ .table = loaders });
+    const loader_state = try vm.allocator.create(MainModuleLoaderCtx);
+    loader_state.* = .{ .cache = try vm.newTable() };
+    try loaders.rawSet(vm.allocator, .{ .number = 2 }, try vm.newNative(loader_state, mainModuleLoader));
     vm.package_loaded = loaded;
     try vm.setGlobal(global_abi.id("package"), .{ .table = package });
     try setGlobalNative(vm, "require", baseRequire);
@@ -799,6 +832,50 @@ fn callField(ctx: *rt.Context, table: Value, name: []const u8, args: []const Val
     return ctx.callValue(callable, args);
 }
 
+const ModuleLoaderProbe = struct {
+    fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+        return if (std.mem.eql(u8, raw_name, "Module:A") or std.mem.eql(u8, raw_name, "Alias:A")) 0 else null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return if (id == 0) "Module:A" else null;
+    }
+    fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        return one(ctx.allocator, .{ .string = "loaded" });
+    }
+};
+
+test "AOT package main loader resolves and caches numeric module loaders" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.initProgram(arena.allocator(), global_abi.count, 1);
+    defer ctx.deinit();
+    const functions = [_]rt.FunctionFn{rt.stabilize(ModuleLoaderProbe.root)};
+    const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
+    const roots = [_]u32{0};
+    ctx.function_blocks = &blocks;
+    ctx.module_roots = &roots;
+    ctx.configureModules(null, ModuleLoaderProbe.lookup, ModuleLoaderProbe.name);
+    try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
+    try install(&ctx);
+
+    const package = ctx.getGlobal(global_abi.id("package"));
+    const loaders = try ctx.getIndex(package, .{ .string = "loaders" });
+    const main_loader = try ctx.getIndex(loaders, .{ .number = 2 });
+    const first = try ctx.callValue(main_loader, &.{.{ .string = "Module:A" }});
+    defer rt.freeResults(first);
+    const alias = try ctx.callValue(main_loader, &.{.{ .string = "Alias:A" }});
+    defer rt.freeResults(alias);
+    try std.testing.expect(first.len == 1 and first[0] == .native);
+    try std.testing.expect(alias.len == 1 and rt.rawEqual(first[0], alias[0]));
+    const missing = try ctx.callValue(main_loader, &.{.{ .string = "Module:Missing" }});
+    defer rt.freeResults(missing);
+    try std.testing.expect(missing.len == 1 and missing[0] == .nil);
+    const loaded = try ctx.callValue(first[0], &.{});
+    defer rt.freeResults(loaded);
+    try std.testing.expectEqualStrings("loaded", loaded[0].string);
+    try std.testing.expectEqualStrings("loaded", ctx.package_loaded.?.rawGet(.{ .string = "Module:A" }).?.string);
+}
+
 test "AOT standard library installs numeric globals and executes core helpers" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -853,4 +930,26 @@ test "AOT pcall preserves Lua error values" {
     defer rt.freeResults(out);
     try std.testing.expect(!out[0].boolean);
     try std.testing.expectEqualStrings("boom", out[1].string);
+}
+
+fn stablePcallFailure(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+    return error.NotCallable;
+}
+
+test "AOT pcall preserves stable generated-function error names" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    const functions = [_]rt.FunctionFn{rt.stabilize(stablePcallFailure)};
+    const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
+    ctx.function_blocks = &blocks;
+    try install(&ctx);
+    const pcall = ctx.getGlobal(global_abi.id("pcall"));
+    const callable = try ctx.makeFunction(0, &.{});
+    const out = try ctx.callValue(pcall, &.{callable});
+    defer rt.freeResults(out);
+    try std.testing.expect(!out[0].boolean);
+    try std.testing.expectEqualStrings("NotCallable", out[1].string);
+    try std.testing.expect(ctx.aotErrorName() == null);
 }
