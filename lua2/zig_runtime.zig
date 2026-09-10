@@ -77,6 +77,7 @@ pub const NativeFunction = struct {
     ctx: ?*anyopaque = null,
     call: NativeFn,
 };
+pub const NativeDispatchFn = *const fn (*NativeFunction, *Context, [*]const Value, usize) callconv(.c) FunctionResult;
 
 pub const Value = union(enum) {
     nil,
@@ -137,6 +138,19 @@ pub fn stabilize(comptime function: DirectFunctionFn) FunctionFn {
             };
         }
     }.call;
+}
+
+fn dispatchNative(native: *NativeFunction, ctx: *Context, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
+    const values = native.call(native.ctx, ctx, args_ptr[0..args_len]) catch |err| {
+        if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
+        return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
+    };
+    return .{
+        .values_ptr = if (values.len == 0) null else values.ptr,
+        .values_len = values.len,
+        .status = 0,
+        .reserved = 0,
+    };
 }
 
 pub const no_shape = std.math.maxInt(u32);
@@ -496,6 +510,7 @@ pub const Context = struct {
     module_lookup_ctx: ?*const anyopaque = null,
     module_lookup: ?ModuleLookupFn = null,
     module_name: ?ModuleNameFn = null,
+    native_dispatch: NativeDispatchFn = dispatchNative,
     host: ?*anyopaque = null,
     current_frame: ?*Table = null,
     package_loaded: ?*Table = null,
@@ -533,6 +548,7 @@ pub const Context = struct {
         child.module_lookup_ctx = self.module_lookup_ctx;
         child.module_lookup = self.module_lookup;
         child.module_name = self.module_name;
+        child.native_dispatch = self.native_dispatch;
         child.max_depth = self.max_depth;
         child.host = self.host;
         return child;
@@ -619,6 +635,18 @@ pub const Context = struct {
     pub fn invokeKnown(self: *Context, id: u32, captures: Captures, args: []const Value) anyerror![]const Value {
         const function = self.functionById(id) orelse return error.BadFunctionId;
         const result = function(self, &captures, args.ptr, args.len);
+        if (result.reserved != 0 or result.status > 1) return error.BadAotFunctionResult;
+        if (result.status == 1) {
+            if (self.aotErrorName() == null) self.setAotErrorName("AotCallFailed");
+            return error.AotCallFailed;
+        }
+        if (result.values_len == 0) return &.{};
+        const values_ptr = result.values_ptr orelse return error.BadAotFunctionResult;
+        return values_ptr[0..result.values_len];
+    }
+
+    fn callNative(self: *Context, native: *NativeFunction, args: []const Value) anyerror![]const Value {
+        const result = self.native_dispatch(native, self, args.ptr, args.len);
         if (result.reserved != 0 or result.status > 1) return error.BadAotFunctionResult;
         if (result.status == 1) {
             if (self.aotErrorName() == null) self.setAotErrorName("AotCallFailed");
@@ -740,7 +768,7 @@ pub const Context = struct {
 
     pub inline fn callKnownNative(self: *Context, callable: Value, expected: Value, args: []const Value) anyerror![]const Value {
         if (callable == .native and expected == .native and callable.native.call == expected.native.call) {
-            return callable.native.call(callable.native.ctx, self, args);
+            return self.callNative(callable.native, args);
         }
         return self.callValue(callable, args);
     }
@@ -779,7 +807,7 @@ pub const Context = struct {
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
         return switch (callable) {
             .function => |value| self.callFunction(value, args),
-            .native => |value| value.call(value.ctx, self, args),
+            .native => |value| self.callNative(value, args),
             .table => blk: {
                 const method = self.metamethod(callable, "__call") orelse return error.NotCallable;
                 const all = try std.heap.smp_allocator.alloc(Value, args.len + 1);
@@ -1627,6 +1655,25 @@ test "guarded call falls back to the actual function on an id mismatch" {
     try std.testing.expectEqual(@as(f64, 110), out[0].number);
 }
 
+fn nativeDispatchFailureProbe(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+    return error.NativeDispatchProbe;
+}
+
+fn nativeDispatchTestOverride(native: *NativeFunction, ctx: *Context, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
+    return dispatchNative(native, ctx, args_ptr, args_len);
+}
+
+test "native calls stabilize errors through the C dispatch boundary" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    ctx.native_dispatch = nativeDispatchTestOverride;
+    const callable = try ctx.newNative(null, nativeDispatchFailureProbe);
+    try std.testing.expectError(error.AotCallFailed, ctx.callValue(callable, &.{}));
+    try std.testing.expectEqualStrings("NativeDispatchProbe", ctx.aotErrorName().?);
+}
+
 test "forked AOT context shares program metadata but resets runtime state" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1640,6 +1687,7 @@ test "forked AOT context shares program metadata but resets runtime state" {
     parent.module_roots = &roots;
     parent.module_root_values = &root_values;
     parent.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
+    parent.native_dispatch = nativeDispatchTestOverride;
     var host_marker: u8 = 0;
     parent.setHost(&host_marker);
     parent.current_frame = try parent.newTable();
@@ -1654,6 +1702,7 @@ test "forked AOT context shares program metadata but resets runtime state" {
     try std.testing.expect(child.getGlobal(1) == .nil);
     try std.testing.expectEqual(@as(u8, 0), child.module_state[0]);
     try std.testing.expect(child.host == parent.host);
+    try std.testing.expect(child.native_dispatch == parent.native_dispatch);
     try std.testing.expect(child.current_frame == null);
     try std.testing.expectEqual(@as(u32, 0), try child.resolveModule("Module:A"));
 }
