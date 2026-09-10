@@ -50,23 +50,31 @@ pub const Stats = struct {
     native_namespace_upvalues: u64 = 0,
     native_field_upvalues: u64 = 0,
     native_field_candidate_upvalues: u64 = 0,
+    guard_only_upvalues: u64 = 0,
 };
 
 pub const Result = struct {
     allocator: std.mem.Allocator,
     offsets: []usize,
     facts: []Fact,
+    guard_facts: []Fact,
     reasons: []UnknownReason,
     stats: Stats,
     pub fn deinit(self: *Result) void {
         self.allocator.free(self.offsets);
         if (self.facts.len != 0) self.allocator.free(self.facts);
+        if (self.guard_facts.len != 0) self.allocator.free(self.guard_facts);
         if (self.reasons.len != 0) self.allocator.free(self.reasons);
     }
 
     pub fn forFunction(self: *const Result, program: *const ir.Program, function_id: u32) []const Fact {
         if (function_id >= program.functions.items.len) return &.{};
         return self.facts[self.offsets[function_id]..self.offsets[function_id + 1]];
+    }
+
+    pub fn guardsForFunction(self: *const Result, program: *const ir.Program, function_id: u32) []const Fact {
+        if (function_id >= program.functions.items.len) return &.{};
+        return self.guard_facts[self.offsets[function_id]..self.offsets[function_id + 1]];
     }
 
     pub fn reasonsForFunction(self: *const Result, program: *const ir.Program, function_id: u32) []const UnknownReason {
@@ -580,10 +588,46 @@ pub fn build(
             }
         }
     }
+    const guard_local_facts = try a.dupe(Fact, local_facts);
+    defer if (guard_local_facts.len != 0) a.free(guard_local_facts);
+    for (guard_local_facts, 0..) |*fact, flat| {
+        if (hasFact(fact.*) or !local_seen[flat] or local_conflicting_write[flat] or
+            local_unknown_write[flat] != .unknown_write_nil or !hasFact(local_candidates[flat])) continue;
+        fact.* = local_candidates[flat];
+    }
+
+    const guard_upvalue_facts = try a.dupe(Fact, upvalue_facts);
+    errdefer if (guard_upvalue_facts.len != 0) a.free(guard_upvalue_facts);
+    var guard_changed = true;
+    while (guard_changed) {
+        guard_changed = false;
+        for (candidates) |*fact| fact.* = .unknown;
+        @memset(bad, false);
+        @memset(seen, false);
+        for (edges.items) |edge| {
+            const child = edge.child_upvalue;
+            if (child >= guard_upvalue_facts.len or mutated_upvalue[child] or hasFact(guard_upvalue_facts[child])) continue;
+            const source_fact = switch (edge.source.source) {
+                .local => guard_local_facts[reg_offsets[edge.parent] + edge.source.index],
+                .upvalue => guard_upvalue_facts[up_offsets[edge.parent] + edge.source.index],
+            };
+            seen[child] = true;
+            mergeCandidate(&candidates[child], &bad[child], source_fact);
+        }
+        for (guard_upvalue_facts, 0..) |*fact, index| {
+            if (mutated_upvalue[index] or hasFact(fact.*) or !seen[index] or bad[index] or !hasFact(candidates[index])) continue;
+            fact.* = candidates[index];
+            guard_changed = true;
+        }
+    }
+    for (guard_upvalue_facts, upvalue_facts) |guard_fact, strict_fact| {
+        if (!hasFact(strict_fact) and hasFact(guard_fact)) stats.guard_only_upvalues += 1;
+    }
     return .{
         .allocator = a,
         .offsets = up_offsets,
         .facts = upvalue_facts,
+        .guard_facts = guard_upvalue_facts,
         .reasons = reasons,
         .stats = stats,
     };
@@ -717,14 +761,17 @@ test "ordinary nil initialization remains an unresolved captured write" {
     for (linked.function_base..linked.function_base + linked.function_count) |function_id| {
         const function = image.program.functions.items[function_id] orelse continue;
         const facts = result.forFunction(&image.program, @intCast(function_id));
+        const guards = result.guardsForFunction(&image.program, @intCast(function_id));
         const reasons = result.reasonsForFunction(&image.program, @intCast(function_id));
         for (function.upvalues.items, 0..) |_, index| {
             if (reasons[index] != .unknown_write_nil) continue;
             saw_nil = true;
             try std.testing.expect(facts[index] == .unknown);
+            try std.testing.expect(guards[index] == .native_field);
         }
     }
     try std.testing.expect(saw_nil);
+    try std.testing.expect(result.stats.guard_only_upvalues != 0);
 }
 
 test "equal multi-write captured imports preserve one guarded target" {

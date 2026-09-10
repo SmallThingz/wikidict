@@ -57,6 +57,7 @@ pub const Stats = struct {
     predicted_native_global_upvalues: u32 = 0,
     predicted_native_field_upvalues: u32 = 0,
     predicted_native_field_candidate_upvalues: u32 = 0,
+    predicted_guard_only_upvalues: u32 = 0,
     unresolved_upvalue_calls: UnresolvedUpvalueCalls = .{},
 };
 
@@ -363,6 +364,37 @@ fn noteUnresolvedUpvalueCall(stats: *Stats, reason: capture_link.UnknownReason) 
     }
 }
 
+fn tagCallFact(program: *const ir.Program, inst: *ir.Inst, fact: facts_mod.Fact, stats: *Stats, tagged: *u32) !bool {
+    switch (fact) {
+        .function => |target| if (target < program.functions.items.len) {
+            try aot_hint.set(inst, target);
+            tagged.* += 1;
+            return true;
+        },
+        .require_builtin => {
+            try aot_hint.setNativeGlobal(inst, global_abi.id("require"));
+            stats.guarded_require_calls += 1;
+            return true;
+        },
+        .captured_native_global => |slot| {
+            try aot_hint.setNativeGlobal(inst, slot);
+            stats.guarded_captured_native_global_calls += 1;
+            return true;
+        },
+        .captured_native_field => |field| {
+            try aot_hint.setNativeField(inst, field.namespace, field.slot);
+            stats.guarded_captured_native_field_calls += 1;
+            return true;
+        },
+        .captured_native_field_candidate => |field_id| {
+            try aot_hint.setNativeFieldCandidate(inst, field_id);
+            stats.guarded_captured_native_candidate_calls += 1;
+            return true;
+        },
+        else => {},
+    }
+    return false;
+}
 fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: *const symbols_mod.Index, stats: *Stats) !u32 {
     var captures = try capture_link.build(allocator, program, symbols);
     defer captures.deinit();
@@ -373,6 +405,7 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
     stats.predicted_native_global_upvalues = @intCast(captures.stats.native_global_upvalues);
     stats.predicted_native_field_upvalues = @intCast(captures.stats.native_field_upvalues);
     stats.predicted_native_field_candidate_upvalues = @intCast(captures.stats.native_field_candidate_upvalues);
+    stats.predicted_guard_only_upvalues = @intCast(captures.stats.guard_only_upvalues);
     var tagged: u32 = 0;
     var function_id: u32 = 0;
     while (function_id < program.functions.items.len) : (function_id += 1) {
@@ -380,7 +413,7 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
         const capture_reasons = captures.reasonsForFunction(program, function_id);
         // This is prediction only: native code guards the actual runtime function
         // identity and falls back to the original dynamic call on any mismatch.
-        var analysis = try facts_mod.buildFunctionWithUpvalues(allocator, program, symbols, function_id, true, captures.forFunction(program, function_id));
+        var analysis = try facts_mod.buildFunctionWithUpvalues(allocator, program, symbols, function_id, true, captures.guardsForFunction(program, function_id));
         defer analysis.deinit();
         const state = try allocator.alloc(ssa.ValueId, function.reg_count);
         defer if (state.len != 0) allocator.free(state);
@@ -391,35 +424,7 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
                 const pc: u32 = @intCast(pc_usize);
                 const inst = &function.insts.items[pc];
                 if (inst.op == .call and inst.a < state.len) {
-                    var tagged_any = false;
-                    switch (factOf(&analysis, state[inst.a])) {
-                        .function => |target| if (target < program.functions.items.len) {
-                            try aot_hint.set(inst, target);
-                            tagged += 1;
-                            tagged_any = true;
-                        },
-                        .require_builtin => {
-                            try aot_hint.setNativeGlobal(inst, global_abi.id("require"));
-                            stats.guarded_require_calls += 1;
-                            tagged_any = true;
-                        },
-                        .captured_native_global => |slot| {
-                            try aot_hint.setNativeGlobal(inst, slot);
-                            stats.guarded_captured_native_global_calls += 1;
-                            tagged_any = true;
-                        },
-                        .captured_native_field => |field| {
-                            try aot_hint.setNativeField(inst, field.namespace, field.slot);
-                            stats.guarded_captured_native_field_calls += 1;
-                            tagged_any = true;
-                        },
-                        .captured_native_field_candidate => |field_id| {
-                            try aot_hint.setNativeFieldCandidate(inst, field_id);
-                            stats.guarded_captured_native_candidate_calls += 1;
-                            tagged_any = true;
-                        },
-                        else => {},
-                    }
+                    var tagged_any = try tagCallFact(program, inst, factOf(&analysis, state[inst.a]), stats, &tagged);
                     if (!tagged_any) {
                         if (guardableNativeGlobal(program, function, &analysis, state, inst.a)) |slot| {
                             try aot_hint.setNativeGlobal(inst, slot);
@@ -627,7 +632,7 @@ test "recursive local function calls carry guarded AOT hints" {
     try std.testing.expect(stats.predicted_function_upvalues != 0);
 }
 
-test "ordinary nil initialization does not predict a captured call" {
+test "ordinary nil initialization gets only an advisory captured call guard" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
     defer image.deinit();
@@ -636,10 +641,49 @@ test "ordinary nil initialization does not predict a captured call" {
     _ = try addSource(a, &image, &symbols, "Module:A", "local f=nil;if ... then f=table.insert end;local function run(t,x)return f(t,x)end;return run");
     const stats = try run(a, &image.program, &symbols);
     try std.testing.expectEqual(@as(u32, 0), countGuardHints(&image.program));
-    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.total);
+    try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
+    try std.testing.expectEqual(@as(u32, 1), stats.predicted_guard_only_upvalues);
+}
+
+test "nil-only captured call remains unguarded" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=nil;local function run()return f()end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), countNativeFieldGuardHints(&image.program));
     try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.unknown_write_nil);
 }
 
+test "nullable captured local function gets only a guarded call hint" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=nil;if ... then local function g(x)return x+1 end;f=g end;local function run(x)return f(x)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
+    try std.testing.expect(stats.predicted_guard_only_upvalues != 0);
+}
+
+test "nullable conflicting native fields remain unguarded" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=nil;if ... then f=table.insert else f=table.remove end;local function run(t,x)return f(t,x)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), countNativeFieldGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.total);
+    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.conflicting_writes);
+}
 test "captured candidate field name carries a guarded AOT hint" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);

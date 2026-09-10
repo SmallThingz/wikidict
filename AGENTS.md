@@ -40,6 +40,7 @@
 - Numeric export linking remains experimental until export mutation/escape proofs and exact Wiktionary replay pass. Do not remove observable names or enable speculative direct calls to satisfy a size target.
 - AOT call predictions are guards, never semantic assumptions: guard the runtime function ID, use that value's actual capture environment, and fall back to ordinary dynamic dispatch on mismatch. Keep prediction hints compiler-only and out of serialized bytecode.
 - Local-function declarations lower as adjacent `load_nil dst; closure tmp; move dst,tmp`; capture analysis may ignore only that exact same-basic-block bootstrap nil because no Lua code can run before the assignment. Ordinary nil writes remain prediction barriers.
+- Guard-only capture facts may ignore ordinary nil writes only while emitting runtime-guarded AOT call hints; strict whole-program facts keep nil as a prediction barrier.
 - Function-entry phis include the implicit entry edge. Inlined closure factories need distinct capture cells for every dynamic activation, including loop calls.
 - AOT module-singleton functions share one activation capture environment; do not duplicate capture slices per `load_function`. Direct linked calls recover captured state by numeric module ID; do not restore an O(function-count) static `Value` registry. Loop and factory closures still require fresh environments and identities.
 - Generated AOT Zig is whitespace-compacted after emission. Lua string bytes must stay escaped onto one Zig source line; do not make codegen semantics depend on indentation.
