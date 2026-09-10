@@ -199,7 +199,7 @@ fn populateFacts(
     }
 }
 
-fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir.Function) !Stats {
+fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir.Function, rewrite_fields: bool) !Stats {
     if (!hasNamespaceRoot(program, function)) return .{};
     var analysis = try ssa.build(allocator, program, function);
     defer analysis.deinit();
@@ -219,7 +219,7 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
         for (block.start..block.end) |pc_usize| {
             const pc: u32 = @intCast(pc_usize);
             const inst = &function.insts.items[pc];
-            if ((inst.op == .get_field or inst.op == .set_field) and inst.a < state.len and inst.aux < program.strings.items.len) {
+            if (rewrite_fields and (inst.op == .get_field or inst.op == .set_field) and inst.a < state.len and inst.aux < program.strings.items.len) {
                 const value = analysis.canonicalValue(state[inst.a]);
                 if (value != ssa.invalid_value and value < facts.len) if (facts[value]) |namespace| {
                     const field_name = program.strings.items[inst.aux];
@@ -248,11 +248,21 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
     return stats;
 }
 
+pub fn tagCallHints(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
+    if (program.references_lowered) return .{};
+    var stats = Stats{};
+    for (program.functions.items) |*maybe| if (maybe.*) |*function| {
+        const one = try runFunction(allocator, program, function, false);
+        stats.guarded_calls += one.guarded_calls;
+    };
+    return stats;
+}
+
 pub fn run(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     if (program.references_lowered) return .{};
     var stats = Stats{};
     for (program.functions.items) |*maybe| if (maybe.*) |*function| {
-        const one = try runFunction(allocator, program, function);
+        const one = try runFunction(allocator, program, function, true);
         stats.reads += one.reads;
         stats.writes += one.writes;
         stats.guarded_calls += one.guarded_calls;
@@ -500,4 +510,18 @@ test "call result layout uses slots and falls back after constructor mutation" {
     const fallback = try vm.executeRoot(&program, &.{});
     defer exec.Vm.freeResults(fallback);
     try std.testing.expectEqual(@as(f64, 9), fallback[0].number);
+}
+
+test "staged native call hints preserve later field rewriting" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local f=table.insert;local t={};f(t,1);return table.concat(t,',')");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    const staged = try tagCallHints(a, &program);
+    try std.testing.expect(staged.guarded_calls >= 2);
+    const rewritten = try run(a, &program);
+    try std.testing.expect(rewritten.reads >= 2);
+    try std.testing.expectEqual(@as(u64, 0), rewritten.guarded_calls);
+    try std.testing.expectEqual(staged.guarded_calls, countNativeFieldGuardHints(&program));
 }

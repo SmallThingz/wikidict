@@ -8,6 +8,7 @@ const verify = @import("vm_verify.zig");
 const link_image = @import("vm_link_image.zig");
 const link_symbols = @import("vm_link_symbols.zig");
 const numeric_link = @import("vm_numeric_link.zig");
+const static_fields_pass = @import("vm_static_fields.zig");
 const module_model = @import("module_model.zig");
 const aot = @import("zig_aot.zig");
 const aot_stats = @import("zig_aot_stats.zig");
@@ -135,10 +136,17 @@ pub fn main(init: std.process.Init) !void {
     _ = try data.run(std.heap.smp_allocator, &image.program);
     const linked = try numeric_link.run(std.heap.smp_allocator, &image.program, &symbols);
     const linked_cleanup = try cleanup.run(std.heap.smp_allocator, &image.program);
+    const staged_static_fields = try static_fields_pass.tagCallHints(std.heap.smp_allocator, &image.program);
     const origins = try aot_stats.collectOrigins(std.heap.smp_allocator, &image.program);
+    const unguarded_call_origins = try aot_stats.collectUnguardedCallOrigins(std.heap.smp_allocator, &image.program);
+    const unguarded_call_field_object_origins = try aot_stats.collectUnguardedCallFieldObjectOrigins(std.heap.smp_allocator, &image.program);
+    var unguarded_call_field_names = try aot_stats.collectUnguardedCallFieldNames(std.heap.smp_allocator, &image.program);
+    defer unguarded_call_field_names.deinit();
     const global_fields = try aot_stats.collectGlobalFields(std.heap.smp_allocator, &image.program);
     const upvalue_origins = try aot_stats.collectUpvalueOrigins(std.heap.smp_allocator, &image.program);
-    const final = try optimizer.finalizeAot(std.heap.smp_allocator, &image.program);
+    const unguarded_upvalue_call_origins = try aot_stats.collectUnguardedUpvalueCallOrigins(std.heap.smp_allocator, &image.program);
+    var final = try optimizer.finalizeAot(std.heap.smp_allocator, &image.program);
+    final.static_fields.guarded_calls += staged_static_fields.guarded_calls;
     _ = try cleanup.compactStrings(std.heap.smp_allocator, &image.program);
     try verify.run(std.heap.smp_allocator, &image.program);
 
@@ -232,5 +240,12 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print(" {s}={d}", .{ name, count });
     std.debug.print(" env_reads={d}\n", .{global_fields.env_reads});
     std.debug.print("AOT_ORIGINS {any}\n", .{origins});
+    std.debug.print("AOT_UNGUARDED_CALL_ORIGINS {any}\n", .{unguarded_call_origins});
+    std.debug.print("AOT_UNGUARDED_CALL_FIELD_OBJECT_ORIGINS {any}\n", .{unguarded_call_field_object_origins});
+    std.debug.print("AOT_UNGUARDED_CALL_FIELDS anonymous_slots={d}", .{unguarded_call_field_names.anonymous_slots});
+    var unguarded_call_field_it = unguarded_call_field_names.counts.iterator();
+    while (unguarded_call_field_it.next()) |entry| std.debug.print(" {s}={d}", .{ entry.key_ptr.*, entry.value_ptr.* });
+    std.debug.print("\n", .{});
     std.debug.print("AOT_UPVALUE_ORIGINS {any}\n", .{upvalue_origins});
+    std.debug.print("AOT_UNGUARDED_UPVALUE_CALL_ORIGINS {any}\n", .{unguarded_upvalue_call_origins});
 }
