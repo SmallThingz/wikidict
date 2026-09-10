@@ -12,6 +12,18 @@ const capture_link = @import("vm_capture_link.zig");
 const aot_hint = @import("vm_aot_hint.zig");
 const global_abi = @import("vm_global_abi.zig");
 
+pub const UnresolvedUpvalueCalls = struct {
+    total: u32 = 0,
+    mutated: u32 = 0,
+    parameter: u32 = 0,
+    detached: u32 = 0,
+    no_writes: u32 = 0,
+    unknown_write: u32 = 0,
+    conflicting_writes: u32 = 0,
+    conflicting_sources: u32 = 0,
+    unresolved_chain: u32 = 0,
+};
+
 pub const Stats = struct {
     direct_calls: u32 = 0,
     numeric_imports: u32 = 0,
@@ -28,6 +40,7 @@ pub const Stats = struct {
     predicted_function_upvalues: u32 = 0,
     predicted_native_global_upvalues: u32 = 0,
     predicted_native_field_upvalues: u32 = 0,
+    unresolved_upvalue_calls: UnresolvedUpvalueCalls = .{},
 };
 
 fn factOf(analysis: *const facts_mod.Analysis, raw: ssa.ValueId) facts_mod.Fact {
@@ -249,6 +262,30 @@ fn guardableNativeGlobal(
     return slot;
 }
 
+fn producerUpvalue(function: *const ir.Function, analysis: *const facts_mod.Analysis, state: []const ssa.ValueId, reg: u32) ?u32 {
+    if (reg >= state.len or analysis.ssa_function.captured[reg]) return null;
+    const id = analysis.ssa_function.canonicalValue(state[reg]);
+    if (id == ssa.invalid_value or id >= analysis.ssa_function.values.items.len) return null;
+    const node = analysis.ssa_function.values.items[id];
+    if (node.kind != .instruction or node.pc >= function.insts.items.len) return null;
+    const producer = function.insts.items[node.pc];
+    return if (producer.op == .get_upvalue) producer.a else null;
+}
+
+fn noteUnresolvedUpvalueCall(stats: *Stats, reason: capture_link.UnknownReason) void {
+    stats.unresolved_upvalue_calls.total += 1;
+    switch (reason) {
+        .mutated => stats.unresolved_upvalue_calls.mutated += 1,
+        .parameter => stats.unresolved_upvalue_calls.parameter += 1,
+        .detached => stats.unresolved_upvalue_calls.detached += 1,
+        .no_writes => stats.unresolved_upvalue_calls.no_writes += 1,
+        .unknown_write => stats.unresolved_upvalue_calls.unknown_write += 1,
+        .conflicting_writes => stats.unresolved_upvalue_calls.conflicting_writes += 1,
+        .conflicting_sources => stats.unresolved_upvalue_calls.conflicting_sources += 1,
+        .none, .unresolved_chain => stats.unresolved_upvalue_calls.unresolved_chain += 1,
+    }
+}
+
 fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: *const symbols_mod.Index, stats: *Stats) !u32 {
     var captures = try capture_link.build(allocator, program, symbols);
     defer captures.deinit();
@@ -262,6 +299,7 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
     var function_id: u32 = 0;
     while (function_id < program.functions.items.len) : (function_id += 1) {
         const function = &(program.functions.items[function_id] orelse continue);
+        const capture_reasons = captures.reasonsForFunction(program, function_id);
         // This is prediction only: native code guards the actual runtime function
         // identity and falls back to the original dynamic call on any mismatch.
         var analysis = try facts_mod.buildFunctionWithUpvalues(allocator, program, symbols, function_id, true, captures.forFunction(program, function_id));
@@ -299,11 +337,22 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
                         },
                         else => {},
                     }
-                    if (!tagged_any) if (guardableNativeGlobal(program, function, &analysis, state, inst.a)) |slot| {
-                        try aot_hint.setNativeGlobal(inst, slot);
-                        stats.guarded_global_calls += 1;
+                    if (!tagged_any) {
+                        if (guardableNativeGlobal(program, function, &analysis, state, inst.a)) |slot| {
+                            try aot_hint.setNativeGlobal(inst, slot);
+                            stats.guarded_global_calls += 1;
+                            tagged_any = true;
+                        }
+                    }
+                    if (!tagged_any) if (producerUpvalue(function, &analysis, state, inst.a)) |up_index| {
+                        const reason = if (up_index < capture_reasons.len) capture_reasons[up_index] else capture_link.UnknownReason.unresolved_chain;
+                        noteUnresolvedUpvalueCall(stats, reason);
                     };
                 }
+                if (inst.op == .call_vararg and inst.a < state.len) if (producerUpvalue(function, &analysis, state, inst.a)) |up_index| {
+                    const reason = if (up_index < capture_reasons.len) capture_reasons[up_index] else capture_link.UnknownReason.unresolved_chain;
+                    noteUnresolvedUpvalueCall(stats, reason);
+                };
                 try ssa.applyWrites(&analysis.ssa_function, function, state, pc, null);
             }
         }
@@ -520,6 +569,42 @@ test "descendant mutation invalidates equal multi-write native field facts" {
     try std.testing.expectEqual(@as(u32, 0), stats.guarded_captured_native_field_calls);
     try std.testing.expectEqual(@as(u32, 0), countNativeFieldGuardHints(&image.program));
     try std.testing.expectEqual(@as(u32, 0), stats.predicted_multiwrite_locals);
+}
+
+test "captured parameter calls are classified separately" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "return function(f)local function run()return f()end;return run end");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.total);
+    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.parameter);
+}
+
+test "unknown captured writes are classified separately" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=table.insert;if ... then f=(...) end;local function run(t,x)return f(t,x)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.total);
+    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.unknown_write);
+}
+
+test "captured vararg calls are included in unresolved cause totals" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "return function(f)local function run(...)return f(...)end;return run end");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.total);
+    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.parameter);
 }
 
 test "mutated captured native field remains unpredicted" {

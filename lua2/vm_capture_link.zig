@@ -7,6 +7,18 @@ const symbols_mod = @import("vm_link_symbols.zig");
 
 const Fact = facts_mod.Fact;
 
+pub const UnknownReason = enum {
+    none,
+    mutated,
+    parameter,
+    detached,
+    no_writes,
+    unknown_write,
+    conflicting_writes,
+    conflicting_sources,
+    unresolved_chain,
+};
+
 const Edge = struct {
     parent: u32,
     child_upvalue: usize,
@@ -28,15 +40,22 @@ pub const Result = struct {
     allocator: std.mem.Allocator,
     offsets: []usize,
     facts: []Fact,
+    reasons: []UnknownReason,
     stats: Stats,
     pub fn deinit(self: *Result) void {
         self.allocator.free(self.offsets);
         if (self.facts.len != 0) self.allocator.free(self.facts);
+        if (self.reasons.len != 0) self.allocator.free(self.reasons);
     }
 
     pub fn forFunction(self: *const Result, program: *const ir.Program, function_id: u32) []const Fact {
         if (function_id >= program.functions.items.len) return &.{};
         return self.facts[self.offsets[function_id]..self.offsets[function_id + 1]];
+    }
+
+    pub fn reasonsForFunction(self: *const Result, program: *const ir.Program, function_id: u32) []const UnknownReason {
+        if (function_id >= program.functions.items.len) return &.{};
+        return self.reasons[self.offsets[function_id]..self.offsets[function_id + 1]];
     }
 };
 
@@ -211,11 +230,23 @@ fn mergeLocalWrite(
     facts: []const Fact,
     candidates: []Fact,
     bad: []bool,
+    unknown_write: []bool,
+    conflicting_write: []bool,
     seen: []bool,
 ) void {
     if (flat >= captured.len or !captured[flat] or detached[flat] or mutated[flat] or hasFact(facts[flat])) return;
     seen[flat] = true;
-    mergeCandidate(&candidates[flat], &bad[flat], incoming);
+    if (!hasFact(incoming)) {
+        bad[flat] = true;
+        unknown_write[flat] = true;
+        return;
+    }
+    if (!hasFact(candidates[flat])) {
+        candidates[flat] = incoming;
+    } else if (!std.meta.eql(candidates[flat], incoming)) {
+        bad[flat] = true;
+        conflicting_write[flat] = true;
+    }
 }
 
 fn collectLocalCandidates(
@@ -231,6 +262,8 @@ fn collectLocalCandidates(
     facts: []const Fact,
     candidates: []Fact,
     bad: []bool,
+    unknown_write: []bool,
+    conflicting_write: []bool,
     seen: []bool,
 ) !void {
     const state = try analysis.allocator.alloc(ssa.ValueId, function.reg_count);
@@ -244,29 +277,29 @@ fn collectLocalCandidates(
             const fact = facts_mod.predictInstruction(analysis, program, symbols, function, state, inst, true, upvalues);
             const info = sem.info(inst.op);
             if (info.defines and inst.dst < function.reg_count)
-                mergeLocalWrite(base + inst.dst, fact, captured, detached, mutated, facts, candidates, bad, seen);
+                mergeLocalWrite(base + inst.dst, fact, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
             if (info.results) {
                 const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
                 var i: u32 = 0;
                 while (i < width and inst.dst + i < function.reg_count) : (i += 1)
-                    mergeLocalWrite(base + inst.dst + i, fact, captured, detached, mutated, facts, candidates, bad, seen);
+                    mergeLocalWrite(base + inst.dst + i, fact, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
             }
             switch (inst.op) {
                 .numeric_for_init => if (inst.dst < function.reg_count)
-                    mergeLocalWrite(base + inst.dst, .unknown, captured, detached, mutated, facts, candidates, bad, seen),
+                    mergeLocalWrite(base + inst.dst, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen),
                 .numeric_for_next => {
                     if (inst.a < function.reg_count)
-                        mergeLocalWrite(base + inst.a, .unknown, captured, detached, mutated, facts, candidates, bad, seen);
+                        mergeLocalWrite(base + inst.a, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
                     if (inst.dst < function.reg_count)
-                        mergeLocalWrite(base + inst.dst, .unknown, captured, detached, mutated, facts, candidates, bad, seen);
+                        mergeLocalWrite(base + inst.dst, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
                 },
                 .generic_for_init, .generic_for_next => {
                     if (inst.c < function.reg_count)
-                        mergeLocalWrite(base + inst.c, .unknown, captured, detached, mutated, facts, candidates, bad, seen);
+                        mergeLocalWrite(base + inst.c, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
                     const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
                     var i: u32 = 0;
                     while (i < width and inst.dst + i < function.reg_count) : (i += 1)
-                        mergeLocalWrite(base + inst.dst + i, .unknown, captured, detached, mutated, facts, candidates, bad, seen);
+                        mergeLocalWrite(base + inst.dst + i, .unknown, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen);
                 },
                 else => {},
             }
@@ -315,6 +348,10 @@ pub fn build(
     defer if (local_candidates.len != 0) a.free(local_candidates);
     const local_bad = try a.alloc(bool, total_regs);
     defer if (local_bad.len != 0) a.free(local_bad);
+    const local_unknown_write = try a.alloc(bool, total_regs);
+    defer if (local_unknown_write.len != 0) a.free(local_unknown_write);
+    const local_conflicting_write = try a.alloc(bool, total_regs);
+    defer if (local_conflicting_write.len != 0) a.free(local_conflicting_write);
     const local_seen = try a.alloc(bool, total_regs);
     defer if (local_seen.len != 0) a.free(local_seen);
     const upvalue_facts = try a.alloc(Fact, total_upvalues);
@@ -333,6 +370,8 @@ pub fn build(
         changed = false;
         for (local_candidates) |*fact| fact.* = .unknown;
         @memset(local_bad, false);
+        @memset(local_unknown_write, false);
+        @memset(local_conflicting_write, false);
         @memset(local_seen, false);
         for (program.functions.items, 0..) |maybe, function_usize| {
             const function = maybe orelse continue;
@@ -371,6 +410,8 @@ pub fn build(
                 local_facts,
                 local_candidates,
                 local_bad,
+                local_unknown_write,
+                local_conflicting_write,
                 local_seen,
             );
         }
@@ -413,10 +454,71 @@ pub fn build(
             else => {},
         }
     };
+
+    const reasons = try a.alloc(UnknownReason, total_upvalues);
+    errdefer if (reasons.len != 0) a.free(reasons);
+    @memset(reasons, .none);
+    for (upvalue_facts, 0..) |fact, index| {
+        if (!hasFact(fact) and mutated_upvalue[index]) reasons[index] = .mutated;
+    }
+    var reasons_changed = true;
+    while (reasons_changed) {
+        reasons_changed = false;
+        for (upvalue_facts, 0..) |fact, child| {
+            if (hasFact(fact) or reasons[child] == .mutated) continue;
+            var candidate: Fact = .unknown;
+            var conflict = false;
+            var unresolved = false;
+            var source_reason: UnknownReason = .none;
+            for (edges.items) |edge| {
+                if (edge.child_upvalue != child) continue;
+                const source_fact = switch (edge.source.source) {
+                    .local => local_facts[reg_offsets[edge.parent] + edge.source.index],
+                    .upvalue => upvalue_facts[up_offsets[edge.parent] + edge.source.index],
+                };
+                if (hasFact(source_fact)) {
+                    if (!hasFact(candidate)) candidate = source_fact else if (!std.meta.eql(candidate, source_fact)) conflict = true;
+                    continue;
+                }
+                unresolved = true;
+                const reason = switch (edge.source.source) {
+                    .local => blk: {
+                        const flat = reg_offsets[edge.parent] + edge.source.index;
+                        if (mutated_local[flat]) break :blk UnknownReason.mutated;
+                        if (detached[flat]) break :blk UnknownReason.detached;
+                        if (write_counts[flat] == 0) {
+                            const parent_function = program.functions.items[edge.parent] orelse break :blk UnknownReason.no_writes;
+                            if (edge.source.index < parent_function.param_count) break :blk UnknownReason.parameter;
+                            break :blk UnknownReason.no_writes;
+                        }
+                        if (local_conflicting_write[flat]) break :blk UnknownReason.conflicting_writes;
+                        if (local_unknown_write[flat]) break :blk UnknownReason.unknown_write;
+                        break :blk UnknownReason.unresolved_chain;
+                    },
+                    .upvalue => blk: {
+                        const parent = up_offsets[edge.parent] + edge.source.index;
+                        break :blk if (reasons[parent] != .none) reasons[parent] else UnknownReason.unresolved_chain;
+                    },
+                };
+                if (source_reason == .none) source_reason = reason else if (source_reason != reason) source_reason = .unresolved_chain;
+            }
+            const next: UnknownReason = if (conflict)
+                .conflicting_sources
+            else if (unresolved)
+                if (source_reason != .none) source_reason else .unresolved_chain
+            else
+                .unresolved_chain;
+            if (reasons[child] != next) {
+                reasons[child] = next;
+                reasons_changed = true;
+            }
+        }
+    }
     return .{
         .allocator = a,
         .offsets = up_offsets,
         .facts = upvalue_facts,
+        .reasons = reasons,
         .stats = stats,
     };
 }
