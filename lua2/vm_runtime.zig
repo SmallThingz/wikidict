@@ -221,13 +221,31 @@ pub const Table = struct {
         return .{ .table = self, .hash = self.map.iterator() };
     }
 
+    fn hasArrayIndex(self: *const Table, index: usize) bool {
+        return self.rawGet(.{ .number = @floatFromInt(index) }) != null;
+    }
+
     pub fn rawLen(self: *const Table) usize {
-        var n: usize = 0;
-        while (true) {
-            const key: Value = .{ .number = @floatFromInt(n + 1) };
-            if (self.rawGet(key) == null) return n;
-            n += 1;
+        var low: usize = if (self.append_index == 0) 0 else self.append_index - 1;
+        if (low != 0 and !self.hasArrayIndex(low)) {
+            var high = low;
+            low = 0;
+            while (high - low > 1) {
+                const mid = low + (high - low) / 2;
+                if (self.hasArrayIndex(mid)) low = mid else high = mid;
+            }
+            return low;
         }
+        var high = low + 1;
+        while (self.hasArrayIndex(high)) {
+            low = high;
+            high *= 2;
+        }
+        while (high - low > 1) {
+            const mid = low + (high - low) / 2;
+            if (self.hasArrayIndex(mid)) low = mid else high = mid;
+        }
+        return low;
     }
 };
 pub fn newTable(a: std.mem.Allocator) !*Table {

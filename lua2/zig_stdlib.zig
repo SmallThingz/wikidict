@@ -920,6 +920,32 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     try std.testing.expectEqual(@as(f64, 8), max[0].number);
 }
 
+test "AOT sparse array borders survive table remove and insert" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try install(&ctx);
+
+    const lib = ctx.getGlobal(global_abi.id("table"));
+    const values = try ctx.newTable();
+    for (1..21) |index| try values.append(ctx.allocator, if (index == 1 or index == 11) .nil else .{ .number = @floatFromInt(index) });
+    try std.testing.expectEqual(@as(usize, 20), values.rawLen());
+
+    const remove11 = try callField(&ctx, lib, "remove", &.{ .{ .table = values }, .{ .number = 11 } });
+    defer rt.freeResults(remove11);
+    try std.testing.expectEqual(@as(usize, 19), values.rawLen());
+    const remove1 = try callField(&ctx, lib, "remove", &.{ .{ .table = values }, .{ .number = 1 } });
+    defer rt.freeResults(remove1);
+    try std.testing.expectEqual(@as(usize, 18), values.rawLen());
+    const insert1 = try callField(&ctx, lib, "insert", &.{ .{ .table = values }, .{ .number = 1 }, .nil });
+    defer rt.freeResults(insert1);
+    try std.testing.expectEqual(@as(usize, 19), values.rawLen());
+    const insert11 = try callField(&ctx, lib, "insert", &.{ .{ .table = values }, .{ .number = 11 }, .nil });
+    defer rt.freeResults(insert11);
+    try std.testing.expectEqual(@as(usize, 20), values.rawLen());
+}
+
 test "AOT pcall preserves Lua error values" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

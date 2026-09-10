@@ -228,6 +228,7 @@ pub const Vm = struct {
                     const value = try self.materializeConst(p, e.value);
                     try t.rawSet(self.allocator, key, value);
                 }
+                t.append_index = list_index;
                 break :blk .{ .table = t };
             },
         };

@@ -808,6 +808,34 @@ test "Lua 5.1 string library coerces numbers" {
     try std.testing.expectEqual(@as(f64, 5), out[2].number);
 }
 
+test "Lua 5.1 sparse array borders survive table remove and insert" {
+    const lua = @import("root.zig");
+    const source =
+        \\local t = {nil, tostring(2), 3, 4, 5, 6, 7, 8, 9, 10, nil, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+        \\local a = #t
+        \\table.remove(t, 11)
+        \\local b = #t
+        \\table.remove(t, 1)
+        \\local c = #t
+        \\table.insert(t, 1, nil)
+        \\local d = #t
+        \\table.insert(t, 11, nil)
+        \\return a, b, c, d, #t
+    ;
+    var chunk = try lua.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(std.testing.allocator, &chunk);
+    defer program.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var vm = try exec.Vm.init(arena.allocator());
+    try install(&vm);
+    const out = try vm.executeRoot(&program, &.{});
+    defer exec.Vm.freeResults(out);
+    const expected = [_]f64{ 20, 19, 18, 19, 20 };
+    for (expected, out) |want, got| try std.testing.expectEqual(want, got.number);
+}
+
 test "Lua 5.1 gsub replacement escapes accept non-digits" {
     const captures: [pattern.max_captures]pattern.Capture = undefined;
     const m = pattern.Match{ .start = 1, .end = 2, .captures = captures, .capture_count = 0 };
