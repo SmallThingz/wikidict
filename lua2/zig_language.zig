@@ -290,7 +290,7 @@ fn formatDateAlloc(a: std.mem.Allocator, timestamp: i64, format: []const u8) ![]
     return out.toOwnedSlice(a);
 }
 
-fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, ctx: ?*anyopaque, call: rt.NativeFn) !void {
+fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, ctx: ?*anyopaque, comptime call: anytype) !void {
     try table.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(ctx, call));
 }
 const LanguageCtx = struct { code: []const u8 };

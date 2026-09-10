@@ -71,11 +71,13 @@ pub const FunctionResult = extern struct {
 };
 pub const FunctionFn = *const fn (*Context, *const Captures, [*]const Value, usize) callconv(.c) FunctionResult;
 pub const NativeFn = *const fn (?*anyopaque, *Context, []const Value) anyerror![]const Value;
+pub const StableNativeFn = *const fn (?*anyopaque, *Context, [*]const Value, usize) callconv(.c) FunctionResult;
 pub const ModuleLookupFn = *const fn (?*const anyopaque, []const u8) ?u32;
 pub const ModuleNameFn = *const fn (?*const anyopaque, u32) ?[]const u8;
 pub const NativeFunction = struct {
     ctx: ?*anyopaque = null,
     call: NativeFn,
+    stable_call: StableNativeFn,
 };
 pub const NativeDispatchFn = *const fn (*NativeFunction, *Context, [*]const Value, usize) callconv(.c) FunctionResult;
 
@@ -140,17 +142,25 @@ pub fn stabilize(comptime function: DirectFunctionFn) FunctionFn {
     }.call;
 }
 
+pub fn stabilizeNative(comptime function: anytype) StableNativeFn {
+    return struct {
+        fn call(host: ?*anyopaque, ctx: *Context, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
+            const values = @call(.always_inline, function, .{ host, ctx, args_ptr[0..args_len] }) catch |err| {
+                if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
+                return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
+            };
+            return .{
+                .values_ptr = if (values.len == 0) null else values.ptr,
+                .values_len = values.len,
+                .status = 0,
+                .reserved = 0,
+            };
+        }
+    }.call;
+}
+
 fn dispatchNative(native: *NativeFunction, ctx: *Context, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
-    const values = native.call(native.ctx, ctx, args_ptr[0..args_len]) catch |err| {
-        if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
-        return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
-    };
-    return .{
-        .values_ptr = if (values.len == 0) null else values.ptr,
-        .values_len = values.len,
-        .status = 0,
-        .reserved = 0,
-    };
+    return native.stable_call(native.ctx, ctx, args_ptr, args_len);
 }
 
 pub const no_shape = std.math.maxInt(u32);
@@ -697,8 +707,6 @@ pub const Context = struct {
             return self.module_values.items[slot];
         }
         if (self.module_state[module_id] == 1) return error.ModuleLoadLoop;
-        const value_slot = std.math.cast(u32, self.module_values.items.len) orelse return error.TooManyLoadedModules;
-        try self.module_values.ensureUnusedCapacity(self.allocator, 1);
         self.module_state[module_id] = 1;
         errdefer {
             if (self.module_state[module_id] != 2) self.module_state[module_id] = 0;
@@ -721,10 +729,12 @@ pub const Context = struct {
             };
             if (value == .nil) value = .{ .boolean = true };
         }
+        const value_slot = std.math.cast(u32, self.module_values.items.len) orelse return error.TooManyLoadedModules;
+        try self.module_values.ensureUnusedCapacity(self.allocator, 1);
         if (canonical) |text| if (self.package_loaded) |loaded|
             try loaded.rawSet(self.allocator, .{ .string = text }, value);
-        self.module_value_slots[module_id] = value_slot;
         self.module_values.appendAssumeCapacity(value);
+        self.module_value_slots[module_id] = value_slot;
         self.module_state[module_id] = 2;
         return value;
     }
@@ -798,7 +808,7 @@ pub const Context = struct {
             for (guards) |guard| {
                 const expected = self.expectedNativeField(guard) orelse continue;
                 if (expected == .native and callable.native.call == expected.native.call)
-                    return callable.native.call(callable.native.ctx, self, args);
+                    return self.callNative(callable.native, args);
             }
         }
         return self.callValue(callable, args);
@@ -819,9 +829,9 @@ pub const Context = struct {
             else => error.NotCallable,
         };
     }
-    pub fn newNative(self: *Context, host: ?*anyopaque, call: NativeFn) !Value {
+    pub fn newNative(self: *Context, host: ?*anyopaque, comptime call: anytype) !Value {
         const native = try self.allocator.create(NativeFunction);
-        native.* = .{ .ctx = host, .call = call };
+        native.* = .{ .ctx = host, .call = call, .stable_call = stabilizeNative(call) };
         return .{ .native = native };
     }
 
@@ -1218,6 +1228,41 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     try std.testing.expectEqual(@as(u8, 0), ctx.module_state[2]);
     try std.testing.expectEqual(std.math.maxInt(u32), ctx.module_value_slots[2]);
     try std.testing.expectError(error.ModuleNotFound, ctx.requireByName("Module:Missing"));
+}
+
+const RecursiveModuleCacheProbe = struct {
+    fn outer(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        const loaded_inner = try ctx.loadModule(1, null);
+        if (loaded_inner != .string or !std.mem.eql(u8, loaded_inner.string, "inner")) return error.BadInnerModule;
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "outer" };
+        return out;
+    }
+    fn inner(_: *Context, _: Captures, _: []const Value) ![]const Value {
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "inner" };
+        return out;
+    }
+};
+
+test "recursive module loads keep distinct cache slots" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 2);
+    defer ctx.deinit();
+    const functions = [_]FunctionFn{ stabilize(RecursiveModuleCacheProbe.outer), stabilize(RecursiveModuleCacheProbe.inner) };
+    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
+    const roots = [_]u32{ 0, 1 };
+    ctx.function_blocks = &blocks;
+    ctx.module_roots = &roots;
+
+    const outer = try ctx.loadModule(0, null);
+    const loaded_inner = try ctx.loadModule(1, null);
+    const cached_outer = try ctx.loadModule(0, null);
+    try std.testing.expectEqualStrings("outer", outer.string);
+    try std.testing.expectEqualStrings("inner", loaded_inner.string);
+    try std.testing.expectEqualStrings("outer", cached_outer.string);
+    try std.testing.expect(ctx.module_value_slots[0] != ctx.module_value_slots[1]);
 }
 
 test "descriptor module roots materialize constants without generated functions" {
@@ -1671,6 +1716,21 @@ test "native calls stabilize errors through the C dispatch boundary" {
     ctx.native_dispatch = nativeDispatchTestOverride;
     const callable = try ctx.newNative(null, nativeDispatchFailureProbe);
     try std.testing.expectError(error.AotCallFailed, ctx.callValue(callable, &.{}));
+    try std.testing.expectEqualStrings("NativeDispatchProbe", ctx.aotErrorName().?);
+}
+
+test "candidate native field calls use the stable dispatch boundary" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    ctx.native_dispatch = nativeDispatchTestOverride;
+    const string = try ctx.newNativeNamespace(.string);
+    const slot = static_fields.slotForName(.string, "gsub") orelse return error.MissingStaticField;
+    const callable = try ctx.newNative(null, nativeDispatchFailureProbe);
+    try string.rawSet(ctx.allocator, .{ .string = "gsub" }, callable);
+    const guards = [_]NativeFieldGuard{.{ .namespace = .string, .slot = slot, .root = .{ .table = string } }};
+    try std.testing.expectError(error.AotCallFailed, ctx.callKnownNativeFieldCandidates(callable, &guards, &.{}));
     try std.testing.expectEqualStrings("NativeDispatchProbe", ctx.aotErrorName().?);
 }
 

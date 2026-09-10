@@ -5,6 +5,7 @@ const files = @import("blob_files");
 const store = @import("store.zig");
 const model = @import("model.zig");
 const A = std.mem.Allocator;
+const InterwikiRow = @import("generated").WikitextProvider.InterwikiRow;
 const storage = @import("blob_storage");
 
 const ManifestRow = struct {
@@ -26,6 +27,7 @@ pub const Provider = struct {
     existence: std.StringHashMapUnmanaged(bool) = .empty,
     templates: std.StringHashMapUnmanaged(TemplateSlot) = .empty,
     modules: std.StringHashMapUnmanaged(u64) = .empty,
+    interwiki_rows: std.ArrayList(InterwikiRow) = .empty,
 
     pub fn init(io: std.Io, a: A, root: []const u8, dictionary_root: ?[]const u8, language: []const u8) !Provider {
         var self: Provider = .{
@@ -61,6 +63,7 @@ pub const Provider = struct {
         }
         if (self.linked_templates == null) try self.loadTemplateManifest();
         try self.loadModuleManifest();
+        try self.loadInterwikiMap();
         return self;
     }
 
@@ -77,10 +80,15 @@ pub const Provider = struct {
         self.templates.deinit(self.a);
         freeStringMapKeys(u64, self.a, &self.modules);
         freeStringMapKeys(bool, self.a, &self.existence);
+        for (self.interwiki_rows.items) |row| {
+            self.a.free((row.prefix));
+            self.a.free((row.url));
+        }
+        self.interwiki_rows.deinit(self.a);
     }
 
     pub fn api(self: *Provider) @import("generated").WikitextProvider {
-        return .{ .ctx = self, .get = get, .exists = exists };
+        return .{ .ctx = self, .get = get, .exists = exists, .interwiki_map = interwikiMap };
     }
 
     fn freeStringMapKeys(comptime V: type, a: A, map: *std.StringHashMapUnmanaged(V)) void {
@@ -117,6 +125,32 @@ pub const Provider = struct {
             });
         }
         return out.toOwnedSlice(self.a);
+    }
+
+    fn loadInterwikiMap(self: *Provider) !void {
+        const bytes = (try self.readOptional("interwiki-map.tsv", 16 * 1024 * 1024)) orelse return;
+        defer self.a.free(bytes);
+        var lines = std.mem.splitScalar(u8, bytes, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            var fields = std.mem.splitScalar(u8, line, '\t');
+            const prefix_raw = fields.next() orelse continue;
+            const local_raw = fields.next() orelse continue;
+            const current_raw = fields.next() orelse continue;
+            const protocol_raw = fields.next() orelse continue;
+            const url_raw = fields.next() orelse continue;
+            const prefix = try self.unescapeField(prefix_raw);
+            errdefer self.a.free(prefix);
+            const url = try self.unescapeField(url_raw);
+            errdefer self.a.free(url);
+            try self.interwiki_rows.append(self.a, .{
+                .prefix = prefix,
+                .url = url,
+                .is_local = std.mem.eql(u8, local_raw, "1"),
+                .is_current_wiki = std.mem.eql(u8, current_raw, "1"),
+                .is_protocol_relative = std.mem.eql(u8, protocol_raw, "1"),
+            });
+        }
     }
 
     fn normalizeTemplateAlloc(self: *Provider, raw: []const u8) ![]u8 {
@@ -267,6 +301,11 @@ pub const Provider = struct {
             }
         }
         return null;
+    }
+
+    fn interwikiMap(ctx: ?*anyopaque) anyerror![]const InterwikiRow {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return self.interwiki_rows.items;
     }
 
     fn get(ctx: ?*anyopaque, a: A, title: []const u8) anyerror!?[]const u8 {

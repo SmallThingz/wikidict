@@ -435,10 +435,10 @@ fn uGsub(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     return result;
 }
 
-fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, call: rt.NativeFn) !void {
+fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, comptime call: anytype) !void {
     try table.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(null, call));
 }
-fn setNativeCtx(runtime: *rt.Context, table: *rt.Table, name: []const u8, host: ?*anyopaque, call: rt.NativeFn) !void {
+fn setNativeCtx(runtime: *rt.Context, table: *rt.Table, name: []const u8, host: ?*anyopaque, comptime call: anytype) !void {
     try table.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(host, call));
 }
 

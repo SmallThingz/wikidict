@@ -31,10 +31,10 @@ fn str(a: std.mem.Allocator, v: Value) ![]const u8 {
     };
 }
 
-fn setNative(vm: *rt.Context, t: *rt.Table, name: []const u8, call: rt.NativeFn) !void {
+fn setNative(vm: *rt.Context, t: *rt.Table, name: []const u8, comptime call: anytype) !void {
     try t.rawSet(vm.allocator, .{ .string = name }, try vm.newNative(null, call));
 }
-fn setGlobalNative(vm: *rt.Context, comptime name: []const u8, call: rt.NativeFn) !void {
+fn setGlobalNative(vm: *rt.Context, comptime name: []const u8, comptime call: anytype) !void {
     try vm.setGlobal(global_abi.id(name), try vm.newNative(null, call));
 }
 

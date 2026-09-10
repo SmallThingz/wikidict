@@ -1,5 +1,6 @@
 const std = @import("std");
 const rt = @import("zig_runtime");
+const host_api = @import("zig_host.zig");
 const Value = rt.Value;
 
 const Host = struct {
@@ -12,7 +13,7 @@ fn one(_: std.mem.Allocator, value: Value) ![]const Value {
     return out;
 }
 
-fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, host: ?*anyopaque, call: rt.NativeFn) !void {
+fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, host: ?*anyopaque, comptime call: anytype) !void {
     try table.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(host, call));
 }
 const TextGsplitCtx = struct {
@@ -313,6 +314,9 @@ fn textUnstripCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
 }
 
 fn textUnstripNoWikiCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    if (host_api.get(runtime)) |host| if (host.text_unstrip_no_wiki) |call|
+        return one(runtime.allocator, .{ .string = try call(host.ctx, runtime.allocator, args[0].string) });
     return textUnstripCall(null, runtime, args);
 }
 

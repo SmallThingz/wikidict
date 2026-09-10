@@ -57,7 +57,7 @@ fn newNode(html: *Html, runtime: *rt.Context, parent: ?*Node, tag_name: ?[]const
     try html.nodes.put(html.allocator, table, node);
     return node;
 }
-fn setNative(node: *Node, runtime: *rt.Context, name: []const u8, call: rt.NativeFn) !void {
+fn setNative(node: *Node, runtime: *rt.Context, name: []const u8, comptime call: anytype) !void {
     try node.table.rawSet(node.html.allocator, .{ .string = name }, try runtime.newNative(node, call));
 }
 

@@ -289,7 +289,7 @@ fn uriAnchorEncodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value
     return one(a, .{ .string = try out.toOwnedSlice(a) });
 }
 
-fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, call: rt.NativeFn) !void {
+fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, comptime call: anytype) !void {
     try table.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(null, call));
 }
 

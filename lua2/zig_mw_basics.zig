@@ -1,6 +1,7 @@
 const std = @import("std");
 const rt = @import("zig_runtime");
 const namespace_lib = @import("zig_namespaces.zig");
+const host_api = @import("zig_host.zig");
 const Value = rt.Value;
 
 fn one(value: Value) ![]const Value {
@@ -33,7 +34,37 @@ fn dumpObjectCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     return one(.{ .string = text });
 }
 
-fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, call: rt.NativeFn) !void {
+fn interwikiMapCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const filter: enum { all, local, nonlocal } = if (args.len == 0 or args[0] == .nil)
+        .all
+    else if (args[0] != .string)
+        return error.StringExpected
+    else if (std.mem.eql(u8, args[0].string, "local"))
+        .local
+    else if (std.mem.eql(u8, args[0].string, "!local"))
+        .nonlocal
+    else
+        return error.InvalidInterwikiFilter;
+    const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
+    const rows = try (host.site_interwiki_map orelse return error.NotImplemented)(host.ctx);
+    const map = try runtime.newTable();
+    for (rows) |row| {
+        if (filter == .local and !row.is_local) continue;
+        if (filter == .nonlocal and row.is_local) continue;
+        const entry = try runtime.newTable();
+        try entry.rawSet(runtime.allocator, .{ .string = "prefix" }, .{ .string = row.prefix });
+        try entry.rawSet(runtime.allocator, .{ .string = "url" }, .{ .string = row.url });
+        try entry.rawSet(runtime.allocator, .{ .string = "isProtocolRelative" }, .{ .boolean = row.is_protocol_relative });
+        try entry.rawSet(runtime.allocator, .{ .string = "isLocal" }, .{ .boolean = row.is_local });
+        try entry.rawSet(runtime.allocator, .{ .string = "isTranscludable" }, .{ .boolean = false });
+        try entry.rawSet(runtime.allocator, .{ .string = "isCurrentWiki" }, .{ .boolean = row.is_current_wiki });
+        try entry.rawSet(runtime.allocator, .{ .string = "isExtraLanguageLink" }, .{ .boolean = false });
+        try map.rawSet(runtime.allocator, .{ .string = row.prefix }, .{ .table = entry });
+    }
+    return one(.{ .table = map });
+}
+
+fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, comptime call: anytype) !void {
     try table.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(null, call));
 }
 
@@ -47,6 +78,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const site = try runtime.newTable();
     const namespaces = try namespace_lib.makeTable(runtime);
     try site.rawSet(runtime.allocator, .{ .string = "namespaces" }, .{ .table = namespaces });
+    try setNative(runtime, site, "interwikiMap", interwikiMapCall);
     try mw.rawSet(runtime.allocator, .{ .string = "site" }, .{ .table = site });
 
     const wikibase = try runtime.newTable();
@@ -106,4 +138,42 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     try std.testing.expectEqualStrings("Project", project.rawGet(.{ .string = "canonicalName" }).?.string);
     const aliases = project.rawGet(.{ .string = "aliases" }).?.table;
     try std.testing.expectEqualStrings("WT", aliases.rawGet(.{ .number = 1 }).?.string);
+}
+
+const InterwikiProbe = struct {
+    const rows = [_]host_api.InterwikiRow{
+        .{ .prefix = "local", .url = "//local.example/$1", .is_local = true, .is_current_wiki = true, .is_protocol_relative = true },
+        .{ .prefix = "ext", .url = "https://ext.example/$1", .is_local = false, .is_current_wiki = false, .is_protocol_relative = false },
+    };
+    fn get(_: ?*anyopaque) ![]const host_api.InterwikiRow {
+        return &rows;
+    }
+};
+
+test "AOT mw site interwikiMap uses typed host rows and filters" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const mw = try runtime.newNativeNamespace(.mw);
+    try install(&runtime, mw);
+    var host = host_api.Host{ .site_interwiki_map = InterwikiProbe.get };
+    host_api.set(&runtime, &host);
+    const site = mw.rawGet(.{ .string = "site" }).?.table;
+
+    const all = try callField(&runtime, .{ .table = site }, "interwikiMap", &.{});
+    defer rt.freeResults(all);
+    const local = all[0].table.rawGet(.{ .string = "local" }).?.table;
+    try std.testing.expect(local.rawGet(.{ .string = "isLocal" }).?.boolean);
+    try std.testing.expect(local.rawGet(.{ .string = "isCurrentWiki" }).?.boolean);
+    try std.testing.expectEqualStrings("//local.example/$1", local.rawGet(.{ .string = "url" }).?.string);
+
+    const local_only = try callField(&runtime, .{ .table = site }, "interwikiMap", &.{.{ .string = "local" }});
+    defer rt.freeResults(local_only);
+    try std.testing.expect(local_only[0].table.rawGet(.{ .string = "local" }) != null);
+    try std.testing.expect(local_only[0].table.rawGet(.{ .string = "ext" }) == null);
+    const external_only = try callField(&runtime, .{ .table = site }, "interwikiMap", &.{.{ .string = "!local" }});
+    defer rt.freeResults(external_only);
+    try std.testing.expect(external_only[0].table.rawGet(.{ .string = "local" }) == null);
+    try std.testing.expect(external_only[0].table.rawGet(.{ .string = "ext" }) != null);
 }

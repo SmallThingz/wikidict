@@ -8,15 +8,25 @@ const parser_expr = @import("parser_expr.zig");
 const language_lib = @import("zig_language.zig");
 const uri_lib = @import("zig_uri.zig");
 const ustring_lib = @import("zig_ustring.zig");
+const text_lib = @import("zig_text.zig");
 const stdlib = @import("zig_stdlib");
 const Value = rt.Value;
+
+const nowiki_marker_prefix = "\x7f'\"`UNIQ--nowiki-";
+const nowiki_marker_suffix = "-QINU`\"'\x7f";
+
+fn makeNowikiMarker(a: std.mem.Allocator, id: u32) ![]const u8 {
+    return std.fmt.allocPrint(a, "{s}{X:0>8}{s}", .{ nowiki_marker_prefix, id, nowiki_marker_suffix });
+}
 
 pub const InstallScribuntoFn = *const fn (*rt.Context, u32, u32, u32) anyerror!void;
 
 pub const Provider = struct {
+    pub const InterwikiRow = host_api.InterwikiRow;
     ctx: ?*anyopaque = null,
     get: *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8,
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
+    interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
 };
 
 pub const Expander = struct {
@@ -28,6 +38,12 @@ pub const Expander = struct {
     install_scribunto: ?InstallScribuntoFn = null,
     host: host_api.Host = .{},
     current_source: ?[]const u8 = null,
+    page_allocator: ?std.mem.Allocator = null,
+    page_heading_count: usize = 0,
+    fake_heading_count: usize = 0,
+    strip_counter: u32 = 0,
+    strip_values: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
+    page_line: std.ArrayList(u8) = .empty,
     max_depth: usize = 128,
 
     pub fn attach(self: *Expander) void {
@@ -38,6 +54,8 @@ pub const Expander = struct {
         self.host.frame_expand_template = hostFrameExpandTemplate;
         self.host.frame_extension_tag = hostFrameExtensionTag;
         self.host.frame_parser_function = hostFrameParserFunction;
+        self.host.text_unstrip_no_wiki = hostTextUnstripNoWiki;
+        self.host.site_interwiki_map = hostSiteInterwikiMap;
         host_api.set(self.runtime, &self.host);
     }
 
@@ -45,6 +63,12 @@ pub const Expander = struct {
         self.host.current_title = title;
         self.host.now_unix = now_unix;
         self.current_source = source;
+        self.page_allocator = self.runtime.allocator;
+        self.page_heading_count = 0;
+        self.fake_heading_count = 0;
+        self.strip_counter = 0;
+        self.strip_values = .empty;
+        self.page_line = .empty;
         self.attach();
     }
 
@@ -52,6 +76,12 @@ pub const Expander = struct {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         if (std.mem.eql(u8, title, self.host.current_title)) if (self.current_source) |source| return source;
         return self.provider.get(self.provider.ctx, a, title);
+    }
+
+    fn hostSiteInterwikiMap(raw: ?*anyopaque) anyerror![]const host_api.InterwikiRow {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const get = self.provider.interwiki_map orelse return &.{};
+        return get(self.provider.ctx);
     }
 
     fn hostPageExists(raw: ?*anyopaque, title: []const u8) anyerror!bool {
@@ -70,7 +100,71 @@ pub const Expander = struct {
         const stripped = try preprocess.stripDecodedComments(self.runtime.allocator, source);
         defer self.runtime.allocator.free(stripped);
         const params = try self.runtime.newTable();
-        return self.expandWikitext(stripped, params, title, 0);
+        return self.expandPageWikitext(stripped, params, title);
+    }
+
+    fn observePageLine(self: *Expander, raw: []const u8) void {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        if (line.len < 3 or line[0] != '=') return;
+        var left: usize = 0;
+        while (left < line.len and left < 6 and line[left] == '=') : (left += 1) {}
+        if (left == 0 or left >= line.len) return;
+        var end = std.mem.trimEnd(u8, line, " \t").len;
+        var right: usize = 0;
+        while (end > 0 and right < 6 and line[end - 1] == '=') : (right += 1) end -= 1;
+        if (right < left or end <= left) return;
+        self.page_heading_count += 1;
+    }
+
+    fn observePageOutput(self: *Expander, text: []const u8) !void {
+        const a = self.page_allocator orelse return error.MissingPageAllocator;
+        var start: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, text, start, '\n')) |nl| {
+            try self.page_line.appendSlice(a, text[start..nl]);
+            self.observePageLine(self.page_line.items);
+            self.page_line.items.len = 0;
+            start = nl + 1;
+        }
+        try self.page_line.appendSlice(a, text[start..]);
+    }
+
+    fn expandPageWikitext(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8) anyerror![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, text, pos, "{{")) |open| {
+            const literal = text[pos..open];
+            try self.observePageOutput(literal);
+            try out.appendSlice(self.runtime.allocator, literal);
+            const expanded = if (open + 2 < text.len and text[open + 2] == '{') blk: {
+                const close = preprocess.findParamEnd(text, open) orelse {
+                    const literal_open = "{{{";
+                    try self.observePageOutput(literal_open);
+                    try out.appendSlice(self.runtime.allocator, literal_open);
+                    pos = open + literal_open.len;
+                    continue;
+                };
+                const value = try self.expandParameter(text[open + 3 .. close], params, host_title, 1);
+                pos = close + 3;
+                break :blk value;
+            } else blk: {
+                const close = preprocess.findTemplateEnd(text, open) orelse {
+                    const literal_open = "{{";
+                    try self.observePageOutput(literal_open);
+                    try out.appendSlice(self.runtime.allocator, literal_open);
+                    pos = open + literal_open.len;
+                    continue;
+                };
+                const value = try self.expandConstruct(text[open + 2 .. close], params, host_title, 1);
+                pos = close + 2;
+                break :blk value;
+            };
+            try self.observePageOutput(expanded);
+            try out.appendSlice(self.runtime.allocator, expanded);
+        }
+        const tail = text[pos..];
+        try self.observePageOutput(tail);
+        try out.appendSlice(self.runtime.allocator, tail);
+        return out.toOwnedSlice(self.runtime.allocator);
     }
 
     fn valueToWikitext(self: *Expander, value: Value) ![]const u8 {
@@ -541,8 +635,15 @@ pub const Expander = struct {
         return out.toOwnedSlice(a);
     }
 
-    fn hostFramePreprocess(raw: ?*anyopaque, _: std.mem.Allocator, source: []const u8, title: []const u8, args: *rt.Table) anyerror![]const u8 {
+    fn hostFramePreprocess(raw: ?*anyopaque, a: std.mem.Allocator, source: []const u8, title: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        if (source.len >= 2 and source[0] == '=' and source[source.len - 1] == '=' and
+            std.mem.indexOf(u8, source, nowiki_marker_prefix) != null)
+        {
+            const number = self.page_heading_count + self.fake_heading_count;
+            self.fake_heading_count += 1;
+            return std.fmt.allocPrint(a, "\x7f'\"`UNIQ--h-{d}--QINU`\"'\x7f", .{number});
+        }
         return self.expandWikitext(source, args, title, 0);
     }
 
@@ -551,11 +652,48 @@ pub const Expander = struct {
         return self.expandTemplateByName(title, args, 0);
     }
 
-    fn hostFrameExtensionTag(raw: ?*anyopaque, _: std.mem.Allocator, name: []const u8, content: ?Value, attrs: ?*rt.Table) anyerror![]const u8 {
+    fn hostFrameExtensionTag(raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, content: ?Value, attrs: ?*rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        if (std.ascii.eqlIgnoreCase(name, "nowiki")) {
+            const text = if (content) |value| if (value == .string) value.string else "" else "";
+            const id = self.strip_counter;
+            self.strip_counter +%= 1;
+            const page_a = self.page_allocator orelse return error.MissingPageAllocator;
+            const stored = try page_a.dupe(u8, text);
+            try self.strip_values.put(page_a, id, stored);
+            return makeNowikiMarker(a, id);
+        }
         if (!std.ascii.eqlIgnoreCase(name, "ref") and !std.ascii.eqlIgnoreCase(name, "references") and !std.ascii.eqlIgnoreCase(name, "templatestyles")) return error.UnsupportedExtensionTag;
         const canonical = if (std.ascii.eqlIgnoreCase(name, "ref")) "ref" else if (std.ascii.eqlIgnoreCase(name, "references")) "references" else "templatestyles";
         return self.serializeExtension(canonical, content, attrs);
+    }
+
+    fn hostTextUnstripNoWiki(raw: ?*anyopaque, a: std.mem.Allocator, source: []const u8) anyerror![]const u8 {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        var out: std.ArrayList(u8) = .empty;
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, source, pos, nowiki_marker_prefix)) |at| {
+            try out.appendSlice(a, source[pos..at]);
+            const id_start = at + nowiki_marker_prefix.len;
+            const suffix_at = std.mem.indexOfPos(u8, source, id_start, nowiki_marker_suffix) orelse {
+                try out.appendSlice(a, source[at..]);
+                pos = source.len;
+                break;
+            };
+            const marker_end = suffix_at + nowiki_marker_suffix.len;
+            const id = std.fmt.parseInt(u32, source[id_start..suffix_at], 16) catch {
+                try out.appendSlice(a, source[at..marker_end]);
+                pos = marker_end;
+                continue;
+            };
+            if (self.strip_values.get(id)) |text|
+                try out.appendSlice(a, text)
+            else
+                try out.appendSlice(a, source[at..marker_end]);
+            pos = marker_end;
+        }
+        try out.appendSlice(a, source[pos..]);
+        return out.toOwnedSlice(a);
     }
 
     fn formattedDateSpan(self: *Expander, raw: []const u8, style_raw: ?[]const u8) ![]const u8 {
@@ -605,6 +743,7 @@ fn installTestHost(runtime: *rt.Context, string_slot: u32, mw_slot: u32) !void {
     while (it.next()) |entry| try ustring.rawSet(runtime.allocator, entry.key_ptr.*, entry.value_ptr.*);
     try ustring_lib.install(runtime, ustring);
     try mw.rawSet(runtime.allocator, .{ .string = "ustring" }, .{ .table = ustring });
+    try text_lib.install(runtime, mw);
     try uri_lib.install(runtime, mw);
     try runtime.setGlobal(mw_slot, .{ .table = mw });
 }
@@ -693,4 +832,39 @@ test "native AOT frame callbacks recurse through the same page expander" {
     const date = try runtime.callValue(parser, &.{ frame, .{ .string = "#formatdate" }, .{ .string = "12-December-2022" }, .{ .string = "dmy" } });
     defer rt.freeResults(date);
     try std.testing.expectEqualStrings("<span class=\"mw-formatted-date\" title=\"2022-12-12\">12 December 2022</span>", date[0].string);
+}
+
+test "native AOT nowiki strip markers share page host state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+
+    const page = try expander.expandFragment("Page", "=Heading=\nplain", 1_670_803_200);
+    try std.testing.expectEqualStrings("=Heading=\nplain", page);
+    try std.testing.expectEqual(@as(usize, 1), expander.page_heading_count);
+
+    const frame_args = try runtime.newTable();
+    const frame = try frame_lib.makeFrameFromTable(&runtime, "Module:Probe", frame_args, null);
+    const extension_tag = try runtime.getIndex(frame, .{ .string = "extensionTag" });
+    const marker = try runtime.callValue(extension_tag, &.{ frame, .{ .string = "nowiki" }, .{ .string = "HEADING\x011" } });
+    defer rt.freeResults(marker);
+    try std.testing.expectEqualStrings("\x7f'\"`UNIQ--nowiki-00000000-QINU`\"'\x7f", marker[0].string);
+
+    const preprocess_fn = try runtime.getIndex(frame, .{ .string = "preprocess" });
+    const heading_source = try std.fmt.allocPrint(arena.allocator(), "={s}=", .{marker[0].string});
+    const heading = try runtime.callValue(preprocess_fn, &.{ frame, .{ .string = heading_source } });
+    defer rt.freeResults(heading);
+    try std.testing.expectEqualStrings("\x7f'\"`UNIQ--h-1--QINU`\"'\x7f", heading[0].string);
+
+    const mw = runtime.getGlobal(23);
+    const text = try runtime.getIndex(mw, .{ .string = "text" });
+    const unstrip = try runtime.getIndex(text, .{ .string = "unstripNoWiki" });
+    const restored = try runtime.callValue(unstrip, &.{marker[0]});
+    defer rt.freeResults(restored);
+    try std.testing.expectEqualStrings("HEADING\x011", restored[0].string);
 }
