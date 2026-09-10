@@ -268,6 +268,14 @@ fn mergeUnknownWriteReason(slot: *UnknownReason, incoming: UnknownReason) void {
     if (slot.* == .none) slot.* = incoming else if (slot.* != incoming) slot.* = .unknown_write;
 }
 
+fn isLocalFunctionBootstrapNil(function: *const ir.Function, block_end: u32, pc: u32, inst: ir.Inst) bool {
+    if (inst.op != .load_nil or block_end - pc < 3) return false;
+    const closure = function.insts.items[pc + 1];
+    const assign = function.insts.items[pc + 2];
+    return closure.op == .closure and closure.dst != inst.dst and
+        assign.op == .move and assign.dst == inst.dst and assign.a == closure.dst;
+}
+
 fn mergeLocalWrite(
     flat: usize,
     incoming: Fact,
@@ -324,7 +332,12 @@ fn collectLocalCandidates(
             const inst = function.insts.items[pc];
             const fact = facts_mod.predictInstruction(analysis, program, symbols, function, state, inst, true, upvalues);
             const info = sem.info(inst.op);
-            if (info.defines and inst.dst < function.reg_count)
+            // `local function f()` lowers to `nil f; closure tmp; f = tmp` so
+            // recursive closure creation observes the bound cell. No Lua code
+            // can run between these instructions, so only the final value is a
+            // candidate for calls made after the declaration completes.
+            const bootstrap_nil = isLocalFunctionBootstrapNil(function, block.end, pc, inst);
+            if (info.defines and inst.dst < function.reg_count and !bootstrap_nil)
                 mergeLocalWrite(base + inst.dst, fact, captured, detached, mutated, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
             if (info.results) {
                 const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
@@ -662,6 +675,56 @@ test "captured imported function survives a stable local alias" {
         };
     }
     try std.testing.expect(found);
+}
+
+test "recursive local function bootstrap nil preserves its captured function fact" {
+    const a = std.testing.allocator;
+    var image = test_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    const module = try addTestModule(a, &image, &symbols, "Module:A", "local function f(n)if n==0 then return 1 end;return f(n-1)end;return f");
+    const root_id = image.modules.items[module].root_function;
+    const root = image.program.functions.items[root_id] orelse return error.IncompleteProgram;
+    var recursive_id: ?u32 = null;
+    for (root.insts.items) |inst| if (inst.op == .closure) {
+        recursive_id = inst.aux;
+        break;
+    };
+    const target = recursive_id orelse return error.MissingRecursiveFunction;
+    var result = try build(a, &image.program, &symbols);
+    defer result.deinit();
+    const facts = result.forFunction(&image.program, target);
+    try std.testing.expectEqual(@as(usize, 1), facts.len);
+    switch (facts[0]) {
+        .function => |id| try std.testing.expectEqual(target, id),
+        else => return error.MissingRecursiveFunctionFact,
+    }
+    try std.testing.expect(result.stats.stable_multiwrite_locals != 0);
+}
+
+test "ordinary nil initialization remains an unresolved captured write" {
+    const a = std.testing.allocator;
+    var image = test_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    const module = try addTestModule(a, &image, &symbols, "Module:A", "local f=nil;if ... then f=table.insert end;local function run(t,x)return f(t,x)end;return run");
+    var result = try build(a, &image.program, &symbols);
+    defer result.deinit();
+    const linked = image.modules.items[module];
+    var saw_nil = false;
+    for (linked.function_base..linked.function_base + linked.function_count) |function_id| {
+        const function = image.program.functions.items[function_id] orelse continue;
+        const facts = result.forFunction(&image.program, @intCast(function_id));
+        const reasons = result.reasonsForFunction(&image.program, @intCast(function_id));
+        for (function.upvalues.items, 0..) |_, index| {
+            if (reasons[index] != .unknown_write_nil) continue;
+            saw_nil = true;
+            try std.testing.expect(facts[index] == .unknown);
+        }
+    }
+    try std.testing.expect(saw_nil);
 }
 
 test "equal multi-write captured imports preserve one guarded target" {

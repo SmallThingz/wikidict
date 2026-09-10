@@ -613,6 +613,33 @@ test "captured native namespace field carries a guarded AOT hint" {
     try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
 }
 
+test "recursive local function calls carry guarded AOT hints" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local function f(n)if n==0 then return 1 end;return f(n-1)end;return f");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
+    try std.testing.expect(stats.predicted_function_upvalues != 0);
+}
+
+test "ordinary nil initialization does not predict a captured call" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=nil;if ... then f=table.insert end;local function run(t,x)return f(t,x)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.total);
+    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.unknown_write_nil);
+}
+
 test "captured candidate field name carries a guarded AOT hint" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
