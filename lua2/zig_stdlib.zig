@@ -890,7 +890,9 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     try std.testing.expect(loaded == .table and ctx.package_loaded == loaded.table);
     const require = ctx.getGlobal(global_abi.id("require"));
     try std.testing.expect(require == .native);
-    try std.testing.expectError(error.ModuleNotFound, ctx.callValue(require, &.{.{ .string = "Module:Missing" }}));
+    try std.testing.expectError(error.AotCallFailed, ctx.callValue(require, &.{.{ .string = "Module:Missing" }}));
+    try std.testing.expectEqualStrings("ModuleNotFound", ctx.aotErrorName().?);
+    ctx.clearAotErrorName();
 
     const string = ctx.getGlobal(global_abi.id("string"));
     const sub = try callField(&ctx, string, "sub", &.{ .{ .string = "abcdef" }, .{ .number = 2 }, .{ .number = -2 } });
