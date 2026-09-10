@@ -254,7 +254,7 @@ fn runFunction(allocator: std.mem.Allocator, program: *ir.Program, function: *ir
                     }
                 };
             }
-            if (inst.op == .call and inst.a < state.len and aot_hint.target(inst.*) == null and aot_hint.nativeGlobal(inst.*) == null and aot_hint.nativeField(inst.*) == null and aot_hint.nativeFieldCandidate(inst.*) == null) {
+            if ((inst.op == .call or inst.op == .call_vararg) and inst.a < state.len and aot_hint.target(inst.*) == null and aot_hint.nativeGlobal(inst.*) == null and aot_hint.nativeField(inst.*) == null and aot_hint.nativeFieldCandidate(inst.*) == null) {
                 const value = analysis.canonicalValue(state[inst.a]);
                 if (value != ssa.invalid_value and value < native_fields.len) {
                     if (native_fields[value]) |field| {
@@ -550,6 +550,35 @@ test "staged native call hints preserve later field rewriting" {
     try std.testing.expect(rewritten.reads >= 2);
     try std.testing.expectEqual(@as(u64, 0), rewritten.guarded_calls);
     try std.testing.expectEqual(staged.guarded_calls, countNativeFieldGuardHints(&program));
+}
+
+test "vararg native field aliases carry staged guards" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local f=table.insert;return f(...)");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    const stats = try tagCallHints(a, &program);
+    try std.testing.expectEqual(@as(u64, 1), stats.guarded_calls);
+    try std.testing.expectEqual(@as(u64, 1), countNativeFieldGuardHints(&program));
+}
+
+test "vararg unproven field aliases carry candidate guards" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "return function(t,...)local f=t.gsub;return f(...)end");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    const stats = try tagCallHints(a, &program);
+    try std.testing.expectEqual(@as(u64, 1), stats.candidate_calls);
+    const field_id = fields.find("gsub") orelse return error.MissingStaticField;
+    var found = false;
+    for (program.functions.items) |maybe| if (maybe) |function| {
+        for (function.insts.items) |inst| {
+            if (aot_hint.nativeFieldCandidate(inst) == field_id) found = true;
+        }
+    };
+    try std.testing.expect(found);
 }
 
 test "unproven field names carry candidate-only native hints" {
