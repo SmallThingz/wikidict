@@ -289,7 +289,6 @@ fn mergeLocalWrite(
     flat: usize,
     incoming: Fact,
     captured: []const bool,
-    detached: []const bool,
     facts: []const Fact,
     candidates: []Fact,
     bad: []bool,
@@ -298,7 +297,7 @@ fn mergeLocalWrite(
     seen: []bool,
     unknown_reason: UnknownReason,
 ) void {
-    if (flat >= captured.len or !captured[flat] or detached[flat] or hasFact(facts[flat])) return;
+    if (flat >= captured.len or !captured[flat] or hasFact(facts[flat])) return;
     seen[flat] = true;
     if (!hasFact(incoming)) {
         bad[flat] = true;
@@ -321,7 +320,6 @@ fn collectLocalCandidates(
     upvalues: []const Fact,
     base: usize,
     captured: []const bool,
-    detached: []const bool,
     facts: []const Fact,
     candidates: []Fact,
     bad: []bool,
@@ -345,29 +343,29 @@ fn collectLocalCandidates(
             // candidate for calls made after the declaration completes.
             const bootstrap_nil = isLocalFunctionBootstrapNil(function, block.end, pc, inst);
             if (info.defines and inst.dst < function.reg_count and !bootstrap_nil)
-                mergeLocalWrite(base + inst.dst, fact, captured, detached, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
+                mergeLocalWrite(base + inst.dst, fact, captured, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
             if (info.results) {
                 const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
                 var i: u32 = 0;
                 while (i < width and inst.dst + i < function.reg_count) : (i += 1)
-                    mergeLocalWrite(base + inst.dst + i, fact, captured, detached, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
+                    mergeLocalWrite(base + inst.dst + i, fact, captured, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
             }
             switch (inst.op) {
                 .numeric_for_init => if (inst.dst < function.reg_count)
-                    mergeLocalWrite(base + inst.dst, .unknown, captured, detached, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op)),
+                    mergeLocalWrite(base + inst.dst, .unknown, captured, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op)),
                 .numeric_for_next => {
                     if (inst.a < function.reg_count)
-                        mergeLocalWrite(base + inst.a, .unknown, captured, detached, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
+                        mergeLocalWrite(base + inst.a, .unknown, captured, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
                     if (inst.dst < function.reg_count)
-                        mergeLocalWrite(base + inst.dst, .unknown, captured, detached, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
+                        mergeLocalWrite(base + inst.dst, .unknown, captured, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
                 },
                 .generic_for_init, .generic_for_next => {
                     if (inst.c < function.reg_count)
-                        mergeLocalWrite(base + inst.c, .unknown, captured, detached, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
+                        mergeLocalWrite(base + inst.c, .unknown, captured, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
                     const width: u32 = if (inst.count == ir.multi_count) 1 else inst.count;
                     var i: u32 = 0;
                     while (i < width and inst.dst + i < function.reg_count) : (i += 1)
-                        mergeLocalWrite(base + inst.dst + i, .unknown, captured, detached, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
+                        mergeLocalWrite(base + inst.dst + i, .unknown, captured, facts, candidates, bad, unknown_write, conflicting_write, seen, unknownWriteReason(inst.op));
                 },
                 else => {},
             }
@@ -448,7 +446,7 @@ pub fn build(
             for (0..function.reg_count) |reg| {
                 const flat = reg_offsets[function_usize] + reg;
                 if (captured[flat] and write_counts[flat] != 0 and
-                    !detached[flat] and !hasFact(local_facts[flat]))
+                    !hasFact(local_facts[flat]))
                 {
                     needs_analysis = true;
                     break;
@@ -473,7 +471,6 @@ pub fn build(
                 upvalues,
                 reg_offsets[function_usize],
                 captured,
-                detached,
                 local_facts,
                 local_candidates,
                 local_bad,
@@ -483,7 +480,7 @@ pub fn build(
             );
         }
         for (local_facts, 0..) |*fact, flat| {
-            if (mutated_local[flat] or hasFact(fact.*) or !local_seen[flat] or local_bad[flat] or !hasFact(local_candidates[flat])) continue;
+            if (detached[flat] or mutated_local[flat] or hasFact(fact.*) or !local_seen[flat] or local_bad[flat] or !hasFact(local_candidates[flat])) continue;
             fact.* = local_candidates[flat];
             stats.stable_locals += 1;
             if (write_counts[flat] > 1) stats.stable_multiwrite_locals += 1;
@@ -587,15 +584,16 @@ pub fn build(
             }
         }
     }
-    // Guard facts are advisory: descendant mutation may invalidate the predicted
-    // value, but generated calls still guard the live identity and fall back.
+    // Guard facts are advisory: activation detachment or descendant mutation may
+    // invalidate a prediction, but generated calls guard the live identity and fall back.
     const guard_local_facts = try a.dupe(Fact, local_facts);
     defer if (guard_local_facts.len != 0) a.free(guard_local_facts);
     for (guard_local_facts, 0..) |*fact, flat| {
         if (hasFact(fact.*) or !local_seen[flat] or !hasFact(local_candidates[flat])) continue;
         const nullable = !local_conflicting_write[flat] and local_unknown_write[flat] == .unknown_write_nil;
         const mutated = mutated_local[flat] and !local_bad[flat];
-        if (!nullable and !mutated) continue;
+        const detached_candidate = detached[flat] and !local_bad[flat];
+        if (!nullable and !mutated and !detached_candidate) continue;
         fact.* = local_candidates[flat];
     }
 
@@ -869,4 +867,46 @@ test "descendant upvalue mutation invalidates sibling capture facts" {
             try std.testing.expect(fact == .unknown);
     }
     try std.testing.expect(captured);
+}
+
+
+test "detached capture keeps only a guard fact" {
+    const a = std.testing.allocator;
+    var image = test_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    const module = try addTestModule(a, &image, &symbols, "Module:A", "local f=table.insert;local function run(t,x)return f(t,x)end;return run");
+    const root_id = image.modules.items[module].root_function;
+    var root = &image.program.functions.items[root_id].?;
+    var closure_pc: ?usize = null;
+    var capture_reg: u32 = 0;
+    for (root.insts.items, 0..) |inst, pc| if (inst.op == .closure) {
+        const child = image.program.functions.items[inst.aux] orelse continue;
+        if (child.upvalues.items.len == 0 or child.upvalues.items[0].source != .local) continue;
+        closure_pc = pc;
+        capture_reg = child.upvalues.items[0].index;
+        break;
+    };
+    const at = closure_pc orelse return error.MissingClosure;
+    var insts: std.ArrayList(ir.Inst) = .empty;
+    for (root.insts.items, 0..) |inst, pc| {
+        try insts.append(a, inst);
+        if (pc == at) try insts.append(a, .{ .op = .detach_cell, .a = capture_reg });
+    }
+    root.insts.deinit(a);
+    root.insts = insts;
+    var result = try build(a, &image.program, &symbols);
+    defer result.deinit();
+    var found = false;
+    for (result.forFunction(&image.program, image.program.functions.items[root_id].?.insts.items[at].aux), 0..) |fact, index| {
+        const guards = result.guardsForFunction(&image.program, image.program.functions.items[root_id].?.insts.items[at].aux);
+        const reasons = result.reasonsForFunction(&image.program, image.program.functions.items[root_id].?.insts.items[at].aux);
+        if (reasons[index] != .detached) continue;
+        found = true;
+        try std.testing.expect(fact == .unknown);
+        try std.testing.expect(guards[index] == .native_field);
+    }
+    try std.testing.expect(found);
+    try std.testing.expect(result.stats.guard_only_upvalues != 0);
 }

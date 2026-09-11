@@ -1068,3 +1068,37 @@ test "descendant mutation keeps local function guard advisory" {
     try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.mutated);
     try std.testing.expect(stats.predicted_guard_only_upvalues != 0);
 }
+
+
+test "detached captured native field keeps an advisory guard" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    const module = try addSource(a, &image, &symbols, "Module:A", "local f=table.insert;local function run(t,x)return f(t,x)end;return run");
+    const root_id = image.modules.items[module].root_function;
+    var root = &image.program.functions.items[root_id].?;
+    var closure_pc: ?usize = null;
+    var capture_reg: u32 = 0;
+    for (root.insts.items, 0..) |inst, pc| if (inst.op == .closure) {
+        const child = image.program.functions.items[inst.aux] orelse continue;
+        if (child.upvalues.items.len == 0 or child.upvalues.items[0].source != .local) continue;
+        closure_pc = pc;
+        capture_reg = child.upvalues.items[0].index;
+        break;
+    };
+    const at = closure_pc orelse return error.MissingClosure;
+    var insts: std.ArrayList(ir.Inst) = .empty;
+    for (root.insts.items, 0..) |inst, pc| {
+        try insts.append(a, inst);
+        if (pc == at) try insts.append(a, .{ .op = .detach_cell, .a = capture_reg });
+    }
+    root.insts.deinit(a);
+    root.insts = insts;
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.detached);
+    try std.testing.expect(stats.predicted_guard_only_upvalues != 0);
+}
