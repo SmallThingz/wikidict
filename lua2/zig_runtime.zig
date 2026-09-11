@@ -766,7 +766,14 @@ pub const Context = struct {
 
     pub fn resolveModule(self: *const Context, raw_name: []const u8) !u32 {
         const lookup = self.module_lookup orelse return error.ModuleNotFound;
-        return lookup(self.module_lookup_ctx, raw_name) orelse error.ModuleNotFound;
+        if (lookup(self.module_lookup_ctx, raw_name)) |id| return id;
+        const trimmed = std.mem.trim(u8, raw_name, " \t\r\n");
+        if (std.mem.indexOfScalar(u8, trimmed, '_') == null)
+            return lookup(self.module_lookup_ctx, trimmed) orelse error.ModuleNotFound;
+        const normalized = try self.allocator.dupe(u8, trimmed);
+        defer self.allocator.free(normalized);
+        std.mem.replaceScalar(u8, normalized, '_', ' ');
+        return lookup(self.module_lookup_ctx, normalized) orelse error.ModuleNotFound;
     }
 
     pub fn requireByName(self: *Context, raw_name: []const u8) anyerror!Value {

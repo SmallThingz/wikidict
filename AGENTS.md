@@ -66,3 +66,5 @@
 - Native callback execution uses the same rule: `NativeFn` is identity metadata only. `newNative` keeps the callback comptime-known and executes it through a C-callconv wrapper with the callback body force-inlined; never indirect-call a Zig callback across compilation units.
 - Dump-specific native workers keep immutable constant/entry payloads in versioned `aot-data.bin`; generated roots that require it expose `requires_program_data` and `initContextWithData`. Do not re-encode this data through VM bytecode or compile multi-million-record constant tables as Zig source.
 - Production AOT function shards link as independent native objects through exported function-pointer tables. Keep numeric function IDs and cross-shard `invokeKnown` dispatch stable; do not restore one LLVM module containing the whole dump.
+
+- Native AOT module resolution matches MediaWiki title normalization: try the exact name, then trim surrounding whitespace and treat underscores as spaces before numeric registry/redirect lookup.

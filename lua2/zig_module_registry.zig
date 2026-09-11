@@ -60,6 +60,20 @@ test "AOT module registry resolves static names to numeric IDs" {
     try std.testing.expectEqualStrings("Module:Zulu", ctx.module_name.?(ctx.module_lookup_ctx, 0).?);
 }
 
+test "AOT module resolution normalizes MediaWiki title spelling" {
+    const names = [_][]const u8{ "Module:labels/templates/show from", "Module:Zulu" };
+    const sorted = [_]u32{ 1, 0 };
+    const registry = Registry{ .names = &names, .sorted_ids = &sorted };
+    try registry.validate();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.initProgram(arena.allocator(), 0, names.len);
+    defer ctx.deinit();
+    registry.configure(&ctx);
+    try std.testing.expectEqual(@as(u32, 0), try ctx.resolveModule(" \tModule:labels/templates/show_from\n"));
+}
+
 test "AOT module registry rejects duplicate lookup names and invalid IDs" {
     const duplicate_names = [_][]const u8{ "A", "A" };
     const duplicate_ids = [_]u32{ 0, 1 };
