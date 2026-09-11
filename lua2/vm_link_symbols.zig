@@ -13,6 +13,7 @@ const FieldFunctionCandidate = union(enum) { target: u32, ambiguous };
 
 const ModuleSymbols = struct {
     exports: std.StringHashMapUnmanaged(ExportTarget) = .empty,
+    callable: ?ExportTarget = null,
     proxy: ?[]const u8 = null,
     dynamic_top: bool = false,
 
@@ -105,6 +106,13 @@ pub const Index = struct {
                     else => {},
                 };
             },
+            .function => |start| if (findFunction(&image.program, linked_module, start)) |function_id| {
+                symbols.callable = .{ .function = function_id };
+            },
+            .module_export => |target| symbols.callable = .{ .module_export = .{
+                .module = try self.own(target.module),
+                .name = try self.own(target.name),
+            } },
             .module => |target| symbols.proxy = try self.own(target),
             else => {},
         }
@@ -125,6 +133,26 @@ pub const Index = struct {
 
     pub fn moduleId(self: *const Index, title: []const u8) ?u32 {
         return self.by_title.get(title);
+    }
+
+    pub fn resolveCallableModule(self: *const Index, raw_module: []const u8) ?u32 {
+        var module = raw_module;
+        var depth: usize = 0;
+        while (depth < 32) : (depth += 1) {
+            const module_index = self.by_title.get(module) orelse return null;
+            const symbols = self.modules.items[module_index];
+            if (symbols.dynamic_top) return null;
+            if (symbols.callable) |target| return switch (target) {
+                .function => |function_id| function_id,
+                .module_export => |next| self.resolveExport(next.module, next.name),
+            };
+            if (symbols.proxy) |next_module| {
+                module = next_module;
+                continue;
+            }
+            return null;
+        }
+        return null;
     }
 
     pub fn resolveExport(self: *const Index, raw_module: []const u8, raw_name: []const u8) ?u32 {
@@ -198,4 +226,25 @@ test "field function candidates require one static export target" {
     try std.testing.expectEqual(@as(?u32, first), symbols.fieldFunctionCandidate("add"));
     try addSource(std.testing.allocator, &image, &symbols, "Module:D", "local e={};function e.add(x)return x+2 end;return e");
     try std.testing.expectEqual(@as(?u32, null), symbols.fieldFunctionCandidate("add"));
+}
+
+test "callable modules resolve function roots and proxies" {
+    var image = link_image.Image.init(std.testing.allocator);
+    defer image.deinit();
+    var symbols = Index.init(std.testing.allocator);
+    defer symbols.deinit();
+    try addSource(std.testing.allocator, &image, &symbols, "Module:F", "local function f(x)return x+1 end;return f");
+    try addSource(std.testing.allocator, &image, &symbols, "Module:Proxy", "return require('Module:F')");
+    const direct = symbols.resolveCallableModule("Module:F") orelse return error.MissingCallableModule;
+    try std.testing.expectEqual(direct, symbols.resolveCallableModule("Module:Proxy").?);
+    try std.testing.expect(direct < image.program.functions.items.len);
+    try addSource(std.testing.allocator, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+2 end;return e");
+    try addSource(std.testing.allocator, &image, &symbols, "Module:ExportProxy", "return require('Module:B').add");
+    const exported = symbols.resolveExport("Module:B", "add") orelse return error.MissingExport;
+    try std.testing.expectEqual(exported, symbols.resolveCallableModule("Module:ExportProxy").?);
+
+    try addSource(std.testing.allocator, &image, &symbols, "Module:Table", "return {}");
+    try std.testing.expectEqual(@as(?u32, null), symbols.resolveCallableModule("Module:Table"));
+    try addSource(std.testing.allocator, &image, &symbols, "Module:Dynamic", "local function f()end;if x then f=function()end end;return f");
+    try std.testing.expectEqual(@as(?u32, null), symbols.resolveCallableModule("Module:Dynamic"));
 }

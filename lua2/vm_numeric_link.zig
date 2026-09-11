@@ -51,6 +51,7 @@ pub const Stats = struct {
     guarded_captured_native_field_calls: u32 = 0,
     guarded_captured_native_candidate_calls: u32 = 0,
     guarded_function_candidate_calls: u32 = 0,
+    guarded_module_function_calls: u32 = 0,
     predicted_upvalues: u32 = 0,
     predicted_multiwrite_locals: u32 = 0,
     predicted_module_upvalues: u32 = 0,
@@ -366,12 +367,21 @@ fn noteUnresolvedUpvalueCall(stats: *Stats, reason: capture_link.UnknownReason) 
     }
 }
 
-fn tagCallFact(program: *const ir.Program, inst: *ir.Inst, fact: facts_mod.Fact, stats: *Stats, tagged: *u32) !bool {
+fn tagCallFact(program: *const ir.Program, symbols: *const symbols_mod.Index, inst: *ir.Inst, fact: facts_mod.Fact, stats: *Stats, tagged: *u32) !bool {
     switch (fact) {
         .function => |target| if (target < program.functions.items.len) {
             try aot_hint.set(inst, target);
             tagged.* += 1;
             return true;
+        },
+        .module => |sid| if (sid < program.strings.items.len) {
+            if (symbols.resolveCallableModule(program.strings.items[sid])) |target| {
+                if (target >= program.functions.items.len) return false;
+                try aot_hint.set(inst, target);
+                tagged.* += 1;
+                stats.guarded_module_function_calls += 1;
+                return true;
+            }
         },
         .require_builtin => {
             try aot_hint.setNativeGlobal(inst, global_abi.id("require"));
@@ -434,7 +444,7 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
                 const pc: u32 = @intCast(pc_usize);
                 const inst = &function.insts.items[pc];
                 if ((inst.op == .call or inst.op == .call_vararg) and inst.a < state.len) {
-                    var tagged_any = try tagCallFact(program, inst, factOf(&analysis, state[inst.a]), stats, &tagged);
+                    var tagged_any = try tagCallFact(program, symbols, inst, factOf(&analysis, state[inst.a]), stats, &tagged);
                     if (!tagged_any) {
                         if (guardableNativeGlobal(program, function, &analysis, state, inst.a)) |slot| {
                             try aot_hint.setNativeGlobal(inst, slot);
@@ -1055,7 +1065,6 @@ test "linked export candidates never preempt static ABI field names" {
     try std.testing.expectEqual(@as(u32, 0), countGuardHints(&image.program));
 }
 
-
 test "descendant mutation keeps local function guard advisory" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
@@ -1068,7 +1077,6 @@ test "descendant mutation keeps local function guard advisory" {
     try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.mutated);
     try std.testing.expect(stats.predicted_guard_only_upvalues != 0);
 }
-
 
 test "detached captured native field keeps an advisory guard" {
     const a = std.testing.allocator;
@@ -1101,4 +1109,44 @@ test "detached captured native field keeps an advisory guard" {
     try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
     try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.detached);
     try std.testing.expect(stats.predicted_guard_only_upvalues != 0);
+}
+
+test "captured callable module carries a guarded function target" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:F", "local function f(x)return x+1 end;return f");
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=require('Module:F');local e={};function e.run(x)return f(x)end;return e");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_module_function_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.unresolved_chain);
+}
+
+test "noncallable module remains unguarded" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:T", "return {}");
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=require('Module:T');local function run()return f()end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), stats.guarded_module_function_calls);
+    try std.testing.expectEqual(@as(u32, 0), countGuardHints(&image.program));
+}
+
+test "captured callable module vararg call keeps the same guard" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:F", "return function(...)return ... end");
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=require('Module:F');return function(...)return f(...)end");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_module_function_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
 }
