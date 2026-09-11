@@ -228,8 +228,8 @@ pub fn main(init: std.process.Init) !void {
         .{ linked, linked_cleanup, final.globals, final.static_fields, final.module_functions },
     );
     std.debug.print(
-        "AOT_CODE functions={d} instructions={d} dynamic_calls={d} dynamic_indexes={d} string_fields={d}\n",
-        .{ classified.functions, classified.instructions, classified.dynamic_calls, classified.dynamic_indexes, classified.string_fields },
+        "AOT_CODE functions={d} instructions={d} dynamic_calls={d} emitted_direct_calls={d} emitted_guarded_calls={d} dynamic_indexes={d} string_fields={d}\n",
+        .{ classified.functions, classified.instructions, classified.dynamic_calls, generated_stats.direct_calls, generated_stats.guarded_calls, classified.dynamic_indexes, classified.string_fields },
     );
     std.debug.print("AOT_DYNAMIC {any}\n", .{classified});
     std.debug.print("AOT_GLOBAL_FIELDS", .{});

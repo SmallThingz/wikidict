@@ -41,6 +41,7 @@ pub const UnresolvedUpvalueCalls = struct {
 
 pub const Stats = struct {
     direct_calls: u32 = 0,
+    proven_direct_calls: u32 = 0,
     numeric_imports: u32 = 0,
     removed_lookup_insts: u32 = 0,
     registrations: u32 = 0,
@@ -414,7 +415,19 @@ fn tagCallFact(program: *const ir.Program, symbols: *const symbols_mod.Index, in
     }
     return false;
 }
-fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: *const symbols_mod.Index, stats: *Stats) !u32 {
+fn tagDirectFact(program: *const ir.Program, inst: *ir.Inst, fact: facts_mod.Fact, stats: *Stats) !bool {
+    switch (fact) {
+        .function => |target| if (target < program.functions.items.len) {
+            try aot_hint.setDirect(inst, target);
+            stats.proven_direct_calls += 1;
+            return true;
+        },
+        else => {},
+    }
+    return false;
+}
+
+fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: *const symbols_mod.Index, require_safe: bool, stats: *Stats) !u32 {
     var captures = try capture_link.build(allocator, program, symbols);
     defer captures.deinit();
     stats.predicted_upvalues = @intCast(captures.stats.known_upvalues);
@@ -431,12 +444,15 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
     while (function_id < program.functions.items.len) : (function_id += 1) {
         const function = &(program.functions.items[function_id] orelse continue);
         const capture_reasons = captures.reasonsForFunction(program, function_id);
-        // This is prediction only: native code guards the actual runtime function
-        // identity and falls back to the original dynamic call on any mismatch.
+        const strict_upvalues = if (require_safe) captures.forFunction(program, function_id) else &.{};
+        var strict_analysis = try facts_mod.buildFunctionWithUpvalues(allocator, program, symbols, function_id, require_safe, strict_upvalues);
+        defer strict_analysis.deinit();
         var analysis = try facts_mod.buildFunctionWithUpvalues(allocator, program, symbols, function_id, true, captures.guardsForFunction(program, function_id));
         defer analysis.deinit();
         const state = try allocator.alloc(ssa.ValueId, function.reg_count);
         defer if (state.len != 0) allocator.free(state);
+        const strict_state = try allocator.alloc(ssa.ValueId, function.reg_count);
+        defer if (strict_state.len != 0) allocator.free(strict_state);
         for (analysis.ssa_function.graph.blocks.items, 0..) |block, block_index| {
             const entry = analysis.ssa_function.entry_states[block_index] orelse continue;
             @memcpy(state, entry);
@@ -444,7 +460,12 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
                 const pc: u32 = @intCast(pc_usize);
                 const inst = &function.insts.items[pc];
                 if ((inst.op == .call or inst.op == .call_vararg) and inst.a < state.len) {
-                    var tagged_any = try tagCallFact(program, symbols, inst, factOf(&analysis, state[inst.a]), stats, &tagged);
+                    try ssa.stateBefore(&strict_analysis.ssa_function, function, pc, strict_state);
+                    var tagged_any = if (inst.a < strict_state.len)
+                        try tagDirectFact(program, inst, factOf(&strict_analysis, strict_state[inst.a]), stats)
+                    else
+                        false;
+                    if (!tagged_any) tagged_any = try tagCallFact(program, symbols, inst, factOf(&analysis, state[inst.a]), stats, &tagged);
                     if (!tagged_any) {
                         if (guardableNativeGlobal(program, function, &analysis, state, inst.a)) |slot| {
                             try aot_hint.setNativeGlobal(inst, slot);
@@ -482,7 +503,7 @@ pub fn run(allocator: std.mem.Allocator, program: *ir.Program, symbols: *const s
         stats.removed_lookup_insts += one.removed_lookup_insts;
     }
     stats.registrations = try insertRegistrations(allocator, program, used_targets);
-    stats.guarded_calls = try tagGuardedCalls(allocator, program, symbols, &stats);
+    stats.guarded_calls = try tagGuardedCalls(allocator, program, symbols, require_safe, &stats);
     return stats;
 }
 
@@ -521,6 +542,16 @@ test "numeric link preserves captured module state" {
     defer exec.Vm.freeResults(out);
     try std.testing.expectEqual(@as(f64, 14), out[0].number);
     try std.testing.expectEqual(@as(f64, 19), out[1].number);
+}
+
+fn countDirectHints(program: *const ir.Program) u32 {
+    var count: u32 = 0;
+    for (program.functions.items) |maybe| if (maybe) |function| {
+        for (function.insts.items) |inst| {
+            if (aot_hint.directTarget(inst) != null) count += 1;
+        }
+    };
+    return count;
 }
 
 fn countGuardHints(program: *const ir.Program) u32 {
@@ -605,7 +636,9 @@ test "guarded import calls survive whole-image require mutation" {
     try std.testing.expect(!facts_mod.requireBuiltinSafe(&image.program));
     const stats = try run(a, &image.program, &symbols);
     try std.testing.expectEqual(@as(u32, 0), stats.direct_calls);
+    try std.testing.expectEqual(@as(u32, 0), stats.proven_direct_calls);
     try std.testing.expectEqual(@as(u32, 0), stats.numeric_imports);
+    try std.testing.expectEqual(@as(u32, 0), countDirectHints(&image.program));
     try std.testing.expect(stats.guarded_calls != 0);
     try std.testing.expect(countGuardHints(&image.program) != 0);
 }
@@ -634,7 +667,7 @@ test "captured native namespace field carries a guarded AOT hint" {
     try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
 }
 
-test "recursive local function calls carry guarded AOT hints" {
+test "recursive local function calls become proven AOT direct calls" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
     defer image.deinit();
@@ -642,13 +675,14 @@ test "recursive local function calls carry guarded AOT hints" {
     defer symbols.deinit();
     _ = try addSource(a, &image, &symbols, "Module:A", "local function f(n)if n==0 then return 1 end;return f(n-1)end;return f");
     const stats = try run(a, &image.program, &symbols);
-    try std.testing.expectEqual(@as(u32, 1), stats.guarded_calls);
-    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 1), stats.proven_direct_calls);
+    try std.testing.expectEqual(@as(u32, 1), countDirectHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), countGuardHints(&image.program));
     try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
     try std.testing.expect(stats.predicted_function_upvalues != 0);
 }
 
-test "captured local function vararg calls carry guarded AOT hints" {
+test "captured local function vararg calls become proven AOT direct calls" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
     defer image.deinit();
@@ -656,7 +690,9 @@ test "captured local function vararg calls carry guarded AOT hints" {
     defer symbols.deinit();
     _ = try addSource(a, &image, &symbols, "Module:A", "local function f(...)return select('#',...),... end;local function run(...)return f(...)end;return run");
     const stats = try run(a, &image.program, &symbols);
-    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 1), stats.proven_direct_calls);
+    try std.testing.expectEqual(@as(u32, 1), countDirectHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), countGuardHints(&image.program));
     try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
 }
 
@@ -763,7 +799,7 @@ test "captured local move chains carry guarded native field hints" {
     try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
 }
 
-test "captured module field chains recover exact guarded targets" {
+test "captured module field chains become proven direct targets when require is immutable" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
     defer image.deinit();
@@ -773,7 +809,8 @@ test "captured module field chains recover exact guarded targets" {
     _ = try addSource(a, &image, &symbols, "Module:C", "local e={};function e.add(x)return x+2 end;return e");
     _ = try addSource(a, &image, &symbols, "Module:A", "local m=require('Module:B');local function keep()return m end;local f=m.add;local function run(x)return f(x)end;return run");
     const stats = try run(a, &image.program, &symbols);
-    try std.testing.expect(stats.guarded_calls != 0);
+    try std.testing.expectEqual(@as(u32, 1), stats.proven_direct_calls);
+    try std.testing.expectEqual(@as(u32, 1), countDirectHints(&image.program));
     try std.testing.expectEqual(@as(u32, 0), stats.guarded_function_candidate_calls);
     try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
 }

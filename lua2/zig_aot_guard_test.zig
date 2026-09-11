@@ -57,6 +57,25 @@ test "guarded AOT hint preserves VM semantics and emits one guard" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, ".callKnownDirect(") != null);
 }
 
+test "proven AOT call emits direct target without an identity dispatch" {
+    const a = std.testing.allocator;
+    var program = try guardedProgram(a);
+    defer program.deinit();
+    for (program.functions.items) |*maybe| if (maybe.*) |*function| {
+        for (function.insts.items) |*inst| if (aot_hint.target(inst.*)) |target| {
+            aot_hint.clear(inst);
+            try aot_hint.setDirect(inst, target);
+        };
+    };
+    const generated = try aot.generate(a, &program);
+    defer a.free(generated.source);
+    try std.testing.expectEqual(@as(u64, 1), generated.stats.direct_calls);
+    try std.testing.expectEqual(@as(u64, 0), generated.stats.guarded_calls);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "const callable_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".function.captures()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".callKnownDirect(") == null);
+}
+
 test "AOT call hints are not serialized into VM bytecode" {
     const a = std.testing.allocator;
     var program = try guardedProgram(a);

@@ -15,6 +15,7 @@ pub const Stats = struct {
     functions: u32 = 0,
     instructions: u64 = 0,
     dynamic_calls: u64 = 0,
+    direct_calls: u64 = 0,
     guarded_calls: u64 = 0,
     dynamic_indexes: u64 = 0,
     string_fields: u64 = 0,
@@ -833,7 +834,18 @@ fn emitNativeFieldCandidateGuards(out: *std.ArrayList(u8), a: A, field_id: u32) 
 fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
         .call, .call_vararg => {
-            if (aot_hint.target(inst)) |target| {
+            if (aot_hint.directTarget(inst)) |target| {
+                if (target >= p.functions.items.len) return error.BadFunctionReference;
+                try print(out, a, "            const callable_{d} = ", .{pc});
+                try valueExpr(out, a, p, plan, inst.a);
+                try text(out, a, ";\n            if (callable_");
+                try print(out, a, "{d} != .function) return error.NotCallable;\n", .{pc});
+                if (p.functions.items[target] != null and (range == null or range.?.contains(target)))
+                    try print(out, a, "            const result_{d} = try f_{d}(ctx, callable_{d}.function.captures(), argv_{d});\n", .{ pc, target, pc, pc })
+                else
+                    try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, callable_{d}.function.captures(), argv_{d});\n", .{ pc, target, pc, pc });
+                stats.direct_calls += 1;
+            } else if (aot_hint.target(inst)) |target| {
                 if (target >= p.functions.items.len) return error.BadFunctionReference;
                 if (p.functions.items[target] != null and (range == null or range.?.contains(target))) {
                     try print(out, a, "            const result_{d} = try ctx.callKnownDirect(", .{pc});
