@@ -1192,6 +1192,20 @@ test "dynamic known module export field carries a guarded candidate" {
     try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.unknown_write_field);
 }
 
+test "known module ABI-name collision keeps a guarded export candidate" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:B", "local e={};function e.ucfirst(x)return x end;if flag then e.ucfirst=function(x)return x..'!' end end;return e");
+    _ = try addSource(a, &image, &symbols, "Module:A", "local m=require('Module:B');local f=m.ucfirst;local function run(x)return f(x)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_function_candidate_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.unknown_write_field);
+}
+
 test "dynamic known module missing export stays unguarded" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
