@@ -155,6 +155,32 @@ pub const Index = struct {
         return null;
     }
 
+    // Candidate-only lookup: this intentionally ignores the module-wide dynamic-top
+    // veto. Callers must use the result only behind a live runtime function-ID guard.
+    pub fn resolveExportCandidate(self: *const Index, raw_module: []const u8, raw_name: []const u8) ?u32 {
+        var module = raw_module;
+        var name = raw_name;
+        var depth: usize = 0;
+        while (depth < 32) : (depth += 1) {
+            const module_index = self.by_title.get(module) orelse return null;
+            const symbols = self.modules.items[module_index];
+            if (symbols.exports.get(name)) |target| switch (target) {
+                .function => |function_id| return function_id,
+                .module_export => |next| {
+                    module = next.module;
+                    name = next.name;
+                    continue;
+                },
+            };
+            if (symbols.proxy) |next_module| {
+                module = next_module;
+                continue;
+            }
+            return null;
+        }
+        return null;
+    }
+
     pub fn resolveExport(self: *const Index, raw_module: []const u8, raw_name: []const u8) ?u32 {
         var module = raw_module;
         var name = raw_name;
@@ -247,4 +273,17 @@ test "callable modules resolve function roots and proxies" {
     try std.testing.expectEqual(@as(?u32, null), symbols.resolveCallableModule("Module:Table"));
     try addSource(std.testing.allocator, &image, &symbols, "Module:Dynamic", "local function f()end;if x then f=function()end end;return f");
     try std.testing.expectEqual(@as(?u32, null), symbols.resolveCallableModule("Module:Dynamic"));
+}
+
+test "dynamic modules expose export candidates without strict export facts" {
+    var image = link_image.Image.init(std.testing.allocator);
+    defer image.deinit();
+    var symbols = Index.init(std.testing.allocator);
+    defer symbols.deinit();
+    try addSource(std.testing.allocator, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;if flag then e.add=function(x)return x+100 end end;return e");
+    try std.testing.expectEqual(@as(?u32, null), symbols.resolveExport("Module:B", "add"));
+    const candidate = symbols.resolveExportCandidate("Module:B", "add") orelse return error.MissingCandidate;
+    try std.testing.expect(candidate < image.program.functions.items.len);
+    try std.testing.expectEqual(@as(?u32, null), symbols.fieldFunctionCandidate("add"));
+    try std.testing.expectEqual(@as(?u32, null), symbols.resolveExportCandidate("Module:B", "missing"));
 }

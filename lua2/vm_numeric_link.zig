@@ -1150,3 +1150,30 @@ test "captured callable module vararg call keeps the same guard" {
     try std.testing.expectEqual(@as(u32, 1), stats.guarded_module_function_calls);
     try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
 }
+
+test "dynamic known module export field carries a guarded candidate" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;if flag then e.add=function(x)return x+100 end end;return e");
+    _ = try addSource(a, &image, &symbols, "Module:A", "local m=require('Module:B');local f=m.add;local function run(x)return f(x)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_function_candidate_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.unknown_write_field);
+}
+
+test "dynamic known module missing export stays unguarded" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:B", "local e={};if flag then e.add=function(x)return x+1 end end;return e");
+    _ = try addSource(a, &image, &symbols, "Module:A", "local m=require('Module:B');local f=m.add;return function(x)return f(x)end");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 0), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.unknown_write_field);
+}

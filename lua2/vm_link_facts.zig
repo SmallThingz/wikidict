@@ -252,16 +252,20 @@ fn instructionFact(
                 },
                 else => {},
             }
+            var module_name: ?[]const u8 = null;
             if (object == .module) {
                 const module_sid = object.module;
                 if (module_sid < program.strings.items.len) {
-                    if (symbols.resolveExport(program.strings.items[module_sid], name)) |target|
+                    module_name = program.strings.items[module_sid];
+                    if (symbols.resolveExport(module_name.?, name)) |target|
                         break :blk .{ .function = target };
                 }
             }
             const native_candidate = nativeFieldCandidateFact(name, captured_candidate);
             if (known(native_candidate)) break :blk native_candidate;
             if (field_abi.find(name) != null) break :blk .unknown;
+            if (module_name) |module| if (symbols.resolveExportCandidate(module, name)) |target|
+                break :blk .{ .function_candidate = target };
             if (symbols.fieldFunctionCandidate(name)) |target|
                 break :blk .{ .function_candidate = target };
             break :blk .unknown;
@@ -467,5 +471,26 @@ test "global require mutation disables require resolution" {
     const root = image.modules.items[a].root_function;
     var facts = try buildFunction(std.testing.allocator, &image.program, &symbols, root, false);
     defer facts.deinit();
+    try std.testing.expectEqual(@as(usize, 0), facts.edges.items.len);
+}
+
+test "dynamic known module field becomes only a guarded function candidate" {
+    var image = link_image.Image.init(std.testing.allocator);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(std.testing.allocator);
+    defer symbols.deinit();
+    _ = try addSource(std.testing.allocator, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;if flag then e.add=function(x)return x+100 end end;return e");
+    const a = try addSource(std.testing.allocator, &image, &symbols, "Module:A", "local m=require('Module:B');local f=m.add;return f(4)");
+    const target = symbols.resolveExportCandidate("Module:B", "add") orelse return error.MissingCandidate;
+    try std.testing.expectEqual(@as(?u32, null), symbols.resolveExport("Module:B", "add"));
+    const root = image.modules.items[a].root_function;
+    var facts = try buildFunction(std.testing.allocator, &image.program, &symbols, root, true);
+    defer facts.deinit();
+    var found = false;
+    for (facts.facts) |fact| if (std.meta.eql(fact, Fact{ .function_candidate = target })) {
+        found = true;
+        break;
+    };
+    try std.testing.expect(found);
     try std.testing.expectEqual(@as(usize, 0), facts.edges.items.len);
 }
