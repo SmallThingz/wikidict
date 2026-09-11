@@ -37,6 +37,7 @@ pub const Analysis = struct {
     allocator: std.mem.Allocator,
     ssa_function: ssa.Function,
     facts: []Fact,
+    local_facts: []const Fact = &.{},
     edges: std.ArrayList(Edge) = .empty,
 
     pub fn deinit(self: *Analysis) void {
@@ -95,6 +96,10 @@ fn phiFact(analysis: *const Analysis, phi: *const ssa.Phi) Fact {
 
 fn regFact(analysis: *const Analysis, state: []const ssa.ValueId, reg: u32) Fact {
     if (reg >= state.len) return .unknown;
+    if (reg < analysis.ssa_function.captured.len and analysis.ssa_function.captured[reg] and reg < analysis.local_facts.len) {
+        const local = analysis.local_facts[reg];
+        if (known(local)) return local;
+    }
     return factOf(analysis, state[reg]);
 }
 
@@ -371,13 +376,14 @@ fn collectEdges(
     }
 }
 
-pub fn buildFunctionWithUpvalues(
+fn buildFunctionWithFacts(
     allocator: std.mem.Allocator,
     program: *const ir.Program,
     symbols: *const symbols_mod.Index,
     function_id: u32,
     require_safe: bool,
     upvalue_facts: []const Fact,
+    local_facts: []const Fact,
 ) !Analysis {
     if (function_id >= program.functions.items.len) return error.BadFunctionId;
     const function = &(program.functions.items[function_id] orelse return error.IncompleteProgram);
@@ -390,11 +396,35 @@ pub fn buildFunctionWithUpvalues(
         .allocator = allocator,
         .ssa_function = ssa_function,
         .facts = facts,
+        .local_facts = local_facts,
     };
     errdefer analysis.deinit();
     try propagate(&analysis, program, symbols, function, require_safe, upvalue_facts);
     try collectEdges(&analysis, program, symbols, function_id, function);
     return analysis;
+}
+
+pub fn buildFunctionWithUpvalues(
+    allocator: std.mem.Allocator,
+    program: *const ir.Program,
+    symbols: *const symbols_mod.Index,
+    function_id: u32,
+    require_safe: bool,
+    upvalue_facts: []const Fact,
+) !Analysis {
+    return buildFunctionWithFacts(allocator, program, symbols, function_id, require_safe, upvalue_facts, &.{});
+}
+
+pub fn buildFunctionWithCapturedLocals(
+    allocator: std.mem.Allocator,
+    program: *const ir.Program,
+    symbols: *const symbols_mod.Index,
+    function_id: u32,
+    require_safe: bool,
+    upvalue_facts: []const Fact,
+    local_facts: []const Fact,
+) !Analysis {
+    return buildFunctionWithFacts(allocator, program, symbols, function_id, require_safe, upvalue_facts, local_facts);
 }
 
 pub fn buildFunction(

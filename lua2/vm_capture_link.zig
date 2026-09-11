@@ -454,13 +454,15 @@ pub fn build(
             }
             if (!needs_analysis) continue;
             const upvalues = upvalue_facts[up_offsets[function_usize]..up_offsets[function_usize + 1]];
-            var analysis = try facts_mod.buildFunctionWithUpvalues(
+            const locals = local_facts[reg_offsets[function_usize]..reg_offsets[function_usize + 1]];
+            var analysis = try facts_mod.buildFunctionWithCapturedLocals(
                 a,
                 program,
                 symbols,
                 function_id,
                 true,
                 upvalues,
+                locals,
             );
             defer analysis.deinit();
             try collectLocalCandidates(
@@ -802,6 +804,57 @@ test "mutated capture keeps only a guard fact" {
     try std.testing.expect(result.stats.guard_only_upvalues != 0);
 }
 
+test "stable captured local facts feed later captured moves" {
+    const a = std.testing.allocator;
+    var image = test_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    const module = try addTestModule(a, &image, &symbols, "Module:A", "local source=table.insert;local function keep()return source end;local alias=source;local function run(t,x)return alias(t,x)end;return run");
+    var result = try build(a, &image.program, &symbols);
+    defer result.deinit();
+    const linked = image.modules.items[module];
+    var found = false;
+    for (linked.function_base..linked.function_base + linked.function_count) |function_id| {
+        const function = image.program.functions.items[function_id] orelse continue;
+        var calls = false;
+        for (function.insts.items) |inst| calls = calls or inst.op == .call or inst.op == .call_vararg;
+        if (!calls) continue;
+        for (result.forFunction(&image.program, @intCast(function_id))) |fact| switch (fact) {
+            .native_field, .captured_native_field => found = true,
+            else => {},
+        };
+    }
+    try std.testing.expect(found);
+}
+
+test "stable captured module facts feed later captured fields" {
+    const a = std.testing.allocator;
+    var image = test_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addTestModule(a, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;return e");
+    _ = try addTestModule(a, &image, &symbols, "Module:C", "local e={};function e.add(x)return x+2 end;return e");
+    const module = try addTestModule(a, &image, &symbols, "Module:A", "local m=require('Module:B');local function keep()return m end;local f=m.add;local function run(x)return f(x)end;return run");
+    const target = symbols.resolveExport("Module:B", "add") orelse return error.MissingExport;
+    var result = try build(a, &image.program, &symbols);
+    defer result.deinit();
+    const linked = image.modules.items[module];
+    var found = false;
+    for (linked.function_base..linked.function_base + linked.function_count) |function_id| {
+        const function = image.program.functions.items[function_id] orelse continue;
+        var calls = false;
+        for (function.insts.items) |inst| calls = calls or inst.op == .call or inst.op == .call_vararg;
+        if (!calls) continue;
+        for (result.forFunction(&image.program, @intCast(function_id))) |fact| switch (fact) {
+            .function => |id| found = found or id == target,
+            else => {},
+        };
+    }
+    try std.testing.expect(found);
+}
+
 test "equal multi-write captured imports preserve one guarded target" {
     const a = std.testing.allocator;
     var image = test_image.Image.init(a);
@@ -868,7 +921,6 @@ test "descendant upvalue mutation invalidates sibling capture facts" {
     }
     try std.testing.expect(captured);
 }
-
 
 test "detached capture keeps only a guard fact" {
     const a = std.testing.allocator;

@@ -751,6 +751,33 @@ test "noncanonical captured field name remains unguarded" {
     try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.total);
 }
 
+test "captured local move chains carry guarded native field hints" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local source=table.insert;local function keep()return source end;local alias=source;local function run(t,x)return alias(t,x)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
+}
+
+test "captured module field chains recover exact guarded targets" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:B", "local e={};function e.add(x)return x+1 end;return e");
+    _ = try addSource(a, &image, &symbols, "Module:C", "local e={};function e.add(x)return x+2 end;return e");
+    _ = try addSource(a, &image, &symbols, "Module:A", "local m=require('Module:B');local function keep()return m end;local f=m.add;local function run(x)return f(x)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expect(stats.guarded_calls != 0);
+    try std.testing.expectEqual(@as(u32, 0), stats.guarded_function_candidate_calls);
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
+}
+
 test "equal multi-write captured candidate fields preserve one hint" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
