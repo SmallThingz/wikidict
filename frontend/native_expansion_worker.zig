@@ -164,6 +164,9 @@ const Engine = struct {
     root: []const u8,
     program_data: ?rt.ProgramData = null,
     resolver: ModuleResolver,
+    provider: ?pages.Provider = null,
+    provider_dictionary_root: ?[]const u8 = null,
+    provider_language: ?[]const u8 = null,
 
     fn fileExists(io: std.Io, path: []const u8) !bool {
         var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
@@ -200,11 +203,47 @@ const Engine = struct {
         return .{ .io = io, .requested_root = try a.dupe(u8, requested_root), .root = root, .program_data = program_data, .resolver = resolver };
     }
 
+    fn sameOptional(a: ?[]const u8, b: ?[]const u8) bool {
+        if (a == null or b == null) return a == null and b == null;
+        return std.mem.eql(u8, a.?, b.?);
+    }
+
+    fn clearProvider(self: *Engine) void {
+        const a = std.heap.smp_allocator;
+        if (self.provider) |*provider| provider.deinit();
+        self.provider = null;
+        if (self.provider_dictionary_root) |root| a.free(root);
+        if (self.provider_language) |language| a.free(language);
+        self.provider_dictionary_root = null;
+        self.provider_language = null;
+    }
+
+    fn deinit(self: *Engine) void {
+        self.clearProvider();
+        self.resolver.deinit();
+    }
+
+    fn providerFor(self: *Engine, dictionary_root: ?[]const u8, language: []const u8) !*pages.Provider {
+        if (self.provider != null and sameOptional(self.provider_dictionary_root, dictionary_root) and
+            self.provider_language != null and std.mem.eql(u8, self.provider_language.?, language))
+            return &self.provider.?;
+
+        self.clearProvider();
+        const a = std.heap.smp_allocator;
+        const root_copy = if (dictionary_root) |root| try a.dupe(u8, root) else null;
+        errdefer if (root_copy) |root| a.free(root);
+        const language_copy = try a.dupe(u8, language);
+        errdefer a.free(language_copy);
+        self.provider = try pages.Provider.init(self.io, a, self.root, root_copy, language_copy);
+        self.provider_dictionary_root = root_copy;
+        self.provider_language = language_copy;
+        return &self.provider.?;
+    }
+
     fn expand(self: *Engine, page_a: A, request: Request, stage: *[]const u8, detail: *?[]const u8) ![]const u8 {
         if (!std.mem.eql(u8, request.root, self.requested_root)) return error.RuntimeRootChanged;
         stage.* = "assets";
-        var provider = try pages.Provider.init(self.io, page_a, self.root, request.dictionary_root, request.language);
-        defer provider.deinit();
+        const provider = try self.providerFor(request.dictionary_root, request.language);
         stage.* = "install";
         var ctx = if (generated.requires_program_data)
             try generated.initContextWithData(page_a, self.program_data orelse return error.RuntimeAssetsMissing)
@@ -238,7 +277,7 @@ pub fn main(init: std.process.Init) !void {
     try limit(.AS, 2 * 1024 * 1024 * 1024);
     const persistent = init.arena.allocator();
     var engine: ?Engine = null;
-    defer if (engine) |*value| value.resolver.deinit();
+    defer if (engine) |*value| value.deinit();
     var in_buf: [8192]u8 = undefined;
     var input = std.Io.File.stdin().readerStreaming(init.io, &in_buf);
     var out_buf: [8192]u8 = undefined;
