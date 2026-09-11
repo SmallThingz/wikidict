@@ -779,7 +779,7 @@ test "captured candidate field propagates through nested closures" {
     try std.testing.expectEqual(@as(u32, 1), countNativeCandidateGuardHints(&image.program));
 }
 
-test "descendant mutation invalidates captured candidate field" {
+test "descendant mutation keeps candidate field guard advisory" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
     defer image.deinit();
@@ -787,9 +787,10 @@ test "descendant mutation invalidates captured candidate field" {
     defer symbols.deinit();
     _ = try addSource(a, &image, &symbols, "Module:A", "return function(obj)local f=obj.gsub;local function mutate()f=function()return 9 end end;local function run(s,p,r)return f(s,p,r)end;return run,mutate end");
     const stats = try run(a, &image.program, &symbols);
-    try std.testing.expectEqual(@as(u32, 0), stats.guarded_captured_native_candidate_calls);
-    try std.testing.expectEqual(@as(u32, 0), countNativeCandidateGuardHints(&image.program));
-    try std.testing.expectEqual(@as(u32, 1), stats.unresolved_upvalue_calls.mutated);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_candidate_calls);
+    try std.testing.expectEqual(@as(u32, 1), countNativeCandidateGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.mutated);
+    try std.testing.expect(stats.predicted_guard_only_upvalues != 0);
 }
 
 test "equal multi-write captured native field carries one guarded hint" {
@@ -830,7 +831,7 @@ test "equal multi-write captured native field propagates through nested closures
     try std.testing.expect(stats.predicted_multiwrite_locals != 0);
 }
 
-test "descendant mutation invalidates equal multi-write native field facts" {
+test "descendant mutation keeps equal multi-write native field guard advisory" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);
     defer image.deinit();
@@ -838,9 +839,11 @@ test "descendant mutation invalidates equal multi-write native field facts" {
     defer symbols.deinit();
     _ = try addSource(a, &image, &symbols, "Module:A", "local f=table.insert;if ... then f=table.insert end;local function mutate()f=function()return 9 end end;local function run(t,x)return f(t,x)end;return run,mutate");
     const stats = try run(a, &image.program, &symbols);
-    try std.testing.expectEqual(@as(u32, 0), stats.guarded_captured_native_field_calls);
-    try std.testing.expectEqual(@as(u32, 0), countNativeFieldGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_field_calls);
+    try std.testing.expectEqual(@as(u32, 1), countNativeFieldGuardHints(&image.program));
     try std.testing.expectEqual(@as(u32, 0), stats.predicted_multiwrite_locals);
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.mutated);
+    try std.testing.expect(stats.predicted_guard_only_upvalues != 0);
 }
 
 test "captured parameter calls are classified separately" {
@@ -1050,4 +1053,18 @@ test "linked export candidates never preempt static ABI field names" {
     const stats = try run(a, &image.program, &symbols);
     try std.testing.expectEqual(@as(u32, 0), stats.guarded_function_candidate_calls);
     try std.testing.expectEqual(@as(u32, 0), countGuardHints(&image.program));
+}
+
+
+test "descendant mutation keeps local function guard advisory" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local function f(x)return x+1 end;local function mutate()f=function(x)return x+100 end end;local function run(x)return f(x)end;return run,mutate");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), countGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.mutated);
+    try std.testing.expect(stats.predicted_guard_only_upvalues != 0);
 }
