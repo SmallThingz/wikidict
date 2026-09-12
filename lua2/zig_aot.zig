@@ -815,14 +815,13 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
         .call, .call_vararg => {
             if (aot_hint.directTarget(inst)) |target| {
                 if (target >= p.functions.items.len) return error.BadFunctionReference;
-                try print(out, a, "            const callable_{d} = ", .{pc});
+                try print(out, a, "            const callable_{d} = (", .{pc});
                 try valueExpr(out, a, p, plan, inst.a);
-                try text(out, a, ";\n            if (callable_");
-                try print(out, a, "{d} != .function) return error.NotCallable;\n", .{pc});
+                try text(out, a, ").function;\n");
                 if (p.functions.items[target] != null and (range == null or range.?.contains(target)))
-                    try print(out, a, "            const result_{d} = try ctx.callDirectFunction(callable_{d}.function, f_{d}, argv_{d});\n", .{ pc, pc, target, pc })
+                    try print(out, a, "            const result_{d} = try ctx.callDirectFunction(callable_{d}, f_{d}, argv_{d});\n", .{ pc, pc, target, pc })
                 else
-                    try print(out, a, "            const result_{d} = try ctx.callFunction(callable_{d}.function, argv_{d});\n", .{ pc, pc, pc });
+                    try print(out, a, "            const result_{d} = try ctx.callFunction(callable_{d}, argv_{d});\n", .{ pc, pc, pc });
                 stats.direct_calls += 1;
             } else {
                 // Advisory call predictions never participate in runtime semantics.
