@@ -870,17 +870,19 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                 try print(out, a, "            const callable_{d} = (", .{pc});
                 try valueExpr(out, a, p, plan, inst.a);
                 try text(out, a, ").callable;\n");
+                const buffered = plan.bufferedFunction(target);
+                if (buffered) try emitBufferedResultStorage(out, a, inst, pc);
                 if (p.functions.items[target] != null and (range == null or range.?.contains(target))) {
-                    if (plan.bufferedFunction(target)) {
-                        try emitBufferedResultStorage(out, a, inst, pc);
-                        try print(out, a, "            const result_{d} = try ctx.callBufferedDirectFunction(callable_{d}, f_{d}, argv_{d}, result_buffer_{d});\n", .{ pc, pc, target, pc, pc });
-                        borrowed_result = inst.count != ir.multi_count;
-                    } else {
+                    if (buffered)
+                        try print(out, a, "            const result_{d} = try ctx.callBufferedDirectFunction(callable_{d}, f_{d}, argv_{d}, result_buffer_{d});\n", .{ pc, pc, target, pc, pc })
+                    else
                         try print(out, a, "            const result_{d} = try ctx.callDirectFunction(callable_{d}, f_{d}, argv_{d});\n", .{ pc, pc, target, pc });
-                    }
+                } else if (buffered) {
+                    try print(out, a, "            const result_{d} = try ctx.callFunctionBuffered(callable_{d}, argv_{d}, result_buffer_{d});\n", .{ pc, pc, pc, pc });
                 } else {
                     try print(out, a, "            const result_{d} = try ctx.callFunction(callable_{d}, argv_{d});\n", .{ pc, pc, pc });
                 }
+                borrowed_result = buffered and inst.count != ir.multi_count;
                 stats.direct_calls += 1;
             } else if (aot_hint.directCallable(inst)) {
                 try print(out, a, "            const callable_{d} = (", .{pc});
@@ -898,33 +900,39 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
         },
         .call_local, .call_local_vararg => {
             if (inst.a >= p.functions.items.len) return error.BadFunctionReference;
+            const buffered = plan.bufferedFunction(inst.a);
+            if (buffered) try emitBufferedResultStorage(out, a, inst, pc);
             if (range == null or range.?.contains(inst.a)) {
-                if (plan.bufferedFunction(inst.a)) {
-                    try emitBufferedResultStorage(out, a, inst, pc);
-                    try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &.{{}} }}, argv_{d}, result_buffer_{d});\n", .{ pc, inst.a, pc, pc });
-                    borrowed_result = inst.count != ir.multi_count;
-                } else {
+                if (buffered)
+                    try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &.{{}} }}, argv_{d}, result_buffer_{d});\n", .{ pc, inst.a, pc, pc })
+                else
                     try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, inst.a, pc });
-                }
             } else {
                 const linked = range.?;
-                try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc });
+                if (buffered)
+                    try print(out, a, "            const result_{d} = try ctx.callEntryBuffered(external_functions_{d:0>4}[{d}], .{{ .direct = &.{{}} }}, argv_{d}, result_buffer_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc, pc })
+                else
+                    try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc });
             }
+            borrowed_result = buffered and inst.count != ir.multi_count;
         },
         .call_scoped, .call_scoped_vararg => {
             try emitCaptures(out, a, p, function, inst.a, pc);
+            const buffered = plan.bufferedFunction(inst.a);
+            if (buffered) try emitBufferedResultStorage(out, a, inst, pc);
             if (range == null or range.?.contains(inst.a)) {
-                if (plan.bufferedFunction(inst.a)) {
-                    try emitBufferedResultStorage(out, a, inst, pc);
-                    try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &captures_{d} }}, argv_{d}, result_buffer_{d});\n", .{ pc, inst.a, pc, pc, pc });
-                    borrowed_result = inst.count != ir.multi_count;
-                } else {
+                if (buffered)
+                    try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &captures_{d} }}, argv_{d}, result_buffer_{d});\n", .{ pc, inst.a, pc, pc, pc })
+                else
                     try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, inst.a, pc, pc });
-                }
             } else {
                 const linked = range.?;
-                try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc, pc });
+                if (buffered)
+                    try print(out, a, "            const result_{d} = try ctx.callEntryBuffered(external_functions_{d:0>4}[{d}], .{{ .direct = &captures_{d} }}, argv_{d}, result_buffer_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc, pc, pc })
+                else
+                    try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc, pc });
             }
+            borrowed_result = buffered and inst.count != ir.multi_count;
         },
         .direct_call, .direct_call_vararg => {
             if (inst.a >= p.functions.items.len or p.function_modules.items.len != p.functions.items.len) return error.BadFunctionReference;
@@ -935,18 +943,21 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                 try print(out, a, "            const static_caps_{d}: rt.Captures = .{{ .direct = &.{{}} }};\n", .{pc})
             else
                 try print(out, a, "            const static_caps_{d} = try ctx.moduleCaptures({d});\n", .{ pc, module_id });
+            const buffered = plan.bufferedFunction(inst.a);
+            if (buffered) try emitBufferedResultStorage(out, a, inst, pc);
             if (range == null or range.?.contains(inst.a)) {
-                if (plan.bufferedFunction(inst.a)) {
-                    try emitBufferedResultStorage(out, a, inst, pc);
-                    try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d}, result_buffer_{d});\n", .{ pc, inst.a, pc, pc, pc });
-                    borrowed_result = inst.count != ir.multi_count;
-                } else {
+                if (buffered)
+                    try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d}, result_buffer_{d});\n", .{ pc, inst.a, pc, pc, pc })
+                else
                     try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc });
-                }
             } else {
                 const linked = range.?;
-                try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], static_caps_{d}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc, pc });
+                if (buffered)
+                    try print(out, a, "            const result_{d} = try ctx.callEntryBuffered(external_functions_{d:0>4}[{d}], static_caps_{d}, argv_{d}, result_buffer_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc, pc, pc })
+                else
+                    try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], static_caps_{d}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc, pc });
             }
+            borrowed_result = buffered and inst.count != ir.multi_count;
         },
         else => return error.NotPlainCall,
     }
@@ -1233,7 +1244,7 @@ pub fn generate(a: A, p: *const ir.Program) !struct { source: []u8, stats: Stats
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     var stats = Stats{};
-    const buffered_functions = try buildBufferedFunctions(a, p, null);
+    const buffered_functions = try analyzeBufferedFunctions(a, p);
     defer a.free(buffered_functions);
     try emitRootDeclarations(&out, a, p);
     try emitNativeGlobalShape(&out, a);
@@ -1434,16 +1445,13 @@ fn bufferedCallTarget(inst: ir.Inst) ?u32 {
     };
 }
 
-fn buildBufferedFunctions(a: A, p: *const ir.Program, range: ?FunctionRange) ![]bool {
+pub fn analyzeBufferedFunctions(a: A, p: *const ir.Program) ![]bool {
     const buffered = try a.alloc(bool, p.functions.items.len);
     @memset(buffered, false);
-    const first: usize = if (range) |value| value.first else 0;
-    const end: usize = if (range) |value| value.end else p.functions.items.len;
-    for (p.functions.items[first..end]) |maybe_function| if (maybe_function) |function| {
+    for (p.functions.items) |maybe_function| if (maybe_function) |function| {
         for (function.insts.items) |inst| if (bufferedCallTarget(inst)) |target| {
             if (target >= p.functions.items.len) return error.BadFunctionReference;
             if (p.functions.items[target] == null) continue;
-            if (range) |value| if (!value.contains(target)) continue;
             buffered[target] = true;
         };
     };
@@ -1496,15 +1504,20 @@ pub fn generateFunctionShard(a: A, p: *const ir.Program, config: ShardConfig, sh
 }
 
 pub fn generateFunctionShardWithDescriptors(a: A, p: *const ir.Program, config: ShardConfig, descriptor_roots: []const bool, shard_index: usize, stats: *Stats) ![]u8 {
+    const buffered_functions = try analyzeBufferedFunctions(a, p);
+    defer a.free(buffered_functions);
+    return generateFunctionShardWithPlans(a, p, config, descriptor_roots, buffered_functions, shard_index, stats);
+}
+
+pub fn generateFunctionShardWithPlans(a: A, p: *const ir.Program, config: ShardConfig, descriptor_roots: []const bool, buffered_functions: []const bool, shard_index: usize, stats: *Stats) ![]u8 {
     if (!p.references_lowered) return error.ProgramNotFinalized;
     if (descriptor_roots.len != p.functions.items.len) return error.BadDescriptorRootMask;
+    if (buffered_functions.len != p.functions.items.len) return error.BadBufferedFunctionMask;
     const bounds = try shardBounds(p.functions.items.len, config.functions_per_shard, shard_index);
     const first: u32 = std.math.cast(u32, bounds.first) orelse return error.ProgramTooLarge;
     const end: u32 = std.math.cast(u32, bounds.end) orelse return error.ProgramTooLarge;
     const shard_size: u32 = std.math.cast(u32, config.functions_per_shard) orelse return error.ProgramTooLarge;
     const range = FunctionRange{ .first = first, .end = end, .shard_size = shard_size };
-    const buffered_functions = try buildBufferedFunctions(a, p, range);
-    defer a.free(buffered_functions);
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     try emitDeclarations(&out, a, p);
@@ -1759,7 +1772,7 @@ test "sharded AOT splits code and data while preserving numeric cross-shard call
     try std.testing.expect(std.mem.indexOf(u8, first, "pub fn f_") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "rt.stabilize(f_") != null or std.mem.indexOf(u8, first, "rt.stabilizeBuffered(f_") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "@setEvalBranchQuota") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first, "ctx.callEntry(external_functions_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "ctx.callEntry(external_functions_") != null or std.mem.indexOf(u8, first, "ctx.callEntryBuffered(external_functions_") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "invokeKnown") == null);
     try std.testing.expect(std.mem.indexOf(u8, first, "pub export const dict_aot_functions_0000") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "vm_codec") == null);
@@ -1883,7 +1896,7 @@ test "same-shard calls use caller-owned fixed result buffers" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "rt.copyReturnTail(result, 1, tail)") != null);
 }
 
-test "buffered return ABI stays local to one function shard" {
+test "buffered return ABI crosses function shards" {
     const lua = @import("root.zig");
     const opt = @import("vm_optimize.zig");
     const allocator = std.testing.allocator;
@@ -1894,20 +1907,21 @@ test "buffered return ABI stays local to one function shard" {
     defer program.deinit();
     _ = try opt.runAot(allocator, &program);
     try std.testing.expectEqual(@as(usize, 3), program.functions.items.len);
-    const config = ShardConfig{ .functions_per_shard = 2 };
+    const config = ShardConfig{ .functions_per_shard = 1 };
     var stats = Stats{};
     const first = try generateFunctionShard(allocator, &program, config, 0, &stats);
     defer allocator.free(first);
     const second = try generateFunctionShard(allocator, &program, config, 1, &stats);
     defer allocator.free(second);
+    const third = try generateFunctionShard(allocator, &program, config, 2, &stats);
+    defer allocator.free(third);
     try std.testing.expect(std.mem.indexOf(u8, first, "fn f_0(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first, "fn f_1(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value, result_buffer: ?[]rt.Value)") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "rt.stabilize(f_0)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first, "rt.stabilizeBuffered(f_1)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first, "ctx.callEntry(external_functions_0001[0]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, second, "fn f_2(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, second, "result_buffer: ?[]rt.Value") == null);
-    try std.testing.expect(std.mem.indexOf(u8, second, "rt.stabilize(f_2)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "ctx.callEntryBuffered(external_functions_0001[0]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second, "fn f_1(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value, result_buffer: ?[]rt.Value)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second, "rt.stabilizeBuffered(f_1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, third, "fn f_2(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value, result_buffer: ?[]rt.Value)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, third, "rt.stabilizeBuffered(f_2)") != null);
 }
 
 test "known non-vararg vararg calls use bounded caller argument storage" {

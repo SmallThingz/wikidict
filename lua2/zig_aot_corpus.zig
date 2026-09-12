@@ -181,6 +181,8 @@ pub fn main(init: std.process.Init) !void {
         }
 
         const descriptor_roots = try aot.analyzeModuleRootDescriptors(std.heap.smp_allocator, &image.program, true);
+        const buffered_functions = try aot.analyzeBufferedFunctions(std.heap.smp_allocator, &image.program);
+        defer std.heap.smp_allocator.free(buffered_functions);
         defer std.heap.smp_allocator.free(descriptor_roots);
         var descriptor_root_count: usize = 0;
         for (descriptor_roots) |descriptor| descriptor_root_count += @intFromBool(descriptor);
@@ -193,7 +195,7 @@ pub fn main(init: std.process.Init) !void {
 
         const function_shards = try aot.functionShardCount(&image.program, config);
         for (0..function_shards) |index| {
-            const source = try aot.generateFunctionShardWithDescriptors(std.heap.smp_allocator, &image.program, config, descriptor_roots, index, &generated_stats);
+            const source = try aot.generateFunctionShardWithPlans(std.heap.smp_allocator, &image.program, config, descriptor_roots, buffered_functions, index, &generated_stats);
             defer std.heap.smp_allocator.free(source);
             const path = try std.fmt.allocPrint(std.heap.smp_allocator, "{s}/functions_{d:0>4}.zig", .{ args[3], index });
             defer std.heap.smp_allocator.free(path);

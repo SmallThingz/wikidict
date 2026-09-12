@@ -83,7 +83,7 @@ pub const FunctionResult = extern struct {
     status: u32,
     reserved: u32,
 };
-pub const FunctionFn = *const fn (*Context, *const Captures, [*]const Value, usize) callconv(.c) FunctionResult;
+pub const FunctionFn = *const fn (*Context, *const Captures, [*]const Value, usize, ?[*]Value, usize) callconv(.c) FunctionResult;
 pub const ModuleLookupFn = *const fn (?*const anyopaque, []const u8) ?u32;
 pub const ModuleNameFn = *const fn (?*const anyopaque, u32) ?[]const u8;
 pub const Value = union(enum) {
@@ -124,7 +124,9 @@ pub const StableErrorName = struct {
 
 pub fn stabilize(comptime function: DirectFunctionFn) FunctionFn {
     return struct {
-        fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
+        fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize, result_ptr: ?[*]Value, result_len: usize) callconv(.c) FunctionResult {
+            _ = result_ptr;
+            _ = result_len;
             const values = function(ctx, captures.*, args_ptr[0..args_len]) catch |err| {
                 if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
                 return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
@@ -141,8 +143,9 @@ pub fn stabilize(comptime function: DirectFunctionFn) FunctionFn {
 
 pub fn stabilizeBuffered(comptime function: BufferedDirectFunctionFn) FunctionFn {
     return struct {
-        fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
-            const values = function(ctx, captures.*, args_ptr[0..args_len], null) catch |err| {
+        fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize, result_ptr: ?[*]Value, result_len: usize) callconv(.c) FunctionResult {
+            const result_buffer: ?[]Value = if (result_ptr) |ptr| ptr[0..result_len] else null;
+            const values = function(ctx, captures.*, args_ptr[0..args_len], result_buffer) catch |err| {
                 if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
                 return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
             };
@@ -158,7 +161,9 @@ pub fn stabilizeBuffered(comptime function: BufferedDirectFunctionFn) FunctionFn
 
 pub fn stabilizeNative(comptime function: anytype) FunctionFn {
     return struct {
-        fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
+        fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize, result_ptr: ?[*]Value, result_len: usize) callconv(.c) FunctionResult {
+            _ = result_ptr;
+            _ = result_len;
             const host = switch (captures.*) {
                 .native => |value| value,
                 else => {
@@ -702,8 +707,15 @@ pub const Context = struct {
         return .{ .callable = .{ .id = id, .env = FunctionEnv.module(env), .identity = identity, .entry = entry } };
     }
 
-    pub fn callEntry(self: *Context, entry: FunctionFn, captures: Captures, args: []const Value) anyerror![]const Value {
-        const result = entry(self, &captures, args.ptr, args.len);
+    pub fn callEntryBuffered(self: *Context, entry: FunctionFn, captures: Captures, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+        const result = entry(
+            self,
+            &captures,
+            args.ptr,
+            args.len,
+            if (result_buffer) |values| values.ptr else null,
+            if (result_buffer) |values| values.len else 0,
+        );
         if (result.reserved != 0 or result.status > 1) return error.BadAotFunctionResult;
         if (result.status == 1) {
             if (self.aotErrorName() == null) self.setAotErrorName("AotCallFailed");
@@ -714,12 +726,20 @@ pub const Context = struct {
         return values_ptr[0..result.values_len];
     }
 
-    pub fn callFunction(self: *Context, value: FunctionValue, args: []const Value) anyerror![]const Value {
-        if (value.id == native_function_id) return self.callEntry(value.entry, value.captures(), args);
+    pub fn callEntry(self: *Context, entry: FunctionFn, captures: Captures, args: []const Value) anyerror![]const Value {
+        return self.callEntryBuffered(entry, captures, args, null);
+    }
+
+    pub fn callFunctionBuffered(self: *Context, value: FunctionValue, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+        if (value.id == native_function_id) return self.callEntryBuffered(value.entry, value.captures(), args, result_buffer);
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
-        return self.callEntry(value.entry, value.captures(), args);
+        return self.callEntryBuffered(value.entry, value.captures(), args, result_buffer);
+    }
+
+    pub fn callFunction(self: *Context, value: FunctionValue, args: []const Value) anyerror![]const Value {
+        return self.callFunctionBuffered(value, args, null);
     }
 
     pub inline fn callDirectFunction(self: *Context, value: FunctionValue, direct: DirectFunctionFn, args: []const Value) anyerror![]const Value {
@@ -1674,7 +1694,7 @@ test "callable table metamethod tables retain recursive call semantics" {
     try std.testing.expectEqual(@as(f64, 9), out[1].number);
 }
 
-test "buffered direct results borrow caller storage while stable calls own results" {
+test "buffered results borrow caller storage across direct and stable calls" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var ctx = try Context.init(arena.allocator(), 0);
@@ -1685,6 +1705,11 @@ test "buffered direct results borrow caller storage while stable calls own resul
     try std.testing.expectEqual(@as(usize, 1), borrowed.len);
     try std.testing.expectEqual(@as(f64, 3), borrowed[0].number);
     try std.testing.expect(borrowed.ptr == storage[0..].ptr);
+    var stable_storage: [1]Value = undefined;
+    const stable_borrowed = try ctx.callEntryBuffered(callable.entry, .{ .direct = &.{} }, &.{.{ .number = 6 }}, &stable_storage);
+    try std.testing.expectEqual(@as(usize, 1), stable_borrowed.len);
+    try std.testing.expectEqual(@as(f64, 6), stable_borrowed[0].number);
+    try std.testing.expect(stable_borrowed.ptr == stable_storage[0..].ptr);
     var none: [0]Value = .{};
     const discarded = try ctx.callBufferedDirectFunction(callable, bufferedResultProbe, &.{.{ .number = 4 }}, &none);
     try std.testing.expectEqual(@as(usize, 0), discarded.len);
