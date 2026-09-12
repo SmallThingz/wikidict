@@ -834,7 +834,10 @@ pub const Context = struct {
                 var storage: [8]Value = undefined;
                 const all = try mergeSmallValues(&storage, &.{callable}, args);
                 defer freeSmallValues(all, &storage);
-                break :blk try self.callValue(method, all);
+                break :blk switch (method) {
+                    .callable => |value| try self.callFunction(value, all),
+                    else => try self.callValue(method, all),
+                };
             },
             else => error.NotCallable,
         };
@@ -1650,6 +1653,25 @@ test "callable tables use full small arguments and heap fallback without changin
     defer freeResults(large);
     try std.testing.expectEqual(@as(f64, 10), large[0].number);
     try std.testing.expectEqual(@as(f64, 9), large[1].number);
+}
+
+test "callable table metamethod tables retain recursive call semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const outer = try ctx.newTable();
+    const outer_mt = try ctx.newTable();
+    outer.metatable = outer_mt;
+    const inner = try ctx.newTable();
+    const inner_mt = try ctx.newTable();
+    inner.metatable = inner_mt;
+    try outer_mt.rawSet(ctx.allocator, .{ .string = "__call" }, .{ .table = inner });
+    try inner_mt.rawSet(ctx.allocator, .{ .string = "__call" }, try ctx.newNative(inner, callableTableProbe));
+    const out = try ctx.callValue(.{ .table = outer }, &.{.{ .number = 9 }});
+    defer freeResults(out);
+    try std.testing.expectEqual(@as(f64, 3), out[0].number);
+    try std.testing.expectEqual(@as(f64, 9), out[1].number);
 }
 
 test "buffered direct results borrow caller storage while stable calls own results" {
