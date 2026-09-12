@@ -82,7 +82,8 @@ fn compileFunctionObjects(io: std.Io, a: std.mem.Allocator, marker: []const u8, 
 
 fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, publish_root: []const u8, aot_dir: []const u8) !void {
     const objects = try compileFunctionObjects(io, a, marker, aot_dir);
-    const worker = try sourcePath(a, "frontend/native_expansion_worker.zig");
+    const worker_core = try sourcePath(a, "frontend/native_expansion_worker_core.zig");
+    const worker_link = try sourcePath(a, "frontend/native_expansion_worker_link.zig");
     const generated = try std.fs.path.join(a, &.{ aot_dir, "root.zig" });
     const zig_runtime = try sourcePath(a, "lua2/zig_runtime.zig");
     const zig_stdlib = try sourcePath(a, "lua2/zig_stdlib.zig");
@@ -92,9 +93,10 @@ fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, pub
     const blob_decoder = try sourcePath(a, "decoder/blob_root.zig");
     const blob_files = try sourcePath(a, "encoder/blob_files.zig");
     const blob_storage = try sourcePath(a, "native/storage.zig");
-    const output = try std.fs.path.join(a, &.{ publish_root, "dict-native-expansion-worker" });
-    const emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{output});
-    const root_module = try std.fmt.allocPrint(a, "-Mroot={s}", .{worker});
+
+    const core_object = try std.fs.path.join(a, &.{ aot_dir, "native-expansion-worker-core.o" });
+    const core_emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{core_object});
+    const core_root_module = try std.fmt.allocPrint(a, "-Mroot={s}", .{worker_core});
     const generated_module = try std.fmt.allocPrint(a, "-Mgenerated={s}", .{generated});
     const runtime_module = try std.fmt.allocPrint(a, "-Mzig_runtime={s}", .{zig_runtime});
     const stdlib_module = try std.fmt.allocPrint(a, "-Mzig_stdlib={s}", .{zig_stdlib});
@@ -105,21 +107,25 @@ fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, pub
     const files_module = try std.fmt.allocPrint(a, "-Mblob_files={s}", .{blob_files});
     const storage_module = try std.fmt.allocPrint(a, "-Mblob_storage={s}", .{blob_storage});
 
-    var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(a, &.{
-        paths.zig, "build-exe",                    "-OReleaseFast", "-fno-llvm", "-fstrip", "-lc", "-I/usr/include",
-        "--name",  "dict-native-expansion-worker", emit,
+    var core_argv: std.ArrayList([]const u8) = .empty;
+    try core_argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fno-llvm", "-lc", "-I/usr/include", core_emit });
+    try core_argv.appendSlice(a, objects.items);
+    try core_argv.appendSlice(a, &.{
+        "--dep",          "generated",    "--dep",       "blob_encoder", "--dep",      "blob_decoder", "--dep",          "blob_files", "--dep",               "blob_storage",   "--dep",        "zig_runtime",
+        core_root_module, "--dep",        "zig_runtime", "--dep",        "zig_stdlib", "--dep",        "zig_scribunto",  "--dep",      "zig_module_registry", generated_module, runtime_module, "--dep",
+        "zig_runtime",    stdlib_module,  "--dep",       "zig_runtime",  "--dep",      "zig_stdlib",   scribunto_module, "--dep",      "zig_runtime",         registry_module,  encoder_module, "--dep",
+        "blob_encoder",   decoder_module, "--dep",       "blob_encoder", "--dep",      "blob_storage", files_module,     "--dep",      "blob_encoder",        storage_module,
     });
-    try argv.appendSlice(a, objects.items);
-    try argv.appendSlice(a, &.{
-        "--dep",        "generated",    "--dep",       "blob_encoder", "--dep",      "blob_decoder", "--dep",          "blob_files", "--dep",               "blob_storage",   "--dep",        "zig_runtime",
-        root_module,    "--dep",        "zig_runtime", "--dep",        "zig_stdlib", "--dep",        "zig_scribunto",  "--dep",      "zig_module_registry", generated_module, runtime_module, "--dep",
-        "zig_runtime",  stdlib_module,  "--dep",       "zig_runtime",  "--dep",      "zig_stdlib",   scribunto_module, "--dep",      "zig_runtime",         registry_module,  encoder_module, "--dep",
-        "blob_encoder", decoder_module, "--dep",       "blob_encoder", "--dep",      "blob_storage", files_module,     "--dep",      "blob_encoder",        storage_module,
-    });
-    try stage(io, marker, "link native AOT worker", argv.items);
-}
+    try stage(io, marker, "compile native AOT worker core", core_argv.items);
 
+    const output = try std.fs.path.join(a, &.{ publish_root, "dict-native-expansion-worker" });
+    const emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{output});
+    const link_root_module = try std.fmt.allocPrint(a, "-Mroot={s}", .{worker_link});
+    try stage(io, marker, "link native AOT worker", &.{
+        paths.zig, "build-exe",                    "-OReleaseFast", "-fllvm",    "-flld",          "-fstrip", "-lc", "-I/usr/include",
+        "--name",  "dict-native-expansion-worker", emit,            core_object, link_root_module,
+    });
+}
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
