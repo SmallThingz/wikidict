@@ -768,8 +768,8 @@ const TestModule = struct {
     }
     fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
         const exports = try ctx.newTable();
-        try exports.rawSet(ctx.allocator, .{ .string = "run" }, try ctx.makeFunction(1, &.{}));
-        try exports.rawSet(ctx.allocator, .{ .string = "fail" }, try ctx.makeFunction(2, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "run" }, try ctx.makeFunctionKnown(1, run, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "fail" }, try ctx.makeFunctionKnown(2, fail, &.{}));
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
         return out;
@@ -793,10 +793,9 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
     defer runtime.deinit();
     const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail) };
-    const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{0};
-    runtime.function_blocks = &blocks;
     runtime.module_roots = &roots;
+    runtime.module_root_entries = &.{&functions[0]};
     runtime.configureModules(null, TestModule.lookup, TestModule.name);
     try rt.bindGlobalTable(&runtime, null, 0);
     try stdlib.install(&runtime);

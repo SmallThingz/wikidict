@@ -98,13 +98,6 @@ pub const Value = union(enum) {
         };
     }
 };
-pub const NativeFieldGuard = struct {
-    namespace: static_fields.Namespace,
-    slot: u32,
-    root: Value,
-    child_slot: ?u32 = null,
-};
-
 pub const stable_error_name_capacity = 128;
 pub const StableErrorName = struct {
     bytes: [stable_error_name_capacity]u8 = [_]u8{0} ** stable_error_name_capacity,
@@ -181,7 +174,6 @@ fn constantEntryValue(entry: ConstantEntry) u32 {
 }
 pub const ConstantBlock = struct { first: u32, values: []const Constant };
 pub const ConstantEntryBlock = struct { first: u32, values: []const ConstantEntry };
-pub const FunctionBlock = struct { first: u32, values: []const FunctionFn };
 pub const ProgramData = aot_data.View;
 pub const module_root_function = std.math.maxInt(u32);
 pub const module_root_empty = module_root_function - 1;
@@ -546,11 +538,11 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     globals: []Value,
     shapes: []const Shape = &.{},
-    function_blocks: []const FunctionBlock = &.{},
     constant_blocks: []const ConstantBlock = &.{},
     constant_entry_blocks: []const ConstantEntryBlock = &.{},
     program_data: ?ProgramData = null,
     module_roots: []const u32 = &.{},
+    module_root_entries: []const *const FunctionFn = &.{},
     module_root_values: []const u32 = &.{},
     string_metatable: ?*Table = null,
     string_intern: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -594,11 +586,11 @@ pub const Context = struct {
     pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
         var child = try initProgram(allocator, self.globals.len, self.module_roots.len);
         child.shapes = self.shapes;
-        child.function_blocks = self.function_blocks;
         child.constant_blocks = self.constant_blocks;
         child.constant_entry_blocks = self.constant_entry_blocks;
         child.program_data = self.program_data;
         child.module_roots = self.module_roots;
+        child.module_root_entries = self.module_root_entries;
         child.module_root_values = self.module_root_values;
         child.module_lookup_ctx = self.module_lookup_ctx;
         child.module_lookup = self.module_lookup;
@@ -651,8 +643,7 @@ pub const Context = struct {
         if (slot >= self.globals.len) return error.BadGlobalSlot;
         self.globals[slot] = value;
     }
-    pub fn makeFunction(self: *Context, id: u32, captures: []const *Cell) !Value {
-        const entry = self.functionById(id) orelse return error.BadFunctionId;
+    pub fn makeFunction(self: *Context, id: u32, entry: FunctionFn, captures: []const *Cell) !Value {
         const identity = self.next_identity;
         self.next_identity +%= 1;
         const env: FunctionEnv = if (captures.len == 0) .{} else blk: {
@@ -664,31 +655,17 @@ pub const Context = struct {
         return .{ .function = .{ .id = id, .env = env, .identity = identity, .entry = entry } };
     }
 
-    pub fn makeModuleFunction(self: *Context, id: u32, env: *ModuleEnv) !Value {
-        const entry = self.functionById(id) orelse return error.BadFunctionId;
+    pub fn makeFunctionKnown(self: *Context, id: u32, comptime entry: DirectFunctionFn, captures: []const *Cell) !Value {
+        return self.makeFunction(id, stabilize(entry), captures);
+    }
+
+    pub fn makeModuleFunction(self: *Context, id: u32, entry: FunctionFn, env: *ModuleEnv) Value {
         const identity = self.next_identity;
         self.next_identity +%= 1;
         return .{ .function = .{ .id = id, .env = FunctionEnv.module(env), .identity = identity, .entry = entry } };
     }
 
-    fn functionById(self: *const Context, id: u32) ?FunctionFn {
-        var low: usize = 0;
-        var high = self.function_blocks.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const block = self.function_blocks[mid];
-            if (id < block.first) {
-                high = mid;
-            } else {
-                const offset = @as(usize, id - block.first);
-                if (offset < block.values.len) return block.values[offset];
-                low = mid + 1;
-            }
-        }
-        return null;
-    }
-
-    fn invokeEntry(self: *Context, entry: FunctionFn, captures: Captures, args: []const Value) anyerror![]const Value {
+    pub fn callEntry(self: *Context, entry: FunctionFn, captures: Captures, args: []const Value) anyerror![]const Value {
         const result = entry(self, &captures, args.ptr, args.len);
         if (result.reserved != 0 or result.status > 1) return error.BadAotFunctionResult;
         if (result.status == 1) {
@@ -698,10 +675,6 @@ pub const Context = struct {
         if (result.values_len == 0) return &.{};
         const values_ptr = result.values_ptr orelse return error.BadAotFunctionResult;
         return values_ptr[0..result.values_len];
-    }
-
-    pub fn invokeKnown(self: *Context, id: u32, captures: Captures, args: []const Value) anyerror![]const Value {
-        return self.invokeEntry(self.functionById(id) orelse return error.BadFunctionId, captures, args);
     }
 
     fn callNative(self: *Context, native: *NativeFunction, args: []const Value) anyerror![]const Value {
@@ -720,7 +693,7 @@ pub const Context = struct {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
-        return self.invokeEntry(value.entry, value.captures(), args);
+        return self.callEntry(value.entry, value.captures(), args);
     }
 
     pub inline fn callDirectFunction(self: *Context, value: FunctionValue, direct: DirectFunctionFn, args: []const Value) anyerror![]const Value {
@@ -771,8 +744,9 @@ pub const Context = struct {
         const canonical = self.canonicalModuleName(module_id, requested);
         const root_value = if (module_id < self.module_root_values.len) self.module_root_values[module_id] else module_root_function;
         var value: Value = if (root_value == module_root_function) blk: {
+            if (module_id >= self.module_root_entries.len) return error.BadModuleId;
             const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
-            const values = try self.invokeKnown(self.module_roots[module_id], .{ .direct = &.{} }, argv);
+            const values = try self.callEntry(self.module_root_entries[module_id].*, .{ .direct = &.{} }, argv);
             defer freeResults(values);
             break :blk if (values.len == 0) .nil else values[0];
         } else if (root_value == module_root_empty)
@@ -817,56 +791,6 @@ pub const Context = struct {
         const value = try self.loadModule(module_id, raw_name);
         if (self.package_loaded) |loaded| try loaded.rawSet(self.allocator, .{ .string = raw_name }, value);
         return value;
-    }
-
-    pub inline fn callKnownDirect(self: *Context, callable: Value, expected: u32, direct: DirectFunctionFn, args: []const Value) anyerror![]const Value {
-        if (callable == .function and callable.function.id == expected)
-            return self.callDirectFunction(callable.function, direct, args);
-        return self.callValue(callable, args);
-    }
-
-    pub inline fn callKnown(self: *Context, callable: Value, expected: u32, args: []const Value) anyerror![]const Value {
-        if (callable == .function and callable.function.id == expected)
-            return self.callFunction(callable.function, args);
-        return self.callValue(callable, args);
-    }
-
-    pub inline fn callKnownNative(self: *Context, callable: Value, expected: Value, args: []const Value) anyerror![]const Value {
-        if (callable == .native and expected == .native and callable.native.call == expected.native.call) {
-            return self.callNative(callable.native, args);
-        }
-        return self.callValue(callable, args);
-    }
-
-    fn expectedNativeField(_: *Context, guard: NativeFieldGuard) ?Value {
-        if (guard.root != .table) return null;
-        var table = guard.root.table;
-        if (guard.child_slot) |child_index| {
-            if (table.native_namespace != .mw or child_index >= table.slots.len) return null;
-            const child = table.slots[child_index];
-            if (child != .table or child.table.native_namespace != guard.namespace) return null;
-            table = child.table;
-        } else if (table.native_namespace != guard.namespace) {
-            return null;
-        }
-        if (guard.slot >= table.slots.len) return null;
-        return table.slots[guard.slot];
-    }
-
-    pub inline fn callKnownNativeField(self: *Context, callable: Value, namespace: static_fields.Namespace, slot: u32, root: Value, child_slot: ?u32, args: []const Value) anyerror![]const Value {
-        const expected = self.expectedNativeField(.{ .namespace = namespace, .slot = slot, .root = root, .child_slot = child_slot }) orelse return self.callValue(callable, args);
-        return self.callKnownNative(callable, expected, args);
-    }
-
-    pub inline fn callKnownNativeFieldCandidates(self: *Context, callable: Value, guards: []const NativeFieldGuard, args: []const Value) anyerror![]const Value {
-        if (callable == .native) {
-            for (guards) |guard| {
-                const expected = self.expectedNativeField(guard) orelse continue;
-                if (expected == .native and callable.native.call == expected.native.call)
-                    return self.callNative(callable.native, args);
-            }
-        }
-        return self.callValue(callable, args);
     }
 
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
@@ -1256,10 +1180,9 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     var ctx = try Context.initProgram(arena.allocator(), 1, 3);
     defer ctx.deinit();
     const functions = [_]FunctionFn{ stabilize(ModuleRuntimeProbe.named), stabilize(ModuleRuntimeProbe.packageOverride), stabilize(ModuleRuntimeProbe.loop) };
-    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{ 0, 1, 2 };
-    ctx.function_blocks = &blocks;
     ctx.module_roots = &roots;
+    ctx.module_root_entries = &.{ &functions[0], &functions[1], &functions[2] };
     ctx.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
     ctx.package_loaded = try ctx.newTable();
     try ctx.ensureModule(0);
@@ -1307,10 +1230,9 @@ test "recursive module loads keep distinct cache slots" {
     var ctx = try Context.initProgram(arena.allocator(), 0, 2);
     defer ctx.deinit();
     const functions = [_]FunctionFn{ stabilize(RecursiveModuleCacheProbe.outer), stabilize(RecursiveModuleCacheProbe.inner) };
-    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{ 0, 1 };
-    ctx.function_blocks = &blocks;
     ctx.module_roots = &roots;
+    ctx.module_root_entries = &.{ &functions[0], &functions[1] };
 
     const outer = try ctx.loadModule(0, null);
     const loaded_inner = try ctx.loadModule(1, null);
@@ -1327,14 +1249,13 @@ test "descriptor module roots materialize constants without generated functions"
     var ctx = try Context.initProgram(arena.allocator(), 0, 2);
     defer ctx.deinit();
     const functions = [_]FunctionFn{stabilize(descriptorModuleRootStub)};
-    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{ 0, 0 };
     const root_values = [_]u32{ 0, module_root_empty };
     const constants = [_]Constant{.{ .table = .{ .first = 0, .count = 0 } }};
     const constant_blocks = [_]ConstantBlock{.{ .first = 0, .values = &constants }};
-    ctx.function_blocks = &blocks;
     ctx.constant_blocks = &constant_blocks;
     ctx.module_roots = &roots;
+    ctx.module_root_entries = &.{ &functions[0], &functions[0] };
     ctx.module_root_values = &root_values;
 
     const first = try ctx.loadModule(0, null);
@@ -1385,160 +1306,6 @@ test "AOT native calls carry independent host context" {
     const out = try ctx.callValue(callable, &.{ .nil, .nil });
     defer freeResults(out);
     try std.testing.expectEqual(@as(f64, 13), out[0].number);
-}
-
-test "guarded native call matches callback identity and uses actual context" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 2);
-    defer ctx.deinit();
-    try ctx.setGlobal(1, .{ .number = 4 });
-    var expected_host = NativeHostProbe{ .value = 90 };
-    var actual_host = NativeHostProbe{ .value = 7 };
-    const expected = try ctx.newNative(&expected_host, NativeHostProbe.call);
-    const actual = try ctx.newNative(&actual_host, NativeHostProbe.call);
-    const out = try ctx.callKnownNative(actual, expected, &.{ .nil, .nil });
-    defer freeResults(out);
-    try std.testing.expectEqual(@as(f64, 13), out[0].number);
-}
-
-test "guarded native call falls back on callback mismatch" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 2);
-    defer ctx.deinit();
-    var expected_host = NativeHostProbe{ .value = 1 };
-    var actual_host = OtherNativeHostProbe{ .value = 9 };
-    const expected = try ctx.newNative(&expected_host, NativeHostProbe.call);
-    const actual = try ctx.newNative(&actual_host, OtherNativeHostProbe.call);
-    const out = try ctx.callKnownNative(actual, expected, &.{});
-    defer freeResults(out);
-    try std.testing.expectEqual(@as(f64, 109), out[0].number);
-}
-
-test "guarded native field resolves root namespace callback identity" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 2);
-    defer ctx.deinit();
-    try ctx.setGlobal(1, .{ .number = 4 });
-    const table = try ctx.newNativeNamespace(.table);
-    var expected_host = NativeHostProbe{ .value = 90 };
-    var actual_host = NativeHostProbe{ .value = 7 };
-    try table.rawSet(ctx.allocator, .{ .string = "insert" }, try ctx.newNative(&expected_host, NativeHostProbe.call));
-    const actual = try ctx.newNative(&actual_host, NativeHostProbe.call);
-    const insert_slot = static_fields.slotForName(.table, "insert") orelse return error.MissingStaticField;
-    const out = try ctx.callKnownNativeField(actual, .table, insert_slot, .{ .table = table }, null, &.{ .nil, .nil });
-    defer freeResults(out);
-    try std.testing.expectEqual(@as(f64, 13), out[0].number);
-}
-
-test "guarded native field resolves canonical nested namespace" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 2);
-    defer ctx.deinit();
-    try ctx.setGlobal(1, .{ .number = 4 });
-    const mw = try ctx.newNativeNamespace(.mw);
-    const ustring = try ctx.newNativeNamespace(.ustring);
-    try mw.rawSet(ctx.allocator, .{ .string = "ustring" }, .{ .table = ustring });
-    var expected_host = NativeHostProbe{ .value = 90 };
-    var actual_host = NativeHostProbe{ .value = 7 };
-    try ustring.rawSet(ctx.allocator, .{ .string = "gsub" }, try ctx.newNative(&expected_host, NativeHostProbe.call));
-    const actual = try ctx.newNative(&actual_host, NativeHostProbe.call);
-    const child_slot = static_fields.slotForName(.mw, "ustring") orelse return error.MissingStaticField;
-    const gsub_slot = static_fields.slotForName(.ustring, "gsub") orelse return error.MissingStaticField;
-    const out = try ctx.callKnownNativeField(actual, .ustring, gsub_slot, .{ .table = mw }, child_slot, &.{ .nil, .nil });
-    defer freeResults(out);
-    try std.testing.expectEqual(@as(f64, 13), out[0].number);
-}
-
-test "candidate native field guard matches shared canonical callbacks and uses actual context" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 2);
-    defer ctx.deinit();
-    try ctx.setGlobal(1, .{ .number = 4 });
-    const string = try ctx.newNativeNamespace(.string);
-    const mw = try ctx.newNativeNamespace(.mw);
-    const ustring = try ctx.newNativeNamespace(.ustring);
-    try mw.rawSet(ctx.allocator, .{ .string = "ustring" }, .{ .table = ustring });
-    var string_host = OtherNativeHostProbe{ .value = 1 };
-    var ustring_host = NativeHostProbe{ .value = 90 };
-    var actual_string_host = OtherNativeHostProbe{ .value = 9 };
-    var actual_ustring_host = NativeHostProbe{ .value = 7 };
-    const string_slot = static_fields.slotForName(.string, "gsub") orelse return error.MissingStaticField;
-    const ustring_slot = static_fields.slotForName(.ustring, "gsub") orelse return error.MissingStaticField;
-    const child_slot = static_fields.slotForName(.mw, "ustring") orelse return error.MissingStaticField;
-    try string.rawSet(ctx.allocator, .{ .string = "gsub" }, try ctx.newNative(&string_host, OtherNativeHostProbe.call));
-    try ustring.rawSet(ctx.allocator, .{ .string = "gsub" }, try ctx.newNative(&ustring_host, NativeHostProbe.call));
-    const guards = [_]NativeFieldGuard{
-        .{ .namespace = .string, .slot = string_slot, .root = .{ .table = string } },
-        .{ .namespace = .ustring, .slot = ustring_slot, .root = .{ .table = mw }, .child_slot = child_slot },
-    };
-
-    const actual_string = try ctx.newNative(&actual_string_host, OtherNativeHostProbe.call);
-    const string_out = try ctx.callKnownNativeFieldCandidates(actual_string, &guards, &.{});
-    defer freeResults(string_out);
-    try std.testing.expectEqual(@as(f64, 109), string_out[0].number);
-
-    const actual_ustring = try ctx.newNative(&actual_ustring_host, NativeHostProbe.call);
-    const ustring_out = try ctx.callKnownNativeFieldCandidates(actual_ustring, &guards, &.{ .nil, .nil });
-    defer freeResults(ustring_out);
-    try std.testing.expectEqual(@as(f64, 13), ustring_out[0].number);
-}
-
-test "candidate native field guard falls back to Lua and mismatched native callables" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.initProgram(arena.allocator(), 0, 0);
-    defer ctx.deinit();
-    const functions = [_]FunctionFn{stabilize(candidateLuaFallback)};
-    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
-    ctx.function_blocks = &blocks;
-    const table = try ctx.newNativeNamespace(.table);
-    var expected_host = NativeHostProbe{ .value = 1 };
-    var mismatch_host = OtherNativeHostProbe{ .value = 9 };
-    const insert_slot = static_fields.slotForName(.table, "insert") orelse return error.MissingStaticField;
-    try table.rawSet(ctx.allocator, .{ .string = "insert" }, try ctx.newNative(&expected_host, NativeHostProbe.call));
-    const guards = [_]NativeFieldGuard{.{ .namespace = .table, .slot = insert_slot, .root = .{ .table = table } }};
-
-    const lua_callable = try ctx.makeFunction(0, &.{});
-    const lua_out = try ctx.callKnownNativeFieldCandidates(lua_callable, &guards, &.{});
-    defer freeResults(lua_out);
-    try std.testing.expectEqual(@as(f64, 7), lua_out[0].number);
-
-    const mismatch = try ctx.newNative(&mismatch_host, OtherNativeHostProbe.call);
-    const mismatch_out = try ctx.callKnownNativeFieldCandidates(mismatch, &guards, &.{});
-    defer freeResults(mismatch_out);
-    try std.testing.expectEqual(@as(f64, 109), mismatch_out[0].number);
-}
-
-test "candidate native field guard observes namespace and field rebinding" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 2);
-    defer ctx.deinit();
-    try ctx.setGlobal(1, .{ .number = 4 });
-    const string = try ctx.newNativeNamespace(.string);
-    var original_host = NativeHostProbe{ .value = 90 };
-    var rebound_host = OtherNativeHostProbe{ .value = 1 };
-    var actual_host = NativeHostProbe{ .value = 7 };
-    const gsub_slot = static_fields.slotForName(.string, "gsub") orelse return error.MissingStaticField;
-    try string.rawSet(ctx.allocator, .{ .string = "gsub" }, try ctx.newNative(&original_host, NativeHostProbe.call));
-    const actual = try ctx.newNative(&actual_host, NativeHostProbe.call);
-
-    try string.rawSet(ctx.allocator, .{ .string = "gsub" }, try ctx.newNative(&rebound_host, OtherNativeHostProbe.call));
-    const field_rebound = [_]NativeFieldGuard{.{ .namespace = .string, .slot = gsub_slot, .root = .{ .table = string } }};
-    const field_out = try ctx.callKnownNativeFieldCandidates(actual, &field_rebound, &.{ .nil, .nil });
-    defer freeResults(field_out);
-    try std.testing.expectEqual(@as(f64, 13), field_out[0].number);
-
-    const replacement = try ctx.newTable();
-    const namespace_rebound = [_]NativeFieldGuard{.{ .namespace = .string, .slot = gsub_slot, .root = .{ .table = replacement } }};
-    const namespace_out = try ctx.callKnownNativeFieldCandidates(actual, &namespace_rebound, &.{ .nil, .nil });
-    defer freeResults(namespace_out);
-    try std.testing.expectEqual(@as(f64, 13), namespace_out[0].number);
 }
 
 test "AOT runtime globals are numeric slots without hash storage" {
@@ -1673,8 +1440,6 @@ test "AOT module functions share one activation environment" {
         stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub),
         stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub),
     };
-    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
-    ctx.function_blocks = &blocks;
     var regs: [3]Value = undefined;
     var cells: [3]?*Cell = undefined;
     var frame = try Frame.init(&regs, &cells, &.{}, 0, false);
@@ -1682,8 +1447,8 @@ test "AOT module functions share one activation environment" {
     _ = try frame.ensureCell(&ctx, 1);
     const env = try frame.ensureModuleEnv(&ctx);
     try std.testing.expect(env == try frame.ensureModuleEnv(&ctx));
-    const first = try ctx.makeModuleFunction(4, env);
-    const second = try ctx.makeModuleFunction(5, env);
+    const first = ctx.makeModuleFunction(4, functions[4], env);
+    const second = ctx.makeModuleFunction(5, functions[5], env);
     try std.testing.expect(first.function.env.modulePtr() == second.function.env.modulePtr());
     try std.testing.expect(first.function.env.closurePtr() == null);
     try std.testing.expect(!rawEqual(first, second));
@@ -1745,47 +1510,14 @@ fn guardTestOther(_: *Context, captures: Captures, args: []const Value) ![]const
     return out;
 }
 
-test "guarded call uses the runtime capture environment on a match" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.initProgram(arena.allocator(), 0, 0);
-    defer ctx.deinit();
-    const functions = [_]FunctionFn{ stabilize(guardTestExpected), stabilize(guardTestOther) };
-    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
-    ctx.function_blocks = &blocks;
-    var cell = Cell{ .value = .{ .number = 7 } };
-    const callable = try ctx.makeFunction(0, &.{&cell});
-    const out = try ctx.callKnownDirect(callable, 0, guardTestExpected, &.{.{ .number = 3 }});
-    defer freeResults(out);
-    try std.testing.expectEqual(@as(f64, 10), out[0].number);
-}
-
-test "guarded call falls back to the actual function on an id mismatch" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.initProgram(arena.allocator(), 0, 0);
-    defer ctx.deinit();
-    const functions = [_]FunctionFn{ stabilize(guardTestExpected), stabilize(guardTestOther) };
-    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
-    ctx.function_blocks = &blocks;
-    var cell = Cell{ .value = .{ .number = 7 } };
-    const callable = try ctx.makeFunction(1, &.{&cell});
-    const out = try ctx.callKnown(callable, 0, &.{.{ .number = 3 }});
-    defer freeResults(out);
-    try std.testing.expectEqual(@as(f64, 110), out[0].number);
-}
-
 test "Lua closures retain their compiled entrypoint" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var ctx = try Context.initProgram(arena.allocator(), 0, 0);
     defer ctx.deinit();
     const functions = [_]FunctionFn{stabilize(guardTestOther)};
-    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
-    ctx.function_blocks = &blocks;
     var cell = Cell{ .value = .{ .number = 7 } };
-    const callable = try ctx.makeFunction(0, &.{&cell});
-    ctx.function_blocks = &.{};
+    const callable = try ctx.makeFunction(0, functions[0], &.{&cell});
     const out = try ctx.callValue(callable, &.{.{ .number = 3 }});
     defer freeResults(out);
     try std.testing.expectEqual(@as(f64, 110), out[0].number);
@@ -1805,31 +1537,16 @@ test "native calls invoke the callable entrypoint directly" {
     try std.testing.expectEqualStrings("NativeDispatchProbe", ctx.aotErrorName().?);
 }
 
-test "candidate native field calls invoke the callable entrypoint directly" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 0);
-    defer ctx.deinit();
-    const string = try ctx.newNativeNamespace(.string);
-    const slot = static_fields.slotForName(.string, "gsub") orelse return error.MissingStaticField;
-    const callable = try ctx.newNative(null, nativeDispatchFailureProbe);
-    try string.rawSet(ctx.allocator, .{ .string = "gsub" }, callable);
-    const guards = [_]NativeFieldGuard{.{ .namespace = .string, .slot = slot, .root = .{ .table = string } }};
-    try std.testing.expectError(error.AotCallFailed, ctx.callKnownNativeFieldCandidates(callable, &guards, &.{}));
-    try std.testing.expectEqualStrings("NativeDispatchProbe", ctx.aotErrorName().?);
-}
-
 test "forked AOT context shares program metadata but resets runtime state" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var parent = try Context.initProgram(arena.allocator(), 2, 1);
     defer parent.deinit();
     const functions = [_]FunctionFn{stabilize(ModuleRuntimeProbe.named)};
-    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{0};
     const root_values = [_]u32{module_root_function};
-    parent.function_blocks = &blocks;
     parent.module_roots = &roots;
+    parent.module_root_entries = &.{&functions[0]};
     parent.module_root_values = &root_values;
     parent.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
     var host_marker: u8 = 0;
@@ -1840,7 +1557,6 @@ test "forked AOT context shares program metadata but resets runtime state" {
 
     var child = try parent.forkProgram(arena.allocator());
     defer child.deinit();
-    try std.testing.expect(child.function_blocks.ptr == parent.function_blocks.ptr);
     try std.testing.expect(child.module_roots.ptr == parent.module_roots.ptr);
     try std.testing.expect(child.module_root_values.ptr == parent.module_root_values.ptr);
     try std.testing.expect(child.getGlobal(1) == .nil);

@@ -850,10 +850,9 @@ test "AOT package main loader resolves and caches numeric module loaders" {
     var ctx = try rt.Context.initProgram(arena.allocator(), global_abi.count, 1);
     defer ctx.deinit();
     const functions = [_]rt.FunctionFn{rt.stabilize(ModuleLoaderProbe.root)};
-    const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{0};
-    ctx.function_blocks = &blocks;
     ctx.module_roots = &roots;
+    ctx.module_root_entries = &.{&functions[0]};
     ctx.configureModules(null, ModuleLoaderProbe.lookup, ModuleLoaderProbe.name);
     try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
     try install(&ctx);
@@ -969,12 +968,9 @@ test "AOT pcall preserves stable generated-function error names" {
     defer arena.deinit();
     var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
     defer ctx.deinit();
-    const functions = [_]rt.FunctionFn{rt.stabilize(stablePcallFailure)};
-    const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
-    ctx.function_blocks = &blocks;
     try install(&ctx);
     const pcall = ctx.getGlobal(global_abi.id("pcall"));
-    const callable = try ctx.makeFunction(0, &.{});
+    const callable = try ctx.makeFunctionKnown(0, stablePcallFailure, &.{});
     const out = try ctx.callValue(pcall, &.{callable});
     defer rt.freeResults(out);
     try std.testing.expect(!out[0].boolean);

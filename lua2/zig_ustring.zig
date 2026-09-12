@@ -560,10 +560,7 @@ test "AOT Unicode gsub supports table and callable replacements" {
     try std.testing.expectEqualStrings("AB", call_out[0].string);
     try std.testing.expectEqual(@as(f64, 2), call_out[1].number);
 
-    const functions = [_]rt.FunctionFn{rt.stabilize(replacementUpperFunction)};
-    const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
-    runtime.function_blocks = &blocks;
-    const lua_callable = try runtime.makeFunction(0, &.{});
+    const lua_callable = try runtime.makeFunctionKnown(0, replacementUpperFunction, &.{});
     const lua_out = try runtime.callValue(gsub, &.{ .{ .string = "cd" }, .{ .string = "." }, lua_callable });
     defer rt.freeResults(lua_out);
     try std.testing.expectEqualStrings("CD", lua_out[0].string);

@@ -245,7 +245,7 @@ const InvokeProbe = struct {
     }
     fn root(runtime: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
         const module = try runtime.newTable();
-        try module.rawSet(runtime.allocator, .{ .string = "run" }, try runtime.makeFunction(1, &.{}));
+        try module.rawSet(runtime.allocator, .{ .string = "run" }, try runtime.makeFunctionKnown(1, run, &.{}));
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = module };
         return out;
@@ -264,10 +264,9 @@ test "AOT frame invoke binds current frame around numeric module call" {
     var runtime = try rt.Context.initProgram(arena.allocator(), 0, 1);
     defer runtime.deinit();
     const functions = [_]rt.FunctionFn{ rt.stabilize(InvokeProbe.root), rt.stabilize(InvokeProbe.run) };
-    const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{0};
-    runtime.function_blocks = &blocks;
     runtime.module_roots = &roots;
+    runtime.module_root_entries = &.{&functions[0]};
     runtime.configureModules(null, InvokeProbe.lookup, InvokeProbe.name);
     const frame = try makeFrame(&runtime, "Module:X", &.{}, null);
     try std.testing.expect(runtime.current_frame == null);

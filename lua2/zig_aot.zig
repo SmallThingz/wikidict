@@ -23,9 +23,18 @@ pub const Stats = struct {
 const FunctionRange = struct {
     first: u32,
     end: u32,
+    shard_size: u32,
 
     fn contains(self: FunctionRange, id: u32) bool {
         return id >= self.first and id < self.end;
+    }
+
+    fn shardIndex(self: FunctionRange, id: u32) u32 {
+        return id / self.shard_size;
+    }
+
+    fn shardOffset(self: FunctionRange, id: u32) u32 {
+        return id % self.shard_size;
     }
 };
 
@@ -563,6 +572,15 @@ fn emitSimple2(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
         else => try emitSimple3(out, a, p, function, plan, inst, pc, stats, range),
     }
 }
+fn emitFunctionEntryExpr(out: *std.ArrayList(u8), a: A, target: u32, range: ?FunctionRange) !void {
+    if (range == null or range.?.contains(target)) {
+        try print(out, a, "rt.stabilize(f_{d})", .{target});
+    } else {
+        const linked = range.?;
+        try print(out, a, "external_functions_{d:0>4}[{d}]", .{ linked.shardIndex(target), linked.shardOffset(target) });
+    }
+}
+
 fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
         .get_field => {
@@ -599,19 +617,25 @@ fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
         },
         .closure => {
             try emitCaptures(out, a, p, function, inst.aux, pc);
-            try print(out, a, "            frame.set({d}, try ctx.makeFunction({d}, &captures_{d}));\n", .{ inst.dst, inst.aux, pc });
+            try print(out, a, "            frame.set({d}, try ctx.makeFunction({d}, ", .{ inst.dst, inst.aux });
+            try emitFunctionEntryExpr(out, a, inst.aux, range);
+            try print(out, a, ", &captures_{d}));\n", .{pc});
         },
         .load_function => {
             if (inst.aux >= p.functions.items.len) return error.BadFunctionReference;
             const target = p.functions.items[inst.aux] orelse return error.IncompleteProgram;
             if (target.upvalues.items.len == 0) {
-                try print(out, a, "            frame.set({d}, try ctx.makeFunction({d}, &.{{}}));\n", .{ inst.dst, inst.aux });
+                try print(out, a, "            frame.set({d}, try ctx.makeFunction({d}, ", .{ inst.dst, inst.aux });
+                try emitFunctionEntryExpr(out, a, inst.aux, range);
+                try text(out, a, ", &.{}));\n");
             } else {
                 for (target.upvalues.items) |up| {
                     if (up.source != .local) return error.BadStaticEnvironment;
                     try print(out, a, "            _ = try frame.ensureCell(ctx, {d});\n", .{up.index});
                 }
-                try print(out, a, "            frame.set({d}, try ctx.makeModuleFunction({d}, try frame.ensureModuleEnv(ctx)));\n", .{ inst.dst, inst.aux });
+                try print(out, a, "            frame.set({d}, ctx.makeModuleFunction({d}, ", .{ inst.dst, inst.aux });
+                try emitFunctionEntryExpr(out, a, inst.aux, range);
+                try text(out, a, ", try frame.ensureModuleEnv(ctx)));\n");
             }
         },
         .register_function => {
@@ -786,51 +810,6 @@ fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *cons
     try print(out, a, "            frame.storeResults({d}, {d}, result_{d}, true);\n", .{ inst.dst, inst.count, pc });
     try text(out, a, "            }\n");
 }
-const NativeFieldPath = struct { root_slot: u32, child_slot: ?u32 = null };
-fn nativeFieldPath(namespace: static_fields.Namespace) ?NativeFieldPath {
-    return switch (namespace) {
-        .table => .{ .root_slot = global_abi.id("table") },
-        .string => .{ .root_slot = global_abi.id("string") },
-        .math => .{ .root_slot = global_abi.id("math") },
-        .debug => .{ .root_slot = global_abi.id("debug") },
-        .mw => .{ .root_slot = global_abi.id("mw") },
-        .ustring, .title, .text, .uri, .html, .language => .{
-            .root_slot = global_abi.id("mw"),
-            .child_slot = static_fields.slotForName(.mw, @tagName(namespace)) orelse return null,
-        },
-        .frame, .title_value, .language_value, .html_node => null,
-    };
-}
-
-fn nativeFieldCandidateCount(field_id: u32) !u32 {
-    const field_ref = try static_fields.encode(field_id);
-    var count: u32 = 0;
-    inline for (std.meta.fields(static_fields.Namespace)) |field| {
-        const namespace: static_fields.Namespace = @enumFromInt(field.value);
-        if (comptime !static_fields.isCanonicalLibrary(namespace)) continue;
-        if (static_fields.slotForRef(namespace, field_ref) != null) count += 1;
-    }
-    return count;
-}
-
-fn emitNativeFieldCandidateGuards(out: *std.ArrayList(u8), a: A, field_id: u32) !void {
-    const field_ref = try static_fields.encode(field_id);
-    var first = true;
-    inline for (std.meta.fields(static_fields.Namespace)) |field| {
-        const namespace: static_fields.Namespace = @enumFromInt(field.value);
-        if (comptime !static_fields.isCanonicalLibrary(namespace)) continue;
-        const slot = static_fields.slotForRef(namespace, field_ref);
-        if (slot != null) {
-            const path = comptime nativeFieldPath(namespace).?;
-            if (!first) try text(out, a, ", ");
-            first = false;
-            try print(out, a, ".{{ .namespace = .{s}, .slot = {d}, .root = ctx.getGlobal({d}), .child_slot = ", .{ @tagName(namespace), slot.?, path.root_slot });
-            if (path.child_slot) |child| try print(out, a, "{d}", .{child}) else try text(out, a, "null");
-            try text(out, a, " }");
-        }
-    }
-}
-
 fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     switch (inst.op) {
         .call, .call_vararg => {
@@ -845,53 +824,10 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                 else
                     try print(out, a, "            const result_{d} = try ctx.callFunction(callable_{d}.function, argv_{d});\n", .{ pc, pc, pc });
                 stats.direct_calls += 1;
-            } else if (aot_hint.target(inst)) |target| {
-                if (target >= p.functions.items.len) return error.BadFunctionReference;
-                if (p.functions.items[target] != null and (range == null or range.?.contains(target))) {
-                    try print(out, a, "            const result_{d} = try ctx.callKnownDirect(", .{pc});
-                    try valueExpr(out, a, p, plan, inst.a);
-                    try print(out, a, ", {d}, f_{d}, argv_{d});\n", .{ target, target, pc });
-                } else {
-                    try print(out, a, "            const result_{d} = try ctx.callKnown(", .{pc});
-                    try valueExpr(out, a, p, plan, inst.a);
-                    try print(out, a, ", {d}, argv_{d});\n", .{ target, pc });
-                }
-                stats.guarded_calls += 1;
-            } else if (aot_hint.nativeGlobal(inst)) |slot| {
-                if (slot >= global_abi.count) return error.BadGlobalReference;
-                try print(out, a, "            const result_{d} = try ctx.callKnownNative(", .{pc});
-                try valueExpr(out, a, p, plan, inst.a);
-                try print(out, a, ", ctx.getGlobal({d}), argv_{d});\n", .{ slot, pc });
-                stats.guarded_calls += 1;
-            } else if (aot_hint.nativeField(inst)) |field| {
-                if (field.slot >= static_fields.fieldCount(field.namespace)) return error.BadStaticField;
-                if (nativeFieldPath(field.namespace)) |path| {
-                    try print(out, a, "            const result_{d} = try ctx.callKnownNativeField(", .{pc});
-                    try valueExpr(out, a, p, plan, inst.a);
-                    try print(out, a, ", .{s}, {d}, ctx.getGlobal({d}), ", .{ @tagName(field.namespace), field.slot, path.root_slot });
-                    if (path.child_slot) |child| try print(out, a, "{d}", .{child}) else try text(out, a, "null");
-                    try print(out, a, ", argv_{d});\n", .{pc});
-                    stats.guarded_calls += 1;
-                } else {
-                    try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
-                    try valueExpr(out, a, p, plan, inst.a);
-                    try print(out, a, ", argv_{d});\n", .{pc});
-                }
-            } else if (aot_hint.nativeFieldCandidate(inst)) |field_id| {
-                if (field_id >= static_fields.names.len) return error.BadStaticField;
-                if (try nativeFieldCandidateCount(field_id) != 0) {
-                    try print(out, a, "            const result_{d} = try ctx.callKnownNativeFieldCandidates(", .{pc});
-                    try valueExpr(out, a, p, plan, inst.a);
-                    try text(out, a, ", &.{");
-                    try emitNativeFieldCandidateGuards(out, a, field_id);
-                    try print(out, a, "}}, argv_{d});\n", .{pc});
-                    stats.guarded_calls += 1;
-                } else {
-                    try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
-                    try valueExpr(out, a, p, plan, inst.a);
-                    try print(out, a, ", argv_{d});\n", .{pc});
-                }
             } else {
+                // Advisory call predictions never participate in runtime semantics.
+                // The live callable already carries its compiled entrypoint, so mutation
+                // simply selects another compiled closure/native without a guard/fallback path.
                 try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
                 try valueExpr(out, a, p, plan, inst.a);
                 try print(out, a, ", argv_{d});\n", .{pc});
@@ -900,17 +836,21 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
         },
         .call_local, .call_local_vararg => {
             if (inst.a >= p.functions.items.len) return error.BadFunctionReference;
-            if (range == null or range.?.contains(inst.a))
-                try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, inst.a, pc })
-            else
-                try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, inst.a, pc });
+            if (range == null or range.?.contains(inst.a)) {
+                try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, inst.a, pc });
+            } else {
+                const linked = range.?;
+                try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc });
+            }
         },
         .call_scoped, .call_scoped_vararg => {
             try emitCaptures(out, a, p, function, inst.a, pc);
-            if (range == null or range.?.contains(inst.a))
-                try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, inst.a, pc, pc })
-            else
-                try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, inst.a, pc, pc });
+            if (range == null or range.?.contains(inst.a)) {
+                try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, inst.a, pc, pc });
+            } else {
+                const linked = range.?;
+                try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc, pc });
+            }
         },
         .direct_call, .direct_call_vararg => {
             if (inst.a >= p.functions.items.len or p.function_modules.items.len != p.functions.items.len) return error.BadFunctionReference;
@@ -921,10 +861,12 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                 try print(out, a, "            const static_caps_{d}: rt.Captures = .{{ .direct = &.{{}} }};\n", .{pc})
             else
                 try print(out, a, "            const static_caps_{d} = try ctx.moduleCaptures({d});\n", .{ pc, module_id });
-            if (range == null or range.?.contains(inst.a))
-                try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc })
-            else
-                try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, static_caps_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc });
+            if (range == null or range.?.contains(inst.a)) {
+                try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc });
+            } else {
+                const linked = range.?;
+                try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], static_caps_{d}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc, pc });
+            }
         },
         else => return error.NotPlainCall,
     }
@@ -1130,16 +1072,20 @@ fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, st
     stats.functions += 1;
 }
 fn emitProgramTables(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
-    try print(out, a, "const function_table = blk: {{\n    @setEvalBranchQuota({d});\n    break :blk [_]rt.FunctionFn{{\n", .{p.functions.items.len * 4 + 1000});
-    for (p.functions.items, 0..) |maybe, id| {
-        if (maybe == null) return error.IncompleteProgram;
-        try print(out, a, "        rt.stabilize(f_{d}),\n", .{id});
-    }
-    try text(out, a, "    };\n};\nconst function_blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &function_table }};\n");
     try text(out, a, "const module_roots = [_]u32{");
     for (p.module_roots.items, 0..) |root, index| {
         if (index != 0) try text(out, a, ", ");
         try print(out, a, "{d}", .{root});
+    }
+    try text(out, a, "};\nconst module_root_entry_values = [_]rt.FunctionFn{");
+    for (p.module_roots.items, 0..) |root, index| {
+        if (index != 0) try text(out, a, ", ");
+        try print(out, a, "rt.stabilize(f_{d})", .{root});
+    }
+    try text(out, a, "};\nconst module_root_entries = [_]*const rt.FunctionFn{");
+    for (p.module_roots.items, 0..) |_, index| {
+        if (index != 0) try text(out, a, ", ");
+        try print(out, a, "&module_root_entry_values[{d}]", .{index});
     }
     try text(out, a, "};\n\n");
 }
@@ -1151,10 +1097,10 @@ fn emitRuntimeEntry(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
     try text(out, a, "pub fn initContext(allocator: std.mem.Allocator) !rt.Context {\n" ++
         "    var ctx = try rt.Context.initProgram(allocator, global_count, module_roots.len);\n" ++
         "    ctx.shapes = &shapes;\n" ++
-        "    ctx.function_blocks = &function_blocks;\n" ++
         "    ctx.constant_blocks = &constant_blocks;\n" ++
         "    ctx.constant_entry_blocks = &constant_entry_blocks;\n" ++
-        "    ctx.module_roots = &module_roots;\n");
+        "    ctx.module_roots = &module_roots;\n" ++
+        "    ctx.module_root_entries = &module_root_entries;\n");
     const env_slot = global_abi.id("_G");
     if (globals > env_slot) {
         if (p.global_shape) |shape_id| {
@@ -1333,7 +1279,9 @@ fn shardCount(total: usize, per_shard: usize) !usize {
     return if (total == 0) 0 else 1 + (total - 1) / per_shard;
 }
 
-fn shardBounds(total: usize, per_shard: usize, shard_index: usize) !struct { first: usize, end: usize } {
+const ShardBounds = struct { first: usize, end: usize };
+
+fn shardBounds(total: usize, per_shard: usize, shard_index: usize) !ShardBounds {
     const count = try shardCount(total, per_shard);
     if (shard_index >= count) return error.BadShardIndex;
     const first = std.math.mul(usize, shard_index, per_shard) catch return error.BadShardIndex;
@@ -1342,6 +1290,47 @@ fn shardBounds(total: usize, per_shard: usize, shard_index: usize) !struct { fir
 
 pub fn functionShardCount(p: *const ir.Program, config: ShardConfig) !usize {
     return shardCount(p.functions.items.len, config.functions_per_shard);
+}
+
+fn staticCallTarget(inst: ir.Inst) ?u32 {
+    return switch (inst.op) {
+        .closure, .load_function => inst.aux,
+        .call_local, .call_local_vararg,
+        .call_scoped, .call_scoped_vararg,
+        .direct_call, .direct_call_vararg,
+        => inst.a,
+        else => null,
+    };
+}
+
+fn emitExternalFunctionRefs(
+    out: *std.ArrayList(u8),
+    a: A,
+    p: *const ir.Program,
+    config: ShardConfig,
+    descriptor_roots: []const bool,
+    current: ShardBounds,
+) !void {
+    const count = try functionShardCount(p, config);
+    const used = try a.alloc(bool, count);
+    defer a.free(used);
+    @memset(used, false);
+    for (current.first..current.end) |id| {
+        if (config.module_registry and descriptor_roots[id]) continue;
+        const function = p.functions.items[id] orelse return error.IncompleteProgram;
+        for (function.insts.items) |inst| if (staticCallTarget(inst)) |target| {
+            if (target >= p.functions.items.len) return error.BadFunctionReference;
+            if (target >= current.first and target < current.end) continue;
+            used[target / config.functions_per_shard] = true;
+        };
+    }
+    for (used, 0..) |needed, index| if (needed) {
+        const bounds = try shardBounds(p.functions.items.len, config.functions_per_shard, index);
+        const len = bounds.end - bounds.first;
+        try print(out, a, "extern const dict_aot_functions_{d:0>4}: [{d}]*const anyopaque;\n", .{ index, len });
+        try print(out, a, "const external_functions_{d:0>4}: *const [{d}]rt.FunctionFn = @ptrCast(&dict_aot_functions_{d:0>4});\n", .{ index, len, index });
+    };
+    try text(out, a, "\n");
 }
 
 pub fn constantShardCount(p: *const ir.Program, config: ShardConfig) !usize {
@@ -1365,10 +1354,12 @@ pub fn generateFunctionShardWithDescriptors(a: A, p: *const ir.Program, config: 
     const bounds = try shardBounds(p.functions.items.len, config.functions_per_shard, shard_index);
     const first: u32 = std.math.cast(u32, bounds.first) orelse return error.ProgramTooLarge;
     const end: u32 = std.math.cast(u32, bounds.end) orelse return error.ProgramTooLarge;
-    const range = FunctionRange{ .first = first, .end = end };
+    const shard_size: u32 = std.math.cast(u32, config.functions_per_shard) orelse return error.ProgramTooLarge;
+    const range = FunctionRange{ .first = first, .end = end, .shard_size = shard_size };
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     try emitDeclarations(&out, a, p);
+    try emitExternalFunctionRefs(&out, a, p, config, descriptor_roots, bounds);
     for (bounds.first..bounds.end) |id| {
         if (config.module_registry and descriptor_roots[id]) {
             const function = p.functions.items[id] orelse return error.IncompleteProgram;
@@ -1384,10 +1375,8 @@ pub fn generateFunctionShardWithDescriptors(a: A, p: *const ir.Program, config: 
             try print(&out, a, "        rt.stabilize(f_{d}),\n", .{id});
     }
     try text(&out, a, "    };\n};\n");
-    if (config.external_functions) {
-        try print(&out, a, "pub export const dict_aot_functions_{d:0>4}: [functions.len]*const anyopaque = blk: {{\n", .{shard_index});
-        try text(&out, a, "    @setEvalBranchQuota(functions.len * 4 + 1000);\n    var values: [functions.len]*const anyopaque = undefined;\n    for (functions, 0..) |function, index| values[index] = @ptrCast(function);\n    break :blk values;\n};\n");
-    }
+    try print(&out, a, "pub export const dict_aot_functions_{d:0>4}: [functions.len]*const anyopaque = blk: {{\n", .{shard_index});
+    try text(&out, a, "    @setEvalBranchQuota(functions.len * 4 + 1000);\n    var values: [functions.len]*const anyopaque = undefined;\n    for (functions, 0..) |function, index| values[index] = @ptrCast(function);\n    break :blk values;\n};\n");
     return finishSource(a, &out);
 }
 
@@ -1428,6 +1417,26 @@ pub fn generateEntryShard(a: A, p: *const ir.Program, config: ShardConfig, shard
     return finishSource(a, &out);
 }
 
+fn emitShardedFunctionFnExpr(out: *std.ArrayList(u8), a: A, p: *const ir.Program, config: ShardConfig, id: u32) !void {
+    if (id >= p.functions.items.len) return error.BadFunctionReference;
+    const shard = @as(usize, id) / config.functions_per_shard;
+    const offset = @as(usize, id) % config.functions_per_shard;
+    if (config.external_functions)
+        try print(out, a, "function_values_{d:0>4}[{d}]", .{ shard, offset })
+    else
+        try print(out, a, "functions_{d:0>4}.functions[{d}]", .{ shard, offset });
+}
+
+fn emitShardedFunctionFnSlotExpr(out: *std.ArrayList(u8), a: A, p: *const ir.Program, config: ShardConfig, id: u32) !void {
+    if (id >= p.functions.items.len) return error.BadFunctionReference;
+    const shard = @as(usize, id) / config.functions_per_shard;
+    const offset = @as(usize, id) % config.functions_per_shard;
+    if (config.external_functions)
+        try print(out, a, "@as(*const rt.FunctionFn, @ptrCast(&dict_aot_functions_{d:0>4}[{d}]))", .{ shard, offset })
+    else
+        try print(out, a, "&functions_{d:0>4}.functions[{d}]", .{ shard, offset });
+}
+
 pub fn generateShardedRoot(a: A, p: *const ir.Program, config: ShardConfig) ![]u8 {
     if (!p.references_lowered) return error.ProgramNotFinalized;
     const descriptor_roots = try analyzeModuleRootDescriptors(a, p, config.module_registry);
@@ -1463,15 +1472,7 @@ pub fn generateShardedRootWithDescriptors(a: A, p: *const ir.Program, config: Sh
     try text(&out, a, "\n");
     try emitShapes(&out, a, p);
 
-    try text(&out, a, "const function_blocks = [_]rt.FunctionBlock{\n");
-    for (0..function_shards) |index| {
-        const bounds = try shardBounds(p.functions.items.len, config.functions_per_shard, index);
-        if (config.external_functions)
-            try print(&out, a, "    .{{ .first = {d}, .values = function_values_{d:0>4} }},\n", .{ bounds.first, index })
-        else
-            try print(&out, a, "    .{{ .first = {d}, .values = &functions_{d:0>4}.functions }},\n", .{ bounds.first, index });
-    }
-    try text(&out, a, "};\nconst constant_blocks = [_]rt.ConstantBlock{\n");
+    try text(&out, a, "const constant_blocks = [_]rt.ConstantBlock{\n");
     for (0..constant_shards) |index| {
         const bounds = try shardBounds(p.constants.items.len, config.constants_per_shard, index);
         try print(&out, a, "    .{{ .first = {d}, .values = &constants_{d:0>4}.constants }},\n", .{ bounds.first, index });
@@ -1485,6 +1486,15 @@ pub fn generateShardedRootWithDescriptors(a: A, p: *const ir.Program, config: Sh
     for (p.module_roots.items, 0..) |root, index| {
         if (index != 0) try text(&out, a, ", ");
         try print(&out, a, "{d}", .{root});
+    }
+    try text(&out, a, "};\nconst descriptor_module_root_entry: rt.FunctionFn = rt.stabilize(rt.descriptorModuleRootStub);\nconst module_root_entries = [_]*const rt.FunctionFn{");
+    for (p.module_roots.items, 0..) |root, index| {
+        if (root >= descriptor_roots.len) return error.BadFunctionReference;
+        if (index != 0) try text(&out, a, ", ");
+        if (config.module_registry and descriptor_roots[root])
+            try text(&out, a, "&descriptor_module_root_entry")
+        else
+            try emitShardedFunctionFnSlotExpr(&out, a, p, config, root);
     }
     try text(&out, a, "};\n");
     if (config.module_registry) {
@@ -1518,10 +1528,10 @@ pub fn generateShardedRootWithDescriptors(a: A, p: *const ir.Program, config: Sh
         &out,
         a,
         "    ctx.shapes = &shapes;\n" ++
-            "    ctx.function_blocks = &function_blocks;\n" ++
             "    ctx.constant_blocks = &constant_blocks;\n" ++
             "    ctx.constant_entry_blocks = &constant_entry_blocks;\n" ++
-            "    ctx.module_roots = &module_roots;\n",
+            "    ctx.module_roots = &module_roots;\n" ++
+            "    ctx.module_root_entries = &module_root_entries;\n",
     );
     if (config.module_registry) try text(&out, a, "    ctx.module_root_values = &module_root_values;\n");
     const env_slot = global_abi.id("_G");
@@ -1543,7 +1553,9 @@ pub fn generateShardedRootWithDescriptors(a: A, p: *const ir.Program, config: Sh
         try text(&out, a, "pub fn initContext(allocator: std.mem.Allocator) !rt.Context { return initContextImpl(allocator, null); }\n");
     try text(&out, a, "pub fn initContextWithData(allocator: std.mem.Allocator, program_data: rt.ProgramData) !rt.Context { return initContextImpl(allocator, program_data); }\n\n");
     try text(&out, a, "pub const Host = lua_scribunto.Host;\npub const FrameArg = lua_scribunto.FrameArg;\npub const WikitextProvider = lua_scribunto.WikitextProvider;\npub const WikitextExpander = lua_scribunto.WikitextExpander;\npub fn setHost(ctx: *rt.Context, host: ?*Host) void { lua_scribunto.setHost(ctx, host); }\npub fn makeFrame(ctx: *rt.Context, title: []const u8, args: []const FrameArg, parent: ?rt.Value) !rt.Value { return lua_scribunto.makeFrame(ctx, title, args, parent); }\npub fn invoke(ctx: *rt.Context, module_name: []const u8, function_name: []const u8, frame: rt.Value) anyerror![]const rt.Value { return lua_scribunto.invoke(ctx, module_name, function_name, frame); }\npub fn initExpander(ctx: *rt.Context, provider: WikitextProvider) WikitextExpander { return lua_scribunto.makeWikitextExpander(ctx, 0, 18, 23, provider); }\n\n");
-    try text(&out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {\n    return ctx.invokeKnown(root_function, .{ .direct = &.{} }, args);\n}\n");
+    try text(&out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {\n    return ctx.callEntry(");
+    try emitShardedFunctionFnExpr(&out, a, p, config, p.root_function);
+    try text(&out, a, ", .{ .direct = &.{} }, args);\n}\n");
     return finishSource(a, &out);
 }
 
@@ -1565,7 +1577,9 @@ test "sharded AOT splits code and data while preserving numeric cross-shard call
     try std.testing.expect(std.mem.indexOf(u8, root, "functions_0000.zig") != null);
     try std.testing.expect(std.mem.indexOf(u8, root, "constant_blocks") != null);
     try std.testing.expect(std.mem.indexOf(u8, root, "module_root_values") == null);
-    try std.testing.expect(std.mem.indexOf(u8, root, "ctx.invokeKnown(root_function") != null);
+    try std.testing.expect(std.mem.indexOf(u8, root, "module_root_entries") != null);
+    try std.testing.expect(std.mem.indexOf(u8, root, "ctx.callEntry(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, root, "invokeKnown") == null);
     const registry_root = try generateShardedRoot(allocator, &program, .{ .functions_per_shard = 1, .constants_per_shard = 2, .entries_per_shard = 1, .module_registry = true });
     defer allocator.free(registry_root);
     try std.testing.expect(std.mem.indexOf(u8, registry_root, "@import(\"module_registry.zig\")") != null);
@@ -1594,7 +1608,9 @@ test "sharded AOT splits code and data while preserving numeric cross-shard call
     try std.testing.expect(std.mem.indexOf(u8, first, "pub fn f_") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "rt.stabilize(f_") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "@setEvalBranchQuota") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first, "ctx.invokeKnown(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "ctx.callEntry(external_functions_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "invokeKnown") == null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "pub export const dict_aot_functions_0000") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "vm_codec") == null);
     var external_stats = Stats{};
     const external_first = try generateFunctionShard(allocator, &program, external_config, 0, &external_stats);
@@ -1708,7 +1724,7 @@ test "numeric bit constants are explicitly typed in native expressions" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "@as(f64, @bitCast(@as(u64, 0x3fd0000000000000)))") != null);
 }
 
-test "native global call hints emit guarded native dispatch" {
+test "advisory native global call hints emit live compiled-callable dispatch" {
     const lua = @import("root.zig");
     const opt = @import("vm_optimize.zig");
     const allocator = std.testing.allocator;
@@ -1729,11 +1745,12 @@ test "native global call hints emit guarded native dispatch" {
     try std.testing.expect(hinted);
     const generated = try generate(allocator, &program);
     defer allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNative(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.getGlobal(1)") != null);
+    try std.testing.expectEqual(@as(u64, 0), generated.stats.guarded_calls);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValue(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnown") == null);
 }
 
-test "vararg call hints emit guards after merging the dynamic tail" {
+test "vararg call hints preserve the dynamic tail without runtime guards" {
     const lua = @import("root.zig");
     const opt = @import("vm_optimize.zig");
     const allocator = std.testing.allocator;
@@ -1755,10 +1772,11 @@ test "vararg call hints emit guards after merging the dynamic tail" {
     const generated = try generate(allocator, &program);
     defer allocator.free(generated.source);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "rt.mergeValues(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNative(") != null);
+    try std.testing.expectEqual(@as(u64, 0), generated.stats.guarded_calls);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValue(") != null);
 }
 
-test "canonical native field hints emit guarded native dispatch" {
+test "canonical native field hints do not emit runtime guards" {
     const lua = @import("root.zig");
     const opt = @import("vm_optimize.zig");
     const allocator = std.testing.allocator;
@@ -1780,8 +1798,9 @@ test "canonical native field hints emit guarded native dispatch" {
     try std.testing.expect(hinted);
     const generated = try generate(allocator, &program);
     defer allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNativeField(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, ", .table, 0, ctx.getGlobal(17), null, argv_") != null);
+    try std.testing.expectEqual(@as(u64, 0), generated.stats.guarded_calls);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValue(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnown") == null);
 }
 
 test "return object native field hints stay on generic dispatch" {
@@ -1810,7 +1829,7 @@ test "return object native field hints stay on generic dispatch" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValue(") != null);
 }
 
-test "native field candidates emit live multi-identity guards" {
+test "native field candidates remain advisory and emit no runtime guards" {
     const lua = @import("root.zig");
     const opt = @import("vm_optimize.zig");
     const allocator = std.testing.allocator;
@@ -1832,8 +1851,7 @@ test "native field candidates emit live multi-identity guards" {
     try std.testing.expect(candidate);
     const generated = try generate(allocator, &program);
     defer allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnownNativeFieldCandidates(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".namespace = .string") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".namespace = .ustring") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".root = ctx.getGlobal(") != null);
+    try std.testing.expectEqual(@as(u64, 0), generated.stats.guarded_calls);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValue(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callKnown") == null);
 }

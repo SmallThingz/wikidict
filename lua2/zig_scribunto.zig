@@ -229,10 +229,9 @@ test "AOT loadData runs in an isolated context and promotes a cached read-only g
     var runtime = try rt.Context.initProgram(arena.allocator(), 24, 2);
     defer runtime.deinit();
     const functions = [_]rt.FunctionFn{ rt.stabilize(DataProbe.root), rt.stabilize(DataProbe.fail) };
-    const blocks = [_]rt.FunctionBlock{.{ .first = 0, .values = &functions }};
     const roots = [_]u32{ 0, 1 };
-    runtime.function_blocks = &blocks;
     runtime.module_roots = &roots;
+    runtime.module_root_entries = &.{ &functions[0], &functions[1] };
     runtime.configureModules(null, DataProbe.lookup, DataProbe.name);
     try rt.bindGlobalTable(&runtime, null, 0);
     try stdlib.install(&runtime);

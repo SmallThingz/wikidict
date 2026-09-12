@@ -40,7 +40,7 @@ fn guardedProgram(a: std.mem.Allocator) !ir.Program {
     return program;
 }
 
-test "guarded AOT hint preserves VM semantics and emits one guard" {
+test "advisory AOT hint preserves VM semantics without runtime guards" {
     const a = std.testing.allocator;
     var program = try guardedProgram(a);
     defer program.deinit();
@@ -53,8 +53,9 @@ test "guarded AOT hint preserves VM semantics and emits one guard" {
     try std.testing.expectEqual(@as(f64, 104), values[1].number);
     const generated = try aot.generate(a, &program);
     defer a.free(generated.source);
-    try std.testing.expectEqual(@as(u64, 1), generated.stats.guarded_calls);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".callKnownDirect(") != null);
+    try std.testing.expectEqual(@as(u64, 0), generated.stats.guarded_calls);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".callValue(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".callKnown") == null);
 }
 
 test "proven AOT call emits direct target without an identity dispatch" {
