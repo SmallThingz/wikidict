@@ -723,6 +723,13 @@ pub const Context = struct {
         return self.invokeEntry(value.entry, value.captures(), args);
     }
 
+    pub inline fn callDirectFunction(self: *Context, value: FunctionValue, direct: DirectFunctionFn, args: []const Value) anyerror![]const Value {
+        if (self.depth >= self.max_depth) return error.CallDepth;
+        self.depth += 1;
+        defer self.depth -= 1;
+        return direct(self, value.captures(), args);
+    }
+
     pub fn bindModuleEnv(self: *Context, module_id: u32, env: *ModuleEnv) !void {
         if (module_id >= self.module_envs.len) return error.BadModuleId;
         if (self.module_envs[module_id]) |existing| {
@@ -813,22 +820,14 @@ pub const Context = struct {
     }
 
     pub inline fn callKnownDirect(self: *Context, callable: Value, expected: u32, direct: DirectFunctionFn, args: []const Value) anyerror![]const Value {
-        if (callable == .function and callable.function.id == expected) {
-            if (self.depth >= self.max_depth) return error.CallDepth;
-            self.depth += 1;
-            defer self.depth -= 1;
-            return direct(self, callable.function.captures(), args);
-        }
+        if (callable == .function and callable.function.id == expected)
+            return self.callDirectFunction(callable.function, direct, args);
         return self.callValue(callable, args);
     }
 
     pub inline fn callKnown(self: *Context, callable: Value, expected: u32, args: []const Value) anyerror![]const Value {
-        if (callable == .function and callable.function.id == expected) {
-            if (self.depth >= self.max_depth) return error.CallDepth;
-            self.depth += 1;
-            defer self.depth -= 1;
-            return self.invokeEntry(callable.function.entry, callable.function.captures(), args);
-        }
+        if (callable == .function and callable.function.id == expected)
+            return self.callFunction(callable.function, args);
         return self.callValue(callable, args);
     }
 

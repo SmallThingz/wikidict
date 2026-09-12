@@ -54,10 +54,12 @@ fn writeAll(io: std.Io, path: []const u8, bytes: []const u8) !void {
 }
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len < 4 or args.len > 8) return error.Usage;
+    if (args.len < 4 or args.len > 9) return error.Usage;
     var sharded = false;
     var external_data = false;
     var external_functions = false;
+    var functions_per_shard: usize = 1024;
+    var shard_size_set = false;
     var limit: usize = std.math.maxInt(usize);
     var have_limit = false;
     for (args[4..]) |arg| {
@@ -70,13 +72,18 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, arg, "--external-functions")) {
             if (external_functions) return error.Usage;
             external_functions = true;
+        } else if (std.mem.startsWith(u8, arg, "--functions-per-shard=")) {
+            if (shard_size_set) return error.Usage;
+            functions_per_shard = try std.fmt.parseInt(usize, arg["--functions-per-shard=".len..], 10);
+            if (functions_per_shard == 0) return error.Usage;
+            shard_size_set = true;
         } else {
             if (have_limit) return error.Usage;
             limit = try std.fmt.parseInt(usize, arg, 10);
             have_limit = true;
         }
     }
-    if ((external_data or external_functions) and !sharded) return error.Usage;
+    if ((external_data or external_functions or shard_size_set) and !sharded) return error.Usage;
 
     var manifest = try mmapPath(args[1]);
     defer manifest.deinit();
@@ -163,7 +170,7 @@ pub fn main(init: std.process.Init) !void {
         try writeAll(init.io, registry_path, registry_source);
         generated_bytes += registry_source.len;
 
-        const config = aot.ShardConfig{ .module_registry = true, .external_data = external_data, .external_functions = external_functions };
+        const config = aot.ShardConfig{ .functions_per_shard = functions_per_shard, .module_registry = true, .external_data = external_data, .external_functions = external_functions };
         if (external_data) {
             const program_data = try aot.generateProgramData(std.heap.smp_allocator, &image.program);
             defer std.heap.smp_allocator.free(program_data);

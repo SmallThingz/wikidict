@@ -841,9 +841,9 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                 try text(out, a, ";\n            if (callable_");
                 try print(out, a, "{d} != .function) return error.NotCallable;\n", .{pc});
                 if (p.functions.items[target] != null and (range == null or range.?.contains(target)))
-                    try print(out, a, "            const result_{d} = try f_{d}(ctx, callable_{d}.function.captures(), argv_{d});\n", .{ pc, target, pc, pc })
+                    try print(out, a, "            const result_{d} = try ctx.callDirectFunction(callable_{d}.function, f_{d}, argv_{d});\n", .{ pc, pc, target, pc })
                 else
-                    try print(out, a, "            const result_{d} = try ctx.invokeKnown({d}, callable_{d}.function.captures(), argv_{d});\n", .{ pc, target, pc, pc });
+                    try print(out, a, "            const result_{d} = try ctx.callFunction(callable_{d}.function, argv_{d});\n", .{ pc, pc, pc });
                 stats.direct_calls += 1;
             } else if (aot_hint.target(inst)) |target| {
                 if (target >= p.functions.items.len) return error.BadFunctionReference;
