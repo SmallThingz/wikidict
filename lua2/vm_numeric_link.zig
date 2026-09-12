@@ -722,6 +722,20 @@ test "ordinary nil initialization gets only an advisory captured call guard" {
     try std.testing.expectEqual(@as(u32, 1), stats.predicted_guard_only_upvalues);
 }
 
+test "unknown move alternative emits only a guarded captured call" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A", "local f=unpack or table.unpack;local function run(t)return f(t)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expectEqual(@as(u32, 1), stats.guarded_captured_native_global_calls);
+    try std.testing.expectEqual(@as(u32, 1), countGlobalGuardHints(&image.program));
+    try std.testing.expectEqual(@as(u32, 0), stats.unresolved_upvalue_calls.total);
+    try std.testing.expectEqual(@as(u32, 1), stats.predicted_guard_only_upvalues);
+}
+
 test "nil-only captured call remains unguarded" {
     const a = std.testing.allocator;
     var image = link_image.Image.init(a);

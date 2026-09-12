@@ -593,9 +593,13 @@ pub fn build(
     for (guard_local_facts, 0..) |*fact, flat| {
         if (hasFact(fact.*) or !local_seen[flat] or !hasFact(local_candidates[flat])) continue;
         const nullable = !local_conflicting_write[flat] and local_unknown_write[flat] == .unknown_write_nil;
+        const movable = !local_conflicting_write[flat] and local_unknown_write[flat] == .unknown_write_move and switch (local_candidates[flat]) {
+            .native_global => true,
+            else => false,
+        };
         const mutated = mutated_local[flat] and !local_bad[flat];
         const detached_candidate = detached[flat] and !local_bad[flat];
-        if (!nullable and !mutated and !detached_candidate) continue;
+        if (!nullable and !movable and !mutated and !detached_candidate) continue;
         fact.* = local_candidates[flat];
     }
 
@@ -774,6 +778,33 @@ test "ordinary nil initialization remains an unresolved captured write" {
         }
     }
     try std.testing.expect(saw_nil);
+    try std.testing.expect(result.stats.guard_only_upvalues != 0);
+}
+
+test "unknown move alternative keeps only an advisory guard fact" {
+    const a = std.testing.allocator;
+    var image = test_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    const module = try addTestModule(a, &image, &symbols, "Module:A", "local f=unpack or table.unpack;local function run(t)return f(t)end;return run");
+    var result = try build(a, &image.program, &symbols);
+    defer result.deinit();
+    const linked = image.modules.items[module];
+    var saw_move = false;
+    for (linked.function_base..linked.function_base + linked.function_count) |function_id| {
+        const function = image.program.functions.items[function_id] orelse continue;
+        const facts = result.forFunction(&image.program, @intCast(function_id));
+        const guards = result.guardsForFunction(&image.program, @intCast(function_id));
+        const reasons = result.reasonsForFunction(&image.program, @intCast(function_id));
+        for (function.upvalues.items, 0..) |_, index| {
+            if (reasons[index] != .unknown_write_move) continue;
+            saw_move = true;
+            try std.testing.expect(facts[index] == .unknown);
+            try std.testing.expect(guards[index] == .native_global);
+        }
+    }
+    try std.testing.expect(saw_move);
     try std.testing.expect(result.stats.guard_only_upvalues != 0);
 }
 
