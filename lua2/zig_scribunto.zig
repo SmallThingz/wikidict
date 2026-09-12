@@ -163,6 +163,31 @@ pub fn install(runtime: *rt.Context, env_slot: u32, string_slot: u32, mw_slot: u
     };
     try installInto(runtime, state);
 }
+fn installForExpander(
+    raw_state: *?*anyopaque,
+    page_allocator: std.mem.Allocator,
+    runtime: *rt.Context,
+    env_slot: u32,
+    string_slot: u32,
+    mw_slot: u32,
+) !void {
+    const state: *State = if (raw_state.*) |raw|
+        @ptrCast(@alignCast(raw))
+    else blk: {
+        const created = try page_allocator.create(State);
+        created.* = .{
+            .allocator = page_allocator,
+            .env_slot = env_slot,
+            .string_slot = string_slot,
+            .mw_slot = mw_slot,
+        };
+        raw_state.* = created;
+        break :blk created;
+    };
+    if (state.env_slot != env_slot or state.string_slot != string_slot or state.mw_slot != mw_slot)
+        return error.ScribuntoStateSlotMismatch;
+    try installInto(runtime, state);
+}
 
 fn callField(runtime: *rt.Context, object: Value, name: []const u8, args: []const Value) ![]const Value {
     const callable = try runtime.getIndex(object, .{ .string = name });
@@ -252,6 +277,50 @@ test "AOT loadData runs in an isolated context and promotes a cached read-only g
     try std.testing.expectEqual(@as(f64, 7), nested.table.rawGet(.{ .string = "x" }).?.number);
     try std.testing.expectError(error.ReadOnlyTable, first[0].table.rawSet(runtime.allocator, .{ .string = "y" }, .{ .number = 1 }));
     try std.testing.expectEqual(@as(f64, 40), runtime.getGlobal(1).number);
+}
+
+test "AOT expander loadData cache survives fresh invoke contexts" {
+    var page = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer page.deinit();
+    var runtime = try rt.Context.initProgram(page.allocator(), 24, 2);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(DataProbe.root), rt.stabilize(DataProbe.fail) };
+    const roots = [_]u32{ 0, 1 };
+    runtime.module_roots = &roots;
+    runtime.module_root_entries = &.{ &functions[0], &functions[1] };
+    runtime.configureModules(null, DataProbe.lookup, DataProbe.name);
+
+    var shared_state: ?*anyopaque = null;
+    var first_table: *rt.Table = undefined;
+    {
+        var invoke_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer invoke_arena.deinit();
+        var child = try runtime.forkProgram(invoke_arena.allocator());
+        defer child.deinit();
+        try rt.bindGlobalTable(&child, null, 0);
+        try stdlib.install(&child);
+        try installForExpander(&shared_state, page.allocator(), &child, 0, 18, 23);
+        const mw = child.getGlobal(23);
+        const first = try callField(&child, mw, "loadData", &.{.{ .string = "Module:Data" }});
+        defer rt.freeResults(first);
+        try std.testing.expect(first[0] == .table and first[0].table.read_only);
+        first_table = first[0].table;
+    }
+    {
+        var invoke_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer invoke_arena.deinit();
+        var child = try runtime.forkProgram(invoke_arena.allocator());
+        defer child.deinit();
+        try rt.bindGlobalTable(&child, null, 0);
+        try stdlib.install(&child);
+        try installForExpander(&shared_state, page.allocator(), &child, 0, 18, 23);
+        const mw = child.getGlobal(23);
+        const second = try callField(&child, mw, "loadData", &.{.{ .string = "Module:Data" }});
+        defer rt.freeResults(second);
+        try std.testing.expect(second[0] == .table);
+        try std.testing.expect(second[0].table == first_table);
+        try std.testing.expectEqual(@as(f64, 7), second[0].table.rawGet(.{ .string = "nested" }).?.table.rawGet(.{ .string = "x" }).?.number);
+    }
 }
 
 test "AOT clone preserves cycles while returning mutable tables" {
@@ -408,6 +477,6 @@ pub fn makeWikitextExpander(runtime: *rt.Context, env_slot: u32, string_slot: u3
         .string_slot = string_slot,
         .mw_slot = mw_slot,
         .provider = provider,
-        .install_scribunto = install,
+        .install_scribunto = installForExpander,
     };
 }

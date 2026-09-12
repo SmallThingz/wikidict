@@ -19,7 +19,14 @@ fn makeNowikiMarker(a: std.mem.Allocator, id: u32) ![]const u8 {
     return std.fmt.allocPrint(a, "{s}{X:0>8}{s}", .{ nowiki_marker_prefix, id, nowiki_marker_suffix });
 }
 
-pub const InstallScribuntoFn = *const fn (*rt.Context, u32, u32, u32) anyerror!void;
+pub const InstallScribuntoFn = *const fn (
+    *?*anyopaque,
+    std.mem.Allocator,
+    *rt.Context,
+    u32,
+    u32,
+    u32,
+) anyerror!void;
 
 pub const Provider = struct {
     pub const InterwikiRow = host_api.InterwikiRow;
@@ -36,6 +43,7 @@ pub const Expander = struct {
     mw_slot: u32,
     provider: Provider,
     install_scribunto: ?InstallScribuntoFn = null,
+    scribunto_state: ?*anyopaque = null,
     host: host_api.Host = .{},
     current_source: ?[]const u8 = null,
     page_allocator: ?std.mem.Allocator = null,
@@ -64,6 +72,7 @@ pub const Expander = struct {
         self.host.now_unix = now_unix;
         self.current_source = source;
         self.page_allocator = self.runtime.allocator;
+        self.scribunto_state = null;
         self.page_heading_count = 0;
         self.fake_heading_count = 0;
         self.strip_counter = 0;
@@ -488,7 +497,7 @@ pub const Expander = struct {
         const global_shape = if (parent_runtime.global_table) |global| global.shape else null;
         try rt.bindGlobalTable(&child, global_shape, self.env_slot);
         try stdlib.install(&child);
-        if (self.install_scribunto) |install| try install(&child, self.env_slot, self.string_slot, self.mw_slot);
+        if (self.install_scribunto) |install| try install(&self.scribunto_state, parent_allocator, &child, self.env_slot, self.string_slot, self.mw_slot);
         host_api.set(&child, &self.host);
 
         self.runtime = &child;
@@ -808,6 +817,18 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expect(runtime.current_frame == null);
     try std.testing.expectError(error.AotCallFailed, expander.expandFragment("Page", "{{#invoke:Test|fail}}", 1_670_803_200));
     try std.testing.expectEqualStrings("NotCallable", runtime.aotErrorName().?);
+}
+
+test "native AOT page boundary resets shared Scribunto state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    var marker: u8 = 0;
+    expander.scribunto_state = @ptrCast(&marker);
+    expander.beginPage("Page", "source", 1_670_803_200);
+    try std.testing.expect(expander.scribunto_state == null);
 }
 
 test "native AOT frame callbacks recurse through the same page expander" {
