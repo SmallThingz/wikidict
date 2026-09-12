@@ -866,7 +866,7 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                 if (target >= p.functions.items.len) return error.BadFunctionReference;
                 try print(out, a, "            const callable_{d} = (", .{pc});
                 try valueExpr(out, a, p, plan, inst.a);
-                try text(out, a, ").function;\n");
+                try text(out, a, ").callable;\n");
                 if (p.functions.items[target] != null and (range == null or range.?.contains(target))) {
                     if (plan.bufferedFunction(target)) {
                         try emitBufferedResultStorage(out, a, inst, pc);

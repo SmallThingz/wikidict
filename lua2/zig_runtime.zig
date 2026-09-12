@@ -25,6 +25,14 @@ pub const FunctionEnv = struct {
         return .{ .raw = raw | module_tag };
     }
 
+    pub fn native(host: ?*anyopaque) FunctionEnv {
+        return .{ .raw = if (host) |ptr| @intFromPtr(ptr) else 0 };
+    }
+
+    pub fn nativePtr(self: FunctionEnv) ?*anyopaque {
+        return if (self.raw == 0) null else @ptrFromInt(self.raw);
+    }
+
     pub fn closurePtr(self: FunctionEnv) ?*Env {
         if (self.raw == 0 or self.raw & module_tag != 0) return null;
         return @ptrFromInt(self.raw);
@@ -39,6 +47,7 @@ pub const FunctionEnv = struct {
 pub const Captures = union(enum) {
     direct: []const *Cell,
     module: *ModuleEnv,
+    native: ?*anyopaque,
 
     pub fn cell(self: Captures, ordinal: u32, module_slot: u32) !*Cell {
         return switch (self) {
@@ -47,10 +56,12 @@ pub const Captures = union(enum) {
                 if (module_slot >= env.cells.len) return error.BadModuleCapture;
                 break :blk env.cells[module_slot] orelse return error.BadModuleCapture;
             },
+            .native => error.BadUpvalue,
         };
     }
 };
 
+pub const native_function_id = std.math.maxInt(u32);
 pub const FunctionValue = struct {
     id: u32,
     env: FunctionEnv = .{},
@@ -58,6 +69,7 @@ pub const FunctionValue = struct {
     entry: FunctionFn,
 
     pub fn captures(self: FunctionValue) Captures {
+        if (self.id == native_function_id) return .{ .native = self.env.nativePtr() };
         if (self.env.modulePtr()) |env| return .{ .module = env };
         if (self.env.closurePtr()) |env| return .{ .direct = env.captures };
         return .{ .direct = &.{} };
@@ -72,24 +84,15 @@ pub const FunctionResult = extern struct {
     reserved: u32,
 };
 pub const FunctionFn = *const fn (*Context, *const Captures, [*]const Value, usize) callconv(.c) FunctionResult;
-pub const NativeFn = *const fn (?*anyopaque, *Context, []const Value) anyerror![]const Value;
-pub const StableNativeFn = *const fn (?*anyopaque, *Context, [*]const Value, usize) callconv(.c) FunctionResult;
 pub const ModuleLookupFn = *const fn (?*const anyopaque, []const u8) ?u32;
 pub const ModuleNameFn = *const fn (?*const anyopaque, u32) ?[]const u8;
-pub const NativeFunction = struct {
-    ctx: ?*anyopaque = null,
-    call: NativeFn,
-    stable_call: StableNativeFn,
-};
-
 pub const Value = union(enum) {
     nil,
     boolean: bool,
     number: f64,
     string: []const u8,
     table: *Table,
-    function: FunctionValue,
-    native: *NativeFunction,
+    callable: FunctionValue,
 
     pub fn truthy(value: Value) bool {
         return switch (value) {
@@ -153,9 +156,16 @@ pub fn stabilizeBuffered(comptime function: BufferedDirectFunctionFn) FunctionFn
     }.call;
 }
 
-pub fn stabilizeNative(comptime function: anytype) StableNativeFn {
+pub fn stabilizeNative(comptime function: anytype) FunctionFn {
     return struct {
-        fn call(host: ?*anyopaque, ctx: *Context, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
+        fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
+            const host = switch (captures.*) {
+                .native => |value| value,
+                else => {
+                    if (ctx.aotErrorName() == null) ctx.setAotErrorName("NativeCaptureExpected");
+                    return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
+                },
+            };
             const values = @call(.always_inline, function, .{ host, ctx, args_ptr[0..args_len] }) catch |err| {
                 if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
                 return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
@@ -229,11 +239,7 @@ const ValueContext = struct {
                 const ptr: usize = @intFromPtr(v);
                 h.update(std.mem.asBytes(&ptr));
             },
-            .function => |v| h.update(std.mem.asBytes(&v.identity)),
-            .native => |v| {
-                const ptr: usize = @intFromPtr(v);
-                h.update(std.mem.asBytes(&ptr));
-            },
+            .callable => |v| h.update(std.mem.asBytes(&v.identity)),
         }
         return h.final();
     }
@@ -407,8 +413,7 @@ pub fn rawEqual(a: Value, b: Value) bool {
         .number => |v| v == b.number,
         .string => |v| std.mem.eql(u8, v, b.string),
         .table => |v| v == b.table,
-        .function => |v| v.identity == b.function.identity,
-        .native => |v| v == b.native,
+        .callable => |v| v.identity == b.callable.identity,
     };
 }
 
@@ -684,7 +689,7 @@ pub const Context = struct {
             value.* = .{ .captures = owned };
             break :blk FunctionEnv.closure(value);
         };
-        return .{ .function = .{ .id = id, .env = env, .identity = identity, .entry = entry } };
+        return .{ .callable = .{ .id = id, .env = env, .identity = identity, .entry = entry } };
     }
 
     pub fn makeFunctionKnown(self: *Context, id: u32, comptime entry: DirectFunctionFn, captures: []const *Cell) !Value {
@@ -694,7 +699,7 @@ pub const Context = struct {
     pub fn makeModuleFunction(self: *Context, id: u32, entry: FunctionFn, env: *ModuleEnv) Value {
         const identity = self.next_identity;
         self.next_identity +%= 1;
-        return .{ .function = .{ .id = id, .env = FunctionEnv.module(env), .identity = identity, .entry = entry } };
+        return .{ .callable = .{ .id = id, .env = FunctionEnv.module(env), .identity = identity, .entry = entry } };
     }
 
     pub fn callEntry(self: *Context, entry: FunctionFn, captures: Captures, args: []const Value) anyerror![]const Value {
@@ -709,19 +714,8 @@ pub const Context = struct {
         return values_ptr[0..result.values_len];
     }
 
-    fn callNative(self: *Context, native: *NativeFunction, args: []const Value) anyerror![]const Value {
-        const result = native.stable_call(native.ctx, self, args.ptr, args.len);
-        if (result.reserved != 0 or result.status > 1) return error.BadAotFunctionResult;
-        if (result.status == 1) {
-            if (self.aotErrorName() == null) self.setAotErrorName("AotCallFailed");
-            return error.AotCallFailed;
-        }
-        if (result.values_len == 0) return &.{};
-        const values_ptr = result.values_ptr orelse return error.BadAotFunctionResult;
-        return values_ptr[0..result.values_len];
-    }
-
     pub fn callFunction(self: *Context, value: FunctionValue, args: []const Value) anyerror![]const Value {
+        if (value.id == native_function_id) return self.callEntry(value.entry, value.captures(), args);
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
@@ -834,8 +828,7 @@ pub const Context = struct {
 
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
         return switch (callable) {
-            .function => |value| self.callFunction(value, args),
-            .native => |value| self.callNative(value, args),
+            .callable => |value| self.callFunction(value, args),
             .table => blk: {
                 const method = self.metamethod(callable, "__call") orelse return error.NotCallable;
                 const all = try std.heap.smp_allocator.alloc(Value, args.len + 1);
@@ -848,9 +841,14 @@ pub const Context = struct {
         };
     }
     pub fn newNative(self: *Context, host: ?*anyopaque, comptime call: anytype) !Value {
-        const native = try self.allocator.create(NativeFunction);
-        native.* = .{ .ctx = host, .call = call, .stable_call = stabilizeNative(call) };
-        return .{ .native = native };
+        const identity = self.next_identity;
+        self.next_identity +%= 1;
+        return .{ .callable = .{
+            .id = native_function_id,
+            .env = FunctionEnv.native(host),
+            .identity = identity,
+            .entry = stabilizeNative(call),
+        } };
     }
 
     pub fn newTable(self: *Context) !*Table {
@@ -1515,8 +1513,8 @@ test "AOT module functions share one activation environment" {
     try std.testing.expect(env == try frame.ensureModuleEnv(&ctx));
     const first = ctx.makeModuleFunction(4, functions[4], env);
     const second = ctx.makeModuleFunction(5, functions[5], env);
-    try std.testing.expect(first.function.env.modulePtr() == second.function.env.modulePtr());
-    try std.testing.expect(first.function.env.closurePtr() == null);
+    try std.testing.expect(first.callable.env.modulePtr() == second.callable.env.modulePtr());
+    try std.testing.expect(first.callable.env.closurePtr() == null);
     try std.testing.expect(!rawEqual(first, second));
     try ctx.bindModuleEnv(1, env);
     try ctx.bindModuleEnv(1, env);
@@ -1567,6 +1565,7 @@ fn guardCapture(captures: Captures) f64 {
     return switch (captures) {
         .direct => |cells| if (cells.len == 0) 0 else cells[0].value.number,
         .module => |env| if (env.cells.len == 0 or env.cells[0] == null) 0 else env.cells[0].?.value.number,
+        .native => 0,
     };
 }
 
@@ -1654,6 +1653,8 @@ test "native calls invoke the callable entrypoint directly" {
     var ctx = try Context.init(arena.allocator(), 0);
     defer ctx.deinit();
     const callable = try ctx.newNative(null, nativeDispatchFailureProbe);
+    try std.testing.expect(callable == .callable);
+    try std.testing.expectEqual(native_function_id, callable.callable.id);
     try std.testing.expectError(error.AotCallFailed, ctx.callValue(callable, &.{}));
     try std.testing.expectEqualStrings("NativeDispatchProbe", ctx.aotErrorName().?);
 }

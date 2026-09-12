@@ -182,7 +182,7 @@ pub const Expander = struct {
             .string => |text| text,
             .number => |number| rt.numberToString(self.runtime.allocator, number),
             .boolean => |boolean| if (boolean) "true" else "false",
-            .table, .function, .native => error.WikitextScalarExpected,
+            .table, .callable => error.WikitextScalarExpected,
         };
     }
 

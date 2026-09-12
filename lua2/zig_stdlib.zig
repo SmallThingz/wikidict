@@ -72,7 +72,7 @@ fn baseType(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Valu
         .number => "number",
         .string => "string",
         .table => "table",
-        .function, .native => "function",
+        .callable => "function",
     };
     return one(a, .{ .string = name });
 }
@@ -147,8 +147,7 @@ fn baseToString(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const 
         .number => |n| try rt.numberToString(a, n),
         .string => |x| x,
         .table => |p| try std.fmt.allocPrint(a, "table: 0x{x}", .{@intFromPtr(p)}),
-        .function => |f| try std.fmt.allocPrint(a, "function: 0x{x}", .{f.identity}),
-        .native => |p| try std.fmt.allocPrint(a, "function: 0x{x}", .{@intFromPtr(p)}),
+        .callable => |f| try std.fmt.allocPrint(a, "function: 0x{x}", .{f.identity}),
     };
     return one(a, .{ .string = s });
 }
@@ -608,7 +607,7 @@ fn replacementValue(vm: *rt.Context, replacement: Value, source: []const u8, m: 
             const key = if (captures.len == 0) Value{ .string = original } else captures[0];
             break :blk try vm.getIndex(.{ .table = table }, key);
         },
-        .function, .native => blk: {
+        .callable => blk: {
             const captures = try replacementArgs(a, source, m);
             defer rt.freeResults(captures);
             const result = try vm.callValue(replacement, captures);
@@ -864,7 +863,7 @@ test "AOT package main loader resolves and caches numeric module loaders" {
     defer rt.freeResults(first);
     const alias = try ctx.callValue(main_loader, &.{.{ .string = "Alias:A" }});
     defer rt.freeResults(alias);
-    try std.testing.expect(first.len == 1 and first[0] == .native);
+    try std.testing.expect(first.len == 1 and first[0] == .callable);
     try std.testing.expect(alias.len == 1 and rt.rawEqual(first[0], alias[0]));
     const missing = try ctx.callValue(main_loader, &.{.{ .string = "Module:Missing" }});
     defer rt.freeResults(missing);
@@ -888,7 +887,7 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     const loaded = try ctx.getIndex(package, .{ .string = "loaded" });
     try std.testing.expect(loaded == .table and ctx.package_loaded == loaded.table);
     const require = ctx.getGlobal(global_abi.id("require"));
-    try std.testing.expect(require == .native);
+    try std.testing.expect(require == .callable);
     try std.testing.expectError(error.AotCallFailed, ctx.callValue(require, &.{.{ .string = "Module:Missing" }}));
     try std.testing.expectEqualStrings("ModuleNotFound", ctx.aotErrorName().?);
     ctx.clearAotErrorName();

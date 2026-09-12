@@ -60,7 +60,7 @@ fn promoteLoadData(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnm
     return switch (value) {
         .nil, .boolean, .number => value,
         .string => |text| .{ .string = try a.dupe(u8, text) },
-        .function, .native => error.LoadDataUnsupportedValue,
+        .callable => error.LoadDataUnsupportedValue,
         .table => |source| blk: {
             if (source.metatable != null) return error.LoadDataMetatable;
             if (seen.get(source)) |existing| break :blk .{ .table = existing };
@@ -214,8 +214,8 @@ test "AOT Scribunto installs mw.ustring, html, loadData, clone, and string alias
     const direct = try runtime.getIndex(ustring, .{ .string = "len" });
     try std.testing.expect(rt.rawEqual(alias, direct));
     try std.testing.expect((try runtime.getIndex(mw, .{ .string = "html" })) == .table);
-    try std.testing.expect((try runtime.getIndex(mw, .{ .string = "loadData" })) == .native);
-    try std.testing.expect((try runtime.getIndex(mw, .{ .string = "clone" })) == .native);
+    try std.testing.expect((try runtime.getIndex(mw, .{ .string = "loadData" })) == .callable);
+    try std.testing.expect((try runtime.getIndex(mw, .{ .string = "clone" })) == .callable);
 }
 
 const DataProbe = struct {

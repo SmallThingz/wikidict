@@ -373,7 +373,7 @@ fn replacementValue(vm: *rt.Context, replacement: Value, search: *const upat.Sea
             defer rt.freeResults(captures);
             break :blk try vm.getIndex(.{ .table = table }, captures[0]);
         },
-        .function, .native => blk: {
+        .callable => blk: {
             const captures = try unicodeCaptureResults(search, m, true);
             defer rt.freeResults(captures);
             const result = try vm.callValue(replacement, captures);
@@ -400,7 +400,7 @@ fn uGsub(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     const pat = try stringArg(a, args[1]);
     var replacement = args[2];
     if (replacement == .number) replacement = .{ .string = try rt.numberToString(a, replacement.number) };
-    if (replacement != .string and replacement != .table and replacement != .function and replacement != .native)
+    if (replacement != .string and replacement != .table and replacement != .callable)
         return error.InvalidReplacement;
     const max_count: usize = if (args.len > 3 and args[3] != .nil)
         @intCast(@max(@as(i64, 0), try integer(args[3])))

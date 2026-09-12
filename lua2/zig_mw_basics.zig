@@ -29,7 +29,7 @@ fn dumpObjectCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
         .number => |value| try rt.numberToString(runtime.allocator, value),
         .string => |value| value,
         .table => "table",
-        .function, .native => "function",
+        .callable => "function",
     };
     return one(.{ .string = text });
 }
@@ -123,7 +123,7 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     try std.testing.expect(!substing[0].boolean);
 
     const wikibase = mw.rawGet(.{ .string = "wikibase" }).?.table;
-    try std.testing.expect(wikibase.rawGet(.{ .string = "getEntity" }).? == .native);
+    try std.testing.expect(wikibase.rawGet(.{ .string = "getEntity" }).? == .callable);
     try std.testing.expect(wikibase.rawGet(.{ .string = "getEntityIdForTitle" }) == null);
     try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, "getEntity", &.{.{ .string = "Q1" }}));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
