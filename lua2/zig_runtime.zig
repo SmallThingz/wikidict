@@ -831,10 +831,9 @@ pub const Context = struct {
             .callable => |value| self.callFunction(value, args),
             .table => blk: {
                 const method = self.metamethod(callable, "__call") orelse return error.NotCallable;
-                const all = try std.heap.smp_allocator.alloc(Value, args.len + 1);
-                defer rawFreeSlice(Value, std.heap.smp_allocator, all);
-                all[0] = callable;
-                @memcpy(all[1..], args);
+                var storage: [8]Value = undefined;
+                const all = try mergeSmallValues(&storage, &.{callable}, args);
+                defer freeSmallValues(all, &storage);
                 break :blk try self.callValue(method, all);
             },
             else => error.NotCallable,
@@ -1621,6 +1620,36 @@ test "small argument merge borrows stack storage and falls back without truncati
     try std.testing.expect(large.ptr != storage[0..].ptr);
     try std.testing.expectEqual(@as(usize, 4), large.len);
     try std.testing.expectEqual(@as(f64, 7), large[3].number);
+}
+
+fn callableTableProbe(raw: ?*anyopaque, _: *Context, args: []const Value) ![]const Value {
+    const expected: *Table = @ptrCast(@alignCast(raw orelse return error.MissingHost));
+    if (args.len == 0 or args[0] != .table or args[0].table != expected) return error.BadCallableSelf;
+    const out = try std.heap.smp_allocator.alloc(Value, 2);
+    out[0] = .{ .number = @floatFromInt(args.len) };
+    out[1] = args[args.len - 1];
+    return out;
+}
+
+test "callable tables use full small arguments and heap fallback without changing self" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const target = try ctx.newTable();
+    const mt = try ctx.newTable();
+    target.metatable = mt;
+    try mt.rawSet(ctx.allocator, .{ .string = "__call" }, try ctx.newNative(target, callableTableProbe));
+
+    const small = try ctx.callValue(.{ .table = target }, &.{ .{ .number = 1 }, .{ .number = 2 }, .{ .number = 3 } });
+    defer freeResults(small);
+    try std.testing.expectEqual(@as(f64, 4), small[0].number);
+    try std.testing.expectEqual(@as(f64, 3), small[1].number);
+
+    const large = try ctx.callValue(.{ .table = target }, &.{ .{ .number = 1 }, .{ .number = 2 }, .{ .number = 3 }, .{ .number = 4 }, .{ .number = 5 }, .{ .number = 6 }, .{ .number = 7 }, .{ .number = 8 }, .{ .number = 9 } });
+    defer freeResults(large);
+    try std.testing.expectEqual(@as(f64, 10), large[0].number);
+    try std.testing.expectEqual(@as(f64, 9), large[1].number);
 }
 
 test "buffered direct results borrow caller storage while stable calls own results" {
