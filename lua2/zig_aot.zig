@@ -89,6 +89,8 @@ const FunctionPlan = struct {
     allocator: A,
     reps: []Rep,
     captured: []bool,
+    buffered_functions: []const bool,
+    result_buffered: bool,
 
     fn deinit(self: *FunctionPlan) void {
         self.allocator.free(self.reps);
@@ -105,6 +107,10 @@ const FunctionPlan = struct {
             if (captured) span = reg + 1;
         }
         return span;
+    }
+
+    fn bufferedFunction(self: *const FunctionPlan, function_id: u32) bool {
+        return function_id < self.buffered_functions.len and self.buffered_functions[function_id];
     }
 };
 
@@ -148,7 +154,7 @@ fn definedRep(p: *const ir.Program, inst: ir.Inst, reps: []const Rep) Rep {
         else => .value,
     };
 }
-fn analyzePlan(a: A, p: *const ir.Program, function: *const ir.Function) !FunctionPlan {
+fn analyzePlan(a: A, p: *const ir.Program, function: *const ir.Function, buffered_functions: []const bool, result_buffered: bool) !FunctionPlan {
     const reps = try a.alloc(Rep, function.reg_count);
     errdefer a.free(reps);
     @memset(reps, .unknown);
@@ -203,7 +209,7 @@ fn analyzePlan(a: A, p: *const ir.Program, function: *const ir.Function) !Functi
     for (reps) |*rep| {
         if (rep.* == .unknown) rep.* = .value;
     }
-    return .{ .allocator = a, .reps = reps, .captured = captured };
+    return .{ .allocator = a, .reps = reps, .captured = captured, .buffered_functions = buffered_functions, .result_buffered = result_buffered };
 }
 
 fn text(out: *std.ArrayList(u8), a: A, value: []const u8) !void {
@@ -580,9 +586,12 @@ fn emitSimple2(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
         else => try emitSimple3(out, a, p, function, plan, inst, pc, stats, range),
     }
 }
-fn emitFunctionEntryExpr(out: *std.ArrayList(u8), a: A, target: u32, range: ?FunctionRange) !void {
+fn emitFunctionEntryExpr(out: *std.ArrayList(u8), a: A, plan: *const FunctionPlan, target: u32, range: ?FunctionRange) !void {
     if (range == null or range.?.contains(target)) {
-        try print(out, a, "rt.stabilize(f_{d})", .{target});
+        if (plan.bufferedFunction(target))
+            try print(out, a, "rt.stabilizeBuffered(f_{d})", .{target})
+        else
+            try print(out, a, "rt.stabilize(f_{d})", .{target});
     } else {
         const linked = range.?;
         try print(out, a, "external_functions_{d:0>4}[{d}]", .{ linked.shardIndex(target), linked.shardOffset(target) });
@@ -626,7 +635,7 @@ fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
         .closure => {
             try emitCaptures(out, a, p, function, inst.aux, pc);
             try print(out, a, "            frame.set({d}, try ctx.makeFunction({d}, ", .{ inst.dst, inst.aux });
-            try emitFunctionEntryExpr(out, a, inst.aux, range);
+            try emitFunctionEntryExpr(out, a, plan, inst.aux, range);
             try print(out, a, ", &captures_{d}));\n", .{pc});
         },
         .load_function => {
@@ -634,7 +643,7 @@ fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
             const target = p.functions.items[inst.aux] orelse return error.IncompleteProgram;
             if (target.upvalues.items.len == 0) {
                 try print(out, a, "            frame.set({d}, try ctx.makeFunction({d}, ", .{ inst.dst, inst.aux });
-                try emitFunctionEntryExpr(out, a, inst.aux, range);
+                try emitFunctionEntryExpr(out, a, plan, inst.aux, range);
                 try text(out, a, ", &.{}));\n");
             } else {
                 for (target.upvalues.items) |up| {
@@ -642,7 +651,7 @@ fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
                     try print(out, a, "            _ = try frame.ensureCell(ctx, {d});\n", .{up.index});
                 }
                 try print(out, a, "            frame.set({d}, ctx.makeModuleFunction({d}, ", .{ inst.dst, inst.aux });
-                try emitFunctionEntryExpr(out, a, inst.aux, range);
+                try emitFunctionEntryExpr(out, a, plan, inst.aux, range);
                 try text(out, a, ", try frame.ensureModuleEnv(ctx)));\n");
             }
         },
@@ -787,6 +796,15 @@ fn emitCallArgs(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *
     }
 }
 
+fn emitBufferedResultStorage(out: *std.ArrayList(u8), a: A, inst: ir.Inst, pc: usize) !void {
+    if (inst.count == ir.multi_count) {
+        try print(out, a, "            const result_buffer_{d}: ?[]rt.Value = null;\n", .{pc});
+    } else {
+        try print(out, a, "            var result_storage_{d}: [{d}]rt.Value = undefined;\n", .{ pc, inst.count });
+        try print(out, a, "            const result_buffer_{d}: ?[]rt.Value = &result_storage_{d};\n", .{ pc, pc });
+    }
+}
+
 fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
     const vararg = switch (inst.op) {
         .call_vararg, .call_local_vararg, .call_scoped_vararg, .direct_call_vararg, .method_call_vararg, .method_call_field_vararg => true,
@@ -794,6 +812,7 @@ fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *cons
     };
     const method = inst.op == .method_call or inst.op == .method_call_vararg;
     const method_field = inst.op == .method_call_field or inst.op == .method_call_field_vararg;
+    var borrowed_result = false;
     try text(out, a, "            {\n");
     try emitCallArgs(out, a, p, function, plan, inst, pc, if (method) 1 else 0, vararg);
     if (method) {
@@ -814,11 +833,13 @@ fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *cons
         try print(out, a, "            const result_{d} = try ctx.callValue(method_{d}, argv_{d});\n", .{ pc, pc, pc });
         stats.dynamic_calls += 1;
         stats.string_fields += 1;
-    } else try emitPlainCall(out, a, p, function, plan, inst, pc, stats, range);
-    try print(out, a, "            frame.storeResults({d}, {d}, result_{d}, true);\n", .{ inst.dst, inst.count, pc });
+    } else borrowed_result = try emitPlainCall(out, a, p, function, plan, inst, pc, stats, range);
+    try print(out, a, "            frame.storeResults({d}, {d}, result_{d}, {});\n", .{ inst.dst, inst.count, pc, !borrowed_result });
     try text(out, a, "            }\n");
 }
-fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !void {
+
+fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !bool {
+    var borrowed_result = false;
     switch (inst.op) {
         .call, .call_vararg => {
             if (aot_hint.directTarget(inst)) |target| {
@@ -826,10 +847,17 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                 try print(out, a, "            const callable_{d} = (", .{pc});
                 try valueExpr(out, a, p, plan, inst.a);
                 try text(out, a, ").function;\n");
-                if (p.functions.items[target] != null and (range == null or range.?.contains(target)))
-                    try print(out, a, "            const result_{d} = try ctx.callDirectFunction(callable_{d}, f_{d}, argv_{d});\n", .{ pc, pc, target, pc })
-                else
+                if (p.functions.items[target] != null and (range == null or range.?.contains(target))) {
+                    if (plan.bufferedFunction(target)) {
+                        try emitBufferedResultStorage(out, a, inst, pc);
+                        try print(out, a, "            const result_{d} = try ctx.callBufferedDirectFunction(callable_{d}, f_{d}, argv_{d}, result_buffer_{d});\n", .{ pc, pc, target, pc, pc });
+                        borrowed_result = inst.count != ir.multi_count;
+                    } else {
+                        try print(out, a, "            const result_{d} = try ctx.callDirectFunction(callable_{d}, f_{d}, argv_{d});\n", .{ pc, pc, target, pc });
+                    }
+                } else {
                     try print(out, a, "            const result_{d} = try ctx.callFunction(callable_{d}, argv_{d});\n", .{ pc, pc, pc });
+                }
                 stats.direct_calls += 1;
             } else {
                 // Advisory call predictions never participate in runtime semantics.
@@ -844,7 +872,13 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
         .call_local, .call_local_vararg => {
             if (inst.a >= p.functions.items.len) return error.BadFunctionReference;
             if (range == null or range.?.contains(inst.a)) {
-                try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, inst.a, pc });
+                if (plan.bufferedFunction(inst.a)) {
+                    try emitBufferedResultStorage(out, a, inst, pc);
+                    try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &.{{}} }}, argv_{d}, result_buffer_{d});\n", .{ pc, inst.a, pc, pc });
+                    borrowed_result = inst.count != ir.multi_count;
+                } else {
+                    try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, inst.a, pc });
+                }
             } else {
                 const linked = range.?;
                 try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], .{{ .direct = &.{{}} }}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc });
@@ -853,7 +887,13 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
         .call_scoped, .call_scoped_vararg => {
             try emitCaptures(out, a, p, function, inst.a, pc);
             if (range == null or range.?.contains(inst.a)) {
-                try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, inst.a, pc, pc });
+                if (plan.bufferedFunction(inst.a)) {
+                    try emitBufferedResultStorage(out, a, inst, pc);
+                    try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &captures_{d} }}, argv_{d}, result_buffer_{d});\n", .{ pc, inst.a, pc, pc, pc });
+                    borrowed_result = inst.count != ir.multi_count;
+                } else {
+                    try print(out, a, "            const result_{d} = try f_{d}(ctx, .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, inst.a, pc, pc });
+                }
             } else {
                 const linked = range.?;
                 try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], .{{ .direct = &captures_{d} }}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc, pc });
@@ -869,7 +909,13 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
             else
                 try print(out, a, "            const static_caps_{d} = try ctx.moduleCaptures({d});\n", .{ pc, module_id });
             if (range == null or range.?.contains(inst.a)) {
-                try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc });
+                if (plan.bufferedFunction(inst.a)) {
+                    try emitBufferedResultStorage(out, a, inst, pc);
+                    try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d}, result_buffer_{d});\n", .{ pc, inst.a, pc, pc, pc });
+                    borrowed_result = inst.count != ir.multi_count;
+                } else {
+                    try print(out, a, "            const result_{d} = try f_{d}(ctx, static_caps_{d}, argv_{d});\n", .{ pc, inst.a, pc, pc });
+                }
             } else {
                 const linked = range.?;
                 try print(out, a, "            const result_{d} = try ctx.callEntry(external_functions_{d:0>4}[{d}], static_caps_{d}, argv_{d});\n", .{ pc, linked.shardIndex(inst.a), linked.shardOffset(inst.a), pc, pc });
@@ -877,6 +923,7 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
         },
         else => return error.NotPlainCall,
     }
+    return borrowed_result;
 }
 fn fallthroughBlock(graph: *const graph_mod.Graph, function: *const ir.Function, pc: usize) !u32 {
     const next = pc + 1;
@@ -886,7 +933,27 @@ fn fallthroughBlock(graph: *const graph_mod.Graph, function: *const ir.Function,
 
 fn emitReturn(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst) !void {
     if (@as(usize, inst.aux) + inst.count > function.operands.items.len) return error.BadOperandRange;
-    if (inst.op == .ret) {
+    if (plan.result_buffered) {
+        if (inst.op == .ret) {
+            try print(out, a, "            const result = try rt.returnBuffer(result_buffer, {d});\n", .{inst.count});
+            for (function.operands.items[inst.aux .. inst.aux + inst.count], 0..) |value, index| {
+                try print(out, a, "            rt.storeReturn(result, {d}, ", .{index});
+                try valueExpr(out, a, p, plan, value);
+                try text(out, a, ");\n");
+            }
+            try text(out, a, "            return result;\n");
+        } else {
+            try print(out, a, "            const tail = frame.multiAt({d});\n", .{inst.a});
+            try print(out, a, "            const result = try rt.returnBuffer(result_buffer, {d} + tail.len);\n", .{inst.count});
+            for (function.operands.items[inst.aux .. inst.aux + inst.count], 0..) |value, index| {
+                try print(out, a, "            rt.storeReturn(result, {d}, ", .{index});
+                try valueExpr(out, a, p, plan, value);
+                try text(out, a, ");\n");
+            }
+            try print(out, a, "            rt.copyReturnTail(result, {d}, tail);\n", .{inst.count});
+            try text(out, a, "            return result;\n");
+        }
+    } else if (inst.op == .ret) {
         try print(out, a, "            const result = try std.heap.smp_allocator.alloc(rt.Value, {d});\n", .{inst.count});
         for (function.operands.items[inst.aux .. inst.aux + inst.count], 0..) |value, index| {
             try print(out, a, "            result[{d}] = ", .{index});
@@ -905,7 +972,6 @@ fn emitReturn(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *co
         try print(out, a, "            @memcpy(result[{d}..], tail);\n            return result;\n", .{inst.count});
     }
 }
-
 fn emitBranchCondition(out: *std.ArrayList(u8), a: A, p: *const ir.Program, plan: *const FunctionPlan, inst: ir.Inst) !void {
     const op = try sem.comparisonOpcode(inst.count);
     const name = try compareName(op);
@@ -1028,16 +1094,20 @@ fn requiresFrame(function: *const ir.Function, plan: *const FunctionPlan) !bool 
     }
     return false;
 }
-fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, stats: *Stats, range: ?FunctionRange) !void {
+fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, stats: *Stats, range: ?FunctionRange, buffered_functions: []const bool) !void {
     if (id >= p.functions.items.len) return error.BadFunctionReference;
+    if (buffered_functions.len != p.functions.items.len) return error.BadBufferedFunctionMask;
     const function = p.functions.items[id] orelse return error.IncompleteProgram;
-    var plan = try analyzePlan(a, p, &function);
+    var plan = try analyzePlan(a, p, &function, buffered_functions, buffered_functions[id]);
     defer plan.deinit();
     var graph = try graph_mod.build(a, &function);
     defer graph.deinit();
     const needs_frame = try requiresFrame(&function, &plan);
     const cell_span = plan.cellSpan();
-    try print(out, a, "{s}fn f_{d}(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value) anyerror![]const rt.Value {{\n", .{ if (range == null) "" else "pub ", id });
+    if (plan.result_buffered)
+        try print(out, a, "{s}fn f_{d}(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value, result_buffer: ?[]rt.Value) anyerror![]const rt.Value {{\n", .{ if (range == null) "" else "pub ", id })
+    else
+        try print(out, a, "{s}fn f_{d}(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value) anyerror![]const rt.Value {{\n", .{ if (range == null) "" else "pub ", id });
     try text(out, a, "    rt.touch(ctx);\n    rt.touch(upvalues);\n    rt.touch(args);\n");
     if (needs_frame) {
         try print(out, a, "    var regs: [{d}]rt.Value = undefined;\n", .{function.reg_count});
@@ -1077,7 +1147,7 @@ fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, st
     try text(out, a, "        else => return error.BadControlFlow,\n        }\n    }\n}\n\n");
     stats.functions += 1;
 }
-fn emitProgramTables(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
+fn emitProgramTables(out: *std.ArrayList(u8), a: A, p: *const ir.Program, buffered_functions: []const bool) !void {
     try text(out, a, "const module_roots = [_]u32{");
     for (p.module_roots.items, 0..) |root, index| {
         if (index != 0) try text(out, a, ", ");
@@ -1086,7 +1156,11 @@ fn emitProgramTables(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void 
     try text(out, a, "};\nconst module_root_entry_values = [_]rt.FunctionFn{");
     for (p.module_roots.items, 0..) |root, index| {
         if (index != 0) try text(out, a, ", ");
-        try print(out, a, "rt.stabilize(f_{d})", .{root});
+        if (root >= buffered_functions.len) return error.BadFunctionReference;
+        if (buffered_functions[root])
+            try print(out, a, "rt.stabilizeBuffered(f_{d})", .{root})
+        else
+            try print(out, a, "rt.stabilize(f_{d})", .{root});
     }
     try text(out, a, "};\nconst module_root_entries = [_]*const rt.FunctionFn{");
     for (p.module_roots.items, 0..) |_, index| {
@@ -1096,7 +1170,7 @@ fn emitProgramTables(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void 
     try text(out, a, "};\n\n");
 }
 
-fn emitRuntimeEntry(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
+fn emitRuntimeEntry(out: *std.ArrayList(u8), a: A, p: *const ir.Program, buffered_functions: []const bool) !void {
     const globals = globalCount(p);
     try print(out, a, "pub const global_count: u32 = {d};\n", .{globals});
     try print(out, a, "pub const root_function: u32 = {d};\n\n", .{p.root_function});
@@ -1120,7 +1194,11 @@ fn emitRuntimeEntry(out: *std.ArrayList(u8), a: A, p: *const ir.Program) !void {
     try print(out, a, "    try lua_scribunto.install(&ctx, {d}, {d}, {d});\n", .{ global_abi.id("_G"), global_abi.id("string"), global_abi.id("mw") });
     try text(out, a, "    return ctx;\n}\n\n");
     try text(out, a, "pub const Host = lua_scribunto.Host;\npub const FrameArg = lua_scribunto.FrameArg;\npub const WikitextProvider = lua_scribunto.WikitextProvider;\npub const WikitextExpander = lua_scribunto.WikitextExpander;\npub fn setHost(ctx: *rt.Context, host: ?*Host) void { lua_scribunto.setHost(ctx, host); }\npub fn makeFrame(ctx: *rt.Context, title: []const u8, args: []const FrameArg, parent: ?rt.Value) !rt.Value { return lua_scribunto.makeFrame(ctx, title, args, parent); }\npub fn invoke(ctx: *rt.Context, module_name: []const u8, function_name: []const u8, frame: rt.Value) anyerror![]const rt.Value { return lua_scribunto.invoke(ctx, module_name, function_name, frame); }\npub fn initExpander(ctx: *rt.Context, provider: WikitextProvider) WikitextExpander { return lua_scribunto.makeWikitextExpander(ctx, 0, 18, 23, provider); }\n\n");
-    try print(out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {{\n    return f_{d}(ctx, .{{ .direct = &.{{}} }}, args);\n}}\n\n", .{p.root_function});
+    if (p.root_function >= buffered_functions.len) return error.BadFunctionReference;
+    if (buffered_functions[p.root_function])
+        try print(out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {{\n    return f_{d}(ctx, .{{ .direct = &.{{}} }}, args, null);\n}}\n\n", .{p.root_function})
+    else
+        try print(out, a, "pub fn executeRoot(ctx: *rt.Context, args: []const rt.Value) anyerror![]const rt.Value {{\n    return f_{d}(ctx, .{{ .direct = &.{{}} }}, args);\n}}\n\n", .{p.root_function});
 }
 pub fn generate(a: A, p: *const ir.Program) !struct { source: []u8, stats: Stats } {
     if (!p.references_lowered) return error.ProgramNotFinalized;
@@ -1128,13 +1206,15 @@ pub fn generate(a: A, p: *const ir.Program) !struct { source: []u8, stats: Stats
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     var stats = Stats{};
+    const buffered_functions = try buildBufferedFunctions(a, p, null);
+    defer a.free(buffered_functions);
     try emitRootDeclarations(&out, a, p);
     try emitNativeGlobalShape(&out, a);
     try emitShapes(&out, a, p);
     try emitConstants(&out, a, p);
-    for (p.functions.items, 0..) |_, id| try emitFunction(&out, a, p, @intCast(id), &stats, null);
-    try emitProgramTables(&out, a, p);
-    try emitRuntimeEntry(&out, a, p);
+    for (p.functions.items, 0..) |_, id| try emitFunction(&out, a, p, @intCast(id), &stats, null, buffered_functions);
+    try emitProgramTables(&out, a, p, buffered_functions);
+    try emitRuntimeEntry(&out, a, p, buffered_functions);
     return .{ .source = try finishSource(a, &out), .stats = stats };
 }
 
@@ -1312,6 +1392,37 @@ fn staticCallTarget(inst: ir.Inst) ?u32 {
     };
 }
 
+fn bufferedCallTarget(inst: ir.Inst) ?u32 {
+    if (inst.count == ir.multi_count) return null;
+    return switch (inst.op) {
+        .call, .call_vararg => aot_hint.directTarget(inst),
+        .call_local,
+        .call_local_vararg,
+        .call_scoped,
+        .call_scoped_vararg,
+        .direct_call,
+        .direct_call_vararg,
+        => inst.a,
+        else => null,
+    };
+}
+
+fn buildBufferedFunctions(a: A, p: *const ir.Program, range: ?FunctionRange) ![]bool {
+    const buffered = try a.alloc(bool, p.functions.items.len);
+    @memset(buffered, false);
+    const first: usize = if (range) |value| value.first else 0;
+    const end: usize = if (range) |value| value.end else p.functions.items.len;
+    for (p.functions.items[first..end]) |maybe_function| if (maybe_function) |function| {
+        for (function.insts.items) |inst| if (bufferedCallTarget(inst)) |target| {
+            if (target >= p.functions.items.len) return error.BadFunctionReference;
+            if (p.functions.items[target] == null) continue;
+            if (range) |value| if (!value.contains(target)) continue;
+            buffered[target] = true;
+        };
+    };
+    return buffered;
+}
+
 fn emitExternalFunctionRefs(
     out: *std.ArrayList(u8),
     a: A,
@@ -1365,6 +1476,8 @@ pub fn generateFunctionShardWithDescriptors(a: A, p: *const ir.Program, config: 
     const end: u32 = std.math.cast(u32, bounds.end) orelse return error.ProgramTooLarge;
     const shard_size: u32 = std.math.cast(u32, config.functions_per_shard) orelse return error.ProgramTooLarge;
     const range = FunctionRange{ .first = first, .end = end, .shard_size = shard_size };
+    const buffered_functions = try buildBufferedFunctions(a, p, range);
+    defer a.free(buffered_functions);
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     try emitDeclarations(&out, a, p);
@@ -1374,12 +1487,14 @@ pub fn generateFunctionShardWithDescriptors(a: A, p: *const ir.Program, config: 
             const function = p.functions.items[id] orelse return error.IncompleteProgram;
             stats.functions += 1;
             stats.instructions += function.insts.items.len;
-        } else try emitFunction(&out, a, p, @intCast(id), stats, range);
+        } else try emitFunction(&out, a, p, @intCast(id), stats, range, buffered_functions);
     }
     try print(&out, a, "pub const functions = blk: {{\n    @setEvalBranchQuota({d});\n    break :blk [_]rt.FunctionFn{{\n", .{(bounds.end - bounds.first) * 4 + 1000});
     for (bounds.first..bounds.end) |id| {
         if (config.module_registry and descriptor_roots[id])
             try text(&out, a, "        rt.stabilize(rt.descriptorModuleRootStub),\n")
+        else if (buffered_functions[id])
+            try print(&out, a, "        rt.stabilizeBuffered(f_{d}),\n", .{id})
         else
             try print(&out, a, "        rt.stabilize(f_{d}),\n", .{id});
     }
@@ -1615,7 +1730,7 @@ test "sharded AOT splits code and data while preserving numeric cross-shard call
     const first = try generateFunctionShard(allocator, &program, config, 0, &stats);
     defer allocator.free(first);
     try std.testing.expect(std.mem.indexOf(u8, first, "pub fn f_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first, "rt.stabilize(f_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "rt.stabilize(f_") != null or std.mem.indexOf(u8, first, "rt.stabilizeBuffered(f_") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "@setEvalBranchQuota") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "ctx.callEntry(external_functions_") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "invokeKnown") == null);
@@ -1718,6 +1833,54 @@ test "captured module functions share one generated activation environment" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "upvalues.cell(") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "var captures_") == null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "static_functions") == null);
+}
+
+test "same-shard calls use caller-owned fixed result buffers" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const allocator = std.testing.allocator;
+    const source = "local n=0;local function triple(x)n=n+1;return x,x+1,x+2 end;local keep=triple;local first=triple(4);triple(10);local function prefix(...)return 7,... end;local keep_prefix=prefix;local a,b=prefix(20,21,22);return first,n,a,b,keep~=nil,keep_prefix~=nil";
+    var chunk = try lua.parse(allocator, source);
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(allocator, &chunk);
+    defer program.deinit();
+    _ = try opt.runAot(allocator, &program);
+    const generated = try generate(allocator, &program);
+    defer allocator.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "anyerror![]const rt.Value") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ": [0]rt.Value = undefined") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ": [1]rt.Value = undefined") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ": [2]rt.Value = undefined") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "result_owned_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "rt.returnBuffer(result_buffer, 1 + tail.len)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "rt.copyReturnTail(result, 1, tail)") != null);
+}
+
+test "buffered return ABI stays local to one function shard" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const allocator = std.testing.allocator;
+    const source = "local n=0;local function triple(x)n=n+1;return x,x+1,x+2 end;local keep=triple;local first=triple(4);triple(10);local function prefix(...)return 7,... end;local keep_prefix=prefix;local a,b=prefix(20,21,22);return first,n,a,b,keep~=nil,keep_prefix~=nil";
+    var chunk = try lua.parse(allocator, source);
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(allocator, &chunk);
+    defer program.deinit();
+    _ = try opt.runAot(allocator, &program);
+    try std.testing.expectEqual(@as(usize, 3), program.functions.items.len);
+    const config = ShardConfig{ .functions_per_shard = 2 };
+    var stats = Stats{};
+    const first = try generateFunctionShard(allocator, &program, config, 0, &stats);
+    defer allocator.free(first);
+    const second = try generateFunctionShard(allocator, &program, config, 1, &stats);
+    defer allocator.free(second);
+    try std.testing.expect(std.mem.indexOf(u8, first, "fn f_0(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "fn f_1(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value, result_buffer: ?[]rt.Value)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "rt.stabilize(f_0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "rt.stabilizeBuffered(f_1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "ctx.callEntry(external_functions_0001[0]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second, "fn f_2(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second, "result_buffer: ?[]rt.Value") == null);
+    try std.testing.expect(std.mem.indexOf(u8, second, "rt.stabilize(f_2)") != null);
 }
 
 test "numeric bit constants are explicitly typed in native expressions" {

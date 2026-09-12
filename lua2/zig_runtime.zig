@@ -64,6 +64,7 @@ pub const FunctionValue = struct {
     }
 };
 pub const DirectFunctionFn = *const fn (*Context, Captures, []const Value) anyerror![]const Value;
+pub const BufferedDirectFunctionFn = *const fn (*Context, Captures, []const Value, ?[]Value) anyerror![]const Value;
 pub const FunctionResult = extern struct {
     values_ptr: ?[*]const Value,
     values_len: usize,
@@ -122,6 +123,23 @@ pub fn stabilize(comptime function: DirectFunctionFn) FunctionFn {
     return struct {
         fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
             const values = function(ctx, captures.*, args_ptr[0..args_len]) catch |err| {
+                if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
+                return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
+            };
+            return .{
+                .values_ptr = if (values.len == 0) null else values.ptr,
+                .values_len = values.len,
+                .status = 0,
+                .reserved = 0,
+            };
+        }
+    }.call;
+}
+
+pub fn stabilizeBuffered(comptime function: BufferedDirectFunctionFn) FunctionFn {
+    return struct {
+        fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
+            const values = function(ctx, captures.*, args_ptr[0..args_len], null) catch |err| {
                 if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
                 return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
             };
@@ -426,6 +444,20 @@ fn rawFreeSlice(comptime T: type, allocator: std.mem.Allocator, values: []T) voi
 pub fn freeResults(values: []const Value) void {
     rawFreeSlice(Value, std.heap.smp_allocator, @constCast(values));
 }
+
+pub inline fn returnBuffer(buffer: ?[]Value, len: usize) ![]Value {
+    return if (buffer) |values| values[0..@min(values.len, len)] else std.heap.smp_allocator.alloc(Value, len);
+}
+
+pub inline fn storeReturn(result: []Value, index: usize, value: Value) void {
+    if (index < result.len) result[index] = value;
+}
+
+pub inline fn copyReturnTail(result: []Value, offset: usize, tail: []const Value) void {
+    if (offset >= result.len) return;
+    const n = @min(result.len - offset, tail.len);
+    @memcpy(result[offset..][0..n], tail[0..n]);
+}
 pub const Frame = struct {
     regs: []Value,
     cells: []?*Cell,
@@ -701,6 +733,13 @@ pub const Context = struct {
         self.depth += 1;
         defer self.depth -= 1;
         return direct(self, value.captures(), args);
+    }
+
+    pub inline fn callBufferedDirectFunction(self: *Context, value: FunctionValue, direct: BufferedDirectFunctionFn, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+        if (self.depth >= self.max_depth) return error.CallDepth;
+        self.depth += 1;
+        defer self.depth -= 1;
+        return direct(self, value.captures(), args, result_buffer);
     }
 
     pub fn bindModuleEnv(self: *Context, module_id: u32, env: *ModuleEnv) !void {
@@ -1521,6 +1560,37 @@ fn guardCapture(captures: Captures) f64 {
         .direct => |cells| if (cells.len == 0) 0 else cells[0].value.number,
         .module => |env| if (env.cells.len == 0 or env.cells[0] == null) 0 else env.cells[0].?.value.number,
     };
+}
+
+fn bufferedResultProbe(_: *Context, captures: Captures, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    const value = guardCapture(captures) + if (args.len == 0) 0 else args[0].number;
+    if (result_buffer) |result| {
+        if (result.len != 0) result[0] = .{ .number = value };
+        return result[0..@min(result.len, 1)];
+    }
+    const result = try std.heap.smp_allocator.alloc(Value, 1);
+    result[0] = .{ .number = value };
+    return result;
+}
+
+test "buffered direct results borrow caller storage while stable calls own results" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const callable = FunctionValue{ .id = 0, .identity = 1, .entry = stabilizeBuffered(bufferedResultProbe) };
+    var storage: [1]Value = undefined;
+    const borrowed = try ctx.callBufferedDirectFunction(callable, bufferedResultProbe, &.{.{ .number = 3 }}, &storage);
+    try std.testing.expectEqual(@as(usize, 1), borrowed.len);
+    try std.testing.expectEqual(@as(f64, 3), borrowed[0].number);
+    try std.testing.expect(borrowed.ptr == storage[0..].ptr);
+    var none: [0]Value = .{};
+    const discarded = try ctx.callBufferedDirectFunction(callable, bufferedResultProbe, &.{.{ .number = 4 }}, &none);
+    try std.testing.expectEqual(@as(usize, 0), discarded.len);
+    const stable = try ctx.callEntry(callable.entry, .{ .direct = &.{} }, &.{.{ .number = 5 }});
+    defer freeResults(stable);
+    try std.testing.expectEqual(@as(usize, 1), stable.len);
+    try std.testing.expectEqual(@as(f64, 5), stable[0].number);
 }
 
 fn guardTestExpected(_: *Context, captures: Captures, args: []const Value) ![]const Value {
