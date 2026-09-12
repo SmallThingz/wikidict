@@ -46,6 +46,7 @@ pub const Stats = struct {
     known_upvalues: u64 = 0,
     module_upvalues: u64 = 0,
     function_upvalues: u64 = 0,
+    callable_upvalues: u64 = 0,
     native_global_upvalues: u64 = 0,
     native_namespace_upvalues: u64 = 0,
     native_field_upvalues: u64 = 0,
@@ -242,7 +243,10 @@ fn mergeCandidate(candidate: *Fact, bad: *bool, incoming: Fact) void {
     if (!hasFact(candidate.*)) {
         candidate.* = incoming;
     } else if (!std.meta.eql(candidate.*, incoming)) {
-        bad.* = true;
+        if (facts_mod.mergeKnown(candidate.*, incoming)) |merged|
+            candidate.* = merged
+        else
+            bad.* = true;
     }
 }
 
@@ -307,8 +311,12 @@ fn mergeLocalWrite(
     if (!hasFact(candidates[flat])) {
         candidates[flat] = incoming;
     } else if (!std.meta.eql(candidates[flat], incoming)) {
-        bad[flat] = true;
-        conflicting_write[flat] = true;
+        if (facts_mod.mergeKnown(candidates[flat], incoming)) |merged| {
+            candidates[flat] = merged;
+        } else {
+            bad[flat] = true;
+            conflicting_write[flat] = true;
+        }
     }
 }
 
@@ -514,6 +522,7 @@ pub fn build(
         switch (fact) {
             .module => stats.module_upvalues += 1,
             .function => stats.function_upvalues += 1,
+            .callable => stats.callable_upvalues += 1,
             .native_global, .captured_native_global => stats.native_global_upvalues += 1,
             .native_namespace, .captured_native_namespace => stats.native_namespace_upvalues += 1,
             .native_field, .captured_native_field => stats.native_field_upvalues += 1,
@@ -684,7 +693,7 @@ test "captured imported function predicts one guarded target" {
     try std.testing.expect(found);
     try std.testing.expect(result.stats.function_upvalues != 0);
 }
-test "mutated captured import remains unpredicted" {
+test "captured local rebound between functions remains proven callable" {
     const a = std.testing.allocator;
     var image = test_image.Image.init(a);
     defer image.deinit();
@@ -695,15 +704,13 @@ test "mutated captured import remains unpredicted" {
     var result = try build(a, &image.program, &symbols);
     defer result.deinit();
     const linked = image.modules.items[module];
-    var saw_capture = false;
+    var saw_callable = false;
     for (linked.function_base..linked.function_base + linked.function_count) |function_id| {
-        const function = image.program.functions.items[function_id] orelse continue;
-        if (function.upvalues.items.len == 0) continue;
-        saw_capture = true;
         for (result.forFunction(&image.program, @intCast(function_id))) |fact|
-            try std.testing.expect(fact == .unknown);
+            saw_callable = saw_callable or fact == .callable;
     }
-    try std.testing.expect(saw_capture);
+    try std.testing.expect(saw_callable);
+    try std.testing.expect(result.stats.callable_upvalues != 0);
 }
 
 test "captured imported function survives a stable local alias" {
@@ -909,7 +916,7 @@ test "equal multi-write captured imports preserve one guarded target" {
     try std.testing.expect(result.stats.stable_multiwrite_locals != 0);
 }
 
-test "different multi-write captured imports remain unpredicted" {
+test "different multi-write captured imports remain proven callable" {
     const a = std.testing.allocator;
     var image = test_image.Image.init(a);
     defer image.deinit();
@@ -920,15 +927,13 @@ test "different multi-write captured imports remain unpredicted" {
     var result = try build(a, &image.program, &symbols);
     defer result.deinit();
     const linked = image.modules.items[module];
-    var saw_capture = false;
+    var saw_callable = false;
     for (linked.function_base..linked.function_base + linked.function_count) |function_id| {
-        const function = image.program.functions.items[function_id] orelse continue;
-        if (function.upvalues.items.len == 0) continue;
-        saw_capture = true;
         for (result.forFunction(&image.program, @intCast(function_id))) |fact|
-            try std.testing.expect(fact == .unknown);
+            saw_callable = saw_callable or fact == .callable;
     }
-    try std.testing.expect(saw_capture);
+    try std.testing.expect(saw_callable);
+    try std.testing.expect(result.stats.callable_upvalues != 0);
 }
 
 test "descendant upvalue mutation invalidates sibling capture facts" {

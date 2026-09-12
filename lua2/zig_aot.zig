@@ -16,6 +16,7 @@ pub const Stats = struct {
     instructions: u64 = 0,
     dynamic_calls: u64 = 0,
     direct_calls: u64 = 0,
+    callable_calls: u64 = 0,
     guarded_calls: u64 = 0,
     dynamic_indexes: u64 = 0,
     string_fields: u64 = 0,
@@ -881,10 +882,14 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                     try print(out, a, "            const result_{d} = try ctx.callFunction(callable_{d}, argv_{d});\n", .{ pc, pc, pc });
                 }
                 stats.direct_calls += 1;
+            } else if (aot_hint.directCallable(inst)) {
+                try print(out, a, "            const callable_{d} = (", .{pc});
+                try valueExpr(out, a, p, plan, inst.a);
+                try text(out, a, ").callable;\n");
+                try print(out, a, "            const result_{d} = try ctx.callFunction(callable_{d}, argv_{d});\n", .{ pc, pc, pc });
+                stats.callable_calls += 1;
             } else {
-                // Advisory call predictions never participate in runtime semantics.
-                // The live callable already carries its compiled entrypoint, so mutation
-                // simply selects another compiled closure/native without a guard/fallback path.
+                // Unproven values retain full Lua __call / NotCallable semantics.
                 try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
                 try valueExpr(out, a, p, plan, inst.a);
                 try print(out, a, ", argv_{d});\n", .{pc});

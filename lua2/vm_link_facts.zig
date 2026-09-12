@@ -25,6 +25,8 @@ pub const Fact = union(enum) {
     captured_function_candidate: u32,
     module: u32,
     function: u32,
+    // Exact target may vary, but every possible live value is a compiled callable.
+    callable,
 };
 
 pub const Edge = struct {
@@ -58,6 +60,20 @@ fn known(fact: Fact) bool {
     };
 }
 
+pub fn definitelyCallable(fact: Fact) bool {
+    return switch (fact) {
+        .function, .callable, .require_builtin => true,
+        else => false,
+    };
+}
+
+pub fn mergeKnown(a: Fact, b: Fact) ?Fact {
+    if (!known(a) or !known(b)) return null;
+    if (factEqual(a, b)) return a;
+    if (definitelyCallable(a) and definitelyCallable(b)) return .callable;
+    return null;
+}
+
 fn factOf(analysis: *const Analysis, raw: ssa.ValueId) Fact {
     const id = analysis.ssa_function.canonicalValue(raw);
     if (id == ssa.invalid_value or id >= analysis.facts.len) return .unknown;
@@ -89,7 +105,11 @@ fn phiFact(analysis: *const Analysis, phi: *const ssa.Phi) Fact {
         if (analysis.ssa_function.canonicalValue(input) == phi.value) continue;
         const fact = factOf(analysis, input);
         if (!known(fact)) return .unknown;
-        if (!known(candidate)) candidate = fact else if (!factEqual(candidate, fact)) return .unknown;
+        if (!known(candidate)) {
+            candidate = fact;
+        } else {
+            candidate = mergeKnown(candidate, fact) orelse return .unknown;
+        }
     }
     return candidate;
 }

@@ -42,6 +42,7 @@ pub const UnresolvedUpvalueCalls = struct {
 pub const Stats = struct {
     direct_calls: u32 = 0,
     proven_direct_calls: u32 = 0,
+    proven_callable_calls: u32 = 0,
     numeric_imports: u32 = 0,
     removed_lookup_insts: u32 = 0,
     registrations: u32 = 0,
@@ -57,6 +58,7 @@ pub const Stats = struct {
     predicted_multiwrite_locals: u32 = 0,
     predicted_module_upvalues: u32 = 0,
     predicted_function_upvalues: u32 = 0,
+    predicted_callable_upvalues: u32 = 0,
     predicted_native_global_upvalues: u32 = 0,
     predicted_native_field_upvalues: u32 = 0,
     predicted_native_field_candidate_upvalues: u32 = 0,
@@ -422,6 +424,11 @@ fn tagDirectFact(program: *const ir.Program, inst: *ir.Inst, fact: facts_mod.Fac
             stats.proven_direct_calls += 1;
             return true;
         },
+        .callable, .require_builtin => {
+            try aot_hint.setDirectCallable(inst);
+            stats.proven_callable_calls += 1;
+            return true;
+        },
         else => {},
     }
     return false;
@@ -434,6 +441,7 @@ fn tagGuardedCalls(allocator: std.mem.Allocator, program: *ir.Program, symbols: 
     stats.predicted_multiwrite_locals = @intCast(captures.stats.stable_multiwrite_locals);
     stats.predicted_module_upvalues = @intCast(captures.stats.module_upvalues);
     stats.predicted_function_upvalues = @intCast(captures.stats.function_upvalues);
+    stats.predicted_callable_upvalues = @intCast(captures.stats.callable_upvalues);
     stats.predicted_native_global_upvalues = @intCast(captures.stats.native_global_upvalues);
     stats.predicted_native_field_upvalues = @intCast(captures.stats.native_field_upvalues);
     stats.predicted_native_field_candidate_upvalues = @intCast(captures.stats.native_field_candidate_upvalues);
@@ -544,6 +552,16 @@ test "numeric link preserves captured module state" {
     try std.testing.expectEqual(@as(f64, 19), out[1].number);
 }
 
+fn countCallableHints(program: *const ir.Program) u32 {
+    var count: u32 = 0;
+    for (program.functions.items) |maybe| if (maybe) |function| {
+        for (function.insts.items) |inst| {
+            if (aot_hint.directCallable(inst)) count += 1;
+        }
+    };
+    return count;
+}
+
 fn countDirectHints(program: *const ir.Program) u32 {
     var count: u32 = 0;
     for (program.functions.items) |maybe| if (maybe) |function| {
@@ -592,6 +610,19 @@ fn countNativeCandidateGuardHints(program: *const ir.Program) u32 {
         }
     };
     return count;
+}
+
+test "different proven function identities merge to callable proof" {
+    const a = std.testing.allocator;
+    var image = link_image.Image.init(a);
+    defer image.deinit();
+    var symbols = symbols_mod.Index.init(a);
+    defer symbols.deinit();
+    _ = try addSource(a, &image, &symbols, "Module:A",
+        "local function a(x)return x+1 end;local function b(x)return x+2 end;local function run(flag)local f;if flag then f=a else f=b end;return f(3)end;return run");
+    const stats = try run(a, &image.program, &symbols);
+    try std.testing.expect(stats.proven_callable_calls != 0);
+    try std.testing.expect(countCallableHints(&image.program) != 0);
 }
 
 test "base native global calls carry guarded AOT hints" {

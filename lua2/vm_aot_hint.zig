@@ -5,6 +5,8 @@ const static_fields = @import("vm_static_field_abi.zig");
 // AOT-only call hints live outside semantic operands and are never serialized.
 // Both fixed and vararg dynamic calls can therefore carry the same guard.
 const native_marker: u32 = @as(u32, 1) << 31;
+// Reserved invalid native-global encoding: compiler-only proof that the live value is callable.
+const callable_marker: u32 = native_marker;
 const native_field_marker: u32 = @as(u32, 1) << 30;
 const native_payload_mask = native_field_marker - 1;
 const namespace_shift = 16;
@@ -70,6 +72,10 @@ pub fn directNativeField(inst: ir.Inst) ?NativeField {
     return nativeField(directAsHint(inst));
 }
 
+pub fn directCallable(inst: ir.Inst) bool {
+    return supports(inst.op) and inst.aot_direct == callable_marker;
+}
+
 pub fn set(inst: *ir.Inst, function_id: u32) !void {
     if (!supports(inst.op)) return error.UnsupportedAotCallHint;
     const encoded = std.math.add(u32, function_id, 1) catch return error.FunctionReferenceOverflow;
@@ -102,6 +108,11 @@ pub fn setNativeFieldCandidate(inst: *ir.Inst, field_id: u32) !void {
     inst.aot_hint = native_marker | native_field_marker | (candidate_namespace_encoded << namespace_shift) | field_encoded;
 }
 
+pub fn setDirectCallable(inst: *ir.Inst) !void {
+    if (!supports(inst.op)) return error.UnsupportedAotCallHint;
+    inst.aot_direct = callable_marker;
+}
+
 pub fn setDirect(inst: *ir.Inst, function_id: u32) !void {
     var copy = inst.*;
     try set(&copy, function_id);
@@ -124,6 +135,21 @@ pub fn clear(inst: *ir.Inst) void {
     if (!supports(inst.op)) return;
     inst.aot_hint = 0;
     inst.aot_direct = 0;
+}
+
+test "proven callable fact is compiler-only and omitted from wire format" {
+    const wire = @import("vm_wire.zig");
+    var inst = ir.Inst{ .op = .call, .dst = 1, .a = 2, .count = 1 };
+    try setDirectCallable(&inst);
+    try std.testing.expect(directCallable(inst));
+    try std.testing.expectEqual(@as(?u32, null), directTarget(inst));
+    try std.testing.expectEqual(@as(?u32, null), directNativeGlobal(inst));
+    var bytes: std.ArrayList(u8) = .empty;
+    defer bytes.deinit(std.testing.allocator);
+    try wire.writeInst(&bytes, std.testing.allocator, 0, inst);
+    var pos: usize = 0;
+    const restored = try wire.readInst(bytes.items, &pos, 0, 1);
+    try std.testing.expect(!directCallable(restored));
 }
 
 test "proven call target is compiler-only and omitted from wire format" {
