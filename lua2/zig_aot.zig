@@ -98,6 +98,14 @@ const FunctionPlan = struct {
     fn rep(self: *const FunctionPlan, reg: u32) Rep {
         return if (reg < self.reps.len) self.reps[reg] else .value;
     }
+
+    fn cellSpan(self: *const FunctionPlan) usize {
+        var span: usize = 0;
+        for (self.captured, 0..) |captured, reg| {
+            if (captured) span = reg + 1;
+        }
+        return span;
+    }
 };
 
 fn mergeRep(slot: *Rep, candidate: Rep) bool {
@@ -1028,14 +1036,13 @@ fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, st
     var graph = try graph_mod.build(a, &function);
     defer graph.deinit();
     const needs_frame = try requiresFrame(&function, &plan);
-    var has_captures = false;
-    for (plan.captured) |captured| has_captures = has_captures or captured;
+    const cell_span = plan.cellSpan();
     try print(out, a, "{s}fn f_{d}(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value) anyerror![]const rt.Value {{\n", .{ if (range == null) "" else "pub ", id });
     try text(out, a, "    rt.touch(ctx);\n    rt.touch(upvalues);\n    rt.touch(args);\n");
     if (needs_frame) {
         try print(out, a, "    var regs: [{d}]rt.Value = undefined;\n", .{function.reg_count});
-        if (has_captures) {
-            try print(out, a, "    var cells: [{d}]?*rt.Cell = undefined;\n", .{function.reg_count});
+        if (cell_span != 0) {
+            try print(out, a, "    var cells: [{d}]?*rt.Cell = undefined;\n", .{cell_span});
             try print(out, a, "    var frame = try rt.Frame.initAot(&regs, &cells, args, {d}, {});\n", .{ function.param_count, function.is_vararg });
         } else {
             try print(out, a, "    var frame = try rt.Frame.initAotNoCells(&regs, args, {d}, {});\n", .{ function.param_count, function.is_vararg });
@@ -1294,9 +1301,12 @@ pub fn functionShardCount(p: *const ir.Program, config: ShardConfig) !usize {
 fn staticCallTarget(inst: ir.Inst) ?u32 {
     return switch (inst.op) {
         .closure, .load_function => inst.aux,
-        .call_local, .call_local_vararg,
-        .call_scoped, .call_scoped_vararg,
-        .direct_call, .direct_call_vararg,
+        .call_local,
+        .call_local_vararg,
+        .call_scoped,
+        .call_scoped_vararg,
+        .direct_call,
+        .direct_call_vararg,
         => inst.a,
         else => null,
     };
@@ -1703,6 +1713,7 @@ test "captured module functions share one generated activation environment" {
     const generated = try generate(allocator, &image.program);
     defer allocator.free(generated.source);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.makeModuleFunction(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "var cells: [1]?*rt.Cell = undefined") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "try frame.ensureModuleEnv(ctx)") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "upvalues.cell(") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "var captures_") == null);

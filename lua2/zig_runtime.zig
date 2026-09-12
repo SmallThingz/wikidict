@@ -448,7 +448,7 @@ pub const Frame = struct {
     /// Generated AOT IR defines every non-parameter register before its first read.
     /// Only parameters need Lua's implicit nil initialization at function entry.
     pub fn initAot(regs: []Value, cells: []?*Cell, args: []const Value, param_count: u32, is_vararg: bool) !Frame {
-        if (param_count > regs.len or cells.len != regs.len) return error.BadFrame;
+        if (param_count > regs.len or cells.len > regs.len) return error.BadFrame;
         const params_len: usize = @intCast(param_count);
         @memset(regs[0..params_len], .nil);
         @memset(cells, null);
@@ -1429,6 +1429,33 @@ test "AOT frames without captures allocate no cell plane" {
     var ctx = try Context.init(std.testing.allocator, 0);
     defer ctx.deinit();
     try std.testing.expectError(error.BadFrame, frame.ensureCell(&ctx, 2));
+}
+
+test "AOT frames permit a captured-cell register prefix" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    var regs: [5]Value = undefined;
+    var cells: [2]?*Cell = undefined;
+    var frame = try Frame.initAot(&regs, &cells, &.{.{ .number = 4 }}, 1, false);
+    try std.testing.expectEqual(@as(usize, 2), frame.cells.len);
+    frame.set(4, .{ .string = "plain" });
+    try std.testing.expectEqualStrings("plain", frame.get(4).string);
+    frame.set(1, .{ .number = 7 });
+    const cell = try frame.ensureCell(&ctx, 1);
+    frame.set(1, .{ .number = 8 });
+    try std.testing.expectEqual(@as(f64, 8), cell.value.number);
+    frame.detachCell(1);
+    try std.testing.expect(frame.cells[1] == null);
+    try std.testing.expectEqual(@as(f64, 8), frame.get(1).number);
+    const reattached = try frame.ensureCell(&ctx, 1);
+    try std.testing.expect(reattached != cell);
+    try std.testing.expectEqual(@as(f64, 8), reattached.value.number);
+    try std.testing.expectError(error.BadFrame, frame.ensureCell(&ctx, 2));
+    const env = try frame.ensureModuleEnv(&ctx);
+    try std.testing.expectEqual(@as(usize, 2), env.cells.len);
+    try std.testing.expect(env.cells[1] == reattached);
 }
 
 test "AOT module functions share one activation environment" {
