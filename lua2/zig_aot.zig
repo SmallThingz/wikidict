@@ -785,6 +785,7 @@ fn emitSimple5(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
     }
 }
 const bounded_vararg_param_limit: u32 = 32;
+const small_vararg_capacity: u32 = 8;
 
 fn boundedVarargParams(p: *const ir.Program, inst: ir.Inst) !?u32 {
     const target = switch (inst.op) {
@@ -807,8 +808,9 @@ fn emitCallArgs(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *
             try print(out, a, "            var argv_storage_{d}: [{d}]rt.Value = undefined;\n", .{ pc, param_count });
             try print(out, a, "            const argv_{d} = rt.mergeBoundedValues(&argv_storage_{d}, fixed_{d}, frame.multiAt({d}));\n", .{ pc, pc, pc, inst.c });
         } else {
-            try print(out, a, "            const argv_{d} = try rt.mergeValues(fixed_{d}, frame.multiAt({d}));\n", .{ pc, pc, inst.c });
-            try print(out, a, "            defer rt.freeValues(argv_{d});\n", .{pc});
+            try print(out, a, "            var argv_storage_{d}: [{d}]rt.Value = undefined;\n", .{ pc, small_vararg_capacity });
+            try print(out, a, "            const argv_{d} = try rt.mergeSmallValues(&argv_storage_{d}, fixed_{d}, frame.multiAt({d}));\n", .{ pc, pc, pc, inst.c });
+            try print(out, a, "            defer rt.freeSmallValues(argv_{d}, &argv_storage_{d});\n", .{ pc, pc });
         }
     } else {
         try print(out, a, "            const argv_{d}: []const rt.Value = fixed_{d};\n", .{ pc, pc });
@@ -2000,7 +2002,7 @@ test "vararg call hints preserve the dynamic tail without runtime guards" {
     try std.testing.expect(hinted);
     const generated = try generate(allocator, &program);
     defer allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "rt.mergeValues(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "rt.mergeSmallValues(") != null);
     try std.testing.expectEqual(@as(u64, 0), generated.stats.guarded_calls);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValue(") != null);
 }

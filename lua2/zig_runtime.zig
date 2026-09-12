@@ -1547,6 +1547,18 @@ pub inline fn mergeBoundedValues(storage: []Value, prefix: []const Value, tail: 
     return storage[0 .. prefix_len + tail_len];
 }
 
+pub inline fn mergeSmallValues(storage: []Value, prefix: []const Value, tail: []const Value) ![]Value {
+    const total = prefix.len + tail.len;
+    if (total > storage.len) return mergeValues(prefix, tail);
+    @memcpy(storage[0..prefix.len], prefix);
+    @memcpy(storage[prefix.len..total], tail);
+    return storage[0..total];
+}
+
+pub inline fn freeSmallValues(values: []Value, storage: []Value) void {
+    if (values.ptr != storage.ptr) freeValues(values);
+}
+
 pub fn freeValues(values: []Value) void {
     rawFreeSlice(Value, std.heap.smp_allocator, values);
 }
@@ -1594,6 +1606,21 @@ test "bounded argument merge truncates excess tail without heap storage" {
     const truncated_prefix = mergeBoundedValues(&one, &.{ .{ .number = 5 }, .{ .number = 6 } }, &.{.{ .number = 7 }});
     try std.testing.expectEqual(@as(usize, 1), truncated_prefix.len);
     try std.testing.expectEqual(@as(f64, 5), truncated_prefix[0].number);
+}
+
+test "small argument merge borrows stack storage and falls back without truncation" {
+    var storage: [3]Value = undefined;
+    const small = try mergeSmallValues(&storage, &.{.{ .number = 1 }}, &.{ .{ .number = 2 }, .{ .number = 3 } });
+    defer freeSmallValues(small, &storage);
+    try std.testing.expect(small.ptr == storage[0..].ptr);
+    try std.testing.expectEqual(@as(usize, 3), small.len);
+    try std.testing.expectEqual(@as(f64, 3), small[2].number);
+
+    const large = try mergeSmallValues(&storage, &.{ .{ .number = 4 }, .{ .number = 5 } }, &.{ .{ .number = 6 }, .{ .number = 7 } });
+    defer freeSmallValues(large, &storage);
+    try std.testing.expect(large.ptr != storage[0..].ptr);
+    try std.testing.expectEqual(@as(usize, 4), large.len);
+    try std.testing.expectEqual(@as(f64, 7), large[3].number);
 }
 
 test "buffered direct results borrow caller storage while stable calls own results" {
