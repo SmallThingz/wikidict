@@ -1087,11 +1087,19 @@ fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, st
     var graph = try graph_mod.build(a, &function);
     defer graph.deinit();
     const needs_frame = try requiresFrame(&function, &plan);
+    var has_captures = false;
+    for (plan.captured) |captured| has_captures = has_captures or captured;
     try print(out, a, "{s}fn f_{d}(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value) anyerror![]const rt.Value {{\n", .{ if (range == null) "" else "pub ", id });
     try text(out, a, "    rt.touch(ctx);\n    rt.touch(upvalues);\n    rt.touch(args);\n");
     if (needs_frame) {
-        try print(out, a, "    var regs: [{d}]rt.Value = undefined;\n    var cells: [{d}]?*rt.Cell = undefined;\n", .{ function.reg_count, function.reg_count });
-        try print(out, a, "    var frame = try rt.Frame.initAot(&regs, &cells, args, {d}, {});\n    defer frame.deinit();\n", .{ function.param_count, function.is_vararg });
+        try print(out, a, "    var regs: [{d}]rt.Value = undefined;\n", .{function.reg_count});
+        if (has_captures) {
+            try print(out, a, "    var cells: [{d}]?*rt.Cell = undefined;\n", .{function.reg_count});
+            try print(out, a, "    var frame = try rt.Frame.initAot(&regs, &cells, args, {d}, {});\n", .{ function.param_count, function.is_vararg });
+        } else {
+            try print(out, a, "    var frame = try rt.Frame.initAotNoCells(&regs, args, {d}, {});\n", .{ function.param_count, function.is_vararg });
+        }
+        try text(out, a, "    defer frame.deinit();\n");
     }
     for (plan.reps, 0..) |rep, reg| if (rep == .number) {
         try print(out, a, "    var n_{d}: f64 = undefined;\n", .{reg});

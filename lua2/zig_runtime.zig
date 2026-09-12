@@ -466,19 +466,34 @@ pub const Frame = struct {
         return .{ .regs = regs, .cells = cells, .varargs = tail };
     }
 
+    pub fn initAotNoCells(regs: []Value, args: []const Value, param_count: u32, is_vararg: bool) !Frame {
+        if (param_count > regs.len) return error.BadFrame;
+        const params_len: usize = @intCast(param_count);
+        @memset(regs[0..params_len], .nil);
+        const n = @min(params_len, args.len);
+        @memcpy(regs[0..n], args[0..n]);
+        const tail = if (is_vararg and args.len > param_count) args[param_count..] else &.{};
+        return .{ .regs = regs, .cells = &.{}, .varargs = tail };
+    }
+
     pub fn deinit(self: *Frame) void {
         if (self.multi_owned) freeResults(self.multi);
     }
 
     pub fn get(self: *const Frame, reg: u32) Value {
-        if (self.cells[reg]) |cell| return cell.value;
+        if (reg < self.cells.len) if (self.cells[reg]) |cell| return cell.value;
         return self.regs[reg];
     }
 
     pub fn set(self: *Frame, reg: u32, value: Value) void {
-        if (self.cells[reg]) |cell| cell.value = value else self.regs[reg] = value;
+        if (reg < self.cells.len) if (self.cells[reg]) |cell| {
+            cell.value = value;
+            return;
+        };
+        self.regs[reg] = value;
     }
     pub fn ensureCell(self: *Frame, ctx: *Context, reg: u32) !*Cell {
+        if (reg >= self.cells.len) return error.BadFrame;
         if (self.cells[reg]) |cell| return cell;
         const cell = try ctx.allocator.create(Cell);
         cell.* = .{ .value = self.regs[reg] };
@@ -499,6 +514,7 @@ pub const Frame = struct {
     }
 
     pub fn detachCell(self: *Frame, reg: u32) void {
+        if (reg >= self.cells.len) return;
         if (self.cells[reg]) |cell| {
             self.regs[reg] = cell.value;
             self.cells[reg] = null;
@@ -1634,6 +1650,19 @@ test "AOT external program data preserves fresh table materialization" {
     try std.testing.expect(left == .table and right == .table and left.table != right.table);
     try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .string = "x" }).?.number);
     try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .number = 1 }).?.number);
+}
+
+test "AOT frames without captures allocate no cell plane" {
+    var regs: [3]Value = undefined;
+    var frame = try Frame.initAotNoCells(&regs, &.{.{ .number = 7 }}, 2, false);
+    try std.testing.expectEqual(@as(usize, 0), frame.cells.len);
+    try std.testing.expectEqual(@as(f64, 7), frame.get(0).number);
+    try std.testing.expect(frame.get(1) == .nil);
+    frame.set(2, .{ .string = "ok" });
+    try std.testing.expectEqualStrings("ok", frame.get(2).string);
+    var ctx = try Context.init(std.testing.allocator, 0);
+    defer ctx.deinit();
+    try std.testing.expectError(error.BadFrame, frame.ensureCell(&ctx, 2));
 }
 
 test "AOT module functions share one activation environment" {
