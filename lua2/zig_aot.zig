@@ -611,7 +611,7 @@ fn emitSimple3(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
                     if (up.source != .local) return error.BadStaticEnvironment;
                     try print(out, a, "            _ = try frame.ensureCell(ctx, {d});\n", .{up.index});
                 }
-                try print(out, a, "            frame.set({d}, ctx.makeModuleFunction({d}, try frame.ensureModuleEnv(ctx)));\n", .{ inst.dst, inst.aux });
+                try print(out, a, "            frame.set({d}, try ctx.makeModuleFunction({d}, try frame.ensureModuleEnv(ctx)));\n", .{ inst.dst, inst.aux });
             }
         },
         .register_function => {
@@ -1091,7 +1091,7 @@ fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, st
     try text(out, a, "    rt.touch(ctx);\n    rt.touch(upvalues);\n    rt.touch(args);\n");
     if (needs_frame) {
         try print(out, a, "    var regs: [{d}]rt.Value = undefined;\n    var cells: [{d}]?*rt.Cell = undefined;\n", .{ function.reg_count, function.reg_count });
-        try print(out, a, "    var frame = try rt.Frame.init(&regs, &cells, args, {d}, {});\n    defer frame.deinit();\n", .{ function.param_count, function.is_vararg });
+        try print(out, a, "    var frame = try rt.Frame.initAot(&regs, &cells, args, {d}, {});\n    defer frame.deinit();\n", .{ function.param_count, function.is_vararg });
     }
     for (plan.reps, 0..) |rep, reg| if (rep == .number) {
         try print(out, a, "    var n_{d}: f64 = undefined;\n", .{reg});

@@ -55,6 +55,7 @@ pub const FunctionValue = struct {
     id: u32,
     env: FunctionEnv = .{},
     identity: u64,
+    entry: FunctionFn,
 
     pub fn captures(self: FunctionValue) Captures {
         if (self.env.modulePtr()) |env| return .{ .module = env };
@@ -79,7 +80,6 @@ pub const NativeFunction = struct {
     call: NativeFn,
     stable_call: StableNativeFn,
 };
-pub const NativeDispatchFn = *const fn (*NativeFunction, *Context, [*]const Value, usize) callconv(.c) FunctionResult;
 
 pub const Value = union(enum) {
     nil,
@@ -157,10 +157,6 @@ pub fn stabilizeNative(comptime function: anytype) StableNativeFn {
             };
         }
     }.call;
-}
-
-fn dispatchNative(native: *NativeFunction, ctx: *Context, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
-    return native.stable_call(native.ctx, ctx, args_ptr, args_len);
 }
 
 pub const no_shape = std.math.maxInt(u32);
@@ -457,6 +453,19 @@ pub const Frame = struct {
         return .{ .regs = regs, .cells = cells, .varargs = tail };
     }
 
+    /// Generated AOT IR defines every non-parameter register before its first read.
+    /// Only parameters need Lua's implicit nil initialization at function entry.
+    pub fn initAot(regs: []Value, cells: []?*Cell, args: []const Value, param_count: u32, is_vararg: bool) !Frame {
+        if (param_count > regs.len or cells.len != regs.len) return error.BadFrame;
+        const params_len: usize = @intCast(param_count);
+        @memset(regs[0..params_len], .nil);
+        @memset(cells, null);
+        const n = @min(params_len, args.len);
+        @memcpy(regs[0..n], args[0..n]);
+        const tail = if (is_vararg and args.len > param_count) args[param_count..] else &.{};
+        return .{ .regs = regs, .cells = cells, .varargs = tail };
+    }
+
     pub fn deinit(self: *Frame) void {
         if (self.multi_owned) freeResults(self.multi);
     }
@@ -541,7 +550,6 @@ pub const Context = struct {
     module_lookup_ctx: ?*const anyopaque = null,
     module_lookup: ?ModuleLookupFn = null,
     module_name: ?ModuleNameFn = null,
-    native_dispatch: NativeDispatchFn = dispatchNative,
     host: ?*anyopaque = null,
     current_frame: ?*Table = null,
     package_loaded: ?*Table = null,
@@ -579,7 +587,6 @@ pub const Context = struct {
         child.module_lookup_ctx = self.module_lookup_ctx;
         child.module_lookup = self.module_lookup;
         child.module_name = self.module_name;
-        child.native_dispatch = self.native_dispatch;
         child.max_depth = self.max_depth;
         child.host = self.host;
         return child;
@@ -629,6 +636,7 @@ pub const Context = struct {
         self.globals[slot] = value;
     }
     pub fn makeFunction(self: *Context, id: u32, captures: []const *Cell) !Value {
+        const entry = self.functionById(id) orelse return error.BadFunctionId;
         const identity = self.next_identity;
         self.next_identity +%= 1;
         const env: FunctionEnv = if (captures.len == 0) .{} else blk: {
@@ -637,13 +645,14 @@ pub const Context = struct {
             value.* = .{ .captures = owned };
             break :blk FunctionEnv.closure(value);
         };
-        return .{ .function = .{ .id = id, .env = env, .identity = identity } };
+        return .{ .function = .{ .id = id, .env = env, .identity = identity, .entry = entry } };
     }
 
-    pub fn makeModuleFunction(self: *Context, id: u32, env: *ModuleEnv) Value {
+    pub fn makeModuleFunction(self: *Context, id: u32, env: *ModuleEnv) !Value {
+        const entry = self.functionById(id) orelse return error.BadFunctionId;
         const identity = self.next_identity;
         self.next_identity +%= 1;
-        return .{ .function = .{ .id = id, .env = FunctionEnv.module(env), .identity = identity } };
+        return .{ .function = .{ .id = id, .env = FunctionEnv.module(env), .identity = identity, .entry = entry } };
     }
 
     fn functionById(self: *const Context, id: u32) ?FunctionFn {
@@ -663,9 +672,8 @@ pub const Context = struct {
         return null;
     }
 
-    pub fn invokeKnown(self: *Context, id: u32, captures: Captures, args: []const Value) anyerror![]const Value {
-        const function = self.functionById(id) orelse return error.BadFunctionId;
-        const result = function(self, &captures, args.ptr, args.len);
+    fn invokeEntry(self: *Context, entry: FunctionFn, captures: Captures, args: []const Value) anyerror![]const Value {
+        const result = entry(self, &captures, args.ptr, args.len);
         if (result.reserved != 0 or result.status > 1) return error.BadAotFunctionResult;
         if (result.status == 1) {
             if (self.aotErrorName() == null) self.setAotErrorName("AotCallFailed");
@@ -676,8 +684,12 @@ pub const Context = struct {
         return values_ptr[0..result.values_len];
     }
 
+    pub fn invokeKnown(self: *Context, id: u32, captures: Captures, args: []const Value) anyerror![]const Value {
+        return self.invokeEntry(self.functionById(id) orelse return error.BadFunctionId, captures, args);
+    }
+
     fn callNative(self: *Context, native: *NativeFunction, args: []const Value) anyerror![]const Value {
-        const result = self.native_dispatch(native, self, args.ptr, args.len);
+        const result = native.stable_call(native.ctx, self, args.ptr, args.len);
         if (result.reserved != 0 or result.status > 1) return error.BadAotFunctionResult;
         if (result.status == 1) {
             if (self.aotErrorName() == null) self.setAotErrorName("AotCallFailed");
@@ -692,7 +704,7 @@ pub const Context = struct {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
-        return self.invokeKnown(value.id, value.captures(), args);
+        return self.invokeEntry(value.entry, value.captures(), args);
     }
 
     pub fn bindModuleEnv(self: *Context, module_id: u32, env: *ModuleEnv) !void {
@@ -799,7 +811,7 @@ pub const Context = struct {
             if (self.depth >= self.max_depth) return error.CallDepth;
             self.depth += 1;
             defer self.depth -= 1;
-            return self.invokeKnown(expected, callable.function.captures(), args);
+            return self.invokeEntry(callable.function.entry, callable.function.captures(), args);
         }
         return self.callValue(callable, args);
     }
@@ -1629,6 +1641,12 @@ test "AOT module functions share one activation environment" {
     defer arena.deinit();
     var ctx = try Context.initProgram(arena.allocator(), 0, 2);
     defer ctx.deinit();
+    const functions = [_]FunctionFn{
+        stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub),
+        stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub),
+    };
+    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
+    ctx.function_blocks = &blocks;
     var regs: [3]Value = undefined;
     var cells: [3]?*Cell = undefined;
     var frame = try Frame.init(&regs, &cells, &.{}, 0, false);
@@ -1636,8 +1654,8 @@ test "AOT module functions share one activation environment" {
     _ = try frame.ensureCell(&ctx, 1);
     const env = try frame.ensureModuleEnv(&ctx);
     try std.testing.expect(env == try frame.ensureModuleEnv(&ctx));
-    const first = ctx.makeModuleFunction(4, env);
-    const second = ctx.makeModuleFunction(5, env);
+    const first = try ctx.makeModuleFunction(4, env);
+    const second = try ctx.makeModuleFunction(5, env);
     try std.testing.expect(first.function.env.modulePtr() == second.function.env.modulePtr());
     try std.testing.expect(first.function.env.closurePtr() == null);
     try std.testing.expect(!rawEqual(first, second));
@@ -1654,7 +1672,7 @@ test "AOT module functions share one activation environment" {
     var other_frame = try Frame.init(&other_regs, &other_cells, &.{}, 0, false);
     const other_env = try other_frame.ensureModuleEnv(&ctx);
     try std.testing.expectError(error.ModuleEnvironmentMismatch, ctx.bindModuleEnv(1, other_env));
-    if (@sizeOf(usize) == 8) try std.testing.expectEqual(@as(usize, 24), @sizeOf(FunctionValue));
+    if (@sizeOf(usize) == 8) try std.testing.expectEqual(@as(usize, 32), @sizeOf(FunctionValue));
 }
 
 pub fn mergeValues(prefix: []const Value, tail: []const Value) ![]Value {
@@ -1729,31 +1747,41 @@ test "guarded call falls back to the actual function on an id mismatch" {
     try std.testing.expectEqual(@as(f64, 110), out[0].number);
 }
 
+test "Lua closures retain their compiled entrypoint" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 0);
+    defer ctx.deinit();
+    const functions = [_]FunctionFn{stabilize(guardTestOther)};
+    const blocks = [_]FunctionBlock{.{ .first = 0, .values = &functions }};
+    ctx.function_blocks = &blocks;
+    var cell = Cell{ .value = .{ .number = 7 } };
+    const callable = try ctx.makeFunction(0, &.{&cell});
+    ctx.function_blocks = &.{};
+    const out = try ctx.callValue(callable, &.{.{ .number = 3 }});
+    defer freeResults(out);
+    try std.testing.expectEqual(@as(f64, 110), out[0].number);
+}
+
 fn nativeDispatchFailureProbe(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
     return error.NativeDispatchProbe;
 }
 
-fn nativeDispatchTestOverride(native: *NativeFunction, ctx: *Context, args_ptr: [*]const Value, args_len: usize) callconv(.c) FunctionResult {
-    return dispatchNative(native, ctx, args_ptr, args_len);
-}
-
-test "native calls stabilize errors through the C dispatch boundary" {
+test "native calls invoke the callable entrypoint directly" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var ctx = try Context.init(arena.allocator(), 0);
     defer ctx.deinit();
-    ctx.native_dispatch = nativeDispatchTestOverride;
     const callable = try ctx.newNative(null, nativeDispatchFailureProbe);
     try std.testing.expectError(error.AotCallFailed, ctx.callValue(callable, &.{}));
     try std.testing.expectEqualStrings("NativeDispatchProbe", ctx.aotErrorName().?);
 }
 
-test "candidate native field calls use the stable dispatch boundary" {
+test "candidate native field calls invoke the callable entrypoint directly" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var ctx = try Context.init(arena.allocator(), 0);
     defer ctx.deinit();
-    ctx.native_dispatch = nativeDispatchTestOverride;
     const string = try ctx.newNativeNamespace(.string);
     const slot = static_fields.slotForName(.string, "gsub") orelse return error.MissingStaticField;
     const callable = try ctx.newNative(null, nativeDispatchFailureProbe);
@@ -1776,7 +1804,6 @@ test "forked AOT context shares program metadata but resets runtime state" {
     parent.module_roots = &roots;
     parent.module_root_values = &root_values;
     parent.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
-    parent.native_dispatch = nativeDispatchTestOverride;
     var host_marker: u8 = 0;
     parent.setHost(&host_marker);
     parent.current_frame = try parent.newTable();
@@ -1791,7 +1818,6 @@ test "forked AOT context shares program metadata but resets runtime state" {
     try std.testing.expect(child.getGlobal(1) == .nil);
     try std.testing.expectEqual(@as(u8, 0), child.module_state[0]);
     try std.testing.expect(child.host == parent.host);
-    try std.testing.expect(child.native_dispatch == parent.native_dispatch);
     try std.testing.expect(child.current_frame == null);
     try std.testing.expectEqual(@as(u32, 0), try child.resolveModule("Module:A"));
 }
