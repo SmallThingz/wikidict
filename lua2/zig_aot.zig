@@ -784,13 +784,32 @@ fn emitSimple5(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
         else => return error.UnsupportedOpcode,
     }
 }
-fn emitCallArgs(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, skip: usize, vararg: bool) !void {
+const bounded_vararg_param_limit: u32 = 32;
+
+fn boundedVarargParams(p: *const ir.Program, inst: ir.Inst) !?u32 {
+    const target = switch (inst.op) {
+        .call_vararg => aot_hint.directTarget(inst),
+        .call_local_vararg, .call_scoped_vararg, .direct_call_vararg => inst.a,
+        else => null,
+    } orelse return null;
+    if (target >= p.functions.items.len) return error.BadFunctionReference;
+    const callee = p.functions.items[target] orelse return error.IncompleteProgram;
+    if (callee.is_vararg or callee.param_count > bounded_vararg_param_limit) return null;
+    return callee.param_count;
+}
+
+fn emitCallArgs(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, skip: usize, vararg: bool, bounded_params: ?u32) !void {
     try print(out, a, "            const fixed_{d} = ", .{pc});
     try emitArgs(out, a, p, function, plan, inst.aux, inst.b, skip);
     try text(out, a, ";\n");
     if (vararg) {
-        try print(out, a, "            const argv_{d} = try rt.mergeValues(fixed_{d}, frame.multiAt({d}));\n", .{ pc, pc, inst.c });
-        try print(out, a, "            defer rt.freeValues(argv_{d});\n", .{pc});
+        if (bounded_params) |param_count| {
+            try print(out, a, "            var argv_storage_{d}: [{d}]rt.Value = undefined;\n", .{ pc, param_count });
+            try print(out, a, "            const argv_{d} = rt.mergeBoundedValues(&argv_storage_{d}, fixed_{d}, frame.multiAt({d}));\n", .{ pc, pc, pc, inst.c });
+        } else {
+            try print(out, a, "            const argv_{d} = try rt.mergeValues(fixed_{d}, frame.multiAt({d}));\n", .{ pc, pc, inst.c });
+            try print(out, a, "            defer rt.freeValues(argv_{d});\n", .{pc});
+        }
     } else {
         try print(out, a, "            const argv_{d}: []const rt.Value = fixed_{d};\n", .{ pc, pc });
     }
@@ -812,9 +831,10 @@ fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *cons
     };
     const method = inst.op == .method_call or inst.op == .method_call_vararg;
     const method_field = inst.op == .method_call_field or inst.op == .method_call_field_vararg;
+    const bounded_params = if (vararg and !method and !method_field) try boundedVarargParams(p, inst) else null;
     var borrowed_result = false;
     try text(out, a, "            {\n");
-    try emitCallArgs(out, a, p, function, plan, inst, pc, if (method) 1 else 0, vararg);
+    try emitCallArgs(out, a, p, function, plan, inst, pc, if (method) 1 else 0, vararg, bounded_params);
     if (method) {
         if (@as(usize, inst.aux) + inst.b > function.operands.items.len or inst.b < 2) return error.BadOperandRange;
         try print(out, a, "            const method_{d} = try ctx.getIndex(", .{pc});
@@ -1881,6 +1901,42 @@ test "buffered return ABI stays local to one function shard" {
     try std.testing.expect(std.mem.indexOf(u8, second, "fn f_2(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value)") != null);
     try std.testing.expect(std.mem.indexOf(u8, second, "result_buffer: ?[]rt.Value") == null);
     try std.testing.expect(std.mem.indexOf(u8, second, "rt.stabilize(f_2)") != null);
+}
+
+test "known non-vararg vararg calls use bounded caller argument storage" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const allocator = std.testing.allocator;
+    var chunk = try lua.parse(allocator, "local function pair(a,b)return a,b end;local keep=pair;local function relay(...)return pair(7,...)end;return relay,keep");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(allocator, &chunk);
+    defer program.deinit();
+    _ = try opt.runAot(allocator, &program);
+    var target: ?u32 = null;
+    for (program.functions.items, 0..) |maybe, id| if (maybe) |function| {
+        if (function.param_count == 2 and !function.is_vararg) target = @intCast(id);
+    };
+    const pair_id = target orelse return error.MissingPairFunction;
+    var tagged = false;
+    for (program.functions.items) |*maybe| if (maybe.*) |*function| {
+        for (function.insts.items) |*inst| if (inst.op == .call_vararg) {
+            try aot_hint.setDirect(inst, pair_id);
+            tagged = true;
+        };
+    };
+    try std.testing.expect(tagged);
+    const generated = try generate(allocator, &program);
+    defer allocator.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "var argv_storage_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "rt.mergeBoundedValues(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "try rt.mergeValues(") == null);
+
+    const config = ShardConfig{ .functions_per_shard = 2 };
+    var stats = Stats{};
+    const second = try generateFunctionShard(allocator, &program, config, 1, &stats);
+    defer allocator.free(second);
+    try std.testing.expect(std.mem.indexOf(u8, second, "rt.mergeBoundedValues(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second, "ctx.callFunction(callable_") != null);
 }
 
 test "numeric bit constants are explicitly typed in native expressions" {

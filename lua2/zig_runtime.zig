@@ -1541,6 +1541,14 @@ pub fn mergeValues(prefix: []const Value, tail: []const Value) ![]Value {
     return out;
 }
 
+pub inline fn mergeBoundedValues(storage: []Value, prefix: []const Value, tail: []const Value) []const Value {
+    const prefix_len = @min(storage.len, prefix.len);
+    @memcpy(storage[0..prefix_len], prefix[0..prefix_len]);
+    const tail_len = @min(storage.len - prefix_len, tail.len);
+    @memcpy(storage[prefix_len..][0..tail_len], tail[0..tail_len]);
+    return storage[0 .. prefix_len + tail_len];
+}
+
 pub fn freeValues(values: []Value) void {
     rawFreeSlice(Value, std.heap.smp_allocator, values);
 }
@@ -1571,6 +1579,22 @@ fn bufferedResultProbe(_: *Context, captures: Captures, args: []const Value, res
     const result = try std.heap.smp_allocator.alloc(Value, 1);
     result[0] = .{ .number = value };
     return result;
+}
+
+test "bounded argument merge truncates excess tail without heap storage" {
+    var storage: [2]Value = undefined;
+    const values = mergeBoundedValues(&storage, &.{.{ .number = 7 }}, &.{ .{ .number = 8 }, .{ .number = 9 } });
+    try std.testing.expectEqual(@as(usize, 2), values.len);
+    try std.testing.expectEqual(@as(f64, 7), values[0].number);
+    try std.testing.expectEqual(@as(f64, 8), values[1].number);
+    var larger: [3]Value = undefined;
+    const short = mergeBoundedValues(&larger, &.{.{ .number = 4 }}, &.{});
+    try std.testing.expectEqual(@as(usize, 1), short.len);
+    try std.testing.expectEqual(@as(f64, 4), short[0].number);
+    var one: [1]Value = undefined;
+    const truncated_prefix = mergeBoundedValues(&one, &.{ .{ .number = 5 }, .{ .number = 6 } }, &.{.{ .number = 7 }});
+    try std.testing.expectEqual(@as(usize, 1), truncated_prefix.len);
+    try std.testing.expectEqual(@as(f64, 5), truncated_prefix[0].number);
 }
 
 test "buffered direct results borrow caller storage while stable calls own results" {
