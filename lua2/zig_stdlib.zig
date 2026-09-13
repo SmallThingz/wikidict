@@ -31,7 +31,10 @@ fn num(v: Value) !f64 {
     return rt.toNumber(v) orelse error.NumberExpected;
 }
 fn integer(v: Value) !i64 {
-    const n = try num(v);
+    const n = switch (v) {
+        .number => |value| value,
+        else => try num(v),
+    };
     return @intFromFloat(@trunc(n));
 }
 fn str(a: std.mem.Allocator, v: Value) ![]const u8 {
@@ -1042,6 +1045,11 @@ test "AOT native next and ipairs iterators borrow fixed result storage" {
     try std.testing.expectEqual(@as(f64, 1), item.values[0].number);
     try std.testing.expectEqualStrings("x", item.values[1].string);
     const item_key = item.values[0];
+
+    const numeric_string = try ctx.callValueFixed(triple[0], &.{ table_value, .{ .string = "0" } }, &storage);
+    defer numeric_string.deinit();
+    try std.testing.expectEqual(@as(usize, 2), numeric_string.values.len);
+    try std.testing.expectEqual(@as(f64, 1), numeric_string.values[0].number);
 
     const ipairs_done = try ctx.callValueFixed(triple[0], &.{ table_value, item_key }, &storage);
     defer ipairs_done.deinit();
