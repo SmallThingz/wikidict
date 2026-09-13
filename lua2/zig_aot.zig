@@ -787,6 +787,7 @@ fn emitSimple5(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *c
 }
 const bounded_vararg_param_limit: u32 = 32;
 const small_vararg_capacity: u32 = 8;
+const small_fixed_result_capacity: u32 = 8;
 
 fn boundedVarargParams(p: *const ir.Program, inst: ir.Inst) !?u32 {
     const target = switch (inst.op) {
@@ -1101,7 +1102,7 @@ fn emitGenericFor(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function:
     try valueExpr(out, a, p, plan, inst.b);
     try text(out, a, "; const control: rt.Value = ");
     try valueExpr(out, a, p, plan, inst.c);
-    if (inst.count != 0 and inst.count <= small_vararg_capacity) {
+    if (inst.count != 0 and inst.count <= small_fixed_result_capacity) {
         try print(out, a, "; var values_storage_{d}: [{d}]rt.Value = undefined; const fixed_{d} = try ctx.callValueFixed(iter, &[_]rt.Value{{ state, control }}, &values_storage_{d}); defer fixed_{d}.deinit(); const values_{d} = fixed_{d}.values; ", .{ pc, inst.count, pc, pc, pc, pc, pc });
     } else {
         try print(out, a, "; const values_{d} = try ctx.callValue(iter, &[_]rt.Value{{ state, control }}); defer rt.freeResults(values_{d}); ", .{ pc, pc });

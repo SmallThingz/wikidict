@@ -856,15 +856,23 @@ pub const Context = struct {
         frame.storeResults(base, count, values, true);
     }
 
-    pub inline fn callValueFixed(self: *Context, callable: Value, args: []const Value, result_buffer: []Value) anyerror!FixedCallResult {
-        if (callable == .callable) {
-            const function = callable.callable;
-            if (function.id == native_function_id)
-                return .{ .values = try self.callEntry(function.entry, function.captures(), args), .owned = true };
-            const values = try self.callFunctionBuffered(function, args, result_buffer);
-            return .{ .values = values, .owned = values.len != 0 and values.ptr != result_buffer.ptr };
-        }
-        return .{ .values = try self.callValue(callable, args), .owned = true };
+    pub fn callValueFixed(self: *Context, callable: Value, args: []const Value, result_buffer: []Value) anyerror!FixedCallResult {
+        return switch (callable) {
+            .callable => |function| if (function.id == native_function_id)
+                .{ .values = try self.callEntry(function.entry, function.captures(), args), .owned = true }
+            else blk: {
+                const values = try self.callFunctionBuffered(function, args, result_buffer);
+                break :blk .{ .values = values, .owned = values.len != 0 and values.ptr != result_buffer.ptr };
+            },
+            .table => blk: {
+                const method = self.metamethod(callable, "__call") orelse return error.NotCallable;
+                var storage: [8]Value = undefined;
+                const all = try mergeSmallValues(&storage, &.{callable}, args);
+                defer freeSmallValues(all, &storage);
+                break :blk try self.callValueFixed(method, all, result_buffer);
+            },
+            else => error.NotCallable,
+        };
     }
 
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
@@ -1727,6 +1735,13 @@ test "callable table metamethod tables retain recursive call semantics" {
     try std.testing.expectEqual(@as(f64, 9), out[1].number);
 }
 
+fn bufferedCallableTableProbe(_: *Context, _: Captures, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    if (args.len < 2 or args[0] != .table or args[1] != .number) return error.BadCallableSelf;
+    const result = try returnBuffer(result_buffer, 1);
+    storeReturn(result, 0, args[1]);
+    return result;
+}
+
 fn nativeBufferedOwnershipProbe(_: ?*anyopaque, _: *Context, args: []const Value) ![]const Value {
     const out = try std.heap.smp_allocator.alloc(Value, 1);
     out[0] = if (args.len == 0) .nil else args[0];
@@ -1787,6 +1802,28 @@ test "fixed dynamic calls borrow and truncate caller result storage" {
     defer native_result.deinit();
     try std.testing.expect(native_result.owned);
     try std.testing.expectEqual(@as(f64, 9), native_result.values[0].number);
+
+    const target = try ctx.newTable();
+    const mt = try ctx.newTable();
+    target.metatable = mt;
+    try mt.rawSet(ctx.allocator, .{ .string = "__call" }, try ctx.newNative(target, callableTableProbe));
+    const table_result = try ctx.callValueFixed(.{ .table = target }, &.{.{ .number = 11 }}, &storage);
+    defer table_result.deinit();
+    try std.testing.expect(table_result.owned);
+    try std.testing.expectEqual(@as(usize, 2), table_result.values.len);
+    try std.testing.expectEqual(@as(f64, 2), table_result.values[0].number);
+    try std.testing.expectEqual(@as(f64, 11), table_result.values[1].number);
+
+    const lua_table = try ctx.newTable();
+    const lua_mt = try ctx.newTable();
+    lua_table.metatable = lua_mt;
+    const lua_method = Value{ .callable = .{ .id = 3, .identity = 4, .entry = stabilizeBuffered(bufferedCallableTableProbe) } };
+    try lua_mt.rawSet(ctx.allocator, .{ .string = "__call" }, lua_method);
+    const table_borrowed = try ctx.callValueFixed(.{ .table = lua_table }, &.{.{ .number = 12 }}, &storage);
+    defer table_borrowed.deinit();
+    try std.testing.expect(!table_borrowed.owned);
+    try std.testing.expectEqual(@as(usize, 1), table_borrowed.values.len);
+    try std.testing.expectEqual(@as(f64, 12), table_borrowed.values[0].number);
 }
 
 test "buffered results borrow caller storage across direct and stable calls" {
