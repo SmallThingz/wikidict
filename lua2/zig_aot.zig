@@ -1101,7 +1101,12 @@ fn emitGenericFor(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function:
     try valueExpr(out, a, p, plan, inst.b);
     try text(out, a, "; const control: rt.Value = ");
     try valueExpr(out, a, p, plan, inst.c);
-    try print(out, a, "; const values_{d} = try ctx.callValue(iter, &[_]rt.Value{{ state, control }}); defer rt.freeResults(values_{d}); ", .{ pc, pc });
+    if (inst.count != 0 and inst.count <= small_vararg_capacity) {
+        try print(out, a, "; var values_storage_{d}: [{d}]rt.Value = undefined; const fixed_{d} = try ctx.callValueFixed(iter, &[_]rt.Value{{ state, control }}, &values_storage_{d}); defer fixed_{d}.deinit(); const values_{d} = fixed_{d}.values; ", .{ pc, inst.count, pc, pc, pc, pc, pc });
+    } else {
+        try print(out, a, "; const values_{d} = try ctx.callValue(iter, &[_]rt.Value{{ state, control }}); defer rt.freeResults(values_{d}); ", .{ pc, pc });
+    }
+    // Keep iterator results out of frame slots until continuation is proven: a terminating nil must not clobber loop variables captured by closures.
     try print(out, a, "const first = if (values_{d}.len == 0) rt.Value.nil else values_{d}[0]; ", .{ pc, pc });
     if (!next) {
         try print(out, a, "if (first == .nil) block = {d} else {{ frame.set({d}, first); ", .{ target, inst.c });
@@ -1335,6 +1340,23 @@ test "generic for boxes numeric scalar iterator operands as runtime values" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const iter: rt.Value = .{ .number = n_") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const state: rt.Value =") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const control: rt.Value =") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValueFixed(iter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "values_storage_") != null);
+}
+
+test "wide generic for keeps owned iterator results" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local function it() return nil end; for a,b,c,d,e,f,g,h,i in it do end; return 1");
+    defer chunk.deinit();
+    var p = try ir.lowerChunk(a, &chunk);
+    defer p.deinit();
+    _ = try opt.runAot(a, &p);
+    const generated = try generate(a, &p);
+    defer a.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValue(iter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValueFixed(iter") == null);
 }
 
 test "constant templates emit static data instead of generated materializer functions" {

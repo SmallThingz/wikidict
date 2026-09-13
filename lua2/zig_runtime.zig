@@ -455,6 +455,15 @@ pub fn freeResults(values: []const Value) void {
     rawFreeSlice(Value, std.heap.smp_allocator, @constCast(values));
 }
 
+pub const FixedCallResult = struct {
+    values: []const Value,
+    owned: bool,
+
+    pub inline fn deinit(self: FixedCallResult) void {
+        if (self.owned) freeResults(self.values);
+    }
+};
+
 pub inline fn returnBuffer(buffer: ?[]Value, len: usize) ![]Value {
     return if (buffer) |values| values[0..@min(values.len, len)] else std.heap.smp_allocator.alloc(Value, len);
 }
@@ -845,6 +854,17 @@ pub const Context = struct {
         }
         const values = try self.callValue(callable, args);
         frame.storeResults(base, count, values, true);
+    }
+
+    pub inline fn callValueFixed(self: *Context, callable: Value, args: []const Value, result_buffer: []Value) anyerror!FixedCallResult {
+        if (callable == .callable) {
+            const function = callable.callable;
+            if (function.id == native_function_id)
+                return .{ .values = try self.callEntry(function.entry, function.captures(), args), .owned = true };
+            const values = try self.callFunctionBuffered(function, args, result_buffer);
+            return .{ .values = values, .owned = values.len != 0 and values.ptr != result_buffer.ptr };
+        }
+        return .{ .values = try self.callValue(callable, args), .owned = true };
     }
 
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
@@ -1615,6 +1635,18 @@ fn bufferedResultProbe(_: *Context, captures: Captures, args: []const Value, res
     return result;
 }
 
+fn bufferedEmptyProbe(_: *Context, _: Captures, _: []const Value, result_buffer: ?[]Value) ![]const Value {
+    return try returnBuffer(result_buffer, 0);
+}
+
+fn bufferedTripleProbe(_: *Context, _: Captures, _: []const Value, result_buffer: ?[]Value) ![]const Value {
+    const result = try returnBuffer(result_buffer, 3);
+    storeReturn(result, 0, .{ .number = 1 });
+    storeReturn(result, 1, .{ .number = 2 });
+    storeReturn(result, 2, .{ .number = 3 });
+    return result;
+}
+
 test "bounded argument merge truncates excess tail without heap storage" {
     var storage: [2]Value = undefined;
     const values = mergeBoundedValues(&storage, &.{.{ .number = 7 }}, &.{ .{ .number = 8 }, .{ .number = 9 } });
@@ -1721,6 +1753,40 @@ test "dynamic fixed result storage buffers Lua functions and preserves native fa
     const native = try ctx.newNative(null, nativeBufferedOwnershipProbe);
     try ctx.callValueStoreFixed(&frame, 2, 1, native, &.{.{ .number = 5 }});
     try std.testing.expectEqual(@as(f64, 5), frame.get(2).number);
+}
+
+test "fixed dynamic calls borrow and truncate caller result storage" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+
+    const buffered = Value{ .callable = .{ .id = 0, .identity = 1, .entry = stabilizeBuffered(bufferedTripleProbe) } };
+    var storage: [2]Value = undefined;
+    const borrowed = try ctx.callValueFixed(buffered, &.{}, &storage);
+    defer borrowed.deinit();
+    try std.testing.expect(!borrowed.owned);
+    try std.testing.expectEqual(@as(usize, 2), borrowed.values.len);
+    try std.testing.expectEqual(@as(f64, 1), borrowed.values[0].number);
+    try std.testing.expectEqual(@as(f64, 2), borrowed.values[1].number);
+
+    const empty_callable = Value{ .callable = .{ .id = 2, .identity = 3, .entry = stabilizeBuffered(bufferedEmptyProbe) } };
+    const empty = try ctx.callValueFixed(empty_callable, &.{}, &storage);
+    defer empty.deinit();
+    try std.testing.expect(!empty.owned);
+    try std.testing.expectEqual(@as(usize, 0), empty.values.len);
+
+    const unbuffered = Value{ .callable = .{ .id = 1, .identity = 2, .entry = stabilize(guardTestExpected) } };
+    const copied = try ctx.callValueFixed(unbuffered, &.{.{ .number = 7 }}, &storage);
+    defer copied.deinit();
+    try std.testing.expect(copied.owned);
+    try std.testing.expectEqual(@as(f64, 7), copied.values[0].number);
+
+    const native = try ctx.newNative(null, nativeBufferedOwnershipProbe);
+    const native_result = try ctx.callValueFixed(native, &.{.{ .number = 9 }}, &storage);
+    defer native_result.deinit();
+    try std.testing.expect(native_result.owned);
+    try std.testing.expectEqual(@as(f64, 9), native_result.values[0].number);
 }
 
 test "buffered results borrow caller storage across direct and stable calls" {
