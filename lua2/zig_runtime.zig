@@ -253,17 +253,21 @@ pub const ChoiceCell = struct {
 
 const ValueContext = struct {
     pub fn hash(_: ValueContext, value: Value) u64 {
-        var h = std.hash.Wyhash.init(0);
         const tag: u8 = @intFromEnum(std.meta.activeTag(value));
+        if (value == .number) {
+            const normalized: f64 = if (value.number == 0) 0 else value.number;
+            const bits: u64 = @bitCast(normalized);
+            var bytes: [9]u8 = undefined;
+            bytes[0] = tag;
+            @memcpy(bytes[1..], std.mem.asBytes(&bits));
+            return std.hash.Wyhash.hash(0, &bytes);
+        }
+        var h = std.hash.Wyhash.init(0);
         h.update(&.{tag});
         switch (value) {
             .nil => {},
             .boolean => |v| h.update(&.{@intFromBool(v)}),
-            .number => |v| {
-                const normalized: f64 = if (v == 0) 0 else v;
-                const bits: u64 = @bitCast(normalized);
-                h.update(std.mem.asBytes(&bits));
-            },
+            .number => unreachable,
             .string => |v| h.update(v),
             .table => |v| {
                 const ptr: usize = @intFromPtr(v);
@@ -1321,6 +1325,21 @@ const ModuleRuntimeProbe = struct {
     }
 };
 
+test "numeric value hashing preserves prior iteration order" {
+    const samples = [_]f64{ 0, -0.0, 1, -1, 64, 1.5 };
+    const context = ValueContext{};
+    for (samples) |sample| {
+        const value = Value{ .number = sample };
+        const normalized: f64 = if (sample == 0) 0 else sample;
+        const bits: u64 = @bitCast(normalized);
+        const tag: u8 = @intFromEnum(std.meta.activeTag(value));
+        var previous = std.hash.Wyhash.init(0);
+        previous.update(&.{tag});
+        previous.update(std.mem.asBytes(&bits));
+        try std.testing.expectEqual(previous.final(), context.hash(value));
+    }
+    try std.testing.expectEqual(context.hash(.{ .number = 0.0 }), context.hash(.{ .number = -0.0 }));
+}
 test "AOT module resolver caches numeric identities and exposes package.loaded aliases" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
