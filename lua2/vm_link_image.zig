@@ -158,6 +158,7 @@ fn cloneFunction(
         .source_end = source.source_end,
         .param_count = source.param_count,
         .is_vararg = source.is_vararg,
+        .aot_dynamic_callable = source.aot_dynamic_callable,
         .reg_count = source.reg_count,
     };
     errdefer out.deinit(allocator);
@@ -341,4 +342,25 @@ test "linker preserves numeric shape keys across string rebasing" {
     try std.testing.expectEqual(@as(f64, 4), out[0].number);
     try std.testing.expectEqual(@as(f64, 5), out[1].number);
     try std.testing.expectEqual(@as(f64, 2), out[2].number);
+}
+
+test "linker preserves compiler-only AOT callable escape metadata" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local function escaped(x)return x+1 end;return escaped");
+    defer chunk.deinit();
+    var source = try ir.lowerChunk(a, &chunk);
+    defer source.deinit();
+    var target: ?usize = null;
+    for (source.functions.items, 0..) |maybe_function, id| {
+        if (id != source.root_function and maybe_function != null) {
+            source.functions.items[id].?.aot_dynamic_callable = true;
+            target = id;
+            break;
+        }
+    }
+    const function_id = target orelse return error.MissingEscapedFunction;
+    var image = Image.init(a);
+    defer image.deinit();
+    _ = try image.appendModule(&source);
+    try std.testing.expect(image.program.functions.items[function_id].?.aot_dynamic_callable);
 }

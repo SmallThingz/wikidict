@@ -836,6 +836,7 @@ fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *cons
     const method_field = inst.op == .method_call_field or inst.op == .method_call_field_vararg;
     const bounded_params = if (vararg and !method and !method_field) try boundedVarargParams(p, inst) else null;
     var borrowed_result = false;
+    var stored_result = false;
     try text(out, a, "            {\n");
     try emitCallArgs(out, a, p, function, plan, inst, pc, if (method) 1 else 0, vararg, bounded_params);
     if (method) {
@@ -856,12 +857,12 @@ fn emitCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *cons
         try print(out, a, "            const result_{d} = try ctx.callValue(method_{d}, argv_{d});\n", .{ pc, pc, pc });
         stats.dynamic_calls += 1;
         stats.string_fields += 1;
-    } else borrowed_result = try emitPlainCall(out, a, p, function, plan, inst, pc, stats, range);
-    try print(out, a, "            frame.storeResults({d}, {d}, result_{d}, {});\n", .{ inst.dst, inst.count, pc, !borrowed_result });
+    } else borrowed_result = try emitPlainCall(out, a, p, function, plan, inst, pc, stats, range, &stored_result);
+    if (!stored_result) try print(out, a, "            frame.storeResults({d}, {d}, result_{d}, {});\n", .{ inst.dst, inst.count, pc, !borrowed_result });
     try text(out, a, "            }\n");
 }
 
-fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange) !bool {
+fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: *const ir.Function, plan: *const FunctionPlan, inst: ir.Inst, pc: usize, stats: *Stats, range: ?FunctionRange, stored_result: *bool) !bool {
     var borrowed_result = false;
     switch (inst.op) {
         .call, .call_vararg => {
@@ -892,9 +893,16 @@ fn emitPlainCall(out: *std.ArrayList(u8), a: A, p: *const ir.Program, function: 
                 stats.callable_calls += 1;
             } else {
                 // Unproven values retain full Lua __call / NotCallable semantics.
-                try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
-                try valueExpr(out, a, p, plan, inst.a);
-                try print(out, a, ", argv_{d});\n", .{pc});
+                if (inst.count == ir.multi_count) {
+                    try print(out, a, "            const result_{d} = try ctx.callValue(", .{pc});
+                    try valueExpr(out, a, p, plan, inst.a);
+                    try print(out, a, ", argv_{d});\n", .{pc});
+                } else {
+                    try print(out, a, "            try ctx.callValueStoreFixed(&frame, {d}, {d}, ", .{ inst.dst, inst.count });
+                    try valueExpr(out, a, p, plan, inst.a);
+                    try print(out, a, ", argv_{d});\n", .{pc});
+                    stored_result.* = true;
+                }
             }
             stats.dynamic_calls += 1;
         },
@@ -1147,6 +1155,7 @@ fn emitFunction(out: *std.ArrayList(u8), a: A, p: *const ir.Program, id: u32, st
     else
         try print(out, a, "{s}fn f_{d}(ctx: *rt.Context, upvalues: rt.Captures, args: []const rt.Value) anyerror![]const rt.Value {{\n", .{ if (range == null) "" else "pub ", id });
     try text(out, a, "    rt.touch(ctx);\n    rt.touch(upvalues);\n    rt.touch(args);\n");
+    if (plan.result_buffered) try text(out, a, "    rt.touch(result_buffer);\n");
     if (needs_frame) {
         try print(out, a, "    var regs: [{d}]rt.Value = undefined;\n", .{function.reg_count});
         if (cell_span != 0) {
@@ -1449,11 +1458,22 @@ pub fn analyzeBufferedFunctions(a: A, p: *const ir.Program) ![]bool {
     const buffered = try a.alloc(bool, p.functions.items.len);
     @memset(buffered, false);
     for (p.functions.items) |maybe_function| if (maybe_function) |function| {
-        for (function.insts.items) |inst| if (bufferedCallTarget(inst)) |target| {
-            if (target >= p.functions.items.len) return error.BadFunctionReference;
-            if (p.functions.items[target] == null) continue;
-            buffered[target] = true;
-        };
+        for (function.insts.items) |inst| {
+            const materialized = switch (inst.op) {
+                .closure, .load_function => inst.aux,
+                else => null,
+            };
+            if (materialized) |target| {
+                if (target >= p.functions.items.len) return error.BadFunctionReference;
+                if (p.functions.items[target]) |target_function| {
+                    if (target_function.aot_dynamic_callable) buffered[target] = true;
+                }
+            }
+            if (bufferedCallTarget(inst)) |target| {
+                if (target >= p.functions.items.len) return error.BadFunctionReference;
+                if (p.functions.items[target] != null) buffered[target] = true;
+            }
+        }
     };
     return buffered;
 }
@@ -1924,6 +1944,32 @@ test "buffered return ABI crosses function shards" {
     try std.testing.expect(std.mem.indexOf(u8, third, "rt.stabilizeBuffered(f_2)") != null);
 }
 
+test "escaped Lua functions accept buffered dynamic fixed-result calls" {
+    const lua = @import("root.zig");
+    const opt = @import("vm_optimize.zig");
+    const allocator = std.testing.allocator;
+    var chunk = try lua.parse(allocator, "local function inc(x)return x+1 end;local keep=inc;local function run(f,x)local y=f(x);return y end;return run,keep");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(allocator, &chunk);
+    defer program.deinit();
+    _ = try opt.runAot(allocator, &program);
+    const generated = try generate(allocator, &program);
+    defer allocator.free(generated.source);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "ctx.callValueStoreFixed(&frame") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "rt.stabilizeBuffered(f_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "result_buffer: ?[]rt.Value") != null);
+
+    const config = ShardConfig{ .functions_per_shard = 1 };
+    var stats = Stats{};
+    var buffered_shards: usize = 0;
+    for (0..try functionShardCount(&program, config)) |shard_index| {
+        const shard = try generateFunctionShard(allocator, &program, config, shard_index, &stats);
+        defer allocator.free(shard);
+        if (std.mem.indexOf(u8, shard, "rt.stabilizeBuffered(f_") != null) buffered_shards += 1;
+    }
+    try std.testing.expect(buffered_shards >= 2);
+}
+
 test "known non-vararg vararg calls use bounded caller argument storage" {
     const lua = @import("root.zig");
     const opt = @import("vm_optimize.zig");
@@ -1957,7 +2003,7 @@ test "known non-vararg vararg calls use bounded caller argument storage" {
     const second = try generateFunctionShard(allocator, &program, config, 1, &stats);
     defer allocator.free(second);
     try std.testing.expect(std.mem.indexOf(u8, second, "rt.mergeBoundedValues(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, second, "ctx.callFunction(callable_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second, "ctx.callFunctionBuffered(callable_") != null);
 }
 
 test "numeric bit constants are explicitly typed in native expressions" {

@@ -555,3 +555,22 @@ test "v18 static numeric keys roundtrip and reject v17 downgrade" {
     defer exec.Vm.freeResults(out);
     try std.testing.expectEqual(@as(f64, 20), out[0].number);
 }
+
+test "AOT callable escape metadata stays out of bytecode" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "return 7");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    const root = program.root_function;
+    program.functions.items[root].?.aot_dynamic_callable = false;
+    const plain = try serialize(a, &program);
+    defer a.free(plain);
+    program.functions.items[root].?.aot_dynamic_callable = true;
+    const marked = try serialize(a, &program);
+    defer a.free(marked);
+    try std.testing.expectEqualSlices(u8, plain, marked);
+    var restored = try deserialize(a, marked);
+    defer restored.deinit();
+    try std.testing.expect(!restored.functions.items[restored.root_function].?.aot_dynamic_callable);
+}

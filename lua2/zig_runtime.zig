@@ -846,6 +846,25 @@ pub const Context = struct {
         return value;
     }
 
+    pub inline fn callValueStoreFixed(self: *Context, frame: *Frame, base: u32, count: u32, callable: Value, args: []const Value) anyerror!void {
+        if (count <= 8 and callable == .callable) {
+            const function = callable.callable;
+            if (function.id == native_function_id) {
+                const values = try self.callEntry(function.entry, function.captures(), args);
+                frame.storeResults(base, count, values, true);
+                return;
+            }
+            var storage: [8]Value = undefined;
+            const len: usize = @intCast(count);
+            const values = try self.callFunctionBuffered(function, args, storage[0..len]);
+            const owned = values.len != 0 and values.ptr != storage[0..].ptr;
+            frame.storeResults(base, count, values, owned);
+            return;
+        }
+        const values = try self.callValue(callable, args);
+        frame.storeResults(base, count, values, true);
+    }
+
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
         return switch (callable) {
             .callable => |value| self.callFunction(value, args),
@@ -1692,6 +1711,34 @@ test "callable table metamethod tables retain recursive call semantics" {
     defer freeResults(out);
     try std.testing.expectEqual(@as(f64, 3), out[0].number);
     try std.testing.expectEqual(@as(f64, 9), out[1].number);
+}
+
+fn nativeBufferedOwnershipProbe(_: ?*anyopaque, _: *Context, args: []const Value) ![]const Value {
+    const out = try std.heap.smp_allocator.alloc(Value, 1);
+    out[0] = if (args.len == 0) .nil else args[0];
+    return out;
+}
+
+test "dynamic fixed result storage buffers Lua functions and preserves native fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    var regs: [3]Value = undefined;
+    var frame = try Frame.initAotNoCells(&regs, &.{}, 0, false);
+    defer frame.deinit();
+
+    const buffered = Value{ .callable = .{ .id = 0, .identity = 1, .entry = stabilizeBuffered(bufferedResultProbe) } };
+    try ctx.callValueStoreFixed(&frame, 0, 1, buffered, &.{.{ .number = 3 }});
+    try std.testing.expectEqual(@as(f64, 3), frame.get(0).number);
+
+    const unbuffered = Value{ .callable = .{ .id = 1, .identity = 2, .entry = stabilize(guardTestExpected) } };
+    try ctx.callValueStoreFixed(&frame, 1, 1, unbuffered, &.{.{ .number = 4 }});
+    try std.testing.expectEqual(@as(f64, 4), frame.get(1).number);
+
+    const native = try ctx.newNative(null, nativeBufferedOwnershipProbe);
+    try ctx.callValueStoreFixed(&frame, 2, 1, native, &.{.{ .number = 5 }});
+    try std.testing.expectEqual(@as(f64, 5), frame.get(2).number);
 }
 
 test "buffered results borrow caller storage across direct and stable calls" {

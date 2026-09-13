@@ -134,6 +134,8 @@ pub const Function = struct {
     source_end: u32 = 0,
     param_count: u32 = 0,
     is_vararg: bool = false,
+    // Compiler-only AOT escape metadata; intentionally omitted from the wire format.
+    aot_dynamic_callable: bool = false,
     reg_count: u32 = 0,
     upvalues: std.ArrayList(Upvalue) = .empty,
     operands: std.ArrayList(u32) = .empty,

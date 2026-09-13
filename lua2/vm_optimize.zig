@@ -4,6 +4,7 @@ const global_lower = @import("vm_global_lower.zig");
 const static_fields = @import("vm_static_fields.zig");
 const static_index = @import("vm_static_index.zig");
 const devirtualize = @import("vm_devirtualize.zig");
+const callgraph = @import("vm_callgraph.zig");
 const ref_lower = @import("vm_ref_lower.zig");
 const compare_fuse = @import("vm_compare_fuse.zig");
 const std = @import("std");
@@ -110,6 +111,16 @@ pub fn finalize(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     return stats;
 }
 
+fn markAotDynamicCallables(allocator: std.mem.Allocator, program: *ir.Program) !void {
+    var graph = try callgraph.build(allocator, program);
+    defer graph.deinit();
+    for (program.functions.items, 0..) |*maybe_function, id| {
+        if (maybe_function.*) |*function| {
+            function.aot_dynamic_callable = !graph.closed[id];
+        }
+    }
+}
+
 pub fn finalizeAot(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     var stats = Stats{};
     try verify.run(allocator, program);
@@ -117,6 +128,7 @@ pub fn finalizeAot(allocator: std.mem.Allocator, program: *ir.Program) !Stats {
     stats.direct = try devirtualize.runScoped(allocator, program);
     addStats(shape_flow.Stats, &stats.layouts, try shape_flow.run(allocator, program));
     stats.module_functions = try module_function.run(allocator, program);
+    try markAotDynamicCallables(allocator, program);
     stats.globals = try global_lower.run(allocator, program);
     stats.static_fields = try static_fields.run(allocator, program);
     stats.references = try ref_lower.run(allocator, program);
@@ -384,4 +396,23 @@ test "multi result inlining preserves activation identity for both returned clos
         \\for i=1,3 do a[i],b[i]=make(i*10) end
         \\return a[1](),b[1](),b[2](),a[3](),b[3]()
     , &.{ 11, 11, 20, 31, 31 });
+}
+
+test "AOT finalization marks escaping callable values only" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local function closed(x)return x+1 end;" ++
+        "local a=closed(1);local b=closed(2);" ++
+        "local function escaped(x)return x+2 end;" ++
+        "return a,b,escaped");
+    defer chunk.deinit();
+    var program = try ir.lowerChunk(a, &chunk);
+    defer program.deinit();
+    _ = try runAot(a, &program);
+    var dynamic: usize = 0;
+    var closed: usize = 0;
+    for (program.functions.items[1..]) |maybe_function| if (maybe_function) |function| {
+        if (function.aot_dynamic_callable) dynamic += 1 else closed += 1;
+    };
+    try std.testing.expect(dynamic >= 1);
+    try std.testing.expect(closed >= 1);
 }

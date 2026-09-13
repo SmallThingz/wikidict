@@ -74,7 +74,7 @@ test "proven AOT call emits direct target without an identity dispatch" {
     try std.testing.expectEqual(@as(u64, 0), generated.stats.guarded_calls);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "const callable_") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "!= .function") == null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".callDirectFunction(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, ".callDirectFunction(") != null or std.mem.indexOf(u8, generated.source, ".callBufferedDirectFunction(") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, ".invokeKnown(") == null);
 }
 
