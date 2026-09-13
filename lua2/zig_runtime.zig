@@ -593,10 +593,10 @@ pub const Context = struct {
     depth: usize = 0,
     max_depth: usize = 1000,
     next_identity: u64 = 1,
-    module_state: []u8 = &.{},
-    module_envs: []?*ModuleEnv = &.{},
-    module_value_slots: []u32 = &.{},
-    module_values: std.ArrayList(Value) = .empty,
+    module_count: usize = 0,
+    module_loading: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    module_envs: std.AutoHashMapUnmanaged(u32, *ModuleEnv) = .empty,
+    module_values: std.AutoHashMapUnmanaged(u32, Value) = .empty,
     module_lookup_ctx: ?*const anyopaque = null,
     module_lookup: ?ModuleLookupFn = null,
     module_name: ?ModuleNameFn = null,
@@ -613,20 +613,11 @@ pub const Context = struct {
         const globals = try allocator.alloc(Value, global_count);
         errdefer allocator.free(globals);
         @memset(globals, .nil);
-        const module_state = try allocator.alloc(u8, module_count);
-        errdefer allocator.free(module_state);
-        @memset(module_state, 0);
-        const module_envs = try allocator.alloc(?*ModuleEnv, module_count);
-        errdefer allocator.free(module_envs);
-        @memset(module_envs, null);
-        const module_value_slots = try allocator.alloc(u32, module_count);
-        errdefer allocator.free(module_value_slots);
-        @memset(module_value_slots, std.math.maxInt(u32));
-        return .{ .allocator = allocator, .globals = globals, .module_state = module_state, .module_envs = module_envs, .module_value_slots = module_value_slots };
+        return .{ .allocator = allocator, .globals = globals, .module_count = module_count };
     }
 
     pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
-        var child = try initProgram(allocator, self.globals.len, self.module_roots.len);
+        var child = try initProgram(allocator, self.globals.len, self.module_count);
         child.shapes = self.shapes;
         child.constant_blocks = self.constant_blocks;
         child.constant_entry_blocks = self.constant_entry_blocks;
@@ -646,15 +637,14 @@ pub const Context = struct {
         var it = self.string_intern.keyIterator();
         while (it.next()) |text| self.allocator.free(text.*);
         self.string_intern.deinit(self.allocator);
+        self.module_loading.deinit(self.allocator);
+        self.module_envs.deinit(self.allocator);
         self.module_values.deinit(self.allocator);
-        if (self.module_value_slots.len != 0) self.allocator.free(self.module_value_slots);
         if (self.global_table) |table| {
             table.deinit(self.allocator);
             self.allocator.destroy(table);
         }
         self.allocator.free(self.globals);
-        if (self.module_state.len != 0) self.allocator.free(self.module_state);
-        if (self.module_envs.len != 0) self.allocator.free(self.module_envs);
     }
 
     pub fn setHost(self: *Context, host: ?*anyopaque) void {
@@ -757,17 +747,17 @@ pub const Context = struct {
     }
 
     pub fn bindModuleEnv(self: *Context, module_id: u32, env: *ModuleEnv) !void {
-        if (module_id >= self.module_envs.len) return error.BadModuleId;
-        if (self.module_envs[module_id]) |existing| {
+        if (module_id >= self.module_count) return error.BadModuleId;
+        if (self.module_envs.get(module_id)) |existing| {
             if (existing != env) return error.ModuleEnvironmentMismatch;
         } else {
-            self.module_envs[module_id] = env;
+            try self.module_envs.put(self.allocator, module_id, env);
         }
     }
 
     pub fn moduleCaptures(self: *const Context, module_id: u32) !Captures {
-        if (module_id >= self.module_envs.len) return error.BadModuleId;
-        return .{ .module = self.module_envs[module_id] orelse return error.UnregisteredModuleEnvironment };
+        if (module_id >= self.module_count) return error.BadModuleId;
+        return .{ .module = self.module_envs.get(module_id) orelse return error.UnregisteredModuleEnvironment };
     }
 
     pub fn configureModules(self: *Context, host: ?*const anyopaque, lookup: ModuleLookupFn, name: ModuleNameFn) void {
@@ -782,17 +772,11 @@ pub const Context = struct {
     }
 
     pub fn loadModule(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!Value {
-        if (module_id >= self.module_roots.len or module_id >= self.module_state.len) return error.BadModuleId;
-        if (self.module_state[module_id] == 2) {
-            const slot = self.module_value_slots[module_id];
-            if (slot >= self.module_values.items.len) return error.MissingModuleValue;
-            return self.module_values.items[slot];
-        }
-        if (self.module_state[module_id] == 1) return error.ModuleLoadLoop;
-        self.module_state[module_id] = 1;
-        errdefer {
-            if (self.module_state[module_id] != 2) self.module_state[module_id] = 0;
-        }
+        if (module_id >= self.module_count or module_id >= self.module_roots.len) return error.BadModuleId;
+        if (self.module_values.get(module_id)) |value| return value;
+        if (self.module_loading.contains(module_id)) return error.ModuleLoadLoop;
+        try self.module_loading.put(self.allocator, module_id, {});
+        errdefer _ = self.module_loading.remove(module_id);
 
         const canonical = self.canonicalModuleName(module_id, requested);
         const root_value = if (module_id < self.module_root_values.len) self.module_root_values[module_id] else module_root_function;
@@ -812,13 +796,11 @@ pub const Context = struct {
             };
             if (value == .nil) value = .{ .boolean = true };
         }
-        const value_slot = std.math.cast(u32, self.module_values.items.len) orelse return error.TooManyLoadedModules;
         try self.module_values.ensureUnusedCapacity(self.allocator, 1);
         if (canonical) |text| if (self.package_loaded) |loaded|
             try loaded.rawSet(self.allocator, .{ .string = text }, value);
-        self.module_values.appendAssumeCapacity(value);
-        self.module_value_slots[module_id] = value_slot;
-        self.module_state[module_id] = 2;
+        self.module_values.putAssumeCapacity(module_id, value);
+        _ = self.module_loading.remove(module_id);
         return value;
     }
 
@@ -1282,8 +1264,8 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     try std.testing.expectEqualStrings("ModuleLoadLoop", ctx.aotErrorName().?);
     ctx.clearAotErrorName();
     ctx.last_error = .nil;
-    try std.testing.expectEqual(@as(u8, 0), ctx.module_state[2]);
-    try std.testing.expectEqual(std.math.maxInt(u32), ctx.module_value_slots[2]);
+    try std.testing.expect(!ctx.module_loading.contains(2));
+    try std.testing.expect(ctx.module_values.get(2) == null);
     try std.testing.expectError(error.ModuleNotFound, ctx.requireByName("Module:Missing"));
 }
 
@@ -1318,7 +1300,7 @@ test "recursive module loads keep distinct cache slots" {
     try std.testing.expectEqualStrings("outer", outer.string);
     try std.testing.expectEqualStrings("inner", loaded_inner.string);
     try std.testing.expectEqualStrings("outer", cached_outer.string);
-    try std.testing.expect(ctx.module_value_slots[0] != ctx.module_value_slots[1]);
+    try std.testing.expect(ctx.module_values.get(0) != null and ctx.module_values.get(1) != null);
 }
 
 test "descriptor module roots materialize constants without generated functions" {
@@ -1809,6 +1791,18 @@ test "native calls invoke the callable entrypoint directly" {
     try std.testing.expectEqualStrings("NativeDispatchProbe", ctx.aotErrorName().?);
 }
 
+test "AOT context startup stays independent of corpus module count" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 2, 1_000_000);
+    defer ctx.deinit();
+    try std.testing.expectEqual(@as(usize, 2), ctx.globals.len);
+    try std.testing.expectEqual(@as(usize, 1_000_000), ctx.module_count);
+    try std.testing.expectEqual(@as(usize, 0), ctx.module_loading.count());
+    try std.testing.expectEqual(@as(usize, 0), ctx.module_envs.count());
+    try std.testing.expectEqual(@as(usize, 0), ctx.module_values.count());
+}
+
 test "forked AOT context shares program metadata but resets runtime state" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1825,14 +1819,15 @@ test "forked AOT context shares program metadata but resets runtime state" {
     parent.setHost(&host_marker);
     parent.current_frame = try parent.newTable();
     try parent.setGlobal(1, .{ .number = 9 });
-    parent.module_state[0] = 2;
+    try parent.module_values.put(parent.allocator, 0, .{ .number = 1 });
 
     var child = try parent.forkProgram(arena.allocator());
     defer child.deinit();
     try std.testing.expect(child.module_roots.ptr == parent.module_roots.ptr);
     try std.testing.expect(child.module_root_values.ptr == parent.module_root_values.ptr);
     try std.testing.expect(child.getGlobal(1) == .nil);
-    try std.testing.expectEqual(@as(u8, 0), child.module_state[0]);
+    try std.testing.expectEqual(@as(usize, 0), child.module_values.count());
+    try std.testing.expectEqual(@as(usize, 1), parent.module_values.count());
     try std.testing.expect(child.host == parent.host);
     try std.testing.expect(child.current_frame == null);
     try std.testing.expectEqual(@as(u32, 0), try child.resolveModule("Module:A"));
