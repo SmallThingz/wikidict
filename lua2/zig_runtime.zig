@@ -251,13 +251,30 @@ pub const ChoiceCell = struct {
     value: Value = .nil,
 };
 
+inline fn wyhashMix64(a: u64, b: u64) u64 {
+    const product = @as(u128, a) *% b;
+    return @as(u64, @truncate(product)) ^ @as(u64, @truncate(product >> 64));
+}
+
 fn numberValueHash(number: f64) u64 {
+    const secret0: u64 = 0xa0761d6478bd642f;
+    const secret1: u64 = 0xe7037ed1a0b428db;
     const normalized: f64 = if (number == 0) 0 else number;
     const bits: u64 = @bitCast(normalized);
     var bytes: [9]u8 = undefined;
     bytes[0] = @intFromEnum(std.meta.Tag(Value).number);
     @memcpy(bytes[1..], std.mem.asBytes(&bits));
-    return std.hash.Wyhash.hash(0, &bytes);
+    const a0 = (@as(u64, std.mem.readInt(u32, bytes[0..4], .little)) << 32) |
+        std.mem.readInt(u32, bytes[4..8], .little);
+    const b0 = (@as(u64, std.mem.readInt(u32, bytes[5..9], .little)) << 32) |
+        std.mem.readInt(u32, bytes[1..5], .little);
+    const state0 = wyhashMix64(secret0, secret1);
+    const a = a0 ^ secret1;
+    const b = b0 ^ state0;
+    const product = @as(u128, a) *% b;
+    const low = @as(u64, @truncate(product));
+    const high = @as(u64, @truncate(product >> 64));
+    return wyhashMix64(low ^ secret0 ^ 9, high ^ secret1);
 }
 
 const NumberLookupContext = struct {
