@@ -8,6 +8,7 @@ const storage = @import("blob_storage");
 const pages = @import("native_runtime_pages.zig");
 const A = std.mem.Allocator;
 const L = std.os.linux;
+extern fn dict_sha256_hash([*]const u8, usize, [*]u8) callconv(.c) void;
 
 pub const Request = struct {
     root: []const u8,
@@ -235,6 +236,7 @@ const Engine = struct {
         const language_copy = try a.dupe(u8, language);
         errdefer a.free(language_copy);
         self.provider = try pages.Provider.init(self.io, a, self.root, root_copy, language_copy);
+        self.provider.?.symbols.sha256 = dict_sha256_hash;
         self.provider_dictionary_root = root_copy;
         self.provider_language = language_copy;
         return &self.provider.?;

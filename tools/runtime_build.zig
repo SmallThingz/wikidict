@@ -84,6 +84,7 @@ fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, pub
     const objects = try compileFunctionObjects(io, a, marker, aot_dir);
     const worker_core = try sourcePath(a, "frontend/native_expansion_worker_core.zig");
     const worker_link = try sourcePath(a, "frontend/native_expansion_worker_link.zig");
+    const sha256_leaf = try sourcePath(a, "native/sha256_abi.zig");
     const generated = try std.fs.path.join(a, &.{ aot_dir, "root.zig" });
     const zig_runtime = try sourcePath(a, "lua2/zig_runtime.zig");
     const zig_stdlib = try sourcePath(a, "lua2/zig_stdlib.zig");
@@ -93,6 +94,13 @@ fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, pub
     const blob_decoder = try sourcePath(a, "decoder/blob_root.zig");
     const blob_files = try sourcePath(a, "encoder/blob_files.zig");
     const blob_storage = try sourcePath(a, "native/storage.zig");
+
+    const sha256_object = try std.fs.path.join(a, &.{ aot_dir, "native-sha256-llvm.o" });
+    const sha256_emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{sha256_object});
+    const sha256_root = try std.fmt.allocPrint(a, "-Mroot={s}", .{sha256_leaf});
+    try stage(io, marker, "compile native SHA-256 leaf", &.{
+        paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-flld", sha256_emit, sha256_root,
+    });
 
     const core_object = try std.fs.path.join(a, &.{ aot_dir, "native-expansion-worker-core.o" });
     const core_emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{core_object});
@@ -123,7 +131,7 @@ fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, pub
     const link_root_module = try std.fmt.allocPrint(a, "-Mroot={s}", .{worker_link});
     try stage(io, marker, "link native AOT worker", &.{
         paths.zig, "build-exe",                    "-OReleaseFast", "-fllvm",    "-flld",          "-fstrip", "-lc", "-I/usr/include",
-        "--name",  "dict-native-expansion-worker", emit,            core_object, link_root_module,
+        "--name",  "dict-native-expansion-worker", emit,            core_object, sha256_object, link_root_module,
     });
 }
 pub fn main(init: std.process.Init) !void {

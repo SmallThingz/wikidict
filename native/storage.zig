@@ -6,7 +6,7 @@ const format = enc.blob_format;
 const Xz = @import("xz.zig").Source;
 const A = std.mem.Allocator;
 const Row = extern struct { offset: u64, length: u32, title: u32 };
-const cache_magic = "DIXIDX03";
+const cache_magic = "DIXIDX04";
 const cache_row_alignment = 8;
 comptime {
     std.debug.assert(@sizeOf(Row) == 16);
@@ -194,9 +194,9 @@ fn validateCached(dir: Directory, size: u64) !void {
 }
 fn cacheDecode(a: A, bytes: []const u8, fingerprint: [32]u8, size: u64) !Directory {
     if (bytes.len < 96 or !std.mem.eql(u8, bytes[0..8], cache_magic) or !std.mem.eql(u8, bytes[8..40], &fingerprint)) return error.InvalidCache;
-    var hash: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(bytes[72..], &hash, .{});
-    if (!std.mem.eql(u8, bytes[40..72], &hash)) return error.InvalidCache;
+    if (!std.mem.allEqual(u8, bytes[48..72], 0)) return error.InvalidCache;
+    const expected = std.mem.readInt(u64, bytes[40..48], .little);
+    if (std.hash.Wyhash.hash(0, bytes[72..]) != expected) return error.InvalidCache;
     var p: usize = 72;
     const h = std.math.cast(usize, try take(bytes, &p)) orelse return error.InvalidCache;
     const n = std.math.cast(usize, try take(bytes, &p)) orelse return error.InvalidCache;
@@ -228,7 +228,7 @@ fn cacheDecode(a: A, bytes: []const u8, fingerprint: [32]u8, size: u64) !Directo
     try validateCached(result, size);
     return result;
 }
-fn hashed(w: *std.Io.Writer, hash: *std.crypto.hash.sha2.Sha256, bytes: []const u8) !void {
+fn hashed(w: *std.Io.Writer, hash: *std.hash.Wyhash, bytes: []const u8) !void {
     hash.update(bytes);
     try w.writeAll(bytes);
 }
@@ -245,7 +245,7 @@ fn save(io: std.Io, a: A, path: []const u8, fingerprint: [32]u8, dir: Directory)
     try w.writeAll(cache_magic);
     try w.writeAll(&fingerprint);
     try w.splatByteAll(0, 32);
-    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    var hash = std.hash.Wyhash.init(0);
     var word: [8]u8 = undefined;
     for ([_]u64{ dir.header.len, dir.rows.len, dir.titles.len }) |value| {
         std.mem.writeInt(u64, &word, value, .little);
@@ -267,7 +267,8 @@ fn save(io: std.Io, a: A, path: []const u8, fingerprint: [32]u8, dir: Directory)
     }
     try hashed(w, &hash, dir.titles);
     try w.flush();
-    const digest = hash.finalResult();
+    var digest: [32]u8 = @splat(0);
+    std.mem.writeInt(u64, digest[0..8], hash.final(), .little);
     try file.writePositionalAll(io, &digest, 40);
     try file.sync(io);
     try std.Io.Dir.cwd().rename(temp, std.Io.Dir.cwd(), path, io);
@@ -386,6 +387,9 @@ pub const File = struct {
     pub fn titleAt(self: File, index: usize) ![]const u8 {
         if (index >= self.recordCount()) return error.InvalidRecordIndex;
         return self.directory.titleAt(index);
+    }
+    pub fn titleBytes(self: File) []const u8 {
+        return self.directory.titles;
     }
     pub fn find(self: File, title: []const u8) ?usize {
         var lo: usize = 0;
@@ -540,6 +544,38 @@ test "an unavailable cache remains an explicit memory-only index" {
     var record = try f.readAlloc(a, f.find("word").?);
     defer record.deinit();
     try std.testing.expectEqualStrings("body", record.payload);
+}
+
+test "derived cache checksum corruption forces a rebuild" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const path = try std.fs.path.join(a, &.{ root, "input.wikblb" });
+    defer a.free(path);
+    const bytes = try format.buildAlloc(a, .citations, "", &.{.{ .title = "word", .payload = "retained data" }});
+    defer a.free(bytes);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    var initial = try File.open(io, a, path);
+    try std.testing.expect(initial.cache_saved);
+    initial.deinit();
+
+    const cache_path = try std.fs.path.join(a, &.{ root, ".dict-cache/input.wikblb.idx" });
+    defer a.free(cache_path);
+    const cache = try std.Io.Dir.cwd().readFileAlloc(io, cache_path, a, .limited(1024 * 1024));
+    defer a.free(cache);
+    cache[40] ^= 0x80;
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = cache_path, .data = cache });
+
+    var reopened = try File.open(io, a, path);
+    defer reopened.deinit();
+    try std.testing.expect(!reopened.cache_hit);
+    try std.testing.expect(reopened.cache_saved);
+    var record = try reopened.readAlloc(a, reopened.find("word").?);
+    defer record.deinit();
+    try std.testing.expectEqualStrings("retained data", record.payload);
 }
 
 fn allocationCase(a: A, path: []const u8) !void {

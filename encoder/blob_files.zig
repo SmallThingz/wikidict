@@ -4,6 +4,7 @@ const enc = @import("blob_encoder");
 const parts = enc.language_parts;
 const storage = @import("blob_storage");
 const format = enc.blob_format;
+pub const Sha256Fn = *const fn ([*]const u8, usize, [*]u8) callconv(.c) void;
 pub const File = struct {
     a: std.mem.Allocator,
     bytes: []align(std.heap.page_size_min) const u8,
@@ -31,6 +32,7 @@ pub const SymbolSource = struct {
     root: []const u8,
     file: ?storage.File = null,
     keys: []const []const u8 = &.{},
+    sha256: ?Sha256Fn = null,
     pub fn deinit(self: *SymbolSource) void {
         self.a.free(self.keys);
         if (self.file) |*file| file.deinit();
@@ -52,7 +54,13 @@ pub const SymbolSource = struct {
                 key.* = title;
             }
             const names: enc.call_symbols.Names = .{ .keys = keys };
-            if (!std.mem.eql(u8, &names.digest(), &file.view.binding_id)) return error.SymbolIdentityMismatch;
+            const digest = if (self.sha256) |hash| accelerated: {
+                var out: [32]u8 = undefined;
+                const title_bytes = file.titleBytes();
+                hash(title_bytes.ptr, title_bytes.len, &out);
+                break :accelerated out;
+            } else names.digest();
+            if (!std.mem.eql(u8, &digest, &file.view.binding_id)) return error.SymbolIdentityMismatch;
             self.file = file;
             self.keys = keys;
         }
