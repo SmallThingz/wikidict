@@ -379,6 +379,20 @@ pub const Table = struct {
         choice: u32 = 0,
         key: Value = .nil,
         pub const Entry = struct { key_ptr: *const Value, value_ptr: *Value };
+        pub const Position = struct { slot: u32, choice: u32, hash_index: u32 };
+
+        pub fn position(self: *const Iterator) Position {
+            return .{ .slot = self.slot, .choice = self.choice, .hash_index = self.hash.index };
+        }
+
+        pub fn restorePosition(self: *Iterator, position_value: Position) bool {
+            if (position_value.slot > self.table.slots.len or position_value.choice > self.table.choices.len or position_value.hash_index > self.table.map.capacity()) return false;
+            self.slot = position_value.slot;
+            self.choice = position_value.choice;
+            self.hash.index = position_value.hash_index;
+            return true;
+        }
+
         pub fn next(self: *Iterator) ?Entry {
             while (self.slot < self.table.slots.len) {
                 const index = self.slot;
@@ -610,6 +624,13 @@ pub const Frame = struct {
         if (owned) freeResults(values);
     }
 };
+
+pub const NextIterationHint = struct {
+    table: *Table,
+    key: Value,
+    position: Table.Iterator.Position,
+};
+
 pub const Context = struct {
     allocator: std.mem.Allocator,
     globals: []Value,
@@ -638,6 +659,7 @@ pub const Context = struct {
     current_frame: ?*Table = null,
     package_loaded: ?*Table = null,
     global_table: ?*Table = null,
+    next_iteration_hint: ?NextIterationHint = null,
 
     pub fn init(allocator: std.mem.Allocator, global_count: usize) !Context {
         return initProgram(allocator, global_count, 0);
@@ -1812,7 +1834,6 @@ test "dynamic fixed result storage buffers Lua functions and preserves native fa
     const native = try ctx.newNative(null, nativeBufferedOwnershipProbe);
     try ctx.callValueStoreFixed(&frame, 2, 1, native, &.{.{ .number = 5 }});
     try std.testing.expectEqual(@as(f64, 5), frame.get(2).number);
-
 }
 
 test "fixed dynamic calls borrow and truncate caller result storage" {

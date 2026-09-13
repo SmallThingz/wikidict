@@ -212,18 +212,36 @@ fn baseUnpack(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Valu
     return out;
 }
 
-fn baseNext(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+fn baseNext(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
     const t = args[0].table;
     const key = if (args.len > 1) args[1] else Value.nil;
     var it = t.iterator();
     var found = key == .nil;
-    while (it.next()) |e| {
-        if (found) return bufferedTwo(result_buffer, e.key_ptr.*, e.value_ptr.*);
-        if (rt.rawEqual(e.key_ptr.*, key)) found = true;
+    if (!found) {
+        if (ctx.next_iteration_hint) |hint| {
+            if (hint.table == t and rt.rawEqual(hint.key, key) and it.restorePosition(hint.position)) found = true;
+        }
+        if (!found) {
+            while (it.next()) |entry| {
+                if (rt.rawEqual(entry.key_ptr.*, key)) {
+                    found = true;
+                    break;
+                }
+            }
+        }
     }
-    if (key != .nil and !found) return error.InvalidNextKey;
-    return bufferedOne(result_buffer, .nil);
+    if (!found) {
+        ctx.next_iteration_hint = null;
+        return error.InvalidNextKey;
+    }
+    const entry = it.next() orelse {
+        ctx.next_iteration_hint = null;
+        return bufferedOne(result_buffer, .nil);
+    };
+    const next_key = entry.key_ptr.*;
+    ctx.next_iteration_hint = .{ .table = t, .key = next_key, .position = it.position() };
+    return bufferedTwo(result_buffer, next_key, entry.value_ptr.*);
 }
 fn iteratorTripleFromCall(vm: *rt.Context, callable: Value, object: Value) ![]const Value {
     const values = try vm.callValue(callable, &.{object});
@@ -1030,4 +1048,49 @@ test "AOT native next and ipairs iterators borrow fixed result storage" {
     try std.testing.expect(!ipairs_done.owned);
     try std.testing.expectEqual(@as(usize, 1), ipairs_done.values.len);
     try std.testing.expect(ipairs_done.values[0] == .nil);
+}
+
+test "AOT next resumes sequential table iteration and falls back after interleaving" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try install(&ctx);
+
+    const values = try ctx.newTable();
+    for (1..4) |i| try values.rawSet(ctx.allocator, .{ .number = @floatFromInt(i) }, .{ .number = @floatFromInt(i * 10) });
+    const table_value = Value{ .table = values };
+    const next = ctx.getGlobal(global_abi.id("next"));
+    var storage: [2]Value = undefined;
+
+    const first = try ctx.callValueFixed(next, &.{ table_value, .nil }, &storage);
+    defer first.deinit();
+    try std.testing.expectEqual(@as(usize, 2), first.values.len);
+    const first_key = first.values[0];
+    try std.testing.expect(ctx.next_iteration_hint != null);
+    try std.testing.expect(ctx.next_iteration_hint.?.table == values);
+    try std.testing.expect(rt.rawEqual(ctx.next_iteration_hint.?.key, first_key));
+
+    // Lua permits deleting the current key while traversing a table. The saved
+    // position lets the immediately following next(t, key) continue safely.
+    try values.rawSet(ctx.allocator, first_key, .nil);
+    const second = try ctx.callValueFixed(next, &.{ table_value, first_key }, &storage);
+    defer second.deinit();
+    try std.testing.expectEqual(@as(usize, 2), second.values.len);
+    const second_key = second.values[0];
+
+    // Interleaving another traversal invalidates only the optimization hint;
+    // the ordinary key scan remains the semantic fallback.
+    const other = try ctx.newTable();
+    try other.rawSet(ctx.allocator, .{ .string = "other" }, .{ .number = 1 });
+    const other_first = try ctx.callValueFixed(next, &.{ .{ .table = other }, .nil }, &storage);
+    defer other_first.deinit();
+    try std.testing.expectEqual(@as(usize, 2), other_first.values.len);
+    const third = try ctx.callValueFixed(next, &.{ table_value, second_key }, &storage);
+    defer third.deinit();
+    try std.testing.expectEqual(@as(usize, 2), third.values.len);
+
+    ctx.clearAotErrorName();
+    try std.testing.expectError(error.AotCallFailed, ctx.callValueFixed(next, &.{ table_value, .{ .number = 999 } }, &storage));
+    try std.testing.expectEqualStrings("InvalidNextKey", ctx.aotErrorName().?);
 }
