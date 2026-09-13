@@ -16,6 +16,17 @@ fn two(_: std.mem.Allocator, x: Value, y: Value) ![]const Value {
     out[1] = y;
     return out;
 }
+fn bufferedOne(buffer: ?[]Value, v: Value) ![]const Value {
+    const out = try rt.returnBuffer(buffer, 1);
+    rt.storeReturn(out, 0, v);
+    return out;
+}
+fn bufferedTwo(buffer: ?[]Value, x: Value, y: Value) ![]const Value {
+    const out = try rt.returnBuffer(buffer, 2);
+    rt.storeReturn(out, 0, x);
+    rt.storeReturn(out, 1, y);
+    return out;
+}
 fn num(v: Value) !f64 {
     return rt.toNumber(v) orelse error.NumberExpected;
 }
@@ -201,19 +212,18 @@ fn baseUnpack(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Valu
     return out;
 }
 
-fn baseNext(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn baseNext(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
     const t = args[0].table;
     const key = if (args.len > 1) args[1] else Value.nil;
     var it = t.iterator();
     var found = key == .nil;
     while (it.next()) |e| {
-        if (found) return two(a, e.key_ptr.*, e.value_ptr.*);
+        if (found) return bufferedTwo(result_buffer, e.key_ptr.*, e.value_ptr.*);
         if (rt.rawEqual(e.key_ptr.*, key)) found = true;
     }
     if (key != .nil and !found) return error.InvalidNextKey;
-    return one(a, .nil);
+    return bufferedOne(result_buffer, .nil);
 }
 fn iteratorTripleFromCall(vm: *rt.Context, callable: Value, object: Value) ![]const Value {
     const values = try vm.callValue(callable, &.{object});
@@ -244,19 +254,18 @@ fn basePairs(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Val
     out[2] = .nil;
     return out;
 }
-fn ipairsIter(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn ipairsIter(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len < 2 or args[0] != .table) return error.TableExpected;
     const i = (try integer(args[1])) + 1;
-    const v = args[0].table.rawGet(.{ .number = @floatFromInt(i) }) orelse return one(a, .nil);
-    return two(a, .{ .number = @floatFromInt(i) }, v);
+    const v = args[0].table.rawGet(.{ .number = @floatFromInt(i) }) orelse return bufferedOne(result_buffer, .nil);
+    return bufferedTwo(result_buffer, .{ .number = @floatFromInt(i) }, v);
 }
 fn baseIpairs(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
     const vm = ctx;
     if (try exposedMetamethod(vm, args[0], "__ipairs")) |method|
         return iteratorTripleFromCall(vm, method, args[0]);
-    const iter = try vm.newNative(null, ipairsIter);
+    const iter = try vm.newNativeBuffered(null, ipairsIter);
     const out = try std.heap.smp_allocator.alloc(Value, 3);
     out[0] = iter;
     out[1] = args[0];
@@ -759,7 +768,7 @@ pub fn install(vm: *rt.Context) !void {
     try setGlobalNative(vm, "tonumber", baseToNumber);
     try setGlobalNative(vm, "select", baseSelect);
     try setGlobalNative(vm, "unpack", baseUnpack);
-    try setGlobalNative(vm, "next", baseNext);
+    try vm.setGlobal(global_abi.id("next"), try vm.newNativeBuffered(null, baseNext));
     try setGlobalNative(vm, "pairs", basePairs);
     try setGlobalNative(vm, "ipairs", baseIpairs);
     try setGlobalNative(vm, "pcall", basePcall);
@@ -975,4 +984,50 @@ test "AOT pcall preserves stable generated-function error names" {
     try std.testing.expect(!out[0].boolean);
     try std.testing.expectEqualStrings("NotCallable", out[1].string);
     try std.testing.expect(ctx.aotErrorName() == null);
+}
+
+test "AOT native next and ipairs iterators borrow fixed result storage" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try install(&ctx);
+
+    const values = try ctx.newTable();
+    try values.rawSet(ctx.allocator, .{ .number = 1 }, .{ .string = "x" });
+    const table_value = Value{ .table = values };
+    var storage: [2]Value = undefined;
+
+    const next = ctx.getGlobal(global_abi.id("next"));
+    const first = try ctx.callValueFixed(next, &.{ table_value, .nil }, &storage);
+    defer first.deinit();
+    try std.testing.expect(!first.owned);
+    try std.testing.expectEqual(@as(usize, 2), first.values.len);
+    try std.testing.expectEqual(@as(f64, 1), first.values[0].number);
+    try std.testing.expectEqualStrings("x", first.values[1].string);
+    const first_key = first.values[0];
+
+    const done = try ctx.callValueFixed(next, &.{ table_value, first_key }, &storage);
+    defer done.deinit();
+    try std.testing.expect(!done.owned);
+    try std.testing.expectEqual(@as(usize, 1), done.values.len);
+    try std.testing.expect(done.values[0] == .nil);
+
+    const ipairs = ctx.getGlobal(global_abi.id("ipairs"));
+    const triple = try ctx.callValue(ipairs, &.{table_value});
+    defer rt.freeResults(triple);
+    try std.testing.expectEqual(@as(usize, 3), triple.len);
+    const item = try ctx.callValueFixed(triple[0], triple[1..3], &storage);
+    defer item.deinit();
+    try std.testing.expect(!item.owned);
+    try std.testing.expectEqual(@as(usize, 2), item.values.len);
+    try std.testing.expectEqual(@as(f64, 1), item.values[0].number);
+    try std.testing.expectEqualStrings("x", item.values[1].string);
+    const item_key = item.values[0];
+
+    const ipairs_done = try ctx.callValueFixed(triple[0], &.{ table_value, item_key }, &storage);
+    defer ipairs_done.deinit();
+    try std.testing.expect(!ipairs_done.owned);
+    try std.testing.expectEqual(@as(usize, 1), ipairs_done.values.len);
+    try std.testing.expect(ipairs_done.values[0] == .nil);
 }

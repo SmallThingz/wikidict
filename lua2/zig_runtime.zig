@@ -185,6 +185,31 @@ pub fn stabilizeNative(comptime function: anytype) FunctionFn {
     }.call;
 }
 
+pub fn stabilizeNativeBuffered(comptime function: anytype) FunctionFn {
+    return struct {
+        fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize, result_ptr: ?[*]Value, result_len: usize) callconv(.c) FunctionResult {
+            const result_buffer: ?[]Value = if (result_ptr) |ptr| ptr[0..result_len] else null;
+            const host = switch (captures.*) {
+                .native => |value| value,
+                else => {
+                    if (ctx.aotErrorName() == null) ctx.setAotErrorName("NativeCaptureExpected");
+                    return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
+                },
+            };
+            const values = @call(.always_inline, function, .{ host, ctx, args_ptr[0..args_len], result_buffer }) catch |err| {
+                if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
+                return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
+            };
+            return .{
+                .values_ptr = if (values.len == 0) null else values.ptr,
+                .values_len = values.len,
+                .status = 0,
+                .reserved = 0,
+            };
+        }
+    }.call;
+}
+
 pub const no_shape = std.math.maxInt(u32);
 pub const TableConstant = struct { first: u32, count: u32, shape: u32 = no_shape };
 pub const Constant = union(enum) {
@@ -858,9 +883,10 @@ pub const Context = struct {
 
     pub fn callValueFixed(self: *Context, callable: Value, args: []const Value, result_buffer: []Value) anyerror!FixedCallResult {
         return switch (callable) {
-            .callable => |function| if (function.id == native_function_id)
-                .{ .values = try self.callEntry(function.entry, function.captures(), args), .owned = true }
-            else blk: {
+            .callable => |function| if (function.id == native_function_id) blk: {
+                const values = try self.callEntryBuffered(function.entry, function.captures(), args, result_buffer);
+                break :blk .{ .values = values, .owned = values.len != 0 and values.ptr != result_buffer.ptr };
+            } else blk: {
                 const values = try self.callFunctionBuffered(function, args, result_buffer);
                 break :blk .{ .values = values, .owned = values.len != 0 and values.ptr != result_buffer.ptr };
             },
@@ -899,6 +925,17 @@ pub const Context = struct {
             .env = FunctionEnv.native(host),
             .identity = identity,
             .entry = stabilizeNative(call),
+        } };
+    }
+
+    pub fn newNativeBuffered(self: *Context, host: ?*anyopaque, comptime call: anytype) !Value {
+        const identity = self.next_identity;
+        self.next_identity +%= 1;
+        return .{ .callable = .{
+            .id = native_function_id,
+            .env = FunctionEnv.native(host),
+            .identity = identity,
+            .entry = stabilizeNativeBuffered(call),
         } };
     }
 
@@ -1748,6 +1785,13 @@ fn nativeBufferedOwnershipProbe(_: ?*anyopaque, _: *Context, args: []const Value
     return out;
 }
 
+fn nativeFixedBufferedProbe(_: ?*anyopaque, _: *Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    const out = try returnBuffer(result_buffer, 2);
+    storeReturn(out, 0, if (args.len == 0) .nil else args[0]);
+    storeReturn(out, 1, .{ .number = 42 });
+    return out;
+}
+
 test "dynamic fixed result storage buffers Lua functions and preserves native fallback" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1768,6 +1812,7 @@ test "dynamic fixed result storage buffers Lua functions and preserves native fa
     const native = try ctx.newNative(null, nativeBufferedOwnershipProbe);
     try ctx.callValueStoreFixed(&frame, 2, 1, native, &.{.{ .number = 5 }});
     try std.testing.expectEqual(@as(f64, 5), frame.get(2).number);
+
 }
 
 test "fixed dynamic calls borrow and truncate caller result storage" {
@@ -1802,6 +1847,20 @@ test "fixed dynamic calls borrow and truncate caller result storage" {
     defer native_result.deinit();
     try std.testing.expect(native_result.owned);
     try std.testing.expectEqual(@as(f64, 9), native_result.values[0].number);
+
+    const buffered_native = try ctx.newNativeBuffered(null, nativeFixedBufferedProbe);
+    const native_borrowed = try ctx.callValueFixed(buffered_native, &.{.{ .number = 10 }}, &storage);
+    defer native_borrowed.deinit();
+    try std.testing.expect(!native_borrowed.owned);
+    try std.testing.expectEqual(@as(usize, 2), native_borrowed.values.len);
+    try std.testing.expectEqual(@as(f64, 10), native_borrowed.values[0].number);
+    try std.testing.expectEqual(@as(f64, 42), native_borrowed.values[1].number);
+
+    const native_owned = try ctx.callValue(buffered_native, &.{.{ .number = 13 }});
+    defer freeResults(native_owned);
+    try std.testing.expectEqual(@as(usize, 2), native_owned.len);
+    try std.testing.expectEqual(@as(f64, 13), native_owned[0].number);
+    try std.testing.expectEqual(@as(f64, 42), native_owned[1].number);
 
     const target = try ctx.newTable();
     const mt = try ctx.newTable();
