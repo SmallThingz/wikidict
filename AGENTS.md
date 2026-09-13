@@ -73,6 +73,7 @@
 - Native `next` may use only an ephemeral Context-local iterator-position hint keyed by table and prior key. Preserve arbitrary-key/interleaved fallback scanning and current-key deletion traversal; do not add per-Table iterator cache/index storage.
 - Generated AOT shards and the native worker core must use one Zig backend for every internal Zig-ABI call. If the final executable is linked with a different backend, cross that boundary only through a fixed C-callconv entrypoint; never rely on mixed-backend Zig ABI compatibility.
 - Backend-specialized worker leaf helpers may use a different Zig backend only behind raw-pointer/scalar C-callconv ABIs. Never pass `Context`, `Value`, allocators, slices, error unions, or other Zig-layout values across those helper boundaries.
+- Native workers must install any backend-specialized semantic SHA-256 callback before the first `SymbolSource.load`; once the catalog binding is validated, reuse that stored binding ID for linked-file identity checks instead of recomputing `Names.digest()` over the same catalog.
 - `.dict-cache` indexes are disposable derived data: version their checksum format and reject/rebuild corrupted or source-mismatched caches. The shared WIKBLB symbol catalog remains bound by exact SHA-256 semantic identity; a faster cache checksum must never replace that binding digest.
 
 - Native AOT module resolution matches MediaWiki title normalization: try the exact name, then trim surrounding whitespace and treat underscores as spaces before numeric registry/redirect lookup.

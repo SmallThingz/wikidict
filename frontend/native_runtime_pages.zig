@@ -30,13 +30,17 @@ pub const Provider = struct {
     interwiki_rows: std.ArrayList(InterwikiRow) = .empty,
 
     pub fn init(io: std.Io, a: A, root: []const u8, dictionary_root: ?[]const u8, language: []const u8) !Provider {
+        return initWithSha256(io, a, root, dictionary_root, language, null);
+    }
+
+    pub fn initWithSha256(io: std.Io, a: A, root: []const u8, dictionary_root: ?[]const u8, language: []const u8, sha256: ?files.Sha256Fn) !Provider {
         var self: Provider = .{
             .io = io,
             .a = a,
             .root = root,
             .dictionary_root = dictionary_root,
             .language = language,
-            .symbols = .{ .io = io, .a = a, .root = root },
+            .symbols = .{ .io = io, .a = a, .root = root, .sha256 = sha256 },
         };
         errdefer self.deinit();
         for ([_][]const u8{ "pages.wikblb", "pages.source.wikblb" }) |name| {
@@ -58,8 +62,8 @@ pub const Provider = struct {
         };
         if (self.linked_templates) |*file| {
             if (file.view.kind != .templates or !file.view.symbolic) return error.InvalidRuntimeArtifact;
-            const names = try self.symbols.load();
-            if (!std.mem.eql(u8, &names.digest(), &file.view.binding_id)) return error.SymbolIdentityMismatch;
+            const binding = try self.symbols.bindingId();
+            if (!std.mem.eql(u8, &binding, &file.view.binding_id)) return error.SymbolIdentityMismatch;
         }
         if (self.linked_templates == null) try self.loadTemplateManifest();
         try self.loadModuleManifest();

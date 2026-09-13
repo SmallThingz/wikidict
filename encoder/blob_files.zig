@@ -66,6 +66,10 @@ pub const SymbolSource = struct {
         }
         return .{ .keys = self.keys };
     }
+    pub fn bindingId(self: *SymbolSource) ![32]u8 {
+        _ = try self.load();
+        return self.file.?.view.binding_id;
+    }
     pub fn bindAlloc(self: *SymbolSource, a: std.mem.Allocator, bytes: []const u8, encoded: bool, binding: [32]u8) !?[]u8 {
         if (!encoded or std.mem.indexOfScalar(u8, bytes, enc.call_symbols.marker) == null) return null;
         const names = try self.load();
@@ -161,3 +165,47 @@ pub const Resolver = struct {
         }
     }
 };
+
+
+test "symbol source uses accelerated semantic hash once and reuses validated binding" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+
+    const keys = [_][]const u8{ "ffoo", "tbar" };
+    const names: enc.call_symbols.Names = .{ .keys = &keys };
+    var bytes = try format.buildAlloc(a, .symbols, "", &.{
+        .{ .title = keys[0], .payload = "" },
+        .{ .title = keys[1], .payload = "" },
+    });
+    defer a.free(bytes);
+    const expected = names.digest();
+    const header = format.encodeLinkedHeader(.symbols, expected);
+    @memcpy(bytes[0..format.header_len], &header);
+    const path = try std.fs.path.join(a, &.{ root, enc.call_symbols.filename });
+    defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+
+    const Probe = struct {
+        var calls: usize = 0;
+        fn hash(input: [*]const u8, len: usize, output: [*]u8) callconv(.c) void {
+            calls += 1;
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(input[0..len], &digest, .{});
+            @memcpy(output[0..digest.len], &digest);
+        }
+    };
+    Probe.calls = 0;
+    defer Probe.calls = 0;
+    var source: SymbolSource = .{ .io = io, .a = a, .root = root, .sha256 = Probe.hash };
+    defer source.deinit();
+    const loaded = try source.load();
+    try std.testing.expectEqual(@as(usize, 1), Probe.calls);
+    try std.testing.expectEqualStrings("foo", try loaded.get(1));
+    try std.testing.expectEqualSlices(u8, &expected, &(try source.bindingId()));
+    try std.testing.expectEqualSlices(u8, &expected, &(try source.bindingId()));
+    try std.testing.expectEqual(@as(usize, 1), Probe.calls);
+}

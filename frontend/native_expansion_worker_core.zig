@@ -116,10 +116,11 @@ const ModuleResolver = struct {
         };
         defer redirects_file.deinit();
         if (redirects_file.view.kind != .redirects or !redirects_file.view.symbolic) return error.InvalidRuntimeArtifact;
-        var symbols: blob_files.SymbolSource = .{ .io = io, .a = self.a, .root = root };
+        var symbols: blob_files.SymbolSource = .{ .io = io, .a = self.a, .root = root, .sha256 = dict_sha256_hash };
         defer symbols.deinit();
         const names = try symbols.load();
-        if (!std.mem.eql(u8, &names.digest(), &redirects_file.view.binding_id)) return error.SymbolIdentityMismatch;
+        const binding = try symbols.bindingId();
+        if (!std.mem.eql(u8, &binding, &redirects_file.view.binding_id)) return error.SymbolIdentityMismatch;
         for (0..redirects_file.recordCount()) |i| {
             const key = try redirects_file.titleAt(i);
             const from_id = try std.fmt.parseInt(usize, key, 16);
@@ -235,8 +236,7 @@ const Engine = struct {
         errdefer if (root_copy) |root| a.free(root);
         const language_copy = try a.dupe(u8, language);
         errdefer a.free(language_copy);
-        self.provider = try pages.Provider.init(self.io, a, self.root, root_copy, language_copy);
-        self.provider.?.symbols.sha256 = dict_sha256_hash;
+        self.provider = try pages.Provider.initWithSha256(self.io, a, self.root, root_copy, language_copy, dict_sha256_hash);
         self.provider_dictionary_root = root_copy;
         self.provider_language = language_copy;
         return &self.provider.?;
