@@ -329,6 +329,19 @@ pub const Table = struct {
         if (self.choices.len != 0) allocator.free(self.choices);
     }
 
+    fn genericArrayIndex(self: *const Table, number: f64) ?u32 {
+        if (self.shape != null or self.native_namespace != null) return null;
+        if (!std.math.isFinite(number) or number < 1 or number > @as(f64, @floatFromInt(std.math.maxInt(u32)))) return null;
+        if (@floor(number) != number) return null;
+        return @intFromFloat(number);
+    }
+
+    fn arraySlotForNumber(self: *const Table, number: f64) ?u32 {
+        const index = self.genericArrayIndex(number) orelse return null;
+        const slot = index - 1;
+        return if (slot < self.slots.len) slot else null;
+    }
+
     fn slotForKey(self: *const Table, key: Value) ?u32 {
         if (key == .string) if (self.native_namespace) |namespace|
             return static_fields.slotForName(namespace, key.string);
@@ -348,13 +361,44 @@ pub const Table = struct {
         return shape.field_keys[slot];
     }
 
+    fn ensureGenericArraySlot(self: *Table, allocator: std.mem.Allocator, index: u32) !?u32 {
+        if (self.shape != null or self.native_namespace != null or !self.owns_slots or index == 0) return null;
+        const slot = index - 1;
+        if (slot < self.slots.len) return slot;
+        const needed: usize = index;
+        const old_len = self.slots.len;
+        const growth_limit = if (old_len == 0) @as(usize, 8) else old_len +| old_len;
+        if (needed > growth_limit or needed > std.math.maxInt(u32)) return null;
+        var new_len: usize = if (old_len == 0) 8 else old_len;
+        while (new_len < needed) {
+            const doubled = new_len +| new_len;
+            new_len = @min(@as(usize, std.math.maxInt(u32)), doubled);
+        }
+        const grown = if (old_len == 0) try allocator.alloc(Value, new_len) else try allocator.realloc(self.slots, new_len);
+        @memset(grown[old_len..], .nil);
+        self.slots = grown;
+        return slot;
+    }
+
+    fn rawGetArraySlot(self: *const Table, slot: u32) ?Value {
+        if (self.shape != null or self.native_namespace != null or slot >= self.slots.len) return null;
+        return if (self.slots[slot] == .nil) null else self.slots[slot];
+    }
+
+    fn rawSetArraySlot(self: *Table, slot: u32, value: Value) void {
+        std.debug.assert(self.shape == null and self.native_namespace == null and slot < self.slots.len);
+        self.slots[slot] = value;
+    }
+
     pub fn rawGetSlot(self: *const Table, slot: u32) ?Value {
+        if (self.shape == null and self.native_namespace == null) return null;
         if (slot >= self.slots.len) return null;
         return if (self.slots[slot] == .nil) null else self.slots[slot];
     }
 
     pub fn rawSetSlot(self: *Table, slot: u32, value: Value) !void {
         if (self.read_only) return error.ReadOnlyTable;
+        if (self.shape == null and self.native_namespace == null) return error.BadShapeSlot;
         if (slot >= self.slots.len) return error.BadShapeSlot;
         self.slots[slot] = value;
     }
@@ -377,6 +421,7 @@ pub const Table = struct {
         self.choices[choice] = .{ .key = key, .value = value };
     }
     pub fn rawGet(self: *const Table, key: Value) ?Value {
+        if (key == .number) if (self.arraySlotForNumber(key.number)) |slot| if (self.rawGetArraySlot(slot)) |value| return value;
         if (self.slotForKey(key)) |slot| if (self.rawGetSlot(slot)) |value| return value;
         for (self.choices) |cell| {
             if (cell.value != .nil and rawEqual(cell.key, key)) return cell.value;
@@ -385,6 +430,7 @@ pub const Table = struct {
     }
 
     pub fn rawGetNumber(self: *const Table, number: f64) ?Value {
+        if (self.arraySlotForNumber(number)) |slot| if (self.rawGetArraySlot(slot)) |value| return value;
         if (self.shape == null and self.choices.len == 0)
             return self.map.getAdapted(number, NumberLookupContext{});
         const key = Value{ .number = number };
@@ -398,6 +444,18 @@ pub const Table = struct {
     pub fn rawSet(self: *Table, allocator: std.mem.Allocator, key: Value, value: Value) !void {
         if (self.read_only) return error.ReadOnlyTable;
         try validateTableKey(key);
+        if (key == .number) if (self.genericArrayIndex(key.number)) |index| {
+            if (self.arraySlotForNumber(key.number)) |slot| {
+                _ = self.map.removeContext(key, .{});
+                self.rawSetArraySlot(slot, value);
+                return;
+            }
+            if (value != .nil) if (try self.ensureGenericArraySlot(allocator, index)) |slot| {
+                _ = self.map.removeContext(key, .{});
+                self.rawSetArraySlot(slot, value);
+                return;
+            };
+        };
         if (self.slotForKey(key)) |slot| return self.rawSetSlot(slot, value);
         for (self.choices, 0..) |cell, choice| {
             if (cell.value != .nil and rawEqual(cell.key, key))
@@ -441,7 +499,10 @@ pub const Table = struct {
                 const index = self.slot;
                 self.slot += 1;
                 if (self.table.slots[index] == .nil) continue;
-                self.key = self.table.fieldKey(index) orelse continue;
+                self.key = if (self.table.shape == null and self.table.native_namespace == null)
+                    .{ .number = @floatFromInt(index + 1) }
+                else
+                    self.table.fieldKey(index) orelse continue;
                 return .{ .key_ptr = &self.key, .value_ptr = &self.table.slots[index] };
             }
             while (self.choice < self.table.choices.len) {
@@ -2093,6 +2154,49 @@ test "static field refs use native slots and generic fallback" {
     try std.testing.expectEqual(@as(f64, 7), (try ctx.getSlot(.{ .table = generic }, insert_ref)).number);
     try ctx.setSlot(.{ .table = generic }, insert_ref, .{ .number = 8 });
     try std.testing.expectEqual(@as(f64, 8), generic.rawGet(.{ .string = "insert" }).?.number);
+}
+
+test "generic tables use dense numeric slots and keep sparse keys hashed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+
+    const nine = Value{ .number = 9 };
+    try table.rawSet(ctx.allocator, nine, .{ .number = 900 });
+    try std.testing.expectEqual(@as(usize, 0), table.slots.len);
+    try std.testing.expectEqual(@as(f64, 900), table.map.getContext(nine, .{}).?.number);
+
+    for (1..10) |i| try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(i) }, .{ .number = @floatFromInt(i * 10) });
+    try std.testing.expect(table.slots.len >= 9);
+    try std.testing.expect(table.rawGetSlot(0) == null);
+    try std.testing.expectError(error.BadShapeSlot, table.rawSetSlot(0, .{ .number = 999 }));
+    try std.testing.expect(table.map.getContext(nine, .{}) == null);
+    for (1..10) |i| try std.testing.expectEqual(@as(f64, @floatFromInt(i * 10)), table.rawGetNumber(@floatFromInt(i)).?.number);
+    try std.testing.expectEqual(@as(usize, 9), table.rawLen());
+
+    const array_capacity = table.slots.len;
+    const sparse = Value{ .number = 1000 };
+    try table.rawSet(ctx.allocator, sparse, .{ .number = 5 });
+    try std.testing.expectEqual(array_capacity, table.slots.len);
+    try std.testing.expectEqual(@as(f64, 5), table.rawGetNumber(1000).?.number);
+    try std.testing.expectEqual(@as(f64, 5), table.map.getContext(sparse, .{}).?.number);
+
+    var iterator = table.iterator();
+    var count: usize = 0;
+    var nine_count: usize = 0;
+    while (iterator.next()) |entry| {
+        count += 1;
+        if (entry.key_ptr.* == .number and entry.key_ptr.number == 9) nine_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 10), count);
+    try std.testing.expectEqual(@as(usize, 1), nine_count);
+
+    try table.rawSet(ctx.allocator, nine, .nil);
+    try std.testing.expect(table.rawGetNumber(9) == null);
+    try std.testing.expect(table.map.getContext(nine, .{}) == null);
+    try std.testing.expectEqual(@as(usize, 8), table.rawLen());
 }
 
 test "numeric shape keys share slot raw length and iteration semantics" {
