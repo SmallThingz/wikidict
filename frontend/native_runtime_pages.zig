@@ -27,6 +27,7 @@ pub const Provider = struct {
     existence: std.StringHashMapUnmanaged(bool) = .empty,
     templates: std.StringHashMapUnmanaged(TemplateSlot) = .empty,
     modules: std.StringHashMapUnmanaged(u64) = .empty,
+    modules_loaded: bool = false,
     interwiki_rows: std.ArrayList(InterwikiRow) = .empty,
 
     pub fn init(io: std.Io, a: A, root: []const u8, dictionary_root: ?[]const u8, language: []const u8) !Provider {
@@ -66,7 +67,6 @@ pub const Provider = struct {
             if (!std.mem.eql(u8, &binding, &file.view.binding_id)) return error.SymbolIdentityMismatch;
         }
         if (self.linked_templates == null) try self.loadTemplateManifest();
-        try self.loadModuleManifest();
         try self.loadInterwikiMap();
         return self;
     }
@@ -192,18 +192,31 @@ pub const Provider = struct {
     }
 
     fn loadModuleManifest(self: *Provider) !void {
-        const bytes = (try self.readOptional("manifest.jsonl", 64 * 1024 * 1024)) orelse return;
+        if (self.modules_loaded) return;
+        const maybe_bytes = try self.readOptional("manifest.jsonl", 64 * 1024 * 1024);
+        if (maybe_bytes == null) {
+            self.modules_loaded = true;
+            return;
+        }
+        const bytes = maybe_bytes.?;
         defer self.a.free(bytes);
+        var loaded: std.StringHashMapUnmanaged(u64) = .empty;
+        errdefer freeStringMapKeys(u64, self.a, &loaded);
         var lines = std.mem.splitScalar(u8, bytes, '\n');
         while (lines.next()) |line| {
             if (line.len == 0) continue;
-            const row = std.json.parseFromSliceLeaky(ManifestRow, self.a, line, .{ .ignore_unknown_fields = true }) catch continue;
+            const parsed = std.json.parseFromSlice(ManifestRow, self.a, line, .{ .ignore_unknown_fields = true }) catch continue;
+            defer parsed.deinit();
+            const row = parsed.value;
             const title = try self.a.dupe(u8, row.title);
             errdefer self.a.free(title);
-            const result = try self.modules.getOrPut(self.a, title);
+            const result = try loaded.getOrPut(self.a, title);
             if (result.found_existing) self.a.free(title) else result.key_ptr.* = title;
             result.value_ptr.* = row.page_id;
         }
+        std.debug.assert(self.modules.count() == 0);
+        self.modules = loaded;
+        self.modules_loaded = true;
     }
 
     fn languageRecord(self: *Provider, a: A, title: []const u8, language: []const u8, content: bool) !?[]const u8 {
@@ -287,9 +300,12 @@ pub const Provider = struct {
             }
             return try self.readRuntimeSource(a, "templates", slot.page_id, "wiki");
         }
-        if (self.modules.get(title)) |id| {
-            if (!content) return "";
-            return try self.readRuntimeSource(a, "modules", id, "lua");
+        if (std.mem.startsWith(u8, title, "Module:")) {
+            try self.loadModuleManifest();
+            if (self.modules.get(title)) |id| {
+                if (!content) return "";
+                return try self.readRuntimeSource(a, "modules", id, "lua");
+            }
         }
         if (std.mem.startsWith(u8, title, "Appendix:") or std.mem.startsWith(u8, title, "Wiktionary:") or std.mem.startsWith(u8, title, "MediaWiki:")) return null;
         if (self.dictionary_root) |root| {
@@ -327,3 +343,41 @@ pub const Provider = struct {
         return result;
     }
 };
+
+test "module manifest stays lazy until a Module page lookup" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const manifest_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" });
+    defer a.free(manifest_path);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = manifest_path,
+        .data = "{\"page_id\":42,\"title\":\"Module:Lazy\"}\n",
+    });
+    const modules_path = try std.fs.path.join(a, &.{ root, "modules" });
+    defer a.free(modules_path);
+    try std.Io.Dir.cwd().createDir(io, modules_path, .default_dir);
+    const source_path = try std.fs.path.join(a, &.{ modules_path, "42.lua" });
+    defer a.free(source_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source_path, .data = "return 42" });
+
+    var provider = try Provider.init(io, a, root, null, "English");
+    defer provider.deinit();
+    var page_arena = std.heap.ArenaAllocator.init(a);
+    defer page_arena.deinit();
+    const page_a = page_arena.allocator();
+    try std.testing.expect(!provider.modules_loaded);
+    try std.testing.expectEqual(@as(usize, 0), provider.modules.count());
+    try std.testing.expect((try provider.lookup(page_a, "Ordinary page", false)) == null);
+    try std.testing.expect(!provider.modules_loaded);
+    try std.testing.expectEqual(@as(usize, 0), provider.modules.count());
+    const exists = (try provider.lookup(page_a, "Module:Lazy", false)) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("", exists);
+    try std.testing.expect(provider.modules_loaded);
+    try std.testing.expectEqual(@as(usize, 1), provider.modules.count());
+    const content = (try provider.lookup(page_a, "Module:Lazy", true)) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("return 42", content);
+}

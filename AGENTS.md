@@ -75,5 +75,6 @@
 - Backend-specialized worker leaf helpers may use a different Zig backend only behind raw-pointer/scalar C-callconv ABIs. Never pass `Context`, `Value`, allocators, slices, error unions, or other Zig-layout values across those helper boundaries.
 - Native workers must install any backend-specialized semantic SHA-256 callback before the first `SymbolSource.load`; once the catalog binding is validated, reuse that stored binding ID for linked-file identity checks instead of recomputing `Names.digest()` over the same catalog.
 - `.dict-cache` indexes are disposable derived data: version their checksum format and reject/rebuild corrupted or source-mismatched caches. The shared WIKBLB symbol catalog remains bound by exact SHA-256 semantic identity; a faster cache checksum must never replace that binding digest.
+- The native linked page provider must not eagerly parse `manifest.jsonl`: `#invoke` uses the generated AOT module registry, while the raw `Module:` source manifest is a lazy fallback loaded only for an actual `Module:` page lookup. Keep ordinary page/template startup independent of corpus module-manifest size.
 
 - Native AOT module resolution matches MediaWiki title normalization: try the exact name, then trim surrounding whitespace and treat underscores as spaces before numeric registry/redirect lookup.
