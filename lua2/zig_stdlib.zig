@@ -278,7 +278,7 @@ fn basePairs(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Val
 fn ipairsIter(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len < 2 or args[0] != .table) return error.TableExpected;
     const i = (try integer(args[1])) + 1;
-    const v = args[0].table.rawGet(.{ .number = @floatFromInt(i) }) orelse return bufferedOne(result_buffer, .nil);
+    const v = args[0].table.rawGetNumber(@floatFromInt(i)) orelse return bufferedOne(result_buffer, .nil);
     return bufferedTwo(result_buffer, .{ .number = @floatFromInt(i) }, v);
 }
 fn baseIpairs(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {

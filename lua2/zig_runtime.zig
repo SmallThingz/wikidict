@@ -251,17 +251,28 @@ pub const ChoiceCell = struct {
     value: Value = .nil,
 };
 
+fn numberValueHash(number: f64) u64 {
+    const normalized: f64 = if (number == 0) 0 else number;
+    const bits: u64 = @bitCast(normalized);
+    var bytes: [9]u8 = undefined;
+    bytes[0] = @intFromEnum(std.meta.Tag(Value).number);
+    @memcpy(bytes[1..], std.mem.asBytes(&bits));
+    return std.hash.Wyhash.hash(0, &bytes);
+}
+
+const NumberLookupContext = struct {
+    pub fn hash(_: NumberLookupContext, number: f64) u64 {
+        return numberValueHash(number);
+    }
+    pub fn eql(_: NumberLookupContext, number: f64, value: Value) bool {
+        return value == .number and number == value.number;
+    }
+};
+
 const ValueContext = struct {
     pub fn hash(_: ValueContext, value: Value) u64 {
+        if (value == .number) return numberValueHash(value.number);
         const tag: u8 = @intFromEnum(std.meta.activeTag(value));
-        if (value == .number) {
-            const normalized: f64 = if (value.number == 0) 0 else value.number;
-            const bits: u64 = @bitCast(normalized);
-            var bytes: [9]u8 = undefined;
-            bytes[0] = tag;
-            @memcpy(bytes[1..], std.mem.asBytes(&bits));
-            return std.hash.Wyhash.hash(0, &bytes);
-        }
         var h = std.hash.Wyhash.init(0);
         h.update(&.{tag});
         switch (value) {
@@ -356,6 +367,17 @@ pub const Table = struct {
         return self.map.getContext(key, .{});
     }
 
+    pub fn rawGetNumber(self: *const Table, number: f64) ?Value {
+        if (self.shape == null and self.choices.len == 0)
+            return self.map.getAdapted(number, NumberLookupContext{});
+        const key = Value{ .number = number };
+        if (self.slotForKey(key)) |slot| if (self.rawGetSlot(slot)) |value| return value;
+        for (self.choices) |cell| {
+            if (cell.value != .nil and cell.key == .number and cell.key.number == number) return cell.value;
+        }
+        return self.map.getAdapted(number, NumberLookupContext{});
+    }
+
     pub fn rawSet(self: *Table, allocator: std.mem.Allocator, key: Value, value: Value) !void {
         if (self.read_only) return error.ReadOnlyTable;
         try validateTableKey(key);
@@ -422,7 +444,7 @@ pub const Table = struct {
     }
 
     fn hasArrayIndex(self: *const Table, index: usize) bool {
-        return self.rawGet(.{ .number = @floatFromInt(index) }) != null;
+        return self.rawGetNumber(@floatFromInt(index)) != null;
     }
 
     pub fn rawLen(self: *const Table) usize {
@@ -1340,6 +1362,7 @@ test "numeric value hashing preserves prior iteration order" {
     }
     try std.testing.expectEqual(context.hash(.{ .number = 0.0 }), context.hash(.{ .number = -0.0 }));
 }
+
 test "AOT module resolver caches numeric identities and exposes package.loaded aliases" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -2068,6 +2091,7 @@ test "numeric shape keys share slot raw length and iteration semantics" {
     try std.testing.expectEqual(@as(f64, 3), (try ctx.getSlot(.{ .table = table }, 0)).number);
     try ctx.setSlot(.{ .table = table }, 0, .{ .number = 4 });
     try std.testing.expectEqual(@as(f64, 4), table.rawGet(.{ .number = 1 }).?.number);
+    try std.testing.expectEqual(@as(f64, 4), table.rawGetNumber(1).?.number);
     try std.testing.expectEqual(@as(usize, 1), table.rawLen());
 }
 
