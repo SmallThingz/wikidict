@@ -254,13 +254,43 @@ fn normalizeStart(len: usize, init: i64) usize {
     return @intCast(raw - 1);
 }
 
+fn isPatternMagic(c: u8) bool {
+    return switch (c) {
+        '^', '$', '(', ')', '%', '.', '[', ']', '*', '+', '-', '?' => true,
+        else => false,
+    };
+}
+
+fn isLiteralPattern(pattern: []const u8) bool {
+    if (pattern.len == 0) return false;
+    for (pattern) |c| if (isPatternMagic(c)) return false;
+    return true;
+}
+
+fn requiredStartByte(pattern: []const u8, start: usize) ?u8 {
+    if (start >= pattern.len or isPatternMagic(pattern[start])) return null;
+    const next = start + 1;
+    if (next < pattern.len) switch (pattern[next]) {
+        '?', '*', '-' => return null,
+        else => {},
+    };
+    return pattern[start];
+}
+
 fn findFrom(source: []const u8, pattern: []const u8, initial: usize, honor_anchor: bool) Error!?Match {
     var start = initial;
     if (start > source.len) return null;
     var pattern_start: usize = 0;
     const anchored = honor_anchor and pattern.len != 0 and pattern[0] == '^';
     if (anchored) pattern_start = 1;
+    if (!anchored and isLiteralPattern(pattern)) {
+        const found = std.mem.indexOfPos(u8, source, start, pattern) orelse return null;
+        return .{ .start = found, .end = found + pattern.len, .captures = undefined, .capture_count = 0 };
+    }
+    const required_start = if (anchored) null else requiredStartByte(pattern, pattern_start);
     while (start <= source.len) : (start += 1) {
+        if (required_start) |literal|
+            start = std.mem.indexOfScalarPos(u8, source, start, literal) orelse return null;
         var matcher = Matcher{ .source = source, .pattern = pattern };
         const end = try matcher.matchAt(start, pattern_start) orelse {
             if (anchored) return null;
@@ -318,6 +348,22 @@ test "literal classes captures and anchors" {
     try std.testing.expectEqualStrings("123", try captureText("abc 123 xyz", m.captures[1]));
     try std.testing.expect((try find("zabc", "^abc", 1)) == null);
     try std.testing.expect((try find("zabc", "abc", 1)) != null);
+}
+
+test "literal and required-prefix searches skip impossible starts without changing pattern semantics" {
+    const literal = (try find("zzneedlezz", "needle", 1)).?;
+    try std.testing.expectEqual(@as(usize, 2), literal.start);
+    try std.testing.expectEqual(@as(usize, 8), literal.end);
+    try std.testing.expectEqual(@as(u8, 0), literal.capture_count);
+
+    const prefixed = (try find("xxxxaa7", "a+%d", 1)).?;
+    try std.testing.expectEqual(@as(usize, 4), prefixed.start);
+    try std.testing.expectEqual(@as(usize, 7), prefixed.end);
+
+    const zero_width = (try find("bbb", "a*b", 1)).?;
+    try std.testing.expectEqual(@as(usize, 0), zero_width.start);
+    try std.testing.expectEqual(@as(usize, 1), zero_width.end);
+    try std.testing.expectError(error.MalformedPattern, find("xxa", "a[", 1));
 }
 
 test "balanced frontier backref and nongreedy" {
