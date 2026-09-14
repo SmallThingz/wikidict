@@ -1,4 +1,4 @@
-//! Coordinated build. VM bytecode remains as an oracle while production gets a dump-specific native worker.
+//! Coordinated native Lua build. The only execution target is a dump-specific AOT worker.
 const std = @import("std");
 const paths = @import("pipeline_paths");
 
@@ -63,15 +63,19 @@ fn compileFunctionObjects(io: std.Io, a: std.mem.Allocator, marker: []const u8, 
         try objects.append(a, object);
         const emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{object});
         const root_module = try std.fmt.allocPrint(a, "-Mroot={s}", .{source});
-        const zig_runtime = try sourcePath(a, "lua2/zig_runtime.zig");
+        const zig_runtime = try sourcePath(a, "lua/runtime/core.zig");
+        const lua_program_data = try sourcePath(a, "lua/aot/program_data.zig");
+        const lua_static_keys = try sourcePath(a, "lua/abi/static_keys.zig");
         const runtime_module = try std.fmt.allocPrint(a, "-Mzig_runtime={s}", .{zig_runtime});
+        const program_data_module = try std.fmt.allocPrint(a, "-Mlua_program_data={s}", .{lua_program_data});
+        const static_keys_module = try std.fmt.allocPrint(a, "-Mlua_static_keys={s}", .{lua_static_keys});
         const slot = index % jobs.len;
         try waitObjectCompile(io, &jobs[slot]);
         std.debug.print("dictionary build: compile native AOT function shard {d}\n", .{index});
         const argv = &.{
-            paths.zig,      "build-obj", "-OReleaseFast", "-fno-llvm",
-            emit,           "--dep",     "zig_runtime",   root_module,
-            runtime_module,
+            paths.zig, "build-obj",       "-OReleaseFast", "-fno-llvm",         emit,
+            "--dep",   "zig_runtime",     root_module,     "--dep",             "lua_program_data",
+            "--dep",   "lua_static_keys", runtime_module,  program_data_module, static_keys_module,
         };
         jobs[slot] = .{ .child = try std.process.spawn(io, .{ .argv = argv, .stdin = .ignore }), .index = index };
     }
@@ -86,10 +90,15 @@ fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, pub
     const worker_link = try sourcePath(a, "frontend/native_expansion_worker_link.zig");
     const sha256_leaf = try sourcePath(a, "native/sha256_abi.zig");
     const generated = try std.fs.path.join(a, &.{ aot_dir, "root.zig" });
-    const zig_runtime = try sourcePath(a, "lua2/zig_runtime.zig");
-    const zig_stdlib = try sourcePath(a, "lua2/zig_stdlib.zig");
-    const zig_scribunto = try sourcePath(a, "lua2/zig_scribunto.zig");
-    const zig_module_registry = try sourcePath(a, "lua2/zig_module_registry.zig");
+    const zig_runtime = try sourcePath(a, "lua/runtime/core.zig");
+    const zig_stdlib = try sourcePath(a, "lua/runtime/stdlib.zig");
+    const zig_scribunto = try sourcePath(a, "lua/runtime/scribunto.zig");
+    const zig_module_registry = try sourcePath(a, "lua/runtime/module_registry.zig");
+    const lua_program_data = try sourcePath(a, "lua/aot/program_data.zig");
+    const lua_static_keys = try sourcePath(a, "lua/abi/static_keys.zig");
+    const lua_globals = try sourcePath(a, "lua/abi/globals.zig");
+    const lua_wikitext_preprocess = try sourcePath(a, "lua/wikitext/preprocess.zig");
+    const lua_wikitext_expression = try sourcePath(a, "lua/wikitext/expression.zig");
     const blob_encoder = try sourcePath(a, "encoder/blob_root.zig");
     const blob_decoder = try sourcePath(a, "decoder/blob_root.zig");
     const blob_files = try sourcePath(a, "encoder/blob_files.zig");
@@ -110,6 +119,11 @@ fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, pub
     const stdlib_module = try std.fmt.allocPrint(a, "-Mzig_stdlib={s}", .{zig_stdlib});
     const scribunto_module = try std.fmt.allocPrint(a, "-Mzig_scribunto={s}", .{zig_scribunto});
     const registry_module = try std.fmt.allocPrint(a, "-Mzig_module_registry={s}", .{zig_module_registry});
+    const program_data_module = try std.fmt.allocPrint(a, "-Mlua_program_data={s}", .{lua_program_data});
+    const static_keys_module = try std.fmt.allocPrint(a, "-Mlua_static_keys={s}", .{lua_static_keys});
+    const globals_module = try std.fmt.allocPrint(a, "-Mlua_globals={s}", .{lua_globals});
+    const wikitext_preprocess_module = try std.fmt.allocPrint(a, "-Mlua_wikitext_preprocess={s}", .{lua_wikitext_preprocess});
+    const wikitext_expression_module = try std.fmt.allocPrint(a, "-Mlua_wikitext_expression={s}", .{lua_wikitext_expression});
     const encoder_module = try std.fmt.allocPrint(a, "-Mblob_encoder={s}", .{blob_encoder});
     const decoder_module = try std.fmt.allocPrint(a, "-Mblob_decoder={s}", .{blob_decoder});
     const files_module = try std.fmt.allocPrint(a, "-Mblob_files={s}", .{blob_files});
@@ -119,10 +133,12 @@ fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, pub
     try core_argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fno-llvm", "-lc", "-I/usr/include", core_emit });
     try core_argv.appendSlice(a, objects.items);
     try core_argv.appendSlice(a, &.{
-        "--dep",          "generated",    "--dep",       "blob_encoder", "--dep",      "blob_decoder", "--dep",          "blob_files", "--dep",               "blob_storage",   "--dep",        "zig_runtime",
-        core_root_module, "--dep",        "zig_runtime", "--dep",        "zig_stdlib", "--dep",        "zig_scribunto",  "--dep",      "zig_module_registry", generated_module, runtime_module, "--dep",
-        "zig_runtime",    stdlib_module,  "--dep",       "zig_runtime",  "--dep",      "zig_stdlib",   scribunto_module, "--dep",      "zig_runtime",         registry_module,  encoder_module, "--dep",
-        "blob_encoder",   decoder_module, "--dep",       "blob_encoder", "--dep",      "blob_storage", files_module,     "--dep",      "blob_encoder",        storage_module,
+        "--dep",                    "generated",               "--dep",        "blob_encoder",            "--dep",          "blob_decoder", "--dep",         "blob_files",    "--dep",               "blob_storage",     "--dep",        "zig_runtime",
+        core_root_module,           "--dep",                   "zig_runtime",  "--dep",                   "zig_stdlib",     "--dep",        "zig_scribunto", "--dep",         "zig_module_registry", generated_module,   "--dep",        "lua_program_data",
+        "--dep",                    "lua_static_keys",         runtime_module, "--dep",                   "zig_runtime",    "--dep",        "lua_globals",   stdlib_module,   "--dep",               "zig_runtime",      "--dep",        "zig_stdlib",
+        "--dep",                    "lua_wikitext_preprocess", "--dep",        "lua_wikitext_expression", scribunto_module, "--dep",        "zig_runtime",   registry_module, program_data_module,   static_keys_module, globals_module, wikitext_preprocess_module,
+        wikitext_expression_module, encoder_module,            "--dep",        "blob_encoder",            decoder_module,   "--dep",        "blob_encoder",  "--dep",         "blob_storage",        files_module,       "--dep",        "blob_encoder",
+        storage_module,
     });
     try stage(io, marker, "compile native AOT worker core", core_argv.items);
 
@@ -130,7 +146,7 @@ fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, pub
     const emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{output});
     const link_root_module = try std.fmt.allocPrint(a, "-Mroot={s}", .{worker_link});
     try stage(io, marker, "link native AOT worker", &.{
-        paths.zig, "build-exe",                    "-OReleaseFast", "-fllvm",    "-flld",          "-fstrip", "-lc", "-I/usr/include",
+        paths.zig, "build-exe",                    "-OReleaseFast", "-fllvm",    "-flld",       "-fstrip",        "-lc", "-I/usr/include",
         "--name",  "dict-native-expansion-worker", emit,            core_object, sha256_object, link_root_module,
     });
 }
@@ -159,10 +175,6 @@ pub fn main(init: std.process.Init) !void {
     try stage(init.io, marker, "extract module redirects", &.{ paths.redirects, dump, runtime });
     try stage(init.io, marker, "extract auxiliary source pages", &.{ paths.pages, dump, runtime });
     const manifest = try std.fs.path.join(a, &.{ runtime, "manifest.jsonl" });
-    const modules = try std.fs.path.join(a, &.{ runtime, "modules" });
-    const bundle = try std.fs.path.join(a, &.{ runtime, "modules.bundle" });
-    try stage(init.io, marker, "compile bytecode oracle", &.{ paths.bytecode, manifest, modules, bundle });
-
     const aot_dir = try std.fs.path.join(a, &.{ runtime, "aot" });
     try std.Io.Dir.cwd().createDirPath(init.io, aot_dir);
     try stage(init.io, marker, "generate native AOT", &.{ paths.aot, manifest, runtime, aot_dir, "--sharded", "--external-data", "--external-functions" });
@@ -170,7 +182,7 @@ pub fn main(init: std.process.Init) !void {
     if (full)
         try stage(init.io, marker, "encode dictionary blobs", &.{ paths.blobs, dump, root })
     else
-        try stage(init.io, marker, "link shared symbols and bytecode", &.{ paths.linker, root, runtime });
+        try stage(init.io, marker, "link shared symbols and runtime sources", &.{ paths.linker, root, runtime });
 
     const publish_root = if (full) root else runtime;
     try publishAotData(init.io, a, aot_dir, publish_root);

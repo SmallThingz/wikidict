@@ -82,7 +82,6 @@ pub const RecordView = union(format.BlobKind) {
     supplement: SupplementRecordView,
     symbols: RawRecordView,
     templates: RawRecordView,
-    bytecode: RawRecordView,
     redirects: RawRecordView,
     pages: RawRecordView,
 
@@ -119,7 +118,7 @@ pub const RecordView = union(format.BlobKind) {
             .reconstruction => |record| record.title,
             .rhymes => |record| record.title,
             .sign_gloss => |record| record.title,
-            .symbols, .templates, .bytecode, .redirects, .pages => |record| record.title,
+            .symbols, .templates, .redirects, .pages => |record| record.title,
             .supplement => |record| record.title,
         };
     }
@@ -188,7 +187,7 @@ pub const BlobView = struct {
     pub fn bindRecordAlloc(self: BlobView, a: std.mem.Allocator, record: RecordView, names: encoder.call_symbols.Names) !BoundRecord {
         if (record.kind() != self.kind()) return error.UnexpectedBlobKind;
         switch (record.kind()) {
-            .symbols, .templates, .bytecode, .redirects => return error.UseRuntimeArtifactReader,
+            .symbols, .templates, .redirects => return error.UseRuntimeArtifactReader,
             else => {},
         }
         if (!record.needsSymbols()) return .{ .allocator = a, .record = record };
@@ -237,7 +236,6 @@ pub const BlobView = struct {
             .sign_gloss => .{ .sign_gloss = .{ .title = record.title, .source = record.payload } },
             .symbols => .{ .symbols = .{ .title = record.title, .source = record.payload } },
             .templates => .{ .templates = .{ .title = record.title, .source = record.payload } },
-            .bytecode => .{ .bytecode = .{ .title = record.title, .source = record.payload } },
             .redirects => .{ .redirects = .{ .title = record.title, .source = record.payload } },
             .pages => .{ .pages = .{ .title = record.title, .source = record.payload } },
             .supplement => .{ .supplement = .{ .title = record.title, .payload = record.payload, .metadata = self.language_metadata.?, .family = self.raw.supplementKind() catch unreachable } },

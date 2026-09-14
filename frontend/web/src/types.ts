@@ -14,7 +14,7 @@ export type Entry = {
   organization?: Organization;
   language_code?: string;
   title: string; kind: string; language: string | null; sections: Section[]; preamble: string;
-  expansion?: { backend: "lua-aot" | "lua-vm"; status: "ok" | "failed"; diagnostic: string | null } | null;
+  expansion?: { backend: "lua-aot"; status: "ok" | "failed"; diagnostic: string | null } | null;
   unexpanded_templates: number; rendered_templates?: number; preamble_spans?: Span[]; references?: Reference[]; status: 'structured' | 'raw' | 'invalid_payload';
   source: string | null; source_base64: string | null; payload_base64: string | null;
 };

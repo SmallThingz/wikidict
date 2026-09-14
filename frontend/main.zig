@@ -42,7 +42,7 @@ const usage =
     \\Search is case-sensitive UTF-8 prefix matching. Results go to stdout.
     \\Diagnostics go to stderr. Exit: 0 success, 1 no matches, 2 usage/data/I/O error.
     \\Wikitext and core Wiktionary templates render locally. Unsupported templates are marked.
-    \\No network is used. Linked datasets prefer their runtime-specific native Lua AOT worker; older runtimes fall back to the embedded VM.
+    \\No network is used. Linked datasets use their runtime-specific native Lua AOT worker. No alternate Lua execution path exists.
     \\
 ;
 
@@ -58,14 +58,6 @@ pub fn main(init: std.process.Init) void {
 fn run(init: std.process.Init) !u8 {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
-    if (argv.len == 2 and std.mem.eql(u8, argv[1], "--internal-expand")) {
-        try @import("expansion_worker.zig").main(init);
-        return 0;
-    }
-    if (argv.len == 2 and std.mem.eql(u8, argv[1], "--internal-expand-loop")) {
-        try @import("expansion_worker.zig").loop(init);
-        return 0;
-    }
     const opts = try args.parse(argv[1..]);
     const media_root: ?[]const u8 = opts.media_dir orelse (if (opts.command == .render) null else try std.fs.path.join(a, &.{ opts.root, "media" }));
     const automatic = if (!opts.native and !opts.core_only and opts.runtime == null and (opts.command == .lookup or opts.command == .search or opts.command == .tui or opts.command == .serve)) try defaultRuntime(init.io, a, opts.root) else null;
@@ -228,7 +220,6 @@ test {
     _ = html;
     _ = tui;
     _ = @import("pipeline_tests.zig");
-    _ = @import("runtime_symbols");
     _ = @import("server.zig");
     _ = @import("blob_storage");
 }
@@ -273,20 +264,15 @@ fn htmlWithLemmas(io: std.Io, arena: std.mem.Allocator, a: std.mem.Allocator, db
 }
 
 fn defaultRuntime(io: std.Io, a: std.mem.Allocator, root: []const u8) !?[]const u8 {
-    const path = try std.fs.path.join(a, &.{ root, "bytecode.wikblb" });
-    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
-        error.FileNotFound => {
-            const compressed = try std.mem.concat(a, u8, &.{ path, ".xz" });
-            defer a.free(compressed);
-            var zipped = std.Io.Dir.cwd().openFile(io, compressed, .{}) catch |e| switch (e) {
-                error.FileNotFound => return null,
-                else => return e,
-            };
-            zipped.close(io);
-            return root;
-        },
-        else => return err,
-    };
-    file.close(io);
-    return root;
+    for ([_][]const u8{ "dict-native-expansion-worker", "runtime/dict-native-expansion-worker" }) |relative| {
+        const path = try std.fs.path.join(a, &.{ root, relative });
+        defer a.free(path);
+        var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        file.close(io);
+        return root;
+    }
+    return null;
 }

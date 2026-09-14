@@ -11,7 +11,7 @@ pub const entry_layout = @import("entry_layout.zig");
 pub const Feature = wiki.Feature;
 pub const Block = wiki.Block;
 pub const Section = struct { level: u8, title: []const u8, blocks: []const Block, deferred: ?enc.language_parts.Kind = null };
-pub const Expansion = struct { backend: []const u8 = "lua-vm", status: enum { ok, failed }, diagnostic: ?[]const u8 = null };
+pub const Expansion = struct { backend: []const u8 = "lua-aot", status: enum { ok, failed }, diagnostic: ?[]const u8 = null };
 pub const Entry = struct {
     content: enum { complete, core } = .complete,
     organization: entry_layout.Layout = .{},
@@ -50,7 +50,7 @@ pub fn sourceAlloc(a: Allocator, record: dec.BlobRecordView) ![]u8 {
         .rhymes => |r| enc.rhymes_encoding.decodeAlloc(a, r.payload),
         .reconstruction => |r| enc.reconstruction_encoding.decodeAlloc(a, r.payload, r.title),
         .citations, .sign_gloss => |r| a.dupe(u8, r.source),
-        .supplement, .symbols, .templates, .bytecode, .redirects, .pages => return error.InvalidEncoding,
+        .supplement, .symbols, .templates, .redirects, .pages => return error.InvalidEncoding,
     };
 }
 
@@ -62,7 +62,7 @@ pub fn payload(record: dec.BlobRecordView) []const u8 {
         .reconstruction => |r| r.payload,
         .citations, .sign_gloss => |r| r.source,
         .supplement => |r| r.payload,
-        .symbols, .templates, .bytecode, .redirects, .pages => |r| r.source,
+        .symbols, .templates, .redirects, .pages => |r| r.source,
     };
 }
 
@@ -170,7 +170,7 @@ pub fn fromRecord(allocator: Allocator, record: dec.BlobRecordView, include_sour
 }
 
 /// A deliberately partial presentation; unresolved section bodies are never empty source.
-/// Exact source and VM expansion must use the resolved record path instead.
+/// Exact source and native Lua expansion must use the resolved record path instead.
 pub fn fromCoreRecord(allocator: Allocator, record: dec.BlobRecordView) !OwnedEntry {
     return recordDocument(allocator, record, false, true);
 }
@@ -212,7 +212,7 @@ fn recordDocument(allocator: Allocator, record: dec.BlobRecordView, include_sour
 fn populate(b: *Builder, record: dec.BlobRecordView, entry: *Entry) !void {
     if (record.needsSymbols()) return error.InvalidEncoding;
     switch (record) {
-        .supplement, .symbols, .templates, .bytecode, .redirects, .pages => return error.InvalidEncoding,
+        .supplement, .symbols, .templates, .redirects, .pages => return error.InvalidEncoding,
         .language => |r| {
             entry.language = try utf8Text(b.a, r.metadata.heading);
             entry.language_code = try utf8Text(b.a, r.metadata.code);

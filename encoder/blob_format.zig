@@ -20,7 +20,6 @@ pub const BlobKind = enum(u8) {
     supplement = 7,
     symbols = 8,
     templates = 9,
-    bytecode = 10,
     redirects = 11,
     pages = 12,
 };
@@ -206,7 +205,6 @@ fn decodeKind(bytes: []const u8) error{InvalidBlob}!BlobKind {
         @intFromEnum(BlobKind.supplement) => .supplement,
         @intFromEnum(BlobKind.symbols) => .symbols,
         @intFromEnum(BlobKind.templates) => .templates,
-        @intFromEnum(BlobKind.bytecode) => .bytecode,
         @intFromEnum(BlobKind.redirects) => .redirects,
         @intFromEnum(BlobKind.pages) => .pages,
         else => error.InvalidBlob,

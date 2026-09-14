@@ -1,8 +1,8 @@
-//! Optional linked Lua rendering. Source and expanded presentation have distinct lifetimes.
+//! Optional native Lua AOT rendering. Source and expanded presentation have distinct lifetimes.
 const std = @import("std");
 const model = @import("model.zig");
 const dec = @import("blob_decoder");
-const protocol = @import("expansion_worker.zig");
+const protocol = @import("expansion_protocol.zig");
 const A = std.mem.Allocator;
 const L = std.os.linux;
 pub const Options = struct { root: ?[]const u8 = null, timeout_ms: u32 = 5000, dictionary_root: ?[]const u8 = null };
@@ -11,17 +11,12 @@ const Reply = protocol.Reply;
 const Result = struct {
     parsed: ?std.json.Parsed(Reply) = null,
     failure: ?[]const u8 = null,
-    backend: []const u8 = "lua-vm",
+    backend: []const u8 = "lua-aot",
     fn deinit(self: *Result) void {
         if (self.parsed) |*p| p.deinit();
     }
 };
-fn executable(io: std.Io, a: A) ![]u8 {
-    // A long-running reader must still start matching workers after its binary
-    // is atomically replaced by an install. Linux keeps the running inode here.
-    return if (@import("builtin").os.tag == .linux) a.dupe(u8, "/proc/self/exe") else std.process.executablePathAlloc(io, a);
-}
-const WorkerExecutable = struct { path: []u8, backend: []const u8 };
+const WorkerExecutable = struct { path: []u8 };
 fn workerExecutable(io: std.Io, a: A, root: []const u8) !WorkerExecutable {
     for ([_][]const u8{ "dict-native-expansion-worker", "runtime/dict-native-expansion-worker" }) |relative| {
         const candidate = try std.fs.path.join(a, &.{ root, relative });
@@ -36,9 +31,9 @@ fn workerExecutable(io: std.Io, a: A, root: []const u8) !WorkerExecutable {
             },
         };
         file.close(io);
-        return .{ .path = candidate, .backend = "lua-aot" };
+        return .{ .path = candidate };
     }
-    return .{ .path = try executable(io, a), .backend = "lua-vm" };
+    return error.NativeLuaWorkerMissing;
 }
 
 fn parseReply(a: A, bytes: []const u8) !Result {
@@ -92,7 +87,7 @@ pub const Worker = struct {
     child: ?std.process.Child = null,
     starts: std.atomic.Value(u64) = .init(0),
     requests: std.atomic.Value(u64) = .init(0),
-    backend: []const u8 = "lua-vm",
+    backend: []const u8 = "lua-aot",
     pub fn init(io: std.Io, options: Options) Worker {
         return .{ .io = io, .options = options };
     }
@@ -108,8 +103,7 @@ pub const Worker = struct {
             const root = self.options.root orelse return error.RuntimeAssetsFailed;
             const selected = try workerExecutable(self.io, a, root);
             defer a.free(selected.path);
-            self.backend = selected.backend;
-            self.child = try std.process.spawn(self.io, .{ .argv = &.{ selected.path, "--internal-expand-loop" }, .stdin = .pipe, .stdout = .pipe, .stderr = .ignore });
+            self.child = try std.process.spawn(self.io, .{ .argv = &.{selected.path}, .stdin = .pipe, .stdout = .pipe, .stderr = .ignore });
             _ = self.starts.fetchAdd(1, .monotonic);
         }
         return &self.child.?;
@@ -211,7 +205,7 @@ pub fn fromRecord(io: std.Io, a: A, record: dec.BlobRecordView, with_source: boo
         .reconstruction => "Reconstruction:",
         .rhymes => "Rhymes:",
         .sign_gloss => "Sign gloss:",
-        .supplement, .symbols, .templates, .bytecode, .redirects, .pages => return error.InvalidEncoding,
+        .supplement, .symbols, .templates, .redirects, .pages => return error.InvalidEncoding,
     };
     const title = try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, record.title() });
     defer a.free(title);

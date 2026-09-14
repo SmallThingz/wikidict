@@ -527,7 +527,7 @@ pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !B
         defer allocator.free(dir);
         try std.Io.Dir.cwd().createDirPath(io, dir);
     }
-    inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss", "symbols", "templates", "bytecode", "redirects", "pages" }) |name| {
+    inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss", "symbols", "templates", "redirects", "pages" }) |name| {
         const stale = try fixedBlobPathAlloc(allocator, options.output_root, name);
         defer allocator.free(stale);
         try deleteFileIfExists(io, stale);

@@ -1,4 +1,4 @@
-//! Runtime wikitext renderer. No HTML strings are executed and no network/VM is required.
+//! Runtime wikitext renderer. No HTML strings are executed and no network is required.
 //! Reuses the portable document IR tokenizer, adding block layout, HTML, references,
 //! entities, and a deliberately bounded set of Wiktionary template presentations.
 const std = @import("std");

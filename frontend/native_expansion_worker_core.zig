@@ -1,4 +1,4 @@
-//! Runtime-specific native AOT expansion worker. No VM/bytecode imports belong here.
+//! Runtime-specific native AOT expansion worker.
 const std = @import("std");
 const generated = @import("generated");
 const rt = @import("zig_runtime");
@@ -6,26 +6,13 @@ const enc = @import("blob_encoder");
 const blob_files = @import("blob_files");
 const storage = @import("blob_storage");
 const pages = @import("native_runtime_pages.zig");
+const protocol = @import("expansion_protocol.zig");
 const A = std.mem.Allocator;
 const L = std.os.linux;
 extern fn dict_sha256_hash([*]const u8, usize, [*]u8) callconv(.c) void;
 
-pub const Request = struct {
-    root: []const u8,
-    title: []const u8,
-    source: []const u8,
-    dictionary_root: ?[]const u8 = null,
-    language: []const u8 = "English",
-};
-
-pub const Reply = struct {
-    schema: []const u8 = "dict.expansion.v1",
-    backend: []const u8 = "lua-aot",
-    output: ?[]const u8 = null,
-    stage: []const u8 = "expand",
-    error_name: ?[]const u8 = null,
-    detail: ?[]const u8 = null,
-};
+pub const Request = protocol.Request;
+pub const Reply = protocol.Reply;
 
 fn limit(resource: std.posix.rlimit_resource, value: u64) !void {
     const old = try std.posix.getrlimit(resource);

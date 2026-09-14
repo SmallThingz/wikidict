@@ -7,7 +7,7 @@ pub const catalog = enc.blob_catalog;
 pub fn parseKind(text: []const u8) ?Kind {
     if (std.mem.eql(u8, text, "sign-gloss")) return .sign_gloss;
     const kind = std.meta.stringToEnum(Kind, text) orelse return null;
-    return if ((kind == .supplement or kind == .symbols or kind == .templates or kind == .bytecode or kind == .redirects or kind == .pages)) null else kind;
+    return if ((kind == .supplement or kind == .symbols or kind == .templates or kind == .redirects or kind == .pages)) null else kind;
 }
 pub fn pathAlloc(a: std.mem.Allocator, root: []const u8, kind: Kind, language: []const u8) ![]u8 {
     if (kind == .language) {

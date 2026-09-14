@@ -1,4 +1,4 @@
-//! VM-free page/template source provider for runtime-specific native AOT workers.
+//! Page/template source provider for runtime-specific native AOT workers.
 const std = @import("std");
 const enc = @import("blob_encoder");
 const files = @import("blob_files");

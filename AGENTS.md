@@ -1,80 +1,28 @@
-# Project Notes
+# AGENTS.md
 
-- The working tree may contain intentional WIP from multiple ongoing rewrites. Do not reset, clean, or discard unrelated changes.
-- Commit completed features and bug fixes as coherent units using conventional commit types (`feat:`, `fix:`, `perf:`, `refactor:`, `test:`, `docs:`, etc.). Stage only the files/hunks belonging to that unit; never sweep unrelated dirty or pre-staged WIP into a commit. Do not push unless explicitly requested.
-- Dictionary format `WIKDIC34` keeps compact titles and aliases, fixed `u32` alias targets, and varint-length-prefixed tagged payload records.
-- Payload kind `1` is the frontend-neutral English section IR. Payload kind `0` is compact raw fallback for mixed-language or non-English storage.
-- Renderer-facing code should prefer `EntryView.renderDocumentAlloc()`. Use `term_records` for term-list sections, `translation_records` for translation sections, and stream `blockIterator()` / `inlineIterator()` for general/POS text. `documentAlloc()` additionally materializes compatibility bodies for structured sections and should be reserved for callers that need them. Template spans hand off to Lua/Scribunto expansion. Do not persist HTML or terminal-specific styling.
-- Preserve exact source reconstruction through the existing raw APIs and verifier.
-- Incompatible dictionary layout changes require a magic bump. Cache reference or semantic changes require a decoder cache-version bump.
-- `WIKBLB05` blobs are logical uncompressed artifacts. Persist semantic data plus only the minimal framing needed to recover it; do not persist derivable lookup indexes, offset tables, record counts, record-area lengths, or catalog filename/count columns. Build those at runtime.
-- Do not bake zstd, Brotli, chunk compression, or any transport/storage compression into blob formats; compress finished blob files separately outside the format when needed.
-- Reuse `encoder/section_encoding.zig` rather than introducing a second structural parser.
-- Run the stable Zig at `/home/a/zalloc-work/zalloc-next-handoff-20260904/remote-tools/zig/zig` and gate changes with `zig build test`.
-- Follow `/home/a/AGENTS.md` for shared-host benchmark and tooling rules.
+## Repository rules
 
-- Serialization work must not modify VM or VM-related code under `lua2/`; it is owned by another agent.
+- `main` is the only local branch. Work directly on it. Do not create branches or worktrees unless the user explicitly asks.
+- Do not push unless the user explicitly asks.
+- Keep temporary files under `.tmp/` and remove them before finishing.
+- Keep the working tree clean. Delete dead experiments instead of parking them in the repository.
 
-- Frontends share `frontend/model.zig`, the runtime wikitext renderer and the portable blob readers. Keep exact source separate from presentation; unresolved templates stay explicit, and human output must neutralize terminal control sequences.
-- Machine results use the versioned `dict.results.v1` stdout protocol; diagnostics go to stderr. Do not place frontend data or theme state into blob files.
-- Rebuild and commit `frontend/web/dist/index.html` after editing web source; native builds embed it and must not fetch Node dependencies. Test terminal cleanup using a real PTY, including resize and handled signals.
-- Rendering gates must assert visible semantic content, not just process startup. Keep native template support explicit; never label an argument projection as full Scribunto expansion or fabricate language morphology.
-- `runtime_bridge.zig` is the integration boundary for the retained VM compiler/codec/oracle fallback; production linked expansion uses the runtime-specific native AOT worker. Keep changes to `lua2/` with its owning agent; test the actual converter-to-renderer path through `zig build test-runtime`. `build-dictionary` coordinates existing passes, not a new wire format or a completed single-pass merger.
-- Lua expansion must preserve original source, expose failures in `entry.expansion`, return nonzero for CLI fallbacks, and reject incomplete runtime builds. Never treat a successful corpus compile as proof that all compiled modules execute correctly.
-- WIKBLB05 external-body markers derive their family from the retained heading. Resolve required per-language companions before exact-source decoding or Lua expansion; do not present missing bodies as empty. Validate complete source and orphan companion records after storage changes.
-- `entry.organization` is runtime-only: preserve original sections, distinguish origins and languages, attach evidence to its actual definition, and never label synonym lists as usage examples. Inflected entries retain their own meanings and explicit base-word relations.
-- Language accounting must state its scope (global catalog or exact spelling). Canonical registry matches are not a count of living languages or Wiktionary editions; Translingual and unverified headings are separate.
-- Core presentation is explicit, not failed reconstruction: `section.deferred` and `entry.content` mark intentionally unopened companions. Exact source and Lua expansion must resolve every required body; test missing-package recovery with a real PTY and verify zero companion mappings before details.
-- Promoted pronunciation must be entry/language-wide, not borrowed from a particular origin. Named quotation passages may render while their unknown citation templates stay explicitly unresolved; keep template accounting honest.
-- WIKBLB05 binds a shared typed symbol catalog by SHA-256 identity. Static template/parser/module/function operands use its IDs in both source blobs and DWSY01 bytecode string pools; never silently bind a different catalog. Names remain once in symbols.wikblb for exact source and reflective Lua semantics.
-- runtime_symbols.zig adapts only the version-checked owner-codec string envelope; instruction/function bodies stay unchanged. Audit all linked programs against exact owner output and test dynamic Lua lookup. Keep owner VM changes in lua2/ with that agent.
-- Linked runtime loading must work without extraction sources. Auxiliary source pages and externally pinned dependencies are semantic inputs, not fake empty pages. Template success requires actual execution; count/index or compilation success is not coverage proof.
-- Media acquisition is explicit and bounded. HTML uses verified local raster/audio bytes, embedded attribution/license data and no automatic network requests. Rebuild the single-file bundle after web changes.
-- Native `blob_storage` owns disposable `.dict-cache` indexes and raw/XZ record lifetimes, outside portable codecs and wire formats. Warm caches are source-bound/checksummed mappings with no copied title directory; full order validation happens when they are built. Title search must not decode payloads. Destroy presentations before their owned record buffers. Test cold/warm caches, replaced inputs, corruption, block crossings and concatenated XZ streams.
-- `dict serve` is a loopback-only read-only HTTP/1.1 app, not a public authenticated service. Keep fixed routes and search separate from serialized persistent Lua expansion. The native runtime worker retains immutable provider/runtime-root state across requests, keyed by dictionary root and language, while each request gets fresh Lua page state; timeout/crash must kill and restart only that child, and server death must not orphan it. `dict export` emits one entry; export controls do not belong in live reading. Test real HTTP, browser navigation and executable replacement while a server runs.
+## Lua architecture
 
-## Lua compiler invariants
-- Keep CFG/type/SSA optimization before `vm_ref_lower`; tagged literal references are final operands, never SSA register numbers.
-- Table-key exclusivity must hold for each allocation lifetime, not merely share one syntactic SSA definition across loop iterations.
-- Lua table length is a valid array border, not a scan from key 1. Preserve constructor/list `append_index` through constant materialization so sparse literals with nil holes keep Lua 5.1 table.insert/remove semantics.
-- Immutable constant/template deduplication must still create distinct mutable Lua objects on every materialization; entry pooling compares every logical sequence before replacement.
-- Numeric export linking remains experimental until export mutation/escape proofs and exact Wiktionary replay pass. Do not remove observable names or enable speculative direct calls to satisfy a size target.
-- Every native AOT Lua closure retains its compiled entrypoint when the closure is created. Rebinding chooses another compiled closure; ordinary function calls must not rediscover machine code through a function-ID dispatcher. Proven call targets may devirtualize further, but correctness never depends on a prediction surviving mutation.
-- Generated AOT frames initialize only Lua parameters at entry. Functions with no captured locals have no cell plane; do not restore whole-register or whole-cell clears on every compiled function call.
-- Advisory AOT call predictions never emit runtime identity guards or fallback branches. Only strictly proven `Inst.aot_direct` targets may devirtualize to a named compiled function; every other call invokes the live callable's compiled entrypoint, so rebinding selects another compiled closure/native directly. Keep prediction hints compiler-only and out of serialized bytecode; `call_vararg.c` remains the semantic dynamic-tail register.
-- Linked export field-name candidates are analysis-only. Ambiguous names and canonical native field names may remain unresolved without adding a runtime guard path; the live callable remains the execution authority.
-- Local-function declarations lower as adjacent `load_nil dst; closure tmp; move dst,tmp`; capture analysis may ignore only that exact same-basic-block bootstrap nil because no Lua code can run before the assignment. Ordinary nil writes remain prediction barriers.
-- Guard-only capture facts may ignore ordinary nil writes only as analysis metadata; they must never create a runtime call guard. Strict whole-program facts keep nil as a prediction barrier.
-- Function-entry phis include the implicit entry edge. Inlined closure factories need distinct capture cells for every dynamic activation, including loop calls.
-- AOT module-singleton functions share one activation capture environment; do not duplicate capture slices per `load_function`. Generated closures, static cross-shard calls and module roots retain link-time compiled entry slots; do not restore a function-ID execution dispatcher. Loop and factory closures still require fresh environments and identities.
-- Generated AOT Zig is whitespace-compacted after emission. Lua string bytes must stay escaped onto one Zig source line; do not make codegen semantics depend on indentation.
-- Native AOT runtime and stdlib must not import the VM/interpreter/bytecode codec. Core globals stay numeric slots; `_G` reflection uses fixed shape metadata, and host-bound natives carry only an opaque host pointer plus the AOT context.
-- Linked AOT dynamic `require` resolves immutable module-name metadata to numeric module IDs; static imports and dynamic `require` share one numeric module cache. `package.loaded` is the reflective Lua adapter, not the execution index. Duplicate manifest titles use the linker-compatible last occurrence.
-- Per-page and per-`#invoke` AOT module loading/value/environment state is sparse by touched numeric module ID. Keep the immutable registry dense if useful, but never allocate or clear mutable arrays sized to the full corpus on context startup.
-- Register-address operands (such as `detach_cell`) are not value reads. Keep their bounds, remapping and physical storage reservation in the shared opcode semantics.
-- AOT host objects must not retain `*Context` across `initContext` return; generated contexts move by value. Native callbacks receive the live context at invocation and persistent host state may retain allocator/data or an opaque external host, not the temporary initializer address.
-- Generated AOT roots expose the typed Scribunto `Host`/`setHost` boundary for live page inputs. Keep current title, page existence/content and future application state behind that opaque application-owned host; isolated `loadData` contexts inherit it, and generated Lua must not reach the filesystem or VM for those inputs.
-- Native AOT core namespaces `table`, `string`, `math`, `debug`, `mw`, and `mw.ustring` use `newNativeNamespace` so compiler static-field refs land in numeric slots. Preserve dynamic fields/iteration and runtime fallback after namespace rebinding; do not replace these namespace tables with generic tables.
-- Native Scribunto title parsing and `mw.site.namespaces` share `zig_namespaces.zig` as one Wiktionary namespace catalog; aliases/canonical names must not be duplicated in separate host tables.
-- Compiler-known nested Scribunto namespaces and stable result layouts (`title`, `text`, `uri`, `html`, `language`, `frame`, `title_value`, `language_value`, `html_node`) also use `newNativeNamespace`; keep list/data/query tables generic when keys are genuinely dynamic.
-- AOT host time is explicit page state: `Host.now_unix` supplies MediaWiki "now" semantics for deterministic native execution. Do not read the process wall clock from generated AOT helpers; callers own the page timestamp.
-- AOT frame state is page-local Context state: `current_frame` is saved/restored around native module invocation and is intentionally not inherited by `forkProgram`/`mw.loadData`. Preprocess/template/extension/parser work crosses only the typed application Host callbacks.
-- Native AOT frame objects never retain `*Context`; they keep only frame/table/parent/title data and receive the live Context on callback. Generated roots expose `FrameArg`, `makeFrame`, and `invoke`; `invoke` scopes `current_frame` around the call and restores it on every exit.
-- VM-oracle and native-AOT page expansion share `wikitext_preprocess.zig` for comments, transclusion tags, brace matching and top-level delimiters; do not fork a second parser for these semantics.
-- Generated linked AOT roots expose `initExpander(ctx, provider)` as the native Wiktionary page-expansion boundary. `#invoke` forks fresh AOT module/global state and reinstalls native stdlib/Scribunto. Immutable `mw.loadData` graphs are promoted into page-owned read-only storage and may be reused by sibling invokes on that page.
-- Native AOT page expansion uses `zig_wikitext.Expander` through `zig_scribunto.makeWikitextExpander`; generated roots expose `WikitextProvider`/`initExpander`. Keep page/template/provider state application-owned and do not route native expansion back through `vm_exec` or `wiktionary_runtime`.
-- Production linked expansion is a dump-specific `dict-native-expansion-worker` built beside runtime data; the generic `dict` process only launches the framed worker. Native providers read linked page/template/redirect data without `runtime_bridge`, `vm_exec`, `vm_codec`, or `wiktionary_runtime`. Retain VM bytecode only as oracle/legacy fallback until real-Wiktionary replay qualifies removal.
-- Each native `#invoke` runs in a fresh `Context.forkProgram` with stdlib/Scribunto reinstalled and the same typed page host. Ordinary `require`, globals and `package.loaded` remain invoke-local; the immutable `mw.loadData` cache is page-scoped, reused across sibling invokes, and reset by `Expander.beginPage`.
-- Sharded AOT may replace exact constant-only/empty module roots with runtime descriptors while keeping function IDs stable via a shared stub; preserve module caching/`package.loaded` semantics and leave roots referenced as ordinary functions fully generated.
-- Native AOT function objects are separate Zig compilation units: never pass Zig `anyerror`, Zig slices, or other internal return ABI across that object boundary. Lua closures and native callbacks share one `Value.callable` representation and one `FunctionFn` C-callconv fixed-result ABI; `newNative` stores only its opaque host context plus the comptime-known stable entrypoint. Do not restore separate native/function dispatch or indirect Zig callback ABI calls across compilation units.
-- Dump-specific native workers keep immutable constant/entry payloads in versioned `aot-data.bin`; generated roots that require it expose `requires_program_data` and `initContextWithData`. Do not re-encode this data through VM bytecode or compile multi-million-record constant tables as Zig source.
-- Production AOT function shards link as independent native objects through exported function-pointer tables. Numeric function IDs remain metadata and closure identity; execution uses compiled entry pointers or static entry slots. Do not restore `functionById`/`invokeKnown` execution dispatch or one LLVM module containing the whole dump.
-- Fixed-result AOT calls may cross shard boundaries with caller-owned result storage only as raw pointer/length fields in the stable C-callconv function ABI. Unbuffered and native entries must stay valid through the same ABI, and multi-result ownership must remain explicit.
-- Native `next` may use only an ephemeral Context-local iterator-position hint keyed by table and prior key. Preserve arbitrary-key/interleaved fallback scanning and current-key deletion traversal; do not add per-Table iterator cache/index storage.
-- Generated AOT shards and the native worker core must use one Zig backend for every internal Zig-ABI call. If the final executable is linked with a different backend, cross that boundary only through a fixed C-callconv entrypoint; never rely on mixed-backend Zig ABI compatibility.
-- Backend-specialized worker leaf helpers may use a different Zig backend only behind raw-pointer/scalar C-callconv ABIs. Never pass `Context`, `Value`, allocators, slices, error unions, or other Zig-layout values across those helper boundaries.
-- Native workers must install any backend-specialized semantic SHA-256 callback before the first `SymbolSource.load`; once the catalog binding is validated, reuse that stored binding ID for linked-file identity checks instead of recomputing `Names.digest()` over the same catalog.
-- `.dict-cache` indexes are disposable derived data: version their checksum format and reject/rebuild corrupted or source-mismatched caches. The shared WIKBLB symbol catalog remains bound by exact SHA-256 semantic identity; a faster cache checksum must never replace that binding digest.
-- The native linked page provider must not eagerly parse `manifest.jsonl`: `#invoke` uses the generated AOT module registry, while the raw `Module:` source manifest is a lazy fallback loaded only for an actual `Module:` page lookup. Keep ordinary page/template startup independent of corpus module-manifest size.
+- Lua execution is native AOT only. There is exactly one execution engine.
+- `lua/parser/` owns Lua syntax parsing.
+- `lua/compiler/` owns IR, analysis, optimization, lowering, and linking.
+- `lua/abi/` owns stable compiler/runtime ABI contracts.
+- `lua/aot/` emits native Zig and external program data.
+- `lua/runtime/` is support code linked into generated native code.
+- `lua/wikitext/` owns compile-time wikitext helpers.
+- `lua/extract/` owns dump extraction for modules and templates.
+- Production expansion requires the dump-specific `dict-native-expansion-worker`. Missing or incompatible native assets are explicit errors. Do not add a second execution path or silent fallback.
+- Runtime builds publish source/provider data, `aot-data.bin` when required, and the native worker. Do not serialize executable Lua programs into a second runtime format.
 
-- Native AOT module resolution matches MediaWiki title normalization: try the exact name, then trim surrounding whitespace and treat underscores as spaces before numeric registry/redirect lookup.
+## Validation
+
+- Use the repository Zig toolchain configured for this host.
+- For compiler/runtime changes, run `zig build test` and `zig build test-runtime`.
+- For frontend schema/UI changes, rebuild `frontend/web` and run the relevant frontend tests.
+- Run `git diff --check` before committing.

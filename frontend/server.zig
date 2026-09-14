@@ -1,4 +1,4 @@
-//! Local HTTP/1.1 application. Persistent indexes are shared; VM work never holds
+//! Local HTTP/1.1 application. Persistent indexes are shared; Lua expansion never holds
 //! the store lock. Only fixed read-only API routes are exposed, never arbitrary files.
 const std = @import("std");
 const args = @import("args.zig");
@@ -63,8 +63,8 @@ const State = struct {
     tick: u64 = 0,
     index_builds: u64 = 0,
     index_hits: u64 = 0,
-    vm_lock: std.Io.Mutex = .init,
-    vm_worker: expansion.Worker,
+    lua_lock: std.Io.Mutex = .init,
+    lua_worker: expansion.Worker,
     fn init(io: std.Io, a: A, opts: args.Options, runtime: expansion.Options, media: ?[]const u8) !State {
         const path = try std.fs.path.join(a, &.{ opts.root, enc.blob_catalog.manifest_filename });
         defer a.free(path);
@@ -98,10 +98,10 @@ const State = struct {
             errdefer a.free(code);
             try list.append(a, .{ .heading = heading, .code = code });
         }
-        return .{ .io = io, .a = a, .opts = opts, .runtime = runtime, .media = media, .languages = try list.toOwnedSlice(a), .vm_worker = expansion.Worker.init(io, runtime) };
+        return .{ .io = io, .a = a, .opts = opts, .runtime = runtime, .media = media, .languages = try list.toOwnedSlice(a), .lua_worker = expansion.Worker.init(io, runtime) };
     }
     fn deinit(self: *State) void {
-        self.vm_worker.deinit();
+        self.lua_worker.deinit();
         for (&self.slots) |*slot| if (slot.*) |*s| {
             s.db.deinit();
             self.a.free(s.language);
@@ -182,7 +182,7 @@ const State = struct {
             response.record_count = dbp.count();
             if (stats) {
                 const x = dbp.file.compressed;
-                return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .records = dbp.count(), .index_bytes = dbp.file.indexBytes(), .index_heap_bytes = dbp.file.indexHeapBytes(), .cache_map_bytes = dbp.file.cacheMappedBytes(), .payload_reads = dbp.file.payload_reads, .disk_cache_hit = dbp.file.cache_hit, .disk_cache_saved = dbp.file.cache_saved, .index_builds = self.index_builds, .index_cache_hits = self.index_hits, .xz_blocks = if (x) |v| v.blocks else 0, .decoded_blocks = if (x) |v| v.decoded_blocks else 0, .vm_worker_starts = self.vm_worker.startCount(), .vm_requests = self.vm_worker.requestCount() }, .{}) };
+                return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .records = dbp.count(), .index_bytes = dbp.file.indexBytes(), .index_heap_bytes = dbp.file.indexHeapBytes(), .cache_map_bytes = dbp.file.cacheMappedBytes(), .payload_reads = dbp.file.payload_reads, .disk_cache_hit = dbp.file.cache_hit, .disk_cache_saved = dbp.file.cache_saved, .index_builds = self.index_builds, .index_cache_hits = self.index_hits, .xz_blocks = if (x) |v| v.blocks else 0, .decoded_blocks = if (x) |v| v.decoded_blocks else 0, .lua_worker_starts = self.lua_worker.startCount(), .lua_requests = self.lua_worker.requestCount() }, .{}) };
             }
             if (search) {
                 const range = try dbp.prefix(q.q);
@@ -216,9 +216,9 @@ const State = struct {
         };
         const expanded_title = try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, q.q });
         var doc = if (self.runtime.root != null) blk: {
-            try self.vm_lock.lock(self.io);
-            defer self.vm_lock.unlock(self.io);
-            break :blk try expansion.fromWikitextWorker(&self.vm_worker, self.a, expanded_title, if (kind == .language) language else "", source, true);
+            try self.lua_lock.lock(self.io);
+            defer self.lua_lock.unlock(self.io);
+            break :blk try expansion.fromWikitextWorker(&self.lua_worker, self.a, expanded_title, if (kind == .language) language else "", source, true);
         } else try expansion.fromWikitext(self.io, self.a, expanded_title, if (kind == .language) language else "", source, true, self.runtime);
         defer doc.deinit();
         doc.entry.title = q.q;

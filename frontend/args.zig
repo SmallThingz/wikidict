@@ -169,7 +169,7 @@ test "language accounting can be scoped to a spelling rather than the whole cata
     try std.testing.expectEqual(Command.languages, opts.command);
 }
 
-test "core-only export cannot silently replace exact source or VM expansion" {
+test "core-only export cannot silently replace exact source or Lua expansion" {
     try std.testing.expect((try parse(&.{ "lookup", "cat", "--core-only", "--format", "html" })).core_only);
     try std.testing.expect((try parse(&.{ "search", "cat", "--core-only", "--format", "json" })).core_only);
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--core-only", "--format", "source" }));
@@ -179,7 +179,7 @@ test "core-only export cannot silently replace exact source or VM expansion" {
     try std.testing.expectError(error.Usage, parse(&.{ "render", "a.wiki", "--core-only" }));
 }
 
-test "explicit native rendering cannot accidentally enable a configured VM" {
+test "explicit native rendering cannot accidentally enable a configured Lua worker" {
     try std.testing.expect((try parse(&.{ "lookup", "cat", "--native" })).native);
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--native", "--runtime", "runtime" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--media-dir", "" }));

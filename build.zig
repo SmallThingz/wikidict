@@ -147,9 +147,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = test_optimize,
     });
-    const runtime_bridge_mod = b.createModule(.{ .root_source_file = b.path("runtime_bridge.zig"), .target = target, .optimize = optimize });
-    const runtime_symbols_mod = b.createModule(.{ .root_source_file = b.path("runtime_symbols.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "runtime_bridge", .module = runtime_bridge_mod }, .{ .name = "blob_encoder", .module = blob_encoder_mod } } });
-    const runtime_symbols_mod_test = b.createModule(.{ .root_source_file = b.path("runtime_symbols.zig"), .target = target, .optimize = test_optimize, .imports = &.{ .{ .name = "runtime_bridge", .module = runtime_bridge_mod }, .{ .name = "blob_encoder", .module = blob_encoder_mod_test } } });
     const storage_mod = b.createModule(.{ .root_source_file = b.path("native/storage.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
     storage_mod.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
     const storage_test = b.createModule(.{ .root_source_file = b.path("native/storage.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
@@ -171,7 +168,6 @@ pub fn build(b: *std.Build) void {
     encoder_mod_bootstrap.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     encoder_mod_bootstrap.addImport("wikitext_source", wikitext_source_mod);
     encoder_mod_bootstrap.addImport("blob_encoder", blob_encoder_mod);
-    encoder_mod_bootstrap.addImport("runtime_symbols", runtime_symbols_mod);
 
     const structure_bin = addDirectStructureBinary(
         b,
@@ -208,7 +204,6 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("compact_pattern_seed", compact_pattern_seed_mod);
     encoder_mod.addImport("wikitext_source", wikitext_source_mod);
     encoder_mod.addImport("blob_encoder", blob_encoder_mod);
-    encoder_mod.addImport("runtime_symbols", runtime_symbols_mod);
 
     const encoder_mod_test = b.addModule("encoder_test", .{
         .root_source_file = b.path("encoder/root.zig"),
@@ -227,7 +222,6 @@ pub fn build(b: *std.Build) void {
     encoder_mod_test.addImport("compact_pattern_seed", compact_pattern_seed_mod_test);
     encoder_mod_test.addImport("wikitext_source", wikitext_source_mod_test);
     encoder_mod_test.addImport("blob_encoder", blob_encoder_mod_test);
-    encoder_mod_test.addImport("runtime_symbols", runtime_symbols_mod_test);
 
     const decoder_mod = b.addModule("decoder", .{
         .root_source_file = b.path("decoder/root.zig"),
@@ -306,11 +300,11 @@ pub fn build(b: *std.Build) void {
         .{ .name = "shared_structure_report", .module = shared_structure_report_mod },
         .{ .name = "tool_paths", .module = verifier_tool_paths_mod },
     });
-    const module_extract_exe = addCliExecutable(b, "dict-module-extract", b.path("lua2/module_extract.zig"), target, optimize, &.{
+    const module_extract_exe = addCliExecutable(b, "dict-module-extract", b.path("lua/module_extract_main.zig"), target, optimize, &.{
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
     });
-    const template_extract_exe = addCliExecutable(b, "dict-template-extract", b.path("lua2/template_extract.zig"), target, optimize, &.{
+    const template_extract_exe = addCliExecutable(b, "dict-template-extract", b.path("lua/template_extract_main.zig"), target, optimize, &.{
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
     });
@@ -323,12 +317,7 @@ pub fn build(b: *std.Build) void {
     });
     const link_blobs_exe = addCliExecutable(b, "dict-link-blobs", b.path("tools/link_blobs.zig"), target, optimize, &.{.{ .name = "encoder", .module = encoder_mod }});
     addPublicRunStep(b, "link-blobs", "Replace static call names with shared symbolic operands", addRunArtifactCommand(b, link_blobs_exe, &.{}, b.args), &.{});
-    const bytecode_exe = addCliExecutable(b, "dict-bytecode-build", b.path("tools/bytecode_build.zig"), target, optimize, &.{.{ .name = "runtime_bridge", .module = runtime_bridge_mod }});
-    bytecode_exe.root_module.link_libc = true;
-    bytecode_exe.use_llvm = true;
-    bytecode_exe.use_lld = true;
-    addPublicRunStep(b, "compile-bytecode", "Compile extracted Lua through the VM bytecode converter", addRunArtifactCommand(b, bytecode_exe, &.{}, b.args), &.{});
-    const aot_exe = addCliExecutable(b, "dict-aot-build", b.path("lua2/zig_aot_corpus.zig"), target, optimize, &.{});
+    const aot_exe = addCliExecutable(b, "dict-aot-build", b.path("lua/aot_build_main.zig"), target, optimize, &.{});
     aot_exe.root_module.link_libc = true;
     aot_exe.use_llvm = true;
     aot_exe.use_lld = true;
@@ -343,13 +332,12 @@ pub fn build(b: *std.Build) void {
     pipeline_paths.addOptionPath("redirects", redirects_exe.getEmittedBin());
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
     pipeline_paths.addOptionPath("templates", template_extract_exe.getEmittedBin());
-    pipeline_paths.addOptionPath("bytecode", bytecode_exe.getEmittedBin());
     pipeline_paths.addOptionPath("aot", aot_exe.getEmittedBin());
     pipeline_paths.addOption([]const u8, "zig", b.graph.zig_exe);
     pipeline_paths.addOption([]const u8, "project_root", b.pathFromRoot("."));
     pipeline_paths.addOptionPath("blobs", blob_build_exe.getEmittedBin());
     const pipeline_exe = addCliExecutable(b, "dict-runtime-build", b.path("tools/runtime_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
-    addPublicRunStep(b, "build-runtime", "Extract templates/modules and build matching VM oracle plus native AOT worker", addRunArtifactCommand(b, pipeline_exe, &.{}, b.args), &.{});
+    addPublicRunStep(b, "build-runtime", "Extract templates/modules and build the native Lua AOT worker", addRunArtifactCommand(b, pipeline_exe, &.{}, b.args), &.{});
     addPublicRunStep(b, "build-dictionary", "Build dictionary blobs plus their shared native Lua runtime in one coordinated pipeline", addRunArtifactCommand(b, pipeline_exe, &.{"--with-blobs"}, b.args), &.{});
     const blob_files_mod = b.createModule(.{ .root_source_file = b.path("encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
     const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
@@ -360,8 +348,6 @@ pub fn build(b: *std.Build) void {
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
         .{ .name = "blob_files", .module = blob_files_mod },
         .{ .name = "blob_storage", .module = storage_mod },
-        .{ .name = "runtime_symbols", .module = runtime_symbols_mod },
-        .{ .name = "runtime_bridge", .module = runtime_bridge_mod },
         .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = optimize }) },
     });
     // Locale-aware terminal cell widths use libc; lld supports current host crt objects.
@@ -487,8 +473,6 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "blob_decoder", .module = blob_decoder_mod_test },
                 .{ .name = "blob_files", .module = blob_files_mod_test },
                 .{ .name = "blob_storage", .module = storage_test },
-                .{ .name = "runtime_symbols", .module = runtime_symbols_mod_test },
-                .{ .name = "runtime_bridge", .module = runtime_bridge_mod },
                 .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = test_optimize }) },
             },
         }),
@@ -497,9 +481,9 @@ pub fn build(b: *std.Build) void {
     blob_query_tests.root_module.link_libc = true;
     blob_query_tests.use_llvm = true;
     blob_query_tests.use_lld = true;
-    const lua2_tests = b.addTest(.{
+    const lua_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua2/all_tests.zig"),
+            .root_source_file = b.path("lua/tests.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -510,24 +494,54 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
-    const zig_runtime_test_mod = b.createModule(.{
-        .root_source_file = b.path("lua2/zig_runtime.zig"),
+    const lua_program_data_test_mod = b.createModule(.{
+        .root_source_file = b.path("lua/aot/program_data.zig"),
         .target = target,
         .optimize = test_optimize,
     });
+    const lua_static_keys_test_mod = b.createModule(.{
+        .root_source_file = b.path("lua/abi/static_keys.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    const lua_globals_test_mod = b.createModule(.{
+        .root_source_file = b.path("lua/abi/globals.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    const lua_wikitext_preprocess_test_mod = b.createModule(.{
+        .root_source_file = b.path("lua/wikitext/preprocess.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    const lua_wikitext_expression_test_mod = b.createModule(.{
+        .root_source_file = b.path("lua/wikitext/expression.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    const zig_runtime_test_mod = b.createModule(.{
+        .root_source_file = b.path("lua/runtime/core.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    zig_runtime_test_mod.addImport("lua_program_data", lua_program_data_test_mod);
+    zig_runtime_test_mod.addImport("lua_static_keys", lua_static_keys_test_mod);
     const aot_stdlib_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua2/zig_stdlib.zig"),
+            .root_source_file = b.path("lua/runtime/stdlib.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
-            .imports = &.{.{ .name = "zig_runtime", .module = zig_runtime_test_mod }},
+            .imports = &.{
+                .{ .name = "zig_runtime", .module = zig_runtime_test_mod },
+                .{ .name = "lua_globals", .module = lua_globals_test_mod },
+            },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const aot_ustring_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua2/zig_ustring.zig"),
+            .root_source_file = b.path("lua/runtime/ustring.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -537,33 +551,37 @@ pub fn build(b: *std.Build) void {
     });
     const aot_scribunto_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua2/zig_scribunto.zig"),
+            .root_source_file = b.path("lua/runtime/scribunto.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
             .imports = &.{
                 .{ .name = "zig_runtime", .module = zig_runtime_test_mod },
                 .{ .name = "zig_stdlib", .module = aot_stdlib_tests.root_module },
+                .{ .name = "lua_wikitext_preprocess", .module = lua_wikitext_preprocess_test_mod },
+                .{ .name = "lua_wikitext_expression", .module = lua_wikitext_expression_test_mod },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const aot_wikitext_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua2/zig_wikitext.zig"),
+            .root_source_file = b.path("lua/runtime/wikitext.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
             .imports = &.{
                 .{ .name = "zig_runtime", .module = zig_runtime_test_mod },
                 .{ .name = "zig_stdlib", .module = aot_stdlib_tests.root_module },
+                .{ .name = "lua_wikitext_preprocess", .module = lua_wikitext_preprocess_test_mod },
+                .{ .name = "lua_wikitext_expression", .module = lua_wikitext_expression_test_mod },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const aot_module_registry_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua2/zig_module_registry_tests.zig"),
+            .root_source_file = b.path("lua/runtime/module_registry_test.zig"),
             .target = target,
             .optimize = test_optimize,
             .imports = &.{.{ .name = "zig_runtime", .module = zig_runtime_test_mod }},
@@ -589,7 +607,7 @@ pub fn build(b: *std.Build) void {
     const run_structure_tables_support_tests = b.addRunArtifact(structure_tables_support_tests);
     const run_verifier_tests = b.addRunArtifact(verifier_tests);
     const run_blob_query_tests = b.addRunArtifact(blob_query_tests);
-    const run_lua2_tests = b.addRunArtifact(lua2_tests);
+    const run_lua_tests = b.addRunArtifact(lua_tests);
     const run_aot_stdlib_tests = b.addRunArtifact(aot_stdlib_tests);
     const run_aot_ustring_tests = b.addRunArtifact(aot_ustring_tests);
     const run_aot_scribunto_tests = b.addRunArtifact(aot_scribunto_tests);
@@ -607,8 +625,8 @@ pub fn build(b: *std.Build) void {
     structure_tables_support_tests.step.dependOn(&run_structure_tests.step);
     verifier_tests.step.dependOn(&run_structure_tables_support_tests.step);
     blob_query_tests.step.dependOn(&run_verifier_tests.step);
-    lua2_tests.step.dependOn(&run_blob_query_tests.step);
-    aot_stdlib_tests.step.dependOn(&run_lua2_tests.step);
+    lua_tests.step.dependOn(&run_blob_query_tests.step);
+    aot_stdlib_tests.step.dependOn(&run_lua_tests.step);
     aot_ustring_tests.step.dependOn(&run_aot_stdlib_tests.step);
     aot_scribunto_tests.step.dependOn(&run_aot_ustring_tests.step);
     aot_wikitext_tests.step.dependOn(&run_aot_scribunto_tests.step);
@@ -619,15 +637,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&blob_wasm_smoke.step);
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "encoder", .module = encoder_mod } });
     addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}, b.args), &.{});
-    const symbol_audit_exe = addCliExecutable(b, "dict-symbol-audit", b.path("tools/symbol_audit.zig"), target, optimize, &.{ .{ .name = "blob_encoder", .module = blob_encoder_mod }, .{ .name = "blob_files", .module = blob_files_mod }, .{ .name = "runtime_symbols", .module = runtime_symbols_mod } });
-    addPublicRunStep(b, "audit-symbols", "Verify shared symbol IDs and exact owner-bytecode reconstruction", addRunArtifactCommand(b, symbol_audit_exe, &.{}, b.args), &.{});
     const runtime_test_exe = addCliExecutable(b, "dict-runtime-integration-test", b.path("tools/runtime_integration_test.zig"), b.graph.host, test_optimize, &.{});
     const runtime_test_run = b.addRunArtifact(runtime_test_exe);
     runtime_test_run.addFileArg(blob_query_exe.getEmittedBin());
     runtime_test_run.addFileArg(pipeline_exe.getEmittedBin());
     runtime_test_run.addArg(b.pathFromRoot(".zig-cache"));
     runtime_test_run.step.dependOn(&blob_wasm_smoke.step);
-    b.step("test-runtime", "Exercise extraction, bytecode conversion and rendered VM output end to end").dependOn(&runtime_test_run.step);
+    b.step("test-runtime", "Exercise extraction and native Lua AOT rendering end to end").dependOn(&runtime_test_run.step);
     const reader_test_exe = addCliExecutable(b, "dict-reader-integration-test", b.path("tools/reader_integration_test.zig"), b.graph.host, test_optimize, &.{});
     const reader_test_run = b.addRunArtifact(reader_test_exe);
     reader_test_run.addFileArg(blob_query_exe.getEmittedBin());

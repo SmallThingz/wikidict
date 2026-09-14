@@ -1,28 +1,14 @@
-//! One shared link step for dictionary calls, template programs and VM bytecode.
+//! One shared link step for dictionary, template, redirect, and page call names.
 //! Source inputs remain owned by their builders; linked outputs contain IDs.
 const std = @import("std");
 const enc = @import("blob_encoder");
-const vm_symbols = @import("runtime_symbols");
 const symbols = enc.call_symbols;
 const format = enc.blob_format;
 const files = @import("blob_files.zig");
 const A = std.mem.Allocator;
-pub const Stats = struct { symbols: usize = 0, templates: usize = 0, functions: usize = 0, modules: usize = 0, parsers: usize = 0, records: usize = 0, bytecode_programs: usize = 0 };
+pub const Stats = struct { symbols: usize = 0, templates: usize = 0, functions: usize = 0, modules: usize = 0, parsers: usize = 0, records: usize = 0 };
 const Template = struct { name: []const u8, path: []const u8, redirect: ?[]const u8 = null };
 const Redirect = struct { from: []const u8, to: []const u8 };
-const Mapped = struct {
-    bytes: []align(std.heap.page_size_min) const u8,
-    fn open(io: std.Io, path: []const u8) !Mapped {
-        var file = try std.Io.Dir.cwd().openFile(io, path, .{});
-        defer file.close(io);
-        const len = std.math.cast(usize, (try file.stat(io)).size) orelse return error.FileTooBig;
-        if (len == 0) return error.EmptyBundle;
-        return .{ .bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0) };
-    }
-    fn deinit(self: Mapped) void {
-        std.posix.munmap(self.bytes);
-    }
-};
 fn read(io: std.Io, a: A, path: []const u8) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(32 * 1024 * 1024));
 }
@@ -41,7 +27,7 @@ fn walk(io: std.Io, a: A, root: []const u8, relative: []const u8, list: *std.Arr
         defer a.free(sub);
         if (item.kind == .directory and (depth != 0 or std.mem.eql(u8, item.name, "languages") or std.mem.eql(u8, item.name, "details"))) try walk(io, a, root, sub, list, depth + 1) else if (item.kind == .file and std.mem.endsWith(u8, item.name, ".wikblb")) {
             var generated = false;
-            for ([_][]const u8{ "symbols.wikblb", "templates.wikblb", "bytecode.wikblb", "redirects.wikblb", "pages.wikblb", "pages.source.wikblb" }) |name| if (std.mem.eql(u8, item.name, name)) {
+            for ([_][]const u8{ "symbols.wikblb", "templates.wikblb", "redirects.wikblb", "pages.wikblb", "pages.source.wikblb" }) |name| if (std.mem.eql(u8, item.name, name)) {
                 generated = true;
                 break;
             };
@@ -234,24 +220,6 @@ fn writeTemplates(io: std.Io, a: A, root: []const u8, list: []const Template, na
     }
     try w.flush();
 }
-fn writePrograms(io: std.Io, a: A, root: []const u8, programs: []const vm_symbols.BundleRecord, names: symbols.Names) !void {
-    var file = try outputFile(io, a, root, "bytecode.wikblb");
-    defer file.close(io);
-    var buffer: [256 * 1024]u8 = undefined;
-    var writer = file.writer(io, &buffer);
-    const w = &writer.interface;
-    try w.writeAll(&format.encodeLinkedHeader(.bytecode, names.digest()));
-    var arena = std.heap.ArenaAllocator.init(a);
-    defer arena.deinit();
-    for (programs) |p| {
-        const id = names.find(.module, p.title) orelse return error.UnboundModule;
-        var key: [16]u8 = undefined;
-        const linked = try vm_symbols.linkProgramAlloc(arena.allocator(), p.program, names);
-        try record(w, try idKey(id, &key), linked);
-        _ = arena.reset(.retain_capacity);
-    }
-    try w.flush();
-}
 fn writeRedirects(io: std.Io, a: A, root: []const u8, list: []const Redirect, names: symbols.Names) !void {
     var file = try outputFile(io, a, root, "redirects.wikblb");
     defer file.close(io);
@@ -308,40 +276,6 @@ pub fn linkRoot(io: std.Io, a: A, root: []const u8, runtime_root: ?[]const u8) !
         }
         a.free(redirects);
     }
-    var maps: [2]?Mapped = @splat(null);
-    defer for (maps) |m| if (m) |map| map.deinit();
-    var programs: std.ArrayList(vm_symbols.BundleRecord) = .empty;
-    defer programs.deinit(a);
-    var module_names: std.StringHashMapUnmanaged(usize) = .empty;
-    defer module_names.deinit(a);
-    for ([_][]const u8{ "modules.bundle", "dependencies/modules.bundle" }, 0..) |name, i| {
-        const path = try std.fs.path.join(a, &.{ runtime, name });
-        defer a.free(path);
-        maps[i] = Mapped.open(io, path) catch |err| switch (err) {
-            error.FileNotFound => continue,
-            else => return err,
-        };
-        var it = try vm_symbols.BundleIterator.init(maps[i].?.bytes);
-        while (try it.next()) |p| {
-            const slot = try module_names.getOrPut(a, p.title);
-            if (slot.found_existing) {
-                if (i != 0) return error.DuplicateModule;
-                // Match the owner bundle loader: later source rows shadow earlier
-                // rows of the same module title. Keep exact source-order semantics.
-                std.debug.print("LINK_SHADOWED_MODULE {s} (last source row wins)\n", .{p.title});
-                programs.items[slot.value_ptr.*] = p;
-            } else {
-                slot.value_ptr.* = programs.items.len;
-                try programs.append(a, p);
-            }
-        }
-    }
-    std.mem.sort(vm_symbols.BundleRecord, programs.items, {}, struct {
-        fn less(_: void, l: vm_symbols.BundleRecord, r: vm_symbols.BundleRecord) bool {
-            return std.mem.order(u8, l.title, r.title) == .lt;
-        }
-    }.less);
-    for (programs.items, 0..) |p, i| if (i != 0 and std.mem.eql(u8, p.title, programs.items[i - 1].title)) return error.DuplicateModule;
     const page_path = try std.fs.path.join(a, &.{ runtime, "pages.source.wikblb" });
     defer a.free(page_path);
     var pages: ?files.File = files.File.open(io, a, page_path) catch |err| switch (err) {
@@ -371,13 +305,6 @@ pub fn linkRoot(io: std.Io, a: A, root: []const u8, runtime_root: ?[]const u8) !
         try builder.add(.module, r.from);
         try builder.add(.module, r.to);
     }
-    var arena = std.heap.ArenaAllocator.init(a);
-    defer arena.deinit();
-    for (programs.items) |p| {
-        try builder.add(.module, p.title);
-        try vm_symbols.collectProgram(arena.allocator(), &builder, p.program);
-        _ = arena.reset(.retain_capacity);
-    }
     if (pages) |file| {
         var it = file.index.blob.iterator();
         while (try it.next()) |r| try builder.collect(r.payload);
@@ -391,13 +318,10 @@ pub fn linkRoot(io: std.Io, a: A, root: []const u8, runtime_root: ?[]const u8) !
     var marker_file = try std.Io.Dir.cwd().createFile(io, marker, .{ .exclusive = true });
     marker_file.close(io);
     try writeNames(io, a, root, names);
-    if (templates.len != 0 or programs.items.len != 0) {
-        try writeTemplates(io, a, root, templates, names);
-        try writePrograms(io, a, root, programs.items, names);
-        try writeRedirects(io, a, root, redirects, names);
-        try writePages(io, a, root, pages, names);
-    }
-    var stats: Stats = .{ .symbols = keys.len, .templates = templates.len, .bytecode_programs = programs.items.len };
+    try writeTemplates(io, a, root, templates, names);
+    try writeRedirects(io, a, root, redirects, names);
+    try writePages(io, a, root, pages, names);
+    var stats: Stats = .{ .symbols = keys.len, .templates = templates.len };
     for (keys) |key| switch (key[0]) {
         'f' => stats.functions += 1,
         'm' => stats.modules += 1,

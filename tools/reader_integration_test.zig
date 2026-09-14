@@ -70,5 +70,5 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().rename(offline, std.Io.Dir.cwd(), details, init.io);
     const restored = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "source" }, 0);
     try h.require(std.mem.eql(u8, restored, source), "reinstalled companions preserve source");
-    std.debug.print("READER_INTEGRATION_PASS checks={d}: core-only reading/JSON/HTML, all 5 deferred families, strict full/source/VM requests, reinstall and exact reconstruction. Artifacts: {s}\n", .{ h.checks, dir });
+    std.debug.print("READER_INTEGRATION_PASS checks={d}: core-only reading/JSON/HTML, all 5 deferred families, strict full/source/runtime requests, reinstall and exact reconstruction. Artifacts: {s}\n", .{ h.checks, dir });
 }
