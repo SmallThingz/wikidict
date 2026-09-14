@@ -1,13 +1,12 @@
-.deps/
 .zig-cache/
 zig-out/
-zig-pkg
+zig-pkg/
+.tmp/
+.worktree/
 .worktrees/
-
 
 data/
 enwiktionary.xml
-.tmp/
 
-frontend/web/node_modules/
-frontend/web/.vite/
+src/frontend/web/node_modules/
+src/frontend/web/.vite/

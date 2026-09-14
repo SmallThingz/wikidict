@@ -60,25 +60,25 @@ pub const ModuleCompileFailure = struct {
 };
 
 pub const BuildData = struct {
-    // Consumed by encoder/compact_encoding.zig for single-byte direct contractions.
+    // Consumed by src/encoder/compact_encoding.zig for single-byte direct contractions.
     compact_direct_patterns: []const []const u8 = &.{},
-    // Consumed by encoder/section_encoding.zig when emitting generic heading refs.
+    // Consumed by src/encoder/section_encoding.zig when emitting generic heading refs.
     heading_specs: []const HeadingSpec = &.{},
-    // Consumed by encoder/compact_encoding.zig and decoder/compact_runtime.zig.
+    // Consumed by src/encoder/compact_encoding.zig and src/decoder/compact_runtime.zig.
     heading_level_specs: []const HeadingLevelSpec = &.{},
-    // Consumed by encoder/compact_encoding.zig and decoder/reader.zig template-table loading.
+    // Consumed by src/encoder/compact_encoding.zig and src/decoder/reader.zig template-table loading.
     line_templates: []const TemplateSpec = &.{},
-    // Consumed by encoder/compact_encoding.zig as the hot escaped-pattern table.
+    // Consumed by src/encoder/compact_encoding.zig as the hot escaped-pattern table.
     compact_patterns: []const []const u8 = &.{},
-    // Consumed by encoder/compact_encoding.zig as the overflow escaped-pattern table.
+    // Consumed by src/encoder/compact_encoding.zig as the overflow escaped-pattern table.
     compact_patterns_ext: []const []const u8 = &.{},
-    // Consumed by encoder/compact_encoding.zig and decoder/reader.zig template-table loading.
+    // Consumed by src/encoder/compact_encoding.zig and src/decoder/reader.zig template-table loading.
     translation_templates: []const TemplateSpec = &.{},
-    // Consumed by encoder/section_encoding.zig translation compaction.
+    // Consumed by src/encoder/section_encoding.zig translation compaction.
     target_languages: []const TargetLanguage = &.{},
-    // Consumed by encoder/section_encoding.zig translation compaction.
+    // Consumed by src/encoder/section_encoding.zig translation compaction.
     language_labels: []const LanguageLabel = &.{},
-    // Consumed by tools/structure_tables_codegen.zig and decoder/reader.zig validation.
+    // Consumed by tools/structure_tables_codegen.zig and src/decoder/reader.zig validation.
     structure_fingerprint: u32 = 0,
 
     pub fn deinit(self: *BuildData, allocator: std.mem.Allocator) void {
@@ -115,7 +115,7 @@ pub const DependencySet = struct {
     // Consumed by structure analysis and compatibility tooling.
     direct_modules: []const []const u8 = &.{},
     transitive_modules: []const []const u8 = &.{},
-    // Consumed by encoder/builder.zig and tools/verifier.zig to avoid rescanning XML pages.
+    // Consumed by src/encoder/builder.zig and tools/verifier.zig to avoid rescanning XML pages.
     all_entry_pages: []const SourcePageRef = &.{},
     all_template_pages: []const SourcePageRef = &.{},
     all_module_pages: []const SourcePageRef = &.{},

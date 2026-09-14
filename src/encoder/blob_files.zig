@@ -166,7 +166,6 @@ pub const Resolver = struct {
     }
 };
 
-
 test "symbol source uses accelerated semantic hash once and reuses validated binding" {
     const a = std.testing.allocator;
     const io = std.testing.io;

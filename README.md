@@ -5,21 +5,16 @@ Offline Wiktionary tooling in Zig. The repository builds compact per-language da
 ## Layout
 
 ```text
-encoder/          Wiktionary XML -> compact dictionary blobs
-decoder/          blob decoding and query APIs
-frontend/         CLI, TUI, HTTP server, HTML/JSON presentation
-lua/
-  parser/         Lua syntax parser
-  compiler/       IR, analysis, optimization, lowering, linking
-  abi/            compiler/runtime ABI contracts
-  aot/            native Zig generation and program data
-  runtime/        support library linked into generated Lua code
-  wikitext/       compile-time wikitext helpers
-  extract/        module and template extraction
-native/           storage and low-level native helpers
-tools/            build, verification, indexing, and integration tools
-shared/           shared codecs and utilities
-data/             local datasets and generated artifacts
+src/
+├── decoder/        blob decoding and query APIs
+├── encoder/        Wiktionary XML -> compact dictionary blobs
+├── frontend/       CLI, TUI, HTTP server, presentation
+│   └── web/        SolidJS browser UI
+├── lua/            parser, compiler, native AOT, Scribunto runtime
+├── native/         storage and low-level native helpers
+└── shared/         shared codecs and utilities
+tools/              build, verification, indexing, integration tools
+data/               ignored local datasets and generated artifacts
 ```
 
 Lua has one execution architecture: whole-dump native AOT. A completed runtime contains the generated `dict-native-expansion-worker` and any required `aot-data.bin`. There is no alternate Lua execution engine or silent fallback.
@@ -145,7 +140,7 @@ zig build compile-aot -- \
   --sharded --external-data --external-functions
 ```
 
-The compiler pipeline lives entirely under `lua/compiler/`; generated-code ABI contracts are isolated under `lua/abi/`. Keep runtime behavior in `lua/runtime/` and code generation in `lua/aot/` instead of mixing those layers.
+The compiler pipeline lives entirely under `src/lua/compiler/`; generated-code ABI contracts are isolated under `src/lua/abi/`. Keep runtime behavior in `src/lua/runtime/` and code generation in `src/lua/aot/` instead of mixing those layers.
 
 ## Blob storage and XZ
 

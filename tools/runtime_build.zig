@@ -63,9 +63,9 @@ fn compileFunctionObjects(io: std.Io, a: std.mem.Allocator, marker: []const u8, 
         try objects.append(a, object);
         const emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{object});
         const root_module = try std.fmt.allocPrint(a, "-Mroot={s}", .{source});
-        const zig_runtime = try sourcePath(a, "lua/runtime/core.zig");
-        const lua_program_data = try sourcePath(a, "lua/aot/program_data.zig");
-        const lua_static_keys = try sourcePath(a, "lua/abi/static_keys.zig");
+        const zig_runtime = try sourcePath(a, "src/lua/runtime/core.zig");
+        const lua_program_data = try sourcePath(a, "src/lua/aot/program_data.zig");
+        const lua_static_keys = try sourcePath(a, "src/lua/abi/static_keys.zig");
         const runtime_module = try std.fmt.allocPrint(a, "-Mzig_runtime={s}", .{zig_runtime});
         const program_data_module = try std.fmt.allocPrint(a, "-Mlua_program_data={s}", .{lua_program_data});
         const static_keys_module = try std.fmt.allocPrint(a, "-Mlua_static_keys={s}", .{lua_static_keys});
@@ -86,23 +86,23 @@ fn compileFunctionObjects(io: std.Io, a: std.mem.Allocator, marker: []const u8, 
 
 fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, publish_root: []const u8, aot_dir: []const u8) !void {
     const objects = try compileFunctionObjects(io, a, marker, aot_dir);
-    const worker_core = try sourcePath(a, "frontend/native_expansion_worker_core.zig");
-    const worker_link = try sourcePath(a, "frontend/native_expansion_worker_link.zig");
-    const sha256_leaf = try sourcePath(a, "native/sha256_abi.zig");
+    const worker_core = try sourcePath(a, "src/frontend/native_expansion_worker_core.zig");
+    const worker_link = try sourcePath(a, "src/frontend/native_expansion_worker_link.zig");
+    const sha256_leaf = try sourcePath(a, "src/native/sha256_abi.zig");
     const generated = try std.fs.path.join(a, &.{ aot_dir, "root.zig" });
-    const zig_runtime = try sourcePath(a, "lua/runtime/core.zig");
-    const zig_stdlib = try sourcePath(a, "lua/runtime/stdlib.zig");
-    const zig_scribunto = try sourcePath(a, "lua/runtime/scribunto.zig");
-    const zig_module_registry = try sourcePath(a, "lua/runtime/module_registry.zig");
-    const lua_program_data = try sourcePath(a, "lua/aot/program_data.zig");
-    const lua_static_keys = try sourcePath(a, "lua/abi/static_keys.zig");
-    const lua_globals = try sourcePath(a, "lua/abi/globals.zig");
-    const lua_wikitext_preprocess = try sourcePath(a, "lua/wikitext/preprocess.zig");
-    const lua_wikitext_expression = try sourcePath(a, "lua/wikitext/expression.zig");
-    const blob_encoder = try sourcePath(a, "encoder/blob_root.zig");
-    const blob_decoder = try sourcePath(a, "decoder/blob_root.zig");
-    const blob_files = try sourcePath(a, "encoder/blob_files.zig");
-    const blob_storage = try sourcePath(a, "native/storage.zig");
+    const zig_runtime = try sourcePath(a, "src/lua/runtime/core.zig");
+    const zig_stdlib = try sourcePath(a, "src/lua/runtime/stdlib.zig");
+    const zig_scribunto = try sourcePath(a, "src/lua/runtime/scribunto.zig");
+    const zig_module_registry = try sourcePath(a, "src/lua/runtime/module_registry.zig");
+    const lua_program_data = try sourcePath(a, "src/lua/aot/program_data.zig");
+    const lua_static_keys = try sourcePath(a, "src/lua/abi/static_keys.zig");
+    const lua_globals = try sourcePath(a, "src/lua/abi/globals.zig");
+    const lua_wikitext_preprocess = try sourcePath(a, "src/lua/wikitext/preprocess.zig");
+    const lua_wikitext_expression = try sourcePath(a, "src/lua/wikitext/expression.zig");
+    const blob_encoder = try sourcePath(a, "src/encoder/blob_root.zig");
+    const blob_decoder = try sourcePath(a, "src/decoder/blob_root.zig");
+    const blob_files = try sourcePath(a, "src/encoder/blob_files.zig");
+    const blob_storage = try sourcePath(a, "src/native/storage.zig");
 
     const sha256_object = try std.fs.path.join(a, &.{ aot_dir, "native-sha256-llvm.o" });
     const sha256_emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{sha256_object});

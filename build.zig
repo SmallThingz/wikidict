@@ -1,6 +1,6 @@
 const std = @import("std");
 const bootstrap_support = @import("tools/structure_tables_support.zig");
-const structure_report_file = @import("shared/structure_report.zig");
+const structure_report_file = @import("src/shared/structure_report.zig");
 
 pub fn build(b: *std.Build) void {
     b.graph.incremental = false;
@@ -64,95 +64,95 @@ pub fn build(b: *std.Build) void {
         .optimize = structure_optimize,
     });
     const normalize_mod = b.createModule(.{
-        .root_source_file = b.path("decoder/normalize.zig"),
+        .root_source_file = b.path("src/decoder/normalize.zig"),
         .target = target,
         .optimize = optimize,
     });
     const normalize_mod_test = b.createModule(.{
-        .root_source_file = b.path("decoder/normalize.zig"),
+        .root_source_file = b.path("src/decoder/normalize.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const normalize_mod_structure = b.createModule(.{
-        .root_source_file = b.path("decoder/normalize.zig"),
+        .root_source_file = b.path("src/decoder/normalize.zig"),
         .target = target,
         .optimize = structure_optimize,
     });
     const shared_html_entities_mod = b.createModule(.{
-        .root_source_file = b.path("shared/html_entities.zig"),
+        .root_source_file = b.path("src/shared/html_entities.zig"),
         .target = target,
         .optimize = optimize,
     });
     const shared_xml_decode_mod = b.createModule(.{
-        .root_source_file = b.path("shared/xml_decode.zig"),
+        .root_source_file = b.path("src/shared/xml_decode.zig"),
         .target = target,
         .optimize = optimize,
     });
     const shared_xml_decode_mod_test = b.createModule(.{
-        .root_source_file = b.path("shared/xml_decode.zig"),
+        .root_source_file = b.path("src/shared/xml_decode.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const shared_structure_report_mod = b.createModule(.{
-        .root_source_file = b.path("shared/structure_report.zig"),
+        .root_source_file = b.path("src/shared/structure_report.zig"),
         .target = target,
         .optimize = optimize,
     });
     const shared_structure_report_mod_test = b.createModule(.{
-        .root_source_file = b.path("shared/structure_report.zig"),
+        .root_source_file = b.path("src/shared/structure_report.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const shared_template_dispatch_mod = b.createModule(.{
-        .root_source_file = b.path("shared/template_dispatch.zig"),
+        .root_source_file = b.path("src/shared/template_dispatch.zig"),
         .target = target,
         .optimize = optimize,
     });
     const shared_template_dispatch_mod_test = b.createModule(.{
-        .root_source_file = b.path("shared/template_dispatch.zig"),
+        .root_source_file = b.path("src/shared/template_dispatch.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const compact_pattern_seed_mod = b.createModule(.{
-        .root_source_file = b.path("shared/compact_pattern_seed.zig"),
+        .root_source_file = b.path("src/shared/compact_pattern_seed.zig"),
         .target = target,
         .optimize = optimize,
     });
     const compact_pattern_seed_mod_test = b.createModule(.{
-        .root_source_file = b.path("shared/compact_pattern_seed.zig"),
+        .root_source_file = b.path("src/shared/compact_pattern_seed.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const wikitext_source_mod = b.createModule(.{
-        .root_source_file = b.path("encoder/wikitext.zig"),
+        .root_source_file = b.path("src/encoder/wikitext.zig"),
         .target = target,
         .optimize = optimize,
     });
     wikitext_source_mod.addOptions("config", config_options);
     wikitext_source_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
     const wikitext_source_mod_test = b.createModule(.{
-        .root_source_file = b.path("encoder/wikitext.zig"),
+        .root_source_file = b.path("src/encoder/wikitext.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     wikitext_source_mod_test.addOptions("config", config_options);
     wikitext_source_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod_test);
     const blob_encoder_mod = b.addModule("blob_encoder", .{
-        .root_source_file = b.path("encoder/blob_root.zig"),
+        .root_source_file = b.path("src/encoder/blob_root.zig"),
         .target = target,
         .optimize = optimize,
     });
     const blob_encoder_mod_test = b.createModule(.{
-        .root_source_file = b.path("encoder/blob_root.zig"),
+        .root_source_file = b.path("src/encoder/blob_root.zig"),
         .target = target,
         .optimize = test_optimize,
     });
-    const storage_mod = b.createModule(.{ .root_source_file = b.path("native/storage.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
+    const storage_mod = b.createModule(.{ .root_source_file = b.path("src/native/storage.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
     storage_mod.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
-    const storage_test = b.createModule(.{ .root_source_file = b.path("native/storage.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
+    const storage_test = b.createModule(.{ .root_source_file = b.path("src/native/storage.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
     storage_test.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
     const encoder_mod_bootstrap = b.addModule("encoder_bootstrap", .{
-        .root_source_file = b.path("encoder/root.zig"),
+        .root_source_file = b.path("src/encoder/root.zig"),
         .target = target,
         .optimize = structure_optimize,
     });
@@ -188,7 +188,7 @@ pub fn build(b: *std.Build) void {
     else
         bootstrap_generated_tables;
     const encoder_mod = b.addModule("encoder", .{
-        .root_source_file = b.path("encoder/root.zig"),
+        .root_source_file = b.path("src/encoder/root.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -206,7 +206,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("blob_encoder", blob_encoder_mod);
 
     const encoder_mod_test = b.addModule("encoder_test", .{
-        .root_source_file = b.path("encoder/root.zig"),
+        .root_source_file = b.path("src/encoder/root.zig"),
         .target = target,
         .optimize = test_optimize,
     });
@@ -224,30 +224,30 @@ pub fn build(b: *std.Build) void {
     encoder_mod_test.addImport("blob_encoder", blob_encoder_mod_test);
 
     const decoder_mod = b.addModule("decoder", .{
-        .root_source_file = b.path("decoder/root.zig"),
+        .root_source_file = b.path("src/decoder/root.zig"),
         .target = target,
         .optimize = optimize,
     });
     const blob_decoder_mod = b.addModule("blob_decoder", .{
-        .root_source_file = b.path("decoder/blob_root.zig"),
+        .root_source_file = b.path("src/decoder/blob_root.zig"),
         .target = target,
         .optimize = optimize,
     });
     blob_decoder_mod.addImport("blob_encoder", blob_encoder_mod);
     const blob_decoder_mod_test = b.createModule(.{
-        .root_source_file = b.path("decoder/blob_root.zig"),
+        .root_source_file = b.path("src/decoder/blob_root.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     blob_decoder_mod_test.addImport("blob_encoder", blob_encoder_mod_test);
     const blob_wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
     const blob_encoder_mod_wasm = b.createModule(.{
-        .root_source_file = b.path("encoder/blob_root.zig"),
+        .root_source_file = b.path("src/encoder/blob_root.zig"),
         .target = blob_wasm_target,
         .optimize = test_optimize,
     });
     const blob_decoder_mod_wasm = b.createModule(.{
-        .root_source_file = b.path("decoder/blob_root.zig"),
+        .root_source_file = b.path("src/decoder/blob_root.zig"),
         .target = blob_wasm_target,
         .optimize = test_optimize,
     });
@@ -264,7 +264,7 @@ pub fn build(b: *std.Build) void {
     decoder_mod.addImport("blob_decoder", blob_decoder_mod);
     decoder_mod.addImport("cli_args", cli_args_mod);
     const decoder_mod_test = b.addModule("decoder_test", .{
-        .root_source_file = b.path("decoder/root.zig"),
+        .root_source_file = b.path("src/decoder/root.zig"),
         .target = target,
         .optimize = test_optimize,
     });
@@ -280,14 +280,14 @@ pub fn build(b: *std.Build) void {
     decoder_mod_test.addImport("wikitext_source", wikitext_source_mod_test);
     decoder_mod_test.addImport("cli_args", cli_args_mod_test);
 
-    const encoder_exe = addCliExecutable(b, "dict-encoder", b.path("encoder/main.zig"), target, optimize, &.{
+    const encoder_exe = addCliExecutable(b, "dict-encoder", b.path("src/encoder/main.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "cli_args", .module = cli_args_mod },
         .{ .name = "required_path", .module = required_path_mod },
         .{ .name = "shared_structure_report", .module = shared_structure_report_mod },
         .{ .name = "tool_paths", .module = encoder_tool_paths_mod },
     });
-    const decoder_exe = addCliExecutable(b, "dict-decoder", b.path("decoder/main.zig"), target, optimize, &.{
+    const decoder_exe = addCliExecutable(b, "dict-decoder", b.path("src/decoder/main.zig"), target, optimize, &.{
         .{ .name = "decoder", .module = decoder_mod },
         .{ .name = "cli_args", .module = cli_args_mod },
         .{ .name = "required_path", .module = required_path_mod },
@@ -300,11 +300,11 @@ pub fn build(b: *std.Build) void {
         .{ .name = "shared_structure_report", .module = shared_structure_report_mod },
         .{ .name = "tool_paths", .module = verifier_tool_paths_mod },
     });
-    const module_extract_exe = addCliExecutable(b, "dict-module-extract", b.path("lua/module_extract_main.zig"), target, optimize, &.{
+    const module_extract_exe = addCliExecutable(b, "dict-module-extract", b.path("src/lua/module_extract_main.zig"), target, optimize, &.{
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
     });
-    const template_extract_exe = addCliExecutable(b, "dict-template-extract", b.path("lua/template_extract_main.zig"), target, optimize, &.{
+    const template_extract_exe = addCliExecutable(b, "dict-template-extract", b.path("src/lua/template_extract_main.zig"), target, optimize, &.{
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
     });
@@ -317,7 +317,7 @@ pub fn build(b: *std.Build) void {
     });
     const link_blobs_exe = addCliExecutable(b, "dict-link-blobs", b.path("tools/link_blobs.zig"), target, optimize, &.{.{ .name = "encoder", .module = encoder_mod }});
     addPublicRunStep(b, "link-blobs", "Replace static call names with shared symbolic operands", addRunArtifactCommand(b, link_blobs_exe, &.{}, b.args), &.{});
-    const aot_exe = addCliExecutable(b, "dict-aot-build", b.path("lua/aot_build_main.zig"), target, optimize, &.{});
+    const aot_exe = addCliExecutable(b, "dict-aot-build", b.path("src/lua/aot_build_main.zig"), target, optimize, &.{});
     aot_exe.root_module.link_libc = true;
     aot_exe.use_llvm = true;
     aot_exe.use_lld = true;
@@ -339,16 +339,16 @@ pub fn build(b: *std.Build) void {
     const pipeline_exe = addCliExecutable(b, "dict-runtime-build", b.path("tools/runtime_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
     addPublicRunStep(b, "build-runtime", "Extract templates/modules and build the native Lua AOT worker", addRunArtifactCommand(b, pipeline_exe, &.{}, b.args), &.{});
     addPublicRunStep(b, "build-dictionary", "Build dictionary blobs plus their shared native Lua runtime in one coordinated pipeline", addRunArtifactCommand(b, pipeline_exe, &.{"--with-blobs"}, b.args), &.{});
-    const blob_files_mod = b.createModule(.{ .root_source_file = b.path("encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
-    const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
+    const blob_files_mod = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
+    const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
     blob_files_mod.addImport("blob_storage", storage_mod);
     blob_files_mod_test.addImport("blob_storage", storage_test);
-    const blob_query_exe = addCliExecutable(b, "dict", b.path("frontend/main.zig"), target, optimize, &.{
+    const blob_query_exe = addCliExecutable(b, "dict", b.path("src/frontend/main.zig"), target, optimize, &.{
         .{ .name = "blob_encoder", .module = blob_encoder_mod },
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
         .{ .name = "blob_files", .module = blob_files_mod },
         .{ .name = "blob_storage", .module = storage_mod },
-        .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = optimize }) },
+        .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("src/shared/html_entities.zig"), .target = target, .optimize = optimize }) },
     });
     // Locale-aware terminal cell widths use libc; lld supports current host crt objects.
     blob_query_exe.root_module.link_libc = true;
@@ -402,7 +402,7 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "dict", "Run the dictionary frontend CLI", blob_query_run, &.{});
 
     const web_build = b.addSystemCommand(&.{ "bun", "run", "build" });
-    web_build.setCwd(b.path("frontend/web"));
+    web_build.setCwd(b.path("src/frontend/web"));
     b.step("frontend", "Rebuild the self-contained web UI (bun install first)").dependOn(&web_build.step);
 
     const test_runner = b.path("tools/test_runner.zig");
@@ -465,7 +465,7 @@ pub fn build(b: *std.Build) void {
     });
     const blob_query_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("frontend/main.zig"),
+            .root_source_file = b.path("src/frontend/main.zig"),
             .target = target,
             .optimize = test_optimize,
             .imports = &.{
@@ -473,7 +473,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "blob_decoder", .module = blob_decoder_mod_test },
                 .{ .name = "blob_files", .module = blob_files_mod_test },
                 .{ .name = "blob_storage", .module = storage_test },
-                .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("shared/html_entities.zig"), .target = target, .optimize = test_optimize }) },
+                .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("src/shared/html_entities.zig"), .target = target, .optimize = test_optimize }) },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -483,7 +483,7 @@ pub fn build(b: *std.Build) void {
     blob_query_tests.use_lld = true;
     const lua_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua/tests.zig"),
+            .root_source_file = b.path("src/lua/tests.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -495,32 +495,32 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const lua_program_data_test_mod = b.createModule(.{
-        .root_source_file = b.path("lua/aot/program_data.zig"),
+        .root_source_file = b.path("src/lua/aot/program_data.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const lua_static_keys_test_mod = b.createModule(.{
-        .root_source_file = b.path("lua/abi/static_keys.zig"),
+        .root_source_file = b.path("src/lua/abi/static_keys.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const lua_globals_test_mod = b.createModule(.{
-        .root_source_file = b.path("lua/abi/globals.zig"),
+        .root_source_file = b.path("src/lua/abi/globals.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const lua_wikitext_preprocess_test_mod = b.createModule(.{
-        .root_source_file = b.path("lua/wikitext/preprocess.zig"),
+        .root_source_file = b.path("src/lua/wikitext/preprocess.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const lua_wikitext_expression_test_mod = b.createModule(.{
-        .root_source_file = b.path("lua/wikitext/expression.zig"),
+        .root_source_file = b.path("src/lua/wikitext/expression.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const zig_runtime_test_mod = b.createModule(.{
-        .root_source_file = b.path("lua/runtime/core.zig"),
+        .root_source_file = b.path("src/lua/runtime/core.zig"),
         .target = target,
         .optimize = test_optimize,
     });
@@ -528,7 +528,7 @@ pub fn build(b: *std.Build) void {
     zig_runtime_test_mod.addImport("lua_static_keys", lua_static_keys_test_mod);
     const aot_stdlib_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua/runtime/stdlib.zig"),
+            .root_source_file = b.path("src/lua/runtime/stdlib.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -541,7 +541,7 @@ pub fn build(b: *std.Build) void {
     });
     const aot_ustring_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua/runtime/ustring.zig"),
+            .root_source_file = b.path("src/lua/runtime/ustring.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -551,7 +551,7 @@ pub fn build(b: *std.Build) void {
     });
     const aot_scribunto_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua/runtime/scribunto.zig"),
+            .root_source_file = b.path("src/lua/runtime/scribunto.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -566,7 +566,7 @@ pub fn build(b: *std.Build) void {
     });
     const aot_wikitext_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua/runtime/wikitext.zig"),
+            .root_source_file = b.path("src/lua/runtime/wikitext.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -581,7 +581,7 @@ pub fn build(b: *std.Build) void {
     });
     const aot_module_registry_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lua/runtime/module_registry_test.zig"),
+            .root_source_file = b.path("src/lua/runtime/module_registry_test.zig"),
             .target = target,
             .optimize = test_optimize,
             .imports = &.{.{ .name = "zig_runtime", .module = zig_runtime_test_mod }},
@@ -635,7 +635,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run encoder, decoder, structure, Lua, and tooling tests");
     blob_wasm_smoke.step.dependOn(&run_aot_module_registry_tests.step);
     test_step.dependOn(&blob_wasm_smoke.step);
-    const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "encoder", .module = encoder_mod } });
+    const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "encoder", .module = encoder_mod } });
     addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}, b.args), &.{});
     const runtime_test_exe = addCliExecutable(b, "dict-runtime-integration-test", b.path("tools/runtime_integration_test.zig"), b.graph.host, test_optimize, &.{});
     const runtime_test_run = b.addRunArtifact(runtime_test_exe);
@@ -856,8 +856,8 @@ fn addDirectStructureTablesCodegenBinary(b: *std.Build) std.Build.LazyPath {
     compile.addArgs(&.{ "--dep", "compact_pattern_seed", "--dep", "shared_structure_report" });
     compile.addPrefixedFileArg("-Mroot=", b.path("tools/structure_tables_codegen.zig"));
     compile.addArg("-OReleaseFast");
-    compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("shared/compact_pattern_seed.zig"));
-    compile.addPrefixedFileArg("-Mshared_structure_report=", b.path("shared/structure_report.zig"));
+    compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("src/shared/compact_pattern_seed.zig"));
+    compile.addPrefixedFileArg("-Mshared_structure_report=", b.path("src/shared/structure_report.zig"));
     const output = compile.addPrefixedOutputFileArg("-femit-bin=", "dict-structure-tables-codegen");
     return output;
 }
@@ -895,29 +895,29 @@ fn addDirectStructureBinary(
         "--dep",
         "wikitext_source",
     });
-    compile.addPrefixedFileArg("-Mencoder=", b.path("encoder/root.zig"));
+    compile.addPrefixedFileArg("-Mencoder=", b.path("src/encoder/root.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{ "--dep", "shared_xml_decode" });
     compile.addArgs(&.{ "--dep", "config=config0" });
     compile.addPrefixedFileArg("-Mzxml=", zxml_root_path);
     compile.addPrefixedFileArg("-Mconfig=", config_path);
     compile.addArg("-OReleaseFast");
-    compile.addPrefixedFileArg("-Mnormalize=", b.path("decoder/normalize.zig"));
+    compile.addPrefixedFileArg("-Mnormalize=", b.path("src/decoder/normalize.zig"));
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mgenerated_structure_tables=", bootstrap_tables_path);
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mcli_args=", b.path("tools/cli_args.zig"));
     compile.addArg("-OReleaseFast");
-    compile.addPrefixedFileArg("-Mshared_html_entities=", b.path("shared/html_entities.zig"));
+    compile.addPrefixedFileArg("-Mshared_html_entities=", b.path("src/shared/html_entities.zig"));
     compile.addArg("-OReleaseFast");
-    compile.addPrefixedFileArg("-Mshared_xml_decode=", b.path("shared/xml_decode.zig"));
+    compile.addPrefixedFileArg("-Mshared_xml_decode=", b.path("src/shared/xml_decode.zig"));
     compile.addArg("-OReleaseFast");
-    compile.addPrefixedFileArg("-Mshared_structure_report=", b.path("shared/structure_report.zig"));
+    compile.addPrefixedFileArg("-Mshared_structure_report=", b.path("src/shared/structure_report.zig"));
     compile.addArg("-OReleaseFast");
-    compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("shared/compact_pattern_seed.zig"));
+    compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("src/shared/compact_pattern_seed.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{ "--dep", "config=config1", "--dep", "shared_xml_decode" });
-    compile.addPrefixedFileArg("-Mwikitext_source=", b.path("encoder/wikitext.zig"));
+    compile.addPrefixedFileArg("-Mwikitext_source=", b.path("src/encoder/wikitext.zig"));
     compile.addPrefixedFileArg("-Mconfig1=", config_path);
     compile.addPrefixedFileArg("-Mconfig0=", config0_path);
     return compile.addPrefixedOutputFileArg("-femit-bin=", "dict-structure");
@@ -957,31 +957,31 @@ fn addDirectVerifierBinary(
         "--dep",
         "wikitext_source",
     });
-    compile.addPrefixedFileArg("-Mencoder=", b.path("encoder/root.zig"));
+    compile.addPrefixedFileArg("-Mencoder=", b.path("src/encoder/root.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{ "--dep", "normalize", "--dep", "encoder", "--dep", "shared_xml_decode", "--dep", "shared_structure_report", "--dep", "wikitext_source", "--dep", "cli_args", "--dep", "config=config1" });
-    compile.addPrefixedFileArg("-Mdecoder=", b.path("decoder/root.zig"));
+    compile.addPrefixedFileArg("-Mdecoder=", b.path("src/decoder/root.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{ "--dep", "config=config0" });
     compile.addPrefixedFileArg("-Mzxml=", zxml_root_path);
     compile.addPrefixedFileArg("-Mconfig=", config_path);
     compile.addArg("-OReleaseFast");
-    compile.addPrefixedFileArg("-Mnormalize=", b.path("decoder/normalize.zig"));
+    compile.addPrefixedFileArg("-Mnormalize=", b.path("src/decoder/normalize.zig"));
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mgenerated_structure_tables=", regular_tables_path);
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mcli_args=", b.path("tools/cli_args.zig"));
     compile.addArg("-OReleaseFast");
-    compile.addPrefixedFileArg("-Mshared_html_entities=", b.path("shared/html_entities.zig"));
+    compile.addPrefixedFileArg("-Mshared_html_entities=", b.path("src/shared/html_entities.zig"));
     compile.addArg("-OReleaseFast");
-    compile.addPrefixedFileArg("-Mshared_xml_decode=", b.path("shared/xml_decode.zig"));
+    compile.addPrefixedFileArg("-Mshared_xml_decode=", b.path("src/shared/xml_decode.zig"));
     compile.addArg("-OReleaseFast");
-    compile.addPrefixedFileArg("-Mshared_structure_report=", b.path("shared/structure_report.zig"));
+    compile.addPrefixedFileArg("-Mshared_structure_report=", b.path("src/shared/structure_report.zig"));
     compile.addArg("-OReleaseFast");
-    compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("shared/compact_pattern_seed.zig"));
+    compile.addPrefixedFileArg("-Mcompact_pattern_seed=", b.path("src/shared/compact_pattern_seed.zig"));
     compile.addArg("-OReleaseFast");
     compile.addArgs(&.{ "--dep", "config=config1", "--dep", "shared_xml_decode" });
-    compile.addPrefixedFileArg("-Mwikitext_source=", b.path("encoder/wikitext.zig"));
+    compile.addPrefixedFileArg("-Mwikitext_source=", b.path("src/encoder/wikitext.zig"));
     compile.addPrefixedFileArg("-Mconfig1=", config_path);
     compile.addArg("-OReleaseFast");
     compile.addPrefixedFileArg("-Mtool_paths=", tool_paths_path);

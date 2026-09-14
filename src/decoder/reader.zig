@@ -553,7 +553,7 @@ pub const LookupHit = struct {
     // Surface form that matched the query. This can differ from the entry word for
     // alternative-form and alias-expansion hits.
     matched: []const u8,
-    // `decoder/format.zig` title/alternative-form kinds plus the local alias-expansion tag.
+    // `src/decoder/format.zig` title/alternative-form kinds plus the local alias-expansion tag.
     kind: u8,
 };
 

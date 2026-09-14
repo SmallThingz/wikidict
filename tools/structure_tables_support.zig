@@ -222,7 +222,7 @@ pub const Dependencies = struct {
     direct_modules: []const []const u8 = &.{},
     transitive_modules: []const []const u8 = &.{},
     // Full ns0 page ref table captured during structure analysis so the
-    // encoder/verifier can mmap-load entry pages without rescanning the XML.
+    // src/encoder/verifier can mmap-load entry pages without rescanning the XML.
     all_entry_pages: []const DependencySourceRef = &.{},
     // Full template page ref table captured during structure analysis so tools
     // can reload any template source directly from the XML mmap without rescans.

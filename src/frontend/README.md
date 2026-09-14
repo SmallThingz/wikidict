@@ -53,10 +53,10 @@ The server retains one native Lua worker across requests. `/api/stats` reports `
 
 ## HTML reader
 
-The SolidJS frontend is under `frontend/web/`.
+The SolidJS frontend is under `src/frontend/web/`.
 
 ```sh
-cd frontend/web
+cd src/frontend/web
 bun install
 bun run build
 ```
