@@ -277,6 +277,20 @@ fn numberValueHash(number: f64) u64 {
     return wyhashMix64(low ^ secret0 ^ 9, high ^ secret1);
 }
 
+fn stringValueHash(text: []const u8) u64 {
+    const tag: u8 = @intFromEnum(std.meta.Tag(Value).string);
+    if (text.len <= 63) {
+        var bytes: [64]u8 = undefined;
+        bytes[0] = tag;
+        @memcpy(bytes[1..][0..text.len], text);
+        return std.hash.Wyhash.hash(0, bytes[0 .. text.len + 1]);
+    }
+    var h = std.hash.Wyhash.init(0);
+    h.update(&.{tag});
+    h.update(text);
+    return h.final();
+}
+
 const NumberLookupContext = struct {
     pub fn hash(_: NumberLookupContext, number: f64) u64 {
         return numberValueHash(number);
@@ -289,6 +303,7 @@ const NumberLookupContext = struct {
 const ValueContext = struct {
     pub fn hash(_: ValueContext, value: Value) u64 {
         if (value == .number) return numberValueHash(value.number);
+        if (value == .string) return stringValueHash(value.string);
         const tag: u8 = @intFromEnum(std.meta.activeTag(value));
         var h = std.hash.Wyhash.init(0);
         h.update(&.{tag});
@@ -296,7 +311,7 @@ const ValueContext = struct {
             .nil => {},
             .boolean => |v| h.update(&.{@intFromBool(v)}),
             .number => unreachable,
-            .string => |v| h.update(v),
+            .string => unreachable,
             .table => |v| {
                 const ptr: usize = @intFromPtr(v);
                 h.update(std.mem.asBytes(&ptr));
@@ -1441,6 +1456,21 @@ test "numeric value hashing preserves prior iteration order" {
     try std.testing.expectEqual(context.hash(.{ .number = 0.0 }), context.hash(.{ .number = -0.0 }));
 }
 
+test "string value hashing preserves prior iteration order" {
+    var bytes: [80]u8 = undefined;
+    for (&bytes, 0..) |*byte, index| byte.* = @intCast((index * 37 + 11) % 251);
+    const lengths = [_]usize{ 0, 1, 3, 4, 7, 8, 15, 16, 17, 31, 32, 47, 48, 49, 63, 64, 79 };
+    const context = ValueContext{};
+    for (lengths) |len| {
+        const text = bytes[0..len];
+        const value = Value{ .string = text };
+        const tag: u8 = @intFromEnum(std.meta.activeTag(value));
+        var previous = std.hash.Wyhash.init(0);
+        previous.update(&.{tag});
+        previous.update(text);
+        try std.testing.expectEqual(previous.final(), context.hash(value));
+    }
+}
 test "AOT module resolver caches numeric identities and exposes package.loaded aliases" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
