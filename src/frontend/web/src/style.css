@@ -297,3 +297,75 @@
 .dict-references ol { list-style: none; padding-left: 0; }
 .dict-references li { display: grid; grid-template-columns: minmax(2.5em,max-content) minmax(0,1fr); gap: 10px; }
 .dict-reference-number { color: var(--dict-muted); font: 10px/1.8 ui-monospace,monospace; }
+
+.dict-header-action { font-size: 11px; min-height: 32px !important; padding: 5px 9px !important; background: transparent !important; }
+.dict-action-count { margin-left: 4px; min-width: 16px; display: inline-block; text-align: center; border-radius: 999px; background: var(--dict-accent); color: white; font-size: 9px; }
+.dict-bookmark { min-height: 27px !important; padding: 3px 8px !important; font-size: 10px !important; margin-left: auto; }
+.dict-bookmark.active { color: var(--dict-accent); border-color: color-mix(in srgb, var(--dict-accent) 40%, var(--dict-line)); }
+.dict-learning-backdrop { position: fixed; z-index: 60; inset: 0; display: flex; justify-content: flex-end; background: #0006; backdrop-filter: blur(3px); }
+.dict-learning-panel { width: min(620px, 100%); height: 100dvh; overflow: hidden; background: var(--dict-bg); border-left: 1px solid var(--dict-line); box-shadow: -22px 0 70px #0003; display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
+.dict-learning-header { padding: 24px 26px 18px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--dict-line); }
+.dict-learning-header h2 { margin: 5px 0 0; font: 680 28px/1.1 var(--dict-serif); letter-spacing: -.025em; }
+.dict-app .dict-learning-close { border: 0; background: transparent; min-width: 38px; font-size: 25px; line-height: 1; }
+.dict-learning-tabs { display: flex; gap: 3px; padding: 10px 20px; border-bottom: 1px solid var(--dict-line); overflow-x: auto; }
+.dict-learning-tabs button { border-color: transparent; background: transparent; font-size: 11px; white-space: nowrap; }
+.dict-learning-tabs button[aria-current="page"] { background: var(--dict-soft); border-color: var(--dict-line); color: var(--dict-accent); }
+.dict-learning-body { overflow-y: auto; padding: 24px 26px 50px; }
+.dict-learning-body h3 { font: 660 21px/1.2 var(--dict-serif); margin: 0 0 5px; }
+.dict-learning-body p { color: var(--dict-muted); margin: 0; }
+.dict-learning-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+.dict-learning-list { display: grid; gap: 7px; }
+.dict-learning-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: stretch; }
+.dict-app .dict-learning-word { min-width: 0; display: grid; grid-template-columns: 1fr auto; gap: 2px 14px; text-align: left; padding: 11px 13px; }
+.dict-learning-word strong { font-size: 13px; overflow-wrap: anywhere; }
+.dict-learning-word span { color: var(--dict-muted); font-size: 9px; text-transform: capitalize; }
+.dict-learning-word small { grid-column: 1 / -1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--dict-muted); }
+.dict-app .dict-learning-remove { min-width: 38px; color: var(--dict-muted); }
+.dict-learning-empty { padding: 36px 4px; text-align: center; border: 1px dashed var(--dict-line); border-radius: 12px; }
+.dict-learning-hero { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px; margin-bottom: 17px; border: 1px solid var(--dict-line); border-radius: 14px; background: var(--dict-soft); }
+.dict-primary { background: var(--dict-accent) !important; border-color: var(--dict-accent) !important; color: white !important; }
+.dict-game-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-bottom: 15px; }
+.dict-game-picker button { min-height: 80px; text-align: left; padding: 11px; display: grid; align-content: start; gap: 5px; }
+.dict-game-picker button[aria-pressed="true"] { border-color: var(--dict-accent); background: color-mix(in srgb, var(--dict-accent) 8%, var(--dict-bg)); }
+.dict-game-picker strong { font-size: 11px; }
+.dict-game-picker small { color: var(--dict-muted); font-size: 9px; line-height: 1.45; }
+.dict-game-card { min-height: 260px; padding: 19px; border: 1px solid var(--dict-line); border-radius: 14px; }
+.dict-game-score { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 19px; color: var(--dict-muted); font-size: 11px; }
+.dict-game-score strong { color: var(--dict-fg); }
+.dict-quiz-clue { font: 18px/1.55 var(--dict-serif); color: var(--dict-fg) !important; margin-bottom: 18px !important; }
+.dict-quiz-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dict-quiz-choices button { min-height: 46px; }
+.dict-quiz-choices button.correct { border-color: #2c9b67; background: color-mix(in srgb, #2c9b67 12%, var(--dict-bg)); }
+.dict-quiz-choices button.wrong { border-color: #c55252; background: color-mix(in srgb, #c55252 12%, var(--dict-bg)); }
+.dict-game-result { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--dict-line); }
+.dict-flashcard { width: 100%; min-height: 155px !important; display: grid; place-content: center; gap: 12px; text-align: center; padding: 22px !important; }
+.dict-flashcard strong { font: 680 30px/1.1 var(--dict-serif); }
+.dict-flashcard span { max-width: 420px; color: var(--dict-muted); }
+.dict-card-grades { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.dict-scramble-word { text-align: center; font: 700 32px/1.2 ui-monospace, monospace; letter-spacing: .13em; padding: 16px 4px; }
+.dict-scramble-clue { text-align: center; margin: 0 auto 16px !important; max-width: 440px; }
+.dict-scramble-input { display: flex; gap: 8px; }
+.dict-scramble-input input { min-width: 0; flex: 1; border: 1px solid var(--dict-line); border-radius: 9px; background: var(--dict-bg); padding: 8px 11px; }
+.dict-settings-grid { display: grid; gap: 9px; }
+.dict-settings-grid label { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 9px 11px; border: 1px solid var(--dict-line); border-radius: 10px; }
+.dict-settings-grid label > span { font-size: 11px; }
+.dict-settings-grid select { min-width: 170px; }
+.dict-settings-grid input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--dict-accent); }
+.dict-settings-danger { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--dict-line); }
+@media (max-width: 720px) {
+  .dict-header-action { display: none; }
+  .dict-learning-panel { width: 100%; border-left: 0; }
+  .dict-learning-header { padding: 19px 18px 15px; }
+  .dict-learning-body { padding: 18px 18px 40px; }
+  .dict-game-picker { grid-template-columns: 1fr; }
+  .dict-game-picker button { min-height: 60px; }
+  .dict-quiz-choices { grid-template-columns: 1fr; }
+  .dict-learning-hero { align-items: flex-start; }
+  .dict-settings-grid label { align-items: flex-start; flex-direction: column; gap: 7px; }
+  .dict-settings-grid select { width: 100%; }
+  .dict-bookmark { margin-left: 0; }
+}
+.dict-mobile-learning { display: none; }
+@media (max-width: 720px) {
+  .dict-mobile-learning { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+}

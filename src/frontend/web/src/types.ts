@@ -37,5 +37,5 @@ export type LiveOptions = {
  query: string; language: string; kind: string; languages: {heading: string; code: string}[];
  matches: {title: string}[]; total: number; hasMore: boolean; searching: boolean; loading: boolean; error: string;
  onQuery: (value:string)=>void; onLanguage:(value:string)=>void; onKind:(value:string)=>void;
- onSelect:(title:string)=>void; onMore:()=>void; onHome:()=>void;
+ onSelect:(title:string)=>void; onMore:()=>void; onHome:()=>void; onRandom:()=>void;
 };

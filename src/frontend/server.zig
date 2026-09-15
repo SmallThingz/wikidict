@@ -171,13 +171,14 @@ const State = struct {
         if (std.mem.eql(u8, q.path, "/api/health")) return .{ .body = "{\"status\":\"ok\",\"protocol\":\"HTTP/1.1\"}" };
         if (std.mem.eql(u8, q.path, "/api/languages")) return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .schema = "dict.catalog.v1", .languages = self.languages }, .{}) };
         const search = std.mem.eql(u8, q.path, "/api/search");
+        const random = std.mem.eql(u8, q.path, "/api/random");
         const entry = std.mem.eql(u8, q.path, "/api/entry");
         const stats = std.mem.eql(u8, q.path, "/api/stats");
-        if (!search and !entry and !stats) return .{ .body = "{\"error\":\"Not found\"}", .status = .not_found };
+        if (!search and !random and !entry and !stats) return .{ .body = "{\"error\":\"Not found\"}", .status = .not_found };
         const language = try self.resolveLanguage(q.language);
         const kind = q.kind orelse self.opts.kind;
         if (entry and q.q.len == 0) return error.BadRequest;
-        var response: output.Response = .{ .operation = if (search) .search else if (stats) .stats else .lookup, .query = q.q, .kind = kind, .language = if (kind == .language) language else null, .total_matches = 0, .record_count = 0 };
+        var response: output.Response = .{ .operation = if (search or random) .search else if (stats) .stats else .lookup, .query = q.q, .kind = kind, .language = if (kind == .language) language else null, .total_matches = 0, .record_count = 0 };
         var source: []const u8 = "";
         var language_code: []const u8 = "";
         {
@@ -188,6 +189,16 @@ const State = struct {
             if (stats) {
                 const x = dbp.file.compressed;
                 return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .records = dbp.count(), .index_bytes = dbp.file.indexBytes(), .index_heap_bytes = dbp.file.indexHeapBytes(), .cache_map_bytes = dbp.file.cacheMappedBytes(), .payload_reads = dbp.file.payload_reads, .disk_cache_hit = dbp.file.cache_hit, .disk_cache_saved = dbp.file.cache_saved, .index_builds = self.index_builds, .index_cache_hits = self.index_hits, .xz_blocks = if (x) |v| v.blocks else 0, .decoded_blocks = if (x) |v| v.decoded_blocks else 0, .lua_worker_starts = self.lua_worker.startCount(), .lua_requests = self.lua_worker.requestCount() }, .{}) };
+            }
+            if (random) {
+                if (dbp.count() == 0) return .{ .body = try std.json.Stringify.valueAlloc(a, response, .{}) };
+                const entropy: u128 = @intCast(std.Io.Clock.awake.now(self.io).toNanoseconds());
+                const i: usize = @intCast(entropy % @as(u128, dbp.count()));
+                const matches = try a.alloc(output.Match, 1);
+                matches[0] = .{ .title = try a.dupe(u8, try dbp.titleAt(i)) };
+                response.matches = matches;
+                response.total_matches = 1;
+                return .{ .body = try std.json.Stringify.valueAlloc(a, response, .{}) };
             }
             if (search) {
                 const range = try dbp.prefix(q.q);

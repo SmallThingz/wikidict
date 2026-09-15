@@ -43,6 +43,17 @@ export function LiveDictionary(props: { language: string; kind: string }) {
     } catch (e) { if (!controller.signal.aborted && version === searchVersion) setError(e instanceof Error ? e.message : 'Search failed.'); }
     finally { if (version === searchVersion) setSearching(false); }
   }
+  async function randomWord() {
+    const controller = new AbortController();
+    setLoading(true); setError('');
+    try {
+      const result = await results(endpoint('random', '', language(), kind()), controller.signal);
+      const title = result.data.matches[0]?.title;
+      if (!title) throw new Error('No words are available in this collection.');
+      await open(title);
+    } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : 'Could not choose a random word.'); }
+    finally { setLoading(false); }
+  }
   async function open(title: string, lang = language(), category = kind(), fragment = '', history = true) {
     const resolvedLanguage = languages().find(item => item.code.toLowerCase() === lang.toLowerCase() || item.heading === lang)?.heading || lang;
     let name = title;
@@ -111,7 +122,7 @@ export function LiveDictionary(props: { language: string; kind: string }) {
     onQuery: value => { setQuery(value); setError(''); },
     onLanguage: value => { entryController?.abort(); ++entryVersion; setLoading(false); setLanguage(value); setData(emptyResults); },
     onKind: value => { entryController?.abort(); ++entryVersion; setLoading(false); setKind(value); setData(emptyResults); },
-    onSelect: title => { void open(title); }, onMore: () => { void search(true); }, onHome: home,
+    onSelect: title => { void open(title); }, onMore: () => { void search(true); }, onHome: home, onRandom: () => { void randomWord(); },
   };
   const navigate = (target: Navigation) => { void open(target.title, target.language || language(), target.kind, target.fragment); };
   return <DictionaryApp data={data()} options={{ live, onNavigate: navigate }} />;

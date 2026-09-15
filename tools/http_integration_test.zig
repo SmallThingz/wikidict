@@ -125,6 +125,9 @@ fn exercise(io: std.Io, a: A, bin: []const u8, root: []const u8, out: []const u8
     try require(unicode.object.get("total_matches").?.integer == 1);
     const language = try json(a, (try c.get("/api/search?q=chat&language=fr")).body);
     try require(std.mem.eql(u8, language.object.get("language").?.string, "French"));
+    const random = try json(a, (try c.get("/api/random?language=English&kind=language")).body);
+    try require(random.object.get("total_matches").?.integer == 1 and random.object.get("matches").?.array.items.len == 1);
+    try require(random.object.get("matches").?.array.items[0].object.get("title").?.string.len != 0);
     const entry = try c.get("/api/entry?q=cat");
     try require(entry.status == 200);
     const ev = (try json(a, entry.body)).object.get("entries").?.array.items[0];
@@ -175,5 +178,5 @@ pub fn main(init: std.process.Init) !void {
     }
     try exercise(io, a, args[1], root, try std.fs.path.join(a, &.{ root, "xz-server.log" }), true);
     try exercise(io, a, args[1], root, try std.fs.path.join(a, &.{ root, "warm-server.log" }), true);
-    std.debug.print("HTTP_INTEGRATION_PASS: live search/entry/languages/collections, pagination/Unicode, one-connection pipelining, HEAD, bounded invalid queries, origin/method rejection, retained indexes, compressed-only + warm restart, clean SIGTERM\nArtifacts: {s}\n", .{root});
+    std.debug.print("HTTP_INTEGRATION_PASS: live search/entry/random/languages/collections, pagination/Unicode, one-connection pipelining, HEAD, bounded invalid queries, origin/method rejection, retained indexes, compressed-only + warm restart, clean SIGTERM\nArtifacts: {s}\n", .{root});
 }
