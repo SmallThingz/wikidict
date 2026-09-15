@@ -23,11 +23,15 @@ fn writePageIndex(io: std.Io, allocator: std.mem.Allocator, dump: *dump_source.D
         const page = (try headers.next(a)) orelse break;
         if (std.mem.indexOfAny(u8, page.title, "\t\r\n") != null) return error.InvalidPageTitle;
         if (page.redirect) |target| if (std.mem.indexOfAny(u8, target, "\t\r\n") != null) return error.InvalidPageTitle;
-        try writer.interface.print("{d}\t{d}\t{s}\t{s}\n", .{
+        if (std.mem.indexOfAny(u8, page.revision_timestamp, "\t\r\n") != null) return error.InvalidPageMetadata;
+        try writer.interface.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\n", .{
             page.source_offset,
             page.source_len,
             page.title,
             page.redirect orelse "",
+            page.page_id,
+            page.revision_id,
+            page.revision_timestamp,
         });
         _ = arena.reset(.retain_capacity);
     }

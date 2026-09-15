@@ -22,6 +22,9 @@ pub const Page = struct {
 pub const PageHeader = struct {
     ns: u32,
     title: []const u8,
+    page_id: u64,
+    revision_id: u64,
+    revision_timestamp: []const u8,
     source_offset: u64,
     source_len: usize,
     redirect: ?[]const u8 = null,
@@ -31,6 +34,9 @@ const Capture = struct {
     names_by_depth: [8][]const u8 = [_][]const u8{""} ** 8,
     title_raw: ?[]const u8 = null,
     ns_raw: ?[]const u8 = null,
+    page_id_raw: ?[]const u8 = null,
+    revision_id_raw: ?[]const u8 = null,
+    revision_timestamp_raw: ?[]const u8 = null,
     text_raw: ?[]const u8 = null,
     redirect_raw: ?[]const u8 = null,
 
@@ -42,10 +48,12 @@ const Capture = struct {
             self.title_raw = node.leadingTextRaw();
         } else if (node.depth == 1 and std.mem.eql(u8, name, "ns")) {
             self.ns_raw = node.leadingTextRaw();
+        } else if (node.depth == 1 and std.mem.eql(u8, name, "id")) {
+            self.page_id_raw = node.leadingTextRaw();
         } else if (node.depth == 1 and std.mem.eql(u8, name, "redirect")) {
             self.redirect_raw = node.getAttributeValueRaw("title");
-        } else if (node.depth == 2 and std.mem.eql(u8, self.names_by_depth[1], "revision") and std.mem.eql(u8, name, "text")) {
-            self.text_raw = node.leadingTextRaw();
+        } else if (node.depth == 2 and std.mem.eql(u8, self.names_by_depth[1], "revision")) {
+            if (std.mem.eql(u8, name, "id")) self.revision_id_raw = node.leadingTextRaw() else if (std.mem.eql(u8, name, "timestamp")) self.revision_timestamp_raw = node.leadingTextRaw() else if (std.mem.eql(u8, name, "text")) self.text_raw = node.leadingTextRaw();
         }
         return true;
     }
@@ -119,6 +127,9 @@ pub const HeaderIterator = struct {
             const ns_raw = capture.ns_raw orelse continue;
             const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch continue;
             const title_raw = capture.title_raw orelse continue;
+            const page_id = std.fmt.parseInt(u64, std.mem.trim(u8, capture.page_id_raw orelse return error.InvalidPageMetadata, " \t\r\n"), 10) catch return error.InvalidPageMetadata;
+            const revision_id = std.fmt.parseInt(u64, std.mem.trim(u8, capture.revision_id_raw orelse return error.InvalidPageMetadata, " \t\r\n"), 10) catch return error.InvalidPageMetadata;
+            const revision_timestamp_raw = capture.revision_timestamp_raw orelse return error.InvalidPageMetadata;
             const text_raw = capture.text_raw orelse "";
             const source_offset: u64 = if (text_raw.len == 0) 0 else blk: {
                 const base = @intFromPtr(self.dump.bytes.ptr);
@@ -131,6 +142,9 @@ pub const HeaderIterator = struct {
             return .{
                 .ns = ns,
                 .title = try xml_decode.decodeSinglePassAlloc(allocator, title_raw),
+                .page_id = page_id,
+                .revision_id = revision_id,
+                .revision_timestamp = try xml_decode.decodeSinglePassAlloc(allocator, revision_timestamp_raw),
                 .source_offset = source_offset,
                 .source_len = text_raw.len,
                 .redirect = if (capture.redirect_raw) |raw| try xml_decode.decodeSinglePassAlloc(allocator, raw) else null,
@@ -171,8 +185,8 @@ pub const Iterator = struct {
 
 test "dump adapter exposes decoded wikitext pages" {
     const xml = "<mediawiki>" ++
-        "<page><title>cat</title><ns>0</ns><revision><text>==English==&amp;x</text></revision></page>" ++
-        "<page><title>kitty</title><ns>0</ns><redirect title=\"cat\"/><revision><text>#REDIRECT [[cat]]</text></revision></page>" ++
+        "<page><title>cat</title><ns>0</ns><id>7</id><revision><id>70</id><timestamp>2024-03-04T05:06:07Z</timestamp><text>==English==&amp;x</text></revision></page>" ++
+        "<page><title>kitty</title><ns>0</ns><id>8</id><redirect title=\"cat\"/><revision><id>80</id><timestamp>2024-03-05T06:07:08Z</timestamp><text>#REDIRECT [[cat]]</text></revision></page>" ++
         "</mediawiki>";
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -192,13 +206,18 @@ test "dump adapter exposes decoded wikitext pages" {
     var headers = dump.headerIterator();
     const header = (try headers.next(std.testing.allocator)).?;
     defer std.testing.allocator.free(header.title);
+    defer std.testing.allocator.free(header.revision_timestamp);
     try std.testing.expectEqual(@as(u32, 0), header.ns);
+    try std.testing.expectEqual(@as(u64, 7), header.page_id);
+    try std.testing.expectEqual(@as(u64, 70), header.revision_id);
+    try std.testing.expectEqualStrings("2024-03-04T05:06:07Z", header.revision_timestamp);
     try std.testing.expectEqualStrings("cat", header.title);
     try std.testing.expect(header.redirect == null);
     const source_start: usize = @intCast(header.source_offset);
     try std.testing.expectEqualStrings("==English==&amp;x", dump.bytes[source_start .. source_start + header.source_len]);
     const redirect = (try headers.next(std.testing.allocator)).?;
     defer std.testing.allocator.free(redirect.title);
+    defer std.testing.allocator.free(redirect.revision_timestamp);
     defer std.testing.allocator.free(redirect.redirect.?);
     try std.testing.expectEqualStrings("kitty", redirect.title);
     try std.testing.expectEqualStrings("cat", redirect.redirect.?);

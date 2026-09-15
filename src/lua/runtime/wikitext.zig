@@ -49,10 +49,16 @@ pub const Provider = struct {
     pub const InterwikiRow = host_api.InterwikiRow;
     pub const SymbolKind = CallSymbolKind;
     pub const Symbol = CallSymbol;
+    pub const PageMetadata = struct {
+        page_id: u64,
+        revision_id: u64,
+        revision_timestamp: []const u8,
+    };
     ctx: ?*anyopaque = null,
     get: *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8,
     get_transclusion: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8 = null,
     redirect_target: ?*const fn (?*anyopaque, []const u8) anyerror!?[]const u8 = null,
+    page_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!?PageMetadata = null,
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
     resolve_call_symbol: ?*const fn (?*anyopaque, *rt.Context, []const u8, CallSymbolKind) anyerror!?CallSymbol = null,
@@ -392,9 +398,48 @@ pub const Expander = struct {
         unreachable;
     }
 
+    fn pageMetadata(self: *Expander) !Provider.PageMetadata {
+        const get = self.provider.page_metadata orelse return error.MissingPageMetadata;
+        return (try get(self.provider.ctx, self.host.current_title)) orelse error.MissingPageMetadata;
+    }
+
+    fn compactRevisionTimestamp(self: *Expander, raw: []const u8) ![]const u8 {
+        if (raw.len != 20 or raw[4] != '-' or raw[7] != '-' or raw[10] != 'T' or raw[13] != ':' or raw[16] != ':' or raw[19] != 'Z') return error.InvalidRevisionTimestamp;
+        const out = try self.runtime.allocator.alloc(u8, 14);
+        @memcpy(out[0..4], raw[0..4]);
+        @memcpy(out[4..6], raw[5..7]);
+        @memcpy(out[6..8], raw[8..10]);
+        @memcpy(out[8..10], raw[11..13]);
+        @memcpy(out[10..12], raw[14..16]);
+        @memcpy(out[12..14], raw[17..19]);
+        return out;
+    }
+
+    fn revisionMagic(self: *Expander, head: []const u8) !?[]const u8 {
+        const metadata = if (std.ascii.eqlIgnoreCase(head, "PAGEID") or std.ascii.startsWithIgnoreCase(head, "REVISION")) try self.pageMetadata() else return null;
+        if (std.ascii.eqlIgnoreCase(head, "PAGEID")) return self.formatMagic("{d}", .{metadata.page_id});
+        if (std.ascii.eqlIgnoreCase(head, "REVISIONID")) return self.formatMagic("{d}", .{metadata.revision_id});
+        const ts = metadata.revision_timestamp;
+        if (ts.len != 20 or ts[4] != '-' or ts[7] != '-' or ts[10] != 'T' or ts[13] != ':' or ts[16] != ':' or ts[19] != 'Z') return error.InvalidRevisionTimestamp;
+        if (std.ascii.eqlIgnoreCase(head, "REVISIONTIMESTAMP")) return @as(?[]const u8, try self.compactRevisionTimestamp(ts));
+        if (std.ascii.eqlIgnoreCase(head, "REVISIONYEAR")) return ts[0..4];
+        if (std.ascii.eqlIgnoreCase(head, "REVISIONMONTH")) return ts[5..7];
+        if (std.ascii.eqlIgnoreCase(head, "REVISIONMONTH1")) {
+            const month = try std.fmt.parseInt(u8, ts[5..7], 10);
+            return self.formatMagic("{d}", .{month});
+        }
+        if (std.ascii.eqlIgnoreCase(head, "REVISIONDAY2")) return ts[8..10];
+        if (std.ascii.eqlIgnoreCase(head, "REVISIONDAY")) {
+            const day = try std.fmt.parseInt(u8, ts[8..10], 10);
+            return self.formatMagic("{d}", .{day});
+        }
+        return null;
+    }
+
     fn magicWord(self: *Expander, raw: []const u8) !?[]const u8 {
         const head = std.mem.trim(u8, raw, " \t\r\n");
         if (try self.titleMagic(head, null)) |value| return value;
+        if (try self.revisionMagic(head)) |value| return value;
         if (std.mem.eql(u8, head, "!")) return "|";
         if (std.mem.eql(u8, head, "!!")) return "||";
         if (std.mem.eql(u8, head, "=")) return "=";
@@ -1012,6 +1057,10 @@ const TestProvider = struct {
     fn exists(_: ?*anyopaque, title: []const u8) !bool {
         return std.mem.eql(u8, title, "Exists") or std.mem.eql(u8, title, "Wiktionary:Sandbox");
     }
+    fn pageMetadata(_: ?*anyopaque, title: []const u8) !?Provider.PageMetadata {
+        if (!std.mem.eql(u8, title, "Page") and !std.mem.eql(u8, title, "Appendix:Page/Sub")) return null;
+        return .{ .page_id = 42, .revision_id = 420, .revision_timestamp = "2024-03-04T05:06:07Z" };
+    }
     fn resolveCallSymbol(_: ?*anyopaque, _: *rt.Context, raw: []const u8, kind: CallSymbolKind) !?CallSymbol {
         const value = std.mem.trim(u8, raw, " \t\r\n");
         return switch (kind) {
@@ -1067,8 +1116,9 @@ test "native AOT wikitext expands templates parser functions and invoke" {
 
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
     const source = "{{Hello|Bob|1}}|{{Only}}|{{:Main_page}}|{{WT:Sandbox}}|{{T:Hello|Z|1}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{#ifexist:WT:Sandbox|W|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
-    const current_magic = try expander.expandFragment("Appendix:Page/Sub", "{{CURRENTDAYNAME}}|{{CURRENTWEEK}}|{{CURRENTMONTHNAMEGEN}}", 1_670_803_200);
-    try std.testing.expectEqualStrings("Monday|50|December", current_magic);
+    expander.provider.page_metadata = TestProvider.pageMetadata;
+    const current_magic = try expander.expandFragment("Appendix:Page/Sub", "{{CURRENTDAYNAME}}|{{CURRENTWEEK}}|{{CURRENTMONTHNAMEGEN}}|{{PAGEID}}|{{REVISIONID}}|{{REVISIONTIMESTAMP}}|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Monday|50|December|42|420|20240304050607|2024-03-4", current_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
     const protected = try expander.expandFragment("Page", "<nowiki>{{Hello|Bob|1}}</nowiki>|{{Hello|A|}}", 1_670_803_200);
@@ -1112,7 +1162,7 @@ test "bundle parser functions cover corpus time sub and iferror forms" {
     try rt.bindGlobalTable(&runtime, null, 0);
     try stdlib.install(&runtime);
     try installTestHost(&runtime, 18, 23);
-    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .page_metadata = TestProvider.pageMetadata } };
     const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
     const got = try expander.expandFragment("Page", source, 1_670_803_200);
     try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|/Wiktionary/Wiktionary/Module", got);

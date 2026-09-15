@@ -7,7 +7,8 @@ const source =
     "# A small rodent.\n{{Template:Template:nested}}\n{{nested}}\n{{T:nested}}\n" ++
     "{{:SharedAlias}}\n{{WT:Sandbox}}\n" ++
     "# Title magic: {{SUBJECTSPACE:Wiktionary talk:Sandbox}} / {{TALKSPACE:WT:Sandbox}}\n" ++
-    "# Parser functions: {{#time:Y M d|2013-3-31 +8 days}} / {{#sub:αβγ|-1}} / {{#iferror:{{#expr:bogus}}|ERR|OK}}\n";
+    "# Parser functions: {{#time:Y M d|2013-3-31 +8 days}} / {{#sub:αβγ|-1}} / {{#iferror:{{#expr:bogus}}|ERR|OK}}\n" ++
+    "# Revision metadata: {{PAGEID}} / {{REVISIONID}} / {{REVISIONTIMESTAMP}}\n";
 const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
     \\local alias_name = 'Module:IntegrationFormsAlias'
@@ -64,7 +65,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
     for (pages) |page| {
         try w.print("<page><title>{s}</title><ns>{d}</ns><id>{d}</id>", .{ page.title, page.ns, page.id });
         if (page.redirect) |target| try w.print("<redirect title=\"{s}\"/>", .{target});
-        try w.print("<revision><id>{d}</id><model>{s}</model><text>", .{
+        try w.print("<revision><id>{d}</id><timestamp>2024-03-04T05:06:07Z</timestamp><model>{s}</model><text>", .{
             page.id + 100,
             if (page.ns == 828 and page.redirect == null) "Scribunto" else "wikitext",
         });
@@ -171,6 +172,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "project namespace transclusion") != null, "namespace-alias transclusion is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Title magic: Wiktionary / Wiktionary talk") != null, "title magic words are resolved before publication");
     try h.require(std.mem.indexOf(u8, text, "Parser functions: 2013 Apr 08 / γ / ERR") != null, "corpus parser functions are baked into data");
+    try h.require(std.mem.indexOf(u8, text, "Revision metadata: 20 / 120 / 20240304050607") != null, "page revision metadata is baked into data");
     try h.require(std.mem.indexOf(u8, text, "ordinary namespace distinct") != null, "Template namespace alias resolves through corpus transclusion");
     try h.require(std.mem.indexOf(u8, text, "Documentation") == null, "noinclude does not leak");
     try h.require(std.mem.indexOf(u8, text, "#invoke") == null, "no executable invoke syntax survives");
