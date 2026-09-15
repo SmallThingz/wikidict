@@ -5,7 +5,8 @@ const expander = @import("bundle_expander.zig");
 const source =
     "==English==\n===Noun===\n{{forms-alias|mouse}}\n" ++
     "# A small rodent.\n{{Template:Template:nested}}\n{{nested}}\n{{T:nested}}\n" ++
-    "{{:SharedAlias}}\n{{WT:Sandbox}}\n";
+    "{{:SharedAlias}}\n{{WT:Sandbox}}\n" ++
+    "# Parser functions: {{#time:Y M d|2013-3-31 +8 days}} / {{#sub:αβγ|-1}} / {{#iferror:{{#expr:bogus}}|ERR|OK}}\n";
 const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
     \\local alias_name = 'Module:IntegrationFormsAlias'
@@ -165,6 +166,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "Forms from native Lua") != null, "template result is baked into data");
     try h.require(std.mem.indexOf(u8, text, "shared main transclusion") != null, "main-page redirect transclusion is baked into data");
     try h.require(std.mem.indexOf(u8, text, "project namespace transclusion") != null, "namespace-alias transclusion is baked into data");
+    try h.require(std.mem.indexOf(u8, text, "Parser functions: 2013 Apr 08 / γ / ERR") != null, "corpus parser functions are baked into data");
     try h.require(std.mem.indexOf(u8, text, "ordinary namespace distinct") != null, "Template namespace alias resolves through corpus transclusion");
     try h.require(std.mem.indexOf(u8, text, "Documentation") == null, "noinclude does not leak");
     try h.require(std.mem.indexOf(u8, text, "#invoke") == null, "no executable invoke syntax survives");

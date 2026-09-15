@@ -179,11 +179,14 @@ fn currentUnix(runtime: *const rt.Context) !i64 {
     return host.now_unix orelse error.MissingCurrentTime;
 }
 
-fn parseTimestamp(runtime: *const rt.Context, raw_value: ?Value) !i64 {
-    if (raw_value == null or raw_value.? == .nil) return try currentUnix(runtime);
-    if (raw_value.? != .string) return error.StringExpected;
-    const raw = std.mem.trim(u8, raw_value.?.string, " \t\r\n");
-    if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "now")) return try currentUnix(runtime);
+fn addDays(timestamp: i64, count: i64) !i64 {
+    const seconds = std.math.mul(i64, count, std.time.s_per_day) catch return error.InvalidDate;
+    return std.math.add(i64, timestamp, seconds) catch error.InvalidDate;
+}
+
+pub fn parseTimestampText(runtime: *const rt.Context, raw_value: ?[]const u8) !i64 {
+    const raw = if (raw_value) |value| std.mem.trim(u8, value, " \t\r\n") else return currentUnix(runtime);
+    if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "now")) return currentUnix(runtime);
     if (raw[0] == '@') return std.fmt.parseInt(i64, raw[1..], 10) catch error.InvalidDate;
     if (std.ascii.eqlIgnoreCase(raw, "today"))
         return floorDiv(try currentUnix(runtime), std.time.s_per_day) * std.time.s_per_day;
@@ -195,11 +198,34 @@ fn parseTimestamp(runtime: *const rt.Context, raw_value: ?Value) !i64 {
             const unit = std.mem.trim(u8, suffix[space + 1 ..], " \t\r\n");
             if (!std.ascii.eqlIgnoreCase(unit, "day") and !std.ascii.eqlIgnoreCase(unit, "days"))
                 return error.InvalidDate;
-            return try currentUnix(runtime) + entry[1] * count * std.time.s_per_day;
+            const signed = std.math.mul(i64, entry[1], count) catch return error.InvalidDate;
+            return addDays(try currentUnix(runtime), signed);
+        }
+    }
+    inline for (.{ .{ " +", @as(i64, 1) }, .{ " -", @as(i64, -1) } }) |entry| {
+        if (std.mem.lastIndexOf(u8, raw, entry[0])) |at| {
+            const base_raw = std.mem.trim(u8, raw[0..at], " \t\r\n");
+            const suffix = std.mem.trim(u8, raw[at + entry[0].len ..], " \t\r\n");
+            if (base_raw.len != 0) {
+                const space = std.mem.indexOfScalar(u8, suffix, ' ') orelse return error.InvalidDate;
+                const count = std.fmt.parseInt(i64, suffix[0..space], 10) catch return error.InvalidDate;
+                const unit = std.mem.trim(u8, suffix[space + 1 ..], " \t\r\n");
+                if (!std.ascii.eqlIgnoreCase(unit, "day") and !std.ascii.eqlIgnoreCase(unit, "days"))
+                    return error.InvalidDate;
+                const civil = parseDelimitedDate(base_raw) orelse return error.InvalidDate;
+                const signed = std.math.mul(i64, entry[1], count) catch return error.InvalidDate;
+                return addDays(try unixFromCivil(civil), signed);
+            }
         }
     }
     const civil = parseDelimitedDate(raw) orelse return error.InvalidDate;
     return unixFromCivil(civil);
+}
+
+fn parseTimestamp(runtime: *const rt.Context, raw_value: ?Value) !i64 {
+    if (raw_value == null or raw_value.? == .nil) return parseTimestampText(runtime, null);
+    if (raw_value.? != .string) return error.StringExpected;
+    return parseTimestampText(runtime, raw_value.?.string);
 }
 
 fn writeTwo(out: *std.ArrayList(u8), a: std.mem.Allocator, n: u8) !void {
@@ -252,7 +278,7 @@ pub fn isoWeek(timestamp: i64, c: Civil) u8 {
     return @intCast(raw);
 }
 
-fn formatDateAlloc(a: std.mem.Allocator, timestamp: i64, format: []const u8) ![]const u8 {
+pub fn formatDateAlloc(a: std.mem.Allocator, timestamp: i64, format: []const u8) ![]const u8 {
     const c = civilFromUnix(timestamp);
     const weekday = weekdaySunday0(timestamp);
     var out: std.ArrayList(u8) = .empty;
@@ -511,6 +537,10 @@ test "MediaWiki partial and word date grammar" {
         try std.testing.expectEqualStrings(case.expected, got);
     }
     try std.testing.expectError(error.InvalidDate, parseTimestamp(&ctx, .{ .string = "2022 July 1" }));
+    const shifted = try parseTimestampText(&ctx, "2013-3-31 +8 days");
+    const shifted_text = try formatDateAlloc(std.testing.allocator, shifted, "Y M d");
+    defer std.testing.allocator.free(shifted_text);
+    try std.testing.expectEqualStrings("2013 Apr 08", shifted_text);
 }
 
 test "parse date forms used by Wiktionary modules" {

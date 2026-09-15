@@ -442,8 +442,91 @@ pub const Expander = struct {
         return self.expandWikitext(chosen, params, host_title, depth + 1);
     }
 
+    fn parserError(self: *Expander, label: []const u8, err: anyerror) ![]const u8 {
+        return std.fmt.allocPrint(self.runtime.allocator, "<strong class=\"error\">{s}: {s}</strong>", .{ label, @errorName(err) });
+    }
+
     fn exprError(self: *Expander, err: anyerror) ![]const u8 {
-        return std.fmt.allocPrint(self.runtime.allocator, "<strong class=\"error\">Expression error: {s}</strong>", .{@errorName(err)});
+        return self.parserError("Expression error", err);
+    }
+
+    fn utf8Count(source: []const u8) !usize {
+        var pos: usize = 0;
+        var count: usize = 0;
+        while (pos < source.len) : (count += 1) {
+            const n = std.unicode.utf8ByteSequenceLength(source[pos]) catch return error.InvalidUtf8;
+            if (pos + n > source.len) return error.InvalidUtf8;
+            _ = std.unicode.utf8Decode(source[pos .. pos + n]) catch return error.InvalidUtf8;
+            pos += n;
+        }
+        return count;
+    }
+
+    fn utf8Offset(source: []const u8, target: usize) !usize {
+        var pos: usize = 0;
+        var index: usize = 0;
+        while (index < target and pos < source.len) : (index += 1) {
+            const n = std.unicode.utf8ByteSequenceLength(source[pos]) catch return error.InvalidUtf8;
+            if (pos + n > source.len) return error.InvalidUtf8;
+            _ = std.unicode.utf8Decode(source[pos .. pos + n]) catch return error.InvalidUtf8;
+            pos += n;
+        }
+        return pos;
+    }
+
+    fn expandTimeParser(self: *Expander, raw_format: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        const format = try self.expandWikitext(raw_format, params, host_title, depth + 1);
+        const timestamp_text: ?[]const u8 = if (args.len == 0)
+            null
+        else
+            try self.expandWikitext(args[0], params, host_title, depth + 1);
+        if (args.len > 1) {
+            const option = std.mem.trim(u8, try self.expandWikitext(args[1], params, host_title, depth + 1), " \t\r\n");
+            if (option.len != 0) return error.UnsupportedTimeOption;
+        }
+        const timestamp = language_lib.parseTimestampText(self.runtime, timestamp_text) catch |err|
+            return self.parserError("Time error", err);
+        return language_lib.formatDateAlloc(self.runtime.allocator, timestamp, format) catch |err|
+            return self.parserError("Time error", err);
+    }
+
+    fn expandSubParser(self: *Expander, raw_source: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        const source = try self.expandWikitext(raw_source, params, host_title, depth + 1);
+        const total: i64 = @intCast(try utf8Count(source));
+        const start_raw: i64 = if (args.len == 0)
+            0
+        else blk: {
+            const text = std.mem.trim(u8, try self.expandWikitext(args[0], params, host_title, depth + 1), " \t\r\n");
+            break :blk std.fmt.parseInt(i64, text, 10) catch return error.InvalidStringIndex;
+        };
+        var start: i64 = if (start_raw < 0)
+            (if (start_raw < -total) 0 else total + start_raw)
+        else
+            @min(start_raw, total);
+        start = @max(@as(i64, 0), start);
+        var end = total;
+        if (args.len > 1) {
+            const text = std.mem.trim(u8, try self.expandWikitext(args[1], params, host_title, depth + 1), " \t\r\n");
+            const length = std.fmt.parseInt(i64, text, 10) catch return error.InvalidStringLength;
+            if (length >= 0)
+                end = @min(total, std.math.add(i64, start, length) catch total)
+            else
+                end = if (length < -total) 0 else total + length;
+        }
+        end = std.math.clamp(end, 0, total);
+        if (end <= start) return "";
+        const begin_byte = try utf8Offset(source, @intCast(start));
+        const end_byte = try utf8Offset(source, @intCast(end));
+        return source[begin_byte..end_byte];
+    }
+
+    fn expandIfError(self: *Expander, raw_test: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        const tested = try self.expandWikitext(raw_test, params, host_title, depth + 1);
+        const failed = std.mem.indexOf(u8, tested, "class=\"error\"") != null;
+        if (failed)
+            return self.expandWikitext(if (args.len > 0) args[0] else "", params, host_title, depth + 1);
+        if (args.len > 1) return self.expandWikitext(args[1], params, host_title, depth + 1);
+        return tested;
     }
 
     fn expandExprParser(self: *Expander, raw: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
@@ -626,6 +709,9 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "urlencode")) return self.expandUrlencodeParser(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "padleft")) return self.expandPadParser(first, parts.items[1..], params, host_title, depth + 1, true);
             if (std.ascii.eqlIgnoreCase(name, "padright")) return self.expandPadParser(first, parts.items[1..], params, host_title, depth + 1, false);
+            if (std.ascii.eqlIgnoreCase(name, "#time")) return self.expandTimeParser(first, parts.items[1..], params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#sub")) return self.expandSubParser(first, parts.items[1..], params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#iferror")) return self.expandIfError(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#invoke")) return self.expandInvoke(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#if")) {
                 const condition = try self.expandWikitext(first, params, host_title, depth + 1);
@@ -800,6 +886,18 @@ pub const Expander = struct {
             } else null;
             return self.formattedDateSpan(first.?.string, style);
         }
+        if (std.ascii.eqlIgnoreCase(name, "#time")) {
+            if (first == null or first.? != .string) return error.StringExpected;
+            const source: ?[]const u8 = if (second) |value| switch (value) {
+                .nil => null,
+                .string => |text| text,
+                else => return error.StringExpected,
+            } else null;
+            const timestamp = language_lib.parseTimestampText(self.runtime, source) catch |err|
+                return self.parserError("Time error", err);
+            return language_lib.formatDateAlloc(self.runtime.allocator, timestamp, first.?.string) catch |err|
+                return self.parserError("Time error", err);
+        }
         return error.UnsupportedParserFunction;
     }
 };
@@ -894,6 +992,28 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("Hi Bob Y|symbolic", symbolic);
     try std.testing.expectError(error.AotCallFailed, expander.expandFragment("Page", "{{#invoke:Test|fail}}", 1_670_803_200));
     try std.testing.expectEqualStrings("NotCallable", runtime.aotErrorName().?);
+}
+
+test "bundle parser functions cover corpus time sub and iferror forms" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}";
+    const got = try expander.expandFragment("Page", source, 1_670_803_200);
+    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|γ|αβ|ERR|OK", got);
+
+    expander.beginPage("Page", "source", 1_670_803_200);
+    const frame_args = try runtime.newTable();
+    const frame = try frame_lib.makeFrameFromTable(&runtime, "Template:Host", frame_args, null);
+    const parser = try runtime.getIndex(frame, .{ .string = "callParserFunction" });
+    const dated = try runtime.callValue(parser, &.{ frame, .{ .string = "#time" }, .{ .string = "Y-m-d" }, .{ .string = "2023-4-2 +8 days" } });
+    defer rt.freeResults(dated);
+    try std.testing.expectEqualStrings("2023-04-10", dated[0].string);
 }
 
 test "missing bundle interwiki metadata fails explicitly" {
