@@ -309,8 +309,14 @@ fn textNowikiCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
 fn textUnstripCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     const source = args[0].string;
-    if (std.mem.indexOfScalar(u8, source, 0x7f) != null) return error.NotImplemented;
-    return one(runtime.allocator, .{ .string = source });
+    if (std.mem.indexOfScalar(u8, source, 0x7f) == null)
+        return one(runtime.allocator, .{ .string = source });
+    if (host_api.get(runtime)) |host| if (host.text_unstrip_no_wiki) |call| {
+        const restored = try call(host.ctx, runtime.allocator, source);
+        if (std.mem.indexOfScalar(u8, restored, 0x7f) != null) return error.NotImplemented;
+        return one(runtime.allocator, .{ .string = restored });
+    };
+    return error.NotImplemented;
 }
 
 fn textUnstripNoWikiCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {

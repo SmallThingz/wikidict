@@ -981,8 +981,15 @@ test "native AOT nowiki strip markers share page host state" {
 
     const mw = runtime.getGlobal(23);
     const text = try runtime.getIndex(mw, .{ .string = "text" });
-    const unstrip = try runtime.getIndex(text, .{ .string = "unstripNoWiki" });
+    const unstrip_no_wiki = try runtime.getIndex(text, .{ .string = "unstripNoWiki" });
+    const restored_no_wiki = try runtime.callValue(unstrip_no_wiki, &.{marker[0]});
+    defer rt.freeResults(restored_no_wiki);
+    try std.testing.expectEqualStrings("HEADING\x011", restored_no_wiki[0].string);
+    const unstrip = try runtime.getIndex(text, .{ .string = "unstrip" });
     const restored = try runtime.callValue(unstrip, &.{marker[0]});
     defer rt.freeResults(restored);
     try std.testing.expectEqualStrings("HEADING\x011", restored[0].string);
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(unstrip, &.{.{ .string = "x\x7fy" }}));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
 }
