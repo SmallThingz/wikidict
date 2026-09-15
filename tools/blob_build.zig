@@ -8,6 +8,26 @@ const Options = struct {
     expander_root: []const u8 = "",
 };
 
+fn writePageIndex(io: std.Io, allocator: std.mem.Allocator, dump: *dump_source.Dump, root: []const u8) !void {
+    const path = try std.fs.path.join(allocator, &.{ root, "page-index.tsv" });
+    defer allocator.free(path);
+    var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
+    defer file.close(io);
+    var buffer: [256 * 1024]u8 = undefined;
+    var writer = file.writer(io, &buffer);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var headers = dump.headerIterator();
+    while (true) {
+        const a = arena.allocator();
+        const page = (try headers.next(a)) orelse break;
+        if (std.mem.indexOfAny(u8, page.title, "\t\r\n") != null) return error.InvalidPageTitle;
+        try writer.interface.print("{d}\t{d}\t{s}\n", .{ page.source_offset, page.source_len, page.title });
+        _ = arena.reset(.retain_capacity);
+    }
+    try writer.interface.flush();
+}
+
 fn parseOptions(args: []const []const u8) !Options {
     var out: Options = .{};
     var index: usize = 3;
@@ -46,6 +66,7 @@ pub fn main(init: std.process.Init) !void {
     defer dump.deinit();
     var registry = try dump.languageRegistry(a);
     defer registry.deinit();
+    try writePageIndex(init.io, a, &dump, options.expander_root);
     const codes: encoder.blob_builder.LanguageCodes = .{
         .ctx = &registry,
         .get_fn = struct {
@@ -58,7 +79,7 @@ pub fn main(init: std.process.Init) !void {
 
     const worker_path = try std.fs.path.join(a, &.{ options.expander_root, "dict-bundle-expander" });
     defer a.free(worker_path);
-    var worker = bundle_expander.Worker.init(init.io, options.expander_root, worker_path);
+    var worker = bundle_expander.Worker.init(init.io, options.expander_root, worker_path, args[1]);
     defer worker.deinit();
 
     var writer = try encoder.blob_builder.Writer.init(init.io, a, args[2]);

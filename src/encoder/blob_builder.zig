@@ -2,10 +2,7 @@ const std = @import("std");
 const blobs = @import("blob_encoder");
 const blob_format = blobs.blob_format;
 const blob_catalog = blobs.blob_catalog;
-const language_encoding = blobs.language_blob_encoding;
-const thesaurus_encoding = blobs.thesaurus_encoding;
-const reconstruction_encoding = blobs.reconstruction_encoding;
-const rhymes_encoding = blobs.rhymes_encoding;
+const language_source = @import("language_source.zig");
 const presentation_document = @import("presentation_document.zig");
 
 const language_bucket_count = 32;
@@ -364,9 +361,9 @@ fn processMain(
     stats: *BuildStats,
 ) !void {
     stats.main_pages += 1;
-    var page_sections: std.ArrayList(language_encoding.SourceLanguageSection) = .empty;
+    var page_sections: std.ArrayList(language_source.Section) = .empty;
     defer page_sections.deinit(page_allocator);
-    var sections = language_encoding.SourceLanguageIterator.init(source);
+    var sections = language_source.Iterator.init(source);
     while (sections.next()) |section| try page_sections.append(page_allocator, section);
 
     for (page_sections.items, 0..) |section, index| {

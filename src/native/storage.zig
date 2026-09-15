@@ -70,12 +70,13 @@ const Builder = struct {
     fn headerComplete(self: Builder) !bool {
         const h = self.header.items;
         if (h.len < 9) return false;
-        const base: usize = if (std.mem.eql(u8, h[0..8], format.magic)) format.header_len else if (std.mem.eql(u8, h[0..8], format.legacy_magic)) format.legacy_header_len else return error.InvalidBlob;
+        if (!std.mem.eql(u8, h[0..8], format.magic)) return error.InvalidBlob;
+        const base: usize = format.header_len;
         if (h.len < base) return false;
-        if (h[8] == 1 or h[8] == 7) {
+        if (h[8] == @intFromEnum(format.BlobKind.language)) {
             const zero1 = std.mem.indexOfScalarPos(u8, h, base, 0) orelse return false;
             const zero2 = std.mem.indexOfScalarPos(u8, h, zero1 + 1, 0) orelse return false;
-            return h.len >= zero2 + 1 + @as(usize, if (h[8] == 7) 1 else 0);
+            return h.len >= zero2 + 1;
         }
         return true;
     }

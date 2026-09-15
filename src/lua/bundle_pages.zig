@@ -2,13 +2,11 @@
 const std = @import("std");
 const A = std.mem.Allocator;
 const lua_program = @import("lua_program");
+const xml_decode = @import("shared_xml_decode");
 const InterwikiRow = lua_program.WikitextProvider.InterwikiRow;
 
-const ManifestRow = struct {
-    page_id: u64,
-    title: []const u8,
-};
 const TemplateSlot = struct { page_id: u64, redirect: ?[]const u8 = null };
+const CorpusPage = struct { offset: u64, len: usize };
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
@@ -23,45 +21,43 @@ pub const Provider = struct {
     io: std.Io,
     a: A,
     root: []const u8,
-    pages: std.StringHashMapUnmanaged(u64) = .empty,
+    corpus_pages: std.StringHashMapUnmanaged(CorpusPage) = .empty,
+    corpus_pages_storage: ?Mapped = null,
+    dump_file: ?std.Io.File = null,
     templates: std.StringHashMapUnmanaged(TemplateSlot) = .empty,
-    modules: std.StringHashMapUnmanaged(u64) = .empty,
-    modules_loaded: bool = false,
     interwiki_rows: std.ArrayList(InterwikiRow) = .empty,
 
-    pub fn init(io: std.Io, a: A, root: []const u8) !Provider {
-        var self: Provider = .{ .io = io, .a = a, .root = root };
+    pub fn init(io: std.Io, a: A, root: []const u8, dump_path: []const u8) !Provider {
+        const owned_root = try a.dupe(u8, root);
+        var self: Provider = .{ .io = io, .a = a, .root = owned_root };
         errdefer self.deinit();
-        try self.loadPageManifest();
+        try self.loadCorpusPages(dump_path);
         try self.loadTemplateManifest();
         try self.loadInterwikiMap();
         return self;
     }
 
     pub fn deinit(self: *Provider) void {
-        freeStringMapKeys(u64, self.a, &self.pages);
+        self.corpus_pages.deinit(self.a);
+        if (self.corpus_pages_storage) |*mapped| mapped.deinit();
+        if (self.dump_file) |*file| file.close(self.io);
         var template_it = self.templates.iterator();
         while (template_it.next()) |entry| {
             self.a.free(entry.key_ptr.*);
             if (entry.value_ptr.redirect) |redirect| self.a.free(redirect);
         }
         self.templates.deinit(self.a);
-        freeStringMapKeys(u64, self.a, &self.modules);
         for (self.interwiki_rows.items) |row| {
             self.a.free((row.prefix));
             self.a.free((row.url));
         }
         self.interwiki_rows.deinit(self.a);
+        self.a.free(self.root);
+        self.root = "";
     }
 
     pub fn api(self: *Provider) lua_program.WikitextProvider {
         return .{ .ctx = self, .get = get, .exists = exists, .interwiki_map = interwikiMap };
-    }
-
-    fn freeStringMapKeys(comptime V: type, a: A, map: *std.StringHashMapUnmanaged(V)) void {
-        var keys = map.keyIterator();
-        while (keys.next()) |key| a.free(key.*);
-        map.deinit(a);
     }
 
     fn mapOptional(self: *Provider, name: []const u8) !?Mapped {
@@ -78,17 +74,17 @@ pub const Provider = struct {
         return .{ .bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0) };
     }
 
-    fn unescapeField(self: *Provider, raw: []const u8) ![]u8 {
+    fn unescapeFieldAlloc(a: A, raw: []const u8) ![]u8 {
         var out: std.ArrayList(u8) = .empty;
-        errdefer out.deinit(self.a);
+        errdefer out.deinit(a);
         var i: usize = 0;
         while (i < raw.len) : (i += 1) {
             if (raw[i] != '\\' or i + 1 >= raw.len) {
-                try out.append(self.a, raw[i]);
+                try out.append(a, raw[i]);
                 continue;
             }
             i += 1;
-            try out.append(self.a, switch (raw[i]) {
+            try out.append(a, switch (raw[i]) {
                 't' => '\t',
                 'n' => '\n',
                 'r' => '\r',
@@ -96,12 +92,13 @@ pub const Provider = struct {
                 else => raw[i],
             });
         }
-        return out.toOwnedSlice(self.a);
+        return out.toOwnedSlice(a);
     }
 
     fn loadInterwikiMap(self: *Provider) !void {
         var mapped = (try self.mapOptional("interwiki-map.tsv")) orelse return;
         defer mapped.deinit();
+        try self.interwiki_rows.ensureTotalCapacity(self.a, std.mem.count(u8, mapped.bytes, "\n"));
         var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
         while (lines.next()) |line| {
             if (line.len == 0 or line[0] == '#') continue;
@@ -111,9 +108,9 @@ pub const Provider = struct {
             const current_raw = fields.next() orelse continue;
             const protocol_raw = fields.next() orelse continue;
             const url_raw = fields.next() orelse continue;
-            const prefix = try self.unescapeField(prefix_raw);
+            const prefix = try unescapeFieldAlloc(self.a, prefix_raw);
             errdefer self.a.free(prefix);
-            const url = try self.unescapeField(url_raw);
+            const url = try unescapeFieldAlloc(self.a, url_raw);
             errdefer self.a.free(url);
             try self.interwiki_rows.append(self.a, .{
                 .prefix = prefix,
@@ -125,38 +122,58 @@ pub const Provider = struct {
         }
     }
 
-    fn normalizeTemplateAlloc(self: *Provider, raw: []const u8) ![]u8 {
-        const decoded = try self.unescapeField(raw);
-        defer self.a.free(decoded);
+    fn normalizeTemplateAlloc(self: *Provider, scratch: A, raw: []const u8) ![]u8 {
+        const decoded = try unescapeFieldAlloc(scratch, raw);
         const body = if (std.mem.startsWith(u8, decoded, "Template:")) decoded[9..] else decoded;
         const title = try std.fmt.allocPrint(self.a, "Template:{s}", .{body});
         std.mem.replaceScalar(u8, title, '_', ' ');
         return title;
     }
 
-    fn loadPageManifest(self: *Provider) !void {
-        var mapped = (try self.mapOptional("pages-manifest.jsonl")) orelse return;
-        defer mapped.deinit();
+    fn loadCorpusPages(self: *Provider, dump_path: []const u8) !void {
+        var mapped = (try self.mapOptional("page-index.tsv")) orelse return;
+        errdefer mapped.deinit();
+        var file = try std.Io.Dir.cwd().openFile(self.io, dump_path, .{});
+        errdefer file.close(self.io);
+        const dump_size = (try file.stat(self.io)).size;
+        var pages: std.StringHashMapUnmanaged(CorpusPage) = .empty;
+        errdefer pages.deinit(self.a);
+        try pages.ensureTotalCapacity(self.a, @intCast(std.mem.count(u8, mapped.bytes, "\n")));
         var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
         while (lines.next()) |line| {
             if (line.len == 0) continue;
-            const parsed = try std.json.parseFromSlice(ManifestRow, self.a, line, .{ .ignore_unknown_fields = true });
-            defer parsed.deinit();
-            const title = try self.a.dupe(u8, parsed.value.title);
-            errdefer self.a.free(title);
-            const result = try self.pages.getOrPut(self.a, title);
-            if (result.found_existing) {
-                self.a.free(title);
-                return error.DuplicatePage;
-            }
+            var fields = std.mem.splitScalar(u8, line, '\t');
+            const offset = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
+            const len = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10);
+            const title = fields.next() orelse return error.InvalidPageIndex;
+            if (title.len == 0 or fields.next() != null) return error.InvalidPageIndex;
+            const end = std.math.add(u64, offset, len) catch return error.InvalidPageIndex;
+            if (end > dump_size) return error.InvalidPageIndex;
+            const result = try pages.getOrPut(self.a, title);
+            if (result.found_existing) return error.DuplicatePage;
             result.key_ptr.* = title;
-            result.value_ptr.* = parsed.value.page_id;
+            result.value_ptr.* = .{ .offset = offset, .len = len };
         }
+        self.corpus_pages = pages;
+        self.corpus_pages_storage = mapped;
+        self.dump_file = file;
+    }
+
+    fn readCorpusSource(self: *Provider, a: A, page: CorpusPage) ![]const u8 {
+        if (page.len == 0) return a.dupe(u8, "");
+        const file = if (self.dump_file) |*value| value else return error.MissingDump;
+        const raw = try a.alloc(u8, page.len);
+        defer a.free(raw);
+        if (try file.readPositionalAll(self.io, raw, page.offset) != raw.len) return error.TruncatedDump;
+        return xml_decode.decodeSinglePassAlloc(a, raw);
     }
 
     fn loadTemplateManifest(self: *Provider) !void {
         var mapped = (try self.mapOptional("template-manifest.tsv")) orelse return;
         defer mapped.deinit();
+        try self.templates.ensureTotalCapacity(self.a, @intCast(std.mem.count(u8, mapped.bytes, "\n")));
+        var scratch = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        defer scratch.deinit();
         var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
         while (lines.next()) |line| {
             if (line.len == 0) continue;
@@ -166,9 +183,9 @@ pub const Provider = struct {
             _ = fields_it.next();
             const redirect_raw = fields_it.next() orelse "";
             const id = std.fmt.parseInt(u64, id_text, 10) catch continue;
-            const title = try self.normalizeTemplateAlloc(title_raw);
+            const title = try self.normalizeTemplateAlloc(scratch.allocator(), title_raw);
             errdefer self.a.free(title);
-            const redirect = if (redirect_raw.len == 0) null else try self.normalizeTemplateAlloc(redirect_raw);
+            const redirect = if (redirect_raw.len == 0) null else try self.normalizeTemplateAlloc(scratch.allocator(), redirect_raw);
             errdefer if (redirect) |value| self.a.free(value);
             const result = try self.templates.getOrPut(self.a, title);
             if (result.found_existing) {
@@ -176,33 +193,8 @@ pub const Provider = struct {
                 if (result.value_ptr.redirect) |old_redirect| self.a.free(old_redirect);
             } else result.key_ptr.* = title;
             result.value_ptr.* = .{ .page_id = id, .redirect = redirect };
+            _ = scratch.reset(.retain_capacity);
         }
-    }
-
-    fn loadModuleManifest(self: *Provider) !void {
-        if (self.modules_loaded) return;
-        var mapped = (try self.mapOptional("manifest.jsonl")) orelse {
-            self.modules_loaded = true;
-            return;
-        };
-        defer mapped.deinit();
-        var loaded: std.StringHashMapUnmanaged(u64) = .empty;
-        errdefer freeStringMapKeys(u64, self.a, &loaded);
-        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
-        while (lines.next()) |line| {
-            if (line.len == 0) continue;
-            const parsed = std.json.parseFromSlice(ManifestRow, self.a, line, .{ .ignore_unknown_fields = true }) catch continue;
-            defer parsed.deinit();
-            const row = parsed.value;
-            const title = try self.a.dupe(u8, row.title);
-            errdefer self.a.free(title);
-            const result = try loaded.getOrPut(self.a, title);
-            if (result.found_existing) self.a.free(title) else result.key_ptr.* = title;
-            result.value_ptr.* = row.page_id;
-        }
-        std.debug.assert(self.modules.count() == 0);
-        self.modules = loaded;
-        self.modules_loaded = true;
     }
 
     fn readSource(self: *Provider, a: A, dir: []const u8, id: u64, suffix: []const u8) ![]const u8 {
@@ -212,18 +204,12 @@ pub const Provider = struct {
 
     fn lookup(self: *Provider, a: A, raw_title: []const u8, content: bool) !?[]const u8 {
         if (raw_title.len > 4096) return error.InvalidPageTitle;
-        var normalized: ?[]u8 = null;
-        defer if (normalized) |owned| a.free(owned);
+        var title_buffer: [4096]u8 = undefined;
         const title: []const u8 = if (std.mem.indexOfScalar(u8, raw_title, '_') != null) blk: {
-            const owned = try a.dupe(u8, raw_title);
-            std.mem.replaceScalar(u8, owned, '_', ' ');
-            normalized = owned;
-            break :blk owned;
+            @memcpy(title_buffer[0..raw_title.len], raw_title);
+            std.mem.replaceScalar(u8, title_buffer[0..raw_title.len], '_', ' ');
+            break :blk title_buffer[0..raw_title.len];
         } else raw_title;
-        if (self.pages.get(title)) |id| {
-            if (!content) return "";
-            return try self.readSource(a, "pages", id, "wiki");
-        }
         if (self.templates.get(title)) |initial| {
             if (!content) return "";
             var slot = initial;
@@ -235,14 +221,7 @@ pub const Provider = struct {
             }
             return try self.readSource(a, "templates", slot.page_id, "wiki");
         }
-        if (std.mem.startsWith(u8, title, "Module:")) {
-            try self.loadModuleManifest();
-            if (self.modules.get(title)) |id| {
-                if (!content) return "";
-                return try self.readSource(a, "modules", id, "lua");
-            }
-        }
-        if (std.mem.startsWith(u8, title, "Appendix:") or std.mem.startsWith(u8, title, "Wiktionary:") or std.mem.startsWith(u8, title, "MediaWiki:")) return null;
+        if (self.corpus_pages.get(title)) |page| return if (content) try self.readCorpusSource(a, page) else "";
         return null;
     }
 
@@ -262,41 +241,42 @@ pub const Provider = struct {
     }
 };
 
-test "module manifest stays lazy until a Module page lookup" {
+test "provider owns paths and serves corpus ranges without query-history state" {
     const a = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
     defer a.free(root);
-    const manifest_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" });
-    defer a.free(manifest_path);
-    try std.Io.Dir.cwd().writeFile(io, .{
-        .sub_path = manifest_path,
-        .data = "{\"page_id\":42,\"title\":\"Module:Lazy\"}\n",
-    });
-    const modules_path = try std.fs.path.join(a, &.{ root, "modules" });
-    defer a.free(modules_path);
-    try std.Io.Dir.cwd().createDir(io, modules_path, .default_dir);
-    const source_path = try std.fs.path.join(a, &.{ modules_path, "42.lua" });
+    const dump_path = try std.fs.path.join(a, &.{ root, "dump.xml" });
+    defer a.free(dump_path);
+    const dump_bytes = "prefixA&amp;B";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = dump_bytes });
+    const page_index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    defer a.free(page_index_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = page_index_path, .data = "6\t7\tOrdinary page\n" });
+    const template_manifest_path = try std.fs.path.join(a, &.{ root, "template-manifest.tsv" });
+    defer a.free(template_manifest_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = template_manifest_path, .data = "42\tTemplate:Lazy\t9\t\n" });
+    const templates_path = try std.fs.path.join(a, &.{ root, "templates" });
+    defer a.free(templates_path);
+    try std.Io.Dir.cwd().createDir(io, templates_path, .default_dir);
+    const source_path = try std.fs.path.join(a, &.{ templates_path, "42.wiki" });
     defer a.free(source_path);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source_path, .data = "return 42" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source_path, .data = "lazy body" });
 
-    var provider = try Provider.init(io, a, root);
+    const caller_root = try a.dupe(u8, root);
+    defer a.free(caller_root);
+    var provider = try Provider.init(io, a, caller_root, dump_path);
     defer provider.deinit();
+    @memset(caller_root, 'x');
     var page_arena = std.heap.ArenaAllocator.init(a);
     defer page_arena.deinit();
     const page_a = page_arena.allocator();
-    try std.testing.expect(!provider.modules_loaded);
-    try std.testing.expectEqual(@as(usize, 0), provider.modules.count());
-    try std.testing.expect((try provider.lookup(page_a, "Ordinary page", false)) == null);
-    try std.testing.expect(!provider.modules_loaded);
-    try std.testing.expectEqual(@as(usize, 0), provider.modules.count());
-    const exists = (try provider.lookup(page_a, "Module:Lazy", false)) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqualStrings("", exists);
-    try std.testing.expect(provider.modules_loaded);
-    try std.testing.expectEqual(@as(usize, 1), provider.modules.count());
-    const content = (try provider.lookup(page_a, "Module:Lazy", true)) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqualStrings("return 42", content);
-    try std.testing.expect(!(try Provider.exists(&provider, "Ordinary_page")));
+    try std.testing.expect((try provider.lookup(page_a, "Missing page", false)) == null);
+    const template_content = (try provider.lookup(page_a, "Template:Lazy", true)) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("lazy body", template_content);
+    try std.testing.expect(try Provider.exists(&provider, "Ordinary_page"));
+    const main_content = (try provider.lookup(page_a, "Ordinary_page", true)) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("A&B", main_content);
 }

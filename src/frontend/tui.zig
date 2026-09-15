@@ -345,7 +345,10 @@ test "terminal query editing is bounded and UTF8-aware" {
     const enc = @import("blob_encoder");
     const dec = @import("blob_decoder");
     const a = std.testing.allocator;
-    const bytes = try enc.blob_format.buildAlloc(a, .citations, "", &.{.{ .title = "café", .payload = "entry" }});
+    const stored: enc.presentation_types.Stored = .{ .entry = .{ .title = "café", .kind = .citations } };
+    const payload = try std.json.Stringify.valueAlloc(a, stored, .{});
+    defer a.free(payload);
+    const bytes = try enc.blob_format.buildAlloc(a, .citations, "", &.{.{ .title = "café", .payload = payload }});
     defer a.free(bytes);
     var index = try (try dec.openTrustedBlob(bytes)).buildIndexAlloc(a);
     defer index.deinit(a);

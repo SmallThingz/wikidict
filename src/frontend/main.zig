@@ -29,8 +29,6 @@ const usage =
     \\  --details          Show all compiled supporting details in text/TUI
     \\  --color MODE       auto, always, never; NO_COLOR disables automatic color
     \\  --theme THEME      TUI palette: terminal, dark, light
-    \\  --trusted          Legacy compatibility flag; cached directories are still validated
-    \\  --validate         Validate while indexing (default)
     \\  --                 End options, for words beginning with a dash
     \\
     \\Readers consume compiled dictionary data only. No wikitext, templates, or Lua execute at runtime.
@@ -65,7 +63,7 @@ fn run(init: std.process.Init) !u8 {
         return 0;
     }
     if (opts.command == .tui and (!try std.Io.File.stdin().isTty(init.io) or !try std.Io.File.stdout().isTty(init.io) or (if (init.environ_map.get("TERM")) |t| std.mem.eql(u8, t, "dumb") else false))) return error.TerminalRequired;
-    var db = try store.Store.open(init.io, init.gpa, opts.root, opts.kind, opts.language, opts.trusted);
+    var db = try store.Store.open(init.io, init.gpa, opts.root, opts.kind, opts.language);
     defer db.deinit();
     const color = switch (opts.color) {
         .always => true,

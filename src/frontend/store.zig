@@ -21,8 +21,7 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
     root: []const u8 = "",
 
-    pub fn open(io: std.Io, a: std.mem.Allocator, root: []const u8, kind: Kind, language: []const u8, trusted: bool) !Store {
-        _ = trusted;
+    pub fn open(io: std.Io, a: std.mem.Allocator, root: []const u8, kind: Kind, language: []const u8) !Store {
         try @import("blob_files").requireComplete(io, a, root);
         const path = try pathAlloc(a, root, kind, language);
         defer a.free(path);
@@ -121,7 +120,7 @@ test "compiled records need no resolution machinery" {
     defer a.free(path);
     try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(path).?);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
-    var db = try Store.open(io, a, root, .language, "English", false);
+    var db = try Store.open(io, a, root, .language, "English");
     defer db.deinit();
     var raw = try db.recordAlloc(a, (try db.find("cat")).?);
     defer raw.deinit();

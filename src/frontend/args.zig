@@ -16,7 +16,6 @@ pub const Options = struct {
     limit: usize = 20,
     offset: usize = 0,
     details: bool = false,
-    trusted: bool = false,
     help: bool = false,
 };
 pub fn parse(argv: []const []const u8) !Options {
@@ -46,25 +45,9 @@ pub fn parse(argv: []const []const u8) !Options {
         out.command = .lookup;
         out.format = .json;
     } else if (std.meta.stringToEnum(Command, argv[0])) |command| out.command = command else {
-        // Keep the original ROOT KIND [LANGUAGE] QUERY form, but make the common
-        // `dict WORD` invocation mean lookup instead of treating WORD as a path.
-        if (argv.len >= 3 and store.parseKind(argv[1]) != null) {
-            out.root = argv[0];
-            out.kind = store.parseKind(argv[1]).?;
-            pos = 2;
-            if (out.kind == .language) {
-                if (argv.len < 4) return error.Usage;
-                out.language = argv[pos];
-                pos += 1;
-            }
-            out.query = argv[pos];
-            pos += 1;
-            has_query = true;
-        } else {
-            out.command = .lookup;
-            out.query = argv[0];
-            has_query = true;
-        }
+        out.command = .lookup;
+        out.query = argv[0];
+        has_query = true;
     }
     while (pos < argv.len) : (pos += 1) {
         const arg = argv[pos];
@@ -79,14 +62,6 @@ pub fn parse(argv: []const []const u8) !Options {
             }
             if (std.mem.eql(u8, arg, "--details")) {
                 out.details = true;
-                continue;
-            }
-            if (std.mem.eql(u8, arg, "--trusted")) {
-                out.trusted = true;
-                continue;
-            }
-            if (std.mem.eql(u8, arg, "--validate")) {
-                out.trusted = false;
                 continue;
             }
             if (pos + 1 >= argv.len) return error.Usage;
@@ -107,10 +82,7 @@ pub fn parse(argv: []const []const u8) !Options {
     if (out.offset != 0 and out.command != .search) return error.Usage;
     return out;
 }
-test "CLI options are strict and legacy query syntax still works" {
-    const old = try parse(&.{ ".tmp/blobs", "language", "French", "chat", "--validate" });
-    try std.testing.expectEqualStrings("chat", old.query);
-    try std.testing.expectEqualStrings("French", old.language);
+test "CLI options are strict and lookup shorthand is unambiguous" {
     const opts = try parse(&.{ "search", "--format", "json", "--limit", "3", "--", "-a" });
     try std.testing.expectEqualStrings("-a", opts.query);
     try std.testing.expectEqual(@as(usize, 3), opts.limit);
@@ -122,9 +94,7 @@ test "CLI options are strict and legacy query syntax still works" {
     try std.testing.expectError(error.Usage, parse(&.{ "search", "--limit", "0" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "unexpected" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--wat", "yes" }));
-}
 
-test "bare word is an intuitive lookup shorthand without breaking legacy root syntax" {
     const leading = try parse(&.{ "--language", "French", "--format", "json", "chat" });
     try std.testing.expectEqual(Command.lookup, leading.command);
     try std.testing.expectEqualStrings("chat", leading.query);
@@ -134,11 +104,9 @@ test "bare word is an intuitive lookup shorthand without breaking legacy root sy
     try std.testing.expectEqual(Command.lookup, bare.command);
     try std.testing.expectEqualStrings("cat", bare.query);
     try std.testing.expectEqualStrings("French", bare.language);
-    const legacy = try parse(&.{ ".tmp/blobs", "citations", "example" });
-    try std.testing.expectEqual(Command.lookup, legacy.command);
-    try std.testing.expectEqualStrings(".tmp/blobs", legacy.root);
-    try std.testing.expectEqual(store.Kind.citations, legacy.kind);
-    try std.testing.expectEqualStrings("example", legacy.query);
+
+    // Old positional ROOT/KIND syntax is gone; a non-command first token is always WORD.
+    try std.testing.expectError(error.Usage, parse(&.{ ".tmp/blobs", "citations", "example" }));
 }
 
 test "frontend formats and terminal options reject invalid combinations" {
@@ -154,6 +122,8 @@ test "removed runtime and web options stay rejected" {
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--runtime", "runtime" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--runtime-timeout-ms", "200" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--native" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--trusted" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--validate" }));
 }
 
 test "language accounting can be scoped to a spelling rather than the whole catalog" {
@@ -162,7 +132,7 @@ test "language accounting can be scoped to a spelling rather than the whole cata
     try std.testing.expectEqual(Command.languages, opts.command);
 }
 
-test "export remains a JSON or source lookup alias" {
+test "export remains a JSON lookup alias" {
     const json = try parse(&.{ "export", "cats" });
     try std.testing.expectEqual(Command.lookup, json.command);
     try std.testing.expectEqual(Format.json, json.format);

@@ -86,7 +86,7 @@ fn jsonBuffer(handle: *Handle, value: anytype, out: *Buffer) !void {
 }
 
 export fn dict_abi_version() callconv(.c) u32 {
-    return 1;
+    return 2;
 }
 
 fn openHandle(root: []const u8) !*Handle {
@@ -121,7 +121,7 @@ export fn dict_close(handle: ?*Handle) callconv(.c) void {
 fn selectImpl(h: *Handle, language: []const u8, kind: store.Kind) !void {
     const copy = try allocator.dupe(u8, language);
     errdefer allocator.free(copy);
-    var db = try store.Store.open(h.io(), allocator, h.root, kind, language, false);
+    var db = try store.Store.open(h.io(), allocator, h.root, kind, language);
     errdefer db.deinit();
     if (h.selected) |*old| {
         old.db.deinit();
@@ -170,7 +170,6 @@ fn lookupInternal(handle: *Handle, query: []const u8, out: *Buffer) !bool {
     try jsonBuffer(handle, response, out);
     return true;
 }
-
 
 export fn dict_lookup_json(
     handle: ?*Handle,
@@ -229,7 +228,10 @@ export fn dict_random_json(handle: ?*Handle, out: *Buffer) callconv(.c) c_int {
     resetBuffer(out);
     const h = handle orelse return @intFromEnum(Status.invalid_argument);
     const current = selected(h) catch |err| return @intFromEnum(h.fail("random", err));
-    if (current.db.count() == 0) return @intFromEnum(Status.not_found);
+    if (current.db.count() == 0) {
+        h.clearError();
+        return @intFromEnum(Status.not_found);
+    }
     const entropy: u128 = @intCast(std.Io.Clock.awake.now(h.io()).toNanoseconds());
     const index: usize = @intCast(entropy % @as(u128, current.db.count()));
     const title = current.db.titleAt(index) catch |err| return @intFromEnum(h.fail("random", err));

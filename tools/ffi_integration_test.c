@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
     dict_handle *handle = NULL;
     dict_status status = dict_open(argv[1], strlen(argv[1]), &handle);
     if (!require(status == DICT_OK && handle != NULL, "open")) return 1;
-    if (!require(dict_abi_version() == 1, "ABI version")) return 1;
+    if (!require(DICT_ABI_VERSION == 2u && dict_abi_version() == DICT_ABI_VERSION, "ABI version")) return 1;
     status = dict_select(handle, "English", 7, "language", 8);
     if (!require(status == DICT_OK, "select English")) return 1;
 

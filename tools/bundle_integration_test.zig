@@ -11,6 +11,9 @@ const module_source =
     \\assert(require(alias_name).mouse == 'mice')
     \\return { render_dictionary_fixture = function(frame)
     \\    assert(mw.title.new('Appendix:IntegrationFixture'):getContent() == 'a real auxiliary source page')
+    \\    assert(mw.title.new('rat').exists)
+    \\    assert(string.find(mw.title.new('rat'):getContent(), 'Another rodent', 1, true))
+    \\    assert(not mw.title.new('definitely-not-a-real-entry').exists)
     \\    local word = frame.args[1]
     \\    local plural = forms[word]
     \\    return "'''"..word.."''' (plural ''"..plural.."'')\n\n" ..
@@ -34,6 +37,7 @@ fn xml(w: *std.Io.Writer, text: []const u8) !void {
 fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
     const pages = [_]Page{
         .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
+        .{ .title = "rat", .ns = 0, .id = 22, .body = "==English==\n===Noun===\n# Another rodent.\n" },
         .{ .title = "Appendix:IntegrationFixture", .ns = 100, .id = 21, .body = "a real auxiliary source page" },
         .{ .title = "Template:show-forms", .ns = 10, .id = 10, .body = template_source },
         .{ .title = "Template:forms-alias", .ns = 10, .id = 11, .body = "#REDIRECT [[Template:show-forms]]", .redirect = "Template:show-forms" },
@@ -97,7 +101,7 @@ fn exists(io: std.Io, path: []const u8) bool {
 }
 
 fn deadlineProbe(io: std.Io, a: std.mem.Allocator, dir: []const u8) !void {
-    var worker = expander.Worker.init(io, dir, "tail");
+    var worker = expander.Worker.init(io, dir, "tail", "missing-dump.xml");
     worker.timeout_ms = 100;
     defer worker.deinit();
     try std.testing.expectError(error.Timeout, worker.expand(a, "probe", "==English==\n"));

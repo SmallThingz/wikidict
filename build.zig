@@ -10,14 +10,6 @@ pub fn build(b: *std.Build) void {
         "Prioritize performance, safety, or binary size",
     ) orelse .ReleaseSafe;
     const test_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
-    const structure_optimize: std.builtin.OptimizeMode = .ReleaseFast;
-    const default_skip_headings = "anagrams,citations,meta,statistics,further_reading,translations";
-    const skip_headings_csv = b.option([]const u8, "skip-headings", "Comma-separated headings or heading families to exclude, e.g. Anagrams,Translations") orelse default_skip_headings;
-    const filter_languages_csv = b.option([]const u8, "language", "Language headings to store; defaults to English, use all for every language, or a comma-separated list such as English,Chinese") orelse "English";
-    const config_options = b.addOptions();
-    config_options.addOption([]const u8, "skip_headings_csv", skip_headings_csv);
-    config_options.addOption([]const u8, "filter_languages_csv", filter_languages_csv);
-    const zxml_config_path = addZxmlConfigModule(b);
     const zxml_dep = b.dependency("zxml", .{
         .target = target,
         .optimize = optimize,
@@ -25,10 +17,6 @@ pub fn build(b: *std.Build) void {
     const zxml_dep_test = b.dependency("zxml", .{
         .target = target,
         .optimize = test_optimize,
-    });
-    const zxml_dep_structure = b.dependency("zxml", .{
-        .target = target,
-        .optimize = structure_optimize,
     });
     const shared_xml_decode_mod = b.createModule(.{
         .root_source_file = b.path("src/shared/xml_decode.zig"),
@@ -40,25 +28,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = test_optimize,
     });
-    const shared_structure_report_mod_test = b.createModule(.{
-        .root_source_file = b.path("src/shared/structure_report.zig"),
-        .target = target,
-        .optimize = test_optimize,
-    });
-    const wikitext_source_mod = b.createModule(.{
-        .root_source_file = b.path("src/encoder/wikitext.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    wikitext_source_mod.addOptions("config", config_options);
-    wikitext_source_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
-    const wikitext_source_mod_test = b.createModule(.{
-        .root_source_file = b.path("src/encoder/wikitext.zig"),
-        .target = target,
-        .optimize = test_optimize,
-    });
-    wikitext_source_mod_test.addOptions("config", config_options);
-    wikitext_source_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod_test);
     const blob_encoder_mod = b.addModule("blob_encoder", .{
         .root_source_file = b.path("src/encoder/blob_root.zig"),
         .target = target,
@@ -73,19 +42,12 @@ pub fn build(b: *std.Build) void {
     storage_mod.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
     const storage_test = b.createModule(.{ .root_source_file = b.path("src/native/storage.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
     storage_test.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
-    const structure_bin = addDirectStructureBinary(
-        b,
-        zxml_dep_structure.path("src/root.zig"),
-        config_options.getOutput(),
-        zxml_config_path,
-    );
     const encoder_mod = b.addModule("encoder", .{
         .root_source_file = b.path("src/encoder/root.zig"),
         .target = target,
         .optimize = optimize,
     });
     encoder_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
-    encoder_mod.addImport("wikitext_source", wikitext_source_mod);
     encoder_mod.addImport("blob_encoder", blob_encoder_mod);
 
     const encoder_mod_test = b.addModule("encoder_test", .{
@@ -94,7 +56,6 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
     });
     encoder_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod_test);
-    encoder_mod_test.addImport("wikitext_source", wikitext_source_mod_test);
     encoder_mod_test.addImport("blob_encoder", blob_encoder_mod_test);
 
     const blob_decoder_mod = b.addModule("blob_decoder", .{
@@ -200,12 +161,6 @@ pub fn build(b: *std.Build) void {
     ffi_step.dependOn(&ffi_install.step);
     ffi_step.dependOn(&ffi_header_install.step);
 
-    const structure_install = b.addInstallBinFile(structure_bin, "dict-structure");
-    b.getInstallStep().dependOn(&structure_install.step);
-
-    const structure_run = addDirectToolRunCommand(b, structure_bin, &.{}, b.args);
-    addPublicRunStep(b, "structure", "Analyze Wiktionary structure", structure_run, &.{});
-
     const module_extract_run = addRunArtifactCommand(b, module_extract_exe, &.{}, b.args);
     addPublicRunStep(b, "extract-modules", "Extract Scribunto modules from a Wiktionary XML dump", module_extract_run, &.{});
 
@@ -239,28 +194,6 @@ pub fn build(b: *std.Build) void {
     });
     const blob_decoder_tests = b.addTest(.{
         .root_module = blob_decoder_mod_test,
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const structure_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/structure_analyzer.zig"),
-            .target = target,
-            .optimize = test_optimize,
-            .imports = &.{
-                .{ .name = "zxml", .module = zxml_dep_test.module("zxml") },
-                .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod_test },
-                .{ .name = "shared_structure_report", .module = shared_structure_report_mod_test },
-                .{ .name = "wikitext_source", .module = wikitext_source_mod_test },
-            },
-        }),
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const structure_tables_support_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/structure_tables_support.zig"),
-            .target = target,
-            .optimize = test_optimize,
-        }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const blob_query_tests = b.addTest(.{
@@ -387,8 +320,6 @@ pub fn build(b: *std.Build) void {
     const run_encoder_tests = b.addRunArtifact(encoder_tests);
     const run_blob_encoder_tests = b.addRunArtifact(blob_encoder_tests);
     const run_blob_decoder_tests = b.addRunArtifact(blob_decoder_tests);
-    const run_structure_tests = b.addRunArtifact(structure_tests);
-    const run_structure_tables_support_tests = b.addRunArtifact(structure_tables_support_tests);
     const run_blob_query_tests = b.addRunArtifact(blob_query_tests);
     const run_lua_tests = b.addRunArtifact(lua_tests);
     const run_lua_stdlib_tests = b.addRunArtifact(lua_stdlib_tests);
@@ -398,16 +329,14 @@ pub fn build(b: *std.Build) void {
 
     blob_encoder_tests.step.dependOn(&run_encoder_tests.step);
     blob_decoder_tests.step.dependOn(&run_blob_encoder_tests.step);
-    structure_tests.step.dependOn(&run_blob_decoder_tests.step);
-    structure_tables_support_tests.step.dependOn(&run_structure_tests.step);
-    blob_query_tests.step.dependOn(&run_structure_tables_support_tests.step);
+    blob_query_tests.step.dependOn(&run_blob_decoder_tests.step);
     lua_tests.step.dependOn(&run_blob_query_tests.step);
     lua_stdlib_tests.step.dependOn(&run_lua_tests.step);
     lua_ustring_tests.step.dependOn(&run_lua_stdlib_tests.step);
     lua_scribunto_tests.step.dependOn(&run_lua_ustring_tests.step);
     lua_wikitext_tests.step.dependOn(&run_lua_scribunto_tests.step);
 
-    const test_step = b.step("test", "Run encoder, decoder, structure, Lua, and tooling tests");
+    const test_step = b.step("test", "Run bundle encoder, data reader, Lua, and tooling tests");
     blob_wasm_smoke.step.dependOn(&run_lua_wikitext_tests.step);
     test_step.dependOn(&blob_wasm_smoke.step);
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod } });
@@ -513,33 +442,4 @@ fn passthroughArgsRequestHelp(args: ?[]const []const u8) bool {
         if (std.mem.eql(u8, arg, "help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) return true;
     }
     return false;
-}
-
-fn addDirectStructureBinary(
-    b: *std.Build,
-    zxml_root_path: std.Build.LazyPath,
-    config_path: std.Build.LazyPath,
-    config0_path: std.Build.LazyPath,
-) std.Build.LazyPath {
-    const compile = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-OReleaseFast" });
-    compile.addArgs(&.{ "--dep", "zxml", "--dep", "wikitext_source", "--dep", "shared_xml_decode", "--dep", "shared_structure_report" });
-    compile.addPrefixedFileArg("-Mroot=", b.path("tools/structure_analyzer.zig"));
-    compile.addArg("-OReleaseFast");
-    compile.addArgs(&.{ "--dep", "config=config0" });
-    compile.addPrefixedFileArg("-Mzxml=", zxml_root_path);
-    compile.addPrefixedFileArg("-Mshared_xml_decode=", b.path("src/shared/xml_decode.zig"));
-    compile.addPrefixedFileArg("-Mshared_structure_report=", b.path("src/shared/structure_report.zig"));
-    compile.addArgs(&.{ "--dep", "config=config1", "--dep", "shared_xml_decode" });
-    compile.addPrefixedFileArg("-Mwikitext_source=", b.path("src/encoder/wikitext.zig"));
-    compile.addPrefixedFileArg("-Mconfig1=", config_path);
-    compile.addPrefixedFileArg("-Mconfig0=", config0_path);
-    return compile.addPrefixedOutputFileArg("-femit-bin=", "dict-structure");
-}
-
-fn addZxmlConfigModule(b: *std.Build) std.Build.LazyPath {
-    const write_files = b.addWriteFiles();
-    return write_files.add("generated/zxml_config.zig",
-        \\pub const intlen: enum { u16, u32, u64, usize } = .u32;
-        \\
-    );
 }

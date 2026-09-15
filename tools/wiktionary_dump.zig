@@ -19,6 +19,13 @@ pub const Page = struct {
     source: []const u8,
 };
 
+pub const PageHeader = struct {
+    ns: u32,
+    title: []const u8,
+    source_offset: u64,
+    source_len: usize,
+};
+
 const Capture = struct {
     names_by_depth: [8][]const u8 = [_][]const u8{""} ** 8,
     title_raw: ?[]const u8 = null,
@@ -72,6 +79,10 @@ pub const Dump = struct {
         return .{ .dump = self };
     }
 
+    pub fn headerIterator(self: *Dump) HeaderIterator {
+        return .{ .dump = self };
+    }
+
     pub fn languageRegistry(self: *Dump, allocator: std.mem.Allocator) !language_registry.Registry {
         const needle = "<title>Module:languages/canonical names</title>";
         const title_pos = std.mem.indexOf(u8, self.bytes, needle) orelse return language_registry.Registry.empty(allocator);
@@ -83,6 +94,44 @@ pub const Dump = struct {
         const source = try xml_decode.decodeSinglePassAlloc(allocator, raw);
         defer allocator.free(source);
         return language_registry.Registry.fromLuaAlloc(allocator, source);
+    }
+};
+
+pub const HeaderIterator = struct {
+    dump: *Dump,
+    pos: usize = 0,
+    pages_seen: usize = 0,
+
+    pub fn next(self: *HeaderIterator, allocator: std.mem.Allocator) !?PageHeader {
+        while (std.mem.indexOfPos(u8, self.dump.bytes, self.pos, "<page>")) |start| {
+            const end_start = std.mem.indexOfPos(u8, self.dump.bytes, start, "</page>") orelse return error.TruncatedXml;
+            const page_end = end_start + "</page>".len;
+            const page = self.dump.bytes[start..page_end];
+            self.pos = page_end;
+            self.pages_seen += 1;
+
+            var capture: Capture = .{};
+            try self.dump.parser.parse(page, &capture, Capture.onNode);
+            const ns_raw = capture.ns_raw orelse continue;
+            const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch continue;
+            const title_raw = capture.title_raw orelse continue;
+            const text_raw = capture.text_raw orelse "";
+            const source_offset: u64 = if (text_raw.len == 0) 0 else blk: {
+                const base = @intFromPtr(self.dump.bytes.ptr);
+                const ptr = @intFromPtr(text_raw.ptr);
+                if (ptr < base) return error.InvalidXmlSlice;
+                const offset = ptr - base;
+                if (offset > self.dump.bytes.len or text_raw.len > self.dump.bytes.len - offset) return error.InvalidXmlSlice;
+                break :blk @intCast(offset);
+            };
+            return .{
+                .ns = ns,
+                .title = try xml_decode.decodeSinglePassAlloc(allocator, title_raw),
+                .source_offset = source_offset,
+                .source_len = text_raw.len,
+            };
+        }
+        return null;
     }
 };
 
@@ -132,4 +181,11 @@ test "dump adapter exposes decoded wikitext pages" {
     try std.testing.expectEqual(@as(u32, 0), page.ns);
     try std.testing.expectEqualStrings("cat", page.title);
     try std.testing.expectEqualStrings("==English==&x", page.source);
+    var headers = dump.headerIterator();
+    const header = (try headers.next(std.testing.allocator)).?;
+    defer std.testing.allocator.free(header.title);
+    try std.testing.expectEqual(@as(u32, 0), header.ns);
+    try std.testing.expectEqualStrings("cat", header.title);
+    const source_start: usize = @intCast(header.source_offset);
+    try std.testing.expectEqualStrings("==English==&amp;x", dump.bytes[source_start .. source_start + header.source_len]);
 }

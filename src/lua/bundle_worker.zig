@@ -20,12 +20,13 @@ fn limit(resource: std.posix.rlimit_resource, value: u64) !void {
 }
 
 fn validateRequest(request: Request) !void {
-    if (request.source.len > 16 * 1024 * 1024 or request.root.len == 0 or request.root.len > 4096 or request.title.len == 0 or request.title.len > 4096) return error.InvalidRequest;
+    if (request.source.len > 16 * 1024 * 1024 or request.root.len == 0 or request.root.len > 4096 or request.dump.len == 0 or request.dump.len > 4096 or request.title.len == 0 or request.title.len > 4096) return error.InvalidRequest;
 }
 
 const Engine = struct {
     io: std.Io,
     requested_root: []const u8,
+    requested_dump: []const u8,
     program: lua_program.Program,
     provider: pages.Provider,
 
@@ -38,18 +39,19 @@ const Engine = struct {
         return true;
     }
 
-    fn init(io: std.Io, a: A, requested_root: []const u8) !Engine {
+    fn init(io: std.Io, a: A, requested_root: []const u8, requested_dump: []const u8) !Engine {
         const marker = try std.fs.path.join(a, &.{ requested_root, ".incomplete" });
         if (try fileExists(io, marker)) return error.BundleAssetsIncomplete;
         const manifest = try std.fs.path.join(a, &.{ requested_root, "manifest.jsonl" });
         if (!try fileExists(io, manifest)) return error.BundleAssetsMissing;
         var program = try lua_program.Program.init(a);
         errdefer program.deinit();
-        var provider = try pages.Provider.init(io, a, requested_root);
+        var provider = try pages.Provider.init(io, a, requested_root, requested_dump);
         errdefer provider.deinit();
         return .{
             .io = io,
             .requested_root = try a.dupe(u8, requested_root),
+            .requested_dump = try a.dupe(u8, requested_dump),
             .program = program,
             .provider = provider,
         };
@@ -62,6 +64,7 @@ const Engine = struct {
 
     fn expand(self: *Engine, page_a: A, request: Request, stage: *[]const u8, detail: *?[]const u8) ![]const u8 {
         if (!std.mem.eql(u8, request.root, self.requested_root)) return error.BundleRootChanged;
+        if (!std.mem.eql(u8, request.dump, self.requested_dump)) return error.BundleDumpChanged;
         stage.* = "install";
         var ctx = try self.program.initContext(page_a);
         defer ctx.deinit();
@@ -124,7 +127,7 @@ pub fn run(io: std.Io, persistent: A) !void {
         };
         if (engine == null) {
             reply.stage = "assets";
-            engine = Engine.init(io, persistent, request.root) catch |err| {
+            engine = Engine.init(io, persistent, request.root, request.dump) catch |err| {
                 reply.error_name = @errorName(err);
                 try writeFrame(&output.interface, try std.json.Stringify.valueAlloc(page_a, reply, .{}));
                 continue;

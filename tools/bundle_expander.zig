@@ -4,6 +4,7 @@ const L = std.os.linux;
 
 const Request = struct {
     root: []const u8,
+    dump: []const u8,
     title: []const u8,
     source: []const u8,
 };
@@ -21,11 +22,12 @@ pub const Worker = struct {
     io: std.Io,
     root: []const u8,
     executable: []const u8,
+    dump: []const u8,
     timeout_ms: u32 = 60_000,
     child: ?std.process.Child = null,
 
-    pub fn init(io: std.Io, root: []const u8, executable: []const u8) Worker {
-        return .{ .io = io, .root = root, .executable = executable };
+    pub fn init(io: std.Io, root: []const u8, executable: []const u8, dump: []const u8) Worker {
+        return .{ .io = io, .root = root, .executable = executable, .dump = dump };
     }
 
     pub fn deinit(self: *Worker) void {
@@ -79,7 +81,7 @@ pub const Worker = struct {
     }
 
     pub fn expand(self: *Worker, a: A, title: []const u8, source: []const u8) ![]u8 {
-        const request = Request{ .root = self.root, .title = title, .source = source };
+        const request = Request{ .root = self.root, .dump = self.dump, .title = title, .source = source };
         const bytes = try std.json.Stringify.valueAlloc(a, request, .{});
         defer a.free(bytes);
         if (bytes.len == 0 or bytes.len > 32 * 1024 * 1024) return error.RequestTooLarge;
