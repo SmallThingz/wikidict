@@ -12,10 +12,11 @@
 ## Product / bundle boundary
 
 - The shipped dictionary contains data only. No Lua modules, template source, LLVM bitcode, native expansion worker, bytecode, executable program representation, or other executable corpus code is shipped to the user.
-- Lua modules and MediaWiki templates are compile/bundle-time inputs. Execute/expand them while building the blobs, then store the resulting wikitext/data needed by the reader.
-- The installed/runtime encoder/decoder path is only for wikitext/data encoding and decoding. Do not make the reader depend on Lua, Scribunto, module/template source, or a native expansion worker.
+- Lua modules, MediaWiki templates, and wikitext syntax are compile/bundle-time inputs. Execute/expand and compile them while building the blobs, then store only semantic presentation data needed by readers.
+- Shipped readers decode compiled semantic presentation data only. They must not parse wikitext, expand templates, reconstruct source, load Lua/Scribunto/module/template inputs, or depend on a native expansion worker.
 - Build-time expansion must preserve Wiktionary/MediaWiki semantics for page-sensitive constructs. If a result depends on page/title/frame/context, resolve it for that concrete bundled page rather than shipping deferred code.
 - Prefer deleting runtime package/provider/code-loading machinery once bundling makes it unnecessary.
+- Treat any template token, raw wikitext delimiter, deferred source body, or executable corpus representation surviving into a shipped reader record as a build error; do not add a read-time fallback.
 
 ## Build-time Lua architecture
 
@@ -44,7 +45,7 @@
 
 ## Encoder / decoder rules
 
-- Encoder and decoder own wikitext/data representation only. Keep Lua/compiler/module/template execution concerns out of their runtime APIs.
+- Encoder owns build-time wikitext-to-presentation compilation; decoder/runtime APIs expose compiled semantic data only. Keep Lua/compiler/module/template execution and wikitext parsing out of reader APIs.
 - Prefer simple direct encodings over expensive deduplication/indexing when the latter does not win end-to-end build+read time.
 - Any size-for-speed tradeoff must be measured with dictionary build time and reader throughput, not assumed from file size alone.
 
