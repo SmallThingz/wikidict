@@ -1,6 +1,6 @@
 # Dict
 
-Offline Wiktionary tooling in Zig. The repository builds compact per-language data, a local reader/server, and a dump-specific native Lua execution engine.
+Offline Wiktionary tooling with a Zig core. The repository builds compact per-language data, CLI/TUI readers, a C ABI, a native Qt 6/C++ desktop application, and a dump-specific native Lua execution engine.
 
 ## Layout
 
@@ -8,8 +8,9 @@ Offline Wiktionary tooling in Zig. The repository builds compact per-language da
 src/
 ├── decoder/        blob decoding and query APIs
 ├── encoder/        Wiktionary XML -> compact dictionary blobs
-├── frontend/       CLI, TUI, HTTP server, presentation
-│   └── web/        SolidJS browser UI
+├── frontend/       CLI, TUI, C ABI, shared presentation
+├── ffi/            stable public C header
+├── qt/             Qt 6 / C++ desktop application
 ├── lua/            parser, compiler, native AOT, Scribunto runtime
 ├── native/         storage and low-level native helpers
 └── shared/         shared codecs and utilities
@@ -27,7 +28,7 @@ Use the repository Zig toolchain:
 zig build
 ```
 
-This installs the main dictionary tools under `zig-out/bin/`.
+This installs the Zig dictionary tools under `zig-out/bin/` and the C ABI library under `zig-out/lib/`. Build the native desktop GUI separately with `zig build qt`.
 
 Run the main validation gate:
 
@@ -103,7 +104,6 @@ Useful output formats:
 
 ```sh
 zig-out/bin/dict lookup cat --root ROOT --format json --with-source
-zig-out/bin/dict lookup cat --root ROOT --format html --with-source > cat.html
 zig-out/bin/dict lookup cat --root ROOT --format source
 ```
 
@@ -111,15 +111,16 @@ zig-out/bin/dict lookup cat --root ROOT --format source
 
 `dict tui [PREFIX] --root ROOT` opens the interactive terminal reader.
 
-## Live local server
+## Native Qt desktop application
 
 ```sh
-zig-out/bin/dict serve --root ROOT --port 8787
+zig build qt
+zig-out/bin/dict-qt --root ROOT cat
 ```
 
-Open `http://127.0.0.1:8787`. The server binds locally, shares retained indexes, and reuses one framed native Lua worker across entry requests. A timeout or crash discards that process and the next request starts a fresh worker.
+The Qt 6 interface is written in C++ and links directly to `libdictffi`; there is no local HTTP server, browser UI, or web engine. The C ABI owns the mapped dictionary/index and a persistent native Lua worker, and returns versioned `dict.results.v1` JSON buffers to native clients.
 
-`/api/stats` exposes native worker request/start counts alongside storage/index statistics.
+The Qt app includes native history, bookmarks, settings, random words, definition quizzes, flashcards, and an unscramble game. Build/install the reusable C boundary with `zig build ffi`; its public header is installed as `zig-out/include/dict/dict.h`.
 
 ## Lua development
 
@@ -151,7 +152,7 @@ xz -0 -T1 --block-size=1MiB --check=crc64 path/language.wikblb
 zig build index-blobs -- path/language.wikblb.xz
 ```
 
-Native readers can use `.wikblb.xz` directly. The derived index records XZ block boundaries so record reads decode only intersecting blocks where possible. `zig build test-storage` and `zig build test-http` exercise raw files, XZ files, cache recovery, and the live server.
+Native readers can use `.wikblb.xz` directly. The derived index records XZ block boundaries so record reads decode only intersecting blocks where possible. `zig build test-storage` and `zig build test-reader` exercise raw files, XZ files, cache recovery, and native reader behavior.
 
 ## Legacy monolithic encoder
 
