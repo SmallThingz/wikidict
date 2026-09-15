@@ -1,5 +1,5 @@
 const std = @import("std");
-const html_entities = @import("html_entities.zig");
+pub const html_entities = @import("html_entities.zig");
 
 const max_decode_passes = 8;
 
