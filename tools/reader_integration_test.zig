@@ -42,32 +42,22 @@ pub fn main(init: std.process.Init) !void {
     const ffi_output = try h.run(&.{ ffi_test, root, "cat" }, 0);
     try h.require(std.mem.indexOf(u8, ffi_output, "FFI_INTEGRATION_PASS") != null, "data-only C ABI");
     const complete = try h.entry(try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "json" }, 0));
-    try h.require(std.mem.eql(u8, complete.object.get("content").?.string, "complete"), "complete compiled document");
-    const partial = try h.entry(try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "json", "--core-only" }, 0));
-    try h.require(std.mem.eql(u8, partial.object.get("content").?.string, "core"), "explicit partial compiled document");
-    var deferred: usize = 0;
-    for (partial.object.get("sections").?.array.items) |section| {
-        if (section.object.get("deferred").? != .null) deferred += 1;
-    }
-    try h.require(deferred == 5, "all five compiled companion families visibly deferred");
-    const full_text = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--details" }, 0);
-    try h.require(std.mem.indexOf(u8, full_text, "Historical source") != null, "compiled details fetched");
+    try h.require(complete.object.get("sections").?.array.items.len != 0, "complete compiled document");
+    const text = try h.run(&.{ bin, "lookup", "cat", "--root", root }, 0);
+    try h.require(std.mem.indexOf(u8, text, "small animal") != null, "compiled definition renders");
+    const details_text = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, details_text, "Historical source") != null, "compiled supporting material renders");
+
+    // No reader-side companion package is required any more. Removing the legacy
+    // directory must not change lookups because each record is self-contained.
     const details = try std.fs.path.join(a, &.{ root, "details" });
-    const offline = try std.fs.path.join(a, &.{ root, "offline-details" });
-    try std.Io.Dir.cwd().rename(details, std.Io.Dir.cwd(), offline, init.io);
-    const core_text = try h.run(&.{ bin, "lookup", "cat", "--root", root }, 0);
-    try h.require(std.mem.indexOf(u8, core_text, "small animal") != null and std.mem.indexOf(u8, core_text, "not loaded") != null, "compiled core works without companions");
-    const core_json = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--core-only", "--format", "json" }, 0);
-    try h.require(std.mem.indexOf(u8, core_json, "\"content\": \"core\"") != null, "compiled core JSON remains inspectable");
-    const search_json = try h.run(&.{ bin, "search", "cat", "--root", root, "--core-only", "--format", "json" }, 0);
-    try h.require(std.mem.indexOf(u8, search_json, "\"title\": \"cat\"") != null, "compiled search JSON works without companions");
-    _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--details" }, 2);
-    _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "json" }, 2);
+    try std.Io.Dir.cwd().deleteTree(init.io, details);
+    const after_delete = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, after_delete, "Historical source") != null, "compiled record is self-contained");
+
+    _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--core-only" }, 2);
     _ = try h.run(&.{ bin, "lookup", "cat", "--format", "source" }, 2);
     _ = try h.run(&.{ bin, "lookup", "cat", "--with-source" }, 2);
     _ = try h.run(&.{ bin, "lookup", "cat", "--runtime", "not-present" }, 2);
-    try std.Io.Dir.cwd().rename(offline, std.Io.Dir.cwd(), details, init.io);
-    const restored = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--details" }, 0);
-    try h.require(std.mem.indexOf(u8, restored, "Historical source") != null, "reinstalled companions restore compiled details");
-    std.debug.print("READER_INTEGRATION_PASS checks={d}: data-only compiled reading/JSON, all 5 deferred families, removed source/runtime flags, companion reinstall. Artifacts: {s}\n", .{ h.checks, dir });
+    std.debug.print("READER_INTEGRATION_PASS checks={d}: self-contained compiled presentation, data-only JSON/CLI/FFI, no source/runtime/core fallback. Artifacts: {s}\n", .{ h.checks, dir });
 }

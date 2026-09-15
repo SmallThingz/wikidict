@@ -6,6 +6,7 @@ const language_encoding = blobs.language_blob_encoding;
 const thesaurus_encoding = blobs.thesaurus_encoding;
 const reconstruction_encoding = blobs.reconstruction_encoding;
 const rhymes_encoding = blobs.rhymes_encoding;
+const presentation_document = @import("presentation_document.zig");
 
 const parts = blobs.language_parts;
 const language_bucket_count = 32;
@@ -397,20 +398,22 @@ fn processMain(
                 break;
             }
         }
-        const language: language_encoding.LanguageContext = .{ .heading = section.heading };
-        const payload = if (repeated)
-            try language_encoding.encodeRepeatedSectionsFallbackAlloc(page_allocator, page_sections.items, language)
-        else
-            try language_encoding.encodeRobustAlloc(page_allocator, section.source, language);
-        var split = try parts.splitAlloc(page_allocator, payload, language);
-        defer split.deinit(page_allocator);
-        try spools.appendLanguage(page_allocator, section.heading, title, split.core, null);
-        for (split.bodies, 0..) |body, part_index| if (body.len != 0) {
-            const family: parts.Kind = @enumFromInt(part_index + 1);
-            try spools.appendLanguage(page_allocator, section.heading, title, body, family);
-            stats.supplement_records[part_index] += 1;
-            stats.supplement_bytes[part_index] += body.len;
-        };
+        var joined: std.ArrayList(u8) = .empty;
+        defer joined.deinit(page_allocator);
+        const expanded = if (repeated) blk: {
+            for (page_sections.items) |candidate| if (std.mem.eql(u8, candidate.heading, section.heading))
+                try joined.appendSlice(page_allocator, candidate.source);
+            break :blk joined.items;
+        } else section.source;
+        const payload = try presentation_document.compileAlloc(
+            page_allocator,
+            title,
+            .language,
+            section.heading,
+            "",
+            expanded,
+        );
+        try spools.appendLanguage(page_allocator, section.heading, title, payload, null);
         stats.language_records += 1;
     }
 }
@@ -424,30 +427,21 @@ fn processNamespace(
     stats: *BuildStats,
 ) !void {
     const local_title = localNamespaceTitle(title);
-    switch (ns) {
-        ns_thesaurus => {
-            const payload = try thesaurus_encoding.encodeAlloc(page_allocator, source);
-            try spools.thesaurus.append(spools.io, page_allocator, "", local_title, payload);
-            stats.thesaurus_records += 1;
-        },
-        ns_citations => {
-            try spools.citations.append(spools.io, page_allocator, "", local_title, source);
-            stats.citations_records += 1;
-        },
-        ns_reconstruction => {
-            const payload = try reconstruction_encoding.encodeAlloc(page_allocator, source, local_title);
-            try spools.reconstruction.append(spools.io, page_allocator, "", local_title, payload);
-            stats.reconstruction_records += 1;
-        },
-        ns_rhymes => {
-            const payload = try rhymes_encoding.encodeAlloc(page_allocator, source);
-            try spools.rhymes.append(spools.io, page_allocator, "", local_title, payload);
-            stats.rhymes_records += 1;
-        },
-        ns_sign_gloss => {
-            try spools.sign_gloss.append(spools.io, page_allocator, "", local_title, source);
-            stats.sign_gloss_records += 1;
-        },
+    const kind: blob_format.BlobKind = switch (ns) {
+        ns_thesaurus => .thesaurus,
+        ns_citations => .citations,
+        ns_reconstruction => .reconstruction,
+        ns_rhymes => .rhymes,
+        ns_sign_gloss => .sign_gloss,
+        else => unreachable,
+    };
+    const payload = try presentation_document.compileAlloc(page_allocator, local_title, kind, null, "", source);
+    switch (kind) {
+        .thesaurus => { try spools.thesaurus.append(spools.io, page_allocator, "", local_title, payload); stats.thesaurus_records += 1; },
+        .citations => { try spools.citations.append(spools.io, page_allocator, "", local_title, payload); stats.citations_records += 1; },
+        .reconstruction => { try spools.reconstruction.append(spools.io, page_allocator, "", local_title, payload); stats.reconstruction_records += 1; },
+        .rhymes => { try spools.rhymes.append(spools.io, page_allocator, "", local_title, payload); stats.rhymes_records += 1; },
+        .sign_gloss => { try spools.sign_gloss.append(spools.io, page_allocator, "", local_title, payload); stats.sign_gloss_records += 1; },
         else => unreachable,
     }
 }

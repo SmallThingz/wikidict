@@ -175,22 +175,14 @@ const State = struct {
         if (index != self.loaded or self.text.len == 0) {
             var formatted: std.Io.Writer.Allocating = .init(self.a);
             defer formatted.deinit();
-            if (index) |i| record_block: {
+            if (index) |i| {
                 var source_record = try self.db.recordAlloc(self.a, i);
                 defer source_record.deinit();
                 const raw = source_record.record;
-                const core = !self.details;
-                var resolved = if (core) try self.db.resolveCoreAlloc(self.a, raw) else self.db.resolveAlloc(self.a, raw) catch |err| switch (err) {
-                    error.MissingSupplement, error.MissingSupplementRecord => {
-                        try formatted.writer.writeAll("Supporting material is not installed.\n\nFull compiled details need the matching companion blobs.\nPress d to return to core reading; other entries remain searchable.\n\n");
-                        try formatted.writer.print("Data error: {s}\n", .{@errorName(err)});
-                        break :record_block;
-                    },
-                    else => return err,
-                };
+                var resolved = try self.db.resolveAlloc(self.a, raw);
                 defer resolved.deinit();
                 const record = resolved.record;
-                var doc = if (core) try model.fromCoreRecord(self.a, record) else try model.fromRecord(self.a, record, false);
+                var doc = try model.fromRecord(self.a, record);
                 defer doc.deinit();
                 try output.entryTextWithDetails(&formatted.writer, doc.entry, self.color, self.details);
             } else try formatted.writer.writeAll("No matching entries.\n\nPress / to edit the prefix; Ctrl-U clears it.\nMatching is case-sensitive UTF-8, not fuzzy search.");
@@ -292,7 +284,7 @@ const State = struct {
             };
             try self.put(w, sz.rows, 3, sz.cols - 4, hints, p.muted);
             if (self.help) {
-                const help = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "d toggles compiled companion details", "t cycles terminal/dark/light; q quits outside Search", "Any key closes this help" };
+                const help = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "d toggles supporting details", "t cycles terminal/dark/light; q quits outside Search", "Any key closes this help" };
                 for (help, 0..) |line, i| {
                     if (6 + i >= sz.rows - 1) break;
                     try w.print("\x1b[{d};1H{s}\x1b[2K", .{ 6 + i, p.base });

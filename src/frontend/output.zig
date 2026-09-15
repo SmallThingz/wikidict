@@ -18,7 +18,6 @@ pub const Response = struct {
     entries: []const model.Entry = &.{},
 };
 
-// Only renderer-owned control sequences reach the terminal.
 pub fn terminalText(w: *std.Io.Writer, text: []const u8) !void {
     var pos: usize = 0;
     while (pos < text.len) {
@@ -41,7 +40,7 @@ pub fn terminalText(w: *std.Io.Writer, text: []const u8) !void {
     }
 }
 
-pub fn spansText(w: *std.Io.Writer, spans: []const @import("wikitext.zig").Span, color: bool) !void {
+pub fn spansText(w: *std.Io.Writer, spans: []const model.Span, color: bool) !void {
     for (spans) |span| {
         if (color and span.bold) try w.writeAll("\x1b[1m");
         if (color and span.italic) try w.writeAll("\x1b[3m");
@@ -49,11 +48,9 @@ pub fn spansText(w: *std.Io.Writer, spans: []const @import("wikitext.zig").Span,
         if (color and span.strike) try w.writeAll("\x1b[9m");
         if (color and (span.small or span.role == .label or span.role == .citation)) try w.writeAll("\x1b[2m");
         if (color and (span.kind == .link or span.kind == .external_link)) try w.writeAll("\x1b[36m");
-        if (span.kind == .template) {
-            try w.writeAll("[unavailable template: ");
-            try terminalText(w, span.target);
-            try w.writeByte(']');
-        } else if (span.kind == .line_break) try w.writeByte('\n') else {
+        if (span.kind == .line_break) {
+            try w.writeByte('\n');
+        } else {
             if (span.superscript and span.role != .reference) try w.writeByte('^');
             if (span.subscript) try w.writeByte('_');
             try terminalText(w, span.text);
@@ -62,172 +59,7 @@ pub fn spansText(w: *std.Io.Writer, spans: []const @import("wikitext.zig").Span,
         if (color) try w.writeAll("\x1b[0m");
     }
 }
-pub fn entryText(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
-    return entryTextWithDetails(w, entry, color, true);
-}
-pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, details: bool) !void {
-    if (color) try w.writeAll("\x1b[1;36m");
-    try terminalText(w, entry.title);
-    if (color) try w.writeAll("\x1b[0m");
-    try w.writeAll("  / ");
-    try terminalText(w, entry.language orelse @tagName(entry.kind));
-    try w.writeByte('\n');
-    if (entry.expansion) |e| {
-        if (e.status == .failed) {
-            try w.writeAll("\n[Lua expansion failed; displaying native fallback: ");
-            try terminalText(w, e.diagnostic orelse "unknown failure");
-            try w.writeAll("]\n");
-        }
-    }
-    if (entry.status == .invalid_payload) {
-        try w.writeAll("\nInvalid semantic payload. JSON preserves its bytes as payload_base64.\n");
-        return;
-    }
-    if (entry.content == .core) try w.writeAll("\n[Core reading. Optional section bodies are not loaded; --details or d loads them.]\n");
-    if (entry.preamble_spans.len != 0) {
-        try spansText(w, entry.preamble_spans, color);
-        try w.writeByte('\n');
-    }
-    const organization = entry.organization;
-    if (organization.lexemes.len == 0) {
-        for (entry.sections) |section| try sectionText(w, section, color);
-    } else {
-        for (organization.lexemes, 0..) |lexeme, l| {
-            var seen = false;
-            for (organization.lexemes[0..l]) |previous| if (std.mem.eql(u8, previous.kind, lexeme.kind) and std.mem.eql(u8, previous.language, lexeme.language)) {
-                seen = true;
-                break;
-            };
-            if (seen) continue;
-            try w.writeByte('\n');
-            if (color) try w.writeAll("\x1b[1m");
-            try terminalText(w, lexeme.kind);
-            if (lexeme.language.len != 0 and !std.mem.eql(u8, lexeme.language, entry.language orelse "")) {
-                try w.writeAll(" / ");
-                try terminalText(w, lexeme.language);
-            }
-            if (color) try w.writeAll("\x1b[0m");
-            try w.writeByte('\n');
-            for (organization.lexemes) |part| {
-                if (!std.mem.eql(u8, part.kind, lexeme.kind) or !std.mem.eql(u8, part.language, lexeme.language)) continue;
-                const section = entry.sections[part.section];
-                if (part.etymology) |e| {
-                    try w.writeAll("  [");
-                    try terminalText(w, entry.sections[e].title);
-                    try w.writeAll("]\n");
-                }
-                for (part.introduction) |i| {
-                    const block = section.blocks[i];
-                    var has_headword = false;
-                    for (block.spans) |span| if (span.role == .headword) {
-                        has_headword = true;
-                        break;
-                    };
-                    if (!details and has_headword) {
-                        for (block.spans, 0..) |span, j| if (span.role == .headword) try spansText(w, block.spans[j..][0..1], color);
-                        try w.writeAll("\n\n");
-                    } else try blocksText(w, section.blocks[i..][0..1], color);
-                }
-                for (part.definitions) |sense| {
-                    try blocksText(w, section.blocks[sense.block..][0..1], color);
-                    for (sense.examples) |i| try blocksText(w, section.blocks[i..][0..1], color);
-                    if (details) {
-                        for (sense.notes) |i| try blocksText(w, section.blocks[i..][0..1], color);
-                        for (sense.quotations) |i| try blocksText(w, section.blocks[i..][0..1], color);
-                    } else if (sense.quotations.len + sense.notes.len != 0) try w.print("      [{d} quotations / {d} supporting notes available]\n", .{ sense.quotations.len, sense.notes.len });
-                }
-                if (details) {
-                    for (part.other_blocks) |i| try blocksText(w, section.blocks[i..][0..1], color);
-                    for (part.related_sections) |i| try sectionText(w, entry.sections[i], color);
-                }
-            }
-        }
-        if (details) {
-            for (organization.other_sections) |i| try sectionText(w, entry.sections[i], color);
-        } else try w.writeAll("\n[History, quotations, related sections and references retained. Use --details, or d in the TUI.]\n");
-    }
-    if (details and entry.references.len != 0) {
-        try w.writeAll("\nReferences\n");
-        for (entry.references) |ref| {
-            if (ref.group.len == 0) {
-                try w.print("[{d}] ", .{ref.group_number});
-            } else {
-                try w.writeByte('[');
-                try terminalText(w, ref.group);
-                try w.print(" {d}] ", .{ref.group_number});
-            }
-            try spansText(w, ref.spans, color);
-            try w.writeByte('\n');
-        }
-    }
-    if (entry.unexpanded_templates != 0) try w.print("\n[{d} unsupported template(s). Exact syntax is available in Source or JSON.]\n", .{entry.unexpanded_templates});
-}
-pub fn json(w: *std.Io.Writer, response: Response) !void {
-    try std.json.Stringify.value(response, .{ .whitespace = .indent_2 }, w);
-    try w.writeByte('\n');
-}
 
-test "terminal output neutralizes control and bidi sequences without corrupting unicode" {
-    var w: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer w.deinit();
-    try terminalText(&w.writer, "é猫\x1b[2J\u{9b}31m\u{61c}a\u{200e}b\u{200f}c\u{2028}d\u{2029}e\u{202e}f\u{206a}g\u{206f}x");
-    try std.testing.expectEqualStrings("é猫\\u{1b}[2J\\u{9b}31m\\u{61c}a\\u{200e}b\\u{200f}c\\u{2028}d\\u{2029}e\\u{202e}f\\u{206a}g\\u{206f}x", w.written());
-}
-test "reference group labels cannot inject terminal controls or bidi marks" {
-    var doc = try model.fromWikitext(std.testing.allocator, "word", "English", "==English==\n===Noun===\n# sense<ref group='note&#x202e;evil'>source</ref>\n", false);
-    defer doc.deinit();
-    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer out.deinit();
-    try entryText(&out.writer, doc.entry, false);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "note\\u{202e}evil") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "\u{202e}") == null);
-}
-
-test "JSON output is a complete versioned machine response" {
-    var w: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer w.deinit();
-    try json(&w.writer, .{ .operation = .search, .query = "a\"", .kind = .language, .language = "English", .record_count = 2, .total_matches = 0 });
-    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, w.written(), .{});
-    defer parsed.deinit();
-    try std.testing.expectEqualStrings("dict.results.v1", parsed.value.object.get("schema").?.string);
-    try std.testing.expectEqualStrings("a\"", parsed.value.object.get("query").?.string);
-}
-
-test "human renderer displays definitions and supplied template data instead of wikitext" {
-    const a = std.testing.allocator;
-    const source = "==English==\n===Noun===\n{{en-noun}}\n#{{lb|en|informal}} A '''small''' [[cat|feline]].<ref>''Book''</ref>\n\n{{quote-text|en|year=2020|title=Book\n|passage=A {{m|en|cat}} appeared.}}\n";
-    var doc = try model.fromWikitext(a, "cat", "English", source, true);
-    defer doc.deinit();
-    var out: std.Io.Writer.Allocating = .init(a);
-    defer out.deinit();
-    try entryText(&out.writer, doc.entry, true);
-    const bytes = out.written();
-    try std.testing.expect(std.mem.indexOf(u8, bytes, "{{") == null);
-    try std.testing.expect(std.mem.indexOf(u8, bytes, "[[") == null);
-    var plain_output: std.Io.Writer.Allocating = .init(a);
-    defer plain_output.deinit();
-    try entryText(&plain_output.writer, doc.entry, false);
-    try std.testing.expect(std.mem.indexOf(u8, plain_output.written(), "(informal) A small feline.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, bytes, "References") != null);
-    try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[1msmall") != null);
-    try std.testing.expectEqualStrings(source, doc.entry.source.?);
-}
-
-fn sectionText(w: *std.Io.Writer, section: model.Section, color: bool) !void {
-    // Feature blobs can contain several level-2 languages; do not drop those labels.
-    {
-        try w.writeByte('\n');
-        if (color) try w.writeAll("\x1b[1m");
-        try terminalText(w, section.title);
-        if (color) try w.writeAll("\x1b[0m");
-        try w.writeByte('\n');
-    }
-    if (section.deferred) |kind| {
-        try w.print("[Not loaded: {s} companion]\n", .{@tagName(kind)});
-        return;
-    }
-    try blocksText(w, section.blocks, color);
-}
 fn blocksText(w: *std.Io.Writer, blocks: []const model.Block, color: bool) !void {
     var ordinal: usize = 0;
     for (blocks) |block| {
@@ -279,30 +111,121 @@ fn blocksText(w: *std.Io.Writer, blocks: []const model.Block, color: bool) !void
     }
 }
 
-test "concise reading is definition first and all details remain explicitly available" {
-    const source = "==English==\n===Etymology===\nLong origin story.\n====Noun====\n# Definition.\n#* A quotation.\n#: An example.\n===References===\nA reference.\n";
-    var doc = try model.fromWikitext(std.testing.allocator, "word", "English", source, true);
-    defer doc.deinit();
-    var brief: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer brief.deinit();
-    try entryTextWithDetails(&brief.writer, doc.entry, false, false);
-    try std.testing.expect(std.mem.indexOf(u8, brief.written(), "Definition.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, brief.written(), "An example.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, brief.written(), "Long origin story.") == null);
-    var complete: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer complete.deinit();
-    try entryTextWithDetails(&complete.writer, doc.entry, false, true);
-    try std.testing.expect(std.mem.indexOf(u8, complete.written(), "Definition.").? < std.mem.indexOf(u8, complete.written(), "Long origin story.").?);
-    try std.testing.expect(std.mem.indexOf(u8, complete.written(), "A quotation.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete.written(), "A reference.") != null);
+fn sectionText(w: *std.Io.Writer, section: model.Section, color: bool) !void {
+    try w.writeByte('\n');
+    if (color) try w.writeAll("\x1b[1m");
+    try terminalText(w, section.title);
+    if (color) try w.writeAll("\x1b[0m");
+    try w.writeByte('\n');
+    try blocksText(w, section.blocks, color);
 }
 
-test "inflection tags are grammar rather than a fake gloss" {
-    var doc = try model.fromWikitext(std.testing.allocator, "cats", "English", "==English==\n===Verb===\n# {{infl of|en|cat||s-verb-form}}\n", false);
-    defer doc.deinit();
+pub fn entryText(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
+    return entryTextWithDetails(w, entry, color, true);
+}
+
+pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, details: bool) !void {
+    if (color) try w.writeAll("\x1b[1;36m");
+    try terminalText(w, entry.title);
+    if (color) try w.writeAll("\x1b[0m");
+    try w.writeAll("  / ");
+    try terminalText(w, entry.language orelse @tagName(entry.kind));
+    try w.writeByte('\n');
+    if (entry.preamble_spans.len != 0) {
+        try spansText(w, entry.preamble_spans, color);
+        try w.writeByte('\n');
+    }
+    const organization = entry.organization;
+    if (organization.lexemes.len == 0) {
+        for (entry.sections) |section| try sectionText(w, section, color);
+    } else {
+        for (organization.lexemes, 0..) |lexeme, l| {
+            var seen = false;
+            for (organization.lexemes[0..l]) |previous| if (std.mem.eql(u8, previous.kind, lexeme.kind) and std.mem.eql(u8, previous.language, lexeme.language)) {
+                seen = true;
+                break;
+            };
+            if (seen) continue;
+            try w.writeByte('\n');
+            if (color) try w.writeAll("\x1b[1m");
+            try terminalText(w, lexeme.kind);
+            if (lexeme.language.len != 0 and !std.mem.eql(u8, lexeme.language, entry.language orelse "")) {
+                try w.writeAll(" / ");
+                try terminalText(w, lexeme.language);
+            }
+            if (color) try w.writeAll("\x1b[0m");
+            try w.writeByte('\n');
+            for (organization.lexemes) |part| {
+                if (!std.mem.eql(u8, part.kind, lexeme.kind) or !std.mem.eql(u8, part.language, lexeme.language)) continue;
+                const section = entry.sections[part.section];
+                if (part.etymology) |e| {
+                    try w.writeAll("  [");
+                    try terminalText(w, entry.sections[e].title);
+                    try w.writeAll("]\n");
+                }
+                for (part.introduction) |i| try blocksText(w, section.blocks[i..][0..1], color);
+                for (part.definitions) |sense| {
+                    try blocksText(w, section.blocks[sense.block..][0..1], color);
+                    for (sense.examples) |i| try blocksText(w, section.blocks[i..][0..1], color);
+                    if (details) {
+                        for (sense.notes) |i| try blocksText(w, section.blocks[i..][0..1], color);
+                        for (sense.quotations) |i| try blocksText(w, section.blocks[i..][0..1], color);
+                    }
+                }
+                if (details) {
+                    for (part.other_blocks) |i| try blocksText(w, section.blocks[i..][0..1], color);
+                    for (part.related_sections) |i| try sectionText(w, entry.sections[i], color);
+                }
+            }
+        }
+        if (details) for (organization.other_sections) |i| try sectionText(w, entry.sections[i], color);
+    }
+    if (details and entry.references.len != 0) {
+        try w.writeAll("\nReferences\n");
+        for (entry.references) |ref| {
+            if (ref.group.len == 0) try w.print("[{d}] ", .{ref.group_number}) else {
+                try w.writeByte('[');
+                try terminalText(w, ref.group);
+                try w.print(" {d}] ", .{ref.group_number});
+            }
+            try spansText(w, ref.spans, color);
+            try w.writeByte('\n');
+        }
+    }
+}
+
+pub fn json(w: *std.Io.Writer, response: Response) !void {
+    try std.json.Stringify.value(response, .{ .whitespace = .indent_2 }, w);
+    try w.writeByte('\n');
+}
+
+test "terminal output neutralizes control and bidi sequences without corrupting unicode" {
     var w: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer w.deinit();
-    try entryText(&w.writer, doc.entry, false);
-    try std.testing.expect(std.mem.indexOf(u8, w.written(), "third-person singular simple present indicative of cat") != null);
-    try std.testing.expect(std.mem.indexOf(u8, w.written(), "s-verb-form") == null);
+    try terminalText(&w.writer, "é猫\x1b[2J\u{9b}31m\u{61c}a\u{200e}b\u{200f}c\u{2028}d\u{2029}e\u{202e}f\u{206a}g\u{206f}x");
+    try std.testing.expectEqualStrings("é猫\\u{1b}[2J\\u{9b}31m\\u{61c}a\\u{200e}b\\u{200f}c\\u{2028}d\\u{2029}e\\u{202e}f\\u{206a}g\\u{206f}x", w.written());
+}
+
+test "JSON output is a complete versioned machine response" {
+    var w: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer w.deinit();
+    try json(&w.writer, .{ .operation = .search, .query = "a\"", .kind = .language, .language = "English", .record_count = 2, .total_matches = 0 });
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, w.written(), .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("dict.results.v1", parsed.value.object.get("schema").?.string);
+}
+
+test "human renderer consumes compiled spans only" {
+    const spans = [_]model.Span{.{ .text = "A small feline.", .bold = true }};
+    const blocks = [_]model.Block{.{ .kind = .definition, .depth = 1, .spans = &spans, .list_path = "#" }};
+    const sections = [_]model.Section{.{ .level = 3, .title = "Noun", .blocks = &blocks }};
+    const senses = [_]model.Sense{.{ .block = 0 }};
+    const lexemes = [_]model.Lexeme{.{ .language = "English", .kind = "Noun", .section = 0, .definitions = &senses }};
+    const entry: model.Entry = .{ .title = "cat", .kind = .language, .language = "English", .sections = &sections, .organization = .{ .lexemes = &lexemes } };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryText(&out.writer, entry, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "A small feline.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "{{") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[[") == null);
 }

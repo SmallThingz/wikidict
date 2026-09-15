@@ -146,8 +146,7 @@ export fn dict_select(
     h.clearError();
     return @intFromEnum(Status.ok);
 }
-fn lookupInternal(handle: *Handle, query: []const u8, flags: u32, out: *Buffer) !bool {
-    if (flags & ~DICT_LOOKUP_CORE_ONLY != 0) return error.InvalidArgument;
+fn lookupInternal(handle: *Handle, query: []const u8, out: *Buffer) !bool {
     const current = try selected(handle);
     var response: output.Response = .{
         .operation = .lookup,
@@ -164,13 +163,9 @@ fn lookupInternal(handle: *Handle, query: []const u8, flags: u32, out: *Buffer) 
     };
     var raw = try current.db.recordAlloc(allocator, index);
     defer raw.deinit();
-    const core = flags & DICT_LOOKUP_CORE_ONLY != 0;
-    var resolved = if (core) try current.db.resolveCoreAlloc(allocator, raw.record) else try current.db.resolveAlloc(allocator, raw.record);
+    var resolved = try current.db.resolveAlloc(allocator, raw.record);
     defer resolved.deinit();
-    var doc = if (core)
-        try model.fromCoreRecord(allocator, resolved.record)
-    else
-        try model.fromRecord(allocator, resolved.record, false);
+    var doc = try model.fromRecord(allocator, resolved.record);
     defer doc.deinit();
     response.entries = &.{doc.entry};
     response.total_matches = 1;
@@ -178,20 +173,18 @@ fn lookupInternal(handle: *Handle, query: []const u8, flags: u32, out: *Buffer) 
     return true;
 }
 
-const DICT_LOOKUP_CORE_ONLY: u32 = 1 << 0;
 
 export fn dict_lookup_json(
     handle: ?*Handle,
     query_ptr: ?[*]const u8,
     query_len: usize,
-    flags: u32,
     out: *Buffer,
 ) callconv(.c) c_int {
     resetBuffer(out);
     const h = handle orelse return @intFromEnum(Status.invalid_argument);
     const query = input(query_ptr, query_len, 4096) catch |err| return @intFromEnum(h.fail("lookup", err));
     if (query.len == 0) return @intFromEnum(h.fail("lookup", error.InvalidArgument));
-    const found = lookupInternal(h, query, flags, out) catch |err| return @intFromEnum(h.fail("lookup", err));
+    const found = lookupInternal(h, query, out) catch |err| return @intFromEnum(h.fail("lookup", err));
     return @intFromEnum(if (found) Status.ok else Status.not_found);
 }
 
@@ -234,7 +227,7 @@ export fn dict_search_json(
     return @intFromEnum(Status.ok);
 }
 
-export fn dict_random_json(handle: ?*Handle, flags: u32, out: *Buffer) callconv(.c) c_int {
+export fn dict_random_json(handle: ?*Handle, out: *Buffer) callconv(.c) c_int {
     resetBuffer(out);
     const h = handle orelse return @intFromEnum(Status.invalid_argument);
     const current = selected(h) catch |err| return @intFromEnum(h.fail("random", err));
@@ -242,7 +235,7 @@ export fn dict_random_json(handle: ?*Handle, flags: u32, out: *Buffer) callconv(
     const entropy: u128 = @intCast(std.Io.Clock.awake.now(h.io()).toNanoseconds());
     const index: usize = @intCast(entropy % @as(u128, current.db.count()));
     const title = current.db.titleAt(index) catch |err| return @intFromEnum(h.fail("random", err));
-    const found = lookupInternal(h, title, flags, out) catch |err| return @intFromEnum(h.fail("random", err));
+    const found = lookupInternal(h, title, out) catch |err| return @intFromEnum(h.fail("random", err));
     return @intFromEnum(if (found) Status.ok else Status.not_found);
 }
 export fn dict_languages_json(handle: ?*Handle, out: *Buffer) callconv(.c) c_int {

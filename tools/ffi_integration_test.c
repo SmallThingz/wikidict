@@ -18,10 +18,9 @@ static int require(int condition, const char *label) {
     return 0;
 }
 
-static int lookup(dict_handle *handle, const char *word, uint32_t flags,
-                  const char *required) {
+static int lookup(dict_handle *handle, const char *word, const char *required) {
     dict_buffer result = {0};
-    const dict_status status = dict_lookup_json(handle, word, strlen(word), flags, &result);
+    const dict_status status = dict_lookup_json(handle, word, strlen(word), &result);
     const int ok = require(status == DICT_OK, word) && require(contains(&result, required), required);
     dict_buffer_free(handle, &result);
     return ok;
@@ -41,8 +40,7 @@ int main(int argc, char **argv) {
     if (!require(status == DICT_OK, "select English")) return 1;
 
     int ok = 1;
-    ok &= lookup(handle, word, 0, word);
-    ok &= lookup(handle, word, DICT_LOOKUP_CORE_ONLY, word);
+    ok &= lookup(handle, word, word);
 
     dict_buffer stats = {0};
     status = dict_stats_json(handle, &stats);
@@ -61,12 +59,12 @@ int main(int argc, char **argv) {
     dict_buffer_free(handle, &languages);
 
     dict_buffer random = {0};
-    status = dict_random_json(handle, 0, &random);
+    status = dict_random_json(handle, &random);
     ok &= require(status == DICT_OK, "random") && require(contains(&random, "\"entries\""), "random entry");
     dict_buffer_free(handle, &random);
 
     dict_close(handle);
     if (!ok) return 1;
-    puts("FFI_INTEGRATION_PASS: data-only C ABI, lookup/core/search/random/languages/stats");
+    puts("FFI_INTEGRATION_PASS: data-only C ABI, lookup/search/random/languages/stats");
     return 0;
 }

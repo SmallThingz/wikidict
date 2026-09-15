@@ -4,46 +4,54 @@ const dec = @import("blob_decoder");
 const model = @import("model.zig");
 const output = @import("output.zig");
 
-test "all six encoded blob kinds survive typed decoding and human and machine rendering" {
+fn payloadAlloc(a: std.mem.Allocator, kind: enc.blob_format.BlobKind, title: []const u8) ![]u8 {
+    const spans = [_]enc.presentation_types.Span{.{ .text = "compiled presentation" }};
+    const blocks = [_]enc.presentation_types.Block{.{ .kind = .definition, .depth = 1, .spans = &spans, .list_path = "#" }};
+    const sections = [_]enc.presentation_types.Section{.{ .level = 3, .title = "Entry", .blocks = &blocks }};
+    return std.json.Stringify.valueAlloc(a, enc.presentation_types.Stored{ .entry = .{
+        .title = title,
+        .kind = kind,
+        .language = if (kind == .language) "English" else null,
+        .language_code = if (kind == .language) "en" else "",
+        .sections = &sections,
+    } }, .{});
+}
+
+test "all six shipped blob kinds deserialize compiled presentation only" {
     const a = std.testing.allocator;
-    const fixtures = .{
-        .{ .kind = enc.blob_format.BlobKind.language, .title = "cat", .source = "==English==\n===Noun===\n# A [[cat|feline]].\n" },
-        .{ .kind = enc.blob_format.BlobKind.thesaurus, .title = "cat", .source = "{{ws header|cat}}\n===={{ws sense|en|animal}}====\n=====Synonyms=====\n{{ws|en|kitty}}\n" },
-        .{ .kind = enc.blob_format.BlobKind.rhymes, .title = "English/æt", .source = "==Rhymes==\n* {{l|en|cat}}, {{l|en|bat}} {{q|rare}}\n" },
-        .{ .kind = enc.blob_format.BlobKind.reconstruction, .title = "Proto-Germanic/kattuz", .source = "{{reconstructed}}\n==Proto-Germanic==\n===Noun===\n# cat\n" },
-        .{ .kind = enc.blob_format.BlobKind.citations, .title = "cat", .source = "A citation with \x00 and \x1b[2J.\n" },
-        .{ .kind = enc.blob_format.BlobKind.sign_gloss, .title = "ASL:CAT", .source = "raw sign \xff\x00" },
-    };
-    inline for (fixtures) |fixture| {
-        const payload = switch (fixture.kind) {
-            .supplement, .symbols, .templates, .redirects, .pages => unreachable,
-            .language => try enc.language_blob_encoding.encodeAlloc(a, fixture.source, .{ .heading = "English" }),
-            .thesaurus => try enc.thesaurus_encoding.encodeAlloc(a, fixture.source),
-            .rhymes => try enc.rhymes_encoding.encodeAlloc(a, fixture.source),
-            .reconstruction => try enc.reconstruction_encoding.encodeAlloc(a, fixture.source, fixture.title),
-            .citations, .sign_gloss => try a.dupe(u8, fixture.source),
-        };
+    const kinds = [_]enc.blob_format.BlobKind{ .language, .thesaurus, .rhymes, .reconstruction, .citations, .sign_gloss };
+    inline for (kinds) |kind| {
+        const title = if (kind == .language) "cat" else @tagName(kind);
+        const payload = try payloadAlloc(a, kind, title);
         defer a.free(payload);
-        const bytes = try enc.blob_format.buildAlloc(a, fixture.kind, if (fixture.kind == .language) "\x00English\x00" else "", &.{.{ .title = fixture.title, .payload = payload }});
+        const metadata = if (kind == .language)
+            try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English")
+        else
+            try a.dupe(u8, "");
+        defer a.free(metadata);
+        const bytes = try enc.blob_format.buildAlloc(a, kind, metadata, &.{.{ .title = title, .payload = payload }});
         defer a.free(bytes);
         const view = try dec.openTrustedBlob(bytes);
         var index = try view.buildIndexAlloc(a);
         defer index.deinit(a);
-        const record = (try index.find(fixture.title)).?;
-        const source = try model.sourceAlloc(a, record);
-        defer a.free(source);
-        try std.testing.expectEqualStrings(fixture.source, source);
-        var doc = try model.fromRecord(a, record, true);
+        const record = (try index.find(title)).?;
+        var doc = try model.fromRecord(a, record);
         defer doc.deinit();
+        try std.testing.expectEqualStrings("compiled presentation", doc.entry.sections[0].blocks[0].spans[0].text);
         var text: std.Io.Writer.Allocating = .init(a);
         defer text.deinit();
         try output.entryText(&text.writer, doc.entry, false);
-        try std.testing.expect(std.mem.indexOfScalar(u8, text.written(), 0x1b) == null);
+        try std.testing.expect(std.mem.indexOf(u8, text.written(), "compiled presentation") != null);
         var json: std.Io.Writer.Allocating = .init(a);
         defer json.deinit();
-        try output.json(&json.writer, .{ .operation = .lookup, .query = fixture.title, .kind = fixture.kind, .language = doc.entry.language, .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} });
-        const parsed = try std.json.parseFromSlice(std.json.Value, a, json.written(), .{});
+        try output.json(&json.writer, .{ .operation = .lookup, .query = title, .kind = kind, .language = doc.entry.language, .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} });
+        var parsed = try std.json.parseFromSlice(std.json.Value, a, json.written(), .{});
         defer parsed.deinit();
-        try std.testing.expectEqualStrings(fixture.title, parsed.value.object.get("entries").?.array.items[0].object.get("title").?.string);
+        try std.testing.expectEqualStrings(title, parsed.value.object.get("entries").?.array.items[0].object.get("title").?.string);
     }
+}
+
+test "reader refuses old source-shaped record payloads" {
+    const doc = model.fromRecord(std.testing.allocator, .{ .citations = .{ .title = "cat", .source = "# [[cat]] {{template}}" } });
+    try std.testing.expectError(error.InvalidPresentation, doc);
 }

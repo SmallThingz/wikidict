@@ -23,9 +23,6 @@ typedef enum dict_status {
     DICT_INTERNAL_ERROR = 5
 } dict_status;
 
-enum {
-    DICT_LOOKUP_CORE_ONLY = 1u << 0
-};
 uint32_t dict_abi_version(void);
 
 dict_status dict_open(
@@ -46,9 +43,8 @@ dict_status dict_search_json(
 dict_status dict_lookup_json(
     dict_handle *handle,
     const char *query, size_t query_len,
-    uint32_t flags,
     dict_buffer *out);
-dict_status dict_random_json(dict_handle *handle, uint32_t flags, dict_buffer *out);
+dict_status dict_random_json(dict_handle *handle, dict_buffer *out);
 dict_status dict_languages_json(dict_handle *handle, dict_buffer *out);
 dict_status dict_stats_json(dict_handle *handle, dict_buffer *out);
 void dict_buffer_free(dict_handle *handle, dict_buffer *buffer);

@@ -26,9 +26,8 @@ const usage =
     \\  --format FORMAT    text, json
     \\  --limit N          Search results per page, 1..1000 (default: 20)
     \\  --offset N         Skip N prefix matches
-    \\  --details          Load compiled companion sections in text/TUI
+    \\  --details          Show all compiled supporting details in text/TUI
     \\  --color MODE       auto, always, never; NO_COLOR disables automatic color
-    \\  --core-only        Read only the compact compiled core
     \\  --theme THEME      TUI palette: terminal, dark, light
     \\  --trusted          Legacy compatibility flag; cached directories are still validated
     \\  --validate         Validate while indexing (default)
@@ -93,12 +92,11 @@ fn run(init: std.process.Init) !u8 {
                 var raw = try db.recordAlloc(init.gpa, record_index);
                 defer raw.deinit();
                 const raw_record = raw.record;
-                const core = opts.core_only or (opts.format == .text and !opts.details);
-                var resolved = if (core) try db.resolveCoreAlloc(init.gpa, raw_record) else try db.resolveAlloc(init.gpa, raw_record);
+                var resolved = try db.resolveAlloc(init.gpa, raw_record);
                 defer resolved.deinit();
                 const record = resolved.record;
                 response.total_matches = 1;
-                var doc = if (core) try model.fromCoreRecord(init.gpa, record) else try model.fromRecord(init.gpa, record, false);
+                var doc = try model.fromRecord(init.gpa, record);
                 defer doc.deinit();
                 response.entries = &.{doc.entry};
                 if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);

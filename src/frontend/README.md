@@ -16,7 +16,7 @@ A handle owns the mapped blob/index and selected collection. Lookup, prefix sear
 
 ## Compiled presentation
 
-Core language blobs can defer optional compiled sections into companion blobs. `--core-only` reads just the compact compiled core; full reads resolve the matching compiled companion data. No source or fallback renderer is available at runtime.
+Every record is a self-contained compiled presentation document. Readers deserialize semantic sections, styled spans, links, tables, references, media descriptors and lexical layout directly; they do not reconstruct source, load companion bodies, expand templates, or parse wikitext. A payload that is not the expected compiled schema is rejected.
 
 ## Qt application
 

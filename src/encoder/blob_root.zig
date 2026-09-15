@@ -7,6 +7,7 @@ pub const language_blob_encoding = @import("language_blob_encoding.zig");
 pub const reconstruction_encoding = @import("reconstruction_encoding.zig");
 pub const blob_format = @import("blob_format.zig");
 pub const blob_catalog = @import("blob_catalog.zig");
+pub const presentation_types = @import("presentation_types.zig");
 
 test "blob encoder root imports portable codecs" {
     _ = blob_codec_support;
@@ -16,6 +17,7 @@ test "blob encoder root imports portable codecs" {
     _ = reconstruction_encoding;
     _ = blob_format;
     _ = blob_catalog;
+    _ = presentation_types;
     _ = language_parts;
     _ = call_symbols;
 }

@@ -21,46 +21,36 @@ pub const Store = struct {
     file: @import("blob_storage").File,
     allocator: std.mem.Allocator,
     root: []const u8 = "",
-    resolver: ?@import("blob_files").Resolver = null,
-    symbols: @import("blob_files").SymbolSource,
+
     pub fn open(io: std.Io, a: std.mem.Allocator, root: []const u8, kind: Kind, language: []const u8, trusted: bool) !Store {
-        _ = trusted; // A reusable disk cache is always built from validated source.
+        _ = trusted;
         try @import("blob_files").requireComplete(io, a, root);
         const path = try pathAlloc(a, root, kind, language);
         defer a.free(path);
         var file = try @import("blob_storage").File.open(io, a, path);
         errdefer file.deinit();
         if (file.view.kind != kind) return error.UnexpectedBlobKind;
-        const meta = if (kind == .language) try file.view.languageMetadata() else null;
-        if (meta) |m| if (!std.mem.eql(u8, m.heading, language)) return error.UnexpectedLanguageBlob;
-        const owned_root = try a.dupe(u8, root);
-        return .{ .file = file, .allocator = a, .root = owned_root, .symbols = .{ .io = io, .a = a, .root = owned_root }, .resolver = if (meta) |m| .{ .io = io, .a = a, .root = owned_root, .metadata = m, .symbolic = file.view.symbolic, .binding_id = file.view.binding_id } else null };
+        if (kind == .language) {
+            const meta = try file.view.languageMetadata();
+            if (!std.mem.eql(u8, meta.heading, language)) return error.UnexpectedLanguageBlob;
+        }
+        return .{ .file = file, .allocator = a, .root = try a.dupe(u8, root) };
     }
     pub fn deinit(self: *Store) void {
-        if (self.resolver) |*r| r.deinit();
-        self.symbols.deinit();
         self.file.deinit();
         self.allocator.free(self.root);
         self.* = undefined;
     }
-    pub fn count(self: Store) usize {
-        return self.file.recordCount();
-    }
-    pub fn titleAt(self: Store, index: usize) ![]const u8 {
-        return self.file.titleAt(index);
-    }
-    pub fn find(self: Store, title: []const u8) !?usize {
-        return self.file.find(title);
-    }
+    pub fn count(self: Store) usize { return self.file.recordCount(); }
+    pub fn titleAt(self: Store, index: usize) ![]const u8 { return self.file.titleAt(index); }
+    pub fn find(self: Store, title: []const u8) !?usize { return self.file.find(title); }
     pub fn metadata(self: Store) ?enc.blob_format.LanguageMetadata {
         return if (self.file.view.kind == .language) self.file.view.languageMetadata() catch null else null;
     }
     pub const Raw = struct {
         record: dec.BlobRecordView,
         storage: @import("blob_storage").Record,
-        pub fn deinit(self: *Raw) void {
-            self.storage.deinit();
-        }
+        pub fn deinit(self: *Raw) void { self.storage.deinit(); }
     };
     pub fn recordAlloc(self: *Store, a: std.mem.Allocator, index: usize) !Raw {
         var r = try self.file.readAlloc(a, index);
@@ -70,27 +60,13 @@ pub const Store = struct {
     }
     pub const Resolved = struct {
         record: dec.BlobRecordView,
-        a: std.mem.Allocator,
-        owned: ?[]u8 = null,
-        pub fn deinit(self: *Resolved) void {
-            if (self.owned) |b| self.a.free(b);
-        }
+        pub fn deinit(_: *Resolved) void {}
     };
-    pub fn resolveCoreAlloc(self: *Store, a: std.mem.Allocator, record: dec.BlobRecordView) !Resolved {
-        var r: Resolved = .{ .record = record, .a = a };
-        r.owned = try self.symbols.bindAlloc(a, @import("model.zig").payload(record), self.file.view.symbolic, self.file.view.binding_id);
-        if (r.owned) |b| r.record = r.record.withBoundPayload(b);
-        return r;
+    pub fn resolveCoreAlloc(_: *Store, _: std.mem.Allocator, record: dec.BlobRecordView) !Resolved {
+        return .{ .record = record };
     }
-    pub fn resolveAlloc(self: *Store, a: std.mem.Allocator, record: dec.BlobRecordView) !Resolved {
-        if (record != .language) return self.resolveCoreAlloc(a, record);
-        var r: Resolved = .{ .record = record, .a = a };
-        if (self.resolver) |*resolver| {
-            resolver.symbols = &self.symbols;
-            r.owned = try resolver.resolveAlloc(a, record.title(), record.language.payload);
-            if (r.owned) |b| r.record = r.record.withBoundPayload(b);
-        }
-        return r;
+    pub fn resolveAlloc(_: *Store, _: std.mem.Allocator, record: dec.BlobRecordView) !Resolved {
+        return .{ .record = record };
     }
     pub fn prefix(self: Store, text: []const u8) !Range {
         const p = self.file.prefix(text);
@@ -132,51 +108,27 @@ test "prefix ranges handle exact matches empty prefixes unicode and misses" {
     try std.testing.expectEqual(Range{ .start = 3, .end = 3 }, try prefixRange(index, "missing"));
 }
 
-test "core reading opens no companions and a missing package can be installed into the same session" {
+test "compiled records resolve without companion or symbol machinery" {
     const a = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
     defer a.free(root);
-    const original = "==English==\n===Etymology===\nHistory\n===Noun===\n# An animal.\n";
-    const payload_bytes = try enc.language_blob_encoding.encodeAlloc(a, original, .{ .heading = "English" });
-    defer a.free(payload_bytes);
-    var split = try enc.language_parts.splitAlloc(a, payload_bytes, .{ .heading = "English" });
-    defer split.deinit(a);
     const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English");
     defer a.free(metadata);
-    const core = try enc.blob_format.buildAlloc(a, .language, metadata, &.{.{ .title = "cat", .payload = split.core }});
-    defer a.free(core);
-    const core_path = try pathAlloc(a, root, .language, "English");
-    defer a.free(core_path);
-    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(core_path).?);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = core_path, .data = core });
+    const payload_bytes = "{\"schema\":\"dict.presentation.v1\",\"entry\":{\"title\":\"cat\",\"kind\":\"language\"}}";
+    const bytes = try enc.blob_format.buildAlloc(a, .language, metadata, &.{.{ .title = "cat", .payload = payload_bytes }});
+    defer a.free(bytes);
+    const path = try pathAlloc(a, root, .language, "English");
+    defer a.free(path);
+    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(path).?);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
     var db = try Store.open(io, a, root, .language, "English", false);
     defer db.deinit();
     var raw = try db.recordAlloc(a, (try db.find("cat")).?);
     defer raw.deinit();
-    const record = raw.record;
-    var doc = try @import("model.zig").fromCoreRecord(a, record);
-    defer doc.deinit();
-    try std.testing.expectEqual(.core, doc.entry.content);
-    for (db.resolver.?.files, db.resolver.?.attempted) |file, attempted| {
-        try std.testing.expect(file == null and !attempted);
-    }
-    try std.testing.expectError(error.MissingSupplement, db.resolveAlloc(a, record));
-    const supplement_metadata = try std.mem.concat(a, u8, &.{ metadata, &.{@intFromEnum(enc.language_parts.Kind.etymology)} });
-    defer a.free(supplement_metadata);
-    const supplement = try enc.blob_format.buildAlloc(a, .supplement, supplement_metadata, &.{.{ .title = "cat", .payload = split.bodies[0] }});
-    defer a.free(supplement);
-    const detail_path = try catalog.supplementPathAlloc(a, root, "English", .etymology);
-    defer a.free(detail_path);
-    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(detail_path).?);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = detail_path, .data = supplement });
-    var resolved = try db.resolveAlloc(a, record);
+    var resolved = try db.resolveAlloc(a, raw.record);
     defer resolved.deinit();
-    const recovered = try @import("model.zig").sourceAlloc(a, resolved.record);
-    defer a.free(recovered);
-    try std.testing.expectEqualStrings(original, recovered);
-    try std.testing.expect(db.resolver.?.files[0] != null);
-    for (db.resolver.?.files[1..]) |file| try std.testing.expect(file == null);
+    try std.testing.expectEqualStrings(payload_bytes, resolved.record.payloadBytes());
 }
