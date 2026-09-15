@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const term = @import("terminal.zig");
 const store = @import("store.zig");
 const model = @import("model.zig");
+const enc = @import("blob_encoder");
 const output = @import("output.zig");
 const L = std.os.linux;
 pub const Theme = @import("args.zig").Theme;
@@ -342,7 +343,6 @@ pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8
 }
 
 test "terminal query editing is bounded and UTF8-aware" {
-    const enc = @import("blob_encoder");
     const dec = @import("blob_decoder");
     const a = std.testing.allocator;
     const stored: enc.presentation_types.Stored = .{ .entry = .{ .title = "café", .kind = .citations } };
