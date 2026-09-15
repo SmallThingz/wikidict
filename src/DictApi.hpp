@@ -21,8 +21,8 @@ public:
 
     void select(const QString &language, const QString &kind);
     QByteArray search(const QString &query, qsizetype limit = 40, qsizetype offset = 0);
-    QByteArray lookup(const QString &query, bool withSource = false, bool coreOnly = false);
-    QByteArray random(bool withSource = false);
+    QByteArray lookup(const QString &query, bool coreOnly = false);
+    QByteArray random();
     QByteArray languages();
     QByteArray stats();
 

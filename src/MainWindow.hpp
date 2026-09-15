@@ -28,7 +28,7 @@ private:
     void loadLanguages();
     void refreshSearch();
     void selectDataset();
-    void openWord(const QString &word, bool withSource = true);
+    void openWord(const QString &word);
     void openSavedWord(const SavedWord &word);
     void showRandomWord();
     void showLearningDialog();
@@ -54,7 +54,6 @@ private:
     QLabel *meta_ = nullptr;
     QTabWidget *entryTabs_ = nullptr;
     QTextBrowser *reading_ = nullptr;
-    QTextEdit *source_ = nullptr;
     QTextEdit *json_ = nullptr;
     QTimer *searchTimer_ = nullptr;
     QJsonObject currentEntry_;
