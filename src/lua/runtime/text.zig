@@ -13,8 +13,8 @@ fn one(_: std.mem.Allocator, value: Value) ![]const Value {
     return out;
 }
 
-fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, host: ?*anyopaque, comptime call: anytype) !void {
-    try table.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(host, call));
+fn setNative(runtime: *rt.Context, table: *rt.Table, comptime name: []const u8, host: ?*anyopaque, comptime call: anytype) !void {
+    try table.rawSetNativeField(.text, name, try runtime.newNative(host, call));
 }
 const TextGsplitCtx = struct {
     source: []const u8,
@@ -370,5 +370,5 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setNative(runtime, text, "unstripNoWiki", null, textUnstripNoWikiCall);
     try setNative(runtime, text, "listToText", null, textListToTextCall);
     try setNative(runtime, text, "nowiki", null, textNowikiCall);
-    try mw.rawSet(runtime.allocator, .{ .string = "text" }, .{ .table = text });
+    try mw.rawSetNativeField(.mw, "text", .{ .table = text });
 }

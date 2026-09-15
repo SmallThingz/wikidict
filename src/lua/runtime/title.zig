@@ -147,21 +147,21 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
     const ns = namespaceOf(base_title);
     const slash = std.mem.lastIndexOfScalar(u8, ns.text, '/');
     const first_slash = std.mem.indexOfScalar(u8, ns.text, '/');
-    try table.rawSet(runtime.allocator, .{ .string = "text" }, .{ .string = ns.text });
-    try table.rawSet(runtime.allocator, .{ .string = "prefixedText" }, .{ .string = base_title });
-    try table.rawSet(runtime.allocator, .{ .string = "__fragment" }, .{ .string = fragment });
-    try table.rawSet(runtime.allocator, .{ .string = "namespace" }, .{ .number = @floatFromInt(ns.id) });
-    try table.rawSet(runtime.allocator, .{ .string = "nsText" }, .{ .string = ns.name });
-    try table.rawSet(runtime.allocator, .{ .string = "subpageText" }, .{ .string = if (slash) |pos| ns.text[pos + 1 ..] else ns.text });
-    try table.rawSet(runtime.allocator, .{ .string = "baseText" }, .{ .string = if (slash) |pos| ns.text[0..pos] else ns.text });
-    try table.rawSet(runtime.allocator, .{ .string = "rootText" }, .{ .string = if (first_slash) |pos| ns.text[0..pos] else ns.text });
-    try table.rawSet(runtime.allocator, .{ .string = "isSubpage" }, .{ .boolean = slash != null });
-    try table.rawSet(runtime.allocator, .{ .string = "interwiki" }, .{ .string = "" });
-    try table.rawSet(runtime.allocator, .{ .string = "exists" }, .{ .boolean = try pageExists(runtime, base_title) });
+    try table.rawSetNativeField(.title_value, "text", .{ .string = ns.text });
+    try table.rawSetNativeField(.title_value, "prefixedText", .{ .string = base_title });
+    try table.rawSetNativeField(.title_value, "__fragment", .{ .string = fragment });
+    try table.rawSetNativeField(.title_value, "namespace", .{ .number = @floatFromInt(ns.id) });
+    try table.rawSetNativeField(.title_value, "nsText", .{ .string = ns.name });
+    try table.rawSetNativeField(.title_value, "subpageText", .{ .string = if (slash) |pos| ns.text[pos + 1 ..] else ns.text });
+    try table.rawSetNativeField(.title_value, "baseText", .{ .string = if (slash) |pos| ns.text[0..pos] else ns.text });
+    try table.rawSetNativeField(.title_value, "rootText", .{ .string = if (first_slash) |pos| ns.text[0..pos] else ns.text });
+    try table.rawSetNativeField(.title_value, "isSubpage", .{ .boolean = slash != null });
+    try table.rawSetNativeField(.title_value, "interwiki", .{ .string = "" });
+    try table.rawSetNativeField(.title_value, "exists", .{ .boolean = try pageExists(runtime, base_title) });
     table.metatable = try ensureMetatable(runtime, state);
     const ctx = try runtime.allocator.create(TitleCtx);
     ctx.* = .{ .title = base_title };
-    try table.rawSet(runtime.allocator, .{ .string = "getContent" }, try runtime.newNative(ctx, getContentCall));
+    try table.rawSetNativeField(.title_value, "getContent", try runtime.newNative(ctx, getContentCall));
     return .{ .table = table };
 }
 fn titleWithNamespace(a: std.mem.Allocator, text_raw: []const u8, namespace: ?Value) !?[]const u8 {
@@ -202,12 +202,12 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     state.* = .{};
     _ = try ensureMetatable(runtime, state);
     const title = try runtime.newNativeNamespace(.title);
-    try title.rawSet(runtime.allocator, .{ .string = "equals" }, state.equals.?);
-    try title.rawSet(runtime.allocator, .{ .string = "compare" }, try runtime.newNative(null, compareCall));
-    try title.rawSet(runtime.allocator, .{ .string = "new" }, try runtime.newNative(state, newCall));
-    try title.rawSet(runtime.allocator, .{ .string = "makeTitle" }, try runtime.newNative(state, makeCall));
-    try title.rawSet(runtime.allocator, .{ .string = "getCurrentTitle" }, try runtime.newNative(state, currentCall));
-    try mw.rawSet(runtime.allocator, .{ .string = "title" }, .{ .table = title });
+    try title.rawSetNativeField(.title, "equals", state.equals.?);
+    try title.rawSetNativeField(.title, "compare", try runtime.newNative(null, compareCall));
+    try title.rawSetNativeField(.title, "new", try runtime.newNative(state, newCall));
+    try title.rawSetNativeField(.title, "makeTitle", try runtime.newNative(state, makeCall));
+    try title.rawSetNativeField(.title, "getCurrentTitle", try runtime.newNative(state, currentCall));
+    try mw.rawSetNativeField(.mw, "title", .{ .table = title });
 }
 
 fn testPageExists(_: ?*anyopaque, title: []const u8) !bool {
@@ -231,7 +231,7 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     defer runtime.deinit();
     var host = host_api.Host{ .current_title = "Template:Foo/Sub", .page_exists = testPageExists, .page_content = testPageContent };
     host_api.set(&runtime, &host);
-    const mw = try runtime.newTable();
+    const mw = try runtime.newNativeNamespace(.mw);
     try install(&runtime, mw);
     const title_lib = mw.rawGet(.{ .string = "title" }).?.table;
     const made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Template:Foo/Sub# frag_ment" }});
@@ -261,7 +261,7 @@ test "AOT title constructors and current title use the live host" {
     defer runtime.deinit();
     var host = host_api.Host{ .current_title = "Module:Current/Sub" };
     host_api.set(&runtime, &host);
-    const mw = try runtime.newTable();
+    const mw = try runtime.newNativeNamespace(.mw);
     try install(&runtime, mw);
     const title_lib = mw.rawGet(.{ .string = "title" }).?.table;
 

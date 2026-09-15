@@ -97,11 +97,35 @@ pub fn fieldCount(namespace: Namespace) u32 {
     return @intCast(namespaceNames(namespace).len);
 }
 
+fn slotMap(comptime field_names: []const []const u8) std.StaticStringMap(u32) {
+    var pairs: [field_names.len]struct { []const u8, u32 } = undefined;
+    for (field_names, 0..) |field_name, slot| pairs[slot] = .{ field_name, @intCast(slot) };
+    return std.StaticStringMap(u32).initComptime(pairs);
+}
+
+fn staticSlot(comptime field_names: []const []const u8, field_name: []const u8) ?u32 {
+    const map = comptime slotMap(field_names);
+    return map.get(field_name);
+}
+
 pub fn slotForName(namespace: Namespace, field_name: []const u8) ?u32 {
-    for (namespaceNames(namespace), 0..) |candidate, slot| {
-        if (std.mem.eql(u8, candidate, field_name)) return @intCast(slot);
-    }
-    return null;
+    return switch (namespace) {
+        .table => staticSlot(table_names, field_name),
+        .string => staticSlot(string_names, field_name),
+        .math => staticSlot(math_names, field_name),
+        .debug => staticSlot(debug_names, field_name),
+        .mw => staticSlot(&mw_names, field_name),
+        .ustring => staticSlot(&ustring_names, field_name),
+        .title => staticSlot(title_names, field_name),
+        .text => staticSlot(text_names, field_name),
+        .uri => staticSlot(&uri_names, field_name),
+        .html => staticSlot(html_names, field_name),
+        .language => staticSlot(&language_names, field_name),
+        .frame => staticSlot(&frame_names, field_name),
+        .title_value => staticSlot(&title_value_names, field_name),
+        .language_value => staticSlot(&language_value_names, field_name),
+        .html_node => staticSlot(&html_node_names, field_name),
+    };
 }
 
 pub fn nameAt(namespace: Namespace, slot: u32) ?[]const u8 {

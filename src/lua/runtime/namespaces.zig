@@ -69,6 +69,12 @@ pub const all = [_]Spec{
     .{ .id = 2600, .name = "Topic", .canonical_name = "Topic", .has_subpages = false },
 };
 
+const alias_slot_count: usize = blk: {
+    var total: usize = 0;
+    for (all) |spec| total += spec.aliases.len;
+    break :blk total;
+};
+
 pub fn byId(id: i32) ?Spec {
     for (all) |spec| if (spec.id == id) return spec;
     return null;
@@ -92,21 +98,39 @@ pub fn ofTitle(title: []const u8) struct { id: i32, name: []const u8, text: []co
 
 pub fn makeTable(runtime: *rt.Context) !*rt.Table {
     // IDs 1..15 are the dense prefix produced by this namespace catalog.
-    // Preallocating it and the fallback map removes all construction-time growth.
+    // The namespace objects and their fixed slots have page lifetime, so allocate
+    // them in contiguous arena-backed batches instead of ~2 allocations per object.
     const namespaces = try runtime.newArrayTable(16);
     try namespaces.map.ensureTotalCapacity(runtime.allocator, @intCast(all.len * 2));
-    for (all) |spec| {
-        const value = try runtime.newShapedTable(&entry_shape);
-        const aliases = try runtime.newArrayTable(@intCast(spec.aliases.len));
-        for (spec.aliases) |alias| try aliases.append(runtime.allocator, .{ .string = alias });
-        try value.rawSetSlot(0, .{ .number = @floatFromInt(spec.id) });
-        try value.rawSetSlot(1, .{ .string = spec.name });
-        try value.rawSetSlot(2, .{ .string = spec.canonical_name });
-        try value.rawSetSlot(3, .{ .boolean = spec.has_subpages });
-        try value.rawSetSlot(4, .{ .table = aliases });
+    const entries = try runtime.allocator.alloc(rt.Table, all.len);
+    const entry_slots = try runtime.allocator.alloc(rt.Value, all.len * entry_keys.len);
+    const alias_tables = try runtime.allocator.alloc(rt.Table, all.len);
+    const alias_slots = try runtime.allocator.alloc(rt.Value, alias_slot_count);
+    var alias_offset: usize = 0;
+    for (all, 0..) |spec, index| {
+        const value = &entries[index];
+        const slots = entry_slots[index * entry_keys.len ..][0..entry_keys.len];
+        value.* = .{ .shape = &entry_shape, .slots = slots, .owns_slots = false };
+
+        const aliases = &alias_tables[index];
+        const initial_aliases = alias_slots[alias_offset..][0..spec.aliases.len];
+        alias_offset += spec.aliases.len;
+        aliases.* = .{
+            .slots = initial_aliases,
+            .owns_slots = false,
+            .append_index = @intCast(spec.aliases.len + 1),
+        };
+        for (spec.aliases, 0..) |alias, alias_index| initial_aliases[alias_index] = .{ .string = alias };
+
+        slots[0] = .{ .number = @floatFromInt(spec.id) };
+        slots[1] = .{ .string = spec.name };
+        slots[2] = .{ .string = spec.canonical_name };
+        slots[3] = .{ .boolean = spec.has_subpages };
+        slots[4] = .{ .table = aliases };
         try namespaces.rawSet(runtime.allocator, .{ .number = @floatFromInt(spec.id) }, .{ .table = value });
         if (spec.name.len != 0) try namespaces.rawSet(runtime.allocator, .{ .string = spec.name }, .{ .table = value });
     }
+    std.debug.assert(alias_offset == alias_slots.len);
     return namespaces;
 }
 
@@ -132,4 +156,9 @@ test "namespace entry shapes remain open and mutable" {
     try template.rawSet(runtime.allocator, .{ .string = "extra" }, .{ .number = 7 });
     try std.testing.expectEqual(@as(f64, 7), template.rawGet(.{ .string = "extra" }).?.number);
     try std.testing.expectEqual(@as(usize, 1), template.map.count());
+    const aliases = template.rawGet(.{ .string = "aliases" }).?.table;
+    try std.testing.expectEqual(@as(usize, 1), aliases.rawLen());
+    try aliases.append(runtime.allocator, .{ .string = "Extra" });
+    try std.testing.expectEqual(@as(usize, 2), aliases.rawLen());
+    try std.testing.expectEqualStrings("Extra", aliases.rawGet(.{ .number = 2 }).?.string);
 }

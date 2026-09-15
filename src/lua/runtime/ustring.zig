@@ -434,11 +434,11 @@ fn uGsub(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     return result;
 }
 
-fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, comptime call: anytype) !void {
-    try table.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(null, call));
+fn setNative(runtime: *rt.Context, table: *rt.Table, comptime name: []const u8, comptime call: anytype) !void {
+    try table.rawSetNativeField(.ustring, name, try runtime.newNative(null, call));
 }
-fn setNativeCtx(runtime: *rt.Context, table: *rt.Table, name: []const u8, host: ?*anyopaque, comptime call: anytype) !void {
-    try table.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(host, call));
+fn setNativeCtx(runtime: *rt.Context, table: *rt.Table, comptime name: []const u8, host: ?*anyopaque, comptime call: anytype) !void {
+    try table.rawSetNativeField(.ustring, name, try runtime.newNative(host, call));
 }
 
 pub fn install(runtime: *rt.Context, table: *rt.Table) !void {
@@ -502,7 +502,7 @@ test "Scribunto Unicode pattern functions operate on codepoints" {
     const a = arena.allocator();
     var runtime = try rt.Context.init(a, 0);
     defer runtime.deinit();
-    const ustring = try runtime.newTable();
+    const ustring = try runtime.newNativeNamespace(.ustring);
     try install(&runtime, ustring);
 
     const match_fn = ustring.rawGet(.{ .string = "match" }).?;
@@ -543,7 +543,7 @@ test "AOT Unicode gsub supports table and callable replacements" {
     defer arena.deinit();
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
-    const ustring = try runtime.newTable();
+    const ustring = try runtime.newNativeNamespace(.ustring);
     try install(&runtime, ustring);
     const gsub = ustring.rawGet(.{ .string = "gsub" }).?;
 

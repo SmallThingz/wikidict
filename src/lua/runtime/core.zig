@@ -383,6 +383,12 @@ pub const Table = struct {
         self.slots[slot] = value;
     }
 
+    pub fn rawSetNativeField(self: *Table, comptime namespace: static_fields.Namespace, comptime name: []const u8, value: Value) !void {
+        if (self.native_namespace != namespace) return error.BadNativeNamespace;
+        const slot = comptime static_fields.slotForName(namespace, name) orelse @compileError("unknown native namespace field: " ++ name);
+        try self.rawSetSlot(slot, value);
+    }
+
     pub fn rawGetChoice(self: *const Table, choice: u32, key: Value) ?Value {
         if (choice >= self.choices.len) return null;
         const cell = self.choices[choice];
@@ -1664,10 +1670,11 @@ test "native namespace fields use fixed slots with generic fallback" {
     defer ctx.deinit();
 
     const native = try ctx.newNativeNamespace(.table);
-    try native.rawSet(ctx.allocator, .{ .string = "insert" }, .{ .number = 3 });
+    try native.rawSetNativeField(.table, "insert", .{ .number = 3 });
     try std.testing.expectEqual(@as(f64, 3), native.rawGet(.{ .string = "insert" }).?.number);
     try std.testing.expectEqual(@as(usize, static_fields.fieldCount(.table)), native.slots.len);
     try std.testing.expectEqual(@as(usize, 0), native.map.count());
+    try std.testing.expectError(error.BadNativeNamespace, native.rawSetNativeField(.string, "len", .{ .number = 1 }));
 
     const generic = try ctx.newTable();
     try generic.rawSet(ctx.allocator, .{ .string = "insert" }, .{ .number = 7 });

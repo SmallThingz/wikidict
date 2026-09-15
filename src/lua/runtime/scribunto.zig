@@ -111,15 +111,15 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try ustring_lib.install(runtime, ustring);
     try html_lib.install(runtime, mw);
     try installStringAliases(runtime, string.table, ustring);
-    try mw.rawSet(runtime.allocator, .{ .string = "ustring" }, .{ .table = ustring });
+    try mw.rawSetNativeField(.mw, "ustring", .{ .table = ustring });
     try text_lib.install(runtime, mw);
     try title_lib.install(runtime, mw);
     try language_lib.install(runtime, mw);
     try frame_lib.install(runtime, mw);
     try uri_lib.install(runtime, mw);
     try basics_lib.install(runtime, mw);
-    try mw.rawSet(runtime.allocator, .{ .string = "loadData" }, try runtime.newNative(state, loadDataCall));
-    try mw.rawSet(runtime.allocator, .{ .string = "clone" }, try runtime.newNative(null, cloneCall));
+    try mw.rawSetNativeField(.mw, "loadData", try runtime.newNative(state, loadDataCall));
+    try mw.rawSetNativeField(.mw, "clone", try runtime.newNative(null, cloneCall));
     try runtime.setGlobal(state.mw_slot, .{ .table = mw });
 }
 fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {

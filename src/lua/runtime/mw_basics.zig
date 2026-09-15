@@ -68,18 +68,22 @@ fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, comptime 
     try table.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(null, call));
 }
 
+fn setMwNative(runtime: *rt.Context, mw: *rt.Table, comptime name: []const u8, comptime call: anytype) !void {
+    try mw.rawSetNativeField(.mw, name, try runtime.newNative(null, call));
+}
+
 pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
-    try setNative(runtime, mw, "dumpObject", dumpObjectCall);
-    try setNative(runtime, mw, "log", noOpCall);
-    try setNative(runtime, mw, "logObject", noOpCall);
-    try setNative(runtime, mw, "addWarning", noOpCall);
-    try setNative(runtime, mw, "isSubsting", falseCall);
+    try setMwNative(runtime, mw, "dumpObject", dumpObjectCall);
+    try setMwNative(runtime, mw, "log", noOpCall);
+    try setMwNative(runtime, mw, "logObject", noOpCall);
+    try setMwNative(runtime, mw, "addWarning", noOpCall);
+    try setMwNative(runtime, mw, "isSubsting", falseCall);
 
     const site = try runtime.newTable();
     const namespaces = try namespace_lib.makeTable(runtime);
     try site.rawSet(runtime.allocator, .{ .string = "namespaces" }, .{ .table = namespaces });
     try setNative(runtime, site, "interwikiMap", interwikiMapCall);
-    try mw.rawSet(runtime.allocator, .{ .string = "site" }, .{ .table = site });
+    try mw.rawSetNativeField(.mw, "site", .{ .table = site });
 
     const wikibase = try runtime.newTable();
     inline for (.{
@@ -96,7 +100,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
         "entityExists",
         "sitelink",
     }) |name| try setNative(runtime, wikibase, name, notImplementedCall);
-    try mw.rawSet(runtime.allocator, .{ .string = "wikibase" }, .{ .table = wikibase });
+    try mw.rawSetNativeField(.mw, "wikibase", .{ .table = wikibase });
 }
 
 fn callField(runtime: *rt.Context, object: Value, name: []const u8, args: []const Value) ![]const Value {

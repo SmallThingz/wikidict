@@ -113,13 +113,13 @@ fn makeFrameWithArgs(runtime: *rt.Context, title: []const u8, arg_table: *rt.Tab
     } else null;
     const ctx = try runtime.allocator.create(FrameCtx);
     ctx.* = .{ .table = frame, .parent = parent_table, .title = try runtime.allocator.dupe(u8, title) };
-    try frame.rawSet(runtime.allocator, .{ .string = "args" }, .{ .table = arg_table });
-    try frame.rawSet(runtime.allocator, .{ .string = "getParent" }, try runtime.newNative(ctx, getParentCall));
-    try frame.rawSet(runtime.allocator, .{ .string = "getTitle" }, try runtime.newNative(ctx, getTitleCall));
-    try frame.rawSet(runtime.allocator, .{ .string = "preprocess" }, try runtime.newNative(ctx, preprocessCall));
-    try frame.rawSet(runtime.allocator, .{ .string = "expandTemplate" }, try runtime.newNative(ctx, expandTemplateCall));
-    try frame.rawSet(runtime.allocator, .{ .string = "extensionTag" }, try runtime.newNative(ctx, extensionTagCall));
-    try frame.rawSet(runtime.allocator, .{ .string = "callParserFunction" }, try runtime.newNative(ctx, parserFunctionCall));
+    try frame.rawSetNativeField(.frame, "args", .{ .table = arg_table });
+    try frame.rawSetNativeField(.frame, "getParent", try runtime.newNative(ctx, getParentCall));
+    try frame.rawSetNativeField(.frame, "getTitle", try runtime.newNative(ctx, getTitleCall));
+    try frame.rawSetNativeField(.frame, "preprocess", try runtime.newNative(ctx, preprocessCall));
+    try frame.rawSetNativeField(.frame, "expandTemplate", try runtime.newNative(ctx, expandTemplateCall));
+    try frame.rawSetNativeField(.frame, "extensionTag", try runtime.newNative(ctx, extensionTagCall));
+    try frame.rawSetNativeField(.frame, "callParserFunction", try runtime.newNative(ctx, parserFunctionCall));
     return .{ .table = frame };
 }
 
@@ -134,7 +134,7 @@ pub fn makeFrame(runtime: *rt.Context, title: []const u8, args: []const FrameArg
 }
 
 pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
-    try mw.rawSet(runtime.allocator, .{ .string = "getCurrentFrame" }, try runtime.newNative(null, currentFrameCall));
+    try mw.rawSetNativeField(.mw, "getCurrentFrame", try runtime.newNative(null, currentFrameCall));
 }
 fn invokeValue(runtime: *rt.Context, module: Value, function_name: []const u8, frame: Value) anyerror![]const Value {
     const callable = if (function_name.len == 0)
@@ -215,7 +215,7 @@ test "AOT frame exposes parent title and typed host callbacks" {
         .frame_parser_function = Probe.parser,
     };
     host_api.set(&runtime, &host);
-    const mw = try runtime.newTable();
+    const mw = try runtime.newNativeNamespace(.mw);
     try install(&runtime, mw);
     const parent = try makeFrame(&runtime, "Parent", &.{}, null);
     const frame = try makeFrame(&runtime, "Module:Probe", &.{.{ .key = .{ .string = "x" }, .value = .{ .string = "y" } }}, parent);

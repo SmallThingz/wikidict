@@ -264,8 +264,8 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const html_ctx = try a.create(Html);
     html_ctx.* = .{ .allocator = a };
     const html = try runtime.newNativeNamespace(.html);
-    try html.rawSet(a, .{ .string = "create" }, try runtime.newNative(html_ctx, createCall));
-    try mw.rawSet(a, .{ .string = "html" }, .{ .table = html });
+    try html.rawSetNativeField(.html, "create", try runtime.newNative(html_ctx, createCall));
+    try mw.rawSetNativeField(.mw, "html", .{ .table = html });
 }
 
 test "html builder chaining and serialization" {
