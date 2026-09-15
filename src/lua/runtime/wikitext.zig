@@ -439,10 +439,24 @@ pub const Expander = struct {
         return std.fmt.allocPrint(self.runtime.allocator, "{s}{s}", .{ first, expanded[first_len..] });
     }
 
+    fn numericStringEqual(lhs: []const u8, rhs: []const u8) bool {
+        if (std.fmt.parseInt(i128, lhs, 10)) |left| {
+            if (std.fmt.parseInt(i128, rhs, 10)) |right| return left == right else |_| {}
+        } else |_| {}
+        const left = std.fmt.parseFloat(f64, lhs) catch return false;
+        const right = std.fmt.parseFloat(f64, rhs) catch return false;
+        if (!std.math.isFinite(left) or !std.math.isFinite(right)) return false;
+        return left == right;
+    }
+
+    fn ifEqEqual(lhs: []const u8, rhs: []const u8) bool {
+        return std.mem.eql(u8, lhs, rhs) or numericStringEqual(lhs, rhs);
+    }
+
     fn expandIfEq(self: *Expander, lhs_raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const lhs = std.mem.trim(u8, try self.expandWikitext(lhs_raw, params, host_title, depth + 1), " \t\r\n");
         const rhs = if (args.len != 0) std.mem.trim(u8, try self.expandWikitext(args[0], params, host_title, depth + 1), " \t\r\n") else "";
-        const chosen = if (std.mem.eql(u8, lhs, rhs))
+        const chosen = if (ifEqEqual(lhs, rhs))
             (if (args.len > 1) args[1] else "")
         else
             (if (args.len > 2) args[2] else "");
@@ -1074,9 +1088,9 @@ test "bundle parser functions cover corpus time sub and iferror forms" {
     try stdlib.install(&runtime);
     try installTestHost(&runtime, 18, 23);
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
-    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}";
+    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}";
     const got = try expander.expandFragment("Page", source, 1_670_803_200);
-    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|γ|αβ|ERR|OK", got);
+    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG", got);
 
     expander.beginPage("Page", "source", 1_670_803_200);
     const frame_args = try runtime.newTable();
