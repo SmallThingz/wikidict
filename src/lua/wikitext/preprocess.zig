@@ -172,6 +172,14 @@ fn isOpaqueParserTag(name: []const u8) bool {
     return false;
 }
 
+fn isLiteralParserTag(name: []const u8) bool {
+    inline for (&.{
+        "nowiki",   "pre",   "math",  "ce",       "chem",    "score",    "syntaxhighlight", "source",
+        "timeline", "hiero", "graph", "mapframe", "maplink", "inputbox", "imagemap",        "templatestyles",
+    }) |tag| if (std.ascii.eqlIgnoreCase(name, tag)) return true;
+    return false;
+}
+
 fn rawTagEnd(s: []const u8, start: usize) ?usize {
     var quote: u8 = 0;
     var i = start + 1;
@@ -190,7 +198,7 @@ fn rawTagEnd(s: []const u8, start: usize) ?usize {
     return null;
 }
 
-pub fn findTemplateOpenOutsideNowiki(s: []const u8, start: usize) ?usize {
+pub fn findTemplateOpenOutsideLiteralTags(s: []const u8, start: usize) ?usize {
     var i = start;
     while (i + 1 < s.len) {
         if (s[i] == '<') {
@@ -198,7 +206,8 @@ pub fn findTemplateOpenOutsideNowiki(s: []const u8, start: usize) ?usize {
             while (p < s.len and std.ascii.isWhitespace(s[p])) : (p += 1) {}
             const name_start = p;
             while (p < s.len and (std.ascii.isAlphanumeric(s[p]) or s[p] == '-')) : (p += 1) {}
-            if (p > name_start and std.ascii.eqlIgnoreCase(s[name_start..p], "nowiki")) {
+            if (p > name_start and isLiteralParserTag(s[name_start..p])) {
+                const name = s[name_start..p];
                 const open_end = rawTagEnd(s, i) orelse return null;
                 var before_gt = open_end - 1;
                 while (before_gt > i and std.ascii.isWhitespace(s[before_gt - 1])) : (before_gt -= 1) {}
@@ -209,8 +218,10 @@ pub fn findTemplateOpenOutsideNowiki(s: []const u8, start: usize) ?usize {
                 var search = open_end;
                 var closed = false;
                 while (std.mem.indexOfScalarPos(u8, s, search, '<')) |lt| {
-                    if (lt + 9 <= s.len and s[lt + 1] == '/' and std.ascii.eqlIgnoreCase(s[lt + 2 .. lt + 8], "nowiki")) {
-                        const after = lt + 8;
+                    if (lt + 2 + name.len <= s.len and s[lt + 1] == '/' and
+                        std.ascii.eqlIgnoreCase(s[lt + 2 .. lt + 2 + name.len], name))
+                    {
+                        const after = lt + 2 + name.len;
                         if (after >= s.len or s[after] == '>' or std.ascii.isWhitespace(s[after])) {
                             i = rawTagEnd(s, lt) orelse return null;
                             closed = true;
@@ -329,11 +340,17 @@ pub fn splitParameter(s: []const u8) ParameterSplit {
     return .{ .key = s, .default = null };
 }
 
-test "template opener scan skips raw nowiki bodies" {
+test "template opener scan skips literal extension bodies but enters wikitext extensions" {
     const source = "a<NoWiKi class='x'>{{hidden}}</NoWiKi>b{{visible}}";
-    try std.testing.expectEqual(std.mem.indexOf(u8, source, "{{visible}}").?, findTemplateOpenOutsideNowiki(source, 0).?);
-    try std.testing.expect(findTemplateOpenOutsideNowiki("<nowiki>{{hidden}}", 0) == null);
-    try std.testing.expectEqual(@as(usize, 10), findTemplateOpenOutsideNowiki("<nowiki/> {{x}}", 0).?);
+    try std.testing.expectEqual(std.mem.indexOf(u8, source, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(source, 0).?);
+    try std.testing.expect(findTemplateOpenOutsideLiteralTags("<nowiki>{{hidden}}", 0) == null);
+    try std.testing.expectEqual(@as(usize, 10), findTemplateOpenOutsideLiteralTags("<nowiki/> {{x}}", 0).?);
+    const math = "<math>{{hidden}}</math>{{visible}}";
+    try std.testing.expectEqual(std.mem.indexOf(u8, math, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(math, 0).?);
+    const syntax = "<syntaxhighlight lang='lua'>{{hidden}}</syntaxhighlight>{{visible}}";
+    try std.testing.expectEqual(std.mem.indexOf(u8, syntax, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(syntax, 0).?);
+    try std.testing.expectEqual(@as(usize, 5), findTemplateOpenOutsideLiteralTags("<ref>{{visible}}</ref>", 0).?);
+    try std.testing.expectEqual(@as(usize, 6), findTemplateOpenOutsideLiteralTags("<poem>{{visible}}</poem>", 0).?);
 }
 
 test "nested template and parameter boundaries match MediaWiki preprocessing" {

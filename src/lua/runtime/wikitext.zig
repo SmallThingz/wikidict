@@ -165,7 +165,7 @@ pub const Expander = struct {
     fn expandPageWikitext(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8) anyerror![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         var pos: usize = 0;
-        while (preprocess.findTemplateOpenOutsideNowiki(text, pos)) |open| {
+        while (preprocess.findTemplateOpenOutsideLiteralTags(text, pos)) |open| {
             const literal = text[pos..open];
             try self.observePageOutput(literal);
             try out.appendSlice(self.runtime.allocator, literal);
@@ -265,7 +265,7 @@ pub const Expander = struct {
         if (depth > self.max_depth) return error.TemplateDepth;
         var out: std.ArrayList(u8) = .empty;
         var pos: usize = 0;
-        while (preprocess.findTemplateOpenOutsideNowiki(text, pos)) |open| {
+        while (preprocess.findTemplateOpenOutsideLiteralTags(text, pos)) |open| {
             try out.appendSlice(self.runtime.allocator, text[pos..open]);
             if (open + 2 < text.len and text[open + 2] == '{') {
                 const close = preprocess.findParamEnd(text, open) orelse {
@@ -1034,6 +1034,15 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
     const protected = try expander.expandFragment("Page", "<nowiki>{{Hello|Bob|1}}</nowiki>|{{Hello|A|}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{Hello|Bob|1}}</nowiki>|Hi A N", protected);
+    const extension_bodies = try expander.expandFragment(
+        "Page",
+        "<math>{{Hello|M|1}}</math>|<syntaxhighlight>{{Hello|S|1}}</syntaxhighlight>|<ref>{{Hello|R|1}}</ref>|<poem>{{Hello|P|1}}</poem>",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings(
+        "<math>{{Hello|M|1}}</math>|<syntaxhighlight>{{Hello|S|1}}</syntaxhighlight>|<ref>Hi R Y</ref>|<poem>Hi P Y</poem>",
+        extension_bodies,
+    );
     try std.testing.expect(runtime.current_frame == null);
     var symbolic_expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .resolve_call_symbol = TestProvider.resolveCallSymbol, .get_template_symbol = TestProvider.getTemplateSymbol } };
     const symbolic = try symbolic_expander.expandFragment("Page", "{{PAGENAME}}|{{@template|Bob|1}}|{{#invoke:@module|@function|x=symbolic}}", 1_670_803_200);
