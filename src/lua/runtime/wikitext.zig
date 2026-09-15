@@ -112,7 +112,7 @@ pub const Expander = struct {
 
     fn hostSiteInterwikiMap(raw: ?*anyopaque) anyerror![]const host_api.InterwikiRow {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        const get = self.provider.interwiki_map orelse return &.{};
+        const get = self.provider.interwiki_map orelse return error.NotImplemented;
         return get(self.provider.ctx);
     }
 
@@ -894,6 +894,21 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("Hi Bob Y|symbolic", symbolic);
     try std.testing.expectError(error.AotCallFailed, expander.expandFragment("Page", "{{#invoke:Test|fail}}", 1_670_803_200));
     try std.testing.expectEqualStrings("NotCallable", runtime.aotErrorName().?);
+}
+
+test "missing bundle interwiki metadata fails explicitly" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+    };
+    try std.testing.expectError(error.NotImplemented, Expander.hostSiteInterwikiMap(&expander));
 }
 
 test "native AOT page boundary resets shared Scribunto state" {

@@ -26,6 +26,7 @@ pub const Provider = struct {
     dump_file: ?std.Io.File = null,
     templates: std.StringHashMapUnmanaged(TemplateSlot) = .empty,
     interwiki_rows: std.ArrayList(InterwikiRow) = .empty,
+    interwiki_available: bool = false,
 
     pub fn init(io: std.Io, a: A, root: []const u8, dump_path: []const u8) !Provider {
         const owned_root = try a.dupe(u8, root);
@@ -57,7 +58,13 @@ pub const Provider = struct {
     }
 
     pub fn api(self: *Provider) lua_program.WikitextProvider {
-        return .{ .ctx = self, .get = get, .get_template = getTemplate, .exists = exists, .interwiki_map = interwikiMap };
+        return .{
+            .ctx = self,
+            .get = get,
+            .get_template = getTemplate,
+            .exists = exists,
+            .interwiki_map = if (self.interwiki_available) interwikiMap else null,
+        };
     }
 
     fn mapOptional(self: *Provider, name: []const u8) !?Mapped {
@@ -98,6 +105,7 @@ pub const Provider = struct {
     fn loadInterwikiMap(self: *Provider) !void {
         var mapped = (try self.mapOptional("interwiki-map.tsv")) orelse return;
         defer mapped.deinit();
+        self.interwiki_available = true;
         try self.interwiki_rows.ensureTotalCapacity(self.a, std.mem.count(u8, mapped.bytes, "\n"));
         var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
         while (lines.next()) |line| {
@@ -299,4 +307,5 @@ test "provider owns paths and serves corpus ranges without query-history state" 
     try std.testing.expect(try Provider.exists(&provider, "Ordinary_page"));
     const main_content = (try provider.lookup(page_a, "Ordinary_page", true)) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("A&B", main_content);
+    try std.testing.expect(provider.api().interwiki_map == null);
 }
