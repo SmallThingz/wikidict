@@ -137,7 +137,13 @@ test "typed blob reader exposes compiled language payload and metadata" {
     const a = std.testing.allocator;
     const metadata = try format.buildLanguageMetadataAlloc(a, "en", "English");
     defer a.free(metadata);
-    const payload = "{\"schema\":\"dict.presentation.v1\"}";
+    const payload = try encoder.presentation_codec.encodeAlloc(a, .{ .entry = .{
+        .title = "cat",
+        .kind = .language,
+        .language = "English",
+        .language_code = "en",
+    } });
+    defer a.free(payload);
     const bytes = try format.buildAlloc(a, .language, metadata, &.{.{ .title = "cat", .payload = payload }});
     defer a.free(bytes);
 
@@ -160,7 +166,8 @@ test "typed blob reader exposes compiled feature payloads without source facades
         format.BlobKind.rhymes,
         format.BlobKind.sign_gloss,
     }) |kind| {
-        const payload = "{\"schema\":\"dict.presentation.v1\"}";
+        const payload = try encoder.presentation_codec.encodeAlloc(a, .{ .entry = .{ .title = "cat", .kind = kind } });
+        defer a.free(payload);
         const bytes = try format.buildAlloc(a, kind, "", &.{.{ .title = "cat", .payload = payload }});
         defer a.free(bytes);
         const blob = try BlobView.inspect(bytes);

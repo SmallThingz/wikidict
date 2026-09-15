@@ -50,7 +50,7 @@ fn writeCompiledFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !voi
         .language_code = "en",
         .sections = &sections,
     } };
-    const payload = try std.json.Stringify.valueAlloc(a, stored, .{});
+    const payload = try enc.presentation_codec.encodeAlloc(a, stored);
     defer a.free(payload);
     const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English");
     defer a.free(metadata);

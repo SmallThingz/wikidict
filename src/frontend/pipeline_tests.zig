@@ -8,13 +8,13 @@ fn payloadAlloc(a: std.mem.Allocator, kind: enc.blob_format.BlobKind, title: []c
     const spans = [_]enc.presentation_types.Span{.{ .text = "compiled presentation" }};
     const blocks = [_]enc.presentation_types.Block{.{ .kind = .definition, .depth = 1, .spans = &spans, .list_path = "#" }};
     const sections = [_]enc.presentation_types.Section{.{ .level = 3, .title = "Entry", .blocks = &blocks }};
-    return std.json.Stringify.valueAlloc(a, enc.presentation_types.Stored{ .entry = .{
+    return enc.presentation_codec.encodeAlloc(a, enc.presentation_types.Stored{ .entry = .{
         .title = title,
         .kind = kind,
         .language = if (kind == .language) "English" else null,
         .language_code = if (kind == .language) "en" else "",
         .sections = &sections,
-    } }, .{});
+    } });
 }
 
 test "all six shipped blob kinds deserialize compiled presentation only" {

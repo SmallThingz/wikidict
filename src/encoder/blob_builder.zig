@@ -584,14 +584,15 @@ test "wikitext writer emits only data blobs" {
     var english_index = try english_blob.buildTrustedIndexAlloc(std.testing.allocator);
     defer english_index.deinit(std.testing.allocator);
     const cat = (try english_index.find("cat")).?;
-    var parsed = try std.json.parseFromSlice(blobs.presentation_types.Stored, std.testing.allocator, cat.payload, .{});
-    defer parsed.deinit();
-    try std.testing.expectEqualStrings(blobs.presentation_types.schema, parsed.value.schema);
-    try std.testing.expectEqualStrings("cat", parsed.value.entry.title);
-    try std.testing.expectEqual(blob_format.BlobKind.language, parsed.value.entry.kind);
+    var decode_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer decode_arena.deinit();
+    const parsed = try blobs.presentation_codec.decodeAlloc(decode_arena.allocator(), cat.payload, "cat", .language, metadata);
+    try std.testing.expectEqualStrings(blobs.presentation_types.schema, parsed.schema);
+    try std.testing.expectEqualStrings("cat", parsed.entry.title);
+    try std.testing.expectEqual(blob_format.BlobKind.language, parsed.entry.kind);
     var saw_noun = false;
     var saw_verb = false;
-    for (parsed.value.entry.sections) |section| {
+    for (parsed.entry.sections) |section| {
         saw_noun = saw_noun or std.mem.eql(u8, section.title, "Noun");
         saw_verb = saw_verb or std.mem.eql(u8, section.title, "Verb");
     }

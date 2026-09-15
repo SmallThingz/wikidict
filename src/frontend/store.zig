@@ -113,7 +113,13 @@ test "compiled records need no resolution machinery" {
     defer a.free(root);
     const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English");
     defer a.free(metadata);
-    const payload_bytes = "{\"schema\":\"dict.presentation.v1\",\"entry\":{\"title\":\"cat\",\"kind\":\"language\"}}";
+    const payload_bytes = try enc.presentation_codec.encodeAlloc(a, .{ .entry = .{
+        .title = "cat",
+        .kind = .language,
+        .language = "English",
+        .language_code = "en",
+    } });
+    defer a.free(payload_bytes);
     const bytes = try enc.blob_format.buildAlloc(a, .language, metadata, &.{.{ .title = "cat", .payload = payload_bytes }});
     defer a.free(bytes);
     const path = try pathAlloc(a, root, .language, "English");

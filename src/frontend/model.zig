@@ -5,6 +5,7 @@ const enc = @import("blob_encoder");
 const dec = @import("blob_decoder");
 const A = std.mem.Allocator;
 const types = enc.presentation_types;
+const codec = enc.presentation_codec;
 
 pub const Feature = types.Feature;
 pub const Span = types.Span;
@@ -17,11 +18,13 @@ pub const Layout = types.Layout;
 pub const Lexeme = types.Lexeme;
 pub const Sense = types.Sense;
 
-pub const OwnedEntry = struct {
+/// Owns decoded structural arrays but borrows strings from the source record.
+/// The source record backing must outlive this value.
+pub const DecodedEntry = struct {
     arena: std.heap.ArenaAllocator,
     entry: Entry,
 
-    pub fn deinit(self: *OwnedEntry) void {
+    pub fn deinit(self: *DecodedEntry) void {
         self.arena.deinit();
         self.* = undefined;
     }
@@ -49,34 +52,32 @@ pub fn payload(record: dec.BlobRecordView) []const u8 {
     return record.payload();
 }
 
-fn validate(record: dec.BlobRecordView, stored: types.Stored) !void {
-    try types.validateStored(
-        stored,
-        record.title(),
-        record.kind(),
-        if (record == .language) record.language.metadata else null,
-    );
-}
-
-pub fn fromRecord(allocator: A, record: dec.BlobRecordView) !OwnedEntry {
+pub fn fromRecord(allocator: A, record: dec.BlobRecordView) !DecodedEntry {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
-    var stored = std.json.parseFromSliceLeaky(types.Stored, a, payload(record), .{
-        .allocate = .alloc_always,
-        .ignore_unknown_fields = false,
-    }) catch return error.InvalidPresentation;
-    try validate(record, stored);
-    if (record == .language) {
-        stored.entry.language = try a.dupe(u8, record.language.metadata.heading);
-        stored.entry.language_code = try a.dupe(u8, record.language.metadata.code);
-    }
+    const stored = codec.decodeAlloc(
+        a,
+        payload(record),
+        record.title(),
+        record.kind(),
+        if (record == .language) record.language.metadata else null,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidPresentation,
+    };
     return .{ .arena = arena, .entry = stored.entry };
 }
 
 test "reader deserializes compiled presentation without wikitext parsing" {
     const a = std.testing.allocator;
-    const bytes = "{\"schema\":\"dict.presentation.v1\",\"entry\":{\"organization\":{},\"title\":\"cat\",\"kind\":\"language\",\"language\":\"English\",\"language_code\":\"en\",\"sections\":[],\"preamble_spans\":[],\"references\":[],\"media\":[]}}";
+    const bytes = try codec.encodeAlloc(a, .{ .entry = .{
+        .title = "cat",
+        .kind = .language,
+        .language = "English",
+        .language_code = "en",
+    } });
+    defer a.free(bytes);
     var doc = try fromRecord(a, .{ .language = .{ .title = "cat", .payload = bytes, .metadata = .{ .code = "en", .heading = "English" } } });
     defer doc.deinit();
     try std.testing.expectEqualStrings("cat", doc.entry.title);

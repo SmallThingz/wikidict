@@ -4,6 +4,7 @@ const semantic = @import("presentation_layout.zig");
 const blobs = @import("blob_encoder");
 const types = blobs.presentation_types;
 const format = blobs.blob_format;
+const codec = blobs.presentation_codec;
 const A = std.mem.Allocator;
 
 const WorkSection = struct {
@@ -225,7 +226,7 @@ pub fn compileAlloc(
         .references = try referencesAlloc(a, work.references),
         .media = try mediaAlloc(a, work.media),
     } };
-    return std.json.Stringify.valueAlloc(a, stored, .{});
+    return codec.encodeAlloc(a, stored);
 }
 
 test "compiled presentation contains no executable template syntax" {
@@ -235,7 +236,7 @@ test "compiled presentation contains no executable template syntax" {
     const source = "==English==\n===Noun===\n# A [[cat|feline]].\n";
     const bytes = try compileAlloc(a, "cat", .language, "English", "en", source);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "{{") == null);
-    const parsed = try std.json.parseFromSliceLeaky(types.Stored, a, bytes, .{ .allocate = .alloc_always });
+    const parsed = try codec.decodeAlloc(a, bytes, "cat", .language, .{ .code = "en", .heading = "English" });
     try std.testing.expectEqualStrings(types.schema, parsed.schema);
     try std.testing.expectEqualStrings("cat", parsed.entry.title);
     try std.testing.expectEqual(types.BlockKind.definition, parsed.entry.sections[1].blocks[0].kind);

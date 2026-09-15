@@ -6,6 +6,7 @@ pub const document_ir = blobs.document_ir;
 pub const blob_format = blobs.blob_format;
 pub const blob_catalog = blobs.blob_catalog;
 pub const presentation_types = blobs.presentation_types;
+pub const presentation_codec = blobs.presentation_codec;
 pub const blob_files = @import("blob_files.zig");
 pub const blob_builder = @import("blob_builder.zig");
 pub const presentation_compile = @import("presentation_compile.zig");
@@ -19,6 +20,7 @@ test "encoder root imports bundle-time presentation modules" {
     _ = blob_format;
     _ = blob_catalog;
     _ = presentation_types;
+    _ = presentation_codec;
     _ = blob_files;
     _ = blob_builder;
     _ = presentation_compile;

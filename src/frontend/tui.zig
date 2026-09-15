@@ -232,7 +232,7 @@ const State = struct {
             try self.put(w, 1, 3, 9, "dict.", p.accent);
             try self.put(w, 1, 13, sz.cols -| 15, self.label, p.muted);
             var buf: [256]u8 = undefined;
-            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "WIKBLB06  /  {d} records  /  {s} theme", .{ self.db.count(), @tagName(self.theme) }), p.muted);
+            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "{s}  /  {d} records  /  {s} theme", .{ enc.blob_format.magic, self.db.count(), @tagName(self.theme) }), p.muted);
             try self.put(w, 4, 3, 10, "Search /", if (self.focus == .search) p.accent else p.muted);
             // Horizontal input viewport follows the caret, at whole-codepoint boundaries.
             var start: usize = 0;
@@ -346,7 +346,7 @@ test "terminal query editing is bounded and UTF8-aware" {
     const dec = @import("blob_decoder");
     const a = std.testing.allocator;
     const stored: enc.presentation_types.Stored = .{ .entry = .{ .title = "café", .kind = .citations } };
-    const payload = try std.json.Stringify.valueAlloc(a, stored, .{});
+    const payload = try enc.presentation_codec.encodeAlloc(a, stored);
     defer a.free(payload);
     const bytes = try enc.blob_format.buildAlloc(a, .citations, "", &.{.{ .title = "café", .payload = payload }});
     defer a.free(bytes);

@@ -3,7 +3,7 @@ const encoder = @import("encoder");
 
 const format = encoder.blob_format;
 const catalog = encoder.blob_catalog;
-const presentation = encoder.presentation_types;
+const presentation_codec = encoder.presentation_codec;
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
@@ -54,11 +54,10 @@ fn verifyRecord(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const stored = std.json.parseFromSliceLeaky(presentation.Stored, a, record.payload, .{
-        .allocate = .alloc_always,
-        .ignore_unknown_fields = false,
-    }) catch return error.InvalidPresentation;
-    try presentation.validateStored(stored, record.title, kind, metadata);
+    _ = presentation_codec.decodeAlloc(a, record.payload, record.title, kind, metadata) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidPresentation,
+    };
 }
 
 fn verifyBlob(
