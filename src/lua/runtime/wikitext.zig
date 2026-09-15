@@ -771,6 +771,14 @@ pub const Expander = struct {
                 const page = try self.expandWikitext(first, params, host_title, depth + 1);
                 return (try self.titleMagic(name, page)) orelse unreachable;
             }
+            if (std.ascii.eqlIgnoreCase(name, "ns")) {
+                const raw_ns = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 1), " \t\r\n");
+                const spec = if (std.fmt.parseInt(i32, raw_ns, 10)) |id|
+                    namespace_lib.byId(id)
+                else |_|
+                    namespace_lib.byName(raw_ns);
+                return (spec orelse return error.InvalidNamespace).name;
+            }
             if (std.ascii.eqlIgnoreCase(name, "uc")) return self.expandCaseParser(first, params, host_title, depth + 1, true, false);
             if (std.ascii.eqlIgnoreCase(name, "lc")) return self.expandCaseParser(first, params, host_title, depth + 1, false, false);
             if (std.ascii.eqlIgnoreCase(name, "ucfirst")) return self.expandCaseParser(first, params, host_title, depth + 1, true, true);
@@ -1105,9 +1113,10 @@ test "bundle parser functions cover corpus time sub and iferror forms" {
     try stdlib.install(&runtime);
     try installTestHost(&runtime, 18, 23);
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
-    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}";
+    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
     const got = try expander.expandFragment("Page", source, 1_670_803_200);
-    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG", got);
+    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|/Wiktionary/Wiktionary/Module", got);
+    try std.testing.expectError(error.InvalidNamespace, expander.expandFragment("Page", "{{ns:not-a-namespace}}", 1_670_803_200));
 
     expander.beginPage("Page", "source", 1_670_803_200);
     const frame_args = try runtime.newTable();
