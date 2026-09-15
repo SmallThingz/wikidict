@@ -202,8 +202,14 @@ pub const Provider = struct {
 
     fn lookup(self: *Provider, a: A, raw_title: []const u8, content: bool) !?[]const u8 {
         if (raw_title.len > 4096) return error.InvalidPageTitle;
-        const title = try a.dupe(u8, raw_title);
-        std.mem.replaceScalar(u8, title, '_', ' ');
+        var normalized: ?[]u8 = null;
+        defer if (normalized) |owned| a.free(owned);
+        const title: []const u8 = if (std.mem.indexOfScalar(u8, raw_title, '_') != null) blk: {
+            const owned = try a.dupe(u8, raw_title);
+            std.mem.replaceScalar(u8, owned, '_', ' ');
+            normalized = owned;
+            break :blk owned;
+        } else raw_title;
         if (self.pages.get(title)) |id| {
             if (!content) return "";
             return try self.readSource(a, "pages", id, "wiki");
@@ -287,4 +293,5 @@ test "module manifest stays lazy until a Module page lookup" {
     try std.testing.expectEqual(@as(usize, 1), provider.modules.count());
     const content = (try provider.lookup(page_a, "Module:Lazy", true)) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("return 42", content);
+    try std.testing.expect(!(try Provider.exists(&provider, "Ordinary_page")));
 }
