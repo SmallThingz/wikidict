@@ -15,6 +15,7 @@ const Work = struct {
     sections: []const WorkSection,
     references: []const compiler.Reference,
     media: []const compiler.media_types.Media,
+    rendered_templates: usize,
     unresolved_templates: usize,
 };
 const Builder = struct {
@@ -66,6 +67,7 @@ fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8) 
         .sections = try builder.sections.toOwnedSlice(a),
         .references = try renderer.finishReferences(),
         .media = try renderer.media.toOwnedSlice(a),
+        .rendered_templates = renderer.rendered_templates,
         .unresolved_templates = renderer.unresolved_templates,
     };
 }
@@ -147,7 +149,6 @@ fn sectionsAlloc(a: A, source: []const WorkSection) ![]types.Section {
     return out;
 }
 
-
 fn layoutAlloc(a: A, source: semantic.Layout) !types.Layout {
     const lexemes = try a.alloc(types.Lexeme, source.lexemes.len);
     for (source.lexemes, lexemes) |lexeme, *dest| {
@@ -211,7 +212,7 @@ pub fn compileAlloc(
     source: []const u8,
 ) ![]u8 {
     const work = try workAlloc(a, title, language orelse "", source);
-    if (work.unresolved_templates != 0) return error.UncompiledTemplate;
+    if (work.rendered_templates != 0 or work.unresolved_templates != 0) return error.UncompiledTemplate;
     const sections = try sectionsAlloc(a, work.sections);
     const layout = try layoutAlloc(a, try semantic.build(a, work.sections));
     const stored: types.Stored = .{ .entry = .{
@@ -248,6 +249,13 @@ test "unknown templates are rejected at bundle time" {
     try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source));
 }
 
+test "known presentation templates cannot bypass bundle expansion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==English==\n===Noun===\n# {{lb|en|rare}} A [[cat]].\n";
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source));
+}
 
 test "partially renderable unsupported citation templates still fail publication" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
