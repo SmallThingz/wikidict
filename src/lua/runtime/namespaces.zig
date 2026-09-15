@@ -96,6 +96,31 @@ pub fn ofTitle(title: []const u8) struct { id: i32, name: []const u8, text: []co
     return .{ .id = 0, .name = "", .text = title };
 }
 
+pub fn canonicalizeTitle(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    const colon = std.mem.indexOfScalar(u8, trimmed, ':');
+    const spec = if (colon) |at| byName(trimmed[0..at]) else null;
+    const canonical_prefix = if (spec) |value| value.name else "";
+    const prefix_changed = if (colon) |at| spec != null and !std.mem.eql(u8, trimmed[0..at], canonical_prefix) else false;
+    const has_underscore = std.mem.indexOfScalar(u8, trimmed, '_') != null;
+    if (!prefix_changed and !has_underscore) return trimmed;
+
+    if (prefix_changed) {
+        const at = colon.?;
+        const suffix = trimmed[at + 1 ..];
+        const out = try a.alloc(u8, canonical_prefix.len + 1 + suffix.len);
+        @memcpy(out[0..canonical_prefix.len], canonical_prefix);
+        out[canonical_prefix.len] = ':';
+        @memcpy(out[canonical_prefix.len + 1 ..], suffix);
+        std.mem.replaceScalar(u8, out, '_', ' ');
+        return out;
+    }
+
+    const out = try a.dupe(u8, trimmed);
+    std.mem.replaceScalar(u8, out, '_', ' ');
+    return out;
+}
+
 pub fn makeTable(runtime: *rt.Context) !*rt.Table {
     // IDs 1..15 are the dense prefix produced by this namespace catalog.
     // The namespace objects and their fixed slots have page lifetime, so allocate
@@ -142,6 +167,11 @@ test "Wiktionary namespace lookup preserves canonical names and aliases" {
     try std.testing.expectEqual(@as(i32, 828), split.id);
     try std.testing.expectEqualStrings("Module", split.name);
     try std.testing.expectEqualStrings("example/sub", split.text);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectEqualStrings("Wiktionary:foo bar", try canonicalizeTitle(arena.allocator(), "WT:foo_bar"));
+    try std.testing.expectEqualStrings("Wiktionary:Foo", try canonicalizeTitle(arena.allocator(), "Project:Foo"));
+    try std.testing.expectEqualStrings("NotNs:foo bar", try canonicalizeTitle(arena.allocator(), "NotNs:foo_bar"));
 }
 
 test "namespace entry shapes remain open and mutable" {

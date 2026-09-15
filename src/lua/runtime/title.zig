@@ -167,7 +167,7 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
 fn titleWithNamespace(a: std.mem.Allocator, text_raw: []const u8, namespace: ?Value) !?[]const u8 {
     const text = try normalizeName(a, text_raw);
     if (text.len == 0) return null;
-    if (namespace == null or namespace.? == .nil) return text;
+    if (namespace == null or namespace.? == .nil) return @as(?[]const u8, try namespace_lib.canonicalizeTitle(a, text));
     const spec = switch (namespace.?) {
         .number => |number| namespaceSpecById(@intFromFloat(@trunc(number))),
         .string => |name| namespaceSpecByName(name),
@@ -246,6 +246,10 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     try std.testing.expect((try runtime.getIndex(title, .{ .string = "exists" })).boolean);
     try std.testing.expectEqualStrings(" frag ment", (try runtime.getIndex(title, .{ .string = "fragment" })).string);
     try std.testing.expectEqualStrings("Template:Foo/Sub# frag ment", (try runtime.getIndex(title, .{ .string = "fullText" })).string);
+
+    const alias_made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "WT:Sandbox_page" }});
+    defer rt.freeResults(alias_made);
+    try std.testing.expectEqualStrings("Wiktionary:Sandbox page", (try runtime.getIndex(alias_made[0], .{ .string = "prefixedText" })).string);
 
     const content = try callField(&runtime, title, "getContent", &.{title});
     defer rt.freeResults(content);

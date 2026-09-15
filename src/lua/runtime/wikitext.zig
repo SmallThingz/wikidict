@@ -105,8 +105,9 @@ pub const Expander = struct {
 
     fn hostPageContent(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) anyerror!?[]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        if (std.mem.eql(u8, title, self.host.current_title)) if (self.current_source) |source| return source;
-        return self.provider.get(self.provider.ctx, a, title);
+        const canonical = try namespace_lib.canonicalizeTitle(a, title);
+        if (std.mem.eql(u8, canonical, self.host.current_title)) if (self.current_source) |source| return source;
+        return self.provider.get(self.provider.ctx, a, canonical);
     }
 
     fn hostSiteInterwikiMap(raw: ?*anyopaque) anyerror![]const host_api.InterwikiRow {
@@ -117,10 +118,11 @@ pub const Expander = struct {
 
     fn hostPageExists(raw: ?*anyopaque, title: []const u8) anyerror!bool {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        if (std.mem.eql(u8, title, self.host.current_title) and self.current_source != null) return true;
-        if (try self.provider.exists(self.provider.ctx, title)) return true;
-        if (namespace_lib.ofTitle(title).id == 828) {
-            _ = self.runtime.resolveModule(title) catch return false;
+        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, title);
+        if (std.mem.eql(u8, canonical, self.host.current_title) and self.current_source != null) return true;
+        if (try self.provider.exists(self.provider.ctx, canonical)) return true;
+        if (namespace_lib.ofTitle(canonical).id == 828) {
+            _ = self.runtime.resolveModule(canonical) catch return false;
             return true;
         }
         return false;
@@ -825,7 +827,7 @@ const TestProvider = struct {
         return null;
     }
     fn exists(_: ?*anyopaque, title: []const u8) !bool {
-        return std.mem.eql(u8, title, "Exists");
+        return std.mem.eql(u8, title, "Exists") or std.mem.eql(u8, title, "Wiktionary:Sandbox");
     }
     fn resolveCallSymbol(_: ?*anyopaque, _: *rt.Context, raw: []const u8, kind: CallSymbolKind) !?CallSymbol {
         const value = std.mem.trim(u8, raw, " \t\r\n");
@@ -881,9 +883,9 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try installTestHost(&runtime, 18, 23);
 
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
-    const source = "{{Hello|Bob|1}}|{{Only}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
+    const source = "{{Hello|Bob|1}}|{{Only}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{#ifexist:WT:Sandbox|W|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
-    try std.testing.expectEqualStrings("Hi Bob Y|ABCD|yes|yes|14|E|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
+    try std.testing.expectEqualStrings("Hi Bob Y|ABCD|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
     const protected = try expander.expandFragment("Page", "<nowiki>{{Hello|Bob|1}}</nowiki>|{{Hello|A|}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{Hello|Bob|1}}</nowiki>|Hi A N", protected);
     try std.testing.expect(runtime.current_frame == null);
