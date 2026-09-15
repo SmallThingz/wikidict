@@ -2,12 +2,9 @@
 
 A native Kotlin/Jetpack Compose reader for Dict exports.
 
-It opens either:
+It opens `dict.results.v1` JSON produced by the CLI or other native Dict clients. Legacy self-contained HTML exports from older versions are still accepted by extracting their inert embedded JSON.
 
-- self-contained HTML produced by `dict export ... --format html`, or
-- `dict.results.v1` JSON produced by the CLI.
-
-The app parses the embedded/result JSON directly into Kotlin models and renders entries with Compose. It does not use WebView or bundle the web frontend.
+The app parses result JSON directly into Kotlin models and renders entries with Compose. It does not use WebView or depend on the desktop Qt frontend.
 
 Product features are local/offline: entry search, source view, persistent history, bookmarks, appearance/learning settings, random words, definition quizzes, flashcards, and an unscramble game.
 
