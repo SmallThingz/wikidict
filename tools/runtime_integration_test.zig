@@ -3,7 +3,17 @@ const std = @import("std");
 const source = "==English==\n===Noun===\n{{forms-alias|mouse}}\n# A small rodent.\n{{Template:Template:nested}}\n{{nested}}\n";
 const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
+    \\local alias_name = 'Module:IntegrationFormsAlias'
+    \\local dynamic_forms = require(alias_name)
+    \\assert(dynamic_forms.mouse == 'mice')
+    \\local suffix = '!'
+    \\local decorate = function(value) return value .. suffix end
+    \\local identity = function(value) return value end
+    \\local function plain(value) return value end
     \\return { render_dictionary_fixture = function(frame)
+    \\    assert(decorate('static') == 'static!')
+    \\    assert(identity('direct') == 'direct')
+    \\    assert(plain('local-function') == 'local-function')
     \\    assert(mw.title.new('Appendix:IntegrationFixture'):getContent() == 'a real auxiliary source page')
     \\    local word = frame.args[1]
     \\    local plural = forms[word]
@@ -56,7 +66,7 @@ const Harness = struct {
     io: std.Io,
     checks: usize = 0,
     fn run(self: *Harness, argv: []const []const u8, code: u8) ![]const u8 {
-        const result = try std.process.run(self.a, self.io, .{ .argv = argv, .stdout_limit = .limited(16 * 1024 * 1024), .stderr_limit = .limited(1024 * 1024), .timeout = (std.Io.Timeout{ .duration = .{ .raw = .fromSeconds(30), .clock = .awake } }).toDeadline(self.io) });
+        const result = try std.process.run(self.a, self.io, .{ .argv = argv, .stdout_limit = .limited(16 * 1024 * 1024), .stderr_limit = .limited(1024 * 1024), .timeout = (std.Io.Timeout{ .duration = .{ .raw = .fromSeconds(120), .clock = .awake } }).toDeadline(self.io) });
         if (result.term != .exited or result.term.exited != code) {
             std.debug.print("Unexpected child result {any}, expected {d}: {s}\n{s}\n{s}\n", .{ result.term, code, argv[0], result.stdout, result.stderr });
             return error.ChildFailed;

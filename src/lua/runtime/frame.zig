@@ -136,17 +136,36 @@ pub fn makeFrame(runtime: *rt.Context, title: []const u8, args: []const FrameArg
 pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try mw.rawSet(runtime.allocator, .{ .string = "getCurrentFrame" }, try runtime.newNative(null, currentFrameCall));
 }
+fn invokeValue(runtime: *rt.Context, module: Value, function_name: []const u8, frame: Value) anyerror![]const Value {
+    const callable = if (function_name.len == 0)
+        module
+    else
+        try runtime.getIndex(module, .{ .string = function_name });
+    return runtime.callValue(callable, &.{frame});
+}
+
+pub fn invokeModuleId(runtime: *rt.Context, module_id: u32, module_name: []const u8, function_name: []const u8, frame: Value) anyerror![]const Value {
+    if (frame != .table) return error.FrameExpected;
+    const saved = runtime.current_frame;
+    runtime.current_frame = frame.table;
+    defer runtime.current_frame = saved;
+    const module = try runtime.requireModuleId(module_id, module_name);
+    const callable = if (function_name.len == 0)
+        module
+    else if (runtime.moduleExportSlot(module_id, function_name)) |known|
+        try runtime.getProgramShapeField(module, known.shape_id, known.slot, function_name)
+    else
+        try runtime.getIndex(module, .{ .string = function_name });
+    return runtime.callValue(callable, &.{frame});
+}
+
 pub fn invoke(runtime: *rt.Context, module_name: []const u8, function_name: []const u8, frame: Value) anyerror![]const Value {
     if (frame != .table) return error.FrameExpected;
     const saved = runtime.current_frame;
     runtime.current_frame = frame.table;
     defer runtime.current_frame = saved;
     const module = try runtime.requireByName(module_name);
-    const callable = if (function_name.len == 0)
-        module
-    else
-        try runtime.getIndex(module, .{ .string = function_name });
-    return runtime.callValue(callable, &.{frame});
+    return invokeValue(runtime, module, function_name, frame);
 }
 
 fn callField(runtime: *rt.Context, object: Value, name: []const u8, args: []const Value) ![]const Value {
@@ -264,9 +283,7 @@ test "AOT frame invoke binds current frame around numeric module call" {
     var runtime = try rt.Context.initProgram(arena.allocator(), 0, 1);
     defer runtime.deinit();
     const functions = [_]rt.FunctionFn{ rt.stabilize(InvokeProbe.root), rt.stabilize(InvokeProbe.run) };
-    const roots = [_]u32{0};
-    runtime.module_roots = &roots;
-    runtime.module_root_entries = &.{&functions[0]};
+    runtime.module_root_entries = &functions;
     runtime.configureModules(null, InvokeProbe.lookup, InvokeProbe.name);
     const frame = try makeFrame(&runtime, "Module:X", &.{}, null);
     try std.testing.expect(runtime.current_frame == null);

@@ -17,10 +17,7 @@ pub const Namespace = enum(u8) {
     language_value,
     html_node,
 };
-pub const marker: u32 = @as(u32, 1) << 31;
-const index_mask = marker - 1;
-
-pub const names = [_][]const u8{
+const names = [_][]const u8{
     "insert",               "remove",             "concat",            "sort",            "maxn",                 "getn",
     "len",                  "sub",                "lower",             "upper",           "reverse",              "rep",
     "char",                 "byte",               "find",              "match",           "gmatch",               "gsub",
@@ -96,78 +93,8 @@ fn namespaceNames(namespace: Namespace) []const []const u8 {
         .html_node => &html_node_names,
     };
 }
-pub fn find(field_name: []const u8) ?u32 {
-    for (names, 0..) |candidate, field_index| {
-        if (std.mem.eql(u8, candidate, field_name)) return @intCast(field_index);
-    }
-    return null;
-}
-
-pub fn encode(field_index: u32) !u32 {
-    if (field_index >= names.len) return error.BadStaticField;
-    return marker | field_index;
-}
-
-pub fn refForName(field_name: []const u8) ?u32 {
-    return marker | (find(field_name) orelse return null);
-}
-
-pub fn indexFromRef(value: u32) ?u32 {
-    if (value & marker == 0) return null;
-    const id = value & index_mask;
-    return if (id < names.len) id else null;
-}
-
-pub fn nameForRef(value: u32) ?[]const u8 {
-    return names[indexFromRef(value) orelse return null];
-}
 pub fn fieldCount(namespace: Namespace) u32 {
     return @intCast(namespaceNames(namespace).len);
-}
-
-pub fn isCanonicalLibrary(namespace: Namespace) bool {
-    return switch (namespace) {
-        .table, .string, .math, .debug, .mw, .ustring, .title, .text, .uri, .html, .language => true,
-        .frame, .title_value, .language_value, .html_node => false,
-    };
-}
-
-pub fn hasCanonicalLibraryField(field_name: []const u8) bool {
-    inline for (std.meta.fields(Namespace)) |field| {
-        const namespace: Namespace = @enumFromInt(field.value);
-        if (isCanonicalLibrary(namespace) and slotForName(namespace, field_name) != null) return true;
-    }
-    return false;
-}
-
-fn slotForNames(comptime field_names: []const []const u8, id: u32) ?u32 {
-    comptime @setEvalBranchQuota(20_000);
-    inline for (field_names, 0..) |field_name, slot| {
-        const field_id = comptime find(field_name) orelse @compileError("static field missing from ABI");
-        if (id == field_id) return @intCast(slot);
-    }
-    return null;
-}
-
-pub fn slotForRef(namespace: Namespace, value: u32) ?u32 {
-    const id = indexFromRef(value) orelse return null;
-    return switch (namespace) {
-        .table => slotForNames(table_names, id),
-        .string => slotForNames(string_names, id),
-        .math => slotForNames(math_names, id),
-        .debug => slotForNames(debug_names, id),
-        .mw => slotForNames(&mw_names, id),
-        .ustring => slotForNames(&ustring_names, id),
-        .title => slotForNames(title_names, id),
-        .text => slotForNames(text_names, id),
-        .uri => slotForNames(&uri_names, id),
-        .html => slotForNames(html_names, id),
-        .language => slotForNames(&language_names, id),
-        .frame => slotForNames(&frame_names, id),
-        .title_value => slotForNames(&title_value_names, id),
-        .language_value => slotForNames(&language_value_names, id),
-        .html_node => slotForNames(&html_node_names, id),
-    };
 }
 
 pub fn slotForName(namespace: Namespace, field_name: []const u8) ?u32 {
@@ -182,46 +109,14 @@ pub fn nameAt(namespace: Namespace, slot: u32) ?[]const u8 {
     if (slot >= namespace_names.len) return null;
     return namespace_names[slot];
 }
-test "static field refs encode names and namespace-local slots" {
-    const insert = refForName("insert") orelse return error.MissingField;
-    const find_ref = refForName("find") orelse return error.MissingField;
-    try std.testing.expectEqualStrings("insert", nameForRef(insert).?);
-    try std.testing.expectEqual(@as(u32, 0), slotForRef(.table, insert).?);
-    try std.testing.expectEqual(@as(?u32, null), slotForRef(.string, insert));
-    try std.testing.expectEqual(@as(u32, 8), slotForRef(.string, find_ref).?);
-    try std.testing.expectEqualStrings("find", nameAt(.string, 8).?);
-    try std.testing.expectEqual(@as(?u32, null), indexFromRef(7));
-}
-
-test "static field names are unique" {
-    for (names, 0..) |lhs, i| {
-        for (names[i + 1 ..]) |rhs| try std.testing.expect(!std.mem.eql(u8, lhs, rhs));
-    }
-}
-
-test "shared field name has one ref across namespaces" {
-    const log_ref = refForName("log") orelse return error.MissingField;
-    try std.testing.expect(slotForRef(.math, log_ref) != null);
-    try std.testing.expect(slotForRef(.mw, log_ref) != null);
-    try std.testing.expectEqualStrings("log", nameAt(.math, slotForRef(.math, log_ref).?).?);
-    try std.testing.expectEqualStrings("log", nameAt(.mw, slotForRef(.mw, log_ref).?).?);
-}
-
-test "numeric namespace mappings match their name layouts" {
+test "namespace slot layouts round trip" {
     inline for (std.meta.fields(Namespace)) |field| {
         const namespace: Namespace = @enumFromInt(field.value);
+        try std.testing.expectEqual(@as(u32, @intCast(namespaceNames(namespace).len)), fieldCount(namespace));
         for (namespaceNames(namespace), 0..) |field_name, expected| {
-            const ref = refForName(field_name) orelse return error.MissingField;
-            try std.testing.expectEqual(@as(u32, @intCast(expected)), slotForRef(namespace, ref).?);
+            try std.testing.expectEqual(@as(u32, @intCast(expected)), slotForName(namespace, field_name).?);
             try std.testing.expectEqualStrings(field_name, nameAt(namespace, @intCast(expected)).?);
         }
     }
-}
-
-test "canonical library fields exclude per-object namespaces" {
-    try std.testing.expect(hasCanonicalLibraryField("gsub"));
-    try std.testing.expect(hasCanonicalLibraryField("insert"));
-    try std.testing.expect(!hasCanonicalLibraryField("getParent"));
-    try std.testing.expect(isCanonicalLibrary(.ustring));
-    try std.testing.expect(!isCanonicalLibrary(.frame));
+    try std.testing.expectEqual(@as(?u32, null), slotForName(.table, "definitely-not-a-field"));
 }

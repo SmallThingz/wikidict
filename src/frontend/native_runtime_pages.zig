@@ -2,10 +2,10 @@
 const std = @import("std");
 const enc = @import("blob_encoder");
 const files = @import("blob_files");
-const store = @import("store.zig");
-const model = @import("model.zig");
+const dec = @import("blob_decoder");
 const A = std.mem.Allocator;
-const InterwikiRow = @import("generated").WikitextProvider.InterwikiRow;
+const lua_program = @import("lua_program");
+const InterwikiRow = lua_program.WikitextProvider.InterwikiRow;
 const storage = @import("blob_storage");
 
 const ManifestRow = struct {
@@ -13,6 +13,61 @@ const ManifestRow = struct {
     title: []const u8,
 };
 const TemplateSlot = struct { page_id: u64, redirect: ?[]const u8 = null };
+
+const LanguageSourceStore = struct {
+    io: std.Io,
+    a: A,
+    file: storage.File,
+    resolver: files.Resolver,
+
+    fn open(io: std.Io, a: A, root: []const u8, language: []const u8) !LanguageSourceStore {
+        try files.requireComplete(io, a, root);
+        var filename: [enc.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ root, enc.blob_catalog.language_directory, enc.blob_catalog.languageBlobFilename(language, &filename) });
+        defer a.free(path);
+        var file = try storage.File.open(io, a, path);
+        errdefer file.deinit();
+        if (file.view.kind != .language) return error.UnexpectedBlobKind;
+        const metadata = try file.view.languageMetadata();
+        if (!std.mem.eql(u8, metadata.heading, language)) return error.UnexpectedLanguageBlob;
+        return .{
+            .io = io,
+            .a = a,
+            .file = file,
+            .resolver = .{
+                .io = io,
+                .a = a,
+                .root = root,
+                .metadata = metadata,
+                .symbolic = file.view.symbolic,
+                .binding_id = file.view.binding_id,
+            },
+        };
+    }
+
+    fn deinit(self: *LanguageSourceStore) void {
+        self.resolver.deinit();
+        self.file.deinit();
+    }
+
+    fn sourceAlloc(self: *LanguageSourceStore, a: A, symbols: *files.SymbolSource, title: []const u8) !?[]const u8 {
+        const record_index = self.file.find(title) orelse return null;
+        var raw = try self.file.readAlloc(a, record_index);
+        defer raw.deinit();
+        const view = try dec.openTrustedBlob(self.file.directory.header);
+        const record = view.wrapRecord(.{ .title = raw.title, .payload = raw.payload });
+        if (record != .language) return error.UnexpectedBlobKind;
+        self.resolver.symbols = symbols;
+        const owned = try self.resolver.resolveRuntimeAlloc(a, record.title(), record.language.payload);
+        defer if (owned) |bytes| a.free(bytes);
+        const payload = owned orelse record.language.payload;
+        const decoded = try enc.language_blob_encoding.decodeAlloc(a, payload, .{
+            .heading = record.language.metadata.heading,
+            .code = record.language.metadata.code,
+        });
+        return @as(?[]const u8, decoded);
+    }
+};
 
 pub const Provider = struct {
     io: std.Io,
@@ -23,12 +78,13 @@ pub const Provider = struct {
     pages: ?storage.File = null,
     linked_templates: ?storage.File = null,
     symbols: files.SymbolSource,
-    primary: ?store.Store = null,
+    primary: ?LanguageSourceStore = null,
     existence: std.StringHashMapUnmanaged(bool) = .empty,
     templates: std.StringHashMapUnmanaged(TemplateSlot) = .empty,
     modules: std.StringHashMapUnmanaged(u64) = .empty,
     modules_loaded: bool = false,
     interwiki_rows: std.ArrayList(InterwikiRow) = .empty,
+    module_symbol_ids: []u32 = &.{},
 
     pub fn init(io: std.Io, a: A, root: []const u8, dictionary_root: ?[]const u8, language: []const u8) !Provider {
         return initWithSha256(io, a, root, dictionary_root, language, null);
@@ -75,6 +131,8 @@ pub const Provider = struct {
         if (self.pages) |*p| p.deinit();
         if (self.linked_templates) |*p| p.deinit();
         self.symbols.deinit();
+        self.a.free(self.module_symbol_ids);
+        self.module_symbol_ids = &.{};
         if (self.primary) |*db| db.deinit();
         var template_it = self.templates.iterator();
         while (template_it.next()) |entry| {
@@ -91,8 +149,8 @@ pub const Provider = struct {
         self.interwiki_rows.deinit(self.a);
     }
 
-    pub fn api(self: *Provider) @import("generated").WikitextProvider {
-        return .{ .ctx = self, .get = get, .exists = exists, .interwiki_map = interwikiMap };
+    pub fn api(self: *Provider) lua_program.WikitextProvider {
+        return .{ .ctx = self, .get = get, .exists = exists, .interwiki_map = interwikiMap, .resolve_call_symbol = resolveCallSymbol, .get_template_symbol = getTemplateSymbol };
     }
 
     fn freeStringMapKeys(comptime V: type, a: A, map: *std.StringHashMapUnmanaged(V)) void {
@@ -222,13 +280,13 @@ pub const Provider = struct {
     fn languageRecord(self: *Provider, a: A, title: []const u8, language: []const u8, content: bool) !?[]const u8 {
         const root = self.dictionary_root orelse return null;
         if (std.mem.eql(u8, language, self.language)) {
-            if (self.primary == null) self.primary = store.Store.open(self.io, self.a, root, .language, language, false) catch |err| switch (err) {
+            if (self.primary == null) self.primary = LanguageSourceStore.open(self.io, self.a, root, language) catch |err| switch (err) {
                 error.FileNotFound => return null,
                 else => return err,
             };
             return self.fromStore(a, &self.primary.?, title, content);
         }
-        var db = store.Store.open(self.io, self.a, root, .language, language, false) catch |err| switch (err) {
+        var db = LanguageSourceStore.open(self.io, self.a, root, language) catch |err| switch (err) {
             error.FileNotFound => return null,
             else => return err,
         };
@@ -236,25 +294,17 @@ pub const Provider = struct {
         return self.fromStore(a, &db, title, content);
     }
 
-    fn fromStore(self: *Provider, a: A, db: *store.Store, title: []const u8, content: bool) !?[]const u8 {
-        const record_index = (try db.find(title)) orelse return null;
+    fn fromStore(self: *Provider, a: A, db: *LanguageSourceStore, title: []const u8, content: bool) !?[]const u8 {
+        if (db.file.find(title) == null) return null;
         if (!content) return "";
-        var input = try db.recordAlloc(self.a, record_index);
-        defer input.deinit();
-        const raw = input.record;
-        var resolved = try db.resolveAlloc(self.a, raw);
-        defer resolved.deinit();
-        return try model.sourceAlloc(a, resolved.record);
+        return db.sourceAlloc(a, &self.symbols, title);
     }
 
-    fn linkedTemplate(self: *Provider, a: A, title: []const u8) !?[]const u8 {
+    fn linkedTemplateId(self: *Provider, a: A, start_id: usize) !?[]const u8 {
         var file = if (self.linked_templates) |*value| value else return null;
-        if (!std.ascii.startsWithIgnoreCase(title, "Template:")) return null;
-        const names = try self.symbols.load();
-        var current = title[9..];
+        var id = start_id;
         var depth: usize = 0;
         while (true) {
-            const id = names.find(.template, current) orelse return null;
             var key: [16]u8 = undefined;
             const key_text = try std.fmt.bufPrint(&key, "{x:0>16}", .{id});
             const record_index = file.find(key_text) orelse return null;
@@ -265,11 +315,18 @@ pub const Provider = struct {
             if (redirect_id != 0) {
                 depth += 1;
                 if (depth > 32) return error.TemplateRedirectLoop;
-                current = try names.get(redirect_id);
+                id = redirect_id;
                 continue;
             }
-            return (try self.symbols.bindAlloc(a, record.payload[pos..], true, file.view.binding_id)) orelse try a.dupe(u8, record.payload[pos..]);
+            return (try self.symbols.bindRuntimeAlloc(a, record.payload[pos..], true, file.view.binding_id)) orelse try a.dupe(u8, record.payload[pos..]);
         }
+    }
+
+    fn linkedTemplate(self: *Provider, a: A, title: []const u8) !?[]const u8 {
+        if (!std.ascii.startsWithIgnoreCase(title, "Template:")) return null;
+        const names = try self.symbols.load();
+        const id = names.find(.template, title[9..]) orelse return null;
+        return self.linkedTemplateId(a, id);
     }
 
     fn readRuntimeSource(self: *Provider, a: A, dir: []const u8, id: u64, suffix: []const u8) ![]const u8 {
@@ -285,7 +342,7 @@ pub const Provider = struct {
             if (!content) return "";
             var r = try file.readAlloc(a, record_index);
             defer r.deinit();
-            const decoded = try self.symbols.bindAlloc(a, r.payload, file.view.symbolic, file.view.binding_id);
+            const decoded = try self.symbols.bindRuntimeAlloc(a, r.payload, file.view.symbolic, file.view.binding_id);
             return decoded orelse try a.dupe(u8, r.payload);
         };
         if (try self.linkedTemplate(a, title)) |body| return if (content) body else "";
@@ -321,6 +378,56 @@ pub const Provider = struct {
             }
         }
         return null;
+    }
+
+    fn moduleIdForSymbol(self: *Provider, runtime: *lua_program.Context, names: enc.call_symbols.Names, id: usize, text: []const u8) !?u32 {
+        const unresolved = std.math.maxInt(u32);
+        const missing = unresolved - 1;
+        if (self.module_symbol_ids.len == 0) {
+            self.module_symbol_ids = try self.a.alloc(u32, names.keys.len + 1);
+            @memset(self.module_symbol_ids, unresolved);
+        }
+        if (id >= self.module_symbol_ids.len) return error.InvalidSymbol;
+        const cached = self.module_symbol_ids[id];
+        if (cached != unresolved) return if (cached == missing) null else cached;
+        const trimmed = std.mem.trim(u8, text, " \t\r\n");
+        var full_buffer: [4096]u8 = undefined;
+        const full = if (trimmed.len >= 7 and std.ascii.eqlIgnoreCase(trimmed[0..7], "Module:")) blk: {
+            if (trimmed.len > full_buffer.len) return error.ModuleNameTooLong;
+            @memcpy(full_buffer[0..trimmed.len], trimmed);
+            break :blk full_buffer[0..trimmed.len];
+        } else std.fmt.bufPrint(&full_buffer, "Module:{s}", .{trimmed}) catch return error.ModuleNameTooLong;
+        std.mem.replaceScalar(u8, full, '_', ' ');
+        const module_id = runtime.resolveModule(full) catch |err| switch (err) {
+            error.ModuleNotFound => null,
+            else => return err,
+        };
+        self.module_symbol_ids[id] = module_id orelse missing;
+        return module_id;
+    }
+
+    fn getTemplateSymbol(ctx: ?*anyopaque, a: std.mem.Allocator, id: usize) anyerror!?[]const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return self.linkedTemplateId(a, id);
+    }
+
+    fn resolveCallSymbol(
+        ctx: ?*anyopaque,
+        runtime: *lua_program.Context,
+        raw: []const u8,
+        kind: lua_program.WikitextProvider.SymbolKind,
+    ) anyerror!?lua_program.WikitextProvider.Symbol {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        const names = try self.symbols.load();
+        const expected: enc.call_symbols.Kind = switch (kind) {
+            .template => .template,
+            .module => .module,
+            .function => .function,
+        };
+        const id = (try enc.call_symbols.preservedId(raw, names, expected)) orelse return null;
+        const text = try names.get(id);
+        const module_id = if (kind == .module) try self.moduleIdForSymbol(runtime, names, id, text) else null;
+        return .{ .id = id, .text = text, .module_id = module_id };
     }
 
     fn interwikiMap(ctx: ?*anyopaque) anyerror![]const InterwikiRow {

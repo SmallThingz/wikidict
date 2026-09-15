@@ -10,6 +10,7 @@ pub const Binding = union(enum) {
     table: *TableInfo,
 };
 pub const TableInfo = struct {
+    span_start: u32,
     fields: std.StringHashMapUnmanaged(Binding) = .empty,
 };
 
@@ -162,7 +163,7 @@ pub const Builder = struct {
         return switch (expr.*) {
             .name => |n| self.env.get(n.value) orelse .unknown,
             .function => |f| .{ .function = f.span.start },
-            .table => |t| try self.evalTable(t.fields),
+            .table => |t| try self.evalTable(t.span.start, t.fields),
             .index => |e| blk: {
                 const object = try self.eval(e.object);
                 const key = stringConst(e.key) orelse break :blk .unknown;
@@ -189,9 +190,9 @@ pub const Builder = struct {
         };
     }
 
-    fn evalTable(self: *Builder, fields: []const lua.TableField) anyerror!Binding {
+    fn evalTable(self: *Builder, span_start: u32, fields: []const lua.TableField) anyerror!Binding {
         const table = try self.allocator.create(TableInfo);
-        table.* = .{};
+        table.* = .{ .span_start = span_start };
         self.owned_tables.append(self.allocator, table) catch |err| {
             self.allocator.destroy(table);
             return err;
@@ -222,6 +223,7 @@ pub const Builder = struct {
 fn stringConst(expr: *const lua.Expr) ?[]const u8 {
     return switch (expr.*) {
         .string => |s| s.value,
+        .paren => |p| stringConst(p.expr),
         else => null,
     };
 }

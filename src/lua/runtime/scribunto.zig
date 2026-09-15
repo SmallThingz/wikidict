@@ -137,7 +137,7 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     defer child.deinit();
     const global_shape = if (runtime.global_table) |global| global.shape else null;
     try rt.bindGlobalTable(&child, global_shape, state.env_slot);
-    try stdlib.install(&child);
+    if (!try child.bootstrapProgram()) try stdlib.install(&child);
     try installInto(&child, state);
     const empty_args = try child.newTable();
     const empty_frame = try frame_lib.makeFrameFromTable(&child, "empty", empty_args, null);
@@ -254,9 +254,7 @@ test "AOT loadData runs in an isolated context and promotes a cached read-only g
     var runtime = try rt.Context.initProgram(arena.allocator(), 24, 2);
     defer runtime.deinit();
     const functions = [_]rt.FunctionFn{ rt.stabilize(DataProbe.root), rt.stabilize(DataProbe.fail) };
-    const roots = [_]u32{ 0, 1 };
-    runtime.module_roots = &roots;
-    runtime.module_root_entries = &.{ &functions[0], &functions[1] };
+    runtime.module_root_entries = &functions;
     runtime.configureModules(null, DataProbe.lookup, DataProbe.name);
     try rt.bindGlobalTable(&runtime, null, 0);
     try stdlib.install(&runtime);
@@ -285,9 +283,7 @@ test "AOT expander loadData cache survives fresh invoke contexts" {
     var runtime = try rt.Context.initProgram(page.allocator(), 24, 2);
     defer runtime.deinit();
     const functions = [_]rt.FunctionFn{ rt.stabilize(DataProbe.root), rt.stabilize(DataProbe.fail) };
-    const roots = [_]u32{ 0, 1 };
-    runtime.module_roots = &roots;
-    runtime.module_root_entries = &.{ &functions[0], &functions[1] };
+    runtime.module_root_entries = &functions;
     runtime.configureModules(null, DataProbe.lookup, DataProbe.name);
 
     var shared_state: ?*anyopaque = null;

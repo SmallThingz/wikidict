@@ -62,6 +62,9 @@ pub const Scanner = struct {
                             if (field(self.text, body_start + fn_start, body_start + fn_end, .function)) |r| self.add(r);
                         }
                     }
+                } else if (std.ascii.eqlIgnoreCase(name, "subst") or std.ascii.eqlIgnoreCase(name, "safesubst")) {
+                    const base = @intFromPtr(head.ptr) - @intFromPtr(self.text.ptr);
+                    if (field(self.text, base + colon + 1, end, .template)) |r| self.add(r);
                 } else if (field(self.text, body_start, end, .template)) |r| self.add(r);
             } else if (field(self.text, body_start, end, if (parserName(head)) .parser else .template)) |r| self.add(r);
             if (self.length != 0) {
@@ -193,6 +196,81 @@ pub fn encodeAlloc(a: A, text: []const u8, names: Names) ![]u8 {
     try literal(&out, a, text[pos..]);
     return out.toOwnedSlice(a);
 }
+pub fn kindForId(self: Names, id: usize) error{InvalidSymbol}!Kind {
+    if (id == 0 or id > self.keys.len) return error.InvalidSymbol;
+    const key = self.keys[id - 1];
+    if (!validKey(key)) return error.InvalidSymbol;
+    return switch (key[0]) {
+        't' => .template,
+        'p' => .parser,
+        'm' => .module,
+        'f' => .function,
+        else => unreachable,
+    };
+}
+
+const runtime_token_hex_len = @sizeOf(usize) * 2;
+const runtime_token_len = 2 + runtime_token_hex_len;
+
+fn appendRuntimeToken(out: *std.ArrayList(u8), a: A, kind: Kind, id: usize) !void {
+    const digits = "0123456789abcdef";
+    try out.ensureUnusedCapacity(a, runtime_token_len);
+    out.appendAssumeCapacity(marker);
+    out.appendAssumeCapacity(@intFromEnum(kind));
+    for (0..runtime_token_hex_len) |index| {
+        const shift = (runtime_token_hex_len - 1 - index) * 4;
+        const nibble: u4 = @truncate(id >> @intCast(shift));
+        out.appendAssumeCapacity(digits[nibble]);
+    }
+}
+
+pub fn preservedId(encoded: []const u8, names: Names, expected: Kind) !?usize {
+    var start: usize = 0;
+    while (start < encoded.len and std.ascii.isWhitespace(encoded[start])) : (start += 1) {}
+    if (encoded.len - start < runtime_token_len or encoded[start] != marker or encoded[start + 1] != @intFromEnum(expected)) return null;
+    const token_end = start + runtime_token_len;
+    var id: usize = 0;
+    for (encoded[start + 2 .. token_end]) |byte| {
+        const nibble: usize = switch (byte) {
+            '0'...'9' => byte - '0',
+            'a'...'f' => byte - 'a' + 10,
+            else => return null,
+        };
+        id = (id << 4) | nibble;
+    }
+    if (id == 0 or try kindForId(names, id) != expected) return null;
+    for (encoded[token_end..]) |byte| if (!std.ascii.isWhitespace(byte)) return null;
+    return id;
+}
+
+/// Runtime binding keeps statically scanned template and #invoke operands typed
+/// so the execution layer can retain symbol identity instead of
+/// round-tripping them through strings. Other symbols are decoded normally.
+pub fn decodeRuntimeAlloc(a: A, encoded: []const u8, names: Names) !?[]u8 {
+    var pos = std.mem.indexOfScalar(u8, encoded, marker) orelse return null;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(a);
+    try out.appendSlice(a, encoded[0..pos]);
+    while (pos < encoded.len) {
+        std.debug.assert(encoded[pos] == marker);
+        pos += 1;
+        const id = try format.readPayloadLength(encoded, &pos);
+        if (id == 0) {
+            try out.append(a, marker);
+        } else {
+            const kind = try kindForId(names, id);
+            switch (kind) {
+                .template, .module, .function => try appendRuntimeToken(&out, a, kind, id),
+                .parser => try out.appendSlice(a, try names.get(id)),
+            }
+        }
+        const end = std.mem.indexOfScalarPos(u8, encoded, pos, marker) orelse encoded.len;
+        try out.appendSlice(a, encoded[pos..end]);
+        pos = end;
+    }
+    return try out.toOwnedSlice(a);
+}
+
 /// Null preserves borrowing when no encoded operand/literal escape is present.
 pub fn decodeAlloc(a: A, encoded: []const u8, names: Names) !?[]u8 {
     var pos = std.mem.indexOfScalar(u8, encoded, marker) orelse return null;
@@ -290,4 +368,88 @@ test "dynamic invoke modules still bind nested static call heads before method n
     const decoded = (try decodeAlloc(a, encoded, names)).?;
     defer a.free(decoded);
     try std.testing.expectEqualStrings(source, decoded);
+}
+
+test "runtime binding preserves typed invoke operands" {
+    const a = std.testing.allocator;
+    const input = "{{#invoke:links|show|{{m|en|cat}}}}";
+    var builder: Builder = .{ .a = a };
+    defer builder.deinit();
+    try builder.collect(input);
+    const keys = try builder.sorted();
+    defer a.free(keys);
+    const names: Names = .{ .keys = keys };
+    const encoded = try encodeAlloc(a, input, names);
+    defer a.free(encoded);
+    const runtime = (try decodeRuntimeAlloc(a, encoded, names)).?;
+    defer a.free(runtime);
+    try std.testing.expect(std.mem.startsWith(u8, runtime, "{{#invoke:"));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, runtime, &.{marker}));
+    const module_start = "{{#invoke:".len;
+    const module_end = std.mem.indexOfScalarPos(u8, runtime, module_start, '|').?;
+    const function_end = std.mem.indexOfScalarPos(u8, runtime, module_end + 1, '|').?;
+    const module_id = (try preservedId(runtime[module_start..module_end], names, .module)).?;
+    const function_id = (try preservedId(runtime[module_end + 1 .. function_end], names, .function)).?;
+    try std.testing.expectEqualStrings("links", try names.get(module_id));
+    try std.testing.expectEqualStrings("show", try names.get(function_id));
+    try std.testing.expect((try preservedId(runtime[module_start..module_end], names, .function)) == null);
+    const nested_start = std.mem.indexOf(u8, runtime, "{{") orelse unreachable;
+    const second_open = std.mem.indexOfPos(u8, runtime, nested_start + 2, "{{") orelse unreachable;
+    const nested_end = std.mem.indexOfScalarPos(u8, runtime, second_open + 2, '|').?;
+    const template_id = (try preservedId(runtime[second_open + 2 .. nested_end], names, .template)).?;
+    try std.testing.expectEqualStrings("m", try names.get(template_id));
+}
+
+test "runtime tokens safely convert whitespace-valued stored varints" {
+    const a = std.testing.allocator;
+    var keys: [32][]const u8 = @splat("mx");
+    keys[31] = "mtarget";
+    const names: Names = .{ .keys = &keys };
+    const stored = [_]u8{ marker, 0x20 };
+    const runtime = (try decodeRuntimeAlloc(a, &stored, names)).?;
+    defer a.free(runtime);
+    try std.testing.expectEqual(@as(?usize, 32), try preservedId(runtime, names, .module));
+    try std.testing.expectEqual(@as(?usize, null), try preservedId(runtime, names, .function));
+    try std.testing.expectEqual(@as(usize, runtime_token_len), runtime.len);
+}
+
+test "runtime template IDs preserve subst prefixes outside the token" {
+    const a = std.testing.allocator;
+    const input = "{{subst:foo}} {{safesubst:bar}}";
+    var builder: Builder = .{ .a = a };
+    defer builder.deinit();
+    try builder.collect(input);
+    const keys = try builder.sorted();
+    defer a.free(keys);
+    const names: Names = .{ .keys = keys };
+    try std.testing.expect(names.find(.template, "foo") != null);
+    try std.testing.expect(names.find(.template, "bar") != null);
+    try std.testing.expect(names.find(.template, "subst:foo") == null);
+    const encoded = try encodeAlloc(a, input, names);
+    defer a.free(encoded);
+    const runtime = (try decodeRuntimeAlloc(a, encoded, names)).?;
+    defer a.free(runtime);
+    try std.testing.expect(std.mem.startsWith(u8, runtime, "{{subst:"));
+    const first_end = std.mem.indexOf(u8, runtime, "}}") orelse unreachable;
+    const colon = std.mem.indexOfScalar(u8, runtime[0..first_end], ':').?;
+    try std.testing.expect((try preservedId(runtime[colon + 1 .. first_end], names, .template)) != null);
+    const decoded = (try decodeAlloc(a, encoded, names)).?;
+    defer a.free(decoded);
+    try std.testing.expectEqualStrings(input, decoded);
+}
+
+test "runtime tokens cannot alias wikitext delimiter bytes" {
+    const a = std.testing.allocator;
+    var keys: [124][]const u8 = @splat("mx");
+    keys[57] = "mcolon";
+    keys[123] = "mpipe";
+    const names: Names = .{ .keys = &keys };
+    inline for (.{ @as(u8, 58), @as(u8, 124) }) |stored_id| {
+        const stored = [_]u8{ marker, stored_id };
+        const runtime = (try decodeRuntimeAlloc(a, &stored, names)).?;
+        defer a.free(runtime);
+        try std.testing.expect(std.mem.indexOfScalar(u8, runtime, ':') == null);
+        try std.testing.expect(std.mem.indexOfScalar(u8, runtime, '|') == null);
+        try std.testing.expectEqual(@as(?usize, stored_id), try preservedId(runtime, names, .module));
+    }
 }

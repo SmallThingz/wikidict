@@ -19,6 +19,16 @@ fn makeNowikiMarker(a: std.mem.Allocator, id: u32) ![]const u8 {
     return std.fmt.allocPrint(a, "{s}{X:0>8}{s}", .{ nowiki_marker_prefix, id, nowiki_marker_suffix });
 }
 
+fn canonicalExtensionTag(raw: []const u8) ?[]const u8 {
+    inline for (&.{
+        "nowiki",  "pre",      "gallery",      "indicator",  "ref",             "references", "templatestyles",
+        "math",    "ce",       "chem",         "score",      "syntaxhighlight", "source",     "timeline",
+        "hiero",   "poem",     "categorytree", "charinsert", "graph",           "mapframe",   "maplink",
+        "section", "inputbox", "imagemap",
+    }) |name| if (std.ascii.eqlIgnoreCase(raw, name)) return name;
+    return null;
+}
+
 pub const InstallScribuntoFn = *const fn (
     *?*anyopaque,
     std.mem.Allocator,
@@ -28,12 +38,23 @@ pub const InstallScribuntoFn = *const fn (
     u32,
 ) anyerror!void;
 
+pub const CallSymbolKind = enum { template, module, function };
+pub const CallSymbol = struct {
+    id: usize,
+    text: []const u8,
+    module_id: ?u32 = null,
+};
+
 pub const Provider = struct {
     pub const InterwikiRow = host_api.InterwikiRow;
+    pub const SymbolKind = CallSymbolKind;
+    pub const Symbol = CallSymbol;
     ctx: ?*anyopaque = null,
     get: *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8,
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
+    resolve_call_symbol: ?*const fn (?*anyopaque, *rt.Context, []const u8, CallSymbolKind) anyerror!?CallSymbol = null,
+    get_template_symbol: ?*const fn (?*anyopaque, std.mem.Allocator, usize) anyerror!?[]const u8 = null,
 };
 
 pub const Expander = struct {
@@ -106,6 +127,7 @@ pub const Expander = struct {
 
     pub fn expandFragment(self: *Expander, title: []const u8, source: []const u8, now_unix: ?i64) anyerror![]const u8 {
         self.beginPage(title, source, now_unix);
+        if (self.install_scribunto) |install| try install(&self.scribunto_state, self.runtime.allocator, self.runtime, self.env_slot, self.string_slot, self.mw_slot);
         const stripped = try preprocess.stripDecodedComments(self.runtime.allocator, source);
         defer self.runtime.allocator.free(stripped);
         const params = try self.runtime.newTable();
@@ -197,13 +219,40 @@ pub const Expander = struct {
         return out;
     }
 
+    fn normalizeTemplateNameBuf(raw: []const u8, buffer: []u8) ![]const u8 {
+        const name = std.mem.trim(u8, raw, " \t\r\n");
+        const has_prefix = name.len >= 9 and std.ascii.eqlIgnoreCase(name[0..9], "Template:");
+        const body = if (has_prefix) std.mem.trim(u8, name[9..], " \t\r\n") else name;
+        if (body.len > buffer.len -| 9) return error.TemplateNameTooLong;
+        @memcpy(buffer[0..9], "Template:");
+        @memcpy(buffer[9..][0..body.len], body);
+        const out = buffer[0 .. 9 + body.len];
+        std.mem.replaceScalar(u8, out, '_', ' ');
+        return out;
+    }
+
+    fn expandTemplateSource(self: *Expander, title: []const u8, raw: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
+        const body = try preprocess.transcludeDecodedAlloc(self.runtime.allocator, raw);
+        defer self.runtime.allocator.free(body);
+        return self.expandWikitext(body, args, title, depth + 1);
+    }
+
     fn expandTemplateByName(self: *Expander, raw_name: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
         const title = try self.normalizeTemplateName(raw_name);
         const raw = (try hostPageContent(self, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
-        const body = try preprocess.transcludeDecodedAlloc(self.runtime.allocator, raw);
-        defer self.runtime.allocator.free(body);
-        return self.expandWikitext(body, args, title, depth + 1);
+        return self.expandTemplateSource(title, raw, args, depth);
+    }
+
+    fn expandTemplateBySymbol(self: *Expander, symbol: CallSymbol, args: *rt.Table, depth: usize) anyerror![]const u8 {
+        if (depth > self.max_depth) return error.TemplateDepth;
+        var title_buffer: [4096]u8 = undefined;
+        const title = try normalizeTemplateNameBuf(symbol.text, &title_buffer);
+        const raw = if (self.provider.get_template_symbol) |get|
+            (try get(self.provider.ctx, self.runtime.allocator, symbol.id)) orelse return error.TemplateNotFound
+        else
+            (try hostPageContent(self, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
+        return self.expandTemplateSource(title, raw, args, depth);
     }
 
     fn expandWikitext(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
@@ -476,49 +525,51 @@ pub const Expander = struct {
         return out;
     }
 
+    fn callSymbol(self: *Expander, raw: []const u8, kind: CallSymbolKind) anyerror!?CallSymbol {
+        const resolve = self.provider.resolve_call_symbol orelse return null;
+        return resolve(self.provider.ctx, self.runtime, raw, kind);
+    }
+
     fn expandInvoke(self: *Expander, module_expr: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
-        const module_raw = try self.expandWikitext(module_expr, params, host_title, depth + 1);
+        const module_symbol = try self.callSymbol(module_expr, .module);
+        const module_raw = if (module_symbol) |symbol|
+            symbol.text
+        else
+            try self.expandWikitext(module_expr, params, host_title, depth + 1);
         const module_trimmed = std.mem.trim(u8, module_raw, " \t\r\n");
+        var module_buffer: [4096]u8 = undefined;
         const module_name = if (module_trimmed.len >= 7 and std.ascii.eqlIgnoreCase(module_trimmed[0..7], "Module:"))
             module_trimmed
         else
-            try std.fmt.allocPrint(self.runtime.allocator, "Module:{s}", .{module_trimmed});
-        const function_name = if (args.len != 0)
+            std.fmt.bufPrint(&module_buffer, "Module:{s}", .{module_trimmed}) catch return error.ModuleNameTooLong;
+        const function_symbol = if (args.len != 0) try self.callSymbol(args[0], .function) else null;
+        const function_name = if (function_symbol) |symbol|
+            symbol.text
+        else if (args.len != 0)
             std.mem.trim(u8, try self.expandWikitext(args[0], params, host_title, depth + 1), " \t\r\n")
         else
             "main";
 
-        const parent_runtime = self.runtime;
-        const parent_allocator = parent_runtime.allocator;
-        var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
-        defer arena.deinit();
-        var child = try parent_runtime.forkProgram(arena.allocator());
-        defer child.deinit();
-        const global_shape = if (parent_runtime.global_table) |global| global.shape else null;
-        try rt.bindGlobalTable(&child, global_shape, self.env_slot);
-        try stdlib.install(&child);
-        if (self.install_scribunto) |install| try install(&self.scribunto_state, parent_allocator, &child, self.env_slot, self.string_slot, self.mw_slot);
-        host_api.set(&child, &self.host);
-
-        self.runtime = &child;
-        defer self.runtime = parent_runtime;
+        const runtime = self.runtime;
         const invoke_args = try self.buildExpandedArgs(if (args.len > 0) args[1..] else &.{}, params, host_title, depth + 1);
-        const parent_args = try copyArgsTable(&child, params);
-        const parent = try frame_lib.makeFrameFromTable(&child, host_title, parent_args, null);
-        const frame = try frame_lib.makeFrameFromTable(&child, module_name, invoke_args, parent);
-        const result = frame_lib.invoke(&child, module_name, function_name, frame) catch |err| {
-            parent_runtime.adoptFailure(&child);
-            return err;
-        };
+        const parent_args = try copyArgsTable(runtime, params);
+        const parent = try frame_lib.makeFrameFromTable(runtime, host_title, parent_args, null);
+        const frame = try frame_lib.makeFrameFromTable(runtime, module_name, invoke_args, parent);
+        const result = if (module_symbol) |symbol|
+            if (symbol.module_id) |module_id|
+                try frame_lib.invokeModuleId(runtime, module_id, module_name, function_name, frame)
+            else
+                try frame_lib.invoke(runtime, module_name, function_name, frame)
+        else
+            try frame_lib.invoke(runtime, module_name, function_name, frame);
         defer rt.freeResults(result);
         if (result.len == 0) return "";
-        const rendered = try self.valueToWikitext(result[0]);
-        return parent_allocator.dupe(u8, rendered);
+        return self.valueToWikitext(result[0]);
     }
 
     fn expandTagParser(self: *Expander, raw_tag: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const tag = std.mem.trim(u8, try self.expandWikitext(raw_tag, params, host_title, depth + 1), " \t\r\n");
-        if (!std.ascii.eqlIgnoreCase(tag, "ref") and !std.ascii.eqlIgnoreCase(tag, "references") and !std.ascii.eqlIgnoreCase(tag, "templatestyles")) return error.UnsupportedExtensionTag;
+        const canonical = canonicalExtensionTag(tag) orelse return error.UnsupportedExtensionTag;
         const content: ?Value = if (raw_args.len == 0)
             .{ .string = "" }
         else
@@ -535,7 +586,6 @@ pub const Expander = struct {
             }
             attrs = table;
         }
-        const canonical = if (std.ascii.eqlIgnoreCase(tag, "ref")) "ref" else if (std.ascii.eqlIgnoreCase(tag, "references")) "references" else "templatestyles";
         return self.serializeExtension(canonical, content, attrs);
     }
 
@@ -550,6 +600,10 @@ pub const Expander = struct {
         else if (raw_head.len >= 6 and std.ascii.eqlIgnoreCase(raw_head[0..6], "subst:"))
             raw_head = std.mem.trim(u8, raw_head[6..], " \t\r\n");
         if (raw_head.len == 0) return error.MalformedWikitext;
+        if (try self.callSymbol(raw_head, .template)) |symbol| {
+            const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
+            return self.expandTemplateBySymbol(symbol, args, depth + 1);
+        }
         if (try self.magicWord(raw_head)) |value| return value;
 
         if (preprocess.findTopDelimiter(raw_head, ':')) |colon| {
@@ -672,8 +726,7 @@ pub const Expander = struct {
             try self.strip_values.put(page_a, id, stored);
             return makeNowikiMarker(a, id);
         }
-        if (!std.ascii.eqlIgnoreCase(name, "ref") and !std.ascii.eqlIgnoreCase(name, "references") and !std.ascii.eqlIgnoreCase(name, "templatestyles")) return error.UnsupportedExtensionTag;
-        const canonical = if (std.ascii.eqlIgnoreCase(name, "ref")) "ref" else if (std.ascii.eqlIgnoreCase(name, "references")) "references" else "templatestyles";
+        const canonical = canonicalExtensionTag(name) orelse return error.UnsupportedExtensionTag;
         return self.serializeExtension(canonical, content, attrs);
     }
 
@@ -766,6 +819,17 @@ const TestProvider = struct {
     fn exists(_: ?*anyopaque, title: []const u8) !bool {
         return std.mem.eql(u8, title, "Exists");
     }
+    fn resolveCallSymbol(_: ?*anyopaque, _: *rt.Context, raw: []const u8, kind: CallSymbolKind) !?CallSymbol {
+        const value = std.mem.trim(u8, raw, " \t\r\n");
+        return switch (kind) {
+            .template => if (std.mem.eql(u8, value, "@template")) .{ .id = 3, .text = "Hello" } else null,
+            .module => if (std.mem.eql(u8, value, "@module")) .{ .id = 1, .text = "Test", .module_id = 0 } else null,
+            .function => if (std.mem.eql(u8, value, "@function")) .{ .id = 2, .text = "run" } else null,
+        };
+    }
+    fn getTemplateSymbol(_: ?*anyopaque, _: std.mem.Allocator, id: usize) !?[]const u8 {
+        return if (id == 3) "Hi {{{1|friend}}} {{#if:{{{2|}}}|Y|N}}" else null;
+    }
 };
 
 const TestModule = struct {
@@ -802,19 +866,20 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
     defer runtime.deinit();
     const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail) };
-    const roots = [_]u32{0};
-    runtime.module_roots = &roots;
-    runtime.module_root_entries = &.{&functions[0]};
+    runtime.module_root_entries = &functions;
     runtime.configureModules(null, TestModule.lookup, TestModule.name);
     try rt.bindGlobalTable(&runtime, null, 0);
     try stdlib.install(&runtime);
     try installTestHost(&runtime, 18, 23);
 
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
-    const source = "{{Hello|Bob|1}}|{{Only}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#invoke:Test|run|x=ok}}";
+    const source = "{{Hello|Bob|1}}|{{Only}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
-    try std.testing.expectEqualStrings("Hi Bob Y|ABCD|yes|yes|14|E|HÉ|øøé|2022|<ref name=\"n\">body</ref>|ok", got);
+    try std.testing.expectEqualStrings("Hi Bob Y|ABCD|yes|yes|14|E|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
     try std.testing.expect(runtime.current_frame == null);
+    var symbolic_expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .resolve_call_symbol = TestProvider.resolveCallSymbol, .get_template_symbol = TestProvider.getTemplateSymbol } };
+    const symbolic = try symbolic_expander.expandFragment("Page", "{{@template|Bob|1}}|{{#invoke:@module|@function|x=symbolic}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Hi Bob Y|symbolic", symbolic);
     try std.testing.expectError(error.AotCallFailed, expander.expandFragment("Page", "{{#invoke:Test|fail}}", 1_670_803_200));
     try std.testing.expectEqualStrings("NotCallable", runtime.aotErrorName().?);
 }

@@ -8,6 +8,21 @@ pub const Spec = struct {
     has_subpages: bool,
     aliases: []const []const u8 = &.{},
 };
+const entry_keys = [_]rt.Value{
+    .{ .string = "id" },
+    .{ .string = "name" },
+    .{ .string = "canonicalName" },
+    .{ .string = "hasSubpages" },
+    .{ .string = "aliases" },
+};
+const entry_sorted_slots = [_]u32{ 4, 2, 3, 0, 1 };
+const entry_shape = rt.Shape{
+    .field_keys = &entry_keys,
+    .sorted_string_slots = &entry_sorted_slots,
+    .field_count = entry_keys.len,
+    .open = true,
+};
+
 pub const all = [_]Spec{
     .{ .id = -2, .name = "Media", .canonical_name = "Media", .has_subpages = false },
     .{ .id = -1, .name = "Special", .canonical_name = "Special", .has_subpages = false },
@@ -76,16 +91,19 @@ pub fn ofTitle(title: []const u8) struct { id: i32, name: []const u8, text: []co
 }
 
 pub fn makeTable(runtime: *rt.Context) !*rt.Table {
-    const namespaces = try runtime.newTable();
+    // IDs 1..15 are the dense prefix produced by this namespace catalog.
+    // Preallocating it and the fallback map removes all construction-time growth.
+    const namespaces = try runtime.newArrayTable(16);
+    try namespaces.map.ensureTotalCapacity(runtime.allocator, @intCast(all.len * 2));
     for (all) |spec| {
-        const value = try runtime.newTable();
-        const aliases = try runtime.newTable();
+        const value = try runtime.newShapedTable(&entry_shape);
+        const aliases = try runtime.newArrayTable(@intCast(spec.aliases.len));
         for (spec.aliases) |alias| try aliases.append(runtime.allocator, .{ .string = alias });
-        try value.rawSet(runtime.allocator, .{ .string = "id" }, .{ .number = @floatFromInt(spec.id) });
-        try value.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = spec.name });
-        try value.rawSet(runtime.allocator, .{ .string = "canonicalName" }, .{ .string = spec.canonical_name });
-        try value.rawSet(runtime.allocator, .{ .string = "hasSubpages" }, .{ .boolean = spec.has_subpages });
-        try value.rawSet(runtime.allocator, .{ .string = "aliases" }, .{ .table = aliases });
+        try value.rawSetSlot(0, .{ .number = @floatFromInt(spec.id) });
+        try value.rawSetSlot(1, .{ .string = spec.name });
+        try value.rawSetSlot(2, .{ .string = spec.canonical_name });
+        try value.rawSetSlot(3, .{ .boolean = spec.has_subpages });
+        try value.rawSetSlot(4, .{ .table = aliases });
         try namespaces.rawSet(runtime.allocator, .{ .number = @floatFromInt(spec.id) }, .{ .table = value });
         if (spec.name.len != 0) try namespaces.rawSet(runtime.allocator, .{ .string = spec.name }, .{ .table = value });
     }
@@ -100,4 +118,18 @@ test "Wiktionary namespace lookup preserves canonical names and aliases" {
     try std.testing.expectEqual(@as(i32, 828), split.id);
     try std.testing.expectEqualStrings("Module", split.name);
     try std.testing.expectEqualStrings("example/sub", split.text);
+}
+
+test "namespace entry shapes remain open and mutable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const namespaces = try makeTable(&runtime);
+    const template = namespaces.rawGet(.{ .number = 10 }).?.table;
+    try template.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = "Changed" });
+    try std.testing.expectEqualStrings("Changed", template.rawGet(.{ .string = "name" }).?.string);
+    try template.rawSet(runtime.allocator, .{ .string = "extra" }, .{ .number = 7 });
+    try std.testing.expectEqual(@as(f64, 7), template.rawGet(.{ .string = "extra" }).?.number);
+    try std.testing.expectEqual(@as(usize, 1), template.map.count());
 }

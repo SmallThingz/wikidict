@@ -1,10 +1,11 @@
 //! Runtime-specific native AOT expansion worker.
 const std = @import("std");
-const generated = @import("generated");
+const lua_program = @import("lua_program");
+const llvm_abi = @import("lua_llvm_abi");
+comptime {
+    _ = llvm_abi;
+}
 const rt = @import("zig_runtime");
-const enc = @import("blob_encoder");
-const blob_files = @import("blob_files");
-const storage = @import("blob_storage");
 const pages = @import("native_runtime_pages.zig");
 const protocol = @import("expansion_protocol.zig");
 const A = std.mem.Allocator;
@@ -24,135 +25,11 @@ fn validateRequest(request: Request) !void {
     if (request.source.len > 16 * 1024 * 1024 or request.root.len == 0 or request.root.len > 4096 or request.title.len == 0 or request.title.len > 4096 or request.language.len > 4096) return error.InvalidRequest;
 }
 
-const ModuleResolver = struct {
-    a: A,
-    redirects: std.StringHashMapUnmanaged([]const u8) = .empty,
-    fallback_ctx: ?*const anyopaque = null,
-    fallback_lookup: ?rt.ModuleLookupFn = null,
-    fallback_name: ?rt.ModuleNameFn = null,
-
-    fn deinit(self: *ModuleResolver) void {
-        var it = self.redirects.iterator();
-        while (it.next()) |entry| {
-            self.a.free(entry.key_ptr.*);
-            self.a.free(entry.value_ptr.*);
-        }
-        self.redirects.deinit(self.a);
-    }
-
-    fn unescape(a: A, raw: []const u8) ![]u8 {
-        var out: std.ArrayList(u8) = .empty;
-        errdefer out.deinit(a);
-        var i: usize = 0;
-        while (i < raw.len) : (i += 1) {
-            if (raw[i] != '\\' or i + 1 >= raw.len) {
-                try out.append(a, raw[i]);
-                continue;
-            }
-            i += 1;
-            try out.append(a, switch (raw[i]) {
-                't' => '\t',
-                'n' => '\n',
-                'r' => '\r',
-                '\\' => '\\',
-                else => raw[i],
-            });
-        }
-        return out.toOwnedSlice(a);
-    }
-
-    fn put(self: *ModuleResolver, from: []const u8, to: []const u8) !void {
-        const from_copy = try self.a.dupe(u8, from);
-        errdefer self.a.free(from_copy);
-        const to_copy = try self.a.dupe(u8, to);
-        errdefer self.a.free(to_copy);
-        const result = try self.redirects.getOrPut(self.a, from_copy);
-        if (result.found_existing) {
-            self.a.free(from_copy);
-            self.a.free(result.value_ptr.*);
-        } else result.key_ptr.* = from_copy;
-        result.value_ptr.* = to_copy;
-    }
-
-    fn load(self: *ModuleResolver, io: std.Io, root: []const u8) !void {
-        const path = try std.fs.path.join(self.a, &.{ root, "module-redirects.tsv" });
-        defer self.a.free(path);
-        if (std.Io.Dir.cwd().readFileAlloc(io, path, self.a, .limited(16 * 1024 * 1024))) |bytes| {
-            defer self.a.free(bytes);
-            var lines = std.mem.splitScalar(u8, bytes, '\n');
-            while (lines.next()) |line| {
-                if (!std.mem.startsWith(u8, line, "M\t")) continue;
-                var fields = std.mem.splitScalar(u8, line, '\t');
-                _ = fields.next();
-                const from_raw = fields.next() orelse continue;
-                const to_raw = fields.next() orelse continue;
-                const from = try unescape(self.a, from_raw);
-                defer self.a.free(from);
-                const to = try unescape(self.a, to_raw);
-                defer self.a.free(to);
-                try self.put(from, to);
-            }
-            return;
-        } else |err| if (err != error.FileNotFound) return err;
-
-        const redirects_path = try std.fs.path.join(self.a, &.{ root, "redirects.wikblb" });
-        defer self.a.free(redirects_path);
-        var redirects_file = storage.File.open(io, self.a, redirects_path) catch |err| switch (err) {
-            error.FileNotFound => return,
-            else => return err,
-        };
-        defer redirects_file.deinit();
-        if (redirects_file.view.kind != .redirects or !redirects_file.view.symbolic) return error.InvalidRuntimeArtifact;
-        var symbols: blob_files.SymbolSource = .{ .io = io, .a = self.a, .root = root, .sha256 = dict_sha256_hash };
-        defer symbols.deinit();
-        const names = try symbols.load();
-        const binding = try symbols.bindingId();
-        if (!std.mem.eql(u8, &binding, &redirects_file.view.binding_id)) return error.SymbolIdentityMismatch;
-        for (0..redirects_file.recordCount()) |i| {
-            const key = try redirects_file.titleAt(i);
-            const from_id = try std.fmt.parseInt(usize, key, 16);
-            var record = try redirects_file.readAlloc(self.a, i);
-            defer record.deinit();
-            var pos: usize = 0;
-            const to_id = try enc.blob_format.readPayloadLength(record.payload, &pos);
-            if (pos != record.payload.len) return error.InvalidRedirect;
-            try self.put(try names.get(from_id), try names.get(to_id));
-        }
-    }
-
-    fn lookup(raw: ?*const anyopaque, raw_name: []const u8) ?u32 {
-        const self: *const ModuleResolver = @ptrCast(@alignCast(raw orelse return null));
-        const fallback = self.fallback_lookup orelse return null;
-        var current = raw_name;
-        var depth: usize = 0;
-        while (self.redirects.get(current)) |target| {
-            depth += 1;
-            if (depth > 32) return null;
-            current = target;
-        }
-        return fallback(self.fallback_ctx, current);
-    }
-
-    fn name(raw: ?*const anyopaque, id: u32) ?[]const u8 {
-        const self: *const ModuleResolver = @ptrCast(@alignCast(raw orelse return null));
-        const fallback = self.fallback_name orelse return null;
-        return fallback(self.fallback_ctx, id);
-    }
-
-    fn configure(self: *ModuleResolver, ctx: *rt.Context) void {
-        self.fallback_ctx = ctx.module_lookup_ctx;
-        self.fallback_lookup = ctx.module_lookup;
-        self.fallback_name = ctx.module_name;
-        ctx.configureModules(self, lookup, name);
-    }
-};
-
 const Engine = struct {
     io: std.Io,
     requested_root: []const u8,
     root: []const u8,
-    program_data: ?rt.ProgramData = null,
-    resolver: ModuleResolver,
+    program: lua_program.Program,
     provider: ?pages.Provider = null,
     provider_dictionary_root: ?[]const u8 = null,
     provider_language: ?[]const u8 = null,
@@ -181,15 +58,9 @@ const Engine = struct {
             nested
         else
             return error.RuntimeAssetsMissing;
-        var resolver: ModuleResolver = .{ .a = a };
-        errdefer resolver.deinit();
-        try resolver.load(io, root);
-        const program_data: ?rt.ProgramData = if (generated.requires_program_data) blk: {
-            const data_path = try std.fs.path.join(a, &.{ root, "aot-data.bin" });
-            const bytes = try std.Io.Dir.cwd().readFileAlloc(io, data_path, a, .limited(1024 * 1024 * 1024));
-            break :blk try rt.ProgramData.parse(bytes);
-        } else null;
-        return .{ .io = io, .requested_root = try a.dupe(u8, requested_root), .root = root, .program_data = program_data, .resolver = resolver };
+        var program = try lua_program.Program.init(a);
+        errdefer program.deinit();
+        return .{ .io = io, .requested_root = try a.dupe(u8, requested_root), .root = root, .program = program };
     }
 
     fn sameOptional(a: ?[]const u8, b: ?[]const u8) bool {
@@ -209,7 +80,7 @@ const Engine = struct {
 
     fn deinit(self: *Engine) void {
         self.clearProvider();
-        self.resolver.deinit();
+        self.program.deinit();
     }
 
     fn providerFor(self: *Engine, dictionary_root: ?[]const u8, language: []const u8) !*pages.Provider {
@@ -234,13 +105,9 @@ const Engine = struct {
         stage.* = "assets";
         const provider = try self.providerFor(request.dictionary_root, request.language);
         stage.* = "install";
-        var ctx = if (generated.requires_program_data)
-            try generated.initContextWithData(page_a, self.program_data orelse return error.RuntimeAssetsMissing)
-        else
-            try generated.initContext(page_a);
+        var ctx = try self.program.initContext(page_a);
         defer ctx.deinit();
-        self.resolver.configure(&ctx);
-        var expander = generated.initExpander(&ctx, provider.api());
+        var expander = lua_program.initExpander(&ctx, provider.api());
         stage.* = "expand";
         const now = std.Io.Clock.real.now(self.io).toSeconds();
         return expander.expandFragment(request.title, request.source, now) catch |err| {

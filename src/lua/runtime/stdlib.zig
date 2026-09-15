@@ -776,6 +776,19 @@ fn addMath(runtime: *rt.Context, t: *rt.Table, name: []const u8, op: MathOp) !vo
     try t.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(ctx, mathUnary));
 }
 
+fn installPackage(runtime: *rt.Context) !void {
+    const package = try runtime.newTable();
+    const loaded = try runtime.newTable();
+    const loaders = try runtime.newTable();
+    try package.rawSet(runtime.allocator, .{ .string = "loaded" }, .{ .table = loaded });
+    try package.rawSet(runtime.allocator, .{ .string = "loaders" }, .{ .table = loaders });
+    const loader_state = try runtime.allocator.create(MainModuleLoaderCtx);
+    loader_state.* = .{ .cache = try runtime.newTable() };
+    try loaders.rawSet(runtime.allocator, .{ .number = 2 }, try runtime.newNative(loader_state, mainModuleLoader));
+    runtime.package_loaded = loaded;
+    try runtime.setGlobal(global_abi.id("package"), .{ .table = package });
+}
+
 pub fn install(runtime: *rt.Context) !void {
     try setGlobalNative(runtime, "type", baseType);
     try setGlobalNative(runtime, "assert", baseAssert);
@@ -794,16 +807,7 @@ pub fn install(runtime: *rt.Context) !void {
     try setGlobalNative(runtime, "ipairs", baseIpairs);
     try setGlobalNative(runtime, "pcall", basePcall);
 
-    const package = try runtime.newTable();
-    const loaded = try runtime.newTable();
-    const loaders = try runtime.newTable();
-    try package.rawSet(runtime.allocator, .{ .string = "loaded" }, .{ .table = loaded });
-    try package.rawSet(runtime.allocator, .{ .string = "loaders" }, .{ .table = loaders });
-    const loader_state = try runtime.allocator.create(MainModuleLoaderCtx);
-    loader_state.* = .{ .cache = try runtime.newTable() };
-    try loaders.rawSet(runtime.allocator, .{ .number = 2 }, try runtime.newNative(loader_state, mainModuleLoader));
-    runtime.package_loaded = loaded;
-    try runtime.setGlobal(global_abi.id("package"), .{ .table = package });
+    try installPackage(runtime);
     try setGlobalNative(runtime, "require", baseRequire);
 
     const table = try runtime.newNativeNamespace(.table);
@@ -856,6 +860,74 @@ pub fn install(runtime: *rt.Context) !void {
     try runtime.setGlobal(global_abi.id("debug"), .{ .table = debug });
 }
 
+fn cloneTemplateNamespace(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
+    const namespace = source.native_namespace orelse return error.TemplateNamespaceExpected;
+    if (source.choices.len != 0 or source.map.count() != 0 or source.metatable != null)
+        return error.UnsupportedTemplateNamespace;
+    const out = try runtime.newNativeNamespace(namespace);
+    if (out.slots.len != source.slots.len) return error.TemplateNamespaceLayoutMismatch;
+    @memcpy(out.slots, source.slots);
+    out.append_index = source.append_index;
+    return out;
+}
+
+pub const Template = struct {
+    arena: *std.heap.ArenaAllocator,
+    base: rt.Context,
+
+    pub fn init() !Template {
+        const arena = try std.heap.smp_allocator.create(std.heap.ArenaAllocator);
+        arena.* = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        errdefer {
+            arena.deinit();
+            std.heap.smp_allocator.destroy(arena);
+        }
+        var base = try rt.Context.init(arena.allocator(), global_abi.count);
+        try rt.bindGlobalTable(&base, null, global_abi.id("_G"));
+        try install(&base);
+        return .{ .arena = arena, .base = base };
+    }
+
+    pub fn deinit(self: *Template) void {
+        self.arena.deinit();
+        std.heap.smp_allocator.destroy(self.arena);
+        self.* = undefined;
+    }
+
+    fn namespace(self: *const Template, comptime name: []const u8) !*rt.Table {
+        const value = self.base.getGlobal(global_abi.id(name));
+        return if (value == .table) value.table else error.TemplateNamespaceExpected;
+    }
+
+    pub fn bootstrapOpaque(raw: ?*const anyopaque, runtime: *rt.Context) !void {
+        const self: *const Template = @ptrCast(@alignCast(raw orelse return error.MissingStdlibTemplate));
+        try self.instantiate(runtime);
+    }
+
+    pub fn instantiate(self: *const Template, runtime: *rt.Context) !void {
+        if (runtime.global_table == null) return error.GlobalTableNotBound;
+        if (runtime.globals.len < self.base.globals.len) return error.TemplateGlobalLayoutMismatch;
+        const page_global = runtime.global_table.?;
+        @memcpy(runtime.globals[0..self.base.globals.len], self.base.globals);
+        runtime.next_identity = self.base.next_identity;
+        try runtime.setGlobal(global_abi.id("_G"), .{ .table = page_global });
+
+        const table = try cloneTemplateNamespace(runtime, try self.namespace("table"));
+        const string = try cloneTemplateNamespace(runtime, try self.namespace("string"));
+        const math = try cloneTemplateNamespace(runtime, try self.namespace("math"));
+        const debug = try cloneTemplateNamespace(runtime, try self.namespace("debug"));
+        try runtime.setGlobal(global_abi.id("table"), .{ .table = table });
+        try runtime.setGlobal(global_abi.id("string"), .{ .table = string });
+        try runtime.setGlobal(global_abi.id("math"), .{ .table = math });
+        try runtime.setGlobal(global_abi.id("debug"), .{ .table = debug });
+
+        const string_mt = try runtime.newTable();
+        try string_mt.rawSet(runtime.allocator, .{ .string = "__index" }, .{ .table = string });
+        runtime.string_metatable = string_mt;
+        try installPackage(runtime);
+    }
+};
+
 fn callField(ctx: *rt.Context, table: Value, name: []const u8, args: []const Value) ![]const Value {
     const callable = try ctx.getIndex(table, .{ .string = name });
     return ctx.callValue(callable, args);
@@ -879,9 +951,7 @@ test "AOT package main loader resolves and caches numeric module loaders" {
     var ctx = try rt.Context.initProgram(arena.allocator(), global_abi.count, 1);
     defer ctx.deinit();
     const functions = [_]rt.FunctionFn{rt.stabilize(ModuleLoaderProbe.root)};
-    const roots = [_]u32{0};
-    ctx.module_roots = &roots;
-    ctx.module_root_entries = &.{&functions[0]};
+    ctx.module_root_entries = &functions;
     ctx.configureModules(null, ModuleLoaderProbe.lookup, ModuleLoaderProbe.name);
     try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
     try install(&ctx);
@@ -1101,4 +1171,30 @@ test "AOT next resumes sequential table iteration and falls back after interleav
     ctx.clearAotErrorName();
     try std.testing.expectError(error.AotCallFailed, ctx.callValueFixed(next, &.{ table_value, .{ .number = 999 } }, &storage));
     try std.testing.expectEqualStrings("InvalidNextKey", ctx.aotErrorName().?);
+}
+
+test "stdlib template keeps page mutation isolated" {
+    var template = try Template.init();
+    defer template.deinit();
+    var first_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer first_arena.deinit();
+    var second_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer second_arena.deinit();
+
+    var first = try rt.Context.init(first_arena.allocator(), global_abi.count + 2);
+    defer first.deinit();
+    try rt.bindGlobalTable(&first, null, global_abi.id("_G"));
+    try template.instantiate(&first);
+    var second = try rt.Context.init(second_arena.allocator(), global_abi.count + 2);
+    defer second.deinit();
+    try rt.bindGlobalTable(&second, null, global_abi.id("_G"));
+    try template.instantiate(&second);
+
+    const first_table = first.getGlobal(global_abi.id("table")).table;
+    const second_table = second.getGlobal(global_abi.id("table")).table;
+    try std.testing.expect(first_table != second_table);
+    try first_table.rawSet(first.allocator, .{ .string = "insert" }, .{ .number = 9 });
+    try std.testing.expect(second_table.rawGet(.{ .string = "insert" }).? == .callable);
+    try std.testing.expect(first.getGlobal(global_abi.id("package")).table != second.getGlobal(global_abi.id("package")).table);
+    try std.testing.expect(first.getGlobal(global_abi.count) == .nil);
 }

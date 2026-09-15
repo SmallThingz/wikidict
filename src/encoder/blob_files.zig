@@ -76,6 +76,12 @@ pub const SymbolSource = struct {
         if (!std.mem.eql(u8, &self.file.?.view.binding_id, &binding)) return error.SymbolIdentityMismatch;
         return enc.call_symbols.decodeAlloc(a, bytes, names);
     }
+    pub fn bindRuntimeAlloc(self: *SymbolSource, a: std.mem.Allocator, bytes: []const u8, encoded: bool, binding: [32]u8) !?[]u8 {
+        if (!encoded or std.mem.indexOfScalar(u8, bytes, enc.call_symbols.marker) == null) return null;
+        const names = try self.load();
+        if (!std.mem.eql(u8, &self.file.?.view.binding_id, &binding)) return error.SymbolIdentityMismatch;
+        return enc.call_symbols.decodeRuntimeAlloc(a, bytes, names);
+    }
 };
 
 pub fn requireComplete(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
@@ -123,10 +129,19 @@ pub const Resolver = struct {
         }
         return if (self.files[i]) |*f| f else null;
     }
-    /// Null means payload is already complete and may remain borrowed.
-    pub fn resolveAlloc(self: *Resolver, a: std.mem.Allocator, title: []const u8, payload: []const u8) !?[]u8 {
+    fn bindPayload(self: *Resolver, a: std.mem.Allocator, payload: []const u8, symbolic: bool, binding_id: [32]u8, runtime: bool) !?[]u8 {
+        if (self.symbols) |symbols|
+            return if (runtime)
+                symbols.bindRuntimeAlloc(a, payload, symbolic, binding_id)
+            else
+                symbols.bindAlloc(a, payload, symbolic, binding_id);
+        if (symbolic and std.mem.indexOfScalar(u8, payload, enc.call_symbols.marker) != null) return error.MissingSymbols;
+        return null;
+    }
+
+    fn resolveModeAlloc(self: *Resolver, a: std.mem.Allocator, title: []const u8, payload: []const u8, runtime: bool) !?[]u8 {
         const context: enc.language_blob_encoding.LanguageContext = .{ .heading = self.metadata.heading, .code = self.metadata.code };
-        const bound = if (self.symbols) |symbols| try symbols.bindAlloc(a, payload, self.symbolic, self.binding_id) else if (self.symbolic and std.mem.indexOfScalar(u8, payload, enc.call_symbols.marker) != null) return error.MissingSymbols else null;
+        const bound = try self.bindPayload(a, payload, self.symbolic, self.binding_id, runtime);
         errdefer if (bound) |b| a.free(b);
         const core = bound orelse payload;
         const required = try parts.required(core, context);
@@ -140,7 +155,7 @@ pub const Resolver = struct {
             const record_index = f.find(title) orelse return error.MissingSupplementRecord;
             var body = try f.readAlloc(a, record_index);
             errdefer body.deinit();
-            owned[i] = if (self.symbols) |symbols| try symbols.bindAlloc(a, body.payload, f.view.symbolic, f.view.binding_id) else if (f.view.symbolic and std.mem.indexOfScalar(u8, body.payload, enc.call_symbols.marker) != null) return error.MissingSymbols else null;
+            owned[i] = try self.bindPayload(a, body.payload, f.view.symbolic, f.view.binding_id, runtime);
             bodies[i] = owned[i] orelse body.payload;
             if (owned[i] == null) {
                 owned[i] = body.owned;
@@ -156,6 +171,17 @@ pub const Resolver = struct {
         if (bound) |b| a.free(b);
         return joined;
     }
+
+    /// Null means payload is already complete and may remain borrowed.
+    pub fn resolveAlloc(self: *Resolver, a: std.mem.Allocator, title: []const u8, payload: []const u8) !?[]u8 {
+        return self.resolveModeAlloc(a, title, payload, false);
+    }
+
+    /// Runtime source reconstruction preserves typed template/module/function IDs.
+    pub fn resolveRuntimeAlloc(self: *Resolver, a: std.mem.Allocator, title: []const u8, payload: []const u8) !?[]u8 {
+        return self.resolveModeAlloc(a, title, payload, true);
+    }
+
     /// For the corpus verifier, which visits each core title once.
     pub fn verifyCounts(self: *Resolver) !void {
         for (0..parts.count) |i| {

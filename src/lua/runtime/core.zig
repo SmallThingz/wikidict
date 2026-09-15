@@ -1,28 +1,13 @@
 const std = @import("std");
-const aot_data = @import("lua_program_data");
-const static_keys = @import("lua_static_keys");
-const static_fields = static_keys.static_fields;
+const static_fields = @import("lua_static_fields");
 
 pub const Cell = struct { value: Value };
 pub const Env = struct { captures: []const *Cell };
-pub const ModuleEnv = struct { cells: []?*Cell };
-
 pub const FunctionEnv = struct {
     raw: usize = 0,
-    const module_tag: usize = 1;
 
     pub fn closure(env: *Env) FunctionEnv {
-        comptime std.debug.assert(@alignOf(Env) >= 2);
-        const raw = @intFromPtr(env);
-        std.debug.assert(raw & module_tag == 0);
-        return .{ .raw = raw };
-    }
-
-    pub fn module(env: *ModuleEnv) FunctionEnv {
-        comptime std.debug.assert(@alignOf(ModuleEnv) >= 2);
-        const raw = @intFromPtr(env);
-        std.debug.assert(raw & module_tag == 0);
-        return .{ .raw = raw | module_tag };
+        return .{ .raw = @intFromPtr(env) };
     }
 
     pub fn native(host: ?*anyopaque) FunctionEnv {
@@ -34,28 +19,17 @@ pub const FunctionEnv = struct {
     }
 
     pub fn closurePtr(self: FunctionEnv) ?*Env {
-        if (self.raw == 0 or self.raw & module_tag != 0) return null;
-        return @ptrFromInt(self.raw);
-    }
-
-    pub fn modulePtr(self: FunctionEnv) ?*ModuleEnv {
-        if (self.raw & module_tag == 0) return null;
-        return @ptrFromInt(self.raw & ~module_tag);
+        return if (self.raw == 0) null else @ptrFromInt(self.raw);
     }
 };
 
 pub const Captures = union(enum) {
     direct: []const *Cell,
-    module: *ModuleEnv,
     native: ?*anyopaque,
 
-    pub fn cell(self: Captures, ordinal: u32, module_slot: u32) !*Cell {
+    pub fn cell(self: Captures, ordinal: u32) !*Cell {
         return switch (self) {
             .direct => |cells| if (ordinal < cells.len) cells[ordinal] else error.BadUpvalue,
-            .module => |env| blk: {
-                if (module_slot >= env.cells.len) return error.BadModuleCapture;
-                break :blk env.cells[module_slot] orelse return error.BadModuleCapture;
-            },
             .native => error.BadUpvalue,
         };
     }
@@ -63,14 +37,13 @@ pub const Captures = union(enum) {
 
 pub const native_function_id = std.math.maxInt(u32);
 pub const FunctionValue = struct {
-    id: u32,
     env: FunctionEnv = .{},
-    identity: u64,
     entry: FunctionFn,
+    id: u32,
+    identity: u32,
 
     pub fn captures(self: FunctionValue) Captures {
         if (self.id == native_function_id) return .{ .native = self.env.nativePtr() };
-        if (self.env.modulePtr()) |env| return .{ .module = env };
         if (self.env.closurePtr()) |env| return .{ .direct = env.captures };
         return .{ .direct = &.{} };
     }
@@ -86,6 +59,7 @@ pub const FunctionResult = extern struct {
 pub const FunctionFn = *const fn (*Context, *const Captures, [*]const Value, usize, ?[*]Value, usize) callconv(.c) FunctionResult;
 pub const ModuleLookupFn = *const fn (?*const anyopaque, []const u8) ?u32;
 pub const ModuleNameFn = *const fn (?*const anyopaque, u32) ?[]const u8;
+pub const ProgramBootstrapFn = *const fn (?*const anyopaque, *Context) anyerror!void;
 pub const Value = union(enum) {
     nil,
     boolean: bool,
@@ -210,41 +184,30 @@ pub fn stabilizeNativeBuffered(comptime function: anytype) FunctionFn {
     }.call;
 }
 
-pub const no_shape = std.math.maxInt(u32);
-pub const TableConstant = struct { first: u32, count: u32, shape: u32 = no_shape };
-pub const Constant = union(enum) {
-    nil,
-    boolean: bool,
-    number: f64,
-    string: []const u8,
-    table: TableConstant,
-};
-pub const implicit_list_key = std.math.maxInt(u32);
-pub const ConstantEntry = u64;
-pub fn packConstantEntry(key: u32, value: u32) ConstantEntry {
-    return (@as(u64, key) << 32) | value;
-}
-fn constantEntryKey(entry: ConstantEntry) u32 {
-    return @intCast(entry >> 32);
-}
-fn constantEntryValue(entry: ConstantEntry) u32 {
-    return @truncate(entry);
-}
-pub const ConstantBlock = struct { first: u32, values: []const Constant };
-pub const ConstantEntryBlock = struct { first: u32, values: []const ConstantEntry };
-pub const ProgramData = aot_data.View;
-pub const module_root_function = std.math.maxInt(u32);
-pub const module_root_empty = module_root_function - 1;
-pub fn descriptorModuleRootStub(_: *Context, _: Captures, _: []const Value) anyerror![]const Value {
-    return error.DescriptorModuleRootInvoked;
-}
-
 pub const Shape = struct {
     field_keys: []const Value = &.{},
+    sorted_string_slots: []const u32 = &.{},
     field_count: u32 = 0,
     choice_count: u32 = 0,
     open: bool = false,
 };
+
+fn shapeStringSlot(shape: *const Shape, name: []const u8) ?u32 {
+    if (shape.field_keys.len != shape.field_count or shape.sorted_string_slots.len != shape.field_keys.len) return null;
+    var low: usize = 0;
+    var high = shape.sorted_string_slots.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const slot = shape.sorted_string_slots[mid];
+        if (slot >= shape.field_keys.len or shape.field_keys[slot] != .string) return null;
+        switch (std.mem.order(u8, name, shape.field_keys[slot].string)) {
+            .lt => high = mid,
+            .gt => low = mid + 1,
+            .eq => return slot,
+        }
+    }
+    return null;
+}
 
 pub const ChoiceCell = struct {
     key: Value = .nil,
@@ -362,6 +325,8 @@ pub const Table = struct {
             return static_fields.slotForName(namespace, key.string);
         const shape = self.shape orelse return null;
         if (shape.field_keys.len != shape.field_count) return null;
+        if (key == .string and shape.sorted_string_slots.len == shape.field_keys.len)
+            return shapeStringSlot(shape, key.string);
         for (shape.field_keys, 0..) |field_key, slot| {
             if (rawEqual(field_key, key)) return @intCast(slot);
         }
@@ -635,115 +600,6 @@ pub inline fn copyReturnTail(result: []Value, offset: usize, tail: []const Value
     const n = @min(result.len - offset, tail.len);
     @memcpy(result[offset..][0..n], tail[0..n]);
 }
-pub const Frame = struct {
-    regs: []Value,
-    cells: []?*Cell,
-    module_env: ?*ModuleEnv = null,
-    varargs: []const Value = &.{},
-    multi: []const Value = &.{},
-    multi_base: u32 = std.math.maxInt(u32),
-    multi_owned: bool = false,
-
-    pub fn init(regs: []Value, cells: []?*Cell, args: []const Value, param_count: u32, is_vararg: bool) !Frame {
-        if (param_count > regs.len or cells.len != regs.len) return error.BadFrame;
-        @memset(regs, .nil);
-        @memset(cells, null);
-        const n = @min(@as(usize, param_count), args.len);
-        @memcpy(regs[0..n], args[0..n]);
-        const tail = if (is_vararg and args.len > param_count) args[param_count..] else &.{};
-        return .{ .regs = regs, .cells = cells, .varargs = tail };
-    }
-
-    /// Generated AOT IR defines every non-parameter register before its first read.
-    /// Only parameters need Lua's implicit nil initialization at function entry.
-    pub fn initAot(regs: []Value, cells: []?*Cell, args: []const Value, param_count: u32, is_vararg: bool) !Frame {
-        if (param_count > regs.len or cells.len > regs.len) return error.BadFrame;
-        const params_len: usize = @intCast(param_count);
-        @memset(regs[0..params_len], .nil);
-        @memset(cells, null);
-        const n = @min(params_len, args.len);
-        @memcpy(regs[0..n], args[0..n]);
-        const tail = if (is_vararg and args.len > param_count) args[param_count..] else &.{};
-        return .{ .regs = regs, .cells = cells, .varargs = tail };
-    }
-
-    pub fn initAotNoCells(regs: []Value, args: []const Value, param_count: u32, is_vararg: bool) !Frame {
-        if (param_count > regs.len) return error.BadFrame;
-        const params_len: usize = @intCast(param_count);
-        @memset(regs[0..params_len], .nil);
-        const n = @min(params_len, args.len);
-        @memcpy(regs[0..n], args[0..n]);
-        const tail = if (is_vararg and args.len > param_count) args[param_count..] else &.{};
-        return .{ .regs = regs, .cells = &.{}, .varargs = tail };
-    }
-
-    pub fn deinit(self: *Frame) void {
-        if (self.multi_owned) freeResults(self.multi);
-    }
-
-    pub fn get(self: *const Frame, reg: u32) Value {
-        if (reg < self.cells.len) if (self.cells[reg]) |cell| return cell.value;
-        return self.regs[reg];
-    }
-
-    pub fn set(self: *Frame, reg: u32, value: Value) void {
-        if (reg < self.cells.len) if (self.cells[reg]) |cell| {
-            cell.value = value;
-            return;
-        };
-        self.regs[reg] = value;
-    }
-    pub fn ensureCell(self: *Frame, ctx: *Context, reg: u32) !*Cell {
-        if (reg >= self.cells.len) return error.BadFrame;
-        if (self.cells[reg]) |cell| return cell;
-        const cell = try ctx.allocator.create(Cell);
-        cell.* = .{ .value = self.regs[reg] };
-        self.cells[reg] = cell;
-        return cell;
-    }
-
-    pub fn ensureModuleEnv(self: *Frame, ctx: *Context) !*ModuleEnv {
-        if (self.module_env) |env| return env;
-        const env = try ctx.allocator.create(ModuleEnv);
-        errdefer ctx.allocator.destroy(env);
-        const cells = try ctx.allocator.alloc(?*Cell, self.cells.len);
-        @memcpy(cells, self.cells);
-        env.* = .{ .cells = cells };
-        self.cells = cells;
-        self.module_env = env;
-        return env;
-    }
-
-    pub fn detachCell(self: *Frame, reg: u32) void {
-        if (reg >= self.cells.len) return;
-        if (self.cells[reg]) |cell| {
-            self.regs[reg] = cell.value;
-            self.cells[reg] = null;
-        }
-    }
-
-    pub fn multiAt(self: *const Frame, base: u32) []const Value {
-        return if (self.multi_base == base) self.multi else &.{};
-    }
-
-    pub fn storeResults(self: *Frame, base: u32, count: u32, values: []const Value, owned: bool) void {
-        if (count == 0) {
-            if (owned) freeResults(values);
-            return;
-        }
-        if (count == std.math.maxInt(u32)) {
-            if (self.multi_owned) freeResults(self.multi);
-            self.multi = values;
-            self.multi_base = base;
-            self.multi_owned = owned;
-            self.set(base, if (values.len == 0) .nil else values[0]);
-            return;
-        }
-        for (0..count) |i| self.set(base + @as(u32, @intCast(i)), if (i < values.len) values[i] else .nil);
-        if (owned) freeResults(values);
-    }
-};
-
 pub const NextIterationHint = struct {
     table: *Table,
     key: Value,
@@ -753,27 +609,24 @@ pub const NextIterationHint = struct {
 pub const Context = struct {
     allocator: std.mem.Allocator,
     globals: []Value,
-    shapes: []const Shape = &.{},
-    constant_blocks: []const ConstantBlock = &.{},
-    constant_entry_blocks: []const ConstantEntryBlock = &.{},
-    program_data: ?ProgramData = null,
-    module_roots: []const u32 = &.{},
-    module_root_entries: []const *const FunctionFn = &.{},
-    module_root_values: []const u32 = &.{},
+    program_shapes: []const Shape = &.{},
+    module_export_shape_ids: []const u32 = &.{},
+    module_root_entries: []const FunctionFn = &.{},
     string_metatable: ?*Table = null,
     string_intern: std.StringHashMapUnmanaged([]const u8) = .empty,
     last_error: Value = .nil,
     aot_error_name: StableErrorName = .{},
     depth: usize = 0,
     max_depth: usize = 1000,
-    next_identity: u64 = 1,
+    next_identity: u32 = 1,
     module_count: usize = 0,
     module_loading: std.AutoHashMapUnmanaged(u32, void) = .empty,
-    module_envs: std.AutoHashMapUnmanaged(u32, *ModuleEnv) = .empty,
     module_values: std.AutoHashMapUnmanaged(u32, Value) = .empty,
     module_lookup_ctx: ?*const anyopaque = null,
     module_lookup: ?ModuleLookupFn = null,
     module_name: ?ModuleNameFn = null,
+    program_bootstrap_ctx: ?*const anyopaque = null,
+    program_bootstrap: ?ProgramBootstrapFn = null,
     host: ?*anyopaque = null,
     current_frame: ?*Table = null,
     package_loaded: ?*Table = null,
@@ -793,16 +646,14 @@ pub const Context = struct {
 
     pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
         var child = try initProgram(allocator, self.globals.len, self.module_count);
-        child.shapes = self.shapes;
-        child.constant_blocks = self.constant_blocks;
-        child.constant_entry_blocks = self.constant_entry_blocks;
-        child.program_data = self.program_data;
-        child.module_roots = self.module_roots;
+        child.program_shapes = self.program_shapes;
+        child.module_export_shape_ids = self.module_export_shape_ids;
         child.module_root_entries = self.module_root_entries;
-        child.module_root_values = self.module_root_values;
         child.module_lookup_ctx = self.module_lookup_ctx;
         child.module_lookup = self.module_lookup;
         child.module_name = self.module_name;
+        child.program_bootstrap_ctx = self.program_bootstrap_ctx;
+        child.program_bootstrap = self.program_bootstrap;
         child.max_depth = self.max_depth;
         child.host = self.host;
         return child;
@@ -813,7 +664,6 @@ pub const Context = struct {
         while (it.next()) |text| self.allocator.free(text.*);
         self.string_intern.deinit(self.allocator);
         self.module_loading.deinit(self.allocator);
-        self.module_envs.deinit(self.allocator);
         self.module_values.deinit(self.allocator);
         if (self.global_table) |table| {
             table.deinit(self.allocator);
@@ -850,9 +700,14 @@ pub const Context = struct {
         if (slot >= self.globals.len) return error.BadGlobalSlot;
         self.globals[slot] = value;
     }
-    pub fn makeFunction(self: *Context, id: u32, entry: FunctionFn, captures: []const *Cell) !Value {
+    fn takeFunctionIdentity(self: *Context) !u32 {
         const identity = self.next_identity;
+        if (identity == 0) return error.FunctionIdentityExhausted;
         self.next_identity +%= 1;
+        return identity;
+    }
+    pub fn makeFunction(self: *Context, id: u32, entry: FunctionFn, captures: []const *Cell) !Value {
+        const identity = try self.takeFunctionIdentity();
         const env: FunctionEnv = if (captures.len == 0) .{} else blk: {
             const owned = try self.allocator.dupe(*Cell, captures);
             const value = try self.allocator.create(Env);
@@ -864,12 +719,6 @@ pub const Context = struct {
 
     pub fn makeFunctionKnown(self: *Context, id: u32, comptime entry: DirectFunctionFn, captures: []const *Cell) !Value {
         return self.makeFunction(id, stabilize(entry), captures);
-    }
-
-    pub fn makeModuleFunction(self: *Context, id: u32, entry: FunctionFn, env: *ModuleEnv) Value {
-        const identity = self.next_identity;
-        self.next_identity +%= 1;
-        return .{ .callable = .{ .id = id, .env = FunctionEnv.module(env), .identity = identity, .entry = entry } };
     }
 
     pub fn callEntryBuffered(self: *Context, entry: FunctionFn, captures: Captures, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
@@ -907,6 +756,13 @@ pub const Context = struct {
         return self.callFunctionBuffered(value, args, null);
     }
 
+    pub fn callStaticFunctionBuffered(self: *Context, entry: FunctionFn, captures: []const *Cell, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+        if (self.depth >= self.max_depth) return error.CallDepth;
+        self.depth += 1;
+        defer self.depth -= 1;
+        return self.callEntryBuffered(entry, .{ .direct = captures }, args, result_buffer);
+    }
+
     pub inline fn callDirectFunction(self: *Context, value: FunctionValue, direct: DirectFunctionFn, args: []const Value) anyerror![]const Value {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
@@ -921,18 +777,15 @@ pub const Context = struct {
         return direct(self, value.captures(), args, result_buffer);
     }
 
-    pub fn bindModuleEnv(self: *Context, module_id: u32, env: *ModuleEnv) !void {
-        if (module_id >= self.module_count) return error.BadModuleId;
-        if (self.module_envs.get(module_id)) |existing| {
-            if (existing != env) return error.ModuleEnvironmentMismatch;
-        } else {
-            try self.module_envs.put(self.allocator, module_id, env);
-        }
+    pub fn configureProgramBootstrap(self: *Context, raw: ?*const anyopaque, bootstrap: ProgramBootstrapFn) void {
+        self.program_bootstrap_ctx = raw;
+        self.program_bootstrap = bootstrap;
     }
 
-    pub fn moduleCaptures(self: *const Context, module_id: u32) !Captures {
-        if (module_id >= self.module_count) return error.BadModuleId;
-        return .{ .module = self.module_envs.get(module_id) orelse return error.UnregisteredModuleEnvironment };
+    pub fn bootstrapProgram(self: *Context) !bool {
+        const bootstrap = self.program_bootstrap orelse return false;
+        try bootstrap(self.program_bootstrap_ctx, self);
+        return true;
     }
 
     pub fn configureModules(self: *Context, host: ?*const anyopaque, lookup: ModuleLookupFn, name: ModuleNameFn) void {
@@ -947,24 +800,17 @@ pub const Context = struct {
     }
 
     pub fn loadModule(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!Value {
-        if (module_id >= self.module_count or module_id >= self.module_roots.len) return error.BadModuleId;
+        if (module_id >= self.module_count or module_id >= self.module_root_entries.len) return error.BadModuleId;
         if (self.module_values.get(module_id)) |value| return value;
         if (self.module_loading.contains(module_id)) return error.ModuleLoadLoop;
         try self.module_loading.put(self.allocator, module_id, {});
         errdefer _ = self.module_loading.remove(module_id);
 
         const canonical = self.canonicalModuleName(module_id, requested);
-        const root_value = if (module_id < self.module_root_values.len) self.module_root_values[module_id] else module_root_function;
-        var value: Value = if (root_value == module_root_function) blk: {
-            if (module_id >= self.module_root_entries.len) return error.BadModuleId;
-            const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
-            const values = try self.callEntry(self.module_root_entries[module_id].*, .{ .direct = &.{} }, argv);
-            defer freeResults(values);
-            break :blk if (values.len == 0) .nil else values[0];
-        } else if (root_value == module_root_empty)
-            .nil
-        else
-            try self.materializeConstant(root_value);
+        const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
+        const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
+        defer freeResults(values);
+        var value: Value = if (values.len == 0) .nil else values[0];
         if (value == .nil) {
             if (canonical) |text| if (self.package_loaded) |loaded| {
                 if (loaded.rawGet(.{ .string = text })) |existing| value = existing;
@@ -995,31 +841,15 @@ pub const Context = struct {
         return lookup(self.module_lookup_ctx, normalized) orelse error.ModuleNotFound;
     }
 
-    pub fn requireByName(self: *Context, raw_name: []const u8) anyerror!Value {
+    pub fn requireModuleId(self: *Context, module_id: u32, raw_name: []const u8) anyerror!Value {
         if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
-        const module_id = try self.resolveModule(raw_name);
         const value = try self.loadModule(module_id, raw_name);
         if (self.package_loaded) |loaded| try loaded.rawSet(self.allocator, .{ .string = raw_name }, value);
         return value;
     }
 
-    pub inline fn callValueStoreFixed(self: *Context, frame: *Frame, base: u32, count: u32, callable: Value, args: []const Value) anyerror!void {
-        if (count <= 8 and callable == .callable) {
-            const function = callable.callable;
-            if (function.id == native_function_id) {
-                const values = try self.callEntry(function.entry, function.captures(), args);
-                frame.storeResults(base, count, values, true);
-                return;
-            }
-            var storage: [8]Value = undefined;
-            const len: usize = @intCast(count);
-            const values = try self.callFunctionBuffered(function, args, storage[0..len]);
-            const owned = values.len != 0 and values.ptr != storage[0..].ptr;
-            frame.storeResults(base, count, values, owned);
-            return;
-        }
-        const values = try self.callValue(callable, args);
-        frame.storeResults(base, count, values, true);
+    pub fn requireByName(self: *Context, raw_name: []const u8) anyerror!Value {
+        return self.requireModuleId(try self.resolveModule(raw_name), raw_name);
     }
 
     pub fn callValueFixed(self: *Context, callable: Value, args: []const Value, result_buffer: []Value) anyerror!FixedCallResult {
@@ -1059,8 +889,7 @@ pub const Context = struct {
         };
     }
     pub fn newNative(self: *Context, host: ?*anyopaque, comptime call: anytype) !Value {
-        const identity = self.next_identity;
-        self.next_identity +%= 1;
+        const identity = try self.takeFunctionIdentity();
         return .{ .callable = .{
             .id = native_function_id,
             .env = FunctionEnv.native(host),
@@ -1070,8 +899,7 @@ pub const Context = struct {
     }
 
     pub fn newNativeBuffered(self: *Context, host: ?*anyopaque, comptime call: anytype) !Value {
-        const identity = self.next_identity;
-        self.next_identity +%= 1;
+        const identity = try self.takeFunctionIdentity();
         return .{ .callable = .{
             .id = native_function_id,
             .env = FunctionEnv.native(host),
@@ -1086,6 +914,57 @@ pub const Context = struct {
         return table;
     }
 
+    pub fn newArrayTable(self: *Context, capacity: u32) !*Table {
+        const table = try self.newTable();
+        errdefer self.allocator.destroy(table);
+        if (capacity != 0) {
+            table.slots = try self.allocator.alloc(Value, capacity);
+            @memset(table.slots, .nil);
+        }
+        return table;
+    }
+
+    pub fn newShapedTable(self: *Context, shape: *const Shape) !*Table {
+        if (shape.field_keys.len != shape.field_count or
+            (shape.sorted_string_slots.len != 0 and shape.sorted_string_slots.len != shape.field_keys.len))
+            return error.BadShape;
+        const table = try self.allocator.create(Table);
+        errdefer self.allocator.destroy(table);
+        table.* = .{ .shape = shape };
+        if (shape.field_count != 0) {
+            table.slots = try self.allocator.alloc(Value, shape.field_count);
+            @memset(table.slots, .nil);
+        }
+        if (shape.choice_count != 0) {
+            table.choices = try self.allocator.alloc(ChoiceCell, shape.choice_count);
+            @memset(table.choices, .{});
+        }
+        return table;
+    }
+
+    pub fn newProgramShape(self: *Context, shape_id: u32) !*Table {
+        if (shape_id >= self.program_shapes.len) return error.BadShape;
+        return self.newShapedTable(&self.program_shapes[shape_id]);
+    }
+
+    pub const ProgramFieldSlot = struct { shape_id: u32, slot: u32 };
+
+    pub fn moduleExportSlot(self: *const Context, module_id: u32, name: []const u8) ?ProgramFieldSlot {
+        if (module_id >= self.module_export_shape_ids.len) return null;
+        const shape_id = self.module_export_shape_ids[module_id];
+        if (shape_id == std.math.maxInt(u32) or shape_id >= self.program_shapes.len) return null;
+        const slot = shapeStringSlot(&self.program_shapes[shape_id], name) orelse return null;
+        return .{ .shape_id = shape_id, .slot = slot };
+    }
+
+    pub fn getProgramShapeField(self: *Context, object: Value, shape_id: u32, slot: u32, name: []const u8) !Value {
+        if (object == .table and shape_id < self.program_shapes.len and object.table.shape == &self.program_shapes[shape_id]) {
+            if (object.table.rawGetSlot(slot)) |value| return value;
+            if (object.table.metatable == null) return .nil;
+        }
+        return self.getIndex(object, .{ .string = name });
+    }
+
     pub fn newNativeNamespace(self: *Context, namespace: static_fields.Namespace) !*Table {
         const table = try self.allocator.create(Table);
         errdefer self.allocator.destroy(table);
@@ -1096,96 +975,6 @@ pub const Context = struct {
             @memset(table.slots, .nil);
         }
         return table;
-    }
-
-    pub fn newShape(self: *Context, shape_id: u32) !*Table {
-        if (shape_id >= self.shapes.len) return error.BadShape;
-        const desc = &self.shapes[shape_id];
-        const table = try self.allocator.create(Table);
-        errdefer self.allocator.destroy(table);
-        table.* = .{ .shape = desc };
-        if (desc.field_count != 0) {
-            table.slots = try self.allocator.alloc(Value, desc.field_count);
-            @memset(table.slots, .nil);
-        }
-        if (desc.choice_count != 0) {
-            table.choices = try self.allocator.alloc(ChoiceCell, desc.choice_count);
-            @memset(table.choices, .{});
-        }
-        return table;
-    }
-
-    fn constantById(self: *const Context, id: u32) anyerror!Constant {
-        if (self.program_data) |view| {
-            return switch (try view.constant(id)) {
-                .nil => .nil,
-                .boolean => |value| .{ .boolean = value },
-                .number_bits => |bits| .{ .number = @bitCast(bits) },
-                .string => |value| .{ .string = value },
-                .table => |table| .{ .table = .{ .first = table.first, .count = table.count, .shape = table.shape } },
-            };
-        }
-        var low: usize = 0;
-        var high = self.constant_blocks.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const block = self.constant_blocks[mid];
-            if (id < block.first) {
-                high = mid;
-            } else {
-                const offset = @as(usize, id - block.first);
-                if (offset < block.values.len) return block.values[offset];
-                low = mid + 1;
-            }
-        }
-        return error.BadConstantReference;
-    }
-
-    fn constantEntryAt(self: *const Context, id: u32) anyerror!ConstantEntry {
-        if (self.program_data) |view| return view.entry(id);
-        var low: usize = 0;
-        var high = self.constant_entry_blocks.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const block = self.constant_entry_blocks[mid];
-            if (id < block.first) {
-                high = mid;
-            } else {
-                const offset = @as(usize, id - block.first);
-                if (offset < block.values.len) return block.values[offset];
-                low = mid + 1;
-            }
-        }
-        return error.BadConstantEntryRange;
-    }
-
-    pub fn materializeConstant(self: *Context, id: u32) anyerror!Value {
-        return switch (try self.constantById(id)) {
-            .nil => .nil,
-            .boolean => |value| .{ .boolean = value },
-            .number => |value| .{ .number = value },
-            .string => |value| .{ .string = value },
-            .table => |table| blk: {
-                if (table.count > std.math.maxInt(u32) - table.first) return error.BadConstantEntryRange;
-                const object = if (table.shape == no_shape) try self.newTable() else try self.newShape(table.shape);
-                var list_index: u32 = 1;
-                for (0..table.count) |offset| {
-                    const entry_id = table.first + @as(u32, @intCast(offset));
-                    const entry = try self.constantEntryAt(entry_id);
-                    const key_id = constantEntryKey(entry);
-                    const value_id = constantEntryValue(entry);
-                    const key: Value = if (key_id == implicit_list_key) list: {
-                        const value: Value = .{ .number = @floatFromInt(list_index) };
-                        list_index += 1;
-                        break :list value;
-                    } else try self.materializeConstant(key_id);
-                    const value = try self.materializeConstant(value_id);
-                    try object.rawSet(self.allocator, key, value);
-                }
-                object.append_index = list_index;
-                break :blk .{ .table = object };
-            },
-        };
     }
 
     pub fn metamethod(_: *Context, value: Value, name: []const u8) ?Value {
@@ -1237,65 +1026,6 @@ pub const Context = struct {
             },
         };
         try table.rawSet(self.allocator, key, value);
-    }
-
-    fn getLocalSlot(self: *Context, object: Value, slot: u32) anyerror!Value {
-        if (object != .table) return error.IndexType;
-        if (object.table.rawGetSlot(slot)) |value| return value;
-        if (object.table.metatable == null) return .nil;
-        const key = object.table.fieldKey(slot) orelse return error.BadAnonymousShapeMetatable;
-        return self.getIndex(object, key);
-    }
-
-    pub fn getSlot(self: *Context, object: Value, slot: u32) anyerror!Value {
-        if (static_keys.integerForRef(slot)) |integer| {
-            const key: Value = .{ .number = @floatFromInt(integer) };
-            if (object == .table) if (object.table.slotForKey(key)) |local| return self.getLocalSlot(object, local);
-            return self.getIndex(object, key);
-        }
-        if (static_fields.nameForRef(slot)) |name| {
-            if (object == .table) if (object.table.native_namespace) |namespace| {
-                if (static_fields.slotForRef(namespace, slot)) |local| return self.getLocalSlot(object, local);
-            };
-            return self.getIndex(object, .{ .string = name });
-        }
-        return self.getLocalSlot(object, slot);
-    }
-
-    fn setLocalSlot(self: *Context, object: Value, slot: u32, value: Value) anyerror!void {
-        if (object != .table) return error.IndexType;
-        if (object.table.rawGetSlot(slot) != null or object.table.metatable == null)
-            return object.table.rawSetSlot(slot, value);
-        const key = object.table.fieldKey(slot) orelse return error.BadAnonymousShapeMetatable;
-        return self.setIndex(object, key, value);
-    }
-
-    pub fn setSlot(self: *Context, object: Value, slot: u32, value: Value) anyerror!void {
-        if (static_keys.integerForRef(slot)) |integer| {
-            const key: Value = .{ .number = @floatFromInt(integer) };
-            if (object == .table) if (object.table.slotForKey(key)) |local| return self.setLocalSlot(object, local, value);
-            return self.setIndex(object, key, value);
-        }
-        if (static_fields.nameForRef(slot)) |name| {
-            if (object == .table) if (object.table.native_namespace) |namespace| {
-                if (static_fields.slotForRef(namespace, slot)) |local| return self.setLocalSlot(object, local, value);
-            };
-            return self.setIndex(object, .{ .string = name }, value);
-        }
-        return self.setLocalSlot(object, slot, value);
-    }
-    pub fn getChoice(self: *Context, object: Value, choice: u32, key: Value) anyerror!Value {
-        if (object != .table) return error.IndexType;
-        if (object.table.rawGetChoice(choice, key)) |value| return value;
-        if (object.table.metatable == null) return .nil;
-        return self.getIndex(object, key);
-    }
-
-    pub fn setChoice(self: *Context, object: Value, choice: u32, key: Value, value: Value) anyerror!void {
-        if (object != .table) return error.IndexType;
-        if (object.table.rawGetChoice(choice, key) != null or object.table.metatable == null)
-            return object.table.rawSetChoice(choice, key, value);
-        return self.setIndex(object, key, value);
     }
 
     pub fn binaryArith(self: *Context, op: ArithOp, a: Value, b: Value) anyerror!Value {
@@ -1477,9 +1207,7 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     var ctx = try Context.initProgram(arena.allocator(), 1, 3);
     defer ctx.deinit();
     const functions = [_]FunctionFn{ stabilize(ModuleRuntimeProbe.named), stabilize(ModuleRuntimeProbe.packageOverride), stabilize(ModuleRuntimeProbe.loop) };
-    const roots = [_]u32{ 0, 1, 2 };
-    ctx.module_roots = &roots;
-    ctx.module_root_entries = &.{ &functions[0], &functions[1], &functions[2] };
+    ctx.module_root_entries = &functions;
     ctx.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
     ctx.package_loaded = try ctx.newTable();
     try ctx.ensureModule(0);
@@ -1527,9 +1255,7 @@ test "recursive module loads keep distinct cache slots" {
     var ctx = try Context.initProgram(arena.allocator(), 0, 2);
     defer ctx.deinit();
     const functions = [_]FunctionFn{ stabilize(RecursiveModuleCacheProbe.outer), stabilize(RecursiveModuleCacheProbe.inner) };
-    const roots = [_]u32{ 0, 1 };
-    ctx.module_roots = &roots;
-    ctx.module_root_entries = &.{ &functions[0], &functions[1] };
+    ctx.module_root_entries = &functions;
 
     const outer = try ctx.loadModule(0, null);
     const loaded_inner = try ctx.loadModule(1, null);
@@ -1538,32 +1264,6 @@ test "recursive module loads keep distinct cache slots" {
     try std.testing.expectEqualStrings("inner", loaded_inner.string);
     try std.testing.expectEqualStrings("outer", cached_outer.string);
     try std.testing.expect(ctx.module_values.get(0) != null and ctx.module_values.get(1) != null);
-}
-
-test "descriptor module roots materialize constants without generated functions" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.initProgram(arena.allocator(), 0, 2);
-    defer ctx.deinit();
-    const functions = [_]FunctionFn{stabilize(descriptorModuleRootStub)};
-    const roots = [_]u32{ 0, 0 };
-    const root_values = [_]u32{ 0, module_root_empty };
-    const constants = [_]Constant{.{ .table = .{ .first = 0, .count = 0 } }};
-    const constant_blocks = [_]ConstantBlock{.{ .first = 0, .values = &constants }};
-    ctx.constant_blocks = &constant_blocks;
-    ctx.module_roots = &roots;
-    ctx.module_root_entries = &.{ &functions[0], &functions[0] };
-    ctx.module_root_values = &root_values;
-
-    const first = try ctx.loadModule(0, null);
-    const second = try ctx.loadModule(0, null);
-    try std.testing.expect(first == .table and second == .table and first.table == second.table);
-    var child = try ctx.forkProgram(arena.allocator());
-    defer child.deinit();
-    const fresh = try child.loadModule(0, null);
-    try std.testing.expect(fresh == .table and fresh.table != first.table);
-    const empty = try ctx.loadModule(1, null);
-    try std.testing.expect(empty == .boolean and empty.boolean);
 }
 
 const NativeHostProbe = struct {
@@ -1612,186 +1312,6 @@ test "AOT runtime globals are numeric slots without hash storage" {
     try ctx.setGlobal(3, .{ .number = 7 });
     try std.testing.expectEqual(@as(f64, 7), ctx.getGlobal(3).number);
 }
-test "AOT constant templates preserve fresh table identity across blocks" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 0);
-    defer ctx.deinit();
-    const shape_keys = [_]Value{.{ .string = "x" }};
-    const shapes = [_]Shape{.{ .field_keys = &shape_keys, .field_count = 1, .open = true }};
-    ctx.shapes = &shapes;
-    const constants_a = [_]Constant{ .{ .number = 4 }, .{ .string = "x" } };
-    const constants_b = [_]Constant{
-        .{ .table = .{ .first = 0, .count = 2, .shape = 0 } },
-        .{ .table = .{ .first = 2, .count = 1 } },
-    };
-    const entries_a = [_]ConstantEntry{
-        packConstantEntry(1, 0),
-        packConstantEntry(implicit_list_key, 0),
-    };
-    const entries_b = [_]ConstantEntry{packConstantEntry(1, 2)};
-    const constant_blocks = [_]ConstantBlock{
-        .{ .first = 0, .values = &constants_a },
-        .{ .first = 2, .values = &constants_b },
-    };
-    const entry_blocks = [_]ConstantEntryBlock{
-        .{ .first = 0, .values = &entries_a },
-        .{ .first = 2, .values = &entries_b },
-    };
-    ctx.constant_blocks = &constant_blocks;
-    ctx.constant_entry_blocks = &entry_blocks;
-    const left = try ctx.materializeConstant(2);
-    const right = try ctx.materializeConstant(2);
-    try std.testing.expect(left == .table and right == .table and left.table != right.table);
-    try std.testing.expect(left.table.shape == &shapes[0] and left.table.slots.len == 1);
-    try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .string = "x" }).?.number);
-    try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .number = 1 }).?.number);
-    const outer_left = try ctx.materializeConstant(3);
-    const outer_right = try ctx.materializeConstant(3);
-    const nested_left = outer_left.table.rawGet(.{ .string = "x" }).?;
-    const nested_right = outer_right.table.rawGet(.{ .string = "x" }).?;
-    try std.testing.expect(nested_left == .table and nested_right == .table and nested_left.table != nested_right.table);
-}
-
-test "external AOT data materializes fresh shaped tables" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 0);
-    defer ctx.deinit();
-    const shape_keys = [_]Value{.{ .string = "x" }};
-    const shapes = [_]Shape{.{ .field_keys = &shape_keys, .field_count = 1, .open = true }};
-    ctx.shapes = &shapes;
-
-    const l = try aot_data.layout(4, 3, 1);
-    const bytes = try arena.allocator().alloc(u8, l.total);
-    @memset(bytes, 0);
-    try aot_data.writeHeader(bytes, l);
-    try aot_data.writeRecord(bytes, l, 0, .number, @bitCast(@as(f64, 4)), 0);
-    try aot_data.writeRecord(bytes, l, 1, .string, 0, 1);
-    try aot_data.writeRecord(bytes, l, 2, .table, (@as(u64, 2) << 32), 0);
-    try aot_data.writeRecord(bytes, l, 3, .table, (@as(u64, 1) << 32) | 2, no_shape);
-    try aot_data.writeEntry(bytes, l, 0, packConstantEntry(1, 0));
-    try aot_data.writeEntry(bytes, l, 1, packConstantEntry(implicit_list_key, 0));
-    try aot_data.writeEntry(bytes, l, 2, packConstantEntry(1, 2));
-    bytes[l.strings_offset] = 'x';
-    ctx.program_data = try ProgramData.parse(bytes);
-
-    const left = try ctx.materializeConstant(2);
-    const right = try ctx.materializeConstant(2);
-    try std.testing.expect(left == .table and right == .table and left.table != right.table);
-    try std.testing.expect(left.table.shape == &shapes[0]);
-    try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .string = "x" }).?.number);
-    try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .number = 1 }).?.number);
-    const outer_left = try ctx.materializeConstant(3);
-    const outer_right = try ctx.materializeConstant(3);
-    try std.testing.expect(outer_left.table.rawGet(.{ .string = "x" }).?.table != outer_right.table.rawGet(.{ .string = "x" }).?.table);
-}
-
-test "AOT external program data preserves fresh table materialization" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 0);
-    defer ctx.deinit();
-    const shape_keys = [_]Value{.{ .string = "x" }};
-    const shapes = [_]Shape{.{ .field_keys = &shape_keys, .field_count = 1, .open = true }};
-    ctx.shapes = &shapes;
-
-    const l = try aot_data.layout(3, 2, 1);
-    const bytes = try arena.allocator().alloc(u8, l.total);
-    @memset(bytes, 0);
-    try aot_data.writeHeader(bytes, l);
-    try aot_data.writeRecord(bytes, l, 0, .number, @bitCast(@as(f64, 4)), 0);
-    try aot_data.writeRecord(bytes, l, 1, .string, 0, 1);
-    try aot_data.writeRecord(bytes, l, 2, .table, (@as(u64, 2) << 32), 0);
-    try aot_data.writeEntry(bytes, l, 0, packConstantEntry(1, 0));
-    try aot_data.writeEntry(bytes, l, 1, packConstantEntry(implicit_list_key, 0));
-    bytes[l.strings_offset] = 'x';
-    ctx.program_data = try aot_data.View.parse(bytes);
-
-    const left = try ctx.materializeConstant(2);
-    const right = try ctx.materializeConstant(2);
-    try std.testing.expect(left == .table and right == .table and left.table != right.table);
-    try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .string = "x" }).?.number);
-    try std.testing.expectEqual(@as(f64, 4), left.table.rawGet(.{ .number = 1 }).?.number);
-}
-
-test "AOT frames without captures allocate no cell plane" {
-    var regs: [3]Value = undefined;
-    var frame = try Frame.initAotNoCells(&regs, &.{.{ .number = 7 }}, 2, false);
-    try std.testing.expectEqual(@as(usize, 0), frame.cells.len);
-    try std.testing.expectEqual(@as(f64, 7), frame.get(0).number);
-    try std.testing.expect(frame.get(1) == .nil);
-    frame.set(2, .{ .string = "ok" });
-    try std.testing.expectEqualStrings("ok", frame.get(2).string);
-    var ctx = try Context.init(std.testing.allocator, 0);
-    defer ctx.deinit();
-    try std.testing.expectError(error.BadFrame, frame.ensureCell(&ctx, 2));
-}
-
-test "AOT frames permit a captured-cell register prefix" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 0);
-    defer ctx.deinit();
-    var regs: [5]Value = undefined;
-    var cells: [2]?*Cell = undefined;
-    var frame = try Frame.initAot(&regs, &cells, &.{.{ .number = 4 }}, 1, false);
-    try std.testing.expectEqual(@as(usize, 2), frame.cells.len);
-    frame.set(4, .{ .string = "plain" });
-    try std.testing.expectEqualStrings("plain", frame.get(4).string);
-    frame.set(1, .{ .number = 7 });
-    const cell = try frame.ensureCell(&ctx, 1);
-    frame.set(1, .{ .number = 8 });
-    try std.testing.expectEqual(@as(f64, 8), cell.value.number);
-    frame.detachCell(1);
-    try std.testing.expect(frame.cells[1] == null);
-    try std.testing.expectEqual(@as(f64, 8), frame.get(1).number);
-    const reattached = try frame.ensureCell(&ctx, 1);
-    try std.testing.expect(reattached != cell);
-    try std.testing.expectEqual(@as(f64, 8), reattached.value.number);
-    try std.testing.expectError(error.BadFrame, frame.ensureCell(&ctx, 2));
-    const env = try frame.ensureModuleEnv(&ctx);
-    try std.testing.expectEqual(@as(usize, 2), env.cells.len);
-    try std.testing.expect(env.cells[1] == reattached);
-}
-
-test "AOT module functions share one activation environment" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.initProgram(arena.allocator(), 0, 2);
-    defer ctx.deinit();
-    const functions = [_]FunctionFn{
-        stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub),
-        stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub), stabilize(descriptorModuleRootStub),
-    };
-    var regs: [3]Value = undefined;
-    var cells: [3]?*Cell = undefined;
-    var frame = try Frame.init(&regs, &cells, &.{}, 0, false);
-    frame.set(1, .{ .number = 7 });
-    _ = try frame.ensureCell(&ctx, 1);
-    const env = try frame.ensureModuleEnv(&ctx);
-    try std.testing.expect(env == try frame.ensureModuleEnv(&ctx));
-    const first = ctx.makeModuleFunction(4, functions[4], env);
-    const second = ctx.makeModuleFunction(5, functions[5], env);
-    try std.testing.expect(first.callable.env.modulePtr() == second.callable.env.modulePtr());
-    try std.testing.expect(first.callable.env.closurePtr() == null);
-    try std.testing.expect(!rawEqual(first, second));
-    try ctx.bindModuleEnv(1, env);
-    try ctx.bindModuleEnv(1, env);
-    const registered = try ctx.moduleCaptures(1);
-    try std.testing.expect(registered.module == env);
-    const capture = try registered.cell(0, 1);
-    try std.testing.expectEqual(@as(f64, 7), capture.value.number);
-    frame.set(1, .{ .number = 9 });
-    try std.testing.expectEqual(@as(f64, 9), capture.value.number);
-    var other_regs: [1]Value = undefined;
-    var other_cells: [1]?*Cell = undefined;
-    var other_frame = try Frame.init(&other_regs, &other_cells, &.{}, 0, false);
-    const other_env = try other_frame.ensureModuleEnv(&ctx);
-    try std.testing.expectError(error.ModuleEnvironmentMismatch, ctx.bindModuleEnv(1, other_env));
-    if (@sizeOf(usize) == 8) try std.testing.expectEqual(@as(usize, 32), @sizeOf(FunctionValue));
-}
-
 pub fn mergeValues(prefix: []const Value, tail: []const Value) ![]Value {
     const out = try std.heap.smp_allocator.alloc(Value, prefix.len + tail.len);
     @memcpy(out[0..prefix.len], prefix);
@@ -1836,7 +1356,6 @@ pub fn bindGlobalTable(ctx: *Context, shape: ?*const Shape, env_slot: u32) !void
 fn guardCapture(captures: Captures) f64 {
     return switch (captures) {
         .direct => |cells| if (cells.len == 0) 0 else cells[0].value.number,
-        .module => |env| if (env.cells.len == 0 or env.cells[0] == null) 0 else env.cells[0].?.value.number,
         .native => 0,
     };
 }
@@ -1962,28 +1481,6 @@ fn nativeFixedBufferedProbe(_: ?*anyopaque, _: *Context, args: []const Value, re
     storeReturn(out, 0, if (args.len == 0) .nil else args[0]);
     storeReturn(out, 1, .{ .number = 42 });
     return out;
-}
-
-test "dynamic fixed result storage buffers Lua functions and preserves native fallback" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 0);
-    defer ctx.deinit();
-    var regs: [3]Value = undefined;
-    var frame = try Frame.initAotNoCells(&regs, &.{}, 0, false);
-    defer frame.deinit();
-
-    const buffered = Value{ .callable = .{ .id = 0, .identity = 1, .entry = stabilizeBuffered(bufferedResultProbe) } };
-    try ctx.callValueStoreFixed(&frame, 0, 1, buffered, &.{.{ .number = 3 }});
-    try std.testing.expectEqual(@as(f64, 3), frame.get(0).number);
-
-    const unbuffered = Value{ .callable = .{ .id = 1, .identity = 2, .entry = stabilize(guardTestExpected) } };
-    try ctx.callValueStoreFixed(&frame, 1, 1, unbuffered, &.{.{ .number = 4 }});
-    try std.testing.expectEqual(@as(f64, 4), frame.get(1).number);
-
-    const native = try ctx.newNative(null, nativeBufferedOwnershipProbe);
-    try ctx.callValueStoreFixed(&frame, 2, 1, native, &.{.{ .number = 5 }});
-    try std.testing.expectEqual(@as(f64, 5), frame.get(2).number);
 }
 
 test "fixed dynamic calls borrow and truncate caller result storage" {
@@ -2132,21 +1629,16 @@ test "AOT context startup stays independent of corpus module count" {
     try std.testing.expectEqual(@as(usize, 2), ctx.globals.len);
     try std.testing.expectEqual(@as(usize, 1_000_000), ctx.module_count);
     try std.testing.expectEqual(@as(usize, 0), ctx.module_loading.count());
-    try std.testing.expectEqual(@as(usize, 0), ctx.module_envs.count());
     try std.testing.expectEqual(@as(usize, 0), ctx.module_values.count());
 }
 
-test "forked AOT context shares program metadata but resets runtime state" {
+test "forked AOT context shares native module entries but resets runtime state" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var parent = try Context.initProgram(arena.allocator(), 2, 1);
     defer parent.deinit();
     const functions = [_]FunctionFn{stabilize(ModuleRuntimeProbe.named)};
-    const roots = [_]u32{0};
-    const root_values = [_]u32{module_root_function};
-    parent.module_roots = &roots;
-    parent.module_root_entries = &.{&functions[0]};
-    parent.module_root_values = &root_values;
+    parent.module_root_entries = &functions;
     parent.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
     var host_marker: u8 = 0;
     parent.setHost(&host_marker);
@@ -2156,8 +1648,7 @@ test "forked AOT context shares program metadata but resets runtime state" {
 
     var child = try parent.forkProgram(arena.allocator());
     defer child.deinit();
-    try std.testing.expect(child.module_roots.ptr == parent.module_roots.ptr);
-    try std.testing.expect(child.module_root_values.ptr == parent.module_root_values.ptr);
+    try std.testing.expect(child.module_root_entries.ptr == parent.module_root_entries.ptr);
     try std.testing.expect(child.getGlobal(1) == .nil);
     try std.testing.expectEqual(@as(usize, 0), child.module_values.count());
     try std.testing.expectEqual(@as(usize, 1), parent.module_values.count());
@@ -2166,24 +1657,22 @@ test "forked AOT context shares program metadata but resets runtime state" {
     try std.testing.expectEqual(@as(u32, 0), try child.resolveModule("Module:A"));
 }
 
-test "static field refs use native slots and generic fallback" {
+test "native namespace fields use fixed slots with generic fallback" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var ctx = try Context.init(arena.allocator(), 0);
     defer ctx.deinit();
-    const insert_ref = static_fields.refForName("insert") orelse return error.MissingStaticField;
 
     const native = try ctx.newNativeNamespace(.table);
     try native.rawSet(ctx.allocator, .{ .string = "insert" }, .{ .number = 3 });
-    try std.testing.expectEqual(@as(f64, 3), (try ctx.getSlot(.{ .table = native }, insert_ref)).number);
-    try ctx.setSlot(.{ .table = native }, insert_ref, .{ .number = 4 });
-    try std.testing.expectEqual(@as(f64, 4), native.rawGet(.{ .string = "insert" }).?.number);
+    try std.testing.expectEqual(@as(f64, 3), native.rawGet(.{ .string = "insert" }).?.number);
+    try std.testing.expectEqual(@as(usize, static_fields.fieldCount(.table)), native.slots.len);
+    try std.testing.expectEqual(@as(usize, 0), native.map.count());
 
     const generic = try ctx.newTable();
     try generic.rawSet(ctx.allocator, .{ .string = "insert" }, .{ .number = 7 });
-    try std.testing.expectEqual(@as(f64, 7), (try ctx.getSlot(.{ .table = generic }, insert_ref)).number);
-    try ctx.setSlot(.{ .table = generic }, insert_ref, .{ .number = 8 });
-    try std.testing.expectEqual(@as(f64, 8), generic.rawGet(.{ .string = "insert" }).?.number);
+    try std.testing.expectEqual(@as(f64, 7), generic.rawGet(.{ .string = "insert" }).?.number);
+    try std.testing.expectEqual(@as(usize, 1), generic.map.count());
 }
 
 test "generic tables use dense numeric slots and keep sparse keys hashed" {
@@ -2229,40 +1718,53 @@ test "generic tables use dense numeric slots and keep sparse keys hashed" {
     try std.testing.expectEqual(@as(usize, 8), table.rawLen());
 }
 
-test "numeric shape keys share slot raw length and iteration semantics" {
+test "program string shapes use sorted slots with open fallback" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var ctx = try Context.init(arena.allocator(), 0);
     defer ctx.deinit();
-    const keys = [_]Value{ .{ .number = 1 }, .{ .string = "x" } };
-    const shapes = [_]Shape{.{ .field_keys = &keys, .field_count = 2, .open = true }};
-    ctx.shapes = &shapes;
-    const table = try ctx.newShape(0);
-    try table.rawSet(ctx.allocator, .{ .number = 1 }, .{ .number = 3 });
-    try std.testing.expectEqual(@as(f64, 3), (try ctx.getSlot(.{ .table = table }, 0)).number);
-    try ctx.setSlot(.{ .table = table }, 0, .{ .number = 4 });
-    try std.testing.expectEqual(@as(f64, 4), table.rawGet(.{ .number = 1 }).?.number);
-    try std.testing.expectEqual(@as(f64, 4), table.rawGetNumber(1).?.number);
-    try std.testing.expectEqual(@as(usize, 1), table.rawLen());
+
+    const keys = [_]Value{ .{ .string = "zeta" }, .{ .string = "alpha" }, .{ .string = "middle" } };
+    const sorted = [_]u32{ 1, 2, 0 };
+    const shapes = [_]Shape{.{
+        .field_keys = &keys,
+        .sorted_string_slots = &sorted,
+        .field_count = keys.len,
+        .open = true,
+    }};
+    ctx.program_shapes = &shapes;
+    const export_shapes = [_]u32{0};
+    ctx.module_export_shape_ids = &export_shapes;
+    const known = ctx.moduleExportSlot(0, "alpha") orelse return error.MissingShapeSlot;
+    try std.testing.expectEqual(@as(u32, 0), known.shape_id);
+    try std.testing.expectEqual(@as(u32, 1), known.slot);
+    try std.testing.expect(ctx.moduleExportSlot(0, "unknown") == null);
+    const table = try ctx.newProgramShape(0);
+    try table.rawSet(ctx.allocator, .{ .string = "zeta" }, .{ .number = 1 });
+    try table.rawSet(ctx.allocator, .{ .string = "alpha" }, .{ .number = 2 });
+    try table.rawSet(ctx.allocator, .{ .string = "other" }, .{ .number = 3 });
+    try std.testing.expectEqual(@as(f64, 1), table.rawGet(.{ .string = "zeta" }).?.number);
+    try std.testing.expectEqual(@as(f64, 2), table.rawGet(.{ .string = "alpha" }).?.number);
+    try std.testing.expectEqual(@as(f64, 2), (try ctx.getProgramShapeField(.{ .table = table }, known.shape_id, known.slot, "alpha")).number);
+    try std.testing.expectEqual(@as(f64, 3), table.rawGet(.{ .string = "other" }).?.number);
+    try std.testing.expectEqual(@as(usize, 1), table.map.count());
 }
 
-test "static numeric key refs use shaped slots and generic fallback" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 0);
+test "runtime Value stays compact and function identities never wrap" {
+    try std.testing.expectEqual(@as(usize, 32), @sizeOf(Value));
+    try std.testing.expectEqual(@as(usize, 24), @sizeOf(FunctionValue));
+    var ctx = try Context.init(std.testing.allocator, 0);
     defer ctx.deinit();
-    const one_ref = static_keys.refForInteger(1) orelse return error.MissingStaticKey;
-    const keys = [_]Value{.{ .number = 1 }};
-    const shapes = [_]Shape{.{ .field_keys = &keys, .field_count = 1, .open = true }};
-    ctx.shapes = &shapes;
-    const shaped = try ctx.newShape(0);
-    try shaped.rawSet(ctx.allocator, .{ .number = 1 }, .{ .number = 3 });
-    try std.testing.expectEqual(@as(f64, 3), (try ctx.getSlot(.{ .table = shaped }, one_ref)).number);
-    try ctx.setSlot(.{ .table = shaped }, one_ref, .{ .number = 4 });
-    try std.testing.expectEqual(@as(f64, 4), shaped.rawGet(.{ .number = 1 }).?.number);
-    const generic = try ctx.newTable();
-    try generic.rawSet(ctx.allocator, .{ .number = 1 }, .{ .number = 7 });
-    try std.testing.expectEqual(@as(f64, 7), (try ctx.getSlot(.{ .table = generic }, one_ref)).number);
-    try ctx.setSlot(.{ .table = generic }, one_ref, .{ .number = 8 });
-    try std.testing.expectEqual(@as(f64, 8), generic.rawGet(.{ .number = 1 }).?.number);
+    ctx.next_identity = std.math.maxInt(u32);
+    const last = try ctx.newNative(null, struct {
+        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return &.{};
+        }
+    }.call);
+    try std.testing.expectEqual(std.math.maxInt(u32), last.callable.identity);
+    try std.testing.expectError(error.FunctionIdentityExhausted, ctx.newNative(null, struct {
+        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return &.{};
+        }
+    }.call));
 }
