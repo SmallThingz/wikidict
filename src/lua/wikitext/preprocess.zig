@@ -190,6 +190,45 @@ fn rawTagEnd(s: []const u8, start: usize) ?usize {
     return null;
 }
 
+pub fn findTemplateOpenOutsideNowiki(s: []const u8, start: usize) ?usize {
+    var i = start;
+    while (i + 1 < s.len) {
+        if (s[i] == '<') {
+            var p = i + 1;
+            while (p < s.len and std.ascii.isWhitespace(s[p])) : (p += 1) {}
+            const name_start = p;
+            while (p < s.len and (std.ascii.isAlphanumeric(s[p]) or s[p] == '-')) : (p += 1) {}
+            if (p > name_start and std.ascii.eqlIgnoreCase(s[name_start..p], "nowiki")) {
+                const open_end = rawTagEnd(s, i) orelse return null;
+                var before_gt = open_end - 1;
+                while (before_gt > i and std.ascii.isWhitespace(s[before_gt - 1])) : (before_gt -= 1) {}
+                if (before_gt > i and s[before_gt - 1] == '/') {
+                    i = open_end;
+                    continue;
+                }
+                var search = open_end;
+                var closed = false;
+                while (std.mem.indexOfScalarPos(u8, s, search, '<')) |lt| {
+                    if (lt + 9 <= s.len and s[lt + 1] == '/' and std.ascii.eqlIgnoreCase(s[lt + 2 .. lt + 8], "nowiki")) {
+                        const after = lt + 8;
+                        if (after >= s.len or s[after] == '>' or std.ascii.isWhitespace(s[after])) {
+                            i = rawTagEnd(s, lt) orelse return null;
+                            closed = true;
+                            break;
+                        }
+                    }
+                    search = lt + 1;
+                }
+                if (!closed) return null;
+                continue;
+            }
+        }
+        if (s[i] == '{' and s[i + 1] == '{') return i;
+        i += 1;
+    }
+    return null;
+}
+
 fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
     if (start >= s.len or s[start] != '<') return null;
     if (std.mem.startsWith(u8, s[start..], "<!--")) {
@@ -288,6 +327,13 @@ pub const ParameterSplit = struct { key: []const u8, default: ?[]const u8 };
 pub fn splitParameter(s: []const u8) ParameterSplit {
     if (findTopDelimiter(s, '|')) |bar| return .{ .key = s[0..bar], .default = s[bar + 1 ..] };
     return .{ .key = s, .default = null };
+}
+
+test "template opener scan skips raw nowiki bodies" {
+    const source = "a<NoWiKi class='x'>{{hidden}}</NoWiKi>b{{visible}}";
+    try std.testing.expectEqual(std.mem.indexOf(u8, source, "{{visible}}").?, findTemplateOpenOutsideNowiki(source, 0).?);
+    try std.testing.expect(findTemplateOpenOutsideNowiki("<nowiki>{{hidden}}", 0) == null);
+    try std.testing.expectEqual(@as(usize, 10), findTemplateOpenOutsideNowiki("<nowiki/> {{x}}", 0).?);
 }
 
 test "nested template and parameter boundaries match MediaWiki preprocessing" {

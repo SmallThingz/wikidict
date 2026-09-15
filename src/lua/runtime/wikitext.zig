@@ -162,7 +162,7 @@ pub const Expander = struct {
     fn expandPageWikitext(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8) anyerror![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         var pos: usize = 0;
-        while (std.mem.indexOfPos(u8, text, pos, "{{")) |open| {
+        while (preprocess.findTemplateOpenOutsideNowiki(text, pos)) |open| {
             const literal = text[pos..open];
             try self.observePageOutput(literal);
             try out.appendSlice(self.runtime.allocator, literal);
@@ -259,7 +259,7 @@ pub const Expander = struct {
         if (depth > self.max_depth) return error.TemplateDepth;
         var out: std.ArrayList(u8) = .empty;
         var pos: usize = 0;
-        while (std.mem.indexOfPos(u8, text, pos, "{{")) |open| {
+        while (preprocess.findTemplateOpenOutsideNowiki(text, pos)) |open| {
             try out.appendSlice(self.runtime.allocator, text[pos..open]);
             if (open + 2 < text.len and text[open + 2] == '{') {
                 const close = preprocess.findParamEnd(text, open) orelse {
@@ -876,6 +876,8 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     const source = "{{Hello|Bob|1}}|{{Only}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|yes|yes|14|E|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
+    const protected = try expander.expandFragment("Page", "<nowiki>{{Hello|Bob|1}}</nowiki>|{{Hello|A|}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{Hello|Bob|1}}</nowiki>|Hi A N", protected);
     try std.testing.expect(runtime.current_frame == null);
     var symbolic_expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .resolve_call_symbol = TestProvider.resolveCallSymbol, .get_template_symbol = TestProvider.getTemplateSymbol } };
     const symbolic = try symbolic_expander.expandFragment("Page", "{{@template|Bob|1}}|{{#invoke:@module|@function|x=symbolic}}", 1_670_803_200);
@@ -913,6 +915,9 @@ test "native AOT frame callbacks recurse through the same page expander" {
     const pre = try runtime.callValue(preprocess_fn, &.{ frame, .{ .string = "{{{x}}}-{{Hello|A|}}" } });
     defer rt.freeResults(pre);
     try std.testing.expectEqualStrings("Z-Hi A N", pre[0].string);
+    const protected_pre = try runtime.callValue(preprocess_fn, &.{ frame, .{ .string = "<nowiki>{{Hello|A|1}}</nowiki>|{{Hello|B|}}" } });
+    defer rt.freeResults(protected_pre);
+    try std.testing.expectEqualStrings("<nowiki>{{Hello|A|1}}</nowiki>|Hi B N", protected_pre[0].string);
     const parser = try runtime.getIndex(frame, .{ .string = "callParserFunction" });
     const date = try runtime.callValue(parser, &.{ frame, .{ .string = "#formatdate" }, .{ .string = "12-December-2022" }, .{ .string = "dmy" } });
     defer rt.freeResults(date);
