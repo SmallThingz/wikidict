@@ -6,8 +6,7 @@ pub const catalog = enc.blob_catalog;
 
 pub fn parseKind(text: []const u8) ?Kind {
     if (std.mem.eql(u8, text, "sign-gloss")) return .sign_gloss;
-    const kind = std.meta.stringToEnum(Kind, text) orelse return null;
-    return if ((kind == .supplement or kind == .symbols or kind == .templates or kind == .redirects or kind == .pages)) null else kind;
+    return std.meta.stringToEnum(Kind, text);
 }
 pub fn pathAlloc(a: std.mem.Allocator, root: []const u8, kind: Kind, language: []const u8) ![]u8 {
     if (kind == .language) {
@@ -41,16 +40,24 @@ pub const Store = struct {
         self.allocator.free(self.root);
         self.* = undefined;
     }
-    pub fn count(self: Store) usize { return self.file.recordCount(); }
-    pub fn titleAt(self: Store, index: usize) ![]const u8 { return self.file.titleAt(index); }
-    pub fn find(self: Store, title: []const u8) !?usize { return self.file.find(title); }
+    pub fn count(self: Store) usize {
+        return self.file.recordCount();
+    }
+    pub fn titleAt(self: Store, index: usize) ![]const u8 {
+        return self.file.titleAt(index);
+    }
+    pub fn find(self: Store, title: []const u8) !?usize {
+        return self.file.find(title);
+    }
     pub fn metadata(self: Store) ?enc.blob_format.LanguageMetadata {
         return if (self.file.view.kind == .language) self.file.view.languageMetadata() catch null else null;
     }
     pub const Raw = struct {
         record: dec.BlobRecordView,
         storage: @import("blob_storage").Record,
-        pub fn deinit(self: *Raw) void { self.storage.deinit(); }
+        pub fn deinit(self: *Raw) void {
+            self.storage.deinit();
+        }
     };
     pub fn recordAlloc(self: *Store, a: std.mem.Allocator, index: usize) !Raw {
         var r = try self.file.readAlloc(a, index);
@@ -98,7 +105,7 @@ test "prefix ranges handle exact matches empty prefixes unicode and misses" {
     try std.testing.expectEqual(Range{ .start = 3, .end = 3 }, try prefixRange(index, "missing"));
 }
 
-test "compiled records resolve without companion or symbol machinery" {
+test "compiled records need no resolution machinery" {
     const a = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -118,5 +125,5 @@ test "compiled records resolve without companion or symbol machinery" {
     defer db.deinit();
     var raw = try db.recordAlloc(a, (try db.find("cat")).?);
     defer raw.deinit();
-    try std.testing.expectEqualStrings(payload_bytes, raw.record.payloadBytes());
+    try std.testing.expectEqualStrings(payload_bytes, @import("model.zig").payload(raw.record));
 }

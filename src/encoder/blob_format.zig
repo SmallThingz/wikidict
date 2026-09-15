@@ -1,13 +1,9 @@
 const std = @import("std");
 
 // Logical, uncompressed blob format. Storage/transport compression stays external.
-pub const magic = "WIKBLB05";
-pub const legacy_magic = "WIKBLB04";
-pub const version: u8 = 5;
-pub const PartKind = @import("part_kind.zig").Kind;
-pub const legacy_header_len: usize = magic.len + 1;
-// Cross-file symbol identity prevents a valid but wrong catalog from rebinding IDs.
-pub const header_len: usize = legacy_header_len + 32;
+pub const magic = "WIKBLB06";
+pub const version: u8 = 6;
+pub const header_len: usize = magic.len + 1;
 pub const max_varuint_len: usize = 10;
 
 pub const BlobKind = enum(u8) {
@@ -17,11 +13,6 @@ pub const BlobKind = enum(u8) {
     reconstruction = 4,
     rhymes = 5,
     sign_gloss = 6,
-    supplement = 7,
-    symbols = 8,
-    templates = 9,
-    redirects = 11,
-    pages = 12,
 };
 
 pub const RecordInput = struct {
@@ -90,8 +81,6 @@ const ParsedRecord = struct {
 };
 
 pub const BlobView = struct {
-    symbolic: bool = false,
-    binding_id: [32]u8 = @splat(0),
     bytes: []const u8,
     kind: BlobKind,
     metadata: []const u8,
@@ -101,21 +90,12 @@ pub const BlobView = struct {
         return .{ .blob = self };
     }
     pub fn languageMetadata(self: BlobView) error{InvalidBlob}!LanguageMetadata {
-        if (self.kind != .language and self.kind != .supplement) return error.InvalidBlob;
+        if (self.kind != .language) return error.InvalidBlob;
         var cursor: usize = 0;
         const code = try readNulField(self.metadata, &cursor);
         const heading = try readNulField(self.metadata, &cursor);
-        if (heading.len == 0) return error.InvalidBlob;
-        if (self.kind == .supplement) {
-            if (cursor + 1 != self.metadata.len) return error.InvalidBlob;
-            _ = try self.supplementKind();
-        } else if (cursor != self.metadata.len) return error.InvalidBlob;
+        if (heading.len == 0 or cursor != self.metadata.len) return error.InvalidBlob;
         return .{ .code = code, .heading = heading };
-    }
-
-    pub fn supplementKind(self: BlobView) error{InvalidBlob}!PartKind {
-        if (self.kind != .supplement or self.metadata.len == 0) return error.InvalidBlob;
-        return @import("part_kind.zig").fromByte(self.metadata[self.metadata.len - 1]) catch error.InvalidBlob;
     }
 
     pub fn validate(self: BlobView) error{InvalidBlob}!void {
@@ -130,7 +110,7 @@ pub const BlobView = struct {
             cursor = parsed.next;
         }
         if (cursor != self.records.len) return error.InvalidBlob;
-        if (self.kind == .language or self.kind == .supplement) _ = try self.languageMetadata();
+        if (self.kind == .language) _ = try self.languageMetadata();
     }
 
     pub fn buildIndexAlloc(self: BlobView, allocator: std.mem.Allocator) !IndexedBlobView {
@@ -175,26 +155,14 @@ pub const BlobView = struct {
     }
 };
 pub fn encodeHeader(kind: BlobKind) [header_len]u8 {
-    return encodeLinkedHeader(kind, @splat(0));
-}
-pub fn encodeLinkedHeader(kind: BlobKind, binding: [32]u8) [header_len]u8 {
     var out: [header_len]u8 = undefined;
-    @memcpy(out[legacy_header_len..], &binding);
     @memcpy(out[0..magic.len], magic);
     out[magic.len] = @intFromEnum(kind);
     return out;
 }
 
-pub fn encodeUnlinkedHeader(kind: BlobKind) [legacy_header_len]u8 {
-    var out: [legacy_header_len]u8 = undefined;
-    @memcpy(out[0..magic.len], legacy_magic);
-    out[magic.len] = @intFromEnum(kind);
-    return out;
-}
-
 fn decodeKind(bytes: []const u8) error{InvalidBlob}!BlobKind {
-    if (bytes.len < legacy_header_len or (!std.mem.eql(u8, bytes[0..magic.len], magic) and !std.mem.eql(u8, bytes[0..magic.len], legacy_magic))) return error.InvalidBlob;
-    if (std.mem.eql(u8, bytes[0..magic.len], magic) and bytes.len < header_len) return error.InvalidBlob;
+    if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..magic.len], magic)) return error.InvalidBlob;
     return switch (bytes[magic.len]) {
         @intFromEnum(BlobKind.language) => .language,
         @intFromEnum(BlobKind.thesaurus) => .thesaurus,
@@ -202,11 +170,6 @@ fn decodeKind(bytes: []const u8) error{InvalidBlob}!BlobKind {
         @intFromEnum(BlobKind.reconstruction) => .reconstruction,
         @intFromEnum(BlobKind.rhymes) => .rhymes,
         @intFromEnum(BlobKind.sign_gloss) => .sign_gloss,
-        @intFromEnum(BlobKind.supplement) => .supplement,
-        @intFromEnum(BlobKind.symbols) => .symbols,
-        @intFromEnum(BlobKind.templates) => .templates,
-        @intFromEnum(BlobKind.redirects) => .redirects,
-        @intFromEnum(BlobKind.pages) => .pages,
         else => error.InvalidBlob,
     };
 }
@@ -248,18 +211,14 @@ pub fn readPayloadLength(bytes: []const u8, cursor: *usize) error{InvalidBlob}!u
 }
 
 pub fn validateMetadata(kind: BlobKind, metadata: []const u8) error{InvalidMetadata}!void {
-    if (kind != .language and kind != .supplement) {
+    if (kind != .language) {
         if (metadata.len != 0) return error.InvalidMetadata;
         return;
     }
     var cursor: usize = 0;
     _ = readNulFieldMetadata(metadata, &cursor) catch return error.InvalidMetadata;
     const heading = readNulFieldMetadata(metadata, &cursor) catch return error.InvalidMetadata;
-    if (heading.len == 0) return error.InvalidMetadata;
-    if (kind == .supplement) {
-        if (cursor + 1 != metadata.len) return error.InvalidMetadata;
-        _ = @import("part_kind.zig").fromByte(metadata[cursor]) catch return error.InvalidMetadata;
-    } else if (cursor != metadata.len) return error.InvalidMetadata;
+    if (heading.len == 0 or cursor != metadata.len) return error.InvalidMetadata;
 }
 
 pub fn validateRecordInput(record: RecordInput) error{InvalidRecord}!void {
@@ -325,26 +284,18 @@ pub fn buildAlloc(
 
 pub fn openTrusted(bytes: []const u8) error{InvalidBlob}!BlobView {
     const kind = try decodeKind(bytes);
-    const prefix: usize = if (std.mem.eql(u8, bytes[0..magic.len], magic)) header_len else legacy_header_len;
-    var records_start = prefix;
-    if (kind == .language or kind == .supplement) {
+    var records_start = header_len;
+    if (kind == .language) {
         var cursor = records_start;
         _ = try readNulField(bytes, &cursor);
         const heading = try readNulField(bytes, &cursor);
         if (heading.len == 0) return error.InvalidBlob;
-        if (kind == .supplement) {
-            if (cursor == bytes.len) return error.InvalidBlob;
-            _ = @import("part_kind.zig").fromByte(bytes[cursor]) catch return error.InvalidBlob;
-            cursor += 1;
-        }
         records_start = cursor;
     }
     return .{
         .bytes = bytes,
-        .symbolic = std.mem.eql(u8, bytes[0..magic.len], magic),
-        .binding_id = if (prefix == header_len) bytes[legacy_header_len..header_len].* else @splat(0),
         .kind = kind,
-        .metadata = bytes[prefix..records_start],
+        .metadata = bytes[header_len..records_start],
         .records = bytes[records_start..],
     };
 }
@@ -370,22 +321,22 @@ fn readNulFieldMetadata(bytes: []const u8, cursor: *usize) error{InvalidMetadata
     return field;
 }
 
-test "blob v4 header carries only magic and kind" {
+test "data blob header carries only v6 magic and kind" {
     const encoded = encodeHeader(.rhymes);
     try std.testing.expectEqualSlices(u8, &.{
-        'W', 'I', 'K', 'B', 'L', 'B', '0', '5', @intFromEnum(BlobKind.rhymes),
-    }, encoded[0..legacy_header_len]);
+        'W', 'I', 'K', 'B', 'L', 'B', '0', '6', @intFromEnum(BlobKind.rhymes),
+    }, encoded[0..header_len]);
     try std.testing.expectEqual(BlobKind.rhymes, try decodeKind(&encoded));
 }
 
-test "blob v4 stores only necessary record framing" {
+test "data blob stores only necessary record framing" {
     const encoded = try buildAlloc(std.testing.allocator, .citations, "", &.{
         .{ .title = "a", .payload = "x" },
     });
     defer std.testing.allocator.free(encoded);
-    try std.testing.expectEqualSlices(u8, "WIKBLB05\x03" ++ ("\x00" ** 32) ++ "a\x00\x01x", encoded);
+    try std.testing.expectEqualSlices(u8, "WIKBLB06\x03a\x00\x01x", encoded);
 }
-test "blob v4 builds runtime index over borrowed records" {
+test "data blob builds runtime index over borrowed records" {
     const metadata = try buildLanguageMetadataAlloc(std.testing.allocator, "", "English");
     defer std.testing.allocator.free(metadata);
     const payload_a = [_]u8{ 0, 1, 2, 0, 3 };
@@ -411,7 +362,7 @@ test "blob v4 builds runtime index over borrowed records" {
     try std.testing.expectEqualStrings("banana", (try iterator.next()).?.title);
     try std.testing.expect((try iterator.next()) == null);
 }
-test "blob v4 rejects malformed framing and unsorted records" {
+test "data blob rejects malformed framing and unsorted records" {
     try std.testing.expectError(error.UnsortedRecords, buildAlloc(std.testing.allocator, .citations, "", &.{
         .{ .title = "b", .payload = "1" },
         .{ .title = "a", .payload = "2" },
@@ -445,7 +396,7 @@ test "trusted open skips title-order scan while runtime index can validate it" {
     try std.testing.expectError(error.InvalidBlob, trusted.validate());
     try std.testing.expectError(error.InvalidBlob, trusted.buildIndexAlloc(std.testing.allocator));
 }
-test "blob v4 rejects non-canonical payload lengths" {
+test "data blob rejects non-canonical payload lengths" {
     const broken = [_]u8{
         'W', 'I', 'K',  'B',  'L', 'B', '0', '5', @intFromEnum(BlobKind.citations),
         'a', 0,   0x81, 0x00, 'x',
@@ -453,7 +404,7 @@ test "blob v4 rejects non-canonical payload lengths" {
     try std.testing.expectError(error.InvalidBlob, inspect(&broken));
 }
 
-test "blob v4 metadata is semantic rather than length-indexed" {
+test "data blob metadata is semantic rather than length-indexed" {
     const metadata = try buildLanguageMetadataAlloc(std.testing.allocator, "en", "English");
     defer std.testing.allocator.free(metadata);
     const encoded = try buildAlloc(std.testing.allocator, .language, metadata, &.{});
@@ -466,7 +417,7 @@ test "blob v4 metadata is semantic rather than length-indexed" {
     try std.testing.expectError(error.InvalidMetadata, buildAlloc(std.testing.allocator, .citations, "x", &.{}));
 }
 
-test "blob v4 empty stream needs no runtime index storage" {
+test "data blob empty stream needs no runtime index storage" {
     const bytes = encodeHeader(.citations);
     const blob = try inspect(&bytes);
     var records = blob.iterator();
@@ -478,7 +429,7 @@ test "blob v4 empty stream needs no runtime index storage" {
     try std.testing.expectError(error.InvalidBlob, index.recordAt(0));
 }
 
-test "blob v4 payload lengths round trip at integer boundaries" {
+test "data blob payload lengths round trip at integer boundaries" {
     const values = [_]usize{ 0, 1, 127, 128, 16383, 16384, std.math.maxInt(usize) };
     for (values) |value| {
         var buffer: [max_varuint_len]u8 = undefined;
@@ -495,7 +446,7 @@ test "blob v4 payload lengths round trip at integer boundaries" {
     }
 }
 
-test "blob v4 rejects old magic and malformed record framing" {
+test "data blob rejects old magic and malformed record framing" {
     const invalid = [_][]const u8{
         "WIKBLB02\x03",
         "WIKBLB03\x03",
@@ -519,12 +470,12 @@ test "blob v4 rejects old magic and malformed record framing" {
 }
 
 fn testIndexAllocationFailures(allocator: std.mem.Allocator) !void {
-    const blob = try openTrusted("WIKBLB04\x03a\x00\x01xb\x00\x00");
+    const blob = try openTrusted("WIKBLB06\x03a\x00\x01xb\x00\x00");
     var index = try blob.buildIndexAlloc(allocator);
     defer index.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), index.recordCount());
 }
 
-test "blob v4 runtime index cleans up every allocation failure" {
+test "data blob runtime index cleans up every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testIndexAllocationFailures, .{});
 }

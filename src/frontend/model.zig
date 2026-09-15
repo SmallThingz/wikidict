@@ -46,21 +46,16 @@ pub fn utf8Text(a: A, bytes: []const u8) ![]const u8 {
 }
 
 pub fn payload(record: dec.BlobRecordView) []const u8 {
-    return switch (record) {
-        .language => |value| value.payload,
-        .thesaurus => |value| value.payload,
-        .citations => |value| value.source,
-        .reconstruction => |value| value.payload,
-        .rhymes => |value| value.payload,
-        .sign_gloss => |value| value.source,
-        .supplement => |value| value.payload,
-    };
+    return record.payload();
 }
 
 fn validate(record: dec.BlobRecordView, stored: types.Stored) !void {
-    if (!std.mem.eql(u8, stored.schema, types.schema)) return error.InvalidPresentation;
-    if (stored.entry.kind != record.kind()) return error.InvalidPresentation;
-    if (!std.mem.eql(u8, stored.entry.title, record.title())) return error.InvalidPresentation;
+    try types.validateStored(
+        stored,
+        record.title(),
+        record.kind(),
+        if (record == .language) record.language.metadata else null,
+    );
 }
 
 pub fn fromRecord(allocator: A, record: dec.BlobRecordView) !OwnedEntry {
@@ -90,5 +85,5 @@ test "reader deserializes compiled presentation without wikitext parsing" {
 }
 
 test "reader rejects source-like payload instead of compiling it" {
-    try std.testing.expectError(error.InvalidPresentation, fromRecord(std.testing.allocator, .{ .citations = .{ .title = "cat", .source = "# [[cat]] {{template}}" } }));
+    try std.testing.expectError(error.InvalidPresentation, fromRecord(std.testing.allocator, .{ .citations = .{ .title = "cat", .payload = "# [[cat]] {{template}}" } }));
 }

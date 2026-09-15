@@ -232,7 +232,7 @@ const State = struct {
             try self.put(w, 1, 3, 9, "dict.", p.accent);
             try self.put(w, 1, 13, sz.cols -| 15, self.label, p.muted);
             var buf: [256]u8 = undefined;
-            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "WIKBLB05  /  {d} records  /  {s} theme", .{ self.db.count(), @tagName(self.theme) }), p.muted);
+            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "WIKBLB06  /  {d} records  /  {s} theme", .{ self.db.count(), @tagName(self.theme) }), p.muted);
             try self.put(w, 4, 3, 10, "Search /", if (self.focus == .search) p.accent else p.muted);
             // Horizontal input viewport follows the caret, at whole-codepoint boundaries.
             var start: usize = 0;
@@ -355,7 +355,7 @@ test "terminal query editing is bounded and UTF8-aware" {
     const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sample", .{tmp.sub_path});
     defer a.free(path);
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
-    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a, .symbols = .{ .io = std.testing.io, .a = a, .root = "" } };
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a };
     defer db.file.deinit();
     var state: State = .{ .a = a, .db = &db, .label = "test", .theme = .terminal, .color = false };
     defer state.deinit();

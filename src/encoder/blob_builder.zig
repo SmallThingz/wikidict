@@ -8,7 +8,6 @@ const reconstruction_encoding = blobs.reconstruction_encoding;
 const rhymes_encoding = blobs.rhymes_encoding;
 const presentation_document = @import("presentation_document.zig");
 
-const parts = blobs.language_parts;
 const language_bucket_count = 32;
 const ns_main: u32 = 0;
 const ns_rhymes: u32 = 106;
@@ -27,8 +26,6 @@ pub const BuildStats = struct {
     rhymes_records: usize = 0,
     sign_gloss_records: usize = 0,
     language_blobs: usize = 0,
-    supplement_records: [parts.count]usize = @splat(0),
-    supplement_bytes: [parts.count]usize = @splat(0),
 };
 
 pub const LanguageCodes = struct {
@@ -211,13 +208,9 @@ const Spools = struct {
         self.root = "";
     }
 
-    fn appendLanguage(self: *Spools, allocator: std.mem.Allocator, heading: []const u8, title: []const u8, payload: []const u8, family: ?parts.Kind) !void {
+    fn appendLanguage(self: *Spools, allocator: std.mem.Allocator, heading: []const u8, title: []const u8, payload: []const u8) !void {
         const bucket: usize = @intCast(std.hash.Wyhash.hash(0, heading) % language_bucket_count);
-        const key = try allocator.alloc(u8, heading.len + 1);
-        defer allocator.free(key);
-        key[0] = if (family) |kind| @intFromEnum(kind) else 0;
-        @memcpy(key[1..], heading);
-        try self.language[bucket].append(self.io, allocator, key, title, payload);
+        try self.language[bucket].append(self.io, allocator, heading, title, payload);
     }
 };
 
@@ -258,7 +251,7 @@ fn writeBlobFile(
     try sortAndValidate(records);
     try blob_format.validateMetadata(kind, metadata);
     for (records) |record| try blob_format.validateRecordInput(record);
-    const header = blob_format.encodeUnlinkedHeader(kind);
+    const header = blob_format.encodeHeader(kind);
 
     var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
     defer file.close(io);
@@ -308,7 +301,6 @@ fn finalizeFixedSpool(
 
 const LanguageGroup = struct {
     heading: []const u8,
-    family: ?parts.Kind,
     records: std.ArrayListUnmanaged(blob_format.RecordInput) = .empty,
 };
 
@@ -332,9 +324,9 @@ fn finalizeLanguageBucket(
     }
     var it: SpoolIterator = .{ .bytes = mapped.bytes };
     while (try it.next()) |frame| {
-        if (frame.key.len < 2) return error.InvalidSpool;
+        if (frame.key.len == 0) return error.InvalidSpool;
         const gop = try groups.getOrPut(allocator, frame.key);
-        if (!gop.found_existing) gop.value_ptr.* = .{ .heading = frame.key[1..], .family = if (frame.key[0] == 0) null else try parts.kinds.fromByte(frame.key[0]) };
+        if (!gop.found_existing) gop.value_ptr.* = .{ .heading = frame.key };
         try gop.value_ptr.records.append(allocator, .{ .title = frame.title, .payload = frame.payload });
     }
 
@@ -351,19 +343,15 @@ fn finalizeLanguageBucket(
 
     var count: usize = 0;
     for (ordered.items) |group| {
-        const base_metadata = try blob_format.buildLanguageMetadataAlloc(allocator, codes.code(group.heading) orelse "", group.heading);
-        defer allocator.free(base_metadata);
-        const metadata = if (group.family) |family| try std.mem.concat(allocator, u8, &.{ base_metadata, &.{@intFromEnum(family)} }) else base_metadata;
-        defer if (group.family != null) allocator.free(metadata);
-        const path = if (group.family) |family| try blob_catalog.supplementPathAlloc(allocator, output_root, group.heading, family) else try languageBlobPathAlloc(allocator, output_root, group.heading);
+        const metadata = try blob_format.buildLanguageMetadataAlloc(allocator, codes.code(group.heading) orelse "", group.heading);
+        defer allocator.free(metadata);
+        const path = try languageBlobPathAlloc(allocator, output_root, group.heading);
         defer allocator.free(path);
-        try writeBlobFile(io, path, if (group.family != null) .supplement else .language, metadata, group.records.items);
-        if (group.family == null) {
-            const heading = try allocator.dupe(u8, group.heading);
-            errdefer allocator.free(heading);
-            try manifest.append(allocator, heading);
-            count += 1;
-        }
+        try writeBlobFile(io, path, .language, metadata, group.records.items);
+        const heading = try allocator.dupe(u8, group.heading);
+        errdefer allocator.free(heading);
+        try manifest.append(allocator, heading);
+        count += 1;
     }
     return count;
 }
@@ -413,7 +401,7 @@ fn processMain(
             "",
             expanded,
         );
-        try spools.appendLanguage(page_allocator, section.heading, title, payload, null);
+        try spools.appendLanguage(page_allocator, section.heading, title, payload);
         stats.language_records += 1;
     }
 }
@@ -437,11 +425,26 @@ fn processNamespace(
     };
     const payload = try presentation_document.compileAlloc(page_allocator, local_title, kind, null, "", source);
     switch (kind) {
-        .thesaurus => { try spools.thesaurus.append(spools.io, page_allocator, "", local_title, payload); stats.thesaurus_records += 1; },
-        .citations => { try spools.citations.append(spools.io, page_allocator, "", local_title, payload); stats.citations_records += 1; },
-        .reconstruction => { try spools.reconstruction.append(spools.io, page_allocator, "", local_title, payload); stats.reconstruction_records += 1; },
-        .rhymes => { try spools.rhymes.append(spools.io, page_allocator, "", local_title, payload); stats.rhymes_records += 1; },
-        .sign_gloss => { try spools.sign_gloss.append(spools.io, page_allocator, "", local_title, payload); stats.sign_gloss_records += 1; },
+        .thesaurus => {
+            try spools.thesaurus.append(spools.io, page_allocator, "", local_title, payload);
+            stats.thesaurus_records += 1;
+        },
+        .citations => {
+            try spools.citations.append(spools.io, page_allocator, "", local_title, payload);
+            stats.citations_records += 1;
+        },
+        .reconstruction => {
+            try spools.reconstruction.append(spools.io, page_allocator, "", local_title, payload);
+            stats.reconstruction_records += 1;
+        },
+        .rhymes => {
+            try spools.rhymes.append(spools.io, page_allocator, "", local_title, payload);
+            stats.rhymes_records += 1;
+        },
+        .sign_gloss => {
+            try spools.sign_gloss.append(spools.io, page_allocator, "", local_title, payload);
+            stats.sign_gloss_records += 1;
+        },
         else => unreachable,
     }
 }
@@ -468,14 +471,6 @@ pub const Writer = struct {
         defer allocator.free(languages_dir);
         try std.Io.Dir.cwd().deleteTree(io, languages_dir);
         try std.Io.Dir.cwd().createDirPath(io, languages_dir);
-        const details_dir = try std.fs.path.join(allocator, &.{ output_root, "details" });
-        defer allocator.free(details_dir);
-        try std.Io.Dir.cwd().deleteTree(io, details_dir);
-        for (std.meta.tags(parts.Kind)) |family| {
-            const dir = try std.fs.path.join(allocator, &.{ details_dir, @tagName(family) });
-            defer allocator.free(dir);
-            try std.Io.Dir.cwd().createDirPath(io, dir);
-        }
         inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss", "symbols", "templates", "redirects", "pages" }) |name| {
             const stale = try fixedBlobPathAlloc(allocator, output_root, name);
             defer allocator.free(stale);
@@ -592,9 +587,18 @@ test "wikitext writer emits only data blobs" {
     var english_index = try english_blob.buildTrustedIndexAlloc(std.testing.allocator);
     defer english_index.deinit(std.testing.allocator);
     const cat = (try english_index.find("cat")).?;
-    const source = try language_encoding.decodeAlloc(std.testing.allocator, cat.payload, .{ .heading = "English" });
-    defer std.testing.allocator.free(source);
-    try std.testing.expectEqualStrings("==English==\n===Noun===\n# [[cat]]\n==English==\n===Verb===\n# purr\n", source);
+    var parsed = try std.json.parseFromSlice(blobs.presentation_types.Stored, std.testing.allocator, cat.payload, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings(blobs.presentation_types.schema, parsed.value.schema);
+    try std.testing.expectEqualStrings("cat", parsed.value.entry.title);
+    try std.testing.expectEqual(blob_format.BlobKind.language, parsed.value.entry.kind);
+    var saw_noun = false;
+    var saw_verb = false;
+    for (parsed.value.entry.sections) |section| {
+        saw_noun = saw_noun or std.mem.eql(u8, section.title, "Noun");
+        saw_verb = saw_verb or std.mem.eql(u8, section.title, "Verb");
+    }
+    try std.testing.expect(saw_noun and saw_verb);
 
     inline for (.{ "symbols", "templates", "redirects", "pages" }) |name| {
         const path = try fixedBlobPathAlloc(std.testing.allocator, out_root, name);

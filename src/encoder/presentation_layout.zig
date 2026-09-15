@@ -1,9 +1,9 @@
-//! Runtime-only reading order. Every source section/block remains addressable; no
+//! Build-time reading-order analysis. Every source section/block remains addressable; no
 //! homonyms are merged and supporting material stays attached to its own sense.
 const std = @import("std");
 const ir = @import("blob_encoder").document_ir;
 const syntax = @import("blob_encoder").wikitext_syntax;
-const part = @import("blob_encoder").language_parts.kinds;
+const part = @import("blob_encoder").part_kind;
 const wiki = @import("presentation_compile.zig");
 const A = std.mem.Allocator;
 pub const Form = struct { relation: []const u8, target: []const u8, language: []const u8 };

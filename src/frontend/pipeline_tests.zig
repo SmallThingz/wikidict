@@ -52,6 +52,6 @@ test "all six shipped blob kinds deserialize compiled presentation only" {
 }
 
 test "reader refuses old source-shaped record payloads" {
-    const doc = model.fromRecord(std.testing.allocator, .{ .citations = .{ .title = "cat", .source = "# [[cat]] {{template}}" } });
+    const doc = model.fromRecord(std.testing.allocator, .{ .citations = .{ .title = "cat", .payload = "# [[cat]] {{template}}" } });
     try std.testing.expectError(error.InvalidPresentation, doc);
 }

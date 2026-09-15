@@ -2,7 +2,7 @@ pub const format = @import("format.zig");
 pub const compact_encoding = @import("compact_encoding.zig");
 pub const section_encoding = @import("section_encoding.zig");
 const blobs = @import("blob_encoder");
-pub const language_parts = blobs.language_parts;
+pub const part_kind = blobs.part_kind;
 pub const blob_codec_support = blobs.blob_codec_support;
 pub const thesaurus_encoding = blobs.thesaurus_encoding;
 pub const rhymes_encoding = blobs.rhymes_encoding;
@@ -52,5 +52,3 @@ test "encoder root imports module tests" {
     _ = wikitext;
     _ = builder;
 }
-
-pub const name_linker = @import("name_linker.zig");
