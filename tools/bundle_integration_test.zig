@@ -106,11 +106,12 @@ fn deadlineProbe(io: std.Io, a: std.mem.Allocator, dir: []const u8) !void {
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
-    if (argv.len != 4) return error.Usage;
+    if (argv.len != 5) return error.Usage;
     const bin = argv[1];
     const pipeline = argv[2];
+    const verifier = argv[3];
     const dir = try std.fmt.allocPrint(a, "{s}/bundle-integration-{d}-{d}", .{
-        argv[3], std.os.linux.getpid(), std.Io.Clock.awake.now(init.io).toNanoseconds(),
+        argv[4], std.os.linux.getpid(), std.Io.Clock.awake.now(init.io).toNanoseconds(),
     });
     try std.Io.Dir.cwd().createDirPath(init.io, dir);
     var h: Harness = .{ .a = a, .io = init.io };
@@ -119,9 +120,23 @@ pub fn main(init: std.process.Init) !void {
     h.checks += 1;
 
     const dump = try std.fs.path.join(a, &.{ dir, "fixture.xml" });
-    const root = try std.fs.path.join(a, &.{ dir, "dictionary" });
     try writeFixture(init.io, a, dump);
+
+    const existing_root = try std.fs.path.join(a, &.{ dir, "existing-dictionary" });
+    try std.Io.Dir.cwd().createDir(init.io, existing_root, .default_dir);
+    _ = try h.run(&.{ pipeline, dump, existing_root }, 1);
+    const existing_marker = try std.fs.path.join(a, &.{ existing_root, ".incomplete" });
+    try h.require(!exists(init.io, existing_marker), "existing output directory stays untouched");
+
+    const failed_root = try std.fs.path.join(a, &.{ dir, "failed-dictionary" });
+    const missing_dump = try std.fs.path.join(a, &.{ dir, "missing.xml" });
+    _ = try h.run(&.{ pipeline, missing_dump, failed_root }, 1);
+    const failed_marker = try std.fs.path.join(a, &.{ failed_root, ".incomplete" });
+    try h.require(exists(init.io, failed_marker), "failed build retains incomplete marker");
+
+    const root = try std.fs.path.join(a, &.{ dir, "dictionary" });
     _ = try h.run(&.{ pipeline, dump, root }, 0);
+    _ = try h.run(&.{ verifier, root }, 0);
 
     const forbidden = [_][]const u8{
         ".bundle-expander", "runtime",          "dict-bundle-expander",
@@ -142,7 +157,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "#invoke") == null, "no executable invoke syntax survives");
 
     std.debug.print(
-        "BUNDLE_INTEGRATION_PASS checks={d}: build-only deadline, pre-expanded Lua/templates, data-only final tree. Artifacts: {s}\n",
+        "BUNDLE_INTEGRATION_PASS checks={d}: destination refusal, incomplete failure marker, verified pre-expanded Lua/templates, data-only final tree. Artifacts: {s}\n",
         .{ h.checks, dir },
     );
 }
