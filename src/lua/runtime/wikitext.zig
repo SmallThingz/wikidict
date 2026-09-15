@@ -700,14 +700,16 @@ pub const Expander = struct {
 
     fn hostFramePreprocess(raw: ?*anyopaque, a: std.mem.Allocator, source: []const u8, title: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        if (source.len >= 2 and source[0] == '=' and source[source.len - 1] == '=' and
-            std.mem.indexOf(u8, source, nowiki_marker_prefix) != null)
+        const stripped = try preprocess.stripDecodedComments(a, source);
+        defer a.free(stripped);
+        if (stripped.len >= 2 and stripped[0] == '=' and stripped[stripped.len - 1] == '=' and
+            std.mem.indexOf(u8, stripped, nowiki_marker_prefix) != null)
         {
             const number = self.page_heading_count + self.fake_heading_count;
             self.fake_heading_count += 1;
             return std.fmt.allocPrint(a, "\x7f'\"`UNIQ--h-{d}--QINU`\"'\x7f", .{number});
         }
-        return self.expandWikitext(source, args, title, 0);
+        return self.expandWikitext(stripped, args, title, 0);
     }
 
     fn hostFrameExpandTemplate(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8, args: *rt.Table) anyerror![]const u8 {
@@ -918,6 +920,9 @@ test "native AOT frame callbacks recurse through the same page expander" {
     const protected_pre = try runtime.callValue(preprocess_fn, &.{ frame, .{ .string = "<nowiki>{{Hello|A|1}}</nowiki>|{{Hello|B|}}" } });
     defer rt.freeResults(protected_pre);
     try std.testing.expectEqualStrings("<nowiki>{{Hello|A|1}}</nowiki>|Hi B N", protected_pre[0].string);
+    const commented_pre = try runtime.callValue(preprocess_fn, &.{ frame, .{ .string = "A<!-- {{Hello|X|1}} -->B{{Hello|C|}}" } });
+    defer rt.freeResults(commented_pre);
+    try std.testing.expectEqualStrings("ABHi C N", commented_pre[0].string);
     const parser = try runtime.getIndex(frame, .{ .string = "callParserFunction" });
     const date = try runtime.callValue(parser, &.{ frame, .{ .string = "#formatdate" }, .{ .string = "12-December-2022" }, .{ .string = "dmy" } });
     defer rt.freeResults(date);
