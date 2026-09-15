@@ -274,6 +274,8 @@ fn save(io: std.Io, a: A, path: []const u8, fingerprint: [32]u8, dir: Directory)
     try file.sync(io);
     try std.Io.Dir.cwd().rename(temp, std.Io.Dir.cwd(), path, io);
 }
+/// For raw blobs, payload borrows the open File mapping. Compressed records own
+/// a decoded buffer. The File must outlive any raw Record view.
 pub const Record = struct {
     title: []const u8,
     payload: []const u8,
@@ -370,8 +372,7 @@ pub const File = struct {
         errdefer dir.deinit(a);
         const view = try format.openTrusted(dir.header);
         const owned_path = try a.dupe(u8, path);
-        if (compressed == null) std.posix.munmap(bytes);
-        return .{ .io = io, .a = a, .handle = handle, .path = owned_path, .bytes = if (compressed != null) bytes else &.{}, .cache_bytes = cache_bytes, .compressed = compressed, .directory = dir, .view = view, .size = size, .cache_hit = hit, .cache_saved = saved, .fingerprint = fingerprint };
+        return .{ .io = io, .a = a, .handle = handle, .path = owned_path, .bytes = bytes, .cache_bytes = cache_bytes, .compressed = compressed, .directory = dir, .view = view, .size = size, .cache_hit = hit, .cache_saved = saved, .fingerprint = fingerprint };
     }
     pub fn deinit(self: *File) void {
         self.directory.deinit(self.a);
@@ -417,11 +418,10 @@ pub const File = struct {
             r.payload = data;
             r.owned = data;
         } else {
-            const data = try a.alloc(u8, @intCast(row.length));
-            errdefer a.free(data);
-            if (try self.handle.readPositionalAll(self.io, data, row.offset) != data.len) return error.SourceChanged;
-            r.payload = data;
-            r.owned = data;
+            const start = std.math.cast(usize, row.offset) orelse return error.SourceChanged;
+            const end = std.math.add(usize, start, row.length) catch return error.SourceChanged;
+            if (end > self.bytes.len) return error.SourceChanged;
+            r.payload = self.bytes[start..end];
         }
         self.payload_reads += 1;
         return r;
@@ -542,9 +542,15 @@ test "an unavailable cache remains an explicit memory-only index" {
     var f = try File.open(io, a, path);
     defer f.deinit();
     try std.testing.expect(!f.cache_hit and !f.cache_saved);
-    var record = try f.readAlloc(a, f.find("word").?);
+    var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    var record = try f.readAlloc(failing.allocator(), f.find("word").?);
     defer record.deinit();
+    try std.testing.expect(!failing.has_induced_failure);
     try std.testing.expectEqualStrings("body", record.payload);
+    try std.testing.expect(record.owned == null);
+    const map_start = @intFromPtr(f.bytes.ptr);
+    const payload_ptr = @intFromPtr(record.payload.ptr);
+    try std.testing.expect(payload_ptr >= map_start and payload_ptr + record.payload.len <= map_start + f.bytes.len);
 }
 
 test "derived cache checksum corruption forces a rebuild" {

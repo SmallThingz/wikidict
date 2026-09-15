@@ -41,6 +41,10 @@ pub fn main(init: std.process.Init) !void {
         var f = try storage.File.open(io, init.gpa, raw);
         defer f.deinit();
         try require(f.cache_hit and f.indexHeapBytes() == 0 and f.cacheMappedBytes() != 0);
+        const id = f.find("word-0042") orelse return error.Missing;
+        var r = try f.readAlloc(init.gpa, id);
+        defer r.deinit();
+        try require(r.owned == null and std.mem.eql(u8, r.payload, records[id].payload));
     }
     const encoded = try compress(io, a, raw, true);
     const xz = try std.mem.concat(a, u8, &.{ raw, ".xz" });
@@ -59,7 +63,7 @@ pub fn main(init: std.process.Init) !void {
         const id = f.find("word-0127") orelse return error.Missing;
         var r = try f.readAlloc(init.gpa, id);
         defer r.deinit();
-        try require(std.mem.eql(u8, r.payload, records[id].payload));
+        try require(r.owned != null and std.mem.eql(u8, r.payload, records[id].payload));
         block_count = f.compressed.?.decoded_blocks;
         total_blocks = f.compressed.?.blocks;
         try require(block_count > 0 and block_count <= 2 and block_count < total_blocks);
