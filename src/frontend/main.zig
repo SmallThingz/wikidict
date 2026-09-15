@@ -3,7 +3,6 @@ const args = @import("args.zig");
 const store = @import("store.zig");
 const model = @import("model.zig");
 const output = @import("output.zig");
-const html = @import("html.zig");
 const tui = @import("tui.zig");
 const expansion = @import("expansion.zig");
 
@@ -14,27 +13,28 @@ const usage =
     \\  dict WORD                         Look up a word
     \\  dict search [PREFIX]              Browse prefix matches
     \\  dict tui [PREFIX]                 Open the interactive reader
-    \\  dict serve [--port 8787]          Open the local web dictionary
-    \\  dict export WORD [--format html]  Create a self-contained entry export
+    \\  dict export WORD [--format json]  Export frontend-neutral data
     \\  dict languages [WORD]             List installed languages
     \\  dict stats                         Show dataset statistics
     \\  dict render FILE                   Render standalone wikitext; use - for stdin
+    \\
+    \\Desktop GUI
+    \\  dict-qt [--root PATH] [WORD]       Open the native Qt 6 application
     \\
     \\Common options
     \\  --language NAME    Language heading (default: English)
     \\  --kind KIND        language, thesaurus, citations, reconstruction, rhymes, sign-gloss
     \\  --root PATH        Dataset root (default: data/wiktionary-blobs)
-    \\  --format FORMAT    text, json, source, html
+    \\  --format FORMAT    text, json, source
     \\  --limit N          Search results per page, 1..1000 (default: 20)
     \\  --offset N         Skip N prefix matches
     \\  --details          Include history, quotations, relations and references in text/TUI
-    \\  --with-source      Include exact source in JSON/HTML
+    \\  --with-source      Include exact source in JSON
     \\  --color MODE       auto, always, never; NO_COLOR disables automatic color
     \\
-    \\Rendering and export
+    \\Rendering
     \\  --core-only        Read only the compact core; omitted companion sections stay labelled
     \\  --native           Skip Lua/template expansion and show the native core preview
-    \\  --media-dir PATH   Embed verified local media in HTML (default: ROOT/media)
     \\  --runtime PATH     Override the auto-detected native Lua runtime
     \\  --runtime-timeout-ms N  Expansion deadline, 1..60000 (default: 60000)
     \\  --title TITLE      Title for `dict render`
@@ -43,18 +43,7 @@ const usage =
     \\  --validate         Validate while indexing (default)
     \\  --                 End options, for words beginning with a dash
     \\
-    \\Examples
-    \\  dict cat
-    \\  dict search trans --language English
-    \\  dict tui etym
-    \\  dict serve --root data/wiktionary-blobs
-    \\  dict export cat --format html > cat.html
-    \\  printf "==English==\\n===Noun===\\n# Example" | dict render - --title Example
-    \\
-    \\Search is case-sensitive UTF-8 prefix matching. Normal output goes to stdout;
-    \\diagnostics go to stderr. Exit codes: 0 success, 1 no match, 2 usage/data/I/O error.
-    \\Everything is local: no network is required for lookup, rendering, TUI, or web serving.
-    \\
+    \\Everything is local. The `dict` executable is CLI/TUI only; the desktop GUI is native Qt 6.
 ;
 
 pub fn main(init: std.process.Init) void {
@@ -72,8 +61,7 @@ fn run(init: std.process.Init) !u8 {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const opts = try args.parse(argv[1..]);
-    const media_root: ?[]const u8 = opts.media_dir orelse (if (opts.command == .render) null else try std.fs.path.join(a, &.{ opts.root, "media" }));
-    const automatic = if (!opts.native and !opts.core_only and opts.runtime == null and (opts.command == .lookup or opts.command == .search or opts.command == .tui or opts.command == .serve)) try defaultRuntime(init.io, a, opts.root) else null;
+    const automatic = if (!opts.native and !opts.core_only and opts.runtime == null and (opts.command == .lookup or opts.command == .search or opts.command == .tui)) try defaultRuntime(init.io, a, opts.root) else null;
     const runtime: expansion.Options = .{ .root = opts.runtime orelse automatic, .timeout_ms = opts.runtime_timeout_ms, .dictionary_root = if (opts.command == .render) null else opts.root };
     var buffer: [16384]u8 = undefined;
     var stdout = std.Io.File.stdout().writerStreaming(init.io, &buffer);
@@ -81,10 +69,6 @@ fn run(init: std.process.Init) !u8 {
     if (opts.help) {
         try w.writeAll(usage);
         try w.flush();
-        return 0;
-    }
-    if (opts.command == .serve) {
-        try @import("server.zig").run(init.io, init.gpa, opts, runtime, media_root);
         return 0;
     }
     if (opts.command == .languages) {
@@ -107,7 +91,7 @@ fn run(init: std.process.Init) !u8 {
         defer doc.deinit();
         const response: output.Response = .{ .operation = .render, .query = doc.entry.title, .kind = .language, .language = doc.entry.language, .match_mode = "render-input", .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} };
         const color = opts.color == .always or (opts.color == .auto and !init.environ_map.contains("NO_COLOR") and !(if (init.environ_map.get("TERM")) |t| std.mem.eql(u8, t, "dumb") else false) and try std.Io.File.stdout().isTty(init.io));
-        if (opts.format == .html) try html.writeLocal(w, a, init.io, response, media_root) else if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
+        if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
         try w.flush();
         return if (renderFailed(doc.entry)) 2 else 0;
     }
@@ -151,13 +135,13 @@ fn run(init: std.process.Init) !u8 {
                     var doc = if (core) try model.fromCoreRecord(init.gpa, record) else try expansion.fromRecord(init.io, init.gpa, record, opts.with_source, runtime);
                     defer doc.deinit();
                     response.entries = &.{doc.entry};
-                    if (opts.format == .html and opts.single_page) try html.writeLocal(w, a, init.io, response, media_root) else if (opts.format == .html) try htmlWithLemmas(init.io, a, init.gpa, &db, w, response, opts.with_source, runtime, opts.core_only, media_root) else if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
+                    if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
                     if (renderFailed(doc.entry)) {
                         try w.flush();
                         return 2;
                     }
                 }
-            } else if (opts.format == .html) try html.writeLocal(w, a, init.io, response, media_root) else if (opts.format == .json) try output.json(w, response) else if (opts.format == .text) {
+            } else if (opts.format == .json) try output.json(w, response) else if (opts.format == .text) {
                 try w.writeAll("No exact match: ");
                 try output.terminalText(w, opts.query);
                 try w.writeByte('\n');
@@ -173,34 +157,7 @@ fn run(init: std.process.Init) !u8 {
             const matches = try a.alloc(output.Match, end - start);
             for (matches, start..) |*match, index| match.* = .{ .title = try model.utf8Text(a, try db.titleAt(index)) };
             response.matches = matches;
-            if (opts.format == .html) {
-                var docs: std.ArrayList(model.OwnedEntry) = .empty;
-                defer {
-                    for (docs.items) |*doc| doc.deinit();
-                    docs.deinit(init.gpa);
-                }
-                const entries = try a.alloc(model.Entry, end - start);
-                var invalid = false;
-                for (entries, start..) |*entry, index| {
-                    // The export arena retains resolved bodies until every borrowed document is written.
-                    const source_record = try db.recordAlloc(a, index);
-                    const raw = source_record.record;
-                    const resolved = if (opts.core_only) try db.resolveCoreAlloc(a, raw) else try db.resolveAlloc(a, raw);
-                    var doc = if (opts.core_only) try model.fromCoreRecord(init.gpa, resolved.record) else try expansion.fromRecord(init.io, init.gpa, resolved.record, opts.with_source, runtime);
-                    docs.append(init.gpa, doc) catch |err| {
-                        doc.deinit();
-                        return err;
-                    };
-                    entry.* = doc.entry;
-                    invalid = invalid or renderFailed(doc.entry);
-                }
-                response.entries = entries;
-                try html.writeLocal(w, a, init.io, response, media_root);
-                if (invalid) {
-                    try w.flush();
-                    return 2;
-                }
-            } else if (opts.format == .json) try output.json(w, response) else {
+            if (opts.format == .json) try output.json(w, response) else {
                 for (matches) |match| {
                     try output.terminalText(w, match.title);
                     try w.writeByte('\n');
@@ -215,7 +172,7 @@ fn run(init: std.process.Init) !u8 {
                 try w.print(" / {s}\nrecords: {d}\nblob bytes: {d}\nruntime index bytes: {d}\nindex heap bytes: {d}\ncache map bytes: {d}\n", .{ @tagName(opts.kind), db.count(), db.file.size, db.file.indexBytes(), db.file.indexHeapBytes(), db.file.cacheMappedBytes() });
             }
         },
-        .languages, .tui, .render, .serve => unreachable,
+        .languages, .tui, .render => unreachable,
     }
     try w.flush();
     return if (response.total_matches == 0 and opts.command != .stats) 1 else 0;
@@ -230,50 +187,9 @@ test {
     _ = store;
     _ = model;
     _ = output;
-    _ = html;
     _ = tui;
     _ = @import("pipeline_tests.zig");
-    _ = @import("server.zig");
     _ = @import("blob_storage");
-}
-
-fn htmlWithLemmas(io: std.Io, arena: std.mem.Allocator, a: std.mem.Allocator, db: *store.Store, w: *std.Io.Writer, response: output.Response, with_source: bool, runtime: expansion.Options, core_only: bool, media_root: ?[]const u8) !void {
-    var entries: std.ArrayList(model.Entry) = .empty;
-    var related_failed = false;
-    var docs: std.ArrayList(model.OwnedEntry) = .empty;
-    defer {
-        for (docs.items) |*doc| doc.deinit();
-        docs.deinit(a);
-    }
-    try entries.appendSlice(arena, response.entries);
-    const metadata = db.metadata() orelse return html.writeLocal(w, arena, io, response, media_root);
-    for (response.entries) |entry| for (entry.organization.lexemes) |lexeme| for (lexeme.definitions) |sense| if (sense.form) |form| {
-        if (!std.mem.eql(u8, form.language, metadata.code) or entries.items.len >= 9) continue;
-        var seen = false;
-        for (entries.items) |present| if (std.mem.eql(u8, present.title, form.target)) {
-            seen = true;
-            break;
-        };
-        if (seen) continue;
-        const record_index = (try db.find(form.target)) orelse continue;
-        const source_record = try db.recordAlloc(arena, record_index);
-        const raw = source_record.record;
-        const resolved = if (core_only) try db.resolveCoreAlloc(arena, raw) else try db.resolveAlloc(arena, raw);
-        var doc = if (core_only) try model.fromCoreRecord(a, resolved.record) else try expansion.fromRecord(io, a, resolved.record, with_source, runtime);
-        docs.append(a, doc) catch |err| {
-            doc.deinit();
-            return err;
-        };
-        related_failed = related_failed or renderFailed(doc.entry);
-        try entries.append(arena, doc.entry);
-    };
-    var expanded = response;
-    expanded.entries = entries.items;
-    try html.writeLocal(w, arena, io, expanded, media_root);
-    if (related_failed) {
-        try w.flush();
-        return error.RelatedEntryRenderingFailed;
-    }
 }
 
 fn defaultRuntime(io: std.Io, a: std.mem.Allocator, root: []const u8) !?[]const u8 {

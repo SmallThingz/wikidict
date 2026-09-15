@@ -352,6 +352,36 @@ pub fn build(b: *std.Build) void {
     blob_query_exe.use_llvm = true;
     blob_query_exe.use_lld = true;
     b.installArtifact(blob_query_exe);
+
+    const ffi_mod = b.createModule(.{
+        .root_source_file = b.path("src/frontend/c_api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "blob_encoder", .module = blob_encoder_mod },
+            .{ .name = "blob_decoder", .module = blob_decoder_mod },
+            .{ .name = "blob_files", .module = blob_files_mod },
+            .{ .name = "blob_storage", .module = storage_mod },
+            .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("src/shared/html_entities.zig"), .target = target, .optimize = optimize }) },
+        },
+    });
+    const ffi_lib = b.addLibrary(.{ .name = "dictffi", .root_module = ffi_mod, .linkage = .dynamic, .use_llvm = true, .use_lld = true });
+    const ffi_install = b.addInstallArtifact(ffi_lib, .{});
+    const ffi_header_install = b.addInstallHeaderFile(b.path("src/ffi/dict.h"), "dict/dict.h");
+
+    const ffi_test_mod = b.createModule(.{ .target = b.graph.host, .optimize = test_optimize, .link_libc = true });
+    ffi_test_mod.addCSourceFile(.{ .file = b.path("tools/ffi_integration_test.c"), .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" } });
+    ffi_test_mod.addIncludePath(b.path("src/ffi"));
+    ffi_test_mod.linkLibrary(ffi_lib);
+    const ffi_test_exe = b.addExecutable(.{ .name = "dict-ffi-integration-test", .root_module = ffi_test_mod, .use_llvm = true, .use_lld = true });
+
+    b.getInstallStep().dependOn(&ffi_install.step);
+    b.getInstallStep().dependOn(&ffi_header_install.step);
+    const ffi_step = b.step("ffi", "Build and install the C FFI library and header");
+    ffi_step.dependOn(&ffi_install.step);
+    ffi_step.dependOn(&ffi_header_install.step);
+
     encoder_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
     decoder_tool_paths_options.addOption([]const u8, "encoder_bin_path", b.pathFromRoot("zig-out/bin/dict-encoder"));
     verifier_tool_paths_options.addOption([]const u8, "structure_bin_path", b.pathFromRoot("zig-out/bin/dict-structure"));
@@ -398,9 +428,13 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "query-blobs", "Query per-language and feature Wiktionary blobs", blob_query_run, &.{});
     addPublicRunStep(b, "dict", "Run the dictionary frontend CLI", blob_query_run, &.{});
 
-    const web_build = b.addSystemCommand(&.{ "bun", "run", "build" });
-    web_build.setCwd(b.path("src/frontend/web"));
-    b.step("frontend", "Rebuild the self-contained web UI (bun install first)").dependOn(&web_build.step);
+    const qt_configure = b.addSystemCommand(&.{ "cmake", "-S", "src/qt", "-B", ".zig-cache/qt", "-DCMAKE_BUILD_TYPE=Release" });
+    qt_configure.step.dependOn(&ffi_install.step);
+    qt_configure.step.dependOn(&ffi_header_install.step);
+    const qt_build = b.addSystemCommand(&.{ "cmake", "--build", ".zig-cache/qt", "--target", "dict-qt", "--parallel", "2" });
+    qt_build.step.dependOn(&qt_configure.step);
+    b.step("qt", "Build the Qt 6 C++ desktop frontend").dependOn(&qt_build.step);
+    b.step("frontend", "Build the Qt 6 C++ desktop frontend").dependOn(&qt_build.step);
 
     const test_runner = b.path("tools/test_runner.zig");
 
@@ -621,6 +655,7 @@ pub fn build(b: *std.Build) void {
     const runtime_test_run = b.addRunArtifact(runtime_test_exe);
     runtime_test_run.addFileArg(blob_query_exe.getEmittedBin());
     runtime_test_run.addFileArg(pipeline_exe.getEmittedBin());
+    runtime_test_run.addFileArg(ffi_test_exe.getEmittedBin());
     runtime_test_run.addArg(b.pathFromRoot(".zig-cache"));
     b.step("test-runtime", "Exercise extraction and native Lua AOT rendering end to end").dependOn(&runtime_test_run.step);
     const reader_test_exe = addCliExecutable(b, "dict-reader-integration-test", b.path("tools/reader_integration_test.zig"), b.graph.host, test_optimize, &.{});
@@ -649,16 +684,7 @@ pub fn build(b: *std.Build) void {
     storage_unit_run.step.dependOn(&reader_test_run.step);
     storage_run.step.dependOn(&storage_unit_run.step);
     b.step("test-storage", "Exercise after-compression indexes and selective real XZ block decoding").dependOn(&storage_run.step);
-    const http_exe = addCliExecutable(b, "dict-http-integration-test", b.path("tools/http_integration_test.zig"), target, test_optimize, &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }});
-    http_exe.root_module.link_libc = true;
-    http_exe.use_llvm = true;
-    http_exe.use_lld = true;
-    const http_run = b.addRunArtifact(http_exe);
-    http_run.addFileArg(blob_query_exe.getEmittedBin());
-    http_run.addArg(b.pathFromRoot(".zig-cache"));
-    http_run.step.dependOn(&storage_run.step);
-    b.step("test-http", "Exercise live HTTP/1.1 against raw, compressed and cached data").dependOn(&http_run.step);
-    if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch) test_step.dependOn(&http_run.step);
+    if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch) test_step.dependOn(&storage_run.step);
 }
 
 fn addCliExecutable(

@@ -217,3 +217,33 @@ pub fn fromRecord(io: std.Io, a: A, record: dec.BlobRecordView, with_source: boo
     if (record == .language) doc.entry.language_code = try doc.arena.allocator().dupe(u8, record.language.metadata.code);
     return doc;
 }
+pub fn fromRecordWorker(worker: *Worker, a: A, record: dec.BlobRecordView, with_source: bool) !model.OwnedEntry {
+    if (worker.options.root == null) return model.fromRecord(a, record, with_source);
+    const source = model.sourceAlloc(a, record) catch |err| switch (err) {
+        error.InvalidEncoding => return model.fromRecord(a, record, with_source),
+        else => return err,
+    };
+    defer a.free(source);
+    const language = switch (record) {
+        .language => |r| r.metadata.heading,
+        else => "",
+    };
+    const prefix = switch (record.kind()) {
+        .language => "",
+        .thesaurus => "Thesaurus:",
+        .citations => "Citations:",
+        .reconstruction => "Reconstruction:",
+        .rhymes => "Rhymes:",
+        .sign_gloss => "Sign gloss:",
+        .supplement, .symbols, .templates, .redirects, .pages => return error.InvalidEncoding,
+    };
+    const title = try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, record.title() });
+    defer a.free(title);
+    var doc = try fromWikitextWorker(worker, a, title, language, source, with_source);
+    errdefer doc.deinit();
+    doc.entry.title = try doc.arena.allocator().dupe(u8, record.title());
+    doc.entry.kind = record.kind();
+    doc.entry.language = if (language.len != 0) try doc.arena.allocator().dupe(u8, language) else null;
+    if (record == .language) doc.entry.language_code = try doc.arena.allocator().dupe(u8, record.language.metadata.code);
+    return doc;
+}

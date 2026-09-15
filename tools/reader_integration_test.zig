@@ -58,10 +58,10 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().rename(details, std.Io.Dir.cwd(), offline, init.io);
     const core_text = try h.run(&.{ bin, "lookup", "cat", "--root", root }, 0);
     try h.require(std.mem.indexOf(u8, core_text, "small animal") != null and std.mem.indexOf(u8, core_text, "not loaded") != null, "default text works without companions");
-    _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--core-only", "--format", "json" }, 0);
-    const page = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--core-only", "--format", "html" }, 0);
-    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = try std.fs.path.join(a, &.{ dir, "core.html" }), .data = page });
-    _ = try h.run(&.{ bin, "search", "cat", "--root", root, "--core-only", "--format", "html" }, 0);
+    const core_json = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--core-only", "--format", "json" }, 0);
+    try h.require(std.mem.indexOf(u8, core_json, "\"content\": \"core\"") != null, "core JSON remains inspectable without companions");
+    const search_json = try h.run(&.{ bin, "search", "cat", "--root", root, "--core-only", "--format", "json" }, 0);
+    try h.require(std.mem.indexOf(u8, search_json, "\"title\": \"cat\"") != null, "core search JSON works without companions");
     _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--details" }, 2);
     _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "source" }, 2);
     _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "json" }, 2);
@@ -70,5 +70,5 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().rename(offline, std.Io.Dir.cwd(), details, init.io);
     const restored = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "source" }, 0);
     try h.require(std.mem.eql(u8, restored, source), "reinstalled companions preserve source");
-    std.debug.print("READER_INTEGRATION_PASS checks={d}: core-only reading/JSON/HTML, all 5 deferred families, strict full/source/runtime requests, reinstall and exact reconstruction. Artifacts: {s}\n", .{ h.checks, dir });
+    std.debug.print("READER_INTEGRATION_PASS checks={d}: core-only reading/JSON, all 5 deferred families, strict full/source/runtime requests, reinstall and exact reconstruction. Artifacts: {s}\n", .{ h.checks, dir });
 }

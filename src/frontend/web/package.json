@@ -1,6 +1,0 @@
-{
-  "name": "@dict/frontend", "version": "0.1.0", "private": true, "type": "module",
-  "scripts": { "dev": "vite", "typecheck": "tsc --noEmit", "build": "tsc --noEmit && vite build" },
-  "dependencies": { "solid-js": "1.9.15" },
-  "devDependencies": { "typescript": "6.0.3", "vite": "8.2.2", "vite-plugin-solid": "2.11.14", "vite-plugin-singlefile": "2.3.3" }
-}

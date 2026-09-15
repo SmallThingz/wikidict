@@ -3,7 +3,6 @@ const enc = @import("blob_encoder");
 const dec = @import("blob_decoder");
 const model = @import("model.zig");
 const output = @import("output.zig");
-const html = @import("html.zig");
 
 test "all six encoded blob kinds survive typed decoding and human and machine rendering" {
     const a = std.testing.allocator;
@@ -43,10 +42,6 @@ test "all six encoded blob kinds survive typed decoding and human and machine re
         var json: std.Io.Writer.Allocating = .init(a);
         defer json.deinit();
         try output.json(&json.writer, .{ .operation = .lookup, .query = fixture.title, .kind = fixture.kind, .language = doc.entry.language, .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} });
-        var page: std.Io.Writer.Allocating = .init(a);
-        defer page.deinit();
-        try html.write(&page.writer, a, .{ .operation = .lookup, .query = fixture.title, .kind = fixture.kind, .language = doc.entry.language, .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} });
-        try std.testing.expect(std.mem.indexOf(u8, page.written(), "<script id=\"dict-data\"") != null);
         const parsed = try std.json.parseFromSlice(std.json.Value, a, json.written(), .{});
         defer parsed.deinit();
         try std.testing.expectEqualStrings(fixture.title, parsed.value.object.get("entries").?.array.items[0].object.get("title").?.string);

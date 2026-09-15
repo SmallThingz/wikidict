@@ -88,10 +88,11 @@ const Harness = struct {
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
-    if (argv.len != 4) return error.Usage;
+    if (argv.len != 5) return error.Usage;
     const bin = argv[1];
     const pipeline = argv[2];
-    const dir = try std.fmt.allocPrint(a, "{s}/runtime-integration-{d}-{d}", .{ argv[3], std.os.linux.getpid(), std.Io.Clock.awake.now(init.io).toNanoseconds() });
+    const ffi_test = argv[3];
+    const dir = try std.fmt.allocPrint(a, "{s}/runtime-integration-{d}-{d}", .{ argv[4], std.os.linux.getpid(), std.Io.Clock.awake.now(init.io).toNanoseconds() });
     try std.Io.Dir.cwd().createDirPath(init.io, dir);
     var h: Harness = .{ .a = a, .io = init.io };
     const dump = try std.fs.path.join(a, &.{ dir, "fixture.xml" });
@@ -104,56 +105,10 @@ pub fn main(init: std.process.Init) !void {
     // extraction/build inputs, leaving the linked .wikblb artifacts at root.
     try std.Io.Dir.cwd().deleteTree(init.io, runtime);
     try std.Io.Dir.cwd().createDir(init.io, runtime, .default_dir);
-    // A live process must still spawn the matching runtime worker after an atomic binary update.
-    const moving = try std.fs.path.join(a, &.{ dir, "movable-dict" });
-    _ = try h.run(&.{ "/usr/bin/cp", bin, moving }, 0);
-    const server_log = try std.fs.path.join(a, &.{ dir, "server.log" });
-    var log = try std.Io.Dir.cwd().createFile(init.io, server_log, .{});
-    defer log.close(init.io);
-    var server = try std.process.spawn(init.io, .{ .argv = &.{ moving, "serve", "--root", root, "--port", "0", "--runtime-timeout-ms", "1000" }, .stdin = .ignore, .stdout = .ignore, .stderr = .{ .file = log } });
-    defer server.kill(init.io);
-    var base: ?[]const u8 = null;
-    for (0..300) |_| {
-        const text = try std.Io.Dir.cwd().readFileAlloc(init.io, server_log, a, .limited(1024 * 1024));
-        if (std.mem.indexOf(u8, text, "http://127.0.0.1:")) |start| {
-            const end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
-            base = try a.dupe(u8, text[start..end]);
-            break;
-        }
-        try std.Io.sleep(init.io, .fromMilliseconds(20), .awake);
-    }
-    try h.require(base != null);
-    const url = try std.fmt.allocPrint(a, "{s}/api/entry?q=mouse", .{base.?});
-    const stats_url = try std.fmt.allocPrint(a, "{s}/api/stats", .{base.?});
-    const loop_url = try std.fmt.allocPrint(a, "{s}/api/entry?q=loop", .{base.?});
-    const badcall_url = try std.fmt.allocPrint(a, "{s}/api/entry?q=badcall", .{base.?});
-    try std.Io.Dir.cwd().deleteFile(init.io, moving);
-    _ = try h.run(&.{ "/usr/bin/cp", bin, moving }, 0);
-    const after_update = try h.entry(try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "25", url }, 0));
-    try h.require(std.mem.eql(u8, after_update.object.get("expansion").?.object.get("status").?.string, "ok"));
-    try h.require(std.mem.eql(u8, after_update.object.get("expansion").?.object.get("backend").?.string, "lua-aot"));
-    try h.require(std.mem.eql(u8, after_update.object.get("source").?.string, source));
-    const stats1 = (try std.json.parseFromSlice(std.json.Value, a, try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "5", stats_url }, 0), .{})).value.object;
-    try h.require(stats1.get("lua_worker_starts").?.integer == 1 and stats1.get("lua_requests").?.integer == 1);
-    _ = try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "25", url }, 0);
-    const stats2 = (try std.json.parseFromSlice(std.json.Value, a, try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "5", stats_url }, 0), .{})).value.object;
-    try h.require(stats2.get("lua_worker_starts").?.integer == 1 and stats2.get("lua_requests").?.integer == 2);
-    const badcall = try h.entry(try h.run(&.{ "/usr/bin/curl", "--silent", "--max-time", "25", badcall_url }, 0));
-    try h.require(std.mem.eql(u8, badcall.object.get("expansion").?.object.get("status").?.string, "failed"));
-    try h.require(std.mem.eql(u8, badcall.object.get("expansion").?.object.get("backend").?.string, "lua-aot"));
-    const badcall_diagnostic = badcall.object.get("expansion").?.object.get("diagnostic").?.string;
-    try h.require(std.mem.indexOf(u8, badcall_diagnostic, "NotCallable") != null);
-    try h.require(std.mem.indexOf(u8, badcall_diagnostic, "AotCallFailed") == null);
-    const stalled = try h.entry(try h.run(&.{ "/usr/bin/curl", "--silent", "--max-time", "5", loop_url }, 0));
-    try h.require(std.mem.eql(u8, stalled.object.get("expansion").?.object.get("status").?.string, "failed"));
-    try h.require(std.mem.eql(u8, stalled.object.get("expansion").?.object.get("backend").?.string, "lua-aot"));
-    try h.require(std.mem.indexOf(u8, stalled.object.get("expansion").?.object.get("diagnostic").?.string, "timed out") != null);
-    _ = try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "25", url }, 0);
-    const stats3 = (try std.json.parseFromSlice(std.json.Value, a, try h.run(&.{ "/usr/bin/curl", "--fail", "--silent", "--max-time", "5", stats_url }, 0), .{})).value.object;
-    try h.require(stats3.get("lua_worker_starts").?.integer == 2 and stats3.get("lua_requests").?.integer == 5);
-    if (std.os.linux.errno(std.os.linux.kill(server.id.?, .TERM)) != .SUCCESS) return error.SignalFailed;
-    const server_exit = try server.wait(init.io);
-    try h.require(server_exit == .exited and server_exit.exited == 0);
+    // The C ABI owns one long-lived worker. Exercise reuse, timeout-driven restart,
+    // stable errors, search, random, and catalog access through the public ABI.
+    const ffi_output = try h.run(&.{ ffi_test, root }, 0);
+    try h.require(std.mem.indexOf(u8, ffi_output, "FFI_INTEGRATION_PASS") != null);
     const data = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--runtime", root, "--format", "json", "--with-source" }, 0);
     const entry = try h.entry(data);
     try h.require(std.mem.eql(u8, entry.object.get("expansion").?.object.get("status").?.string, "ok"));
@@ -172,9 +127,6 @@ pub fn main(init: std.process.Init) !void {
     _ = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--runtime", root }, 2);
     try std.Io.Dir.cwd().rename(parked_worker, std.Io.Dir.cwd(), worker_path, init.io);
     try h.require(std.mem.indexOf(u8, text, "show-forms") == null and std.mem.indexOf(u8, text, "Documentation") == null);
-    const page = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--runtime", root, "--format", "html", "--with-source" }, 0);
-    try h.require(std.mem.indexOf(u8, page, "dict-data") != null and std.mem.indexOf(u8, page, "Forms from native Lua") != null);
-    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = try std.fs.path.join(a, &.{ dir, "native.html" }), .data = page });
     const raw = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--runtime", root, "--format", "source" }, 0);
     try h.require(std.mem.eql(u8, raw, source));
     _ = try h.run(&.{ pipeline, "--with-blobs", dump, root }, 1);
@@ -198,5 +150,5 @@ pub fn main(init: std.process.Init) !void {
     _ = try h.run(&.{ pipeline, bad_dump, bad_root }, 1);
     var marker_file = try std.Io.Dir.cwd().openFile(init.io, try std.fs.path.join(a, &.{ bad_root, ".incomplete" }), .{});
     marker_file.close(init.io);
-    std.debug.print("RUNTIME_INTEGRATION_PASS checks={d}: XML extraction, native AOT execution, mandatory native worker selection, persistent live-worker reuse/restart, require, stable cross-shard errors, template transclusion, HTML tables, raw source, explicit failures, deadline, incomplete-build refusal. Artifacts: {s}\n", .{ h.checks, dir });
+    std.debug.print("RUNTIME_INTEGRATION_PASS checks={d}: XML extraction, native AOT execution, mandatory native worker selection, persistent FFI worker reuse/restart, require, stable cross-shard errors, template transclusion, table rendering, raw source, explicit failures, deadline, incomplete-build refusal. Artifacts: {s}\n", .{ h.checks, dir });
 }
