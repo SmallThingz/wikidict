@@ -178,11 +178,7 @@ const State = struct {
             if (index) |i| {
                 var source_record = try self.db.recordAlloc(self.a, i);
                 defer source_record.deinit();
-                const raw = source_record.record;
-                var resolved = try self.db.resolveAlloc(self.a, raw);
-                defer resolved.deinit();
-                const record = resolved.record;
-                var doc = try model.fromRecord(self.a, record);
+                var doc = try model.fromRecord(self.a, source_record.record);
                 defer doc.deinit();
                 try output.entryTextWithDetails(&formatted.writer, doc.entry, self.color, self.details);
             } else try formatted.writer.writeAll("No matching entries.\n\nPress / to edit the prefix; Ctrl-U clears it.\nMatching is case-sensitive UTF-8, not fuzzy search.");

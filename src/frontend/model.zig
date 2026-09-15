@@ -46,7 +46,15 @@ pub fn utf8Text(a: A, bytes: []const u8) ![]const u8 {
 }
 
 pub fn payload(record: dec.BlobRecordView) []const u8 {
-    return record.payloadBytes();
+    return switch (record) {
+        .language => |value| value.payload,
+        .thesaurus => |value| value.payload,
+        .citations => |value| value.source,
+        .reconstruction => |value| value.payload,
+        .rhymes => |value| value.payload,
+        .sign_gloss => |value| value.source,
+        .supplement => |value| value.payload,
+    };
 }
 
 fn validate(record: dec.BlobRecordView, stored: types.Stored) !void {
@@ -59,7 +67,7 @@ pub fn fromRecord(allocator: A, record: dec.BlobRecordView) !OwnedEntry {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
-    var stored = std.json.parseFromSliceLeaky(types.Stored, a, record.payloadBytes(), .{
+    var stored = std.json.parseFromSliceLeaky(types.Stored, a, payload(record), .{
         .allocate = .alloc_always,
         .ignore_unknown_fields = false,
     }) catch return error.InvalidPresentation;
@@ -69,10 +77,6 @@ pub fn fromRecord(allocator: A, record: dec.BlobRecordView) !OwnedEntry {
         stored.entry.language_code = try a.dupe(u8, record.language.metadata.code);
     }
     return .{ .arena = arena, .entry = stored.entry };
-}
-
-pub fn fromCoreRecord(allocator: A, record: dec.BlobRecordView) !OwnedEntry {
-    return fromRecord(allocator, record);
 }
 
 test "reader deserializes compiled presentation without wikitext parsing" {

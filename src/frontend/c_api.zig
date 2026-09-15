@@ -163,9 +163,7 @@ fn lookupInternal(handle: *Handle, query: []const u8, out: *Buffer) !bool {
     };
     var raw = try current.db.recordAlloc(allocator, index);
     defer raw.deinit();
-    var resolved = try current.db.resolveAlloc(allocator, raw.record);
-    defer resolved.deinit();
-    var doc = try model.fromRecord(allocator, resolved.record);
+    var doc = try model.fromRecord(allocator, raw.record);
     defer doc.deinit();
     response.entries = &.{doc.entry};
     response.total_matches = 1;

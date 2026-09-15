@@ -58,16 +58,6 @@ pub const Store = struct {
         const view = try dec.openTrustedBlob(self.file.directory.header);
         return .{ .record = view.wrapRecord(.{ .title = r.title, .payload = r.payload }), .storage = r };
     }
-    pub const Resolved = struct {
-        record: dec.BlobRecordView,
-        pub fn deinit(_: *Resolved) void {}
-    };
-    pub fn resolveCoreAlloc(_: *Store, _: std.mem.Allocator, record: dec.BlobRecordView) !Resolved {
-        return .{ .record = record };
-    }
-    pub fn resolveAlloc(_: *Store, _: std.mem.Allocator, record: dec.BlobRecordView) !Resolved {
-        return .{ .record = record };
-    }
     pub fn prefix(self: Store, text: []const u8) !Range {
         const p = self.file.prefix(text);
         return .{ .start = p.start, .end = p.end };
@@ -128,7 +118,5 @@ test "compiled records resolve without companion or symbol machinery" {
     defer db.deinit();
     var raw = try db.recordAlloc(a, (try db.find("cat")).?);
     defer raw.deinit();
-    var resolved = try db.resolveAlloc(a, raw.record);
-    defer resolved.deinit();
-    try std.testing.expectEqualStrings(payload_bytes, resolved.record.payloadBytes());
+    try std.testing.expectEqualStrings(payload_bytes, raw.record.payloadBytes());
 }

@@ -91,12 +91,8 @@ fn run(init: std.process.Init) !u8 {
             if (try db.find(opts.query)) |record_index| {
                 var raw = try db.recordAlloc(init.gpa, record_index);
                 defer raw.deinit();
-                const raw_record = raw.record;
-                var resolved = try db.resolveAlloc(init.gpa, raw_record);
-                defer resolved.deinit();
-                const record = resolved.record;
                 response.total_matches = 1;
-                var doc = try model.fromRecord(init.gpa, record);
+                var doc = try model.fromRecord(init.gpa, raw.record);
                 defer doc.deinit();
                 response.entries = &.{doc.entry};
                 if (opts.format == .json) try output.json(w, response) else try output.entryTextWithDetails(w, doc.entry, color, opts.details);
