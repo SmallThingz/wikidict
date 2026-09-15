@@ -81,16 +81,40 @@ fn compareCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Val
     return one(.{ .number = result });
 }
 
-fn metaIndexCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn titleForSpec(runtime: *rt.Context, spec: namespace_lib.Spec, text: []const u8) ![]const u8 {
+    if (spec.id == 0) return text;
+    return std.fmt.allocPrint(runtime.allocator, "{s}:{s}", .{ spec.name, text });
+}
+
+fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len < 2 or args[0] != .table or args[1] != .string) return one(.nil);
+    const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
     const table = args[0].table;
+    const key = args[1].string;
     const fragment = table.rawGet(.{ .string = "__fragment" }) orelse Value{ .string = "" };
-    if (std.mem.eql(u8, args[1].string, "fragment")) return one(fragment);
-    if (!std.mem.eql(u8, args[1].string, "fullText")) return one(.nil);
+    if (std.mem.eql(u8, key, "fragment")) return one(fragment);
     const prefixed = table.rawGet(.{ .string = "prefixedText" }) orelse return one(.nil);
     if (prefixed != .string or fragment != .string) return one(.nil);
-    if (fragment.string.len == 0) return one(prefixed);
-    return one(.{ .string = try std.fmt.allocPrint(runtime.allocator, "{s}#{s}", .{ prefixed.string, fragment.string }) });
+    if (std.mem.eql(u8, key, "fullText")) {
+        if (fragment.string.len == 0) return one(prefixed);
+        return one(.{ .string = try std.fmt.allocPrint(runtime.allocator, "{s}#{s}", .{ prefixed.string, fragment.string }) });
+    }
+
+    const ns = namespaceOf(prefixed.string);
+    const subject = namespace_lib.subjectSpec(ns.id);
+    const is_talk = subject != null and subject.?.id != ns.id;
+    if (std.mem.eql(u8, key, "isTalkPage")) return one(.{ .boolean = is_talk });
+    if (std.mem.eql(u8, key, "subjectPageTitle")) {
+        const spec = subject orelse return one(.nil);
+        const title = try titleForSpec(runtime, spec, ns.text);
+        return one(try makeTitleValue(runtime, state, title));
+    }
+    if (std.mem.eql(u8, key, "talkPageTitle")) {
+        const spec = namespace_lib.talkSpec(ns.id) orelse return one(.nil);
+        const title = try titleForSpec(runtime, spec, ns.text);
+        return one(try makeTitleValue(runtime, state, title));
+    }
+    return one(.nil);
 }
 fn metaNewIndexCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len < 3 or args[0] != .table) return error.TableExpected;
@@ -111,7 +135,7 @@ fn ensureMetatable(runtime: *rt.Context, state: *State) !*rt.Table {
     const lt = try runtime.newNative(null, lessCall);
     try mt.rawSet(runtime.allocator, .{ .string = "__eq" }, eq);
     try mt.rawSet(runtime.allocator, .{ .string = "__lt" }, lt);
-    try mt.rawSet(runtime.allocator, .{ .string = "__index" }, try runtime.newNative(null, metaIndexCall));
+    try mt.rawSet(runtime.allocator, .{ .string = "__index" }, try runtime.newNative(state, metaIndexCall));
     try mt.rawSet(runtime.allocator, .{ .string = "__newindex" }, try runtime.newNative(null, metaNewIndexCall));
     state.metatable = mt;
     state.equals = eq;
@@ -246,6 +270,14 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     try std.testing.expect((try runtime.getIndex(title, .{ .string = "exists" })).boolean);
     try std.testing.expectEqualStrings(" frag ment", (try runtime.getIndex(title, .{ .string = "fragment" })).string);
     try std.testing.expectEqualStrings("Template:Foo/Sub# frag ment", (try runtime.getIndex(title, .{ .string = "fullText" })).string);
+    try std.testing.expect(!(try runtime.getIndex(title, .{ .string = "isTalkPage" })).boolean);
+    const talk = try runtime.getIndex(title, .{ .string = "talkPageTitle" });
+    try std.testing.expect(talk == .table);
+    try std.testing.expectEqualStrings("Template talk:Foo/Sub", (try runtime.getIndex(talk, .{ .string = "prefixedText" })).string);
+    const subject = try runtime.getIndex(talk, .{ .string = "subjectPageTitle" });
+    try std.testing.expect(subject == .table);
+    try std.testing.expectEqualStrings("Template:Foo/Sub", (try runtime.getIndex(subject, .{ .string = "prefixedText" })).string);
+    try std.testing.expect((try runtime.getIndex(talk, .{ .string = "isTalkPage" })).boolean);
 
     const alias_made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "WT:Sandbox_page" }});
     defer rt.freeResults(alias_made);
