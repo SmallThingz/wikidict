@@ -6,7 +6,6 @@ test {
     _ = @import("direct/module_model.zig");
     _ = @import("direct/shapes.zig");
     _ = @import("extract/modules.zig");
-    _ = @import("extract/templates.zig");
     _ = @import("wikitext/expression.zig");
     _ = @import("wikitext/preprocess.zig");
     _ = @import("runtime/pattern.zig");
