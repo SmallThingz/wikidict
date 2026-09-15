@@ -310,6 +310,8 @@ pub fn build(b: *std.Build) void {
     });
     const blob_build_exe = addCliExecutable(b, "dict-blob-build", b.path("tools/blob_build.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
+        .{ .name = "zxml", .module = zxml_dep.module("zxml") },
+        .{ .name = "xml_decode", .module = shared_xml_decode_mod },
     });
     const blob_verify_exe = addCliExecutable(b, "dict-blob-verify", b.path("tools/blob_verify.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },

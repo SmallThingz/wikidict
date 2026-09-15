@@ -1,6 +1,4 @@
 const std = @import("std");
-const zxml = @import("zxml");
-const xml_decode = @import("shared_xml_decode");
 const blobs = @import("blob_encoder");
 const blob_format = blobs.blob_format;
 const blob_catalog = blobs.blob_catalog;
@@ -10,7 +8,6 @@ const reconstruction_encoding = blobs.reconstruction_encoding;
 const rhymes_encoding = blobs.rhymes_encoding;
 
 const parts = blobs.language_parts;
-const Registry = blobs.language_registry.Registry;
 const language_bucket_count = 32;
 const ns_main: u32 = 0;
 const ns_rhymes: u32 = 106;
@@ -18,21 +15,6 @@ const ns_thesaurus: u32 = 110;
 const ns_citations: u32 = 114;
 const ns_sign_gloss: u32 = 116;
 const ns_reconstruction: u32 = 118;
-
-const parse_opts: zxml.ParseOptions = .{
-    .mode = .strict,
-    .validate_closing_tags = true,
-    .drop_whitespace_text_nodes = false,
-};
-const ztypes = zxml.Types(parse_opts);
-const StreamParser = ztypes.StreamParser;
-const StreamNode = ztypes.StreamNode;
-
-pub const BuildOptions = struct {
-    input_path: []const u8,
-    output_root: []const u8,
-    limit_pages: ?usize = null,
-};
 
 pub const BuildStats = struct {
     pages_seen: usize = 0,
@@ -48,24 +30,12 @@ pub const BuildStats = struct {
     supplement_bytes: [parts.count]usize = @splat(0),
 };
 
-const Capture = struct {
-    names_by_depth: [8][]const u8 = [_][]const u8{""} ** 8,
-    title_raw: ?[]const u8 = null,
-    ns_raw: ?[]const u8 = null,
-    text_raw: ?[]const u8 = null,
+pub const LanguageCodes = struct {
+    ctx: ?*const anyopaque = null,
+    get_fn: *const fn (?*const anyopaque, []const u8) ?[]const u8,
 
-    fn onNode(self: *@This(), node: StreamNode) bool {
-        if (node.kind != .element) return true;
-        if (node.depth < self.names_by_depth.len) self.names_by_depth[node.depth] = node.nameSlice();
-        const name = node.nameSlice();
-        if (node.depth == 1 and std.mem.eql(u8, name, "title")) {
-            self.title_raw = node.leadingTextRaw();
-        } else if (node.depth == 1 and std.mem.eql(u8, name, "ns")) {
-            self.ns_raw = node.leadingTextRaw();
-        } else if (node.depth == 2 and std.mem.eql(u8, self.names_by_depth[1], "revision") and std.mem.eql(u8, name, "text")) {
-            self.text_raw = node.leadingTextRaw();
-        }
-        return true;
+    pub fn code(self: LanguageCodes, heading: []const u8) ?[]const u8 {
+        return self.get_fn(self.ctx, heading);
     }
 };
 
@@ -250,18 +220,6 @@ const Spools = struct {
     }
 };
 
-fn isRelevantPage(page: []const u8) bool {
-    inline for ([_][]const u8{
-        "<ns>0</ns>",
-        "<ns>106</ns>",
-        "<ns>110</ns>",
-        "<ns>114</ns>",
-        "<ns>116</ns>",
-        "<ns>118</ns>",
-    }) |needle| if (std.mem.indexOf(u8, page, needle) != null) return true;
-    return false;
-}
-
 fn localNamespaceTitle(title: []const u8) []const u8 {
     const colon = std.mem.indexOfScalar(u8, title, ':') orelse return title;
     if (colon + 1 >= title.len) return title;
@@ -359,7 +317,7 @@ fn finalizeLanguageBucket(
     spool: *const SpoolFile,
     output_root: []const u8,
     manifest: *std.ArrayList([]const u8),
-    registry: *const Registry,
+    codes: LanguageCodes,
 ) !usize {
     var mapped = try mmapPath(io, spool.path);
     defer mapped.deinit();
@@ -392,7 +350,7 @@ fn finalizeLanguageBucket(
 
     var count: usize = 0;
     for (ordered.items) |group| {
-        const base_metadata = try blob_format.buildLanguageMetadataAlloc(allocator, registry.code(group.heading) orelse "", group.heading);
+        const base_metadata = try blob_format.buildLanguageMetadataAlloc(allocator, codes.code(group.heading) orelse "", group.heading);
         defer allocator.free(base_metadata);
         const metadata = if (group.family) |family| try std.mem.concat(allocator, u8, &.{ base_metadata, &.{@intFromEnum(family)} }) else base_metadata;
         defer if (group.family != null) allocator.free(metadata);
@@ -501,201 +459,151 @@ fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
     };
 }
 
-pub fn registryFromDump(allocator: std.mem.Allocator, dump: []const u8, parser: *StreamParser) !Registry {
-    const needle = "<title>Module:languages/canonical names</title>";
-    const title_pos = std.mem.indexOf(u8, dump, needle) orelse return Registry.empty(allocator);
-    const begin = std.mem.lastIndexOf(u8, dump[0..title_pos], "<page>") orelse return error.InvalidLanguageRegistry;
-    const end = std.mem.indexOfPos(u8, dump, title_pos, "</page>") orelse return error.InvalidLanguageRegistry;
-    var capture: Capture = .{};
-    try parser.parse(dump[begin .. end + 7], &capture, Capture.onNode);
-    const source = try xml_decode.decodeSinglePassAlloc(allocator, capture.text_raw orelse return error.InvalidLanguageRegistry);
-    defer allocator.free(source);
-    return Registry.fromLuaAlloc(allocator, source);
-}
+pub const Writer = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    output_root: []const u8,
+    spools: Spools,
+    stats: BuildStats = .{},
+    closed: bool = false,
+    finished: bool = false,
 
-pub fn build(io: std.Io, allocator: std.mem.Allocator, options: BuildOptions) !BuildStats {
-    try std.Io.Dir.cwd().createDirPath(io, options.output_root);
-    const languages_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ options.output_root, blob_catalog.language_directory });
-    defer allocator.free(languages_dir);
-    try std.Io.Dir.cwd().deleteTree(io, languages_dir);
-    try std.Io.Dir.cwd().createDirPath(io, languages_dir);
-    const details_dir = try std.fs.path.join(allocator, &.{ options.output_root, "details" });
-    defer allocator.free(details_dir);
-    try std.Io.Dir.cwd().deleteTree(io, details_dir);
-    for (std.meta.tags(parts.Kind)) |family| {
-        const dir = try std.fs.path.join(allocator, &.{ details_dir, @tagName(family) });
-        defer allocator.free(dir);
-        try std.Io.Dir.cwd().createDirPath(io, dir);
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, output_root: []const u8) !Writer {
+        try std.Io.Dir.cwd().createDirPath(io, output_root);
+        const languages_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ output_root, blob_catalog.language_directory });
+        defer allocator.free(languages_dir);
+        try std.Io.Dir.cwd().deleteTree(io, languages_dir);
+        try std.Io.Dir.cwd().createDirPath(io, languages_dir);
+        const details_dir = try std.fs.path.join(allocator, &.{ output_root, "details" });
+        defer allocator.free(details_dir);
+        try std.Io.Dir.cwd().deleteTree(io, details_dir);
+        for (std.meta.tags(parts.Kind)) |family| {
+            const dir = try std.fs.path.join(allocator, &.{ details_dir, @tagName(family) });
+            defer allocator.free(dir);
+            try std.Io.Dir.cwd().createDirPath(io, dir);
+        }
+        inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss", "symbols", "templates", "redirects", "pages" }) |name| {
+            const stale = try fixedBlobPathAlloc(allocator, output_root, name);
+            defer allocator.free(stale);
+            try deleteFileIfExists(io, stale);
+        }
+        const stale_manifest = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ output_root, blob_catalog.manifest_filename });
+        defer allocator.free(stale_manifest);
+        try deleteFileIfExists(io, stale_manifest);
+
+        const owned_root = try allocator.dupe(u8, output_root);
+        errdefer allocator.free(owned_root);
+        return .{
+            .io = io,
+            .allocator = allocator,
+            .output_root = owned_root,
+            .spools = try Spools.init(io, allocator, output_root),
+        };
     }
-    inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss", "symbols", "templates", "redirects", "pages" }) |name| {
-        const stale = try fixedBlobPathAlloc(allocator, options.output_root, name);
-        defer allocator.free(stale);
-        try deleteFileIfExists(io, stale);
+
+    pub fn deinit(self: *Writer) void {
+        if (!self.closed) self.spools.close();
+        self.spools.cleanup();
+        self.allocator.free(self.output_root);
+        self.* = undefined;
     }
-    const stale_manifest = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ options.output_root, blob_catalog.manifest_filename });
-    defer allocator.free(stale_manifest);
-    try deleteFileIfExists(io, stale_manifest);
 
-    var spools = try Spools.init(io, allocator, options.output_root);
-    defer spools.cleanup();
-    var spools_closed = false;
-    defer if (!spools_closed) spools.close();
-
-    var mapped = try mmapPath(io, options.input_path);
-    defer mapped.deinit();
-    var parser = StreamParser.init(allocator);
-    defer parser.deinit();
-    var registry = try registryFromDump(allocator, mapped.bytes, &parser);
-    defer registry.deinit();
-    var page_arena = std.heap.ArenaAllocator.init(allocator);
-    defer page_arena.deinit();
-
-    var stats: BuildStats = .{};
-    var pos: usize = 0;
-    while (std.mem.indexOfPos(u8, mapped.bytes, pos, "<page>")) |start| {
-        if (options.limit_pages) |limit| if (stats.pages_seen >= limit) break;
-        const end_start = std.mem.indexOfPos(u8, mapped.bytes, start, "</page>") orelse return error.TruncatedXml;
-        const page_end = end_start + "</page>".len;
-        const page = mapped.bytes[start..page_end];
-        pos = page_end;
-        stats.pages_seen += 1;
-        if (!isRelevantPage(page)) continue;
-
-        var capture: Capture = .{};
-        try parser.parse(page, &capture, Capture.onNode);
-        const ns_raw = capture.ns_raw orelse continue;
-        const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch continue;
-        if (ns != ns_main and ns != ns_rhymes and ns != ns_thesaurus and ns != ns_citations and ns != ns_sign_gloss and ns != ns_reconstruction) continue;
-        const title_raw = capture.title_raw orelse continue;
-        const text_raw = capture.text_raw orelse continue;
-        const page_allocator = page_arena.allocator();
-        const title = try xml_decode.decodeSinglePassAlloc(page_allocator, title_raw);
-        const source = try xml_decode.decodeSinglePassAlloc(page_allocator, text_raw);
+    pub fn addPage(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, source: []const u8) !void {
+        if (self.finished) return error.WriterFinished;
         if (ns == ns_main) {
-            try processMain(page_allocator, &spools, title, source, &stats);
-        } else {
-            try processNamespace(page_allocator, &spools, ns, title, source, &stats);
+            try processMain(page_allocator, &self.spools, title, source, &self.stats);
+        } else if (ns == ns_rhymes or ns == ns_thesaurus or ns == ns_citations or ns == ns_sign_gloss or ns == ns_reconstruction) {
+            try processNamespace(page_allocator, &self.spools, ns, title, source, &self.stats);
         }
-        _ = page_arena.reset(.retain_capacity);
     }
 
-    spools.close();
-    spools_closed = true;
-
-    const manifest_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ options.output_root, blob_catalog.manifest_filename });
-    defer allocator.free(manifest_path);
-    var manifest_file = try std.Io.Dir.cwd().createFile(io, manifest_path, .{ .truncate = true });
-    defer manifest_file.close(io);
-    var manifest_buffer: [64 * 1024]u8 = undefined;
-    var manifest_writer = manifest_file.writer(io, &manifest_buffer);
-    const manifest = &manifest_writer.interface;
-    var headings: std.ArrayList([]const u8) = .empty;
-    defer {
-        for (headings.items) |heading| allocator.free(heading);
-        headings.deinit(allocator);
-    }
-    for (&spools.language) |*spool| stats.language_blobs += try finalizeLanguageBucket(io, allocator, spool, options.output_root, &headings, &registry);
-    std.mem.sort([]const u8, headings.items, {}, struct {
-        fn less(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.order(u8, a, b) == .lt;
+    pub fn finish(self: *Writer, codes: LanguageCodes) !BuildStats {
+        if (self.finished) return error.WriterFinished;
+        if (!self.closed) {
+            self.spools.close();
+            self.closed = true;
         }
-    }.less);
-    try manifest.writeAll(blob_catalog.manifest_header ++ "\n");
-    for (headings.items) |heading| try blob_catalog.writeEntry(manifest, heading);
-    try manifest.flush();
 
-    try finalizeFixedSpool(io, allocator, &spools.thesaurus, options.output_root, "thesaurus", .thesaurus);
-    try finalizeFixedSpool(io, allocator, &spools.citations, options.output_root, "citations", .citations);
-    try finalizeFixedSpool(io, allocator, &spools.reconstruction, options.output_root, "reconstruction", .reconstruction);
-    try finalizeFixedSpool(io, allocator, &spools.rhymes, options.output_root, "rhymes", .rhymes);
-    try finalizeFixedSpool(io, allocator, &spools.sign_gloss, options.output_root, "sign-gloss", .sign_gloss);
-    _ = try @import("name_linker.zig").linkRoot(io, allocator, options.output_root, null);
-    return stats;
-}
+        const manifest_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.output_root, blob_catalog.manifest_filename });
+        defer self.allocator.free(manifest_path);
+        var manifest_file = try std.Io.Dir.cwd().createFile(self.io, manifest_path, .{ .truncate = true });
+        defer manifest_file.close(self.io);
+        var manifest_buffer: [64 * 1024]u8 = undefined;
+        var manifest_writer = manifest_file.writer(self.io, &manifest_buffer);
+        const manifest = &manifest_writer.interface;
+        var headings: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (headings.items) |heading| self.allocator.free(heading);
+            headings.deinit(self.allocator);
+        }
+        for (&self.spools.language) |*spool|
+            self.stats.language_blobs += try finalizeLanguageBucket(self.io, self.allocator, spool, self.output_root, &headings, codes);
+        std.mem.sort([]const u8, headings.items, {}, struct {
+            fn less(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.less);
+        try manifest.writeAll(blob_catalog.manifest_header ++ "\n");
+        for (headings.items) |heading| try blob_catalog.writeEntry(manifest, heading);
+        try manifest.flush();
 
-fn writeFixture(io: std.Io, path: []const u8, bytes: []const u8) !void {
-    var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
-    defer file.close(io);
-    try file.writePositionalAll(io, bytes, 0);
-}
+        try finalizeFixedSpool(self.io, self.allocator, &self.spools.thesaurus, self.output_root, "thesaurus", .thesaurus);
+        try finalizeFixedSpool(self.io, self.allocator, &self.spools.citations, self.output_root, "citations", .citations);
+        try finalizeFixedSpool(self.io, self.allocator, &self.spools.reconstruction, self.output_root, "reconstruction", .reconstruction);
+        try finalizeFixedSpool(self.io, self.allocator, &self.spools.rhymes, self.output_root, "rhymes", .rhymes);
+        try finalizeFixedSpool(self.io, self.allocator, &self.spools.sign_gloss, self.output_root, "sign-gloss", .sign_gloss);
+        self.finished = true;
+        return self.stats;
+    }
+};
 
-test "blob builder routes main languages and feature namespaces into separate blobs" {
+test "wikitext writer emits only data blobs" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
-    defer std.testing.allocator.free(base);
-    const xml_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/sample.xml", .{base});
-    defer std.testing.allocator.free(xml_path);
-    const out_root = try std.fmt.allocPrint(std.testing.allocator, "{s}/blobs", .{base});
+    const out_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
     defer std.testing.allocator.free(out_root);
-    try std.Io.Dir.cwd().createDirPath(std.testing.io, base);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, out_root);
 
-    const xml =
-        "<mediawiki>" ++
-        "<page><title>cat</title><ns>0</ns><revision><text xml:space=\"preserve\">==English==\n===Noun===\n# [[cat]]\n==French==\n===Nom===\n# [[chat]]\n==English==\n===Verb===\n# purr\n</text></revision></page>" ++
-        "<page><title>Thesaurus:cat</title><ns>110</ns><revision><text xml:space=\"preserve\">==English==\n===Noun===\n====Synonyms====\n{{ws beginlist}}\n{{ws|feline}}\n{{ws endlist}}\n</text></revision></page>" ++
-        "<page><title>Rhymes:English/æt</title><ns>106</ns><revision><text xml:space=\"preserve\">==English==\n* {{l|en|cat}}\n</text></revision></page>" ++
-        "<page><title>Citations:cat</title><ns>114</ns><revision><text xml:space=\"preserve\">citation raw</text></revision></page>" ++
-        "<page><title>Sign gloss:CAT</title><ns>116</ns><revision><text xml:space=\"preserve\">sign raw</text></revision></page>" ++
-        "<page><title>Reconstruction:Proto-Germanic/kattuz</title><ns>118</ns><revision><text xml:space=\"preserve\">{{reconstructed}}\n==Proto-Germanic==\n===Noun===\n# cat\n</text></revision></page>" ++
-        "<page><title>Reconstruction:no-slash</title><ns>118</ns><revision><text xml:space=\"preserve\">raw malformed reconstruction</text></revision></page>" ++
-        "</mediawiki>";
-    try writeFixture(std.testing.io, xml_path, xml);
-    const stats = try build(std.testing.io, std.testing.allocator, .{ .input_path = xml_path, .output_root = out_root });
+    const codes: LanguageCodes = .{
+        .get_fn = struct {
+            fn get(_: ?*const anyopaque, heading: []const u8) ?[]const u8 {
+                if (std.mem.eql(u8, heading, "English")) return "en";
+                if (std.mem.eql(u8, heading, "French")) return "fr";
+                return null;
+            }
+        }.get,
+    };
+    var writer = try Writer.init(std.testing.io, std.testing.allocator, out_root);
+    defer writer.deinit();
+    writer.stats.pages_seen = 3;
+    try writer.addPage(std.testing.allocator, 0, "cat", "==English==\n===Noun===\n# [[cat]]\n==French==\n===Nom===\n# [[chat]]\n==English==\n===Verb===\n# purr\n");
+    try writer.addPage(std.testing.allocator, 114, "Citations:cat", "citation raw");
+    try writer.addPage(std.testing.allocator, 118, "Reconstruction:Proto-Germanic/kattuz", "==Proto-Germanic==\n===Noun===\n# cat\n");
+    const stats = try writer.finish(codes);
     try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
     try std.testing.expectEqual(@as(usize, 2), stats.language_records);
-    try std.testing.expectEqual(@as(usize, 2), stats.reconstruction_records);
 
-    var symbols: @import("blob_files.zig").SymbolSource = .{ .io = std.testing.io, .a = std.testing.allocator, .root = out_root };
-    defer symbols.deinit();
     const english_path = try languageBlobPathAlloc(std.testing.allocator, out_root, "English");
     defer std.testing.allocator.free(english_path);
     var english_map = try mmapPath(std.testing.io, english_path);
     defer english_map.deinit();
     const english_blob = try blob_format.inspect(english_map.bytes);
-    const english_meta = try english_blob.languageMetadata();
+    const metadata = try english_blob.languageMetadata();
+    try std.testing.expectEqualStrings("en", metadata.code);
     var english_index = try english_blob.buildTrustedIndexAlloc(std.testing.allocator);
     defer english_index.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("English", english_meta.heading);
     const cat = (try english_index.find("cat")).?;
-    const english_source = try language_encoding.decodeAlloc(std.testing.allocator, cat.payload, .{ .heading = "English" });
-    defer std.testing.allocator.free(english_source);
-    try std.testing.expectEqualStrings("==English==\n===Noun===\n# [[cat]]\n==English==\n===Verb===\n# purr\n", english_source);
+    const source = try language_encoding.decodeAlloc(std.testing.allocator, cat.payload, .{ .heading = "English" });
+    defer std.testing.allocator.free(source);
+    try std.testing.expectEqualStrings("==English==\n===Noun===\n# [[cat]]\n==English==\n===Verb===\n# purr\n", source);
 
-    const recon_path = try fixedBlobPathAlloc(std.testing.allocator, out_root, "reconstruction");
-    defer std.testing.allocator.free(recon_path);
-    var recon_map = try mmapPath(std.testing.io, recon_path);
-    defer recon_map.deinit();
-    const recon_blob = try blob_format.inspect(recon_map.bytes);
-    var recon_index = try recon_blob.buildTrustedIndexAlloc(std.testing.allocator);
-    defer recon_index.deinit(std.testing.allocator);
-    const reconstruction = (try recon_index.find("Proto-Germanic/kattuz")).?;
-    const bound_recon = try symbols.bindAlloc(std.testing.allocator, reconstruction.payload, recon_blob.symbolic, recon_blob.binding_id);
-    defer if (bound_recon) |b| std.testing.allocator.free(b);
-    const recon_source = try reconstruction_encoding.decodeAlloc(std.testing.allocator, bound_recon orelse reconstruction.payload, "Proto-Germanic/kattuz");
-    defer std.testing.allocator.free(recon_source);
-    try std.testing.expectEqualStrings("{{reconstructed}}\n==Proto-Germanic==\n===Noun===\n# cat\n", recon_source);
-    const raw_reconstruction = (try recon_index.find("no-slash")).?;
-    const raw_recon_source = try reconstruction_encoding.decodeAlloc(std.testing.allocator, raw_reconstruction.payload, "no-slash");
-    defer std.testing.allocator.free(raw_recon_source);
-    try std.testing.expectEqualStrings("raw malformed reconstruction", raw_recon_source);
-
-    const citations_path = try fixedBlobPathAlloc(std.testing.allocator, out_root, "citations");
-    defer std.testing.allocator.free(citations_path);
-    var citations_map = try mmapPath(std.testing.io, citations_path);
-    defer citations_map.deinit();
-    const citations_blob = try blob_format.inspect(citations_map.bytes);
-    var citations_index = try citations_blob.buildTrustedIndexAlloc(std.testing.allocator);
-    defer citations_index.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("citation raw", (try citations_index.find("cat")).?.payload);
-
-    const stale_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/languages/stale.wikblb", .{out_root});
-    defer std.testing.allocator.free(stale_path);
-    try writeFixture(std.testing.io, stale_path, "stale");
-    _ = try build(std.testing.io, std.testing.allocator, .{ .input_path = xml_path, .output_root = out_root });
-    const stale_file = std.Io.Dir.cwd().openFile(std.testing.io, stale_path, .{});
-    if (stale_file) |file| {
-        file.close(std.testing.io);
-        return error.StaleOutputSurvived;
-    } else |err| try std.testing.expectEqual(error.FileNotFound, err);
+    inline for (.{ "symbols", "templates", "redirects", "pages" }) |name| {
+        const path = try fixedBlobPathAlloc(std.testing.allocator, out_root, name);
+        defer std.testing.allocator.free(path);
+        const opened = std.Io.Dir.cwd().openFile(std.testing.io, path, .{});
+        if (opened) |file| {
+            file.close(std.testing.io);
+            return error.RuntimeArtifactLeaked;
+        } else |err| try std.testing.expectEqual(error.FileNotFound, err);
+    }
 }

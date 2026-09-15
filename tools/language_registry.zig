@@ -1,3 +1,4 @@
+//! Build-time parser for Wiktionary language-name metadata.
 const std = @import("std");
 /// Canonical headings/codes from the exact input dump's Module:languages/canonical names.
 /// Does not infer a language from template arguments, translations, or interwiki links.

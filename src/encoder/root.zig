@@ -3,7 +3,6 @@ pub const compact_encoding = @import("compact_encoding.zig");
 pub const section_encoding = @import("section_encoding.zig");
 const blobs = @import("blob_encoder");
 pub const language_parts = blobs.language_parts;
-pub const language_registry = blobs.language_registry;
 pub const blob_codec_support = blobs.blob_codec_support;
 pub const thesaurus_encoding = blobs.thesaurus_encoding;
 pub const rhymes_encoding = blobs.rhymes_encoding;

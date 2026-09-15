@@ -1,0 +1,135 @@
+//! Build-time Wiktionary XML adapter. Product encoders consume decoded wikitext records, not XML.
+const std = @import("std");
+const zxml = @import("zxml");
+const xml_decode = @import("xml_decode");
+const language_registry = @import("language_registry.zig");
+
+const parse_opts: zxml.ParseOptions = .{
+    .mode = .strict,
+    .validate_closing_tags = true,
+    .drop_whitespace_text_nodes = false,
+};
+const ztypes = zxml.Types(parse_opts);
+const StreamParser = ztypes.StreamParser;
+const StreamNode = ztypes.StreamNode;
+
+pub const Page = struct {
+    ns: u32,
+    title: []const u8,
+    source: []const u8,
+};
+
+const Capture = struct {
+    names_by_depth: [8][]const u8 = [_][]const u8{""} ** 8,
+    title_raw: ?[]const u8 = null,
+    ns_raw: ?[]const u8 = null,
+    text_raw: ?[]const u8 = null,
+
+    fn onNode(self: *@This(), node: StreamNode) bool {
+        if (node.kind != .element) return true;
+        if (node.depth < self.names_by_depth.len) self.names_by_depth[node.depth] = node.nameSlice();
+        const name = node.nameSlice();
+        if (node.depth == 1 and std.mem.eql(u8, name, "title")) {
+            self.title_raw = node.leadingTextRaw();
+        } else if (node.depth == 1 and std.mem.eql(u8, name, "ns")) {
+            self.ns_raw = node.leadingTextRaw();
+        } else if (node.depth == 2 and std.mem.eql(u8, self.names_by_depth[1], "revision") and std.mem.eql(u8, name, "text")) {
+            self.text_raw = node.leadingTextRaw();
+        }
+        return true;
+    }
+};
+
+pub fn relevantNamespace(ns: u32) bool {
+    return ns == 0 or ns == 106 or ns == 110 or ns == 114 or ns == 116 or ns == 118;
+}
+
+pub const Dump = struct {
+    allocator: std.mem.Allocator,
+    bytes: []align(std.heap.page_size_min) const u8,
+    parser: StreamParser,
+
+    pub fn open(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !Dump {
+        const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+        var file: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
+        defer file.close(io);
+        const stat = try file.stat(io);
+        const len = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
+        const bytes = if (len == 0)
+            @as([]align(std.heap.page_size_min) const u8, &.{})
+        else
+            try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0);
+        return .{ .allocator = allocator, .bytes = bytes, .parser = StreamParser.init(allocator) };
+    }
+
+    pub fn deinit(self: *Dump) void {
+        self.parser.deinit();
+        if (self.bytes.len != 0) std.posix.munmap(self.bytes);
+        self.* = undefined;
+    }
+
+    pub fn iterator(self: *Dump) Iterator {
+        return .{ .dump = self };
+    }
+
+    pub fn languageRegistry(self: *Dump, allocator: std.mem.Allocator) !language_registry.Registry {
+        const needle = "<title>Module:languages/canonical names</title>";
+        const title_pos = std.mem.indexOf(u8, self.bytes, needle) orelse return language_registry.Registry.empty(allocator);
+        const begin = std.mem.lastIndexOf(u8, self.bytes[0..title_pos], "<page>") orelse return error.InvalidLanguageRegistry;
+        const end = std.mem.indexOfPos(u8, self.bytes, title_pos, "</page>") orelse return error.InvalidLanguageRegistry;
+        var capture: Capture = .{};
+        try self.parser.parse(self.bytes[begin .. end + 7], &capture, Capture.onNode);
+        const raw = capture.text_raw orelse return error.InvalidLanguageRegistry;
+        const source = try xml_decode.decodeSinglePassAlloc(allocator, raw);
+        defer allocator.free(source);
+        return language_registry.Registry.fromLuaAlloc(allocator, source);
+    }
+};
+
+pub const Iterator = struct {
+    dump: *Dump,
+    pos: usize = 0,
+    pages_seen: usize = 0,
+
+    pub fn next(self: *Iterator, allocator: std.mem.Allocator) !?Page {
+        while (std.mem.indexOfPos(u8, self.dump.bytes, self.pos, "<page>")) |start| {
+            const end_start = std.mem.indexOfPos(u8, self.dump.bytes, start, "</page>") orelse return error.TruncatedXml;
+            const page_end = end_start + "</page>".len;
+            const page = self.dump.bytes[start..page_end];
+            self.pos = page_end;
+            self.pages_seen += 1;
+
+            var capture: Capture = .{};
+            try self.dump.parser.parse(page, &capture, Capture.onNode);
+            const ns_raw = capture.ns_raw orelse continue;
+            const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch continue;
+            const title_raw = capture.title_raw orelse continue;
+            const text_raw = capture.text_raw orelse continue;
+            return .{
+                .ns = ns,
+                .title = try xml_decode.decodeSinglePassAlloc(allocator, title_raw),
+                .source = try xml_decode.decodeSinglePassAlloc(allocator, text_raw),
+            };
+        }
+        return null;
+    }
+};
+
+test "dump adapter exposes decoded wikitext pages" {
+    const xml = "<mediawiki><page><title>cat</title><ns>0</ns><revision><text>==English==&amp;x</text></revision></page></mediawiki>";
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dump.xml", .{tmp.sub_path});
+    defer std.testing.allocator.free(path);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, std.fs.path.dirname(path).?);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = xml });
+    var dump = try Dump.open(std.testing.io, std.testing.allocator, path);
+    defer dump.deinit();
+    var it = dump.iterator();
+    const page = (try it.next(std.testing.allocator)).?;
+    defer std.testing.allocator.free(page.title);
+    defer std.testing.allocator.free(page.source);
+    try std.testing.expectEqual(@as(u32, 0), page.ns);
+    try std.testing.expectEqualStrings("cat", page.title);
+    try std.testing.expectEqualStrings("==English==&x", page.source);
+}
