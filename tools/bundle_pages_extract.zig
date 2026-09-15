@@ -2,7 +2,7 @@
 //! These sources are transient and are never part of the shipped blob schema.
 const std = @import("std");
 const zxml = @import("zxml");
-const enc = @import("encoder");
+const xml_decode = @import("xml_decode");
 
 const types = zxml.Types(.{
     .mode = .strict,
@@ -80,8 +80,8 @@ pub fn main(init: std.process.Init) !void {
         var captured: Capture = .{};
         try parser.parse(page, &captured, Capture.onNode);
         const pa = arena.allocator();
-        const title = try enc.xml_decode.decodeSinglePassAlloc(pa, captured.title orelse continue);
-        const source = try enc.xml_decode.decodeSinglePassAlloc(pa, captured.source orelse "");
+        const title = try xml_decode.decodeSinglePassAlloc(pa, captured.title orelse continue);
+        const source = try xml_decode.decodeSinglePassAlloc(pa, captured.source orelse "");
         count += 1;
 
         const source_path = try std.fmt.allocPrint(pa, "{s}/{d}.wiki", .{ pages_dir, count });

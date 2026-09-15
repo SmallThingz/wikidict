@@ -60,25 +60,25 @@ pub const ModuleCompileFailure = struct {
 };
 
 pub const BuildData = struct {
-    // Consumed by src/encoder/compact_encoding.zig for single-byte direct contractions.
+    // Historical corpus-shape metric retained in the structure report.
     compact_direct_patterns: []const []const u8 = &.{},
-    // Consumed by src/encoder/section_encoding.zig when emitting generic heading refs.
+    // Corpus heading metadata produced by structure analysis.
     heading_specs: []const HeadingSpec = &.{},
-    // Consumed by src/encoder/compact_encoding.zig and src/decoder/compact_runtime.zig.
+    // Corpus heading-level metadata produced by structure analysis.
     heading_level_specs: []const HeadingLevelSpec = &.{},
-    // Consumed by src/encoder/compact_encoding.zig and src/decoder/reader.zig template-table loading.
+    // Corpus template-shape metadata produced by structure analysis.
     line_templates: []const TemplateSpec = &.{},
-    // Consumed by src/encoder/compact_encoding.zig as the hot escaped-pattern table.
+    // Historical compact-pattern metric retained in the structure report.
     compact_patterns: []const []const u8 = &.{},
-    // Consumed by src/encoder/compact_encoding.zig as the overflow escaped-pattern table.
+    // Historical overflow-pattern metric retained in the structure report.
     compact_patterns_ext: []const []const u8 = &.{},
-    // Consumed by src/encoder/compact_encoding.zig and src/decoder/reader.zig template-table loading.
+    // Corpus template-shape metadata produced by structure analysis.
     translation_templates: []const TemplateSpec = &.{},
-    // Consumed by src/encoder/section_encoding.zig translation compaction.
+    // Corpus translation metadata produced by structure analysis.
     target_languages: []const TargetLanguage = &.{},
-    // Consumed by src/encoder/section_encoding.zig translation compaction.
+    // Corpus translation metadata produced by structure analysis.
     language_labels: []const LanguageLabel = &.{},
-    // Consumed by tools/structure_tables_codegen.zig and src/decoder/reader.zig validation.
+    // Stable fingerprint of the analyzed structure metadata.
     structure_fingerprint: u32 = 0,
 
     pub fn deinit(self: *BuildData, allocator: std.mem.Allocator) void {
@@ -115,7 +115,7 @@ pub const DependencySet = struct {
     // Consumed by structure analysis and compatibility tooling.
     direct_modules: []const []const u8 = &.{},
     transitive_modules: []const []const u8 = &.{},
-    // Consumed by src/encoder/builder.zig and tools/verifier.zig to avoid rescanning XML pages.
+    // Source page references retained for structure-analysis consumers.
     all_entry_pages: []const SourcePageRef = &.{},
     all_template_pages: []const SourcePageRef = &.{},
     all_module_pages: []const SourcePageRef = &.{},

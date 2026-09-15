@@ -129,14 +129,3 @@ zig build index-blobs -- path/language.wikblb.xz
 ```
 
 Native readers can use `.wikblb.xz` directly. The derived index records XZ block boundaries so record reads decode only intersecting blocks where possible. `zig build test-storage` and `zig build test-reader` exercise raw files, XZ files, cache recovery, and native reader behavior.
-
-## Legacy monolithic encoder
-
-The older `wiktionary.bin` workflow remains available for compatibility:
-
-```sh
-zig build encode -- --input data/wiktionary.xml --output data/wiktionary.bin
-zig build decode -- lookup --db data/wiktionary.bin --word color
-```
-
-For current work, prefer the per-language data-only bundle pipeline above.

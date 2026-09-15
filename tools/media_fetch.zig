@@ -1,7 +1,7 @@
 //! Explicit bounded Wikimedia acquisition. Renderers never access the network.
 const std = @import("std");
 const types = @import("media_types");
-const enc = @import("encoder");
+const xml_decode = @import("shared_xml_decode");
 const A = std.mem.Allocator;
 fn run(io: std.Io, a: A, args: []const []const u8) ![]const u8 {
     const result = try std.process.run(a, io, .{ .argv = args, .stdout_limit = .limited(4 * 1024 * 1024), .stderr_limit = .limited(256 * 1024), .timeout = (std.Io.Timeout{ .duration = .{ .raw = .fromSeconds(90), .clock = .awake } }).toDeadline(io) });
@@ -32,7 +32,7 @@ fn plain(a: A, input: []const u8) ![]const u8 {
         }
         try bytes.append(a, input[pos]);
     }
-    return enc.xml_decode.decodeSinglePassAlloc(a, bytes.items);
+    return xml_decode.decodeSinglePassAlloc(a, bytes.items);
 }
 fn fetch(io: std.Io, a: A, root: []const u8, file: []const u8) !void {
     const id = types.key(file);

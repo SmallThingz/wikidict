@@ -2,9 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const zxml = @import("zxml");
 
-const encoder = @import("encoder");
-const wikitext = encoder.wikitext;
-const xml_decode = encoder.xml_decode;
+const wikitext = @import("wikitext_source");
+const xml_decode = @import("shared_xml_decode");
 const required_path = @import("required_path.zig");
 const structure_report = @import("shared_structure_report");
 const structure_tables_support = @import("structure_tables_support.zig");
