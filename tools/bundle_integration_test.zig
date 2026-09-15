@@ -19,6 +19,7 @@ const module_source =
     \\    assert(string.find(mw.title.new('SharedAlias'):getContent(), '#REDIRECT', 1, true))
     \\    local shared_alias = mw.title.new('SharedAlias')
     \\    assert(shared_alias.isRedirect and shared_alias.redirectTarget.prefixedText == 'Shared')
+    \\    assert(shared_alias.id == 24 and shared_alias.redirectTarget.id == 23)
     \\    assert(mw.title.new('rat').exists)
     \\    assert(string.find(mw.title.new('rat'):getContent(), 'Another rodent', 1, true))
     \\    assert(not mw.title.new('definitely-not-a-real-entry').exists)

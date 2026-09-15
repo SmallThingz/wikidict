@@ -114,6 +114,11 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         const title = try titleForSpec(runtime, spec, ns.text);
         return one(try makeTitleValue(runtime, state, title));
     }
+    if (std.mem.eql(u8, key, "id")) {
+        const host = host_api.get(runtime) orelse return one(.{ .number = 0 });
+        const id = if (host.page_id) |get| try get(host.ctx, prefixed.string) else null;
+        return one(.{ .number = @floatFromInt(id orelse 0) });
+    }
     if (std.mem.eql(u8, key, "isRedirect") or std.mem.eql(u8, key, "redirectTarget")) {
         const host = host_api.get(runtime) orelse return one(if (std.mem.eql(u8, key, "isRedirect")) .{ .boolean = false } else .nil);
         const redirect = if (host.page_redirect) |get| try get(host.ctx, prefixed.string) else null;
@@ -250,6 +255,12 @@ fn testPageRedirect(_: ?*anyopaque, title: []const u8) !?[]const u8 {
     return if (std.mem.eql(u8, title, "Template:Alias")) "Template:Foo/Sub" else null;
 }
 
+fn testPageId(_: ?*anyopaque, title: []const u8) !?u64 {
+    if (std.mem.eql(u8, title, "Template:Foo/Sub")) return 77;
+    if (std.mem.eql(u8, title, "Template:Alias")) return 78;
+    return null;
+}
+
 fn testPageContent(_: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
     if (!std.mem.eql(u8, title, "Template:Foo/Sub")) return null;
     return try a.dupe(u8, "template body");
@@ -265,7 +276,7 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     defer arena.deinit();
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
-    var host = host_api.Host{ .current_title = "Template:Foo/Sub", .page_exists = testPageExists, .page_content = testPageContent, .page_redirect = testPageRedirect };
+    var host = host_api.Host{ .current_title = "Template:Foo/Sub", .page_exists = testPageExists, .page_content = testPageContent, .page_redirect = testPageRedirect, .page_id = testPageId };
     host_api.set(&runtime, &host);
     const mw = try runtime.newNativeNamespace(.mw);
     try install(&runtime, mw);
@@ -280,6 +291,7 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     try std.testing.expectEqualStrings("Foo", (try runtime.getIndex(title, .{ .string = "baseText" })).string);
     try std.testing.expect((try runtime.getIndex(title, .{ .string = "isSubpage" })).boolean);
     try std.testing.expect((try runtime.getIndex(title, .{ .string = "exists" })).boolean);
+    try std.testing.expectEqual(@as(f64, 77), (try runtime.getIndex(title, .{ .string = "id" })).number);
     try std.testing.expectEqualStrings(" frag ment", (try runtime.getIndex(title, .{ .string = "fragment" })).string);
     try std.testing.expectEqualStrings("Template:Foo/Sub# frag ment", (try runtime.getIndex(title, .{ .string = "fullText" })).string);
     try std.testing.expect(!(try runtime.getIndex(title, .{ .string = "isTalkPage" })).boolean);
@@ -293,6 +305,7 @@ test "AOT title exposes namespace fragment and subpage semantics" {
 
     const redirect_made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Template:Alias" }});
     defer rt.freeResults(redirect_made);
+    try std.testing.expectEqual(@as(f64, 78), (try runtime.getIndex(redirect_made[0], .{ .string = "id" })).number);
     try std.testing.expect((try runtime.getIndex(redirect_made[0], .{ .string = "isRedirect" })).boolean);
     const redirect_target = try runtime.getIndex(redirect_made[0], .{ .string = "redirectTarget" });
     try std.testing.expect(redirect_target == .table);

@@ -88,6 +88,7 @@ pub const Expander = struct {
         self.host.page_exists = hostPageExists;
         self.host.page_content = hostPageContent;
         self.host.page_redirect = hostPageRedirect;
+        self.host.page_id = hostPageId;
         self.host.frame_preprocess = hostFramePreprocess;
         self.host.frame_expand_template = hostFrameExpandTemplate;
         self.host.frame_extension_tag = hostFrameExtensionTag;
@@ -123,6 +124,14 @@ pub const Expander = struct {
         const get = self.provider.redirect_target orelse return null;
         const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, title);
         return get(self.provider.ctx, canonical);
+    }
+
+    fn hostPageId(raw: ?*anyopaque, title: []const u8) anyerror!?u64 {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const get = self.provider.page_metadata orelse return null;
+        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, title);
+        const metadata = (try get(self.provider.ctx, canonical)) orelse return null;
+        return metadata.page_id;
     }
 
     fn hostSiteInterwikiMap(raw: ?*anyopaque) anyerror![]const host_api.InterwikiRow {
