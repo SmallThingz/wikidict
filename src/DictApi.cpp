@@ -62,18 +62,17 @@ QByteArray DictApi::search(const QString &query, qsizetype limit, qsizetype offs
     return take(buffer);
 }
 
-QByteArray DictApi::lookup(const QString &query, bool coreOnly) {
+QByteArray DictApi::lookup(const QString &query) {
     const QByteArray text = query.toUtf8();
-    const uint32_t flags = coreOnly ? DICT_LOOKUP_CORE_ONLY : 0;
     dict_buffer buffer{};
     const auto status = static_cast<dict_status>(dict_lookup_json(
-        handle_, text.constData(), static_cast<size_t>(text.size()), flags, &buffer));
+        handle_, text.constData(), static_cast<size_t>(text.size()), &buffer));
     check(status, "lookup", true);
     return take(buffer);
 }
 QByteArray DictApi::random() {
     dict_buffer buffer{};
-    const auto status = static_cast<dict_status>(dict_random_json(handle_, 0, &buffer));
+    const auto status = static_cast<dict_status>(dict_random_json(handle_, &buffer));
     check(status, "random", true);
     return take(buffer);
 }

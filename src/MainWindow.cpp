@@ -218,7 +218,7 @@ void MainWindow::refreshSearch() {
 void MainWindow::openWord(const QString &word) {
     if (word.trimmed().isEmpty()) return;
     try {
-        const QByteArray response = api_->lookup(word, false);
+        const QByteArray response = api_->lookup(word);
         const QJsonDocument document = QJsonDocument::fromJson(response);
         if (document.object().value(QStringLiteral("entries")).toArray().isEmpty()) {
             statusBar()->showMessage(QStringLiteral("No exact entry for “%1”.").arg(word), 4000);
@@ -346,11 +346,6 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
         const int level = section.value(QStringLiteral("level")).toInt();
         if (level >= 3 || entry.value(QStringLiteral("kind")).toString() != QStringLiteral("language"))
             out += QStringLiteral("<h2>%1</h2>").arg(title.toHtmlEscaped());
-        const QString deferred = section.value(QStringLiteral("deferred")).toString();
-        if (!deferred.isEmpty()) {
-            out += QStringLiteral("<p><i>%1 details are stored in a companion section.</i></p>").arg(deferred.toHtmlEscaped());
-            continue;
-        }
         for (const QJsonValue &block : section.value(QStringLiteral("blocks")).toArray()) out += blockHtml(block.toObject());
     }
     const QJsonArray references = entry.value(QStringLiteral("references")).toArray();
