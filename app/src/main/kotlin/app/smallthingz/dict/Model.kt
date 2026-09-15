@@ -39,9 +39,7 @@ data class Entry(
     val languageCode: String,
     val sections: List<Section>,
     val references: List<Reference>,
-    val unexpandedTemplates: Int,
     val status: String,
-    val source: String?,
 ) {
     val key: String get() = "$kind\u0000${language.orEmpty()}\u0000$title"
     fun clue(): String {
@@ -61,8 +59,13 @@ data class Results(
     val entries: List<Entry>,
 )
 
-fun textOf(spans: List<Span>): String = spans.filter { it.kind != "template" }
-    .joinToString("") { it.text + it.trail }.replace(Regex("\\s+"), " ").trim()
+fun compiledSpanKind(kind: String): String {
+    require(kind != "template") { "Dictionary package contains uncompiled template markup." }
+    return kind
+}
+
+fun textOf(spans: List<Span>): String = spans.joinToString("") { it.text + it.trail }
+    .replace(Regex("\\s+"), " ").trim()
 object ResultParser {
     fun parse(json: String): Results {
         val root = JSONObject(json)
@@ -87,9 +90,7 @@ object ResultParser {
             languageCode = value.optString("language_code"),
             sections = (0 until sections.length()).map { section(sections.getJSONObject(it)) },
             references = (0 until references.length()).map { reference(references.getJSONObject(it)) },
-            unexpandedTemplates = value.optInt("unexpanded_templates"),
             status = value.optString("status", "structured"),
-            source = value.stringOrNull("source"),
         )
     }
     private fun section(value: JSONObject): Section {
@@ -114,15 +115,18 @@ object ResultParser {
         )
     }
 
-    private fun span(value: JSONObject) = Span(
-        kind = value.optString("kind", "text"), text = value.optString("text"),
-        target = value.optString("target"), trail = value.optString("trail"),
-        bold = value.optBoolean("bold"), italic = value.optBoolean("italic"),
-        code = value.optBoolean("code"), small = value.optBoolean("small"),
-        superscript = value.optBoolean("superscript"), subscript = value.optBoolean("subscript"),
-        strike = value.optBoolean("strike"), underline = value.optBoolean("underline"),
-        role = value.optString("role", "normal"),
-    )
+    private fun span(value: JSONObject): Span {
+        val kind = compiledSpanKind(value.optString("kind", "text"))
+        return Span(
+            kind = kind, text = value.optString("text"),
+            target = value.optString("target"), trail = value.optString("trail"),
+            bold = value.optBoolean("bold"), italic = value.optBoolean("italic"),
+            code = value.optBoolean("code"), small = value.optBoolean("small"),
+            superscript = value.optBoolean("superscript"), subscript = value.optBoolean("subscript"),
+            strike = value.optBoolean("strike"), underline = value.optBoolean("underline"),
+            role = value.optString("role", "normal"),
+        )
+    }
     private fun table(value: JSONObject): Table {
         val caption = value.optJSONArray("caption") ?: JSONArray()
         val rows = value.optJSONArray("rows") ?: JSONArray()

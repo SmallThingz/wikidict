@@ -5,18 +5,18 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ExportDocumentTest {
-    @Test fun directJsonIsAccepted() {
+    @Test fun directCompiledJsonIsAccepted() {
         val json = "{\"schema\":\"dict.results.v1\",\"entries\":[]}"
-        assertEquals(json, ExportDocument.extractJson(json))
+        assertEquals(json, ExportDocument.compiledJson(json.toByteArray()))
     }
 
-    @Test fun htmlExtractsOnlyDictData() {
-        val json = "{\"schema\":\"dict.results.v1\",\"query\":\"cat\"}"
-        val html = "<html><script id=\"dict-data\" type=\"application/json\">$json</script><p>tail</p></html>"
-        assertEquals(json, ExportDocument.extractJson(html))
+    @Test fun htmlIsRejected() {
+        val html = "<html><script id=\"dict-data\" type=\"application/json\">{}</script></html>"
+        assertThrows(IllegalArgumentException::class.java) { ExportDocument.compiledJson(html.toByteArray()) }
     }
 
-    @Test fun unrelatedHtmlIsRejected() {
-        assertThrows(IllegalArgumentException::class.java) { ExportDocument.extractJson("<html>no data</html>") }
+    @Test fun uncompiledTemplateSpanIsRejected() {
+        assertThrows(IllegalArgumentException::class.java) { compiledSpanKind("template") }
+        assertEquals("link", compiledSpanKind("link"))
     }
 }

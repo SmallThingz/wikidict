@@ -41,7 +41,7 @@ fun DictApp(document: DocumentState, learning: LearningStore, onOpen: () -> Unit
     fun openWord(word: SavedWord) {
         val match = entries.firstOrNull { it.key == word.key }
         if (match != null) { selectedKey = match.key; query = ""; screen = AppScreen.Dictionary }
-        else scope.launch { snackbar.showSnackbar("${word.title} is not in the currently opened export.") }
+        else scope.launch { snackbar.showSnackbar("${word.title} is not in the currently opened dictionary.") }
     }
     fun randomWord() {
         val candidates = learning.pool(entries).filter { word -> entries.any { it.key == word.key } }
@@ -55,7 +55,7 @@ fun DictApp(document: DocumentState, learning: LearningStore, onOpen: () -> Unit
             title = { Column { Text("Dict", fontWeight = FontWeight.Bold); Text(loaded?.name ?: "Offline Wiktionary", style = MaterialTheme.typography.labelSmall) } },
             actions = {
                 IconButton(onClick = ::randomWord) { Icon(Icons.Filled.Casino, "Random word") }
-                IconButton(onClick = onOpen) { Icon(Icons.Filled.FolderOpen, "Open export") }
+                IconButton(onClick = onOpen) { Icon(Icons.Filled.FolderOpen, "Open dictionary") }
             },
         ) },
         bottomBar = { NavigationBar {
@@ -104,14 +104,14 @@ private fun DictionaryScreen(
 private fun SearchBar(query: String, onQuery: (String) -> Unit) {
     OutlinedTextField(
         value = query, onValueChange = onQuery, singleLine = true,
-        leadingIcon = { Icon(Icons.Filled.Search, null) }, label = { Text("Find in this export") },
+        leadingIcon = { Icon(Icons.Filled.Search, null) }, label = { Text("Find in this dictionary") },
         modifier = Modifier.fillMaxWidth().padding(16.dp),
     )
 }
 
 @Composable
 private fun EntryMatches(entries: List<Entry>, onSelect: (String) -> Unit) {
-    if (entries.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No matching words in this export.") }
+    if (entries.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No matching words in this dictionary.") }
     else LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
         items(entries, key = { it.key }) { entry ->
             ListItem(
@@ -128,8 +128,8 @@ private fun EmptyDocument(onOpen: () -> Unit) {
     Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Your dictionary, offline.", style = MaterialTheme.typography.headlineMedium)
-            Text("Open a Dict JSON or HTML export. Reading, bookmarks, history and games stay on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Button(onClick = onOpen) { Icon(Icons.Filled.FolderOpen, null); Spacer(Modifier.width(8.dp)); Text("Open export") }
+            Text("Open a compiled Dict JSON package. Reading, bookmarks, history and games stay on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Button(onClick = onOpen) { Icon(Icons.Filled.FolderOpen, null); Spacer(Modifier.width(8.dp)); Text("Open dictionary") }
         }
     }
 }
