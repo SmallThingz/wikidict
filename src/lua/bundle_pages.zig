@@ -10,6 +10,15 @@ const ManifestRow = struct {
 };
 const TemplateSlot = struct { page_id: u64, redirect: ?[]const u8 = null };
 
+const Mapped = struct {
+    bytes: []align(std.heap.page_size_min) const u8,
+
+    fn deinit(self: *Mapped) void {
+        if (self.bytes.len != 0) std.posix.munmap(self.bytes);
+        self.bytes = &.{};
+    }
+};
+
 pub const Provider = struct {
     io: std.Io,
     a: A,
@@ -57,13 +66,18 @@ pub const Provider = struct {
         map.deinit(a);
     }
 
-    fn readOptional(self: *Provider, name: []const u8, max: usize) !?[]u8 {
+    fn mapOptional(self: *Provider, name: []const u8) !?Mapped {
         const path = try std.fs.path.join(self.a, &.{ self.root, name });
         defer self.a.free(path);
-        return std.Io.Dir.cwd().readFileAlloc(self.io, path, self.a, .limited(max)) catch |err| switch (err) {
-            error.FileNotFound => null,
+        const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch |err| switch (err) {
+            error.FileNotFound => return null,
             else => return err,
         };
+        var file: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
+        defer file.close(self.io);
+        const len = std.math.cast(usize, (try file.stat(self.io)).size) orelse return error.FileTooBig;
+        if (len == 0) return .{ .bytes = &.{} };
+        return .{ .bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0) };
     }
 
     fn unescapeField(self: *Provider, raw: []const u8) ![]u8 {
@@ -88,9 +102,9 @@ pub const Provider = struct {
     }
 
     fn loadInterwikiMap(self: *Provider) !void {
-        const bytes = (try self.readOptional("interwiki-map.tsv", 16 * 1024 * 1024)) orelse return;
-        defer self.a.free(bytes);
-        var lines = std.mem.splitScalar(u8, bytes, '\n');
+        var mapped = (try self.mapOptional("interwiki-map.tsv")) orelse return;
+        defer mapped.deinit();
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
         while (lines.next()) |line| {
             if (line.len == 0 or line[0] == '#') continue;
             var fields = std.mem.splitScalar(u8, line, '\t');
@@ -123,9 +137,9 @@ pub const Provider = struct {
     }
 
     fn loadPageManifest(self: *Provider) !void {
-        const bytes = (try self.readOptional("pages-manifest.jsonl", 64 * 1024 * 1024)) orelse return;
-        defer self.a.free(bytes);
-        var lines = std.mem.splitScalar(u8, bytes, '\n');
+        var mapped = (try self.mapOptional("pages-manifest.jsonl")) orelse return;
+        defer mapped.deinit();
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
         while (lines.next()) |line| {
             if (line.len == 0) continue;
             const parsed = try std.json.parseFromSlice(ManifestRow, self.a, line, .{ .ignore_unknown_fields = true });
@@ -143,9 +157,9 @@ pub const Provider = struct {
     }
 
     fn loadTemplateManifest(self: *Provider) !void {
-        const bytes = (try self.readOptional("template-manifest.tsv", 64 * 1024 * 1024)) orelse return;
-        defer self.a.free(bytes);
-        var lines = std.mem.splitScalar(u8, bytes, '\n');
+        var mapped = (try self.mapOptional("template-manifest.tsv")) orelse return;
+        defer mapped.deinit();
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
         while (lines.next()) |line| {
             if (line.len == 0) continue;
             var fields_it = std.mem.splitScalar(u8, line, '\t');
@@ -169,16 +183,14 @@ pub const Provider = struct {
 
     fn loadModuleManifest(self: *Provider) !void {
         if (self.modules_loaded) return;
-        const maybe_bytes = try self.readOptional("manifest.jsonl", 64 * 1024 * 1024);
-        if (maybe_bytes == null) {
+        var mapped = (try self.mapOptional("manifest.jsonl")) orelse {
             self.modules_loaded = true;
             return;
-        }
-        const bytes = maybe_bytes.?;
-        defer self.a.free(bytes);
+        };
+        defer mapped.deinit();
         var loaded: std.StringHashMapUnmanaged(u64) = .empty;
         errdefer freeStringMapKeys(u64, self.a, &loaded);
-        var lines = std.mem.splitScalar(u8, bytes, '\n');
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
         while (lines.next()) |line| {
             if (line.len == 0) continue;
             const parsed = std.json.parseFromSlice(ManifestRow, self.a, line, .{ .ignore_unknown_fields = true }) catch continue;
