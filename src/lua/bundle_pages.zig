@@ -57,7 +57,7 @@ pub const Provider = struct {
     }
 
     pub fn api(self: *Provider) lua_program.WikitextProvider {
-        return .{ .ctx = self, .get = get, .exists = exists, .interwiki_map = interwikiMap };
+        return .{ .ctx = self, .get = get, .get_template = getTemplate, .exists = exists, .interwiki_map = interwikiMap };
     }
 
     fn mapOptional(self: *Provider, name: []const u8) !?Mapped {
@@ -210,19 +210,25 @@ pub const Provider = struct {
             std.mem.replaceScalar(u8, title_buffer[0..raw_title.len], '_', ' ');
             break :blk title_buffer[0..raw_title.len];
         } else raw_title;
-        if (self.templates.get(title)) |initial| {
-            if (!content) return "";
-            var slot = initial;
-            var redirects: usize = 0;
-            while (slot.redirect) |target| {
-                redirects += 1;
-                if (redirects > 32) return error.TemplateRedirectLoop;
-                slot = self.templates.get(target) orelse return null;
-            }
-            return try self.readSource(a, "templates", slot.page_id, "wiki");
-        }
         if (self.corpus_pages.get(title)) |page| return if (content) try self.readCorpusSource(a, page) else "";
         return null;
+    }
+
+    fn templateSource(self: *Provider, a: A, title: []const u8) !?[]const u8 {
+        const initial = self.templates.get(title) orelse return null;
+        var slot = initial;
+        var redirects: usize = 0;
+        while (slot.redirect) |target| {
+            redirects += 1;
+            if (redirects > 32) return error.TemplateRedirectLoop;
+            slot = self.templates.get(target) orelse return null;
+        }
+        return try self.readSource(a, "templates", slot.page_id, "wiki");
+    }
+
+    fn getTemplate(ctx: ?*anyopaque, a: A, title: []const u8) anyerror!?[]const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return self.templateSource(a, title);
     }
 
     fn interwikiMap(ctx: ?*anyopaque) anyerror![]const InterwikiRow {
@@ -250,14 +256,26 @@ test "provider owns paths and serves corpus ranges without query-history state" 
     defer a.free(root);
     const dump_path = try std.fs.path.join(a, &.{ root, "dump.xml" });
     defer a.free(dump_path);
-    const dump_bytes = "prefixA&amp;B";
+    const prefix = "prefix";
+    const ordinary_raw = "A&amp;B";
+    const alias_raw = "#REDIRECT [[Template:Lazy]]";
+    const dump_bytes = prefix ++ ordinary_raw ++ alias_raw;
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = dump_bytes });
     const page_index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
     defer a.free(page_index_path);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = page_index_path, .data = "6\t7\tOrdinary page\n" });
+    const page_index = try std.fmt.allocPrint(
+        a,
+        "{d}\t{d}\tOrdinary page\n{d}\t{d}\tTemplate:Alias\n",
+        .{ prefix.len, ordinary_raw.len, prefix.len + ordinary_raw.len, alias_raw.len },
+    );
+    defer a.free(page_index);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = page_index_path, .data = page_index });
     const template_manifest_path = try std.fs.path.join(a, &.{ root, "template-manifest.tsv" });
     defer a.free(template_manifest_path);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = template_manifest_path, .data = "42\tTemplate:Lazy\t9\t\n" });
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = template_manifest_path,
+        .data = "42\tTemplate:Lazy\t9\t\n43\tTemplate:Alias\t27\tTemplate:Lazy\n",
+    });
     const templates_path = try std.fs.path.join(a, &.{ root, "templates" });
     defer a.free(templates_path);
     try std.Io.Dir.cwd().createDir(io, templates_path, .default_dir);
@@ -274,7 +292,9 @@ test "provider owns paths and serves corpus ranges without query-history state" 
     defer page_arena.deinit();
     const page_a = page_arena.allocator();
     try std.testing.expect((try provider.lookup(page_a, "Missing page", false)) == null);
-    const template_content = (try provider.lookup(page_a, "Template:Lazy", true)) orelse return error.TestExpectedEqual;
+    const raw_alias = (try provider.lookup(page_a, "Template:Alias", true)) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings(alias_raw, raw_alias);
+    const template_content = (try Provider.getTemplate(&provider, page_a, "Template:Alias")) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("lazy body", template_content);
     try std.testing.expect(try Provider.exists(&provider, "Ordinary_page"));
     const main_content = (try provider.lookup(page_a, "Ordinary_page", true)) orelse return error.TestExpectedEqual;

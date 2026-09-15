@@ -11,6 +11,7 @@ const module_source =
     \\assert(require(alias_name).mouse == 'mice')
     \\return { render_dictionary_fixture = function(frame)
     \\    assert(mw.title.new('Appendix:IntegrationFixture'):getContent() == 'a real auxiliary source page')
+    \\    assert(string.find(mw.title.new('Template:forms-alias'):getContent(), '#REDIRECT', 1, true))
     \\    assert(mw.title.new('rat').exists)
     \\    assert(string.find(mw.title.new('rat'):getContent(), 'Another rodent', 1, true))
     \\    assert(not mw.title.new('definitely-not-a-real-entry').exists)

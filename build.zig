@@ -104,10 +104,7 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "compile-lua", "Compile extracted Lua AST directly to LLVM IR", addRunArtifactCommand(b, llvm_exe, &.{}, b.args), &.{});
     const redirects_exe = addCliExecutable(b, "dict-bundle-redirects", b.path("tools/bundle_redirects_extract.zig"), target, optimize, &.{ .{ .name = "zxml", .module = zxml_dep.module("zxml") }, .{ .name = "xml_decode", .module = shared_xml_decode_mod } });
     addPublicRunStep(b, "extract-bundle-redirects", "Extract bundle-time module redirect dependencies", addRunArtifactCommand(b, redirects_exe, &.{}, b.args), &.{});
-    const pages_exe = addCliExecutable(b, "dict-bundle-pages", b.path("tools/bundle_pages_extract.zig"), target, optimize, &.{ .{ .name = "zxml", .module = zxml_dep.module("zxml") }, .{ .name = "xml_decode", .module = shared_xml_decode_mod } });
-    addPublicRunStep(b, "extract-bundle-pages", "Extract bundle-time auxiliary wiki source dependencies", addRunArtifactCommand(b, pages_exe, &.{}, b.args), &.{});
     const pipeline_paths = b.addOptions();
-    pipeline_paths.addOptionPath("pages", pages_exe.getEmittedBin());
     pipeline_paths.addOptionPath("redirects", redirects_exe.getEmittedBin());
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
     pipeline_paths.addOptionPath("templates", template_extract_exe.getEmittedBin());

@@ -51,6 +51,7 @@ pub const Provider = struct {
     pub const Symbol = CallSymbol;
     ctx: ?*anyopaque = null,
     get: *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8,
+    get_template: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8 = null,
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
     resolve_call_symbol: ?*const fn (?*anyopaque, *rt.Context, []const u8, CallSymbolKind) anyerror!?CallSymbol = null,
@@ -240,7 +241,10 @@ pub const Expander = struct {
     fn expandTemplateByName(self: *Expander, raw_name: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
         const title = try self.normalizeTemplateName(raw_name);
-        const raw = (try hostPageContent(self, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
+        const raw = if (self.provider.get_template) |get|
+            (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound
+        else
+            (try hostPageContent(self, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
         return self.expandTemplateSource(title, raw, args, depth);
     }
 
@@ -250,6 +254,8 @@ pub const Expander = struct {
         const title = try normalizeTemplateNameBuf(symbol.text, &title_buffer);
         const raw = if (self.provider.get_template_symbol) |get|
             (try get(self.provider.ctx, self.runtime.allocator, symbol.id)) orelse return error.TemplateNotFound
+        else if (self.provider.get_template) |get|
+            (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound
         else
             (try hostPageContent(self, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
         return self.expandTemplateSource(title, raw, args, depth);

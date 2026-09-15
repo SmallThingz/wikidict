@@ -52,8 +52,8 @@ zig build -Doptimize=ReleaseFast build-dictionary -- \
 
 The coordinated pipeline:
 
-1. extracts Scribunto modules, templates, redirects, and auxiliary page sources into a transient build directory;
-2. parses the Lua corpus and emits LLVM IR directly from the AST;
+1. extracts Scribunto modules, templates, and module redirects into a transient build directory;
+2. indexes raw dump page ranges for page-sensitive MediaWiki/Scribunto title lookups, then parses the Lua corpus and emits LLVM IR directly from the AST;
 3. compiles module/support bitcode and ThinLTO-links a bounded-concurrency transient expander;
 4. expands every bundled page with its concrete title/frame context;
 5. compiles the expanded wikitext into self-contained semantic presentation records;
