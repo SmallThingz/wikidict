@@ -24,7 +24,6 @@ pub const Provider = struct {
     a: A,
     root: []const u8,
     pages: std.StringHashMapUnmanaged(u64) = .empty,
-    existence: std.StringHashMapUnmanaged(bool) = .empty,
     templates: std.StringHashMapUnmanaged(TemplateSlot) = .empty,
     modules: std.StringHashMapUnmanaged(u64) = .empty,
     modules_loaded: bool = false,
@@ -48,7 +47,6 @@ pub const Provider = struct {
         }
         self.templates.deinit(self.a);
         freeStringMapKeys(u64, self.a, &self.modules);
-        freeStringMapKeys(bool, self.a, &self.existence);
         for (self.interwiki_rows.items) |row| {
             self.a.free((row.prefix));
             self.a.free((row.url));
@@ -260,12 +258,7 @@ pub const Provider = struct {
 
     fn exists(ctx: ?*anyopaque, title: []const u8) anyerror!bool {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
-        if (self.existence.get(title)) |known| return known;
-        const result = (try self.lookup(self.a, title, false)) != null;
-        const owned = try self.a.dupe(u8, title);
-        errdefer self.a.free(owned);
-        try self.existence.put(self.a, owned, result);
-        return result;
+        return (try self.lookup(self.a, title, false)) != null;
     }
 };
 
