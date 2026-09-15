@@ -6,26 +6,25 @@ import java.nio.charset.StandardCharsets
 
 object ExportDocument {
     const val MAX_BYTES = 64 * 1024 * 1024
-    private const val OPEN = "<script id=\"dict-data\" type=\"application/json\">"
-    private const val CLOSE = "</script>"
 
-    fun decode(bytes: ByteArray): Results {
-        require(bytes.size <= MAX_BYTES) { "Export is larger than 64 MiB." }
+    fun compiledJson(bytes: ByteArray): String {
         val decoder = StandardCharsets.UTF_8.newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
-        val text = decoder.decode(ByteBuffer.wrap(bytes)).toString()
-        return ResultParser.parse(extractJson(text))
+        return compiledJson(bytes, decoder)
     }
 
-    fun extractJson(text: String): String {
-        val trimmed = text.trimStart()
-        if (trimmed.startsWith("{")) return trimmed
-        val start = text.indexOf(OPEN)
-        require(start >= 0) { "This HTML file is not a Dict export." }
-        val bodyStart = start + OPEN.length
-        val end = text.indexOf(CLOSE, bodyStart)
-        require(end >= bodyStart) { "The Dict export is incomplete." }
-        return text.substring(bodyStart, end)
+    private fun compiledJson(bytes: ByteArray, decoder: java.nio.charset.CharsetDecoder): String {
+        require(bytes.size <= MAX_BYTES) { "Dictionary package is larger than 64 MiB." }
+        val text = decoder.decode(ByteBuffer.wrap(bytes)).toString()
+        require(text.trimStart().startsWith("{")) { "Compiled dictionary packages must be JSON." }
+        return text
+    }
+
+    fun decode(bytes: ByteArray): Results {
+        val decoder = StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+        return ResultParser.parse(compiledJson(bytes, decoder))
     }
 }

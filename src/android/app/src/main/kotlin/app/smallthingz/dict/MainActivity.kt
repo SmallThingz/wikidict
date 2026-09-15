@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
                 DictApp(
                     document = document,
                     learning = learning,
-                    onOpen = { picker.launch(arrayOf("application/json", "text/html", "text/plain")) },
+                    onOpen = { picker.launch(arrayOf("application/json", "text/plain")) },
                     onReload = { (document as? DocumentState.Loaded)?.uri?.let { open(it, false) } },
                 )
             }
@@ -62,13 +62,13 @@ class MainActivity : ComponentActivity() {
         uriFrom(intent)?.let { open(it, persist = true) }
     }
     private fun open(uri: Uri, persist: Boolean) {
-        val name = uri.lastPathSegment?.substringAfterLast('/') ?: "Dictionary export"
+        val name = uri.lastPathSegment?.substringAfterLast('/') ?: "Compiled dictionary"
         document = DocumentState.Loading(name)
         lifecycleScope.launch {
             val loaded = runCatching { withContext(Dispatchers.IO) { ExportDocument.decode(readBounded(uri)) } }
             document = loaded.fold(
                 onSuccess = { DocumentState.Loaded(it, uri, name) },
-                onFailure = { DocumentState.Failed(it.message ?: "Could not open this export.") },
+                onFailure = { DocumentState.Failed(it.message ?: "Could not open this compiled dictionary package.") },
             )
             if (loaded.isSuccess && persist) getSharedPreferences("dict.files", MODE_PRIVATE).edit { putString("last", uri.toString()) }
         }
@@ -84,7 +84,7 @@ class MainActivity : ComponentActivity() {
                 val count = input.read(buffer)
                 if (count < 0) break
                 total += count
-                require(total <= ExportDocument.MAX_BYTES) { "Export is larger than 64 MiB." }
+                require(total <= ExportDocument.MAX_BYTES) { "Dictionary package is larger than 64 MiB." }
                 output.write(buffer, 0, count)
             }
             return output.toByteArray()

@@ -28,8 +28,8 @@ const Harness = struct {
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
-    if (argv.len != 4) return error.Usage;
-    const dir = try std.fmt.allocPrint(a, "{s}/reader-integration-{d}", .{ argv[3], std.Io.Clock.awake.now(init.io).toNanoseconds() });
+    if (argv.len != 5) return error.Usage;
+    const dir = try std.fmt.allocPrint(a, "{s}/reader-integration-{d}", .{ argv[4], std.Io.Clock.awake.now(init.io).toNanoseconds() });
     try std.Io.Dir.cwd().createDirPath(init.io, dir);
     const dump = try std.fs.path.join(a, &.{ dir, "source.xml" });
     const root = try std.fs.path.join(a, &.{ dir, "blobs" });
@@ -37,38 +37,37 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = dump, .data = xml });
     var h: Harness = .{ .a = a, .io = init.io };
     const bin = argv[1];
+    const ffi_test = argv[3];
     _ = try h.run(&.{ argv[2], dump, root }, 0);
-    const complete = try h.entry(try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "json", "--with-source" }, 0));
-    try h.require(std.mem.eql(u8, complete.object.get("content").?.string, "complete"), "complete document");
-    try h.require(std.mem.eql(u8, complete.object.get("source").?.string, source), "exact original source");
+    const ffi_output = try h.run(&.{ ffi_test, root, "cat" }, 0);
+    try h.require(std.mem.indexOf(u8, ffi_output, "FFI_INTEGRATION_PASS") != null, "data-only C ABI");
+    const complete = try h.entry(try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "json" }, 0));
+    try h.require(std.mem.eql(u8, complete.object.get("content").?.string, "complete"), "complete compiled document");
     const partial = try h.entry(try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "json", "--core-only" }, 0));
-    try h.require(std.mem.eql(u8, partial.object.get("content").?.string, "core"), "explicit partial document");
-    try h.require(partial.object.get("source").? == .null, "partial document has no fake source");
+    try h.require(std.mem.eql(u8, partial.object.get("content").?.string, "core"), "explicit partial compiled document");
     var deferred: usize = 0;
-    for (partial.object.get("sections").?.array.items) |section| if (section.object.get("deferred").? != .null) {
-        deferred += 1;
-    };
-    try h.require(deferred == 5, "all five families visibly deferred");
-    const raw = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "source" }, 0);
-    try h.require(std.mem.eql(u8, raw, source), "raw source round trip");
+    for (partial.object.get("sections").?.array.items) |section| {
+        if (section.object.get("deferred").? != .null) deferred += 1;
+    }
+    try h.require(deferred == 5, "all five compiled companion families visibly deferred");
     const full_text = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--details" }, 0);
-    try h.require(std.mem.indexOf(u8, full_text, "Historical source") != null, "full details fetched");
+    try h.require(std.mem.indexOf(u8, full_text, "Historical source") != null, "compiled details fetched");
     const details = try std.fs.path.join(a, &.{ root, "details" });
     const offline = try std.fs.path.join(a, &.{ root, "offline-details" });
     try std.Io.Dir.cwd().rename(details, std.Io.Dir.cwd(), offline, init.io);
     const core_text = try h.run(&.{ bin, "lookup", "cat", "--root", root }, 0);
-    try h.require(std.mem.indexOf(u8, core_text, "small animal") != null and std.mem.indexOf(u8, core_text, "not loaded") != null, "default text works without companions");
+    try h.require(std.mem.indexOf(u8, core_text, "small animal") != null and std.mem.indexOf(u8, core_text, "not loaded") != null, "compiled core works without companions");
     const core_json = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--core-only", "--format", "json" }, 0);
-    try h.require(std.mem.indexOf(u8, core_json, "\"content\": \"core\"") != null, "core JSON remains inspectable without companions");
+    try h.require(std.mem.indexOf(u8, core_json, "\"content\": \"core\"") != null, "compiled core JSON remains inspectable");
     const search_json = try h.run(&.{ bin, "search", "cat", "--root", root, "--core-only", "--format", "json" }, 0);
-    try h.require(std.mem.indexOf(u8, search_json, "\"title\": \"cat\"") != null, "core search JSON works without companions");
+    try h.require(std.mem.indexOf(u8, search_json, "\"title\": \"cat\"") != null, "compiled search JSON works without companions");
     _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--details" }, 2);
-    _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "source" }, 2);
     _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "json" }, 2);
-    _ = try h.run(&.{ bin, "lookup", "cat", "--core-only", "--with-source" }, 2);
-    _ = try h.run(&.{ bin, "lookup", "cat", "--core-only", "--runtime", "not-present" }, 2);
+    _ = try h.run(&.{ bin, "lookup", "cat", "--format", "source" }, 2);
+    _ = try h.run(&.{ bin, "lookup", "cat", "--with-source" }, 2);
+    _ = try h.run(&.{ bin, "lookup", "cat", "--runtime", "not-present" }, 2);
     try std.Io.Dir.cwd().rename(offline, std.Io.Dir.cwd(), details, init.io);
-    const restored = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "source" }, 0);
-    try h.require(std.mem.eql(u8, restored, source), "reinstalled companions preserve source");
-    std.debug.print("READER_INTEGRATION_PASS checks={d}: core-only reading/JSON, all 5 deferred families, strict full/source/runtime requests, reinstall and exact reconstruction. Artifacts: {s}\n", .{ h.checks, dir });
+    const restored = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, restored, "Historical source") != null, "reinstalled companions restore compiled details");
+    std.debug.print("READER_INTEGRATION_PASS checks={d}: data-only compiled reading/JSON, all 5 deferred families, removed source/runtime flags, companion reinstall. Artifacts: {s}\n", .{ h.checks, dir });
 }

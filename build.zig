@@ -664,8 +664,8 @@ pub fn build(b: *std.Build) void {
     const reader_test_run = b.addRunArtifact(reader_test_exe);
     reader_test_run.addFileArg(blob_query_exe.getEmittedBin());
     reader_test_run.addFileArg(blob_build_exe.getEmittedBin());
+    reader_test_run.addFileArg(ffi_test_exe.getEmittedBin());
     reader_test_run.addArg(b.pathFromRoot(".zig-cache"));
-    reader_test_run.step.dependOn(&runtime_test_run.step);
     b.step("test-reader", "Exercise optional-companion reading through the real CLI").dependOn(&reader_test_run.step);
     const index_blobs_exe = addCliExecutable(b, "dict-index-blobs", b.path("tools/index_blobs.zig"), target, optimize, &.{.{ .name = "blob_storage", .module = storage_mod }});
     index_blobs_exe.root_module.link_libc = true;

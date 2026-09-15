@@ -20,7 +20,6 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit) {
-    var source by remember(entry.key) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f)) {
@@ -29,18 +28,14 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit) {
             }
             IconButton(onClick = onBookmark) { Icon(if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, if (bookmarked) "Remove bookmark" else "Bookmark") }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !source, onClick = { source = false }, label = { Text("Reading") })
-            FilterChip(selected = source, onClick = { source = true }, label = { Text("Source") })
-        }
         Spacer(Modifier.height(12.dp))
-        if (source) SourceView(entry) else ReadingView(entry)
+        ReadingView(entry)
     }
 }
 @Composable
 private fun ReadingView(entry: Entry) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        if (entry.status == "invalid_payload") AssistChip(onClick = {}, label = { Text("Invalid payload; use Source/JSON on desktop for exact bytes") })
+        if (entry.status == "invalid_payload") AssistChip(onClick = {}, label = { Text("Invalid compiled dictionary payload") })
         entry.sections.forEach { section ->
             if (section.title.isNotBlank()) Text(section.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             section.blocks.filterNot { it.kind == "blank" }.forEach { block -> BlockView(block) }
@@ -53,17 +48,10 @@ private fun ReadingView(entry: Entry) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Text(label, fontWeight = FontWeight.SemiBold); StyledText(ref.spans, Modifier.weight(1f)) }
             }
         }
-        if (entry.unexpandedTemplates > 0) Text("${entry.unexpandedTemplates} unsupported template(s); source remains available.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(48.dp))
     }
 }
 
-@Composable
-private fun SourceView(entry: Entry) {
-    SelectionContainer {
-        Text(entry.source ?: "Source was not included in this export.", style = MaterialTheme.typography.bodySmall)
-    }
-}
 @Composable
 private fun BlockView(block: Block) {
     when {
@@ -104,7 +92,6 @@ private fun TableView(table: Table) {
 private fun StyledText(spans: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null) {
     val annotated = buildAnnotatedString {
         spans.forEach { span ->
-            if (span.kind == "template") return@forEach
             val start = length
             append(span.text)
             append(span.trail)

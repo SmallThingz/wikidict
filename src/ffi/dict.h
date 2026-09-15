@@ -24,8 +24,7 @@ typedef enum dict_status {
 } dict_status;
 
 enum {
-    DICT_LOOKUP_WITH_SOURCE = 1u << 0,
-    DICT_LOOKUP_CORE_ONLY = 1u << 1
+    DICT_LOOKUP_CORE_ONLY = 1u << 0
 };
 uint32_t dict_abi_version(void);
 
@@ -38,8 +37,6 @@ dict_status dict_select(
     dict_handle *handle,
     const char *language, size_t language_len,
     const char *kind, size_t kind_len);
-
-dict_status dict_set_runtime_timeout(dict_handle *handle, uint32_t timeout_ms);
 
 dict_status dict_search_json(
     dict_handle *handle,

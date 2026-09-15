@@ -1,11 +1,10 @@
-//! Stateful, bounded two-pane terminal reader over the same runtime model as HTML/JSON.
+//! Stateful, bounded two-pane terminal reader over compiled dictionary presentation data.
 const std = @import("std");
 const builtin = @import("builtin");
 const term = @import("terminal.zig");
 const store = @import("store.zig");
 const model = @import("model.zig");
 const output = @import("output.zig");
-const expansion = @import("expansion.zig");
 const L = std.os.linux;
 pub const Theme = @import("args.zig").Theme;
 const Focus = enum { search, matches, entry };
@@ -20,7 +19,6 @@ fn palette(theme: Theme, color: bool) Palette {
 }
 const State = struct {
     io: std.Io = undefined,
-    runtime: expansion.Options = .{},
     a: std.mem.Allocator,
     db: *store.Store,
     label: []const u8,
@@ -33,7 +31,6 @@ const State = struct {
     focus: Focus = .search,
     theme: Theme,
     color: bool,
-    source: bool = false,
     details: bool = false,
     help: bool = false,
     loaded: ?usize = null,
@@ -162,12 +159,6 @@ const State = struct {
                         self.loaded = null;
                         self.scroll = 0;
                     },
-                    's' => {
-                        self.source = !self.source;
-                        self.loaded = null;
-                        self.scroll = 0;
-                        self.focus = .entry;
-                    },
                     '?' => self.help = true,
                     'j' => self.page(true, 1),
                     'k' => self.page(false, 1),
@@ -188,10 +179,10 @@ const State = struct {
                 var source_record = try self.db.recordAlloc(self.a, i);
                 defer source_record.deinit();
                 const raw = source_record.record;
-                const core = !self.source and !self.details and self.runtime.root == null;
+                const core = !self.details;
                 var resolved = if (core) try self.db.resolveCoreAlloc(self.a, raw) else self.db.resolveAlloc(self.a, raw) catch |err| switch (err) {
                     error.MissingSupplement, error.MissingSupplementRecord => {
-                        try formatted.writer.writeAll("Supporting material is not installed.\n\nFull details and exact source need the matching companion blobs.\nPress s or d to return to core reading; other entries remain searchable.\n\n");
+                        try formatted.writer.writeAll("Supporting material is not installed.\n\nFull compiled details need the matching companion blobs.\nPress d to return to core reading; other entries remain searchable.\n\n");
                         try formatted.writer.print("Data error: {s}\n", .{@errorName(err)});
                         break :record_block;
                     },
@@ -199,18 +190,9 @@ const State = struct {
                 };
                 defer resolved.deinit();
                 const record = resolved.record;
-                if (self.source) {
-                    const source = model.sourceAlloc(self.a, record) catch |err| switch (err) {
-                        error.InvalidEncoding => try self.a.dupe(u8, "Invalid semantic payload. Use JSON output to inspect its original bytes."),
-                        else => return err,
-                    };
-                    defer self.a.free(source);
-                    try output.terminalText(&formatted.writer, source);
-                } else {
-                    var doc = if (core) try model.fromCoreRecord(self.a, record) else try expansion.fromRecord(self.io, self.a, record, false, self.runtime);
-                    defer doc.deinit();
-                    try output.entryTextWithDetails(&formatted.writer, doc.entry, self.color, self.details);
-                }
+                var doc = if (core) try model.fromCoreRecord(self.a, record) else try model.fromRecord(self.a, record, false);
+                defer doc.deinit();
+                try output.entryTextWithDetails(&formatted.writer, doc.entry, self.color, self.details);
             } else try formatted.writer.writeAll("No matching entries.\n\nPress / to edit the prefix; Ctrl-U clears it.\nMatching is case-sensitive UTF-8, not fuzzy search.");
             const text = try self.a.dupe(u8, formatted.written());
             for (text) |*b| if (b.* == '\t') {
@@ -287,7 +269,7 @@ const State = struct {
             }
             if (split_at != 0) for (5..sz.rows - 1) |row| try self.put(w, row, split_at, 1, "│", p.muted);
             if (split_at != 0 or self.focus == .entry) {
-                try self.put(w, 6, content_col, content_width, if (self.source) "SOURCE" else "READING", if (self.focus == .entry) p.accent else p.muted);
+                try self.put(w, 6, content_col, content_width, "READING", if (self.focus == .entry) p.accent else p.muted);
                 if (self.count() != 0 and content_width > 12) {
                     const title = try self.db.titleAt(self.range.start + self.selected);
                     try self.put(w, 6, content_col + 10, content_width - 10, title, p.muted);
@@ -306,11 +288,11 @@ const State = struct {
             const hints: []const u8 = switch (self.focus) {
                 .search => "type to search  ↑↓ results  Enter read  Tab switch  Ctrl-U clear  Ctrl-C quit",
                 .matches => "/ search  ↑↓ select  Enter read  PgUp/PgDn page  ? help  q quit",
-                .entry => "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  s source  d details  ? help  q quit",
+                .entry => "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  d details  ? help  q quit",
             };
             try self.put(w, sz.rows, 3, sz.cols - 4, hints, p.muted);
             if (self.help) {
-                const help = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "s toggles exact source; d toggles full details", "t cycles terminal/dark/light; q quits outside Search", "Any key closes this help" };
+                const help = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "d toggles compiled companion details", "t cycles terminal/dark/light; q quits outside Search", "Any key closes this help" };
                 for (help, 0..) |line, i| {
                     if (6 + i >= sz.rows - 1) break;
                     try w.print("\x1b[{d};1H{s}\x1b[2K", .{ 6 + i, p.base });
@@ -323,11 +305,11 @@ const State = struct {
     }
 };
 
-pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8, query: []const u8, theme: Theme, color: bool, runtime: expansion.Options, initial_details: bool) !void {
+pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8, query: []const u8, theme: Theme, color: bool, initial_details: bool) !void {
     if (builtin.os.tag != .linux) return error.UnsupportedTerminalPlatform;
     if (!try std.Io.File.stdin().isTty(io) or !try std.Io.File.stdout().isTty(io)) return error.TerminalRequired;
     if (!std.unicode.utf8ValidateSlice(query) or query.len > 4096) return error.InvalidQuery;
-    var state: State = .{ .a = a, .io = io, .runtime = runtime, .db = db, .label = label, .theme = theme, .color = color, .details = initial_details };
+    var state: State = .{ .a = a, .io = io, .db = db, .label = label, .theme = theme, .color = color, .details = initial_details };
     defer state.deinit();
     @memcpy(state.query[0..query.len], query);
     state.len = query.len;

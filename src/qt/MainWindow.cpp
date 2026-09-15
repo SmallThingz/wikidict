@@ -129,14 +129,10 @@ void MainWindow::setupUi() {
     reading_->setOpenLinks(false);
     reading_->setOpenExternalLinks(false);
     reading_->setFrameShape(QFrame::NoFrame);
-    source_ = new QTextEdit(entryTabs_);
-    source_->setReadOnly(true);
-    source_->setLineWrapMode(QTextEdit::NoWrap);
     json_ = new QTextEdit(entryTabs_);
     json_->setReadOnly(true);
     json_->setLineWrapMode(QTextEdit::NoWrap);
     entryTabs_->addTab(reading_, QStringLiteral("Reading"));
-    entryTabs_->addTab(source_, QStringLiteral("Source"));
     entryTabs_->addTab(json_, QStringLiteral("JSON"));
     right->addWidget(entryTabs_, 1);
 
@@ -219,10 +215,10 @@ void MainWindow::refreshSearch() {
     }
 }
 
-void MainWindow::openWord(const QString &word, bool withSource) {
+void MainWindow::openWord(const QString &word) {
     if (word.trimmed().isEmpty()) return;
     try {
-        const QByteArray response = api_->lookup(word, withSource, false);
+        const QByteArray response = api_->lookup(word, false);
         const QJsonDocument document = QJsonDocument::fromJson(response);
         if (document.object().value(QStringLiteral("entries")).toArray().isEmpty()) {
             statusBar()->showMessage(QStringLiteral("No exact entry for “%1”.").arg(word), 4000);
@@ -250,7 +246,6 @@ void MainWindow::renderResponse(const QByteArray &bytes) {
     title_->setText(title);
     meta_->setText(QStringLiteral("%1 · %2 · native Qt").arg(language.isEmpty() ? kindLabel(kind) : language, kindLabel(kind)));
     reading_->setHtml(entryHtml(currentEntry_));
-    source_->setPlainText(currentEntry_.value(QStringLiteral("source")).toString(QStringLiteral("Source was not requested.")));
     json_->setPlainText(QString::fromUtf8(currentJson_));
     entryTabs_->setCurrentIndex(0);
 
@@ -276,10 +271,9 @@ QString MainWindow::spansHtml(const QJsonArray &spans) const {
         const QString kind = span.value(QStringLiteral("kind")).toString();
         if (kind == QStringLiteral("line_break")) { out += QStringLiteral("<br>"); continue; }
         QString text = (span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString()).toHtmlEscaped();
-        if (kind == QStringLiteral("template")) {
-            text = QStringLiteral("<span style='color:#777'>[unavailable template: %1]</span>")
-                .arg(span.value(QStringLiteral("target")).toString().toHtmlEscaped());
-        } else if (kind == QStringLiteral("link")) {
+        if (kind == QStringLiteral("template"))
+            throw DictApiError("compiled dictionary contains an uncompiled template span");
+        if (kind == QStringLiteral("link")) {
             const QByteArray encoded = QUrl::toPercentEncoding(span.value(QStringLiteral("target")).toString());
             text = QStringLiteral("<a href='dict:%1'>%2</a>").arg(QString::fromLatin1(encoded), text);
         } else if (kind == QStringLiteral("external_link")) {
@@ -368,8 +362,6 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
         }
         out += QStringLiteral("</ol>");
     }
-    const int unavailable = entry.value(QStringLiteral("unexpanded_templates")).toInt();
-    if (unavailable > 0) out += QStringLiteral("<p style='color:#777'>%1 unsupported template(s) remain inspectable in Source/JSON.</p>").arg(unavailable);
     return out;
 }
 
@@ -378,7 +370,7 @@ QString MainWindow::clueFor(const QJsonObject &entry) const {
         QString text;
         for (const QJsonValue &value : spans) {
             const QJsonObject span = value.toObject();
-            if (span.value(QStringLiteral("kind")).toString() == QStringLiteral("template")) continue;
+            if (span.value(QStringLiteral("kind")).toString() == QStringLiteral("template")) throw DictApiError("compiled dictionary contains an uncompiled template span");
             text += span.value(QStringLiteral("text")).toString();
             text += span.value(QStringLiteral("trail")).toString();
         }
@@ -421,7 +413,7 @@ void MainWindow::showRandomWord() {
     try {
         const QString source = learning_.settings().randomPool;
         if (source == QStringLiteral("all")) {
-            const QByteArray response = api_->random(true);
+            const QByteArray response = api_->random();
             const QJsonDocument document = QJsonDocument::fromJson(response);
             const QJsonArray entries = document.object().value(QStringLiteral("entries")).toArray();
             if (!entries.isEmpty()) {

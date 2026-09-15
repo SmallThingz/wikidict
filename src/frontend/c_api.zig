@@ -2,7 +2,6 @@ const std = @import("std");
 const store = @import("store.zig");
 const model = @import("model.zig");
 const output = @import("output.zig");
-const expansion = @import("expansion.zig");
 
 const A = std.mem.Allocator;
 const allocator = std.heap.c_allocator;
@@ -30,7 +29,6 @@ const Handle = struct {
     threaded: std.Io.Threaded,
     root: []u8,
     selected: ?Selected = null,
-    worker: expansion.Worker,
     last_error: [512]u8 = [_]u8{0} ** 512,
     error_len: usize = 0,
 
@@ -57,7 +55,7 @@ fn statusFor(err: anyerror) Status {
     return switch (err) {
         error.OutOfMemory => .out_of_memory,
         error.InvalidArgument, error.InvalidUtf8, error.InvalidEncoding, error.UnexpectedBlobKind, error.UnexpectedLanguageBlob, error.InvalidManifest => .invalid_argument,
-        error.FileNotFound, error.AccessDenied, error.InputOutput, error.ReadFailed, error.WriteFailed, error.RuntimeAssetsFailed, error.NativeLuaWorkerMissing => .io_error,
+        error.FileNotFound, error.AccessDenied, error.InputOutput, error.ReadFailed, error.WriteFailed => .io_error,
         else => .internal_error,
     };
 }
@@ -87,29 +85,6 @@ fn jsonBuffer(handle: *Handle, value: anytype, out: *Buffer) !void {
     handle.clearError();
 }
 
-fn runtimeOptions(handle: *Handle) expansion.Options {
-    return .{
-        .root = handle.worker.options.root,
-        .timeout_ms = handle.worker.options.timeout_ms,
-        .dictionary_root = handle.root,
-    };
-}
-
-fn hasRuntime(io: std.Io, root: []const u8) !bool {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    for ([_][]const u8{ "dict-native-expansion-worker", "runtime/dict-native-expansion-worker" }) |relative| {
-        const path = try std.fs.path.join(a, &.{ root, relative });
-        var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
-            error.FileNotFound => continue,
-            else => return err,
-        };
-        file.close(io);
-        return true;
-    }
-    return false;
-}
 export fn dict_abi_version() callconv(.c) u32 {
     return 1;
 }
@@ -119,10 +94,8 @@ fn openHandle(root: []const u8) !*Handle {
     errdefer allocator.free(copy);
     const handle = try allocator.create(Handle);
     errdefer allocator.destroy(handle);
-    handle.* = .{ .threaded = std.Io.Threaded.init(allocator, .{}), .root = copy, .worker = undefined };
+    handle.* = .{ .threaded = std.Io.Threaded.init(allocator, .{}), .root = copy };
     errdefer handle.threaded.deinit();
-    const runtime_root = if (try hasRuntime(handle.io(), handle.root)) handle.root else null;
-    handle.worker = expansion.Worker.init(handle.io(), .{ .root = runtime_root, .timeout_ms = 60000, .dictionary_root = handle.root });
     return handle;
 }
 
@@ -137,7 +110,6 @@ export fn dict_open(root_ptr: ?[*]const u8, root_len: usize, out_handle: *?*Hand
 
 export fn dict_close(handle: ?*Handle) callconv(.c) void {
     const h = handle orelse return;
-    h.worker.deinit();
     if (h.selected) |*value| {
         value.db.deinit();
         allocator.free(value.language);
@@ -146,14 +118,6 @@ export fn dict_close(handle: ?*Handle) callconv(.c) void {
     h.threaded.deinit();
     allocator.destroy(h);
 }
-export fn dict_set_runtime_timeout(handle: ?*Handle, timeout_ms: u32) callconv(.c) c_int {
-    const h = handle orelse return @intFromEnum(Status.invalid_argument);
-    if (timeout_ms == 0 or timeout_ms > 60000) return @intFromEnum(h.fail("timeout", error.InvalidArgument));
-    h.worker.options.timeout_ms = timeout_ms;
-    h.clearError();
-    return @intFromEnum(Status.ok);
-}
-
 fn selectImpl(h: *Handle, language: []const u8, kind: store.Kind) !void {
     const copy = try allocator.dupe(u8, language);
     errdefer allocator.free(copy);
@@ -183,8 +147,7 @@ export fn dict_select(
     return @intFromEnum(Status.ok);
 }
 fn lookupInternal(handle: *Handle, query: []const u8, flags: u32, out: *Buffer) !bool {
-    if (flags & ~(DICT_LOOKUP_WITH_SOURCE | DICT_LOOKUP_CORE_ONLY) != 0) return error.InvalidArgument;
-    if (flags & DICT_LOOKUP_WITH_SOURCE != 0 and flags & DICT_LOOKUP_CORE_ONLY != 0) return error.InvalidArgument;
+    if (flags & ~DICT_LOOKUP_CORE_ONLY != 0) return error.InvalidArgument;
     const current = try selected(handle);
     var response: output.Response = .{
         .operation = .lookup,
@@ -207,7 +170,7 @@ fn lookupInternal(handle: *Handle, query: []const u8, flags: u32, out: *Buffer) 
     var doc = if (core)
         try model.fromCoreRecord(allocator, resolved.record)
     else
-        try expansion.fromRecordWorker(&handle.worker, allocator, resolved.record, flags & DICT_LOOKUP_WITH_SOURCE != 0);
+        try model.fromRecord(allocator, resolved.record, false);
     defer doc.deinit();
     response.entries = &.{doc.entry};
     response.total_matches = 1;
@@ -215,8 +178,7 @@ fn lookupInternal(handle: *Handle, query: []const u8, flags: u32, out: *Buffer) 
     return true;
 }
 
-const DICT_LOOKUP_WITH_SOURCE: u32 = 1 << 0;
-const DICT_LOOKUP_CORE_ONLY: u32 = 1 << 1;
+const DICT_LOOKUP_CORE_ONLY: u32 = 1 << 0;
 
 export fn dict_lookup_json(
     handle: ?*Handle,
@@ -313,8 +275,6 @@ export fn dict_stats_json(handle: ?*Handle, out: *Buffer) callconv(.c) c_int {
         .index_bytes = current.db.file.indexBytes(),
         .index_heap_bytes = current.db.file.indexHeapBytes(),
         .cache_map_bytes = current.db.file.cacheMappedBytes(),
-        .lua_worker_starts = h.worker.startCount(),
-        .lua_requests = h.worker.requestCount(),
     };
     jsonBuffer(h, payload, out) catch |err| return @intFromEnum(h.fail("stats", err));
     return @intFromEnum(Status.ok);

@@ -1,25 +1,20 @@
 const std = @import("std");
 const store = @import("store.zig");
-pub const Command = enum { lookup, search, languages, stats, tui, render };
+pub const Command = enum { lookup, search, languages, stats, tui };
 pub const Theme = enum { terminal, dark, light };
-pub const Format = enum { text, json, source };
+pub const Format = enum { text, json };
 pub const Color = enum { auto, always, never };
 pub const Options = struct {
-    runtime: ?[]const u8 = null,
-    runtime_timeout_ms: u32 = 60000,
-    native: bool = false,
     command: Command = .lookup,
     root: []const u8 = "data/wiktionary-blobs",
     kind: store.Kind = .language,
     language: []const u8 = "English",
     query: []const u8 = "",
-    title: []const u8 = "Entry",
     format: Format = .text,
     color: Color = .auto,
     theme: Theme = .terminal,
     limit: usize = 20,
     offset: usize = 0,
-    with_source: bool = false,
     details: bool = false,
     core_only: bool = false,
     trusted: bool = false,
@@ -46,6 +41,8 @@ pub fn parse(argv: []const []const u8) !Options {
         // Command-specific options still use an explicit command first.
         out.command = .lookup;
         pos = 0;
+    } else if (std.mem.eql(u8, argv[0], "serve")) {
+        return error.Usage;
     } else if (std.mem.eql(u8, argv[0], "export")) {
         out.command = .lookup;
         out.format = .json;
@@ -85,16 +82,8 @@ pub fn parse(argv: []const []const u8) !Options {
                 out.core_only = true;
                 continue;
             }
-            if (std.mem.eql(u8, arg, "--native")) {
-                out.native = true;
-                continue;
-            }
             if (std.mem.eql(u8, arg, "--details")) {
                 out.details = true;
-                continue;
-            }
-            if (std.mem.eql(u8, arg, "--with-source")) {
-                out.with_source = true;
                 continue;
             }
             if (std.mem.eql(u8, arg, "--trusted")) {
@@ -108,7 +97,7 @@ pub fn parse(argv: []const []const u8) !Options {
             if (pos + 1 >= argv.len) return error.Usage;
             pos += 1;
             const value = argv[pos];
-            if (std.mem.eql(u8, arg, "--runtime")) out.runtime = value else if (std.mem.eql(u8, arg, "--runtime-timeout-ms")) out.runtime_timeout_ms = std.fmt.parseInt(u32, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--title")) out.title = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = if (std.mem.eql(u8, value, "wikitext")) .source else std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
+            if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
         } else {
             if (has_query) return error.Usage;
             out.query = arg;
@@ -117,14 +106,10 @@ pub fn parse(argv: []const []const u8) !Options {
     }
     if (out.help) return out;
     if (out.core_only and (out.command != .lookup and out.command != .search)) return error.Usage;
-    if (out.core_only and (out.format == .source or out.with_source or out.runtime != null or out.details)) return error.Usage;
-    if (out.native and out.runtime != null) return error.Usage;
-    if (out.runtime_timeout_ms == 0 or out.runtime_timeout_ms > 60000) return error.Usage;
-    if (out.runtime) |root| if (root.len == 0 or out.command == .stats or out.command == .languages) return error.Usage;
+    if (out.core_only and out.details) return error.Usage;
     if (out.limit == 0 or out.limit > 1000 or out.root.len == 0 or out.language.len == 0) return error.Usage;
-    if ((out.command == .lookup or out.command == .render) and (!has_query or out.query.len == 0)) return error.Usage;
+    if (out.command == .lookup and (!has_query or out.query.len == 0)) return error.Usage;
     if (out.command == .stats and has_query) return error.Usage;
-    if (out.format == .source and out.command != .lookup and out.command != .render) return error.Usage;
     if (out.command == .tui and out.format != .text) return error.Usage;
     if (out.offset != 0 and out.command != .search) return error.Usage;
     return out;
@@ -141,7 +126,6 @@ test "CLI options are strict and legacy query syntax still works" {
     try std.testing.expectEqualStrings("-dash", dashed.query);
     try std.testing.expectError(error.Usage, parse(&.{ "--", "-dash", "extra" }));
     try std.testing.expectError(error.Usage, parse(&.{"lookup"}));
-    try std.testing.expectError(error.Usage, parse(&.{ "search", "--format", "source" }));
     try std.testing.expectError(error.Usage, parse(&.{ "search", "--limit", "0" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "unexpected" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--wat", "yes" }));
@@ -172,23 +156,11 @@ test "frontend formats and terminal options reject invalid combinations" {
     try std.testing.expectError(error.Usage, parse(&.{ "tui", "--theme", "unknown" }));
 }
 
-test "standalone render accepts stdin and needs no blob path" {
-    const stdin = try parse(&.{ "render", "-", "--title", "Example", "--format", "json" });
-    try std.testing.expectEqual(Command.render, stdin.command);
-    try std.testing.expectEqualStrings("-", stdin.query);
-    try std.testing.expectEqualStrings("Example", stdin.title);
-    try std.testing.expectEqual(Format.json, stdin.format);
-    try std.testing.expectError(error.Usage, parse(&.{"render"}));
-    try std.testing.expectError(error.Usage, parse(&.{ "render", "a", "b" }));
-}
-
-test "runtime options are bounded and excluded from metadata-only commands" {
-    const selected = try parse(&.{ "lookup", "cat", "--runtime", "runtime", "--runtime-timeout-ms", "200" });
-    try std.testing.expectEqualStrings("runtime", selected.runtime.?);
-    try std.testing.expectEqual(@as(u32, 200), selected.runtime_timeout_ms);
-    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--runtime-timeout-ms", "0" }));
-    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--runtime-timeout-ms", "60001" }));
-    try std.testing.expectError(error.Usage, parse(&.{ "languages", "--runtime", "runtime" }));
+test "removed runtime and web options stay rejected" {
+    try std.testing.expectError(error.Usage, parse(&.{ "serve", "--root", "data" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--runtime", "runtime" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--runtime-timeout-ms", "200" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--native" }));
 }
 
 test "language accounting can be scoped to a spelling rather than the whole catalog" {
@@ -197,27 +169,16 @@ test "language accounting can be scoped to a spelling rather than the whole cata
     try std.testing.expectEqual(Command.languages, opts.command);
 }
 
-test "core-only export cannot silently replace exact source or Lua expansion" {
+test "core-only export cannot pretend omitted companion data is present" {
     try std.testing.expect((try parse(&.{ "lookup", "cat", "--core-only", "--format", "json" })).core_only);
     try std.testing.expect((try parse(&.{ "search", "cat", "--core-only", "--format", "json" })).core_only);
-    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--core-only", "--format", "source" }));
-    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--core-only", "--with-source" }));
-    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--core-only", "--runtime", "runtime" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--core-only", "--details" }));
-    try std.testing.expectError(error.Usage, parse(&.{ "render", "a.wiki", "--core-only" }));
-}
-
-test "explicit native rendering cannot accidentally enable a configured Lua worker" {
-    try std.testing.expect((try parse(&.{ "lookup", "cat", "--native" })).native);
-    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--native", "--runtime", "runtime" }));
 }
 
 test "export remains a JSON or source lookup alias" {
     const json = try parse(&.{ "export", "cats" });
     try std.testing.expectEqual(Command.lookup, json.command);
     try std.testing.expectEqual(Format.json, json.format);
-    const source = try parse(&.{ "export", "cats", "--format", "wikitext" });
-    try std.testing.expectEqual(Format.source, source.format);
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--format", "html" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--port", "5" }));
 }
