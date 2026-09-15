@@ -614,12 +614,13 @@ pub const NextIterationHint = struct {
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
+    // Lua strings compare/hash by bytes; runtime concat results need ownership, not hash dedup.
+    string_arena: std.heap.ArenaAllocator,
     globals: []Value,
     program_shapes: []const Shape = &.{},
     module_export_shape_ids: []const u32 = &.{},
     module_root_entries: []const FunctionFn = &.{},
     string_metatable: ?*Table = null,
-    string_intern: std.StringHashMapUnmanaged([]const u8) = .empty,
     last_error: Value = .nil,
     aot_error_name: StableErrorName = .{},
     depth: usize = 0,
@@ -647,7 +648,7 @@ pub const Context = struct {
         const globals = try allocator.alloc(Value, global_count);
         errdefer allocator.free(globals);
         @memset(globals, .nil);
-        return .{ .allocator = allocator, .globals = globals, .module_count = module_count };
+        return .{ .allocator = allocator, .string_arena = .init(allocator), .globals = globals, .module_count = module_count };
     }
 
     pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
@@ -666,9 +667,7 @@ pub const Context = struct {
     }
 
     pub fn deinit(self: *Context) void {
-        var it = self.string_intern.keyIterator();
-        while (it.next()) |text| self.allocator.free(text.*);
-        self.string_intern.deinit(self.allocator);
+        self.string_arena.deinit();
         self.module_loading.deinit(self.allocator);
         self.module_values.deinit(self.allocator);
         if (self.global_table) |table| {
@@ -1085,11 +1084,8 @@ pub const Context = struct {
         }
         return error.CompareType;
     }
-    fn internString(self: *Context, text: []const u8) ![]const u8 {
-        if (self.string_intern.get(text)) |existing| return existing;
-        const owned = try self.allocator.dupe(u8, text);
-        try self.string_intern.put(self.allocator, owned, owned);
-        return owned;
+    fn ownString(self: *Context, text: []const u8) ![]const u8 {
+        return self.string_arena.allocator().dupe(u8, text);
     }
 
     pub fn concatValues(self: *Context, values: []const Value) anyerror!Value {
@@ -1109,7 +1105,7 @@ pub const Context = struct {
             },
             else => return error.ConcatType,
         };
-        return .{ .string = try self.internString(out.items) };
+        return .{ .string = try self.ownString(out.items) };
     }
 };
 
@@ -1774,4 +1770,16 @@ test "runtime Value stays compact and function identities never wrap" {
             return &.{};
         }
     }.call));
+}
+
+test "concat strings use owned arena without interning" {
+    var runtime = try Context.init(std.testing.allocator, 0);
+    defer runtime.deinit();
+    const first = try runtime.concatValues(&.{ .{ .string = "ab" }, .{ .string = "cd" } });
+    const second = try runtime.concatValues(&.{ .{ .string = "ab" }, .{ .string = "cd" } });
+    try std.testing.expect(first == .string and second == .string);
+    try std.testing.expectEqualStrings("abcd", first.string);
+    try std.testing.expect(rawEqual(first, second));
+    try std.testing.expectEqual((ValueContext{}).hash(first), (ValueContext{}).hash(second));
+    try std.testing.expect(first.string.ptr != second.string.ptr);
 }
