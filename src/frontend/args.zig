@@ -40,26 +40,40 @@ pub fn parse(argv: []const []const u8) !Options {
     }
     var pos: usize = 1;
     var has_query = false;
-    if (std.mem.eql(u8, argv[0], "export")) {
+    var positional_only = false;
+    if (std.mem.eql(u8, argv[0], "--")) {
+        out.command = .lookup;
+        positional_only = true;
+    } else if (std.mem.startsWith(u8, argv[0], "-") and !std.mem.eql(u8, argv[0], "-")) {
+        // Lookup is the default command, so common options may precede WORD.
+        // Command-specific options still use an explicit command first.
+        out.command = .lookup;
+        pos = 0;
+    } else if (std.mem.eql(u8, argv[0], "export")) {
         out.command = .lookup;
         out.single_page = true;
         out.format = .html;
     } else if (std.meta.stringToEnum(Command, argv[0])) |command| out.command = command else {
-        // Retain the documented query-blobs positional entrypoint; remove its old diagnostic renderer.
-        if (argv.len < 3) return error.Usage;
-        out.root = argv[0];
-        out.kind = store.parseKind(argv[1]) orelse return error.Usage;
-        pos = 2;
-        if (out.kind == .language) {
-            if (argv.len < 4) return error.Usage;
-            out.language = argv[pos];
+        // Keep the original ROOT KIND [LANGUAGE] QUERY form, but make the common
+        // `dict WORD` invocation mean lookup instead of treating WORD as a path.
+        if (argv.len >= 3 and store.parseKind(argv[1]) != null) {
+            out.root = argv[0];
+            out.kind = store.parseKind(argv[1]).?;
+            pos = 2;
+            if (out.kind == .language) {
+                if (argv.len < 4) return error.Usage;
+                out.language = argv[pos];
+                pos += 1;
+            }
+            out.query = argv[pos];
             pos += 1;
+            has_query = true;
+        } else {
+            out.command = .lookup;
+            out.query = argv[0];
+            has_query = true;
         }
-        out.query = argv[pos];
-        pos += 1;
-        has_query = true;
     }
-    var positional_only = false;
     while (pos < argv.len) : (pos += 1) {
         const arg = argv[pos];
         if (!positional_only and std.mem.eql(u8, arg, "--")) {
@@ -130,11 +144,32 @@ test "CLI options are strict and legacy query syntax still works" {
     const opts = try parse(&.{ "search", "--format", "json", "--limit", "3", "--", "-a" });
     try std.testing.expectEqualStrings("-a", opts.query);
     try std.testing.expectEqual(@as(usize, 3), opts.limit);
+    const dashed = try parse(&.{ "--", "-dash" });
+    try std.testing.expectEqual(Command.lookup, dashed.command);
+    try std.testing.expectEqualStrings("-dash", dashed.query);
+    try std.testing.expectError(error.Usage, parse(&.{ "--", "-dash", "extra" }));
     try std.testing.expectError(error.Usage, parse(&.{"lookup"}));
     try std.testing.expectError(error.Usage, parse(&.{ "search", "--format", "source" }));
     try std.testing.expectError(error.Usage, parse(&.{ "search", "--limit", "0" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "unexpected" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--wat", "yes" }));
+}
+
+test "bare word is an intuitive lookup shorthand without breaking legacy root syntax" {
+    const leading = try parse(&.{ "--language", "French", "--format", "json", "chat" });
+    try std.testing.expectEqual(Command.lookup, leading.command);
+    try std.testing.expectEqualStrings("chat", leading.query);
+    try std.testing.expectEqualStrings("French", leading.language);
+    try std.testing.expectEqual(Format.json, leading.format);
+    const bare = try parse(&.{ "cat", "--language", "French" });
+    try std.testing.expectEqual(Command.lookup, bare.command);
+    try std.testing.expectEqualStrings("cat", bare.query);
+    try std.testing.expectEqualStrings("French", bare.language);
+    const legacy = try parse(&.{ ".tmp/blobs", "citations", "example" });
+    try std.testing.expectEqual(Command.lookup, legacy.command);
+    try std.testing.expectEqualStrings(".tmp/blobs", legacy.root);
+    try std.testing.expectEqual(store.Kind.citations, legacy.kind);
+    try std.testing.expectEqualStrings("example", legacy.query);
 }
 
 test "frontend formats and terminal options reject invalid combinations" {

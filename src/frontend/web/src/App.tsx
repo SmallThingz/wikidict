@@ -1,4 +1,4 @@
-import { createMemo, createSignal, createUniqueId, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, createUniqueId, For, onCleanup, onMount, Show } from 'solid-js';
 import { Reading } from './entry';
 import { navigation, reveal } from './organization';
 import { useTheme } from './theme';
@@ -21,6 +21,13 @@ export function DictionaryApp(props: { data: Results; options?: MountOptions }) 
   const [tab, setTab] = createSignal<Tab>('reading');
   const [mobileIndex, setMobileIndex] = createSignal(false);
   const [notice, setNotice] = createSignal('');
+  const mobileQuery = matchMedia('(max-width: 720px)');
+  const [mobileViewport, setMobileViewport] = createSignal(mobileQuery.matches);
+  const initialOverflow = document.documentElement.style.overflow;
+  createEffect(() => {
+    document.documentElement.style.overflow = mobileIndex() && mobileViewport() ? 'hidden' : initialOverflow;
+  });
+  onCleanup(() => { document.documentElement.style.overflow = initialOverflow; });
   const theme = useTheme(() => root, !!props.options?.inheritedTheme);
   const filtered = createMemo(() => live() ? live()!.matches.map((m,index) => ({entry: {title:m.title,language:live()!.kind==='language' ? live()!.language : null,kind:live()!.kind},index})) : props.data.entries.map((entry, index) => ({ entry, index })).filter(item => item.entry.title.toLocaleLowerCase().includes(filter().toLocaleLowerCase())));
   const current = createMemo(() => filtered().find(item => item.index === selection()) ?? filtered()[0]);
@@ -43,7 +50,7 @@ export function DictionaryApp(props: { data: Results; options?: MountOptions }) 
     const found = props.data.entries.findIndex(item => item.title === title && (!language || item.language_code === language || item.language === language));
     if (found >= 0) {
       event.preventDefault(); setFilter(''); select(found); setTab('reading');
-      if (fragment) queueMicrotask(() => { const section = props.data.entries[found].sections.findIndex(s => s.title === fragment); if (section >= 0) reveal(root.querySelector(`[id="${id}-section-${section}"]`)); });
+      if (fragment) queueMicrotask(() => { const heading = fragment.replaceAll('_', ' ').trim(); const section = props.data.entries[found].sections.findIndex(s => s.title === heading); if (section >= 0) reveal(root.querySelector(`[id="${id}-section-${section}"]`)); });
     } else if (props.options?.onNavigate) {
       event.preventDefault(); props.options.onNavigate({ title, fragment, language: language || entry()?.language || null, kind: 'language' });
     }
@@ -60,6 +67,11 @@ export function DictionaryApp(props: { data: Results; options?: MountOptions }) 
   };
   onMount(() => {
     theme.apply();
+    const viewportChanged = (event: MediaQueryListEvent) => {
+      setMobileViewport(event.matches);
+      if (!event.matches) setMobileIndex(false);
+    };
+    mobileQuery.addEventListener('change', viewportChanged);
     const keydown = (event: KeyboardEvent) => {
       if (props.options?.inheritedTheme && !root.contains(event.target as Node)) return;
       const editable = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || (event.target instanceof HTMLElement && event.target.isContentEditable);
@@ -69,14 +81,17 @@ export function DictionaryApp(props: { data: Results; options?: MountOptions }) 
       if (event.key === 'Escape') { if (appearanceMenu) appearanceMenu.open = false; setMobileIndex(false); search.blur(); }
     };
     document.addEventListener('keydown', keydown);
-    onCleanup(() => document.removeEventListener('keydown', keydown));
+    onCleanup(() => {
+      document.removeEventListener('keydown', keydown);
+      mobileQuery.removeEventListener('change', viewportChanged);
+    });
   });
   return <div class="dict-app" ref={root}>
     <a class="dict-skip" href={`#${id}-content`}>Skip to entry</a>
     <header class="dict-topbar"><div class="dict-topbar-inner">
-      <a class="dict-brand" href="#" onClick={event => { event.preventDefault(); setFilter(''); select(0); }}>dict<span>.</span></a>
-      <span class="dict-topbar-context">WIKTIONARY <span>/</span> LOCAL EDITION</span>
-      <div class="dict-topbar-actions"><button class="dict-mobile-toggle" aria-expanded={mobileIndex()} aria-controls={`${id}-index`} onClick={() => setMobileIndex(!mobileIndex())}>Index</button>
+      <a class="dict-brand" href="#" onClick={event => { event.preventDefault(); if (live()) { live()!.onHome(); setMobileIndex(false); setTab('reading'); } else { setFilter(''); select(0); } }}>dict<span>.</span></a>
+      <span class="dict-topbar-context">Local Wiktionary <span>·</span> private, fast, offline</span>
+      <div class="dict-topbar-actions"><button class="dict-mobile-toggle" aria-expanded={mobileIndex()} aria-controls={`${id}-index`} onClick={() => { const next = !mobileIndex(); setMobileIndex(next); if (next) queueMicrotask(() => { search.focus(); search.select(); }); }}>{mobileIndex() ? 'Close' : live() ? 'Search' : 'Entries'}</button>
         <Show when={!props.options?.inheritedTheme}><details class="dict-appearance" ref={appearanceMenu}><summary aria-label="Appearance settings">Appearance <span aria-hidden="true">◐</span></summary>
           <div class="dict-appearance-panel"><label>Theme<select aria-label="Theme" value={theme.appearance().mode} onChange={event => theme.update({ mode: event.currentTarget.value })}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option><option value="cool">Cool dark</option></select></label>
             <label>Type<select aria-label="Typeface" value={theme.appearance().font} onChange={event => theme.update({ font: event.currentTarget.value })}><option value="sans">Sans serif</option><option value="mono">Monospace</option></select></label>
@@ -93,14 +108,14 @@ export function DictionaryApp(props: { data: Results; options?: MountOptions }) 
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); step(event.key === 'ArrowDown' ? 1 : -1); }
           if (event.key === 'Enter') { if(live()) select(current()?.index ?? 0); else {setMobileIndex(false);content?.focus();} }
         }}/><kbd>/</kbd></label>
-        <nav id={`${id}-results`} class="dict-results" aria-label="Entries"><For each={filtered()}>{item => <button aria-current={item.index === current()?.index ? 'true' : undefined} onClick={() => select(item.index)}><span>{item.entry.title}</span><small>{item.entry.language ?? item.entry.kind.replaceAll('_', ' ')}</small><span class="dict-result-arrow" aria-hidden="true">↗</span></button>}</For></nav>
+        <nav id={`${id}-results`} class="dict-results" aria-label="Entries"><For each={filtered()}>{item => <button aria-current={item.index === current()?.index ? 'true' : undefined} onClick={() => select(item.index)}><span>{item.entry.title}</span><small>{item.entry.language ?? item.entry.kind.replaceAll('_', ' ')}</small><span class="dict-result-arrow" aria-hidden="true">→</span></button>}</For></nav>
         <Show when={live()?.hasMore}><button class="dict-more-results" disabled={live()?.searching} onClick={() => live()?.onMore()}>More matches</button></Show>
         <Show when={!filtered().length && !live()?.searching}><p class="dict-empty-index">No entries match this filter.</p></Show>
         <Show when={entry()}>{selected => <nav class="dict-contents" aria-label="Entry contents"><span class="dict-eyebrow">ON THIS PAGE</span><For each={navigation(selected())}>{item => <a href={`#${id}-section-${item.index}`} onClick={event => { event.preventDefault(); setTab('reading'); setMobileIndex(false); queueMicrotask(() => reveal(root.querySelector(`[id="${id}-section-${item.index}"]`))); }}>{item.label}</a>}</For></nav>}</Show>
-        <Show when={live()}><p class="dict-live-hint">Case-sensitive prefix search across the selected collection.</p></Show><footer class="dict-index-footer"><span>{props.data.operation === "render" ? "WIKITEXT" : "WIKBLB05"}</span><span>{props.data.operation === "render" ? "Rendered local source" : `${props.data.record_count.toLocaleString()} records in source blob`}</span><span>{props.data.total_matches.toLocaleString()} {props.data.operation === 'search' ? 'prefix matches' : 'exact match(es)'} · {live() ? 'live local database' : 'export is self-contained'}</span></footer>
+        <Show when={live()}><p class="dict-live-hint"><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> open · <kbd>Esc</kbd> close</p></Show><footer class="dict-index-footer"><span>{props.data.operation === "render" ? "WIKITEXT" : "WIKBLB05"}</span><span>{props.data.operation === "render" ? "Rendered local source" : `${props.data.record_count.toLocaleString()} records in source blob`}</span><span>{props.data.total_matches.toLocaleString()} {props.data.operation === 'search' ? 'prefix matches' : 'exact match(es)'} · {live() ? 'live local database' : 'export is self-contained'}</span></footer>
       </aside>
-      <main class="dict-main"><Show when={live()?.loading || live()?.searching}><p class="dict-live-status" role="status">{live()?.loading ? 'Rendering entry… Search remains available.' : 'Searching…'}</p></Show><Show when={live()?.error}><p class="dict-notice" role="alert">{live()?.error}</p></Show><Show when={entry()} fallback={<div class="dict-empty"><span class="dict-eyebrow">A DICTIONARY, WITHOUT THE DISTRACTIONS</span><h1>Words, in context.</h1><p>{live() ? 'Search the full local dictionary. Select a result to read definitions, examples and history.' : props.data.entries.length ? 'No entries match your filter. Clear it to return to the exported words.' : 'This export contains no matching entries.'}</p><Show when={filter()}><button onClick={() => setFilter('')}>Clear filter</button></Show></div>}>{selected => <>
-        <div class="dict-entry-header"><div class="dict-breadcrumb"><span>{selected().language ?? selected().kind.replaceAll('_', ' ')}</span><span aria-hidden="true">/</span><span>DICTIONARY ENTRY</span></div><h1 dir="auto">{selected().title}</h1><div class="dict-entry-meta"><span class="dict-badge">{selected().kind.replaceAll('_', ' ')}</span><span>{selected().sections.length} sections</span><span>{live() ? 'Local database' : 'Available offline'}</span><Show when={selected().expansion}>{state => <span>{state().status === "ok" ? "Native Lua AOT" : "Expansion fallback"}</span>}</Show></div></div>
+      <main class="dict-main"><Show when={live()?.loading || live()?.searching}><p class="dict-live-status" role="status">{live()?.loading ? 'Loading entry…' : 'Searching…'}</p></Show><Show when={live()?.error}><p class="dict-notice" role="alert">{live()?.error}</p></Show><Show when={entry()} fallback={<div class="dict-empty"><span class="dict-eyebrow">LOCAL WIKTIONARY</span><h1>Find the word.</h1><p>{live() ? 'Type a word or prefix. Definitions, examples, pronunciation and history stay together in one reading view.' : props.data.entries.length ? 'No entries match your filter. Clear it to return to the exported words.' : 'This export contains no matching entries.'}</p><Show when={filter()}><button onClick={() => setFilter('')}>Clear filter</button></Show></div>}>{selected => <>
+        <div class="dict-entry-header"><div class="dict-breadcrumb"><span>{selected().language ?? selected().kind.replaceAll('_', ' ')}</span><span aria-hidden="true">/</span><span>DICTIONARY ENTRY</span></div><h1 dir="auto">{selected().title}</h1><div class="dict-entry-meta"><span class="dict-badge">{selected().kind.replaceAll('_', ' ')}</span><span>{selected().sections.length} sections</span><span>{live() ? 'Local database' : 'Available offline'}</span><Show when={selected().expansion?.status === "failed"}><span>Some templates unavailable</span></Show></div></div>
         <Show when={!live()}><div class="dict-toolbar"><div role="tablist" aria-label="Entry view"><For each={tabs}>{value => <button id={`${id}-tab-${value}`} role="tab" aria-selected={tab() === value} aria-controls={`${id}-content`} tabIndex={tab() === value ? 0 : -1} onClick={() => setTab(value)} onKeyDown={event => {
           if (event.key === 'ArrowRight' || event.key === 'ArrowLeft' || event.key === 'Home' || event.key === 'End') {
             event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (tabs.indexOf(value) + (event.key === 'ArrowRight' ? 1 : 2)) % 3;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const syntax = @import("wikitext_syntax.zig");
 pub const SectionKind = enum(u8) {
     lines = 0,
     pos_lines = 1,
@@ -127,6 +128,7 @@ pub const DecodedBlock = struct {
     kind: BlockKind,
     depth: u8,
     text: []const u8,
+    list_path: []const u8 = "",
 
     pub fn inlineIterator(self: DecodedBlock) InlineIterator {
         return .{ .input = self.text };
@@ -187,17 +189,62 @@ pub const InlineIterator = struct {
                 self.cursor += marker.len;
                 continue;
             }
-
+            const quote_run = quoteRunLength(self.input, self.cursor);
+            if (quote_run >= 2) {
+                // Four quotes are one literal plus bold; 6+ are literal extras
+                // plus the five-quote bold+italic marker. If a 2/3/5 marker
+                // cannot be balanced, preserve the whole run literally.
+                const literal = if (quote_run == 4) @as(usize, 1) else if (quote_run > 5) quote_run - 5 else quote_run;
+                const start = self.cursor;
+                self.cursor += literal;
+                return .{ .kind = .text, .text = self.input[start..self.cursor], .bold = self.bold, .italic = self.italic };
+            }
             const start = self.cursor;
-            while (self.cursor < self.input.len) : (self.cursor += 1) {
-                if (parseTemplateAt(self.input, self.cursor) != null or
-                    parseInlineLinkAt(self.input, self.cursor) != null or
-                    parseExternalLinkAt(self.input, self.cursor) != null or
-                    parseLineBreakAt(self.input, self.cursor) != null or
-                    emphasisMarkerAt(self.input, self.cursor, self.bold, self.italic) != null)
-                {
+            while (self.cursor < self.input.len) {
+                const rest = self.input[self.cursor..];
+                if (std.mem.startsWith(u8, rest, "{{{")) {
+                    if (syntax.balanced(self.input, self.cursor)) |pair| {
+                        // Parameters are deliberately plain text to this shared
+                        // iterator; frontend expansion may interpret them later.
+                        self.cursor = pair.end;
+                        continue;
+                    }
+                    self.cursor = self.input.len;
                     break;
                 }
+                if (std.mem.startsWith(u8, rest, "{{")) {
+                    if (parseTemplateAt(self.input, self.cursor) != null) break;
+                    self.cursor = self.input.len;
+                    break;
+                }
+                if (std.mem.startsWith(u8, rest, "[[")) {
+                    if (parseInlineLinkAt(self.input, self.cursor) != null) break;
+                    self.cursor = self.input.len;
+                    break;
+                }
+                if (rest[0] == '[' and rest.len > 1 and rest[1] != '[' and
+                    (startsWithAsciiIgnoreCase(rest[1..], "http://") or startsWithAsciiIgnoreCase(rest[1..], "https://")))
+                {
+                    if (parseExternalLinkAt(self.input, self.cursor) != null) break;
+                    self.cursor = self.input.len;
+                    break;
+                }
+                if (rest[0] == '<' and rest.len >= 3 and std.ascii.toLower(rest[1]) == 'b' and std.ascii.toLower(rest[2]) == 'r') {
+                    if (parseLineBreakAt(self.input, self.cursor) != null) break;
+                    if (std.mem.indexOfScalar(u8, rest, '>') == null) {
+                        self.cursor = self.input.len;
+                        break;
+                    }
+                }
+                const run = quoteRunLength(self.input, self.cursor);
+                if (run >= 2) {
+                    if (emphasisMarkerAt(self.input, self.cursor, self.bold, self.italic) != null) break;
+                    if (run == 4 and emphasisMarkerAt(self.input, self.cursor + 1, self.bold, self.italic) != null) break;
+                    if (run > 5 and emphasisMarkerAt(self.input, self.cursor + run - 5, self.bold, self.italic) != null) break;
+                    self.cursor += run;
+                    continue;
+                }
+                self.cursor += 1;
             }
             if (self.cursor != start) {
                 return .{
@@ -281,41 +328,34 @@ pub const DecodedDocument = struct {
 
 pub fn classifyLine(line: []const u8) DecodedBlock {
     if (line.len == 0) return .{ .kind = .blank, .depth = 0, .text = line };
+    var prefix: usize = 0;
+    while (prefix < line.len and std.mem.indexOfScalar(u8, "#*:;", line[prefix]) != null) : (prefix += 1) {}
+    if (prefix == 0) return .{ .kind = .paragraph, .depth = 0, .text = line };
 
-    if (line[0] == '#') {
-        var depth: usize = 0;
-        while (depth < line.len and line[depth] == '#') : (depth += 1) {}
-        const rest = line[depth..];
-        if (std.mem.startsWith(u8, rest, ":* ")) return blockWithPrefix(.quotation, depth, line, depth + 3);
-        if (std.mem.startsWith(u8, rest, "* ")) return blockWithPrefix(.quotation, depth, line, depth + 2);
-        if (std.mem.startsWith(u8, rest, ": ")) return blockWithPrefix(.example, depth, line, depth + 2);
-        if (std.mem.startsWith(u8, rest, " ")) return blockWithPrefix(.definition, depth, line, depth + 1);
-    }
-
-    if (line[0] == '*') {
-        var depth: usize = 0;
-        while (depth < line.len and line[depth] == '*') : (depth += 1) {}
-        const rest = line[depth..];
-        if (std.mem.startsWith(u8, rest, ": ")) return blockWithPrefix(.list_detail, depth, line, depth + 2);
-        if (std.mem.startsWith(u8, rest, " ")) return blockWithPrefix(.list_item, depth, line, depth + 1);
-    }
-
-    if (line[0] == ':') {
-        var depth: usize = 0;
-        while (depth < line.len and line[depth] == ':') : (depth += 1) {}
-        if (depth < line.len and line[depth] == ' ') return blockWithPrefix(.indent, depth, line, depth + 1);
-    }
-    if (std.mem.startsWith(u8, line, "; ")) return .{ .kind = .term, .depth = 1, .text = line[2..] };
-    return .{ .kind = .paragraph, .depth = 0, .text = line };
-}
-
-fn blockWithPrefix(kind: BlockKind, depth: usize, line: []const u8, text_start: usize) DecodedBlock {
+    const path = line[0..prefix];
+    const last = path[path.len - 1];
+    const kind: BlockKind = if (path[0] == '#' and std.mem.indexOfScalar(u8, path, '*') != null)
+        .quotation
+    else if (last == '#')
+        .definition
+    else if (last == '*')
+        .list_item
+    else if (last == ';')
+        .term
+    else if (path[0] == '*' and last == ':')
+        .list_detail
+    else if (path[0] == '#')
+        .example
+    else
+        .indent;
     return .{
         .kind = kind,
-        .depth = @intCast(@min(depth, std.math.maxInt(u8))),
-        .text = line[text_start..],
+        .depth = @intCast(@min(prefix, std.math.maxInt(u8))),
+        .text = std.mem.trimStart(u8, line[prefix..], " \t"),
+        .list_path = path[0..@min(prefix, std.math.maxInt(u8))],
     };
 }
+
 
 const ParsedTemplate = struct {
     end: usize,
@@ -342,82 +382,46 @@ const EmphasisMarker = struct {
     italic: bool,
 };
 
+fn potentialInlineBoundary(input: []const u8, start: usize) bool {
+    if (start >= input.len) return false;
+    const rest = input[start..];
+    if (std.mem.startsWith(u8, rest, "{{") or std.mem.startsWith(u8, rest, "[[")) return true;
+    if (input[start] == '[' and start + 1 < input.len and input[start + 1] != '[') {
+        const body = input[start + 1 ..];
+        if (startsWithAsciiIgnoreCase(body, "http://") or startsWithAsciiIgnoreCase(body, "https://")) return true;
+    }
+    if (input[start] == '<' and rest.len >= 3 and std.ascii.toLower(rest[1]) == 'b' and std.ascii.toLower(rest[2]) == 'r') return true;
+    return quoteRunLength(input, start) >= 2;
+}
+
 fn parseTemplateAt(input: []const u8, start: usize) ?ParsedTemplate {
     if (start + 4 > input.len or !std.mem.eql(u8, input[start .. start + 2], "{{")) return null;
     if (start != 0 and input[start - 1] == '{') return null;
     if (start + 3 <= input.len and std.mem.eql(u8, input[start .. start + 3], "{{{")) return null;
 
-    const close = findTemplateClose(input, start) orelse return null;
-    const body = input[start + 2 .. close];
-    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
+    const pair = syntax.balanced(input, start) orelse return null;
+    const body = input[start + 2 .. pair.inner_end];
+    const pipe = syntax.delimiter(body, "|", 0) orelse body.len;
     const name = std.mem.trim(u8, body[0..pipe], " \t\r\n");
     if (name.len == 0) return null;
-    return .{ .end = close + 2, .name = name, .body = body };
-}
-
-fn findTemplateClose(input: []const u8, start: usize) ?usize {
-    var template_depth: usize = 1;
-    var parameter_depth: usize = 0;
-    var cursor = start + 2;
-    while (cursor < input.len) {
-        if (cursor + 4 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 4], "<!--")) {
-            if (std.mem.indexOfPos(u8, input, cursor + 4, "-->")) |comment_end| {
-                cursor = comment_end + 3;
-                continue;
-            }
-            return null;
-        }
-        if (cursor + 3 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 3], "{{{")) {
-            parameter_depth += 1;
-            cursor += 3;
-            continue;
-        }
-        if (parameter_depth != 0 and cursor + 3 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 3], "}}}")) {
-            parameter_depth -= 1;
-            cursor += 3;
-            continue;
-        }
-        if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "{{")) {
-            template_depth += 1;
-            cursor += 2;
-            continue;
-        }
-        if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "}}")) {
-            template_depth -= 1;
-            if (template_depth == 0 and parameter_depth == 0) return cursor;
-            cursor += 2;
-            continue;
-        }
-        cursor += 1;
-    }
-    return null;
+    return .{ .end = pair.end, .name = name, .body = body };
 }
 
 fn parseInlineLinkAt(input: []const u8, start: usize) ?ParsedInlineLink {
     if (start + 4 > input.len or !std.mem.eql(u8, input[start .. start + 2], "[[")) return null;
-
-    var close = start + 2;
-    while (close + 1 < input.len) : (close += 1) {
-        if (input[close] != ']' or input[close + 1] != ']') continue;
-
-        const inside = input[start + 2 .. close];
-        if (inside.len == 0) return null;
-        const pipe = std.mem.indexOfScalar(u8, inside, '|');
-        const raw_target = if (pipe) |index| inside[0..index] else inside;
-        const target = std.mem.trim(u8, raw_target, " \t");
-        if (target.len == 0) return null;
-        const raw_label = if (pipe) |index| inside[index + 1 ..] else target;
-        const label = if (raw_label.len == 0) target else raw_label;
-        var trail_end = close + 2;
-        while (trail_end < input.len and std.ascii.isAlphabetic(input[trail_end])) : (trail_end += 1) {}
-        return .{
-            .end = trail_end,
-            .target = target,
-            .label = label,
-            .trail = input[close + 2 .. trail_end],
-        };
-    }
-    return null;
+    const pair = syntax.balanced(input, start) orelse return null;
+    const inside = input[start + 2 .. pair.inner_end];
+    if (inside.len == 0) return null;
+    const pipe = syntax.delimiter(inside, "|", 0);
+    const raw_target = if (pipe) |index| inside[0..index] else inside;
+    const target = std.mem.trim(u8, raw_target, " \t");
+    if (target.len == 0) return null;
+    const raw_label = if (pipe) |index| inside[index + 1 ..] else target;
+    const label = if (raw_label.len == 0) target else raw_label;
+    var trail_end = pair.end;
+    // English Wiktionary uses MediaWiki's default lowercase a-z link trail.
+    while (trail_end < input.len and std.ascii.isLower(input[trail_end])) : (trail_end += 1) {}
+    return .{ .end = trail_end, .target = target, .label = label, .trail = input[pair.end..trail_end] };
 }
 
 fn parseExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
@@ -451,6 +455,10 @@ fn findExternalLinkClose(input: []const u8, start: usize) ?usize {
     var link_depth: usize = 0;
     var cursor = start + 1;
     while (cursor < input.len) : (cursor += 1) {
+        if (input[cursor] == '<') if (syntax.protectedEnd(input, cursor)) |end| {
+            cursor = end - 1;
+            continue;
+        };
         if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "{{")) {
             template_depth += 1;
             cursor += 1;
@@ -523,4 +531,68 @@ fn hasMatchingEmphasis(input: []const u8, start: usize, marker_len: usize) bool 
         cursor += if (run == 0) 1 else run;
     }
     return false;
+}
+
+test "external link closing ignores brackets inside protected extension bodies" {
+    const block = DecodedBlock{
+        .kind = .paragraph,
+        .depth = 0,
+        .text = "[https://example.test <nowiki>]</nowiki> docs] tail",
+    };
+    var iterator = block.inlineIterator();
+    const link = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.external_link, link.kind);
+    try std.testing.expectEqualStrings("https://example.test", link.target);
+    try std.testing.expectEqualStrings("<nowiki>]</nowiki> docs", link.text);
+    const tail = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.text, tail.kind);
+    try std.testing.expectEqualStrings(" tail", tail.text);
+    try std.testing.expect(iterator.next() == null);
+}
+
+test "inline iterator makes bounded progress across malformed opener storms" {
+    const a = std.testing.allocator;
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(a);
+    try input.appendSlice(a, "prefix ");
+    for (0..8_000) |_| try input.appendSlice(a, "[[broken ");
+    try input.appendSlice(a, "EDGE_SENTINEL");
+    var it: InlineIterator = .{ .input = input.items };
+    var total: usize = 0;
+    var saw_sentinel = false;
+    while (it.next()) |span| {
+        total += span.text.len;
+        if (std.mem.indexOf(u8, span.text, "EDGE_SENTINEL") != null) saw_sentinel = true;
+    }
+    try std.testing.expect(saw_sentinel);
+    try std.testing.expectEqual(input.items.len, total);
+}
+
+test "link trail stops before uppercase suffixes" {
+    var it: InlineIterator = .{ .input = "[[Help]]ingBUT" };
+    const link = it.next().?;
+    try std.testing.expectEqual(InlineKind.link, link.kind);
+    try std.testing.expectEqualStrings("ing", link.trail);
+    const tail = it.next().?;
+    try std.testing.expectEqualStrings("BUT", tail.text);
+}
+
+test "block classifier accepts compact and mixed MediaWiki list markers" {
+    const cases = [_]struct { source: []const u8, kind: BlockKind, path: []const u8, text: []const u8 }{
+        .{ .source = "#definition", .kind = .definition, .path = "#", .text = "definition" },
+        .{ .source = "##child", .kind = .definition, .path = "##", .text = "child" },
+        .{ .source = "#:example", .kind = .example, .path = "#:", .text = "example" },
+        .{ .source = "#*quote", .kind = .quotation, .path = "#*", .text = "quote" },
+        .{ .source = "*:detail", .kind = .list_detail, .path = "*:", .text = "detail" },
+        .{ .source = "**child", .kind = .list_item, .path = "**", .text = "child" },
+        .{ .source = ";term : definition", .kind = .term, .path = ";", .text = "term : definition" },
+        .{ .source = "::indent", .kind = .indent, .path = "::", .text = "indent" },
+    };
+    for (cases) |case| {
+        const block = classifyLine(case.source);
+        try std.testing.expectEqual(case.kind, block.kind);
+        try std.testing.expectEqualStrings(case.path, block.list_path);
+        try std.testing.expectEqualStrings(case.text, block.text);
+        try std.testing.expectEqual(@as(u8, @intCast(case.path.len)), block.depth);
+    }
 }

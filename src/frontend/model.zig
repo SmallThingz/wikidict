@@ -114,7 +114,12 @@ const Builder = struct {
     fn block(self: *Builder, input: ir.DecodedBlock, feature: ?Feature) !void {
         self.started = true;
         const text = try utf8Text(self.a, input.text);
-        try self.blocks.append(self.a, .{ .kind = std.meta.stringToEnum(wiki.Kind, @tagName(input.kind)).?, .depth = input.depth, .text = text, .spans = try self.renderer.parseSpans(text, .{}), .feature = feature });
+        if (input.kind == .term) if (wiki.inlineDefinitionSplit(text)) |pair| {
+            try self.blocks.append(self.a, .{ .kind = .term, .depth = input.depth, .text = pair.term, .spans = try self.renderer.parseSpans(pair.term, .{}), .feature = feature, .list_path = ";" });
+            try self.blocks.append(self.a, .{ .kind = .list_detail, .depth = input.depth, .text = pair.definition, .spans = try self.renderer.parseSpans(pair.definition, .{}), .list_path = ":" });
+            return;
+        };
+        try self.blocks.append(self.a, .{ .kind = std.meta.stringToEnum(wiki.Kind, @tagName(input.kind)).?, .depth = input.depth, .text = text, .spans = try self.renderer.parseSpans(text, .{}), .feature = feature, .list_path = input.list_path });
     }
     fn raw(self: *Builder, source: []const u8) !void {
         for (try self.renderer.renderBody(try utf8Text(self.a, source))) |item| {
@@ -511,4 +516,48 @@ test "expanded headwords and lexical relations keep their presentation semantics
         headword = true;
     };
     try std.testing.expect(headword);
+}
+
+test "standalone oversized definition stays inspectable instead of failing presentation" {
+    const a = std.testing.allocator;
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(a);
+    try source.appendSlice(a, "==English==\n===Noun===\n# {{oversized");
+    for (0..16_385) |_| try source.appendSlice(a, "|x");
+    try source.appendSlice(a, "}} tail\n");
+    var doc = try fromWikitext(a, "edge", "English", source.items, true);
+    defer doc.deinit();
+    try std.testing.expectEqual(@as(usize, 1), doc.entry.unexpanded_templates);
+    try std.testing.expectEqual(@as(usize, 2), doc.entry.sections.len);
+    try std.testing.expectEqual(wiki.Kind.definition, doc.entry.sections[1].blocks[0].kind);
+    try std.testing.expect(std.mem.endsWith(u8, try wiki.plainText(doc.arena.allocator(), doc.entry.sections[1].blocks[0].spans), " tail"));
+    try std.testing.expectEqualStrings(source.items, doc.entry.source.?);
+}
+
+test "decoded term lines split same-line definition-list pairs for presentation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    var builder: Builder = .{ .a = a, .renderer = &renderer };
+    try builder.block(.{ .kind = .term, .depth = 1, .text = "term : definition" }, null);
+    try std.testing.expectEqual(@as(usize, 2), builder.blocks.items.len);
+    try std.testing.expectEqual(wiki.Kind.term, builder.blocks.items[0].kind);
+    try std.testing.expectEqual(wiki.Kind.list_detail, builder.blocks.items[1].kind);
+    try std.testing.expectEqualStrings(";", builder.blocks.items[0].list_path);
+    try std.testing.expectEqualStrings(":", builder.blocks.items[1].list_path);
+}
+
+test "standalone invalid UTF8 renders replacement text while preserving exact source bytes" {
+    const a = std.testing.allocator;
+    const source = "==English==\n===Noun===\n# bad \xff byte\n";
+    var doc = try fromWikitext(a, "broken", "English", source, true);
+    defer doc.deinit();
+    try std.testing.expect(doc.entry.source == null);
+    try std.testing.expect(doc.entry.source_base64 != null);
+    var saw_replacement = false;
+    for (doc.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+        if (std.mem.indexOf(u8, span.text, "�") != null) saw_replacement = true;
+    };
+    try std.testing.expect(saw_replacement);
 }

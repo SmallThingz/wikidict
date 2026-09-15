@@ -33,7 +33,7 @@ pub fn terminalText(w: *std.Io.Writer, text: []const u8) !void {
             pos += 1;
             continue;
         };
-        if (cp == '\n' or cp == '\t') try w.writeByte(@intCast(cp)) else if (cp < 32 or (cp >= 0x7f and cp <= 0x9f) or (cp >= 0x202a and cp <= 0x202e) or (cp >= 0x2066 and cp <= 0x2069))
+        if (cp == '\n' or cp == '\t') try w.writeByte(@intCast(cp)) else if (cp < 32 or (cp >= 0x7f and cp <= 0x9f) or cp == 0x061c or cp == 0x200e or cp == 0x200f or cp == 0x2028 or cp == 0x2029 or (cp >= 0x202a and cp <= 0x202e) or (cp >= 0x2066 and cp <= 0x206f))
             try w.print("\\u{{{x}}}", .{cp})
         else
             try w.writeAll(text[pos..][0..n]);
@@ -149,7 +149,13 @@ pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, 
     if (details and entry.references.len != 0) {
         try w.writeAll("\nReferences\n");
         for (entry.references) |ref| {
-            try w.print("[{d}] ", .{ref.number});
+            if (ref.group.len == 0) {
+                try w.print("[{d}] ", .{ref.group_number});
+            } else {
+                try w.writeByte('[');
+                try terminalText(w, ref.group);
+                try w.print(" {d}] ", .{ref.group_number});
+            }
             try spansText(w, ref.spans, color);
             try w.writeByte('\n');
         }
@@ -164,9 +170,19 @@ pub fn json(w: *std.Io.Writer, response: Response) !void {
 test "terminal output neutralizes control and bidi sequences without corrupting unicode" {
     var w: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer w.deinit();
-    try terminalText(&w.writer, "é猫\x1b[2J\u{9b}31m\u{202e}x");
-    try std.testing.expectEqualStrings("é猫\\u{1b}[2J\\u{9b}31m\\u{202e}x", w.written());
+    try terminalText(&w.writer, "é猫\x1b[2J\u{9b}31m\u{61c}a\u{200e}b\u{200f}c\u{2028}d\u{2029}e\u{202e}f\u{206a}g\u{206f}x");
+    try std.testing.expectEqualStrings("é猫\\u{1b}[2J\\u{9b}31m\\u{61c}a\\u{200e}b\\u{200f}c\\u{2028}d\\u{2029}e\\u{202e}f\\u{206a}g\\u{206f}x", w.written());
 }
+test "reference group labels cannot inject terminal controls or bidi marks" {
+    var doc = try model.fromWikitext(std.testing.allocator, "word", "English", "==English==\n===Noun===\n# sense<ref group='note&#x202e;evil'>source</ref>\n", false);
+    defer doc.deinit();
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryText(&out.writer, doc.entry, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "note\\u{202e}evil") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "\u{202e}") == null);
+}
+
 test "JSON output is a complete versioned machine response" {
     var w: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer w.deinit();

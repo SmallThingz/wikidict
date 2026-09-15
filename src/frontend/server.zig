@@ -30,6 +30,11 @@ fn decode(a: A, text: []const u8) ![]const u8 {
         try result.append(a, b);
     }
     if (!std.unicode.utf8ValidateSlice(result.items) or result.items.len > 4096) return error.BadRequest;
+    var view = std.unicode.Utf8View.initUnchecked(result.items);
+    var codepoints = view.iterator();
+    while (codepoints.nextCodepoint()) |cp| {
+        if (cp < 32 or (cp >= 0x7f and cp <= 0x9f)) return error.BadRequest;
+    }
     return result.toOwnedSlice(a);
 }
 fn query(a: A, target: []const u8) !Query {
@@ -115,7 +120,7 @@ const State = struct {
     fn resolveLanguage(self: *State, name: []const u8) ![]const u8 {
         if (name.len == 0) return self.opts.language;
         for (self.languages) |l| if (std.mem.eql(u8, name, l.heading)) return l.heading;
-        for (self.languages) |l| if (l.code.len != 0 and std.mem.eql(u8, name, l.code)) return l.heading;
+        for (self.languages) |l| if (l.code.len != 0 and std.ascii.eqlIgnoreCase(name, l.code)) return l.heading;
         return error.UnknownLanguage;
     }
     // Caller holds lock. Fixed LRU bounds retained mappings, including compressed block caches.
@@ -398,5 +403,23 @@ test "HTTP queries reject ambiguous malformed and overlarge input" {
     const a = arena.allocator();
     const q = try query(a, "/api/search?q=%E7%8C%AB&limit=10&offset=2");
     try std.testing.expectEqualStrings("猫", q.q);
-    for ([_][]const u8{ "/api/search?q=%", "/api/search?q=%00", "/api/search?q=a&q=b", "/api/search?limit=0", "//elsewhere/", "/api/search?limit=999", "/api/search?unknown=1" }) |bad| try std.testing.expectError(error.BadRequest, query(a, bad));
+    for ([_][]const u8{
+        "/api/search?q=%",
+        "/api/search?q=%00",
+        "/api/search?q=%7f",
+        "/api/search?q=%C2%85",
+        "/api/search?q=%C0%AF",
+        "/api/search?q=%ED%A0%80",
+        "/api/search?q=a&q=b",
+        "/api/search?q=a&%71=b",
+        "/api/search?limit=0",
+        "/api/search?limit=999",
+        "/api/search?offset=184467440737095516160",
+        "/api/search?unknown=1",
+        "/api/search?q=x#fragment",
+        "//elsewhere/",
+    }) |bad| try std.testing.expectError(error.BadRequest, query(a, bad));
+
+    const huge = try std.fmt.allocPrint(a, "/api/search?q={s}", .{"x" ** 4097});
+    try std.testing.expectError(error.BadRequest, query(a, huge));
 }

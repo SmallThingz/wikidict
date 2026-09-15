@@ -7,6 +7,21 @@ pub fn starts(text: []const u8, prefix: []const u8) bool {
 pub fn trim(text: []const u8) []const u8 {
     return std.mem.trim(u8, text, " \t\r\n");
 }
+pub fn isMultilineContainerTag(name: []const u8) bool {
+    inline for (&.{ "ref", "table", "div", "blockquote", "p", "ul", "ol", "dl", "center" }) |tag| {
+        if (std.ascii.eqlIgnoreCase(name, tag)) return true;
+    }
+    return false;
+}
+pub fn isOpaqueTag(name: []const u8) bool {
+    inline for (&.{
+        "nowiki",  "pre",      "gallery",      "indicator",  "ref",             "references", "templatestyles",
+        "math",    "ce",       "chem",         "score",      "syntaxhighlight", "source",     "timeline",
+        "hiero",   "poem",     "categorytree", "charinsert", "graph",           "mapframe",   "maplink",
+        "section", "inputbox", "imagemap",
+    }) |tag| if (std.ascii.eqlIgnoreCase(name, tag)) return true;
+    return false;
+}
 pub const Tag = struct {
     name: []const u8,
     attrs: []const u8,
@@ -75,12 +90,38 @@ pub fn tagAt(text: []const u8, start: usize) ?Tag {
     }
     return null;
 }
+fn opaquePair(text: []const u8, tag: Tag) ?Pair {
+    if (tag.self_closing) return .{ .inner_end = tag.end, .end = tag.end };
+    var i = tag.end;
+    while (std.mem.indexOfScalarPos(u8, text, i, '<')) |open| {
+        if (tagAt(text, open)) |next| {
+            if (next.closing and std.ascii.eqlIgnoreCase(next.name, tag.name))
+                return .{ .inner_end = open, .end = next.end };
+            i = next.end;
+        } else i = open + 1;
+    }
+    return null;
+}
 pub fn matchingTag(text: []const u8, tag: Tag) ?Pair {
     if (tag.self_closing) return .{ .inner_end = tag.end, .end = tag.end };
+    // MediaWiki extension bodies are opaque: an opening tag of the same name
+    // inside the body is literal text, not a nested extension.
+    if (isOpaqueTag(tag.name)) return opaquePair(text, tag);
     var i = tag.end;
     var nesting: usize = 1;
     while (std.mem.indexOfScalarPos(u8, text, i, '<')) |open| {
+        if (starts(text[open..], "<!--")) {
+            i = if (std.mem.indexOfPos(u8, text, open + 4, "-->")) |end| end + 3 else text.len;
+            continue;
+        }
         if (tagAt(text, open)) |next| {
+            // Closing-looking text inside nowiki/ref/math/etc. cannot close the
+            // surrounding ordinary HTML element.
+            if (!next.closing and isOpaqueTag(next.name)) {
+                const pair = opaquePair(text, next) orelse return null;
+                i = pair.end;
+                continue;
+            }
             if (std.ascii.eqlIgnoreCase(next.name, tag.name)) {
                 if (next.closing) nesting -= 1 else if (!next.self_closing) nesting += 1;
                 if (nesting == 0) return .{ .inner_end = open, .end = next.end };
@@ -93,7 +134,7 @@ pub fn matchingTag(text: []const u8, tag: Tag) ?Pair {
 pub fn protectedEnd(text: []const u8, start: usize) ?usize {
     if (starts(text[start..], "<!--")) return if (std.mem.indexOfPos(u8, text, start + 4, "-->")) |end| end + 3 else text.len;
     const tag = tagAt(text, start) orelse return null;
-    if (tag.closing or !(tag.is("nowiki") or tag.is("pre") or tag.is("syntaxhighlight") or tag.is("source") or tag.is("math"))) return null;
+    if (tag.closing or !isOpaqueTag(tag.name)) return null;
     return if (matchingTag(text, tag)) |pair| pair.end else text.len;
 }
 /// Stack-based matching prevents pipes in links/parameters from becoming template delimiters.
@@ -142,7 +183,7 @@ pub fn logicalEnd(text: []const u8, start: usize) usize {
                 i = end;
                 continue;
             }
-            if (tagAt(text, i)) |tag| if (!tag.closing and (tag.is("ref") or tag.is("table") or tag.is("div"))) {
+            if (tagAt(text, i)) |tag| if (!tag.closing and isMultilineContainerTag(tag.name)) {
                 if (matchingTag(text, tag)) |pair| {
                     i = pair.end;
                     continue;
@@ -171,15 +212,22 @@ pub fn delimiter(text: []const u8, needle: []const u8, start: usize) ?usize {
                 continue;
             }
         }
-        if (starts(text[i..], "{{") or starts(text[i..], "[[")) if (balanced(text, i)) |pair| {
-            i = pair.end;
-            continue;
-        };
+        if (starts(text[i..], "{{") or starts(text[i..], "[[")) {
+            if (balanced(text, i)) |pair| {
+                i = pair.end;
+                continue;
+            }
+            // An unbalanced nested construct makes following separators
+            // ambiguous. Preserve the remainder instead of repeatedly probing
+            // every overlapping opener.
+            return null;
+        }
         i += 1;
     }
     return null;
 }
 pub const Param = struct { key: []const u8, position: usize = 0, value: []const u8 };
+const max_template_params: usize = 16 * 1024;
 pub const Template = struct {
     name: []const u8,
     params: []const Param,
@@ -187,22 +235,30 @@ pub const Template = struct {
         const first = delimiter(body, "|", 0) orelse body.len;
         var params: std.ArrayList(Param) = .empty;
         errdefer params.deinit(a);
-        var pos = @min(first + 1, body.len);
+        if (first == body.len) return .{ .name = trim(body), .params = try params.toOwnedSlice(a) };
+        var pos = first + 1;
         var automatic: usize = 0;
-        while (pos < body.len) {
-            if (params.items.len >= 512) return error.RenderLimit;
+        while (true) {
+            if (params.items.len >= max_template_params) return error.RenderLimit;
             const end = delimiter(body, "|", pos) orelse body.len;
             const part = body[pos..end];
             if (delimiter(part, "=", 0)) |eq| {
                 const key = trim(part[0..eq]);
+                if (key.len == 0) {
+                    if (end == body.len) break;
+                    pos = end + 1;
+                    continue;
+                }
                 const position = std.fmt.parseInt(usize, key, 10) catch 0;
-                if (position > 512) return error.RenderLimit;
                 try params.append(a, .{ .key = key, .position = position, .value = trim(part[eq + 1 ..]) });
             } else {
                 automatic += 1;
-                try params.append(a, .{ .key = "", .position = automatic, .value = trim(part) });
+                // MediaWiki preserves whitespace for unnamed positional values.
+                // Named (including explicitly numbered) values are trimmed above.
+                try params.append(a, .{ .key = "", .position = automatic, .value = part });
             }
-            pos = @min(end + 1, body.len);
+            if (end == body.len) break;
+            pos = end + 1;
         }
         return .{ .name = trim(body[0..first]), .params = try params.toOwnedSlice(a) };
     }
@@ -239,13 +295,112 @@ test "template parameters respect nested constructs and last-value wins" {
     try std.testing.expectEqual(source.len - 4, balanced(source, 0).?.end);
 }
 
-test "template arguments are bounded without silently truncating supported terms" {
+test "template arguments scale to real Wiktionary columns while remaining bounded" {
     const a = std.testing.allocator;
-    const body = "col|en" ++ "|term" ** 300;
-    const t = try Template.parse(a, body);
+    var body: std.ArrayList(u8) = .empty;
+    defer body.deinit(a);
+    try body.appendSlice(a, "col|en");
+    for (0..1_200) |_| try body.appendSlice(a, "|term");
+    const t = try Template.parse(a, body.items);
     defer a.free(t.params);
-    try std.testing.expectEqual(@as(usize, 301), t.last());
-    try std.testing.expectEqualStrings("term", t.get(301));
-    try std.testing.expectError(error.RenderLimit, Template.parse(a, "col|en" ++ "|term" ** 512));
-    try std.testing.expectError(error.RenderLimit, Template.parse(a, "q|999999999=oversized"));
+    try std.testing.expectEqual(@as(usize, 1_201), t.last());
+    try std.testing.expectEqualStrings("term", t.get(1_201));
+
+    body.clearRetainingCapacity();
+    try body.appendSlice(a, "col");
+    for (0..max_template_params + 1) |_| try body.appendSlice(a, "|x");
+    try std.testing.expectError(error.RenderLimit, Template.parse(a, body.items));
+
+    const sparse = try Template.parse(a, "col|en|2=two|999999999=last|2=override");
+    defer a.free(sparse.params);
+    try std.testing.expectEqualStrings("override", sparse.get(2));
+    try std.testing.expectEqualStrings("last", sparse.get(999_999_999));
+}
+
+test "opaque extension bodies never split template arguments" {
+    const a = std.testing.allocator;
+    const t = try Template.parse(a, "x|<math>a|b=c</math>|<gallery>File:A.jpg|caption</gallery>|tail");
+    defer a.free(t.params);
+    try std.testing.expectEqualStrings("<math>a|b=c</math>", t.get(1));
+    try std.testing.expectEqualStrings("<gallery>File:A.jpg|caption</gallery>", t.get(2));
+    try std.testing.expectEqualStrings("tail", t.get(3));
+    try std.testing.expectEqual(@as(?usize, null), delimiter("<syntaxhighlight>|=</syntaxhighlight>", "|", 0));
+}
+
+test "template parsing ignores empty named keys like runtime expansion" {
+    const a = std.testing.allocator;
+    const t = try Template.parse(a, "x|=ignored|one|name=value");
+    defer a.free(t.params);
+    try std.testing.expectEqual(@as(usize, 2), t.params.len);
+    try std.testing.expectEqualStrings("one", t.get(1));
+    try std.testing.expectEqualStrings("value", t.named("name"));
+}
+
+test "template parsing preserves positional whitespace but trims named values" {
+    const a = std.testing.allocator;
+    const t = try Template.parse(a, "x|  positional  |named=  named value  |2=  explicit numeric  ");
+    defer a.free(t.params);
+    try std.testing.expectEqualStrings("  positional  ", t.get(1));
+    try std.testing.expectEqualStrings("explicit numeric", t.get(2));
+    try std.testing.expectEqualStrings("named value", t.named("named"));
+}
+
+test "template parsing preserves explicit trailing empty parameters" {
+    const a = std.testing.allocator;
+    const one = try Template.parse(a, "x|");
+    defer a.free(one.params);
+    try std.testing.expectEqual(@as(usize, 1), one.params.len);
+    try std.testing.expectEqual(@as(usize, 1), one.last());
+    try std.testing.expectEqualStrings("", one.get(1));
+
+    const several = try Template.parse(a, "x|a||");
+    defer a.free(several.params);
+    try std.testing.expectEqual(@as(usize, 3), several.params.len);
+    try std.testing.expectEqual(@as(usize, 3), several.last());
+    try std.testing.expectEqualStrings("a", several.get(1));
+    try std.testing.expectEqualStrings("", several.get(2));
+    try std.testing.expectEqualStrings("", several.get(3));
+}
+
+test "ordinary HTML matching ignores fake closers in comments and opaque extensions" {
+    const source = "<div><!-- </div> --><nowiki></div></nowiki><b>kept</b></div>tail";
+    const outer = tagAt(source, 0).?;
+    const pair = matchingTag(source, outer).?;
+    try std.testing.expectEqualStrings("tail", source[pair.end..]);
+    try std.testing.expect(std.mem.indexOf(u8, source[outer.end..pair.inner_end], "<b>kept</b>") != null);
+
+    const raw_source = "<nowiki><nowiki>x</nowiki>tail";
+    const raw = tagAt(raw_source, 0).?;
+    const raw_pair = matchingTag(raw_source, raw).?;
+    try std.testing.expectEqualStrings("<nowiki>x", raw_source[raw.end..raw_pair.inner_end]);
+    try std.testing.expectEqualStrings("tail", raw_source[raw_pair.end..]);
+}
+
+test "HTML tag scanning respects quoted delimiters self-closing whitespace and malformed quotes" {
+    const source = "<REF name=\"a>b\" group='g&amp;x' / >tail";
+    const tag = tagAt(source, 0).?;
+    try std.testing.expect(tag.is("ref"));
+    try std.testing.expect(tag.self_closing);
+    try std.testing.expectEqualStrings("a>b", tag.attr("name").?);
+    try std.testing.expectEqualStrings("g&amp;x", tag.attr("GROUP").?);
+    try std.testing.expectEqualStrings("tail", source[tag.end..]);
+    try std.testing.expect(tagAt("<span title='unterminated>", 0) == null);
+    try std.testing.expect(tagAt("<9invalid>", 0) == null);
+}
+
+test "logical lines span safe multiline block containers" {
+    const source = "<blockquote>\n# inside\n</blockquote>\n# outside";
+    const end = logicalEnd(source, 0);
+    try std.testing.expectEqualStrings("<blockquote>\n# inside\n</blockquote>", source[0..end]);
+    try std.testing.expectEqual(@as(u8, '\n'), source[end]);
+}
+
+test "delimiter search stops conservatively at malformed nested opener storms" {
+    const a = std.testing.allocator;
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(a);
+    try text.appendSlice(a, "prefix");
+    for (0..8_000) |_| try text.appendSlice(a, "{{broken");
+    try text.appendSlice(a, "|not-top-level");
+    try std.testing.expect(delimiter(text.items, "|", 0) == null);
 }

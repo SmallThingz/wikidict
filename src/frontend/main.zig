@@ -8,48 +8,61 @@ const tui = @import("tui.zig");
 const expansion = @import("expansion.zig");
 
 const usage =
-    \\dict: local Wiktionary, one language or feature blob at a time
+    \\dict — fast local Wiktionary
     \\
-    \\  dict serve [--port 8787] [--root PATH]
-    \\  dict export WORD --format json|html|wikitext [options]
-    \\  dict lookup WORD [options]
-    \\  dict search [PREFIX] [options]
-    \\  dict languages [WORD] [--root PATH] [--format text|json]
-    \\  dict stats [options]
-    \\  dict tui [PREFIX] [options]
-    \\  dict render FILE [--title TITLE] [--format text|json|html|source]
-    \\       Use - for stdin. No database is needed.
+    \\Usage
+    \\  dict WORD                         Look up a word
+    \\  dict search [PREFIX]              Browse prefix matches
+    \\  dict tui [PREFIX]                 Open the interactive reader
+    \\  dict serve [--port 8787]          Open the local web dictionary
+    \\  dict export WORD [--format html]  Create a self-contained entry export
+    \\  dict languages [WORD]             List installed languages
+    \\  dict stats                         Show dataset statistics
+    \\  dict render FILE                   Render standalone wikitext; use - for stdin
     \\
-    \\  --root PATH        WIKBLB05 root (default data/wiktionary-blobs)
-    \\  --language NAME    Exact language heading (default English)
+    \\Common options
+    \\  --language NAME    Language heading (default: English)
     \\  --kind KIND        language, thesaurus, citations, reconstruction, rhymes, sign-gloss
-    \\  --format FORMAT    text, json, source, html (HTML supports lookup and search)
-    \\  --limit N          Search page size, 1..1000 (default 20)
+    \\  --root PATH        Dataset root (default: data/wiktionary-blobs)
+    \\  --format FORMAT    text, json, source, html
+    \\  --limit N          Search results per page, 1..1000 (default: 20)
     \\  --offset N         Skip N prefix matches
-    \\  --with-source      Include exact source in JSON/HTML entries
-    \\  --details          Load all supporting material in human text; TUI uses d
-    \\  --core-only        Export native core without reading optional companion blobs
+    \\  --details          Include history, quotations, relations and references in text/TUI
+    \\  --with-source      Include exact source in JSON/HTML
     \\  --color MODE       auto, always, never; NO_COLOR disables automatic color
-    \\  --theme THEME      TUI palette: terminal (default), dark, light
-    \\  --native           Use native core preview instead of Lua expansion
-    \\  --media-dir PATH   Embed verified local media in HTML (default ROOT/media)
-    \\  --runtime PATH     Override auto-detected shared template/Lua runtime
-    \\  --runtime-timeout-ms N  Per-page Lua expansion deadline, 1..60000 (default 60000)
-    \\  --trusted          Legacy flag; native cached directories remain validated
-    \\  --validate         Validate while indexing (the default)
+    \\
+    \\Rendering and export
+    \\  --core-only        Read only the compact core; omitted companion sections stay labelled
+    \\  --native           Skip Lua/template expansion and show the native core preview
+    \\  --media-dir PATH   Embed verified local media in HTML (default: ROOT/media)
+    \\  --runtime PATH     Override the auto-detected native Lua runtime
+    \\  --runtime-timeout-ms N  Expansion deadline, 1..60000 (default: 60000)
+    \\  --title TITLE      Title for `dict render`
+    \\  --theme THEME      TUI palette: terminal, dark, light
+    \\  --trusted          Legacy compatibility flag; cached directories are still validated
+    \\  --validate         Validate while indexing (default)
     \\  --                 End options, for words beginning with a dash
     \\
-    \\Search is case-sensitive UTF-8 prefix matching. Results go to stdout.
-    \\Diagnostics go to stderr. Exit: 0 success, 1 no matches, 2 usage/data/I/O error.
-    \\Wikitext and core Wiktionary templates render locally. Unsupported templates are marked.
-    \\No network is used. Linked datasets use their runtime-specific native Lua AOT worker. No alternate Lua execution path exists.
+    \\Examples
+    \\  dict cat
+    \\  dict search trans --language English
+    \\  dict tui etym
+    \\  dict serve --root data/wiktionary-blobs
+    \\  dict export cat --format html > cat.html
+    \\  printf "==English==\\n===Noun===\\n# Example" | dict render - --title Example
+    \\
+    \\Search is case-sensitive UTF-8 prefix matching. Normal output goes to stdout;
+    \\diagnostics go to stderr. Exit codes: 0 success, 1 no match, 2 usage/data/I/O error.
+    \\Everything is local: no network is required for lookup, rendering, TUI, or web serving.
     \\
 ;
 
 pub fn main(init: std.process.Init) void {
     const code = run(init) catch |err| {
-        std.debug.print("dict: {s}\n", .{@errorName(err)});
-        if (err == error.Usage) std.debug.print("{s}", .{usage});
+        if (err == error.Usage)
+            std.debug.print("dict: invalid arguments\n\n{s}", .{usage})
+        else
+            std.debug.print("dict: {s}\n", .{@errorName(err)});
         std.process.exit(2);
     };
     if (code != 0) std.process.exit(code);

@@ -12,6 +12,23 @@ pub fn width(cp: u21) usize {
     const cells = wcwidth(@intCast(cp));
     return if (cells < 0) 1 else @intCast(cells);
 }
+fn clusterWidth(text: []const u8, start: usize, end: usize) usize {
+    var pos = start;
+    var result: usize = 0;
+    var regional: usize = 0;
+    var emoji_presentation = false;
+    while (pos < end) {
+        const n: usize = std.unicode.utf8ByteSequenceLength(text[pos]) catch 1;
+        if (n > end - pos) break;
+        const cp = std.unicode.utf8Decode(text[pos..][0..n]) catch 0xfffd;
+        result = @max(result, width(cp));
+        if (isRegionalIndicator(cp)) regional += 1;
+        if (cp == 0xfe0f or cp == 0x20e3 or cp == 0x200d or (cp >= 0x1f3fb and cp <= 0x1f3ff)) emoji_presentation = true;
+        pos += n;
+    }
+    if (regional >= 2 or emoji_presentation) result = @max(result, 2);
+    return result;
+}
 pub fn prefixBytes(text: []const u8, cells: usize) usize {
     var pos: usize = 0;
     var used: usize = 0;
@@ -20,13 +37,12 @@ pub fn prefixBytes(text: []const u8, cells: usize) usize {
             pos += n;
             continue;
         }
-        const n: usize = std.unicode.utf8ByteSequenceLength(text[pos]) catch return pos;
-        if (n > text.len - pos) break;
-        const cp = std.unicode.utf8Decode(text[pos..][0..n]) catch return pos;
-        const w = width(cp);
+        const end = nextClusterEnd(text, pos);
+        if (end <= pos) break;
+        const w = clusterWidth(text, pos, end);
         if (used + w > cells) break;
         used += w;
-        pos += n;
+        pos = end;
     }
     return pos;
 }
@@ -38,12 +54,84 @@ pub fn cellWidth(text: []const u8) usize {
             pos += n;
             continue;
         }
-        const n: usize = std.unicode.utf8ByteSequenceLength(text[pos]) catch 1;
-        if (n > text.len - pos) break;
-        result += width(std.unicode.utf8Decode(text[pos..][0..n]) catch 0xfffd);
-        pos += n;
+        const end = nextClusterEnd(text, pos);
+        if (end <= pos) break;
+        result += clusterWidth(text, pos, end);
+        pos = end;
     }
     return result;
+}
+
+fn previousCodepointStart(text: []const u8, end: usize) usize {
+    if (end == 0) return 0;
+    var start = end - 1;
+    while (start != 0 and text[start] & 0xc0 == 0x80) start -= 1;
+    return start;
+}
+fn codepointAt(text: []const u8, start: usize) u21 {
+    if (start >= text.len) return 0xfffd;
+    const n: usize = std.unicode.utf8ByteSequenceLength(text[start]) catch return 0xfffd;
+    if (n > text.len - start) return 0xfffd;
+    return std.unicode.utf8Decode(text[start..][0..n]) catch 0xfffd;
+}
+fn isClusterExtend(cp: u21) bool {
+    if (cp == 0x200d) return false; // ZWJ joins two bases; it is handled explicitly.
+    if (cp >= 0x1f3fb and cp <= 0x1f3ff) return true; // emoji skin-tone modifiers
+    if ((cp >= 0xfe00 and cp <= 0xfe0f) or (cp >= 0xe0100 and cp <= 0xe01ef)) return true;
+    if (cp >= 0xe0020 and cp <= 0xe007f) return true; // emoji tag sequences
+    return width(cp) == 0;
+}
+fn isRegionalIndicator(cp: u21) bool {
+    return cp >= 0x1f1e6 and cp <= 0x1f1ff;
+}
+pub fn previousClusterStart(text: []const u8, end: usize) usize {
+    if (end == 0) return 0;
+    var start = previousCodepointStart(text, @min(end, text.len));
+    while (start != 0 and isClusterExtend(codepointAt(text, start))) start = previousCodepointStart(text, start);
+    if (isRegionalIndicator(codepointAt(text, start)) and start != 0) {
+        var scan = start;
+        var preceding: usize = 0;
+        while (scan != 0) {
+            const previous = previousCodepointStart(text, scan);
+            if (!isRegionalIndicator(codepointAt(text, previous))) break;
+            preceding += 1;
+            scan = previous;
+        }
+        // Regional indicators form pairs from the beginning of each run. The
+        // current indicator joins its predecessor only when an odd number of
+        // indicators precede it.
+        if (preceding & 1 == 1) start = previousCodepointStart(text, start);
+    }
+    while (start != 0) {
+        const joiner = previousCodepointStart(text, start);
+        if (codepointAt(text, joiner) != 0x200d) break;
+        start = joiner;
+        if (start == 0) break;
+        start = previousCodepointStart(text, start);
+        while (start != 0 and isClusterExtend(codepointAt(text, start))) start = previousCodepointStart(text, start);
+    }
+    return start;
+}
+pub fn nextClusterEnd(text: []const u8, start: usize) usize {
+    if (start >= text.len) return text.len;
+    const first_n: usize = std.unicode.utf8ByteSequenceLength(text[start]) catch return @min(start + 1, text.len);
+    var end = @min(text.len, start + first_n);
+    const first = codepointAt(text, start);
+    if (isRegionalIndicator(first) and end < text.len and isRegionalIndicator(codepointAt(text, end))) {
+        end += std.unicode.utf8ByteSequenceLength(text[end]) catch 1;
+    }
+    while (end < text.len) {
+        const cp = codepointAt(text, end);
+        if (isClusterExtend(cp)) {
+            end += std.unicode.utf8ByteSequenceLength(text[end]) catch 1;
+            continue;
+        }
+        if (cp != 0x200d) break;
+        end += std.unicode.utf8ByteSequenceLength(text[end]) catch 1;
+        if (end >= text.len) break;
+        end += std.unicode.utf8ByteSequenceLength(text[end]) catch 1;
+    }
+    return @min(end, text.len);
 }
 pub fn wrap(a: std.mem.Allocator, text: []const u8, columns: usize) ![][]const u8 {
     var rows: std.ArrayList([]const u8) = .empty;
@@ -214,6 +302,33 @@ pub const Session = struct {
         return interrupted.load(.monotonic);
     }
 };
+
+test "cluster cursor boundaries keep combining marks flags and ZWJ emoji intact" {
+    initLocale();
+    const combining = "éx";
+    const first = nextClusterEnd(combining, 0);
+    try std.testing.expectEqualStrings("é", combining[0..first]);
+    try std.testing.expectEqual(@as(usize, 0), previousClusterStart(combining, first));
+
+    const joined = "👩‍💻x";
+    const emoji_end = nextClusterEnd(joined, 0);
+    try std.testing.expectEqualStrings("👩‍💻", joined[0..emoji_end]);
+    try std.testing.expectEqual(@as(usize, 0), previousClusterStart(joined, emoji_end));
+    try std.testing.expectEqual(@as(usize, 2), cellWidth("👩‍💻"));
+    try std.testing.expectEqualStrings("👩‍💻", joined[0..prefixBytes(joined, 2)]);
+
+    const flag = "🇦🇺x";
+    const flag_end = nextClusterEnd(flag, 0);
+    try std.testing.expectEqualStrings("🇦🇺", flag[0..flag_end]);
+    try std.testing.expectEqual(@as(usize, 0), previousClusterStart(flag, flag_end));
+    try std.testing.expectEqual(@as(usize, 2), cellWidth("🇦🇺"));
+    try std.testing.expectEqual(@as(usize, 2), cellWidth("1️⃣"));
+
+    const odd_run = "🇦🇺🇳x";
+    const third_end = std.mem.indexOfScalar(u8, odd_run, 'x').?;
+    const third_start = previousClusterStart(odd_run, third_end);
+    try std.testing.expectEqualStrings("🇳", odd_run[third_start..third_end]);
+}
 
 test "terminal input survives split escape sequences and multibyte paste" {
     var input: Input = .{};

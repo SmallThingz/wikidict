@@ -72,13 +72,10 @@ const State = struct {
         try self.changed();
     }
     fn previous(self: State) usize {
-        if (self.cursor == 0) return 0;
-        var p = self.cursor - 1;
-        while (p != 0 and self.query[p] & 0xc0 == 0x80) p -= 1;
-        return p;
+        return term.previousClusterStart(self.query[0..self.len], self.cursor);
     }
     fn next(self: State) usize {
-        return if (self.cursor == self.len) self.len else self.cursor + (std.unicode.utf8ByteSequenceLength(self.query[self.cursor]) catch 1);
+        return term.nextClusterEnd(self.query[0..self.len], self.cursor);
     }
     fn key(self: *State, event: term.Event) !bool {
         if (event.key == .quit) return false;
@@ -88,15 +85,23 @@ const State = struct {
         }
         switch (event.key) {
             .quit => unreachable,
-            .escape => self.focus = .matches,
+            .escape => self.focus = switch (self.focus) {
+                .entry => .matches,
+                .matches => .search,
+                .search => .search,
+            },
             .tab => self.focus = switch (self.focus) {
                 .search => .matches,
                 .matches => .entry,
                 .entry => .search,
             },
-            .enter => self.focus = .entry,
-            .up => self.page(false, 1),
-            .down => self.page(true, 1),
+            .enter => if (self.count() != 0) {
+                self.focus = .entry;
+            },
+            .up, .down => {
+                if (self.focus == .search and self.count() != 0) self.focus = .matches;
+                self.page(event.key == .down, 1);
+            },
             .page_up => self.page(false, @max(1, self.bodyHeight() -| 1)),
             .page_down => self.page(true, @max(1, self.bodyHeight() -| 1)),
             .left => {
@@ -247,8 +252,8 @@ const State = struct {
         try w.writeAll("\x1b[?2026h\x1b[?25l");
         for (0..sz.rows) |i| try w.print("\x1b[{d};1H{s}\x1b[2K", .{ i + 1, p.base });
         if (sz.cols < 40 or sz.rows < 12) {
-            try self.put(w, 1, 1, sz.cols -| 1, "dict: resize to at least 40 x 12", p.accent);
-            try self.put(w, 3, 1, sz.cols -| 1, "Ctrl-C to leave safely.", p.base);
+            if (sz.rows >= 1 and sz.cols >= 1) try self.put(w, 1, 1, sz.cols, "dict: resize to at least 40 x 12", p.accent);
+            if (sz.rows >= 3 and sz.cols >= 1) try self.put(w, 3, 1, sz.cols, "Ctrl-C to leave safely.", p.base);
         } else {
             const split_at = self.split();
             const content_col = if (split_at == 0) 3 else split_at + 3;
@@ -262,7 +267,11 @@ const State = struct {
             // Horizontal input viewport follows the caret, at whole-codepoint boundaries.
             var start: usize = 0;
             const input_width = sz.cols - 15;
-            while (term.cellWidth(self.query[start..self.cursor]) >= input_width) start += std.unicode.utf8ByteSequenceLength(self.query[start]) catch 1;
+            while (term.cellWidth(self.query[start..self.cursor]) >= input_width) {
+                const next_start = term.nextClusterEnd(self.query[0..self.len], start);
+                if (next_start <= start) break;
+                start = next_start;
+            }
             try self.put(w, 4, 13, input_width, self.query[start..self.len], p.base);
             const show_matches = split_at != 0 or self.focus != .entry;
             if (show_matches) {
@@ -278,7 +287,11 @@ const State = struct {
             }
             if (split_at != 0) for (5..sz.rows - 1) |row| try self.put(w, row, split_at, 1, "│", p.muted);
             if (split_at != 0 or self.focus == .entry) {
-                try self.put(w, 6, content_col, content_width, if (self.source) "EXACT SOURCE  /  DISPLAY-SAFE" else "READING  /  RENDERED WIKITEXT", if (self.focus == .entry) p.accent else p.muted);
+                try self.put(w, 6, content_col, content_width, if (self.source) "SOURCE" else "READING", if (self.focus == .entry) p.accent else p.muted);
+                if (self.count() != 0 and content_width > 12) {
+                    const title = try self.db.titleAt(self.range.start + self.selected);
+                    try self.put(w, 6, content_col + 10, content_width - 10, title, p.muted);
+                }
                 for (0..self.bodyHeight()) |i| {
                     if (self.scroll + i >= self.rows.len) break;
                     const row = self.rows[self.scroll + i];
@@ -288,10 +301,16 @@ const State = struct {
                     try w.writeAll(p.base);
                 }
             }
-            try self.put(w, sz.rows - 1, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "{s} focus  |  match {d}/{d}  |  lines {d}-{d}/{d}", .{ @tagName(self.focus), if (self.count() == 0) @as(usize, 0) else self.selected + 1, self.count(), self.scroll + 1, @min(self.scroll + self.bodyHeight(), self.rows.len), self.rows.len }), p.muted);
-            try self.put(w, sz.rows, 3, sz.cols - 4, "/ search  Tab focus  ↑↓ move  PgDn/PgUp  s source  d details  t theme  ? help  q quit", p.muted);
+            const first_line = if (self.rows.len == 0) @as(usize, 0) else self.scroll + 1;
+            try self.put(w, sz.rows - 1, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "{s}  ·  match {d}/{d}  ·  lines {d}-{d}/{d}", .{ @tagName(self.focus), if (self.count() == 0) @as(usize, 0) else self.selected + 1, self.count(), first_line, @min(self.scroll + self.bodyHeight(), self.rows.len), self.rows.len }), p.muted);
+            const hints: []const u8 = switch (self.focus) {
+                .search => "type to search  ↑↓ results  Enter read  Tab switch  Ctrl-U clear  Ctrl-C quit",
+                .matches => "/ search  ↑↓ select  Enter read  PgUp/PgDn page  ? help  q quit",
+                .entry => "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  s source  d details  ? help  q quit",
+            };
+            try self.put(w, sz.rows, 3, sz.cols - 4, hints, p.muted);
             if (self.help) {
-                const help = [_][]const u8{ "KEYBOARD", "Tab: search > matches > reading", "Enter: read selected word    /: search", "Arrows or j/k: select or scroll", "PgUp/PgDn, Home/End: page or jump", "Search: UTF-8 editing, Left/Right, Delete", "Ctrl-U: clear query    Ctrl-C/D: quit", "s: exact source    t: terminal/dark/light", "q: quit outside search    any key: close", "Local wikitext renderer. s shows raw source." };
+                const help = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "s toggles exact source; d toggles full details", "t cycles terminal/dark/light; q quits outside Search", "Any key closes this help" };
                 for (help, 0..) |line, i| {
                     if (6 + i >= sz.rows - 1) break;
                     try w.print("\x1b[{d};1H{s}\x1b[2K", .{ 6 + i, p.base });
@@ -381,6 +400,23 @@ test "terminal query editing is bounded and UTF8-aware" {
     try std.testing.expectEqualStrings("xaf", state.query[0..state.len]);
     _ = try state.key(.{ .key = .clear });
     try std.testing.expectEqual(@as(usize, 0), state.len);
+    term.initLocale();
+    try state.insert("é👩‍💻");
+    _ = try state.key(.{ .key = .backspace });
+    try std.testing.expectEqualStrings("é", state.query[0..state.len]);
+    _ = try state.key(.{ .key = .backspace });
+    try std.testing.expectEqual(@as(usize, 0), state.len);
+    try state.insert("c");
+    try std.testing.expectEqual(Focus.search, state.focus);
+    _ = try state.key(.{ .key = .down });
+    try std.testing.expectEqual(Focus.matches, state.focus);
+    _ = try state.key(.{ .key = .enter });
+    try std.testing.expectEqual(Focus.entry, state.focus);
+    _ = try state.key(.{ .key = .escape });
+    try std.testing.expectEqual(Focus.matches, state.focus);
+    _ = try state.key(.{ .key = .escape });
+    try std.testing.expectEqual(Focus.search, state.focus);
+    _ = try state.key(.{ .key = .clear });
     _ = try state.key(.{ .key = .tab });
     try std.testing.expectEqual(Focus.matches, state.focus);
     try std.testing.expect(!try state.key(.{ .key = .text, .bytes = .{ 'q', 0, 0, 0 }, .len = 1 }));

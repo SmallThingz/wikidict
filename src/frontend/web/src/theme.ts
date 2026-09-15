@@ -13,9 +13,9 @@ export function useTheme(root: () => HTMLElement, inherited: boolean) {
     const settings = appearance();
     const dark = settings.mode === 'dark' || settings.mode === 'cool' || (settings.mode === 'system' && media.matches);
     const cool = settings.mode === 'cool';
-    const bg = cool ? '#303237' : dark ? '#121213' : '#ffffff';
-    const fg = cool ? '#b0b4bd' : dark ? '#f8f8f8' : '#121213';
-    const accent = settings.accent || (cool ? '#7c9fc4' : dark ? '#60a5fa' : '#2563eb');
+    const bg = cool ? '#25282e' : dark ? '#111214' : '#fbfbfa';
+    const fg = cool ? '#d6d9df' : dark ? '#f4f4f5' : '#1d1d1f';
+    const accent = settings.accent || (cool ? '#8ab4e6' : dark ? '#7aa7ff' : '#315efb');
     const style = root().style;
     style.setProperty('--site-bg', bg); style.setProperty('--site-fg', fg); style.setProperty('--site-accent', accent);
     style.setProperty('--site-font', settings.font === 'mono' ? 'ui-monospace,SFMono-Regular,Menlo,monospace' : 'system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif');

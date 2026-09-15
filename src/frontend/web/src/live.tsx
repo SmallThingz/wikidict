@@ -3,6 +3,7 @@ import { DictionaryApp } from './App';
 import { isResults } from './validate';
 import { emptyResults, type LiveOptions, type Results, type Navigation } from './types';
 const kinds = new Set(['language', 'thesaurus', 'citations', 'reconstruction', 'rhymes', 'sign_gloss']);
+const locationFragment = () => { const raw = location.hash.startsWith('#') ? location.hash.slice(1) : ''; try { return decodeURIComponent(raw); } catch { return raw; } };
 export function LiveDictionary(props: { language: string; kind: string }) {
   const params = new URLSearchParams(location.search);
   const [query, setQuery] = createSignal(params.get('q') || '');
@@ -43,15 +44,19 @@ export function LiveDictionary(props: { language: string; kind: string }) {
     finally { if (version === searchVersion) setSearching(false); }
   }
   async function open(title: string, lang = language(), category = kind(), fragment = '', history = true) {
-    const resolvedLanguage = languages().find(item => item.code === lang || item.heading === lang)?.heading || lang;
+    const resolvedLanguage = languages().find(item => item.code.toLowerCase() === lang.toLowerCase() || item.heading === lang)?.heading || lang;
     let name = title;
-    const namespaces: Record<string, string> = { Thesaurus: 'thesaurus', Citations: 'citations', Reconstruction: 'reconstruction', Rhymes: 'rhymes', 'Sign gloss': 'sign_gloss' };
+    const namespaces: Record<string, string> = { thesaurus: 'thesaurus', citations: 'citations', reconstruction: 'reconstruction', rhymes: 'rhymes', 'sign gloss': 'sign_gloss' };
     const colon = title.indexOf(':');
-    if (colon > 0 && Object.hasOwn(namespaces, title.slice(0, colon))) { category = namespaces[title.slice(0, colon)]; name = title.slice(colon + 1); }
+    const prefix = colon > 0 ? title.slice(0, colon).toLowerCase() : '';
+    if (colon > 0 && Object.hasOwn(namespaces, prefix)) { category = namespaces[prefix]; name = title.slice(colon + 1); }
     setLanguage(resolvedLanguage); setKind(category); setQuery(name);
     entryController?.abort(); const controller = new AbortController(); entryController = controller;
     const version = ++entryVersion; setLoading(true); setError('');
-    if (history) window.history.pushState(null, '', `/?${new URLSearchParams({ q: name, language: resolvedLanguage, kind: category })}`);
+    if (history) {
+      const hash = fragment ? `#${encodeURIComponent(fragment.replaceAll(' ', '_'))}` : '';
+      window.history.pushState(null, '', `/?${new URLSearchParams({ q: name, language: resolvedLanguage, kind: category })}${hash}`);
+    }
     document.title = `${name} · Dict`;
     const url = endpoint('entry', name, resolvedLanguage, category);
     try {
@@ -64,13 +69,20 @@ export function LiveDictionary(props: { language: string; kind: string }) {
         cache.set(url, result); cacheBytes += result.bytes;
       }
       if (fragment) queueMicrotask(() => {
-        const section = [...document.querySelectorAll<HTMLElement>('[data-section]')].find(element => element.dataset.section === fragment);
+        const heading = fragment.replaceAll('_', ' ').trim();
+        const section = [...document.querySelectorAll<HTMLElement>('[data-section]')].find(element => element.dataset.section === heading);
         if (section instanceof HTMLDetailsElement) section.open = true;
         section?.scrollIntoView({ block: 'start' });
       });
     } catch (e) { if (!controller.signal.aborted && version === entryVersion) setError(e instanceof Error ? e.message : 'Entry could not be loaded.'); }
     finally { if (version === entryVersion) setLoading(false); }
   }
+  const home = () => {
+    entryController?.abort(); ++entryVersion; searchController?.abort(); ++searchVersion;
+    setLoading(false); setSearching(false); setError(''); setMatches([]); setMore(false); setQuery(''); setData(emptyResults);
+    window.history.pushState(null, '', '/');
+    document.title = 'Dict · A local dictionary';
+  };
   createEffect(() => {
     query(); language(); kind();
     // Clear prior suggestions immediately; cancelled responses cannot replace new input.
@@ -84,9 +96,12 @@ export function LiveDictionary(props: { language: string; kind: string }) {
       if (!value || typeof value !== 'object' || !('languages' in value) || !Array.isArray(value.languages)
           || !value.languages.every((item: unknown) => !!item && typeof item === 'object' && 'heading' in item && typeof item.heading === 'string' && 'code' in item && typeof item.code === 'string')) throw new Error('Invalid language catalog.');
       setLanguages(value.languages);
+      const current = language();
+      const canonical = value.languages.find((item: { heading: string; code: string }) => item.code.toLowerCase() === current.toLowerCase() || item.heading === current)?.heading;
+      if (canonical && canonical !== current) setLanguage(canonical);
     }).catch(e => { if (!catalog.signal.aborted) setError(e instanceof Error ? e.message : 'Language catalog unavailable.'); });
-    const pop = () => { const p = new URLSearchParams(location.search); const q = p.get('q') || ''; if (q) void open(q, p.get('language') || props.language, p.get('kind') || props.kind, '', false); else { entryController?.abort(); ++entryVersion; setLoading(false); setQuery(''); setData(emptyResults); } };
-    window.addEventListener('popstate', pop); if (query()) void open(query(), language(), kind(), '', false);
+    const pop = () => { const p = new URLSearchParams(location.search); const q = p.get('q') || ''; const requestedKind = p.get('kind') || props.kind; const category = kinds.has(requestedKind) ? requestedKind : props.kind; if (q) void open(q, p.get('language') || props.language, category, locationFragment(), false); else { entryController?.abort(); ++entryVersion; searchController?.abort(); ++searchVersion; setLoading(false); setSearching(false); setError(''); setMatches([]); setMore(false); setQuery(''); setData(emptyResults); document.title = 'Dict · A local dictionary'; } };
+    window.addEventListener('popstate', pop); if (query()) void open(query(), language(), kind(), locationFragment(), false);
     onCleanup(() => { catalog.abort(); searchController?.abort(); entryController?.abort(); window.removeEventListener('popstate', pop); });
   });
   const live: LiveOptions = {
@@ -96,7 +111,7 @@ export function LiveDictionary(props: { language: string; kind: string }) {
     onQuery: value => { setQuery(value); setError(''); },
     onLanguage: value => { entryController?.abort(); ++entryVersion; setLoading(false); setLanguage(value); setData(emptyResults); },
     onKind: value => { entryController?.abort(); ++entryVersion; setLoading(false); setKind(value); setData(emptyResults); },
-    onSelect: title => { void open(title); }, onMore: () => { void search(true); },
+    onSelect: title => { void open(title); }, onMore: () => { void search(true); }, onHome: home,
   };
   const navigate = (target: Navigation) => { void open(target.title, target.language || language(), target.kind, target.fragment); };
   return <DictionaryApp data={data()} options={{ live, onNavigate: navigate }} />;

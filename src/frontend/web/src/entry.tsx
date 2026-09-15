@@ -96,7 +96,7 @@ export function Reading(props: Props) {
         <For each={props.entry.organization!.other_sections.filter(index => !pronunciation().some(item => item.index === index))}>{index => <Show when={props.entry.sections[index].level > 2 || props.entry.sections[index].blocks.some(b => b.kind !== 'blank')}><Supplement index={index} context={props}/></Show>}</For>
       </section>
     </Show>
-    <Show when={props.entry.references?.length}><details class="dict-section dict-references"><summary>Source references <span>{props.entry.references!.length}</span></summary><ol><For each={props.entry.references}>{ref => <li id={`${props.prefix}-reference-${ref.number}`}><Spans spans={ref.spans} context={props}/></li>}</For></ol></details></Show>
+    <Show when={props.entry.references?.length}><details class="dict-section dict-references"><summary>Source references <span>{props.entry.references!.length}</span></summary><ol><For each={props.entry.references}>{ref => <li id={`${props.prefix}-reference-${ref.number}`}><span class="dict-reference-number">{ref.group ? `${ref.group} ${ref.group_number ?? ref.number}` : ref.group_number ?? ref.number}</span><Spans spans={ref.spans} context={props}/></li>}</For></ol></details></Show>
   </div>;
 }
 
@@ -119,7 +119,7 @@ function Pronunciation(props: { index: number; language: string; context: Props 
 
 function MediaGallery(props: { entry: Entry }) {
   const assets = () => props.entry.media ?? [];
-  const external = (url: string | null) => url && /^https:\/\//.test(url) ? url : undefined;
+  const external = (url: string | null) => url && /^https:\/\/[^\x00-\x20\x7f]+$/i.test(url) ? url : undefined;
   return <Show when={assets().length}><details class="dict-media"><summary>Images &amp; audio <small>{assets().filter(m => m.data_url).length} embedded / {assets().length} referenced</small></summary>
     <div class="dict-media-grid"><For each={assets()}>{item => <figure>
       <Show when={item.data_url} fallback={<p class="dict-media-unavailable">Media not included in this export.</p>}>

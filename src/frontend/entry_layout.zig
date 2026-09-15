@@ -38,7 +38,10 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
 fn formOf(a: A, block: wiki.Block) !?Form {
     var it: ir.InlineIterator = .{ .input = block.text };
     while (it.next()) |span| if (span.kind == .template) {
-        const t = try syntax.Template.parse(a, span.text);
+        const t = syntax.Template.parse(a, span.text) catch |err| switch (err) {
+            error.RenderLimit => continue,
+            else => return err,
+        };
         const relation: []const u8 = if (std.ascii.eqlIgnoreCase(t.name, "plural of")) "plural" else if (std.ascii.eqlIgnoreCase(t.name, "past participle of")) "past participle" else if (std.ascii.eqlIgnoreCase(t.name, "present participle of")) "present participle" else if (std.ascii.eqlIgnoreCase(t.name, "past of") or std.ascii.eqlIgnoreCase(t.name, "simple past of")) "past tense" else if ((std.ascii.eqlIgnoreCase(t.name, "infl of") or std.ascii.eqlIgnoreCase(t.name, "inflection of")) and std.mem.eql(u8, t.get(4), "s-verb-form") and t.last() == 4) "third-person singular present" else continue;
         if (t.get(2).len != 0) return .{ .relation = relation, .target = t.get(2), .language = t.get(1) };
     };
@@ -171,4 +174,15 @@ test "lexemes keep homonyms and nested sense evidence separate without losing bl
     try std.testing.expectEqualSlices(usize, &.{3}, noun.related_sections);
     try std.testing.expectEqual(@as(?usize, 5), result.lexemes[2].etymology);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 5, 7 }, result.other_sections);
+}
+
+test "oversized definition template cannot fail lexeme analysis after renderer fallback" {
+    const a = std.testing.allocator;
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(a);
+    try source.appendSlice(a, "{{plural of|en|cat");
+    for (0..16_385) |_| try source.appendSlice(a, "|x");
+    try source.appendSlice(a, "}}");
+    const block_value: wiki.Block = .{ .kind = .definition, .text = source.items, .spans = &.{}, .list_path = "#" };
+    try std.testing.expect((try formOf(a, block_value)) == null);
 }

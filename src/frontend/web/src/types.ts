@@ -6,7 +6,7 @@ export type Cell = { spans: Span[]; header: boolean; colspan: number; rowspan: n
 export type Table = { caption: Span[]; rows: { cells: Cell[] }[] };
 export type Block = { kind: string; depth: number; text: string; spans: Span[]; feature: Feature | null; list_path?: string; number?: string; level?: number; table?: Table | null };
 export type Section = { level: number; title: string; blocks: Block[]; deferred?: 'etymology' | 'translations' | 'relations' | 'references' | 'quotations' | null };
-export type Reference = { number: number; name: string; body: string; spans: Span[] };
+export type Reference = { number: number; group_number?: number; name: string; group?: string; body: string; spans: Span[] };
 export type Media = { file:string;kind:'image'|'audio';caption:string;data_url:string|null;author:string|null;license:string|null;license_url:string|null;source_url:string|null;license_text?:string|null };
 export type Entry = {
   media?: Media[];
@@ -37,5 +37,5 @@ export type LiveOptions = {
  query: string; language: string; kind: string; languages: {heading: string; code: string}[];
  matches: {title: string}[]; total: number; hasMore: boolean; searching: boolean; loading: boolean; error: string;
  onQuery: (value:string)=>void; onLanguage:(value:string)=>void; onKind:(value:string)=>void;
- onSelect:(title:string)=>void; onMore:()=>void;
+ onSelect:(title:string)=>void; onMore:()=>void; onHome:()=>void;
 };

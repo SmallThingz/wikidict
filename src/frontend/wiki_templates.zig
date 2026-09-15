@@ -49,14 +49,32 @@ fn termLink(p: anytype, label_value: []const u8, target_value: []const u8, style
     if (pos < target_value.len) try p.inlineText(target_value[pos..], style, depth + 1);
 }
 fn join(p: anytype, t: Template, start: usize, sep: []const u8, style: anytype, depth: usize, links: bool) Error!void {
+    const Positioned = struct { position: usize, source_index: usize };
+    const ordered = try p.a.alloc(Positioned, t.params.len);
+    defer p.a.free(ordered);
+    var count: usize = 0;
+    for (t.params, 0..) |param, source_index| {
+        if (param.position < start) continue;
+        ordered[count] = .{ .position = param.position, .source_index = source_index };
+        count += 1;
+    }
+    std.mem.sort(Positioned, ordered[0..count], {}, struct {
+        fn lessThan(_: void, lhs: Positioned, rhs: Positioned) bool {
+            return lhs.position < rhs.position or (lhs.position == rhs.position and lhs.source_index < rhs.source_index);
+        }
+    }.lessThan);
     var written = false;
-    if (t.last() < start) return;
-    for (start..t.last() + 1) |i| {
-        const value = t.get(i);
-        if (value.len == 0) continue;
-        if (written) try p.text(sep, style);
-        if (links) try termLink(p, value, value, style, depth + 1) else try p.inlineText(value, style, depth + 1);
-        written = true;
+    var i: usize = 0;
+    while (i < count) {
+        var end = i + 1;
+        while (end < count and ordered[end].position == ordered[i].position) : (end += 1) {}
+        const value = t.params[ordered[end - 1].source_index].value;
+        if (value.len != 0) {
+            if (written) try p.text(sep, style);
+            if (links) try termLink(p, value, value, style, depth + 1) else try p.inlineText(value, style, depth + 1);
+            written = true;
+        }
+        i = end;
     }
 }
 fn label(p: anytype, value: []const u8, style: anytype, depth: usize) Error!void {
