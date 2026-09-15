@@ -247,3 +247,23 @@ test "unknown templates are rejected at bundle time" {
     const source = "==English==\n===Noun===\n# {{definitely-unknown-template|x}}\n";
     try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source));
 }
+
+
+test "partially renderable unsupported citation templates still fail publication" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==English==\n===Noun===\n# {{RQ:Unknown Work|page=17|passage=The '''[[cat]]''' sleeps.}}\n";
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source));
+}
+
+test "template parse limits fail publication instead of preserving executable syntax" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source: std.ArrayList(u8) = .empty;
+    try source.appendSlice(a, "==English==\n===Noun===\n# {{oversized");
+    for (0..16_385) |_| try source.appendSlice(a, "|x");
+    try source.appendSlice(a, "}} tail\n");
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source.items));
+}
