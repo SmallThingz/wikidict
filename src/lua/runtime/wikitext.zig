@@ -333,15 +333,59 @@ pub const Expander = struct {
         return text;
     }
 
+    fn isTitleMagicName(raw: []const u8) bool {
+        inline for (&.{
+            "PAGENAME",     "FULLPAGENAME", "NAMESPACE",       "NAMESPACENUMBER",
+            "BASEPAGENAME", "ROOTPAGENAME", "SUBPAGENAME",     "SUBJECTSPACE",
+            "ARTICLESPACE", "TALKSPACE",    "SUBJECTPAGENAME", "ARTICLEPAGENAME",
+            "TALKPAGENAME",
+        }) |name| if (std.ascii.eqlIgnoreCase(raw, name)) return true;
+        return false;
+    }
+
+    fn namespacedPageAlloc(self: *Expander, spec: namespace_lib.Spec, text: []const u8) ![]const u8 {
+        if (spec.id == 0) return text;
+        return std.fmt.allocPrint(self.runtime.allocator, "{s}:{s}", .{ spec.name, text });
+    }
+
+    fn titleMagic(self: *Expander, raw_name: []const u8, raw_page: ?[]const u8) !?[]const u8 {
+        const name = std.mem.trim(u8, raw_name, " \t\r\n");
+        if (!isTitleMagicName(name)) return null;
+        const requested = if (raw_page) |value| blk: {
+            const trimmed = std.mem.trim(u8, value, " \t\r\n");
+            break :blk if (trimmed.len == 0) self.host.current_title else trimmed;
+        } else self.host.current_title;
+        const canonical_with_fragment = try namespace_lib.canonicalizeTitle(self.runtime.allocator, requested);
+        const page = if (std.mem.indexOfScalar(u8, canonical_with_fragment, '#')) |hash|
+            canonical_with_fragment[0..hash]
+        else
+            canonical_with_fragment;
+        const ns = namespace_lib.ofTitle(page);
+        if (std.ascii.eqlIgnoreCase(name, "PAGENAME")) return ns.text;
+        if (std.ascii.eqlIgnoreCase(name, "FULLPAGENAME")) return page;
+        if (std.ascii.eqlIgnoreCase(name, "NAMESPACE")) return ns.name;
+        if (std.ascii.eqlIgnoreCase(name, "NAMESPACENUMBER")) return self.formatMagic("{d}", .{ns.id});
+        if (std.ascii.eqlIgnoreCase(name, "BASEPAGENAME"))
+            return if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
+        if (std.ascii.eqlIgnoreCase(name, "ROOTPAGENAME"))
+            return if (std.mem.indexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
+        if (std.ascii.eqlIgnoreCase(name, "SUBPAGENAME"))
+            return if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[slash + 1 ..] else ns.text;
+
+        const subject = namespace_lib.subjectSpec(ns.id) orelse return "";
+        if (std.ascii.eqlIgnoreCase(name, "SUBJECTSPACE") or std.ascii.eqlIgnoreCase(name, "ARTICLESPACE"))
+            return subject.name;
+        if (std.ascii.eqlIgnoreCase(name, "SUBJECTPAGENAME") or std.ascii.eqlIgnoreCase(name, "ARTICLEPAGENAME"))
+            return @as(?[]const u8, try self.namespacedPageAlloc(subject, ns.text));
+        const talk = namespace_lib.talkSpec(ns.id) orelse return "";
+        if (std.ascii.eqlIgnoreCase(name, "TALKSPACE")) return talk.name;
+        if (std.ascii.eqlIgnoreCase(name, "TALKPAGENAME")) return @as(?[]const u8, try self.namespacedPageAlloc(talk, ns.text));
+        unreachable;
+    }
+
     fn magicWord(self: *Expander, raw: []const u8) !?[]const u8 {
         const head = std.mem.trim(u8, raw, " \t\r\n");
-        const page = self.host.current_title;
-        const ns = namespace_lib.ofTitle(page);
-        if (std.ascii.eqlIgnoreCase(head, "PAGENAME")) return ns.text;
-        if (std.ascii.eqlIgnoreCase(head, "FULLPAGENAME")) return page;
-        if (std.ascii.eqlIgnoreCase(head, "NAMESPACE")) return ns.name;
-        if (std.ascii.eqlIgnoreCase(head, "BASEPAGENAME")) return if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
-        if (std.ascii.eqlIgnoreCase(head, "SUBPAGENAME")) return if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[slash + 1 ..] else ns.text;
+        if (try self.titleMagic(head, null)) |value| return value;
         if (std.mem.eql(u8, head, "!")) return "|";
         if (std.mem.eql(u8, head, "!!")) return "||";
         if (std.mem.eql(u8, head, "=")) return "=";
@@ -689,15 +733,15 @@ pub const Expander = struct {
         else if (raw_head.len >= 6 and std.ascii.eqlIgnoreCase(raw_head[0..6], "subst:"))
             raw_head = std.mem.trim(u8, raw_head[6..], " \t\r\n");
         if (raw_head.len == 0) return error.MalformedWikitext;
-        if (try self.callSymbol(raw_head, .template)) |symbol| {
-            const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
-            return self.expandTemplateBySymbol(symbol, args, depth + 1);
-        }
         if (try self.magicWord(raw_head)) |value| return value;
 
         if (preprocess.findTopDelimiter(raw_head, ':')) |colon| {
             const name = std.mem.trim(u8, raw_head[0..colon], " \t\r\n");
             const first = raw_head[colon + 1 ..];
+            if (isTitleMagicName(name)) {
+                const page = try self.expandWikitext(first, params, host_title, depth + 1);
+                return (try self.titleMagic(name, page)) orelse unreachable;
+            }
             if (std.ascii.eqlIgnoreCase(name, "uc")) return self.expandCaseParser(first, params, host_title, depth + 1, true, false);
             if (std.ascii.eqlIgnoreCase(name, "lc")) return self.expandCaseParser(first, params, host_title, depth + 1, false, false);
             if (std.ascii.eqlIgnoreCase(name, "ucfirst")) return self.expandCaseParser(first, params, host_title, depth + 1, true, true);
@@ -730,6 +774,10 @@ pub const Expander = struct {
             if (name.len != 0 and name[0] == '#') return error.UnsupportedParserFunction;
         }
         if (raw_head[0] == '#') return error.UnsupportedParserFunction;
+        if (try self.callSymbol(raw_head, .template)) |symbol| {
+            const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
+            return self.expandTemplateBySymbol(symbol, args, depth + 1);
+        }
         const title = try self.expandWikitext(raw_head, params, host_title, depth + 1);
         const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
         return self.expandTemplateByName(title, args, depth + 1);
@@ -930,7 +978,7 @@ const TestProvider = struct {
     fn resolveCallSymbol(_: ?*anyopaque, _: *rt.Context, raw: []const u8, kind: CallSymbolKind) !?CallSymbol {
         const value = std.mem.trim(u8, raw, " \t\r\n");
         return switch (kind) {
-            .template => if (std.mem.eql(u8, value, "@template")) .{ .id = 3, .text = "Hello" } else null,
+            .template => if (std.mem.eql(u8, value, "@template") or std.mem.eql(u8, value, "PAGENAME")) .{ .id = 3, .text = "Hello" } else null,
             .module => if (std.mem.eql(u8, value, "@module")) .{ .id = 1, .text = "Test", .module_id = 0 } else null,
             .function => if (std.mem.eql(u8, value, "@function")) .{ .id = 2, .text = "run" } else null,
         };
@@ -988,10 +1036,24 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("<nowiki>{{Hello|Bob|1}}</nowiki>|Hi A N", protected);
     try std.testing.expect(runtime.current_frame == null);
     var symbolic_expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .resolve_call_symbol = TestProvider.resolveCallSymbol, .get_template_symbol = TestProvider.getTemplateSymbol } };
-    const symbolic = try symbolic_expander.expandFragment("Page", "{{@template|Bob|1}}|{{#invoke:@module|@function|x=symbolic}}", 1_670_803_200);
-    try std.testing.expectEqualStrings("Hi Bob Y|symbolic", symbolic);
+    const symbolic = try symbolic_expander.expandFragment("Page", "{{PAGENAME}}|{{@template|Bob|1}}|{{#invoke:@module|@function|x=symbolic}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Page|Hi Bob Y|symbolic", symbolic);
     try std.testing.expectError(error.AotCallFailed, expander.expandFragment("Page", "{{#invoke:Test|fail}}", 1_670_803_200));
     try std.testing.expectEqualStrings("NotCallable", runtime.aotErrorName().?);
+}
+
+test "bundle title magic words resolve subject talk and parameterized namespaces" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    const source = "{{PAGENAME}}|{{FULLPAGENAME}}|{{NAMESPACE}}|{{NAMESPACENUMBER}}|{{BASEPAGENAME}}|{{ROOTPAGENAME}}|{{SUBPAGENAME}}|{{SUBJECTSPACE}}|{{TALKSPACE}}|{{SUBJECTPAGENAME}}|{{TALKPAGENAME}}|{{SUBJECTSPACE:Wiktionary talk:Foo}}|{{TALKSPACE:WT:Foo}}|{{TALKPAGENAME:Template:Foo}}|{{SUBJECTPAGENAME:Template talk:Foo}}";
+    const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
+    try std.testing.expectEqualStrings("Page/Sub|Appendix:Page/Sub|Appendix|100|Page|Page|Sub|Appendix|Appendix talk|Appendix:Page/Sub|Appendix talk:Page/Sub|Wiktionary|Wiktionary talk|Template talk:Foo|Template:Foo", got);
 }
 
 test "bundle parser functions cover corpus time sub and iferror forms" {

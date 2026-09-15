@@ -89,6 +89,20 @@ pub fn byName(name: []const u8) ?Spec {
     return null;
 }
 
+pub fn subjectSpec(id: i32) ?Spec {
+    const spec = byId(id) orelse return null;
+    if (id > 0 and @mod(id, 2) == 1) return byId(id - 1) orelse spec;
+    return spec;
+}
+
+pub fn talkSpec(id: i32) ?Spec {
+    if (id < 0) return null;
+    const spec = byId(id) orelse return null;
+    if (id == 0) return byId(1);
+    if (@mod(id, 2) == 1) return spec;
+    return byId(id + 1);
+}
+
 pub fn ofTitle(title: []const u8) struct { id: i32, name: []const u8, text: []const u8 } {
     if (std.mem.indexOfScalar(u8, title, ':')) |colon| {
         if (byName(title[0..colon])) |spec| return .{ .id = spec.id, .name = spec.name, .text = title[colon + 1 ..] };
@@ -163,6 +177,11 @@ test "Wiktionary namespace lookup preserves canonical names and aliases" {
     try std.testing.expectEqual(@as(i32, 4), byName("WT").?.id);
     try std.testing.expectEqual(@as(i32, 4), byName("Project").?.id);
     try std.testing.expectEqual(@as(i32, 828), byName("MOD").?.id);
+    try std.testing.expectEqual(@as(i32, 4), subjectSpec(5).?.id);
+    try std.testing.expectEqual(@as(i32, 5), talkSpec(4).?.id);
+    try std.testing.expectEqual(@as(i32, 1), talkSpec(0).?.id);
+    try std.testing.expect(talkSpec(-1) == null);
+    try std.testing.expect(talkSpec(2600) == null);
     const split = ofTitle("MOD:example/sub");
     try std.testing.expectEqual(@as(i32, 828), split.id);
     try std.testing.expectEqualStrings("Module", split.name);
