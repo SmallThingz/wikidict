@@ -24,6 +24,7 @@ pub const PageHeader = struct {
     title: []const u8,
     source_offset: u64,
     source_len: usize,
+    redirect: ?[]const u8 = null,
 };
 
 const Capture = struct {
@@ -31,6 +32,7 @@ const Capture = struct {
     title_raw: ?[]const u8 = null,
     ns_raw: ?[]const u8 = null,
     text_raw: ?[]const u8 = null,
+    redirect_raw: ?[]const u8 = null,
 
     fn onNode(self: *@This(), node: StreamNode) bool {
         if (node.kind != .element) return true;
@@ -40,6 +42,8 @@ const Capture = struct {
             self.title_raw = node.leadingTextRaw();
         } else if (node.depth == 1 and std.mem.eql(u8, name, "ns")) {
             self.ns_raw = node.leadingTextRaw();
+        } else if (node.depth == 1 and std.mem.eql(u8, name, "redirect")) {
+            self.redirect_raw = node.getAttributeValueRaw("title");
         } else if (node.depth == 2 and std.mem.eql(u8, self.names_by_depth[1], "revision") and std.mem.eql(u8, name, "text")) {
             self.text_raw = node.leadingTextRaw();
         }
@@ -129,6 +133,7 @@ pub const HeaderIterator = struct {
                 .title = try xml_decode.decodeSinglePassAlloc(allocator, title_raw),
                 .source_offset = source_offset,
                 .source_len = text_raw.len,
+                .redirect = if (capture.redirect_raw) |raw| try xml_decode.decodeSinglePassAlloc(allocator, raw) else null,
             };
         }
         return null;
@@ -165,7 +170,10 @@ pub const Iterator = struct {
 };
 
 test "dump adapter exposes decoded wikitext pages" {
-    const xml = "<mediawiki><page><title>cat</title><ns>0</ns><revision><text>==English==&amp;x</text></revision></page></mediawiki>";
+    const xml = "<mediawiki>" ++
+        "<page><title>cat</title><ns>0</ns><revision><text>==English==&amp;x</text></revision></page>" ++
+        "<page><title>kitty</title><ns>0</ns><redirect title=\"cat\"/><revision><text>#REDIRECT [[cat]]</text></revision></page>" ++
+        "</mediawiki>";
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/dump.xml", .{tmp.sub_path});
@@ -186,6 +194,12 @@ test "dump adapter exposes decoded wikitext pages" {
     defer std.testing.allocator.free(header.title);
     try std.testing.expectEqual(@as(u32, 0), header.ns);
     try std.testing.expectEqualStrings("cat", header.title);
+    try std.testing.expect(header.redirect == null);
     const source_start: usize = @intCast(header.source_offset);
     try std.testing.expectEqualStrings("==English==&amp;x", dump.bytes[source_start .. source_start + header.source_len]);
+    const redirect = (try headers.next(std.testing.allocator)).?;
+    defer std.testing.allocator.free(redirect.title);
+    defer std.testing.allocator.free(redirect.redirect.?);
+    try std.testing.expectEqualStrings("kitty", redirect.title);
+    try std.testing.expectEqualStrings("cat", redirect.redirect.?);
 }

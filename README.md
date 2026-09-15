@@ -52,7 +52,7 @@ zig build -Doptimize=ReleaseFast build-dictionary -- \
 
 The coordinated pipeline:
 
-1. extracts Scribunto modules, templates, and module redirects into a transient build directory;
+1. extracts Scribunto modules and module redirects into a transient build directory;
 2. indexes raw dump page ranges for page-sensitive MediaWiki/Scribunto title lookups, then parses the Lua corpus and emits LLVM IR directly from the AST;
 3. compiles module/support bitcode and ThinLTO-links a bounded-concurrency transient expander;
 4. expands every bundled page with its concrete title/frame context;
@@ -101,11 +101,10 @@ The Qt app includes native history, bookmarks, settings, random words, definitio
 
 ## Lua development
 
-Extract modules and templates directly:
+Extract Scribunto modules directly:
 
 ```sh
 zig build extract-modules -- data/wiktionary.xml data/runtime
-zig build extract-templates -- data/wiktionary.xml data/runtime
 ```
 
 Compile extracted modules directly to LLVM IR:

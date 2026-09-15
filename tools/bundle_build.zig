@@ -209,7 +209,6 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = expander_marker, .data = "building" });
 
     try stage(init.io, marker, "extract modules", &.{ paths.modules, dump, expander_root });
-    try stage(init.io, marker, "extract templates", &.{ paths.templates, dump, expander_root });
     try stage(init.io, marker, "extract module redirects", &.{ paths.redirects, dump, expander_root });
 
     const manifest = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });

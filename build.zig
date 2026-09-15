@@ -87,10 +87,6 @@ pub fn build(b: *std.Build) void {
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
     });
-    const template_extract_exe = addCliExecutable(b, "dict-template-extract", b.path("src/lua/template_extract_main.zig"), target, optimize, &.{
-        .{ .name = "zxml", .module = zxml_dep.module("zxml") },
-        .{ .name = "xml_decode", .module = shared_xml_decode_mod },
-    });
     const blob_build_exe = addCliExecutable(b, "dict-blob-build", b.path("tools/blob_build.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
@@ -107,7 +103,6 @@ pub fn build(b: *std.Build) void {
     const pipeline_paths = b.addOptions();
     pipeline_paths.addOptionPath("redirects", redirects_exe.getEmittedBin());
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
-    pipeline_paths.addOptionPath("templates", template_extract_exe.getEmittedBin());
     pipeline_paths.addOptionPath("llvm", llvm_exe.getEmittedBin());
     pipeline_paths.addOption([]const u8, "zig", b.graph.zig_exe);
     pipeline_paths.addOption([]const u8, "project_root", b.pathFromRoot("."));
@@ -160,9 +155,6 @@ pub fn build(b: *std.Build) void {
 
     const module_extract_run = addRunArtifactCommand(b, module_extract_exe, &.{}, b.args);
     addPublicRunStep(b, "extract-modules", "Extract Scribunto modules from a Wiktionary XML dump", module_extract_run, &.{});
-
-    const template_extract_run = addRunArtifactCommand(b, template_extract_exe, &.{}, b.args);
-    addPublicRunStep(b, "extract-templates", "Extract template pages from a Wiktionary XML dump", template_extract_run, &.{});
 
     const blob_verify_run = addRunArtifactCommand(b, blob_verify_exe, &.{}, b.args);
     addPublicRunStep(b, "verify-blobs", "Verify compiled blob framing and presentation records", blob_verify_run, &.{});

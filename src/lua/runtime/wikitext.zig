@@ -51,7 +51,7 @@ pub const Provider = struct {
     pub const Symbol = CallSymbol;
     ctx: ?*anyopaque = null,
     get: *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8,
-    get_template: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8 = null,
+    get_transclusion: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8 = null,
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
     resolve_call_symbol: ?*const fn (?*anyopaque, *rt.Context, []const u8, CallSymbolKind) anyerror!?CallSymbol = null,
@@ -211,25 +211,24 @@ pub const Expander = struct {
         };
     }
 
-    fn normalizeTemplateName(self: *Expander, raw: []const u8) ![]const u8 {
+    fn normalizeTransclusionName(self: *Expander, raw: []const u8) ![]const u8 {
         const name = std.mem.trim(u8, raw, " \t\r\n");
-        const has_prefix = name.len >= 9 and std.ascii.eqlIgnoreCase(name[0..9], "Template:");
-        const body = if (has_prefix) std.mem.trim(u8, name[9..], " \t\r\n") else name;
-        const out = try self.runtime.allocator.alloc(u8, 9 + body.len);
-        @memcpy(out[0..9], "Template:");
-        @memcpy(out[9..], body);
-        std.mem.replaceScalar(u8, out, '_', ' ');
-        return out;
-    }
+        if (name.len == 0) return error.MalformedWikitext;
 
-    fn normalizeTemplateNameBuf(raw: []const u8, buffer: []u8) ![]const u8 {
-        const name = std.mem.trim(u8, raw, " \t\r\n");
-        const has_prefix = name.len >= 9 and std.ascii.eqlIgnoreCase(name[0..9], "Template:");
-        const body = if (has_prefix) std.mem.trim(u8, name[9..], " \t\r\n") else name;
-        if (body.len > buffer.len -| 9) return error.TemplateNameTooLong;
-        @memcpy(buffer[0..9], "Template:");
-        @memcpy(buffer[9..][0..body.len], body);
-        const out = buffer[0 .. 9 + body.len];
+        if (name[0] == ':') {
+            const direct = std.mem.trim(u8, name[1..], " \t\r\n");
+            if (direct.len == 0) return error.MalformedWikitext;
+            return namespace_lib.canonicalizeTitle(self.runtime.allocator, direct);
+        }
+
+        if (std.mem.indexOfScalar(u8, name, ':')) |colon| {
+            if (namespace_lib.byName(name[0..colon]) != null)
+                return namespace_lib.canonicalizeTitle(self.runtime.allocator, name);
+        }
+
+        const out = try self.runtime.allocator.alloc(u8, "Template:".len + name.len);
+        @memcpy(out[0.."Template:".len], "Template:");
+        @memcpy(out["Template:".len..], name);
         std.mem.replaceScalar(u8, out, '_', ' ');
         return out;
     }
@@ -242,8 +241,8 @@ pub const Expander = struct {
 
     fn expandTemplateByName(self: *Expander, raw_name: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
-        const title = try self.normalizeTemplateName(raw_name);
-        const raw = if (self.provider.get_template) |get|
+        const title = try self.normalizeTransclusionName(raw_name);
+        const raw = if (self.provider.get_transclusion) |get|
             (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound
         else
             (try hostPageContent(self, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
@@ -252,11 +251,10 @@ pub const Expander = struct {
 
     fn expandTemplateBySymbol(self: *Expander, symbol: CallSymbol, args: *rt.Table, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
-        var title_buffer: [4096]u8 = undefined;
-        const title = try normalizeTemplateNameBuf(symbol.text, &title_buffer);
+        const title = try self.normalizeTransclusionName(symbol.text);
         const raw = if (self.provider.get_template_symbol) |get|
             (try get(self.provider.ctx, self.runtime.allocator, symbol.id)) orelse return error.TemplateNotFound
-        else if (self.provider.get_template) |get|
+        else if (self.provider.get_transclusion) |get|
             (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound
         else
             (try hostPageContent(self, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
@@ -824,6 +822,8 @@ const TestProvider = struct {
     fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
         if (std.mem.eql(u8, title, "Template:Hello")) return "Hi {{{1|friend}}} {{#if:{{{2|}}}|Y|N}}";
         if (std.mem.eql(u8, title, "Template:Only")) return "A<noinclude>X</noinclude>B<includeonly>C</includeonly>D";
+        if (std.mem.eql(u8, title, "Main page")) return "main-transclusion";
+        if (std.mem.eql(u8, title, "Wiktionary:Sandbox")) return "project-transclusion";
         return null;
     }
     fn exists(_: ?*anyopaque, title: []const u8) !bool {
@@ -883,9 +883,9 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try installTestHost(&runtime, 18, 23);
 
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
-    const source = "{{Hello|Bob|1}}|{{Only}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{#ifexist:WT:Sandbox|W|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
+    const source = "{{Hello|Bob|1}}|{{Only}}|{{:Main_page}}|{{WT:Sandbox}}|{{T:Hello|Z|1}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{#ifexist:WT:Sandbox|W|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
-    try std.testing.expectEqualStrings("Hi Bob Y|ABCD|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
+    try std.testing.expectEqualStrings("Hi Bob Y|ABCD|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
     const protected = try expander.expandFragment("Page", "<nowiki>{{Hello|Bob|1}}</nowiki>|{{Hello|A|}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{Hello|Bob|1}}</nowiki>|Hi A N", protected);
     try std.testing.expect(runtime.current_frame == null);

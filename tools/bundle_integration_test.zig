@@ -4,7 +4,8 @@ const expander = @import("bundle_expander.zig");
 
 const source =
     "==English==\n===Noun===\n{{forms-alias|mouse}}\n" ++
-    "# A small rodent.\n{{Template:Template:nested}}\n{{nested}}\n";
+    "# A small rodent.\n{{Template:Template:nested}}\n{{nested}}\n{{T:nested}}\n" ++
+    "{{:SharedAlias}}\n{{WT:Sandbox}}\n";
 const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
     \\local alias_name = 'Module:IntegrationFormsAlias'
@@ -12,6 +13,7 @@ const module_source =
     \\return { render_dictionary_fixture = function(frame)
     \\    assert(mw.title.new('Appendix:IntegrationFixture'):getContent() == 'a real auxiliary source page')
     \\    assert(string.find(mw.title.new('Template:forms-alias'):getContent(), '#REDIRECT', 1, true))
+    \\    assert(string.find(mw.title.new('SharedAlias'):getContent(), '#REDIRECT', 1, true))
     \\    assert(mw.title.new('rat').exists)
     \\    assert(string.find(mw.title.new('rat'):getContent(), 'Another rodent', 1, true))
     \\    assert(not mw.title.new('definitely-not-a-real-entry').exists)
@@ -39,6 +41,9 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
     const pages = [_]Page{
         .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
         .{ .title = "rat", .ns = 0, .id = 22, .body = "==English==\n===Noun===\n# Another rodent.\n" },
+        .{ .title = "Shared", .ns = 0, .id = 23, .body = "shared main transclusion" },
+        .{ .title = "SharedAlias", .ns = 0, .id = 24, .body = "#REDIRECT [[Shared]]", .redirect = "Shared" },
+        .{ .title = "Wiktionary:Sandbox", .ns = 4, .id = 25, .body = "project namespace transclusion" },
         .{ .title = "Appendix:IntegrationFixture", .ns = 100, .id = 21, .body = "a real auxiliary source page" },
         .{ .title = "Template:show-forms", .ns = 10, .id = 10, .body = template_source },
         .{ .title = "Template:forms-alias", .ns = 10, .id = 11, .body = "#REDIRECT [[Template:show-forms]]", .redirect = "Template:show-forms" },
@@ -158,6 +163,9 @@ pub fn main(init: std.process.Init) !void {
     const text = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--details" }, 0);
     try h.require(std.mem.indexOf(u8, text, "plural mice") != null, "Lua result is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Forms from native Lua") != null, "template result is baked into data");
+    try h.require(std.mem.indexOf(u8, text, "shared main transclusion") != null, "main-page redirect transclusion is baked into data");
+    try h.require(std.mem.indexOf(u8, text, "project namespace transclusion") != null, "namespace-alias transclusion is baked into data");
+    try h.require(std.mem.indexOf(u8, text, "ordinary namespace distinct") != null, "Template namespace alias resolves through corpus transclusion");
     try h.require(std.mem.indexOf(u8, text, "Documentation") == null, "noinclude does not leak");
     try h.require(std.mem.indexOf(u8, text, "#invoke") == null, "no executable invoke syntax survives");
 
