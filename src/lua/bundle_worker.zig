@@ -27,6 +27,7 @@ const Engine = struct {
     io: std.Io,
     requested_root: []const u8,
     requested_dump: []const u8,
+    requested_now_unix: i64,
     program: lua_program.Program,
     provider: pages.Provider,
 
@@ -39,7 +40,7 @@ const Engine = struct {
         return true;
     }
 
-    fn init(io: std.Io, a: A, requested_root: []const u8, requested_dump: []const u8) !Engine {
+    fn init(io: std.Io, a: A, requested_root: []const u8, requested_dump: []const u8, requested_now_unix: i64) !Engine {
         const marker = try std.fs.path.join(a, &.{ requested_root, ".incomplete" });
         if (try fileExists(io, marker)) return error.BundleAssetsIncomplete;
         const manifest = try std.fs.path.join(a, &.{ requested_root, "manifest.jsonl" });
@@ -52,6 +53,7 @@ const Engine = struct {
             .io = io,
             .requested_root = try a.dupe(u8, requested_root),
             .requested_dump = try a.dupe(u8, requested_dump),
+            .requested_now_unix = requested_now_unix,
             .program = program,
             .provider = provider,
         };
@@ -65,13 +67,13 @@ const Engine = struct {
     fn expand(self: *Engine, page_a: A, request: Request, stage: *[]const u8, detail: *?[]const u8) ![]const u8 {
         if (!std.mem.eql(u8, request.root, self.requested_root)) return error.BundleRootChanged;
         if (!std.mem.eql(u8, request.dump, self.requested_dump)) return error.BundleDumpChanged;
+        if (request.now_unix != self.requested_now_unix) return error.BundleTimeChanged;
         stage.* = "install";
         var ctx = try self.program.initContext(page_a);
         defer ctx.deinit();
         var expander = lua_program.initExpander(&ctx, self.provider.api());
         stage.* = "expand";
-        const now = std.Io.Clock.real.now(self.io).toSeconds();
-        return expander.expandFragment(request.title, request.source, now) catch |err| {
+        return expander.expandFragment(request.title, request.source, self.requested_now_unix) catch |err| {
             detail.* = try page_a.dupe(u8, ctx.aotErrorName() orelse @errorName(err));
             return err;
         };
@@ -127,7 +129,7 @@ pub fn run(io: std.Io, persistent: A) !void {
         };
         if (engine == null) {
             reply.stage = "assets";
-            engine = Engine.init(io, persistent, request.root, request.dump) catch |err| {
+            engine = Engine.init(io, persistent, request.root, request.dump, request.now_unix) catch |err| {
                 reply.error_name = @errorName(err);
                 try writeFrame(&output.interface, try std.json.Stringify.valueAlloc(page_a, reply, .{}));
                 continue;

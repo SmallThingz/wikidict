@@ -5,6 +5,7 @@ const L = std.os.linux;
 const Request = struct {
     root: []const u8,
     dump: []const u8,
+    now_unix: i64,
     title: []const u8,
     source: []const u8,
 };
@@ -23,11 +24,18 @@ pub const Worker = struct {
     root: []const u8,
     executable: []const u8,
     dump: []const u8,
+    now_unix: i64,
     timeout_ms: u32 = 60_000,
     child: ?std.process.Child = null,
 
     pub fn init(io: std.Io, root: []const u8, executable: []const u8, dump: []const u8) Worker {
-        return .{ .io = io, .root = root, .executable = executable, .dump = dump };
+        return .{
+            .io = io,
+            .root = root,
+            .executable = executable,
+            .dump = dump,
+            .now_unix = std.Io.Clock.real.now(io).toSeconds(),
+        };
     }
 
     pub fn deinit(self: *Worker) void {
@@ -81,7 +89,13 @@ pub const Worker = struct {
     }
 
     pub fn expand(self: *Worker, a: A, title: []const u8, source: []const u8) ![]u8 {
-        const request = Request{ .root = self.root, .dump = self.dump, .title = title, .source = source };
+        const request = Request{
+            .root = self.root,
+            .dump = self.dump,
+            .now_unix = self.now_unix,
+            .title = title,
+            .source = source,
+        };
         const bytes = try std.json.Stringify.valueAlloc(a, request, .{});
         defer a.free(bytes);
         if (bytes.len == 0 or bytes.len > 32 * 1024 * 1024) return error.RequestTooLarge;
@@ -127,3 +141,10 @@ pub const Worker = struct {
         return a.dupe(u8, output);
     }
 };
+
+test "worker restart preserves the pinned bundle timestamp" {
+    var worker = Worker.init(std.testing.io, "root", "unused", "dump.xml");
+    const pinned = worker.now_unix;
+    worker.reset();
+    try std.testing.expectEqual(pinned, worker.now_unix);
+}

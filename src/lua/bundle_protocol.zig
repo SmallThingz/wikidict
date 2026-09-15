@@ -1,6 +1,7 @@
 pub const Request = struct {
     root: []const u8,
     dump: []const u8,
+    now_unix: i64,
     title: []const u8,
     source: []const u8,
 };
