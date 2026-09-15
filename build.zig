@@ -315,19 +315,16 @@ pub fn build(b: *std.Build) void {
     });
     const blob_verify_exe = addCliExecutable(b, "dict-blob-verify", b.path("tools/blob_verify.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
-        .{ .name = "zxml", .module = zxml_dep.module("zxml") },
     });
-    const link_blobs_exe = addCliExecutable(b, "dict-link-blobs", b.path("tools/link_blobs.zig"), target, optimize, &.{.{ .name = "encoder", .module = encoder_mod }});
-    addPublicRunStep(b, "link-blobs", "Replace static call names with shared symbolic operands", addRunArtifactCommand(b, link_blobs_exe, &.{}, b.args), &.{});
+
     const llvm_exe = addCliExecutable(b, "dict-llvm-build", b.path("src/lua/llvm_build_main.zig"), target, optimize, &.{});
     addPublicRunStep(b, "compile-lua", "Compile extracted Lua AST directly to LLVM IR", addRunArtifactCommand(b, llvm_exe, &.{}, b.args), &.{});
-    const redirects_exe = addCliExecutable(b, "dict-runtime-redirects", b.path("tools/runtime_redirects.zig"), target, optimize, &.{ .{ .name = "zxml", .module = zxml_dep.module("zxml") }, .{ .name = "xml_decode", .module = shared_xml_decode_mod } });
-    addPublicRunStep(b, "extract-runtime-redirects", "Extract semantic module redirect dependencies", addRunArtifactCommand(b, redirects_exe, &.{}, b.args), &.{});
-    const pages_exe = addCliExecutable(b, "dict-runtime-pages", b.path("tools/runtime_pages.zig"), target, optimize, &.{ .{ .name = "encoder", .module = encoder_mod }, .{ .name = "zxml", .module = zxml_dep.module("zxml") } });
-    addPublicRunStep(b, "extract-runtime-pages", "Extract auxiliary wiki source dependencies", addRunArtifactCommand(b, pages_exe, &.{}, b.args), &.{});
+    const redirects_exe = addCliExecutable(b, "dict-bundle-redirects", b.path("tools/bundle_redirects_extract.zig"), target, optimize, &.{ .{ .name = "zxml", .module = zxml_dep.module("zxml") }, .{ .name = "xml_decode", .module = shared_xml_decode_mod } });
+    addPublicRunStep(b, "extract-bundle-redirects", "Extract bundle-time module redirect dependencies", addRunArtifactCommand(b, redirects_exe, &.{}, b.args), &.{});
+    const pages_exe = addCliExecutable(b, "dict-bundle-pages", b.path("tools/bundle_pages_extract.zig"), target, optimize, &.{ .{ .name = "encoder", .module = encoder_mod }, .{ .name = "zxml", .module = zxml_dep.module("zxml") } });
+    addPublicRunStep(b, "extract-bundle-pages", "Extract bundle-time auxiliary wiki source dependencies", addRunArtifactCommand(b, pages_exe, &.{}, b.args), &.{});
     const pipeline_paths = b.addOptions();
     pipeline_paths.addOptionPath("pages", pages_exe.getEmittedBin());
-    pipeline_paths.addOptionPath("linker", link_blobs_exe.getEmittedBin());
     pipeline_paths.addOptionPath("redirects", redirects_exe.getEmittedBin());
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
     pipeline_paths.addOptionPath("templates", template_extract_exe.getEmittedBin());
@@ -335,13 +332,10 @@ pub fn build(b: *std.Build) void {
     pipeline_paths.addOption([]const u8, "zig", b.graph.zig_exe);
     pipeline_paths.addOption([]const u8, "project_root", b.pathFromRoot("."));
     pipeline_paths.addOptionPath("blobs", blob_build_exe.getEmittedBin());
-    const pipeline_exe = addCliExecutable(b, "dict-runtime-build", b.path("tools/runtime_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
-    addPublicRunStep(b, "build-runtime", "Extract templates/modules and build the native Lua AOT worker", addRunArtifactCommand(b, pipeline_exe, &.{}, b.args), &.{});
-    addPublicRunStep(b, "build-dictionary", "Build dictionary blobs plus their shared native Lua runtime in one coordinated pipeline", addRunArtifactCommand(b, pipeline_exe, &.{"--with-blobs"}, b.args), &.{});
+    const pipeline_exe = addCliExecutable(b, "dict-bundle-build", b.path("tools/bundle_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
+    addPublicRunStep(b, "build-dictionary", "Pre-expand templates/modules and emit data-only dictionary blobs", addRunArtifactCommand(b, pipeline_exe, &.{}, b.args), &.{});
     const blob_files_mod = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
     const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
-    blob_files_mod.addImport("blob_storage", storage_mod);
-    blob_files_mod_test.addImport("blob_storage", storage_test);
     const blob_query_exe = addCliExecutable(b, "dict", b.path("src/frontend/main.zig"), target, optimize, &.{
         .{ .name = "blob_encoder", .module = blob_encoder_mod },
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
@@ -420,11 +414,8 @@ pub fn build(b: *std.Build) void {
     const template_extract_run = addRunArtifactCommand(b, template_extract_exe, &.{}, b.args);
     addPublicRunStep(b, "extract-templates", "Extract template pages from a Wiktionary XML dump", template_extract_run, &.{});
 
-    const blob_build_run = addRunArtifactCommand(b, blob_build_exe, &.{}, b.args);
-    addPublicRunStep(b, "build-blobs", "Build per-language and feature Wiktionary blobs", blob_build_run, &.{});
-
     const blob_verify_run = addRunArtifactCommand(b, blob_verify_exe, &.{}, b.args);
-    addPublicRunStep(b, "verify-blobs", "Verify Wiktionary blobs against the XML dump", blob_verify_run, &.{});
+    addPublicRunStep(b, "verify-blobs", "Verify compiled blob framing and presentation records", blob_verify_run, &.{});
 
     const blob_query_run = addRunArtifactCommand(b, blob_query_exe, &.{}, b.args);
     addPublicRunStep(b, "query-blobs", "Query per-language and feature Wiktionary blobs", blob_query_run, &.{});
@@ -653,20 +644,18 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&blob_wasm_smoke.step);
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "encoder", .module = encoder_mod } });
     addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}, b.args), &.{});
-    const runtime_test_exe = addCliExecutable(b, "dict-runtime-integration-test", b.path("tools/runtime_integration_test.zig"), b.graph.host, test_optimize, &.{});
-    const runtime_test_run = b.addRunArtifact(runtime_test_exe);
-    runtime_test_run.addFileArg(blob_query_exe.getEmittedBin());
-    runtime_test_run.addFileArg(pipeline_exe.getEmittedBin());
-    runtime_test_run.addFileArg(ffi_test_exe.getEmittedBin());
-    runtime_test_run.addArg(b.pathFromRoot(".zig-cache"));
-    b.step("test-runtime", "Exercise extraction and native Lua AOT rendering end to end").dependOn(&runtime_test_run.step);
-    const reader_test_exe = addCliExecutable(b, "dict-reader-integration-test", b.path("tools/reader_integration_test.zig"), b.graph.host, test_optimize, &.{});
+    const bundle_test_exe = addCliExecutable(b, "dict-bundle-integration-test", b.path("tools/bundle_integration_test.zig"), b.graph.host, test_optimize, &.{});
+    const bundle_test_run = b.addRunArtifact(bundle_test_exe);
+    bundle_test_run.addFileArg(blob_query_exe.getEmittedBin());
+    bundle_test_run.addFileArg(pipeline_exe.getEmittedBin());
+    bundle_test_run.addArg(b.pathFromRoot(".zig-cache"));
+    b.step("test-bundle", "Exercise build-time Lua/template expansion into data-only blobs").dependOn(&bundle_test_run.step);
+    const reader_test_exe = addCliExecutable(b, "dict-reader-integration-test", b.path("tools/reader_integration_test.zig"), b.graph.host, test_optimize, &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }});
     const reader_test_run = b.addRunArtifact(reader_test_exe);
     reader_test_run.addFileArg(blob_query_exe.getEmittedBin());
-    reader_test_run.addFileArg(blob_build_exe.getEmittedBin());
     reader_test_run.addFileArg(ffi_test_exe.getEmittedBin());
     reader_test_run.addArg(b.pathFromRoot(".zig-cache"));
-    b.step("test-reader", "Exercise optional-companion reading through the real CLI").dependOn(&reader_test_run.step);
+    b.step("test-reader", "Exercise precompiled data-only reading through CLI and C FFI").dependOn(&reader_test_run.step);
     const index_blobs_exe = addCliExecutable(b, "dict-index-blobs", b.path("tools/index_blobs.zig"), target, optimize, &.{.{ .name = "blob_storage", .module = storage_mod }});
     index_blobs_exe.root_module.link_libc = true;
     index_blobs_exe.use_llvm = true;

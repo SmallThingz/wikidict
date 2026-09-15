@@ -2,8 +2,6 @@ pub const Request = struct {
     root: []const u8,
     title: []const u8,
     source: []const u8,
-    dictionary_root: ?[]const u8 = null,
-    language: []const u8 = "English",
 };
 
 pub const Reply = struct {

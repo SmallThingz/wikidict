@@ -1,4 +1,4 @@
-//! Module redirects are semantic runtime dependencies, not compilable Lua source.
+//! Module redirects are semantic bundle-time dependencies, not compilable Lua source.
 const std = @import("std");
 const zxml = @import("zxml");
 const xml_decode = @import("xml_decode");

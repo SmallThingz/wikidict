@@ -1,4 +1,4 @@
-//! Coordinated Lua -> LLVM -> ThinLTO runtime build.
+//! Coordinated build-time Lua/template expansion and data-only blob bundling.
 const std = @import("std");
 const paths = @import("pipeline_paths");
 
@@ -77,7 +77,7 @@ fn compileLlModules(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_d
     return objects;
 }
 fn compileWorkerBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_dir: []const u8) ![]const u8 {
-    const worker_core = try sourcePath(a, "src/frontend/native_expansion_worker_core.zig");
+    const worker_core = try sourcePath(a, "src/lua/bundle_worker.zig");
     const zig_runtime = try sourcePath(a, "src/lua/runtime/core.zig");
     const lua_program = try sourcePath(a, "src/lua/runtime/llvm_program.zig");
     const lua_llvm_abi = try sourcePath(a, "src/lua/runtime/llvm_abi.zig");
@@ -87,10 +87,6 @@ fn compileWorkerBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, ll
     const lua_globals = try sourcePath(a, "src/lua/abi/globals.zig");
     const preprocess = try sourcePath(a, "src/lua/wikitext/preprocess.zig");
     const expression = try sourcePath(a, "src/lua/wikitext/expression.zig");
-    const blob_encoder = try sourcePath(a, "src/encoder/blob_root.zig");
-    const blob_decoder = try sourcePath(a, "src/decoder/blob_root.zig");
-    const blob_files = try sourcePath(a, "src/encoder/blob_files.zig");
-    const blob_storage = try sourcePath(a, "src/native/storage.zig");
     const output = try std.fs.path.join(a, &.{ llvm_dir, "worker.bc" });
     const emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{output});
     const root = try std.fmt.allocPrint(a, "-Mroot={s}", .{worker_core});
@@ -103,14 +99,10 @@ fn compileWorkerBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, ll
     const globals_mod = try std.fmt.allocPrint(a, "-Mlua_globals={s}", .{lua_globals});
     const preprocess_mod = try std.fmt.allocPrint(a, "-Mlua_wikitext_preprocess={s}", .{preprocess});
     const expression_mod = try std.fmt.allocPrint(a, "-Mlua_wikitext_expression={s}", .{expression});
-    const encoder_mod = try std.fmt.allocPrint(a, "-Mblob_encoder={s}", .{blob_encoder});
-    const decoder_mod = try std.fmt.allocPrint(a, "-Mblob_decoder={s}", .{blob_decoder});
-    const files_mod = try std.fmt.allocPrint(a, "-Mblob_files={s}", .{blob_files});
-    const storage_mod = try std.fmt.allocPrint(a, "-Mblob_storage={s}", .{blob_storage});
 
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-flto", "-lc", "-I/usr/include", emit });
-    try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", "--dep", "zig_runtime", "--dep", "blob_encoder", "--dep", "blob_decoder", "--dep", "blob_files", "--dep", "blob_storage", root });
+    try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-flto", "-lc", emit });
+    try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", root });
     try argv.appendSlice(a, &.{
         "--dep",                   "lua_static_fields",       runtime_mod,
         "--dep",                   "zig_runtime",             "--dep",
@@ -123,24 +115,11 @@ fn compileWorkerBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, ll
         "--dep",                   "lua_wikitext_preprocess", "--dep",
         "lua_wikitext_expression", scribunto_mod,             static_fields_mod,
         globals_mod,               preprocess_mod,            expression_mod,
-        encoder_mod,               "--dep",                   "blob_encoder",
-        "--dep",                   "blob_storage",            decoder_mod,
-        "--dep",                   "blob_encoder",            "--dep",
-        "blob_storage",            files_mod,                 "--dep",
-        "blob_encoder",            storage_mod,
     });
-    try stage(io, marker, "compile Zig worker runtime to LLVM bitcode", argv.items);
+    try stage(io, marker, "compile build-only Lua worker to LLVM bitcode", argv.items);
     return output;
 }
 
-fn compileShaBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_dir: []const u8) ![]const u8 {
-    const source = try sourcePath(a, "src/native/sha256_abi.zig");
-    const output = try std.fs.path.join(a, &.{ llvm_dir, "sha256.bc" });
-    const emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{output});
-    const root = try std.fmt.allocPrint(a, "-Mroot={s}", .{source});
-    try stage(io, marker, "compile SHA-256 runtime to LLVM bitcode", &.{ paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-flto", emit, root });
-    return output;
-}
 fn thinLtoLink(
     io: std.Io,
     a: std.mem.Allocator,
@@ -148,7 +127,6 @@ fn thinLtoLink(
     llvm_dir: []const u8,
     main_c: []const u8,
     worker: []const u8,
-    sha: []const u8,
     lua_objects: []const []const u8,
     output: []const u8,
 ) !void {
@@ -189,7 +167,6 @@ fn thinLtoLink(
         }
         if (!inserted and std.mem.eql(u8, token, "--as-needed")) {
             try argv.append(a, worker);
-            try argv.append(a, sha);
             try argv.appendSlice(a, lua_objects);
             inserted = true;
         }
@@ -202,19 +179,17 @@ fn thinLtoLink(
 fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, publish_root: []const u8, llvm_dir: []const u8) !void {
     const lua_objects = try compileLlModules(io, a, marker, llvm_dir);
     const worker = try compileWorkerBitcode(io, a, marker, llvm_dir);
-    const sha = try compileShaBitcode(io, a, marker, llvm_dir);
-    const main_c = try sourcePath(a, "src/frontend/native_expansion_worker_main.c");
-    const output = try std.fs.path.join(a, &.{ publish_root, "dict-native-expansion-worker" });
-    try thinLtoLink(io, a, marker, llvm_dir, main_c, worker, sha, lua_objects.items, output);
+    const main_c = try sourcePath(a, "src/lua/bundle_worker_main.c");
+    const output = try std.fs.path.join(a, &.{ publish_root, "dict-bundle-expander" });
+    try thinLtoLink(io, a, marker, llvm_dir, main_c, worker, lua_objects.items, output);
 }
 
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
-    const full = argv.len > 1 and std.mem.eql(u8, argv[1], "--with-blobs");
-    const args = argv[if (full) @as(usize, 2) else 1..];
+    const args = argv[1..];
     if (args.len != 2) {
-        std.debug.print("usage: build-runtime|build-dictionary -- DUMP NEW_OUTPUT_DIRECTORY\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY\n", .{});
         return error.Usage;
     }
     const dump = args[0];
@@ -224,37 +199,32 @@ pub fn main(init: std.process.Init) !void {
         try std.Io.Dir.cwd().createDirPath(init.io, parent);
     try std.Io.Dir.cwd().createDir(init.io, root, .default_dir);
     const marker = try std.fs.path.join(a, &.{ root, ".incomplete" });
-    const runtime = if (full) try std.fs.path.join(a, &.{ root, "runtime" }) else root;
-    if (full) try std.Io.Dir.cwd().createDir(init.io, runtime, .default_dir);
-    const runtime_marker = try std.fs.path.join(a, &.{ runtime, ".incomplete" });
-    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = runtime_marker, .data = "building" });
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = marker, .data = "initializing" });
+    const expander_root = try std.fs.path.join(a, &.{ root, ".bundle-expander" });
+    try std.Io.Dir.cwd().createDir(init.io, expander_root, .default_dir);
+    const expander_marker = try std.fs.path.join(a, &.{ expander_root, ".incomplete" });
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = expander_marker, .data = "building" });
 
-    try stage(init.io, marker, "extract modules", &.{ paths.modules, dump, runtime });
-    try stage(init.io, marker, "extract templates", &.{ paths.templates, dump, runtime });
-    try stage(init.io, marker, "extract module redirects", &.{ paths.redirects, dump, runtime });
-    try stage(init.io, marker, "extract auxiliary source pages", &.{ paths.pages, dump, runtime });
+    try stage(init.io, marker, "extract modules", &.{ paths.modules, dump, expander_root });
+    try stage(init.io, marker, "extract templates", &.{ paths.templates, dump, expander_root });
+    try stage(init.io, marker, "extract module redirects", &.{ paths.redirects, dump, expander_root });
+    try stage(init.io, marker, "extract auxiliary source pages", &.{ paths.pages, dump, expander_root });
 
-    const manifest = try std.fs.path.join(a, &.{ runtime, "manifest.jsonl" });
-    const llvm_dir = try std.fs.path.join(a, &.{ runtime, "llvm" });
+    const manifest = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });
+    const llvm_dir = try std.fs.path.join(a, &.{ expander_root, "llvm" });
     try std.Io.Dir.cwd().createDirPath(init.io, llvm_dir);
-    try stage(init.io, marker, "compile Lua AST directly to LLVM IR", &.{ paths.llvm, manifest, runtime, llvm_dir });
+    try stage(init.io, marker, "compile Lua AST directly to LLVM IR", &.{ paths.llvm, manifest, expander_root, llvm_dir });
 
-    if (full)
-        try stage(init.io, marker, "encode dictionary blobs", &.{ paths.blobs, dump, root })
-    else
-        try stage(init.io, marker, "link shared symbols and runtime sources", &.{ paths.linker, root, runtime });
-
-    const publish_root = if (full) root else runtime;
-    try compileNativeWorker(init.io, a, marker, publish_root, llvm_dir);
+    // The native worker is a transient bundle compiler. It never belongs in the
+    // shipped dictionary; full builds consume it immediately and delete .bundle-expander/.
+    try compileNativeWorker(init.io, a, marker, expander_root, llvm_dir);
     try std.Io.Dir.cwd().deleteTree(init.io, llvm_dir);
-    for ([_][]const u8{ "module-redirects.tsv", "usage.tsv" }) |name| {
-        const transient = try std.fs.path.join(a, &.{ runtime, name });
-        std.Io.Dir.cwd().deleteFile(init.io, transient) catch |err| switch (err) {
-            error.FileNotFound => {},
-            else => return err,
-        };
-    }
-    try std.Io.Dir.cwd().deleteFile(init.io, runtime_marker);
-    if (full) try std.Io.Dir.cwd().deleteFile(init.io, marker);
+
+    try std.Io.Dir.cwd().deleteFile(init.io, expander_marker);
+    try stage(init.io, marker, "expand and encode dictionary blobs", &.{
+        paths.blobs, dump, root, "--expander-root", expander_root,
+    });
+    try std.Io.Dir.cwd().deleteTree(init.io, expander_root);
+    try std.Io.Dir.cwd().deleteFile(init.io, marker);
     std.debug.print("dictionary build complete: {s}\n", .{root});
 }

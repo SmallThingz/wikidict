@@ -1,0 +1,148 @@
+//! End-to-end bundle test: Lua/templates execute before data blobs are published.
+const std = @import("std");
+const expander = @import("bundle_expander.zig");
+
+const source =
+    "==English==\n===Noun===\n{{forms-alias|mouse}}\n" ++
+    "# A small rodent.\n{{Template:Template:nested}}\n{{nested}}\n";
+const module_source =
+    \\local forms = require('Module:IntegrationFormsAlias')
+    \\local alias_name = 'Module:IntegrationFormsAlias'
+    \\assert(require(alias_name).mouse == 'mice')
+    \\return { render_dictionary_fixture = function(frame)
+    \\    assert(mw.title.new('Appendix:IntegrationFixture'):getContent() == 'a real auxiliary source page')
+    \\    local word = frame.args[1]
+    \\    local plural = forms[word]
+    \\    return "'''"..word.."''' (plural ''"..plural.."'')\n\n" ..
+    \\        "<table><caption>Forms from native Lua</caption><tr><td>"..plural.."</td></tr></table>\n"
+    \\end }
+;
+const template_source =
+    "<includeonly>{{#invoke:IntegrationForms|render_dictionary_fixture|{{{1}}}}}</includeonly>" ++
+    "<noinclude>Documentation must not leak.</noinclude>";
+
+const Page = struct { title: []const u8, ns: u16, id: u32, body: []const u8, redirect: ?[]const u8 = null };
+fn xml(w: *std.Io.Writer, text: []const u8) !void {
+    for (text) |ch| switch (ch) {
+        '&' => try w.writeAll("&amp;"),
+        '<' => try w.writeAll("&lt;"),
+        '>' => try w.writeAll("&gt;"),
+        else => try w.writeByte(ch),
+    };
+}
+
+fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
+    const pages = [_]Page{
+        .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
+        .{ .title = "Appendix:IntegrationFixture", .ns = 100, .id = 21, .body = "a real auxiliary source page" },
+        .{ .title = "Template:show-forms", .ns = 10, .id = 10, .body = template_source },
+        .{ .title = "Template:forms-alias", .ns = 10, .id = 11, .body = "#REDIRECT [[Template:show-forms]]", .redirect = "Template:show-forms" },
+        .{ .title = "Template:Template:nested", .ns = 10, .id = 12, .body = "nested namespace retained" },
+        .{ .title = "Template:nested", .ns = 10, .id = 13, .body = "ordinary namespace distinct" },
+        .{ .title = "Module:IntegrationForms", .ns = 828, .id = 1, .body = module_source },
+        .{ .title = "Module:IntegrationFormsData", .ns = 828, .id = 2, .body = "return { mouse = 'mice' }" },
+        .{ .title = "Module:IntegrationFormsAlias", .ns = 828, .id = 4, .body = "#REDIRECT [[Module:IntegrationFormsData]]", .redirect = "Module:IntegrationFormsData" },
+    };
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    const w = &out.writer;
+    try w.writeAll("<mediawiki>\n");
+    for (pages) |page| {
+        try w.print("<page><title>{s}</title><ns>{d}</ns><id>{d}</id>", .{ page.title, page.ns, page.id });
+        if (page.redirect) |target| try w.print("<redirect title=\"{s}\"/>", .{target});
+        try w.print("<revision><id>{d}</id><model>{s}</model><text>", .{
+            page.id + 100,
+            if (page.ns == 828 and page.redirect == null) "Scribunto" else "wikitext",
+        });
+        try xml(w, page.body);
+        try w.writeAll("</text></revision></page>\n");
+    }
+    try w.writeAll("</mediawiki>\n");
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.written() });
+}
+
+const Harness = struct {
+    a: std.mem.Allocator,
+    io: std.Io,
+    checks: usize = 0,
+
+    fn run(self: *Harness, argv: []const []const u8, expected: u8) ![]const u8 {
+        const result = try std.process.run(self.a, self.io, .{
+            .argv = argv,
+            .stdout_limit = .limited(16 * 1024 * 1024),
+            .stderr_limit = .limited(4 * 1024 * 1024),
+            .timeout = (std.Io.Timeout{ .duration = .{ .raw = .fromSeconds(180), .clock = .awake } }).toDeadline(self.io),
+        });
+        if (result.term != .exited or result.term.exited != expected) {
+            std.debug.print("bundle integration child failed: {any}, expected {d}\n{s}\n{s}\n", .{
+                result.term, expected, result.stdout, result.stderr,
+            });
+            return error.ChildFailed;
+        }
+        self.checks += 1;
+        return result.stdout;
+    }
+
+    fn require(self: *Harness, ok: bool, label: []const u8) !void {
+        if (ok) return;
+        std.debug.print("bundle integration assertion failed after {d} checks: {s}\n", .{ self.checks, label });
+        return error.AssertionFailed;
+    }
+};
+
+fn exists(io: std.Io, path: []const u8) bool {
+    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    file.close(io);
+    return true;
+}
+
+fn deadlineProbe(io: std.Io, a: std.mem.Allocator, dir: []const u8) !void {
+    var worker = expander.Worker.init(io, dir, "tail");
+    worker.timeout_ms = 100;
+    defer worker.deinit();
+    try std.testing.expectError(error.Timeout, worker.expand(a, "probe", "==English==\n"));
+}
+
+pub fn main(init: std.process.Init) !void {
+    const a = init.arena.allocator();
+    const argv = try init.minimal.args.toSlice(a);
+    if (argv.len != 4) return error.Usage;
+    const bin = argv[1];
+    const pipeline = argv[2];
+    const dir = try std.fmt.allocPrint(a, "{s}/bundle-integration-{d}-{d}", .{
+        argv[3], std.os.linux.getpid(), std.Io.Clock.awake.now(init.io).toNanoseconds(),
+    });
+    try std.Io.Dir.cwd().createDirPath(init.io, dir);
+    var h: Harness = .{ .a = a, .io = init.io };
+
+    try deadlineProbe(init.io, a, dir);
+    h.checks += 1;
+
+    const dump = try std.fs.path.join(a, &.{ dir, "fixture.xml" });
+    const root = try std.fs.path.join(a, &.{ dir, "dictionary" });
+    try writeFixture(init.io, a, dump);
+    _ = try h.run(&.{ pipeline, dump, root }, 0);
+
+    const forbidden = [_][]const u8{
+        ".bundle-expander", "runtime",          "dict-bundle-expander",
+        "symbols.wikblb",   "templates.wikblb", "redirects.wikblb",
+        "pages.wikblb",
+    };
+    for (forbidden) |name| {
+        const path = try std.fs.path.join(a, &.{ root, name });
+        try h.require(!exists(init.io, path), name);
+    }
+    const incomplete = try std.fs.path.join(a, &.{ root, ".incomplete" });
+    try h.require(!exists(init.io, incomplete), "completed bundle marker removed");
+
+    const text = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, text, "plural mice") != null, "Lua result is baked into data");
+    try h.require(std.mem.indexOf(u8, text, "Forms from native Lua") != null, "template result is baked into data");
+    try h.require(std.mem.indexOf(u8, text, "Documentation") == null, "noinclude does not leak");
+    try h.require(std.mem.indexOf(u8, text, "#invoke") == null, "no executable invoke syntax survives");
+
+    std.debug.print(
+        "BUNDLE_INTEGRATION_PASS checks={d}: build-only deadline, pre-expanded Lua/templates, data-only final tree. Artifacts: {s}\n",
+        .{ h.checks, dir },
+    );
+}

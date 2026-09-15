@@ -1,6 +1,6 @@
 # Dict
 
-Offline Wiktionary tooling with a Zig core. The repository builds compact per-language data, CLI/TUI readers, a C ABI, a native Qt 6/C++ desktop application, and a dump-specific native Lua execution engine.
+Offline Wiktionary tooling with a Zig core. The repository builds fully compiled per-language dictionary data, CLI/TUI readers, a C ABI, and a native Qt 6/C++ desktop application. Lua/Scribunto and MediaWiki templates execute only while bundling.
 
 ## Layout
 
@@ -11,14 +11,14 @@ src/
 ├── frontend/       CLI, TUI, C ABI, shared presentation
 ├── ffi/            stable public C header
 ├── qt/             Qt 6 / C++ desktop application
-├── lua/            parser, compiler, native AOT, Scribunto runtime
+├── lua/            parser, direct LLVM compiler, Scribunto/runtime support
 ├── native/         storage and low-level native helpers
 └── shared/         shared codecs and utilities
 tools/              build, verification, indexing, integration tools
 data/               ignored local datasets and generated artifacts
 ```
 
-Lua has one execution architecture: whole-dump native AOT. A completed runtime contains the generated `dict-native-expansion-worker` and any required `aot-data.bin`. There is no alternate Lua execution engine or silent fallback.
+Lua is a build-time compiler path only: `Lua source -> AST -> LLVM IR -> native code`. The bundler creates a transient native expander, executes templates/modules for each concrete page, encodes the resulting semantic presentation data, then deletes the expander. No Lua, template source, LLVM bitcode, native worker, bytecode, or other executable corpus representation is shipped.
 
 ## Build
 
@@ -36,10 +36,10 @@ Run the main validation gate:
 zig build test
 ```
 
-Run the real extraction -> AOT -> native expansion integration gate:
+Run the bundle-time expansion and data-only publication integration gate:
 
 ```sh
-zig build test-runtime
+zig build test-bundle
 ```
 
 ## Build a complete dictionary
@@ -52,44 +52,28 @@ zig build -Doptimize=ReleaseFast build-dictionary -- \
 
 The coordinated pipeline:
 
-1. extracts Scribunto modules;
-2. extracts templates, redirects, and auxiliary source pages;
-3. parses and compiles the module corpus;
-4. generates native Zig AOT shards and external program data where required;
-5. builds the dump-specific native expansion worker;
-6. encodes and links dictionary blobs.
+1. extracts Scribunto modules, templates, redirects, and auxiliary page sources into a transient build directory;
+2. parses the Lua corpus and emits LLVM IR directly from the AST;
+3. compiles module/support bitcode and ThinLTO-links a bounded-concurrency transient expander;
+4. expands every bundled page with its concrete title/frame context;
+5. compiles the expanded wikitext into self-contained semantic presentation records;
+6. emits data-only `WIKBLB06` blobs and deletes the entire transient expander directory.
 
 A failed build retains an `.incomplete` marker. Existing output directories are refused rather than modified in place.
 
-For runtime-only assets:
-
-```sh
-zig build -Doptimize=ReleaseFast build-runtime -- \
-  data/wiktionary.xml \
-  data/runtime
-```
-
 ## Per-language blobs
 
-Build blobs only:
+The blob writer is a build-tool component fed already-expanded wikitext. Use `build-dictionary` for complete corpus builds; it owns the transient expander and guarantees executable corpus artifacts cannot leak into the published directory.
+
+Verify the published compiled blobs directly:
 
 ```sh
-zig build -Doptimize=ReleaseFast build-blobs -- \
-  data/wiktionary.xml \
-  data/wiktionary-blobs
+zig build -Doptimize=ReleaseFast verify-blobs -- data/wiktionary-blobs
 ```
 
-An optional trailing page count creates a deterministic limited build.
+The verifier checks WIKBLB06 framing/order/metadata plus every `dict.presentation.v1` record and its semantic indices. It does not reconstruct pre-expansion wikitext.
 
-Verify blobs against the XML source:
-
-```sh
-zig build -Doptimize=ReleaseFast verify-blobs -- \
-  data/wiktionary.xml \
-  data/wiktionary-blobs
-```
-
-`WIKBLB05` stores sorted records with shared symbol identity and self-delimiting metadata. It deliberately stores no persisted lookup index. Native readers derive indexes into `.dict-cache/`; those caches are disposable and validated against the source file.
+`WIKBLB06` stores only data records with a minimal magic/kind header and self-delimiting metadata. It deliberately stores no persisted lookup index. Native readers derive indexes into `.dict-cache/`; those caches are disposable and validated against the source file.
 
 ## Query and read
 
@@ -100,14 +84,7 @@ zig-out/bin/dict languages --root data/wiktionary-blobs
 zig-out/bin/dict stats --root data/wiktionary-blobs
 ```
 
-Useful output formats:
-
-```sh
-zig-out/bin/dict lookup cat --root ROOT --format json --with-source
-zig-out/bin/dict lookup cat --root ROOT --format source
-```
-
-`dict.results.v1` is the frontend-neutral JSON interface. Exact source output remains byte-faithful to the stored source. Human rendering uses the native Lua worker when the linked runtime is available. A missing or incompatible worker is an explicit expansion failure.
+`dict.results.v1` is the frontend-neutral JSON interface. Reader output is rendered from self-contained compiled presentation data; readers do not parse wikitext or execute Lua/templates.
 
 `dict tui [PREFIX] --root ROOT` opens the interactive terminal reader.
 
@@ -118,7 +95,7 @@ zig build qt
 zig-out/bin/dict-qt --root ROOT cat
 ```
 
-The Qt 6 interface is written in C++ and links directly to `libdictffi`; there is no local HTTP server, browser UI, or web engine. The C ABI owns the mapped dictionary/index and a persistent native Lua worker, and returns versioned `dict.results.v1` JSON buffers to native clients.
+The Qt 6 interface is written in C++ and links directly to `libdictffi`; there is no local HTTP server, browser UI, or web engine. The C ABI owns the mapped dictionary/index and returns versioned `dict.results.v1` JSON buffers to native clients.
 
 The Qt app includes native history, bookmarks, settings, random words, definition quizzes, flashcards, and an unscramble game. Build/install the reusable C boundary with `zig build ffi`; its public header is installed as `zig-out/include/dict/dict.h`.
 
@@ -131,17 +108,16 @@ zig build extract-modules -- data/wiktionary.xml data/runtime
 zig build extract-templates -- data/wiktionary.xml data/runtime
 ```
 
-Compile extracted modules to native AOT source:
+Compile extracted modules directly to LLVM IR:
 
 ```sh
-zig build compile-aot -- \
+zig build compile-lua -- \
   data/runtime/manifest.jsonl \
   data/runtime \
-  data/runtime/aot \
-  --sharded --external-data --external-functions
+  data/runtime/llvm
 ```
 
-The compiler pipeline lives entirely under `src/lua/compiler/`; generated-code ABI contracts are isolated under `src/lua/abi/`. Keep runtime behavior in `src/lua/runtime/` and code generation in `src/lua/aot/` instead of mixing those layers.
+`src/lua/direct/` analyzes the AST and emits LLVM IR directly. `src/lua/abi/` contains small stable slot/layout contracts, while `src/lua/runtime/` provides Zig runtime primitives through a C ABI. Bundle builds compile the emitted IR with `zig cc -flto=thin` and perform a bounded ThinLTO link with Zig's bundled LLD. These compiler artifacts are transient and are deleted before publication.
 
 ## Blob storage and XZ
 
@@ -163,4 +139,4 @@ zig build encode -- --input data/wiktionary.xml --output data/wiktionary.bin
 zig build decode -- lookup --db data/wiktionary.bin --word color
 ```
 
-For current work, prefer the per-language blob and native Lua pipeline above.
+For current work, prefer the per-language data-only bundle pipeline above.

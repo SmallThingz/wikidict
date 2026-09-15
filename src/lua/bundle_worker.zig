@@ -1,16 +1,14 @@
-//! Runtime-specific native AOT expansion worker.
+//! Build-only native Lua/template expansion worker. This binary is never shipped.
 const std = @import("std");
 const lua_program = @import("lua_program");
 const llvm_abi = @import("lua_llvm_abi");
 comptime {
     _ = llvm_abi;
 }
-const rt = @import("zig_runtime");
-const pages = @import("native_runtime_pages.zig");
-const protocol = @import("expansion_protocol.zig");
+const pages = @import("bundle_pages.zig");
+const protocol = @import("bundle_protocol.zig");
 const A = std.mem.Allocator;
 const L = std.os.linux;
-extern fn dict_sha256_hash([*]const u8, usize, [*]u8) callconv(.c) void;
 
 pub const Request = protocol.Request;
 pub const Reply = protocol.Reply;
@@ -22,17 +20,14 @@ fn limit(resource: std.posix.rlimit_resource, value: u64) !void {
 }
 
 fn validateRequest(request: Request) !void {
-    if (request.source.len > 16 * 1024 * 1024 or request.root.len == 0 or request.root.len > 4096 or request.title.len == 0 or request.title.len > 4096 or request.language.len > 4096) return error.InvalidRequest;
+    if (request.source.len > 16 * 1024 * 1024 or request.root.len == 0 or request.root.len > 4096 or request.title.len == 0 or request.title.len > 4096) return error.InvalidRequest;
 }
 
 const Engine = struct {
     io: std.Io,
     requested_root: []const u8,
-    root: []const u8,
     program: lua_program.Program,
-    provider: ?pages.Provider = null,
-    provider_dictionary_root: ?[]const u8 = null,
-    provider_language: ?[]const u8 = null,
+    provider: pages.Provider,
 
     fn fileExists(io: std.Io, path: []const u8) !bool {
         var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
@@ -45,69 +40,32 @@ const Engine = struct {
 
     fn init(io: std.Io, a: A, requested_root: []const u8) !Engine {
         const marker = try std.fs.path.join(a, &.{ requested_root, ".incomplete" });
-        if (try fileExists(io, marker)) return error.RuntimeBuildIncomplete;
-        const direct_manifest = try std.fs.path.join(a, &.{ requested_root, "manifest.jsonl" });
-        const direct_templates = try std.fs.path.join(a, &.{ requested_root, "templates.wikblb" });
-        const nested = try std.fs.path.join(a, &.{ requested_root, "runtime" });
-        const nested_marker = try std.fs.path.join(a, &.{ nested, ".incomplete" });
-        if (try fileExists(io, nested_marker)) return error.RuntimeBuildIncomplete;
-        const nested_manifest = try std.fs.path.join(a, &.{ nested, "manifest.jsonl" });
-        const root = if (try fileExists(io, direct_manifest) or try fileExists(io, direct_templates))
-            try a.dupe(u8, requested_root)
-        else if (try fileExists(io, nested_manifest))
-            nested
-        else
-            return error.RuntimeAssetsMissing;
+        if (try fileExists(io, marker)) return error.BundleAssetsIncomplete;
+        const manifest = try std.fs.path.join(a, &.{ requested_root, "manifest.jsonl" });
+        if (!try fileExists(io, manifest)) return error.BundleAssetsMissing;
         var program = try lua_program.Program.init(a);
         errdefer program.deinit();
-        return .{ .io = io, .requested_root = try a.dupe(u8, requested_root), .root = root, .program = program };
-    }
-
-    fn sameOptional(a: ?[]const u8, b: ?[]const u8) bool {
-        if (a == null or b == null) return a == null and b == null;
-        return std.mem.eql(u8, a.?, b.?);
-    }
-
-    fn clearProvider(self: *Engine) void {
-        const a = std.heap.smp_allocator;
-        if (self.provider) |*provider| provider.deinit();
-        self.provider = null;
-        if (self.provider_dictionary_root) |root| a.free(root);
-        if (self.provider_language) |language| a.free(language);
-        self.provider_dictionary_root = null;
-        self.provider_language = null;
+        var provider = try pages.Provider.init(io, a, requested_root);
+        errdefer provider.deinit();
+        return .{
+            .io = io,
+            .requested_root = try a.dupe(u8, requested_root),
+            .program = program,
+            .provider = provider,
+        };
     }
 
     fn deinit(self: *Engine) void {
-        self.clearProvider();
+        self.provider.deinit();
         self.program.deinit();
     }
 
-    fn providerFor(self: *Engine, dictionary_root: ?[]const u8, language: []const u8) !*pages.Provider {
-        if (self.provider != null and sameOptional(self.provider_dictionary_root, dictionary_root) and
-            self.provider_language != null and std.mem.eql(u8, self.provider_language.?, language))
-            return &self.provider.?;
-
-        self.clearProvider();
-        const a = std.heap.smp_allocator;
-        const root_copy = if (dictionary_root) |root| try a.dupe(u8, root) else null;
-        errdefer if (root_copy) |root| a.free(root);
-        const language_copy = try a.dupe(u8, language);
-        errdefer a.free(language_copy);
-        self.provider = try pages.Provider.initWithSha256(self.io, a, self.root, root_copy, language_copy, dict_sha256_hash);
-        self.provider_dictionary_root = root_copy;
-        self.provider_language = language_copy;
-        return &self.provider.?;
-    }
-
     fn expand(self: *Engine, page_a: A, request: Request, stage: *[]const u8, detail: *?[]const u8) ![]const u8 {
-        if (!std.mem.eql(u8, request.root, self.requested_root)) return error.RuntimeRootChanged;
-        stage.* = "assets";
-        const provider = try self.providerFor(request.dictionary_root, request.language);
+        if (!std.mem.eql(u8, request.root, self.requested_root)) return error.BundleRootChanged;
         stage.* = "install";
         var ctx = try self.program.initContext(page_a);
         defer ctx.deinit();
-        var expander = lua_program.initExpander(&ctx, provider.api());
+        var expander = lua_program.initExpander(&ctx, self.provider.api());
         stage.* = "expand";
         const now = std.Io.Clock.real.now(self.io).toSeconds();
         return expander.expandFragment(request.title, request.source, now) catch |err| {
@@ -184,7 +142,7 @@ pub fn run(io: std.Io, persistent: A) !void {
     }
 }
 
-pub export fn dict_native_expansion_worker_main() callconv(.c) u8 {
+pub export fn dict_bundle_expander_main() callconv(.c) u8 {
     var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
     defer threaded.deinit();
     var persistent = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
