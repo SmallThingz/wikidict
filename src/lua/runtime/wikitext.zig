@@ -399,11 +399,17 @@ pub const Expander = struct {
         if (std.ascii.eqlIgnoreCase(head, "CURRENTYEAR")) return self.formatMagic("{d:0>4}", .{@as(u64, @intCast(civil.year))});
         if (std.ascii.eqlIgnoreCase(head, "CURRENTMONTH")) return self.formatMagic("{d:0>2}", .{civil.month});
         if (std.ascii.eqlIgnoreCase(head, "CURRENTMONTH1")) return self.formatMagic("{d}", .{civil.month});
-        if (std.ascii.eqlIgnoreCase(head, "CURRENTMONTHNAME")) return months[civil.month - 1];
+        if (std.ascii.eqlIgnoreCase(head, "CURRENTMONTHNAME") or std.ascii.eqlIgnoreCase(head, "CURRENTMONTHNAMEGEN")) return months[civil.month - 1];
         if (std.ascii.eqlIgnoreCase(head, "CURRENTMONTHABBREV")) return months[civil.month - 1][0..3];
         if (std.ascii.eqlIgnoreCase(head, "CURRENTDAY")) return self.formatMagic("{d}", .{civil.day});
         if (std.ascii.eqlIgnoreCase(head, "CURRENTDAY2")) return self.formatMagic("{d:0>2}", .{civil.day});
-        if (std.ascii.eqlIgnoreCase(head, "CURRENTDOW")) return self.formatMagic("{d}", .{language_lib.weekdaySunday0(now)});
+        const weekday = language_lib.weekdaySunday0(now);
+        if (std.ascii.eqlIgnoreCase(head, "CURRENTDOW")) return self.formatMagic("{d}", .{weekday});
+        if (std.ascii.eqlIgnoreCase(head, "CURRENTDAYNAME")) {
+            const names = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+            return names[weekday];
+        }
+        if (std.ascii.eqlIgnoreCase(head, "CURRENTWEEK")) return self.formatMagic("{d:0>2}", .{language_lib.isoWeek(now, civil)});
         const day_seconds = @mod(now, @as(i64, std.time.s_per_day));
         const seconds = if (day_seconds < 0) day_seconds + std.time.s_per_day else day_seconds;
         const hour: u8 = @intCast(@divFloor(seconds, std.time.s_per_hour));
@@ -1044,6 +1050,8 @@ test "native AOT wikitext expands templates parser functions and invoke" {
 
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
     const source = "{{Hello|Bob|1}}|{{Only}}|{{:Main_page}}|{{WT:Sandbox}}|{{T:Hello|Z|1}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{#ifexist:WT:Sandbox|W|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
+    const current_magic = try expander.expandFragment("Appendix:Page/Sub", "{{CURRENTDAYNAME}}|{{CURRENTWEEK}}|{{CURRENTMONTHNAMEGEN}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Monday|50|December", current_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
     const protected = try expander.expandFragment("Page", "<nowiki>{{Hello|Bob|1}}</nowiki>|{{Hello|A|}}", 1_670_803_200);
