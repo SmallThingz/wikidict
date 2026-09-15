@@ -576,9 +576,14 @@ test "wikitext writer emits only data blobs" {
     var writer = try Writer.init(std.testing.io, std.testing.allocator, out_root);
     defer writer.deinit();
     writer.stats.pages_seen = 3;
-    try writer.addPage(std.testing.allocator, 0, "cat", "==English==\n===Noun===\n# [[cat]]\n==French==\n===Nom===\n# [[chat]]\n==English==\n===Verb===\n# purr\n");
-    try writer.addPage(std.testing.allocator, 114, "Citations:cat", "citation raw");
-    try writer.addPage(std.testing.allocator, 118, "Reconstruction:Proto-Germanic/kattuz", "==Proto-Germanic==\n===Noun===\n# cat\n");
+    var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer page_arena.deinit();
+    try writer.addPage(page_arena.allocator(), 0, "cat", "==English==\n===Noun===\n# [[cat]]\n==French==\n===Nom===\n# [[chat]]\n==English==\n===Verb===\n# purr\n");
+    _ = page_arena.reset(.retain_capacity);
+    try writer.addPage(page_arena.allocator(), 114, "Citations:cat", "citation raw");
+    _ = page_arena.reset(.retain_capacity);
+    try writer.addPage(page_arena.allocator(), 118, "Reconstruction:Proto-Germanic/kattuz", "==Proto-Germanic==\n===Noun===\n# cat\n");
+    _ = page_arena.reset(.retain_capacity);
     const stats = try writer.finish(codes);
     try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
     try std.testing.expectEqual(@as(usize, 2), stats.language_records);
