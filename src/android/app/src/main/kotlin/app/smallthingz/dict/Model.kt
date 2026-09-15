@@ -24,7 +24,6 @@ data class Table(val caption: List<Span>, val rows: List<List<Cell>>)
 data class Block(
     val kind: String,
     val depth: Int,
-    val text: String,
     val spans: List<Span>,
     val listPath: String = "",
     val number: String = "",
@@ -39,7 +38,6 @@ data class Entry(
     val languageCode: String,
     val sections: List<Section>,
     val references: List<Reference>,
-    val status: String,
 ) {
     val key: String get() = "$kind\u0000${language.orEmpty()}\u0000$title"
     fun clue(): String {
@@ -58,6 +56,16 @@ data class Results(
     val language: String?,
     val entries: List<Entry>,
 )
+
+private val forbiddenCompiledFields = setOf(
+    "source", "source_base64", "payload_base64", "unexpanded_templates",
+    "rendered_templates", "expansion", "deferred", "content",
+)
+
+fun compiledFieldName(name: String): String {
+    require(name !in forbiddenCompiledFields) { "Dictionary package contains legacy uncompiled reader field: $name" }
+    return name
+}
 
 fun compiledSpanKind(kind: String): String {
     require(kind != "template") { "Dictionary package contains uncompiled template markup." }
@@ -81,6 +89,7 @@ object ResultParser {
     }
 
     private fun entry(value: JSONObject): Entry {
+        rejectLegacyFields(value)
         val sections = value.optJSONArray("sections") ?: JSONArray()
         val references = value.optJSONArray("references") ?: JSONArray()
         return Entry(
@@ -90,10 +99,10 @@ object ResultParser {
             languageCode = value.optString("language_code"),
             sections = (0 until sections.length()).map { section(sections.getJSONObject(it)) },
             references = (0 until references.length()).map { reference(references.getJSONObject(it)) },
-            status = value.optString("status", "structured"),
         )
     }
     private fun section(value: JSONObject): Section {
+        rejectLegacyFields(value)
         val blocks = value.optJSONArray("blocks") ?: JSONArray()
         return Section(
             level = value.optInt("level", 2),
@@ -103,11 +112,11 @@ object ResultParser {
     }
 
     private fun block(value: JSONObject): Block {
+        rejectLegacyFields(value)
         val spans = value.optJSONArray("spans") ?: JSONArray()
         return Block(
             kind = value.optString("kind", "paragraph"),
             depth = value.optInt("depth"),
-            text = value.optString("text"),
             spans = (0 until spans.length()).map { span(spans.getJSONObject(it)) },
             listPath = value.optString("list_path"),
             number = value.optString("number"),
@@ -116,6 +125,7 @@ object ResultParser {
     }
 
     private fun span(value: JSONObject): Span {
+        rejectLegacyFields(value)
         val kind = compiledSpanKind(value.optString("kind", "text"))
         return Span(
             kind = kind, text = value.optString("text"),
@@ -157,6 +167,11 @@ object ResultParser {
             spans = (0 until spans.length()).map { span(spans.getJSONObject(it)) },
         )
     }
+}
+
+
+private fun rejectLegacyFields(value: JSONObject) {
+    forbiddenCompiledFields.forEach { field -> require(!value.has(field)) { "Dictionary package contains legacy uncompiled reader field: $field" } }
 }
 
 private fun JSONObject.stringOrNull(name: String): String? = if (isNull(name) || !has(name)) null else optString(name).takeIf { it.isNotBlank() }

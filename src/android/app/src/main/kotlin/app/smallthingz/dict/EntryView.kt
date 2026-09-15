@@ -35,7 +35,6 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit) {
 @Composable
 private fun ReadingView(entry: Entry) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        if (entry.status == "invalid_payload") AssistChip(onClick = {}, label = { Text("Invalid compiled dictionary payload") })
         entry.sections.forEach { section ->
             if (section.title.isNotBlank()) Text(section.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             section.blocks.filterNot { it.kind == "blank" }.forEach { block -> BlockView(block) }
