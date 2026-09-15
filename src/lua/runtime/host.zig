@@ -3,6 +3,7 @@ const rt = @import("zig_runtime");
 
 pub const PageExistsFn = *const fn (?*anyopaque, []const u8) anyerror!bool;
 pub const PageContentFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8;
+pub const PageRedirectFn = *const fn (?*anyopaque, []const u8) anyerror!?[]const u8;
 pub const FramePreprocessFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, []const u8, *rt.Table) anyerror![]const u8;
 pub const FrameExpandTemplateFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, *rt.Table) anyerror![]const u8;
 pub const FrameExtensionTagFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, ?rt.Value, ?*rt.Table) anyerror![]const u8;
@@ -24,6 +25,7 @@ pub const Host = struct {
     now_unix: ?i64 = null,
     page_exists: ?PageExistsFn = null,
     page_content: ?PageContentFn = null,
+    page_redirect: ?PageRedirectFn = null,
     frame_preprocess: ?FramePreprocessFn = null,
     frame_expand_template: ?FrameExpandTemplateFn = null,
     frame_extension_tag: ?FrameExtensionTagFn = null,

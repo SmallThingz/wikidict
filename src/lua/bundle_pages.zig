@@ -53,6 +53,7 @@ pub const Provider = struct {
             .ctx = self,
             .get = get,
             .get_transclusion = getTransclusion,
+            .redirect_target = redirectTarget,
             .exists = exists,
             .interwiki_map = if (self.interwiki_available) interwikiMap else null,
         };
@@ -161,7 +162,7 @@ pub const Provider = struct {
         return xml_decode.decodeSinglePassAlloc(a, raw);
     }
 
-    fn lookup(self: *Provider, a: A, raw_title: []const u8, content: bool) !?[]const u8 {
+    fn findPage(self: *Provider, raw_title: []const u8) !?CorpusPage {
         if (raw_title.len > 4096) return error.InvalidPageTitle;
         var title_buffer: [4096]u8 = undefined;
         const title: []const u8 = if (std.mem.indexOfScalar(u8, raw_title, '_') != null) blk: {
@@ -169,8 +170,12 @@ pub const Provider = struct {
             std.mem.replaceScalar(u8, title_buffer[0..raw_title.len], '_', ' ');
             break :blk title_buffer[0..raw_title.len];
         } else raw_title;
-        if (self.corpus_pages.get(title)) |page| return if (content) try self.readCorpusSource(a, page) else "";
-        return null;
+        return self.corpus_pages.get(title);
+    }
+
+    fn lookup(self: *Provider, a: A, raw_title: []const u8, content: bool) !?[]const u8 {
+        const page = (try self.findPage(raw_title)) orelse return null;
+        return if (content) try self.readCorpusSource(a, page) else "";
     }
 
     fn transclusionSource(self: *Provider, a: A, raw_title: []const u8) !?[]const u8 {
@@ -178,14 +183,7 @@ pub const Provider = struct {
         var current = raw_title;
         var redirects: usize = 0;
         while (true) {
-            var title_buffer: [4096]u8 = undefined;
-            const title: []const u8 = if (std.mem.indexOfScalar(u8, current, '_') != null) blk: {
-                if (current.len > title_buffer.len) return error.InvalidPageTitle;
-                @memcpy(title_buffer[0..current.len], current);
-                std.mem.replaceScalar(u8, title_buffer[0..current.len], '_', ' ');
-                break :blk title_buffer[0..current.len];
-            } else current;
-            const page = self.corpus_pages.get(title) orelse return null;
+            const page = (try self.findPage(current)) orelse return null;
             if (page.redirect) |target| {
                 redirects += 1;
                 if (redirects > 32) return error.PageRedirectLoop;
@@ -199,6 +197,12 @@ pub const Provider = struct {
     fn getTransclusion(ctx: ?*anyopaque, a: A, title: []const u8) anyerror!?[]const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return self.transclusionSource(a, title);
+    }
+
+    fn redirectTarget(ctx: ?*anyopaque, title: []const u8) anyerror!?[]const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        const page = (try self.findPage(title)) orelse return null;
+        return page.redirect;
     }
 
     fn interwikiMap(ctx: ?*anyopaque) anyerror![]const InterwikiRow {
@@ -257,6 +261,8 @@ test "provider owns paths and separates raw content from redirect-following tran
     try std.testing.expectEqualStrings(alias_raw, raw_alias);
     const template_content = (try Provider.getTransclusion(&provider, page_a, "Template:Alias")) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings(template_raw, template_content);
+    try std.testing.expectEqualStrings("Template:Lazy", (try Provider.redirectTarget(&provider, "Template:Alias")).?);
+    try std.testing.expect((try Provider.redirectTarget(&provider, "Template:Lazy")) == null);
     try std.testing.expect(try Provider.exists(&provider, "Ordinary_page"));
     const main_content = (try provider.lookup(page_a, "Ordinary_page", true)) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("A&B", main_content);

@@ -52,6 +52,7 @@ pub const Provider = struct {
     ctx: ?*anyopaque = null,
     get: *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8,
     get_transclusion: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8 = null,
+    redirect_target: ?*const fn (?*anyopaque, []const u8) anyerror!?[]const u8 = null,
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
     resolve_call_symbol: ?*const fn (?*anyopaque, *rt.Context, []const u8, CallSymbolKind) anyerror!?CallSymbol = null,
@@ -80,6 +81,7 @@ pub const Expander = struct {
         self.host.ctx = self;
         self.host.page_exists = hostPageExists;
         self.host.page_content = hostPageContent;
+        self.host.page_redirect = hostPageRedirect;
         self.host.frame_preprocess = hostFramePreprocess;
         self.host.frame_expand_template = hostFrameExpandTemplate;
         self.host.frame_extension_tag = hostFrameExtensionTag;
@@ -108,6 +110,13 @@ pub const Expander = struct {
         const canonical = try namespace_lib.canonicalizeTitle(a, title);
         if (std.mem.eql(u8, canonical, self.host.current_title)) if (self.current_source) |source| return source;
         return self.provider.get(self.provider.ctx, a, canonical);
+    }
+
+    fn hostPageRedirect(raw: ?*anyopaque, title: []const u8) anyerror!?[]const u8 {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const get = self.provider.redirect_target orelse return null;
+        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, title);
+        return get(self.provider.ctx, canonical);
     }
 
     fn hostSiteInterwikiMap(raw: ?*anyopaque) anyerror![]const host_api.InterwikiRow {

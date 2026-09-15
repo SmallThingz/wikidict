@@ -16,6 +16,8 @@ const module_source =
     \\    assert(mw.title.new('Appendix:IntegrationFixture'):getContent() == 'a real auxiliary source page')
     \\    assert(string.find(mw.title.new('Template:forms-alias'):getContent(), '#REDIRECT', 1, true))
     \\    assert(string.find(mw.title.new('SharedAlias'):getContent(), '#REDIRECT', 1, true))
+    \\    local shared_alias = mw.title.new('SharedAlias')
+    \\    assert(shared_alias.isRedirect and shared_alias.redirectTarget.prefixedText == 'Shared')
     \\    assert(mw.title.new('rat').exists)
     \\    assert(string.find(mw.title.new('rat'):getContent(), 'Another rodent', 1, true))
     \\    assert(not mw.title.new('definitely-not-a-real-entry').exists)
