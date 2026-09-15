@@ -11,6 +11,10 @@ apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 
 repositories { google(); mavenCentral() }
 
+configurations.configureEach {
+    exclude group: 'androidx.graphics', module: 'graphics-path'
+}
+
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 kotlin { compilerOptions { jvmTarget = JvmTarget.JVM_17 } }
 
