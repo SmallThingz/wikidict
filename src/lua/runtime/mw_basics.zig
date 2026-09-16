@@ -34,7 +34,11 @@ fn dumpObjectCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     return one(.{ .string = text });
 }
 
-const MessageCtx = struct { key: []const u8 };
+const MessageCtx = struct {
+    key: ?[]const u8 = null,
+    raw_message: ?[]const u8 = null,
+    params: std.ArrayList(Value) = .empty,
+};
 
 fn messageTitleAlloc(a: std.mem.Allocator, key_raw: []const u8) ![]const u8 {
     const key = std.mem.trim(u8, key_raw, " \t\r\n");
@@ -48,15 +52,72 @@ fn messageTitleAlloc(a: std.mem.Allocator, key_raw: []const u8) ![]const u8 {
 }
 
 fn messageSource(runtime: *rt.Context, ctx: *const MessageCtx) !?[]const u8 {
+    if (ctx.raw_message) |source| return source;
+    const key = ctx.key orelse return error.MissingMessageKey;
     const host = host_api.get(runtime) orelse return error.NotImplemented;
     const get = host.page_content orelse return error.NotImplemented;
-    return get(host.ctx, runtime.allocator, try messageTitleAlloc(runtime.allocator, ctx.key));
+    return get(host.ctx, runtime.allocator, try messageTitleAlloc(runtime.allocator, key));
+}
+
+fn messageParamString(runtime: *rt.Context, value: Value) ![]const u8 {
+    return switch (value) {
+        .string => |text| text,
+        .number => |number| try rt.numberToString(runtime.allocator, number),
+        .table => blk: {
+            const method = runtime.metamethod(value, "__tostring") orelse return error.MessageParamExpected;
+            const result = try runtime.callValue(method, &.{value});
+            defer rt.freeResults(result);
+            if (result.len == 0 or result[0] != .string) return error.StringExpected;
+            break :blk result[0].string;
+        },
+        else => return error.MessageParamExpected,
+    };
+}
+
+fn appendMessageParams(runtime: *rt.Context, ctx: *MessageCtx, values: []const Value) !void {
+    for (values) |value| {
+        const stored = if (value == .table)
+            Value{ .string = try messageParamString(runtime, value) }
+        else switch (value) {
+            .string, .number => value,
+            else => return error.MessageParamExpected,
+        };
+        try ctx.params.append(runtime.allocator, stored);
+    }
+}
+
+fn substituteMessageParams(runtime: *rt.Context, source: []const u8, params: []const Value) ![]const u8 {
+    if (params.len == 0 or std.mem.indexOfScalar(u8, source, '$') == null) return source;
+    var out: std.ArrayList(u8) = .empty;
+    var remaining = source;
+    var pos: usize = 0;
+    while (pos < remaining.len) {
+        if (remaining[pos] == '$' and pos + 1 < remaining.len and std.ascii.isDigit(remaining[pos + 1])) {
+            var end = pos + 1;
+            var index: usize = 0;
+            while (end < remaining.len and std.ascii.isDigit(remaining[end])) : (end += 1) {
+                index = std.math.add(usize, try std.math.mul(usize, index, 10), @as(usize, remaining[end] - '0')) catch return error.MessageParameterIndexOverflow;
+            }
+            if (index != 0 and index <= params.len) {
+                try out.appendSlice(runtime.allocator, remaining[0..pos]);
+                try out.appendSlice(runtime.allocator, try messageParamString(runtime, params[index - 1]));
+                remaining = remaining[end..];
+                pos = 0;
+                continue;
+            }
+        }
+        pos += 1;
+    }
+    if (out.items.len == 0) return source;
+    try out.appendSlice(runtime.allocator, remaining);
+    return out.toOwnedSlice(runtime.allocator);
 }
 
 fn messagePlainCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const ctx: *MessageCtx = @ptrCast(@alignCast(raw orelse return error.MissingMessageContext));
-    if (try messageSource(runtime, ctx)) |source| return one(.{ .string = source });
-    return one(.{ .string = try std.fmt.allocPrint(runtime.allocator, "⧼{s}⧽", .{ctx.key}) });
+    const source = (try messageSource(runtime, ctx)) orelse
+        return one(.{ .string = try std.fmt.allocPrint(runtime.allocator, "⧼{s}⧽", .{ctx.key orelse ""}) });
+    return one(.{ .string = try substituteMessageParams(runtime, source, ctx.params.items) });
 }
 
 fn messageExistsCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
@@ -76,11 +137,7 @@ fn messageIsDisabledCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Valu
     return one(.{ .boolean = source == null or source.?.len == 0 or std.mem.eql(u8, source.?, "-") });
 }
 
-fn messageNewCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    if (args.len != 1) return error.NotImplemented;
-    const ctx = try runtime.allocator.create(MessageCtx);
-    ctx.* = .{ .key = try runtime.allocator.dupe(u8, args[0].string) };
+fn makeMessageObject(runtime: *rt.Context, ctx: *MessageCtx) ![]const Value {
     const object = try runtime.newTable();
     const plain = try runtime.newNative(ctx, messagePlainCall);
     try object.rawSet(runtime.allocator, .{ .string = "plain" }, plain);
@@ -93,6 +150,22 @@ fn messageNewCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     try mt.rawSet(runtime.allocator, .{ .string = "__tostring" }, plain);
     object.metatable = mt;
     return one(.{ .table = object });
+}
+
+fn messageNewCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const ctx = try runtime.allocator.create(MessageCtx);
+    ctx.* = .{ .key = try runtime.allocator.dupe(u8, args[0].string) };
+    try appendMessageParams(runtime, ctx, args[1..]);
+    return makeMessageObject(runtime, ctx);
+}
+
+fn messageNewRawCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const ctx = try runtime.allocator.create(MessageCtx);
+    ctx.* = .{ .raw_message = try runtime.allocator.dupe(u8, args[0].string) };
+    try appendMessageParams(runtime, ctx, args[1..]);
+    return makeMessageObject(runtime, ctx);
 }
 
 fn interwikiMapCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -168,9 +241,9 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
 
     const message = try runtime.newTable();
     try setNative(runtime, message, "new", messageNewCall);
+    try setNative(runtime, message, "newRawMessage", messageNewRawCall);
     inline for (.{
         "newFallbackSequence",
-        "newRawMessage",
         "rawParam",
         "numParam",
         "getDefaultLanguage",
@@ -293,10 +366,17 @@ test "AOT mw message reads dump-backed interface messages" {
     defer rt.freeResults(is_disabled);
     try std.testing.expect(is_disabled[0].boolean);
 
-    const new_fn = message.rawGet(.{ .string = "new" }).?;
-    try std.testing.expectError(error.AotCallFailed, runtime.callValue(new_fn, &.{ .{ .string = "parentheses" }, .{ .string = "x" } }));
-    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
-    runtime.clearAotErrorName();
+    const raw_message = try callField(&runtime, .{ .table = message }, "newRawMessage", &.{ .{ .string = "($1 $2 $3)" }, .{ .string = "foo" }, .{ .number = 123456 }, main[0] });
+    defer rt.freeResults(raw_message);
+    const raw_plain = try callField(&runtime, raw_message[0], "plain", &.{raw_message[0]});
+    defer rt.freeResults(raw_plain);
+    try std.testing.expectEqualStrings("(foo 123456 {{ns:Project}}:Main Page)", raw_plain[0].string);
+
+    const parameterized = try callField(&runtime, .{ .table = message }, "new", &.{ .{ .string = "mainpage" }, .{ .string = "unused" } });
+    defer rt.freeResults(parameterized);
+    const parameterized_plain = try callField(&runtime, parameterized[0], "plain", &.{parameterized[0]});
+    defer rt.freeResults(parameterized_plain);
+    try std.testing.expectEqualStrings("{{ns:Project}}:Main Page", parameterized_plain[0].string);
 }
 
 const InterwikiProbe = struct {

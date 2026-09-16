@@ -64,6 +64,7 @@ const module_source =
     \\    local missing_message = mw.message.new('definitely-missing-message')
     \\    assert(not missing_message:exists() and missing_message:isBlank() and missing_message:isDisabled())
     \\    assert(missing_message:plain() == '⧼definitely-missing-message⧽')
+    \\    assert(mw.message.newRawMessage('raw $1 / $2', 'value', 7):plain() == 'raw value / 7')
     \\    assert(tostring(mw.html.create('div'):tag('br'):allDone()) == '<div><br /></div>')
     \\    assert(mw.text.encode('a&b') == 'a&amp;b')
     \\    assert(mw.text.tag('div', {class = 'chart'}, 'x') == '<div class=\"chart\">x</div>')
