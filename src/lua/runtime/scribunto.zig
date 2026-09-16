@@ -394,7 +394,7 @@ test "AOT mw.text split and gsplit preserve Unicode and empty fields" {
     try std.testing.expectEqual(@as(usize, 0), done.len);
 }
 
-test "AOT mw.text trim listToText truncate and nowiki match Scribunto behavior" {
+test "AOT mw.text trim listToText truncate encode tag and nowiki match Scribunto behavior" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var runtime = try makeMovedHostContext(arena.allocator());
@@ -433,6 +433,22 @@ test "AOT mw.text trim listToText truncate and nowiki match Scribunto behavior" 
     const unicode = try callField(&runtime, text, "truncate", &.{ .{ .string = "é猫xyz" }, .{ .number = 2 }, .{ .string = "" } });
     defer rt.freeResults(unicode);
     try std.testing.expectEqualStrings("é猫", unicode[0].string);
+
+    const encoded = try callField(&runtime, text, "encode", &.{.{ .string = "><&\"'\u{a0}" }});
+    defer rt.freeResults(encoded);
+    try std.testing.expectEqualStrings("&gt;&lt;&amp;&quot;&#039;&nbsp;", encoded[0].string);
+    const attrs = try runtime.newTable();
+    try attrs.rawSet(runtime.allocator, .{ .string = "style" }, .{ .string = "a&b" });
+    const tagged = try callField(&runtime, text, "tag", &.{ .{ .string = "div" }, .{ .table = attrs }, .{ .string = "body" } });
+    defer rt.freeResults(tagged);
+    try std.testing.expectEqualStrings("<div style=\"a&amp;b\">body</div>", tagged[0].string);
+    const opening = try callField(&runtime, text, "tag", &.{ .{ .string = "div" }, .{ .table = attrs } });
+    defer rt.freeResults(opening);
+    try std.testing.expectEqualStrings("<div style=\"a&amp;b\">", opening[0].string);
+    const self_closed = try callField(&runtime, text, "tag", &.{ .{ .string = "br" }, .nil, .{ .boolean = false } });
+    defer rt.freeResults(self_closed);
+    try std.testing.expectEqualStrings("<br />", self_closed[0].string);
+
     inline for (.{
         .{ "[[x|y]]", "&#91;&#91;x&#124;y&#93;&#93;" },
         .{ "# item\n* two", "&#35; item\n&#42; two" },

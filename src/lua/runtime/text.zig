@@ -327,6 +327,117 @@ fn textUnstripNoWikiCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Val
     return textUnstripCall(null, runtime, args);
 }
 
+fn appendHtmlEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []const u8) !void {
+    var i: usize = 0;
+    while (i < source.len) {
+        if (i + 1 < source.len and source[i] == 0xc2 and source[i + 1] == 0xa0) {
+            try out.appendSlice(a, "&nbsp;");
+            i += 2;
+            continue;
+        }
+        const replacement: ?[]const u8 = switch (source[i]) {
+            '>' => "&gt;",
+            '<' => "&lt;",
+            '&' => "&amp;",
+            '"' => "&quot;",
+            '\'' => "&#039;",
+            else => null,
+        };
+        if (replacement) |value| try out.appendSlice(a, value) else try out.append(a, source[i]);
+        i += 1;
+    }
+}
+
+fn textEncodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    if (args.len > 1 and args[1] != .nil) return error.NotImplemented;
+    var out: std.ArrayList(u8) = .empty;
+    try appendHtmlEncoded(&out, runtime.allocator, args[0].string);
+    return one(runtime.allocator, .{ .string = try out.toOwnedSlice(runtime.allocator) });
+}
+
+fn validTagAttributeName(name: []const u8) bool {
+    for (name) |ch| switch (ch) {
+        '\t', '\r', '\n', 0x0c, ' ', '/', '<', '>', '"', '\'', '=' => return false,
+        else => {},
+    };
+    return true;
+}
+
+fn appendTagAttribute(out: *std.ArrayList(u8), runtime: *rt.Context, name: []const u8, value: Value) !void {
+    if (!validTagAttributeName(name)) return error.InvalidTagAttribute;
+    if (value == .boolean) {
+        if (value.boolean) {
+            try out.append(runtime.allocator, ' ');
+            try out.appendSlice(runtime.allocator, name);
+        }
+        return;
+    }
+    const raw = switch (value) {
+        .string => |text| text,
+        .number => |number| try rt.numberToString(runtime.allocator, number),
+        else => return error.InvalidTagAttributeValue,
+    };
+    try out.append(runtime.allocator, ' ');
+    try out.appendSlice(runtime.allocator, name);
+    try out.appendSlice(runtime.allocator, "=\"");
+    try appendHtmlEncoded(out, runtime.allocator, raw);
+    try out.append(runtime.allocator, '"');
+}
+
+fn textTagCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0) return error.StringExpected;
+    var name: []const u8 = undefined;
+    var attrs: ?*rt.Table = null;
+    var content: Value = .nil;
+
+    if (args[0] == .table) {
+        const spec = args[0].table;
+        const name_value = spec.rawGet(.{ .string = "name" }) orelse return error.StringExpected;
+        if (name_value != .string) return error.StringExpected;
+        name = name_value.string;
+        if (spec.rawGet(.{ .string = "attrs" })) |value| switch (value) {
+            .nil => {},
+            .table => |table| attrs = table,
+            else => return error.TableExpected,
+        };
+        content = spec.rawGet(.{ .string = "content" }) orelse .nil;
+    } else {
+        if (args[0] != .string) return error.StringExpected;
+        name = args[0].string;
+        if (args.len > 1) switch (args[1]) {
+            .nil => {},
+            .table => |table| attrs = table,
+            else => return error.TableExpected,
+        };
+        if (args.len > 2) content = args[2];
+    }
+
+    var out: std.ArrayList(u8) = .empty;
+    try out.append(runtime.allocator, '<');
+    try out.appendSlice(runtime.allocator, name);
+    if (attrs) |table| {
+        var it = table.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* != .string) return error.InvalidTagAttribute;
+            try appendTagAttribute(&out, runtime, entry.key_ptr.string, entry.value_ptr.*);
+        }
+    }
+
+    if (content == .nil) {
+        try out.append(runtime.allocator, '>');
+    } else if (content == .boolean and !content.boolean) {
+        try out.appendSlice(runtime.allocator, " />");
+    } else if (content == .string or content == .number) {
+        try out.append(runtime.allocator, '>');
+        try out.appendSlice(runtime.allocator, if (content == .string) content.string else try rt.numberToString(runtime.allocator, content.number));
+        try out.appendSlice(runtime.allocator, "</");
+        try out.appendSlice(runtime.allocator, name);
+        try out.append(runtime.allocator, '>');
+    } else return error.InvalidTagContent;
+    return one(runtime.allocator, .{ .string = try out.toOwnedSlice(runtime.allocator) });
+}
+
 fn appendCodepoint(out: *std.ArrayList(u8), a: std.mem.Allocator, value: u21) !bool {
     var buf: [4]u8 = undefined;
     const len = std.unicode.utf8Encode(value, &buf) catch return false;
@@ -500,7 +611,9 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setNative(runtime, text, "unstripNoWiki", null, textUnstripNoWikiCall);
     try setNative(runtime, text, "listToText", null, textListToTextCall);
     try setNative(runtime, text, "truncate", host, textTruncateCall);
+    try setNative(runtime, text, "encode", null, textEncodeCall);
     try setNative(runtime, text, "decode", null, textDecodeCall);
+    try setNative(runtime, text, "tag", null, textTagCall);
     try setNative(runtime, text, "nowiki", null, textNowikiCall);
     try mw.rawSetNativeField(.mw, "text", .{ .table = text });
 }
