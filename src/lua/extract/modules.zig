@@ -206,6 +206,7 @@ pub fn main(init: std.process.Init) !void {
             const page_id = std.fmt.parseInt(u64, std.mem.trim(u8, capture.page_id_raw orelse return error.InvalidPageMetadata, " \t\r\n"), 10) catch return error.InvalidPageMetadata;
             const revision_id = std.fmt.parseInt(u64, std.mem.trim(u8, capture.revision_id_raw orelse return error.InvalidPageMetadata, " \t\r\n"), 10) catch return error.InvalidPageMetadata;
             const revision_timestamp_raw = capture.revision_timestamp_raw orelse return error.InvalidPageMetadata;
+            const model_raw = capture.model_raw orelse return error.InvalidPageMetadata;
             const text_raw = capture.text_raw orelse "";
             const source_offset: u64 = if (text_raw.len == 0) 0 else blk: {
                 const base = @intFromPtr(mapped.bytes.ptr);
@@ -218,11 +219,12 @@ pub fn main(init: std.process.Init) !void {
             const title = try xml_decode.decodeSinglePassAlloc(arena.allocator(), title_raw);
             const revision_timestamp = try xml_decode.decodeSinglePassAlloc(arena.allocator(), revision_timestamp_raw);
             const revision_user = try xml_decode.decodeSinglePassAlloc(arena.allocator(), capture.revision_user_raw orelse "");
+            const content_model = try xml_decode.decodeSinglePassAlloc(arena.allocator(), model_raw);
             const redirect = if (capture.redirect_raw) |raw| try xml_decode.decodeSinglePassAlloc(arena.allocator(), raw) else null;
             if (std.mem.indexOfAny(u8, title, "\t\r\n") != null) return error.InvalidPageTitle;
             if (redirect) |target| if (std.mem.indexOfAny(u8, target, "\t\r\n") != null) return error.InvalidPageTitle;
-            if (std.mem.indexOfAny(u8, revision_timestamp, "\t\r\n") != null or std.mem.indexOfAny(u8, revision_user, "\t\r\n") != null) return error.InvalidPageMetadata;
-            try page_writer.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{d}\t{d}\n", .{
+            if (content_model.len == 0 or std.mem.indexOfAny(u8, revision_timestamp, "\t\r\n") != null or std.mem.indexOfAny(u8, revision_user, "\t\r\n") != null or std.mem.indexOfAny(u8, content_model, "\t\r\n") != null) return error.InvalidPageMetadata;
+            try page_writer.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\n", .{
                 source_offset,
                 text_raw.len,
                 title,
@@ -231,6 +233,7 @@ pub fn main(init: std.process.Init) !void {
                 revision_id,
                 revision_timestamp,
                 revision_user,
+                content_model,
                 parsed_ns,
                 @intFromBool(capture.text_raw != null),
             });

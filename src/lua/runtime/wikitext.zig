@@ -54,6 +54,7 @@ pub const Provider = struct {
         revision_id: u64,
         revision_timestamp: []const u8,
         revision_user: []const u8,
+        content_model: []const u8,
     };
     ctx: ?*anyopaque = null,
     get: *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8,
@@ -1251,9 +1252,9 @@ const TestProvider = struct {
     }
     fn pageMetadata(_: ?*anyopaque, title: []const u8) !?Provider.PageMetadata {
         if (std.mem.eql(u8, title, "Page") or std.mem.eql(u8, title, "Appendix:Page/Sub"))
-            return .{ .page_id = 42, .revision_id = 420, .revision_timestamp = "2024-03-04T05:06:07Z", .revision_user = "Test editor" };
+            return .{ .page_id = 42, .revision_id = 420, .revision_timestamp = "2024-03-04T05:06:07Z", .revision_user = "Test editor", .content_model = "wikitext" };
         if (std.mem.eql(u8, title, "Other page"))
-            return .{ .page_id = 99, .revision_id = 990, .revision_timestamp = "2025-06-07T08:09:10Z", .revision_user = "Other editor" };
+            return .{ .page_id = 99, .revision_id = 990, .revision_timestamp = "2025-06-07T08:09:10Z", .revision_user = "Other editor", .content_model = "wikitext" };
         return null;
     }
     fn resolveCallSymbol(_: ?*anyopaque, _: *rt.Context, raw: []const u8, kind: CallSymbolKind) !?CallSymbol {

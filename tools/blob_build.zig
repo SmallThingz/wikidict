@@ -46,6 +46,7 @@ fn parseIndexedPage(line: []const u8) !IndexedPage {
     _ = fields.next() orelse return error.InvalidPageIndex; // revision id
     _ = fields.next() orelse return error.InvalidPageIndex; // revision timestamp
     _ = fields.next() orelse return error.InvalidPageIndex; // revision user
+    _ = fields.next() orelse return error.InvalidPageIndex; // content model
     const ns = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10);
     const has_source_raw = fields.next() orelse return error.InvalidPageIndex;
     if (title.len == 0 or fields.next() != null) return error.InvalidPageIndex;
