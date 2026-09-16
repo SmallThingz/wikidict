@@ -19,6 +19,7 @@ pub const PageHeader = struct {
     page_id: u64,
     revision_id: u64,
     revision_timestamp: []const u8,
+    revision_user: []const u8,
     source_offset: u64,
     source_len: usize,
     has_source: bool,
@@ -36,6 +37,7 @@ const Capture = struct {
     page_id_raw: ?[]const u8 = null,
     revision_id_raw: ?[]const u8 = null,
     revision_timestamp_raw: ?[]const u8 = null,
+    revision_user_raw: ?[]const u8 = null,
     text_raw: ?[]const u8 = null,
     redirect_raw: ?[]const u8 = null,
 
@@ -53,6 +55,8 @@ const Capture = struct {
             self.redirect_raw = node.getAttributeValueRaw("title");
         } else if (node.depth == 2 and std.mem.eql(u8, self.names_by_depth[1], "revision")) {
             if (std.mem.eql(u8, name, "id")) self.revision_id_raw = node.leadingTextRaw() else if (std.mem.eql(u8, name, "timestamp")) self.revision_timestamp_raw = node.leadingTextRaw() else if (std.mem.eql(u8, name, "text")) self.text_raw = node.leadingTextRaw();
+        } else if (node.depth == 3 and std.mem.eql(u8, self.names_by_depth[1], "revision") and std.mem.eql(u8, self.names_by_depth[2], "contributor") and (std.mem.eql(u8, name, "username") or std.mem.eql(u8, name, "ip"))) {
+            self.revision_user_raw = node.leadingTextRaw();
         }
         return true;
     }
@@ -140,6 +144,7 @@ pub const HeaderIterator = struct {
                 .page_id = page_id,
                 .revision_id = revision_id,
                 .revision_timestamp = try xml_decode.decodeSinglePassAlloc(allocator, revision_timestamp_raw),
+                .revision_user = try xml_decode.decodeSinglePassAlloc(allocator, capture.revision_user_raw orelse ""),
                 .source_offset = source_offset,
                 .source_len = text_raw.len,
                 .has_source = capture.text_raw != null,
@@ -152,8 +157,8 @@ pub const HeaderIterator = struct {
 
 test "dump adapter exposes decoded wikitext pages" {
     const xml = "<mediawiki>" ++
-        "<page><title>cat</title><ns>0</ns><id>7</id><revision><id>70</id><timestamp>2024-03-04T05:06:07Z</timestamp><text>==English==&amp;x</text></revision></page>" ++
-        "<page><title>kitty</title><ns>0</ns><id>8</id><redirect title=\"cat\"/><revision><id>80</id><timestamp>2024-03-05T06:07:08Z</timestamp><text>#REDIRECT [[cat]]</text></revision></page>" ++
+        "<page><title>cat</title><ns>0</ns><id>7</id><revision><id>70</id><timestamp>2024-03-04T05:06:07Z</timestamp><contributor><username>Alice</username></contributor><text>==English==&amp;x</text></revision></page>" ++
+        "<page><title>kitty</title><ns>0</ns><id>8</id><redirect title=\"cat\"/><revision><id>80</id><timestamp>2024-03-05T06:07:08Z</timestamp><contributor><ip>192.0.2.7</ip></contributor><text>#REDIRECT [[cat]]</text></revision></page>" ++
         "<page><title>missing-source</title><ns>10</ns><id>9</id><revision><id>90</id><timestamp>2024-03-06T07:08:09Z</timestamp></revision></page>" ++
         "</mediawiki>";
     var tmp = std.testing.tmpDir(.{});
@@ -168,10 +173,12 @@ test "dump adapter exposes decoded wikitext pages" {
     const header = (try headers.next(std.testing.allocator)).?;
     defer std.testing.allocator.free(header.title);
     defer std.testing.allocator.free(header.revision_timestamp);
+    defer std.testing.allocator.free(header.revision_user);
     try std.testing.expectEqual(@as(u32, 0), header.ns);
     try std.testing.expectEqual(@as(u64, 7), header.page_id);
     try std.testing.expectEqual(@as(u64, 70), header.revision_id);
     try std.testing.expectEqualStrings("2024-03-04T05:06:07Z", header.revision_timestamp);
+    try std.testing.expectEqualStrings("Alice", header.revision_user);
     try std.testing.expectEqualStrings("cat", header.title);
     try std.testing.expect(header.has_source);
     try std.testing.expect(header.redirect == null);
@@ -184,13 +191,17 @@ test "dump adapter exposes decoded wikitext pages" {
     const redirect = (try headers.next(std.testing.allocator)).?;
     defer std.testing.allocator.free(redirect.title);
     defer std.testing.allocator.free(redirect.revision_timestamp);
+    defer std.testing.allocator.free(redirect.revision_user);
     defer std.testing.allocator.free(redirect.redirect.?);
     try std.testing.expectEqualStrings("kitty", redirect.title);
     try std.testing.expectEqualStrings("cat", redirect.redirect.?);
+    try std.testing.expectEqualStrings("192.0.2.7", redirect.revision_user);
     const missing_source = (try headers.next(std.testing.allocator)).?;
     defer std.testing.allocator.free(missing_source.title);
     defer std.testing.allocator.free(missing_source.revision_timestamp);
+    defer std.testing.allocator.free(missing_source.revision_user);
     try std.testing.expectEqual(@as(u32, 10), missing_source.ns);
+    try std.testing.expectEqualStrings("", missing_source.revision_user);
     try std.testing.expect(!missing_source.has_source);
     try std.testing.expectEqual(@as(usize, 0), missing_source.source_len);
 }

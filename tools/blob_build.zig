@@ -45,6 +45,7 @@ fn parseIndexedPage(line: []const u8) !IndexedPage {
     _ = fields.next() orelse return error.InvalidPageIndex; // page id
     _ = fields.next() orelse return error.InvalidPageIndex; // revision id
     _ = fields.next() orelse return error.InvalidPageIndex; // revision timestamp
+    _ = fields.next() orelse return error.InvalidPageIndex; // revision user
     const ns = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10);
     const has_source_raw = fields.next() orelse return error.InvalidPageIndex;
     if (title.len == 0 or fields.next() != null) return error.InvalidPageIndex;
@@ -72,8 +73,8 @@ fn writePageIndex(io: std.Io, allocator: std.mem.Allocator, dump: *dump_source.D
         const page = (try headers.next(a)) orelse break;
         if (std.mem.indexOfAny(u8, page.title, "\t\r\n") != null) return error.InvalidPageTitle;
         if (page.redirect) |target| if (std.mem.indexOfAny(u8, target, "\t\r\n") != null) return error.InvalidPageTitle;
-        if (std.mem.indexOfAny(u8, page.revision_timestamp, "\t\r\n") != null) return error.InvalidPageMetadata;
-        try writer.interface.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\t{d}\t{d}\n", .{
+        if (std.mem.indexOfAny(u8, page.revision_timestamp, "\t\r\n") != null or std.mem.indexOfAny(u8, page.revision_user, "\t\r\n") != null) return error.InvalidPageMetadata;
+        try writer.interface.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{d}\t{d}\n", .{
             page.source_offset,
             page.source_len,
             page.title,
@@ -81,6 +82,7 @@ fn writePageIndex(io: std.Io, allocator: std.mem.Allocator, dump: *dump_source.D
             page.page_id,
             page.revision_id,
             page.revision_timestamp,
+            page.revision_user,
             page.ns,
             @intFromBool(page.has_source),
         });

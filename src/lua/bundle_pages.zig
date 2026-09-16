@@ -5,7 +5,7 @@ const lua_program = @import("lua_program");
 const xml_decode = @import("shared_xml_decode");
 const InterwikiRow = lua_program.WikitextProvider.InterwikiRow;
 
-const CorpusPage = struct { offset: u64, len: usize, page_id: u64, revision_id: u64, revision_timestamp: []const u8, redirect: ?[]const u8 = null };
+const CorpusPage = struct { offset: u64, len: usize, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, redirect: ?[]const u8 = null };
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
@@ -143,6 +143,7 @@ pub const Provider = struct {
             const page_id = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
             const revision_id = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
             const revision_timestamp = fields.next() orelse return error.InvalidPageIndex;
+            const revision_user = fields.next() orelse return error.InvalidPageIndex;
             _ = std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10) catch return error.InvalidPageIndex; // namespace
             const has_source = fields.next() orelse return error.InvalidPageIndex;
             if (title.len == 0 or revision_timestamp.len == 0 or
@@ -154,7 +155,7 @@ pub const Provider = struct {
             const result = try pages.getOrPut(self.a, title);
             if (result.found_existing) return error.DuplicatePage;
             result.key_ptr.* = title;
-            result.value_ptr.* = .{ .offset = offset, .len = len, .page_id = page_id, .revision_id = revision_id, .revision_timestamp = revision_timestamp, .redirect = redirect };
+            result.value_ptr.* = .{ .offset = offset, .len = len, .page_id = page_id, .revision_id = revision_id, .revision_timestamp = revision_timestamp, .revision_user = revision_user, .redirect = redirect };
         }
         self.corpus_pages = pages;
         self.corpus_pages_storage = mapped;
@@ -216,7 +217,7 @@ pub const Provider = struct {
     fn pageMetadata(ctx: ?*anyopaque, title: []const u8) anyerror!?lua_program.WikitextProvider.PageMetadata {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         const page = (try self.findPage(title)) orelse return null;
-        return .{ .page_id = page.page_id, .revision_id = page.revision_id, .revision_timestamp = page.revision_timestamp };
+        return .{ .page_id = page.page_id, .revision_id = page.revision_id, .revision_timestamp = page.revision_timestamp, .revision_user = page.revision_user };
     }
 
     fn interwikiMap(ctx: ?*anyopaque) anyerror![]const InterwikiRow {
@@ -256,7 +257,7 @@ test "provider owns paths and separates raw content from redirect-following tran
     const alias_offset = template_offset + template_raw.len;
     const page_index = try std.fmt.allocPrint(
         a,
-        "{d}\t{d}\tOrdinary page\t\t1\t101\t2024-03-04T05:06:07Z\t0\t1\n{d}\t{d}\tTemplate:Lazy\t\t2\t102\t2024-03-05T06:07:08Z\t10\t1\n{d}\t{d}\tTemplate:Alias\tTemplate:Lazy\t3\t103\t2024-03-06T07:08:09Z\t10\t1\n",
+        "{d}\t{d}\tOrdinary page\t\t1\t101\t2024-03-04T05:06:07Z\tAlice\t0\t1\n{d}\t{d}\tTemplate:Lazy\t\t2\t102\t2024-03-05T06:07:08Z\tBob\t10\t1\n{d}\t{d}\tTemplate:Alias\tTemplate:Lazy\t3\t103\t2024-03-06T07:08:09Z\t192.0.2.7\t10\t1\n",
         .{ prefix.len, ordinary_raw.len, template_offset, template_raw.len, alias_offset, alias_raw.len },
     );
     defer a.free(page_index);
@@ -281,6 +282,7 @@ test "provider owns paths and separates raw content from redirect-following tran
     try std.testing.expectEqual(@as(u64, 1), metadata.page_id);
     try std.testing.expectEqual(@as(u64, 101), metadata.revision_id);
     try std.testing.expectEqualStrings("2024-03-04T05:06:07Z", metadata.revision_timestamp);
+    try std.testing.expectEqualStrings("Alice", metadata.revision_user);
     try std.testing.expect(try Provider.exists(&provider, "Ordinary_page"));
     const main_content = (try provider.lookup(page_a, "Ordinary_page", true)) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("A&B", main_content);
