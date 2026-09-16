@@ -93,6 +93,17 @@ fn titleForSpec(runtime: *rt.Context, spec: namespace_lib.Spec, text: []const u8
     return std.fmt.allocPrint(runtime.allocator, "{s}:{s}", .{ spec.name, text });
 }
 
+fn defaultContentModel(title: []const u8) []const u8 {
+    const ns = namespaceOf(title);
+    if (ns.id == 828) return "Scribunto";
+    if (ns.id == 2 or ns.id == 8) {
+        if (std.mem.endsWith(u8, ns.text, ".css")) return "css";
+        if (std.mem.endsWith(u8, ns.text, ".js")) return "javascript";
+        if (std.mem.endsWith(u8, ns.text, ".json")) return "json";
+    }
+    return "wikitext";
+}
+
 fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len < 2 or args[0] != .table or args[1] != .string) return one(.nil);
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
@@ -131,6 +142,14 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
             if (std.mem.indexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
         const title = try titleForSpec(runtime, spec, text);
         return one(try makeTitleValue(runtime, state, title));
+    }
+    if (std.mem.eql(u8, key, "contentModel")) {
+        const host = host_api.get(runtime);
+        const model = if (host) |value|
+            if (value.page_content_model) |get| try get(value.ctx, prefixed.string) else null
+        else
+            null;
+        return one(.{ .string = model orelse defaultContentModel(prefixed.string) });
     }
     if (std.mem.eql(u8, key, "id")) {
         const host = host_api.get(runtime) orelse return one(.{ .number = 0 });
@@ -335,6 +354,11 @@ fn testPageId(_: ?*anyopaque, title: []const u8) !?u64 {
     return null;
 }
 
+fn testPageContentModel(_: ?*anyopaque, title: []const u8) !?[]const u8 {
+    if (std.mem.eql(u8, title, "Template:Foo/Sub") or std.mem.eql(u8, title, "Template:Alias")) return "wikitext";
+    return null;
+}
+
 fn testPageContent(_: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
     if (!std.mem.eql(u8, title, "Template:Foo/Sub")) return null;
     return try a.dupe(u8, "template body");
@@ -350,7 +374,7 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     defer arena.deinit();
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
-    var host = host_api.Host{ .current_title = "Template:Foo/Sub", .page_exists = testPageExists, .page_content = testPageContent, .page_redirect = testPageRedirect, .page_id = testPageId };
+    var host = host_api.Host{ .current_title = "Template:Foo/Sub", .page_exists = testPageExists, .page_content = testPageContent, .page_redirect = testPageRedirect, .page_id = testPageId, .page_content_model = testPageContentModel };
     host_api.set(&runtime, &host);
     const mw = try runtime.newNativeNamespace(.mw);
     try install(&runtime, mw);
@@ -374,6 +398,7 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     try std.testing.expectEqualStrings("Template:Foo/Sub/Next", (try runtime.getIndex(sub_page[0], .{ .string = "prefixedText" })).string);
     try std.testing.expect((try runtime.getIndex(title, .{ .string = "exists" })).boolean);
     try std.testing.expectEqual(@as(f64, 77), (try runtime.getIndex(title, .{ .string = "id" })).number);
+    try std.testing.expectEqualStrings("wikitext", (try runtime.getIndex(title, .{ .string = "contentModel" })).string);
     try std.testing.expectEqualStrings(" frag ment", (try runtime.getIndex(title, .{ .string = "fragment" })).string);
     try std.testing.expectEqualStrings("Template:Foo/Sub# frag ment", (try runtime.getIndex(title, .{ .string = "fullText" })).string);
     try std.testing.expect(!(try runtime.getIndex(title, .{ .string = "isTalkPage" })).boolean);
@@ -438,6 +463,13 @@ test "AOT title subpage fields respect namespace settings" {
     try std.testing.expectEqualStrings("foo/bar", (try runtime.getIndex(title, .{ .string = "subpageText" })).string);
     const base = try runtime.getIndex(title, .{ .string = "basePageTitle" });
     try std.testing.expectEqualStrings("foo/bar", (try runtime.getIndex(base, .{ .string = "prefixedText" })).string);
+    try std.testing.expectEqualStrings("wikitext", (try runtime.getIndex(title, .{ .string = "contentModel" })).string);
+    const missing_module = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Module:Missing" }});
+    defer rt.freeResults(missing_module);
+    try std.testing.expectEqualStrings("Scribunto", (try runtime.getIndex(missing_module[0], .{ .string = "contentModel" })).string);
+    const missing_css = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "User:Example/common.css" }});
+    defer rt.freeResults(missing_css);
+    try std.testing.expectEqualStrings("css", (try runtime.getIndex(missing_css[0], .{ .string = "contentModel" })).string);
 }
 
 test "AOT title constructors and current title use the live host" {
