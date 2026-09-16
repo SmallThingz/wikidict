@@ -11,7 +11,7 @@ const source =
     "# Formatting magic: {{formatnum:11000}} / {{formatnum:1,234.50|R}} / {{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}\n" ++
     "# Title parts: {{#titleparts:A/B/C|1|2}} / {{#titleparts:A/B/C|-1}}\n" ++
     "# Escaped title: {{PAGENAMEE:Appendix:A B/é?x}} / {{FULLPAGENAMEE:Appendix:A B/é?x}}\n" ++
-    "# Revision metadata: {{PAGEID}} / {{REVISIONID}} / {{REVISIONTIMESTAMP}}\n";
+    "# Revision metadata: {{PAGEID}} / {{REVISIONID}} / {{REVISIONTIMESTAMP}} / {{REVISIONUSER}} / {{PAGEID:rat}} / {{REVISIONUSER:rat}}\n";
 const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
     \\local alias_name = 'Module:IntegrationFormsAlias'
@@ -41,7 +41,7 @@ const template_source =
     "<includeonly>{{#invoke:IntegrationForms|render_dictionary_fixture|{{{1}}}}}</includeonly>" ++
     "<noinclude>Documentation must not leak.</noinclude>";
 
-const Page = struct { title: []const u8, ns: u16, id: u32, body: []const u8, redirect: ?[]const u8 = null };
+const Page = struct { title: []const u8, ns: u16, id: u32, body: []const u8, user: []const u8 = "Fixture editor", redirect: ?[]const u8 = null };
 fn xml(w: *std.Io.Writer, text: []const u8) !void {
     for (text) |ch| switch (ch) {
         '&' => try w.writeAll("&amp;"),
@@ -54,7 +54,7 @@ fn xml(w: *std.Io.Writer, text: []const u8) !void {
 fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
     const pages = [_]Page{
         .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
-        .{ .title = "rat", .ns = 0, .id = 22, .body = "==English==\n===Noun===\n# Another rodent.\n" },
+        .{ .title = "rat", .ns = 0, .id = 22, .body = "==English==\n===Noun===\n# Another rodent.\n", .user = "Rat editor" },
         .{ .title = "Shared", .ns = 0, .id = 23, .body = "shared main transclusion" },
         .{ .title = "SharedAlias", .ns = 0, .id = 24, .body = "#REDIRECT [[Shared]]", .redirect = "Shared" },
         .{ .title = "Wiktionary:Sandbox", .ns = 4, .id = 25, .body = "project namespace transclusion" },
@@ -74,10 +74,9 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
     for (pages) |page| {
         try w.print("<page><title>{s}</title><ns>{d}</ns><id>{d}</id>", .{ page.title, page.ns, page.id });
         if (page.redirect) |target| try w.print("<redirect title=\"{s}\"/>", .{target});
-        try w.print("<revision><id>{d}</id><timestamp>2024-03-04T05:06:07Z</timestamp><model>{s}</model><text>", .{
-            page.id + 100,
-            if (page.ns == 828 and page.redirect == null) "Scribunto" else "wikitext",
-        });
+        try w.print("<revision><id>{d}</id><timestamp>2024-03-04T05:06:07Z</timestamp><contributor><username>", .{page.id + 100});
+        try xml(w, page.user);
+        try w.print("</username></contributor><model>{s}</model><text>", .{if (page.ns == 828 and page.redirect == null) "Scribunto" else "wikitext"});
         try xml(w, page.body);
         try w.writeAll("</text></revision></page>\n");
     }
@@ -184,7 +183,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "Formatting magic: 11,000 / 1234.50 / A_B_x_C") != null, "formatting magic is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Title parts: B / A/B") != null, "titleparts is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Escaped title: A_B/%C3%A9%3Fx / Appendix:A_B/%C3%A9%3Fx") != null, "escaped title magic is baked into data");
-    try h.require(std.mem.indexOf(u8, text, "Revision metadata: 20 / 120 / 20240304050607") != null, "page revision metadata is baked into data");
+    try h.require(std.mem.indexOf(u8, text, "Revision metadata: 20 / 120 / 20240304050607 / Fixture editor / 22 / Rat editor") != null, "page revision metadata is baked into data");
     try h.require(std.mem.indexOf(u8, text, "ordinary namespace distinct") != null, "Template namespace alias resolves through corpus transclusion");
     try h.require(std.mem.indexOf(u8, text, "Documentation") == null, "noinclude does not leak");
     try h.require(std.mem.indexOf(u8, text, "#invoke") == null, "no executable invoke syntax survives");

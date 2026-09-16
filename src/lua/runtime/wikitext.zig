@@ -422,9 +422,30 @@ pub const Expander = struct {
         return if (escaped) @as(?[]const u8, try uri_lib.wikiEncodeAlloc(self.runtime.allocator, value)) else value;
     }
 
-    fn pageMetadata(self: *Expander) !Provider.PageMetadata {
+    fn isRevisionMagicName(raw: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(raw, "PAGEID") or
+            std.ascii.eqlIgnoreCase(raw, "REVISIONID") or
+            std.ascii.eqlIgnoreCase(raw, "REVISIONTIMESTAMP") or
+            std.ascii.eqlIgnoreCase(raw, "REVISIONYEAR") or
+            std.ascii.eqlIgnoreCase(raw, "REVISIONMONTH") or
+            std.ascii.eqlIgnoreCase(raw, "REVISIONMONTH1") or
+            std.ascii.eqlIgnoreCase(raw, "REVISIONDAY") or
+            std.ascii.eqlIgnoreCase(raw, "REVISIONDAY2") or
+            std.ascii.eqlIgnoreCase(raw, "REVISIONUSER");
+    }
+
+    fn pageMetadataFor(self: *Expander, raw_page: ?[]const u8) !?Provider.PageMetadata {
         const get = self.provider.page_metadata orelse return error.MissingPageMetadata;
-        return (try get(self.provider.ctx, self.host.current_title)) orelse error.MissingPageMetadata;
+        const requested = if (raw_page) |value| blk: {
+            const trimmed = std.mem.trim(u8, value, " \t\r\n");
+            break :blk if (trimmed.len == 0) self.host.current_title else trimmed;
+        } else self.host.current_title;
+        const canonical_with_fragment = try namespace_lib.canonicalizeTitle(self.runtime.allocator, requested);
+        const page = if (std.mem.indexOfScalar(u8, canonical_with_fragment, '#')) |hash|
+            canonical_with_fragment[0..hash]
+        else
+            canonical_with_fragment;
+        return get(self.provider.ctx, page);
     }
 
     fn compactRevisionTimestamp(self: *Expander, raw: []const u8) ![]const u8 {
@@ -439,10 +460,12 @@ pub const Expander = struct {
         return out;
     }
 
-    fn revisionMagic(self: *Expander, head: []const u8) !?[]const u8 {
-        const metadata = if (std.ascii.eqlIgnoreCase(head, "PAGEID") or std.ascii.startsWithIgnoreCase(head, "REVISION")) try self.pageMetadata() else return null;
+    fn revisionMagic(self: *Expander, head: []const u8, raw_page: ?[]const u8) !?[]const u8 {
+        if (!isRevisionMagicName(head)) return null;
+        const metadata = (try self.pageMetadataFor(raw_page)) orelse return "";
         if (std.ascii.eqlIgnoreCase(head, "PAGEID")) return self.formatMagic("{d}", .{metadata.page_id});
         if (std.ascii.eqlIgnoreCase(head, "REVISIONID")) return self.formatMagic("{d}", .{metadata.revision_id});
+        if (std.ascii.eqlIgnoreCase(head, "REVISIONUSER")) return metadata.revision_user;
         const ts = metadata.revision_timestamp;
         if (ts.len != 20 or ts[4] != '-' or ts[7] != '-' or ts[10] != 'T' or ts[13] != ':' or ts[16] != ':' or ts[19] != 'Z') return error.InvalidRevisionTimestamp;
         if (std.ascii.eqlIgnoreCase(head, "REVISIONTIMESTAMP")) return @as(?[]const u8, try self.compactRevisionTimestamp(ts));
@@ -463,7 +486,7 @@ pub const Expander = struct {
     fn magicWord(self: *Expander, raw: []const u8) !?[]const u8 {
         const head = std.mem.trim(u8, raw, " \t\r\n");
         if (try self.titleMagic(head, null)) |value| return value;
-        if (try self.revisionMagic(head)) |value| return value;
+        if (try self.revisionMagic(head, null)) |value| return value;
         if (std.mem.eql(u8, head, "!")) return "|";
         if (std.mem.eql(u8, head, "!!")) return "||";
         if (std.mem.eql(u8, head, "=")) return "=";
@@ -884,6 +907,10 @@ pub const Expander = struct {
         if (preprocess.findTopDelimiter(raw_head, ':')) |colon| {
             const name = std.mem.trim(u8, raw_head[0..colon], " \t\r\n");
             const first = raw_head[colon + 1 ..];
+            if (isRevisionMagicName(name)) {
+                const page = try self.expandWikitext(first, params, host_title, depth + 1);
+                return (try self.revisionMagic(name, page)) orelse unreachable;
+            }
             if (isTitleMagicName(name)) {
                 const page = try self.expandWikitext(first, params, host_title, depth + 1);
                 return (try self.titleMagic(name, page)) orelse unreachable;
@@ -1151,6 +1178,14 @@ pub const Expander = struct {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const first = args.rawGet(.{ .number = 1 });
         const second = args.rawGet(.{ .number = 2 });
+        if (isRevisionMagicName(name)) {
+            const page: ?[]const u8 = if (first) |value| switch (value) {
+                .nil => null,
+                .string => |text| text,
+                else => return error.StringExpected,
+            } else null;
+            return (try self.revisionMagic(name, page)) orelse unreachable;
+        }
         if (std.ascii.eqlIgnoreCase(name, "#invoke")) return self.frameParserInvoke(args);
         if (std.ascii.eqlIgnoreCase(name, "#tag") or std.ascii.startsWithIgnoreCase(name, "#tag:")) return self.frameParserTag(raw, a, name, args);
         if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT") or std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) return "";
@@ -1205,8 +1240,11 @@ const TestProvider = struct {
         return std.mem.eql(u8, title, "Exists") or std.mem.eql(u8, title, "Wiktionary:Sandbox");
     }
     fn pageMetadata(_: ?*anyopaque, title: []const u8) !?Provider.PageMetadata {
-        if (!std.mem.eql(u8, title, "Page") and !std.mem.eql(u8, title, "Appendix:Page/Sub")) return null;
-        return .{ .page_id = 42, .revision_id = 420, .revision_timestamp = "2024-03-04T05:06:07Z", .revision_user = "Test editor" };
+        if (std.mem.eql(u8, title, "Page") or std.mem.eql(u8, title, "Appendix:Page/Sub"))
+            return .{ .page_id = 42, .revision_id = 420, .revision_timestamp = "2024-03-04T05:06:07Z", .revision_user = "Test editor" };
+        if (std.mem.eql(u8, title, "Other page"))
+            return .{ .page_id = 99, .revision_id = 990, .revision_timestamp = "2025-06-07T08:09:10Z", .revision_user = "Other editor" };
+        return null;
     }
     fn resolveCallSymbol(_: ?*anyopaque, _: *rt.Context, raw: []const u8, kind: CallSymbolKind) !?CallSymbol {
         const value = std.mem.trim(u8, raw, " \t\r\n");
@@ -1264,8 +1302,10 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
     const source = "{{Hello|Bob|1}}|{{Only}}|{{:Main_page}}|{{WT:Sandbox}}|{{T:Hello|Z|1}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{#ifexist:WT:Sandbox|W|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
     expander.provider.page_metadata = TestProvider.pageMetadata;
-    const current_magic = try expander.expandFragment("Appendix:Page/Sub", "{{CURRENTDAYNAME}}|{{CURRENTWEEK}}|{{CURRENTMONTHNAMEGEN}}|{{PAGEID}}|{{REVISIONID}}|{{REVISIONTIMESTAMP}}|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}", 1_670_803_200);
-    try std.testing.expectEqualStrings("Monday|50|December|42|420|20240304050607|2024-03-4", current_magic);
+    const current_magic = try expander.expandFragment("Appendix:Page/Sub", "{{CURRENTDAYNAME}}|{{CURRENTWEEK}}|{{CURRENTMONTHNAMEGEN}}|{{PAGEID}}|{{REVISIONID}}|{{REVISIONTIMESTAMP}}|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}|{{REVISIONUSER}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Monday|50|December|42|420|20240304050607|2024-03-4|Test editor", current_magic);
+    const other_magic = try expander.expandFragment("Page", "{{PAGEID:Other_page}}|{{REVISIONID:Other page}}|{{REVISIONTIMESTAMP:Other page}}|{{REVISIONUSER:Other_page}}|{{PAGEID:Missing page}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("99|990|20250607080910|Other editor|", other_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
 
@@ -1413,6 +1453,10 @@ test "native AOT frame callbacks recurse through the same page expander" {
     defer rt.freeResults(commented_pre);
     try std.testing.expectEqualStrings("ABHi C N", commented_pre[0].string);
     const parser = try runtime.getIndex(frame, .{ .string = "callParserFunction" });
+    expander.provider.page_metadata = TestProvider.pageMetadata;
+    const revision_user = try runtime.callValue(parser, &.{ frame, .{ .string = "REVISIONUSER" }, .{ .string = "Other_page" } });
+    defer rt.freeResults(revision_user);
+    try std.testing.expectEqualStrings("Other editor", revision_user[0].string);
     const date = try runtime.callValue(parser, &.{ frame, .{ .string = "#formatdate" }, .{ .string = "12-December-2022" }, .{ .string = "dmy" } });
     defer rt.freeResults(date);
     try std.testing.expectEqualStrings("<span class=\"mw-formatted-date\" title=\"2022-12-12\">12 December 2022</span>", date[0].string);
