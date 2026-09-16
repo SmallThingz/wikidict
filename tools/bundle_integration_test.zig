@@ -19,6 +19,12 @@ const module_source =
     \\local bit32 = require('bit32')
     \\assert(bit32.band(240, 60) == 48 and bit32.bor(16, 3, 64) == 83)
     \\assert(require('bit32') == bit32)
+    \\local libraryUtil = require('libraryUtil')
+    \\libraryUtil.checkType('integration', 1, 'ok', 'string')
+    \\local type_ok, type_err = pcall(libraryUtil.checkType, 'integration', 2, 7, 'string')
+    \\assert(not type_ok and type_err == "bad argument #2 to 'integration' (string expected, got number)")
+    \\libraryUtil.checkTypeMulti('integration', 1, 7, {'string', 'number'})
+    \\assert(require('libraryUtil') == libraryUtil)
     \\local alias_name = 'Module:IntegrationFormsAlias'
     \\assert(require(alias_name).mouse == 'mice')
     \\return {

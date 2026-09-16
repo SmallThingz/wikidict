@@ -78,9 +78,8 @@ fn mainModuleLoader(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]
     return one(ctx.allocator, loader);
 }
 
-fn baseType(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
-    const name = if (args.len == 0) "nil" else switch (args[0]) {
+fn valueTypeName(value: Value) []const u8 {
+    return switch (value) {
         .nil => "nil",
         .boolean => "boolean",
         .number => "number",
@@ -88,7 +87,10 @@ fn baseType(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Valu
         .table => "table",
         .callable => "function",
     };
-    return one(a, .{ .string = name });
+}
+
+fn baseType(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    return one(ctx.allocator, .{ .string = if (args.len == 0) "nil" else valueTypeName(args[0]) });
 }
 fn baseAssert(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     if (args.len != 0 and args[0].truthy()) {
@@ -933,6 +935,68 @@ fn makeBit32(runtime: *rt.Context) !*rt.Table {
     return bit32;
 }
 
+fn raiseLibraryUtilTypeError(ctx: *rt.Context, name: []const u8, arg_index: i64, expected: []const u8, actual: []const u8) ![]const Value {
+    ctx.last_error = .{ .string = try std.fmt.allocPrint(
+        ctx.allocator,
+        "bad argument #{d} to '{s}' ({s} expected, got {s})",
+        .{ arg_index, name, expected, actual },
+    ) };
+    return error.LuaRaised;
+}
+
+fn libraryUtilCheckType(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len < 4) return error.MissingArgument;
+    const name = try str(ctx.allocator, args[0]);
+    const arg_index = try integer(args[1]);
+    const expected = try str(ctx.allocator, args[3]);
+    if (args[2] == .nil and args.len > 4 and args[4].truthy()) return &.{};
+    const actual = valueTypeName(args[2]);
+    if (std.mem.eql(u8, actual, expected)) return &.{};
+    return raiseLibraryUtilTypeError(ctx, name, arg_index, expected, actual);
+}
+
+fn libraryUtilCheckTypeMulti(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len < 4) return error.MissingArgument;
+    if (args[3] != .table) return error.TableExpected;
+    const name = try str(ctx.allocator, args[0]);
+    const arg_index = try integer(args[1]);
+    const actual = valueTypeName(args[2]);
+    const expected_types = args[3].table;
+
+    var type_list: std.ArrayList(u8) = .empty;
+    defer type_list.deinit(ctx.allocator);
+    var expected_count: usize = 0;
+    var index: usize = 1;
+    while (expected_types.rawGetNumber(@floatFromInt(index))) |value| : (index += 1) {
+        if (value == .nil) break;
+        const expected = try str(ctx.allocator, value);
+        if (std.mem.eql(u8, actual, expected)) return &.{};
+        if (expected_count != 0) try type_list.appendSlice(ctx.allocator, ", ");
+        try type_list.appendSlice(ctx.allocator, expected);
+        expected_count += 1;
+    }
+    if (expected_count == 0) return error.MissingExpectedType;
+
+    if (expected_count > 1) {
+        var split = std.mem.lastIndexOf(u8, type_list.items, ", ").?;
+        var joined: std.ArrayList(u8) = .empty;
+        defer joined.deinit(ctx.allocator);
+        try joined.appendSlice(ctx.allocator, type_list.items[0..split]);
+        try joined.appendSlice(ctx.allocator, " or ");
+        split += 2;
+        try joined.appendSlice(ctx.allocator, type_list.items[split..]);
+        return raiseLibraryUtilTypeError(ctx, name, arg_index, joined.items, actual);
+    }
+    return raiseLibraryUtilTypeError(ctx, name, arg_index, type_list.items, actual);
+}
+
+fn makeLibraryUtil(runtime: *rt.Context) !*rt.Table {
+    const library_util = try runtime.newTable();
+    try setNative(runtime, library_util, "checkType", libraryUtilCheckType);
+    try setNative(runtime, library_util, "checkTypeMulti", libraryUtilCheckTypeMulti);
+    return library_util;
+}
+
 fn installPackage(runtime: *rt.Context) !void {
     const package = try runtime.newTable();
     const loaded = try runtime.newTable();
@@ -940,6 +1004,7 @@ fn installPackage(runtime: *rt.Context) !void {
     try package.rawSet(runtime.allocator, .{ .string = "loaded" }, .{ .table = loaded });
     try package.rawSet(runtime.allocator, .{ .string = "loaders" }, .{ .table = loaders });
     try loaded.rawSet(runtime.allocator, .{ .string = "bit32" }, .{ .table = try makeBit32(runtime) });
+    try loaded.rawSet(runtime.allocator, .{ .string = "libraryUtil" }, .{ .table = try makeLibraryUtil(runtime) });
     const loader_state = try runtime.allocator.create(MainModuleLoaderCtx);
     loader_state.* = .{ .cache = try runtime.newTable() };
     try loaders.rawSet(runtime.allocator, .{ .number = 2 }, try runtime.newNative(loader_state, mainModuleLoader));
@@ -1162,6 +1227,34 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     const wrapped = try callField(&ctx, bit32_result[0], "band", &.{ .{ .number = -1 }, .{ .number = 0xFF } });
     defer rt.freeResults(wrapped);
     try std.testing.expectEqual(@as(f64, 0xFF), wrapped[0].number);
+    const library_util_result = try ctx.callValue(require, &.{.{ .string = "libraryUtil" }});
+    defer rt.freeResults(library_util_result);
+    try std.testing.expect(library_util_result.len == 1 and library_util_result[0] == .table);
+    const check_type = try ctx.getIndex(library_util_result[0], .{ .string = "checkType" });
+    const check_type_ok = try ctx.callValue(check_type, &.{ .{ .string = "demo" }, .{ .number = 1 }, .{ .string = "ok" }, .{ .string = "string" } });
+    defer rt.freeResults(check_type_ok);
+    try std.testing.expectEqual(@as(usize, 0), check_type_ok.len);
+    const pcall = ctx.getGlobal(global_abi.id("pcall"));
+    const check_type_bad = try ctx.callValue(pcall, &.{ check_type, .{ .string = "demo" }, .{ .number = 2 }, .{ .number = 7 }, .{ .string = "string" } });
+    defer rt.freeResults(check_type_bad);
+    try std.testing.expect(!check_type_bad[0].boolean);
+    try std.testing.expectEqualStrings("bad argument #2 to 'demo' (string expected, got number)", check_type_bad[1].string);
+    const check_nil = try ctx.callValue(check_type, &.{ .{ .string = "demo" }, .{ .number = 3 }, .nil, .{ .string = "table" }, .{ .boolean = true } });
+    defer rt.freeResults(check_nil);
+    try std.testing.expectEqual(@as(usize, 0), check_nil.len);
+
+    const expected_types = try ctx.newTable();
+    try expected_types.rawSet(ctx.allocator, .{ .number = 1 }, .{ .string = "table" });
+    try expected_types.rawSet(ctx.allocator, .{ .number = 2 }, .{ .string = "number" });
+    try expected_types.rawSet(ctx.allocator, .{ .number = 3 }, .{ .string = "string" });
+    const check_type_multi = try ctx.getIndex(library_util_result[0], .{ .string = "checkTypeMulti" });
+    const multi_ok = try ctx.callValue(check_type_multi, &.{ .{ .string = "demo" }, .{ .number = 1 }, .{ .number = 7 }, .{ .table = expected_types } });
+    defer rt.freeResults(multi_ok);
+    try std.testing.expectEqual(@as(usize, 0), multi_ok.len);
+    const multi_bad = try ctx.callValue(pcall, &.{ check_type_multi, .{ .string = "demo" }, .{ .number = 1 }, .{ .boolean = true }, .{ .table = expected_types } });
+    defer rt.freeResults(multi_bad);
+    try std.testing.expect(!multi_bad[0].boolean);
+    try std.testing.expectEqualStrings("bad argument #1 to 'demo' (table, number or string expected, got boolean)", multi_bad[1].string);
     try std.testing.expectError(error.AotCallFailed, ctx.callValue(require, &.{.{ .string = "Module:Missing" }}));
     try std.testing.expectEqualStrings("ModuleNotFound", ctx.aotErrorName().?);
     ctx.clearAotErrorName();
