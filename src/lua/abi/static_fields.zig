@@ -16,6 +16,7 @@ pub const Namespace = enum(u8) {
     title_value,
     language_value,
     html_node,
+    hash,
 };
 const names = [_][]const u8{
     "insert",               "remove",             "concat",            "sort",            "maxn",                 "getn",
@@ -73,6 +74,7 @@ const language_value_names = [_][]const u8{
     "getArrow", "gender",  "formatNum",  "parseFormattedNumber",
 };
 const html_node_names = [_][]const u8{ "tag", "done", "allDone", "wikitext", "node", "css", "cssText", "addClass", "attr", "newline" };
+const hash_names = [_][]const u8{"hashValue"};
 
 fn namespaceNames(namespace: Namespace) []const []const u8 {
     return switch (namespace) {
@@ -91,6 +93,7 @@ fn namespaceNames(namespace: Namespace) []const []const u8 {
         .title_value => &title_value_names,
         .language_value => &language_value_names,
         .html_node => &html_node_names,
+        .hash => &hash_names,
     };
 }
 pub fn fieldCount(namespace: Namespace) u32 {
@@ -125,6 +128,7 @@ pub fn slotForName(namespace: Namespace, field_name: []const u8) ?u32 {
         .title_value => staticSlot(&title_value_names, field_name),
         .language_value => staticSlot(&language_value_names, field_name),
         .html_node => staticSlot(&html_node_names, field_name),
+        .hash => staticSlot(&hash_names, field_name),
     };
 }
 

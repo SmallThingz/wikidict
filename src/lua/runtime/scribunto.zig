@@ -9,6 +9,7 @@ const language_lib = @import("language.zig");
 const frame_lib = @import("frame.zig");
 const uri_lib = @import("uri.zig");
 const basics_lib = @import("mw_basics.zig");
+const hash_lib = @import("hash.zig");
 pub const FrameArg = frame_lib.FrameArg;
 pub fn makeFrame(runtime: *rt.Context, title: []const u8, args: []const FrameArg, parent: ?Value) !Value {
     return frame_lib.makeFrame(runtime, title, args, parent);
@@ -118,6 +119,7 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try frame_lib.install(runtime, mw);
     try uri_lib.install(runtime, mw);
     try basics_lib.install(runtime, mw);
+    try hash_lib.install(runtime, mw);
     try mw.rawSetNativeField(.mw, "loadData", try runtime.newNative(state, loadDataCall));
     try mw.rawSetNativeField(.mw, "clone", try runtime.newNative(null, cloneCall));
     try runtime.setGlobal(state.mw_slot, .{ .table = mw });
@@ -444,6 +446,7 @@ test "AOT Scribunto compiler-known namespaces use native slots" {
         .{ "html", "html" },
         .{ "language", "language" },
         .{ "ustring", "ustring" },
+        .{ "hash", "hash" },
     }) |entry| {
         const value = try runtime.getIndex(mw, .{ .string = entry[0] });
         try std.testing.expect(value == .table and std.mem.eql(u8, @tagName(value.table.native_namespace.?), entry[1]));
