@@ -50,7 +50,7 @@ const string_names = names[6..19];
 const math_names = names[19..42];
 const debug_names = names[42..45];
 const mw_names = [_][]const u8{
-    "loadData",   "clone",      "getCurrentFrame", "ustring", "dumpObject", "log",                "logObject",
+    "loadData",   "loadJsonData", "clone",      "getCurrentFrame", "ustring", "dumpObject", "log",                "logObject",
     "addWarning", "isSubsting", "title",           "text",    "site",       "uri",                "wikibase",
     "message",    "hash",       "ext",             "html",    "language",   "getContentLanguage", "getLanguage",
 };

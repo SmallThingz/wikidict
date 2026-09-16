@@ -64,6 +64,11 @@ const module_source =
     \\    assert(mw.text.killMarkers('a' .. strip_marker .. 'b') == 'ab')
     \\    local json_value = mw.text.jsonDecode('{"x":[1,2]}', mw.text.JSON_TRY_FIXING)
     \\    assert(json_value.x[2] == 2 and mw.text.jsonEncode(json_value) == '{"x":[1,2]}')
+    \\    local json_data = mw.loadJsonData('Module:IntegrationFormsData.json')
+    \\    assert(json_data.cuts[2] == 2 and json_data.nested.ok)
+    \\    assert(json_data == mw.loadJsonData('Module:IntegrationFormsData.json'))
+    \\    local json_write_ok = pcall(function() json_data.cuts[1] = 9 end)
+    \\    assert(not json_write_ok)
     \\    assert(mw.getContentLanguage():ucfirst('hello') == 'Hello')
     \\    local unicode_case_ok = pcall(function() return mw.getContentLanguage():ucfirst('éclair') end)
     \\    assert(not unicode_case_ok)
@@ -95,7 +100,7 @@ const template_source =
     "<includeonly>{{#invoke:IntegrationForms|render_dictionary_fixture|{{{1}}}}}</includeonly>" ++
     "<noinclude>Documentation must not leak.</noinclude>";
 
-const Page = struct { title: []const u8, ns: u16, id: u32, body: []const u8, user: []const u8 = "Fixture editor", redirect: ?[]const u8 = null };
+const Page = struct { title: []const u8, ns: u16, id: u32, body: []const u8, user: []const u8 = "Fixture editor", redirect: ?[]const u8 = null, model: ?[]const u8 = null };
 fn xml(w: *std.Io.Writer, text: []const u8) !void {
     for (text) |ch| switch (ch) {
         '&' => try w.writeAll("&amp;"),
@@ -120,6 +125,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Module:IntegrationForms", .ns = 828, .id = 1, .body = module_source },
         .{ .title = "Module:languages/canonical names", .ns = 828, .id = 3, .body = "return { [\"English\"] = \"en\" }" },
         .{ .title = "Module:IntegrationFormsData", .ns = 828, .id = 2, .body = "return { mouse = 'mice' }" },
+        .{ .title = "Module:IntegrationFormsData.json", .ns = 828, .id = 5, .body = "{\"cuts\":[1,2],\"nested\":{\"ok\":true}}", .model = "json" },
         .{ .title = "Module:IntegrationFormsAlias", .ns = 828, .id = 4, .body = "#REDIRECT [[Module:IntegrationFormsData]]", .redirect = "Module:IntegrationFormsData" },
     };
     var out: std.Io.Writer.Allocating = .init(a);
@@ -131,7 +137,8 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         if (page.redirect) |target| try w.print("<redirect title=\"{s}\"/>", .{target});
         try w.print("<revision><id>{d}</id><timestamp>2024-03-04T05:06:07Z</timestamp><contributor><username>", .{page.id + 100});
         try xml(w, page.user);
-        try w.print("</username></contributor><model>{s}</model><text>", .{if (page.ns == 828 and page.redirect == null) "Scribunto" else "wikitext"});
+        const model = page.model orelse if (page.ns == 828 and page.redirect == null) "Scribunto" else "wikitext";
+        try w.print("</username></contributor><model>{s}</model><text>", .{model});
         try xml(w, page.body);
         try w.writeAll("</text></revision></page>\n");
     }

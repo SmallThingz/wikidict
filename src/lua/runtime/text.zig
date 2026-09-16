@@ -581,18 +581,21 @@ fn fixJsonTrailingCommas(a: std.mem.Allocator, source: []const u8) !?[]u8 {
     return try out.toOwnedSlice(a);
 }
 
-fn textJsonDecodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    const flags = try jsonFlags(args);
+pub fn jsonDecodeValue(runtime: *rt.Context, source: []const u8, flags: u32) !Value {
     var fixed: ?[]u8 = null;
-    const source = args[0].string;
     var parsed = std.json.parseFromSlice(std.json.Value, runtime.allocator, source, .{}) catch {
         if ((flags & json_try_fixing) == 0) return error.InvalidJson;
         fixed = try fixJsonTrailingCommas(runtime.allocator, source) orelse return error.InvalidJson;
-        return one(runtime.allocator, try jsonDecodeFixed(runtime, fixed.?, flags));
+        return jsonDecodeFixed(runtime, fixed.?, flags);
     };
     defer parsed.deinit();
-    return one(runtime.allocator, try jsonToLua(runtime, parsed.value, (flags & json_preserve_keys) != 0));
+    return jsonToLua(runtime, parsed.value, (flags & json_preserve_keys) != 0);
+}
+
+fn textJsonDecodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const flags = try jsonFlags(args);
+    return one(runtime.allocator, try jsonDecodeValue(runtime, args[0].string, flags));
 }
 
 fn jsonDecodeFixed(runtime: *rt.Context, source: []const u8, flags: u32) !Value {

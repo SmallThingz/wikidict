@@ -31,6 +31,7 @@ const State = struct {
     mw_slot: u32,
     load_data_cache: std.AutoHashMapUnmanaged(u32, Value) = .empty,
     load_data_loading: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    load_json_cache: std.StringHashMapUnmanaged(Value) = .empty,
 };
 
 fn one(value: Value) ![]const Value {
@@ -121,6 +122,7 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try basics_lib.install(runtime, mw);
     try hash_lib.install(runtime, mw);
     try mw.rawSetNativeField(.mw, "loadData", try runtime.newNative(state, loadDataCall));
+    try mw.rawSetNativeField(.mw, "loadJsonData", try runtime.newNative(state, loadJsonDataCall));
     try mw.rawSetNativeField(.mw, "clone", try runtime.newNative(null, cloneCall));
     try runtime.setGlobal(state.mw_slot, .{ .table = mw });
 }
@@ -155,6 +157,30 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     try state.load_data_cache.put(state.allocator, module_id, promoted);
     return one(promoted);
 }
+fn loadJsonDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingScribuntoState));
+    const title = args[0].string;
+    if (state.load_json_cache.get(title)) |value| return one(value);
+
+    const host = host_api.get(runtime) orelse return error.NotImplemented;
+    const get_model = host.page_content_model orelse return error.NotImplemented;
+    const model = (try get_model(host.ctx, title)) orelse return error.InvalidJsonPage;
+    if (!std.mem.eql(u8, model, "json")) return error.InvalidJsonPage;
+    const get_content = host.page_content orelse return error.NotImplemented;
+    const source = (try get_content(host.ctx, runtime.allocator, title)) orelse return error.InvalidJsonPage;
+    if (source.len == 0) return error.InvalidJsonPage;
+
+    const decoded = text_lib.jsonDecodeValue(runtime, source, 0) catch return error.InvalidJsonPage;
+    if (decoded != .table) return error.LoadJsonDataTableExpected;
+    var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
+    defer seen.deinit(runtime.allocator);
+    const promoted = try promoteLoadData(state.allocator, decoded, &seen);
+    const key = try state.allocator.dupe(u8, title);
+    try state.load_json_cache.put(state.allocator, key, promoted);
+    return one(promoted);
+}
+
 pub fn install(runtime: *rt.Context, env_slot: u32, string_slot: u32, mw_slot: u32) !void {
     const state = try runtime.allocator.create(State);
     state.* = .{
@@ -217,6 +243,7 @@ test "AOT Scribunto installs mw.ustring, html, loadData, clone, and string alias
     try std.testing.expect(rt.rawEqual(alias, direct));
     try std.testing.expect((try runtime.getIndex(mw, .{ .string = "html" })) == .table);
     try std.testing.expect((try runtime.getIndex(mw, .{ .string = "loadData" })) == .callable);
+    try std.testing.expect((try runtime.getIndex(mw, .{ .string = "loadJsonData" })) == .callable);
     try std.testing.expect((try runtime.getIndex(mw, .{ .string = "clone" })) == .callable);
 }
 
@@ -318,6 +345,65 @@ test "AOT expander loadData cache survives fresh invoke contexts" {
         try std.testing.expect(second[0] == .table);
         try std.testing.expect(second[0].table == first_table);
         try std.testing.expectEqual(@as(f64, 7), second[0].table.rawGet(.{ .string = "nested" }).?.table.rawGet(.{ .string = "x" }).?.number);
+    }
+}
+
+const JsonDataProbe = struct {
+    fn model(_: ?*anyopaque, title: []const u8) !?[]const u8 {
+        if (std.mem.eql(u8, title, "Module:Data.json") or
+            std.mem.eql(u8, title, "Module:Scalar.json") or
+            std.mem.eql(u8, title, "Module:Broken.json")) return "json";
+        if (std.mem.eql(u8, title, "Module:Wrong.json")) return "Scribunto";
+        return null;
+    }
+
+    fn content(_: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        const source = if (std.mem.eql(u8, title, "Module:Data.json"))
+            "{\"cuts\":[1,2],\"nested\":{\"ok\":true}}"
+        else if (std.mem.eql(u8, title, "Module:Scalar.json"))
+            "7"
+        else if (std.mem.eql(u8, title, "Module:Broken.json"))
+            "{bad"
+        else if (std.mem.eql(u8, title, "Module:Wrong.json"))
+            "{}"
+        else
+            return null;
+        return try a.dupe(u8, source);
+    }
+};
+
+test "AOT loadJsonData reads corpus JSON once and returns a cached read-only graph" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try makeMovedHostContext(arena.allocator());
+    defer runtime.deinit();
+    var host = Host{ .page_content = JsonDataProbe.content, .page_content_model = JsonDataProbe.model };
+    setHost(&runtime, &host);
+    const mw = runtime.getGlobal(23);
+
+    const first = try callField(&runtime, mw, "loadJsonData", &.{.{ .string = "Module:Data.json" }});
+    defer rt.freeResults(first);
+    const second = try callField(&runtime, mw, "loadJsonData", &.{.{ .string = "Module:Data.json" }});
+    defer rt.freeResults(second);
+    try std.testing.expect(first[0] == .table and first[0].table == second[0].table);
+    try std.testing.expect(first[0].table.read_only);
+    const cuts = first[0].table.rawGet(.{ .string = "cuts" }).?.table;
+    try std.testing.expect(cuts.read_only);
+    try std.testing.expectEqual(@as(f64, 2), cuts.rawGet(.{ .number = 2 }).?.number);
+    const nested = first[0].table.rawGet(.{ .string = "nested" }).?.table;
+    try std.testing.expect(nested.read_only and nested.rawGet(.{ .string = "ok" }).?.boolean);
+    try std.testing.expectError(error.ReadOnlyTable, cuts.rawSet(runtime.allocator, .{ .number = 1 }, .{ .number = 9 }));
+
+    const load_json = try runtime.getIndex(mw, .{ .string = "loadJsonData" });
+    inline for (.{
+        .{ "Module:Missing.json", "InvalidJsonPage" },
+        .{ "Module:Wrong.json", "InvalidJsonPage" },
+        .{ "Module:Broken.json", "InvalidJsonPage" },
+        .{ "Module:Scalar.json", "LoadJsonDataTableExpected" },
+    }) |case| {
+        try std.testing.expectError(error.AotCallFailed, runtime.callValue(load_json, &.{.{ .string = case[0] }}));
+        try std.testing.expectEqualStrings(case[1], runtime.aotErrorName().?);
+        runtime.clearAotErrorName();
     }
 }
 
