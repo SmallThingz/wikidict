@@ -701,6 +701,13 @@ pub const Expander = struct {
             return self.parserError("Time error", err);
     }
 
+    fn expandLenParser(self: *Expander, raw_source: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        const expanded = try self.expandWikitext(raw_source, params, host_title, depth + 1);
+        const source = try text_lib.killMarkersAlloc(self.runtime.allocator, expanded);
+        const count = try utf8Count(source);
+        return std.fmt.allocPrint(self.runtime.allocator, "{d}", .{count});
+    }
+
     fn expandSubParser(self: *Expander, raw_source: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const source = try self.expandWikitext(raw_source, params, host_title, depth + 1);
         const total: i64 = @intCast(try utf8Count(source));
@@ -988,6 +995,7 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "padleft")) return self.expandPadParser(first, parts.items[1..], params, host_title, depth + 1, true);
             if (std.ascii.eqlIgnoreCase(name, "padright")) return self.expandPadParser(first, parts.items[1..], params, host_title, depth + 1, false);
             if (std.ascii.eqlIgnoreCase(name, "#time")) return self.expandTimeParser(first, parts.items[1..], params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#len")) return self.expandLenParser(first, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#sub")) return self.expandSubParser(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#titleparts")) return self.expandTitleParts(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#iferror")) return self.expandIfError(first, parts.items[1..], params, host_title, depth + 1);
@@ -1448,9 +1456,9 @@ test "bundle parser functions cover corpus time sub and iferror forms" {
     try stdlib.install(&runtime);
     try installTestHost(&runtime, 18, 23);
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .page_metadata = TestProvider.pageMetadata } };
-    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{formatnum:11000}}|{{FORMATNUM:-1234567.89}}|{{formatnum:1,234.50|R}}|{{formatnum:1234.50|NOSEP}}|{{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}|{{anchorencode:a%20b}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
+    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#len:é猫}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{formatnum:11000}}|{{FORMATNUM:-1234567.89}}|{{formatnum:1,234.50|R}}|{{formatnum:1234.50|NOSEP}}|{{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}|{{anchorencode:a%20b}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
     const got = try expander.expandFragment("Page", source, 1_670_803_200);
-    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|11,000|−1,234,567.89|1234.50|1234.50|A_B_x_C|a%2520b|/Wiktionary/Wiktionary/Module", got);
+    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|2|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|11,000|−1,234,567.89|1234.50|1234.50|A_B_x_C|a%2520b|/Wiktionary/Wiktionary/Module", got);
     try std.testing.expectError(error.InvalidNamespace, expander.expandFragment("Page", "{{ns:not-a-namespace}}", 1_670_803_200));
 
     expander.beginPage("Page", "source", 1_670_803_200);

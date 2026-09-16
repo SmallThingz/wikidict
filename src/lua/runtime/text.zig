@@ -339,31 +339,32 @@ fn validMarkerBody(body: []const u8) bool {
     return true;
 }
 
-fn textKillMarkersCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    const source = args[0].string;
-    if (std.mem.indexOf(u8, source, marker_prefix) == null)
-        return one(runtime.allocator, .{ .string = source });
-
+pub fn killMarkersAlloc(a: std.mem.Allocator, source: []const u8) ![]const u8 {
+    if (std.mem.indexOf(u8, source, marker_prefix) == null) return source;
     var out: std.ArrayList(u8) = .empty;
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, source, pos, marker_prefix)) |at| {
-        try out.appendSlice(runtime.allocator, source[pos..at]);
+        try out.appendSlice(a, source[pos..at]);
         const body_start = at + marker_prefix.len;
         const suffix_at = std.mem.indexOfPos(u8, source, body_start, marker_suffix) orelse {
-            try out.appendSlice(runtime.allocator, source[at..]);
+            try out.appendSlice(a, source[at..]);
             pos = source.len;
             break;
         };
         if (validMarkerBody(source[body_start..suffix_at])) {
             pos = suffix_at + marker_suffix.len;
         } else {
-            try out.append(runtime.allocator, source[at]);
+            try out.append(a, source[at]);
             pos = at + 1;
         }
     }
-    try out.appendSlice(runtime.allocator, source[pos..]);
-    return one(runtime.allocator, .{ .string = try out.toOwnedSlice(runtime.allocator) });
+    try out.appendSlice(a, source[pos..]);
+    return out.toOwnedSlice(a);
+}
+
+fn textKillMarkersCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    return one(runtime.allocator, .{ .string = try killMarkersAlloc(runtime.allocator, args[0].string) });
 }
 
 fn appendHtmlEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []const u8) !void {
