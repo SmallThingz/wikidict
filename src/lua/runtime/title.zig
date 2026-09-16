@@ -2,13 +2,16 @@ const std = @import("std");
 const rt = @import("zig_runtime");
 const shared_xml_decode = @import("shared_xml_decode");
 const host_api = @import("host.zig");
+const language_lib = @import("language.zig");
 const uri_lib = @import("uri.zig");
+const ustring_lib = @import("ustring.zig");
 const Value = rt.Value;
 
 const State = struct {
     metatable: ?*rt.Table = null,
     equals: ?Value = null,
     ustring: ?*rt.Table = null,
+    case_mapper: *ustring_lib.Normalizer,
 };
 
 const BatchState = struct {
@@ -445,10 +448,14 @@ fn validTitleBody(spec: namespace_lib.Spec, text_with_fragment: []const u8) bool
     return text.len <= max_len;
 }
 
-fn titleForNamespace(a: std.mem.Allocator, spec: namespace_lib.Spec, text: []const u8) !?[]const u8 {
-    if (!validTitleBody(spec, text)) return null;
-    if (spec.id == 0) return text;
-    return @as(?[]const u8, try std.fmt.allocPrint(a, "{s}:{s}", .{ spec.name, text }));
+fn titleForNamespace(runtime: *rt.Context, state: *State, spec: namespace_lib.Spec, text: []const u8) !?[]const u8 {
+    const normalized = if (spec.is_capitalized)
+        try language_lib.firstCaseAlloc(state.case_mapper, runtime.allocator, text, true)
+    else
+        text;
+    if (!validTitleBody(spec, normalized)) return null;
+    if (spec.id == 0) return normalized;
+    return @as(?[]const u8, try std.fmt.allocPrint(runtime.allocator, "{s}:{s}", .{ spec.name, normalized }));
 }
 
 const InterwikiDisposition = enum { none, current_wiki, external };
@@ -469,7 +476,7 @@ fn titleWithNamespace(runtime: *rt.Context, state: *State, text_raw: []const u8,
     var text = (try normalizeName(a, source)) orelse return null;
     if (text.len == 0) return null;
     var default_spec = try namespaceArgument(namespace, force_namespace);
-    if (force_namespace) return titleForNamespace(a, default_spec, text);
+    if (force_namespace) return titleForNamespace(runtime, state, default_spec, text);
 
     if (text[0] == ':') {
         default_spec = namespaceSpecById(0).?;
@@ -480,7 +487,7 @@ fn titleWithNamespace(runtime: *rt.Context, state: *State, text_raw: []const u8,
         const prefix = std.mem.trim(u8, text[0..colon], " ");
         const body = std.mem.trimStart(u8, text[colon + 1 ..], " ");
         if (namespaceSpecByName(prefix)) |explicit_spec|
-            return titleForNamespace(a, explicit_spec, body);
+            return titleForNamespace(runtime, state, explicit_spec, body);
         switch (try interwikiDisposition(runtime, prefix)) {
             .none => {},
             .current_wiki => {
@@ -490,7 +497,7 @@ fn titleWithNamespace(runtime: *rt.Context, state: *State, text_raw: []const u8,
             .external => return error.NotImplemented,
         }
     };
-    return titleForNamespace(a, default_spec, text);
+    return titleForNamespace(runtime, state, default_spec, text);
 }
 
 fn buildBatchTitles(runtime: *rt.Context, batch: *BatchState) !*rt.Table {
@@ -575,13 +582,13 @@ fn currentCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]cons
     return one(try makeTitleValue(runtime, state, host.current_title));
 }
 
-pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
+pub fn install(runtime: *rt.Context, mw: *rt.Table, case_mapper: *ustring_lib.Normalizer) !void {
     const state = try runtime.allocator.create(State);
     const ustring: ?*rt.Table = if (mw.rawGet(.{ .string = "ustring" })) |value| switch (value) {
         .table => |table| table,
         else => null,
     } else null;
-    state.* = .{ .ustring = ustring };
+    state.* = .{ .ustring = ustring, .case_mapper = case_mapper };
     _ = try ensureMetatable(runtime, state);
     const title = try runtime.newNativeNamespace(.title);
     try title.rawSetNativeField(.title, "equals", state.equals.?);
@@ -631,6 +638,13 @@ fn callField(runtime: *rt.Context, object: Value, name: []const u8, args: []cons
     return runtime.callValue(callable, args);
 }
 
+fn installForTest(runtime: *rt.Context, mw: *rt.Table) !void {
+    const ustring = try runtime.newNativeNamespace(.ustring);
+    const case_mapper = try ustring_lib.install(runtime, ustring);
+    try mw.rawSetNativeField(.mw, "ustring", .{ .table = ustring });
+    try install(runtime, mw, case_mapper);
+}
+
 test "AOT title exposes namespace fragment and subpage semantics" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -639,7 +653,7 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     var host = host_api.Host{ .current_title = "Template:Foo/Sub", .page_exists = testPageExists, .page_content = testPageContent, .page_redirect = testPageRedirect, .page_id = testPageId, .page_content_model = testPageContentModel };
     host_api.set(&runtime, &host);
     const mw = try runtime.newNativeNamespace(.mw);
-    try install(&runtime, mw);
+    try installForTest(&runtime, mw);
     const title_lib = mw.rawGet(.{ .string = "title" }).?.table;
     const made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Template:Foo/Sub# frag_ment" }});
     defer rt.freeResults(made);
@@ -752,7 +766,7 @@ test "AOT title subpage fields respect namespace settings" {
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
     const mw = try runtime.newNativeNamespace(.mw);
-    try install(&runtime, mw);
+    try installForTest(&runtime, mw);
     const title_lib = mw.rawGet(.{ .string = "title" }).?.table;
     const made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "foo/bar" }});
     defer rt.freeResults(made);
@@ -788,7 +802,7 @@ test "AOT title constructors and current title use the live host" {
     var host = host_api.Host{ .current_title = "Module:Current/Sub" };
     host_api.set(&runtime, &host);
     const mw = try runtime.newNativeNamespace(.mw);
-    try install(&runtime, mw);
+    try installForTest(&runtime, mw);
     const title_lib = mw.rawGet(.{ .string = "title" }).?.table;
 
     const current = try callField(&runtime, .{ .table = title_lib }, "getCurrentTitle", &.{});
@@ -809,6 +823,21 @@ test "AOT title constructors and current title use the live host" {
     const made2 = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Template:Thing" }});
     defer rt.freeResults(made2);
     try std.testing.expectEqualStrings("Template:Thing", (try runtime.getIndex(made[0], .{ .string = "prefixedText" })).string);
+    const user_lower = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "User:example" }});
+    defer rt.freeResults(user_lower);
+    try std.testing.expectEqualStrings("User:Example", (try runtime.getIndex(user_lower[0], .{ .string = "prefixedText" })).string);
+    const user_unicode = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "User:ǰfoo" }});
+    defer rt.freeResults(user_unicode);
+    try std.testing.expectEqualStrings("User:J̌foo", (try runtime.getIndex(user_unicode[0], .{ .string = "prefixedText" })).string);
+    const user_override = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "User:ßeta" }});
+    defer rt.freeResults(user_override);
+    try std.testing.expectEqualStrings("User:ßeta", (try runtime.getIndex(user_override[0], .{ .string = "prefixedText" })).string);
+    const template_lower = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Template:example" }});
+    defer rt.freeResults(template_lower);
+    try std.testing.expectEqualStrings("Template:example", (try runtime.getIndex(template_lower[0], .{ .string = "prefixedText" })).string);
+    const made_user = try callField(&runtime, .{ .table = title_lib }, "makeTitle", &.{ .{ .number = 2 }, .{ .string = "example" } });
+    defer rt.freeResults(made_user);
+    try std.testing.expectEqualStrings("User:Example", (try runtime.getIndex(made_user[0], .{ .string = "prefixedText" })).string);
     const decoded_new = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Foo&amp;Bar" }});
     defer rt.freeResults(decoded_new);
     try std.testing.expectEqualStrings("Foo&Bar", (try runtime.getIndex(decoded_new[0], .{ .string = "prefixedText" })).string);

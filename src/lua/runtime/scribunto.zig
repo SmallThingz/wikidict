@@ -116,7 +116,7 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try installStringAliases(runtime, string.table, ustring);
     try mw.rawSetNativeField(.mw, "ustring", .{ .table = ustring });
     try text_lib.install(runtime, mw);
-    try title_lib.install(runtime, mw);
+    try title_lib.install(runtime, mw, case_mapper);
     try language_lib.install(runtime, mw, case_mapper);
     try frame_lib.install(runtime, mw);
     try uri_lib.install(runtime, mw);

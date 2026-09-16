@@ -365,7 +365,7 @@ fn wmfUcfirstOverride(cp: u21) bool {
     };
 }
 
-fn firstCaseAlloc(ctx: *LanguageCtx, a: std.mem.Allocator, source: []const u8, upper: bool) ![]const u8 {
+pub fn firstCaseAlloc(case_mapper: *ustring_lib.Normalizer, a: std.mem.Allocator, source: []const u8, upper: bool) ![]const u8 {
     if (source.len == 0) return source;
     if (source[0] < 0x80) {
         const out = try a.dupe(u8, source);
@@ -377,7 +377,7 @@ fn firstCaseAlloc(ctx: *LanguageCtx, a: std.mem.Allocator, source: []const u8, u
     const first = source[0..first_len];
     const cp = try std.unicode.utf8Decode(first);
     if (upper and wmfUcfirstOverride(cp)) return source;
-    const mapped = try ustring_lib.caseAlloc(ctx.case_mapper, a, first, if (upper) .title else .lower);
+    const mapped = try ustring_lib.caseAlloc(case_mapper, a, first, if (upper) .title else .lower);
     if (std.mem.eql(u8, first, mapped)) return source;
     const out = try a.alloc(u8, mapped.len + source.len - first.len);
     @memcpy(out[0..mapped.len], mapped);
@@ -400,13 +400,13 @@ fn languageLc(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
 fn languageUcfirst(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const ctx = try requireBaseCaseLocale(ctx_raw);
     const a = runtime.allocator;
-    return one(a, .{ .string = try firstCaseAlloc(ctx, a, try sourceMethodArg(args), true) });
+    return one(a, .{ .string = try firstCaseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), true) });
 }
 
 fn languageLcfirst(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const ctx = try requireBaseCaseLocale(ctx_raw);
     const a = runtime.allocator;
-    return one(a, .{ .string = try firstCaseAlloc(ctx, a, try sourceMethodArg(args), false) });
+    return one(a, .{ .string = try firstCaseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), false) });
 }
 
 fn languageGetDir(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
