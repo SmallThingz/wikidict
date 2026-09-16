@@ -274,7 +274,7 @@ test "call-only captured closures pass cells without materializing callable iden
     const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
     defer std.testing.allocator.free(generated.source);
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "call %CallResult @dict_lua_call_static_multi") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "store ptr %cap") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated.source, "_cap, ptr") != null);
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated.source, " = call i32 @dict_lua_make_function"));
 }
 

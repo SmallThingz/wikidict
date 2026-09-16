@@ -203,6 +203,14 @@ const PreparedTarget = union(enum) {
     index: struct { object: ValueRef, key: ValueRef },
     field: struct { object: ValueRef, key: StringRef },
 };
+fn tempNameAlloc(a: A, prefix: []const u8, id: u32) ![]u8 {
+    return std.fmt.allocPrint(a, "%t{d}_{s}", .{ id, prefix });
+}
+
+fn labelNameAlloc(a: A, prefix: []const u8, id: u32) ![]u8 {
+    return std.fmt.allocPrint(a, "bb_{d}_{s}", .{ id, prefix });
+}
+
 const FnEmitter = struct {
     module: *ModuleEmitter,
     info: *const analysis.FunctionInfo,
@@ -244,13 +252,19 @@ const FnEmitter = struct {
     fn temp(self: *FnEmitter, prefix: []const u8) anyerror![]const u8 {
         const id = self.temp_next;
         self.temp_next += 1;
-        return self.ownFmt("%{s}{d}", .{ prefix, id });
+        const value = try tempNameAlloc(self.a(), prefix, id);
+        errdefer self.a().free(value);
+        try self.owned_names.append(self.a(), value);
+        return value;
     }
 
     fn label(self: *FnEmitter, prefix: []const u8) anyerror![]const u8 {
         const id = self.label_next;
         self.label_next += 1;
-        return self.ownFmt("bb_{s}{d}", .{ prefix, id });
+        const value = try labelNameAlloc(self.a(), prefix, id);
+        errdefer self.a().free(value);
+        try self.owned_names.append(self.a(), value);
+        return value;
     }
 
     fn valueSlot(self: *FnEmitter) anyerror![]const u8 {
@@ -1635,4 +1649,26 @@ pub fn generate(allocator: A, globals: *const analysis.Globals, module: *const a
         .root_function = module.root.id,
         .function_count = @intCast(module.functions.items.len),
     };
+}
+
+test "LLVM temporary names cannot alias across numeric prefixes" {
+    const a = std.testing.allocator;
+    const first = try tempNameAlloc(a, "truth1", 996);
+    defer a.free(first);
+    const second = try tempNameAlloc(a, "truth", 1996);
+    defer a.free(second);
+    try std.testing.expect(!std.mem.eql(u8, first, second));
+    try std.testing.expectEqualStrings("%t996_truth1", first);
+    try std.testing.expectEqualStrings("%t1996_truth", second);
+}
+
+test "LLVM block labels cannot alias across numeric prefixes" {
+    const a = std.testing.allocator;
+    const first = try labelNameAlloc(a, "next1", 2);
+    defer a.free(first);
+    const second = try labelNameAlloc(a, "next", 12);
+    defer a.free(second);
+    try std.testing.expect(!std.mem.eql(u8, first, second));
+    try std.testing.expectEqualStrings("bb_2_next1", first);
+    try std.testing.expectEqualStrings("bb_12_next", second);
 }
