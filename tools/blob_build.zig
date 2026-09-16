@@ -8,6 +8,55 @@ const Options = struct {
     expander_root: []const u8 = "",
 };
 
+const IndexedPage = struct {
+    source_offset: u64,
+    source_len: usize,
+    title: []const u8,
+    ns: u32,
+    has_source: bool,
+};
+
+const Mapped = struct {
+    bytes: []align(std.heap.page_size_min) const u8,
+
+    fn deinit(self: *Mapped) void {
+        if (self.bytes.len != 0) std.posix.munmap(self.bytes);
+        self.bytes = &.{};
+    }
+};
+
+fn mmapPath(io: std.Io, path: []const u8) !Mapped {
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const len = std.math.cast(usize, (try file.stat(io)).size) orelse return error.FileTooBig;
+    const bytes = if (len == 0)
+        @as([]align(std.heap.page_size_min) const u8, &.{})
+    else
+        try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0);
+    return .{ .bytes = bytes };
+}
+
+fn parseIndexedPage(line: []const u8) !IndexedPage {
+    var fields = std.mem.splitScalar(u8, line, '\t');
+    const source_offset = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
+    const source_len = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10);
+    const title = fields.next() orelse return error.InvalidPageIndex;
+    _ = fields.next() orelse return error.InvalidPageIndex; // redirect
+    _ = fields.next() orelse return error.InvalidPageIndex; // page id
+    _ = fields.next() orelse return error.InvalidPageIndex; // revision id
+    _ = fields.next() orelse return error.InvalidPageIndex; // revision timestamp
+    const ns = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10);
+    const has_source_raw = fields.next() orelse return error.InvalidPageIndex;
+    if (title.len == 0 or fields.next() != null) return error.InvalidPageIndex;
+    const has_source = if (std.mem.eql(u8, has_source_raw, "1"))
+        true
+    else if (std.mem.eql(u8, has_source_raw, "0"))
+        false
+    else
+        return error.InvalidPageIndex;
+    return .{ .source_offset = source_offset, .source_len = source_len, .title = title, .ns = ns, .has_source = has_source };
+}
+
 fn writePageIndex(io: std.Io, allocator: std.mem.Allocator, dump: *dump_source.Dump, root: []const u8) !void {
     const path = try std.fs.path.join(allocator, &.{ root, "page-index.tsv" });
     defer allocator.free(path);
@@ -24,7 +73,7 @@ fn writePageIndex(io: std.Io, allocator: std.mem.Allocator, dump: *dump_source.D
         if (std.mem.indexOfAny(u8, page.title, "\t\r\n") != null) return error.InvalidPageTitle;
         if (page.redirect) |target| if (std.mem.indexOfAny(u8, target, "\t\r\n") != null) return error.InvalidPageTitle;
         if (std.mem.indexOfAny(u8, page.revision_timestamp, "\t\r\n") != null) return error.InvalidPageMetadata;
-        try writer.interface.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\n", .{
+        try writer.interface.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\t{d}\t{d}\n", .{
             page.source_offset,
             page.source_len,
             page.title,
@@ -32,6 +81,8 @@ fn writePageIndex(io: std.Io, allocator: std.mem.Allocator, dump: *dump_source.D
             page.page_id,
             page.revision_id,
             page.revision_timestamp,
+            page.ns,
+            @intFromBool(page.has_source),
         });
         _ = arena.reset(.retain_capacity);
     }
@@ -94,17 +145,29 @@ pub fn main(init: std.process.Init) !void {
 
     var writer = try encoder.blob_builder.Writer.init(init.io, a, args[2]);
     defer writer.deinit();
+    const page_index_path = try std.fs.path.join(a, &.{ options.expander_root, "page-index.tsv" });
+    defer a.free(page_index_path);
+    var page_index = try mmapPath(init.io, page_index_path);
+    defer page_index.deinit();
+
     var page_arena = std.heap.ArenaAllocator.init(a);
     defer page_arena.deinit();
-    var it = dump.iterator();
-    while (true) {
-        if (options.limit_pages) |limit| if (it.pages_seen >= limit) break;
+    var lines = std.mem.splitScalar(u8, page_index.bytes, '\n');
+    var pages_seen: usize = 0;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        if (options.limit_pages) |limit| if (pages_seen >= limit) break;
+        pages_seen += 1;
+        writer.stats.pages_seen = pages_seen;
         const page_allocator = page_arena.allocator();
-        const page = (try it.next(page_allocator)) orelse break;
-        writer.stats.pages_seen = it.pages_seen;
-        if (dump_source.relevantNamespace(page.ns)) {
-            const source = try worker.expand(page_allocator, page.title, page.source);
-            try writer.addPage(page_allocator, page.ns, page.title, source);
+        const page = try parseIndexedPage(line);
+        if (page.has_source and dump_source.relevantNamespace(page.ns)) {
+            const start = std.math.cast(usize, page.source_offset) orelse return error.InvalidPageIndex;
+            const end = std.math.add(usize, start, page.source_len) catch return error.InvalidPageIndex;
+            if (end > dump.bytes.len) return error.InvalidPageIndex;
+            const source = try dump_source.decodeSourceAlloc(page_allocator, dump.bytes[start..end]);
+            const expanded = try worker.expand(page_allocator, page.title, source);
+            try writer.addPage(page_allocator, page.ns, page.title, expanded);
         }
         _ = page_arena.reset(.retain_capacity);
     }

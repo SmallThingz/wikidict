@@ -143,7 +143,11 @@ pub const Provider = struct {
             const page_id = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
             const revision_id = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
             const revision_timestamp = fields.next() orelse return error.InvalidPageIndex;
-            if (title.len == 0 or revision_timestamp.len == 0 or fields.next() != null) return error.InvalidPageIndex;
+            _ = std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10) catch return error.InvalidPageIndex; // namespace
+            const has_source = fields.next() orelse return error.InvalidPageIndex;
+            if (title.len == 0 or revision_timestamp.len == 0 or
+                (!std.mem.eql(u8, has_source, "0") and !std.mem.eql(u8, has_source, "1")) or
+                fields.next() != null) return error.InvalidPageIndex;
             const redirect = if (redirect_raw.len == 0) null else redirect_raw;
             const end = std.math.add(u64, offset, len) catch return error.InvalidPageIndex;
             if (end > dump_size) return error.InvalidPageIndex;
@@ -252,7 +256,7 @@ test "provider owns paths and separates raw content from redirect-following tran
     const alias_offset = template_offset + template_raw.len;
     const page_index = try std.fmt.allocPrint(
         a,
-        "{d}\t{d}\tOrdinary page\t\t1\t101\t2024-03-04T05:06:07Z\n{d}\t{d}\tTemplate:Lazy\t\t2\t102\t2024-03-05T06:07:08Z\n{d}\t{d}\tTemplate:Alias\tTemplate:Lazy\t3\t103\t2024-03-06T07:08:09Z\n",
+        "{d}\t{d}\tOrdinary page\t\t1\t101\t2024-03-04T05:06:07Z\t0\t1\n{d}\t{d}\tTemplate:Lazy\t\t2\t102\t2024-03-05T06:07:08Z\t10\t1\n{d}\t{d}\tTemplate:Alias\tTemplate:Lazy\t3\t103\t2024-03-06T07:08:09Z\t10\t1\n",
         .{ prefix.len, ordinary_raw.len, template_offset, template_raw.len, alias_offset, alias_raw.len },
     );
     defer a.free(page_index);

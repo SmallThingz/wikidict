@@ -13,12 +13,6 @@ const ztypes = zxml.Types(parse_opts);
 const StreamParser = ztypes.StreamParser;
 const StreamNode = ztypes.StreamNode;
 
-pub const Page = struct {
-    ns: u32,
-    title: []const u8,
-    source: []const u8,
-};
-
 pub const PageHeader = struct {
     ns: u32,
     title: []const u8,
@@ -27,8 +21,13 @@ pub const PageHeader = struct {
     revision_timestamp: []const u8,
     source_offset: u64,
     source_len: usize,
+    has_source: bool,
     redirect: ?[]const u8 = null,
 };
+
+pub fn decodeSourceAlloc(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return xml_decode.decodeSinglePassAlloc(allocator, raw);
+}
 
 const Capture = struct {
     names_by_depth: [8][]const u8 = [_][]const u8{""} ** 8,
@@ -87,10 +86,6 @@ pub const Dump = struct {
         self.* = undefined;
     }
 
-    pub fn iterator(self: *Dump) Iterator {
-        return .{ .dump = self };
-    }
-
     pub fn headerIterator(self: *Dump) HeaderIterator {
         return .{ .dump = self };
     }
@@ -147,36 +142,8 @@ pub const HeaderIterator = struct {
                 .revision_timestamp = try xml_decode.decodeSinglePassAlloc(allocator, revision_timestamp_raw),
                 .source_offset = source_offset,
                 .source_len = text_raw.len,
+                .has_source = capture.text_raw != null,
                 .redirect = if (capture.redirect_raw) |raw| try xml_decode.decodeSinglePassAlloc(allocator, raw) else null,
-            };
-        }
-        return null;
-    }
-};
-
-pub const Iterator = struct {
-    dump: *Dump,
-    pos: usize = 0,
-    pages_seen: usize = 0,
-
-    pub fn next(self: *Iterator, allocator: std.mem.Allocator) !?Page {
-        while (std.mem.indexOfPos(u8, self.dump.bytes, self.pos, "<page>")) |start| {
-            const end_start = std.mem.indexOfPos(u8, self.dump.bytes, start, "</page>") orelse return error.TruncatedXml;
-            const page_end = end_start + "</page>".len;
-            const page = self.dump.bytes[start..page_end];
-            self.pos = page_end;
-            self.pages_seen += 1;
-
-            var capture: Capture = .{};
-            try self.dump.parser.parse(page, &capture, Capture.onNode);
-            const ns_raw = capture.ns_raw orelse continue;
-            const ns = std.fmt.parseInt(u32, std.mem.trim(u8, ns_raw, " \t\r\n"), 10) catch continue;
-            const title_raw = capture.title_raw orelse continue;
-            const text_raw = capture.text_raw orelse continue;
-            return .{
-                .ns = ns,
-                .title = try xml_decode.decodeSinglePassAlloc(allocator, title_raw),
-                .source = try xml_decode.decodeSinglePassAlloc(allocator, text_raw),
             };
         }
         return null;
@@ -187,6 +154,7 @@ test "dump adapter exposes decoded wikitext pages" {
     const xml = "<mediawiki>" ++
         "<page><title>cat</title><ns>0</ns><id>7</id><revision><id>70</id><timestamp>2024-03-04T05:06:07Z</timestamp><text>==English==&amp;x</text></revision></page>" ++
         "<page><title>kitty</title><ns>0</ns><id>8</id><redirect title=\"cat\"/><revision><id>80</id><timestamp>2024-03-05T06:07:08Z</timestamp><text>#REDIRECT [[cat]]</text></revision></page>" ++
+        "<page><title>missing-source</title><ns>10</ns><id>9</id><revision><id>90</id><timestamp>2024-03-06T07:08:09Z</timestamp></revision></page>" ++
         "</mediawiki>";
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -196,13 +164,6 @@ test "dump adapter exposes decoded wikitext pages" {
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = xml });
     var dump = try Dump.open(std.testing.io, std.testing.allocator, path);
     defer dump.deinit();
-    var it = dump.iterator();
-    const page = (try it.next(std.testing.allocator)).?;
-    defer std.testing.allocator.free(page.title);
-    defer std.testing.allocator.free(page.source);
-    try std.testing.expectEqual(@as(u32, 0), page.ns);
-    try std.testing.expectEqualStrings("cat", page.title);
-    try std.testing.expectEqualStrings("==English==&x", page.source);
     var headers = dump.headerIterator();
     const header = (try headers.next(std.testing.allocator)).?;
     defer std.testing.allocator.free(header.title);
@@ -212,13 +173,24 @@ test "dump adapter exposes decoded wikitext pages" {
     try std.testing.expectEqual(@as(u64, 70), header.revision_id);
     try std.testing.expectEqualStrings("2024-03-04T05:06:07Z", header.revision_timestamp);
     try std.testing.expectEqualStrings("cat", header.title);
+    try std.testing.expect(header.has_source);
     try std.testing.expect(header.redirect == null);
     const source_start: usize = @intCast(header.source_offset);
-    try std.testing.expectEqualStrings("==English==&amp;x", dump.bytes[source_start .. source_start + header.source_len]);
+    const raw_source = dump.bytes[source_start .. source_start + header.source_len];
+    try std.testing.expectEqualStrings("==English==&amp;x", raw_source);
+    const decoded_source = try decodeSourceAlloc(std.testing.allocator, raw_source);
+    defer std.testing.allocator.free(decoded_source);
+    try std.testing.expectEqualStrings("==English==&x", decoded_source);
     const redirect = (try headers.next(std.testing.allocator)).?;
     defer std.testing.allocator.free(redirect.title);
     defer std.testing.allocator.free(redirect.revision_timestamp);
     defer std.testing.allocator.free(redirect.redirect.?);
     try std.testing.expectEqualStrings("kitty", redirect.title);
     try std.testing.expectEqualStrings("cat", redirect.redirect.?);
+    const missing_source = (try headers.next(std.testing.allocator)).?;
+    defer std.testing.allocator.free(missing_source.title);
+    defer std.testing.allocator.free(missing_source.revision_timestamp);
+    try std.testing.expectEqual(@as(u32, 10), missing_source.ns);
+    try std.testing.expect(!missing_source.has_source);
+    try std.testing.expectEqual(@as(usize, 0), missing_source.source_len);
 }
