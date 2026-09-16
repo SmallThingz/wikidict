@@ -50,9 +50,9 @@ const string_names = names[6..19];
 const math_names = [_][]const u8{ "abs", "ceil", "floor", "sqrt", "exp", "log", "log10", "sin", "cos", "tan", "asin", "acos", "atan", "deg", "rad", "min", "max", "pow", "fmod", "mod", "modf", "pi", "huge", "random", "randomseed" };
 const debug_names = names[42..45];
 const mw_names = [_][]const u8{
-    "loadData",   "loadJsonData", "clone",      "getCurrentFrame", "ustring", "dumpObject", "log",                "logObject",
-    "addWarning", "isSubsting", "title",           "text",    "site",       "uri",                "wikibase",
-    "message",    "hash",       "ext",             "html",    "language",   "getContentLanguage", "getLanguage",
+    "loadData",   "loadJsonData", "clone", "getCurrentFrame", "ustring",            "dumpObject",  "log",      "logObject",
+    "addWarning", "isSubsting",   "title", "text",            "site",               "uri",         "wikibase", "message",
+    "hash",       "ext",          "html",  "language",        "getContentLanguage", "getLanguage",
 };
 const ustring_names = [_][]const u8{
     "len",    "sub",  "lower",  "upper",  "reverse",    "rep",       "char",       "byte",  "find",  "match",
@@ -66,9 +66,9 @@ const html_names = names[94..95];
 const language_names = [_][]const u8{ "new", "getContentLanguage", "getFallbacksFor", "isKnownLanguageTag", "fetchLanguageName" };
 const frame_names = [_][]const u8{ "args", "getParent", "getTitle", "expandTemplate", "preprocess", "extensionTag", "callParserFunction", "newChild" };
 const title_value_names = [_][]const u8{
-    "text",         "prefixedText", "__fragment", "namespace", "nsText", "subpageText", "baseText", "rootText",
-    "isSubpage",    "interwiki",    "isExternal", "isLocal",   "exists", "getContent",  "fullUrl",  "localUrl",
-    "canonicalUrl",
+    "text",         "prefixedText", "__fragment",  "namespace", "nsText", "subpageText", "baseText", "rootText",
+    "isSubpage",    "interwiki",    "isExternal",  "isLocal",   "exists", "getContent",  "fullUrl",  "localUrl",
+    "canonicalUrl", "inNamespace",  "isSubpageOf",
 };
 const language_value_names = [_][]const u8{
     "code",     "getCode", "formatDate", "uc",                   "lc", "ucfirst", "lcfirst", "getDir", "getFallbackLanguages",

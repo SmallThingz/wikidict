@@ -240,6 +240,55 @@ fn pageExists(runtime: *rt.Context, title: []const u8) !bool {
 
 const TitleCtx = struct { title: []const u8, state: *State };
 
+fn checkedNamespaceId(value: Value) !i32 {
+    const number = switch (value) {
+        .number => |number| number,
+        .string => |name| blk: {
+            if (namespaceSpecByName(name)) |spec| return spec.id;
+            const parsed = std.fmt.parseFloat(f64, name) catch return error.InvalidNamespace;
+            var buffer: [64]u8 = undefined;
+            const canonical = std.fmt.bufPrint(&buffer, "{d}", .{parsed}) catch return error.InvalidNamespace;
+            if (!std.mem.eql(u8, canonical, name)) return error.InvalidNamespace;
+            break :blk parsed;
+        },
+        else => return error.InvalidNamespace,
+    };
+    if (!std.math.isFinite(number)) return error.InvalidNamespace;
+    const rounded = @floor(number + 0.5);
+    if (rounded < @as(f64, @floatFromInt(std.math.minInt(i32))) or rounded > @as(f64, @floatFromInt(std.math.maxInt(i32))))
+        return error.InvalidNamespace;
+    const id: i32 = @intFromFloat(rounded);
+    return if (namespaceSpecById(id) != null) id else error.InvalidNamespace;
+}
+
+fn inNamespaceCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len < 2 or args[0] != .table) return error.TableExpected;
+    const namespace = args[0].table.rawGet(.{ .string = "namespace" }) orelse return error.InvalidTitle;
+    if (namespace != .number) return error.InvalidTitle;
+    const wanted = try checkedNamespaceId(args[1]);
+    return one(.{ .boolean = namespace.number == @as(f64, @floatFromInt(wanted)) });
+}
+
+fn isSubpageOfCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len < 2 or args[0] != .table or args[1] != .table) return error.TableExpected;
+    const self = args[0].table;
+    const parent = args[1].table;
+    const self_interwiki = self.rawGet(.{ .string = "interwiki" }) orelse return error.InvalidTitle;
+    const parent_interwiki = parent.rawGet(.{ .string = "interwiki" }) orelse return error.InvalidTitle;
+    const self_namespace = self.rawGet(.{ .string = "namespace" }) orelse return error.InvalidTitle;
+    const parent_namespace = parent.rawGet(.{ .string = "namespace" }) orelse return error.InvalidTitle;
+    const self_text = self.rawGet(.{ .string = "text" }) orelse return error.InvalidTitle;
+    const parent_text = parent.rawGet(.{ .string = "text" }) orelse return error.InvalidTitle;
+    if (self_interwiki != .string or parent_interwiki != .string or self_namespace != .number or parent_namespace != .number or
+        self_text != .string or parent_text != .string)
+        return error.InvalidTitle;
+    if (!std.mem.eql(u8, self_interwiki.string, parent_interwiki.string) or self_namespace.number != parent_namespace.number)
+        return one(.{ .boolean = false });
+    if (self_text.string.len <= parent_text.string.len or self_text.string[parent_text.string.len] != '/')
+        return one(.{ .boolean = false });
+    return one(.{ .boolean = std.mem.eql(u8, self_text.string[0..parent_text.string.len], parent_text.string) });
+}
+
 fn subPageTitleCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const ctx: *TitleCtx = @ptrCast(@alignCast(raw orelse return error.MissingTitleContext));
     if (args.len < 2 or args[1] != .string) return one(.nil);
@@ -316,6 +365,8 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
     try table.rawSetNativeField(.title_value, "fullUrl", try runtime.newNative(null, fullUrlCall));
     try table.rawSetNativeField(.title_value, "localUrl", try runtime.newNative(null, localUrlCall));
     try table.rawSetNativeField(.title_value, "canonicalUrl", try runtime.newNative(null, canonicalUrlCall));
+    try table.rawSetNativeField(.title_value, "inNamespace", try runtime.newNative(null, inNamespaceCall));
+    try table.rawSetNativeField(.title_value, "isSubpageOf", try runtime.newNative(null, isSubpageOfCall));
     try table.rawSet(runtime.allocator, .{ .string = "subPageTitle" }, try runtime.newNative(ctx, subPageTitleCall));
     return .{ .table = table };
 }
@@ -607,6 +658,23 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     const sub_page = try runtime.callValue(sub_page_fn, &.{ title, .{ .string = "Next" } });
     defer rt.freeResults(sub_page);
     try std.testing.expectEqualStrings("Template:Foo/Sub/Next", (try runtime.getIndex(sub_page[0], .{ .string = "prefixedText" })).string);
+    const in_template = try callField(&runtime, title, "inNamespace", &.{ title, .{ .string = "Template" } });
+    defer rt.freeResults(in_template);
+    try std.testing.expect(in_template[0].boolean);
+    const in_template_id = try callField(&runtime, title, "inNamespace", &.{ title, .{ .number = 10 } });
+    defer rt.freeResults(in_template_id);
+    try std.testing.expect(in_template_id[0].boolean);
+    const in_project = try callField(&runtime, title, "inNamespace", &.{ title, .{ .string = "Project" } });
+    defer rt.freeResults(in_project);
+    try std.testing.expect(!in_project[0].boolean);
+    const parent_made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Template:Foo" }});
+    defer rt.freeResults(parent_made);
+    const is_subpage = try callField(&runtime, title, "isSubpageOf", &.{ title, parent_made[0] });
+    defer rt.freeResults(is_subpage);
+    try std.testing.expect(is_subpage[0].boolean);
+    const reverse_subpage = try callField(&runtime, parent_made[0], "isSubpageOf", &.{ parent_made[0], title });
+    defer rt.freeResults(reverse_subpage);
+    try std.testing.expect(!reverse_subpage[0].boolean);
     try std.testing.expect((try runtime.getIndex(title, .{ .string = "exists" })).boolean);
     try std.testing.expectEqual(@as(f64, 77), (try runtime.getIndex(title, .{ .string = "id" })).number);
     try std.testing.expectEqualStrings("wikitext", (try runtime.getIndex(title, .{ .string = "contentModel" })).string);
