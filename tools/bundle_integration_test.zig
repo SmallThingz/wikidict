@@ -90,6 +90,10 @@ const module_source =
     \\    assert(os.date('!%Y%m%d%H%M%S', pinned_now) == frame:preprocess('{{CURRENTTIMESTAMP}}'))
     \\    local normalized_time = {year = 2024, month = 13, day = 1}
     \\    assert(os.date('!%Y-%m-%d %H:%M', os.time(normalized_time)) == '2025-01-01 12:00')
+    \\    local xp_ok, xp_value = xpcall(function() error('xp') end, function(err) return 'handled:' .. err end)
+    \\    assert(not xp_ok and xp_value == 'handled:xp')
+    \\    local xp_success, xp_left, xp_right = xpcall(function() return 'left', 7 end, function(err) return err end)
+    \\    assert(xp_success and xp_left == 'left' and xp_right == 7)
     \\    assert(frame:callParserFunction{ name = '#invoke', args = {'IntegrationForms', 'frame_probe', x = 'frame-parser'} } == 'frame-parser')
     \\    assert(frame:callParserFunction{ name = '#tag:syntaxhighlight', args = {'x', lang = 'text'} } == '<syntaxhighlight lang="text">x</syntaxhighlight>')
     \\    assert(frame:callParserFunction{ name = '#tag', args = {'ref', 'body', 'name=n'} } == '<ref name="n">body</ref>')

@@ -293,6 +293,12 @@ fn baseIpairs(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
     out[2] = .{ .number = 0 };
     return out;
 }
+fn protectedErrorValue(ctx: *rt.Context, err: anyerror) !Value {
+    if (ctx.last_error != .nil) return ctx.last_error;
+    if (ctx.aotErrorName()) |name| return .{ .string = try ctx.allocator.dupe(u8, name) };
+    return .{ .string = @errorName(err) };
+}
+
 fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0) return error.MissingArgument;
     const saved_error = ctx.last_error;
@@ -302,12 +308,7 @@ fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Val
     const result = ctx.callValue(args[0], args[1..]) catch |err| {
         const out = try std.heap.smp_allocator.alloc(Value, 2);
         out[0] = .{ .boolean = false };
-        out[1] = if (ctx.last_error != .nil)
-            ctx.last_error
-        else if (ctx.aotErrorName()) |name|
-            .{ .string = try ctx.allocator.dupe(u8, name) }
-        else
-            .{ .string = @errorName(err) };
+        out[1] = try protectedErrorValue(ctx, err);
         ctx.last_error = saved_error;
         ctx.aot_error_name = saved_aot_error_name;
         return out;
@@ -319,6 +320,46 @@ fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Val
     out[0] = .{ .boolean = true };
     @memcpy(out[1..], result);
     return out;
+}
+
+fn baseXpcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len < 2) return error.MissingArgument;
+    const saved_error = ctx.last_error;
+    const saved_aot_error_name = ctx.aot_error_name;
+    ctx.last_error = .nil;
+    ctx.clearAotErrorName();
+    const result = ctx.callValue(args[0], &.{}) catch |err| {
+        const original_error = try protectedErrorValue(ctx, err);
+        ctx.last_error = .nil;
+        ctx.clearAotErrorName();
+        const handled = ctx.callValue(args[1], &.{original_error}) catch {
+            const out = try std.heap.smp_allocator.alloc(Value, 2);
+            out[0] = .{ .boolean = false };
+            out[1] = .{ .string = "error in error handling" };
+            ctx.last_error = saved_error;
+            ctx.aot_error_name = saved_aot_error_name;
+            return out;
+        };
+        defer rt.freeResults(handled);
+        const out = try std.heap.smp_allocator.alloc(Value, 2);
+        out[0] = .{ .boolean = false };
+        out[1] = if (handled.len == 0) .nil else handled[0];
+        ctx.last_error = saved_error;
+        ctx.aot_error_name = saved_aot_error_name;
+        return out;
+    };
+    ctx.last_error = saved_error;
+    ctx.aot_error_name = saved_aot_error_name;
+    defer rt.freeResults(result);
+    const out = try std.heap.smp_allocator.alloc(Value, result.len + 1);
+    out[0] = .{ .boolean = true };
+    @memcpy(out[1..], result);
+    return out;
+}
+
+fn installDynamicBase(runtime: *rt.Context) !void {
+    const global = runtime.global_table orelse return;
+    try global.rawSet(runtime.allocator, .{ .string = "xpcall" }, try runtime.newNative(null, baseXpcall));
 }
 
 fn tableInsert(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
@@ -806,6 +847,7 @@ pub fn install(runtime: *rt.Context) !void {
     try setGlobalNative(runtime, "pairs", basePairs);
     try setGlobalNative(runtime, "ipairs", baseIpairs);
     try setGlobalNative(runtime, "pcall", basePcall);
+    try installDynamicBase(runtime);
 
     try installPackage(runtime);
     try setGlobalNative(runtime, "require", baseRequire);
@@ -925,6 +967,7 @@ pub const Template = struct {
         try string_mt.rawSet(runtime.allocator, .{ .string = "__index" }, .{ .table = string });
         runtime.string_metatable = string_mt;
         try installPackage(runtime);
+        try installDynamicBase(runtime);
     }
 };
 
@@ -1075,6 +1118,44 @@ test "AOT pcall preserves stable generated-function error names" {
     try std.testing.expect(!out[0].boolean);
     try std.testing.expectEqualStrings("NotCallable", out[1].string);
     try std.testing.expect(ctx.aotErrorName() == null);
+}
+
+fn xpcallFail(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+    ctx.last_error = .{ .string = "boom" };
+    return error.LuaError;
+}
+fn xpcallReturnPair(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+    const out = try std.heap.smp_allocator.alloc(Value, 2);
+    out[0] = .{ .string = "left" };
+    out[1] = .{ .number = 7 };
+    return out;
+}
+fn xpcallHandle(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    return one(ctx.allocator, .{ .string = try std.fmt.allocPrint(ctx.allocator, "handled:{s}", .{args[0].string}) });
+}
+
+test "AOT xpcall transforms failures and preserves success results" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
+    try install(&ctx);
+    const xpcall = ctx.global_table.?.rawGet(.{ .string = "xpcall" }).?;
+    const fail_fn = try ctx.makeFunctionKnown(0, xpcallFail, &.{});
+    const handler = try ctx.newNative(null, xpcallHandle);
+    const failed = try ctx.callValue(xpcall, &.{ fail_fn, handler, .{ .string = "ignored" } });
+    defer rt.freeResults(failed);
+    try std.testing.expect(!failed[0].boolean);
+    try std.testing.expectEqualStrings("handled:boom", failed[1].string);
+
+    const success_fn = try ctx.makeFunctionKnown(0, xpcallReturnPair, &.{});
+    const success = try ctx.callValue(xpcall, &.{ success_fn, handler });
+    defer rt.freeResults(success);
+    try std.testing.expect(success[0].boolean);
+    try std.testing.expectEqualStrings("left", success[1].string);
+    try std.testing.expectEqual(@as(f64, 7), success[2].number);
 }
 
 test "AOT native next and ipairs iterators borrow fixed result storage" {
