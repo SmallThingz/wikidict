@@ -101,6 +101,54 @@ fn parserFunctionCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     return one(.{ .string = try call(host.ctx, runtime.allocator, parsed.name, parsed.args) });
 }
 
+fn valueToString(runtime: *rt.Context, value: Value) ![]const u8 {
+    if (runtime.metamethod(value, "__tostring")) |mm| {
+        const out = try runtime.callValue(mm, &.{value});
+        defer rt.freeResults(out);
+        if (out.len == 0 or out[0] != .string) return error.StringExpected;
+        return out[0].string;
+    }
+    return switch (value) {
+        .nil => "nil",
+        .boolean => |v| if (v) "true" else "false",
+        .number => |v| try rt.numberToString(runtime.allocator, v),
+        .string => |v| v,
+        .table => |v| try std.fmt.allocPrint(runtime.allocator, "table: 0x{x}", .{@intFromPtr(v)}),
+        .callable => |v| try std.fmt.allocPrint(runtime.allocator, "function: 0x{x}", .{v.identity}),
+    };
+}
+
+fn checkedChildArgs(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
+    const out = try runtime.newTable();
+    var it = source.iterator();
+    while (it.next()) |entry| {
+        if (entry.key_ptr.* != .string and entry.key_ptr.* != .number) return error.InvalidFrameArgKey;
+        const text = switch (entry.value_ptr.*) {
+            .boolean => |v| if (v) "1" else "",
+            .string, .number => try valueToString(runtime, entry.value_ptr.*),
+            else => return error.InvalidFrameArgValue,
+        };
+        try out.rawSet(runtime.allocator, entry.key_ptr.*, .{ .string = text });
+    }
+    return out;
+}
+
+fn newChildCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const ctx: *FrameCtx = @ptrCast(@alignCast(raw orelse return error.MissingFrameContext));
+    if (args.len < 2 or args[1] != .table) return error.FrameChildSpecExpected;
+    const spec = args[1].table;
+    const title: []const u8 = if (spec.rawGet(.{ .string = "title" })) |value|
+        if (value == .nil) ctx.title else try valueToString(runtime, value)
+    else
+        ctx.title;
+    const child_args = if (spec.rawGet(.{ .string = "args" })) |value| switch (value) {
+        .nil => try runtime.newTable(),
+        .table => |table| try checkedChildArgs(runtime, table),
+        else => return error.FrameChildArgsExpected,
+    } else try runtime.newTable();
+    return one(try makeFrameWithArgs(runtime, title, child_args, .{ .table = ctx.table }));
+}
+
 fn currentFrameCall(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     return one(if (runtime.current_frame) |frame| .{ .table = frame } else .nil);
 }
@@ -120,6 +168,7 @@ fn makeFrameWithArgs(runtime: *rt.Context, title: []const u8, arg_table: *rt.Tab
     try frame.rawSetNativeField(.frame, "expandTemplate", try runtime.newNative(ctx, expandTemplateCall));
     try frame.rawSetNativeField(.frame, "extensionTag", try runtime.newNative(ctx, extensionTagCall));
     try frame.rawSetNativeField(.frame, "callParserFunction", try runtime.newNative(ctx, parserFunctionCall));
+    try frame.rawSetNativeField(.frame, "newChild", try runtime.newNative(ctx, newChildCall));
     return .{ .table = frame };
 }
 
@@ -230,6 +279,33 @@ test "AOT frame exposes parent title and typed host callbacks" {
     const got_parent = try callField(&runtime, frame, "getParent", &.{frame});
     defer rt.freeResults(got_parent);
     try std.testing.expect(got_parent[0] == .table and got_parent[0].table == parent.table);
+
+    const child_args = try runtime.newTable();
+    try child_args.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = "value" });
+    try child_args.rawSet(runtime.allocator, .{ .number = 1 }, .{ .number = 42 });
+    try child_args.rawSet(runtime.allocator, .{ .string = "flag" }, .{ .boolean = false });
+    const child_spec = try runtime.newTable();
+    try child_spec.rawSet(runtime.allocator, .{ .string = "args" }, .{ .table = child_args });
+    const child_result = try callField(&runtime, frame, "newChild", &.{ frame, .{ .table = child_spec } });
+    defer rt.freeResults(child_result);
+    const child = child_result[0];
+    const child_title = try callField(&runtime, child, "getTitle", &.{child});
+    defer rt.freeResults(child_title);
+    try std.testing.expectEqualStrings("Module:Probe", child_title[0].string);
+    const child_parent = try callField(&runtime, child, "getParent", &.{child});
+    defer rt.freeResults(child_parent);
+    try std.testing.expect(child_parent[0] == .table and child_parent[0].table == frame.table);
+    const child_frame_args = (try runtime.getIndex(child, .{ .string = "args" })).table;
+    try std.testing.expectEqualStrings("value", child_frame_args.rawGet(.{ .string = "name" }).?.string);
+    try std.testing.expectEqualStrings("42", child_frame_args.rawGet(.{ .number = 1 }).?.string);
+    try std.testing.expectEqualStrings("", child_frame_args.rawGet(.{ .string = "flag" }).?.string);
+    const titled_spec = try runtime.newTable();
+    try titled_spec.rawSet(runtime.allocator, .{ .string = "title" }, .{ .number = 123 });
+    const titled_child = try callField(&runtime, frame, "newChild", &.{ frame, .{ .table = titled_spec } });
+    defer rt.freeResults(titled_child);
+    const titled_name = try callField(&runtime, titled_child[0], "getTitle", &.{titled_child[0]});
+    defer rt.freeResults(titled_name);
+    try std.testing.expectEqualStrings("123", titled_name[0].string);
 
     runtime.current_frame = frame.table;
     const current = try callField(&runtime, .{ .table = mw }, "getCurrentFrame", &.{});

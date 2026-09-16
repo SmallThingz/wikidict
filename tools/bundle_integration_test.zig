@@ -83,6 +83,8 @@ const module_source =
     \\    local media_batch = mw.title.newBatch({'Media:Remote.svg'}):lookupExistence():getTitles()
     \\    local media_batch_ok = pcall(function() return media_batch[1].exists end)
     \\    assert(not media_batch_ok)
+    \\    local child = frame:newChild{args = {x = 'child-frame', [1] = 7, flag = false}}
+    \\    assert(child:getTitle() == frame:getTitle() and child:getParent() == frame and child.args.x == 'child-frame' and child.args[1] == '7' and child.args.flag == '')
     \\    assert(frame:callParserFunction{ name = '#invoke', args = {'IntegrationForms', 'frame_probe', x = 'frame-parser'} } == 'frame-parser')
     \\    assert(frame:callParserFunction{ name = '#tag:syntaxhighlight', args = {'x', lang = 'text'} } == '<syntaxhighlight lang="text">x</syntaxhighlight>')
     \\    assert(frame:callParserFunction{ name = '#tag', args = {'ref', 'body', 'name=n'} } == '<ref name="n">body</ref>')

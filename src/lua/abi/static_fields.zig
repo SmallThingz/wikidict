@@ -64,7 +64,7 @@ const text_names = [_][]const u8{ "trim", "split", "gsplit", "unstrip", "unstrip
 const uri_names = [_][]const u8{ "fullUrl", "localUrl", "canonicalUrl", "encode", "decode", "anchorEncode", "new", "validate" };
 const html_names = names[94..95];
 const language_names = [_][]const u8{ "new", "getContentLanguage", "getFallbacksFor", "isKnownLanguageTag", "fetchLanguageName" };
-const frame_names = [_][]const u8{ "args", "getParent", "getTitle", "expandTemplate", "preprocess", "extensionTag", "callParserFunction" };
+const frame_names = [_][]const u8{ "args", "getParent", "getTitle", "expandTemplate", "preprocess", "extensionTag", "callParserFunction", "newChild" };
 const title_value_names = [_][]const u8{
     "text",         "prefixedText", "__fragment", "namespace", "nsText", "subpageText", "baseText", "rootText",
     "isSubpage",    "interwiki",    "isExternal", "isLocal",   "exists", "getContent",  "fullUrl",  "localUrl",
