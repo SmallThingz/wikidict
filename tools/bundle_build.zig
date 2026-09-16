@@ -208,7 +208,7 @@ pub fn main(init: std.process.Init) !void {
     const expander_marker = try std.fs.path.join(a, &.{ expander_root, ".incomplete" });
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = expander_marker, .data = "building" });
 
-    try stage(init.io, marker, "extract modules and redirects", &.{ paths.modules, dump, expander_root });
+    try stage(init.io, marker, "extract modules, redirects, and corpus index", &.{ paths.modules, dump, expander_root, "--page-index" });
 
     const manifest = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });
     const llvm_dir = try std.fs.path.join(a, &.{ expander_root, "llvm" });

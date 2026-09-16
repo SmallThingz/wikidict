@@ -58,39 +58,6 @@ fn parseIndexedPage(line: []const u8) !IndexedPage {
     return .{ .source_offset = source_offset, .source_len = source_len, .title = title, .ns = ns, .has_source = has_source };
 }
 
-fn writePageIndex(io: std.Io, allocator: std.mem.Allocator, dump: *dump_source.Dump, root: []const u8) !void {
-    const path = try std.fs.path.join(allocator, &.{ root, "page-index.tsv" });
-    defer allocator.free(path);
-    var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
-    defer file.close(io);
-    var buffer: [256 * 1024]u8 = undefined;
-    var writer = file.writer(io, &buffer);
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    var headers = dump.headerIterator();
-    while (true) {
-        const a = arena.allocator();
-        const page = (try headers.next(a)) orelse break;
-        if (std.mem.indexOfAny(u8, page.title, "\t\r\n") != null) return error.InvalidPageTitle;
-        if (page.redirect) |target| if (std.mem.indexOfAny(u8, target, "\t\r\n") != null) return error.InvalidPageTitle;
-        if (std.mem.indexOfAny(u8, page.revision_timestamp, "\t\r\n") != null or std.mem.indexOfAny(u8, page.revision_user, "\t\r\n") != null) return error.InvalidPageMetadata;
-        try writer.interface.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{d}\t{d}\n", .{
-            page.source_offset,
-            page.source_len,
-            page.title,
-            page.redirect orelse "",
-            page.page_id,
-            page.revision_id,
-            page.revision_timestamp,
-            page.revision_user,
-            page.ns,
-            @intFromBool(page.has_source),
-        });
-        _ = arena.reset(.retain_capacity);
-    }
-    try writer.interface.flush();
-}
-
 fn parseOptions(args: []const []const u8) !Options {
     var out: Options = .{};
     var index: usize = 3;
@@ -129,7 +96,6 @@ pub fn main(init: std.process.Init) !void {
     defer dump.deinit();
     var registry = try dump.languageRegistry(a);
     defer registry.deinit();
-    try writePageIndex(init.io, a, &dump, options.expander_root);
     const codes: encoder.blob_builder.LanguageCodes = .{
         .ctx = &registry,
         .get_fn = struct {
