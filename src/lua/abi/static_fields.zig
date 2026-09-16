@@ -66,15 +66,15 @@ const html_names = names[94..95];
 const language_names = [_][]const u8{ "new", "getContentLanguage", "getFallbacksFor", "isKnownLanguageTag", "fetchLanguageName" };
 const frame_names = [_][]const u8{ "args", "getParent", "getTitle", "expandTemplate", "preprocess", "extensionTag", "callParserFunction" };
 const title_value_names = [_][]const u8{
-    "text",       "prefixedText", "__fragment", "namespace",  "nsText",     "subpageText", "baseText",  "rootText",
-    "isSubpage",  "interwiki",    "isExternal", "isLocal",    "exists",     "getContent",   "fullUrl",   "localUrl",
+    "text",         "prefixedText", "__fragment", "namespace", "nsText", "subpageText", "baseText", "rootText",
+    "isSubpage",    "interwiki",    "isExternal", "isLocal",   "exists", "getContent",  "fullUrl",  "localUrl",
     "canonicalUrl",
 };
 const language_value_names = [_][]const u8{
     "code",     "getCode", "formatDate", "uc",                   "lc", "ucfirst", "lcfirst", "getDir", "getFallbackLanguages",
     "getArrow", "gender",  "formatNum",  "parseFormattedNumber",
 };
-const html_node_names = [_][]const u8{ "tag", "done", "allDone", "wikitext", "node", "css", "cssText", "addClass", "attr", "newline" };
+const html_node_names = [_][]const u8{ "tag", "done", "allDone", "wikitext", "node", "css", "cssText", "addClass", "attr", "getAttr", "newline" };
 const hash_names = [_][]const u8{"hashValue"};
 
 fn namespaceNames(namespace: Namespace) []const []const u8 {

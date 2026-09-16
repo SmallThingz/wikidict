@@ -3,6 +3,8 @@ const rt = @import("zig_runtime");
 const Value = rt.Value;
 
 const Pair = struct { name: []const u8, value: []const u8 };
+const Attr = struct { name: []const u8, value: Value };
+const Style = union(enum) { property: Pair, raw: []const u8 };
 const Child = union(enum) { text: []const u8, node: *Node };
 
 const Html = struct {
@@ -17,10 +19,8 @@ const Node = struct {
     tag_name: ?[]const u8,
     self_closing: bool = false,
     children: std.ArrayList(Child) = .empty,
-    attrs: std.ArrayList(Pair) = .empty,
-    styles: std.ArrayList(Pair) = .empty,
-    classes: std.ArrayList([]const u8) = .empty,
-    css_text: std.ArrayList([]const u8) = .empty,
+    attrs: std.ArrayList(Attr) = .empty,
+    styles: std.ArrayList(Style) = .empty,
 };
 
 fn one(_: std.mem.Allocator, value: Value) ![]const Value {
@@ -32,19 +32,49 @@ fn scalarText(a: std.mem.Allocator, value: Value) ![]const u8 {
     return switch (value) {
         .string => |s| s,
         .number => |n| try rt.numberToString(a, n),
-        .boolean => |b| if (b) "true" else "false",
-        .nil => "",
         else => error.HtmlScalarExpected,
     };
 }
 
-fn setPair(a: std.mem.Allocator, list: *std.ArrayList(Pair), name: []const u8, value: ?[]const u8) !void {
-    for (list.items, 0..) |*pair, i| {
-        if (!std.mem.eql(u8, pair.name, name)) continue;
-        if (value) |v| pair.value = v else _ = list.orderedRemove(i);
+fn validAttributeName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    const first = name[0];
+    if (!(std.ascii.isAlphabetic(first) or first == '_' or first == ':')) return false;
+    for (name[1..]) |ch| {
+        if (!(std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '.' or ch == ':' or ch == '-')) return false;
+    }
+    return true;
+}
+
+fn attrIndex(node: *Node, name: []const u8) ?usize {
+    for (node.attrs.items, 0..) |attr, i| if (std.mem.eql(u8, attr.name, name)) return i;
+    return null;
+}
+
+fn setAttr(node: *Node, name: []const u8, value: ?Value) !void {
+    if (!validAttributeName(name)) return error.InvalidHtmlAttributeName;
+    if (std.mem.eql(u8, name, "style")) {
+        node.styles.clearRetainingCapacity();
+        if (value) |raw| try node.styles.append(node.html.allocator, .{ .raw = try scalarText(node.html.allocator, raw) });
         return;
     }
-    if (value) |v| try list.append(a, .{ .name = name, .value = v });
+    if (attrIndex(node, name)) |i| {
+        if (value) |raw| node.attrs.items[i].value = raw else _ = node.attrs.orderedRemove(i);
+        return;
+    }
+    if (value) |raw| try node.attrs.append(node.html.allocator, .{ .name = name, .value = raw });
+}
+
+fn setStyleProperty(node: *Node, name: []const u8, value: ?[]const u8) !void {
+    for (node.styles.items, 0..) |*style, i| switch (style.*) {
+        .raw => {},
+        .property => |*pair| {
+            if (!std.mem.eql(u8, pair.name, name)) continue;
+            if (value) |raw| pair.value = raw else _ = node.styles.orderedRemove(i);
+            return;
+        },
+    };
+    if (value) |raw| try node.styles.append(node.html.allocator, .{ .property = .{ .name = name, .value = raw } });
 }
 
 fn returnSelf(node: *Node, a: std.mem.Allocator) ![]const Value {
@@ -53,8 +83,8 @@ fn returnSelf(node: *Node, a: std.mem.Allocator) ![]const Value {
 
 fn selfClosingTag(name: []const u8) bool {
     inline for (.{
-        "area", "base", "br", "col", "command", "embed", "hr", "img", "input", "keygen",
-        "link", "meta", "param", "source", "track", "wbr",
+        "area", "base", "br",    "col",    "command", "embed", "hr", "img", "input", "keygen",
+        "link", "meta", "param", "source", "track",   "wbr",
     }) |tag| if (std.mem.eql(u8, name, tag)) return true;
     return false;
 }
@@ -101,6 +131,7 @@ fn installNodeMethods(node: *Node, runtime: *rt.Context) !void {
     try setNative(node, runtime, "cssText", cssTextCall);
     try setNative(node, runtime, "addClass", addClassCall);
     try setNative(node, runtime, "attr", attrCall);
+    try setNative(node, runtime, "getAttr", getAttrCall);
     try setNative(node, runtime, "newline", newlineCall);
     const mt = try runtime.newTable();
     try mt.rawSet(node.html.allocator, .{ .string = "__tostring" }, try runtime.newNative(node, tostringCall));
@@ -151,7 +182,7 @@ fn wikitextCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     const a = runtime.allocator;
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
     for (args[1..]) |value| {
-        if (value == .nil) continue;
+        if (value == .nil) break;
         try appendChild(node, .{ .text = try scalarText(node.html.allocator, value) });
     }
     return returnSelf(node, a);
@@ -159,39 +190,57 @@ fn wikitextCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value)
 fn nodeCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
-    for (args[1..]) |value| switch (value) {
-        .nil => {},
-        .string, .number, .boolean => try appendChild(node, .{ .text = try scalarText(node.html.allocator, value) }),
+    if (args.len < 2 or args[1] == .nil) return returnSelf(node, a);
+    switch (args[1]) {
+        .string, .number => try appendChild(node, .{ .text = try scalarText(node.html.allocator, args[1]) }),
+        .boolean => |value| try appendChild(node, .{ .text = if (value) "true" else "false" }),
         .table => |table| {
             const child = node.html.nodes.get(table) orelse return error.HtmlNodeExpected;
             try appendChild(node, .{ .node = child });
         },
         else => return error.HtmlNodeExpected,
-    };
+    }
     return returnSelf(node, a);
 }
 
 fn cssCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
-    if (args.len < 2 or args[1] != .string) return error.HtmlCssNameExpected;
+    if (args.len < 2) return error.HtmlCssNameExpected;
+    if (args[1] == .table) {
+        if (args.len > 2 and args[2] != .nil) return error.HtmlCssTableValue;
+        var it = args[1].table.iterator();
+        while (it.next()) |entry| {
+            const name = try scalarText(node.html.allocator, entry.key_ptr.*);
+            const value = try scalarText(node.html.allocator, entry.value_ptr.*);
+            try setStyleProperty(node, name, value);
+        }
+        return returnSelf(node, a);
+    }
+    const name = try scalarText(node.html.allocator, args[1]);
     const value = if (args.len < 3 or args[2] == .nil) null else try scalarText(node.html.allocator, args[2]);
-    try setPair(node.html.allocator, &node.styles, args[1].string, value);
+    try setStyleProperty(node, name, value);
     return returnSelf(node, a);
 }
 
 fn cssTextCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
-    if (args.len >= 2 and args[1] != .nil) try node.css_text.append(node.html.allocator, try scalarText(node.html.allocator, args[1]));
+    if (args.len >= 2 and args[1] != .nil) {
+        try node.styles.append(node.html.allocator, .{ .raw = try scalarText(node.html.allocator, args[1]) });
+    }
     return returnSelf(node, a);
 }
 fn addClassCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
-    if (args.len >= 2 and args[1] != .nil) {
-        const class = try scalarText(node.html.allocator, args[1]);
-        if (class.len != 0) try node.classes.append(node.html.allocator, class);
+    if (args.len < 2 or args[1] == .nil) return returnSelf(node, a);
+    const class = try scalarText(node.html.allocator, args[1]);
+    if (attrIndex(node, "class")) |i| {
+        const previous = try scalarText(node.html.allocator, node.attrs.items[i].value);
+        node.attrs.items[i].value = .{ .string = try std.fmt.allocPrint(node.html.allocator, "{s} {s}", .{ previous, class }) };
+    } else {
+        try setAttr(node, "class", args[1]);
     }
     return returnSelf(node, a);
 }
@@ -199,20 +248,31 @@ fn addClassCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value)
 fn attrCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
-    if (args.len < 2) return returnSelf(node, a);
+    if (args.len < 2) return error.HtmlAttributeNameExpected;
     if (args[1] == .table) {
+        if (args.len > 2 and args[2] != .nil) return error.HtmlAttributeTableValue;
         var it = args[1].table.iterator();
         while (it.next()) |entry| {
-            if (entry.key_ptr.* != .string) continue;
-            const value = if (entry.value_ptr.* == .nil) null else try scalarText(node.html.allocator, entry.value_ptr.*);
-            try setPair(node.html.allocator, &node.attrs, entry.key_ptr.string, value);
+            if (entry.key_ptr.* != .string) return error.HtmlAttributeTableExpected;
+            if (entry.value_ptr.* != .string and entry.value_ptr.* != .number) return error.HtmlAttributeTableExpected;
+            try setAttr(node, entry.key_ptr.string, entry.value_ptr.*);
         }
-    } else {
-        if (args[1] != .string) return error.HtmlAttributeNameExpected;
-        const value = if (args.len < 3 or args[2] == .nil) null else try scalarText(node.html.allocator, args[2]);
-        try setPair(node.html.allocator, &node.attrs, args[1].string, value);
+        return returnSelf(node, a);
     }
+    if (args[1] != .string) return error.HtmlAttributeNameExpected;
+    const value: ?Value = if (args.len < 3 or args[2] == .nil) null else switch (args[2]) {
+        .string, .number => args[2],
+        else => return error.HtmlAttributeValueExpected,
+    };
+    try setAttr(node, args[1].string, value);
     return returnSelf(node, a);
+}
+
+fn getAttrCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
+    if (args.len < 2 or args[1] != .string) return error.HtmlAttributeNameExpected;
+    const value: Value = if (attrIndex(node, args[1].string)) |i| node.attrs.items[i].value else .nil;
+    return one(runtime.allocator, value);
 }
 fn newlineCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const a = runtime.allocator;
@@ -231,52 +291,38 @@ fn appendEscapedAttribute(out: *std.ArrayList(u8), a: std.mem.Allocator, text: [
     };
 }
 
-fn appendAttribute(out: *std.ArrayList(u8), a: std.mem.Allocator, name: []const u8, value: []const u8) !void {
+fn appendAttribute(out: *std.ArrayList(u8), a: std.mem.Allocator, name: []const u8, value: Value) !void {
     try out.append(a, ' ');
     try out.appendSlice(a, name);
     try out.appendSlice(a, "=\"");
-    try appendEscapedAttribute(out, a, value);
+    try appendEscapedAttribute(out, a, try scalarText(a, value));
     try out.append(a, '"');
 }
 fn appendStyleValue(node: *Node, out: *std.ArrayList(u8)) !void {
     const a = node.html.allocator;
-    var first = true;
-    for (node.styles.items) |pair| {
-        if (!first) try out.append(a, ';');
-        try out.appendSlice(a, pair.name);
-        try out.append(a, ':');
-        try out.appendSlice(a, pair.value);
-        first = false;
-    }
-    for (node.css_text.items) |text| {
-        if (text.len == 0) continue;
-        if (!first and out.items.len != 0 and out.items[out.items.len - 1] != ';') try out.append(a, ';');
-        try out.appendSlice(a, text);
-        first = false;
+    for (node.styles.items, 0..) |style, i| {
+        if (i != 0) try out.append(a, ';');
+        switch (style) {
+            .raw => |text| try out.appendSlice(a, text),
+            .property => |pair| {
+                try out.appendSlice(a, pair.name);
+                try out.append(a, ':');
+                try out.appendSlice(a, pair.value);
+            },
+        }
     }
 }
 
-fn appendClassValue(node: *Node, out: *std.ArrayList(u8)) !void {
-    for (node.classes.items, 0..) |class, i| {
-        if (i != 0) try out.append(node.html.allocator, ' ');
-        try out.appendSlice(node.html.allocator, class);
-    }
-}
 fn renderNode(node: *Node, out: *std.ArrayList(u8)) !void {
     const a = node.html.allocator;
     if (node.tag_name) |tag| {
         try out.append(a, '<');
         try out.appendSlice(a, tag);
-        if (node.classes.items.len != 0) {
-            var classes: std.ArrayList(u8) = .empty;
-            try appendClassValue(node, &classes);
-            try appendAttribute(out, a, "class", classes.items);
-        }
-        for (node.attrs.items) |pair| try appendAttribute(out, a, pair.name, pair.value);
-        if (node.styles.items.len != 0 or node.css_text.items.len != 0) {
+        for (node.attrs.items) |attr| try appendAttribute(out, a, attr.name, attr.value);
+        if (node.styles.items.len != 0) {
             var styles: std.ArrayList(u8) = .empty;
             try appendStyleValue(node, &styles);
-            try appendAttribute(out, a, "style", styles.items);
+            try appendAttribute(out, a, "style", .{ .string = styles.items });
         }
         if (node.self_closing) {
             try out.appendSlice(a, " />");
@@ -321,9 +367,9 @@ test "html builder chaining and serialization" {
     html.* = .{ .allocator = a };
     const root = try newNode(html, &runtime, null, "div");
     try installNodeMethods(root, &runtime);
-    try root.classes.append(a, "box");
-    try root.styles.append(a, .{ .name = "width", .value = "2px" });
-    try root.attrs.append(a, .{ .name = "title", .value = "a&b" });
+    try setAttr(root, "class", .{ .string = "box" });
+    try setStyleProperty(root, "width", "2px");
+    try setAttr(root, "title", .{ .string = "a&b" });
     const child = try newNode(html, &runtime, root, "span");
     try installNodeMethods(child, &runtime);
     try child.children.append(a, .{ .text = "wiki" });
@@ -331,6 +377,102 @@ test "html builder chaining and serialization" {
     var out: std.ArrayList(u8) = .empty;
     try renderNode(root, &out);
     try std.testing.expectEqualStrings("<div class=\"box\" title=\"a&amp;b\" style=\"width:2px\"><span>wiki</span></div>", out.items);
+}
+
+test "html builder matches MediaWiki attribute class and style semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 0);
+    defer runtime.deinit();
+    const html = try a.create(Html);
+    html.* = .{ .allocator = a };
+    const root = try newNode(html, &runtime, null, "div");
+    try installNodeMethods(root, &runtime);
+    const self = Value{ .table = root.table };
+
+    const attr_result = try attrCall(root, &runtime, &.{ self, .{ .string = "town" }, .{ .string = "Berlin" } });
+    defer rt.freeResults(attr_result);
+    const getter = try runtime.getIndex(self, .{ .string = "getAttr" });
+    const got = try runtime.callValue(getter, &.{ self, .{ .string = "town" } });
+    defer rt.freeResults(got);
+    try std.testing.expectEqualStrings("Berlin", got[0].string);
+    const missing = try runtime.callValue(getter, &.{ self, .{ .string = "missing" } });
+    defer rt.freeResults(missing);
+    try std.testing.expect(missing[0] == .nil);
+
+    const class_one = try addClassCall(root, &runtime, &.{ self, .{ .string = "foo" } });
+    defer rt.freeResults(class_one);
+    const class_two = try addClassCall(root, &runtime, &.{ self, .{ .string = "bar" } });
+    defer rt.freeResults(class_two);
+    const css_one = try cssCall(root, &runtime, &.{ self, .{ .string = "foo" }, .{ .string = "bar" } });
+    defer rt.freeResults(css_one);
+    const css_raw = try cssTextCall(root, &runtime, &.{ self, .{ .string = "abc:def" } });
+    defer rt.freeResults(css_raw);
+    const css_two = try cssCall(root, &runtime, &.{ self, .{ .string = "g" }, .{ .string = "h" } });
+    defer rt.freeResults(css_two);
+
+    var out: std.ArrayList(u8) = .empty;
+    try renderNode(root, &out);
+    try std.testing.expectEqualStrings("<div town=\"Berlin\" class=\"foo bar\" style=\"foo:bar;abc:def;g:h\"></div>", out.items);
+
+    const style_override = try attrCall(root, &runtime, &.{ self, .{ .string = "style" }, .{ .string = "color:red" } });
+    defer rt.freeResults(style_override);
+    out.items.len = 0;
+    try renderNode(root, &out);
+    try std.testing.expectEqualStrings("<div town=\"Berlin\" class=\"foo bar\" style=\"color:red\"></div>", out.items);
+
+    try std.testing.expectError(error.HtmlAttributeValueExpected, attrCall(root, &runtime, &.{ self, .{ .string = "bad" }, .{ .boolean = true } }));
+    try std.testing.expectError(error.HtmlScalarExpected, cssCall(root, &runtime, &.{ self, .{ .boolean = true }, .{ .string = "x" } }));
+    try std.testing.expectError(error.HtmlScalarExpected, wikitextCall(root, &runtime, &.{ self, .{ .boolean = true } }));
+}
+
+test "html builder table setters and removals match MediaWiki behavior" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 0);
+    defer runtime.deinit();
+    const html = try a.create(Html);
+    html.* = .{ .allocator = a };
+    const root = try newNode(html, &runtime, null, "div");
+    try installNodeMethods(root, &runtime);
+    const self = Value{ .table = root.table };
+
+    const attrs = try runtime.newTable();
+    try attrs.rawSet(a, .{ .string = "foo" }, .{ .string = "bar" });
+    try attrs.rawSet(a, .{ .string = "count" }, .{ .number = 7 });
+    const attr_result = try attrCall(root, &runtime, &.{ self, .{ .table = attrs } });
+    defer rt.freeResults(attr_result);
+    const count = try getAttrCall(root, &runtime, &.{ self, .{ .string = "count" } });
+    defer rt.freeResults(count);
+    try std.testing.expectEqual(@as(f64, 7), count[0].number);
+
+    const styles = try runtime.newTable();
+    try styles.rawSet(a, .{ .string = "color" }, .{ .string = "red" });
+    try styles.rawSet(a, .{ .number = 12 }, .{ .number = 34 });
+    const css_result = try cssCall(root, &runtime, &.{ self, .{ .table = styles } });
+    defer rt.freeResults(css_result);
+    const css_remove = try cssCall(root, &runtime, &.{ self, .{ .string = "color" }, .nil });
+    defer rt.freeResults(css_remove);
+
+    var out: std.ArrayList(u8) = .empty;
+    try renderNode(root, &out);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "foo=\"bar\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "count=\"7\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "12:34") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "color:red") == null);
+
+    const bad_attrs = try runtime.newTable();
+    try bad_attrs.rawSet(a, .{ .number = 1 }, .{ .string = "x" });
+    try std.testing.expectError(error.HtmlAttributeTableExpected, attrCall(root, &runtime, &.{ self, .{ .table = bad_attrs } }));
+    try std.testing.expectError(error.InvalidHtmlAttributeName, attrCall(root, &runtime, &.{ self, .{ .string = "§§" }, .{ .string = "x" } }));
+
+    const style_clear = try attrCall(root, &runtime, &.{ self, .{ .string = "style" }, .nil });
+    defer rt.freeResults(style_clear);
+    out.items.len = 0;
+    try renderNode(root, &out);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, " style=") == null);
 }
 
 test "html builder matches MediaWiki self-closing tag semantics" {
