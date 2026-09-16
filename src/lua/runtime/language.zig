@@ -321,13 +321,24 @@ fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, ctx: ?*an
 }
 const LanguageCtx = struct { code: []const u8 };
 
+fn languageContext(raw: ?*anyopaque) !*LanguageCtx {
+    return @ptrCast(@alignCast(raw orelse return error.MissingLanguageContext));
+}
+
+fn requireEnglishLocale(raw: ?*anyopaque) !*LanguageCtx {
+    const ctx = try languageContext(raw);
+    if (!std.mem.eql(u8, ctx.code, "en")) return error.NotImplemented;
+    return ctx;
+}
+
 fn languageGetCode(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const a = runtime.allocator;
     const ctx: *LanguageCtx = @ptrCast(@alignCast(ctx_raw.?));
     return one(a, .{ .string = ctx.code });
 }
 
-fn languageFormatDate(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn languageFormatDate(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
     if (args.len < 2 or args[1] != .string) return error.StringExpected;
     const timestamp = try parseTimestamp(runtime, if (args.len > 2) args[2] else null);
@@ -340,49 +351,57 @@ fn sourceMethodArg(args: []const Value) ![]const u8 {
 }
 
 fn asciiCaseAlloc(a: std.mem.Allocator, source: []const u8, upper: bool, first_only: bool) ![]const u8 {
+    if (first_only) {
+        if (source.len != 0 and source[0] >= 0x80) return error.NotImplemented;
+    } else {
+        for (source) |c| if (c >= 0x80) return error.NotImplemented;
+    }
     const out = try a.dupe(u8, source);
     if (first_only) {
-        if (out.len != 0 and out[0] < 0x80) out[0] = if (upper) std.ascii.toUpper(out[0]) else std.ascii.toLower(out[0]);
+        if (out.len != 0) out[0] = if (upper) std.ascii.toUpper(out[0]) else std.ascii.toLower(out[0]);
         return out;
     }
-    for (out) |*c| if (c.* < 0x80) {
-        c.* = if (upper) std.ascii.toUpper(c.*) else std.ascii.toLower(c.*);
-    };
+    for (out) |*c| c.* = if (upper) std.ascii.toUpper(c.*) else std.ascii.toLower(c.*);
     return out;
 }
 
-fn languageUc(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn languageUc(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
     return one(a, .{ .string = try asciiCaseAlloc(a, try sourceMethodArg(args), true, false) });
 }
 
-fn languageLc(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn languageLc(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
     return one(a, .{ .string = try asciiCaseAlloc(a, try sourceMethodArg(args), false, false) });
 }
 
-fn languageUcfirst(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn languageUcfirst(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
     return one(a, .{ .string = try asciiCaseAlloc(a, try sourceMethodArg(args), true, true) });
 }
 
-fn languageLcfirst(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn languageLcfirst(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
     return one(a, .{ .string = try asciiCaseAlloc(a, try sourceMethodArg(args), false, true) });
 }
 
-fn languageGetDir(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+fn languageGetDir(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
     return one(a, .{ .string = "ltr" });
 }
-fn languageGetFallbacks(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+fn languageGetFallbacks(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
-    const table = try runtime.newTable();
-    try table.append(a, .{ .string = "en" });
-    return one(a, .{ .table = table });
+    return one(a, .{ .table = try runtime.newTable() });
 }
 
-fn languageGetArrow(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn languageGetArrow(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
     const which = try sourceMethodArg(args);
     if (std.ascii.eqlIgnoreCase(which, "forwards")) return one(a, .{ .string = "→" });
@@ -390,12 +409,15 @@ fn languageGetArrow(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
     return error.InvalidArrowDirection;
 }
 
-fn languageGender(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn languageGender(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
     if (args.len < 3 or args[2] != .table) return error.TableExpected;
     const forms = args[2].table;
-    const first = forms.rawGet(.{ .number = 1 }) orelse Value.nil;
-    return one(a, first);
+    const count = forms.rawLen();
+    if (count == 0) return one(a, .{ .string = "" });
+    if (count == 1) return one(a, forms.rawGet(.{ .number = 1 }) orelse .nil);
+    return error.NotImplemented;
 }
 
 fn valueString(a: std.mem.Allocator, value: Value) ![]const u8 {
@@ -461,13 +483,15 @@ pub fn parseFormattedNumberAlloc(a: std.mem.Allocator, raw: []const u8) ![]const
     return clean.toOwnedSlice(a);
 }
 
-fn languageFormatNum(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn languageFormatNum(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
     if (args.len < 2) return error.NumberExpected;
     const raw = try valueString(a, args[1]);
     return one(a, .{ .string = try formatNumberAlloc(a, raw) });
 }
-fn languageParseFormattedNumber(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn languageParseFormattedNumber(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
     const raw = try sourceMethodArg(args);
     return one(a, .{ .string = try parseFormattedNumberAlloc(a, raw) });
@@ -507,24 +531,21 @@ fn getContentLanguage(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![
 fn isKnownLanguageTag(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len == 0 or args[0] != .string) return one(a, .{ .boolean = false });
-    const code = args[0].string;
-    if (code.len == 0) return one(a, .{ .boolean = false });
-    for (code) |c| if (!(std.ascii.isAlphanumeric(c) or c == '-'))
-        return one(a, .{ .boolean = false });
-    return one(a, .{ .boolean = true });
+    if (std.mem.eql(u8, args[0].string, "en")) return one(a, .{ .boolean = true });
+    return error.NotImplemented;
 }
 
 fn fetchLanguageName(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     if (std.mem.eql(u8, args[0].string, "en")) return one(a, .{ .string = "English" });
-    return one(a, .{ .string = args[0].string });
+    return error.NotImplemented;
 }
-fn getFallbacksFor(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+fn getFallbacksFor(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
-    const table = try runtime.newTable();
-    try table.append(a, .{ .string = "en" });
-    return one(a, .{ .table = table });
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    if (!std.mem.eql(u8, args[0].string, "en")) return error.NotImplemented;
+    return one(a, .{ .table = try runtime.newTable() });
 }
 
 pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
@@ -620,14 +641,32 @@ test "AOT language objects expose MediaWiki helpers" {
     const parsed = try callField(&runtime, language, "parseFormattedNumber", &.{ language, .{ .string = "−12,345.67" } });
     defer rt.freeResults(parsed);
     try std.testing.expectEqualStrings("-12345.67", parsed[0].string);
+    const ucfirst = try callField(&runtime, language, "ucfirst", &.{ language, .{ .string = "hello" } });
+    defer rt.freeResults(ucfirst);
+    try std.testing.expectEqualStrings("Hello", ucfirst[0].string);
+    const ucfirst_fn = try runtime.getIndex(language, .{ .string = "ucfirst" });
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(ucfirst_fn, &.{ language, .{ .string = "éclair" } }));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
 
     const language_api = mw.rawGet(.{ .string = "language" }).?.table;
+    const known = try callField(&runtime, .{ .table = language_api }, "isKnownLanguageTag", &.{.{ .string = "en" }});
+    defer rt.freeResults(known);
+    try std.testing.expect(known[0].boolean);
+    const known_fn = try runtime.getIndex(.{ .table = language_api }, .{ .string = "isKnownLanguageTag" });
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(known_fn, &.{.{ .string = "fr" }}));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+    const english_name = try callField(&runtime, .{ .table = language_api }, "fetchLanguageName", &.{.{ .string = "en" }});
+    defer rt.freeResults(english_name);
+    try std.testing.expectEqualStrings("English", english_name[0].string);
     const french = try callField(&runtime, .{ .table = language_api }, "new", &.{.{ .string = "fr" }});
     defer rt.freeResults(french);
     const french_code = try callField(&runtime, french[0], "getCode", &.{french[0]});
     defer rt.freeResults(french_code);
     try std.testing.expectEqualStrings("fr", french_code[0].string);
-    const upper = try callField(&runtime, french[0], "uc", &.{ french[0], .{ .string = "abc" } });
-    defer rt.freeResults(upper);
-    try std.testing.expectEqualStrings("ABC", upper[0].string);
+    const upper_fn = try runtime.getIndex(french[0], .{ .string = "uc" });
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(upper_fn, &.{ french[0], .{ .string = "abc" } }));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
 }
