@@ -49,6 +49,7 @@ const module_source =
     \\    assert(mw.hash.hashValue('md5', 'abc') == '900150983cd24fb0d6963f7d28e17f72')
     \\    assert(mw.ustring.upper('straße ﬃ') == 'STRASSE FFI')
     \\    assert(mw.ustring.lower('İ') == 'i̇')
+    \\    assert(mw.text.truncate('wako', -2, '') == 'ko')
     \\    assert(mw.getContentLanguage():ucfirst('hello') == 'Hello')
     \\    local unicode_case_ok = pcall(function() return mw.getContentLanguage():ucfirst('éclair') end)
     \\    assert(not unicode_case_ok)

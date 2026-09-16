@@ -394,7 +394,7 @@ test "AOT mw.text split and gsplit preserve Unicode and empty fields" {
     try std.testing.expectEqual(@as(usize, 0), done.len);
 }
 
-test "AOT mw.text trim listToText and nowiki match Scribunto behavior" {
+test "AOT mw.text trim listToText truncate and nowiki match Scribunto behavior" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var runtime = try makeMovedHostContext(arena.allocator());
@@ -411,6 +411,22 @@ test "AOT mw.text trim listToText and nowiki match Scribunto behavior" {
     const joined = try callField(&runtime, text, "listToText", &.{.{ .table = list }});
     defer rt.freeResults(joined);
     try std.testing.expectEqualStrings("a, b and c", joined[0].string);
+
+    const suffix = try callField(&runtime, text, "truncate", &.{ .{ .string = "abcdef" }, .{ .number = -2 }, .{ .string = "" } });
+    defer rt.freeResults(suffix);
+    try std.testing.expectEqualStrings("ef", suffix[0].string);
+    const default_ellipsis = try callField(&runtime, text, "truncate", &.{ .{ .string = "abcdef" }, .{ .number = 2 } });
+    defer rt.freeResults(default_ellipsis);
+    try std.testing.expectEqualStrings("ab...", default_ellipsis[0].string);
+    const adjusted = try callField(&runtime, text, "truncate", &.{ .{ .string = "abcdef" }, .{ .number = 4 }, .{ .string = "..." }, .{ .boolean = true } });
+    defer rt.freeResults(adjusted);
+    try std.testing.expectEqualStrings("a...", adjusted[0].string);
+    const no_growth = try callField(&runtime, text, "truncate", &.{ .{ .string = "abc" }, .{ .number = 1 } });
+    defer rt.freeResults(no_growth);
+    try std.testing.expectEqualStrings("abc", no_growth[0].string);
+    const unicode = try callField(&runtime, text, "truncate", &.{ .{ .string = "é猫xyz" }, .{ .number = 2 }, .{ .string = "" } });
+    defer rt.freeResults(unicode);
+    try std.testing.expectEqualStrings("é猫", unicode[0].string);
     inline for (.{
         .{ "[[x|y]]", "&#91;&#91;x&#124;y&#93;&#93;" },
         .{ "# item\n* two", "&#35; item\n&#42; two" },

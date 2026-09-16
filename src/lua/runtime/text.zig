@@ -333,6 +333,56 @@ fn textTrimCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]co
     return one(a, .{ .string = std.mem.trim(u8, args[0].string, chars) });
 }
 
+fn ustringLength(host: *const Host, runtime: *rt.Context, text: []const u8) !f64 {
+    const callable = host.ustring.rawGet(.{ .string = "len" }) orelse return error.NotImplemented;
+    const result = try runtime.callValue(callable, &.{.{ .string = text }});
+    defer rt.freeResults(result);
+    if (result.len == 0 or result[0] != .number) return error.NumberExpected;
+    return result[0].number;
+}
+
+fn ustringSub(host: *const Host, runtime: *rt.Context, text: []const u8, first: f64, last: ?f64) ![]const u8 {
+    const callable = host.ustring.rawGet(.{ .string = "sub" }) orelse return error.NotImplemented;
+    const result = if (last) |end|
+        try runtime.callValue(callable, &.{ .{ .string = text }, .{ .number = first }, .{ .number = end } })
+    else
+        try runtime.callValue(callable, &.{ .{ .string = text }, .{ .number = first } });
+    defer rt.freeResults(result);
+    if (result.len == 0 or result[0] != .string) return error.StringExpected;
+    return try runtime.allocator.dupe(u8, result[0].string);
+}
+
+fn textTruncateCall(host_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const a = runtime.allocator;
+    if (args.len < 2 or args[0] != .string) return error.StringExpected;
+    const length = rt.toNumber(args[1]) orelse return error.NumberExpected;
+    const host: *Host = @ptrCast(@alignCast(host_raw orelse return error.MissingTextHost));
+    const source = args[0].string;
+    const source_len = try ustringLength(host, runtime, source);
+    if (source_len <= @abs(length)) return one(a, .{ .string = source });
+
+    const ellipsis: []const u8 = if (args.len < 3 or args[2] == .nil or (args[2] == .boolean and !args[2].boolean))
+        "..."
+    else switch (args[2]) {
+        .string => |value| value,
+        .number => |value| try rt.numberToString(a, value),
+        else => return error.StringExpected,
+    };
+    const adjust_length = args.len > 3 and args[3].truthy();
+    const ellipsis_len: f64 = if (adjust_length) try ustringLength(host, runtime, ellipsis) else 0;
+
+    const truncated = if (@abs(length) <= ellipsis_len)
+        ellipsis
+    else if (length > 0) blk: {
+        const prefix = try ustringSub(host, runtime, source, 1, length - ellipsis_len);
+        break :blk try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, ellipsis });
+    } else blk: {
+        const suffix = try ustringSub(host, runtime, source, length + ellipsis_len, null);
+        break :blk try std.fmt.allocPrint(a, "{s}{s}", .{ ellipsis, suffix });
+    };
+    return one(a, .{ .string = if (try ustringLength(host, runtime, truncated) < source_len) truncated else source });
+}
+
 fn textListToTextCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
@@ -375,6 +425,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setNative(runtime, text, "unstrip", null, textUnstripCall);
     try setNative(runtime, text, "unstripNoWiki", null, textUnstripNoWikiCall);
     try setNative(runtime, text, "listToText", null, textListToTextCall);
+    try setNative(runtime, text, "truncate", host, textTruncateCall);
     try setNative(runtime, text, "nowiki", null, textNowikiCall);
     try mw.rawSetNativeField(.mw, "text", .{ .table = text });
 }
