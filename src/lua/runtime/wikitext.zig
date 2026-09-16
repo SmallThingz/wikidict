@@ -56,9 +56,14 @@ pub const Provider = struct {
         revision_user: []const u8,
         content_model: []const u8,
     };
+    pub const TransclusionBody = struct {
+        text: []const u8,
+        borrowed: bool,
+    };
     ctx: ?*anyopaque = null,
     get: *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8,
     get_transclusion: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8 = null,
+    get_transclusion_body: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?TransclusionBody = null,
     redirect_target: ?*const fn (?*anyopaque, []const u8) anyerror!?[]const u8 = null,
     page_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!?PageMetadata = null,
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
@@ -288,6 +293,11 @@ pub const Expander = struct {
     fn expandTemplateByName(self: *Expander, raw_name: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
         const title = try self.normalizeTransclusionName(raw_name);
+        if (self.provider.get_transclusion_body) |get| {
+            const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
+            defer if (!body.borrowed) self.runtime.allocator.free(body.text);
+            return self.expandWikitext(body.text, args, title, depth + 1);
+        }
         const raw = if (self.provider.get_transclusion) |get|
             (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound
         else
@@ -298,6 +308,11 @@ pub const Expander = struct {
     fn expandTemplateBySymbol(self: *Expander, symbol: CallSymbol, args: *rt.Table, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
         const title = try self.normalizeTransclusionName(symbol.text);
+        if (self.provider.get_template_symbol == null) if (self.provider.get_transclusion_body) |get| {
+            const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
+            defer if (!body.borrowed) self.runtime.allocator.free(body.text);
+            return self.expandWikitext(body.text, args, title, depth + 1);
+        };
         const raw = if (self.provider.get_template_symbol) |get|
             (try get(self.provider.ctx, self.runtime.allocator, symbol.id)) orelse return error.TemplateNotFound
         else if (self.provider.get_transclusion) |get|

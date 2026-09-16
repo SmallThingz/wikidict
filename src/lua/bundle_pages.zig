@@ -3,9 +3,15 @@ const std = @import("std");
 const A = std.mem.Allocator;
 const lua_program = @import("lua_program");
 const xml_decode = @import("shared_xml_decode");
+const preprocess = @import("lua_wikitext_preprocess");
 const InterwikiRow = lua_program.WikitextProvider.InterwikiRow;
+const TransclusionBody = lua_program.WikitextProvider.TransclusionBody;
 
-const CorpusPage = struct { offset: u64, len: usize, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, source_needs_decode: bool, redirect: ?[]const u8 = null };
+const CorpusPage = struct { offset: u64, len: usize, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
+
+const max_transclusion_cache_bytes: usize = 64 * 1024 * 1024;
+const max_transclusion_cache_entries: usize = 65_536;
+const max_transclusion_cache_entry_bytes: usize = 1024 * 1024;
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
@@ -23,6 +29,9 @@ pub const Provider = struct {
     corpus_pages: std.StringHashMapUnmanaged(CorpusPage) = .empty,
     corpus_pages_storage: ?Mapped = null,
     dump_file: ?std.Io.File = null,
+    transclusion_body_cache: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
+    transclusion_body_cache_bytes: usize = 0,
+    transclusion_seen: []usize = &.{},
     interwiki_rows: std.ArrayList(InterwikiRow) = .empty,
     interwiki_available: bool = false,
 
@@ -39,6 +48,10 @@ pub const Provider = struct {
         self.corpus_pages.deinit(self.a);
         if (self.corpus_pages_storage) |*mapped| mapped.deinit();
         if (self.dump_file) |*file| file.close(self.io);
+        var cached = self.transclusion_body_cache.valueIterator();
+        while (cached.next()) |body| self.a.free(body.*);
+        self.transclusion_body_cache.deinit(self.a);
+        self.a.free(self.transclusion_seen);
         for (self.interwiki_rows.items) |row| {
             self.a.free((row.prefix));
             self.a.free((row.url));
@@ -53,6 +66,7 @@ pub const Provider = struct {
             .ctx = self,
             .get = get,
             .get_transclusion = getTransclusion,
+            .get_transclusion_body = getTransclusionBody,
             .redirect_target = redirectTarget,
             .page_metadata = pageMetadata,
             .exists = exists,
@@ -131,10 +145,17 @@ pub const Provider = struct {
         const dump_size = (try file.stat(self.io)).size;
         var pages: std.StringHashMapUnmanaged(CorpusPage) = .empty;
         errdefer pages.deinit(self.a);
-        try pages.ensureTotalCapacity(self.a, @intCast(std.mem.count(u8, mapped.bytes, "\n")));
+        const page_count = std.mem.count(u8, mapped.bytes, "\n") + @intFromBool(mapped.bytes.len != 0 and mapped.bytes[mapped.bytes.len - 1] != '\n');
+        try pages.ensureTotalCapacity(self.a, @intCast(page_count));
+        const bits_per_word = @bitSizeOf(usize);
+        const seen_words = self.a.alloc(usize, (page_count + bits_per_word - 1) / bits_per_word) catch null;
+        errdefer if (seen_words) |words| self.a.free(words);
+        if (seen_words) |words| @memset(words, 0);
         var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        var ordinal: usize = 0;
         while (lines.next()) |line| {
             if (line.len == 0) continue;
+            defer ordinal += 1;
             var fields = std.mem.splitScalar(u8, line, '\t');
             const offset = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
             const len = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10);
@@ -145,7 +166,7 @@ pub const Provider = struct {
             const revision_timestamp = fields.next() orelse return error.InvalidPageIndex;
             const revision_user = fields.next() orelse return error.InvalidPageIndex;
             const content_model = fields.next() orelse return error.InvalidPageIndex;
-            _ = std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10) catch return error.InvalidPageIndex; // namespace
+            const ns = std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10) catch return error.InvalidPageIndex;
             const has_source = fields.next() orelse return error.InvalidPageIndex;
             const needs_decode_raw = fields.next() orelse return error.InvalidPageIndex;
             if (title.len == 0 or revision_timestamp.len == 0 or content_model.len == 0 or
@@ -159,11 +180,12 @@ pub const Provider = struct {
             const result = try pages.getOrPut(self.a, title);
             if (result.found_existing) return error.DuplicatePage;
             result.key_ptr.* = title;
-            result.value_ptr.* = .{ .offset = offset, .len = len, .page_id = page_id, .revision_id = revision_id, .revision_timestamp = revision_timestamp, .revision_user = revision_user, .content_model = content_model, .source_needs_decode = source_needs_decode, .redirect = redirect };
+            result.value_ptr.* = .{ .offset = offset, .len = len, .page_id = page_id, .revision_id = revision_id, .revision_timestamp = revision_timestamp, .revision_user = revision_user, .content_model = content_model, .ns = ns, .ordinal = ordinal, .source_needs_decode = source_needs_decode, .redirect = redirect };
         }
         self.corpus_pages = pages;
         self.corpus_pages_storage = mapped;
         self.dump_file = file;
+        self.transclusion_seen = seen_words orelse &.{};
     }
 
     fn readCorpusSource(self: *Provider, a: A, page: CorpusPage) ![]const u8 {
@@ -194,7 +216,7 @@ pub const Provider = struct {
         return if (content) try self.readCorpusSource(a, page) else "";
     }
 
-    fn transclusionSource(self: *Provider, a: A, raw_title: []const u8) !?[]const u8 {
+    fn finalTransclusionPage(self: *Provider, raw_title: []const u8) !?CorpusPage {
         if (raw_title.len > 4096) return error.InvalidPageTitle;
         var current = raw_title;
         var redirects: usize = 0;
@@ -206,13 +228,60 @@ pub const Provider = struct {
                 current = target;
                 continue;
             }
-            return try self.readCorpusSource(a, page);
+            return page;
         }
     }
 
+    fn transclusionSource(self: *Provider, a: A, raw_title: []const u8) !?[]const u8 {
+        const page = (try self.finalTransclusionPage(raw_title)) orelse return null;
+        return try self.readCorpusSource(a, page);
+    }
+
+    fn transclusionBody(self: *Provider, a: A, raw_title: []const u8) !?TransclusionBody {
+        const page = (try self.finalTransclusionPage(raw_title)) orelse return null;
+        if (self.transclusion_body_cache.get(page.page_id)) |body| return .{ .text = body, .borrowed = true };
+
+        const raw = try self.readCorpusSource(a, page);
+        defer if (page.len != 0) a.free(raw);
+        const body = try preprocess.transcludeDecodedAlloc(a, raw);
+        if (page.ns != 10 or page.len > max_transclusion_cache_entry_bytes) return .{ .text = body, .borrowed = false };
+
+        const bits_per_word = @bitSizeOf(usize);
+        const word_index = page.ordinal / bits_per_word;
+        const bit = @as(usize, 1) << @intCast(page.ordinal % bits_per_word);
+        if (word_index >= self.transclusion_seen.len) return .{ .text = body, .borrowed = false };
+        if (self.transclusion_seen[word_index] & bit == 0) {
+            self.transclusion_seen[word_index] |= bit;
+            return .{ .text = body, .borrowed = false };
+        }
+        if (self.transclusion_body_cache.count() >= max_transclusion_cache_entries or
+            body.len > max_transclusion_cache_entry_bytes or
+            self.transclusion_body_cache_bytes > max_transclusion_cache_bytes -| body.len)
+            return .{ .text = body, .borrowed = false };
+
+        const owned = self.a.dupe(u8, body) catch return .{ .text = body, .borrowed = false };
+        const result = self.transclusion_body_cache.getOrPut(self.a, page.page_id) catch {
+            self.a.free(owned);
+            return .{ .text = body, .borrowed = false };
+        };
+        if (result.found_existing) {
+            self.a.free(owned);
+            a.free(body);
+            return .{ .text = result.value_ptr.*, .borrowed = true };
+        }
+        a.free(body);
+        result.value_ptr.* = owned;
+        self.transclusion_body_cache_bytes += owned.len;
+        return .{ .text = owned, .borrowed = true };
+    }
     fn getTransclusion(ctx: ?*anyopaque, a: A, title: []const u8) anyerror!?[]const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return self.transclusionSource(a, title);
+    }
+
+    fn getTransclusionBody(ctx: ?*anyopaque, a: A, title: []const u8) anyerror!?TransclusionBody {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return self.transclusionBody(a, title);
     }
 
     fn redirectTarget(ctx: ?*anyopaque, title: []const u8) anyerror!?[]const u8 {
@@ -255,7 +324,7 @@ test "provider owns paths and separates raw content from redirect-following tran
     defer a.free(dump_path);
     const prefix = "prefix";
     const ordinary_raw = "A&amp;B";
-    const template_raw = "lazy body";
+    const template_raw = "lazy <noinclude>docs</noinclude>body";
     const alias_raw = "#REDIRECT [[Template:Lazy]]";
     const dump_bytes = prefix ++ ordinary_raw ++ template_raw ++ alias_raw;
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = dump_bytes });
@@ -265,7 +334,7 @@ test "provider owns paths and separates raw content from redirect-following tran
     const alias_offset = template_offset + template_raw.len;
     const page_index = try std.fmt.allocPrint(
         a,
-        "{d}\t{d}\tOrdinary page\t\t1\t101\t2024-03-04T05:06:07Z\tAlice\twikitext\t0\t1\t1\n{d}\t{d}\tTemplate:Lazy\t\t2\t102\t2024-03-05T06:07:08Z\tBob\twikitext\t10\t1\t0\n{d}\t{d}\tTemplate:Alias\tTemplate:Lazy\t3\t103\t2024-03-06T07:08:09Z\t192.0.2.7\twikitext\t10\t1\t0\n",
+        "{d}\t{d}\tOrdinary page\t\t1\t101\t2024-03-04T05:06:07Z\tAlice\twikitext\t0\t1\t1\n{d}\t{d}\tTemplate:Lazy\t\t2\t102\t2024-03-05T06:07:08Z\tBob\twikitext\t10\t1\t0\n{d}\t{d}\tTemplate:Alias\tTemplate:Lazy\t3\t103\t2024-03-06T07:08:09Z\t192.0.2.7\twikitext\t10\t1\t0",
         .{ prefix.len, ordinary_raw.len, template_offset, template_raw.len, alias_offset, alias_raw.len },
     );
     defer a.free(page_index);
@@ -284,6 +353,24 @@ test "provider owns paths and separates raw content from redirect-following tran
     try std.testing.expectEqualStrings(alias_raw, raw_alias);
     const template_content = (try Provider.getTransclusion(&provider, page_a, "Template:Alias")) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings(template_raw, template_content);
+    const template_body = (try Provider.getTransclusionBody(&provider, page_a, "Template:Alias")) orelse return error.TestExpectedEqual;
+    defer if (!template_body.borrowed) page_a.free(template_body.text);
+    try std.testing.expectEqualStrings("lazy body", template_body.text);
+    const persistent_a = provider.a;
+    var cache_alloc = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    provider.a = cache_alloc.allocator();
+    const uncached_body = (try Provider.getTransclusionBody(&provider, page_a, "Template:Lazy")) orelse return error.TestExpectedEqual;
+    provider.a = persistent_a;
+    defer if (!uncached_body.borrowed) page_a.free(uncached_body.text);
+    try std.testing.expect(!uncached_body.borrowed);
+    try std.testing.expectEqualStrings("lazy body", uncached_body.text);
+    const admitted_body = (try Provider.getTransclusionBody(&provider, page_a, "Template:Lazy")) orelse return error.TestExpectedEqual;
+    try std.testing.expect(admitted_body.borrowed);
+    try std.testing.expectEqualStrings("lazy body", admitted_body.text);
+    var no_alloc = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    const cached_body = (try Provider.getTransclusionBody(&provider, no_alloc.allocator(), "Template:Alias")) orelse return error.TestExpectedEqual;
+    try std.testing.expect(cached_body.borrowed);
+    try std.testing.expectEqualStrings("lazy body", cached_body.text);
     var borrowed_alloc = std.testing.FailingAllocator.init(a, .{ .fail_index = 1 });
     const borrowed_a = borrowed_alloc.allocator();
     const borrowed_template = (try provider.lookup(borrowed_a, "Template:Lazy", true)) orelse return error.TestExpectedEqual;

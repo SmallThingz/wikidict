@@ -104,7 +104,7 @@ fn compileWorkerBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, ll
 
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-flto", "-lc", emit });
-    try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", "--dep", "shared_xml_decode", root });
+    try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", "--dep", "shared_xml_decode", "--dep", "lua_wikitext_preprocess", root });
     try argv.appendSlice(a, &.{
         "--dep",                   "lua_static_fields",       runtime_mod,
         "--dep",                   "zig_runtime",             "--dep",
