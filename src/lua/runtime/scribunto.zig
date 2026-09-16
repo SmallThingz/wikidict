@@ -111,13 +111,13 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     var it = string.table.iterator();
     while (it.next()) |entry|
         try ustring.rawSet(runtime.allocator, entry.key_ptr.*, entry.value_ptr.*);
-    try ustring_lib.install(runtime, ustring);
+    const case_mapper = try ustring_lib.install(runtime, ustring);
     try html_lib.install(runtime, mw);
     try installStringAliases(runtime, string.table, ustring);
     try mw.rawSetNativeField(.mw, "ustring", .{ .table = ustring });
     try text_lib.install(runtime, mw);
     try title_lib.install(runtime, mw);
-    try language_lib.install(runtime, mw);
+    try language_lib.install(runtime, mw, case_mapper);
     try frame_lib.install(runtime, mw);
     try uri_lib.install(runtime, mw);
     try basics_lib.install(runtime, mw);

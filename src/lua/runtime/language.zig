@@ -1,6 +1,7 @@
 const std = @import("std");
 const rt = @import("zig_runtime");
 const host_api = @import("host.zig");
+const ustring_lib = @import("ustring.zig");
 
 const Value = rt.Value;
 
@@ -319,7 +320,8 @@ pub fn formatDateAlloc(a: std.mem.Allocator, timestamp: i64, format: []const u8)
 fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, ctx: ?*anyopaque, comptime call: anytype) !void {
     try table.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(ctx, call));
 }
-const LanguageCtx = struct { code: []const u8 };
+const LanguageCtx = struct { code: []const u8, case_mapper: *ustring_lib.Normalizer };
+const LanguageFactoryCtx = struct { case_mapper: *ustring_lib.Normalizer };
 
 fn languageContext(raw: ?*anyopaque) !*LanguageCtx {
     return @ptrCast(@alignCast(raw orelse return error.MissingLanguageContext));
@@ -328,6 +330,12 @@ fn languageContext(raw: ?*anyopaque) !*LanguageCtx {
 fn requireEnglishLocale(raw: ?*anyopaque) !*LanguageCtx {
     const ctx = try languageContext(raw);
     if (!std.mem.eql(u8, ctx.code, "en")) return error.NotImplemented;
+    return ctx;
+}
+
+fn requireBaseCaseLocale(raw: ?*anyopaque) !*LanguageCtx {
+    const ctx = try languageContext(raw);
+    if (!std.mem.eql(u8, ctx.code, "en") and !std.mem.eql(u8, ctx.code, "it")) return error.NotImplemented;
     return ctx;
 }
 
@@ -365,6 +373,33 @@ fn asciiCaseAlloc(a: std.mem.Allocator, source: []const u8, upper: bool, first_o
     return out;
 }
 
+fn wmfUcfirstOverride(cp: u21) bool {
+    return switch (cp) {
+        0xDF, 0x19B, 0x264, 0x1C8A, 0xA7CD, 0xA7CF, 0xA7D3, 0xA7D5, 0xA7DB => true,
+        else => (cp >= 0x10D70 and cp <= 0x10D85) or (cp >= 0x16EBB and cp <= 0x16ED3),
+    };
+}
+
+fn firstCaseAlloc(ctx: *LanguageCtx, a: std.mem.Allocator, source: []const u8, upper: bool) ![]const u8 {
+    if (source.len == 0) return source;
+    if (source[0] < 0x80) {
+        const out = try a.dupe(u8, source);
+        out[0] = if (upper) std.ascii.toUpper(out[0]) else std.ascii.toLower(out[0]);
+        return out;
+    }
+    const first_len = try std.unicode.utf8ByteSequenceLength(source[0]);
+    if (first_len > source.len) return error.InvalidUtf8;
+    const first = source[0..first_len];
+    const cp = try std.unicode.utf8Decode(first);
+    if (upper and wmfUcfirstOverride(cp)) return source;
+    const mapped = try ustring_lib.caseAlloc(ctx.case_mapper, a, first, if (upper) .title else .lower);
+    if (std.mem.eql(u8, first, mapped)) return source;
+    const out = try a.alloc(u8, mapped.len + source.len - first.len);
+    @memcpy(out[0..mapped.len], mapped);
+    @memcpy(out[mapped.len..], source[first.len..]);
+    return out;
+}
+
 fn languageUc(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
@@ -378,15 +413,15 @@ fn languageLc(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
 }
 
 fn languageUcfirst(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    _ = try requireEnglishLocale(ctx_raw);
+    const ctx = try requireBaseCaseLocale(ctx_raw);
     const a = runtime.allocator;
-    return one(a, .{ .string = try asciiCaseAlloc(a, try sourceMethodArg(args), true, true) });
+    return one(a, .{ .string = try firstCaseAlloc(ctx, a, try sourceMethodArg(args), true) });
 }
 
 fn languageLcfirst(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    _ = try requireEnglishLocale(ctx_raw);
+    const ctx = try requireBaseCaseLocale(ctx_raw);
     const a = runtime.allocator;
-    return one(a, .{ .string = try asciiCaseAlloc(a, try sourceMethodArg(args), false, true) });
+    return one(a, .{ .string = try firstCaseAlloc(ctx, a, try sourceMethodArg(args), false) });
 }
 
 fn languageGetDir(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
@@ -497,11 +532,11 @@ fn languageParseFormattedNumber(ctx_raw: ?*anyopaque, runtime: *rt.Context, args
     return one(a, .{ .string = try parseFormattedNumberAlloc(a, raw) });
 }
 
-fn makeLanguage(runtime: *rt.Context, code: []const u8) !*rt.Table {
+fn makeLanguage(runtime: *rt.Context, case_mapper: *ustring_lib.Normalizer, code: []const u8) !*rt.Table {
     const a = runtime.allocator;
     const table = try runtime.newNativeNamespace(.language_value);
     const ctx = try a.create(LanguageCtx);
-    ctx.* = .{ .code = code };
+    ctx.* = .{ .code = code, .case_mapper = case_mapper };
     try table.rawSet(a, .{ .string = "code" }, .{ .string = code });
     try setNative(runtime, table, "getCode", ctx, languageGetCode);
     try setNative(runtime, table, "formatDate", ctx, languageFormatDate);
@@ -517,15 +552,17 @@ fn makeLanguage(runtime: *rt.Context, code: []const u8) !*rt.Table {
     try setNative(runtime, table, "parseFormattedNumber", ctx, languageParseFormattedNumber);
     return table;
 }
-fn languageNew(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn languageNew(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    return one(a, .{ .table = try makeLanguage(runtime, args[0].string) });
+    const factory: *LanguageFactoryCtx = @ptrCast(@alignCast(raw orelse return error.MissingLanguageFactory));
+    return one(a, .{ .table = try makeLanguage(runtime, factory.case_mapper, args[0].string) });
 }
 
-fn getContentLanguage(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+fn getContentLanguage(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const a = runtime.allocator;
-    return one(a, .{ .table = try makeLanguage(runtime, "en") });
+    const factory: *LanguageFactoryCtx = @ptrCast(@alignCast(raw orelse return error.MissingLanguageFactory));
+    return one(a, .{ .table = try makeLanguage(runtime, factory.case_mapper, "en") });
 }
 
 fn isKnownLanguageTag(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -548,16 +585,18 @@ fn getFallbacksFor(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
     return one(a, .{ .table = try runtime.newTable() });
 }
 
-pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
+pub fn install(runtime: *rt.Context, mw: *rt.Table, case_mapper: *ustring_lib.Normalizer) !void {
+    const factory = try runtime.allocator.create(LanguageFactoryCtx);
+    factory.* = .{ .case_mapper = case_mapper };
     const language = try runtime.newNativeNamespace(.language);
-    try setNative(runtime, language, "new", null, languageNew);
-    try setNative(runtime, language, "getContentLanguage", null, getContentLanguage);
+    try setNative(runtime, language, "new", factory, languageNew);
+    try setNative(runtime, language, "getContentLanguage", factory, getContentLanguage);
     try setNative(runtime, language, "getFallbacksFor", null, getFallbacksFor);
     try setNative(runtime, language, "isKnownLanguageTag", null, isKnownLanguageTag);
     try setNative(runtime, language, "fetchLanguageName", null, fetchLanguageName);
     try mw.rawSet(runtime.allocator, .{ .string = "language" }, .{ .table = language });
-    try setNative(runtime, mw, "getContentLanguage", null, getContentLanguage);
-    try setNative(runtime, mw, "getLanguage", null, getContentLanguage);
+    try setNative(runtime, mw, "getContentLanguage", factory, getContentLanguage);
+    try setNative(runtime, mw, "getLanguage", factory, languageNew);
 }
 
 test "civil conversion round trips unix epoch and leap dates" {
@@ -621,7 +660,9 @@ test "AOT language objects expose MediaWiki helpers" {
     var host = host_api.Host{ .now_unix = 1_670_803_200 };
     host_api.set(&runtime, &host);
     const mw = try runtime.newTable();
-    try install(&runtime, mw);
+    const ustring = try runtime.newNativeNamespace(.ustring);
+    const case_mapper = try ustring_lib.install(&runtime, ustring);
+    try install(&runtime, mw, case_mapper);
 
     const content = try callField(&runtime, .{ .table = mw }, "getContentLanguage", &.{});
     defer rt.freeResults(content);
@@ -645,9 +686,27 @@ test "AOT language objects expose MediaWiki helpers" {
     defer rt.freeResults(ucfirst);
     try std.testing.expectEqualStrings("Hello", ucfirst[0].string);
     const ucfirst_fn = try runtime.getIndex(language, .{ .string = "ucfirst" });
-    try std.testing.expectError(error.AotCallFailed, runtime.callValue(ucfirst_fn, &.{ language, .{ .string = "éclair" } }));
-    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
-    runtime.clearAotErrorName();
+    const accented = try runtime.callValue(ucfirst_fn, &.{ language, .{ .string = "éclair" } });
+    defer rt.freeResults(accented);
+    try std.testing.expectEqualStrings("Éclair", accented[0].string);
+    const eszett = try runtime.callValue(ucfirst_fn, &.{ language, .{ .string = "ßeta" } });
+    defer rt.freeResults(eszett);
+    try std.testing.expectEqualStrings("ßeta", eszett[0].string);
+    const composed_title = try runtime.callValue(ucfirst_fn, &.{ language, .{ .string = "ǰfoo" } });
+    defer rt.freeResults(composed_title);
+    try std.testing.expectEqualStrings("J̌foo", composed_title[0].string);
+
+    const italian = try callField(&runtime, .{ .table = mw }, "getLanguage", &.{.{ .string = "it" }});
+    defer rt.freeResults(italian);
+    const italian_code = try callField(&runtime, italian[0], "getCode", &.{italian[0]});
+    defer rt.freeResults(italian_code);
+    try std.testing.expectEqualStrings("it", italian_code[0].string);
+    const italian_ucfirst = try runtime.getIndex(italian[0], .{ .string = "ucfirst" });
+    inline for (.{ .{ "istanza", "Istanza" }, .{ "éclair", "Éclair" }, .{ "ßeta", "ßeta" }, .{ "ǰfoo", "J̌foo" } }) |case| {
+        const result = try runtime.callValue(italian_ucfirst, &.{ italian[0], .{ .string = case[0] } });
+        defer rt.freeResults(result);
+        try std.testing.expectEqualStrings(case[1], result[0].string);
+    }
 
     const language_api = mw.rawGet(.{ .string = "language" }).?.table;
     const known = try callField(&runtime, .{ .table = language_api }, "isKnownLanguageTag", &.{.{ .string = "en" }});

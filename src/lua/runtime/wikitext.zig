@@ -1284,7 +1284,7 @@ fn installTestHost(runtime: *rt.Context, string_slot: u32, mw_slot: u32) !void {
     if (string != .table) return error.MissingStringLibrary;
     var it = string.table.iterator();
     while (it.next()) |entry| try ustring.rawSet(runtime.allocator, entry.key_ptr.*, entry.value_ptr.*);
-    try ustring_lib.install(runtime, ustring);
+    _ = try ustring_lib.install(runtime, ustring);
     try mw.rawSet(runtime.allocator, .{ .string = "ustring" }, .{ .table = ustring });
     try text_lib.install(runtime, mw);
     try uri_lib.install(runtime, mw);

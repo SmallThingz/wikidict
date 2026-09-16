@@ -134,7 +134,7 @@ fn uGcodepoint(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
 const DecomposeFn = *const fn ([*]const u8, isize, ?[*]i32, isize, c_int) callconv(.c) isize;
 const ReencodeFn = *const fn ([*]i32, isize, c_int) callconv(.c) isize;
 const FullCaseFn = *const fn ([*]const u8, usize, ?[*:0]const u8, ?*anyopaque, ?[*]u8, *usize) callconv(.c) ?[*]u8;
-const Normalizer = struct {
+pub const Normalizer = struct {
     lib: std.DynLib,
     case_lib: std.DynLib,
     decompose: DecomposeFn,
@@ -142,6 +142,7 @@ const Normalizer = struct {
     category: upat.CategoryFn,
     lower: FullCaseFn,
     upper: FullCaseFn,
+    title: FullCaseFn,
 };
 const NormalizeCtx = struct { normalizer: *Normalizer, options: c_int };
 
@@ -154,7 +155,8 @@ fn createNormalizer(a: std.mem.Allocator) !*Normalizer {
     var case_lib = std.DynLib.open("libunistring.so.5") catch try std.DynLib.open("libunistring.so");
     const lower = case_lib.lookup(FullCaseFn, "u8_tolower") orelse return error.UnicodeNormalizerUnavailable;
     const upper = case_lib.lookup(FullCaseFn, "u8_toupper") orelse return error.UnicodeNormalizerUnavailable;
-    normalizer.* = .{ .lib = lib, .case_lib = case_lib, .decompose = decompose, .reencode = reencode, .category = category, .lower = lower, .upper = upper };
+    const title = case_lib.lookup(FullCaseFn, "u8_totitle") orelse return error.UnicodeNormalizerUnavailable;
+    normalizer.* = .{ .lib = lib, .case_lib = case_lib, .decompose = decompose, .reencode = reencode, .category = category, .lower = lower, .upper = upper, .title = title };
     return normalizer;
 }
 
@@ -190,20 +192,29 @@ fn uByteoffset(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     return one(a, .{ .number = @floatFromInt(starts.items[@intCast(destination)] + 1) });
 }
 
-fn uCase(ctx_raw: ?*anyopaque, args: []const Value, a: std.mem.Allocator, upper: bool) ![]const Value {
-    if (args.len == 0) return error.StringExpected;
-    const normalizer: *Normalizer = @ptrCast(@alignCast(ctx_raw.?));
-    const source = try stringArg(a, args[0]);
+pub const CaseKind = enum { lower, upper, title };
+
+pub fn caseAlloc(normalizer: *Normalizer, a: std.mem.Allocator, source: []const u8, kind: CaseKind) ![]const u8 {
     _ = try countCodepoints(source);
     const capacity = std.math.add(usize, std.math.mul(usize, source.len, 4) catch return error.OutOfMemory, 16) catch return error.OutOfMemory;
     const buffer = try a.alloc(u8, @max(capacity, 64));
     var result_len = buffer.len;
-    const case_fn = if (upper) normalizer.upper else normalizer.lower;
+    const case_fn = switch (kind) {
+        .lower => normalizer.lower,
+        .upper => normalizer.upper,
+        .title => normalizer.title,
+    };
     const result = case_fn(source.ptr, source.len, null, null, buffer.ptr, &result_len) orelse return error.UnicodeCaseFailed;
-    if (@intFromPtr(result) == @intFromPtr(buffer.ptr))
-        return one(a, .{ .string = buffer[0..result_len] });
+    if (@intFromPtr(result) == @intFromPtr(buffer.ptr)) return buffer[0..result_len];
     defer std.c.free(@ptrCast(result));
-    return one(a, .{ .string = try a.dupe(u8, result[0..result_len]) });
+    return a.dupe(u8, result[0..result_len]);
+}
+
+fn uCase(ctx_raw: ?*anyopaque, args: []const Value, a: std.mem.Allocator, upper: bool) ![]const Value {
+    if (args.len == 0) return error.StringExpected;
+    const normalizer: *Normalizer = @ptrCast(@alignCast(ctx_raw.?));
+    const source = try stringArg(a, args[0]);
+    return one(a, .{ .string = try caseAlloc(normalizer, a, source, if (upper) .upper else .lower) });
 }
 
 fn uUpper(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -448,7 +459,7 @@ fn setNativeCtx(runtime: *rt.Context, table: *rt.Table, comptime name: []const u
     try table.rawSetNativeField(.ustring, name, try runtime.newNative(host, call));
 }
 
-pub fn install(runtime: *rt.Context, table: *rt.Table) !void {
+pub fn install(runtime: *rt.Context, table: *rt.Table) !*Normalizer {
     const a = runtime.allocator;
     try setNative(runtime, table, "isutf8", uIsUtf8);
     try setNative(runtime, table, "byteoffset", uByteoffset);
@@ -474,6 +485,7 @@ pub fn install(runtime: *rt.Context, table: *rt.Table) !void {
         ctx.* = .{ .normalizer = normalizer, .options = item[1] };
         try setNativeCtx(runtime, table, item[0], ctx, uNormalize);
     }
+    return normalizer;
 }
 
 test "UTF-8 codepoint primitives" {
@@ -494,7 +506,7 @@ test "Scribunto full Unicode case mappings match MediaWiki expansions" {
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
     const ustring = try runtime.newNativeNamespace(.ustring);
-    try install(&runtime, ustring);
+    _ = try install(&runtime, ustring);
 
     const upper = ustring.rawGet(.{ .string = "upper" }).?;
     const expanded = try runtime.callValue(upper, &.{.{ .string = "straße ﬃ ǰ ᾀ" }});
@@ -529,7 +541,7 @@ test "Scribunto Unicode pattern functions operate on codepoints" {
     var runtime = try rt.Context.init(a, 0);
     defer runtime.deinit();
     const ustring = try runtime.newNativeNamespace(.ustring);
-    try install(&runtime, ustring);
+    _ = try install(&runtime, ustring);
 
     const match_fn = ustring.rawGet(.{ .string = "match" }).?;
     const matched = try runtime.callValue(match_fn, &.{ .{ .string = "ʃə" }, .{ .string = "^." } });
@@ -570,7 +582,7 @@ test "AOT Unicode gsub supports table and callable replacements" {
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
     const ustring = try runtime.newNativeNamespace(.ustring);
-    try install(&runtime, ustring);
+    _ = try install(&runtime, ustring);
     const gsub = ustring.rawGet(.{ .string = "gsub" }).?;
 
     const replacements = try runtime.newTable();
