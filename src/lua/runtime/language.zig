@@ -358,21 +358,6 @@ fn sourceMethodArg(args: []const Value) ![]const u8 {
     return args[1].string;
 }
 
-fn asciiCaseAlloc(a: std.mem.Allocator, source: []const u8, upper: bool, first_only: bool) ![]const u8 {
-    if (first_only) {
-        if (source.len != 0 and source[0] >= 0x80) return error.NotImplemented;
-    } else {
-        for (source) |c| if (c >= 0x80) return error.NotImplemented;
-    }
-    const out = try a.dupe(u8, source);
-    if (first_only) {
-        if (out.len != 0) out[0] = if (upper) std.ascii.toUpper(out[0]) else std.ascii.toLower(out[0]);
-        return out;
-    }
-    for (out) |*c| c.* = if (upper) std.ascii.toUpper(c.*) else std.ascii.toLower(c.*);
-    return out;
-}
-
 fn wmfUcfirstOverride(cp: u21) bool {
     return switch (cp) {
         0xDF, 0x19B, 0x264, 0x1C8A, 0xA7CD, 0xA7CF, 0xA7D3, 0xA7D5, 0xA7DB => true,
@@ -401,15 +386,15 @@ fn firstCaseAlloc(ctx: *LanguageCtx, a: std.mem.Allocator, source: []const u8, u
 }
 
 fn languageUc(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    _ = try requireEnglishLocale(ctx_raw);
+    const ctx = try requireBaseCaseLocale(ctx_raw);
     const a = runtime.allocator;
-    return one(a, .{ .string = try asciiCaseAlloc(a, try sourceMethodArg(args), true, false) });
+    return one(a, .{ .string = try ustring_lib.caseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), .upper) });
 }
 
 fn languageLc(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    _ = try requireEnglishLocale(ctx_raw);
+    const ctx = try requireBaseCaseLocale(ctx_raw);
     const a = runtime.allocator;
-    return one(a, .{ .string = try asciiCaseAlloc(a, try sourceMethodArg(args), false, false) });
+    return one(a, .{ .string = try ustring_lib.caseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), .lower) });
 }
 
 fn languageUcfirst(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -682,6 +667,12 @@ test "AOT language objects expose MediaWiki helpers" {
     const parsed = try callField(&runtime, language, "parseFormattedNumber", &.{ language, .{ .string = "−12,345.67" } });
     defer rt.freeResults(parsed);
     try std.testing.expectEqualStrings("-12345.67", parsed[0].string);
+    const upper = try callField(&runtime, language, "uc", &.{ language, .{ .string = "straße ﬃ" } });
+    defer rt.freeResults(upper);
+    try std.testing.expectEqualStrings("STRASSE FFI", upper[0].string);
+    const lower = try callField(&runtime, language, "lc", &.{ language, .{ .string = "ÉCLAIR İ ΣΊΣΥΦΟΣ" } });
+    defer rt.freeResults(lower);
+    try std.testing.expectEqualStrings("éclair i̇ σίσυφος", lower[0].string);
     const ucfirst = try callField(&runtime, language, "ucfirst", &.{ language, .{ .string = "hello" } });
     defer rt.freeResults(ucfirst);
     try std.testing.expectEqualStrings("Hello", ucfirst[0].string);

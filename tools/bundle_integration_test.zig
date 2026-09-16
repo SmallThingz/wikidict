@@ -79,6 +79,8 @@ const module_source =
     \\    assert(json_data == mw.loadJsonData('Module:IntegrationFormsData.json'))
     \\    local json_write_ok = pcall(function() json_data.cuts[1] = 9 end)
     \\    assert(not json_write_ok)
+    \\    assert(mw.getContentLanguage():uc('straße ﬃ') == 'STRASSE FFI')
+    \\    assert(mw.getContentLanguage():lc('ÉCLAIR İ ΣΊΣΥΦΟΣ') == 'éclair i̇ σίσυφος')
     \\    assert(mw.getContentLanguage():ucfirst('hello') == 'Hello')
     \\    assert(mw.getContentLanguage():ucfirst('éclair') == 'Éclair')
     \\    assert(mw.getContentLanguage():ucfirst('ßeta') == 'ßeta')
