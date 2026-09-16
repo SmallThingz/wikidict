@@ -80,6 +80,7 @@ pub const Expander = struct {
     page_allocator: ?std.mem.Allocator = null,
     page_heading_count: usize = 0,
     fake_heading_count: usize = 0,
+    display_title: ?[]const u8 = null,
     strip_counter: u32 = 0,
     strip_values: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
     page_line: std.ArrayList(u8) = .empty,
@@ -109,10 +110,20 @@ pub const Expander = struct {
         self.scribunto_state = null;
         self.page_heading_count = 0;
         self.fake_heading_count = 0;
+        self.display_title = null;
         self.strip_counter = 0;
         self.strip_values = .empty;
         self.page_line = .empty;
         self.attach();
+    }
+
+    fn recordDisplayTitle(self: *Expander, value: []const u8) ![]const u8 {
+        const a = self.page_allocator orelse self.runtime.allocator;
+        const previous = self.display_title;
+        self.display_title = try a.dupe(u8, value);
+        if (previous) |old| if (!std.mem.eql(u8, old, value))
+            return "<span class=\"error\"><strong>Warning:</strong> Display title overrides earlier display title.</span>";
+        return "";
     }
 
     fn hostPageContent(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) anyerror!?[]const u8 {
@@ -935,6 +946,11 @@ pub const Expander = struct {
                 const page = try self.expandWikitext(first, params, host_title, depth + 1);
                 return (try self.titleMagic(name, page)) orelse unreachable;
             }
+            if (std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) {
+                const value = try self.expandWikitext(first, params, host_title, depth + 1);
+                return self.recordDisplayTitle(value);
+            }
+            if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT")) return "";
             if (std.ascii.eqlIgnoreCase(name, "ns")) {
                 const raw_ns = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 1), " \t\r\n");
                 const spec = if (std.fmt.parseInt(i32, raw_ns, 10)) |id|
@@ -1208,7 +1224,11 @@ pub const Expander = struct {
         }
         if (std.ascii.eqlIgnoreCase(name, "#invoke")) return self.frameParserInvoke(args);
         if (std.ascii.eqlIgnoreCase(name, "#tag") or std.ascii.startsWithIgnoreCase(name, "#tag:")) return self.frameParserTag(raw, a, name, args);
-        if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT") or std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) return "";
+        if (std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) {
+            if (first == null or first.? != .string) return error.StringExpected;
+            return self.recordDisplayTitle(first.?.string);
+        }
+        if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT")) return "";
         if (std.ascii.eqlIgnoreCase(name, "#formatdate")) {
             if (first == null or first.? != .string) return error.StringExpected;
             const style: ?[]const u8 = if (second) |value| switch (value) {
@@ -1328,6 +1348,13 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("99|990|20250607080910|Other editor|", other_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
+
+    const display_body = try expander.expandFragment("Page", "{{DISPLAYTITLE:''Page''}}body", 1_670_803_200);
+    try std.testing.expectEqualStrings("body", display_body);
+    try std.testing.expectEqualStrings("''Page''", expander.display_title.?);
+    const display_override = try expander.expandFragment("Page", "{{DISPLAYTITLE:''Page''}}{{DISPLAYTITLE:<b>Page</b>}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, display_override, "Display title overrides earlier display title") != null);
+    try std.testing.expectEqualStrings("<b>Page</b>", expander.display_title.?);
 
     expander.beginPage("Page", "source", 1_670_803_200);
     const caller_args = try runtime.newTable();

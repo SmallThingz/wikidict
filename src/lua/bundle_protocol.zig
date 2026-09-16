@@ -2,10 +2,12 @@ const std = @import("std");
 
 pub const max_frame_bytes: usize = 32 * 1024 * 1024;
 pub const max_source_bytes: usize = 16 * 1024 * 1024;
+pub const max_display_title_bytes: usize = 64 * 1024;
 pub const max_path_bytes: usize = 4096;
 pub const max_title_bytes: usize = 4096;
 const request_version: u8 = 1;
 const request_header_len: usize = 1 + 8 + 4 * 4;
+const success_header_len: usize = 1 + 4 * 2;
 const error_header_len: usize = 1 + 4 * 3;
 
 pub const Request = struct {
@@ -16,6 +18,11 @@ pub const Request = struct {
     source: []const u8,
 };
 
+pub const SuccessReply = struct {
+    output: []const u8,
+    display_title: []const u8,
+};
+
 pub const ErrorReply = struct {
     stage: []const u8,
     error_name: []const u8,
@@ -23,7 +30,7 @@ pub const ErrorReply = struct {
 };
 
 pub const Reply = union(enum) {
-    output: []const u8,
+    output: SuccessReply,
     failure: ErrorReply,
 };
 
@@ -99,14 +106,19 @@ pub fn decodeRequest(bytes: []const u8) !Request {
     return request;
 }
 
-pub fn writeSuccess(w: *std.Io.Writer, output: []const u8) !void {
-    if (output.len > max_source_bytes) return error.FrameTooLarge;
-    const payload_len = try checkedFramePayload(&.{ 1, output.len });
+pub fn writeSuccess(w: *std.Io.Writer, output: []const u8, display_title: []const u8) !void {
+    if (output.len > max_source_bytes or display_title.len > max_display_title_bytes) return error.FrameTooLarge;
+    const payload_len = try checkedFramePayload(&.{ success_header_len, output.len, display_title.len });
     var outer: [4]u8 = undefined;
     std.mem.writeInt(u32, &outer, payload_len, .little);
+    var header: [success_header_len]u8 = undefined;
+    header[0] = 0;
+    try putU32(header[1..5], output.len);
+    try putU32(header[5..9], display_title.len);
     try w.writeAll(&outer);
-    try w.writeByte(0);
+    try w.writeAll(&header);
     try w.writeAll(output);
+    try w.writeAll(display_title);
     try w.flush();
 }
 
@@ -130,8 +142,17 @@ pub fn writeError(w: *std.Io.Writer, stage: []const u8, error_name: []const u8, 
 pub fn decodeReply(bytes: []const u8) !Reply {
     if (bytes.len == 0) return error.InvalidFrame;
     if (bytes[0] == 0) {
-        if (bytes.len - 1 > max_source_bytes) return error.InvalidFrame;
-        return .{ .output = bytes[1..] };
+        if (bytes.len < success_header_len) return error.InvalidFrame;
+        var cursor: usize = 1;
+        const output_len = try takeU32(bytes, &cursor);
+        const display_title_len = try takeU32(bytes, &cursor);
+        if (output_len > max_source_bytes or display_title_len > max_display_title_bytes) return error.InvalidFrame;
+        const success: SuccessReply = .{
+            .output = try take(bytes, &cursor, output_len),
+            .display_title = try take(bytes, &cursor, display_title_len),
+        };
+        if (cursor != bytes.len) return error.InvalidFrame;
+        return .{ .output = success };
     }
     if (bytes[0] != 1 or bytes.len < error_header_len) return error.InvalidFrame;
     var cursor: usize = 1;
@@ -165,10 +186,11 @@ test "binary bundle request round trips without copying fields" {
 test "binary bundle replies preserve output and errors" {
     var success: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer success.deinit();
-    try writeSuccess(&success.writer, "expanded {{literal}}");
+    try writeSuccess(&success.writer, "expanded {{literal}}", "''display''");
     const success_bytes = success.written();
     const success_reply = try decodeReply(success_bytes[4..]);
-    try std.testing.expectEqualStrings("expanded {{literal}}", success_reply.output);
+    try std.testing.expectEqualStrings("expanded {{literal}}", success_reply.output.output);
+    try std.testing.expectEqualStrings("''display''", success_reply.output.display_title);
 
     var failure: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer failure.deinit();

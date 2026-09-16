@@ -69,6 +69,7 @@ const module_source =
     \\    assert(not mw.title.new('definitely-not-a-real-entry').exists)
     \\    local word = frame.args[1]
     \\    local plural = forms[word]
+    \\    frame:callParserFunction("DISPLAYTITLE", "''" .. word .. "''")
     \\    return "'''"..word.."''' (plural ''"..plural.."'')\n\n" ..
     \\        "<table><caption>Forms from native Lua</caption><tr><td>"..plural.."</td></tr></table>\n"
     \\end }

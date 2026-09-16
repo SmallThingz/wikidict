@@ -3,6 +3,11 @@ const A = std.mem.Allocator;
 const L = std.os.linux;
 const protocol = @import("bundle_protocol");
 
+pub const Expansion = struct {
+    source: []const u8,
+    display_title: ?[]const u8 = null,
+};
+
 pub const Worker = struct {
     io: std.Io,
     root: []const u8,
@@ -75,7 +80,7 @@ pub const Worker = struct {
         });
     }
 
-    pub fn expand(self: *Worker, a: A, title: []const u8, source: []const u8) ![]u8 {
+    pub fn expand(self: *Worker, a: A, title: []const u8, source: []const u8) !Expansion {
         if (source.len > protocol.max_source_bytes) return error.RequestTooLarge;
         const child = try self.ensure();
         self.writeRequest(child, title, source) catch |err| {
@@ -100,7 +105,10 @@ pub const Worker = struct {
         };
         const reply = protocol.decodeReply(response) catch return error.InvalidResponse;
         switch (reply) {
-            .output => |output| return @constCast(output),
+            .output => |success| return .{
+                .source = success.output,
+                .display_title = if (success.display_title.len == 0) null else success.display_title,
+            },
             .failure => |failure| {
                 std.debug.print("bundle expansion failed title={s} stage={s} error={s}{s}{s}\n", .{
                     title,

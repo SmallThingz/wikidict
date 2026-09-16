@@ -12,6 +12,11 @@ const L = std.os.linux;
 
 pub const Request = protocol.Request;
 
+const Expansion = struct {
+    output: []const u8,
+    display_title: []const u8,
+};
+
 fn limit(resource: std.posix.rlimit_resource, value: u64) !void {
     const old = try std.posix.getrlimit(resource);
     const n = @min(value, old.max);
@@ -59,7 +64,7 @@ const Engine = struct {
         self.program.deinit();
     }
 
-    fn expand(self: *Engine, page_a: A, request: Request, stage: *[]const u8, detail: *?[]const u8) ![]const u8 {
+    fn expand(self: *Engine, page_a: A, request: Request, stage: *[]const u8, detail: *?[]const u8) !Expansion {
         if (!std.mem.eql(u8, request.root, self.requested_root)) return error.BundleRootChanged;
         if (!std.mem.eql(u8, request.dump, self.requested_dump)) return error.BundleDumpChanged;
         if (request.now_unix != self.requested_now_unix) return error.BundleTimeChanged;
@@ -68,10 +73,11 @@ const Engine = struct {
         defer ctx.deinit();
         var expander = lua_program.initExpander(&ctx, self.provider.api());
         stage.* = "expand";
-        return expander.expandFragment(request.title, request.source, self.requested_now_unix) catch |err| {
+        const output = expander.expandFragment(request.title, request.source, self.requested_now_unix) catch |err| {
             detail.* = try page_a.dupe(u8, ctx.aotErrorName() orelse @errorName(err));
             return err;
         };
+        return .{ .output = output, .display_title = expander.display_title orelse "" };
     }
 };
 
@@ -115,11 +121,11 @@ pub fn run(io: std.Io, persistent: A) !void {
             try protocol.writeError(&output.interface, stage, detail orelse @errorName(err), detail orelse "");
             continue;
         };
-        if (expanded.len > protocol.max_source_bytes) {
+        if (expanded.output.len > protocol.max_source_bytes or expanded.display_title.len > protocol.max_display_title_bytes) {
             try protocol.writeError(&output.interface, stage, "ExpandedSourceTooLarge", "");
             continue;
         }
-        try protocol.writeSuccess(&output.interface, expanded);
+        try protocol.writeSuccess(&output.interface, expanded.output, expanded.display_title);
     }
 }
 
