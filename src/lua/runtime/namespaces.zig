@@ -6,6 +6,7 @@ pub const Spec = struct {
     name: []const u8,
     canonical_name: []const u8,
     has_subpages: bool,
+    is_capitalized: bool = false,
     aliases: []const []const u8 = &.{},
 };
 const entry_keys = [_]rt.Value{
@@ -13,9 +14,10 @@ const entry_keys = [_]rt.Value{
     .{ .string = "name" },
     .{ .string = "canonicalName" },
     .{ .string = "hasSubpages" },
+    .{ .string = "isCapitalized" },
     .{ .string = "aliases" },
 };
-const entry_sorted_slots = [_]u32{ 4, 2, 3, 0, 1 };
+const entry_sorted_slots = [_]u32{ 5, 2, 3, 0, 4, 1 };
 const entry_shape = rt.Shape{
     .field_keys = &entry_keys,
     .sorted_string_slots = &entry_sorted_slots,
@@ -25,17 +27,17 @@ const entry_shape = rt.Shape{
 
 pub const all = [_]Spec{
     .{ .id = -2, .name = "Media", .canonical_name = "Media", .has_subpages = false },
-    .{ .id = -1, .name = "Special", .canonical_name = "Special", .has_subpages = false },
+    .{ .id = -1, .name = "Special", .canonical_name = "Special", .has_subpages = false, .is_capitalized = true },
     .{ .id = 0, .name = "", .canonical_name = "", .has_subpages = false },
     .{ .id = 1, .name = "Talk", .canonical_name = "Talk", .has_subpages = true },
-    .{ .id = 2, .name = "User", .canonical_name = "User", .has_subpages = true },
-    .{ .id = 3, .name = "User talk", .canonical_name = "User talk", .has_subpages = true },
+    .{ .id = 2, .name = "User", .canonical_name = "User", .has_subpages = true, .is_capitalized = true },
+    .{ .id = 3, .name = "User talk", .canonical_name = "User talk", .has_subpages = true, .is_capitalized = true },
     .{ .id = 4, .name = "Wiktionary", .canonical_name = "Project", .has_subpages = true, .aliases = &.{"WT"} },
     .{ .id = 5, .name = "Wiktionary talk", .canonical_name = "Project talk", .has_subpages = true },
     .{ .id = 6, .name = "File", .canonical_name = "File", .has_subpages = false, .aliases = &.{"Image"} },
     .{ .id = 7, .name = "File talk", .canonical_name = "File talk", .has_subpages = true, .aliases = &.{"Image talk"} },
-    .{ .id = 8, .name = "MediaWiki", .canonical_name = "MediaWiki", .has_subpages = true },
-    .{ .id = 9, .name = "MediaWiki talk", .canonical_name = "MediaWiki talk", .has_subpages = true },
+    .{ .id = 8, .name = "MediaWiki", .canonical_name = "MediaWiki", .has_subpages = true, .is_capitalized = true },
+    .{ .id = 9, .name = "MediaWiki talk", .canonical_name = "MediaWiki talk", .has_subpages = true, .is_capitalized = true },
     .{ .id = 10, .name = "Template", .canonical_name = "Template", .has_subpages = true, .aliases = &.{"T"} },
     .{ .id = 11, .name = "Template talk", .canonical_name = "Template talk", .has_subpages = true },
     .{ .id = 12, .name = "Help", .canonical_name = "Help", .has_subpages = true },
@@ -66,7 +68,7 @@ pub const all = [_]Spec{
     .{ .id = 829, .name = "Module talk", .canonical_name = "Module talk", .has_subpages = true },
     .{ .id = 1728, .name = "Event", .canonical_name = "Event", .has_subpages = true },
     .{ .id = 1729, .name = "Event talk", .canonical_name = "Event talk", .has_subpages = true },
-    .{ .id = 2600, .name = "Topic", .canonical_name = "Topic", .has_subpages = false },
+    .{ .id = 2600, .name = "Topic", .canonical_name = "Topic", .has_subpages = false, .is_capitalized = true },
 };
 
 const alias_slot_count: usize = blk: {
@@ -186,7 +188,8 @@ pub fn makeTable(runtime: *rt.Context) !*rt.Table {
         slots[1] = .{ .string = spec.name };
         slots[2] = .{ .string = spec.canonical_name };
         slots[3] = .{ .boolean = spec.has_subpages };
-        slots[4] = .{ .table = aliases };
+        slots[4] = .{ .boolean = spec.is_capitalized };
+        slots[5] = .{ .table = aliases };
         try namespaces.rawSet(runtime.allocator, .{ .number = @floatFromInt(spec.id) }, .{ .table = value });
     }
     const metatable = try runtime.newTable();
@@ -201,6 +204,8 @@ test "Wiktionary namespace lookup preserves canonical names and aliases" {
     try std.testing.expectEqual(@as(i32, 4), byName("Project").?.id);
     try std.testing.expectEqual(@as(i32, 3), byName("user_talk").?.id);
     try std.testing.expectEqual(@as(i32, 828), byName("MOD").?.id);
+    try std.testing.expect(byId(2).?.is_capitalized);
+    try std.testing.expect(!byId(10).?.is_capitalized);
     try std.testing.expectEqual(@as(i32, 4), subjectSpec(5).?.id);
     try std.testing.expectEqual(@as(i32, 5), talkSpec(4).?.id);
     try std.testing.expectEqual(@as(i32, 1), talkSpec(0).?.id);
@@ -237,6 +242,7 @@ test "namespace entry shapes remain open and mutable" {
     const user_talk = try runtime.getIndex(.{ .table = namespaces }, .{ .string = "User_talk" });
     try std.testing.expect(user_talk == .table);
     try std.testing.expectEqual(@as(f64, 3), user_talk.table.rawGet(.{ .string = "id" }).?.number);
+    try std.testing.expect(user_talk.table.rawGet(.{ .string = "isCapitalized" }).?.boolean);
     const template = namespaces.rawGet(.{ .number = 10 }).?.table;
     try template.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = "Changed" });
     try std.testing.expectEqualStrings("Changed", template.rawGet(.{ .string = "name" }).?.string);

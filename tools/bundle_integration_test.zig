@@ -48,6 +48,8 @@ const module_source =
     \\    assert(namespace_count > 30)
     \\    assert(mw.site.namespaces.Template == mw.site.namespaces[10])
     \\    assert(mw.site.namespaces.user_talk == mw.site.namespaces[3])
+    \\    assert(mw.site.namespaces.Special.isCapitalized and mw.site.namespaces.User.isCapitalized)
+    \\    assert(not mw.site.namespaces[0].isCapitalized and not mw.site.namespaces.Template.isCapitalized)
     \\    local user_title = mw.title.new('User:Example')
     \\    assert(user_title:inNamespace('User') and user_title:inNamespace(2) and not user_title:inNamespace('Module'))
     \\    local parameters_title = mw.title.new('Module:parameters')
