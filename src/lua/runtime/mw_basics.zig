@@ -34,6 +34,67 @@ fn dumpObjectCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     return one(.{ .string = text });
 }
 
+const MessageCtx = struct { key: []const u8 };
+
+fn messageTitleAlloc(a: std.mem.Allocator, key_raw: []const u8) ![]const u8 {
+    const key = std.mem.trim(u8, key_raw, " \t\r\n");
+    const prefix = "MediaWiki:";
+    const out = try a.alloc(u8, prefix.len + key.len);
+    @memcpy(out[0..prefix.len], prefix);
+    @memcpy(out[prefix.len..], key);
+    std.mem.replaceScalar(u8, out[prefix.len..], '_', ' ');
+    if (key.len != 0 and std.ascii.isLower(out[prefix.len])) out[prefix.len] = std.ascii.toUpper(out[prefix.len]);
+    return out;
+}
+
+fn messageSource(runtime: *rt.Context, ctx: *const MessageCtx) !?[]const u8 {
+    const host = host_api.get(runtime) orelse return error.NotImplemented;
+    const get = host.page_content orelse return error.NotImplemented;
+    return get(host.ctx, runtime.allocator, try messageTitleAlloc(runtime.allocator, ctx.key));
+}
+
+fn messagePlainCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+    const ctx: *MessageCtx = @ptrCast(@alignCast(raw orelse return error.MissingMessageContext));
+    if (try messageSource(runtime, ctx)) |source| return one(.{ .string = source });
+    return one(.{ .string = try std.fmt.allocPrint(runtime.allocator, "⧼{s}⧽", .{ctx.key}) });
+}
+
+fn messageExistsCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+    const ctx: *MessageCtx = @ptrCast(@alignCast(raw orelse return error.MissingMessageContext));
+    return one(.{ .boolean = (try messageSource(runtime, ctx)) != null });
+}
+
+fn messageIsBlankCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+    const ctx: *MessageCtx = @ptrCast(@alignCast(raw orelse return error.MissingMessageContext));
+    const source = try messageSource(runtime, ctx);
+    return one(.{ .boolean = source == null or source.?.len == 0 });
+}
+
+fn messageIsDisabledCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+    const ctx: *MessageCtx = @ptrCast(@alignCast(raw orelse return error.MissingMessageContext));
+    const source = try messageSource(runtime, ctx);
+    return one(.{ .boolean = source == null or source.?.len == 0 or std.mem.eql(u8, source.?, "-") });
+}
+
+fn messageNewCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    if (args.len != 1) return error.NotImplemented;
+    const ctx = try runtime.allocator.create(MessageCtx);
+    ctx.* = .{ .key = try runtime.allocator.dupe(u8, args[0].string) };
+    const object = try runtime.newTable();
+    const plain = try runtime.newNative(ctx, messagePlainCall);
+    try object.rawSet(runtime.allocator, .{ .string = "plain" }, plain);
+    try object.rawSet(runtime.allocator, .{ .string = "exists" }, try runtime.newNative(ctx, messageExistsCall));
+    try object.rawSet(runtime.allocator, .{ .string = "isBlank" }, try runtime.newNative(ctx, messageIsBlankCall));
+    try object.rawSet(runtime.allocator, .{ .string = "isDisabled" }, try runtime.newNative(ctx, messageIsDisabledCall));
+    inline for (.{ "params", "rawParams", "numParams", "inLanguage", "useDatabase" }) |name|
+        try setNative(runtime, object, name, notImplementedCall);
+    const mt = try runtime.newTable();
+    try mt.rawSet(runtime.allocator, .{ .string = "__tostring" }, plain);
+    object.metatable = mt;
+    return one(.{ .table = object });
+}
+
 fn interwikiMapCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const filter: enum { all, local, nonlocal } = if (args.len == 0 or args[0] == .nil)
         .all
@@ -106,8 +167,8 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try mw.rawSetNativeField(.mw, "wikibase", .{ .table = wikibase });
 
     const message = try runtime.newTable();
+    try setNative(runtime, message, "new", messageNewCall);
     inline for (.{
-        "new",
         "newFallbackSequence",
         "newRawMessage",
         "rawParam",
@@ -151,9 +212,11 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     inline for (.{ "new", "newFallbackSequence", "newRawMessage", "rawParam", "numParam", "getDefaultLanguage" }) |name| {
         try std.testing.expect(message.rawGet(.{ .string = name }).? == .callable);
     }
-    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = message }, "new", &.{.{ .string = "mainpage" }}));
-    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
-    runtime.clearAotErrorName();
+    const message_object = try callField(&runtime, .{ .table = message }, "new", &.{.{ .string = "mainpage" }});
+    defer rt.freeResults(message_object);
+    try std.testing.expect(message_object[0] == .table);
+    inline for (.{ "plain", "exists", "isBlank", "isDisabled", "params", "rawParams", "numParams", "inLanguage", "useDatabase" }) |name|
+        try std.testing.expect(message_object[0].table.rawGet(.{ .string = name }).? == .callable);
 
     const site = mw.rawGet(.{ .string = "site" }).?.table;
     const namespaces = site.rawGet(.{ .string = "namespaces" }).?.table;
@@ -167,6 +230,71 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     const stats = site.rawGet(.{ .string = "stats" }).?.table;
     try std.testing.expect(stats.rawGet(.{ .string = "pagesInCategory" }).? == .callable);
     try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = stats }, "pagesInCategory", &.{ .{ .string = "English nouns" }, .{ .string = "pages" } }));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+}
+
+const MessageProbe = struct {
+    fn pageContent(_: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        const source = if (std.mem.eql(u8, title, "MediaWiki:Mainpage"))
+            "{{ns:Project}}:Main Page"
+        else if (std.mem.eql(u8, title, "MediaWiki:Disabled"))
+            "-"
+        else
+            return null;
+        return try a.dupe(u8, source);
+    }
+};
+
+test "AOT mw message reads dump-backed interface messages" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{ .page_content = MessageProbe.pageContent };
+    host_api.set(&runtime, &host);
+    const mw = try runtime.newNativeNamespace(.mw);
+    try install(&runtime, mw);
+    const message = mw.rawGet(.{ .string = "message" }).?.table;
+
+    const main = try callField(&runtime, .{ .table = message }, "new", &.{.{ .string = "mainpage" }});
+    defer rt.freeResults(main);
+    const plain = try callField(&runtime, main[0], "plain", &.{main[0]});
+    defer rt.freeResults(plain);
+    try std.testing.expectEqualStrings("{{ns:Project}}:Main Page", plain[0].string);
+    const exists = try callField(&runtime, main[0], "exists", &.{main[0]});
+    defer rt.freeResults(exists);
+    try std.testing.expect(exists[0].boolean);
+    const blank = try callField(&runtime, main[0], "isBlank", &.{main[0]});
+    defer rt.freeResults(blank);
+    try std.testing.expect(!blank[0].boolean);
+    const disabled = try callField(&runtime, main[0], "isDisabled", &.{main[0]});
+    defer rt.freeResults(disabled);
+    try std.testing.expect(!disabled[0].boolean);
+
+    const missing = try callField(&runtime, .{ .table = message }, "new", &.{.{ .string = "missing_key" }});
+    defer rt.freeResults(missing);
+    const missing_plain = try callField(&runtime, missing[0], "plain", &.{missing[0]});
+    defer rt.freeResults(missing_plain);
+    try std.testing.expectEqualStrings("⧼missing_key⧽", missing_plain[0].string);
+    const missing_exists = try callField(&runtime, missing[0], "exists", &.{missing[0]});
+    defer rt.freeResults(missing_exists);
+    try std.testing.expect(!missing_exists[0].boolean);
+    const missing_blank = try callField(&runtime, missing[0], "isBlank", &.{missing[0]});
+    defer rt.freeResults(missing_blank);
+    try std.testing.expect(missing_blank[0].boolean);
+    const missing_disabled = try callField(&runtime, missing[0], "isDisabled", &.{missing[0]});
+    defer rt.freeResults(missing_disabled);
+    try std.testing.expect(missing_disabled[0].boolean);
+
+    const disabled_message = try callField(&runtime, .{ .table = message }, "new", &.{.{ .string = "disabled" }});
+    defer rt.freeResults(disabled_message);
+    const is_disabled = try callField(&runtime, disabled_message[0], "isDisabled", &.{disabled_message[0]});
+    defer rt.freeResults(is_disabled);
+    try std.testing.expect(is_disabled[0].boolean);
+
+    const new_fn = message.rawGet(.{ .string = "new" }).?;
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(new_fn, &.{ .{ .string = "parentheses" }, .{ .string = "x" } }));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
 }

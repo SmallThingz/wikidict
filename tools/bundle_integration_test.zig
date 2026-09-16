@@ -57,6 +57,13 @@ const module_source =
     \\    assert(official_uri.protocol == 'https' and official_uri.host == 'main.knesset.gov.il')
     \\    assert(official_uri.path == '/apps/smartprotocol/session/123/456' and official_uri.query.itemid == '7')
     \\    assert(type(mw.site.stats.pagesInCategory) == 'function')
+    \\    local main_message = mw.message.new('mainpage')
+    \\    assert(main_message:exists() and not main_message:isBlank() and not main_message:isDisabled())
+    \\    assert(main_message:plain() == '{{ns:Project}}:Main Page' and tostring(main_message) == '{{ns:Project}}:Main Page')
+    \\    assert(frame:preprocess(main_message:plain()) == 'Wiktionary:Main Page')
+    \\    local missing_message = mw.message.new('definitely-missing-message')
+    \\    assert(not missing_message:exists() and missing_message:isBlank() and missing_message:isDisabled())
+    \\    assert(missing_message:plain() == '⧼definitely-missing-message⧽')
     \\    assert(tostring(mw.html.create('div'):tag('br'):allDone()) == '<div><br /></div>')
     \\    assert(mw.text.encode('a&b') == 'a&amp;b')
     \\    assert(mw.text.tag('div', {class = 'chart'}, 'x') == '<div class=\"chart\">x</div>')
@@ -133,6 +140,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Shared", .ns = 0, .id = 23, .body = "shared main transclusion" },
         .{ .title = "SharedAlias", .ns = 0, .id = 24, .body = "#REDIRECT [[Shared]]", .redirect = "Shared" },
         .{ .title = "Wiktionary:Sandbox", .ns = 4, .id = 25, .body = "project namespace transclusion" },
+        .{ .title = "MediaWiki:Mainpage", .ns = 8, .id = 26, .body = "{{ns:Project}}:Main Page" },
         .{ .title = "Appendix:IntegrationFixture", .ns = 100, .id = 21, .body = "a real auxiliary source page" },
         .{ .title = "Template:show-forms", .ns = 10, .id = 10, .body = template_source },
         .{ .title = "Template:forms-alias", .ns = 10, .id = 11, .body = "#REDIRECT [[Template:show-forms]]", .redirect = "Template:show-forms" },
