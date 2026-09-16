@@ -10,6 +10,7 @@ const source =
     "# Parser functions: {{#time:Y M d|2013-3-31 +8 days}} / {{#sub:αβγ|-1}} / {{#iferror:{{#expr:bogus}}|ERR|OK}}\n" ++
     "# Formatting magic: {{formatnum:11000}} / {{formatnum:1,234.50|R}} / {{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}\n" ++
     "# Title parts: {{#titleparts:A/B/C|1|2}} / {{#titleparts:A/B/C|-1}}\n" ++
+    "# Escaped title: {{PAGENAMEE:Appendix:A B/é?x}} / {{FULLPAGENAMEE:Appendix:A B/é?x}}\n" ++
     "# Revision metadata: {{PAGEID}} / {{REVISIONID}} / {{REVISIONTIMESTAMP}}\n";
 const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
@@ -177,6 +178,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "Parser functions: 2013 Apr 08 / γ / ERR") != null, "corpus parser functions are baked into data");
     try h.require(std.mem.indexOf(u8, text, "Formatting magic: 11,000 / 1234.50 / A_B_x_C") != null, "formatting magic is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Title parts: B / A/B") != null, "titleparts is baked into data");
+    try h.require(std.mem.indexOf(u8, text, "Escaped title: A_B/%C3%A9%3Fx / Appendix:A_B/%C3%A9%3Fx") != null, "escaped title magic is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Revision metadata: 20 / 120 / 20240304050607") != null, "page revision metadata is baked into data");
     try h.require(std.mem.indexOf(u8, text, "ordinary namespace distinct") != null, "Template namespace alias resolves through corpus transclusion");
     try h.require(std.mem.indexOf(u8, text, "Documentation") == null, "noinclude does not leak");

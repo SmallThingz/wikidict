@@ -357,6 +357,15 @@ pub const Expander = struct {
         return text;
     }
 
+    fn isEscapedTitleMagicName(raw: []const u8) bool {
+        inline for (&.{
+            "PAGENAMEE",        "FULLPAGENAMEE",    "NAMESPACEE",        "BASEPAGENAMEE",
+            "ROOTPAGENAMEE",    "SUBPAGENAMEE",     "SUBJECTSPACEE",     "ARTICLESPACEE",
+            "TALKSPACEE",       "SUBJECTPAGENAMEE", "ARTICLEPAGENAMEE",  "TALKPAGENAMEE",
+        }) |name| if (std.ascii.eqlIgnoreCase(raw, name)) return true;
+        return false;
+    }
+
     fn isTitleMagicName(raw: []const u8) bool {
         inline for (&.{
             "PAGENAME",     "FULLPAGENAME", "NAMESPACE",       "NAMESPACENUMBER",
@@ -364,7 +373,7 @@ pub const Expander = struct {
             "ARTICLESPACE", "TALKSPACE",    "SUBJECTPAGENAME", "ARTICLEPAGENAME",
             "TALKPAGENAME",
         }) |name| if (std.ascii.eqlIgnoreCase(raw, name)) return true;
-        return false;
+        return isEscapedTitleMagicName(raw);
     }
 
     fn namespacedPageAlloc(self: *Expander, spec: namespace_lib.Spec, text: []const u8) ![]const u8 {
@@ -375,6 +384,8 @@ pub const Expander = struct {
     fn titleMagic(self: *Expander, raw_name: []const u8, raw_page: ?[]const u8) !?[]const u8 {
         const name = std.mem.trim(u8, raw_name, " \t\r\n");
         if (!isTitleMagicName(name)) return null;
+        const escaped = isEscapedTitleMagicName(name);
+        const base_name = if (escaped) name[0 .. name.len - 1] else name;
         const requested = if (raw_page) |value| blk: {
             const trimmed = std.mem.trim(u8, value, " \t\r\n");
             break :blk if (trimmed.len == 0) self.host.current_title else trimmed;
@@ -385,26 +396,29 @@ pub const Expander = struct {
         else
             canonical_with_fragment;
         const ns = namespace_lib.ofTitle(page);
-        if (std.ascii.eqlIgnoreCase(name, "PAGENAME")) return ns.text;
-        if (std.ascii.eqlIgnoreCase(name, "FULLPAGENAME")) return page;
-        if (std.ascii.eqlIgnoreCase(name, "NAMESPACE")) return ns.name;
-        if (std.ascii.eqlIgnoreCase(name, "NAMESPACENUMBER")) return self.formatMagic("{d}", .{ns.id});
-        if (std.ascii.eqlIgnoreCase(name, "BASEPAGENAME"))
-            return if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
-        if (std.ascii.eqlIgnoreCase(name, "ROOTPAGENAME"))
-            return if (std.mem.indexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
-        if (std.ascii.eqlIgnoreCase(name, "SUBPAGENAME"))
-            return if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[slash + 1 ..] else ns.text;
+        if (std.ascii.eqlIgnoreCase(base_name, "NAMESPACENUMBER")) return self.formatMagic("{d}", .{ns.id});
+        const value: []const u8 = result: {
+            if (std.ascii.eqlIgnoreCase(base_name, "PAGENAME")) break :result ns.text;
+            if (std.ascii.eqlIgnoreCase(base_name, "FULLPAGENAME")) break :result page;
+            if (std.ascii.eqlIgnoreCase(base_name, "NAMESPACE")) break :result ns.name;
+            if (std.ascii.eqlIgnoreCase(base_name, "BASEPAGENAME"))
+                break :result if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
+            if (std.ascii.eqlIgnoreCase(base_name, "ROOTPAGENAME"))
+                break :result if (std.mem.indexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
+            if (std.ascii.eqlIgnoreCase(base_name, "SUBPAGENAME"))
+                break :result if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[slash + 1 ..] else ns.text;
 
-        const subject = namespace_lib.subjectSpec(ns.id) orelse return "";
-        if (std.ascii.eqlIgnoreCase(name, "SUBJECTSPACE") or std.ascii.eqlIgnoreCase(name, "ARTICLESPACE"))
-            return subject.name;
-        if (std.ascii.eqlIgnoreCase(name, "SUBJECTPAGENAME") or std.ascii.eqlIgnoreCase(name, "ARTICLEPAGENAME"))
-            return @as(?[]const u8, try self.namespacedPageAlloc(subject, ns.text));
-        const talk = namespace_lib.talkSpec(ns.id) orelse return "";
-        if (std.ascii.eqlIgnoreCase(name, "TALKSPACE")) return talk.name;
-        if (std.ascii.eqlIgnoreCase(name, "TALKPAGENAME")) return @as(?[]const u8, try self.namespacedPageAlloc(talk, ns.text));
-        unreachable;
+            const subject = namespace_lib.subjectSpec(ns.id) orelse break :result "";
+            if (std.ascii.eqlIgnoreCase(base_name, "SUBJECTSPACE") or std.ascii.eqlIgnoreCase(base_name, "ARTICLESPACE"))
+                break :result subject.name;
+            if (std.ascii.eqlIgnoreCase(base_name, "SUBJECTPAGENAME") or std.ascii.eqlIgnoreCase(base_name, "ARTICLEPAGENAME"))
+                break :result try self.namespacedPageAlloc(subject, ns.text);
+            const talk = namespace_lib.talkSpec(ns.id) orelse break :result "";
+            if (std.ascii.eqlIgnoreCase(base_name, "TALKSPACE")) break :result talk.name;
+            if (std.ascii.eqlIgnoreCase(base_name, "TALKPAGENAME")) break :result try self.namespacedPageAlloc(talk, ns.text);
+            unreachable;
+        };
+        return if (escaped) @as(?[]const u8, try uri_lib.wikiEncodeAlloc(self.runtime.allocator, value)) else value;
     }
 
     fn pageMetadata(self: *Expander) !Provider.PageMetadata {
@@ -1212,6 +1226,12 @@ test "bundle title magic words resolve subject talk and parameterized namespaces
     const source = "{{PAGENAME}}|{{FULLPAGENAME}}|{{NAMESPACE}}|{{NAMESPACENUMBER}}|{{BASEPAGENAME}}|{{ROOTPAGENAME}}|{{SUBPAGENAME}}|{{SUBJECTSPACE}}|{{TALKSPACE}}|{{SUBJECTPAGENAME}}|{{TALKPAGENAME}}|{{SUBJECTSPACE:Wiktionary talk:Foo}}|{{TALKSPACE:WT:Foo}}|{{TALKPAGENAME:Template:Foo}}|{{SUBJECTPAGENAME:Template talk:Foo}}";
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Page/Sub|Appendix:Page/Sub|Appendix|100|Page|Page|Sub|Appendix|Appendix talk|Appendix:Page/Sub|Appendix talk:Page/Sub|Wiktionary|Wiktionary talk|Template talk:Foo|Template:Foo", got);
+    const escaped = try expander.expandFragment(
+        "Appendix:A B/é?x",
+        "{{PAGENAMEE}}|{{FULLPAGENAMEE}}|{{NAMESPACEE}}|{{BASEPAGENAMEE}}|{{ROOTPAGENAMEE}}|{{SUBPAGENAMEE}}|{{SUBJECTSPACEE}}|{{TALKSPACEE}}|{{SUBJECTPAGENAMEE}}|{{TALKPAGENAMEE}}|{{ARTICLESPACEE}}|{{ARTICLEPAGENAMEE}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings("A_B/%C3%A9%3Fx|Appendix:A_B/%C3%A9%3Fx|Appendix|A_B|A_B|%C3%A9%3Fx|Appendix|Appendix_talk|Appendix:A_B/%C3%A9%3Fx|Appendix_talk:A_B/%C3%A9%3Fx|Appendix|Appendix:A_B/%C3%A9%3Fx", escaped);
 }
 
 test "bundle parser functions cover corpus time sub and iferror forms" {

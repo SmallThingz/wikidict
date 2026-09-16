@@ -74,6 +74,12 @@ fn appendWikiEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []co
     }
 }
 
+pub fn wikiEncodeAlloc(a: std.mem.Allocator, source: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try appendWikiEncoded(&out, a, source);
+    return out.toOwnedSlice(a);
+}
+
 fn appendQueryEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []const u8) !void {
     for (source) |c| {
         const safe = std.ascii.isAlphanumeric(c) or c == '_' or c == '.' or c == '~' or c == '-';
