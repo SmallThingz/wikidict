@@ -49,13 +49,16 @@ fn appendAnchorEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []
         }
         if (pending_separator and out.items.len != 0 and out.items[out.items.len - 1] != '_') try out.append(a, '_');
         pending_separator = false;
-        switch (c) {
+        if (c == '%' and i + 2 < source.len and std.ascii.isHex(source[i + 1]) and std.ascii.isHex(source[i + 2])) {
+            try out.appendSlice(a, "%25");
+        } else switch (c) {
             '&' => try out.appendSlice(a, "&amp;"),
             '"' => try out.appendSlice(a, "&quot;"),
             '\'' => try out.appendSlice(a, "&#039;"),
             '[' => try out.appendSlice(a, "&#91;"),
             ']' => try out.appendSlice(a, "&#93;"),
             '{' => try out.appendSlice(a, "&#123;"),
+            '}' => try out.appendSlice(a, "&#125;"),
             else => try out.append(a, c),
         }
         i += 1;
@@ -281,12 +284,16 @@ fn uriDecodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]c
     return one(a, .{ .string = try out.toOwnedSlice(a) });
 }
 
+pub fn anchorEncodeAlloc(a: std.mem.Allocator, source: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try appendAnchorEncoded(&out, a, source);
+    return out.toOwnedSlice(a);
+}
+
 fn uriAnchorEncodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    var out: std.ArrayList(u8) = .empty;
-    try appendAnchorEncoded(&out, a, args[0].string);
-    return one(a, .{ .string = try out.toOwnedSlice(a) });
+    return one(a, .{ .string = try anchorEncodeAlloc(a, args[0].string) });
 }
 
 fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, comptime call: anytype) !void {
@@ -330,6 +337,9 @@ test "AOT URI encode decode and anchors match MediaWiki modes" {
     const anchor = try callField(&runtime, .{ .table = uri }, "anchorEncode", &.{.{ .string = "[[foo|A B]] <b>x</b>&nbsp;C" }});
     defer rt.freeResults(anchor);
     try std.testing.expectEqualStrings("A_B_x_C", anchor[0].string);
+    const escaped_anchor = try callField(&runtime, .{ .table = uri }, "anchorEncode", &.{.{ .string = "a%20b {c}" }});
+    defer rt.freeResults(escaped_anchor);
+    try std.testing.expectEqualStrings("a%2520b_&#123;c&#125;", escaped_anchor[0].string);
 }
 
 test "AOT URI builders sort query parameters and expose URI fields" {

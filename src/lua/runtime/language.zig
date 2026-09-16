@@ -405,40 +405,72 @@ fn valueString(a: std.mem.Allocator, value: Value) ![]const u8 {
         else => error.NumberExpected,
     };
 }
+fn formatNumberImpl(a: std.mem.Allocator, raw: []const u8, commafy: bool) ![]const u8 {
+    if (raw.len == 0) return raw;
+    const minus = "−";
+    const sign_len: usize = if (raw[0] == '-' or raw[0] == '+') 1 else if (std.mem.startsWith(u8, raw, minus)) minus.len else 0;
+    const negative = raw[0] == '-' or std.mem.startsWith(u8, raw, minus);
+    const body = raw[sign_len..];
+    const dot = std.mem.indexOfScalar(u8, body, '.') orelse body.len;
+    if (std.mem.indexOfScalarPos(u8, body, dot + @intFromBool(dot < body.len), '.') != null) return raw;
+    if (dot == 0) return raw;
+    for (body[0..dot]) |c| if (!std.ascii.isDigit(c)) return raw;
+    if (dot < body.len) for (body[dot + 1 ..]) |c| if (!std.ascii.isDigit(c)) return raw;
+
+    const commas = if (commafy and dot > 3) (dot - 1) / 3 else 0;
+    const sign_out_len: usize = if (negative) minus.len else 0;
+    if (commas == 0 and sign_out_len == sign_len and (sign_len == 0 or negative and std.mem.startsWith(u8, raw, minus))) return raw;
+    const out = try a.alloc(u8, sign_out_len + body.len + commas);
+    var dst: usize = 0;
+    if (negative) {
+        @memcpy(out[0..minus.len], minus);
+        dst = minus.len;
+    }
+    for (body[0..dot], 0..) |c, i| {
+        if (commafy and i != 0 and (dot - i) % 3 == 0) {
+            out[dst] = ',';
+            dst += 1;
+        }
+        out[dst] = c;
+        dst += 1;
+    }
+    @memcpy(out[dst..], body[dot..]);
+    return out;
+}
+
+pub fn formatNumberAlloc(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    return formatNumberImpl(a, raw, true);
+}
+
+pub fn formatNumberNoSeparatorsAlloc(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    return formatNumberImpl(a, raw, false);
+}
+
+pub fn parseFormattedNumberAlloc(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    const minus = "−";
+    const has_comma = std.mem.indexOfScalar(u8, raw, ',') != null;
+    const localized_minus = std.mem.startsWith(u8, raw, minus);
+    if (!has_comma and !localized_minus) return raw;
+    var clean: std.ArrayList(u8) = .empty;
+    if (localized_minus) {
+        try clean.append(a, '-');
+        for (raw[minus.len..]) |c| if (c != ',') try clean.append(a, c);
+    } else {
+        for (raw) |c| if (c != ',') try clean.append(a, c);
+    }
+    return clean.toOwnedSlice(a);
+}
+
 fn languageFormatNum(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len < 2) return error.NumberExpected;
     const raw = try valueString(a, args[1]);
-    const dot = std.mem.indexOfScalar(u8, raw, '.') orelse raw.len;
-    const sign_len: usize = if (raw.len != 0 and (raw[0] == '-' or raw[0] == '+')) 1 else 0;
-    const digits = dot - sign_len;
-    if (digits <= 3) return one(a, .{ .string = raw });
-    const commas = (digits - 1) / 3;
-    const out = try a.alloc(u8, raw.len + commas);
-    var src: usize = 0;
-    var dst: usize = 0;
-    if (sign_len != 0) {
-        out[0] = raw[0];
-        src = 1;
-        dst = 1;
-    }
-    while (src < dot) : (src += 1) {
-        if (src > sign_len and (dot - src) % 3 == 0) {
-            out[dst] = ',';
-            dst += 1;
-        }
-        out[dst] = raw[src];
-        dst += 1;
-    }
-    @memcpy(out[dst..], raw[dot..]);
-    return one(a, .{ .string = out });
+    return one(a, .{ .string = try formatNumberAlloc(a, raw) });
 }
 fn languageParseFormattedNumber(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     const raw = try sourceMethodArg(args);
-    var clean: std.ArrayList(u8) = .empty;
-    for (raw) |c| if (c != ',') try clean.append(a, c);
-    return one(a, .{ .string = try clean.toOwnedSlice(a) });
+    return one(a, .{ .string = try parseFormattedNumberAlloc(a, raw) });
 }
 
 fn makeLanguage(runtime: *rt.Context, code: []const u8) !*rt.Table {
@@ -582,9 +614,12 @@ test "AOT language objects expose MediaWiki helpers" {
     const formatted = try callField(&runtime, language, "formatNum", &.{ language, .{ .number = 12345.67 } });
     defer rt.freeResults(formatted);
     try std.testing.expectEqualStrings("12,345.67", formatted[0].string);
-    const parsed = try callField(&runtime, language, "parseFormattedNumber", &.{ language, .{ .string = "12,345.67" } });
+    const formatted_negative = try callField(&runtime, language, "formatNum", &.{ language, .{ .string = "-1234" } });
+    defer rt.freeResults(formatted_negative);
+    try std.testing.expectEqualStrings("−1,234", formatted_negative[0].string);
+    const parsed = try callField(&runtime, language, "parseFormattedNumber", &.{ language, .{ .string = "−12,345.67" } });
     defer rt.freeResults(parsed);
-    try std.testing.expectEqualStrings("12345.67", parsed[0].string);
+    try std.testing.expectEqualStrings("-12345.67", parsed[0].string);
 
     const language_api = mw.rawGet(.{ .string = "language" }).?.table;
     const french = try callField(&runtime, .{ .table = language_api }, "new", &.{.{ .string = "fr" }});

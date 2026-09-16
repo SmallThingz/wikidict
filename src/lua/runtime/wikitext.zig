@@ -656,6 +656,25 @@ pub const Expander = struct {
         return tested;
     }
 
+    fn expandFormatNum(self: *Expander, raw_value: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        const value = std.mem.trim(u8, try self.expandWikitext(raw_value, params, host_title, depth + 1), " \t\r\n");
+        const option = if (args.len == 0)
+            ""
+        else
+            std.mem.trim(u8, try self.expandWikitext(args[0], params, host_title, depth + 1), " \t\r\n");
+        if (args.len > 1) return error.UnsupportedFormatNumOption;
+        if (option.len == 0) return language_lib.formatNumberAlloc(self.runtime.allocator, value);
+        if (std.ascii.eqlIgnoreCase(option, "R")) return language_lib.parseFormattedNumberAlloc(self.runtime.allocator, value);
+        if (std.ascii.eqlIgnoreCase(option, "NOSEP")) return language_lib.formatNumberNoSeparatorsAlloc(self.runtime.allocator, value);
+        return error.UnsupportedFormatNumOption;
+    }
+
+    fn expandAnchorEncode(self: *Expander, raw_value: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        if (args.len != 0) return error.UnsupportedAnchorEncodeArgument;
+        const value = try self.expandWikitext(raw_value, params, host_title, depth + 1);
+        return uri_lib.anchorEncodeAlloc(self.runtime.allocator, value);
+    }
+
     fn expandExprParser(self: *Expander, raw: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const expanded = std.mem.trim(u8, try self.expandWikitext(raw, params, host_title, depth + 1), " \t\r\n");
         const value = parser_expr.eval(self.runtime.allocator, expanded) catch |err| return self.exprError(err);
@@ -837,6 +856,8 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "lc")) return self.expandCaseParser(first, params, host_title, depth + 1, false, false);
             if (std.ascii.eqlIgnoreCase(name, "ucfirst")) return self.expandCaseParser(first, params, host_title, depth + 1, true, true);
             if (std.ascii.eqlIgnoreCase(name, "lcfirst")) return self.expandCaseParser(first, params, host_title, depth + 1, false, true);
+            if (std.ascii.eqlIgnoreCase(name, "formatnum")) return self.expandFormatNum(first, parts.items[1..], params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "anchorencode")) return self.expandAnchorEncode(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "fullurl")) return self.expandUrlParser(first, parts.items[1..], params, host_title, depth + 1, .full, false);
             if (std.ascii.eqlIgnoreCase(name, "fullurle")) return self.expandUrlParser(first, parts.items[1..], params, host_title, depth + 1, .full, true);
             if (std.ascii.eqlIgnoreCase(name, "localurl")) return self.expandUrlParser(first, parts.items[1..], params, host_title, depth + 1, .local, false);
@@ -1172,9 +1193,9 @@ test "bundle parser functions cover corpus time sub and iferror forms" {
     try stdlib.install(&runtime);
     try installTestHost(&runtime, 18, 23);
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .page_metadata = TestProvider.pageMetadata } };
-    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
+    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{formatnum:11000}}|{{FORMATNUM:-1234567.89}}|{{formatnum:1,234.50|R}}|{{formatnum:1234.50|NOSEP}}|{{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}|{{anchorencode:a%20b}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
     const got = try expander.expandFragment("Page", source, 1_670_803_200);
-    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|/Wiktionary/Wiktionary/Module", got);
+    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|11,000|−1,234,567.89|1234.50|1234.50|A_B_x_C|a%2520b|/Wiktionary/Wiktionary/Module", got);
     try std.testing.expectError(error.InvalidNamespace, expander.expandFragment("Page", "{{ns:not-a-namespace}}", 1_670_803_200));
 
     expander.beginPage("Page", "source", 1_670_803_200);
