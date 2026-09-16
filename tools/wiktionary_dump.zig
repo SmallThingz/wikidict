@@ -2,7 +2,6 @@
 const std = @import("std");
 const zxml = @import("zxml");
 const xml_decode = @import("xml_decode");
-const language_registry = @import("language_registry.zig");
 
 const parse_opts: zxml.ParseOptions = .{
     .mode = .strict,
@@ -92,19 +91,6 @@ pub const Dump = struct {
 
     pub fn headerIterator(self: *Dump) HeaderIterator {
         return .{ .dump = self };
-    }
-
-    pub fn languageRegistry(self: *Dump, allocator: std.mem.Allocator) !language_registry.Registry {
-        const needle = "<title>Module:languages/canonical names</title>";
-        const title_pos = std.mem.indexOf(u8, self.bytes, needle) orelse return language_registry.Registry.empty(allocator);
-        const begin = std.mem.lastIndexOf(u8, self.bytes[0..title_pos], "<page>") orelse return error.InvalidLanguageRegistry;
-        const end = std.mem.indexOfPos(u8, self.bytes, title_pos, "</page>") orelse return error.InvalidLanguageRegistry;
-        var capture: Capture = .{};
-        try self.parser.parse(self.bytes[begin .. end + 7], &capture, Capture.onNode);
-        const raw = capture.text_raw orelse return error.InvalidLanguageRegistry;
-        const source = try xml_decode.decodeSinglePassAlloc(allocator, raw);
-        defer allocator.free(source);
-        return language_registry.Registry.fromLuaAlloc(allocator, source);
     }
 };
 

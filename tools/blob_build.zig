@@ -1,6 +1,7 @@
 const std = @import("std");
 const encoder = @import("encoder");
 const dump_source = @import("wiktionary_dump.zig");
+const language_registry = @import("language_registry.zig");
 const bundle_expander = @import("bundle_expander.zig");
 
 const Options = struct {
@@ -35,6 +36,27 @@ fn mmapPath(io: std.Io, path: []const u8) !Mapped {
     else
         try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0);
     return .{ .bytes = bytes };
+}
+
+fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const u8) !language_registry.Registry {
+    const manifest_path = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });
+    defer a.free(manifest_path);
+    var manifest = try mmapPath(io, manifest_path);
+    defer manifest.deinit();
+    const title_marker = "\"title\":\"Module:languages/canonical names\"";
+    const marker = std.mem.indexOf(u8, manifest.bytes, title_marker) orelse return language_registry.Registry.empty(a);
+    const line_start = if (std.mem.lastIndexOfScalar(u8, manifest.bytes[0..marker], '\n')) |newline| newline + 1 else 0;
+    const line_end = std.mem.indexOfScalarPos(u8, manifest.bytes, marker, '\n') orelse manifest.bytes.len;
+    const line = manifest.bytes[line_start..line_end];
+    const page_prefix = "{\"page_id\":";
+    if (!std.mem.startsWith(u8, line, page_prefix)) return error.InvalidModuleManifest;
+    const comma = std.mem.indexOfScalarPos(u8, line, page_prefix.len, ',') orelse return error.InvalidModuleManifest;
+    const page_id = std.fmt.parseInt(u64, line[page_prefix.len..comma], 10) catch return error.InvalidModuleManifest;
+    const module_path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ expander_root, page_id });
+    defer a.free(module_path);
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, module_path, a, .unlimited);
+    defer a.free(source);
+    return language_registry.Registry.fromLuaAlloc(a, source);
 }
 
 fn parseIndexedPage(line: []const u8) !IndexedPage {
@@ -103,7 +125,7 @@ pub fn main(init: std.process.Init) !void {
 
     var dump = try dump_source.Dump.open(init.io, a, args[1]);
     defer dump.deinit();
-    var registry = try dump.languageRegistry(a);
+    var registry = try loadLanguageRegistry(init.io, a, options.expander_root);
     defer registry.deinit();
     const codes: encoder.blob_builder.LanguageCodes = .{
         .ctx = &registry,

@@ -109,6 +109,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Template:Template:nested", .ns = 10, .id = 12, .body = "nested namespace retained" },
         .{ .title = "Template:nested", .ns = 10, .id = 13, .body = "ordinary namespace distinct" },
         .{ .title = "Module:IntegrationForms", .ns = 828, .id = 1, .body = module_source },
+        .{ .title = "Module:languages/canonical names", .ns = 828, .id = 3, .body = "return { [\"English\"] = \"en\" }" },
         .{ .title = "Module:IntegrationFormsData", .ns = 828, .id = 2, .body = "return { mouse = 'mice' }" },
         .{ .title = "Module:IntegrationFormsAlias", .ns = 828, .id = 4, .body = "#REDIRECT [[Module:IntegrationFormsData]]", .redirect = "Module:IntegrationFormsData" },
     };
@@ -246,6 +247,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.eql(u8, display_span.get("text").?.string, "mouse"), "display-title text remains the canonical page name");
     try h.require(display_span.get("italic").?.bool, "display-title emphasis is compiled into presentation data");
     try h.require(std.mem.eql(u8, exported_entry.get("title").?.string, "mouse"), "display title does not replace the canonical lookup key");
+    try h.require(std.mem.eql(u8, exported_entry.get("language_code").?.string, "en"), "language code comes from extracted canonical-name module metadata");
 
     std.debug.print(
         "BUNDLE_INTEGRATION_PASS checks={d}: destination refusal, incomplete failure marker, verified pre-expanded Lua/templates, data-only final tree. Artifacts: {s}\n",
