@@ -249,10 +249,14 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
     try table.rawSet(runtime.allocator, .{ .string = "subPageTitle" }, try runtime.newNative(ctx, subPageTitleCall));
     return .{ .table = table };
 }
-fn titleWithNamespace(a: std.mem.Allocator, text_raw: []const u8, namespace: ?Value) !?[]const u8 {
+fn titleWithNamespace(a: std.mem.Allocator, text_raw: []const u8, namespace: ?Value, force_namespace: bool) !?[]const u8 {
     const text = try normalizeName(a, text_raw);
     if (text.len == 0) return null;
     if (namespace == null or namespace.? == .nil) return @as(?[]const u8, try namespace_lib.canonicalizeTitle(a, text));
+    if (!force_namespace) if (std.mem.indexOfScalar(u8, text, ':')) |colon| {
+        if (namespaceSpecByName(text[0..colon]) != null)
+            return @as(?[]const u8, try namespace_lib.canonicalizeTitle(a, text));
+    };
     const spec = switch (namespace.?) {
         .number => |number| namespaceSpecById(@intFromFloat(@trunc(number))),
         .string => |name| namespaceSpecByName(name),
@@ -270,7 +274,7 @@ fn buildBatchTitles(runtime: *rt.Context, batch: *BatchState) !*rt.Table {
         const index: f64 = @floatFromInt(i + 1);
         const value = batch.source.rawGet(.{ .number = index }) orelse continue;
         if (value != .string) return error.StringExpected;
-        const title = try titleWithNamespace(runtime.allocator, value.string, batch.namespace) orelse continue;
+        const title = try titleWithNamespace(runtime.allocator, value.string, batch.namespace, false) orelse continue;
         try titles.rawSet(runtime.allocator, .{ .number = index }, try makeTitleValue(runtime, batch.title_state, title));
     }
     batch.titles = titles;
@@ -309,14 +313,14 @@ fn newBatchCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
 fn newCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
     if (args.len == 0 or args[0] != .string) return one(.nil);
-    const title = try titleWithNamespace(runtime.allocator, args[0].string, if (args.len > 1) args[1] else null) orelse return one(.nil);
+    const title = try titleWithNamespace(runtime.allocator, args[0].string, if (args.len > 1) args[1] else null, false) orelse return one(.nil);
     return one(try makeTitleValue(runtime, state, title));
 }
 
 fn makeCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
     if (args.len < 2 or args[1] != .string) return one(.nil);
-    const title = try titleWithNamespace(runtime.allocator, args[1].string, args[0]) orelse return one(.nil);
+    const title = try titleWithNamespace(runtime.allocator, args[1].string, args[0], true) orelse return one(.nil);
     return one(try makeTitleValue(runtime, state, title));
 }
 fn currentCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
@@ -493,6 +497,12 @@ test "AOT title constructors and current title use the live host" {
     const made2 = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Template:Thing" }});
     defer rt.freeResults(made2);
     try std.testing.expectEqualStrings("Template:Thing", (try runtime.getIndex(made[0], .{ .string = "prefixedText" })).string);
+    const defaulted_explicit = try callField(&runtime, .{ .table = title_lib }, "new", &.{ .{ .string = "Module:Thing" }, .{ .number = 10 } });
+    defer rt.freeResults(defaulted_explicit);
+    try std.testing.expectEqualStrings("Module:Thing", (try runtime.getIndex(defaulted_explicit[0], .{ .string = "prefixedText" })).string);
+    const forced_explicit = try callField(&runtime, .{ .table = title_lib }, "makeTitle", &.{ .{ .number = 10 }, .{ .string = "Module:Thing" } });
+    defer rt.freeResults(forced_explicit);
+    try std.testing.expectEqualStrings("Template:Module:Thing", (try runtime.getIndex(forced_explicit[0], .{ .string = "prefixedText" })).string);
     const equals = title_lib.rawGet(.{ .string = "equals" }).?;
     const same = try runtime.callValue(equals, &.{ made[0], made2[0] });
     defer rt.freeResults(same);

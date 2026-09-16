@@ -28,6 +28,8 @@ const module_source =
     \\    assert(shared_alias.id == 24 and shared_alias.redirectTarget.id == 23)
     \\    assert(mw.title.new('rat').contentModel == 'wikitext')
     \\    assert(mw.title.new('Module:IntegrationForms').contentModel == 'Scribunto')
+    \\    assert(mw.title.new('Module:IntegrationForms', 10).prefixedText == 'Module:IntegrationForms')
+    \\    assert(mw.title.makeTitle(10, 'Module:IntegrationForms').prefixedText == 'Template:Module:IntegrationForms')
     \\    assert(mw.title.new('Module:DefinitelyMissing').contentModel == 'Scribunto')
     \\    assert(mw.title.new('User:Example/common.css').contentModel == 'css')
     \\    assert(mw.hash.hashValue('md5', 'abc') == '900150983cd24fb0d6963f7d28e17f72')
