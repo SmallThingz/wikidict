@@ -22,6 +22,13 @@ fn notImplementedCall(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const
     return error.NotImplemented;
 }
 
+fn statsIndexCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len < 2 or args[1] != .string) return one(.nil);
+    inline for (.{ "pages", "articles", "files", "edits", "users", "activeUsers", "admins" }) |name|
+        if (std.mem.eql(u8, args[1].string, name)) return error.NotImplemented;
+    return one(.nil);
+}
+
 fn dumpObjectCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const text: []const u8 = if (args.len == 0) "nil" else switch (args[0]) {
         .nil => "nil",
@@ -217,7 +224,11 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const namespaces = try namespace_lib.makeTable(runtime);
     try site.rawSet(runtime.allocator, .{ .string = "namespaces" }, .{ .table = namespaces });
     const stats = try runtime.newTable();
-    try setNative(runtime, stats, "pagesInCategory", notImplementedCall);
+    inline for (.{ "pagesInCategory", "pagesInNamespace", "usersInGroup" }) |name|
+        try setNative(runtime, stats, name, notImplementedCall);
+    const stats_mt = try runtime.newTable();
+    try stats_mt.rawSet(runtime.allocator, .{ .string = "__index" }, try runtime.newNative(null, statsIndexCall));
+    stats.metatable = stats_mt;
     try site.rawSet(runtime.allocator, .{ .string = "stats" }, .{ .table = stats });
     try setNative(runtime, site, "interwikiMap", interwikiMapCall);
     try mw.rawSetNativeField(.mw, "site", .{ .table = site });
@@ -225,6 +236,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const wikibase = try runtime.newTable();
     inline for (.{
         "getEntity",
+        "getEntityIdForTitle",
         "getDescription",
         "getLabel",
         "getEntityIdForCurrentPage",
@@ -276,7 +288,7 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
 
     const wikibase = mw.rawGet(.{ .string = "wikibase" }).?.table;
     try std.testing.expect(wikibase.rawGet(.{ .string = "getEntity" }).? == .callable);
-    try std.testing.expect(wikibase.rawGet(.{ .string = "getEntityIdForTitle" }) == null);
+    try std.testing.expect(wikibase.rawGet(.{ .string = "getEntityIdForTitle" }).? == .callable);
     try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, "getEntity", &.{.{ .string = "Q1" }}));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
@@ -301,8 +313,12 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     const aliases = project.rawGet(.{ .string = "aliases" }).?.table;
     try std.testing.expectEqualStrings("WT", aliases.rawGet(.{ .number = 1 }).?.string);
     const stats = site.rawGet(.{ .string = "stats" }).?.table;
-    try std.testing.expect(stats.rawGet(.{ .string = "pagesInCategory" }).? == .callable);
+    inline for (.{ "pagesInCategory", "pagesInNamespace", "usersInGroup" }) |name|
+        try std.testing.expect(stats.rawGet(.{ .string = name }).? == .callable);
     try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = stats }, "pagesInCategory", &.{ .{ .string = "English nouns" }, .{ .string = "pages" } }));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+    try std.testing.expectError(error.AotCallFailed, runtime.getIndex(.{ .table = stats }, .{ .string = "pages" }));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
 }
