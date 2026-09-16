@@ -115,7 +115,8 @@ fn compileWorkerBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, ll
         "lua_globals",             stdlib_mod,                "--dep",
         "zig_runtime",             "--dep",                   "zig_stdlib",
         "--dep",                   "lua_wikitext_preprocess", "--dep",
-        "lua_wikitext_expression", scribunto_mod,             static_fields_mod,
+        "lua_wikitext_expression", "--dep",                   "shared_xml_decode",
+        scribunto_mod,             static_fields_mod,
         globals_mod,               preprocess_mod,            expression_mod,
         xml_decode_mod,
     });
