@@ -56,6 +56,7 @@ const module_source =
     \\    assert(official_uri.protocol == 'https' and official_uri.host == 'main.knesset.gov.il')
     \\    assert(official_uri.path == '/apps/smartprotocol/session/123/456' and official_uri.query.itemid == '7')
     \\    assert(type(mw.site.stats.pagesInCategory) == 'function')
+    \\    assert(tostring(mw.html.create('div'):tag('br'):allDone()) == '<div><br /></div>')
     \\    assert(mw.getContentLanguage():ucfirst('hello') == 'Hello')
     \\    local unicode_case_ok = pcall(function() return mw.getContentLanguage():ucfirst('éclair') end)
     \\    assert(not unicode_case_ok)

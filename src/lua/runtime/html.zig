@@ -15,6 +15,7 @@ const Node = struct {
     table: *rt.Table,
     parent: ?*Node,
     tag_name: ?[]const u8,
+    self_closing: bool = false,
     children: std.ArrayList(Child) = .empty,
     attrs: std.ArrayList(Pair) = .empty,
     styles: std.ArrayList(Pair) = .empty,
@@ -50,10 +51,39 @@ fn returnSelf(node: *Node, a: std.mem.Allocator) ![]const Value {
     return one(a, .{ .table = node.table });
 }
 
+fn selfClosingTag(name: []const u8) bool {
+    inline for (.{
+        "area", "base", "br", "col", "command", "embed", "hr", "img", "input", "keygen",
+        "link", "meta", "param", "source", "track", "wbr",
+    }) |tag| if (std.mem.eql(u8, name, tag)) return true;
+    return false;
+}
+
+fn validTagName(name: []const u8) bool {
+    if (name.len == 0) return true;
+    for (name) |ch| if (!std.ascii.isAlphanumeric(ch)) return false;
+    return true;
+}
+
+fn forcedSelfClosing(value: ?Value) !bool {
+    const option = value orelse return false;
+    if (option == .nil) return false;
+    if (option != .table) return error.HtmlOptionsExpected;
+    const raw = option.table.rawGet(.{ .string = "selfClosing" }) orelse return false;
+    return raw.truthy();
+}
+
 fn newNode(html: *Html, runtime: *rt.Context, parent: ?*Node, tag_name: ?[]const u8) !*Node {
+    if (tag_name) |name| if (!validTagName(name)) return error.InvalidHtmlTag;
     const node = try html.allocator.create(Node);
     const table = try runtime.newNativeNamespace(.html_node);
-    node.* = .{ .html = html, .table = table, .parent = parent, .tag_name = tag_name };
+    node.* = .{
+        .html = html,
+        .table = table,
+        .parent = parent,
+        .tag_name = if (tag_name) |name| if (name.len == 0) null else name else null,
+        .self_closing = if (tag_name) |name| selfClosingTag(name) else false,
+    };
     try html.nodes.put(html.allocator, table, node);
     return node;
 }
@@ -82,16 +112,25 @@ fn createCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
     const html: *Html = @ptrCast(@alignCast(ctx_raw.?));
     const tag_name: ?[]const u8 = if (args.len == 0 or args[0] == .nil) null else if (args[0] == .string) args[0].string else return error.HtmlTagExpected;
     const node = try newNode(html, runtime, null, tag_name);
+    node.self_closing = node.self_closing or try forcedSelfClosing(if (args.len > 1) args[1] else null);
     try installNodeMethods(node, runtime);
     return one(a, .{ .table = node.table });
 }
+
+fn appendChild(node: *Node, child: Child) !void {
+    if (node.self_closing) return error.HtmlSelfClosingHasChildren;
+    try node.children.append(node.html.allocator, child);
+}
+
 fn tagCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
     if (args.len < 2 or args[1] != .string) return error.HtmlTagExpected;
+    if (node.self_closing) return error.HtmlSelfClosingHasChildren;
     const child = try newNode(node.html, runtime, node, args[1].string);
+    child.self_closing = child.self_closing or try forcedSelfClosing(if (args.len > 2) args[2] else null);
     try installNodeMethods(child, runtime);
-    try node.children.append(node.html.allocator, .{ .node = child });
+    try appendChild(node, .{ .node = child });
     return one(a, .{ .table = child.table });
 }
 
@@ -113,7 +152,7 @@ fn wikitextCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
     for (args[1..]) |value| {
         if (value == .nil) continue;
-        try node.children.append(node.html.allocator, .{ .text = try scalarText(node.html.allocator, value) });
+        try appendChild(node, .{ .text = try scalarText(node.html.allocator, value) });
     }
     return returnSelf(node, a);
 }
@@ -122,10 +161,10 @@ fn nodeCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
     for (args[1..]) |value| switch (value) {
         .nil => {},
-        .string, .number, .boolean => try node.children.append(node.html.allocator, .{ .text = try scalarText(node.html.allocator, value) }),
+        .string, .number, .boolean => try appendChild(node, .{ .text = try scalarText(node.html.allocator, value) }),
         .table => |table| {
             const child = node.html.nodes.get(table) orelse return error.HtmlNodeExpected;
-            try node.children.append(node.html.allocator, .{ .node = child });
+            try appendChild(node, .{ .node = child });
         },
         else => return error.HtmlNodeExpected,
     };
@@ -178,7 +217,7 @@ fn attrCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
 fn newlineCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const a = runtime.allocator;
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
-    try node.children.append(node.html.allocator, .{ .text = "\n" });
+    try appendChild(node, .{ .text = "\n" });
     return returnSelf(node, a);
 }
 
@@ -239,6 +278,10 @@ fn renderNode(node: *Node, out: *std.ArrayList(u8)) !void {
             try appendStyleValue(node, &styles);
             try appendAttribute(out, a, "style", styles.items);
         }
+        if (node.self_closing) {
+            try out.appendSlice(a, " />");
+            return;
+        }
         try out.append(a, '>');
     }
     for (node.children.items) |child| switch (child) {
@@ -288,4 +331,30 @@ test "html builder chaining and serialization" {
     var out: std.ArrayList(u8) = .empty;
     try renderNode(root, &out);
     try std.testing.expectEqualStrings("<div class=\"box\" title=\"a&amp;b\" style=\"width:2px\"><span>wiki</span></div>", out.items);
+}
+
+test "html builder matches MediaWiki self-closing tag semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 0);
+    defer runtime.deinit();
+    const html = try a.create(Html);
+    html.* = .{ .allocator = a };
+
+    const root = try newNode(html, &runtime, null, "div");
+    const br = try newNode(html, &runtime, root, "br");
+    try appendChild(root, .{ .node = br });
+    try std.testing.expect(br.self_closing);
+    try std.testing.expectError(error.HtmlSelfClosingHasChildren, appendChild(br, .{ .text = "bad" }));
+
+    var out: std.ArrayList(u8) = .empty;
+    try renderNode(root, &out);
+    try std.testing.expectEqualStrings("<div><br /></div>", out.items);
+
+    const forced = try newNode(html, &runtime, null, "div");
+    forced.self_closing = true;
+    out.items.len = 0;
+    try renderNode(forced, &out);
+    try std.testing.expectEqualStrings("<div />", out.items);
 }
