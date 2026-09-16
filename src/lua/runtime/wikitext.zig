@@ -675,6 +675,35 @@ pub const Expander = struct {
         return uri_lib.anchorEncodeAlloc(self.runtime.allocator, value);
     }
 
+    fn expandTitleParts(self: *Expander, raw_title: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        if (args.len > 2) return error.UnsupportedTitlePartsArgument;
+        const title = try self.expandWikitext(raw_title, params, host_title, depth + 1);
+        var parts: std.ArrayList([]const u8) = .empty;
+        defer parts.deinit(self.runtime.allocator);
+        var it = std.mem.splitScalar(u8, title, '/');
+        while (it.next()) |part| try parts.append(self.runtime.allocator, part);
+
+        const count: i64 = if (args.len == 0) 0 else blk: {
+            const text = std.mem.trim(u8, try self.expandWikitext(args[0], params, host_title, depth + 1), " \t\r\n");
+            break :blk if (text.len == 0) 0 else std.fmt.parseInt(i64, text, 10) catch return error.InvalidTitlePartsCount;
+        };
+        const first: i64 = if (args.len < 2) 1 else blk: {
+            const text = std.mem.trim(u8, try self.expandWikitext(args[1], params, host_title, depth + 1), " \t\r\n");
+            break :blk if (text.len == 0) 1 else std.fmt.parseInt(i64, text, 10) catch return error.InvalidTitlePartsOffset;
+        };
+        const total: i64 = @intCast(parts.items.len);
+        const start = if (first > 0) first - 1 else if (first < 0) total + first else 0;
+        if (start < 0 or start >= total) return "";
+        const end = if (count > 0)
+            @min(total, std.math.add(i64, start, count) catch total)
+        else if (count < 0)
+            @max(start, total + count)
+        else
+            total;
+        if (end <= start) return "";
+        return std.mem.join(self.runtime.allocator, "/", parts.items[@intCast(start)..@intCast(end)]);
+    }
+
     fn expandExprParser(self: *Expander, raw: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const expanded = std.mem.trim(u8, try self.expandWikitext(raw, params, host_title, depth + 1), " \t\r\n");
         const value = parser_expr.eval(self.runtime.allocator, expanded) catch |err| return self.exprError(err);
@@ -867,6 +896,7 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "padright")) return self.expandPadParser(first, parts.items[1..], params, host_title, depth + 1, false);
             if (std.ascii.eqlIgnoreCase(name, "#time")) return self.expandTimeParser(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#sub")) return self.expandSubParser(first, parts.items[1..], params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#titleparts")) return self.expandTitleParts(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#iferror")) return self.expandIfError(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#invoke")) return self.expandInvoke(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#if")) {
@@ -1205,6 +1235,19 @@ test "bundle parser functions cover corpus time sub and iferror forms" {
     const dated = try runtime.callValue(parser, &.{ frame, .{ .string = "#time" }, .{ .string = "Y-m-d" }, .{ .string = "2023-4-2 +8 days" } });
     defer rt.freeResults(dated);
     try std.testing.expectEqualStrings("2023-04-10", dated[0].string);
+}
+
+test "bundle titleparts matches MediaWiki segment slicing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    const got = try expander.expandFragment("Page", "{{#titleparts:A/B/C|1}}|{{#titleparts:A/B/C|1|2}}|{{#titleparts:A/B/C|2|1}}|{{#titleparts:A/B/C|-1}}|{{#titleparts:A/B/C|1|-1}}|{{#titleparts:A/B/C|0|2}}|{{#titleparts:A/B/C|2|-2}}|{{#titleparts:A//C|3|1}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("A|B|A/B|A/B|C|B/C|B/C|A//C", got);
 }
 
 test "missing bundle interwiki metadata fails explicitly" {
