@@ -121,6 +121,17 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         const title = try titleForSpec(runtime, spec, ns.text);
         return one(try makeTitleValue(runtime, state, title));
     }
+    if (std.mem.eql(u8, key, "basePageTitle") or std.mem.eql(u8, key, "rootPageTitle")) {
+        const spec = namespaceSpecById(ns.id) orelse return one(.nil);
+        const text = if (!spec.has_subpages)
+            ns.text
+        else if (std.mem.eql(u8, key, "basePageTitle"))
+            if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text
+        else
+            if (std.mem.indexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
+        const title = try titleForSpec(runtime, spec, text);
+        return one(try makeTitleValue(runtime, state, title));
+    }
     if (std.mem.eql(u8, key, "id")) {
         const host = host_api.get(runtime) orelse return one(.{ .number = 0 });
         const id = if (host.page_id) |get| try get(host.ctx, prefixed.string) else null;
@@ -171,7 +182,16 @@ fn pageExists(runtime: *rt.Context, title: []const u8) !bool {
     return false;
 }
 
-const TitleCtx = struct { title: []const u8 };
+const TitleCtx = struct { title: []const u8, state: *State };
+
+fn subPageTitleCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const ctx: *TitleCtx = @ptrCast(@alignCast(raw orelse return error.MissingTitleContext));
+    if (args.len < 2 or args[1] != .string) return one(.nil);
+    const ns = namespaceOf(ctx.title);
+    const text = try std.fmt.allocPrint(runtime.allocator, "{s}/{s}", .{ ns.text, args[1].string });
+    const title = try titleForSpec(runtime, namespaceSpecById(ns.id) orelse return error.InvalidNamespace, text);
+    return one(try makeTitleValue(runtime, ctx.state, title));
+}
 
 fn getContentCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const ctx: *TitleCtx = @ptrCast(@alignCast(raw orelse return error.MissingTitleContext));
@@ -189,8 +209,9 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
     const fragment_raw = if (hash) |pos| title[pos + 1 ..] else "";
     const fragment = try normalizeFragment(runtime.allocator, fragment_raw);
     const ns = namespaceOf(base_title);
-    const slash = std.mem.lastIndexOfScalar(u8, ns.text, '/');
-    const first_slash = std.mem.indexOfScalar(u8, ns.text, '/');
+    const ns_spec = namespaceSpecById(ns.id) orelse return error.InvalidNamespace;
+    const slash = if (ns_spec.has_subpages) std.mem.lastIndexOfScalar(u8, ns.text, '/') else null;
+    const first_slash = if (ns_spec.has_subpages) std.mem.indexOfScalar(u8, ns.text, '/') else null;
     try table.rawSetNativeField(.title_value, "text", .{ .string = ns.text });
     try table.rawSetNativeField(.title_value, "prefixedText", .{ .string = base_title });
     try table.rawSetNativeField(.title_value, "__fragment", .{ .string = fragment });
@@ -204,8 +225,9 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
     try table.rawSetNativeField(.title_value, "exists", .{ .boolean = try pageExists(runtime, base_title) });
     table.metatable = try ensureMetatable(runtime, state);
     const ctx = try runtime.allocator.create(TitleCtx);
-    ctx.* = .{ .title = base_title };
+    ctx.* = .{ .title = base_title, .state = state };
     try table.rawSetNativeField(.title_value, "getContent", try runtime.newNative(ctx, getContentCall));
+    try table.rawSet(runtime.allocator, .{ .string = "subPageTitle" }, try runtime.newNative(ctx, subPageTitleCall));
     return .{ .table = table };
 }
 fn titleWithNamespace(a: std.mem.Allocator, text_raw: []const u8, namespace: ?Value) !?[]const u8 {
@@ -342,6 +364,14 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     try std.testing.expectEqualStrings("Sub", (try runtime.getIndex(title, .{ .string = "subpageText" })).string);
     try std.testing.expectEqualStrings("Foo", (try runtime.getIndex(title, .{ .string = "baseText" })).string);
     try std.testing.expect((try runtime.getIndex(title, .{ .string = "isSubpage" })).boolean);
+    const base_page = try runtime.getIndex(title, .{ .string = "basePageTitle" });
+    try std.testing.expectEqualStrings("Template:Foo", (try runtime.getIndex(base_page, .{ .string = "prefixedText" })).string);
+    const root_page = try runtime.getIndex(title, .{ .string = "rootPageTitle" });
+    try std.testing.expectEqualStrings("Template:Foo", (try runtime.getIndex(root_page, .{ .string = "prefixedText" })).string);
+    const sub_page_fn = try runtime.getIndex(title, .{ .string = "subPageTitle" });
+    const sub_page = try runtime.callValue(sub_page_fn, &.{ title, .{ .string = "Next" } });
+    defer rt.freeResults(sub_page);
+    try std.testing.expectEqualStrings("Template:Foo/Sub/Next", (try runtime.getIndex(sub_page[0], .{ .string = "prefixedText" })).string);
     try std.testing.expect((try runtime.getIndex(title, .{ .string = "exists" })).boolean);
     try std.testing.expectEqual(@as(f64, 77), (try runtime.getIndex(title, .{ .string = "id" })).number);
     try std.testing.expectEqualStrings(" frag ment", (try runtime.getIndex(title, .{ .string = "fragment" })).string);
@@ -389,6 +419,25 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     try std.testing.expectEqualStrings("template body", content[0].string);
     try runtime.setIndex(title, .{ .string = "fragment" }, .{ .string = " next_part " });
     try std.testing.expectEqualStrings(" next part", (try runtime.getIndex(title, .{ .string = "fragment" })).string);
+}
+
+test "AOT title subpage fields respect namespace settings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const mw = try runtime.newNativeNamespace(.mw);
+    try install(&runtime, mw);
+    const title_lib = mw.rawGet(.{ .string = "title" }).?.table;
+    const made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "foo/bar" }});
+    defer rt.freeResults(made);
+    const title = made[0];
+    try std.testing.expect(!(try runtime.getIndex(title, .{ .string = "isSubpage" })).boolean);
+    try std.testing.expectEqualStrings("foo/bar", (try runtime.getIndex(title, .{ .string = "baseText" })).string);
+    try std.testing.expectEqualStrings("foo/bar", (try runtime.getIndex(title, .{ .string = "rootText" })).string);
+    try std.testing.expectEqualStrings("foo/bar", (try runtime.getIndex(title, .{ .string = "subpageText" })).string);
+    const base = try runtime.getIndex(title, .{ .string = "basePageTitle" });
+    try std.testing.expectEqualStrings("foo/bar", (try runtime.getIndex(base, .{ .string = "prefixedText" })).string);
 }
 
 test "AOT title constructors and current title use the live host" {

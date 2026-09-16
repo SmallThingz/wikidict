@@ -397,17 +397,27 @@ pub const Expander = struct {
         else
             canonical_with_fragment;
         const ns = namespace_lib.ofTitle(page);
+        const ns_spec = namespace_lib.byId(ns.id) orelse return error.InvalidNamespace;
         if (std.ascii.eqlIgnoreCase(base_name, "NAMESPACENUMBER")) return self.formatMagic("{d}", .{ns.id});
         const value: []const u8 = result: {
             if (std.ascii.eqlIgnoreCase(base_name, "PAGENAME")) break :result ns.text;
             if (std.ascii.eqlIgnoreCase(base_name, "FULLPAGENAME")) break :result page;
             if (std.ascii.eqlIgnoreCase(base_name, "NAMESPACE")) break :result ns.name;
             if (std.ascii.eqlIgnoreCase(base_name, "BASEPAGENAME"))
-                break :result if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
+                break :result if (ns_spec.has_subpages)
+                    (if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text)
+                else
+                    ns.text;
             if (std.ascii.eqlIgnoreCase(base_name, "ROOTPAGENAME"))
-                break :result if (std.mem.indexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
+                break :result if (ns_spec.has_subpages)
+                    (if (std.mem.indexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text)
+                else
+                    ns.text;
             if (std.ascii.eqlIgnoreCase(base_name, "SUBPAGENAME"))
-                break :result if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[slash + 1 ..] else ns.text;
+                break :result if (ns_spec.has_subpages)
+                    (if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[slash + 1 ..] else ns.text)
+                else
+                    ns.text;
 
             const subject = namespace_lib.subjectSpec(ns.id) orelse break :result "";
             if (std.ascii.eqlIgnoreCase(base_name, "SUBJECTSPACE") or std.ascii.eqlIgnoreCase(base_name, "ARTICLESPACE"))
@@ -1358,6 +1368,8 @@ test "bundle title magic words resolve subject talk and parameterized namespaces
     const source = "{{PAGENAME}}|{{FULLPAGENAME}}|{{NAMESPACE}}|{{NAMESPACENUMBER}}|{{BASEPAGENAME}}|{{ROOTPAGENAME}}|{{SUBPAGENAME}}|{{SUBJECTSPACE}}|{{TALKSPACE}}|{{SUBJECTPAGENAME}}|{{TALKPAGENAME}}|{{SUBJECTSPACE:Wiktionary talk:Foo}}|{{TALKSPACE:WT:Foo}}|{{TALKPAGENAME:Template:Foo}}|{{SUBJECTPAGENAME:Template talk:Foo}}";
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Page/Sub|Appendix:Page/Sub|Appendix|100|Page|Page|Sub|Appendix|Appendix talk|Appendix:Page/Sub|Appendix talk:Page/Sub|Wiktionary|Wiktionary talk|Template talk:Foo|Template:Foo", got);
+    const slash_semantics = try expander.expandFragment("foo/bar", "{{PAGENAME}}|{{BASEPAGENAME}}|{{ROOTPAGENAME}}|{{SUBPAGENAME}}|{{BASEPAGENAME:Template:foo/bar}}|{{BASEPAGENAME:Category:foo/bar}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("foo/bar|foo/bar|foo/bar|foo/bar|foo|foo/bar", slash_semantics);
     const escaped = try expander.expandFragment(
         "Appendix:A B/é?x",
         "{{PAGENAMEE}}|{{FULLPAGENAMEE}}|{{NAMESPACEE}}|{{BASEPAGENAMEE}}|{{ROOTPAGENAMEE}}|{{SUBPAGENAMEE}}|{{SUBJECTSPACEE}}|{{TALKSPACEE}}|{{SUBJECTPAGENAMEE}}|{{TALKPAGENAMEE}}|{{ARTICLESPACEE}}|{{ARTICLEPAGENAMEE}}",
