@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -24,7 +25,8 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f)) {
                 Text(entry.language ?: entry.kind.replace('_', ' '), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(entry.title, style = MaterialTheme.typography.displayMedium)
+                if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, style = MaterialTheme.typography.displayMedium)
+                else Text(entry.title, style = MaterialTheme.typography.displayMedium)
             }
             IconButton(onClick = onBookmark) { Icon(if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, if (bookmarked) "Remove bookmark" else "Bookmark") }
         }
@@ -88,7 +90,7 @@ private fun TableView(table: Table) {
     }
 }
 @Composable
-private fun StyledText(spans: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null) {
+private fun StyledText(spans: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge) {
     val annotated = buildAnnotatedString {
         spans.forEach { span ->
             val start = length
@@ -106,5 +108,5 @@ private fun StyledText(spans: List<Span>, modifier: Modifier = Modifier, weight:
             ), start, length)
         }
     }
-    Text(annotated, modifier = modifier, style = MaterialTheme.typography.bodyLarge)
+    Text(annotated, modifier = modifier, style = style)
 }
