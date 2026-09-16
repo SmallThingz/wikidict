@@ -176,24 +176,30 @@ pub fn balanced(text: []const u8, start: usize) ?Pair {
 /// A logical line may span physical newlines inside templates, comments or protected tags.
 pub fn logicalEnd(text: []const u8, start: usize) usize {
     var i = start;
+    var line_end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
     while (i < text.len) {
-        if (text[i] == '\n') return i;
+        if (i >= line_end) return line_end;
+        const relative = std.mem.indexOfAny(u8, text[i..line_end], "<[{") orelse return line_end;
+        i += relative;
+        var skip_to: ?usize = null;
         if (text[i] == '<') {
             if (protectedEnd(text, i)) |end| {
-                i = end;
-                continue;
-            }
-            if (tagAt(text, i)) |tag| if (!tag.closing and isMultilineContainerTag(tag.name)) {
-                if (matchingTag(text, tag)) |pair| {
-                    i = pair.end;
-                    continue;
+                skip_to = end;
+            } else if (tagAt(text, i)) |tag| {
+                if (!tag.closing and isMultilineContainerTag(tag.name)) {
+                    if (matchingTag(text, tag)) |pair| skip_to = pair.end;
                 }
-            };
+            }
+        } else if ((text[i] == '{' and starts(text[i..], "{{")) or
+            (text[i] == '[' and starts(text[i..], "[[")))
+        {
+            if (balanced(text, i)) |pair| skip_to = pair.end;
         }
-        if (starts(text[i..], "{{") or starts(text[i..], "[[")) if (balanced(text, i)) |pair| {
-            i = pair.end;
+        if (skip_to) |end| {
+            i = end;
+            if (end > line_end) line_end = std.mem.indexOfScalarPos(u8, text, end, '\n') orelse text.len;
             continue;
-        };
+        }
         i += 1;
     }
     return i;

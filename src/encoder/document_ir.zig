@@ -201,6 +201,11 @@ pub const InlineIterator = struct {
             }
             const start = self.cursor;
             while (self.cursor < self.input.len) {
+                const relative = std.mem.indexOfAny(u8, self.input[self.cursor..], "{[<'") orelse {
+                    self.cursor = self.input.len;
+                    break;
+                };
+                self.cursor += relative;
                 const rest = self.input[self.cursor..];
                 if (std.mem.startsWith(u8, rest, "{{{")) {
                     if (syntax.balanced(self.input, self.cursor)) |pair| {
@@ -355,7 +360,6 @@ pub fn classifyLine(line: []const u8) DecodedBlock {
         .list_path = path[0..@min(prefix, std.math.maxInt(u8))],
     };
 }
-
 
 const ParsedTemplate = struct {
     end: usize,
