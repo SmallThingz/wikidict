@@ -82,6 +82,9 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const site = try runtime.newTable();
     const namespaces = try namespace_lib.makeTable(runtime);
     try site.rawSet(runtime.allocator, .{ .string = "namespaces" }, .{ .table = namespaces });
+    const stats = try runtime.newTable();
+    try setNative(runtime, stats, "pagesInCategory", notImplementedCall);
+    try site.rawSet(runtime.allocator, .{ .string = "stats" }, .{ .table = stats });
     try setNative(runtime, site, "interwikiMap", interwikiMapCall);
     try mw.rawSetNativeField(.mw, "site", .{ .table = site });
 
@@ -142,6 +145,11 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     try std.testing.expectEqualStrings("Project", project.rawGet(.{ .string = "canonicalName" }).?.string);
     const aliases = project.rawGet(.{ .string = "aliases" }).?.table;
     try std.testing.expectEqualStrings("WT", aliases.rawGet(.{ .number = 1 }).?.string);
+    const stats = site.rawGet(.{ .string = "stats" }).?.table;
+    try std.testing.expect(stats.rawGet(.{ .string = "pagesInCategory" }).? == .callable);
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = stats }, "pagesInCategory", &.{ .{ .string = "English nouns" }, .{ .string = "pages" } }));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
 }
 
 const InterwikiProbe = struct {
