@@ -60,7 +60,7 @@ const ustring_names = [_][]const u8{
     "toNFKD",
 };
 const title_names = names[71..77];
-const text_names = names[77..90];
+const text_names = [_][]const u8{ "trim", "split", "gsplit", "unstrip", "unstripNoWiki", "killMarkers", "listToText", "nowiki", "jsonEncode", "jsonDecode", "tag", "truncate", "encode", "decode" };
 const uri_names = [_][]const u8{ "fullUrl", "localUrl", "canonicalUrl", "encode", "decode", "anchorEncode", "new", "validate" };
 const html_names = names[94..95];
 const language_names = [_][]const u8{ "new", "getContentLanguage", "getFallbacksFor", "isKnownLanguageTag", "fetchLanguageName" };
@@ -86,7 +86,7 @@ fn namespaceNames(namespace: Namespace) []const []const u8 {
         .mw => &mw_names,
         .ustring => &ustring_names,
         .title => title_names,
-        .text => text_names,
+        .text => &text_names,
         .uri => &uri_names,
         .html => html_names,
         .language => &language_names,
@@ -121,7 +121,7 @@ pub fn slotForName(namespace: Namespace, field_name: []const u8) ?u32 {
         .mw => staticSlot(&mw_names, field_name),
         .ustring => staticSlot(&ustring_names, field_name),
         .title => staticSlot(title_names, field_name),
-        .text => staticSlot(text_names, field_name),
+        .text => staticSlot(&text_names, field_name),
         .uri => staticSlot(&uri_names, field_name),
         .html => staticSlot(html_names, field_name),
         .language => staticSlot(&language_names, field_name),

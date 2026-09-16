@@ -394,7 +394,7 @@ test "AOT mw.text split and gsplit preserve Unicode and empty fields" {
     try std.testing.expectEqual(@as(usize, 0), done.len);
 }
 
-test "AOT mw.text trim listToText truncate encode tag and nowiki match Scribunto behavior" {
+test "AOT mw.text trim listToText truncate encode tag killMarkers and nowiki match Scribunto behavior" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var runtime = try makeMovedHostContext(arena.allocator());
@@ -448,6 +448,12 @@ test "AOT mw.text trim listToText truncate encode tag and nowiki match Scribunto
     const self_closed = try callField(&runtime, text, "tag", &.{ .{ .string = "br" }, .nil, .{ .boolean = false } });
     defer rt.freeResults(self_closed);
     try std.testing.expectEqualStrings("<br />", self_closed[0].string);
+    const killed = try callField(&runtime, text, "killMarkers", &.{.{ .string = "a\x7f'\"`UNIQ--nowiki-00000000-QINU`\"'\x7fb" }});
+    defer rt.freeResults(killed);
+    try std.testing.expectEqualStrings("ab", killed[0].string);
+    const malformed_marker = try callField(&runtime, text, "killMarkers", &.{.{ .string = "a\x7f'\"`UNIQ---QINU`\"'\x7fb" }});
+    defer rt.freeResults(malformed_marker);
+    try std.testing.expectEqualStrings("a\x7f'\"`UNIQ---QINU`\"'\x7fb", malformed_marker[0].string);
 
     inline for (.{
         .{ "[[x|y]]", "&#91;&#91;x&#124;y&#93;&#93;" },

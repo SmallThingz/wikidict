@@ -60,6 +60,8 @@ const module_source =
     \\    assert(mw.text.encode('a&b') == 'a&amp;b')
     \\    assert(mw.text.tag('div', {class = 'chart'}, 'x') == '<div class=\"chart\">x</div>')
     \\    assert(mw.text.tag('div', {class = 'chart'}) == '<div class=\"chart\">')
+    \\    local strip_marker = frame:extensionTag('nowiki', 'hidden')
+    \\    assert(mw.text.killMarkers('a' .. strip_marker .. 'b') == 'ab')
     \\    assert(mw.getContentLanguage():ucfirst('hello') == 'Hello')
     \\    local unicode_case_ok = pcall(function() return mw.getContentLanguage():ucfirst('éclair') end)
     \\    assert(not unicode_case_ok)
