@@ -854,6 +854,7 @@ pub const Context = struct {
     }
 
     pub fn requireByName(self: *Context, raw_name: []const u8) anyerror!Value {
+        if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
         return self.requireModuleId(try self.resolveModule(raw_name), raw_name);
     }
 
@@ -1212,6 +1213,8 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     ctx.module_root_entries = &functions;
     ctx.configureModules(null, ModuleRuntimeProbe.lookup, ModuleRuntimeProbe.name);
     ctx.package_loaded = try ctx.newTable();
+    try ctx.package_loaded.?.rawSet(ctx.allocator, .{ .string = "builtin" }, .{ .string = "preloaded" });
+    try std.testing.expectEqualStrings("preloaded", (try ctx.requireByName("builtin")).string);
     try ctx.ensureModule(0);
     try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
     try std.testing.expectEqualStrings("Module:A", ctx.package_loaded.?.rawGet(.{ .string = "Module:A" }).?.string);

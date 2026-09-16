@@ -16,6 +16,9 @@ const source =
     "# Revision metadata: {{PAGEID}} / {{REVISIONID}} / {{REVISIONTIMESTAMP}} / {{REVISIONUSER}} / {{PAGEID:rat}} / {{REVISIONUSER:rat}}\n";
 const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
+    \\local bit32 = require('bit32')
+    \\assert(bit32.band(240, 60) == 48 and bit32.bor(16, 3, 64) == 83)
+    \\assert(require('bit32') == bit32)
     \\local alias_name = 'Module:IntegrationFormsAlias'
     \\assert(require(alias_name).mouse == 'mice')
     \\return {

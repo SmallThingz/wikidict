@@ -905,12 +905,41 @@ fn addMath(runtime: *rt.Context, t: *rt.Table, name: []const u8, op: MathOp) !vo
     try t.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(ctx, mathUnary));
 }
 
+fn bit32Value(value: Value) !u32 {
+    const number = try num(value);
+    if (!std.math.isFinite(number)) return error.NumberExpected;
+    const modulus: f64 = 4294967296.0;
+    const floored = @floor(number);
+    const wrapped = floored - @floor(floored / modulus) * modulus;
+    return @intFromFloat(wrapped);
+}
+
+fn bit32Band(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    var result: u32 = std.math.maxInt(u32);
+    for (args) |arg| result &= try bit32Value(arg);
+    return one(ctx.allocator, .{ .number = @floatFromInt(result) });
+}
+
+fn bit32Bor(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    var result: u32 = 0;
+    for (args) |arg| result |= try bit32Value(arg);
+    return one(ctx.allocator, .{ .number = @floatFromInt(result) });
+}
+
+fn makeBit32(runtime: *rt.Context) !*rt.Table {
+    const bit32 = try runtime.newTable();
+    try setNative(runtime, bit32, "band", bit32Band);
+    try setNative(runtime, bit32, "bor", bit32Bor);
+    return bit32;
+}
+
 fn installPackage(runtime: *rt.Context) !void {
     const package = try runtime.newTable();
     const loaded = try runtime.newTable();
     const loaders = try runtime.newTable();
     try package.rawSet(runtime.allocator, .{ .string = "loaded" }, .{ .table = loaded });
     try package.rawSet(runtime.allocator, .{ .string = "loaders" }, .{ .table = loaders });
+    try loaded.rawSet(runtime.allocator, .{ .string = "bit32" }, .{ .table = try makeBit32(runtime) });
     const loader_state = try runtime.allocator.create(MainModuleLoaderCtx);
     loader_state.* = .{ .cache = try runtime.newTable() };
     try loaders.rawSet(runtime.allocator, .{ .number = 2 }, try runtime.newNative(loader_state, mainModuleLoader));
@@ -1121,6 +1150,18 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     try std.testing.expect(loaded == .table and ctx.package_loaded == loaded.table);
     const require = ctx.getGlobal(global_abi.id("require"));
     try std.testing.expect(require == .callable);
+    const bit32_result = try ctx.callValue(require, &.{.{ .string = "bit32" }});
+    defer rt.freeResults(bit32_result);
+    try std.testing.expect(bit32_result.len == 1 and bit32_result[0] == .table);
+    const band = try callField(&ctx, bit32_result[0], "band", &.{ .{ .number = 0xF0 }, .{ .number = 0x3C } });
+    defer rt.freeResults(band);
+    try std.testing.expectEqual(@as(f64, 0x30), band[0].number);
+    const bor = try callField(&ctx, bit32_result[0], "bor", &.{ .{ .number = 0x10 }, .{ .number = 0x03 }, .{ .number = 0x40 } });
+    defer rt.freeResults(bor);
+    try std.testing.expectEqual(@as(f64, 0x53), bor[0].number);
+    const wrapped = try callField(&ctx, bit32_result[0], "band", &.{ .{ .number = -1 }, .{ .number = 0xFF } });
+    defer rt.freeResults(wrapped);
+    try std.testing.expectEqual(@as(f64, 0xFF), wrapped[0].number);
     try std.testing.expectError(error.AotCallFailed, ctx.callValue(require, &.{.{ .string = "Module:Missing" }}));
     try std.testing.expectEqualStrings("ModuleNotFound", ctx.aotErrorName().?);
     ctx.clearAotErrorName();
