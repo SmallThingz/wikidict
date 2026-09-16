@@ -31,6 +31,14 @@ const module_source =
     \\    assert(mw.title.new('rat').contentModel == 'wikitext')
     \\    assert(mw.title.new('rat').isContentPage and not mw.title.new('Appendix:IntegrationFixture').isContentPage and not mw.title.new('Template:show-forms').isContentPage)
     \\    assert(not mw.title.new('rat').isExternal and mw.title.new('rat').isLocal)
+    \\    local seen_namespaces, namespace_count = {}, 0
+    \\    for id, namespace in next, mw.site.namespaces do
+    \\        assert(type(id) == 'number' and not seen_namespaces[namespace])
+    \\        seen_namespaces[namespace], namespace_count = true, namespace_count + 1
+    \\    end
+    \\    assert(namespace_count > 30)
+    \\    assert(mw.site.namespaces.Template == mw.site.namespaces[10])
+    \\    assert(mw.site.namespaces.user_talk == mw.site.namespaces[3])
     \\    local user_title = mw.title.new('User:Example')
     \\    assert(user_title:inNamespace('User') and user_title:inNamespace(2) and not user_title:inNamespace('Module'))
     \\    local parameters_title = mw.title.new('Module:parameters')

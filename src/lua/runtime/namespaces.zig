@@ -80,11 +80,20 @@ pub fn byId(id: i32) ?Spec {
     return null;
 }
 
+fn nameEqual(raw: []const u8, expected: []const u8) bool {
+    if (raw.len != expected.len) return false;
+    for (raw, expected) |lhs_raw, rhs_raw| {
+        const lhs = if (lhs_raw == '_') ' ' else lhs_raw;
+        if (std.ascii.toLower(lhs) != std.ascii.toLower(rhs_raw)) return false;
+    }
+    return true;
+}
+
 pub fn byName(name: []const u8) ?Spec {
     if (name.len == 0) return byId(0);
     for (all) |spec| {
-        if (std.ascii.eqlIgnoreCase(name, spec.name) or std.ascii.eqlIgnoreCase(name, spec.canonical_name)) return spec;
-        for (spec.aliases) |alias| if (std.ascii.eqlIgnoreCase(name, alias)) return spec;
+        if (nameEqual(name, spec.name) or nameEqual(name, spec.canonical_name)) return spec;
+        for (spec.aliases) |alias| if (nameEqual(name, alias)) return spec;
     }
     return null;
 }
@@ -135,12 +144,24 @@ pub fn canonicalizeTitle(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
     return out;
 }
 
+fn one(value: rt.Value) ![]const rt.Value {
+    const out = try std.heap.smp_allocator.alloc(rt.Value, 1);
+    out[0] = value;
+    return out;
+}
+
+fn namespaceIndexCall(_: ?*anyopaque, _: *rt.Context, args: []const rt.Value) ![]const rt.Value {
+    if (args.len < 2 or args[0] != .table or args[1] != .string) return one(.nil);
+    const spec = byName(args[1].string) orelse return one(.nil);
+    return one(args[0].table.rawGet(.{ .number = @floatFromInt(spec.id) }) orelse .nil);
+}
+
 pub fn makeTable(runtime: *rt.Context) !*rt.Table {
     // IDs 1..15 are the dense prefix produced by this namespace catalog.
     // The namespace objects and their fixed slots have page lifetime, so allocate
     // them in contiguous arena-backed batches instead of ~2 allocations per object.
     const namespaces = try runtime.newArrayTable(16);
-    try namespaces.map.ensureTotalCapacity(runtime.allocator, @intCast(all.len * 2));
+    try namespaces.map.ensureTotalCapacity(runtime.allocator, @intCast(all.len));
     const entries = try runtime.allocator.alloc(rt.Table, all.len);
     const entry_slots = try runtime.allocator.alloc(rt.Value, all.len * entry_keys.len);
     const alias_tables = try runtime.allocator.alloc(rt.Table, all.len);
@@ -167,8 +188,10 @@ pub fn makeTable(runtime: *rt.Context) !*rt.Table {
         slots[3] = .{ .boolean = spec.has_subpages };
         slots[4] = .{ .table = aliases };
         try namespaces.rawSet(runtime.allocator, .{ .number = @floatFromInt(spec.id) }, .{ .table = value });
-        if (spec.name.len != 0) try namespaces.rawSet(runtime.allocator, .{ .string = spec.name }, .{ .table = value });
     }
+    const metatable = try runtime.newTable();
+    try metatable.rawSet(runtime.allocator, .{ .string = "__index" }, try runtime.newNative(null, namespaceIndexCall));
+    namespaces.metatable = metatable;
     std.debug.assert(alias_offset == alias_slots.len);
     return namespaces;
 }
@@ -176,6 +199,7 @@ pub fn makeTable(runtime: *rt.Context) !*rt.Table {
 test "Wiktionary namespace lookup preserves canonical names and aliases" {
     try std.testing.expectEqual(@as(i32, 4), byName("WT").?.id);
     try std.testing.expectEqual(@as(i32, 4), byName("Project").?.id);
+    try std.testing.expectEqual(@as(i32, 3), byName("user_talk").?.id);
     try std.testing.expectEqual(@as(i32, 828), byName("MOD").?.id);
     try std.testing.expectEqual(@as(i32, 4), subjectSpec(5).?.id);
     try std.testing.expectEqual(@as(i32, 5), talkSpec(4).?.id);
@@ -199,6 +223,20 @@ test "namespace entry shapes remain open and mutable" {
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
     const namespaces = try makeTable(&runtime);
+    var namespace_count: usize = 0;
+    var namespace_it = namespaces.iterator();
+    while (namespace_it.next()) |entry| {
+        try std.testing.expect(entry.key_ptr.* == .number);
+        namespace_count += 1;
+    }
+    try std.testing.expectEqual(all.len, namespace_count);
+    try std.testing.expect(namespaces.rawGet(.{ .string = "Template" }) == null);
+    const template_by_name = try runtime.getIndex(.{ .table = namespaces }, .{ .string = "template" });
+    try std.testing.expect(template_by_name == .table);
+    try std.testing.expect(template_by_name.table == namespaces.rawGet(.{ .number = 10 }).?.table);
+    const user_talk = try runtime.getIndex(.{ .table = namespaces }, .{ .string = "User_talk" });
+    try std.testing.expect(user_talk == .table);
+    try std.testing.expectEqual(@as(f64, 3), user_talk.table.rawGet(.{ .string = "id" }).?.number);
     const template = namespaces.rawGet(.{ .number = 10 }).?.table;
     try template.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = "Changed" });
     try std.testing.expectEqualStrings("Changed", template.rawGet(.{ .string = "name" }).?.string);

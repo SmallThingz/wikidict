@@ -320,7 +320,8 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     const namespaces = site.rawGet(.{ .string = "namespaces" }).?.table;
     const template = namespaces.rawGet(.{ .number = 10 }).?.table;
     try std.testing.expectEqualStrings("Template", template.rawGet(.{ .string = "name" }).?.string);
-    try std.testing.expect(namespaces.rawGet(.{ .string = "Template" }).?.table == template);
+    const template_by_name = try runtime.getIndex(.{ .table = namespaces }, .{ .string = "Template" });
+    try std.testing.expect(template_by_name == .table and template_by_name.table == template);
     const project = namespaces.rawGet(.{ .number = 4 }).?.table;
     try std.testing.expectEqualStrings("Project", project.rawGet(.{ .string = "canonicalName" }).?.string);
     const aliases = project.rawGet(.{ .string = "aliases" }).?.table;
