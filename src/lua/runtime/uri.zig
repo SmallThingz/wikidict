@@ -8,6 +8,13 @@ fn one(_: std.mem.Allocator, value: Value) ![]const Value {
     return out;
 }
 
+fn two(_: std.mem.Allocator, first: Value, second: Value) ![]const Value {
+    const out = try std.heap.smp_allocator.alloc(Value, 2);
+    out[0] = first;
+    out[1] = second;
+    return out;
+}
+
 fn appendAnchorEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []const u8) !void {
     var i: usize = 0;
     var pending_separator = false;
@@ -175,6 +182,232 @@ fn buildQueryArgument(runtime: *rt.Context, value: Value) !?[]const u8 {
     return @as([]const u8, owned);
 }
 
+fn containsAny(source: []const u8, chars: []const u8) bool {
+    return std.mem.indexOfAny(u8, source, chars) != null;
+}
+
+fn firstAny(source: []const u8, chars: []const u8) ?usize {
+    return std.mem.indexOfAny(u8, source, chars);
+}
+
+fn percentDecodeAlloc(a: std.mem.Allocator, source: []const u8, plus_as_space: bool) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < source.len) {
+        if (plus_as_space and source[i] == '+') {
+            try out.append(a, ' ');
+            i += 1;
+            continue;
+        }
+        if (source[i] == '%' and i + 2 < source.len) {
+            if (hexNibble(source[i + 1])) |hi| if (hexNibble(source[i + 2])) |lo| {
+                try out.append(a, (hi << 4) | lo);
+                i += 3;
+                continue;
+            };
+        }
+        try out.append(a, source[i]);
+        i += 1;
+    }
+    return out.toOwnedSlice(a);
+}
+
+fn queryPut(runtime: *rt.Context, query: *rt.Table, key: []const u8, value: Value) !void {
+    const k: Value = .{ .string = key };
+    if (query.rawGet(k)) |existing| {
+        if (!existing.truthy()) {
+            try query.rawSet(runtime.allocator, k, value);
+            return;
+        }
+        if (existing == .table) {
+            try existing.table.rawSet(runtime.allocator, .{ .number = @floatFromInt(existing.table.rawLen() + 1) }, value);
+            return;
+        }
+        const values = try runtime.newTable();
+        try values.rawSet(runtime.allocator, .{ .number = 1 }, existing);
+        try values.rawSet(runtime.allocator, .{ .number = 2 }, value);
+        try query.rawSet(runtime.allocator, k, .{ .table = values });
+        return;
+    }
+    try query.rawSet(runtime.allocator, k, value);
+}
+
+fn parseQueryAlloc(runtime: *rt.Context, source: []const u8) !*rt.Table {
+    const query = try runtime.newTable();
+    var pos: usize = 0;
+    while (pos < source.len) {
+        const amp = std.mem.indexOfScalarPos(u8, source, pos, '&') orelse source.len;
+        const field = source[pos..amp];
+        const eq = std.mem.indexOfScalar(u8, field, '=');
+        const raw_key = field[0 .. eq orelse field.len];
+        const key = try percentDecodeAlloc(runtime.allocator, raw_key, true);
+        const value: Value = if (eq) |at|
+            .{ .string = try percentDecodeAlloc(runtime.allocator, field[at + 1 ..], true) }
+        else
+            .{ .boolean = false };
+        try queryPut(runtime, query, key, value);
+        if (amp == source.len) break;
+        pos = amp + 1;
+    }
+    return query;
+}
+
+fn setStringField(runtime: *rt.Context, object: *rt.Table, name: []const u8, value: ?[]const u8) !void {
+    if (value) |text| try object.rawSet(runtime.allocator, .{ .string = name }, .{ .string = text });
+}
+
+fn parsePort(raw: []const u8) !f64 {
+    if (raw.len == 0) return error.InvalidUriPort;
+    const value = std.fmt.parseFloat(f64, raw) catch return error.InvalidUriPort;
+    if (!std.math.isFinite(value)) return error.InvalidUriPort;
+    return value;
+}
+
+fn parseAuthority(runtime: *rt.Context, object: *rt.Table, authority: []const u8) !void {
+    var host_port = authority;
+    if (std.mem.indexOfScalar(u8, authority, '@')) |at| {
+        const user_info = authority[0..at];
+        host_port = authority[at + 1 ..];
+        if (std.mem.indexOfScalar(u8, user_info, ':')) |colon| {
+            try setStringField(runtime, object, "user", user_info[0..colon]);
+            try setStringField(runtime, object, "password", user_info[colon + 1 ..]);
+        } else try setStringField(runtime, object, "user", user_info);
+    }
+
+    if (host_port.len != 0 and host_port[0] == '[') {
+        if (std.mem.indexOfScalar(u8, host_port, ']')) |close| {
+            if (close + 1 == host_port.len) {
+                try setStringField(runtime, object, "host", host_port);
+                return;
+            }
+            if (host_port[close + 1] == ':' and close + 2 <= host_port.len) {
+                const port_text = host_port[close + 2 ..];
+                if (port_text.len != 0) for (port_text) |c| if (!std.ascii.isDigit(c)) return error.InvalidUriPort;
+                try setStringField(runtime, object, "host", host_port[0 .. close + 1]);
+                try object.rawSet(runtime.allocator, .{ .string = "port" }, .{ .number = try parsePort(port_text) });
+                return;
+            }
+        }
+    }
+
+    if (std.mem.indexOfScalar(u8, host_port, ':')) |colon| {
+        try setStringField(runtime, object, "host", host_port[0..colon]);
+        try object.rawSet(runtime.allocator, .{ .string = "port" }, .{ .number = try parsePort(host_port[colon + 1 ..]) });
+    } else try setStringField(runtime, object, "host", host_port);
+}
+
+fn parseRelative(runtime: *rt.Context, object: *rt.Table, relative: []const u8) !void {
+    var end = relative.len;
+    if (std.mem.indexOfScalar(u8, relative, '#')) |hash| {
+        try setStringField(runtime, object, "fragment", relative[hash + 1 ..]);
+        end = hash;
+    }
+    if (std.mem.indexOfScalar(u8, relative[0..end], '?')) |question| {
+        try object.rawSet(runtime.allocator, .{ .string = "query" }, .{ .table = try parseQueryAlloc(runtime, relative[question + 1 .. end]) });
+        end = question;
+    }
+    try setStringField(runtime, object, "path", relative[0..end]);
+}
+
+fn parseUriFields(runtime: *rt.Context, object: *rt.Table, source: []const u8) !void {
+    var protocol: ?[]const u8 = null;
+    var authority: ?[]const u8 = null;
+    var relative = source;
+
+    if (std.mem.indexOf(u8, source, "://")) |sep| {
+        if (sep != 0 and !containsAny(source[0..sep], ":/?#")) {
+            protocol = source[0..sep];
+            const rest = source[sep + 3 ..];
+            const authority_end = firstAny(rest, "/?#") orelse rest.len;
+            authority = rest[0..authority_end];
+            relative = rest[authority_end..];
+        }
+    }
+    if (protocol == null and authority == null and std.mem.startsWith(u8, source, "//")) {
+        const rest = source[2..];
+        const authority_end = firstAny(rest, "/?#") orelse rest.len;
+        authority = rest[0..authority_end];
+        relative = rest[authority_end..];
+    }
+    if (protocol == null and authority == null) {
+        if (firstAny(source, ":/?#")) |marker| if (source[marker] == ':' and marker != 0) {
+            protocol = source[0..marker];
+            relative = source[marker + 1 ..];
+        };
+    }
+
+    try setStringField(runtime, object, "protocol", protocol);
+    if (authority) |value| try parseAuthority(runtime, object, value);
+    try parseRelative(runtime, object, relative);
+}
+
+fn truthyField(object: *rt.Table, name: []const u8) ?Value {
+    const value = object.rawGet(.{ .string = name }) orelse return null;
+    return if (value.truthy()) value else null;
+}
+
+fn validHost(host: []const u8) bool {
+    if (!containsAny(host, ":/?#")) return true;
+    if (host.len < 3 or host[0] != '[' or host[host.len - 1] != ']') return false;
+    const inner = host[1 .. host.len - 1];
+    return inner.len != 0 and !containsAny(inner, "/?#[]@");
+}
+
+fn validPath(path: []const u8, authority: bool, protocol: bool) bool {
+    if (containsAny(path, "?#")) return false;
+    if (authority) return path.len == 0 or path[0] == '/';
+    if (path.len == 0 or std.mem.eql(u8, path, "/")) return true;
+    if (path[0] == '/') return path.len > 1 and path[1] != '/';
+    if (protocol) return true;
+    if (!containsAny(path, "/:")) return true;
+    const slash = std.mem.indexOfScalar(u8, path, '/') orelse return false;
+    return slash != 0 and !containsAny(path[0..slash], "/:");
+}
+
+fn appendValidationError(out: *std.ArrayList(u8), a: std.mem.Allocator, message: []const u8) !void {
+    if (out.items.len != 0) try out.appendSlice(a, "; ");
+    try out.appendSlice(a, message);
+}
+
+fn validationMessageAlloc(runtime: *rt.Context, object: *rt.Table) ![]const u8 {
+    var errors: std.ArrayList(u8) = .empty;
+    const a = runtime.allocator;
+
+    const protocol_value = truthyField(object, "protocol");
+    if (protocol_value) |value| {
+        if (value != .string) try appendValidationError(&errors, a, ".protocol must be a string") else if (containsAny(value.string, ":/?#")) try appendValidationError(&errors, a, "invalid .protocol");
+    }
+    inline for (.{ "user", "password" }) |field| if (truthyField(object, field)) |value| {
+        if (value != .string) try appendValidationError(&errors, a, ".user/password must be strings") else if (containsAny(value.string, ":@/?#")) try appendValidationError(&errors, a, "invalid .user/password");
+    };
+    if (truthyField(object, "host")) |value| {
+        if (value != .string) try appendValidationError(&errors, a, ".host must be a string") else if (!validHost(value.string)) try appendValidationError(&errors, a, "invalid .host");
+    }
+    if (truthyField(object, "port")) |value| {
+        if (value != .number or !std.math.isFinite(value.number) or @floor(value.number) != value.number)
+            try appendValidationError(&errors, a, ".port must be an integer")
+        else if (value.number < 1 or value.number > 65535)
+            try appendValidationError(&errors, a, "invalid .port");
+    }
+
+    const authority = truthyField(object, "user") != null or truthyField(object, "password") != null or truthyField(object, "host") != null or truthyField(object, "port") != null;
+    const path_value = truthyField(object, "path");
+    if (path_value == null) {
+        try appendValidationError(&errors, a, "missing .path");
+    } else if (path_value.? != .string) {
+        try appendValidationError(&errors, a, ".path must be a string");
+    } else if (!validPath(path_value.?.string, authority, protocol_value != null)) {
+        try appendValidationError(&errors, a, "invalid .path");
+    }
+    if (truthyField(object, "query")) |value| if (value != .table)
+        try appendValidationError(&errors, a, ".query must be a table");
+    if (truthyField(object, "fragment")) |value| if (value != .string)
+        try appendValidationError(&errors, a, ".fragment must be a string");
+
+    if (errors.items.len == 0) return "";
+    return errors.toOwnedSlice(a);
+}
+
 const UriStringCtx = struct { url: []const u8 };
 
 fn uriObjectToStringCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
@@ -190,19 +423,21 @@ fn makeUriObject(runtime: *rt.Context, url: []const u8) !Value {
     ctx.* = .{ .url = url };
     try mt.rawSet(runtime.allocator, .{ .string = "__tostring" }, try runtime.newNative(ctx, uriObjectToStringCall));
     object.metatable = mt;
-    const scheme_end = std.mem.indexOf(u8, url, "//");
-    const authority_start: usize = if (scheme_end) |i| i + 2 else 0;
-    if (scheme_end) |i| if (i != 0 and url[i - 1] == ':') try object.rawSet(runtime.allocator, .{ .string = "protocol" }, .{ .string = url[0 .. i - 1] });
-    if (authority_start != 0) {
-        const path_start = std.mem.indexOfScalarPos(u8, url, authority_start, '/') orelse url.len;
-        try object.rawSet(runtime.allocator, .{ .string = "host" }, .{ .string = url[authority_start..path_start] });
-        const query_at = std.mem.indexOfScalarPos(u8, url, path_start, '?');
-        const frag_at = std.mem.indexOfScalarPos(u8, url, path_start, '#');
-        const path_end = @min(query_at orelse url.len, frag_at orelse url.len);
-        try object.rawSet(runtime.allocator, .{ .string = "path" }, .{ .string = url[path_start..path_end] });
-        if (frag_at) |f| try object.rawSet(runtime.allocator, .{ .string = "fragment" }, .{ .string = url[f + 1 ..] });
-    }
+    try parseUriFields(runtime, object, url);
+    if ((try validationMessageAlloc(runtime, object)).len != 0) return error.InvalidUri;
     return .{ .table = object };
+}
+
+fn uriNewCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] == .nil) return error.NotImplemented;
+    if (args[0] != .string) return error.NotImplemented;
+    return one(runtime.allocator, try makeUriObject(runtime, args[0].string));
+}
+
+fn uriValidateCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .table) return error.TableExpected;
+    const message = try validationMessageAlloc(runtime, args[0].table);
+    return two(runtime.allocator, .{ .boolean = message.len == 0 }, .{ .string = message });
 }
 
 fn uriUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value, kind: WikiUrlKind) ![]const Value {
@@ -314,6 +549,8 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setNative(runtime, uri, "encode", uriEncodeCall);
     try setNative(runtime, uri, "decode", uriDecodeCall);
     try setNative(runtime, uri, "anchorEncode", uriAnchorEncodeCall);
+    try setNative(runtime, uri, "new", uriNewCall);
+    try setNative(runtime, uri, "validate", uriValidateCall);
     try mw.rawSet(runtime.allocator, .{ .string = "uri" }, .{ .table = uri });
 }
 
@@ -370,4 +607,36 @@ test "AOT URI builders sort query parameters and expose URI fields" {
     try std.testing.expectEqualStrings("en.wiktionary.org", (try runtime.getIndex(built[0], .{ .string = "host" })).string);
     try std.testing.expectEqualStrings("/w/index.php", (try runtime.getIndex(built[0], .{ .string = "path" })).string);
     try std.testing.expectEqualStrings("Frag", (try runtime.getIndex(built[0], .{ .string = "fragment" })).string);
+}
+
+test "AOT URI new and validate parse production URL fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const mw = try runtime.newTable();
+    try install(&runtime, mw);
+    const uri = mw.rawGet(.{ .string = "uri" }).?.table;
+
+    const parsed = try callField(&runtime, .{ .table = uri }, "new", &.{.{ .string = "https://main.knesset.gov.il/apps/smartprotocol/session/123/456?itemid=7&bare&itemid=8#frag" }});
+    defer rt.freeResults(parsed);
+    try std.testing.expectEqualStrings("https", (try runtime.getIndex(parsed[0], .{ .string = "protocol" })).string);
+    try std.testing.expectEqualStrings("main.knesset.gov.il", (try runtime.getIndex(parsed[0], .{ .string = "host" })).string);
+    try std.testing.expectEqualStrings("/apps/smartprotocol/session/123/456", (try runtime.getIndex(parsed[0], .{ .string = "path" })).string);
+    try std.testing.expectEqualStrings("frag", (try runtime.getIndex(parsed[0], .{ .string = "fragment" })).string);
+    const parsed_query = (try runtime.getIndex(parsed[0], .{ .string = "query" })).table;
+    try std.testing.expect(!(parsed_query.rawGet(.{ .string = "bare" }).?.boolean));
+    const item_ids = parsed_query.rawGet(.{ .string = "itemid" }).?.table;
+    try std.testing.expectEqualStrings("7", item_ids.rawGet(.{ .number = 1 }).?.string);
+    try std.testing.expectEqualStrings("8", item_ids.rawGet(.{ .number = 2 }).?.string);
+
+    const valid = try callField(&runtime, .{ .table = uri }, "validate", &.{parsed[0]});
+    defer rt.freeResults(valid);
+    try std.testing.expect(valid[0].boolean);
+    try std.testing.expectEqualStrings("", valid[1].string);
+
+    const ipv6 = try callField(&runtime, .{ .table = uri }, "new", &.{.{ .string = "http://[2001:db8::]:80" }});
+    defer rt.freeResults(ipv6);
+    try std.testing.expectEqualStrings("[2001:db8::]", (try runtime.getIndex(ipv6[0], .{ .string = "host" })).string);
+    try std.testing.expectEqual(@as(f64, 80), (try runtime.getIndex(ipv6[0], .{ .string = "port" })).number);
 }
