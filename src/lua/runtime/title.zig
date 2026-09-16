@@ -146,6 +146,8 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         if (fragment.string.len == 0) return one(prefixed);
         return one(.{ .string = try std.fmt.allocPrint(runtime.allocator, "{s}#{s}", .{ prefixed.string, fragment.string }) });
     }
+    if (std.mem.eql(u8, key, "file") or std.mem.eql(u8, key, "fileExists"))
+        return error.NotImplemented;
 
     const ns = namespaceOf(prefixed.string);
     if (std.mem.eql(u8, key, "exists")) {
@@ -636,6 +638,14 @@ test "AOT title subpage fields respect namespace settings" {
     const missing_css = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "User:Example/common.css" }});
     defer rt.freeResults(missing_css);
     try std.testing.expectEqualStrings("css", (try runtime.getIndex(missing_css[0], .{ .string = "contentModel" })).string);
+
+    const file_title = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "File:Example.svg" }});
+    defer rt.freeResults(file_title);
+    inline for (.{ "file", "fileExists" }) |field| {
+        try std.testing.expectError(error.AotCallFailed, runtime.getIndex(file_title[0], .{ .string = field }));
+        try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+        runtime.clearAotErrorName();
+    }
 }
 
 test "AOT title constructors and current title use the live host" {
