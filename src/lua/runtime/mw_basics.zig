@@ -104,6 +104,17 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
         "sitelink",
     }) |name| try setNative(runtime, wikibase, name, notImplementedCall);
     try mw.rawSetNativeField(.mw, "wikibase", .{ .table = wikibase });
+
+    const message = try runtime.newTable();
+    inline for (.{
+        "new",
+        "newFallbackSequence",
+        "newRawMessage",
+        "rawParam",
+        "numParam",
+        "getDefaultLanguage",
+    }) |name| try setNative(runtime, message, name, notImplementedCall);
+    try mw.rawSetNativeField(.mw, "message", .{ .table = message });
 }
 
 fn callField(runtime: *rt.Context, object: Value, name: []const u8, args: []const Value) ![]const Value {
@@ -133,6 +144,14 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     try std.testing.expect(wikibase.rawGet(.{ .string = "getEntity" }).? == .callable);
     try std.testing.expect(wikibase.rawGet(.{ .string = "getEntityIdForTitle" }) == null);
     try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, "getEntity", &.{.{ .string = "Q1" }}));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+
+    const message = mw.rawGet(.{ .string = "message" }).?.table;
+    inline for (.{ "new", "newFallbackSequence", "newRawMessage", "rawParam", "numParam", "getDefaultLanguage" }) |name| {
+        try std.testing.expect(message.rawGet(.{ .string = name }).? == .callable);
+    }
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = message }, "new", &.{.{ .string = "mainpage" }}));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
 
