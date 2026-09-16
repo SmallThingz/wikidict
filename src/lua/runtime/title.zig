@@ -175,8 +175,7 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
             ns.text
         else if (std.mem.eql(u8, key, "basePageTitle"))
             if (std.mem.lastIndexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text
-        else
-            if (std.mem.indexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
+        else if (std.mem.indexOfScalar(u8, ns.text, '/')) |slash| ns.text[0..slash] else ns.text;
         const title = try titleForSpec(runtime, spec, text);
         return one(try makeTitleValue(runtime, state, title));
     }
@@ -504,8 +503,18 @@ fn newCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const
 fn makeCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
     if (args.len < 2 or args[1] != .string) return one(.nil);
+    const fragment: []const u8 = if (args.len > 2 and args[2] != .nil) blk: {
+        if (args[2] != .string) return error.StringExpected;
+        break :blk args[2].string;
+    } else "";
+    if (args.len > 3 and args[3] != .nil) {
+        if (args[3] != .string) return error.StringExpected;
+        if (args[3].string.len != 0) return error.NotImplemented;
+    }
     const title = try titleWithNamespace(runtime, state, args[1].string, args[0], true, false) orelse return one(.nil);
-    return one(try makeTitleValue(runtime, state, title));
+    if (fragment.len == 0) return one(try makeTitleValue(runtime, state, title));
+    const with_fragment = try std.fmt.allocPrint(runtime.allocator, "{s}#{s}", .{ title, fragment });
+    return one(try makeTitleValue(runtime, state, with_fragment));
 }
 fn currentCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
@@ -713,6 +722,14 @@ test "AOT title constructors and current title use the live host" {
 
     const made = try callField(&runtime, .{ .table = title_lib }, "makeTitle", &.{ .{ .number = 10 }, .{ .string = "Thing" } });
     defer rt.freeResults(made);
+    const fragmented = try callField(&runtime, .{ .table = title_lib }, "makeTitle", &.{ .{ .string = "Wiktionary" }, .{ .string = "Word of the day/Archive/2026/September" }, .{ .string = "17" } });
+    defer rt.freeResults(fragmented);
+    try std.testing.expectEqualStrings("Wiktionary:Word of the day/Archive/2026/September", (try runtime.getIndex(fragmented[0], .{ .string = "prefixedText" })).string);
+    try std.testing.expectEqualStrings("17", (try runtime.getIndex(fragmented[0], .{ .string = "fragment" })).string);
+    try std.testing.expectEqualStrings("Wiktionary:Word of the day/Archive/2026/September#17", (try runtime.getIndex(fragmented[0], .{ .string = "fullText" })).string);
+    const normalized_fragment = try callField(&runtime, .{ .table = title_lib }, "makeTitle", &.{ .{ .number = 4 }, .{ .string = "Page" }, .{ .string = "  frag__frag  " } });
+    defer rt.freeResults(normalized_fragment);
+    try std.testing.expectEqualStrings(" frag frag", (try runtime.getIndex(normalized_fragment[0], .{ .string = "fragment" })).string);
     const made2 = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Template:Thing" }});
     defer rt.freeResults(made2);
     try std.testing.expectEqualStrings("Template:Thing", (try runtime.getIndex(made[0], .{ .string = "prefixedText" })).string);
@@ -749,6 +766,13 @@ test "AOT title constructors and current title use the live host" {
     const forced_explicit = try callField(&runtime, .{ .table = title_lib }, "makeTitle", &.{ .{ .number = 10 }, .{ .string = "Module:Thing" } });
     defer rt.freeResults(forced_explicit);
     try std.testing.expectEqualStrings("Template:Module:Thing", (try runtime.getIndex(forced_explicit[0], .{ .string = "prefixedText" })).string);
+    const make_fn = title_lib.rawGet(.{ .string = "makeTitle" }).?;
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(make_fn, &.{ .{ .number = 0 }, .{ .string = "Thing" }, .{ .number = 1 } }));
+    try std.testing.expectEqualStrings("StringExpected", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(make_fn, &.{ .{ .number = 0 }, .{ .string = "Thing" }, .nil, .{ .string = "w" } }));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
     const new_fn = title_lib.rawGet(.{ .string = "new" }).?;
     try std.testing.expectError(error.AotCallFailed, runtime.callValue(new_fn, &.{ .{ .string = "Thing" }, .{ .string = "not-a-namespace" } }));
     try std.testing.expectEqualStrings("InvalidNamespace", runtime.aotErrorName().?);

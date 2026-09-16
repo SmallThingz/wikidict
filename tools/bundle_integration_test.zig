@@ -34,6 +34,8 @@ const module_source =
     \\    assert(mw.title.new('Module:IntegrationForms').contentModel == 'Scribunto')
     \\    assert(mw.title.new('Module:IntegrationForms', 10).prefixedText == 'Module:IntegrationForms')
     \\    assert(mw.title.makeTitle(10, 'Module:IntegrationForms').prefixedText == 'Template:Module:IntegrationForms')
+    \\    local archive_title = mw.title.makeTitle('Wiktionary', 'Word of the day/Archive/2026/September', '17')
+    \\    assert(archive_title.prefixedText == 'Wiktionary:Word of the day/Archive/2026/September' and archive_title.fragment == '17' and archive_title.fullText == 'Wiktionary:Word of the day/Archive/2026/September#17')
     \\    assert(mw.title.new('Foo&amp;Bar').prefixedText == 'Foo&Bar')
     \\    assert(mw.title.new('Module&#58;IntegrationForms', 10).prefixedText == 'Module:IntegrationForms')
     \\    assert(mw.title.makeTitle(0, 'Foo&amp;Bar') == nil)
