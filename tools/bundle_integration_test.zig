@@ -80,6 +80,7 @@ const module_source =
     \\    local strip_marker = frame:extensionTag('nowiki', 'hidden')
     \\    assert(mw.text.killMarkers('a' .. strip_marker .. 'b') == 'ab')
     \\    assert(frame:preprocess('{{#len:é猫}}') == '2')
+    \\    assert(frame:preprocess('{{ucfirst:ßeta}}|{{ucfirst:ǰfoo}}|{{lcfirst:Éclair}}') == 'ßeta|J̌foo|éclair')
     \\    local json_value = mw.text.jsonDecode('{"x":[1,2]}', mw.text.JSON_TRY_FIXING)
     \\    assert(json_value.x[2] == 2 and mw.text.jsonEncode(json_value) == '{"x":[1,2]}')
     \\    local json_data = mw.loadJsonData('Module:IntegrationFormsData.json')

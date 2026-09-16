@@ -583,13 +583,24 @@ pub const Expander = struct {
         return result[0].string;
     }
 
+    fn contentLanguageFirstCase(self: *Expander, text: []const u8, upper: bool) anyerror![]const u8 {
+        const mw = self.runtime.getGlobal(self.mw_slot);
+        if (mw != .table) return error.MissingMw;
+        const get_language = try self.runtime.getIndex(mw, .{ .string = "getContentLanguage" });
+        const language_result = try self.runtime.callValue(get_language, &.{});
+        defer rt.freeResults(language_result);
+        if (language_result.len == 0 or language_result[0] != .table) return error.TableExpected;
+        const language = language_result[0];
+        const callable = try self.runtime.getIndex(language, .{ .string = if (upper) "ucfirst" else "lcfirst" });
+        const result = try self.runtime.callValue(callable, &.{ language, .{ .string = text } });
+        defer rt.freeResults(result);
+        if (result.len == 0 or result[0] != .string) return error.StringExpected;
+        return result[0].string;
+    }
+
     fn expandCaseParser(self: *Expander, raw: []const u8, params: *rt.Table, host_title: []const u8, depth: usize, upper: bool, first_only: bool) anyerror![]const u8 {
         const expanded = try self.expandWikitext(raw, params, host_title, depth + 1);
-        if (!first_only or expanded.len == 0) return self.unicodeCase(expanded, upper);
-        const first_len = std.unicode.utf8ByteSequenceLength(expanded[0]) catch return error.InvalidUtf8;
-        if (first_len > expanded.len) return error.InvalidUtf8;
-        const first = try self.unicodeCase(expanded[0..first_len], upper);
-        return std.fmt.allocPrint(self.runtime.allocator, "{s}{s}", .{ first, expanded[first_len..] });
+        return if (first_only) self.contentLanguageFirstCase(expanded, upper) else self.unicodeCase(expanded, upper);
     }
 
     fn numericStringEqual(lhs: []const u8, rhs: []const u8) bool {
@@ -1284,10 +1295,11 @@ fn installTestHost(runtime: *rt.Context, string_slot: u32, mw_slot: u32) !void {
     if (string != .table) return error.MissingStringLibrary;
     var it = string.table.iterator();
     while (it.next()) |entry| try ustring.rawSet(runtime.allocator, entry.key_ptr.*, entry.value_ptr.*);
-    _ = try ustring_lib.install(runtime, ustring);
+    const case_mapper = try ustring_lib.install(runtime, ustring);
     try mw.rawSet(runtime.allocator, .{ .string = "ustring" }, .{ .table = ustring });
     try text_lib.install(runtime, mw);
     try uri_lib.install(runtime, mw);
+    try language_lib.install(runtime, mw, case_mapper);
     try runtime.setGlobal(mw_slot, .{ .table = mw });
 }
 
@@ -1456,9 +1468,9 @@ test "bundle parser functions cover corpus time sub and iferror forms" {
     try stdlib.install(&runtime);
     try installTestHost(&runtime, 18, 23);
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .page_metadata = TestProvider.pageMetadata } };
-    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#len:é猫}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{formatnum:11000}}|{{FORMATNUM:-1234567.89}}|{{formatnum:1,234.50|R}}|{{formatnum:1234.50|NOSEP}}|{{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}|{{anchorencode:a%20b}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
+    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#len:é猫}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{formatnum:11000}}|{{FORMATNUM:-1234567.89}}|{{formatnum:1,234.50|R}}|{{formatnum:1234.50|NOSEP}}|{{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}|{{anchorencode:a%20b}}|{{ucfirst:ßeta}}|{{ucfirst:ǰfoo}}|{{lcfirst:Éclair}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
     const got = try expander.expandFragment("Page", source, 1_670_803_200);
-    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|2|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|11,000|−1,234,567.89|1234.50|1234.50|A_B_x_C|a%2520b|/Wiktionary/Wiktionary/Module", got);
+    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|2|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|11,000|−1,234,567.89|1234.50|1234.50|A_B_x_C|a%2520b|ßeta|J̌foo|éclair|/Wiktionary/Wiktionary/Module", got);
     try std.testing.expectError(error.InvalidNamespace, expander.expandFragment("Page", "{{ns:not-a-namespace}}", 1_670_803_200));
 
     expander.beginPage("Page", "source", 1_670_803_200);
