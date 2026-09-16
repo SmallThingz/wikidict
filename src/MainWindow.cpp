@@ -115,6 +115,7 @@ void MainWindow::setupUi() {
     titleFont.setPointSize(30);
     titleFont.setBold(true);
     title_->setFont(titleFont);
+    title_->setTextFormat(Qt::RichText);
     title_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     meta_ = new QLabel(QStringLiteral("Local Wiktionary · native Qt"), content);
     heading->addWidget(title_);
@@ -241,9 +242,10 @@ void MainWindow::renderResponse(const QByteArray &bytes) {
     currentEntry_ = entries.first().toObject();
 
     const QString title = currentEntry_.value(QStringLiteral("title")).toString();
+    const QJsonArray displayTitle = currentEntry_.value(QStringLiteral("display_title")).toArray();
     const QString language = currentEntry_.value(QStringLiteral("language")).toString();
     const QString kind = currentEntry_.value(QStringLiteral("kind")).toString();
-    title_->setText(title);
+    title_->setText(displayTitle.isEmpty() ? title.toHtmlEscaped() : spansHtml(displayTitle));
     meta_->setText(QStringLiteral("%1 · %2 · native Qt").arg(language.isEmpty() ? kindLabel(kind) : language, kindLabel(kind)));
     reading_->setHtml(entryHtml(currentEntry_));
     json_->setPlainText(QString::fromUtf8(currentJson_));
@@ -288,6 +290,16 @@ QString MainWindow::spansHtml(const QJsonArray &spans) const {
         if (span.value(QStringLiteral("strike")).toBool()) text = QStringLiteral("<s>%1</s>").arg(text);
         if (span.value(QStringLiteral("superscript")).toBool()) text = QStringLiteral("<sup>%1</sup>").arg(text);
         if (span.value(QStringLiteral("subscript")).toBool()) text = QStringLiteral("<sub>%1</sub>").arg(text);
+        const QString classes = span.value(QStringLiteral("classes")).toString();
+        const QString language = span.value(QStringLiteral("language")).toString();
+        const QString direction = span.value(QStringLiteral("direction")).toString();
+        if (!classes.isEmpty() || !language.isEmpty() || !direction.isEmpty()) {
+            QString attrs;
+            if (!classes.isEmpty()) attrs += QStringLiteral(" class=\"%1\"").arg(classes.toHtmlEscaped());
+            if (!language.isEmpty()) attrs += QStringLiteral(" lang=\"%1\"").arg(language.toHtmlEscaped());
+            if (!direction.isEmpty()) attrs += QStringLiteral(" dir=\"%1\"").arg(direction.toHtmlEscaped());
+            text = QStringLiteral("<span%1>%2</span>").arg(attrs, text);
+        }
         out += text;
     }
     return out;
