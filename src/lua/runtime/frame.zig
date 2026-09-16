@@ -1,6 +1,7 @@
 const std = @import("std");
 const rt = @import("zig_runtime");
 const host_api = @import("host.zig");
+const stdlib = @import("zig_stdlib");
 const Value = rt.Value;
 
 pub const FrameArg = struct { key: Value, value: Value };
@@ -193,8 +194,23 @@ fn invokeValue(runtime: *rt.Context, module: Value, function_name: []const u8, f
     return runtime.callValue(callable, &.{frame});
 }
 
+fn enterInvoke(runtime: *rt.Context) !?*host_api.Host {
+    const host = host_api.get(runtime) orelse return null;
+    if (host.invoke_depth == 0) try stdlib.resetMathRandom(runtime);
+    host.invoke_depth +%= 1;
+    return host;
+}
+fn leaveInvoke(host: ?*host_api.Host) void {
+    if (host) |value| {
+        std.debug.assert(value.invoke_depth != 0);
+        value.invoke_depth -= 1;
+    }
+}
+
 pub fn invokeModuleId(runtime: *rt.Context, module_id: u32, module_name: []const u8, function_name: []const u8, frame: Value) anyerror![]const Value {
     if (frame != .table) return error.FrameExpected;
+    const invoke_host = try enterInvoke(runtime);
+    defer leaveInvoke(invoke_host);
     const saved = runtime.current_frame;
     runtime.current_frame = frame.table;
     defer runtime.current_frame = saved;
@@ -210,6 +226,8 @@ pub fn invokeModuleId(runtime: *rt.Context, module_id: u32, module_name: []const
 
 pub fn invoke(runtime: *rt.Context, module_name: []const u8, function_name: []const u8, frame: Value) anyerror![]const Value {
     if (frame != .table) return error.FrameExpected;
+    const invoke_host = try enterInvoke(runtime);
+    defer leaveInvoke(invoke_host);
     const saved = runtime.current_frame;
     runtime.current_frame = frame.table;
     defer runtime.current_frame = saved;

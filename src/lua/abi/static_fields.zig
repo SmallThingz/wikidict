@@ -47,7 +47,7 @@ const names = [_][]const u8{
 
 const table_names = names[0..6];
 const string_names = names[6..19];
-const math_names = names[19..42];
+const math_names = [_][]const u8{ "abs", "ceil", "floor", "sqrt", "exp", "log", "log10", "sin", "cos", "tan", "asin", "acos", "atan", "deg", "rad", "min", "max", "pow", "fmod", "mod", "modf", "pi", "huge", "random", "randomseed" };
 const debug_names = names[42..45];
 const mw_names = [_][]const u8{
     "loadData",   "loadJsonData", "clone",      "getCurrentFrame", "ustring", "dumpObject", "log",                "logObject",
@@ -81,7 +81,7 @@ fn namespaceNames(namespace: Namespace) []const []const u8 {
     return switch (namespace) {
         .table => table_names,
         .string => string_names,
-        .math => math_names,
+        .math => &math_names,
         .debug => debug_names,
         .mw => &mw_names,
         .ustring => &ustring_names,
@@ -116,7 +116,7 @@ pub fn slotForName(namespace: Namespace, field_name: []const u8) ?u32 {
     return switch (namespace) {
         .table => staticSlot(table_names, field_name),
         .string => staticSlot(string_names, field_name),
-        .math => staticSlot(math_names, field_name),
+        .math => staticSlot(&math_names, field_name),
         .debug => staticSlot(debug_names, field_name),
         .mw => staticSlot(&mw_names, field_name),
         .ustring => staticSlot(&ustring_names, field_name),

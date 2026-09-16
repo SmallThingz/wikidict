@@ -1325,6 +1325,7 @@ const TestModule = struct {
         const exports = try ctx.newTable();
         try exports.rawSet(ctx.allocator, .{ .string = "run" }, try ctx.makeFunctionKnown(1, run, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "fail" }, try ctx.makeFunctionKnown(2, fail, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "random" }, try ctx.makeFunctionKnown(3, random, &.{}));
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
         return out;
@@ -1340,6 +1341,12 @@ const TestModule = struct {
     fn fail(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
         return error.NotCallable;
     }
+    fn random(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        const math = ctx.getGlobal(19); // Stable globals ABI: math.
+        if (math != .table) return error.MissingMathLibrary;
+        const call = try ctx.getIndex(math, .{ .string = "random" });
+        return ctx.callValue(call, &.{.{ .number = 10 }});
+    }
 };
 
 test "native AOT wikitext expands templates parser functions and invoke" {
@@ -1347,7 +1354,7 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     defer arena.deinit();
     var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
     defer runtime.deinit();
-    const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail) };
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail), rt.stabilize(TestModule.random) };
     runtime.module_root_entries = &functions;
     runtime.configureModules(null, TestModule.lookup, TestModule.name);
     try rt.bindGlobalTable(&runtime, null, 0);
@@ -1363,6 +1370,8 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("99|990|20250607080910|Other editor|", other_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
+    const random_top_level = try expander.expandFragment("Page", "{{#invoke:Test|random}}|{{#invoke:Test|random}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("9|9", random_top_level);
 
     const display_body = try expander.expandFragment("Page", "{{DISPLAYTITLE:''Page''}}body", 1_670_803_200);
     try std.testing.expectEqualStrings("body", display_body);

@@ -811,6 +811,94 @@ fn debugGetInfo(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value
     return error.NotImplemented;
 }
 
+const MathRandomState = struct {
+    state: [31]u32 = [_]u32{0} ** 31,
+    front: u8 = 3,
+    rear: u8 = 0,
+
+    fn seed(self: *MathRandomState, raw_seed: u32) void {
+        const seed_value: u32 = if (raw_seed == 0) 1 else raw_seed;
+        self.state[0] = seed_value;
+        var word: i64 = @as(i32, @bitCast(seed_value));
+        var i: usize = 1;
+        while (i < self.state.len) : (i += 1) {
+            const hi = @divTrunc(word, 127773);
+            const lo = @rem(word, 127773);
+            word = 16807 * lo - 2836 * hi;
+            if (word < 0) word += 2147483647;
+            self.state[i] = @intCast(word);
+        }
+        self.front = 3;
+        self.rear = 0;
+        var warm: usize = 0;
+        while (warm < self.state.len * 10) : (warm += 1) _ = self.next();
+    }
+
+    fn next(self: *MathRandomState) u32 {
+        const front: usize = self.front;
+        const rear: usize = self.rear;
+        self.state[front] +%= self.state[rear];
+        const result = self.state[front] >> 1;
+        self.front = @intCast((front + 1) % self.state.len);
+        self.rear = @intCast((rear + 1) % self.state.len);
+        return result;
+    }
+};
+
+fn randomSeedValue(value: Value) !u32 {
+    const n = try integer(value);
+    return @truncate(@as(u64, @bitCast(n)));
+}
+fn randomBound(value: Value) !i32 {
+    const n = try integer(value);
+    if (n < std.math.minInt(i32) or n > std.math.maxInt(i32)) return error.RandomBoundOutOfRange;
+    return @intCast(n);
+}
+fn mathRandomCall(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    const state: *MathRandomState = @ptrCast(@alignCast(raw orelse return error.MissingRandomState));
+    const rand_max: u32 = 2147483647;
+    const sample = state.next() % rand_max;
+    const r = @as(f64, @floatFromInt(sample)) / @as(f64, @floatFromInt(rand_max));
+    const result: f64 = switch (args.len) {
+        0 => r,
+        1 => blk: {
+            const upper = try randomBound(args[0]);
+            if (upper < 1) return error.RandomIntervalEmpty;
+            break :blk @floor(r * @as(f64, @floatFromInt(upper))) + 1;
+        },
+        2 => blk: {
+            const lower = try randomBound(args[0]);
+            const upper = try randomBound(args[1]);
+            if (lower > upper) return error.RandomIntervalEmpty;
+            const width = @as(i64, upper) - @as(i64, lower) + 1;
+            break :blk @floor(r * @as(f64, @floatFromInt(width))) + @as(f64, @floatFromInt(lower));
+        },
+        else => return error.WrongArgumentCount,
+    };
+    return one(ctx.allocator, .{ .number = result });
+}
+fn mathRandomSeedCall(raw: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0) return error.MissingArgument;
+    const state: *MathRandomState = @ptrCast(@alignCast(raw orelse return error.MissingRandomState));
+    state.seed(try randomSeedValue(args[0]));
+    return &.{};
+}
+fn installMathRandom(runtime: *rt.Context, math: *rt.Table) !void {
+    const state = try runtime.allocator.create(MathRandomState);
+    state.* = .{};
+    state.seed(1);
+    try math.rawSetNativeField(.math, "random", try runtime.newNative(state, mathRandomCall));
+    try math.rawSetNativeField(.math, "randomseed", try runtime.newNative(state, mathRandomSeedCall));
+}
+
+pub fn resetMathRandom(runtime: *rt.Context) !void {
+    const math = runtime.getGlobal(global_abi.id("math"));
+    if (math != .table) return error.MissingMathLibrary;
+    const seed_fn = math.table.rawGet(.{ .string = "randomseed" }) orelse return error.MissingRandomSeed;
+    const result = try runtime.callValue(seed_fn, &.{.{ .number = 1 }});
+    defer rt.freeResults(result);
+}
+
 fn addMath(runtime: *rt.Context, t: *rt.Table, name: []const u8, op: MathOp) !void {
     const ctx = try runtime.allocator.create(MathOp);
     ctx.* = op;
@@ -894,6 +982,7 @@ pub fn install(runtime: *rt.Context) !void {
     try setNative(runtime, math, "modf", mathModf);
     try math.rawSet(runtime.allocator, .{ .string = "pi" }, .{ .number = std.math.pi });
     try math.rawSet(runtime.allocator, .{ .string = "huge" }, .{ .number = std.math.inf(f64) });
+    try installMathRandom(runtime, math);
     try runtime.setGlobal(global_abi.id("math"), .{ .table = math });
     const debug = try runtime.newNativeNamespace(.debug);
     try setNative(runtime, debug, "getmetatable", debugGetMetatable);
@@ -957,6 +1046,7 @@ pub const Template = struct {
         const table = try cloneTemplateNamespace(runtime, try self.namespace("table"));
         const string = try cloneTemplateNamespace(runtime, try self.namespace("string"));
         const math = try cloneTemplateNamespace(runtime, try self.namespace("math"));
+        try installMathRandom(runtime, math);
         const debug = try cloneTemplateNamespace(runtime, try self.namespace("debug"));
         try runtime.setGlobal(global_abi.id("table"), .{ .table = table });
         try runtime.setGlobal(global_abi.id("string"), .{ .table = string });
@@ -1085,6 +1175,28 @@ test "AOT sparse array borders survive table remove and insert" {
     const insert11 = try callField(&ctx, lib, "insert", &.{ .{ .table = values }, .{ .number = 11 }, .nil });
     defer rt.freeResults(insert11);
     try std.testing.expectEqual(@as(usize, 20), values.rawLen());
+}
+
+test "Lua 5.1 math random matches glibc sequence and reseeding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
+    try install(&ctx);
+    const math = ctx.getGlobal(global_abi.id("math"));
+    const random = try ctx.getIndex(math, .{ .string = "random" });
+    const seed = try ctx.getIndex(math, .{ .string = "randomseed" });
+    inline for ([_]f64{ 9, 4, 8 }) |expected| {
+        const got = try ctx.callValue(random, &.{.{ .number = 10 }});
+        defer rt.freeResults(got);
+        try std.testing.expectEqual(expected, got[0].number);
+    }
+    const seeded = try ctx.callValue(seed, &.{.{ .number = 1 }});
+    defer rt.freeResults(seeded);
+    const range = try ctx.callValue(random, &.{ .{ .number = -300 }, .{ .number = 300 } });
+    defer rt.freeResults(range);
+    try std.testing.expectEqual(@as(f64, 204), range[0].number);
 }
 
 test "AOT pcall preserves Lua error values" {

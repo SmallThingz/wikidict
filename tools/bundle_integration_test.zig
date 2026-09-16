@@ -19,6 +19,7 @@ const module_source =
     \\assert(require(alias_name).mouse == 'mice')
     \\return {
     \\frame_probe = function(frame) return frame.args.x end,
+    \\random_probe = function(frame) return math.random(1, 10), math.random(1, 10) end,
     \\render_dictionary_fixture = function(frame)
     \\    assert(mw.title.new('Appendix:IntegrationFixture'):getContent() == 'a real auxiliary source page')
     \\    assert(string.find(mw.title.new('Template:forms-alias'):getContent(), '#REDIRECT', 1, true))
@@ -90,6 +91,8 @@ const module_source =
     \\    assert(os.date('!%Y%m%d%H%M%S', pinned_now) == frame:preprocess('{{CURRENTTIMESTAMP}}'))
     \\    local normalized_time = {year = 2024, month = 13, day = 1}
     \\    assert(os.date('!%Y-%m-%d %H:%M', os.time(normalized_time)) == '2025-01-01 12:00')
+    \\    local rnd_a, rnd_b = require('Module:IntegrationForms').random_probe(frame)
+    \\    assert(rnd_a == 9 and rnd_b == 4)
     \\    local xp_ok, xp_value = xpcall(function() error('xp') end, function(err) return 'handled:' .. err end)
     \\    assert(not xp_ok and xp_value == 'handled:xp')
     \\    local xp_success, xp_left, xp_right = xpcall(function() return 'left', 7 end, function(err) return err end)

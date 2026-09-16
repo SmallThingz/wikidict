@@ -25,6 +25,7 @@ pub const Host = struct {
     ctx: ?*anyopaque = null,
     current_title: []const u8 = "",
     now_unix: ?i64 = null,
+    invoke_depth: u32 = 0,
     page_exists: ?PageExistsFn = null,
     page_content: ?PageContentFn = null,
     page_redirect: ?PageRedirectFn = null,
