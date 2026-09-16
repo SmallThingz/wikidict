@@ -712,7 +712,7 @@ pub const Renderer = struct {
     }
     pub fn parseSpans(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
         const parent = self.spans;
-        self.spans = .empty;
+        self.spans = try .initCapacity(self.a, 4);
         defer self.spans = parent;
         try self.inlineText(input, style, 0);
         return try self.spans.toOwnedSlice(self.a);
