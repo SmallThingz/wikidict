@@ -16,13 +16,16 @@ const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
     \\local alias_name = 'Module:IntegrationFormsAlias'
     \\assert(require(alias_name).mouse == 'mice')
-    \\return { render_dictionary_fixture = function(frame)
+    \\return {
+    \\frame_probe = function(frame) return frame.args.x end,
+    \\render_dictionary_fixture = function(frame)
     \\    assert(mw.title.new('Appendix:IntegrationFixture'):getContent() == 'a real auxiliary source page')
     \\    assert(string.find(mw.title.new('Template:forms-alias'):getContent(), '#REDIRECT', 1, true))
     \\    assert(string.find(mw.title.new('SharedAlias'):getContent(), '#REDIRECT', 1, true))
     \\    local shared_alias = mw.title.new('SharedAlias')
     \\    assert(shared_alias.isRedirect and shared_alias.redirectTarget.prefixedText == 'Shared')
     \\    assert(shared_alias.id == 24 and shared_alias.redirectTarget.id == 23)
+    \\    assert(frame:callParserFunction{ name = '#invoke', args = {'IntegrationForms', 'frame_probe', x = 'frame-parser'} } == 'frame-parser')
     \\    assert(frame:callParserFunction{ name = '#tag:syntaxhighlight', args = {'x', lang = 'text'} } == '<syntaxhighlight lang="text">x</syntaxhighlight>')
     \\    assert(frame:callParserFunction{ name = '#tag', args = {'ref', 'body', 'name=n'} } == '<ref name="n">body</ref>')
     \\    assert(mw.title.new('rat').exists)

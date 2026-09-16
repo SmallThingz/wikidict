@@ -1117,10 +1117,40 @@ pub const Expander = struct {
         return hostFrameExtensionTag(raw, a, tag, .{ .string = content_text }, attrs);
     }
 
+    fn frameParserInvoke(self: *Expander, args: *rt.Table) ![]const u8 {
+        const module_value = args.rawGet(.{ .number = 1 }) orelse return error.ModuleNameExpected;
+        const module_raw = std.mem.trim(u8, try self.scalarText(module_value), " \t\r\n");
+        if (module_raw.len == 0) return error.ModuleNameExpected;
+        const module_name = if (module_raw.len >= 7 and std.ascii.eqlIgnoreCase(module_raw[0..7], "Module:"))
+            module_raw
+        else
+            try std.fmt.allocPrint(self.runtime.allocator, "Module:{s}", .{module_raw});
+        const function_name = if (args.rawGet(.{ .number = 2 })) |value|
+            std.mem.trim(u8, try self.scalarText(value), " \t\r\n")
+        else
+            "main";
+
+        const invoke_args = try self.runtime.newTable();
+        var it = args.iterator();
+        while (it.next()) |entry| switch (entry.key_ptr.*) {
+            .string => try invoke_args.rawSet(self.runtime.allocator, entry.key_ptr.*, entry.value_ptr.*),
+            .number => |index| if (std.math.isFinite(index) and index >= 3 and index == @trunc(index))
+                try invoke_args.rawSet(self.runtime.allocator, .{ .number = index - 2 }, entry.value_ptr.*),
+            else => {},
+        };
+        const parent: ?Value = if (self.runtime.current_frame) |frame| .{ .table = frame } else null;
+        const frame = try frame_lib.makeFrameFromTable(self.runtime, module_name, invoke_args, parent);
+        const result = try frame_lib.invoke(self.runtime, module_name, function_name, frame);
+        defer rt.freeResults(result);
+        if (result.len == 0) return "";
+        return self.valueToWikitext(result[0]);
+    }
+
     fn hostFrameParserFunction(raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const first = args.rawGet(.{ .number = 1 });
         const second = args.rawGet(.{ .number = 2 });
+        if (std.ascii.eqlIgnoreCase(name, "#invoke")) return self.frameParserInvoke(args);
         if (std.ascii.eqlIgnoreCase(name, "#tag") or std.ascii.startsWithIgnoreCase(name, "#tag:")) return self.frameParserTag(raw, a, name, args);
         if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT") or std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) return "";
         if (std.ascii.eqlIgnoreCase(name, "#formatdate")) {
@@ -1237,6 +1267,25 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("Monday|50|December|42|420|20240304050607|2024-03-4", current_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
+
+    expander.beginPage("Page", "source", 1_670_803_200);
+    const caller_args = try runtime.newTable();
+    const caller = try frame_lib.makeFrameFromTable(&runtime, "Module:Caller", caller_args, null);
+    runtime.current_frame = caller.table;
+    defer runtime.current_frame = null;
+    const parser = try runtime.getIndex(caller, .{ .string = "callParserFunction" });
+    const invoke_args = try runtime.newTable();
+    try invoke_args.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "Test" });
+    try invoke_args.rawSet(runtime.allocator, .{ .number = 2 }, .{ .string = "run" });
+    try invoke_args.rawSet(runtime.allocator, .{ .string = "x" }, .{ .string = "frame-parser" });
+    const invoke_spec = try runtime.newTable();
+    try invoke_spec.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = "#invoke" });
+    try invoke_spec.rawSet(runtime.allocator, .{ .string = "args" }, .{ .table = invoke_args });
+    const frame_invoked = try runtime.callValue(parser, &.{ caller, .{ .table = invoke_spec } });
+    defer rt.freeResults(frame_invoked);
+    try std.testing.expectEqualStrings("frame-parser", frame_invoked[0].string);
+    runtime.current_frame = null;
+
     const protected = try expander.expandFragment("Page", "<nowiki>{{Hello|Bob|1}}</nowiki>|{{Hello|A|}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{Hello|Bob|1}}</nowiki>|Hi A N", protected);
     const extension_bodies = try expander.expandFragment(
