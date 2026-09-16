@@ -23,6 +23,8 @@ const module_source =
     \\    local shared_alias = mw.title.new('SharedAlias')
     \\    assert(shared_alias.isRedirect and shared_alias.redirectTarget.prefixedText == 'Shared')
     \\    assert(shared_alias.id == 24 and shared_alias.redirectTarget.id == 23)
+    \\    assert(frame:callParserFunction{ name = '#tag:syntaxhighlight', args = {'x', lang = 'text'} } == '<syntaxhighlight lang="text">x</syntaxhighlight>')
+    \\    assert(frame:callParserFunction{ name = '#tag', args = {'ref', 'body', 'name=n'} } == '<ref name="n">body</ref>')
     \\    assert(mw.title.new('rat').exists)
     \\    assert(string.find(mw.title.new('rat'):getContent(), 'Another rodent', 1, true))
     \\    assert(not mw.title.new('definitely-not-a-real-entry').exists)

@@ -1078,10 +1078,50 @@ pub const Expander = struct {
         return std.fmt.allocPrint(self.runtime.allocator, "<span class=\"mw-formatted-date\" title=\"{s}\">{s}</span>", .{ canonical, display });
     }
 
-    fn hostFrameParserFunction(raw: ?*anyopaque, _: std.mem.Allocator, name: []const u8, args: *rt.Table) anyerror![]const u8 {
+    fn frameParserTagAttrs(self: *Expander, args: *rt.Table, positional_start: usize) !?*rt.Table {
+        const attrs = try self.runtime.newTable();
+        var any = false;
+        var it = args.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* != .string or entry.value_ptr.* == .nil) continue;
+            try attrs.rawSet(self.runtime.allocator, entry.key_ptr.*, entry.value_ptr.*);
+            any = true;
+        }
+        var index = positional_start;
+        while (args.rawGet(.{ .number = @floatFromInt(index) })) |value| : (index += 1) {
+            const text = try self.scalarText(value);
+            const eq = std.mem.indexOfScalar(u8, text, '=') orelse return error.UnsupportedExtensionAttributeArgument;
+            const key = std.mem.trim(u8, text[0..eq], " \t\r\n");
+            if (key.len == 0) return error.UnsupportedExtensionAttributeArgument;
+            const attr_value = std.mem.trim(u8, text[eq + 1 ..], " \t\r\n");
+            try attrs.rawSet(self.runtime.allocator, .{ .string = key }, .{ .string = attr_value });
+            any = true;
+        }
+        return if (any) attrs else null;
+    }
+
+    fn frameParserTag(self: *Expander, raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, args: *rt.Table) ![]const u8 {
+        const plain = std.ascii.eqlIgnoreCase(name, "#tag");
+        const prefixed = std.ascii.startsWithIgnoreCase(name, "#tag:");
+        if (!plain and !prefixed) return error.UnsupportedParserFunction;
+        const tag: []const u8 = if (plain) blk: {
+            const value = args.rawGet(.{ .number = 1 }) orelse return error.StringExpected;
+            if (value != .string) return error.StringExpected;
+            break :blk std.mem.trim(u8, value.string, " \t\r\n");
+        } else std.mem.trim(u8, name[5..], " \t\r\n");
+        if (tag.len == 0) return error.UnsupportedExtensionTag;
+        const content_index: usize = if (plain) 2 else 1;
+        const attr_start: usize = content_index + 1;
+        const content_text = if (args.rawGet(.{ .number = @floatFromInt(content_index) })) |value| try self.scalarText(value) else "";
+        const attrs = try self.frameParserTagAttrs(args, attr_start);
+        return hostFrameExtensionTag(raw, a, tag, .{ .string = content_text }, attrs);
+    }
+
+    fn hostFrameParserFunction(raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const first = args.rawGet(.{ .number = 1 });
         const second = args.rawGet(.{ .number = 2 });
+        if (std.ascii.eqlIgnoreCase(name, "#tag") or std.ascii.startsWithIgnoreCase(name, "#tag:")) return self.frameParserTag(raw, a, name, args);
         if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT") or std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) return "";
         if (std.ascii.eqlIgnoreCase(name, "#formatdate")) {
             if (first == null or first.? != .string) return error.StringExpected;
@@ -1326,6 +1366,27 @@ test "native AOT frame callbacks recurse through the same page expander" {
     const date = try runtime.callValue(parser, &.{ frame, .{ .string = "#formatdate" }, .{ .string = "12-December-2022" }, .{ .string = "dmy" } });
     defer rt.freeResults(date);
     try std.testing.expectEqualStrings("<span class=\"mw-formatted-date\" title=\"2022-12-12\">12 December 2022</span>", date[0].string);
+
+    const syntax_args = try runtime.newTable();
+    try syntax_args.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "x" });
+    try syntax_args.rawSet(runtime.allocator, .{ .string = "lang" }, .{ .string = "text" });
+    const syntax_spec = try runtime.newTable();
+    try syntax_spec.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = "#tag:syntaxhighlight" });
+    try syntax_spec.rawSet(runtime.allocator, .{ .string = "args" }, .{ .table = syntax_args });
+    const syntax = try runtime.callValue(parser, &.{ frame, .{ .table = syntax_spec } });
+    defer rt.freeResults(syntax);
+    try std.testing.expectEqualStrings("<syntaxhighlight lang=\"text\">x</syntaxhighlight>", syntax[0].string);
+
+    const ref_args = try runtime.newTable();
+    try ref_args.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "ref" });
+    try ref_args.rawSet(runtime.allocator, .{ .number = 2 }, .{ .string = "body" });
+    try ref_args.rawSet(runtime.allocator, .{ .number = 3 }, .{ .string = "name=n" });
+    const ref_spec = try runtime.newTable();
+    try ref_spec.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = "#tag" });
+    try ref_spec.rawSet(runtime.allocator, .{ .string = "args" }, .{ .table = ref_args });
+    const ref = try runtime.callValue(parser, &.{ frame, .{ .table = ref_spec } });
+    defer rt.freeResults(ref);
+    try std.testing.expectEqualStrings("<ref name=\"n\">body</ref>", ref[0].string);
 }
 
 test "native AOT nowiki strip markers share page host state" {
