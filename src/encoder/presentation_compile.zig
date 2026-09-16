@@ -46,6 +46,7 @@ pub const Span = struct {
     role: Role = .normal,
 };
 pub const Feature = struct { kind: []const u8, language: []const u8 = "", data: []const u8 = "", tail_kind: []const u8 = "none", tail: []const u8 = "" };
+const SemanticHints = struct { relation_note: bool = false };
 pub const Kind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table };
 pub const Cell = struct { spans: []const Span, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1 };
 pub const Row = struct { cells: []const Cell };
@@ -60,6 +61,8 @@ pub const Block = struct {
     number: []const u8 = "",
     level: u8 = 0,
     table: ?Table = null,
+    // Build-only hint captured while rendering; it is not serialized into DPR2.
+    relation_note: bool = false,
 };
 pub const Reference = struct { number: usize, group_number: usize, name: []const u8 = "", group: []const u8 = "", body: []const u8 = "", spans: []const Span = &.{} };
 const ReferenceDefinition = struct { name: []const u8, group: []const u8 = "", body: []const u8 = "" };
@@ -129,6 +132,7 @@ pub const Renderer = struct {
     media_depth: usize = 0,
     spans: std.ArrayList(Span) = .empty,
     in_reference: bool = false,
+    semantic_capture: ?*SemanticHints = null,
 
     pub fn mediaFile(self: *Renderer, raw: []const u8, caption: []const u8) Error!void {
         // Media is supplemental presentation. Pathological nesting or a page with
@@ -485,6 +489,9 @@ pub const Renderer = struct {
                 if (std.mem.eql(u8, class, "headword-line") or std.mem.eql(u8, class, "headword")) s.role = .headword;
                 if (s.role != .headword and (std.mem.eql(u8, class, "label-content") or std.mem.eql(u8, class, "qualifier-content"))) s.role = .label;
                 if (std.mem.eql(u8, class, "IPA")) s.role = .pronunciation;
+                if (std.mem.eql(u8, class, "nyms")) {
+                    if (self.semantic_capture) |hints| hints.relation_note = true;
+                }
             }
             if (safe_classes.items.len != 0) {
                 s.classes = if (s.classes.len == 0)
@@ -720,6 +727,10 @@ pub const Renderer = struct {
         try list.append(self.a, value);
     }
     fn block(self: *Renderer, list: *std.ArrayList(Block), kind: Kind, raw: []const u8, path: []const u8, number: []const u8, level: u8) Error!void {
+        var hints: SemanticHints = .{};
+        const parent_capture = self.semantic_capture;
+        self.semantic_capture = &hints;
+        defer self.semantic_capture = parent_capture;
         const spans = if (kind == .preformatted) blk: {
             const parent = self.spans;
             self.spans = .empty;
@@ -728,7 +739,7 @@ pub const Renderer = struct {
             break :blk try self.spans.toOwnedSlice(self.a);
         } else try self.parseSpans(raw, .{});
         if (spans.len == 0 and kind != .heading and kind != .blank and kind != .rule) return;
-        try self.appendBlockBudgeted(list, .{ .kind = kind, .text = raw, .spans = spans, .depth = @intCast(@min(path.len, 255)), .list_path = path[0..@min(path.len, 255)], .number = number, .level = level });
+        try self.appendBlockBudgeted(list, .{ .kind = kind, .text = raw, .spans = spans, .depth = @intCast(@min(path.len, 255)), .list_path = path[0..@min(path.len, 255)], .number = number, .level = level, .relation_note = hints.relation_note });
     }
     fn paragraph(self: *Renderer, list: *std.ArrayList(Block), text_value: []const u8) Error!void {
         if (trim(text_value).len == 0) return;

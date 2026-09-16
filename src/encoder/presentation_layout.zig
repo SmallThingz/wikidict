@@ -1,8 +1,6 @@
 //! Build-time reading-order analysis. Every source section/block remains addressable; no
 //! homonyms are merged and supporting material stays attached to its own sense.
 const std = @import("std");
-const ir = @import("blob_encoder").document_ir;
-const syntax = @import("blob_encoder").wikitext_syntax;
 const part = @import("blob_encoder").part_kind;
 const wiki = @import("presentation_compile.zig");
 const A = std.mem.Allocator;
@@ -35,38 +33,6 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     for (speech) |name| if (part.named(title, name)) return name;
     return null;
 }
-fn formOf(a: A, block: wiki.Block) !?Form {
-    var it: ir.InlineIterator = .{ .input = block.text };
-    while (it.next()) |span| if (span.kind == .template) {
-        const t = syntax.Template.parse(a, span.text) catch |err| switch (err) {
-            error.RenderLimit => continue,
-            else => return err,
-        };
-        const relation: []const u8 = if (std.ascii.eqlIgnoreCase(t.name, "plural of")) "plural" else if (std.ascii.eqlIgnoreCase(t.name, "past participle of")) "past participle" else if (std.ascii.eqlIgnoreCase(t.name, "present participle of")) "present participle" else if (std.ascii.eqlIgnoreCase(t.name, "past of") or std.ascii.eqlIgnoreCase(t.name, "simple past of")) "past tense" else if ((std.ascii.eqlIgnoreCase(t.name, "infl of") or std.ascii.eqlIgnoreCase(t.name, "inflection of")) and std.mem.eql(u8, t.get(4), "s-verb-form") and t.last() == 4) "third-person singular present" else continue;
-        if (t.get(2).len != 0) return .{ .relation = relation, .target = t.get(2), .language = t.get(1) };
-    };
-    return null;
-}
-fn isRelationNote(block: wiki.Block) bool {
-    var position: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, block.text, position, '<')) |start| {
-        const tag = syntax.tagAt(block.text, start) orelse {
-            position = start + 1;
-            continue;
-        };
-        position = tag.end;
-        if (tag.attr("class")) |classes| {
-            var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n");
-            while (tokens.next()) |name| if (std.mem.eql(u8, name, "nyms")) return true;
-        }
-    }
-
-    var it: ir.InlineIterator = .{ .input = block.text };
-    while (it.next()) |span| if (span.kind == .template) {
-        for ([_][]const u8{ "syn", "synonyms", "ant", "antonyms", "hyper", "hypernyms", "hypo", "hyponyms", "meronyms", "holonyms", "coordinate terms", "cot", "see", "senseid", "senseno" }) |name| if (std.ascii.eqlIgnoreCase(span.target, name)) return true;
-    };
-    return false;
-}
 const PendingSense = struct {
     value: Sense,
     examples: std.ArrayList(usize) = .empty,
@@ -98,10 +64,10 @@ fn analyze(a: A, kind: []const u8, index: usize, etymology: ?usize, blocks: []co
             }
             stack[depth] = pending.items.len;
             @memset(stack[depth + 1 ..], null);
-            try pending.append(a, .{ .value = .{ .block = b, .parent = parent, .form = try formOf(a, block) } });
+            try pending.append(a, .{ .value = .{ .block = b, .parent = parent, .form = null } });
         } else if (depth != 0 and stack[depth] != null and block.kind != .blank) {
             const owner = &pending.items[stack[depth].?];
-            if (block.kind == .example and !isRelationNote(block)) try owner.examples.append(a, b) else if (block.kind == .quotation) try owner.quotations.append(a, b) else try owner.notes.append(a, b);
+            if (block.kind == .example and !block.relation_note) try owner.examples.append(a, b) else if (block.kind == .quotation) try owner.quotations.append(a, b) else try owner.notes.append(a, b);
         } else if (pending.items.len == 0) try intro.append(a, b) else try other.append(a, b);
     }
     const senses = try a.alloc(Sense, pending.items.len);
@@ -176,13 +142,18 @@ test "lexemes keep homonyms and nested sense evidence separate without losing bl
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 5, 7 }, result.other_sections);
 }
 
-test "oversized definition template cannot fail lexeme analysis after renderer fallback" {
-    const a = std.testing.allocator;
-    var source: std.ArrayList(u8) = .empty;
-    defer source.deinit(a);
-    try source.appendSlice(a, "{{plural of|en|cat");
-    for (0..16_385) |_| try source.appendSlice(a, "|x");
-    try source.appendSlice(a, "}}");
-    const block_value: wiki.Block = .{ .kind = .definition, .text = source.items, .spans = &.{}, .list_path = "#" };
-    try std.testing.expect((try formOf(a, block_value)) == null);
+test "renderer relation hints feed layout without reparsing source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "cat", .language = "English" } };
+    const blocks = try renderer.renderBody("# A feline.\n#: <span class='nyms'>Synonyms: kitty</span>\n#: An ordinary example.\n");
+    try std.testing.expect(blocks[1].relation_note);
+    try std.testing.expect(!blocks[2].relation_note);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{ .{ .title = "English", .level = 2 }, .{ .title = "Noun", .level = 3, .blocks = blocks } };
+    const layout = try build(a, &sections);
+    try std.testing.expect(layout.lexemes[0].definitions[0].form == null);
+    try std.testing.expectEqualSlices(usize, &.{2}, layout.lexemes[0].definitions[0].examples);
+    try std.testing.expectEqualSlices(usize, &.{1}, layout.lexemes[0].definitions[0].notes);
 }
