@@ -30,6 +30,12 @@ pub fn lookupNamedEntity(entity: []const u8) ?[]const u8 {
     return named_entities.get(entity);
 }
 
+pub fn lookupHtmlNamedEntity(entity: []const u8) ?[]const u8 {
+    for (malformed_entity_entries) |entry|
+        if (std.mem.eql(u8, entity, entry.key)) return null;
+    return named_entities.get(entity);
+}
+
 test "lookupNamedEntity covers html5 named references" {
     try std.testing.expectEqualStrings("\u{2267}\u{338}", lookupNamedEntity("NotGreaterFullEqual").?);
     try std.testing.expectEqualStrings("\u{2233}", lookupNamedEntity("CounterClockwiseContourIntegral").?);
@@ -40,4 +46,11 @@ test "lookupNamedEntity covers html5 named references" {
 test "lookupNamedEntity preserves malformed dump aliases" {
     try std.testing.expectEqualStrings("—", lookupNamedEntity("emdash").?);
     try std.testing.expectEqualStrings("\u{a0}", lookupNamedEntity("nsbp").?);
+}
+
+test "canonical HTML entity lookup excludes dump typo aliases" {
+    try std.testing.expectEqualStrings("©", lookupHtmlNamedEntity("copy").?);
+    try std.testing.expectEqualStrings("\u{2267}\u{338}", lookupHtmlNamedEntity("NotGreaterFullEqual").?);
+    try std.testing.expect(lookupHtmlNamedEntity("emdash") == null);
+    try std.testing.expect(lookupHtmlNamedEntity("nsbp") == null);
 }

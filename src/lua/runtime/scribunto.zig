@@ -424,6 +424,12 @@ test "AOT mw.text trim listToText truncate and nowiki match Scribunto behavior" 
     const no_growth = try callField(&runtime, text, "truncate", &.{ .{ .string = "abc" }, .{ .number = 1 } });
     defer rt.freeResults(no_growth);
     try std.testing.expectEqualStrings("abc", no_growth[0].string);
+    const decoded = try callField(&runtime, text, "decode", &.{.{ .string = "&gt;&lt;&amp;&quot;&#039;&nbsp; &#65; &#x1F4A1; &copy; &amp;quot;" }});
+    defer rt.freeResults(decoded);
+    try std.testing.expectEqualStrings("><&\"'\u{a0} A 💡 &copy; &quot;", decoded[0].string);
+    const decoded_named = try callField(&runtime, text, "decode", &.{ .{ .string = "&copy; &NotGreaterFullEqual; &emdash; &amp;copy;" }, .{ .boolean = true } });
+    defer rt.freeResults(decoded_named);
+    try std.testing.expectEqualStrings("© \u{2267}\u{338} &emdash; &copy;", decoded_named[0].string);
     const unicode = try callField(&runtime, text, "truncate", &.{ .{ .string = "é猫xyz" }, .{ .number = 2 }, .{ .string = "" } });
     defer rt.freeResults(unicode);
     try std.testing.expectEqualStrings("é猫", unicode[0].string);

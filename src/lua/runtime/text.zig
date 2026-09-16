@@ -1,6 +1,7 @@
 const std = @import("std");
 const rt = @import("zig_runtime");
 const host_api = @import("host.zig");
+const html_entities = @import("shared_xml_decode").html_entities;
 const Value = rt.Value;
 
 const Host = struct {
@@ -326,6 +327,79 @@ fn textUnstripNoWikiCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Val
     return textUnstripCall(null, runtime, args);
 }
 
+fn appendCodepoint(out: *std.ArrayList(u8), a: std.mem.Allocator, value: u21) !bool {
+    var buf: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(value, &buf) catch return false;
+    try out.appendSlice(a, buf[0..len]);
+    return true;
+}
+
+fn builtinEntity(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "gt")) return ">";
+    if (std.mem.eql(u8, name, "lt")) return "<";
+    if (std.mem.eql(u8, name, "amp")) return "&";
+    if (std.mem.eql(u8, name, "quot")) return "\"";
+    if (std.mem.eql(u8, name, "nbsp")) return "\u{a0}";
+    return null;
+}
+
+fn textDecodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const a = runtime.allocator;
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const source = args[0].string;
+    const decode_named = args.len > 1 and args[1].truthy();
+    if (std.mem.indexOfScalar(u8, source, '&') == null) return one(a, .{ .string = source });
+
+    var out: std.ArrayList(u8) = .empty;
+    var pos: usize = 0;
+    while (pos < source.len) {
+        const amp = std.mem.indexOfScalarPos(u8, source, pos, '&') orelse {
+            try out.appendSlice(a, source[pos..]);
+            break;
+        };
+        try out.appendSlice(a, source[pos..amp]);
+        var semi = amp + 1;
+        while (semi < source.len and source[semi] != ';' and
+            (std.ascii.isAlphanumeric(source[semi]) or source[semi] == '#')) : (semi += 1) {}
+        if (semi >= source.len or source[semi] != ';') {
+            try out.append(a, '&');
+            pos = amp + 1;
+            continue;
+        }
+        const body = source[amp + 1 .. semi];
+        var replacement: ?[]const u8 = null;
+        var numeric: ?u21 = null;
+        if (std.mem.eql(u8, body, "#039")) {
+            replacement = "'";
+        } else if (body.len > 1 and body[0] == '#') {
+            if (body.len > 2 and body[1] == 'x') {
+                numeric = std.fmt.parseInt(u21, body[2..], 16) catch null;
+            } else {
+                numeric = std.fmt.parseInt(u21, body[1..], 10) catch null;
+            }
+        } else {
+            replacement = builtinEntity(body);
+            if (replacement == null and decode_named)
+                replacement = html_entities.lookupHtmlNamedEntity(body);
+        }
+
+        if (replacement) |value| {
+            try out.appendSlice(a, value);
+            pos = semi + 1;
+            continue;
+        }
+        if (numeric) |value| {
+            if (try appendCodepoint(&out, a, value)) {
+                pos = semi + 1;
+                continue;
+            }
+        }
+        try out.appendSlice(a, source[amp .. semi + 1]);
+        pos = semi + 1;
+    }
+    return one(a, .{ .string = try out.toOwnedSlice(a) });
+}
+
 fn textTrimCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
@@ -426,6 +500,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setNative(runtime, text, "unstripNoWiki", null, textUnstripNoWikiCall);
     try setNative(runtime, text, "listToText", null, textListToTextCall);
     try setNative(runtime, text, "truncate", host, textTruncateCall);
+    try setNative(runtime, text, "decode", null, textDecodeCall);
     try setNative(runtime, text, "nowiki", null, textNowikiCall);
     try mw.rawSetNativeField(.mw, "text", .{ .table = text });
 }
