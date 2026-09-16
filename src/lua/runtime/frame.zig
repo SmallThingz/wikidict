@@ -67,16 +67,20 @@ fn extensionTagCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
 
 const ParserCall = struct {
     name: []const u8,
-    first: ?Value = null,
-    second: ?Value = null,
+    args: *rt.Table,
 };
 
-fn decodeParserCall(args: []const Value) !ParserCall {
+fn positionalParserArgs(runtime: *rt.Context, values: []const Value) !*rt.Table {
+    const table = try runtime.newTable();
+    for (values, 1..) |value, index| try table.rawSet(runtime.allocator, .{ .number = @floatFromInt(index) }, value);
+    return table;
+}
+
+fn decodeParserCall(runtime: *rt.Context, args: []const Value) !ParserCall {
     if (args.len < 2) return error.ParserFunctionNameExpected;
     if (args[1] == .string) return .{
         .name = args[1].string,
-        .first = if (args.len > 2) args[2] else null,
-        .second = if (args.len > 3) args[3] else null,
+        .args = try positionalParserArgs(runtime, args[2..]),
     };
     if (args[1] != .table) return error.ParserFunctionNameExpected;
     const spec = args[1].table;
@@ -84,21 +88,17 @@ fn decodeParserCall(args: []const Value) !ParserCall {
     if (name != .string) return error.ParserFunctionNameExpected;
     const raw_args = spec.rawGet(.{ .string = "args" });
     if (raw_args) |value| {
-        if (value == .table) return .{
-            .name = name.string,
-            .first = value.table.rawGet(.{ .number = 1 }),
-            .second = value.table.rawGet(.{ .number = 2 }),
-        };
-        return .{ .name = name.string, .first = value };
+        if (value == .table) return .{ .name = name.string, .args = value.table };
+        return .{ .name = name.string, .args = try positionalParserArgs(runtime, &.{value}) };
     }
-    return .{ .name = name.string };
+    return .{ .name = name.string, .args = try runtime.newTable() };
 }
 
 fn parserFunctionCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const parsed = try decodeParserCall(args);
+    const parsed = try decodeParserCall(runtime, args);
     const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
     const call = host.frame_parser_function orelse return error.NotImplemented;
-    return one(.{ .string = try call(host.ctx, runtime.allocator, parsed.name, parsed.first, parsed.second) });
+    return one(.{ .string = try call(host.ctx, runtime.allocator, parsed.name, parsed.args) });
 }
 
 fn currentFrameCall(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
@@ -193,9 +193,13 @@ const Probe = struct {
         return try a.dupe(u8, "<ref>body</ref>");
     }
 
-    fn parser(_: ?*anyopaque, a: std.mem.Allocator, name: []const u8, first: ?Value, second: ?Value) ![]const u8 {
-        parser_seen = std.mem.eql(u8, name, "#if") and first != null and first.? == .string and std.mem.eql(u8, first.?.string, "x") and second != null;
-        return try a.dupe(u8, "parser");
+    fn parser(_: ?*anyopaque, a: std.mem.Allocator, name: []const u8, args: *rt.Table) ![]const u8 {
+        const first = args.rawGet(.{ .number = 1 });
+        const second = args.rawGet(.{ .number = 2 });
+        const third = args.rawGet(.{ .number = 3 });
+        const named = args.rawGet(.{ .string = "named" });
+        parser_seen = std.mem.eql(u8, name, "#if") and first != null and first.? == .string and std.mem.eql(u8, first.?.string, "x") and second != null and third != null;
+        return try a.dupe(u8, if (named != null and named.? == .string and std.mem.eql(u8, named.?.string, "attr")) "parser-named" else "parser");
     }
 };
 
@@ -249,9 +253,20 @@ test "AOT frame exposes parent title and typed host callbacks" {
     const tag = try callField(&runtime, frame, "extensionTag", &.{ frame, .{ .string = "ref" }, .{ .string = "body" }, .{ .table = attrs } });
     defer rt.freeResults(tag);
     try std.testing.expectEqualStrings("<ref>body</ref>", tag[0].string);
-    const parser = try callField(&runtime, frame, "callParserFunction", &.{ frame, .{ .string = "#if" }, .{ .string = "x" }, .{ .string = "yes" } });
+    const parser = try callField(&runtime, frame, "callParserFunction", &.{ frame, .{ .string = "#if" }, .{ .string = "x" }, .{ .string = "yes" }, .{ .string = "tail" } });
     defer rt.freeResults(parser);
     try std.testing.expectEqualStrings("parser", parser[0].string);
+    const parser_args = try runtime.newTable();
+    try parser_args.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "x" });
+    try parser_args.rawSet(runtime.allocator, .{ .number = 2 }, .{ .string = "yes" });
+    try parser_args.rawSet(runtime.allocator, .{ .number = 3 }, .{ .string = "tail" });
+    try parser_args.rawSet(runtime.allocator, .{ .string = "named" }, .{ .string = "attr" });
+    const parser_spec = try runtime.newTable();
+    try parser_spec.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = "#if" });
+    try parser_spec.rawSet(runtime.allocator, .{ .string = "args" }, .{ .table = parser_args });
+    const named_parser = try callField(&runtime, frame, "callParserFunction", &.{ frame, .{ .table = parser_spec } });
+    defer rt.freeResults(named_parser);
+    try std.testing.expectEqualStrings("parser-named", named_parser[0].string);
     try std.testing.expect(Probe.preprocess_seen and Probe.template_seen and Probe.extension_seen and Probe.parser_seen);
 }
 

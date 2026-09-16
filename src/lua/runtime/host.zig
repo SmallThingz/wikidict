@@ -8,7 +8,7 @@ pub const PageIdFn = *const fn (?*anyopaque, []const u8) anyerror!?u64;
 pub const FramePreprocessFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, []const u8, *rt.Table) anyerror![]const u8;
 pub const FrameExpandTemplateFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, *rt.Table) anyerror![]const u8;
 pub const FrameExtensionTagFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, ?rt.Value, ?*rt.Table) anyerror![]const u8;
-pub const FrameParserFunctionFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, ?rt.Value, ?rt.Value) anyerror![]const u8;
+pub const FrameParserFunctionFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, *rt.Table) anyerror![]const u8;
 pub const TextUnstripNoWikiFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror![]const u8;
 
 pub const InterwikiRow = struct {

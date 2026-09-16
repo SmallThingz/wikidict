@@ -1078,8 +1078,10 @@ pub const Expander = struct {
         return std.fmt.allocPrint(self.runtime.allocator, "<span class=\"mw-formatted-date\" title=\"{s}\">{s}</span>", .{ canonical, display });
     }
 
-    fn hostFrameParserFunction(raw: ?*anyopaque, _: std.mem.Allocator, name: []const u8, first: ?Value, second: ?Value) anyerror![]const u8 {
+    fn hostFrameParserFunction(raw: ?*anyopaque, _: std.mem.Allocator, name: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const first = args.rawGet(.{ .number = 1 });
+        const second = args.rawGet(.{ .number = 2 });
         if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT") or std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) return "";
         if (std.ascii.eqlIgnoreCase(name, "#formatdate")) {
             if (first == null or first.? != .string) return error.StringExpected;
