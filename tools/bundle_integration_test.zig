@@ -30,6 +30,8 @@ const module_source =
     \\    assert(mw.title.new('Module:IntegrationForms').contentModel == 'Scribunto')
     \\    assert(mw.title.new('Module:IntegrationForms', 10).prefixedText == 'Module:IntegrationForms')
     \\    assert(mw.title.makeTitle(10, 'Module:IntegrationForms').prefixedText == 'Template:Module:IntegrationForms')
+    \\    local bad_namespace = pcall(mw.title.new, 'Thing', 'not-a-namespace')
+    \\    assert(not bad_namespace)
     \\    assert(mw.title.new('Module:DefinitelyMissing').contentModel == 'Scribunto')
     \\    assert(mw.title.new('User:Example/common.css').contentModel == 'css')
     \\    assert(mw.hash.hashValue('md5', 'abc') == '900150983cd24fb0d6963f7d28e17f72')

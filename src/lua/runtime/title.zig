@@ -261,7 +261,7 @@ fn titleWithNamespace(a: std.mem.Allocator, text_raw: []const u8, namespace: ?Va
         .number => |number| namespaceSpecById(@intFromFloat(@trunc(number))),
         .string => |name| namespaceSpecByName(name),
         else => null,
-    } orelse return null;
+    } orelse return error.InvalidNamespace;
     if (spec.id == 0) return text;
     return @as(?[]const u8, try std.fmt.allocPrint(a, "{s}:{s}", .{ spec.name, text }));
 }
@@ -503,6 +503,10 @@ test "AOT title constructors and current title use the live host" {
     const forced_explicit = try callField(&runtime, .{ .table = title_lib }, "makeTitle", &.{ .{ .number = 10 }, .{ .string = "Module:Thing" } });
     defer rt.freeResults(forced_explicit);
     try std.testing.expectEqualStrings("Template:Module:Thing", (try runtime.getIndex(forced_explicit[0], .{ .string = "prefixedText" })).string);
+    const new_fn = title_lib.rawGet(.{ .string = "new" }).?;
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(new_fn, &.{ .{ .string = "Thing" }, .{ .string = "not-a-namespace" } }));
+    try std.testing.expectEqualStrings("InvalidNamespace", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
     const equals = title_lib.rawGet(.{ .string = "equals" }).?;
     const same = try runtime.callValue(equals, &.{ made[0], made2[0] });
     defer rt.freeResults(same);
