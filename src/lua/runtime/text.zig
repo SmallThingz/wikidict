@@ -477,6 +477,241 @@ fn textTagCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     return one(runtime.allocator, .{ .string = try out.toOwnedSlice(runtime.allocator) });
 }
 
+const json_preserve_keys: u32 = 1;
+const json_try_fixing: u32 = 2;
+const json_pretty: u32 = 4;
+
+fn jsonFlags(args: []const Value) !u32 {
+    if (args.len < 2 or args[1] == .nil) return 0;
+    if (args[1] != .number) return error.NumberExpected;
+    const raw = args[1].number;
+    if (!std.math.isFinite(raw) or raw != @trunc(raw) or raw < 0 or raw > std.math.maxInt(u32))
+        return error.InvalidJsonFlags;
+    return @intFromFloat(raw);
+}
+
+fn jsonToLua(runtime: *rt.Context, value: std.json.Value, preserve_keys: bool) !Value {
+    return switch (value) {
+        .null => .nil,
+        .bool => |v| .{ .boolean = v },
+        .integer => |v| .{ .number = @floatFromInt(v) },
+        .float => |v| if (std.math.isFinite(v)) .{ .number = v } else error.InvalidJsonNumber,
+        .number_string => |raw| blk: {
+            const v = std.fmt.parseFloat(f64, raw) catch return error.InvalidJsonNumber;
+            if (!std.math.isFinite(v)) return error.InvalidJsonNumber;
+            break :blk .{ .number = v };
+        },
+        .string => |raw| .{ .string = try runtime.allocator.dupe(u8, raw) },
+        .array => |array| blk: {
+            const table = try runtime.newArrayTable(@intCast(array.items.len));
+            for (array.items, 0..) |item, index| {
+                const converted = try jsonToLua(runtime, item, preserve_keys);
+                const key: f64 = @floatFromInt(if (preserve_keys) index else index + 1);
+                try table.rawSet(runtime.allocator, .{ .number = key }, converted);
+            }
+            table.append_index = if (preserve_keys) @intCast(array.items.len) else @intCast(array.items.len + 1);
+            break :blk .{ .table = table };
+        },
+        .object => |object| blk: {
+            const table = try runtime.newTable();
+            var it = object.iterator();
+            while (it.next()) |entry| {
+                const key = try runtime.allocator.dupe(u8, entry.key_ptr.*);
+                try table.rawSet(runtime.allocator, .{ .string = key }, try jsonToLua(runtime, entry.value_ptr.*, preserve_keys));
+            }
+            break :blk .{ .table = table };
+        },
+    };
+}
+
+fn fixJsonTrailingCommas(a: std.mem.Allocator, source: []const u8) !?[]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var copied: usize = 0;
+    var scan: usize = 0;
+    var changed = false;
+    while (std.mem.indexOfScalarPos(u8, source, scan, ',')) |comma| {
+        var p = comma + 1;
+        while (p < source.len and (source[p] == ' ' or source[p] == '\t')) p += 1;
+
+        // FormatJson pattern branch 1:
+        // , [ \t]* [}\]] [^"\r\n]* ([\r\n]|$)
+        if (p < source.len and (source[p] == '}' or source[p] == ']')) {
+            var end = p + 1;
+            var quote = false;
+            while (end < source.len and source[end] != '\r' and source[end] != '\n') : (end += 1) {
+                if (source[end] == '"') {
+                    quote = true;
+                    break;
+                }
+            }
+            if (!quote) {
+                if (end < source.len) end += 1;
+                try out.appendSlice(a, source[copied..comma]);
+                try out.appendSlice(a, source[comma + 1 .. end]);
+                copied = end;
+                scan = end;
+                changed = true;
+                continue;
+            }
+        }
+
+        // FormatJson pattern branch 2:
+        // , [ \t]* [\r\n] [ \t\r\n]* [}\]]
+        p = comma + 1;
+        while (p < source.len and (source[p] == ' ' or source[p] == '\t')) p += 1;
+        if (p < source.len and (source[p] == '\r' or source[p] == '\n')) {
+            p += 1;
+            while (p < source.len and switch (source[p]) {
+                ' ', '\t', '\r', '\n' => true,
+                else => false,
+            }) p += 1;
+            if (p < source.len and (source[p] == '}' or source[p] == ']')) {
+                try out.appendSlice(a, source[copied..comma]);
+                try out.appendSlice(a, source[comma + 1 .. p + 1]);
+                copied = p + 1;
+                scan = copied;
+                changed = true;
+                continue;
+            }
+        }
+        scan = comma + 1;
+    }
+    if (!changed) return null;
+    try out.appendSlice(a, source[copied..]);
+    return try out.toOwnedSlice(a);
+}
+
+fn textJsonDecodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const flags = try jsonFlags(args);
+    var fixed: ?[]u8 = null;
+    const source = args[0].string;
+    var parsed = std.json.parseFromSlice(std.json.Value, runtime.allocator, source, .{}) catch {
+        if ((flags & json_try_fixing) == 0) return error.InvalidJson;
+        fixed = try fixJsonTrailingCommas(runtime.allocator, source) orelse return error.InvalidJson;
+        return one(runtime.allocator, try jsonDecodeFixed(runtime, fixed.?, flags));
+    };
+    defer parsed.deinit();
+    return one(runtime.allocator, try jsonToLua(runtime, parsed.value, (flags & json_preserve_keys) != 0));
+}
+
+fn jsonDecodeFixed(runtime: *rt.Context, source: []const u8, flags: u32) !Value {
+    var parsed = std.json.parseFromSlice(std.json.Value, runtime.allocator, source, .{}) catch return error.InvalidJson;
+    defer parsed.deinit();
+    return jsonToLua(runtime, parsed.value, (flags & json_preserve_keys) != 0);
+}
+
+fn jsonArrayIndex(key: Value, preserve_keys: bool) ?usize {
+    if (key != .number) return null;
+    const raw = key.number;
+    if (!std.math.isFinite(raw) or raw != @trunc(raw)) return null;
+    const first: f64 = if (preserve_keys) 0 else 1;
+    if (raw < first or raw > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return null;
+    return @intFromFloat(raw);
+}
+
+fn jsonSequenceLength(table: *rt.Table, preserve_keys: bool) ?usize {
+    var count: usize = 0;
+    var max_index: usize = 0;
+    var it = table.iterator();
+    while (it.next()) |entry| {
+        const index = jsonArrayIndex(entry.key_ptr.*, preserve_keys) orelse return null;
+        if (count == 0 or index > max_index) max_index = index;
+        count += 1;
+    }
+    if (count == 0) return 0;
+    return if (preserve_keys)
+        if (max_index + 1 == count) count else null
+    else
+        if (max_index == count) count else null;
+}
+
+const JsonEncodeState = struct {
+    runtime: *rt.Context,
+    preserve_keys: bool,
+    seen: std.AutoHashMapUnmanaged(*rt.Table, void) = .empty,
+};
+
+fn luaTableKeyString(state: *JsonEncodeState, key: Value) ![]const u8 {
+    return switch (key) {
+        .string => |text| text,
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) return error.InvalidJsonKey;
+            break :blk try rt.numberToString(state.runtime.allocator, number);
+        },
+        else => error.InvalidJsonKey,
+    };
+}
+
+fn luaToJson(state: *JsonEncodeState, value: Value) !std.json.Value {
+    return switch (value) {
+        .nil => .null,
+        .boolean => |v| .{ .bool = v },
+        .number => |v| blk: {
+            if (!std.math.isFinite(v)) return error.InvalidJsonNumber;
+            if (v == @trunc(v) and v >= @as(f64, @floatFromInt(std.math.minInt(i64))) and v <= @as(f64, @floatFromInt(std.math.maxInt(i64))))
+                break :blk .{ .integer = @intFromFloat(v) };
+            break :blk .{ .float = v };
+        },
+        .string => |text| .{ .string = text },
+        .callable => error.InvalidJsonValue,
+        .table => |table| blk: {
+            if (state.seen.contains(table)) return error.JsonRecursiveTable;
+            try state.seen.put(state.runtime.allocator, table, {});
+            defer _ = state.seen.remove(table);
+
+            if (jsonSequenceLength(table, state.preserve_keys)) |len| {
+                var array = std.json.Array.init(state.runtime.allocator);
+                errdefer array.deinit();
+                for (0..len) |offset| {
+                    const index = if (state.preserve_keys) offset else offset + 1;
+                    const item = table.rawGet(.{ .number = @floatFromInt(index) }) orelse .nil;
+                    try array.append(try luaToJson(state, item));
+                }
+                break :blk .{ .array = array };
+            }
+
+            var object: std.json.ObjectMap = .empty;
+            errdefer object.deinit(state.runtime.allocator);
+            var it = table.iterator();
+            while (it.next()) |entry| {
+                const key = try luaTableKeyString(state, entry.key_ptr.*);
+                if (object.contains(key)) return error.DuplicateJsonKey;
+                try object.put(state.runtime.allocator, key, try luaToJson(state, entry.value_ptr.*));
+            }
+            break :blk .{ .object = object };
+        },
+    };
+}
+
+fn deinitJsonTree(a: std.mem.Allocator, value: *std.json.Value) void {
+    switch (value.*) {
+        .array => |*array| {
+            for (array.items) |*item| deinitJsonTree(a, item);
+            array.deinit();
+        },
+        .object => |*object| {
+            var it = object.iterator();
+            while (it.next()) |entry| deinitJsonTree(a, entry.value_ptr);
+            object.deinit(a);
+        },
+        else => {},
+    }
+}
+
+fn textJsonEncodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const value: Value = if (args.len == 0) .nil else args[0];
+    const flags = try jsonFlags(args);
+    var state = JsonEncodeState{ .runtime = runtime, .preserve_keys = (flags & json_preserve_keys) != 0 };
+    defer state.seen.deinit(runtime.allocator);
+    var encoded = try luaToJson(&state, value);
+    defer deinitJsonTree(runtime.allocator, &encoded);
+    const text = try std.json.Stringify.valueAlloc(runtime.allocator, encoded, .{
+        .whitespace = if ((flags & json_pretty) != 0) .indent_4 else .minified,
+    });
+    return one(runtime.allocator, .{ .string = text });
+}
+
 fn appendCodepoint(out: *std.ArrayList(u8), a: std.mem.Allocator, value: u21) !bool {
     var buf: [4]u8 = undefined;
     const len = std.unicode.utf8Encode(value, &buf) catch return false;
@@ -653,7 +888,12 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setNative(runtime, text, "truncate", host, textTruncateCall);
     try setNative(runtime, text, "encode", null, textEncodeCall);
     try setNative(runtime, text, "decode", null, textDecodeCall);
+    try setNative(runtime, text, "jsonEncode", null, textJsonEncodeCall);
+    try setNative(runtime, text, "jsonDecode", null, textJsonDecodeCall);
     try setNative(runtime, text, "tag", null, textTagCall);
     try setNative(runtime, text, "nowiki", null, textNowikiCall);
+    try text.rawSetNativeField(.text, "JSON_PRESERVE_KEYS", .{ .number = json_preserve_keys });
+    try text.rawSetNativeField(.text, "JSON_TRY_FIXING", .{ .number = json_try_fixing });
+    try text.rawSetNativeField(.text, "JSON_PRETTY", .{ .number = json_pretty });
     try mw.rawSetNativeField(.mw, "text", .{ .table = text });
 }

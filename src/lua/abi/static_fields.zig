@@ -60,7 +60,7 @@ const ustring_names = [_][]const u8{
     "toNFKD",
 };
 const title_names = names[71..77];
-const text_names = [_][]const u8{ "trim", "split", "gsplit", "unstrip", "unstripNoWiki", "killMarkers", "listToText", "nowiki", "jsonEncode", "jsonDecode", "tag", "truncate", "encode", "decode" };
+const text_names = [_][]const u8{ "trim", "split", "gsplit", "unstrip", "unstripNoWiki", "killMarkers", "listToText", "nowiki", "jsonEncode", "jsonDecode", "tag", "truncate", "encode", "decode", "JSON_PRESERVE_KEYS", "JSON_TRY_FIXING", "JSON_PRETTY" };
 const uri_names = [_][]const u8{ "fullUrl", "localUrl", "canonicalUrl", "encode", "decode", "anchorEncode", "new", "validate" };
 const html_names = names[94..95];
 const language_names = [_][]const u8{ "new", "getContentLanguage", "getFallbacksFor", "isKnownLanguageTag", "fetchLanguageName" };

@@ -62,6 +62,8 @@ const module_source =
     \\    assert(mw.text.tag('div', {class = 'chart'}) == '<div class=\"chart\">')
     \\    local strip_marker = frame:extensionTag('nowiki', 'hidden')
     \\    assert(mw.text.killMarkers('a' .. strip_marker .. 'b') == 'ab')
+    \\    local json_value = mw.text.jsonDecode('{"x":[1,2]}', mw.text.JSON_TRY_FIXING)
+    \\    assert(json_value.x[2] == 2 and mw.text.jsonEncode(json_value) == '{"x":[1,2]}')
     \\    assert(mw.getContentLanguage():ucfirst('hello') == 'Hello')
     \\    local unicode_case_ok = pcall(function() return mw.getContentLanguage():ucfirst('éclair') end)
     \\    assert(not unicode_case_ok)

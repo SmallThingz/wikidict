@@ -476,6 +476,63 @@ test "AOT mw.text trim listToText truncate encode tag killMarkers and nowiki mat
     runtime.clearAotErrorName();
 }
 
+test "AOT mw.text JSON preserves Scribunto array and flag semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try makeMovedHostContext(arena.allocator());
+    defer runtime.deinit();
+    const text = try runtime.getIndex(runtime.getGlobal(23), .{ .string = "text" });
+    try std.testing.expectEqual(@as(f64, 1), (try runtime.getIndex(text, .{ .string = "JSON_PRESERVE_KEYS" })).number);
+    try std.testing.expectEqual(@as(f64, 2), (try runtime.getIndex(text, .{ .string = "JSON_TRY_FIXING" })).number);
+    try std.testing.expectEqual(@as(f64, 4), (try runtime.getIndex(text, .{ .string = "JSON_PRETTY" })).number);
+
+    const decoded = try callField(&runtime, text, "jsonDecode", &.{ .{ .string = "{\"x\":[1,2],\"ok\":true}" }, .{ .number = 2 } });
+    defer rt.freeResults(decoded);
+    const x = decoded[0].table.rawGet(.{ .string = "x" }).?.table;
+    try std.testing.expectEqual(@as(f64, 1), x.rawGet(.{ .number = 1 }).?.number);
+    try std.testing.expectEqual(@as(f64, 2), x.rawGet(.{ .number = 2 }).?.number);
+    try std.testing.expect(decoded[0].table.rawGet(.{ .string = "ok" }).?.boolean);
+
+    const encoded = try callField(&runtime, text, "jsonEncode", &.{decoded[0]});
+    defer rt.freeResults(encoded);
+    var parsed = try std.json.parseFromSlice(std.json.Value, arena.allocator(), encoded[0].string, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(i64, 2), parsed.value.object.get("x").?.array.items[1].integer);
+    try std.testing.expect(parsed.value.object.get("ok").?.bool);
+
+    const sequence = try runtime.newTable();
+    try sequence.rawSet(runtime.allocator, .{ .number = 1 }, .{ .number = 10 });
+    try sequence.rawSet(runtime.allocator, .{ .number = 2 }, .{ .number = 20 });
+    const compact = try callField(&runtime, text, "jsonEncode", &.{.{ .table = sequence }});
+    defer rt.freeResults(compact);
+    try std.testing.expectEqualStrings("[10,20]", compact[0].string);
+    const pretty = try callField(&runtime, text, "jsonEncode", &.{ .{ .table = sequence }, .{ .number = 4 } });
+    defer rt.freeResults(pretty);
+    try std.testing.expectEqualStrings("[\n    10,\n    20\n]", pretty[0].string);
+
+    const preserved = try callField(&runtime, text, "jsonDecode", &.{ .{ .string = "[10,20]" }, .{ .number = 1 } });
+    defer rt.freeResults(preserved);
+    try std.testing.expectEqual(@as(f64, 10), preserved[0].table.rawGet(.{ .number = 0 }).?.number);
+    try std.testing.expectEqual(@as(f64, 20), preserved[0].table.rawGet(.{ .number = 1 }).?.number);
+    const preserved_encoded = try callField(&runtime, text, "jsonEncode", &.{ preserved[0], .{ .number = 1 } });
+    defer rt.freeResults(preserved_encoded);
+    try std.testing.expectEqualStrings("[10,20]", preserved_encoded[0].string);
+
+    const fixed = try callField(&runtime, text, "jsonDecode", &.{ .{ .string = "[1,]" }, .{ .number = 2 } });
+    defer rt.freeResults(fixed);
+    try std.testing.expectEqual(@as(f64, 1), fixed[0].table.rawGet(.{ .number = 1 }).?.number);
+    const decode_fn = try runtime.getIndex(text, .{ .string = "jsonDecode" });
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(decode_fn, &.{ .{ .string = "[[1,],[2,],[3,]]" }, .{ .number = 2 } }));
+    try std.testing.expectEqualStrings("InvalidJson", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+
+    try sequence.rawSet(runtime.allocator, .{ .string = "self" }, .{ .table = sequence });
+    const encode_fn = try runtime.getIndex(text, .{ .string = "jsonEncode" });
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(encode_fn, &.{.{ .table = sequence }}));
+    try std.testing.expectEqualStrings("JsonRecursiveTable", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+}
+
 test "AOT Scribunto compiler-known namespaces use native slots" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
