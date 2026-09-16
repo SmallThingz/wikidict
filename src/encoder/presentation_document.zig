@@ -78,39 +78,7 @@ fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8) 
     };
 }
 
-fn inlineKind(kind: anytype) !types.InlineKind {
-    return switch (kind) {
-        .text => .text,
-        .link => .link,
-        .external_link => .external_link,
-        .line_break => .line_break,
-        .template => error.UncompiledTemplate,
-    };
-}
-fn spansAlloc(a: A, source: []const compiler.Span) ![]types.Span {
-    const out = try a.alloc(types.Span, source.len);
-    for (source, out) |span, *dest| dest.* = .{
-        .kind = try inlineKind(span.kind),
-        .text = span.text,
-        .target = span.target,
-        .trail = span.trail,
-        .language = span.language,
-        .classes = span.classes,
-        .direction = span.direction,
-        .bold = span.bold,
-        .italic = span.italic,
-        .code = span.code,
-        .small = span.small,
-        .superscript = span.superscript,
-        .subscript = span.subscript,
-        .strike = span.strike,
-        .underline = span.underline,
-        .role = std.meta.stringToEnum(types.Role, @tagName(span.role)) orelse return error.InvalidPresentation,
-    };
-    return out;
-}
-
-fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8) ![]const types.Span {
+fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8) ![]const compiler.Span {
     const value = display orelse return &.{};
     if (value.source.len == 0) return &.{};
     var renderer: compiler.Renderer = .{
@@ -122,108 +90,7 @@ fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8) ![
     const plain = try compiler.plainText(a, spans);
     if (!std.mem.eql(u8, plain, value.page_title)) return &.{};
     if (renderer.rendered_templates != 0 or renderer.unresolved_templates != 0) return error.UncompiledTemplate;
-    return spansAlloc(a, spans);
-}
-
-fn tableAlloc(a: A, source: compiler.Table) !types.Table {
-    const rows = try a.alloc(types.Row, source.rows.len);
-    for (source.rows, rows) |row, *dest_row| {
-        const cells = try a.alloc(types.Cell, row.cells.len);
-        for (row.cells, cells) |cell, *dest_cell| dest_cell.* = .{
-            .spans = try spansAlloc(a, cell.spans),
-            .header = cell.header,
-            .colspan = cell.colspan,
-            .rowspan = cell.rowspan,
-        };
-        dest_row.* = .{ .cells = cells };
-    }
-    return .{ .caption = try spansAlloc(a, source.caption), .rows = rows };
-}
-fn blocksAlloc(a: A, source: []const compiler.Block) ![]types.Block {
-    const out = try a.alloc(types.Block, source.len);
-    for (source, out) |block, *dest| {
-        dest.* = .{
-            .kind = std.meta.stringToEnum(types.BlockKind, @tagName(block.kind)) orelse return error.InvalidPresentation,
-            .depth = block.depth,
-            .spans = try spansAlloc(a, block.spans),
-            .list_path = block.list_path,
-            .number = block.number,
-            .level = block.level,
-            .table = if (block.table) |table| try tableAlloc(a, table) else null,
-        };
-        if (block.feature) |feature| dest.feature = .{
-            .kind = feature.kind,
-            .language = feature.language,
-            .data = feature.data,
-            .tail_kind = feature.tail_kind,
-            .tail = feature.tail,
-        };
-    }
-    return out;
-}
-
-fn sectionsAlloc(a: A, source: []const WorkSection) ![]types.Section {
-    const out = try a.alloc(types.Section, source.len);
-    for (source, out) |section, *dest| dest.* = .{
-        .level = section.level,
-        .title = section.title,
-        .blocks = try blocksAlloc(a, section.blocks),
-    };
-    return out;
-}
-
-fn layoutAlloc(a: A, source: semantic.Layout) !types.Layout {
-    const lexemes = try a.alloc(types.Lexeme, source.lexemes.len);
-    for (source.lexemes, lexemes) |lexeme, *dest| {
-        const senses = try a.alloc(types.Sense, lexeme.definitions.len);
-        for (lexeme.definitions, senses) |sense, *dest_sense| {
-            dest_sense.* = .{
-                .block = sense.block,
-                .parent = sense.parent,
-                .examples = sense.examples,
-                .quotations = sense.quotations,
-                .notes = sense.notes,
-                .form = if (sense.form) |form| .{
-                    .relation = form.relation,
-                    .target = form.target,
-                    .language = form.language,
-                } else null,
-            };
-        }
-        dest.* = .{
-            .language = lexeme.language,
-            .kind = lexeme.kind,
-            .section = lexeme.section,
-            .etymology = lexeme.etymology,
-            .definitions = senses,
-            .introduction = lexeme.introduction,
-            .other_blocks = lexeme.other_blocks,
-            .related_sections = lexeme.related_sections,
-        };
-    }
-    return .{ .lexemes = lexemes, .other_sections = source.other_sections };
-}
-
-fn referencesAlloc(a: A, source: []const compiler.Reference) ![]types.Reference {
-    const out = try a.alloc(types.Reference, source.len);
-    for (source, out) |reference, *dest| dest.* = .{
-        .number = reference.number,
-        .group_number = reference.group_number,
-        .name = reference.name,
-        .group = reference.group,
-        .spans = try spansAlloc(a, reference.spans),
-    };
-    return out;
-}
-
-fn mediaAlloc(a: A, source: []const compiler.media_types.Media) ![]types.Media {
-    const out = try a.alloc(types.Media, source.len);
-    for (source, out) |media, *dest| dest.* = .{
-        .file = media.file,
-        .kind = std.meta.stringToEnum(types.MediaKind, @tagName(media.kind)) orelse return error.InvalidPresentation,
-        .caption = media.caption,
-    };
-    return out;
+    return spans;
 }
 
 pub fn compileAlloc(
@@ -235,22 +102,13 @@ pub fn compileAlloc(
     source: []const u8,
     display_title: ?DisplayTitle,
 ) ![]u8 {
+    _ = kind;
+    _ = language_code;
     const work = try workAlloc(a, title, language orelse "", source);
     if (work.rendered_templates != 0 or work.unresolved_templates != 0) return error.UncompiledTemplate;
-    const sections = try sectionsAlloc(a, work.sections);
-    const layout = try layoutAlloc(a, try semantic.build(a, work.sections));
-    const stored: types.Stored = .{ .entry = .{
-        .organization = layout,
-        .title = title,
-        .display_title = try displayTitleSpansAlloc(a, display_title, language orelse ""),
-        .kind = kind,
-        .language = language,
-        .language_code = language_code,
-        .sections = sections,
-        .references = try referencesAlloc(a, work.references),
-        .media = try mediaAlloc(a, work.media),
-    } };
-    return codec.encodeAlloc(a, stored);
+    const layout = try semantic.build(a, work.sections);
+    const display_spans = try displayTitleSpansAlloc(a, display_title, language orelse "");
+    return codec.encodeBuildAlloc(a, display_spans, work.sections, layout, work.references, work.media);
 }
 
 test "compiled presentation contains no executable template syntax" {

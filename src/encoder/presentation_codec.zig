@@ -50,9 +50,13 @@ const Encoder = struct {
         try self.count(values.len);
         for (values) |value| try self.index(value);
     }
-    fn span(self: *Encoder, value: types.Span) !void {
-        try self.byte(@intFromEnum(value.kind));
-        try self.byte(@intFromEnum(value.role));
+    fn enumByte(self: *Encoder, comptime E: type, value: anytype) !void {
+        const mapped = std.meta.stringToEnum(E, @tagName(value)) orelse return error.UncompiledTemplate;
+        try self.byte(@intFromEnum(mapped));
+    }
+    fn span(self: *Encoder, value: anytype) !void {
+        try self.enumByte(types.InlineKind, value.kind);
+        try self.enumByte(types.Role, value.role);
         var flags: u8 = 0;
         if (value.bold) flags |= 1 << 0;
         if (value.italic) flags |= 1 << 1;
@@ -70,11 +74,11 @@ const Encoder = struct {
         try self.string(value.classes);
         try self.string(value.direction);
     }
-    fn spans(self: *Encoder, values: []const types.Span) !void {
+    fn spans(self: *Encoder, values: anytype) !void {
         try self.count(values.len);
         for (values) |value| try self.span(value);
     }
-    fn feature(self: *Encoder, value: ?types.Feature) !void {
+    fn feature(self: *Encoder, value: anytype) !void {
         if (value) |feature_value| {
             try self.byte(1);
             try self.string(feature_value.kind);
@@ -84,17 +88,17 @@ const Encoder = struct {
             try self.string(feature_value.tail);
         } else try self.byte(0);
     }
-    fn cell(self: *Encoder, value: types.Cell) !void {
+    fn cell(self: *Encoder, value: anytype) !void {
         try self.byte(@intFromBool(value.header));
         try self.writeU16(value.colspan);
         try self.writeU16(value.rowspan);
         try self.spans(value.spans);
     }
-    fn row(self: *Encoder, value: types.Row) !void {
+    fn row(self: *Encoder, value: anytype) !void {
         try self.count(value.cells.len);
         for (value.cells) |cell_value| try self.cell(cell_value);
     }
-    fn table(self: *Encoder, value: ?types.Table) !void {
+    fn table(self: *Encoder, value: anytype) !void {
         if (value) |table_value| {
             try self.byte(1);
             try self.spans(table_value.caption);
@@ -102,8 +106,8 @@ const Encoder = struct {
             for (table_value.rows) |row_value| try self.row(row_value);
         } else try self.byte(0);
     }
-    fn block(self: *Encoder, value: types.Block) !void {
-        try self.byte(@intFromEnum(value.kind));
+    fn block(self: *Encoder, value: anytype) !void {
+        try self.enumByte(types.BlockKind, value.kind);
         try self.byte(value.depth);
         try self.byte(value.level);
         try self.spans(value.spans);
@@ -112,7 +116,7 @@ const Encoder = struct {
         try self.string(value.number);
         try self.table(value.table);
     }
-    fn sections(self: *Encoder, values: []const types.Section) !void {
+    fn sections(self: *Encoder, values: anytype) !void {
         try self.count(values.len);
         for (values) |section| {
             try self.byte(section.level);
@@ -121,7 +125,7 @@ const Encoder = struct {
             for (section.blocks) |block_value| try self.block(block_value);
         }
     }
-    fn form(self: *Encoder, value: ?types.Form) !void {
+    fn form(self: *Encoder, value: anytype) !void {
         if (value) |form_value| {
             try self.byte(1);
             try self.string(form_value.relation);
@@ -129,7 +133,7 @@ const Encoder = struct {
             try self.string(form_value.language);
         } else try self.byte(0);
     }
-    fn sense(self: *Encoder, value: types.Sense) !void {
+    fn sense(self: *Encoder, value: anytype) !void {
         try self.index(value.block);
         try self.optionalIndex(value.parent);
         try self.indices(value.examples);
@@ -137,7 +141,7 @@ const Encoder = struct {
         try self.indices(value.notes);
         try self.form(value.form);
     }
-    fn layout(self: *Encoder, value: types.Layout) !void {
+    fn layout(self: *Encoder, value: anytype) !void {
         try self.count(value.lexemes.len);
         for (value.lexemes) |lexeme| {
             try self.string(lexeme.language);
@@ -152,7 +156,7 @@ const Encoder = struct {
         }
         try self.indices(value.other_sections);
     }
-    fn references(self: *Encoder, values: []const types.Reference) !void {
+    fn references(self: *Encoder, values: anytype) !void {
         try self.count(values.len);
         for (values) |reference| {
             try self.index(reference.number);
@@ -162,11 +166,11 @@ const Encoder = struct {
             try self.spans(reference.spans);
         }
     }
-    fn media(self: *Encoder, values: []const types.Media) !void {
+    fn media(self: *Encoder, values: anytype) !void {
         try self.count(values.len);
         for (values) |item| {
             try self.string(item.file);
-            try self.byte(@intFromEnum(item.kind));
+            try self.enumByte(types.MediaKind, item.kind);
             try self.string(item.caption);
         }
     }
@@ -386,6 +390,28 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     try encoder.layout(stored.entry.organization);
     try encoder.references(stored.entry.references);
     try encoder.media(stored.entry.media);
+    return encoder.out.toOwnedSlice(a);
+}
+
+/// Build-time fast path: serialize compiler/layout structures directly instead of
+/// allocating a second presentation tree with the same fields.
+pub fn encodeBuildAlloc(
+    a: A,
+    display_title: anytype,
+    sections: anytype,
+    layout_value: anytype,
+    references_value: anytype,
+    media_value: anytype,
+) ![]u8 {
+    var encoder: Encoder = .{ .a = a };
+    defer encoder.deinit();
+    try encoder.out.appendSlice(a, magic);
+    try encoder.spans(display_title);
+    try encoder.sections(sections);
+    try encoder.count(0); // no preamble is emitted by the bundle compiler
+    try encoder.layout(layout_value);
+    try encoder.references(references_value);
+    try encoder.media(media_value);
     return encoder.out.toOwnedSlice(a);
 }
 
