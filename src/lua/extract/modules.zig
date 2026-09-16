@@ -224,7 +224,7 @@ pub fn main(init: std.process.Init) !void {
             if (std.mem.indexOfAny(u8, title, "\t\r\n") != null) return error.InvalidPageTitle;
             if (redirect) |target| if (std.mem.indexOfAny(u8, target, "\t\r\n") != null) return error.InvalidPageTitle;
             if (content_model.len == 0 or std.mem.indexOfAny(u8, revision_timestamp, "\t\r\n") != null or std.mem.indexOfAny(u8, revision_user, "\t\r\n") != null or std.mem.indexOfAny(u8, content_model, "\t\r\n") != null) return error.InvalidPageMetadata;
-            try page_writer.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\n", .{
+            try page_writer.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{d}\n", .{
                 source_offset,
                 text_raw.len,
                 title,
@@ -236,6 +236,7 @@ pub fn main(init: std.process.Init) !void {
                 content_model,
                 parsed_ns,
                 @intFromBool(capture.text_raw != null),
+                @intFromBool(std.mem.indexOfScalar(u8, text_raw, '&') != null),
             });
             decoded_title = title;
             decoded_redirect = redirect;

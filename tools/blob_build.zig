@@ -14,6 +14,7 @@ const IndexedPage = struct {
     title: []const u8,
     ns: u32,
     has_source: bool,
+    source_needs_decode: bool,
 };
 
 const Mapped = struct {
@@ -49,6 +50,7 @@ fn parseIndexedPage(line: []const u8) !IndexedPage {
     _ = fields.next() orelse return error.InvalidPageIndex; // content model
     const ns = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10);
     const has_source_raw = fields.next() orelse return error.InvalidPageIndex;
+    const needs_decode_raw = fields.next() orelse return error.InvalidPageIndex;
     if (title.len == 0 or fields.next() != null) return error.InvalidPageIndex;
     const has_source = if (std.mem.eql(u8, has_source_raw, "1"))
         true
@@ -56,7 +58,13 @@ fn parseIndexedPage(line: []const u8) !IndexedPage {
         false
     else
         return error.InvalidPageIndex;
-    return .{ .source_offset = source_offset, .source_len = source_len, .title = title, .ns = ns, .has_source = has_source };
+    const source_needs_decode = if (std.mem.eql(u8, needs_decode_raw, "1"))
+        true
+    else if (std.mem.eql(u8, needs_decode_raw, "0"))
+        false
+    else
+        return error.InvalidPageIndex;
+    return .{ .source_offset = source_offset, .source_len = source_len, .title = title, .ns = ns, .has_source = has_source, .source_needs_decode = source_needs_decode };
 }
 
 fn parseOptions(args: []const []const u8) !Options {
@@ -134,7 +142,11 @@ pub fn main(init: std.process.Init) !void {
             const start = std.math.cast(usize, page.source_offset) orelse return error.InvalidPageIndex;
             const end = std.math.add(usize, start, page.source_len) catch return error.InvalidPageIndex;
             if (end > dump.bytes.len) return error.InvalidPageIndex;
-            const source = try dump_source.decodeSourceAlloc(page_allocator, dump.bytes[start..end]);
+            const raw_source = dump.bytes[start..end];
+            const source = if (page.source_needs_decode)
+                try dump_source.decodeSourceAlloc(page_allocator, raw_source)
+            else
+                raw_source;
             const expanded = try worker.expand(page_allocator, page.title, source);
             try writer.addPage(page_allocator, page.ns, page.title, expanded);
         }

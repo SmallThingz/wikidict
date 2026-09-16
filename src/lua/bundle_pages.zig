@@ -5,7 +5,7 @@ const lua_program = @import("lua_program");
 const xml_decode = @import("shared_xml_decode");
 const InterwikiRow = lua_program.WikitextProvider.InterwikiRow;
 
-const CorpusPage = struct { offset: u64, len: usize, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, redirect: ?[]const u8 = null };
+const CorpusPage = struct { offset: u64, len: usize, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, source_needs_decode: bool, redirect: ?[]const u8 = null };
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
@@ -147,16 +147,19 @@ pub const Provider = struct {
             const content_model = fields.next() orelse return error.InvalidPageIndex;
             _ = std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10) catch return error.InvalidPageIndex; // namespace
             const has_source = fields.next() orelse return error.InvalidPageIndex;
+            const needs_decode_raw = fields.next() orelse return error.InvalidPageIndex;
             if (title.len == 0 or revision_timestamp.len == 0 or content_model.len == 0 or
                 (!std.mem.eql(u8, has_source, "0") and !std.mem.eql(u8, has_source, "1")) or
+                (!std.mem.eql(u8, needs_decode_raw, "0") and !std.mem.eql(u8, needs_decode_raw, "1")) or
                 fields.next() != null) return error.InvalidPageIndex;
+            const source_needs_decode = std.mem.eql(u8, needs_decode_raw, "1");
             const redirect = if (redirect_raw.len == 0) null else redirect_raw;
             const end = std.math.add(u64, offset, len) catch return error.InvalidPageIndex;
             if (end > dump_size) return error.InvalidPageIndex;
             const result = try pages.getOrPut(self.a, title);
             if (result.found_existing) return error.DuplicatePage;
             result.key_ptr.* = title;
-            result.value_ptr.* = .{ .offset = offset, .len = len, .page_id = page_id, .revision_id = revision_id, .revision_timestamp = revision_timestamp, .revision_user = revision_user, .content_model = content_model, .redirect = redirect };
+            result.value_ptr.* = .{ .offset = offset, .len = len, .page_id = page_id, .revision_id = revision_id, .revision_timestamp = revision_timestamp, .revision_user = revision_user, .content_model = content_model, .source_needs_decode = source_needs_decode, .redirect = redirect };
         }
         self.corpus_pages = pages;
         self.corpus_pages_storage = mapped;
@@ -164,12 +167,15 @@ pub const Provider = struct {
     }
 
     fn readCorpusSource(self: *Provider, a: A, page: CorpusPage) ![]const u8 {
-        if (page.len == 0) return a.dupe(u8, "");
+        if (page.len == 0) return "";
         const file = if (self.dump_file) |*value| value else return error.MissingDump;
         const raw = try a.alloc(u8, page.len);
-        defer a.free(raw);
+        errdefer a.free(raw);
         if (try file.readPositionalAll(self.io, raw, page.offset) != raw.len) return error.TruncatedDump;
-        return xml_decode.decodeSinglePassAlloc(a, raw);
+        if (!page.source_needs_decode) return raw;
+        const decoded = try xml_decode.decodeSinglePassAlloc(a, raw);
+        a.free(raw);
+        return decoded;
     }
 
     fn findPage(self: *Provider, raw_title: []const u8) !?CorpusPage {
@@ -259,7 +265,7 @@ test "provider owns paths and separates raw content from redirect-following tran
     const alias_offset = template_offset + template_raw.len;
     const page_index = try std.fmt.allocPrint(
         a,
-        "{d}\t{d}\tOrdinary page\t\t1\t101\t2024-03-04T05:06:07Z\tAlice\twikitext\t0\t1\n{d}\t{d}\tTemplate:Lazy\t\t2\t102\t2024-03-05T06:07:08Z\tBob\twikitext\t10\t1\n{d}\t{d}\tTemplate:Alias\tTemplate:Lazy\t3\t103\t2024-03-06T07:08:09Z\t192.0.2.7\twikitext\t10\t1\n",
+        "{d}\t{d}\tOrdinary page\t\t1\t101\t2024-03-04T05:06:07Z\tAlice\twikitext\t0\t1\t1\n{d}\t{d}\tTemplate:Lazy\t\t2\t102\t2024-03-05T06:07:08Z\tBob\twikitext\t10\t1\t0\n{d}\t{d}\tTemplate:Alias\tTemplate:Lazy\t3\t103\t2024-03-06T07:08:09Z\t192.0.2.7\twikitext\t10\t1\t0\n",
         .{ prefix.len, ordinary_raw.len, template_offset, template_raw.len, alias_offset, alias_raw.len },
     );
     defer a.free(page_index);
@@ -278,6 +284,13 @@ test "provider owns paths and separates raw content from redirect-following tran
     try std.testing.expectEqualStrings(alias_raw, raw_alias);
     const template_content = (try Provider.getTransclusion(&provider, page_a, "Template:Alias")) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings(template_raw, template_content);
+    var borrowed_alloc = std.testing.FailingAllocator.init(a, .{ .fail_index = 1 });
+    const borrowed_a = borrowed_alloc.allocator();
+    const borrowed_template = (try provider.lookup(borrowed_a, "Template:Lazy", true)) orelse return error.TestExpectedEqual;
+    defer borrowed_a.free(borrowed_template);
+    try std.testing.expectEqualStrings(template_raw, borrowed_template);
+    var decoded_alloc = std.testing.FailingAllocator.init(a, .{ .fail_index = 1 });
+    try std.testing.expectError(error.OutOfMemory, provider.lookup(decoded_alloc.allocator(), "Ordinary page", true));
     try std.testing.expectEqualStrings("Template:Lazy", (try Provider.redirectTarget(&provider, "Template:Alias")).?);
     try std.testing.expect((try Provider.redirectTarget(&provider, "Template:Lazy")) == null);
     const metadata = (try Provider.pageMetadata(&provider, "Ordinary page")).?;
