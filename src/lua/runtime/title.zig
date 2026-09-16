@@ -148,6 +148,11 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
     }
 
     const ns = namespaceOf(prefixed.string);
+    if (std.mem.eql(u8, key, "exists")) {
+        const exists = try pageExists(runtime, prefixed.string);
+        try table.rawSetNativeField(.title_value, "exists", .{ .boolean = exists });
+        return one(.{ .boolean = exists });
+    }
     const subject = namespace_lib.subjectSpec(ns.id);
     const is_talk = subject != null and subject.?.id != ns.id;
     if (std.mem.eql(u8, key, "isTalkPage")) return one(.{ .boolean = is_talk });
@@ -270,7 +275,6 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
     try table.rawSetNativeField(.title_value, "rootText", .{ .string = if (first_slash) |pos| ns.text[0..pos] else ns.text });
     try table.rawSetNativeField(.title_value, "isSubpage", .{ .boolean = slash != null });
     try table.rawSetNativeField(.title_value, "interwiki", .{ .string = "" });
-    try table.rawSetNativeField(.title_value, "exists", .{ .boolean = try pageExists(runtime, base_title) });
     table.metatable = try ensureMetatable(runtime, state);
     const ctx = try runtime.allocator.create(TitleCtx);
     ctx.* = .{ .title = base_title, .state = state };
@@ -400,7 +404,15 @@ fn buildBatchTitles(runtime: *rt.Context, batch: *BatchState) !*rt.Table {
 fn batchLookupExistenceCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const batch: *BatchState = @ptrCast(@alignCast(raw orelse return error.MissingTitleBatchState));
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
-    _ = try buildBatchTitles(runtime, batch);
+    const titles = try buildBatchTitles(runtime, batch);
+    const n = batch.source.rawLen();
+    for (0..n) |i| {
+        const title = titles.rawGet(.{ .number = @floatFromInt(i + 1) }) orelse continue;
+        if (title != .table) continue;
+        const prefixed = title.table.rawGet(.{ .string = "prefixedText" }) orelse continue;
+        if (prefixed != .string or namespaceOf(prefixed.string).id == -2) continue;
+        _ = try runtime.getIndex(title, .{ .string = "exists" });
+    }
     return one(args[0]);
 }
 

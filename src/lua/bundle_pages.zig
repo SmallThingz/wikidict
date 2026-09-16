@@ -233,6 +233,7 @@ pub const Provider = struct {
 
     fn exists(ctx: ?*anyopaque, title: []const u8) anyerror!bool {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        if (std.ascii.startsWithIgnoreCase(title, "Media:")) return error.NotImplemented;
         return (try self.lookup(self.a, title, false)) != null;
     }
 };
@@ -286,6 +287,7 @@ test "provider owns paths and separates raw content from redirect-following tran
     try std.testing.expectEqualStrings("Alice", metadata.revision_user);
     try std.testing.expectEqualStrings("wikitext", metadata.content_model);
     try std.testing.expect(try Provider.exists(&provider, "Ordinary_page"));
+    try std.testing.expectError(error.NotImplemented, Provider.exists(&provider, "Media:Remote.svg"));
     const main_content = (try provider.lookup(page_a, "Ordinary_page", true)) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("A&B", main_content);
     try std.testing.expect(provider.api().interwiki_map == null);
