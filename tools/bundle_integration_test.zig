@@ -28,6 +28,7 @@ const module_source =
     \\    assert(shared_alias.isRedirect and shared_alias.redirectTarget.prefixedText == 'Shared')
     \\    assert(shared_alias.id == 24 and shared_alias.redirectTarget.id == 23)
     \\    assert(mw.title.new('rat').contentModel == 'wikitext')
+    \\    assert(mw.title.new('rat').isContentPage and not mw.title.new('Appendix:IntegrationFixture').isContentPage and not mw.title.new('Template:show-forms').isContentPage)
     \\    assert(not mw.title.new('rat').isExternal and mw.title.new('rat').isLocal)
     \\    local interwiki_ok = pcall(mw.title.new, 'w:Example')
     \\    assert(not interwiki_ok)

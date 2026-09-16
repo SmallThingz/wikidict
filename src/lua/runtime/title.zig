@@ -159,6 +159,7 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
     const subject = namespace_lib.subjectSpec(ns.id);
     const is_talk = subject != null and subject.?.id != ns.id;
     if (std.mem.eql(u8, key, "isTalkPage")) return one(.{ .boolean = is_talk });
+    if (std.mem.eql(u8, key, "isContentPage")) return one(.{ .boolean = ns.id == 0 });
     if (std.mem.eql(u8, key, "subjectPageTitle")) {
         const spec = subject orelse return one(.nil);
         const title = try titleForSpec(runtime, spec, ns.text);
@@ -626,6 +627,13 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     defer rt.freeResults(canonical_url);
     try std.testing.expectEqualStrings("https://en.wiktionary.org/wiki/Template:Foo/Sub#_frag_ment", canonical_url[0].string);
     try std.testing.expect(!(try runtime.getIndex(title, .{ .string = "isTalkPage" })).boolean);
+    try std.testing.expect(!(try runtime.getIndex(title, .{ .string = "isContentPage" })).boolean);
+    const main_page = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "entry" }});
+    defer rt.freeResults(main_page);
+    try std.testing.expect((try runtime.getIndex(main_page[0], .{ .string = "isContentPage" })).boolean);
+    const appendix_page = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Appendix:entry" }});
+    defer rt.freeResults(appendix_page);
+    try std.testing.expect(!(try runtime.getIndex(appendix_page[0], .{ .string = "isContentPage" })).boolean);
     const talk = try runtime.getIndex(title, .{ .string = "talkPageTitle" });
     try std.testing.expect(talk == .table);
     try std.testing.expectEqualStrings("Template talk:Foo/Sub", (try runtime.getIndex(talk, .{ .string = "prefixedText" })).string);
