@@ -27,12 +27,39 @@ const namespace_lib = @import("namespaces.zig");
 const namespaceSpecById = namespace_lib.byId;
 const namespaceSpecByName = namespace_lib.byName;
 const namespaceOf = namespace_lib.ofTitle;
-fn normalizeName(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
-    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    if (std.mem.indexOfScalar(u8, trimmed, '_') == null) return trimmed;
-    const out = try a.dupe(u8, trimmed);
-    std.mem.replaceScalar(u8, out, '_', ' ');
-    return out;
+fn isTitleSpace(cp: u21) bool {
+    return cp == ' ' or cp == '_' or cp == 0x00a0 or cp == 0x1680 or cp == 0x180e or
+        (cp >= 0x2000 and cp <= 0x200a) or cp == 0x2028 or cp == 0x2029 or
+        cp == 0x202f or cp == 0x205f or cp == 0x3000;
+}
+
+fn isBidiOverride(cp: u21) bool {
+    return cp == 0x200e or cp == 0x200f or (cp >= 0x202a and cp <= 0x202e);
+}
+
+fn normalizeName(a: std.mem.Allocator, raw: []const u8) !?[]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var pending_space = false;
+    var pos: usize = 0;
+    while (pos < raw.len) {
+        const len = std.unicode.utf8ByteSequenceLength(raw[pos]) catch return null;
+        if (pos + len > raw.len) return null;
+        const cp = std.unicode.utf8Decode(raw[pos .. pos + len]) catch return null;
+        if (isBidiOverride(cp)) {
+            pos += len;
+            continue;
+        }
+        if (isTitleSpace(cp)) {
+            pending_space = out.items.len != 0;
+            pos += len;
+            continue;
+        }
+        if (pending_space) try out.append(a, ' ');
+        pending_space = false;
+        try out.appendSlice(a, raw[pos .. pos + len]);
+        pos += len;
+    }
+    return @as(?[]const u8, try out.toOwnedSlice(a));
 }
 
 fn normalizeFragment(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
@@ -262,23 +289,97 @@ fn normalizedNewText(runtime: *rt.Context, state: *State, raw: []const u8) ![]co
     return result[0].string;
 }
 
+fn namespaceArgument(value: ?Value, required: bool) !namespace_lib.Spec {
+    const actual = value orelse return if (required) error.InvalidNamespace else namespaceSpecById(0).?;
+    if (actual == .nil) return if (required) error.InvalidNamespace else namespaceSpecById(0).?;
+    const spec = switch (actual) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number) or number != @trunc(number) or
+                number < @as(f64, @floatFromInt(std.math.minInt(i32))) or number > @as(f64, @floatFromInt(std.math.maxInt(i32))))
+                break :blk null;
+            break :blk namespaceSpecById(@intFromFloat(number));
+        },
+        .string => |name| namespaceSpecByName(name),
+        else => null,
+    };
+    return spec orelse error.InvalidNamespace;
+}
+
+fn legalTitleAscii(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or switch (c) {
+        ' ', '%', '!', '"', '$', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '=', '?', '@', '\\', '^', '_', '`', '~' => true,
+        else => false,
+    };
+}
+
+fn hasPercentEscape(text: []const u8) bool {
+    if (text.len < 3) return false;
+    for (text[0 .. text.len - 2], 0..) |c, i|
+        if (c == '%' and std.ascii.isHex(text[i + 1]) and std.ascii.isHex(text[i + 2])) return true;
+    return false;
+}
+
+fn hasNamedCharacterReference(text: []const u8) bool {
+    var pos: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, text, pos, '&')) |amp| {
+        var i = amp + 1;
+        var any = false;
+        while (i < text.len and text[i] != ';') : (i += 1) {
+            const c = text[i];
+            if (!(std.ascii.isAlphanumeric(c) or c >= 0x80)) break;
+            any = true;
+        }
+        if (any and i < text.len and text[i] == ';') return true;
+        pos = amp + 1;
+    }
+    return false;
+}
+
+fn validTitleBody(spec: namespace_lib.Spec, text_with_fragment: []const u8) bool {
+    const hash = std.mem.indexOfScalar(u8, text_with_fragment, '#');
+    const text = if (hash) |at| text_with_fragment[0..at] else text_with_fragment;
+    if (text.len == 0) return spec.id == 0 and hash != null;
+    if (text[0] == ':') return false;
+    if (spec.id == 1) if (std.mem.indexOfScalar(u8, text, ':')) |colon|
+        if (colon != 0 and namespaceSpecByName(std.mem.trim(u8, text[0..colon], " ")) != null) return false;
+    for (text) |c| if (c < 0x80 and !legalTitleAscii(c)) return false;
+    if (hasPercentEscape(text) or hasNamedCharacterReference(text)) return false;
+    if (std.mem.indexOf(u8, text, "~~~") != null) return false;
+    if (std.mem.eql(u8, text, ".") or std.mem.eql(u8, text, "..") or
+        std.mem.startsWith(u8, text, "./") or std.mem.startsWith(u8, text, "../") or
+        std.mem.indexOf(u8, text, "/./") != null or std.mem.indexOf(u8, text, "/../") != null or
+        std.mem.endsWith(u8, text, "/.") or std.mem.endsWith(u8, text, "/..")) return false;
+    const max_len: usize = if (spec.id == -1) 512 else 255;
+    return text.len <= max_len;
+}
+
+fn titleForNamespace(a: std.mem.Allocator, spec: namespace_lib.Spec, text: []const u8) !?[]const u8 {
+    if (!validTitleBody(spec, text)) return null;
+    if (spec.id == 0) return text;
+    return @as(?[]const u8, try std.fmt.allocPrint(a, "{s}:{s}", .{ spec.name, text }));
+}
+
 fn titleWithNamespace(runtime: *rt.Context, state: *State, text_raw: []const u8, namespace: ?Value, force_namespace: bool, decode_entities: bool) !?[]const u8 {
     const a = runtime.allocator;
     const source = if (decode_entities) try normalizedNewText(runtime, state, text_raw) else text_raw;
-    const text = try normalizeName(a, source);
+    var text = (try normalizeName(a, source)) orelse return null;
     if (text.len == 0) return null;
-    if (namespace == null or namespace.? == .nil) return @as(?[]const u8, try namespace_lib.canonicalizeTitle(a, text));
-    if (!force_namespace) if (std.mem.indexOfScalar(u8, text, ':')) |colon| {
-        if (namespaceSpecByName(text[0..colon]) != null)
-            return @as(?[]const u8, try namespace_lib.canonicalizeTitle(a, text));
+    var default_spec = try namespaceArgument(namespace, force_namespace);
+    if (force_namespace) return titleForNamespace(a, default_spec, text);
+
+    if (text[0] == ':') {
+        default_spec = namespaceSpecById(0).?;
+        text = std.mem.trimStart(u8, text[1..], " ");
+        if (text.len == 0) return null;
+    }
+    if (std.mem.indexOfScalar(u8, text, ':')) |colon| if (colon != 0) {
+        const prefix = std.mem.trim(u8, text[0..colon], " ");
+        if (namespaceSpecByName(prefix)) |explicit_spec| {
+            const body = std.mem.trimStart(u8, text[colon + 1 ..], " ");
+            return titleForNamespace(a, explicit_spec, body);
+        }
     };
-    const spec = switch (namespace.?) {
-        .number => |number| namespaceSpecById(@intFromFloat(@trunc(number))),
-        .string => |name| namespaceSpecByName(name),
-        else => null,
-    } orelse return error.InvalidNamespace;
-    if (spec.id == 0) return text;
-    return @as(?[]const u8, try std.fmt.allocPrint(a, "{s}:{s}", .{ spec.name, text }));
+    return titleForNamespace(a, default_spec, text);
 }
 
 fn buildBatchTitles(runtime: *rt.Context, batch: *BatchState) !*rt.Table {
@@ -524,10 +625,24 @@ test "AOT title constructors and current title use the live host" {
     try std.testing.expectEqualStrings("Module:Thing", (try runtime.getIndex(decoded_namespace[0], .{ .string = "prefixedText" })).string);
     const undecoded_make = try callField(&runtime, .{ .table = title_lib }, "makeTitle", &.{ .{ .number = 0 }, .{ .string = "Foo&amp;Bar" } });
     defer rt.freeResults(undecoded_make);
-    try std.testing.expectEqualStrings("Foo&amp;Bar", (try runtime.getIndex(undecoded_make[0], .{ .string = "prefixedText" })).string);
+    try std.testing.expect(undecoded_make[0] == .nil);
     const one_pass = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Foo&amp;amp;Bar" }});
     defer rt.freeResults(one_pass);
-    try std.testing.expectEqualStrings("Foo&amp;Bar", (try runtime.getIndex(one_pass[0], .{ .string = "prefixedText" })).string);
+    try std.testing.expect(one_pass[0] == .nil);
+    const collapsed = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "  foo__  bar  " }});
+    defer rt.freeResults(collapsed);
+    try std.testing.expectEqualStrings("foo bar", (try runtime.getIndex(collapsed[0], .{ .string = "prefixedText" })).string);
+    const initial_colon = try callField(&runtime, .{ .table = title_lib }, "new", &.{ .{ .string = ":foo" }, .{ .number = 10 } });
+    defer rt.freeResults(initial_colon);
+    try std.testing.expectEqualStrings("foo", (try runtime.getIndex(initial_colon[0], .{ .string = "prefixedText" })).string);
+    const spaced_namespace = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Template : Foo" }});
+    defer rt.freeResults(spaced_namespace);
+    try std.testing.expectEqualStrings("Template:Foo", (try runtime.getIndex(spaced_namespace[0], .{ .string = "prefixedText" })).string);
+    inline for (&.{ "foo[bar", "foo%20bar", "foo/../bar", "foo~~~bar", "Template:" }) |invalid| {
+        const value = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = invalid }});
+        defer rt.freeResults(value);
+        try std.testing.expect(value[0] == .nil);
+    }
 
     const defaulted_explicit = try callField(&runtime, .{ .table = title_lib }, "new", &.{ .{ .string = "Module:Thing" }, .{ .number = 10 } });
     defer rt.freeResults(defaulted_explicit);
