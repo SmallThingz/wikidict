@@ -85,6 +85,11 @@ const module_source =
     \\    assert(not media_batch_ok)
     \\    local child = frame:newChild{args = {x = 'child-frame', [1] = 7, flag = false}}
     \\    assert(child:getTitle() == frame:getTitle() and child:getParent() == frame and child.args.x == 'child-frame' and child.args[1] == '7' and child.args.flag == '')
+    \\    local pinned_now = os.time()
+    \\    assert(os.date('!%Y', pinned_now) == frame:preprocess('{{CURRENTYEAR}}'))
+    \\    assert(os.date('!%Y%m%d%H%M%S', pinned_now) == frame:preprocess('{{CURRENTTIMESTAMP}}'))
+    \\    local normalized_time = {year = 2024, month = 13, day = 1}
+    \\    assert(os.date('!%Y-%m-%d %H:%M', os.time(normalized_time)) == '2025-01-01 12:00')
     \\    assert(frame:callParserFunction{ name = '#invoke', args = {'IntegrationForms', 'frame_probe', x = 'frame-parser'} } == 'frame-parser')
     \\    assert(frame:callParserFunction{ name = '#tag:syntaxhighlight', args = {'x', lang = 'text'} } == '<syntaxhighlight lang="text">x</syntaxhighlight>')
     \\    assert(frame:callParserFunction{ name = '#tag', args = {'ref', 'body', 'name=n'} } == '<ref name="n">body</ref>')

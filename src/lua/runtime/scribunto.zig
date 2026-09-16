@@ -10,6 +10,7 @@ const frame_lib = @import("frame.zig");
 const uri_lib = @import("uri.zig");
 const basics_lib = @import("mw_basics.zig");
 const hash_lib = @import("hash.zig");
+const os_lib = @import("os.zig");
 pub const FrameArg = frame_lib.FrameArg;
 pub fn makeFrame(runtime: *rt.Context, title: []const u8, args: []const FrameArg, parent: ?Value) !Value {
     return frame_lib.makeFrame(runtime, title, args, parent);
@@ -121,6 +122,7 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try uri_lib.install(runtime, mw);
     try basics_lib.install(runtime, mw);
     try hash_lib.install(runtime, mw);
+    try os_lib.install(runtime);
     try mw.rawSetNativeField(.mw, "loadData", try runtime.newNative(state, loadDataCall));
     try mw.rawSetNativeField(.mw, "loadJsonData", try runtime.newNative(state, loadJsonDataCall));
     try mw.rawSetNativeField(.mw, "clone", try runtime.newNative(null, cloneCall));
@@ -439,6 +441,8 @@ test "AOT host survives Context return by value" {
     var runtime = try makeMovedHostContext(arena.allocator());
     defer runtime.deinit();
     const mw = runtime.getGlobal(23);
+    const os_value = try runtime.getIndex(runtime.getGlobal(0), .{ .string = "os" });
+    try std.testing.expect(os_value == .table and os_value.table.rawGet(.{ .string = "date" }).? == .callable);
     const html = try runtime.getIndex(mw, .{ .string = "html" });
     const made = try callField(&runtime, html, "create", &.{.{ .string = "b" }});
     defer rt.freeResults(made);

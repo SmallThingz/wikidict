@@ -22,7 +22,7 @@ fn one(_: std.mem.Allocator, value: Value) ![]const Value {
 fn floorDiv(a: i64, b: i64) i64 {
     return @divFloor(a, b);
 }
-fn daysFromCivil(year_raw: i64, month: u8, day: u8) i64 {
+pub fn daysFromCivil(year_raw: i64, month: u8, day: u8) i64 {
     var year = year_raw;
     year -= if (month <= 2) 1 else 0;
     const era = floorDiv(year, 400);
