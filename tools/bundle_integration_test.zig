@@ -86,6 +86,7 @@ const module_source =
     \\    assert(frame:callParserFunction{ name = '#invoke', args = {'IntegrationForms', 'frame_probe', x = 'frame-parser'} } == 'frame-parser')
     \\    assert(frame:callParserFunction{ name = '#tag:syntaxhighlight', args = {'x', lang = 'text'} } == '<syntaxhighlight lang="text">x</syntaxhighlight>')
     \\    assert(frame:callParserFunction{ name = '#tag', args = {'ref', 'body', 'name=n'} } == '<ref name="n">body</ref>')
+    \\    assert(mw.title.new('rat'):fullUrl({action = 'view'}, 'https') == 'https://en.wiktionary.org/w/index.php?title=rat&action=view')
     \\    assert(mw.title.new('rat').exists)
     \\    assert(string.find(mw.title.new('rat'):getContent(), 'Another rodent', 1, true))
     \\    assert(not mw.title.new('definitely-not-a-real-entry').exists)

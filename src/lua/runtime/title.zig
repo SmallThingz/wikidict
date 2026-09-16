@@ -2,6 +2,7 @@ const std = @import("std");
 const rt = @import("zig_runtime");
 const shared_xml_decode = @import("shared_xml_decode");
 const host_api = @import("host.zig");
+const uri_lib = @import("uri.zig");
 const Value = rt.Value;
 
 const State = struct {
@@ -248,6 +249,35 @@ fn subPageTitleCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     return one(try makeTitleValue(runtime, ctx.state, title));
 }
 
+fn titleFullText(runtime: *rt.Context, table: *rt.Table) ![]const u8 {
+    const prefixed = table.rawGet(.{ .string = "prefixedText" }) orelse return error.InvalidTitle;
+    const fragment = table.rawGet(.{ .string = "__fragment" }) orelse Value{ .string = "" };
+    if (prefixed != .string or fragment != .string) return error.InvalidTitle;
+    if (fragment.string.len == 0) return prefixed.string;
+    return std.fmt.allocPrint(runtime.allocator, "{s}#{s}", .{ prefixed.string, fragment.string });
+}
+
+fn titleUrlCall(runtime: *rt.Context, args: []const Value, kind: uri_lib.WikiUrlKind) ![]const Value {
+    if (args.len == 0 or args[0] != .table) return error.TableExpected;
+    const query = if (args.len > 1) args[1] else Value.nil;
+    const proto: ?[]const u8 = if (kind == .full and args.len > 2 and args[2] != .nil) blk: {
+        if (args[2] != .string) return error.StringExpected;
+        break :blk args[2].string;
+    } else null;
+    const full_text = try titleFullText(runtime, args[0].table);
+    return one(.{ .string = try uri_lib.buildTitleUrl(runtime, full_text, query, kind, proto) });
+}
+
+fn fullUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    return titleUrlCall(runtime, args, .full);
+}
+fn localUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    return titleUrlCall(runtime, args, .local);
+}
+fn canonicalUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    return titleUrlCall(runtime, args, .canonical);
+}
+
 fn getContentCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const ctx: *TitleCtx = @ptrCast(@alignCast(raw orelse return error.MissingTitleContext));
     const host = host_api.get(runtime) orelse return one(.nil);
@@ -283,6 +313,9 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
     const ctx = try runtime.allocator.create(TitleCtx);
     ctx.* = .{ .title = base_title, .state = state };
     try table.rawSetNativeField(.title_value, "getContent", try runtime.newNative(ctx, getContentCall));
+    try table.rawSetNativeField(.title_value, "fullUrl", try runtime.newNative(null, fullUrlCall));
+    try table.rawSetNativeField(.title_value, "localUrl", try runtime.newNative(null, localUrlCall));
+    try table.rawSetNativeField(.title_value, "canonicalUrl", try runtime.newNative(null, canonicalUrlCall));
     try table.rawSet(runtime.allocator, .{ .string = "subPageTitle" }, try runtime.newNative(ctx, subPageTitleCall));
     return .{ .table = table };
 }
@@ -569,6 +602,20 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     try std.testing.expectEqualStrings("wikitext", (try runtime.getIndex(title, .{ .string = "contentModel" })).string);
     try std.testing.expectEqualStrings(" frag ment", (try runtime.getIndex(title, .{ .string = "fragment" })).string);
     try std.testing.expectEqualStrings("Template:Foo/Sub# frag ment", (try runtime.getIndex(title, .{ .string = "fullText" })).string);
+    const full_url = try callField(&runtime, title, "fullUrl", &.{ title, .nil, .{ .string = "https" } });
+    defer rt.freeResults(full_url);
+    try std.testing.expectEqualStrings("https://en.wiktionary.org/wiki/Template:Foo/Sub#_frag_ment", full_url[0].string);
+    const query = try runtime.newTable();
+    try query.rawSet(runtime.allocator, .{ .string = "action" }, .{ .string = "test" });
+    const queried_url = try callField(&runtime, title, "fullUrl", &.{ title, .{ .table = query } });
+    defer rt.freeResults(queried_url);
+    try std.testing.expectEqualStrings("//en.wiktionary.org/w/index.php?title=Template:Foo/Sub&action=test#_frag_ment", queried_url[0].string);
+    const local_url = try callField(&runtime, title, "localUrl", &.{title});
+    defer rt.freeResults(local_url);
+    try std.testing.expectEqualStrings("/wiki/Template:Foo/Sub", local_url[0].string);
+    const canonical_url = try callField(&runtime, title, "canonicalUrl", &.{title});
+    defer rt.freeResults(canonical_url);
+    try std.testing.expectEqualStrings("https://en.wiktionary.org/wiki/Template:Foo/Sub#_frag_ment", canonical_url[0].string);
     try std.testing.expect(!(try runtime.getIndex(title, .{ .string = "isTalkPage" })).boolean);
     const talk = try runtime.getIndex(title, .{ .string = "talkPageTitle" });
     try std.testing.expect(talk == .table);

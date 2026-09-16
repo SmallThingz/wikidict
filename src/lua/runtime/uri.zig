@@ -143,6 +143,28 @@ pub fn buildWikiUrlRawQuery(a: std.mem.Allocator, raw_title: []const u8, query: 
     return out.toOwnedSlice(a);
 }
 
+pub fn buildTitleUrl(runtime: *rt.Context, raw_title: []const u8, query_value: Value, kind: WikiUrlKind, proto: ?[]const u8) ![]const u8 {
+    if (kind != .full and proto != null) return error.InvalidTitleUrlProtocol;
+    if (proto) |value| {
+        if (!std.ascii.eqlIgnoreCase(value, "http") and
+            !std.ascii.eqlIgnoreCase(value, "https") and
+            !std.ascii.eqlIgnoreCase(value, "relative") and
+            !std.ascii.eqlIgnoreCase(value, "canonical"))
+            return error.InvalidTitleUrlProtocol;
+    }
+    const query = try buildQueryArgument(runtime, query_value);
+    const effective_proto: ?[]const u8 = if (proto) |value|
+        if (std.ascii.eqlIgnoreCase(value, "canonical")) "https" else if (std.ascii.eqlIgnoreCase(value, "relative")) null else value
+    else
+        null;
+    if (kind != .local) return buildWikiUrlRawQuery(runtime.allocator, raw_title, query, kind, false, effective_proto);
+
+    // MediaWiki Title::getLocalURL() does not include a title fragment.
+    const hash = std.mem.indexOfScalar(u8, raw_title, '#');
+    const without_fragment = if (hash) |at| raw_title[0..at] else raw_title;
+    return buildWikiUrlRawQuery(runtime.allocator, without_fragment, query, kind, false, null);
+}
+
 fn queryScalarText(a: std.mem.Allocator, value: Value) !?[]const u8 {
     return switch (value) {
         .nil => null,
@@ -153,7 +175,7 @@ fn queryScalarText(a: std.mem.Allocator, value: Value) !?[]const u8 {
     };
 }
 
-fn buildQueryArgument(runtime: *rt.Context, value: Value) !?[]const u8 {
+pub fn buildQueryArgument(runtime: *rt.Context, value: Value) !?[]const u8 {
     if (value == .nil) return null;
     if (value == .string) return value.string;
     if (value != .table) return error.WikitextScalarExpected;
