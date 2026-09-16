@@ -148,7 +148,7 @@ pub fn main(init: std.process.Init) !void {
             else
                 raw_source;
             const expanded = try worker.expand(page_allocator, page.title, source);
-            try writer.addPage(page_allocator, page.ns, page.title, expanded.source);
+            try writer.addPage(page_allocator, page.ns, page.title, expanded.source, expanded.display_title);
         }
         _ = page_arena.reset(.retain_capacity);
     }

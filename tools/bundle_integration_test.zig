@@ -226,6 +226,19 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "Documentation") == null, "noinclude does not leak");
     try h.require(std.mem.indexOf(u8, text, "#invoke") == null, "no executable invoke syntax survives");
 
+    const exported = try h.run(&.{ bin, "export", "mouse", "--root", root }, 0);
+    var exported_json = try std.json.parseFromSlice(std.json.Value, a, exported, .{});
+    defer exported_json.deinit();
+    const exported_entries = exported_json.value.object.get("entries") orelse return error.InvalidExport;
+    try h.require(exported_entries == .array and exported_entries.array.items.len == 1, "compiled export contains the requested entry");
+    const exported_entry = exported_entries.array.items[0].object;
+    const display_title = exported_entry.get("display_title") orelse return error.InvalidExport;
+    try h.require(display_title == .array and display_title.array.items.len == 1, "DISPLAYTITLE survives publication as semantic spans");
+    const display_span = display_title.array.items[0].object;
+    try h.require(std.mem.eql(u8, display_span.get("text").?.string, "mouse"), "display-title text remains the canonical page name");
+    try h.require(display_span.get("italic").?.bool, "display-title emphasis is compiled into presentation data");
+    try h.require(std.mem.eql(u8, exported_entry.get("title").?.string, "mouse"), "display title does not replace the canonical lookup key");
+
     std.debug.print(
         "BUNDLE_INTEGRATION_PASS checks={d}: destination refusal, incomplete failure marker, verified pre-expanded Lua/templates, data-only final tree. Artifacts: {s}\n",
         .{ h.checks, dir },

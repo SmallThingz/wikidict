@@ -358,6 +358,7 @@ fn processMain(
     spools: *Spools,
     title: []const u8,
     source: []const u8,
+    display_title: ?[]const u8,
     stats: *BuildStats,
 ) !void {
     stats.main_pages += 1;
@@ -397,6 +398,7 @@ fn processMain(
             section.heading,
             "",
             expanded,
+            if (display_title) |value| .{ .source = value, .page_title = title } else null,
         );
         try spools.appendLanguage(page_allocator, section.heading, title, payload);
         stats.language_records += 1;
@@ -409,6 +411,7 @@ fn processNamespace(
     ns: u32,
     title: []const u8,
     source: []const u8,
+    display_title: ?[]const u8,
     stats: *BuildStats,
 ) !void {
     const local_title = localNamespaceTitle(title);
@@ -420,7 +423,15 @@ fn processNamespace(
         ns_sign_gloss => .sign_gloss,
         else => unreachable,
     };
-    const payload = try presentation_document.compileAlloc(page_allocator, local_title, kind, null, "", source);
+    const payload = try presentation_document.compileAlloc(
+        page_allocator,
+        local_title,
+        kind,
+        null,
+        "",
+        source,
+        if (display_title) |value| .{ .source = value, .page_title = title } else null,
+    );
     switch (kind) {
         .thesaurus => {
             try spools.thesaurus.append(spools.io, page_allocator, "", local_title, payload);
@@ -494,12 +505,12 @@ pub const Writer = struct {
         self.* = undefined;
     }
 
-    pub fn addPage(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, source: []const u8) !void {
+    pub fn addPage(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, source: []const u8, display_title: ?[]const u8) !void {
         if (self.finished) return error.WriterFinished;
         if (ns == ns_main) {
-            try processMain(page_allocator, &self.spools, title, source, &self.stats);
+            try processMain(page_allocator, &self.spools, title, source, display_title, &self.stats);
         } else if (ns == ns_rhymes or ns == ns_thesaurus or ns == ns_citations or ns == ns_sign_gloss or ns == ns_reconstruction) {
-            try processNamespace(page_allocator, &self.spools, ns, title, source, &self.stats);
+            try processNamespace(page_allocator, &self.spools, ns, title, source, display_title, &self.stats);
         }
     }
 
@@ -564,11 +575,11 @@ test "wikitext writer emits only data blobs" {
     writer.stats.pages_seen = 3;
     var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer page_arena.deinit();
-    try writer.addPage(page_arena.allocator(), 0, "cat", "==English==\n===Noun===\n# [[cat]]\n==French==\n===Nom===\n# [[chat]]\n==English==\n===Verb===\n# purr\n");
+    try writer.addPage(page_arena.allocator(), 0, "cat", "==English==\n===Noun===\n# [[cat]]\n==French==\n===Nom===\n# [[chat]]\n==English==\n===Verb===\n# purr\n", "<i>cat</i>");
     _ = page_arena.reset(.retain_capacity);
-    try writer.addPage(page_arena.allocator(), 114, "Citations:cat", "citation raw");
+    try writer.addPage(page_arena.allocator(), 114, "Citations:cat", "citation raw", null);
     _ = page_arena.reset(.retain_capacity);
-    try writer.addPage(page_arena.allocator(), 118, "Reconstruction:Proto-Germanic/kattuz", "==Proto-Germanic==\n===Noun===\n# cat\n");
+    try writer.addPage(page_arena.allocator(), 118, "Reconstruction:Proto-Germanic/kattuz", "==Proto-Germanic==\n===Noun===\n# cat\n", null);
     _ = page_arena.reset(.retain_capacity);
     const stats = try writer.finish(codes);
     try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
@@ -589,6 +600,9 @@ test "wikitext writer emits only data blobs" {
     const parsed = try blobs.presentation_codec.decodeAlloc(decode_arena.allocator(), cat.payload, "cat", .language, metadata);
     try std.testing.expectEqualStrings(blobs.presentation_types.schema, parsed.schema);
     try std.testing.expectEqualStrings("cat", parsed.entry.title);
+    try std.testing.expectEqual(@as(usize, 1), parsed.entry.display_title.len);
+    try std.testing.expect(parsed.entry.display_title[0].italic);
+    try std.testing.expectEqualStrings("cat", parsed.entry.display_title[0].text);
     try std.testing.expectEqual(blob_format.BlobKind.language, parsed.entry.kind);
     var saw_noun = false;
     var saw_verb = false;

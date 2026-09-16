@@ -57,7 +57,7 @@ The coordinated pipeline:
 3. compiles module/support bitcode and ThinLTO-links a bounded-concurrency transient expander;
 4. expands every bundled page with its concrete title/frame context;
 5. compiles the expanded wikitext into self-contained semantic presentation records;
-6. emits data-only `WIKBLB07` blobs and deletes the entire transient expander directory.
+6. emits data-only `WIKBLB08` blobs and deletes the entire transient expander directory.
 
 A failed build retains an `.incomplete` marker. Existing output directories are refused rather than modified in place.
 
@@ -71,11 +71,11 @@ Verify the published compiled blobs directly:
 zig build -Doptimize=ReleaseFast verify-blobs -- data/wiktionary-blobs
 ```
 
-The verifier checks WIKBLB07 framing/order/metadata plus every binary `DPR1` presentation record and its semantic indices. It does not reconstruct pre-expansion wikitext.
+The verifier checks WIKBLB08 framing/order/metadata plus every binary `DPR2` presentation record and its semantic indices. It does not reconstruct pre-expansion wikitext.
 
-`WIKBLB07` stores only data records with a minimal magic/kind header and self-delimiting metadata. It deliberately stores no persisted lookup index. Native readers derive indexes into `.dict-cache/`; those caches are disposable and validated against the source file.
+`WIKBLB08` stores only data records with a minimal magic/kind header and self-delimiting metadata. It deliberately stores no persisted lookup index. Native readers derive indexes into `.dict-cache/`; those caches are disposable and validated against the source file.
 
-`WIKBLB07` is intentionally incompatible with v6: presentation payloads are binary `DPR1` semantic records rather than JSON. Rebuild older bundles instead of attempting an in-reader compatibility path.
+`WIKBLB08` is intentionally incompatible with older bundles: presentation payloads are binary `DPR2` semantic records, including compiled display-title spans, rather than JSON or raw title markup. Rebuild older bundles instead of attempting an in-reader compatibility path.
 
 ## Query and read
 

@@ -7,6 +7,11 @@ const format = blobs.blob_format;
 const codec = blobs.presentation_codec;
 const A = std.mem.Allocator;
 
+pub const DisplayTitle = struct {
+    source: []const u8,
+    page_title: []const u8,
+};
+
 const WorkSection = struct {
     level: u8,
     title: []const u8,
@@ -90,6 +95,8 @@ fn spansAlloc(a: A, source: []const compiler.Span) ![]types.Span {
         .target = span.target,
         .trail = span.trail,
         .language = span.language,
+        .classes = span.classes,
+        .direction = span.direction,
         .bold = span.bold,
         .italic = span.italic,
         .code = span.code,
@@ -101,6 +108,21 @@ fn spansAlloc(a: A, source: []const compiler.Span) ![]types.Span {
         .role = std.meta.stringToEnum(types.Role, @tagName(span.role)) orelse return error.InvalidPresentation,
     };
     return out;
+}
+
+fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8) ![]const types.Span {
+    const value = display orelse return &.{};
+    if (value.source.len == 0) return &.{};
+    var renderer: compiler.Renderer = .{
+        .a = a,
+        .context = .{ .title = value.page_title, .language = if (language.len == 0) "English" else language },
+    };
+    const spans = try renderer.parseSpans(value.source, .{ .role = .headword });
+    for (spans) |span| if (span.kind != .text) return &.{};
+    const plain = try compiler.plainText(a, spans);
+    if (!std.mem.eql(u8, plain, value.page_title)) return &.{};
+    if (renderer.rendered_templates != 0 or renderer.unresolved_templates != 0) return error.UncompiledTemplate;
+    return spansAlloc(a, spans);
 }
 
 fn tableAlloc(a: A, source: compiler.Table) !types.Table {
@@ -211,6 +233,7 @@ pub fn compileAlloc(
     language: ?[]const u8,
     language_code: []const u8,
     source: []const u8,
+    display_title: ?DisplayTitle,
 ) ![]u8 {
     const work = try workAlloc(a, title, language orelse "", source);
     if (work.rendered_templates != 0 or work.unresolved_templates != 0) return error.UncompiledTemplate;
@@ -219,6 +242,7 @@ pub fn compileAlloc(
     const stored: types.Stored = .{ .entry = .{
         .organization = layout,
         .title = title,
+        .display_title = try displayTitleSpansAlloc(a, display_title, language orelse ""),
         .kind = kind,
         .language = language,
         .language_code = language_code,
@@ -234,7 +258,7 @@ test "compiled presentation contains no executable template syntax" {
     defer arena.deinit();
     const a = arena.allocator();
     const source = "==English==\n===Noun===\n# A [[cat|feline]].\n";
-    const bytes = try compileAlloc(a, "cat", .language, "English", "en", source);
+    const bytes = try compileAlloc(a, "cat", .language, "English", "en", source, null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "{{") == null);
     const parsed = try codec.decodeAlloc(a, bytes, "cat", .language, .{ .code = "en", .heading = "English" });
     try std.testing.expectEqualStrings(types.schema, parsed.schema);
@@ -242,12 +266,45 @@ test "compiled presentation contains no executable template syntax" {
     try std.testing.expectEqual(types.BlockKind.definition, parsed.entry.sections[1].blocks[0].kind);
 }
 
+test "display titles compile to semantic spans after page-title validation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==English==\n===Noun===\n# A word.\n";
+    const bytes = try compileAlloc(a, "cat", .language, "English", "en", source, .{
+        .source = "<span class=\"Latn headword\" lang=\"en\" dir=\"ltr\"><i>cat</i></span>",
+        .page_title = "cat",
+    });
+    const parsed = try codec.decodeAlloc(a, bytes, "cat", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 1), parsed.entry.display_title.len);
+    try std.testing.expectEqualStrings("cat", parsed.entry.display_title[0].text);
+    try std.testing.expect(parsed.entry.display_title[0].italic);
+    try std.testing.expectEqualStrings("Latn headword", parsed.entry.display_title[0].classes);
+    try std.testing.expectEqualStrings("en", parsed.entry.display_title[0].language);
+    try std.testing.expectEqualStrings("ltr", parsed.entry.display_title[0].direction);
+    try std.testing.expectEqual(types.Role.headword, parsed.entry.display_title[0].role);
+
+    const ignored = try compileAlloc(a, "cat", .language, "English", "en", source, .{
+        .source = "<b>dog</b>",
+        .page_title = "cat",
+    });
+    const ignored_parsed = try codec.decodeAlloc(a, ignored, "cat", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 0), ignored_parsed.entry.display_title.len);
+
+    const linked = try compileAlloc(a, "cat", .language, "English", "en", source, .{
+        .source = "[[cat]]",
+        .page_title = "cat",
+    });
+    const linked_parsed = try codec.decodeAlloc(a, linked, "cat", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 0), linked_parsed.entry.display_title.len);
+}
+
 test "unknown templates are rejected at bundle time" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     const source = "==English==\n===Noun===\n# {{definitely-unknown-template|x}}\n";
-    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source));
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source, null));
 }
 
 test "known presentation templates cannot bypass bundle expansion" {
@@ -255,7 +312,7 @@ test "known presentation templates cannot bypass bundle expansion" {
     defer arena.deinit();
     const a = arena.allocator();
     const source = "==English==\n===Noun===\n# {{lb|en|rare}} A [[cat]].\n";
-    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source));
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source, null));
 }
 
 test "partially renderable unsupported citation templates still fail publication" {
@@ -263,7 +320,7 @@ test "partially renderable unsupported citation templates still fail publication
     defer arena.deinit();
     const a = arena.allocator();
     const source = "==English==\n===Noun===\n# {{RQ:Unknown Work|page=17|passage=The '''[[cat]]''' sleeps.}}\n";
-    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source));
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source, null));
 }
 
 test "template parse limits fail publication instead of preserving executable syntax" {
@@ -274,5 +331,5 @@ test "template parse limits fail publication instead of preserving executable sy
     try source.appendSlice(a, "==English==\n===Noun===\n# {{oversized");
     for (0..16_385) |_| try source.appendSlice(a, "|x");
     try source.appendSlice(a, "}} tail\n");
-    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source.items));
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source.items, null));
 }

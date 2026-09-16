@@ -15,6 +15,8 @@ pub const Style = struct {
     kind: ir.InlineKind = .text,
     target: []const u8 = "",
     language: []const u8 = "",
+    classes: []const u8 = "",
+    direction: []const u8 = "",
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -31,6 +33,8 @@ pub const Span = struct {
     target: []const u8 = "",
     trail: []const u8 = "",
     language: []const u8 = "",
+    classes: []const u8 = "",
+    direction: []const u8 = "",
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -157,7 +161,7 @@ pub const Renderer = struct {
             }
             return;
         }
-        try self.spans.append(self.a, .{ .kind = s.kind, .text = value, .target = s.target, .language = s.language, .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline, .role = s.role });
+        try self.spans.append(self.a, .{ .kind = s.kind, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline, .role = s.role });
     }
     pub fn lineBreak(self: *Renderer, s: Style) Error!void {
         var style = s;
@@ -469,14 +473,32 @@ pub const Renderer = struct {
         if (tag.is("small")) s.small = true;
         if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) s.code = true;
         if (tag.attr("class")) |classes| {
+            var safe_classes: std.ArrayList(u8) = .empty;
+            defer safe_classes.deinit(self.a);
             var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n");
             while (tokens.next()) |class| {
+                var safe = class.len != 0;
+                for (class) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) { safe = false; break; };
+                if (!safe) continue;
+                if (safe_classes.items.len != 0) try safe_classes.append(self.a, ' ');
+                try safe_classes.appendSlice(self.a, class);
                 if (std.mem.eql(u8, class, "headword-line") or std.mem.eql(u8, class, "headword")) s.role = .headword;
                 if (s.role != .headword and (std.mem.eql(u8, class, "label-content") or std.mem.eql(u8, class, "qualifier-content"))) s.role = .label;
                 if (std.mem.eql(u8, class, "IPA")) s.role = .pronunciation;
             }
+            if (safe_classes.items.len != 0) {
+                s.classes = if (s.classes.len == 0)
+                    try self.a.dupe(u8, safe_classes.items)
+                else
+                    try std.fmt.allocPrint(self.a, "{s} {s}", .{ s.classes, safe_classes.items });
+            }
         }
         if (tag.attr("lang")) |lang| s.language = lang;
+        if (tag.attr("dir")) |dir| {
+            if (std.ascii.eqlIgnoreCase(dir, "ltr")) s.direction = "ltr"
+            else if (std.ascii.eqlIgnoreCase(dir, "rtl")) s.direction = "rtl"
+            else if (std.ascii.eqlIgnoreCase(dir, "auto")) s.direction = "auto";
+        }
         const content = input[tag.end..pair.inner_end];
         if (tag.is("a")) {
             if (tag.attr("href")) |href| {

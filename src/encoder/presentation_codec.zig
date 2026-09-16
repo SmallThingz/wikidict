@@ -3,7 +3,7 @@ const format = @import("blob_format.zig");
 const types = @import("presentation_types.zig");
 const A = std.mem.Allocator;
 
-pub const magic = "DPR1";
+pub const magic = "DPR2";
 const max_items: usize = 1 << 20;
 const max_string_bytes: usize = 32 * 1024 * 1024;
 const no_index: u32 = std.math.maxInt(u32);
@@ -67,6 +67,8 @@ const Encoder = struct {
         try self.string(value.target);
         try self.string(value.trail);
         try self.string(value.language);
+        try self.string(value.classes);
+        try self.string(value.direction);
     }
     fn spans(self: *Encoder, values: []const types.Span) !void {
         try self.count(values.len);
@@ -250,10 +252,12 @@ const Reader = struct {
             .target = try self.string(),
             .trail = try self.string(),
             .language = try self.string(),
+            .classes = try self.string(),
+            .direction = try self.string(),
         };
     }
     fn spans(self: *Reader) ![]const types.Span {
-        const len = try self.count(19);
+        const len = try self.count(27);
         const out = try self.a.alloc(types.Span, len);
         for (out) |*value| value.* = try self.span();
         return out;
@@ -376,6 +380,7 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     var encoder: Encoder = .{ .a = a };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, magic);
+    try encoder.spans(stored.entry.display_title);
     try encoder.sections(stored.entry.sections);
     try encoder.spans(stored.entry.preamble_spans);
     try encoder.layout(stored.entry.organization);
@@ -395,6 +400,7 @@ pub fn decodeAlloc(
 ) !types.Stored {
     if (payload.len < magic.len or !std.mem.eql(u8, payload[0..magic.len], magic)) return error.InvalidPresentation;
     var reader: Reader = .{ .a = a, .bytes = payload, .pos = magic.len };
+    const display_title = try reader.spans();
     const sections = try reader.sections();
     const preamble = try reader.spans();
     const layout = try reader.layout();
@@ -411,6 +417,7 @@ pub fn decodeAlloc(
     const stored: types.Stored = .{ .entry = .{
         .organization = layout,
         .title = title,
+        .display_title = display_title,
         .kind = expected_kind,
         .language = language,
         .language_code = language_code,
@@ -428,6 +435,7 @@ test "binary presentation codec round trips semantic structure" {
     defer arena.deinit();
     const a = arena.allocator();
     const spans = [_]types.Span{.{ .kind = .link, .text = "cat", .target = "cat", .bold = true, .role = .headword }};
+    const display_title = [_]types.Span{.{ .text = "cat", .italic = true, .classes = "Latn", .language = "en", .direction = "ltr", .role = .headword }};
     const blocks = [_]types.Block{.{ .kind = .definition, .spans = &spans }};
     const sections = [_]types.Section{.{ .level = 2, .title = "English", .blocks = &blocks }};
     const senses = [_]types.Sense{.{ .block = 0 }};
@@ -435,6 +443,7 @@ test "binary presentation codec round trips semantic structure" {
     const stored: types.Stored = .{ .entry = .{
         .organization = .{ .lexemes = &lexemes },
         .title = "cat",
+        .display_title = &display_title,
         .kind = .language,
         .language = "English",
         .language_code = "en",
@@ -444,6 +453,12 @@ test "binary presentation codec round trips semantic structure" {
     const decoded = try decodeAlloc(a, bytes, "cat", .language, .{ .code = "en", .heading = "English" });
     try std.testing.expectEqualStrings("cat", decoded.entry.title);
     try std.testing.expectEqualStrings("English", decoded.entry.language.?);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.display_title.len);
+    try std.testing.expect(decoded.entry.display_title[0].italic);
+    try std.testing.expectEqualStrings("cat", decoded.entry.display_title[0].text);
+    try std.testing.expectEqualStrings("Latn", decoded.entry.display_title[0].classes);
+    try std.testing.expectEqualStrings("en", decoded.entry.display_title[0].language);
+    try std.testing.expectEqualStrings("ltr", decoded.entry.display_title[0].direction);
     try std.testing.expectEqual(types.BlockKind.definition, decoded.entry.sections[0].blocks[0].kind);
     try std.testing.expect(decoded.entry.sections[0].blocks[0].spans[0].bold);
     try std.testing.expectEqualStrings("cat", decoded.entry.sections[0].blocks[0].spans[0].target);

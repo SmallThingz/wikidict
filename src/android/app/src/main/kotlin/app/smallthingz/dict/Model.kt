@@ -8,6 +8,9 @@ data class Span(
     val text: String,
     val target: String = "",
     val trail: String = "",
+    val language: String = "",
+    val classes: String = "",
+    val direction: String = "",
     val bold: Boolean = false,
     val italic: Boolean = false,
     val code: Boolean = false,
@@ -33,6 +36,7 @@ data class Section(val level: Int, val title: String, val blocks: List<Block>)
 data class Reference(val number: Int, val groupNumber: Int, val group: String, val spans: List<Span>)
 data class Entry(
     val title: String,
+    val displayTitle: List<Span>,
     val kind: String,
     val language: String?,
     val languageCode: String,
@@ -90,10 +94,12 @@ object ResultParser {
 
     private fun entry(value: JSONObject): Entry {
         rejectLegacyFields(value)
+        val displayTitle = value.optJSONArray("display_title") ?: JSONArray()
         val sections = value.optJSONArray("sections") ?: JSONArray()
         val references = value.optJSONArray("references") ?: JSONArray()
         return Entry(
             title = value.getString("title"),
+            displayTitle = (0 until displayTitle.length()).map { span(displayTitle.getJSONObject(it)) },
             kind = value.optString("kind", "language"),
             language = value.stringOrNull("language"),
             languageCode = value.optString("language_code"),
@@ -130,6 +136,7 @@ object ResultParser {
         return Span(
             kind = kind, text = value.optString("text"),
             target = value.optString("target"), trail = value.optString("trail"),
+            language = value.optString("language"), classes = value.optString("classes"), direction = value.optString("direction"),
             bold = value.optBoolean("bold"), italic = value.optBoolean("italic"),
             code = value.optBoolean("code"), small = value.optBoolean("small"),
             superscript = value.optBoolean("superscript"), subscript = value.optBoolean("subscript"),

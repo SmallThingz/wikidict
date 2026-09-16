@@ -1,8 +1,8 @@
 const std = @import("std");
 
 // Logical, uncompressed blob format. Storage/transport compression stays external.
-pub const magic = "WIKBLB07";
-pub const version: u8 = 7;
+pub const magic = "WIKBLB08";
+pub const version: u8 = 8;
 pub const header_len: usize = magic.len + 1;
 pub const max_varuint_len: usize = 10;
 
@@ -321,10 +321,10 @@ fn readNulFieldMetadata(bytes: []const u8, cursor: *usize) error{InvalidMetadata
     return field;
 }
 
-test "data blob header carries only v7 magic and kind" {
+test "data blob header carries only v8 magic and kind" {
     const encoded = encodeHeader(.rhymes);
     try std.testing.expectEqualSlices(u8, &.{
-        'W', 'I', 'K', 'B', 'L', 'B', '0', '7', @intFromEnum(BlobKind.rhymes),
+        'W', 'I', 'K', 'B', 'L', 'B', '0', '8', @intFromEnum(BlobKind.rhymes),
     }, encoded[0..header_len]);
     try std.testing.expectEqual(BlobKind.rhymes, try decodeKind(&encoded));
 }
@@ -334,7 +334,7 @@ test "data blob stores only necessary record framing" {
         .{ .title = "a", .payload = "x" },
     });
     defer std.testing.allocator.free(encoded);
-    try std.testing.expectEqualSlices(u8, "WIKBLB07\x03a\x00\x01x", encoded);
+    try std.testing.expectEqualSlices(u8, "WIKBLB08\x03a\x00\x01x", encoded);
 }
 test "data blob builds runtime index over borrowed records" {
     const metadata = try buildLanguageMetadataAlloc(std.testing.allocator, "", "English");
@@ -461,6 +461,7 @@ test "data blob rejects old magic and malformed record framing" {
         "WIKBLB04\x03b\x00\x00a\x00\x00",
         "WIKBLB04\x03a\x00\x00a\x00\x00",
         "WIKBLB06\x03a\x00\x00",
+        "WIKBLB07\x03a\x00\x00",
     };
     for (invalid) |bytes| {
         try std.testing.expectError(error.InvalidBlob, inspect(bytes));
@@ -471,7 +472,7 @@ test "data blob rejects old magic and malformed record framing" {
 }
 
 fn testIndexAllocationFailures(allocator: std.mem.Allocator) !void {
-    const blob = try openTrusted("WIKBLB07\x03a\x00\x01xb\x00\x00");
+    const blob = try openTrusted("WIKBLB08\x03a\x00\x01xb\x00\x00");
     var index = try blob.buildIndexAlloc(allocator);
     defer index.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), index.recordCount());

@@ -1,7 +1,7 @@
 const std = @import("std");
 const format = @import("blob_format.zig");
 
-pub const schema = "dict.presentation.v1";
+pub const schema = "dict.presentation.v2";
 pub const Role = enum { normal, label, pronunciation, headword, example, quotation, citation, reference };
 pub const InlineKind = enum { text, link, external_link, line_break };
 pub const Span = struct {
@@ -10,6 +10,8 @@ pub const Span = struct {
     target: []const u8 = "",
     trail: []const u8 = "",
     language: []const u8 = "",
+    classes: []const u8 = "",
+    direction: []const u8 = "",
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -78,6 +80,7 @@ pub const Media = struct { file: []const u8, kind: MediaKind, caption: []const u
 pub const Entry = struct {
     organization: Layout = .{},
     title: []const u8,
+    display_title: []const Span = &.{},
     kind: format.BlobKind,
     language: ?[]const u8 = null,
     language_code: []const u8 = "",

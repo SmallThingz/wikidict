@@ -6,10 +6,12 @@ const output = @import("output.zig");
 
 fn payloadAlloc(a: std.mem.Allocator, kind: enc.blob_format.BlobKind, title: []const u8) ![]u8 {
     const spans = [_]enc.presentation_types.Span{.{ .text = "compiled presentation" }};
+    const display_title = [_]enc.presentation_types.Span{.{ .text = title, .italic = true, .classes = "Latn", .role = .headword }};
     const blocks = [_]enc.presentation_types.Block{.{ .kind = .definition, .depth = 1, .spans = &spans, .list_path = "#" }};
     const sections = [_]enc.presentation_types.Section{.{ .level = 3, .title = "Entry", .blocks = &blocks }};
     return enc.presentation_codec.encodeAlloc(a, enc.presentation_types.Stored{ .entry = .{
         .title = title,
+        .display_title = &display_title,
         .kind = kind,
         .language = if (kind == .language) "English" else null,
         .language_code = if (kind == .language) "en" else "",
@@ -38,16 +40,21 @@ test "all six shipped blob kinds deserialize compiled presentation only" {
         var doc = try model.fromRecord(a, record);
         defer doc.deinit();
         try std.testing.expectEqualStrings("compiled presentation", doc.entry.sections[0].blocks[0].spans[0].text);
+        try std.testing.expectEqualStrings(title, doc.entry.title);
+        try std.testing.expect(doc.entry.display_title.len == 1 and doc.entry.display_title[0].italic);
         var text: std.Io.Writer.Allocating = .init(a);
         defer text.deinit();
         try output.entryText(&text.writer, doc.entry, false);
+        try std.testing.expect(std.mem.indexOf(u8, text.written(), title) != null);
         try std.testing.expect(std.mem.indexOf(u8, text.written(), "compiled presentation") != null);
         var json: std.Io.Writer.Allocating = .init(a);
         defer json.deinit();
         try output.json(&json.writer, .{ .operation = .lookup, .query = title, .kind = kind, .language = doc.entry.language, .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} });
         var parsed = try std.json.parseFromSlice(std.json.Value, a, json.written(), .{});
         defer parsed.deinit();
-        try std.testing.expectEqualStrings(title, parsed.value.object.get("entries").?.array.items[0].object.get("title").?.string);
+        const entry = parsed.value.object.get("entries").?.array.items[0].object;
+        try std.testing.expectEqualStrings(title, entry.get("title").?.string);
+        try std.testing.expectEqualStrings(title, entry.get("display_title").?.array.items[0].object.get("text").?.string);
     }
 }
 

@@ -126,7 +126,10 @@ pub fn entryText(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
 
 pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, details: bool) !void {
     if (color) try w.writeAll("\x1b[1;36m");
-    try terminalText(w, entry.title);
+    if (entry.display_title.len != 0)
+        try spansText(w, entry.display_title, color)
+    else
+        try terminalText(w, entry.title);
     if (color) try w.writeAll("\x1b[0m");
     try w.writeAll("  / ");
     try terminalText(w, entry.language orelse @tagName(entry.kind));
