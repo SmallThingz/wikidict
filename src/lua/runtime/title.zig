@@ -275,6 +275,8 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
     try table.rawSetNativeField(.title_value, "rootText", .{ .string = if (first_slash) |pos| ns.text[0..pos] else ns.text });
     try table.rawSetNativeField(.title_value, "isSubpage", .{ .boolean = slash != null });
     try table.rawSetNativeField(.title_value, "interwiki", .{ .string = "" });
+    try table.rawSetNativeField(.title_value, "isExternal", .{ .boolean = false });
+    try table.rawSetNativeField(.title_value, "isLocal", .{ .boolean = true });
     table.metatable = try ensureMetatable(runtime, state);
     const ctx = try runtime.allocator.create(TitleCtx);
     ctx.* = .{ .title = base_title, .state = state };
@@ -363,6 +365,18 @@ fn titleForNamespace(a: std.mem.Allocator, spec: namespace_lib.Spec, text: []con
     return @as(?[]const u8, try std.fmt.allocPrint(a, "{s}:{s}", .{ spec.name, text }));
 }
 
+const InterwikiDisposition = enum { none, current_wiki, external };
+
+fn interwikiDisposition(runtime: *rt.Context, prefix: []const u8) !InterwikiDisposition {
+    const host = host_api.get(runtime) orelse return error.NotImplemented;
+    const get = host.site_interwiki_map orelse return error.NotImplemented;
+    for (try get(host.ctx)) |row| {
+        if (!std.ascii.eqlIgnoreCase(row.prefix, prefix)) continue;
+        return if (row.is_current_wiki) .current_wiki else .external;
+    }
+    return .none;
+}
+
 fn titleWithNamespace(runtime: *rt.Context, state: *State, text_raw: []const u8, namespace: ?Value, force_namespace: bool, decode_entities: bool) !?[]const u8 {
     const a = runtime.allocator;
     const source = if (decode_entities) try normalizedNewText(runtime, state, text_raw) else text_raw;
@@ -378,9 +392,16 @@ fn titleWithNamespace(runtime: *rt.Context, state: *State, text_raw: []const u8,
     }
     if (std.mem.indexOfScalar(u8, text, ':')) |colon| if (colon != 0) {
         const prefix = std.mem.trim(u8, text[0..colon], " ");
-        if (namespaceSpecByName(prefix)) |explicit_spec| {
-            const body = std.mem.trimStart(u8, text[colon + 1 ..], " ");
+        const body = std.mem.trimStart(u8, text[colon + 1 ..], " ");
+        if (namespaceSpecByName(prefix)) |explicit_spec|
             return titleForNamespace(a, explicit_spec, body);
+        switch (try interwikiDisposition(runtime, prefix)) {
+            .none => {},
+            .current_wiki => {
+                if (body.len == 0) return error.NotImplemented;
+                return titleWithNamespace(runtime, state, body, null, false, false);
+            },
+            .external => return error.NotImplemented,
         }
     };
     return titleForNamespace(a, default_spec, text);
@@ -493,6 +514,15 @@ fn testPageId(_: ?*anyopaque, title: []const u8) !?u64 {
 fn testPageContentModel(_: ?*anyopaque, title: []const u8) !?[]const u8 {
     if (std.mem.eql(u8, title, "Template:Foo/Sub") or std.mem.eql(u8, title, "Template:Alias")) return "wikitext";
     return null;
+}
+
+const test_interwiki_rows = [_]host_api.InterwikiRow{
+    .{ .prefix = "w", .url = "https://example.test/$1", .is_local = false, .is_current_wiki = false, .is_protocol_relative = false },
+    .{ .prefix = "self", .url = "https://local.test/$1", .is_local = true, .is_current_wiki = true, .is_protocol_relative = false },
+};
+
+fn testInterwikiMap(_: ?*anyopaque) ![]const host_api.InterwikiRow {
+    return &test_interwiki_rows;
 }
 
 fn testPageContent(_: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
@@ -666,6 +696,18 @@ test "AOT title constructors and current title use the live host" {
     try std.testing.expectError(error.AotCallFailed, runtime.callValue(new_fn, &.{ .{ .string = "Thing" }, .{ .string = "not-a-namespace" } }));
     try std.testing.expectEqualStrings("InvalidNamespace", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(new_fn, &.{.{ .string = "w:Thing" }}));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+    host.site_interwiki_map = testInterwikiMap;
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(new_fn, &.{.{ .string = "w:Thing" }}));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+    const local_interwiki = try runtime.callValue(new_fn, &.{.{ .string = "self:Template:Thing" }});
+    defer rt.freeResults(local_interwiki);
+    try std.testing.expectEqualStrings("Template:Thing", (try runtime.getIndex(local_interwiki[0], .{ .string = "prefixedText" })).string);
+    try std.testing.expect(!(try runtime.getIndex(local_interwiki[0], .{ .string = "isExternal" })).boolean);
+    try std.testing.expect((try runtime.getIndex(local_interwiki[0], .{ .string = "isLocal" })).boolean);
     const equals = title_lib.rawGet(.{ .string = "equals" }).?;
     const same = try runtime.callValue(equals, &.{ made[0], made2[0] });
     defer rt.freeResults(same);
