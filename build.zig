@@ -28,6 +28,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = test_optimize,
     });
+    const bundle_protocol_mod = b.createModule(.{
+        .root_source_file = b.path("src/lua/bundle_protocol.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const bundle_protocol_mod_test = b.createModule(.{
+        .root_source_file = b.path("src/lua/bundle_protocol.zig"),
+        .target = b.graph.host,
+        .optimize = test_optimize,
+    });
     const blob_encoder_mod = b.addModule("blob_encoder", .{
         .root_source_file = b.path("src/encoder/blob_root.zig"),
         .target = target,
@@ -91,6 +101,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
+        .{ .name = "bundle_protocol", .module = bundle_protocol_mod },
     });
     const blob_verify_exe = addCliExecutable(b, "dict-blob-verify", b.path("tools/blob_verify.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
@@ -323,13 +334,19 @@ pub fn build(b: *std.Build) void {
     lua_ustring_tests.step.dependOn(&run_lua_stdlib_tests.step);
     lua_scribunto_tests.step.dependOn(&run_lua_ustring_tests.step);
     lua_wikitext_tests.step.dependOn(&run_lua_scribunto_tests.step);
+    const bundle_protocol_tests = b.addTest(.{
+        .root_module = bundle_protocol_mod_test,
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const run_bundle_protocol_tests = b.addRunArtifact(bundle_protocol_tests);
+    run_bundle_protocol_tests.step.dependOn(&run_lua_wikitext_tests.step);
 
     const test_step = b.step("test", "Run bundle encoder, data reader, Lua, and tooling tests");
-    blob_wasm_smoke.step.dependOn(&run_lua_wikitext_tests.step);
+    blob_wasm_smoke.step.dependOn(&run_bundle_protocol_tests.step);
     test_step.dependOn(&blob_wasm_smoke.step);
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod } });
     addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}, b.args), &.{});
-    const bundle_test_exe = addCliExecutable(b, "dict-bundle-integration-test", b.path("tools/bundle_integration_test.zig"), b.graph.host, test_optimize, &.{});
+    const bundle_test_exe = addCliExecutable(b, "dict-bundle-integration-test", b.path("tools/bundle_integration_test.zig"), b.graph.host, test_optimize, &.{.{ .name = "bundle_protocol", .module = bundle_protocol_mod_test }});
     const bundle_test_run = b.addRunArtifact(bundle_test_exe);
     bundle_test_run.addFileArg(blob_query_exe.getEmittedBin());
     bundle_test_run.addFileArg(pipeline_exe.getEmittedBin());

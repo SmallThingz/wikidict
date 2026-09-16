@@ -1,23 +1,7 @@
 const std = @import("std");
 const A = std.mem.Allocator;
 const L = std.os.linux;
-
-const Request = struct {
-    root: []const u8,
-    dump: []const u8,
-    now_unix: i64,
-    title: []const u8,
-    source: []const u8,
-};
-
-const Reply = struct {
-    schema: []const u8 = "dict.expansion.v1",
-    backend: []const u8 = "lua-aot",
-    output: ?[]const u8 = null,
-    stage: []const u8 = "expand",
-    error_name: ?[]const u8 = null,
-    detail: ?[]const u8 = null,
-};
+const protocol = @import("bundle_protocol");
 
 pub const Worker = struct {
     io: std.Io,
@@ -79,29 +63,22 @@ pub const Worker = struct {
         }
     }
 
-    fn writeRequest(self: *Worker, child: *std.process.Child, bytes: []const u8) !void {
-        var length: [4]u8 = undefined;
-        std.mem.writeInt(u32, &length, @intCast(bytes.len), .little);
-        var writer = child.stdin.?.writer(self.io, &.{});
-        try writer.interface.writeAll(&length);
-        try writer.interface.writeAll(bytes);
-        try writer.interface.flush();
-    }
-
-    pub fn expand(self: *Worker, a: A, title: []const u8, source: []const u8) ![]u8 {
-        const request = Request{
+    fn writeRequest(self: *Worker, child: *std.process.Child, title: []const u8, source: []const u8) !void {
+        var buffer: [8192]u8 = undefined;
+        var writer = child.stdin.?.writer(self.io, &buffer);
+        try protocol.writeRequest(&writer.interface, .{
             .root = self.root,
             .dump = self.dump,
             .now_unix = self.now_unix,
             .title = title,
             .source = source,
-        };
-        const bytes = try std.json.Stringify.valueAlloc(a, request, .{});
-        defer a.free(bytes);
-        if (bytes.len == 0 or bytes.len > 32 * 1024 * 1024) return error.RequestTooLarge;
+        });
+    }
 
+    pub fn expand(self: *Worker, a: A, title: []const u8, source: []const u8) ![]u8 {
+        if (source.len > protocol.max_source_bytes) return error.RequestTooLarge;
         const child = try self.ensure();
-        self.writeRequest(child, bytes) catch |err| {
+        self.writeRequest(child, title, source) catch |err| {
             self.reset();
             return err;
         };
@@ -112,33 +89,29 @@ pub const Worker = struct {
             return err;
         };
         const response_len = std.mem.readInt(u32, &raw_length, .little);
-        if (response_len == 0 or response_len > 32 * 1024 * 1024) {
+        if (response_len == 0 or response_len > protocol.max_frame_bytes) {
             self.reset();
             return error.InvalidResponse;
         }
         const response = try a.alloc(u8, response_len);
-        defer a.free(response);
         self.readExact(child.stdout.?, response, deadline) catch |err| {
             self.reset();
             return err;
         };
-
-        const parsed = try std.json.parseFromSlice(Reply, a, response, .{});
-        defer parsed.deinit();
-        const reply = parsed.value;
-        if (!std.mem.eql(u8, reply.schema, "dict.expansion.v1")) return error.InvalidResponse;
-        if (reply.error_name) |name| {
-            std.debug.print("bundle expansion failed title={s} stage={s} error={s}{s}{s}\n", .{
-                title,
-                reply.stage,
-                name,
-                if (reply.detail != null) ": " else "",
-                reply.detail orelse "",
-            });
-            return error.ExpansionFailed;
+        const reply = protocol.decodeReply(response) catch return error.InvalidResponse;
+        switch (reply) {
+            .output => |output| return @constCast(output),
+            .failure => |failure| {
+                std.debug.print("bundle expansion failed title={s} stage={s} error={s}{s}{s}\n", .{
+                    title,
+                    failure.stage,
+                    failure.error_name,
+                    if (failure.detail.len != 0) ": " else "",
+                    failure.detail,
+                });
+                return error.ExpansionFailed;
+            },
         }
-        const output = reply.output orelse return error.InvalidResponse;
-        return a.dupe(u8, output);
     }
 };
 
