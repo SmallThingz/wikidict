@@ -233,6 +233,12 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setNative(runtime, site, "interwikiMap", interwikiMapCall);
     try mw.rawSetNativeField(.mw, "site", .{ .table = site });
 
+    const ext = try runtime.newTable();
+    const ext_data = try runtime.newTable();
+    try setNative(runtime, ext_data, "get", notImplementedCall);
+    try ext.rawSet(runtime.allocator, .{ .string = "data" }, .{ .table = ext_data });
+    try mw.rawSetNativeField(.mw, "ext", .{ .table = ext });
+
     const wikibase = try runtime.newTable();
     inline for (.{
         "getEntity",
@@ -285,6 +291,13 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     const substing = try callField(&runtime, .{ .table = mw }, "isSubsting", &.{});
     defer rt.freeResults(substing);
     try std.testing.expect(!substing[0].boolean);
+
+    const ext = mw.rawGet(.{ .string = "ext" }).?.table;
+    const ext_data = ext.rawGet(.{ .string = "data" }).?.table;
+    try std.testing.expect(ext_data.rawGet(.{ .string = "get" }).? == .callable);
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = ext_data }, "get", &.{.{ .string = "Unicode/data" }}));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
 
     const wikibase = mw.rawGet(.{ .string = "wikibase" }).?.table;
     try std.testing.expect(wikibase.rawGet(.{ .string = "getEntity" }).? == .callable);
