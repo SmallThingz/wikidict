@@ -588,7 +588,6 @@ pub const Renderer = struct {
                 try self.plain(input[it.cursor..], s);
                 break;
             }
-            const before = it.cursor;
             const token = it.next() orelse break;
             s.bold = token.bold;
             s.italic = token.italic;
@@ -611,28 +610,18 @@ pub const Renderer = struct {
                 },
                 .line_break => try self.lineBreak(s),
                 .link => {
-                    const open = std.mem.indexOfPos(u8, input, before, "[[") orelse before;
-                    const pair = syntax.balanced(input, open);
-                    const inside = if (pair) |found| input[open + 2 .. found.inner_end] else "";
-                    const pipe = syntax.delimiter(inside, "|", 0);
-                    var target = if (pair != null) trim(inside[0 .. pipe orelse inside.len]) else token.target;
-                    var label_value = if (pair != null and pipe != null) inside[pipe.? + 1 ..] else if (pair != null) target else token.text;
-                    var trail = token.trail;
-                    if (pair) |found| {
-                        var end = found.end;
-                        while (end < input.len and std.ascii.isLower(input[end])) : (end += 1) {}
-                        trail = input[found.end..end];
-                        it.cursor = end;
-                    }
+                    var target = token.target;
+                    var label_value = if (token.link_empty_label) "" else token.text;
+                    const trail = token.trail;
                     const decoded_target = try self.entityText(target);
                     const normalized_target = try self.a.dupe(u8, decoded_target);
                     std.mem.replaceScalar(u8, normalized_target, '_', ' ');
                     target = normalized_target;
-                    if (pipe == null) label_value = target;
+                    if (!token.link_has_pipe) label_value = target;
                     const explicit = starts(target, ":");
                     if (explicit) {
                         target = target[1..];
-                        if (pipe == null) label_value = target;
+                        if (!token.link_has_pipe) label_value = target;
                     }
                     if (!explicit and std.ascii.startsWithIgnoreCase(target, "Category:")) {
                         try self.text(trail, s);

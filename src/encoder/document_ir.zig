@@ -120,6 +120,8 @@ pub const InlineSpan = struct {
     text: []const u8,
     target: []const u8 = "",
     trail: []const u8 = "",
+    link_has_pipe: bool = false,
+    link_empty_label: bool = false,
     bold: bool = false,
     italic: bool = false,
 };
@@ -160,6 +162,8 @@ pub const InlineIterator = struct {
                     .text = link.label,
                     .target = link.target,
                     .trail = link.trail,
+                    .link_has_pipe = link.has_pipe,
+                    .link_empty_label = link.empty_label,
                     .bold = self.bold,
                     .italic = self.italic,
                 };
@@ -372,6 +376,8 @@ const ParsedInlineLink = struct {
     target: []const u8,
     label: []const u8,
     trail: []const u8,
+    has_pipe: bool,
+    empty_label: bool,
 };
 
 const ParsedExternalLink = struct {
@@ -425,7 +431,14 @@ fn parseInlineLinkAt(input: []const u8, start: usize) ?ParsedInlineLink {
     var trail_end = pair.end;
     // English Wiktionary uses MediaWiki's default lowercase a-z link trail.
     while (trail_end < input.len and std.ascii.isLower(input[trail_end])) : (trail_end += 1) {}
-    return .{ .end = trail_end, .target = target, .label = label, .trail = input[pair.end..trail_end] };
+    return .{
+        .end = trail_end,
+        .target = target,
+        .label = label,
+        .trail = input[pair.end..trail_end],
+        .has_pipe = pipe != null,
+        .empty_label = pipe != null and raw_label.len == 0,
+    };
 }
 
 fn parseExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
