@@ -8,6 +8,13 @@ const State = struct {
     equals: ?Value = null,
 };
 
+const BatchState = struct {
+    title_state: *State,
+    source: *rt.Table,
+    namespace: ?Value,
+    titles: ?*rt.Table = null,
+};
+
 fn one(value: Value) ![]const Value {
     const out = try std.heap.smp_allocator.alloc(Value, 1);
     out[0] = value;
@@ -214,6 +221,50 @@ fn titleWithNamespace(a: std.mem.Allocator, text_raw: []const u8, namespace: ?Va
     return @as(?[]const u8, try std.fmt.allocPrint(a, "{s}:{s}", .{ spec.name, text }));
 }
 
+fn buildBatchTitles(runtime: *rt.Context, batch: *BatchState) !*rt.Table {
+    if (batch.titles) |titles| return titles;
+    const titles = try runtime.newTable();
+    const n = batch.source.rawLen();
+    for (0..n) |i| {
+        const index: f64 = @floatFromInt(i + 1);
+        const value = batch.source.rawGet(.{ .number = index }) orelse continue;
+        if (value != .string) return error.StringExpected;
+        const title = try titleWithNamespace(runtime.allocator, value.string, batch.namespace) orelse continue;
+        try titles.rawSet(runtime.allocator, .{ .number = index }, try makeTitleValue(runtime, batch.title_state, title));
+    }
+    batch.titles = titles;
+    return titles;
+}
+
+fn batchLookupExistenceCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const batch: *BatchState = @ptrCast(@alignCast(raw orelse return error.MissingTitleBatchState));
+    if (args.len == 0 or args[0] != .table) return error.TableExpected;
+    _ = try buildBatchTitles(runtime, batch);
+    return one(args[0]);
+}
+
+fn batchGetTitlesCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+    const batch: *BatchState = @ptrCast(@alignCast(raw orelse return error.MissingTitleBatchState));
+    return one(.{ .table = try buildBatchTitles(runtime, batch) });
+}
+
+fn newBatchCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
+    if (args.len == 0 or args[0] != .table) return error.TableExpected;
+    const namespace: ?Value = if (args.len > 1 and args[1] != .nil) args[1] else null;
+    const n = args[0].table.rawLen();
+    for (0..n) |i| {
+        const value = args[0].table.rawGet(.{ .number = @floatFromInt(i + 1) }) orelse continue;
+        if (value != .string) return error.StringExpected;
+    }
+    const batch_state = try runtime.allocator.create(BatchState);
+    batch_state.* = .{ .title_state = state, .source = args[0].table, .namespace = namespace };
+    const batch = try runtime.newTable();
+    try batch.rawSet(runtime.allocator, .{ .string = "lookupExistence" }, try runtime.newNative(batch_state, batchLookupExistenceCall));
+    try batch.rawSet(runtime.allocator, .{ .string = "getTitles" }, try runtime.newNative(batch_state, batchGetTitlesCall));
+    return one(.{ .table = batch });
+}
+
 fn newCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
     if (args.len == 0 or args[0] != .string) return one(.nil);
@@ -244,6 +295,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try title.rawSetNativeField(.title, "new", try runtime.newNative(state, newCall));
     try title.rawSetNativeField(.title, "makeTitle", try runtime.newNative(state, makeCall));
     try title.rawSetNativeField(.title, "getCurrentTitle", try runtime.newNative(state, currentCall));
+    try title.rawSetNativeField(.title, "newBatch", try runtime.newNative(state, newBatchCall));
     try mw.rawSetNativeField(.mw, "title", .{ .table = title });
 }
 
@@ -315,6 +367,22 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     const alias_made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "WT:Sandbox_page" }});
     defer rt.freeResults(alias_made);
     try std.testing.expectEqualStrings("Wiktionary:Sandbox page", (try runtime.getIndex(alias_made[0], .{ .string = "prefixedText" })).string);
+
+    const batch_input = try runtime.newTable();
+    try batch_input.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "Foo/Sub" });
+    try batch_input.rawSet(runtime.allocator, .{ .number = 2 }, .{ .string = "Missing" });
+    const batch = try callField(&runtime, .{ .table = title_lib }, "newBatch", &.{ .{ .table = batch_input }, .{ .number = 10 } });
+    defer rt.freeResults(batch);
+    const looked_up = try callField(&runtime, batch[0], "lookupExistence", &.{batch[0]});
+    defer rt.freeResults(looked_up);
+    try std.testing.expect(looked_up[0] == .table and looked_up[0].table == batch[0].table);
+    const batch_titles = try callField(&runtime, batch[0], "getTitles", &.{batch[0]});
+    defer rt.freeResults(batch_titles);
+    const batch_first = batch_titles[0].table.rawGet(.{ .number = 1 }).?;
+    const batch_second = batch_titles[0].table.rawGet(.{ .number = 2 }).?;
+    try std.testing.expect((try runtime.getIndex(batch_first, .{ .string = "exists" })).boolean);
+    try std.testing.expect(!(try runtime.getIndex(batch_second, .{ .string = "exists" })).boolean);
+    try std.testing.expectEqualStrings("Template:Foo/Sub", (try runtime.getIndex(batch_first, .{ .string = "prefixedText" })).string);
 
     const content = try callField(&runtime, title, "getContent", &.{title});
     defer rt.freeResults(content);
