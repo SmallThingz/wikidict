@@ -2,6 +2,9 @@ const std = @import("std");
 const rt = @import("zig_runtime");
 const Value = rt.Value;
 
+pub const site_server = "//en.wiktionary.org";
+pub const site_server_name = "en.wiktionary.org";
+
 fn one(_: std.mem.Allocator, value: Value) ![]const Value {
     const out = try std.heap.smp_allocator.alloc(Value, 1);
     out[0] = value;
@@ -117,13 +120,17 @@ pub fn buildWikiUrlRawQuery(a: std.mem.Allocator, raw_title: []const u8, query: 
             if (proto_override) |proto| {
                 if (std.ascii.eqlIgnoreCase(proto, "http") or std.ascii.eqlIgnoreCase(proto, "https")) {
                     try out.appendSlice(a, proto);
-                    try out.appendSlice(a, "://en.wiktionary.org");
+                    try out.append(a, ':');
+                    try out.appendSlice(a, site_server);
                 } else {
-                    try out.appendSlice(a, "//en.wiktionary.org");
+                    try out.appendSlice(a, site_server);
                 }
-            } else try out.appendSlice(a, "//en.wiktionary.org");
+            } else try out.appendSlice(a, site_server);
         },
-        .canonical => try out.appendSlice(a, "https://en.wiktionary.org"),
+        .canonical => {
+            try out.appendSlice(a, "https:");
+            try out.appendSlice(a, site_server);
+        },
     }
     if (query) |q| {
         try out.appendSlice(a, "/w/index.php?title=");

@@ -536,6 +536,8 @@ pub const Expander = struct {
         if (std.mem.eql(u8, head, "!")) return "|";
         if (std.mem.eql(u8, head, "!!")) return "||";
         if (std.mem.eql(u8, head, "=")) return "=";
+        if (std.ascii.eqlIgnoreCase(head, "SERVER")) return uri_lib.site_server;
+        if (std.ascii.eqlIgnoreCase(head, "SERVERNAME")) return uri_lib.site_server_name;
         if (!std.ascii.startsWithIgnoreCase(head, "CURRENT")) return null;
         const now = self.host.now_unix orelse return error.MissingCurrentTime;
         const civil = language_lib.civilFromUnix(now);
@@ -1386,6 +1388,8 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     expander.provider.page_metadata = TestProvider.pageMetadata;
     const current_magic = try expander.expandFragment("Appendix:Page/Sub", "{{CURRENTDAYNAME}}|{{CURRENTWEEK}}|{{CURRENTMONTHNAMEGEN}}|{{PAGEID}}|{{REVISIONID}}|{{REVISIONTIMESTAMP}}|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}|{{REVISIONUSER}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Monday|50|December|42|420|20240304050607|2024-03-4|Test editor", current_magic);
+    const site_magic = try expander.expandFragment("Page", "{{SERVER}}|{{SERVERNAME}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("//en.wiktionary.org|en.wiktionary.org", site_magic);
     const other_magic = try expander.expandFragment("Page", "{{PAGEID:Other_page}}|{{REVISIONID:Other page}}|{{REVISIONTIMESTAMP:Other page}}|{{REVISIONUSER:Other_page}}|{{PAGEID:Missing page}}", 1_670_803_200);
     try std.testing.expectEqualStrings("99|990|20250607080910|Other editor|", other_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
