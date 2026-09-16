@@ -14,6 +14,7 @@ const StreamNode = ztypes.StreamNode;
 const Capture = struct {
     names_by_depth: [8][]const u8 = [_][]const u8{""} ** 8,
     title_raw: ?[]const u8 = null,
+    redirect_raw: ?[]const u8 = null,
     page_id_raw: ?[]const u8 = null,
     revision_id_raw: ?[]const u8 = null,
     model_raw: ?[]const u8 = null,
@@ -24,7 +25,7 @@ const Capture = struct {
         if (node.kind != .element) return true;
         if (node.depth < self.names_by_depth.len) self.names_by_depth[node.depth] = node.nameSlice();
         const name = node.nameSlice();
-        if (node.depth == 1 and std.mem.eql(u8, name, "title")) self.title_raw = node.leadingTextRaw() else if (node.depth == 1 and std.mem.eql(u8, name, "id")) self.page_id_raw = node.leadingTextRaw() else if (node.depth == 2 and std.mem.eql(u8, self.names_by_depth[1], "revision")) {
+        if (node.depth == 1 and std.mem.eql(u8, name, "title")) self.title_raw = node.leadingTextRaw() else if (node.depth == 1 and std.mem.eql(u8, name, "redirect")) self.redirect_raw = node.getAttributeValueRaw("title") else if (node.depth == 1 and std.mem.eql(u8, name, "id")) self.page_id_raw = node.leadingTextRaw() else if (node.depth == 2 and std.mem.eql(u8, self.names_by_depth[1], "revision")) {
             if (std.mem.eql(u8, name, "id")) self.revision_id_raw = node.leadingTextRaw() else if (std.mem.eql(u8, name, "model")) self.model_raw = node.leadingTextRaw() else if (std.mem.eql(u8, name, "format")) self.format_raw = node.leadingTextRaw() else if (std.mem.eql(u8, name, "text")) self.text_raw = node.leadingTextRaw();
         }
         return true;
@@ -55,6 +56,16 @@ fn writeAllFile(io: std.Io, path: []const u8, bytes: []const u8) !void {
     var writer = file.writer(io, &buf);
     try writer.interface.writeAll(bytes);
     try writer.interface.flush();
+}
+
+fn writeTsvField(w: *std.Io.Writer, text: []const u8) !void {
+    for (text) |ch| switch (ch) {
+        '\\' => try w.writeAll("\\\\"),
+        '\t' => try w.writeAll("\\t"),
+        '\r' => try w.writeAll("\\r"),
+        '\n' => try w.writeAll("\\n"),
+        else => try w.writeByte(ch),
+    };
 }
 
 fn writeJsonString(w: *std.Io.Writer, value: []const u8) !void {
@@ -110,7 +121,14 @@ pub fn main(init: std.process.Init) !void {
     const output_root = args[2];
     const modules_dir = try std.fmt.allocPrint(init.arena.allocator(), "{s}/modules", .{output_root});
     const manifest_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/manifest.jsonl", .{output_root});
+    const redirects_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/module-redirects.tsv", .{output_root});
     try std.Io.Dir.cwd().createDirPath(init.io, modules_dir);
+
+    var redirects_file = try std.Io.Dir.cwd().createFile(init.io, redirects_path, .{ .truncate = true });
+    defer redirects_file.close(init.io);
+    var redirects_buf: [64 * 1024]u8 = undefined;
+    var redirects_writer = redirects_file.writer(init.io, &redirects_buf);
+    const rw = &redirects_writer.interface;
 
     var manifest_file = try std.Io.Dir.cwd().createFile(init.io, manifest_path, .{ .truncate = true });
     defer manifest_file.close(init.io);
@@ -127,6 +145,7 @@ pub fn main(init: std.process.Init) !void {
     var pos: usize = 0;
     var pages: usize = 0;
     var modules: usize = 0;
+    var redirects: usize = 0;
     var source_bytes: u64 = 0;
     while (std.mem.indexOfPos(u8, mapped.bytes, pos, "<page>")) |start| {
         const end_start = std.mem.indexOfPos(u8, mapped.bytes, start, "</page>") orelse return error.TruncatedXml;
@@ -138,17 +157,46 @@ pub fn main(init: std.process.Init) !void {
 
         var capture: Capture = .{};
         try parser.parse(page, &capture, Capture.onNode);
-        const page_id_raw = capture.page_id_raw orelse continue;
-        const page_id = std.fmt.parseInt(u64, std.mem.trim(u8, page_id_raw, " \t\r\n"), 10) catch continue;
-        const model_raw = capture.model_raw orelse continue;
+        var decoded_title: ?[]const u8 = null;
+        if (capture.redirect_raw) |target_raw| {
+            if (capture.title_raw) |title_raw| {
+                const title = try xml_decode.decodeSinglePassAlloc(arena.allocator(), title_raw);
+                const target = try xml_decode.decodeSinglePassAlloc(arena.allocator(), target_raw);
+                decoded_title = title;
+                try rw.writeAll("M\t");
+                try writeTsvField(rw, title);
+                try rw.writeByte('\t');
+                try writeTsvField(rw, target);
+                try rw.writeByte('\n');
+                redirects += 1;
+            }
+        }
+        const page_id_raw = capture.page_id_raw orelse {
+            _ = arena.reset(.retain_capacity);
+            continue;
+        };
+        const page_id = std.fmt.parseInt(u64, std.mem.trim(u8, page_id_raw, " \t\r\n"), 10) catch {
+            _ = arena.reset(.retain_capacity);
+            continue;
+        };
+        const model_raw = capture.model_raw orelse {
+            _ = arena.reset(.retain_capacity);
+            continue;
+        };
         const model = try xml_decode.decodeSinglePassAlloc(arena.allocator(), model_raw);
         if (!std.mem.eql(u8, model, "Scribunto")) {
             _ = arena.reset(.retain_capacity);
             continue;
         }
-        const title_raw = capture.title_raw orelse continue;
-        const text_raw = capture.text_raw orelse continue;
-        const title = try xml_decode.decodeSinglePassAlloc(arena.allocator(), title_raw);
+        const title_raw = capture.title_raw orelse {
+            _ = arena.reset(.retain_capacity);
+            continue;
+        };
+        const text_raw = capture.text_raw orelse {
+            _ = arena.reset(.retain_capacity);
+            continue;
+        };
+        const title = decoded_title orelse try xml_decode.decodeSinglePassAlloc(arena.allocator(), title_raw);
         const source = try xml_decode.decodeSinglePassAlloc(arena.allocator(), text_raw);
         const revision_id = if (capture.revision_id_raw) |raw|
             std.fmt.parseInt(u64, std.mem.trim(u8, raw, " \t\r\n"), 10) catch null
@@ -166,10 +214,12 @@ pub fn main(init: std.process.Init) !void {
         source_bytes += source.len;
         if (modules % 1000 == 0) {
             try mw.flush();
-            std.debug.print("modules={d} pages={d} source_bytes={d}\n", .{ modules, pages, source_bytes });
+            try rw.flush();
+            std.debug.print("modules={d} redirects={d} pages={d} source_bytes={d}\n", .{ modules, redirects, pages, source_bytes });
         }
         _ = arena.reset(.retain_capacity);
     }
     try mw.flush();
-    std.debug.print("TOTAL pages={d} modules={d} source_bytes={d}\n", .{ pages, modules, source_bytes });
+    try rw.flush();
+    std.debug.print("TOTAL pages={d} modules={d} redirects={d} source_bytes={d}\n", .{ pages, modules, redirects, source_bytes });
 }

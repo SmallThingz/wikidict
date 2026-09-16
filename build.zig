@@ -98,10 +98,7 @@ pub fn build(b: *std.Build) void {
 
     const llvm_exe = addCliExecutable(b, "dict-llvm-build", b.path("src/lua/llvm_build_main.zig"), target, optimize, &.{});
     addPublicRunStep(b, "compile-lua", "Compile extracted Lua AST directly to LLVM IR", addRunArtifactCommand(b, llvm_exe, &.{}, b.args), &.{});
-    const redirects_exe = addCliExecutable(b, "dict-bundle-redirects", b.path("tools/bundle_redirects_extract.zig"), target, optimize, &.{ .{ .name = "zxml", .module = zxml_dep.module("zxml") }, .{ .name = "xml_decode", .module = shared_xml_decode_mod } });
-    addPublicRunStep(b, "extract-bundle-redirects", "Extract bundle-time module redirect dependencies", addRunArtifactCommand(b, redirects_exe, &.{}, b.args), &.{});
     const pipeline_paths = b.addOptions();
-    pipeline_paths.addOptionPath("redirects", redirects_exe.getEmittedBin());
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
     pipeline_paths.addOptionPath("llvm", llvm_exe.getEmittedBin());
     pipeline_paths.addOption([]const u8, "zig", b.graph.zig_exe);
