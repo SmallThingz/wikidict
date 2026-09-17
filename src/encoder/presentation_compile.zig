@@ -157,7 +157,7 @@ pub const Renderer = struct {
         self.nodes += 1;
         return true;
     }
-    pub fn text(self: *Renderer, value: []const u8, s: Style) Error!void {
+    pub inline fn text(self: *Renderer, value: []const u8, s: Style) Error!void {
         if (value.len == 0) return;
         if (!self.spend()) {
             if (!self.span_limit_marker) {
