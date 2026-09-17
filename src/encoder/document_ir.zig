@@ -143,6 +143,7 @@ pub const InlineIterator = struct {
     cursor: usize = 0,
     bold: bool = false,
     italic: bool = false,
+    renderer_boundaries: bool = false,
     pending_link_start: usize = 0,
     pending_link_inner_end: usize = 0,
     pending_link_end: usize = 0,
@@ -239,12 +240,17 @@ pub const InlineIterator = struct {
             }
             const start = self.cursor;
             scan: while (self.cursor < self.input.len) {
-                const relative = std.mem.indexOfAny(u8, self.input[self.cursor..], "{[<'") orelse {
+                const relative = std.mem.indexOfAny(u8, self.input[self.cursor..], "{[<&'") orelse {
                     self.cursor = self.input.len;
                     break;
                 };
                 self.cursor += relative;
                 const rest = self.input[self.cursor..];
+                if (self.renderer_boundaries and self.cursor != start and
+                    (rest[0] == '<' or rest[0] == '&' or std.mem.startsWith(u8, rest, "{{{")))
+                {
+                    break :scan;
+                }
                 if (std.mem.startsWith(u8, rest, "{{{")) {
                     if (syntax.balanced(self.input, self.cursor)) |pair| {
                         // Parameters are deliberately plain text to this shared
@@ -271,6 +277,13 @@ pub const InlineIterator = struct {
                             self.pending_link_start = self.cursor;
                             self.pending_link_inner_end = pair.inner_end;
                             self.pending_link_end = pair.end;
+                            break :scan;
+                        },
+                        .invalid => if (self.renderer_boundaries) {
+                            self.cursor = pair.end;
+                            continue :scan;
+                        } else {
+                            self.cursor = self.input.len;
                             break :scan;
                         },
                         else => {
@@ -668,6 +681,17 @@ test "inline iterator drops cached link boundaries after caller skips past them"
     const after = it.next().?;
     try std.testing.expectEqualStrings("after", after.text);
     try std.testing.expectEqual(@as(usize, 0), it.pending_link_end);
+}
+
+test "renderer boundaries stop text before renderer-owned markup" {
+    const cases = [_][]const u8{ "plain <b>bold</b>", "plain &amp; tail", "plain {{{p|default}}} tail" };
+    for (cases) |input| {
+        var it: InlineIterator = .{ .input = input, .renderer_boundaries = true };
+        const text = it.next().?;
+        try std.testing.expectEqual(InlineKind.text, text.kind);
+        try std.testing.expectEqualStrings("plain ", text.text);
+        try std.testing.expectEqual(@as(usize, "plain ".len), it.cursor);
+    }
 }
 
 test "link trail stops before uppercase suffixes" {

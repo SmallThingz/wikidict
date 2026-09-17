@@ -574,7 +574,7 @@ pub const Renderer = struct {
             try self.text("[render nesting limit]", inherited);
             return;
         }
-        var it: ir.InlineIterator = .{ .input = input, .bold = inherited.bold, .italic = inherited.italic };
+        var it: ir.InlineIterator = .{ .input = input, .bold = inherited.bold, .italic = inherited.italic, .renderer_boundaries = true };
         while (it.cursor < input.len) {
             if (self.truncated and self.span_limit_marker) return;
             var s = inherited;
@@ -607,26 +607,7 @@ pub const Renderer = struct {
             s.bold = token.bold;
             s.italic = token.italic;
             switch (token.kind) {
-                .text => {
-                    if (token.literal_tail) {
-                        try self.plain(token.text, s);
-                        continue;
-                    }
-                    const markup_at = std.mem.indexOfAny(u8, token.text, "<&");
-                    const parameter_at = std.mem.indexOf(u8, token.text, "{{{");
-                    const at = if (markup_at) |m| if (parameter_at) |p| @min(m, p) else m else parameter_at;
-                    if (at) |special| {
-                        const start = @intFromPtr(token.text.ptr) - @intFromPtr(input.ptr);
-                        it.cursor = start + special;
-                        if (special != 0) {
-                            try self.plain(token.text[0..special], s);
-                            continue;
-                        }
-                        if (starts(token.text, "{{{")) continue;
-                        try self.text(token.text[0..1], s);
-                        it.cursor += 1;
-                    } else try self.plain(token.text, s);
-                },
+                .text => try self.plain(token.text, s),
                 .line_break => try self.lineBreak(s),
                 .link => {
                     var target = token.target;
