@@ -34,16 +34,218 @@ fn statsIndexCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const 
     return one(.nil);
 }
 
+const DumpState = struct {
+    runtime: *rt.Context,
+    table_labels: std.AutoHashMapUnmanaged(*rt.Table, []const u8) = .empty,
+    expanded_tables: std.AutoHashMapUnmanaged(*rt.Table, void) = .empty,
+    function_labels: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
+    table_count: u32 = 0,
+    function_count: u32 = 0,
+
+    fn deinit(self: *DumpState) void {
+        self.table_labels.deinit(self.runtime.allocator);
+        self.expanded_tables.deinit(self.runtime.allocator);
+        self.function_labels.deinit(self.runtime.allocator);
+    }
+
+    fn appendIndent(out: *std.ArrayList(u8), allocator: std.mem.Allocator, count: usize) !void {
+        for (0..count) |_| try out.appendSlice(allocator, "  ");
+    }
+
+    fn appendQuoted(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
+        try out.append(allocator, '"');
+        for (text) |c| switch (c) {
+            '"', '\\' => {
+                try out.append(allocator, '\\');
+                try out.append(allocator, c);
+            },
+            '\n' => try out.appendSlice(allocator, "\\n"),
+            '\r' => try out.appendSlice(allocator, "\\r"),
+            0 => try out.appendSlice(allocator, "\\000"),
+            else => if (c < 32 or c == 127) {
+                var buf: [4]u8 = undefined;
+                try out.appendSlice(allocator, try std.fmt.bufPrint(&buf, "\\{d:0>3}", .{c}));
+            } else try out.append(allocator, c),
+        };
+        try out.append(allocator, '"');
+    }
+
+    fn functionLabel(self: *DumpState, identity: u32) ![]const u8 {
+        if (self.function_labels.get(identity)) |label| return label;
+        self.function_count += 1;
+        const label = try std.fmt.allocPrint(self.runtime.allocator, "function#{d}", .{self.function_count});
+        try self.function_labels.put(self.runtime.allocator, identity, label);
+        return label;
+    }
+
+    fn tableLabel(self: *DumpState, table: *rt.Table) ![]const u8 {
+        if (self.table_labels.get(table)) |label| return label;
+        if (table.metatable) |mt| if (mt.rawGet(.{ .string = "__tostring" })) |method| {
+            const result = try self.runtime.callValue(method, &.{.{ .table = table }});
+            defer rt.freeResults(result);
+            if (result.len == 0 or result[0] != .string) return error.StringExpected;
+            if (!std.mem.eql(u8, result[0].string, "table")) {
+                const label = try self.runtime.allocator.dupe(u8, result[0].string);
+                try self.table_labels.put(self.runtime.allocator, table, label);
+                try self.expanded_tables.put(self.runtime.allocator, table, {});
+                return label;
+            }
+        };
+        self.table_count += 1;
+        const label = try std.fmt.allocPrint(self.runtime.allocator, "table#{d}", .{self.table_count});
+        try self.table_labels.put(self.runtime.allocator, table, label);
+        return label;
+    }
+
+    fn containsKey(keys: []const Value, key: Value) bool {
+        for (keys) |seen| if (rt.rawEqual(seen, key)) return true;
+        return false;
+    }
+
+    fn keyRank(value: Value) u8 {
+        return switch (value) {
+            .boolean => 0,
+            .callable => 1,
+            .nil => 2,
+            .number => 3,
+            .string => 4,
+            .table => 5,
+        };
+    }
+
+    fn keyLess(a: Value, b: Value) bool {
+        const ar = keyRank(a);
+        const br = keyRank(b);
+        if (ar != br) return ar < br;
+        return switch (a) {
+            .boolean => !a.boolean and b.boolean,
+            .number => a.number < b.number,
+            .string => std.mem.order(u8, a.string, b.string) == .lt,
+            else => false,
+        };
+    }
+
+    fn sortKeys(keys: []Value) void {
+        var i: usize = 1;
+        while (i < keys.len) : (i += 1) {
+            const key = keys[i];
+            var j = i;
+            while (j > 0 and keyLess(key, keys[j - 1])) : (j -= 1) keys[j] = keys[j - 1];
+            keys[j] = key;
+        }
+    }
+
+    fn dumpIpairs(self: *DumpState, table: *rt.Table, out: *std.ArrayList(u8), indent: usize, done_keys: *std.ArrayList(Value)) !void {
+        const allocator = self.runtime.allocator;
+        const object = Value{ .table = table };
+        if (table.metatable) |mt| if (mt.rawGet(.{ .string = "__ipairs" })) |method| {
+            const triple = try self.runtime.callValue(method, &.{object});
+            defer rt.freeResults(triple);
+            const iter = if (triple.len > 0) triple[0] else Value.nil;
+            const state = if (triple.len > 1) triple[1] else Value.nil;
+            var key = if (triple.len > 2) triple[2] else Value.nil;
+            while (true) {
+                const result = try self.runtime.callValue(iter, &.{ state, key });
+                defer rt.freeResults(result);
+                if (result.len == 0 or result[0] == .nil) break;
+                key = result[0];
+                const value = if (result.len > 1) result[1] else Value.nil;
+                try done_keys.append(allocator, key);
+                try appendIndent(out, allocator, indent + 2);
+                try self.dumpValue(out, value, indent + 2, true);
+                try out.appendSlice(allocator, ",\n");
+            }
+            return;
+        };
+        var index: usize = 1;
+        while (table.rawGetNumber(@floatFromInt(index))) |value| : (index += 1) {
+            try done_keys.append(allocator, .{ .number = @floatFromInt(index) });
+            try appendIndent(out, allocator, indent + 2);
+            try self.dumpValue(out, value, indent + 2, true);
+            try out.appendSlice(allocator, ",\n");
+        }
+    }
+
+    fn collectPairKeys(self: *DumpState, table: *rt.Table, done_keys: []const Value, keys: *std.ArrayList(Value)) !void {
+        const allocator = self.runtime.allocator;
+        const object = Value{ .table = table };
+        if (table.metatable) |mt| if (mt.rawGet(.{ .string = "__pairs" })) |method| {
+            const triple = try self.runtime.callValue(method, &.{object});
+            defer rt.freeResults(triple);
+            const iter = if (triple.len > 0) triple[0] else Value.nil;
+            const state = if (triple.len > 1) triple[1] else Value.nil;
+            var key = if (triple.len > 2) triple[2] else Value.nil;
+            while (true) {
+                const result = try self.runtime.callValue(iter, &.{ state, key });
+                defer rt.freeResults(result);
+                if (result.len == 0 or result[0] == .nil) break;
+                key = result[0];
+                if (!containsKey(done_keys, key)) try keys.append(allocator, key);
+            }
+            return;
+        };
+        var iterator = table.iterator();
+        while (iterator.next()) |entry| {
+            const key = entry.key_ptr.*;
+            if (!containsKey(done_keys, key)) try keys.append(allocator, key);
+        }
+    }
+
+    fn dumpTable(self: *DumpState, out: *std.ArrayList(u8), table: *rt.Table, indent: usize, expand_table: bool) anyerror!void {
+        const allocator = self.runtime.allocator;
+        const label = try self.tableLabel(table);
+        try out.appendSlice(allocator, label);
+        if (self.expanded_tables.contains(table) or !expand_table) return;
+        try self.expanded_tables.put(allocator, table, {});
+        try out.appendSlice(allocator, " {\n");
+
+        if (table.metatable) |mt| {
+            const visible = mt.rawGet(.{ .string = "__metatable" }) orelse Value{ .table = mt };
+            try appendIndent(out, allocator, indent + 2);
+            try out.appendSlice(allocator, "metatable = ");
+            try self.dumpValue(out, visible, indent + 2, false);
+            try out.append(allocator, '\n');
+        }
+
+        var done_keys: std.ArrayList(Value) = .empty;
+        defer done_keys.deinit(allocator);
+        try self.dumpIpairs(table, out, indent, &done_keys);
+
+        var keys: std.ArrayList(Value) = .empty;
+        defer keys.deinit(allocator);
+        try self.collectPairKeys(table, done_keys.items, &keys);
+        sortKeys(keys.items);
+        for (keys.items) |key| {
+            try appendIndent(out, allocator, indent + 2);
+            try out.append(allocator, '[');
+            try self.dumpValue(out, key, indent + 3, false);
+            try out.appendSlice(allocator, "] = ");
+            try self.dumpValue(out, try self.runtime.getIndex(.{ .table = table }, key), indent + 2, true);
+            try out.appendSlice(allocator, ",\n");
+        }
+        try appendIndent(out, allocator, indent);
+        try out.append(allocator, '}');
+    }
+
+    fn dumpValue(self: *DumpState, out: *std.ArrayList(u8), value: Value, indent: usize, expand_table: bool) anyerror!void {
+        const allocator = self.runtime.allocator;
+        switch (value) {
+            .nil => try out.appendSlice(allocator, "nil"),
+            .boolean => |v| try out.appendSlice(allocator, if (v) "true" else "false"),
+            .number => |v| try out.appendSlice(allocator, try rt.numberToString(allocator, v)),
+            .string => |v| try appendQuoted(out, allocator, v),
+            .table => |v| try self.dumpTable(out, v, indent, expand_table),
+            .callable => |v| try out.appendSlice(allocator, try self.functionLabel(v.identity)),
+        }
+    }
+};
+
 fn dumpObjectCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const text: []const u8 = if (args.len == 0) "nil" else switch (args[0]) {
-        .nil => "nil",
-        .boolean => |value| if (value) "true" else "false",
-        .number => |value| try rt.numberToString(runtime.allocator, value),
-        .string => |value| value,
-        .table => "table",
-        .callable => "function",
-    };
-    return one(.{ .string = text });
+    var state = DumpState{ .runtime = runtime };
+    defer state.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    try state.dumpValue(&out, if (args.len == 0) .nil else args[0], 0, true);
+    return one(.{ .string = try out.toOwnedSlice(runtime.allocator) });
 }
 
 const MessageCtx = struct {
@@ -294,6 +496,44 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     const dumped = try callField(&runtime, .{ .table = mw }, "dumpObject", &.{.{ .number = 7 }});
     defer rt.freeResults(dumped);
     try std.testing.expectEqualStrings("7", dumped[0].string);
+    const quoted = try callField(&runtime, .{ .table = mw }, "dumpObject", &.{.{ .string = "line\n\"quoted\"" }});
+    defer rt.freeResults(quoted);
+    try std.testing.expectEqualStrings("\"line\\n\\\"quoted\\\"\"", quoted[0].string);
+
+    const nested = try runtime.newTable();
+    try nested.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "y" });
+    const object = try runtime.newTable();
+    try object.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "x" });
+    try object.rawSet(runtime.allocator, .{ .boolean = false }, .{ .string = "bool" });
+    try object.rawSet(runtime.allocator, .{ .string = "a" }, .{ .boolean = true });
+    try object.rawSet(runtime.allocator, .{ .string = "nested" }, .{ .table = nested });
+    try object.rawSet(runtime.allocator, .{ .string = "self" }, .{ .table = object });
+    const table_dump = try callField(&runtime, .{ .table = mw }, "dumpObject", &.{.{ .table = object }});
+    defer rt.freeResults(table_dump);
+    try std.testing.expectEqualStrings(
+        \\table#1 {
+        \\    "x",
+        \\    [false] = "bool",
+        \\    ["a"] = true,
+        \\    ["nested"] = table#2 {
+        \\        "y",
+        \\    },
+        \\    ["self"] = table#1,
+        \\}
+    , table_dump[0].string);
+
+    const protected = try runtime.newTable();
+    const protected_mt = try runtime.newTable();
+    try protected_mt.rawSet(runtime.allocator, .{ .string = "__metatable" }, .{ .string = "hidden" });
+    protected.metatable = protected_mt;
+    const protected_dump = try callField(&runtime, .{ .table = mw }, "dumpObject", &.{.{ .table = protected }});
+    defer rt.freeResults(protected_dump);
+    try std.testing.expectEqualStrings(
+        \\table#1 {
+        \\    metatable = "hidden"
+        \\}
+    , protected_dump[0].string);
+
     const logged = try callField(&runtime, .{ .table = mw }, "log", &.{.{ .string = "ignored" }});
     defer rt.freeResults(logged);
     try std.testing.expectEqual(@as(usize, 0), logged.len);
