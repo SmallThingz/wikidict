@@ -425,6 +425,31 @@ fn appendTagAttribute(out: *std.ArrayList(u8), runtime: *rt.Context, name: []con
     try out.append(runtime.allocator, '"');
 }
 
+fn appendTagAttributes(out: *std.ArrayList(u8), runtime: *rt.Context, table: *rt.Table) !void {
+    const object = Value{ .table = table };
+    if (table.metatable) |mt| if (mt.rawGet(.{ .string = "__pairs" })) |method| {
+        const triple = try runtime.callValue(method, &.{object});
+        defer rt.freeResults(triple);
+        const iter = if (triple.len > 0) triple[0] else Value.nil;
+        const state = if (triple.len > 1) triple[1] else Value.nil;
+        var key = if (triple.len > 2) triple[2] else Value.nil;
+        while (true) {
+            const result = try runtime.callValue(iter, &.{ state, key });
+            defer rt.freeResults(result);
+            if (result.len == 0 or result[0] == .nil) break;
+            key = result[0];
+            if (key != .string) return error.InvalidTagAttribute;
+            try appendTagAttribute(out, runtime, key.string, if (result.len > 1) result[1] else .nil);
+        }
+        return;
+    };
+    var it = table.iterator();
+    while (it.next()) |entry| {
+        if (entry.key_ptr.* != .string) return error.InvalidTagAttribute;
+        try appendTagAttribute(out, runtime, entry.key_ptr.string, entry.value_ptr.*);
+    }
+}
+
 fn textTagCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0) return error.StringExpected;
     var name: []const u8 = undefined;
@@ -433,15 +458,16 @@ fn textTagCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
 
     if (args[0] == .table) {
         const spec = args[0].table;
-        const name_value = spec.rawGet(.{ .string = "name" }) orelse return error.StringExpected;
+        const object = Value{ .table = spec };
+        const name_value = try runtime.getIndex(object, .{ .string = "name" });
         if (name_value != .string) return error.StringExpected;
         name = name_value.string;
-        if (spec.rawGet(.{ .string = "attrs" })) |value| switch (value) {
+        switch (try runtime.getIndex(object, .{ .string = "attrs" })) {
             .nil => {},
             .table => |table| attrs = table,
             else => return error.TableExpected,
-        };
-        content = spec.rawGet(.{ .string = "content" }) orelse .nil;
+        }
+        content = try runtime.getIndex(object, .{ .string = "content" });
     } else {
         if (args[0] != .string) return error.StringExpected;
         name = args[0].string;
@@ -456,13 +482,7 @@ fn textTagCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     var out: std.ArrayList(u8) = .empty;
     try out.append(runtime.allocator, '<');
     try out.appendSlice(runtime.allocator, name);
-    if (attrs) |table| {
-        var it = table.iterator();
-        while (it.next()) |entry| {
-            if (entry.key_ptr.* != .string) return error.InvalidTagAttribute;
-            try appendTagAttribute(&out, runtime, entry.key_ptr.string, entry.value_ptr.*);
-        }
-    }
+    if (attrs) |table| try appendTagAttributes(&out, runtime, table);
 
     if (content == .nil) {
         try out.append(runtime.allocator, '>');
@@ -900,4 +920,63 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try text.rawSetNativeField(.text, "JSON_TRY_FIXING", .{ .number = json_try_fixing });
     try text.rawSetNativeField(.text, "JSON_PRETTY", .{ .number = json_pretty });
     try mw.rawSetNativeField(.mw, "text", .{ .table = text });
+}
+
+
+fn tagPairsIter(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const key = if (args.len > 1) args[1] else Value.nil;
+    const next: ?struct { []const u8, Value } = if (key == .nil)
+        .{ "absent", .{ .boolean = false } }
+    else if (key == .string and std.mem.eql(u8, key.string, "absent"))
+        .{ "present", .{ .boolean = true } }
+    else if (key == .string and std.mem.eql(u8, key.string, "present"))
+        .{ "key", .{ .string = "value" } }
+    else if (key == .string and std.mem.eql(u8, key.string, "key"))
+        .{ "n", .{ .number = 42 } }
+    else
+        null;
+    if (next) |item| {
+        const out = try std.heap.smp_allocator.alloc(Value, 2);
+        out[0] = .{ .string = item[0] };
+        out[1] = item[1];
+        return out;
+    }
+    return one(runtime.allocator, .nil);
+}
+
+fn tagPairs(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .table) return error.TableExpected;
+    const out = try std.heap.smp_allocator.alloc(Value, 3);
+    out[0] = try runtime.newNative(null, tagPairsIter);
+    out[1] = args[0];
+    out[2] = .nil;
+    return out;
+}
+
+test "mw.text tag honors pairs and ordinary table indexing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+
+    const attrs = try runtime.newTable();
+    const attrs_mt = try runtime.newTable();
+    try attrs_mt.rawSet(runtime.allocator, .{ .string = "__pairs" }, try runtime.newNative(null, tagPairs));
+    attrs.metatable = attrs_mt;
+
+    const positional = try textTagCall(null, &runtime, &.{ .{ .string = "b" }, .{ .table = attrs } });
+    defer rt.freeResults(positional);
+    try std.testing.expectEqualStrings("<b present key=\"value\" n=\"42\">", positional[0].string);
+
+    const fields = try runtime.newTable();
+    try fields.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = "b" });
+    try fields.rawSet(runtime.allocator, .{ .string = "attrs" }, .{ .table = attrs });
+    try fields.rawSet(runtime.allocator, .{ .string = "content" }, .{ .string = "foo" });
+    const spec = try runtime.newTable();
+    const spec_mt = try runtime.newTable();
+    try spec_mt.rawSet(runtime.allocator, .{ .string = "__index" }, .{ .table = fields });
+    spec.metatable = spec_mt;
+    const named = try textTagCall(null, &runtime, &.{.{ .table = spec }});
+    defer rt.freeResults(named);
+    try std.testing.expectEqualStrings("<b present key=\"value\" n=\"42\">foo</b>", named[0].string);
 }
