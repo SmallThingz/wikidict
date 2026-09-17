@@ -1058,6 +1058,16 @@ pub const Context = struct {
         defer freeResults(out);
         return if (out.len == 0) .nil else out[0];
     }
+    fn sharedComparisonMetamethod(self: *Context, a: Value, b: Value, name: []const u8) ?Value {
+        const left = self.metamethod(a, name) orelse return null;
+        const right = self.metamethod(b, name) orelse return null;
+        return if (rawEqual(left, right)) left else null;
+    }
+    fn callComparisonMetamethod(self: *Context, method: Value, a: Value, b: Value) anyerror!bool {
+        const out = try self.callValue(method, &.{ a, b });
+        defer freeResults(out);
+        return out.len != 0 and out[0].truthy();
+    }
     pub fn comparison(self: *Context, op: CompareOp, a: Value, b: Value) anyerror!bool {
         if (op == .eq or op == .ne) {
             if (rawEqual(a, b)) return op == .eq;
@@ -1075,14 +1085,16 @@ pub const Context = struct {
         }
         if (a == .number and b == .number) return numericCompare(op, a.number, b.number);
         if (a == .string and b == .string) return stringCompare(op, a.string, b.string);
-        const name = if (op == .lt or op == .gt) "__lt" else "__le";
         const left = if (op == .gt or op == .ge) b else a;
         const right = if (op == .gt or op == .ge) a else b;
-        if (self.metamethod(left, name) orelse self.metamethod(right, name)) |method| {
-            const out = try self.callValue(method, &.{ left, right });
-            defer freeResults(out);
-            return out.len != 0 and out[0].truthy();
+        if (op == .lt or op == .gt) {
+            const method = self.sharedComparisonMetamethod(left, right, "__lt") orelse return error.CompareType;
+            return self.callComparisonMetamethod(method, left, right);
         }
+        if (self.sharedComparisonMetamethod(left, right, "__le")) |method|
+            return self.callComparisonMetamethod(method, left, right);
+        if (self.sharedComparisonMetamethod(right, left, "__lt")) |method|
+            return !(try self.callComparisonMetamethod(method, right, left));
         return error.CompareType;
     }
     fn ownString(self: *Context, text: []const u8) ![]const u8 {
@@ -1358,11 +1370,66 @@ pub fn bindGlobalTable(ctx: *Context, shape: ?*const Shape, env_slot: u32) !void
     try ctx.setGlobal(env_slot, .{ .table = table });
 }
 
+fn comparisonField(args: []const Value, index: usize) !f64 {
+    if (index >= args.len or args[index] != .table) return error.TableExpected;
+    const value = args[index].table.rawGet(.{ .string = "n" }) orelse return error.NumberExpected;
+    if (value != .number) return error.NumberExpected;
+    return value.number;
+}
+
+fn comparisonLessProbe(_: ?*anyopaque, _: *Context, args: []const Value) ![]const Value {
+    const out = try std.heap.smp_allocator.alloc(Value, 1);
+    out[0] = .{ .boolean = try comparisonField(args, 0) < try comparisonField(args, 1) };
+    return out;
+}
+
+fn comparisonFalseProbe(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+    const out = try std.heap.smp_allocator.alloc(Value, 1);
+    out[0] = .{ .boolean = false };
+    return out;
+}
+
 fn guardCapture(captures: Captures) f64 {
     return switch (captures) {
         .direct => |cells| if (cells.len == 0) 0 else cells[0].value.number,
         .native => 0,
     };
+}
+
+test "Lua 5.1 ordering metamethods require shared functions and fall back from le to reversed lt" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+
+    const a = try ctx.newTable();
+    const b = try ctx.newTable();
+    try a.rawSet(ctx.allocator, .{ .string = "n" }, .{ .number = 1 });
+    try b.rawSet(ctx.allocator, .{ .string = "n" }, .{ .number = 2 });
+    const shared_mt = try ctx.newTable();
+    const shared_lt = try ctx.newNative(null, comparisonLessProbe);
+    try shared_mt.rawSet(ctx.allocator, .{ .string = "__lt" }, shared_lt);
+    a.metatable = shared_mt;
+    b.metatable = shared_mt;
+
+    try std.testing.expect(try ctx.comparison(.lt, .{ .table = a }, .{ .table = b }));
+    try std.testing.expect(try ctx.comparison(.le, .{ .table = a }, .{ .table = b }));
+    try std.testing.expect(!(try ctx.comparison(.le, .{ .table = b }, .{ .table = a })));
+    try std.testing.expect(try ctx.comparison(.ge, .{ .table = b }, .{ .table = a }));
+
+    const shared_le = try ctx.newNative(null, comparisonFalseProbe);
+    try shared_mt.rawSet(ctx.allocator, .{ .string = "__le" }, shared_le);
+    try std.testing.expect(!(try ctx.comparison(.le, .{ .table = a }, .{ .table = b })));
+
+    const c = try ctx.newTable();
+    const d = try ctx.newTable();
+    const c_mt = try ctx.newTable();
+    const d_mt = try ctx.newTable();
+    try c_mt.rawSet(ctx.allocator, .{ .string = "__lt" }, try ctx.newNative(null, comparisonLessProbe));
+    try d_mt.rawSet(ctx.allocator, .{ .string = "__lt" }, try ctx.newNative(null, comparisonLessProbe));
+    c.metatable = c_mt;
+    d.metatable = d_mt;
+    try std.testing.expectError(error.CompareType, ctx.comparison(.lt, .{ .table = c }, .{ .table = d }));
 }
 
 fn bufferedResultProbe(_: *Context, captures: Captures, args: []const Value, result_buffer: ?[]Value) ![]const Value {

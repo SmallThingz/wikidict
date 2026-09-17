@@ -25,6 +25,16 @@ const module_source =
     \\assert(not type_ok and type_err == "bad argument #2 to 'integration' (string expected, got number)")
     \\libraryUtil.checkTypeMulti('integration', 1, 7, {'string', 'number'})
     \\assert(require('libraryUtil') == libraryUtil)
+    \\local order_mt = {__lt = function(a, b) return a.n < b.n end}
+    \\local order_a = setmetatable({n = 1}, order_mt)
+    \\local order_b = setmetatable({n = 2}, order_mt)
+    \\assert(order_a < order_b and order_a <= order_b and not (order_b <= order_a) and order_b >= order_a)
+    \\order_mt.__le = function() return false end
+    \\assert(not (order_a <= order_b))
+    \\local bad_a = setmetatable({}, {__lt = function() return true end})
+    \\local bad_b = setmetatable({}, {__lt = function() return true end})
+    \\local bad_compare_ok = pcall(function() return bad_a < bad_b end)
+    \\assert(not bad_compare_ok)
     \\local alias_name = 'Module:IntegrationFormsAlias'
     \\assert(require(alias_name).mouse == 'mice')
     \\return {
