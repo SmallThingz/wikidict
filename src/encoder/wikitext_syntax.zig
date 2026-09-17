@@ -139,6 +139,20 @@ pub fn protectedEnd(text: []const u8, start: usize) ?usize {
 }
 /// Stack-based matching prevents pipes in links/parameters from becoming template delimiters.
 pub fn balanced(text: []const u8, start: usize) ?Pair {
+    if (start + 2 <= text.len and starts(text[start..], "[[")) {
+        var i = start + 2;
+        while (i < text.len) {
+            const ch = text[i];
+            if (ch == ']') {
+                if (i + 1 < text.len and text[i + 1] == ']') return .{ .inner_end = i, .end = i + 2 };
+                i += 1;
+                continue;
+            }
+            if (ch == '{' or ch == '[' or ch == '<') break;
+            i += 1;
+        }
+        if (i == text.len) return null;
+    }
     const Kind = enum { template, parameter, link };
     var stack: [128]Kind = undefined;
     var n: usize = 0;
@@ -290,6 +304,18 @@ pub const Template = struct {
         return max;
     }
 };
+test "balanced handles simple and nested internal links identically" {
+    const simple = "[[cat|feline]]tail";
+    const simple_pair = balanced(simple, 0).?;
+    try std.testing.expectEqual(@as(usize, 12), simple_pair.inner_end);
+    try std.testing.expectEqual(@as(usize, 14), simple_pair.end);
+
+    const nested = "[[cat|{{l|en|feline}}]]tail";
+    const nested_pair = balanced(nested, 0).?;
+    try std.testing.expectEqual(@as(usize, 21), nested_pair.inner_end);
+    try std.testing.expectEqual(@as(usize, 23), nested_pair.end);
+}
+
 test "template parameters respect nested constructs and last-value wins" {
     const a = std.testing.allocator;
     const t = try Template.parse(a, "ux|en|[[a|b]] {{q|x}} <nowiki>|=</nowiki>|translation|2=replaced|q=rare");
