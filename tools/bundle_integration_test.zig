@@ -158,7 +158,8 @@ const module_source =
     \\    assert(mw.title.new('rat'):fullUrl({action = 'view'}, 'https') == 'https://en.wiktionary.org/w/index.php?title=rat&action=view')
     \\    assert(mw.title.new('rat').exists)
     \\    assert(string.find(mw.title.new('rat'):getContent(), 'Another rodent', 1, true))
-    \\    assert(not mw.title.new('definitely-not-a-real-entry').exists)
+    \\    local missing_entry = mw.title.new('definitely-not-a-real-entry')
+    \\    assert(not missing_entry.exists and missing_entry.content == false and missing_entry:getContent() == nil)
     \\    local word = frame.args[1]
     \\    local plural = forms[word]
     \\    frame:callParserFunction("DISPLAYTITLE", "''" .. word .. "''")

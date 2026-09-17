@@ -150,7 +150,12 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         if (fragment.string.len == 0) return one(prefixed);
         return one(.{ .string = try std.fmt.allocPrint(runtime.allocator, "{s}#{s}", .{ prefixed.string, fragment.string }) });
     }
-    if (std.mem.eql(u8, key, "content")) return one(try titleContentValue(runtime, prefixed.string));
+    if (std.mem.eql(u8, key, "content")) {
+        const content = try titleContentValue(runtime, prefixed.string);
+        const value: Value = if (content) |source| .{ .string = source } else .{ .boolean = false };
+        try table.rawSetNativeField(.title_value, "content", value);
+        return one(value);
+    }
     if (std.mem.eql(u8, key, "file") or std.mem.eql(u8, key, "fileExists"))
         return error.NotImplemented;
 
@@ -331,16 +336,16 @@ fn canonicalUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
     return titleUrlCall(runtime, args, .canonical);
 }
 
-fn titleContentValue(runtime: *rt.Context, title: []const u8) !Value {
-    const host = host_api.get(runtime) orelse return .nil;
-    const provider = host.page_content orelse return .nil;
-    if (try provider(host.ctx, runtime.allocator, title)) |source| return .{ .string = source };
-    return .nil;
+fn titleContentValue(runtime: *rt.Context, title: []const u8) !?[]const u8 {
+    const host = host_api.get(runtime) orelse return null;
+    const provider = host.page_content orelse return null;
+    return provider(host.ctx, runtime.allocator, title);
 }
 
 fn getContentCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const ctx: *TitleCtx = @ptrCast(@alignCast(raw orelse return error.MissingTitleContext));
-    return one(try titleContentValue(runtime, ctx.title));
+    const content = try titleContentValue(runtime, ctx.title);
+    return one(if (content) |source| .{ .string = source } else .nil);
 }
 
 fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !Value {
@@ -788,6 +793,11 @@ test "AOT title subpage fields respect namespace settings" {
     const missing_module = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Module:Missing" }});
     defer rt.freeResults(missing_module);
     try std.testing.expectEqualStrings("Scribunto", (try runtime.getIndex(missing_module[0], .{ .string = "contentModel" })).string);
+    const missing_content = try runtime.getIndex(missing_module[0], .{ .string = "content" });
+    try std.testing.expect(missing_content == .boolean and !missing_content.boolean);
+    const missing_get_content = try callField(&runtime, missing_module[0], "getContent", &.{missing_module[0]});
+    defer rt.freeResults(missing_get_content);
+    try std.testing.expect(missing_get_content[0] == .nil);
     const missing_css = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "User:Example/common.css" }});
     defer rt.freeResults(missing_css);
     try std.testing.expectEqualStrings("css", (try runtime.getIndex(missing_css[0], .{ .string = "contentModel" })).string);
