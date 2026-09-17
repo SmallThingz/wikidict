@@ -16,8 +16,19 @@ const entry_keys = [_]rt.Value{
     .{ .string = "hasSubpages" },
     .{ .string = "isCapitalized" },
     .{ .string = "aliases" },
+    .{ .string = "displayName" },
+    .{ .string = "hasGenderDistinction" },
+    .{ .string = "isContent" },
+    .{ .string = "isIncludable" },
+    .{ .string = "isMovable" },
+    .{ .string = "isSubject" },
+    .{ .string = "isTalk" },
+    .{ .string = "defaultContentModel" },
+    .{ .string = "subject" },
+    .{ .string = "talk" },
+    .{ .string = "associated" },
 };
-const entry_sorted_slots = [_]u32{ 5, 2, 3, 0, 4, 1 };
+const entry_sorted_slots = [_]u32{ 5, 16, 2, 13, 6, 7, 3, 0, 4, 8, 9, 10, 11, 12, 1, 14, 15 };
 const entry_shape = rt.Shape{
     .field_keys = &entry_keys,
     .sorted_string_slots = &entry_sorted_slots,
@@ -190,8 +201,37 @@ pub fn makeTable(runtime: *rt.Context) !*rt.Table {
         slots[3] = .{ .boolean = spec.has_subpages };
         slots[4] = .{ .boolean = spec.is_capitalized };
         slots[5] = .{ .table = aliases };
+        slots[6] = if (spec.id == 0) .{ .string = "(Main)" } else .nil;
+        slots[7] = .{ .boolean = spec.id == 2 or spec.id == 3 };
+        slots[8] = .{ .boolean = spec.id == 0 };
+        slots[9] = .{ .boolean = true };
+        slots[10] = .{ .boolean = spec.id >= 0 and spec.id != 2600 };
+        const is_talk = spec.id > 0 and @mod(spec.id, 2) == 1;
+        slots[11] = .{ .boolean = !is_talk };
+        slots[12] = .{ .boolean = is_talk };
+        slots[13] = if (spec.id == 2600) .{ .string = "flow-board" } else .nil;
+        slots[14] = .nil;
+        slots[15] = .nil;
+        slots[16] = .nil;
         try namespaces.rawSet(runtime.allocator, .{ .number = @floatFromInt(spec.id) }, .{ .table = value });
     }
+
+    // Scribunto exposes namespace relationships as object identities, not IDs.
+    // Negative virtual namespaces have only a subject (themselves); missing talk
+    // namespaces such as Topic's 2601 resolve to nil.
+    for (all, 0..) |spec, index| {
+        const value = &entries[index];
+        if (subjectSpec(spec.id)) |subject|
+            value.slots[14] = namespaces.rawGet(.{ .number = @floatFromInt(subject.id) }) orelse .nil;
+        if (talkSpec(spec.id)) |talk|
+            value.slots[15] = namespaces.rawGet(.{ .number = @floatFromInt(talk.id) }) orelse .nil;
+        if (spec.id >= 0) {
+            const associated = if (spec.id > 0 and @mod(spec.id, 2) == 1) subjectSpec(spec.id) else talkSpec(spec.id);
+            if (associated) |other|
+                value.slots[16] = namespaces.rawGet(.{ .number = @floatFromInt(other.id) }) orelse .nil;
+        }
+    }
+
     const metatable = try runtime.newTable();
     try metatable.rawSet(runtime.allocator, .{ .string = "__index" }, try runtime.newNative(null, namespaceIndexCall));
     namespaces.metatable = metatable;
@@ -243,7 +283,48 @@ test "namespace entry shapes remain open and mutable" {
     try std.testing.expect(user_talk == .table);
     try std.testing.expectEqual(@as(f64, 3), user_talk.table.rawGet(.{ .string = "id" }).?.number);
     try std.testing.expect(user_talk.table.rawGet(.{ .string = "isCapitalized" }).?.boolean);
+    const main = namespaces.rawGet(.{ .number = 0 }).?.table;
+    const talk = namespaces.rawGet(.{ .number = 1 }).?.table;
+    try std.testing.expectEqualStrings("(Main)", main.rawGet(.{ .string = "displayName" }).?.string);
+    try std.testing.expect(main.rawGet(.{ .string = "isContent" }).?.boolean);
+    try std.testing.expect(main.rawGet(.{ .string = "isSubject" }).?.boolean);
+    try std.testing.expect(!main.rawGet(.{ .string = "isTalk" }).?.boolean);
+    try std.testing.expect(main.rawGet(.{ .string = "talk" }).?.table == talk);
+    try std.testing.expect(main.rawGet(.{ .string = "associated" }).?.table == talk);
+
+    const project = namespaces.rawGet(.{ .number = 4 }).?.table;
+    const project_talk = namespaces.rawGet(.{ .number = 5 }).?.table;
+    try std.testing.expect(project.rawGet(.{ .string = "subject" }).?.table == project);
+    try std.testing.expect(project.rawGet(.{ .string = "talk" }).?.table == project_talk);
+    try std.testing.expect(project.rawGet(.{ .string = "associated" }).?.table == project_talk);
+    try std.testing.expect(project_talk.rawGet(.{ .string = "subject" }).?.table == project);
+    try std.testing.expect(project_talk.rawGet(.{ .string = "talk" }).?.table == project_talk);
+    try std.testing.expect(project_talk.rawGet(.{ .string = "associated" }).?.table == project);
+    try std.testing.expect(project.rawGet(.{ .string = "isMovable" }).?.boolean);
+    try std.testing.expect(project.rawGet(.{ .string = "isIncludable" }).?.boolean);
+    try std.testing.expect((project.rawGet(.{ .string = "defaultContentModel" }) orelse .nil) == .nil);
+
+    const user = namespaces.rawGet(.{ .number = 2 }).?.table;
+    try std.testing.expect(user.rawGet(.{ .string = "hasGenderDistinction" }).?.boolean);
+    try std.testing.expect(user_talk.table.rawGet(.{ .string = "hasGenderDistinction" }).?.boolean);
+
+    const media = namespaces.rawGet(.{ .number = -2 }).?.table;
+    try std.testing.expect(media.rawGet(.{ .string = "subject" }).?.table == media);
+    try std.testing.expect((media.rawGet(.{ .string = "talk" }) orelse .nil) == .nil);
+    try std.testing.expect((media.rawGet(.{ .string = "associated" }) orelse .nil) == .nil);
+    try std.testing.expect(!media.rawGet(.{ .string = "isMovable" }).?.boolean);
+    try std.testing.expect(media.rawGet(.{ .string = "isSubject" }).?.boolean);
+
+    const topic = namespaces.rawGet(.{ .number = 2600 }).?.table;
+    try std.testing.expectEqualStrings("flow-board", topic.rawGet(.{ .string = "defaultContentModel" }).?.string);
+    try std.testing.expect(topic.rawGet(.{ .string = "subject" }).?.table == topic);
+    try std.testing.expect((topic.rawGet(.{ .string = "talk" }) orelse .nil) == .nil);
+    try std.testing.expect((topic.rawGet(.{ .string = "associated" }) orelse .nil) == .nil);
+    try std.testing.expect(!topic.rawGet(.{ .string = "isMovable" }).?.boolean);
+
     const template = namespaces.rawGet(.{ .number = 10 }).?.table;
+    try std.testing.expect(!template.rawGet(.{ .string = "hasGenderDistinction" }).?.boolean);
+    try std.testing.expect(template.map.count() == 0);
     try template.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = "Changed" });
     try std.testing.expectEqualStrings("Changed", template.rawGet(.{ .string = "name" }).?.string);
     try template.rawSet(runtime.allocator, .{ .string = "extra" }, .{ .number = 7 });
