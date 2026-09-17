@@ -143,9 +143,40 @@ pub const InlineIterator = struct {
     cursor: usize = 0,
     bold: bool = false,
     italic: bool = false,
+    pending_link_start: usize = 0,
+    pending_link_inner_end: usize = 0,
+    pending_link_end: usize = 0,
+
+    fn clearPendingLink(self: *InlineIterator) void {
+        self.pending_link_end = 0;
+    }
+
+    fn inlineLink(self: *InlineIterator, link: ParsedInlineLink) InlineSpan {
+        self.cursor = link.end;
+        return .{
+            .kind = .link,
+            .text = link.label,
+            .target = link.target,
+            .trail = link.trail,
+            .link_has_pipe = link.has_pipe,
+            .link_empty_label = link.empty_label,
+            .bold = self.bold,
+            .italic = self.italic,
+        };
+    }
 
     pub fn next(self: *InlineIterator) ?InlineSpan {
         while (self.cursor < self.input.len) {
+            if (self.pending_link_end != 0) {
+                if (self.cursor == self.pending_link_start) {
+                    const pair: syntax.Pair = .{ .inner_end = self.pending_link_inner_end, .end = self.pending_link_end };
+                    self.clearPendingLink();
+                    switch (parseInlineLinkAtPair(self.input, self.cursor, pair)) {
+                        .link => |link| return self.inlineLink(link),
+                        else => {},
+                    }
+                } else if (self.cursor > self.pending_link_start) self.clearPendingLink();
+            }
             if (parseTemplateAt(self.input, self.cursor)) |template| {
                 self.cursor = template.end;
                 return .{
@@ -157,19 +188,7 @@ pub const InlineIterator = struct {
                 };
             }
             switch (parseInlineLinkAtDetailed(self.input, self.cursor)) {
-                .link => |link| {
-                    self.cursor = link.end;
-                    return .{
-                        .kind = .link,
-                        .text = link.label,
-                        .target = link.target,
-                        .trail = link.trail,
-                        .link_has_pipe = link.has_pipe,
-                        .link_empty_label = link.empty_label,
-                        .bold = self.bold,
-                        .italic = self.italic,
-                    };
-                },
+                .link => |link| return self.inlineLink(link),
                 .unbalanced => {
                     const start = self.cursor;
                     self.cursor = self.input.len;
@@ -219,7 +238,7 @@ pub const InlineIterator = struct {
                 return .{ .kind = .text, .text = self.input[start..self.cursor], .bold = self.bold, .italic = self.italic };
             }
             const start = self.cursor;
-            while (self.cursor < self.input.len) {
+            scan: while (self.cursor < self.input.len) {
                 const relative = std.mem.indexOfAny(u8, self.input[self.cursor..], "{[<'") orelse {
                     self.cursor = self.input.len;
                     break;
@@ -242,9 +261,23 @@ pub const InlineIterator = struct {
                     break;
                 }
                 if (std.mem.startsWith(u8, rest, "[[")) {
-                    if (parseInlineLinkAt(self.input, self.cursor) != null) break;
-                    self.cursor = self.input.len;
-                    break;
+                    if (self.pending_link_end != 0 and self.pending_link_start == self.cursor) break :scan;
+                    const pair = syntax.balanced(self.input, self.cursor) orelse {
+                        self.cursor = self.input.len;
+                        break :scan;
+                    };
+                    switch (parseInlineLinkAtPair(self.input, self.cursor, pair)) {
+                        .link => {
+                            self.pending_link_start = self.cursor;
+                            self.pending_link_inner_end = pair.inner_end;
+                            self.pending_link_end = pair.end;
+                            break :scan;
+                        },
+                        else => {
+                            self.cursor = self.input.len;
+                            break :scan;
+                        },
+                    }
                 }
                 if (rest[0] == '[' and rest.len > 1 and rest[1] != '[' and
                     (startsWithAsciiIgnoreCase(rest[1..], "http://") or startsWithAsciiIgnoreCase(rest[1..], "https://")))
@@ -442,6 +475,10 @@ fn parseTemplateAt(input: []const u8, start: usize) ?ParsedTemplate {
 fn parseInlineLinkAtDetailed(input: []const u8, start: usize) InlineLinkParse {
     if (start + 2 > input.len or !std.mem.eql(u8, input[start .. start + 2], "[[")) return .not_link;
     const pair = syntax.balanced(input, start) orelse return .unbalanced;
+    return parseInlineLinkAtPair(input, start, pair);
+}
+
+fn parseInlineLinkAtPair(input: []const u8, start: usize, pair: syntax.Pair) InlineLinkParse {
     const inside = input[start + 2 .. pair.inner_end];
     if (inside.len == 0) return .invalid;
     const pipe = syntax.delimiter(inside, "|", 0);
@@ -461,13 +498,6 @@ fn parseInlineLinkAtDetailed(input: []const u8, start: usize) InlineLinkParse {
         .has_pipe = pipe != null,
         .empty_label = pipe != null and raw_label.len == 0,
     } };
-}
-
-fn parseInlineLinkAt(input: []const u8, start: usize) ?ParsedInlineLink {
-    return switch (parseInlineLinkAtDetailed(input, start)) {
-        .link => |link| link,
-        else => null,
-    };
 }
 
 fn parseExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
@@ -612,6 +642,32 @@ test "inline iterator makes bounded progress across malformed opener storms" {
     }
     try std.testing.expect(saw_sentinel);
     try std.testing.expectEqual(input.items.len, total);
+}
+
+test "inline iterator reuses balanced link boundaries found after leading text" {
+    var it: InlineIterator = .{ .input = "before [[cat|feline]] after" };
+    const before = it.next().?;
+    try std.testing.expectEqual(InlineKind.text, before.kind);
+    try std.testing.expectEqualStrings("before ", before.text);
+    try std.testing.expect(it.pending_link_end != 0);
+    const link = it.next().?;
+    try std.testing.expectEqual(InlineKind.link, link.kind);
+    try std.testing.expectEqualStrings("cat", link.target);
+    try std.testing.expectEqualStrings("feline", link.text);
+    try std.testing.expectEqual(@as(usize, 0), it.pending_link_end);
+    const after = it.next().?;
+    try std.testing.expectEqualStrings(" after", after.text);
+}
+
+test "inline iterator drops cached link boundaries after caller skips past them" {
+    const input = "before [[cat]] after";
+    var it: InlineIterator = .{ .input = input };
+    _ = it.next().?;
+    try std.testing.expect(it.pending_link_end != 0);
+    it.cursor = std.mem.indexOf(u8, input, "after").?;
+    const after = it.next().?;
+    try std.testing.expectEqualStrings("after", after.text);
+    try std.testing.expectEqual(@as(usize, 0), it.pending_link_end);
 }
 
 test "link trail stops before uppercase suffixes" {
