@@ -438,6 +438,17 @@ pub const Renderer = struct {
             try self.referenceDefinitions(input[tag.end..pair.inner_end], group);
             return pair.end;
         }
+        if (tag.name.len == "small".len and tag.attrs.len == 0 and tag.is("small")) {
+            if (tag.closing or tag.self_closing) return tag.end;
+            const pair = syntax.matchingTag(input, tag) orelse {
+                try self.literal(input[tag.end..], style);
+                return input.len;
+            };
+            var s = style;
+            s.small = true;
+            try self.inlineText(input[tag.end..pair.inner_end], s, depth + 1);
+            return pair.end;
+        }
         if (syntax.isOpaqueTag(tag.name) and !tag.closing and !tag.is("nowiki")) return try self.opaqueExtension(input, tag, style, depth);
         if (tag.is("hr")) {
             if (!tag.closing) {
