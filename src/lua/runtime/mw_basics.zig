@@ -251,6 +251,9 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
         "getBestStatements",
         "getLabelWithLang",
         "getLabelByLang",
+        "getAllStatements",
+        "getGlobalSiteId",
+        "formatValue",
         "isValidEntityId",
         "entityExists",
         "sitelink",
@@ -300,9 +303,25 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     runtime.clearAotErrorName();
 
     const wikibase = mw.rawGet(.{ .string = "wikibase" }).?.table;
-    try std.testing.expect(wikibase.rawGet(.{ .string = "getEntity" }).? == .callable);
-    try std.testing.expect(wikibase.rawGet(.{ .string = "getEntityIdForTitle" }).? == .callable);
-    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, "getEntity", &.{.{ .string = "Q1" }}));
+    inline for (.{
+        "getEntity",
+        "getEntityIdForTitle",
+        "getDescription",
+        "getLabel",
+        "getEntityIdForCurrentPage",
+        "getSitelink",
+        "getEntityUrl",
+        "getBestStatements",
+        "getLabelWithLang",
+        "getLabelByLang",
+        "getAllStatements",
+        "getGlobalSiteId",
+        "formatValue",
+        "isValidEntityId",
+        "entityExists",
+        "sitelink",
+    }) |name| try std.testing.expect(wikibase.rawGet(.{ .string = name }).? == .callable);
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, "formatValue", &.{.{ .string = "Q1" }}));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
 
