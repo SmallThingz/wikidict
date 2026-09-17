@@ -111,6 +111,7 @@ pub const Module = struct {
 
 const Capture = union(enum) { global, local: u32, upvalue: u32 };
 const Save = struct { name: []const u8, previous: ?u32 };
+const TypeDependency = struct { source: u32, target: u32 };
 const Analyzer = struct {
     allocator: std.mem.Allocator,
     globals: *Globals,
@@ -122,6 +123,7 @@ const Analyzer = struct {
     bindings: std.ArrayList(Binding) = .empty,
     upvalues: std.ArrayList(Upvalue) = .empty,
     upvalue_by_name: std.StringHashMapUnmanaged(u32) = .empty,
+    type_dependencies: std.ArrayList(TypeDependency) = .empty,
 
     fn deinit(self: *Analyzer) void {
         self.locals.deinit(self.allocator);
@@ -129,6 +131,7 @@ const Analyzer = struct {
         self.bindings.deinit(self.allocator);
         self.upvalues.deinit(self.allocator);
         self.upvalue_by_name.deinit(self.allocator);
+        self.type_dependencies.deinit(self.allocator);
     }
 
     fn bind(self: *Analyzer, name: []const u8) !u32 {
@@ -159,6 +162,9 @@ const Analyzer = struct {
     fn captureForChild(self: *Analyzer, name: []const u8) !Capture {
         if (self.locals.get(name)) |binding| {
             self.bindings.items[binding].captured = true;
+            // Captured locals live in boxed cells. Any scalar type inferred by
+            // aliases before this closure was seen must be invalidated too.
+            self.invalidateStaticType(binding);
             return .{ .local = binding };
         }
         const parent = self.parent orelse return .global;
@@ -225,11 +231,10 @@ const Analyzer = struct {
                     const rhs = self.exprStaticType(v.rhs);
                     break :blk if ((lhs == .number or lhs == .string) and (rhs == .number or rhs == .string)) .string else .unknown;
                 },
-                .and_, .or_ => blk: {
-                    const lhs = self.exprStaticType(v.lhs);
-                    const rhs = self.exprStaticType(v.rhs);
-                    break :blk if (lhs == rhs) lhs else .unknown;
-                },
+                // Lua logical operators return an operand, and the emitter keeps
+                // their short-circuit result boxed. Keep mutable-local storage
+                // conservative rather than claiming a native scalar type here.
+                .and_, .or_ => .unknown,
             },
             .index, .call, .method_call, .function, .table, .vararg => .unknown,
         };
@@ -251,11 +256,50 @@ const Analyzer = struct {
         return out;
     }
 
+    fn invalidateStaticType(self: *Analyzer, binding: u32) void {
+        if (self.bindings.items[binding].static_type == .unknown) return;
+        self.bindings.items[binding].static_type = .unknown;
+        for (self.type_dependencies.items) |dependency|
+            if (dependency.source == binding) self.invalidateStaticType(dependency.target);
+    }
+
+    fn addTypeDependency(self: *Analyzer, source: u32, target: u32) !void {
+        if (source == target) return;
+        for (self.type_dependencies.items) |dependency|
+            if (dependency.source == source and dependency.target == target) return;
+        try self.type_dependencies.append(self.allocator, .{ .source = source, .target = target });
+    }
+
+    fn collectTypeSources(self: *const Analyzer, value: *const lua.Expr, out: *std.ArrayList(u32)) !void {
+        switch (value.*) {
+            .name => |name| if (self.locals.get(name.value)) |binding| {
+                for (out.items) |existing| if (existing == binding) return;
+                try out.append(self.allocator, binding);
+            },
+            .paren => |v| try self.collectTypeSources(v.expr, out),
+            .unary => |v| if (v.op == .neg) try self.collectTypeSources(v.expr, out),
+            .binary => |v| switch (v.op) {
+                .add, .sub, .mul, .div, .mod, .pow => {
+                    try self.collectTypeSources(v.lhs, out);
+                    try self.collectTypeSources(v.rhs, out);
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    fn addTypeDependencies(self: *Analyzer, target: u32, value: *const lua.Expr) !void {
+        var sources: std.ArrayList(u32) = .empty;
+        defer sources.deinit(self.allocator);
+        try self.collectTypeSources(value, &sources);
+        for (sources.items) |source| try self.addTypeDependency(source, target);
+    }
+
     fn mergeWriteType(self: *Analyzer, target: lua.LValue, incoming: StaticType) void {
         if (target != .name) return;
         const binding = self.locals.get(target.name) orelse return;
-        const old = self.bindings.items[binding].static_type;
-        self.bindings.items[binding].static_type = if (old == incoming) old else .unknown;
+        if (self.bindings.items[binding].static_type != incoming) self.invalidateStaticType(binding);
     }
 
     fn analyzeWriteTarget(self: *Analyzer, target: lua.LValue) anyerror!void {
@@ -326,9 +370,16 @@ const Analyzer = struct {
                 for (s.values) |value| try self.expr(value);
                 const types = try self.rhsTypes(s.values, s.names.len);
                 defer self.allocator.free(types);
+                const sources = try self.allocator.alloc(std.ArrayList(u32), s.names.len);
+                defer self.allocator.free(sources);
+                for (sources) |*items| items.* = .empty;
+                defer for (sources) |*items| items.deinit(self.allocator);
+                for (s.names, 0..) |_, index| if (index < s.values.len and !(index + 1 == s.values.len and isMultiExpr(s.values[index])))
+                    try self.collectTypeSources(s.values[index], &sources[index]);
                 for (s.names, types, 0..) |name, static_type, index| {
                     const binding = try self.bind(name);
                     self.bindings.items[binding].static_type = static_type;
+                    for (sources[index].items) |source| try self.addTypeDependency(source, binding);
                     if (s.values.len == s.names.len and s.values[index].* == .function)
                         self.bindings.items[binding].function_span = s.values[index].function.span;
                 }
@@ -338,7 +389,14 @@ const Analyzer = struct {
                 for (s.values) |value| try self.expr(value);
                 const types = try self.rhsTypes(s.values, s.targets.len);
                 defer self.allocator.free(types);
-                for (s.targets, types) |target, static_type| self.mergeWriteType(target, static_type);
+                for (s.targets, types, 0..) |target, static_type, index| {
+                    self.mergeWriteType(target, static_type);
+                    if (target == .name and index < s.values.len and !(index + 1 == s.values.len and isMultiExpr(s.values[index]))) {
+                        const binding = self.locals.get(target.name) orelse continue;
+                        if (self.bindings.items[binding].static_type != .unknown)
+                            try self.addTypeDependencies(binding, s.values[index]);
+                    }
+                }
             },
             .call => |s| try self.expr(s.expr),
             .do_block => |s| try self.scopedBlock(s.body),

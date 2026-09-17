@@ -84,6 +84,87 @@ test "mutable proven scalar locals stay native LLVM storage" {
     try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_require_number") == null);
 }
 
+test "mutable logical results use generic storage" {
+    const source =
+        \\local ok = false
+        \\ok = ok or not not value
+        \\return ok
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var saw_ok = false;
+    for (module.root.bindings) |binding| if (std.mem.eql(u8, binding.name, "ok")) {
+        saw_ok = true;
+        try std.testing.expectEqual(llvm_analysis.StaticType.unknown, binding.static_type);
+    };
+    try std.testing.expect(saw_ok);
+    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer std.testing.allocator.free(generated.source);
+}
+
+test "loop-carried scalar dependencies invalidate stale aliases" {
+    const source =
+        \\local state = true
+        \\local copy = true
+        \\local count = 0
+        \\for i = 1, 3 do
+        \\  copy = state
+        \\  state = maybe and maybe.flag or false
+        \\  count = count + 1
+        \\end
+        \\return state, copy, count
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var state_type: ?llvm_analysis.StaticType = null;
+    var copy_type: ?llvm_analysis.StaticType = null;
+    var count_type: ?llvm_analysis.StaticType = null;
+    for (module.root.bindings) |binding| {
+        if (std.mem.eql(u8, binding.name, "state")) state_type = binding.static_type;
+        if (std.mem.eql(u8, binding.name, "copy")) copy_type = binding.static_type;
+        if (std.mem.eql(u8, binding.name, "count")) count_type = binding.static_type;
+    }
+    try std.testing.expectEqual(llvm_analysis.StaticType.unknown, state_type.?);
+    try std.testing.expectEqual(llvm_analysis.StaticType.unknown, copy_type.?);
+    try std.testing.expectEqual(llvm_analysis.StaticType.number, count_type.?);
+    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer std.testing.allocator.free(generated.source);
+}
+
+test "late capture invalidates native scalar aliases" {
+    const source =
+        \\local value = 1
+        \\local copy = 0
+        \\copy = value
+        \\local function capture() return value end
+        \\return copy, capture
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var value_type: ?llvm_analysis.StaticType = null;
+    var copy_type: ?llvm_analysis.StaticType = null;
+    for (module.root.bindings) |binding| {
+        if (std.mem.eql(u8, binding.name, "value")) value_type = binding.static_type;
+        if (std.mem.eql(u8, binding.name, "copy")) copy_type = binding.static_type;
+    }
+    try std.testing.expectEqual(llvm_analysis.StaticType.unknown, value_type.?);
+    try std.testing.expectEqual(llvm_analysis.StaticType.unknown, copy_type.?);
+    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer std.testing.allocator.free(generated.source);
+}
+
 test "constant require lowers to module id only when global is stable" {
     var ids: llvm_emitter.ModuleIdMap = .empty;
     defer ids.deinit(std.testing.allocator);
@@ -145,6 +226,29 @@ test "mixed list tables keep generic dense array semantics" {
     try std.testing.expectEqual(@as(usize, 0), registry.count());
 }
 
+test "computed-key module exports stay generic" {
+    const source =
+        \\local keywords = { bar = 'bar' }
+        \\local function render() return 1 end
+        \\return { fixed = render, [keywords.bar] = render }
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var model = llvm_module_model.Builder{
+        .allocator = std.testing.allocator,
+        .source = chunk.source,
+    };
+    defer model.deinit();
+    try model.build(chunk.body);
+    try std.testing.expect(!model.dynamic_top_level);
+    const table = switch (model.return_binding) {
+        .table => |value| value,
+        else => return error.ExpectedTableModel,
+    };
+    try std.testing.expect(!table.shape_eligible);
+    try std.testing.expect(table.fields.contains("fixed"));
+}
+
 test "module model promotes incremental exports to guarded shape slots" {
     const source =
         \\local export = {}
@@ -170,6 +274,7 @@ test "module model promotes incremental exports to guarded shape slots" {
         .table => |value| value,
         else => return error.ExpectedTableModel,
     };
+    try std.testing.expect(table.shape_eligible);
     var names: std.ArrayList([]const u8) = .empty;
     defer names.deinit(std.testing.allocator);
     var keys = table.fields.keyIterator();

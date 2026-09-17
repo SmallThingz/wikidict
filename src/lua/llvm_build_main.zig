@@ -346,7 +346,7 @@ fn analyzeManifest(
         try model.build(chunk.body);
         var export_shape_id: ?u32 = null;
         if (!model.dynamic_top_level) switch (model.return_binding) {
-            .table => |table| {
+            .table => |table| if (table.shape_eligible) {
                 var fields: std.ArrayList([]const u8) = .empty;
                 var keys = table.fields.keyIterator();
                 while (keys.next()) |key| try fields.append(sa, key.*);

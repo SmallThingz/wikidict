@@ -12,6 +12,7 @@ pub const Binding = union(enum) {
 pub const TableInfo = struct {
     span_start: u32,
     fields: std.StringHashMapUnmanaged(Binding) = .empty,
+    shape_eligible: bool = true,
 };
 
 pub const Builder = struct {
@@ -199,8 +200,13 @@ pub const Builder = struct {
         };
         for (fields) |field| switch (field) {
             .named => |v| try table.fields.put(self.allocator, v.name, try self.eval(v.value)),
-            .keyed => |v| if (stringConst(v.key)) |key| try table.fields.put(self.allocator, key, try self.eval(v.value)),
-            .list => {},
+            .keyed => |v| {
+                if (stringConst(v.key)) |key|
+                    try table.fields.put(self.allocator, key, try self.eval(v.value))
+                else
+                    table.shape_eligible = false;
+            },
+            .list => table.shape_eligible = false,
         };
         return .{ .table = table };
     }
