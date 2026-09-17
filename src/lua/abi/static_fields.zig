@@ -71,8 +71,8 @@ const title_value_names = [_][]const u8{
     "canonicalUrl", "inNamespace",  "isSubpageOf", "content",
 };
 const language_value_names = [_][]const u8{
-    "code",     "getCode", "formatDate", "uc",                   "lc", "ucfirst", "lcfirst", "getDir", "getFallbackLanguages",
-    "getArrow", "gender",  "formatNum",  "parseFormattedNumber",
+    "code",  "getCode",              "formatDate", "uc",     "lc",        "ucfirst",              "lcfirst", "getDir",
+    "isRTL", "getFallbackLanguages", "getArrow",   "gender", "formatNum", "parseFormattedNumber",
 };
 const html_node_names = [_][]const u8{ "tag", "done", "allDone", "wikitext", "node", "css", "cssText", "addClass", "attr", "getAttr", "newline" };
 const hash_names = [_][]const u8{"hashValue"};

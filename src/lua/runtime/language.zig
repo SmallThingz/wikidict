@@ -640,6 +640,7 @@ test "AOT language objects expose MediaWiki helpers" {
     const code = try callField(&runtime, language, "getCode", &.{language});
     defer rt.freeResults(code);
     try std.testing.expectEqualStrings("en", code[0].string);
+    try std.testing.expectEqual(@as(usize, 0), language.table.map.count());
     const is_rtl = try callField(&runtime, language, "isRTL", &.{language});
     defer rt.freeResults(is_rtl);
     try std.testing.expect(!is_rtl[0].boolean);
