@@ -384,7 +384,7 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
     try table.rawSetNativeField(.title_value, "canonicalUrl", try runtime.newNative(null, canonicalUrlCall));
     try table.rawSetNativeField(.title_value, "inNamespace", try runtime.newNative(null, inNamespaceCall));
     try table.rawSetNativeField(.title_value, "isSubpageOf", try runtime.newNative(null, isSubpageOfCall));
-    try table.rawSet(runtime.allocator, .{ .string = "subPageTitle" }, try runtime.newNative(ctx, subPageTitleCall));
+    try table.rawSetNativeField(.title_value, "subPageTitle", try runtime.newNative(ctx, subPageTitleCall));
     return .{ .table = table };
 }
 fn normalizedNewText(runtime: *rt.Context, state: *State, raw: []const u8) ![]const u8 {
@@ -672,6 +672,7 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     const made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Template:Foo/Sub# frag_ment" }});
     defer rt.freeResults(made);
     const title = made[0];
+    try std.testing.expectEqual(@as(usize, 0), title.table.map.count());
     try std.testing.expectEqualStrings("Foo/Sub", (try runtime.getIndex(title, .{ .string = "text" })).string);
     try std.testing.expectEqualStrings("Template", (try runtime.getIndex(title, .{ .string = "nsText" })).string);
     try std.testing.expectEqual(@as(f64, 10), (try runtime.getIndex(title, .{ .string = "namespace" })).number);
