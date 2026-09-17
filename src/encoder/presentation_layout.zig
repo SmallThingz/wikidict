@@ -43,7 +43,9 @@ fn analyze(a: A, kind: []const u8, index: usize, etymology: ?usize, blocks: []co
     var pending: std.ArrayList(PendingSense) = .empty;
     var intro: std.ArrayList(usize) = .empty;
     var other: std.ArrayList(usize) = .empty;
-    var stack: [256]?usize = @splat(null);
+    const no_sense = std.math.maxInt(usize);
+    var stack: [256]usize = undefined;
+    var stack_len: usize = 1;
     for (blocks, 0..) |block, b| {
         var depth: usize = 0;
         for (block.list_path) |c| {
@@ -53,20 +55,21 @@ fn analyze(a: A, kind: []const u8, index: usize, etymology: ?usize, blocks: []co
         depth = @min(depth, stack.len - 1);
         if (block.kind == .definition) {
             depth = @max(1, depth);
+            if (depth >= stack_len) @memset(stack[stack_len..depth], no_sense);
             var parent: ?usize = null;
             var d = depth;
             while (d > 1) {
                 d -= 1;
-                if (stack[d]) |s| {
-                    parent = s;
+                if (stack[d] != no_sense) {
+                    parent = stack[d];
                     break;
                 }
             }
             stack[depth] = pending.items.len;
-            @memset(stack[depth + 1 ..], null);
+            stack_len = depth + 1;
             try pending.append(a, .{ .value = .{ .block = b, .parent = parent, .form = null } });
-        } else if (depth != 0 and stack[depth] != null and block.kind != .blank) {
-            const owner = &pending.items[stack[depth].?];
+        } else if (depth != 0 and depth < stack_len and stack[depth] != no_sense and block.kind != .blank) {
+            const owner = &pending.items[stack[depth]];
             if (block.kind == .example and !block.relation_note) try owner.examples.append(a, b) else if (block.kind == .quotation) try owner.quotations.append(a, b) else try owner.notes.append(a, b);
         } else if (pending.items.len == 0) try intro.append(a, b) else try other.append(a, b);
     }
@@ -140,6 +143,33 @@ test "lexemes keep homonyms and nested sense evidence separate without losing bl
     try std.testing.expectEqualSlices(usize, &.{3}, noun.related_sections);
     try std.testing.expectEqual(@as(?usize, 5), result.lexemes[2].etymology);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 5, 7 }, result.other_sections);
+}
+
+test "sense ownership skips missing depths and invalidates stale deeper owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "English", .level = 2 },
+        .{ .title = "Noun", .level = 3, .blocks = &.{
+            .{ .kind = .definition, .list_path = "#" },
+            .{ .kind = .definition, .list_path = "###" },
+            .{ .kind = .example, .list_path = "###:" },
+            .{ .kind = .definition, .list_path = "##" },
+            .{ .kind = .example, .list_path = "###:" },
+            .{ .kind = .definition, .list_path = "#" },
+            .{ .kind = .example, .list_path = "##:" },
+        } },
+    };
+    const layout = try build(a, &sections);
+    const senses = layout.lexemes[0].definitions;
+    try std.testing.expectEqual(@as(usize, 4), senses.len);
+    try std.testing.expectEqual(@as(?usize, 0), senses[1].parent);
+    try std.testing.expectEqualSlices(usize, &.{2}, senses[1].examples);
+    try std.testing.expectEqual(@as(?usize, 0), senses[2].parent);
+    try std.testing.expectEqual(@as(?usize, null), senses[3].parent);
+    try std.testing.expectEqualSlices(usize, &.{ 4, 6 }, layout.lexemes[0].other_blocks);
 }
 
 test "renderer relation hints feed layout without reparsing source" {
