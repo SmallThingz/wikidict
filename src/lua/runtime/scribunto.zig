@@ -609,6 +609,17 @@ test "AOT mw.text JSON preserves Scribunto array and flag semantics" {
     try std.testing.expectEqual(@as(f64, 2), x.rawGet(.{ .number = 2 }).?.number);
     try std.testing.expect(decoded[0].table.rawGet(.{ .string = "ok" }).?.boolean);
 
+    const numeric_keys = try callField(&runtime, text, "jsonDecode", &.{.{ .string = "{\"x\":\"x\",\"1\":1,\"2\":2,\"01\":3}" }});
+    defer rt.freeResults(numeric_keys);
+    try std.testing.expectEqual(@as(f64, 1), numeric_keys[0].table.rawGet(.{ .number = 1 }).?.number);
+    try std.testing.expectEqual(@as(f64, 2), numeric_keys[0].table.rawGet(.{ .number = 2 }).?.number);
+    try std.testing.expectEqualStrings("x", numeric_keys[0].table.rawGet(.{ .string = "x" }).?.string);
+    try std.testing.expectEqual(@as(f64, 3), numeric_keys[0].table.rawGet(.{ .string = "01" }).?.number);
+    try std.testing.expect(numeric_keys[0].table.rawGet(.{ .string = "1" }) == null);
+    const large_numeric_key = try callField(&runtime, text, "jsonDecode", &.{.{ .string = "{\"1000\":1}" }});
+    defer rt.freeResults(large_numeric_key);
+    try std.testing.expectEqual(@as(f64, 1), large_numeric_key[0].table.rawGet(.{ .number = 1000 }).?.number);
+
     const encoded = try callField(&runtime, text, "jsonEncode", &.{decoded[0]});
     defer rt.freeResults(encoded);
     var parsed = try std.json.parseFromSlice(std.json.Value, arena.allocator(), encoded[0].string, .{});

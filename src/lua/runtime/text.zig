@@ -511,6 +511,16 @@ fn jsonFlags(args: []const Value) !u32 {
     return @intFromFloat(raw);
 }
 
+fn jsonObjectKey(runtime: *rt.Context, raw: []const u8) !Value {
+    const integer = std.fmt.parseInt(i64, raw, 10) catch
+        return .{ .string = try runtime.allocator.dupe(u8, raw) };
+    var buffer: [32]u8 = undefined;
+    const canonical = try std.fmt.bufPrint(&buffer, "{d}", .{integer});
+    if (!std.mem.eql(u8, canonical, raw))
+        return .{ .string = try runtime.allocator.dupe(u8, raw) };
+    return .{ .number = @floatFromInt(integer) };
+}
+
 fn jsonToLua(runtime: *rt.Context, value: std.json.Value, preserve_keys: bool) !Value {
     return switch (value) {
         .null => .nil,
@@ -537,8 +547,8 @@ fn jsonToLua(runtime: *rt.Context, value: std.json.Value, preserve_keys: bool) !
             const table = try runtime.newTable();
             var it = object.iterator();
             while (it.next()) |entry| {
-                const key = try runtime.allocator.dupe(u8, entry.key_ptr.*);
-                try table.rawSet(runtime.allocator, .{ .string = key }, try jsonToLua(runtime, entry.value_ptr.*, preserve_keys));
+                const key = try jsonObjectKey(runtime, entry.key_ptr.*);
+                try table.rawSet(runtime.allocator, key, try jsonToLua(runtime, entry.value_ptr.*, preserve_keys));
             }
             break :blk .{ .table = table };
         },
