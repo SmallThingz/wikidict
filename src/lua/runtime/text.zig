@@ -635,29 +635,43 @@ fn jsonDecodeFixed(runtime: *rt.Context, source: []const u8, flags: u32) !Value 
     return jsonToLua(runtime, parsed.value, (flags & json_preserve_keys) != 0);
 }
 
-fn jsonArrayIndex(key: Value, preserve_keys: bool) ?usize {
+fn jsonArrayIndex(key: Value) ?usize {
     if (key != .number) return null;
     const raw = key.number;
     if (!std.math.isFinite(raw) or raw != @trunc(raw)) return null;
-    const first: f64 = if (preserve_keys) 0 else 1;
-    if (raw < first or raw > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return null;
+    if (raw < 0 or raw > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return null;
     return @intFromFloat(raw);
 }
 
-fn jsonSequenceLength(table: *rt.Table, preserve_keys: bool) ?usize {
+fn jsonSequenceIndex(key: Value, preserve_keys: bool) ?usize {
+    if (jsonArrayIndex(key)) |index| return index;
+    if (preserve_keys or key != .string or key.string.len == 0) return null;
+    for (key.string) |ch| if (!std.ascii.isDigit(ch)) return null;
+    return std.fmt.parseUnsigned(usize, key.string, 10) catch null;
+}
+
+const JsonSequence = struct {
+    len: usize,
+    first_index: usize,
+};
+
+fn jsonSequence(table: *rt.Table, preserve_keys: bool) ?JsonSequence {
     var count: usize = 0;
+    var min_index: usize = 0;
     var max_index: usize = 0;
     var it = table.iterator();
     while (it.next()) |entry| {
-        const index = jsonArrayIndex(entry.key_ptr.*, preserve_keys) orelse return null;
+        const index = jsonSequenceIndex(entry.key_ptr.*, preserve_keys) orelse return null;
+        if (count == 0 or index < min_index) min_index = index;
         if (count == 0 or index > max_index) max_index = index;
         count += 1;
     }
-    if (count == 0) return 0;
-    return if (preserve_keys)
-        if (max_index + 1 == count) count else null
-    else
-        if (max_index == count) count else null;
+    if (count == 0) return .{ .len = 0, .first_index = if (preserve_keys) 0 else 1 };
+    if (min_index == 0 and max_index == count - 1)
+        return .{ .len = count, .first_index = 0 };
+    if (!preserve_keys and min_index == 1 and max_index == count)
+        return .{ .len = count, .first_index = 1 };
+    return null;
 }
 
 const JsonEncodeState = struct {
@@ -687,36 +701,41 @@ fn collectJsonPairs(runtime: *rt.Context, table: *rt.Table, method: Value) !std.
     return pairs;
 }
 
-fn jsonPairSequenceLength(a: std.mem.Allocator, pairs: []const JsonPair, preserve_keys: bool) !?usize {
-    if (pairs.len == 0) return 0;
+fn jsonPairSequence(a: std.mem.Allocator, pairs: []const JsonPair, preserve_keys: bool) !?JsonSequence {
+    if (pairs.len == 0) return .{ .len = 0, .first_index = if (preserve_keys) 0 else 1 };
+    var min_index: usize = 0;
     var max_index: usize = 0;
-    for (pairs) |entry| {
-        const index = jsonArrayIndex(entry.key, preserve_keys) orelse return null;
-        if (index > max_index) max_index = index;
+    for (pairs, 0..) |entry, i| {
+        const index = jsonSequenceIndex(entry.key, preserve_keys) orelse return null;
+        if (i == 0 or index < min_index) min_index = index;
+        if (i == 0 or index > max_index) max_index = index;
     }
-    if (preserve_keys) {
-        if (max_index + 1 != pairs.len) return null;
-    } else if (max_index != pairs.len) return null;
+    const first_index: usize = if (min_index == 0 and max_index == pairs.len - 1)
+        0
+    else if (!preserve_keys and min_index == 1 and max_index == pairs.len)
+        1
+    else
+        return null;
     const seen = try a.alloc(bool, pairs.len);
     defer a.free(seen);
     @memset(seen, false);
     for (pairs) |entry| {
-        const index = jsonArrayIndex(entry.key, preserve_keys).? - @intFromBool(!preserve_keys);
+        const index = jsonSequenceIndex(entry.key, preserve_keys).? - first_index;
         if (seen[index]) return null;
         seen[index] = true;
     }
-    return pairs.len;
+    return .{ .len = pairs.len, .first_index = first_index };
 }
 
 fn jsonFromPairs(state: *JsonEncodeState, table: *rt.Table, method: Value) anyerror!std.json.Value {
     var pairs = try collectJsonPairs(state.runtime, table, method);
     defer pairs.deinit(state.runtime.allocator);
-    if (try jsonPairSequenceLength(state.runtime.allocator, pairs.items, state.preserve_keys)) |len| {
+    if (try jsonPairSequence(state.runtime.allocator, pairs.items, state.preserve_keys)) |sequence| {
         var array = std.json.Array.init(state.runtime.allocator);
         errdefer array.deinit();
-        for (0..len) |_| try array.append(.null);
+        for (0..sequence.len) |_| try array.append(.null);
         for (pairs.items) |entry| {
-            const index = jsonArrayIndex(entry.key, state.preserve_keys).? - @intFromBool(!state.preserve_keys);
+            const index = jsonSequenceIndex(entry.key, state.preserve_keys).? - sequence.first_index;
             array.items[index] = try luaToJson(state, entry.value);
         }
         return .{ .array = array };
@@ -764,13 +783,14 @@ fn luaToJson(state: *JsonEncodeState, value: Value) !std.json.Value {
             if (table.metatable) |mt| if (mt.rawGet(.{ .string = "__pairs" })) |method|
                 break :blk try jsonFromPairs(state, table, method);
 
-            if (jsonSequenceLength(table, state.preserve_keys)) |len| {
+            if (jsonSequence(table, state.preserve_keys)) |sequence| {
                 var array = std.json.Array.init(state.runtime.allocator);
                 errdefer array.deinit();
-                for (0..len) |offset| {
-                    const index = if (state.preserve_keys) offset else offset + 1;
-                    const item = table.rawGet(.{ .number = @floatFromInt(index) }) orelse .nil;
-                    try array.append(try luaToJson(state, item));
+                for (0..sequence.len) |_| try array.append(.null);
+                var it = table.iterator();
+                while (it.next()) |entry| {
+                    const index = jsonSequenceIndex(entry.key_ptr.*, state.preserve_keys).? - sequence.first_index;
+                    array.items[index] = try luaToJson(state, entry.value_ptr.*);
                 }
                 break :blk .{ .array = array };
             }
@@ -1002,6 +1022,37 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try mw.rawSetNativeField(.mw, "text", .{ .table = text });
 }
 
+
+test "mw.text JSON encode accepts zero-based arrays" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+
+    const value = try runtime.newTable();
+    try value.rawSet(runtime.allocator, .{ .number = 0 }, .{ .string = "zero" });
+    try value.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "one" });
+    const encoded = try textJsonEncodeCall(null, &runtime, &.{.{ .table = value }});
+    defer rt.freeResults(encoded);
+    try std.testing.expectEqualStrings("[\"zero\",\"one\"]", encoded[0].string);
+    const preserved = try textJsonEncodeCall(null, &runtime, &.{ .{ .table = value }, .{ .number = json_preserve_keys } });
+    defer rt.freeResults(preserved);
+    try std.testing.expectEqualStrings("[\"zero\",\"one\"]", preserved[0].string);
+}
+
+test "mw.text JSON encode reindexes digit-string keys" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+
+    const value = try runtime.newTable();
+    try value.rawSet(runtime.allocator, .{ .string = "1" }, .{ .string = "one" });
+    try value.rawSet(runtime.allocator, .{ .string = "2" }, .{ .string = "two" });
+    const encoded = try textJsonEncodeCall(null, &runtime, &.{.{ .table = value }});
+    defer rt.freeResults(encoded);
+    try std.testing.expectEqualStrings("[\"one\",\"two\"]", encoded[0].string);
+}
 
 test "mw.text JSON preserve keys keeps numeric object keys" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
