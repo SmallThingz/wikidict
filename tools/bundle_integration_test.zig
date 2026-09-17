@@ -157,6 +157,7 @@ const module_source =
     \\    assert(frame:callParserFunction{ name = '#tag', args = {'ref', 'body', 'name=n'} } == '<ref name="n">body</ref>')
     \\    assert(mw.title.new('rat'):fullUrl({action = 'view'}, 'https') == 'https://en.wiktionary.org/w/index.php?title=rat&action=view')
     \\    assert(mw.title.new('rat').exists)
+    \\    assert(mw.title.new('rat').redirectTarget == false)
     \\    assert(string.find(mw.title.new('rat'):getContent(), 'Another rodent', 1, true))
     \\    local missing_entry = mw.title.new('definitely-not-a-real-entry')
     \\    assert(not missing_entry.exists and missing_entry.content == false and missing_entry:getContent() == nil)
