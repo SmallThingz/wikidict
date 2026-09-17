@@ -194,7 +194,9 @@ pub const Renderer = struct {
         }
         try self.text(try out.toOwnedSlice(self.a), style);
     }
-    fn entity(self: *Renderer, input: []const u8, style: Style) Error!?usize {
+    const DecodedEntity = struct { bytes: []const u8, consumed: usize, scratch: bool = false };
+
+    fn decodeEntity(input: []const u8, buf: *[4]u8) ?DecodedEntity {
         const end = std.mem.indexOfScalar(u8, input[0..@min(input.len, 64)], ';') orelse return null;
         if (end < 2) return null;
         const name = input[1..end];
@@ -202,27 +204,29 @@ pub const Renderer = struct {
             const hex = name.len > 1 and (name[1] == 'x' or name[1] == 'X');
             const digits = name[if (hex) @as(usize, 2) else 1..];
             const cp = std.fmt.parseInt(u21, digits, if (hex) 16 else 10) catch return null;
-            var buf: [4]u8 = undefined;
-            const n = std.unicode.utf8Encode(if (cp == 0 or cp > 0x10ffff or (cp >= 0xd800 and cp <= 0xdfff)) 0xfffd else cp, &buf) catch return null;
-            try self.text(try self.a.dupe(u8, buf[0..n]), style);
-        } else if (entities.lookupNamedEntity(name)) |value| try self.text(value, style) else return null;
-        return end + 1;
+            const n = std.unicode.utf8Encode(if (cp == 0 or cp > 0x10ffff or (cp >= 0xd800 and cp <= 0xdfff)) 0xfffd else cp, buf) catch return null;
+            return .{ .bytes = buf[0..n], .consumed = end + 1, .scratch = true };
+        }
+        const value = entities.lookupNamedEntity(name) orelse return null;
+        return .{ .bytes = value, .consumed = end + 1 };
+    }
+    fn entity(self: *Renderer, input: []const u8, style: Style) Error!?usize {
+        var buf: [4]u8 = undefined;
+        const decoded = decodeEntity(input, &buf) orelse return null;
+        try self.text(if (decoded.scratch) try self.a.dupe(u8, decoded.bytes) else decoded.bytes, style);
+        return decoded.consumed;
     }
     fn literal(self: *Renderer, input: []const u8, style: Style) Error!void {
         var start: usize = 0;
-        var i: usize = 0;
-        while (i < input.len) : (i += 1) if (input[i] == '&') {
+        while (std.mem.indexOfScalarPos(u8, input, start, '&')) |i| {
             try self.text(input[start..i], style);
             if (try self.entity(input[i..], style)) |n| {
-                i += n;
-                start = i;
-                if (i == input.len) break;
-                i -= 1;
+                start = i + n;
             } else {
                 try self.text("&", style);
                 start = i + 1;
             }
-        };
+        }
         try self.text(input[start..], style);
     }
     pub fn link(self: *Renderer, label: []const u8, target: []const u8, style: Style, depth: usize, external: bool) Error!void {
@@ -542,12 +546,21 @@ pub const Renderer = struct {
         return try std.fmt.allocPrint(self.a, "{s}#{s}", .{ title, fragment });
     }
     fn entityText(self: *Renderer, value: []const u8) Error![]const u8 {
-        const old = self.spans;
-        self.spans = .empty;
-        defer self.spans = old;
-        try self.literal(value, .{});
+        if (std.mem.indexOfScalar(u8, value, '&') == null) return value;
         var out: std.ArrayList(u8) = .empty;
-        for (self.spans.items) |s| try out.appendSlice(self.a, s.text);
+        var start: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, value, start, '&')) |i| {
+            try out.appendSlice(self.a, value[start..i]);
+            var buf: [4]u8 = undefined;
+            if (decodeEntity(value[i..], &buf)) |decoded| {
+                try out.appendSlice(self.a, decoded.bytes);
+                start = i + decoded.consumed;
+            } else {
+                try out.append(self.a, '&');
+                start = i + 1;
+            }
+        }
+        try out.appendSlice(self.a, value[start..]);
         return try out.toOwnedSlice(self.a);
     }
     pub fn inlineText(self: *Renderer, input: []const u8, inherited: Style, depth: usize) Error!void {
@@ -613,10 +626,12 @@ pub const Renderer = struct {
                     var target = token.target;
                     var label_value = if (token.link_empty_label) "" else token.text;
                     const trail = token.trail;
-                    const decoded_target = try self.entityText(target);
-                    const normalized_target = try self.a.dupe(u8, decoded_target);
-                    std.mem.replaceScalar(u8, normalized_target, '_', ' ');
-                    target = normalized_target;
+                    target = try self.entityText(target);
+                    if (std.mem.indexOfScalar(u8, target, '_') != null) {
+                        const normalized = try self.a.dupe(u8, target);
+                        std.mem.replaceScalar(u8, normalized, '_', ' ');
+                        target = normalized;
+                    }
                     if (!token.link_has_pipe) label_value = target;
                     const explicit = starts(target, ":");
                     if (explicit) {
@@ -1401,6 +1416,16 @@ test "malformed entities stay literal while invalid Unicode scalars become repla
     try std.testing.expect(std.mem.startsWith(u8, text_value, "�|�|"));
     try std.testing.expect(std.mem.indexOf(u8, text_value, "&definitelyNotAnEntity;") != null);
     try std.testing.expect(std.mem.endsWith(u8, text_value, "|&amp"));
+}
+
+test "attribute entity decoding does not spend presentation node budget" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const before = r.nodes;
+    try std.testing.expectEqualStrings("plain", try r.entityText("plain"));
+    try std.testing.expectEqualStrings("A&B � &bogus;", try r.entityText("A&amp;B &#x110000; &bogus;"));
+    try std.testing.expectEqual(before, r.nodes);
 }
 
 test "renderer degrades oversized templates instead of failing the whole entry" {
