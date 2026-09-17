@@ -27,6 +27,17 @@ const module_source =
     \\assert(require('libraryUtil') == libraryUtil)
     \\assert(type(debug) == 'table' and type(debug.traceback) == 'function')
     \\assert(debug.getmetatable == nil and debug.getinfo == nil)
+    \\local protected_pairs = setmetatable({x = 1}, {__metatable = 'hidden', __pairs = function() return next, {y = 2}, nil end})
+    \\local protected_pairs_text = ''
+    \\for k, v in pairs(protected_pairs) do protected_pairs_text = protected_pairs_text .. k .. v end
+    \\assert(protected_pairs_text == 'y2' and getmetatable(protected_pairs) == 'hidden')
+    \\local protected_ipairs = setmetatable({1}, {__metatable = false, __ipairs = function() return ipairs({7, 8}) end})
+    \\local protected_ipairs_text = ''
+    \\for i, v in ipairs(protected_ipairs) do protected_ipairs_text = protected_ipairs_text .. i .. v end
+    \\assert(protected_ipairs_text == '1728')
+    \\local false_pairs_ok = pcall(function() for _ in pairs(setmetatable({}, {__pairs = false})) do end end)
+    \\local false_ipairs_ok = pcall(function() for _ in ipairs(setmetatable({}, {__ipairs = false})) do end end)
+    \\assert(not false_pairs_ok and not false_ipairs_ok)
     \\local order_mt = {__lt = function(a, b) return a.n < b.n end}
     \\local order_a = setmetatable({n = 1}, order_mt)
     \\local order_b = setmetatable({n = 2}, order_mt)
