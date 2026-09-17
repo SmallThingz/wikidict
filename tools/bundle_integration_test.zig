@@ -31,7 +31,8 @@ const module_source =
     \\frame_probe = function(frame) return frame.args.x end,
     \\random_probe = function(frame) return math.random(1, 10), math.random(1, 10) end,
     \\render_dictionary_fixture = function(frame)
-    \\    assert(mw.title.new('Appendix:IntegrationFixture'):getContent() == 'a real auxiliary source page')
+    \\    local auxiliary_title = mw.title.new('Appendix:IntegrationFixture')
+    \\    assert(auxiliary_title:getContent() == 'a real auxiliary source page' and auxiliary_title.content == auxiliary_title:getContent())
     \\    assert(string.find(mw.title.new('Template:forms-alias'):getContent(), '#REDIRECT', 1, true))
     \\    assert(string.find(mw.title.new('SharedAlias'):getContent(), '#REDIRECT', 1, true))
     \\    local shared_alias = mw.title.new('SharedAlias')

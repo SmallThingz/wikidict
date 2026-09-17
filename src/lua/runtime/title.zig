@@ -150,6 +150,7 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         if (fragment.string.len == 0) return one(prefixed);
         return one(.{ .string = try std.fmt.allocPrint(runtime.allocator, "{s}#{s}", .{ prefixed.string, fragment.string }) });
     }
+    if (std.mem.eql(u8, key, "content")) return one(try titleContentValue(runtime, prefixed.string));
     if (std.mem.eql(u8, key, "file") or std.mem.eql(u8, key, "fileExists"))
         return error.NotImplemented;
 
@@ -330,12 +331,16 @@ fn canonicalUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
     return titleUrlCall(runtime, args, .canonical);
 }
 
+fn titleContentValue(runtime: *rt.Context, title: []const u8) !Value {
+    const host = host_api.get(runtime) orelse return .nil;
+    const provider = host.page_content orelse return .nil;
+    if (try provider(host.ctx, runtime.allocator, title)) |source| return .{ .string = source };
+    return .nil;
+}
+
 fn getContentCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const ctx: *TitleCtx = @ptrCast(@alignCast(raw orelse return error.MissingTitleContext));
-    const host = host_api.get(runtime) orelse return one(.nil);
-    const provider = host.page_content orelse return one(.nil);
-    if (try provider(host.ctx, runtime.allocator, ctx.title)) |source| return one(.{ .string = source });
-    return one(.nil);
+    return one(try titleContentValue(runtime, ctx.title));
 }
 
 fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !Value {
@@ -756,6 +761,8 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     const content = try callField(&runtime, title, "getContent", &.{title});
     defer rt.freeResults(content);
     try std.testing.expectEqualStrings("template body", content[0].string);
+    const content_property = try runtime.getIndex(title, .{ .string = "content" });
+    try std.testing.expectEqualStrings("template body", content_property.string);
     try runtime.setIndex(title, .{ .string = "fragment" }, .{ .string = " next_part " });
     try std.testing.expectEqualStrings(" next part", (try runtime.getIndex(title, .{ .string = "fragment" })).string);
 }
