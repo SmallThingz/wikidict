@@ -167,31 +167,62 @@ fn baseToString(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const 
     };
     return one(a, .{ .string = s });
 }
+fn explicitBaseDigit(c: u8) ?u8 {
+    return if (c >= '0' and c <= '9')
+        c - '0'
+    else if (c >= 'a' and c <= 'z')
+        c - 'a' + 10
+    else if (c >= 'A' and c <= 'Z')
+        c - 'A' + 10
+    else
+        null;
+}
+
+fn parseExplicitBase(a: std.mem.Allocator, value: Value, base: i64) !?f64 {
+    if (base == 10) return rt.toNumber(value);
+    const raw: []const u8 = switch (value) {
+        .string => |text| text,
+        .number => |number| try rt.numberToString(a, number),
+        else => return error.StringExpected,
+    };
+    const text = std.mem.trim(u8, raw, rt.lua_number_whitespace);
+    if (text.len == 0) return null;
+
+    var i: usize = 0;
+    const negative = text[0] == '-';
+    if (text[0] == '+' or text[0] == '-') i += 1;
+    if (base == 16 and i + 2 <= text.len and text[i] == '0' and (text[i + 1] == 'x' or text[i + 1] == 'X')) i += 2;
+    if (i == text.len) return null;
+
+    const base_u: u64 = @intCast(base);
+    var number: u64 = 0;
+    var overflow = false;
+    while (i < text.len) : (i += 1) {
+        const digit = explicitBaseDigit(text[i]) orelse return null;
+        if (digit >= base) return null;
+        if (!overflow) {
+            const digit_u: u64 = digit;
+            if (number > (std.math.maxInt(u64) - digit_u) / base_u) {
+                number = std.math.maxInt(u64);
+                overflow = true;
+            } else {
+                number = number * base_u + digit_u;
+            }
+        }
+    }
+    if (negative and !overflow) number = 0 -% number;
+    return @floatFromInt(number);
+}
+
 fn baseToNumber(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     const a = ctx.allocator;
     if (args.len == 0) return one(a, .nil);
     if (args.len < 2 or args[1] == .nil) {
         return one(a, if (rt.toNumber(args[0])) |n| .{ .number = n } else .nil);
     }
-    if (args[0] != .string) return one(a, .nil);
     const base = try integer(args[1]);
     if (base < 2 or base > 36) return error.BadBase;
-    const s = std.mem.trim(u8, args[0].string, " \t\r\n\x0b\x0c");
-    var sign: f64 = 1;
-    var i: usize = 0;
-    if (i < s.len and (s[i] == '+' or s[i] == '-')) {
-        if (s[i] == '-') sign = -1;
-        i += 1;
-    }
-    if (i == s.len) return one(a, .nil);
-    var n: f64 = 0;
-    while (i < s.len) : (i += 1) {
-        const c = s[i];
-        const d: i64 = if (c >= '0' and c <= '9') c - '0' else if (c >= 'a' and c <= 'z') c - 'a' + 10 else if (c >= 'A' and c <= 'Z') c - 'A' + 10 else return one(a, .nil);
-        if (d >= base) return one(a, .nil);
-        n = n * @as(f64, @floatFromInt(base)) + @as(f64, @floatFromInt(d));
-    }
-    return one(a, .{ .number = sign * n });
+    return one(a, if (try parseExplicitBase(a, args[0], base)) |n| .{ .number = n } else .nil);
 }
 fn baseSelect(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     const a = ctx.allocator;
@@ -1257,6 +1288,38 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     try std.testing.expectEqualStrings("bad argument #1 to 'demo' (table, number or string expected, got boolean)", multi_bad[1].string);
     try std.testing.expectError(error.AotCallFailed, ctx.callValue(require, &.{.{ .string = "Module:Missing" }}));
     try std.testing.expectEqualStrings("ModuleNotFound", ctx.aotErrorName().?);
+    ctx.clearAotErrorName();
+
+    const tonumber_fn = ctx.getGlobal(global_abi.id("tonumber"));
+    const spaced_number = try ctx.callValue(tonumber_fn, &.{.{ .string = " \t1\r\n" }});
+    defer rt.freeResults(spaced_number);
+    try std.testing.expectEqual(@as(f64, 1), spaced_number[0].number);
+    const default_hex = try ctx.callValue(tonumber_fn, &.{.{ .string = "0x10" }});
+    defer rt.freeResults(default_hex);
+    try std.testing.expectEqual(@as(f64, 16), default_hex[0].number);
+    const decimal_hex = try ctx.callValue(tonumber_fn, &.{ .{ .string = "0x10" }, .{ .number = 10 } });
+    defer rt.freeResults(decimal_hex);
+    try std.testing.expectEqual(@as(f64, 16), decimal_hex[0].number);
+    const explicit_hex = try ctx.callValue(tonumber_fn, &.{ .{ .string = "+0xFF" }, .{ .number = 16 } });
+    defer rt.freeResults(explicit_hex);
+    try std.testing.expectEqual(@as(f64, 255), explicit_hex[0].number);
+    const numeric_hex = try ctx.callValue(tonumber_fn, &.{ .{ .number = 10 }, .{ .number = 16 } });
+    defer rt.freeResults(numeric_hex);
+    try std.testing.expectEqual(@as(f64, 16), numeric_hex[0].number);
+    const wrapped_hex = try ctx.callValue(tonumber_fn, &.{ .{ .string = "-FFFFFFFFFFFFFFFF" }, .{ .number = 16 } });
+    defer rt.freeResults(wrapped_hex);
+    try std.testing.expectEqual(@as(f64, 1), wrapped_hex[0].number);
+    const saturated_hex = try ctx.callValue(tonumber_fn, &.{ .{ .string = "10000000000000000" }, .{ .number = 16 } });
+    defer rt.freeResults(saturated_hex);
+    try std.testing.expectEqual(@as(f64, @floatFromInt(std.math.maxInt(u64))), saturated_hex[0].number);
+    const base34 = try ctx.callValue(tonumber_fn, &.{ .{ .string = "0xFF" }, .{ .number = 34 } });
+    defer rt.freeResults(base34);
+    try std.testing.expectEqual(@as(f64, 38673), base34[0].number);
+    const invalid_hex = try ctx.callValue(tonumber_fn, &.{ .{ .string = "F.F" }, .{ .number = 16 } });
+    defer rt.freeResults(invalid_hex);
+    try std.testing.expect(invalid_hex[0] == .nil);
+    try std.testing.expectError(error.AotCallFailed, ctx.callValue(tonumber_fn, &.{ .{ .boolean = true }, .{ .number = 16 } }));
+    try std.testing.expectEqualStrings("StringExpected", ctx.aotErrorName().?);
     ctx.clearAotErrorName();
 
     const string = ctx.getGlobal(global_abi.id("string"));

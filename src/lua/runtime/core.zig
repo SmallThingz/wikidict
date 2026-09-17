@@ -551,10 +551,16 @@ pub fn rawEqual(a: Value, b: Value) bool {
     };
 }
 
+pub const lua_number_whitespace = " \t\r\n\x0b\x0c";
+
 pub fn toNumber(value: Value) ?f64 {
     return switch (value) {
         .number => |v| v,
-        .string => |v| std.fmt.parseFloat(f64, v) catch null,
+        .string => |v| blk: {
+            const text = std.mem.trim(u8, v, lua_number_whitespace);
+            if (text.len == 0) break :blk null;
+            break :blk std.fmt.parseFloat(f64, text) catch null;
+        },
         else => null,
     };
 }
@@ -1199,6 +1205,23 @@ test "numeric value hashing preserves prior iteration order" {
         try std.testing.expectEqual(previous.final(), context.hash(value));
     }
     try std.testing.expectEqual(context.hash(.{ .number = 0.0 }), context.hash(.{ .number = -0.0 }));
+}
+
+test "Lua numeric coercion trims whitespace and accepts hexadecimal strings" {
+    try std.testing.expectEqual(@as(f64, 1), toNumber(.{ .string = " \t1\r\n" }).?);
+    try std.testing.expectEqual(@as(f64, 16), toNumber(.{ .string = "0x10" }).?);
+    try std.testing.expectEqual(@as(f64, -16), toNumber(.{ .string = " -0x10 " }).?);
+    try std.testing.expect(toNumber(.{ .string = "   " }) == null);
+    try std.testing.expect(std.math.isNan(toNumber(.{ .string = "nan" }).?));
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const spaced = try ctx.binaryArith(.add, .{ .number = 1 }, .{ .string = " 2 " });
+    try std.testing.expectEqual(@as(f64, 3), spaced.number);
+    const hex = try ctx.binaryArith(.add, .{ .number = 1 }, .{ .string = "0x10" });
+    try std.testing.expectEqual(@as(f64, 17), hex.number);
 }
 
 test "string value hashing preserves prior iteration order" {

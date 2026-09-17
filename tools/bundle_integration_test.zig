@@ -35,6 +35,12 @@ const module_source =
     \\local bad_b = setmetatable({}, {__lt = function() return true end})
     \\local bad_compare_ok = pcall(function() return bad_a < bad_b end)
     \\assert(not bad_compare_ok)
+    \\assert(tonumber(' \t1\r\n') == 1 and tonumber('0x10') == 16 and tonumber('0x10', 10) == 16)
+    \\assert(tonumber('+0xFF', 16) == 255 and tonumber(10, 16) == 16 and tonumber('0xFF', 34) == 38673)
+    \\assert(tonumber('-FFFFFFFFFFFFFFFF', 16) == 1 and tonumber('F.F', 16) == nil)
+    \\assert(1 + ' 2 ' == 3 and 1 + '0x10' == 17)
+    \\local base_type_ok = pcall(tonumber, true, 16)
+    \\assert(not base_type_ok)
     \\local alias_name = 'Module:IntegrationFormsAlias'
     \\assert(require(alias_name).mouse == 'mice')
     \\return {
