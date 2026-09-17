@@ -230,8 +230,11 @@ fn baseSelect(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
     if (args[0] == .string and std.mem.eql(u8, args[0].string, "#")) return one(a, .{ .number = @floatFromInt(args.len - 1) });
     var idx = try integer(args[0]);
     const n: @TypeOf(idx) = @intCast(args.len - 1);
+    if (idx == 0 or idx < -n) {
+        ctx.last_error = .{ .string = "bad argument #1 to 'select' (index out of range)" };
+        return error.LuaRaised;
+    }
     if (idx < 0) idx = n + idx + 1;
-    if (idx < 1) idx = 1;
     if (idx > n) return &.{};
     const out = try std.heap.smp_allocator.alloc(Value, @intCast(n - idx + 1));
     @memcpy(out, args[@intCast(idx)..]);
@@ -1322,6 +1325,22 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     const sub = try callField(&ctx, string, "sub", &.{ .{ .string = "abcdef" }, .{ .number = 2 }, .{ .number = -2 } });
     defer rt.freeResults(sub);
     try std.testing.expectEqualStrings("bcde", sub[0].string);
+
+    const select_fn = ctx.getGlobal(global_abi.id("select"));
+    const tail = try ctx.callValue(select_fn, &.{ .{ .number = -2 }, .{ .string = "a" }, .{ .string = "b" }, .{ .string = "c" } });
+    defer rt.freeResults(tail);
+    try std.testing.expectEqual(@as(usize, 2), tail.len);
+    try std.testing.expectEqualStrings("b", tail[0].string);
+    try std.testing.expectEqualStrings("c", tail[1].string);
+    const after_end = try ctx.callValue(select_fn, &.{ .{ .number = 4 }, .{ .string = "a" }, .{ .string = "b" }, .{ .string = "c" } });
+    defer rt.freeResults(after_end);
+    try std.testing.expectEqual(@as(usize, 0), after_end.len);
+    inline for ([_]f64{ 0, -4 }) |index| {
+        const bad_select = try ctx.callValue(pcall, &.{ select_fn, .{ .number = index }, .{ .string = "a" }, .{ .string = "b" }, .{ .string = "c" } });
+        defer rt.freeResults(bad_select);
+        try std.testing.expect(!bad_select[0].boolean);
+        try std.testing.expectEqualStrings("bad argument #1 to 'select' (index out of range)", bad_select[1].string);
+    }
 
     const match = try callField(&ctx, string, "match", &.{ .{ .string = "abc123" }, .{ .string = "(%a+)(%d+)" } });
     defer rt.freeResults(match);
