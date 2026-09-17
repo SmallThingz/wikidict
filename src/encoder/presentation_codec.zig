@@ -51,8 +51,27 @@ const Encoder = struct {
         for (values) |value| try self.index(value);
     }
     fn enumByte(self: *Encoder, comptime E: type, value: anytype) !void {
-        const mapped = std.meta.stringToEnum(E, @tagName(value)) orelse return error.UncompiledTemplate;
-        try self.byte(@intFromEnum(mapped));
+        const Source = @TypeOf(value);
+        const fields = std.meta.fields(Source);
+        const invalid = std.math.maxInt(u8);
+        const map = comptime blk: {
+            const target_fields = std.meta.fields(E);
+            var result: [fields.len]u8 = undefined;
+            for (fields, 0..) |field, i| {
+                if (field.value != i) @compileError("enumByte source must use dense zero-based values");
+                result[i] = invalid;
+                for (target_fields) |target| {
+                    if (std.mem.eql(u8, field.name, target.name)) {
+                        result[i] = @intCast(target.value);
+                        break;
+                    }
+                }
+            }
+            break :blk result;
+        };
+        const mapped = map[@intFromEnum(value)];
+        if (mapped == invalid) return error.UncompiledTemplate;
+        try self.byte(mapped);
     }
     fn span(self: *Encoder, value: anytype) !void {
         try self.enumByte(types.InlineKind, value.kind);
@@ -454,6 +473,16 @@ pub fn decodeAlloc(
     } };
     try types.validateStored(stored, expected_title, expected_kind, language_metadata);
     return stored;
+}
+
+test "enum encoding maps build-only tags without runtime name lookup" {
+    const BuildInlineKind = enum { text, template, link, external_link, line_break };
+    var encoder: Encoder = .{ .a = std.testing.allocator };
+    defer encoder.deinit();
+
+    try encoder.enumByte(types.InlineKind, BuildInlineKind.link);
+    try std.testing.expectEqualSlices(u8, &.{@intFromEnum(types.InlineKind.link)}, encoder.out.items);
+    try std.testing.expectError(error.UncompiledTemplate, encoder.enumByte(types.InlineKind, BuildInlineKind.template));
 }
 
 test "binary presentation codec round trips semantic structure" {
