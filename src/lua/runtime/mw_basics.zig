@@ -14,6 +14,11 @@ fn noOpCall(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
     return &.{};
 }
 
+fn addWarningCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    return &.{};
+}
+
 fn falseCall(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
     return one(.{ .boolean = false });
 }
@@ -217,7 +222,8 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setMwNative(runtime, mw, "dumpObject", dumpObjectCall);
     try setMwNative(runtime, mw, "log", noOpCall);
     try setMwNative(runtime, mw, "logObject", noOpCall);
-    try setMwNative(runtime, mw, "addWarning", noOpCall);
+    try setMwNative(runtime, mw, "addWarning", addWarningCall);
+    try setMwNative(runtime, mw, "incrementExpensiveFunctionCount", noOpCall);
     try setMwNative(runtime, mw, "isSubsting", falseCall);
 
     const site = try runtime.newTable();
@@ -291,6 +297,15 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     const logged = try callField(&runtime, .{ .table = mw }, "log", &.{.{ .string = "ignored" }});
     defer rt.freeResults(logged);
     try std.testing.expectEqual(@as(usize, 0), logged.len);
+    const warning = try callField(&runtime, .{ .table = mw }, "addWarning", &.{.{ .string = "ignored" }});
+    defer rt.freeResults(warning);
+    try std.testing.expectEqual(@as(usize, 0), warning.len);
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = mw }, "addWarning", &.{.{ .boolean = true }}));
+    try std.testing.expectEqualStrings("StringExpected", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+    const expensive = try callField(&runtime, .{ .table = mw }, "incrementExpensiveFunctionCount", &.{});
+    defer rt.freeResults(expensive);
+    try std.testing.expectEqual(@as(usize, 0), expensive.len);
     const substing = try callField(&runtime, .{ .table = mw }, "isSubsting", &.{});
     defer rt.freeResults(substing);
     try std.testing.expect(!substing[0].boolean);
