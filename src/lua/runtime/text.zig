@@ -666,6 +666,74 @@ const JsonEncodeState = struct {
     seen: std.AutoHashMapUnmanaged(*rt.Table, void) = .empty,
 };
 
+const JsonPair = struct { key: Value, value: Value };
+
+fn collectJsonPairs(runtime: *rt.Context, table: *rt.Table, method: Value) !std.ArrayList(JsonPair) {
+    var pairs: std.ArrayList(JsonPair) = .empty;
+    errdefer pairs.deinit(runtime.allocator);
+    const object = Value{ .table = table };
+    const triple = try runtime.callValue(method, &.{object});
+    defer rt.freeResults(triple);
+    const iter = if (triple.len > 0) triple[0] else Value.nil;
+    const state = if (triple.len > 1) triple[1] else Value.nil;
+    var key = if (triple.len > 2) triple[2] else Value.nil;
+    while (true) {
+        const result = try runtime.callValue(iter, &.{ state, key });
+        defer rt.freeResults(result);
+        if (result.len == 0 or result[0] == .nil) break;
+        key = result[0];
+        try pairs.append(runtime.allocator, .{ .key = key, .value = if (result.len > 1) result[1] else .nil });
+    }
+    return pairs;
+}
+
+fn jsonPairSequenceLength(a: std.mem.Allocator, pairs: []const JsonPair, preserve_keys: bool) !?usize {
+    if (pairs.len == 0) return 0;
+    var max_index: usize = 0;
+    for (pairs) |entry| {
+        const index = jsonArrayIndex(entry.key, preserve_keys) orelse return null;
+        if (index > max_index) max_index = index;
+    }
+    if (preserve_keys) {
+        if (max_index + 1 != pairs.len) return null;
+    } else if (max_index != pairs.len) return null;
+    const seen = try a.alloc(bool, pairs.len);
+    defer a.free(seen);
+    @memset(seen, false);
+    for (pairs) |entry| {
+        const index = jsonArrayIndex(entry.key, preserve_keys).? - @intFromBool(!preserve_keys);
+        if (seen[index]) return null;
+        seen[index] = true;
+    }
+    return pairs.len;
+}
+
+fn jsonFromPairs(state: *JsonEncodeState, table: *rt.Table, method: Value) anyerror!std.json.Value {
+    var pairs = try collectJsonPairs(state.runtime, table, method);
+    defer pairs.deinit(state.runtime.allocator);
+    if (try jsonPairSequenceLength(state.runtime.allocator, pairs.items, state.preserve_keys)) |len| {
+        var array = std.json.Array.init(state.runtime.allocator);
+        errdefer array.deinit();
+        for (0..len) |_| try array.append(.null);
+        for (pairs.items) |entry| {
+            const index = jsonArrayIndex(entry.key, state.preserve_keys).? - @intFromBool(!state.preserve_keys);
+            array.items[index] = try luaToJson(state, entry.value);
+        }
+        return .{ .array = array };
+    }
+    var object: std.json.ObjectMap = .empty;
+    errdefer object.deinit(state.runtime.allocator);
+    for (pairs.items) |entry| {
+        const key = try luaTableKeyString(state, entry.key);
+        const encoded = try luaToJson(state, entry.value);
+        if (object.getPtr(key)) |existing| {
+            deinitJsonTree(state.runtime.allocator, existing);
+            existing.* = encoded;
+        } else try object.put(state.runtime.allocator, key, encoded);
+    }
+    return .{ .object = object };
+}
+
 fn luaTableKeyString(state: *JsonEncodeState, key: Value) ![]const u8 {
     return switch (key) {
         .string => |text| text,
@@ -693,6 +761,8 @@ fn luaToJson(state: *JsonEncodeState, value: Value) !std.json.Value {
             if (state.seen.contains(table)) return error.JsonRecursiveTable;
             try state.seen.put(state.runtime.allocator, table, {});
             defer _ = state.seen.remove(table);
+            if (table.metatable) |mt| if (mt.rawGet(.{ .string = "__pairs" })) |method|
+                break :blk try jsonFromPairs(state, table, method);
 
             if (jsonSequenceLength(table, state.preserve_keys)) |len| {
                 var array = std.json.Array.init(state.runtime.allocator);
@@ -932,6 +1002,88 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try mw.rawSetNativeField(.mw, "text", .{ .table = text });
 }
 
+
+test "mw.text JSON preserve keys keeps numeric object keys" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+
+    const value = try runtime.newTable();
+    try value.rawSet(runtime.allocator, .{ .number = 1 }, .{ .number = 1 });
+    try value.rawSet(runtime.allocator, .{ .number = 2 }, .{ .string = "foo" });
+    try value.rawSet(runtime.allocator, .{ .number = 3 }, .{ .boolean = true });
+    try value.rawSet(runtime.allocator, .{ .number = 4 }, .{ .boolean = false });
+    const encoded = try textJsonEncodeCall(null, &runtime, &.{ .{ .table = value }, .{ .number = json_preserve_keys } });
+    defer rt.freeResults(encoded);
+    try std.testing.expectEqualStrings("{\"1\":1,\"2\":\"foo\",\"3\":true,\"4\":false}", encoded[0].string);
+}
+
+fn jsonObjectPairsIter(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len > 1 and args[1] == .string and std.mem.eql(u8, args[1].string, "foo"))
+        return one(runtime.allocator, .nil);
+    const out = try std.heap.smp_allocator.alloc(Value, 2);
+    out[0] = .{ .string = "foo" };
+    out[1] = .nil;
+    return out;
+}
+
+fn jsonArrayPairsIter(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .table) return one(runtime.allocator, .nil);
+    const next_index: usize = if (args.len < 2 or args[1] == .nil) 1 else blk: {
+        if (args[1] != .number) return one(runtime.allocator, .nil);
+        break :blk @as(usize, @intFromFloat(args[1].number)) + 1;
+    };
+    if (next_index > 4) return one(runtime.allocator, .nil);
+    const out = try std.heap.smp_allocator.alloc(Value, 2);
+    out[0] = .{ .number = @floatFromInt(next_index) };
+    out[1] = args[0].table.rawGet(.{ .number = @floatFromInt(next_index) }) orelse .nil;
+    return out;
+}
+
+fn jsonObjectPairs(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .table) return error.TableExpected;
+    const out = try std.heap.smp_allocator.alloc(Value, 3);
+    out[0] = try runtime.newNative(null, jsonObjectPairsIter);
+    out[1] = args[0];
+    out[2] = .nil;
+    return out;
+}
+
+fn jsonArrayPairs(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .table) return error.TableExpected;
+    const out = try std.heap.smp_allocator.alloc(Value, 3);
+    out[0] = try runtime.newNative(null, jsonArrayPairsIter);
+    out[1] = args[0];
+    out[2] = .nil;
+    return out;
+}
+
+test "mw.text JSON encode honors pairs metamethod" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+
+    const object = try runtime.newTable();
+    const object_mt = try runtime.newTable();
+    try object_mt.rawSet(runtime.allocator, .{ .string = "__pairs" }, try runtime.newNative(null, jsonObjectPairs));
+    object.metatable = object_mt;
+    const object_encoded = try textJsonEncodeCall(null, &runtime, &.{.{ .table = object }});
+    defer rt.freeResults(object_encoded);
+    try std.testing.expectEqualStrings("{\"foo\":null}", object_encoded[0].string);
+
+    const array = try runtime.newTable();
+    try array.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "one" });
+    try array.rawSet(runtime.allocator, .{ .number = 2 }, .{ .string = "two" });
+    try array.rawSet(runtime.allocator, .{ .number = 4 }, .{ .string = "four" });
+    const array_mt = try runtime.newTable();
+    try array_mt.rawSet(runtime.allocator, .{ .string = "__pairs" }, try runtime.newNative(null, jsonArrayPairs));
+    array.metatable = array_mt;
+    const array_encoded = try textJsonEncodeCall(null, &runtime, &.{.{ .table = array }});
+    defer rt.freeResults(array_encoded);
+    try std.testing.expectEqualStrings("[\"one\",\"two\",null,\"four\"]", array_encoded[0].string);
+}
 
 fn tagPairsIter(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const key = if (args.len > 1) args[1] else Value.nil;
