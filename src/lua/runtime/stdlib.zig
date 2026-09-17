@@ -830,7 +830,9 @@ fn mathModf(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Valu
     const a = ctx.allocator;
     const x = try num(args[0]);
     const ip = @trunc(x);
-    return two(a, .{ .number = ip }, .{ .number = x - ip });
+    var fp: f64 = if (std.math.isInf(x)) 0.0 else x - ip;
+    if (fp == 0 and std.math.signbit(x)) fp = -0.0;
+    return two(a, .{ .number = ip }, .{ .number = fp });
 }
 
 fn debugTraceback(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
@@ -1361,6 +1363,19 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     const max = try callField(&ctx, math, "max", &.{ .{ .number = 3 }, .{ .number = 8 }, .{ .number = 5 } });
     defer rt.freeResults(max);
     try std.testing.expectEqual(@as(f64, 8), max[0].number);
+
+    const negative_integer = try callField(&ctx, math, "modf", &.{.{ .number = -2 }});
+    defer rt.freeResults(negative_integer);
+    try std.testing.expectEqual(@as(f64, -2), negative_integer[0].number);
+    try std.testing.expect(negative_integer[1].number == 0 and std.math.signbit(negative_integer[1].number));
+    const positive_infinity = try callField(&ctx, math, "modf", &.{.{ .number = std.math.inf(f64) }});
+    defer rt.freeResults(positive_infinity);
+    try std.testing.expect(std.math.isPositiveInf(positive_infinity[0].number));
+    try std.testing.expect(positive_infinity[1].number == 0 and !std.math.signbit(positive_infinity[1].number));
+    const negative_infinity = try callField(&ctx, math, "modf", &.{.{ .number = -std.math.inf(f64) }});
+    defer rt.freeResults(negative_infinity);
+    try std.testing.expect(std.math.isNegativeInf(negative_infinity[0].number));
+    try std.testing.expect(negative_infinity[1].number == 0 and std.math.signbit(negative_infinity[1].number));
 }
 
 test "AOT sparse array borders survive table remove and insert" {
