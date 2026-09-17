@@ -49,9 +49,8 @@ fn cloneValue(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnmanage
     try seen.put(a, value.table, copy);
     var it = value.table.iterator();
     while (it.next()) |entry| {
-        const key = try cloneValue(a, entry.key_ptr.*, seen);
         const item = try cloneValue(a, entry.value_ptr.*, seen);
-        try copy.rawSet(a, key, item);
+        try copy.rawSet(a, entry.key_ptr.*, item);
     }
     copy.append_index = value.table.append_index;
     if (value.table.metatable) |mt|
@@ -443,11 +442,14 @@ test "AOT clone preserves cycles while returning mutable tables" {
     try install(&runtime, 0, 1, 2);
     const source = try runtime.newTable();
     try source.rawSet(runtime.allocator, .{ .string = "self" }, .{ .table = source });
+    try source.rawSet(runtime.allocator, .{ .table = source }, .{ .string = "source-key" });
     const mw = runtime.getGlobal(2);
     const cloned = try callField(&runtime, mw, "clone", &.{.{ .table = source }});
     defer rt.freeResults(cloned);
     try std.testing.expect(cloned[0] == .table and cloned[0].table != source);
     try std.testing.expect(cloned[0].table.rawGet(.{ .string = "self" }).?.table == cloned[0].table);
+    try std.testing.expectEqualStrings("source-key", cloned[0].table.rawGet(.{ .table = source }).?.string);
+    try std.testing.expect(cloned[0].table.rawGet(.{ .table = cloned[0].table }) == null);
     try cloned[0].table.rawSet(runtime.allocator, .{ .string = "x" }, .{ .number = 1 });
 }
 
