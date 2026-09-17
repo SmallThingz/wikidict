@@ -121,6 +121,13 @@ fn compareCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Val
     return one(.{ .number = result });
 }
 
+fn toStringCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .table) return error.TableExpected;
+    const prefixed = args[0].table.rawGet(.{ .string = "prefixedText" }) orelse return error.InvalidTitle;
+    if (prefixed != .string) return error.InvalidTitle;
+    return one(prefixed);
+}
+
 fn titleForSpec(runtime: *rt.Context, spec: namespace_lib.Spec, text: []const u8) ![]const u8 {
     if (spec.id == 0) return text;
     return std.fmt.allocPrint(runtime.allocator, "{s}:{s}", .{ spec.name, text });
@@ -235,6 +242,7 @@ fn ensureMetatable(runtime: *rt.Context, state: *State) !*rt.Table {
     const lt = try runtime.newNative(null, lessCall);
     try mt.rawSet(runtime.allocator, .{ .string = "__eq" }, eq);
     try mt.rawSet(runtime.allocator, .{ .string = "__lt" }, lt);
+    try mt.rawSet(runtime.allocator, .{ .string = "__tostring" }, try runtime.newNative(null, toStringCall));
     try mt.rawSet(runtime.allocator, .{ .string = "__index" }, try runtime.newNative(state, metaIndexCall));
     try mt.rawSet(runtime.allocator, .{ .string = "__newindex" }, try runtime.newNative(null, metaNewIndexCall));
     state.metatable = mt;
@@ -709,6 +717,10 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     try std.testing.expectEqualStrings("wikitext", (try runtime.getIndex(title, .{ .string = "contentModel" })).string);
     try std.testing.expectEqualStrings(" frag ment", (try runtime.getIndex(title, .{ .string = "fragment" })).string);
     try std.testing.expectEqualStrings("Template:Foo/Sub# frag ment", (try runtime.getIndex(title, .{ .string = "fullText" })).string);
+    const title_tostring = runtime.metamethod(title, "__tostring") orelse return error.MissingTitleTostring;
+    const title_text = try runtime.callValue(title_tostring, &.{title});
+    defer rt.freeResults(title_text);
+    try std.testing.expectEqualStrings("Template:Foo/Sub", title_text[0].string);
     const full_url = try callField(&runtime, title, "fullUrl", &.{ title, .nil, .{ .string = "https" } });
     defer rt.freeResults(full_url);
     try std.testing.expectEqualStrings("https://en.wiktionary.org/wiki/Template:Foo/Sub#_frag_ment", full_url[0].string);
