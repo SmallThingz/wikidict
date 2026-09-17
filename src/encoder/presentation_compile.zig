@@ -603,15 +603,15 @@ pub const Renderer = struct {
                 it.cursor = pair.end;
                 continue;
             }
-            if (starts(input[it.cursor..], "[[") and syntax.balanced(input, it.cursor) == null) {
-                try self.plain(input[it.cursor..], s);
-                break;
-            }
             const token = it.next() orelse break;
             s.bold = token.bold;
             s.italic = token.italic;
             switch (token.kind) {
                 .text => {
+                    if (token.literal_tail) {
+                        try self.plain(token.text, s);
+                        continue;
+                    }
                     const markup_at = std.mem.indexOfAny(u8, token.text, "<&");
                     const parameter_at = std.mem.indexOf(u8, token.text, "{{{");
                     const at = if (markup_at) |m| if (parameter_at) |p| @min(m, p) else m else parameter_at;
@@ -1594,6 +1594,25 @@ test "parameter defaults remain visible when preceded by ordinary text" {
         if (span.kind == .link and std.mem.eql(u8, span.target, "cat")) linked = true;
     }
     try std.testing.expect(linked);
+}
+
+test "malformed link tail stays literal at the current cursor" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const source = "[[broken <b>bold</b> &amp; tail";
+    const spans = try r.parseSpans(source, .{});
+    try std.testing.expectEqualStrings(source, try flattened(a, spans));
+}
+
+test "balanced invalid link keeps following inline semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("[[]]<b>bold</b> &amp;", .{});
+    try std.testing.expectEqualStrings("[[]]bold &", try flattened(a, spans));
 }
 
 test "malformed template and link opener storms preserve the tail without trapping" {

@@ -122,6 +122,7 @@ pub const InlineSpan = struct {
     trail: []const u8 = "",
     link_has_pipe: bool = false,
     link_empty_label: bool = false,
+    literal_tail: bool = false,
     bold: bool = false,
     italic: bool = false,
 };
@@ -155,18 +156,32 @@ pub const InlineIterator = struct {
                     .italic = self.italic,
                 };
             }
-            if (parseInlineLinkAt(self.input, self.cursor)) |link| {
-                self.cursor = link.end;
-                return .{
-                    .kind = .link,
-                    .text = link.label,
-                    .target = link.target,
-                    .trail = link.trail,
-                    .link_has_pipe = link.has_pipe,
-                    .link_empty_label = link.empty_label,
-                    .bold = self.bold,
-                    .italic = self.italic,
-                };
+            switch (parseInlineLinkAtDetailed(self.input, self.cursor)) {
+                .link => |link| {
+                    self.cursor = link.end;
+                    return .{
+                        .kind = .link,
+                        .text = link.label,
+                        .target = link.target,
+                        .trail = link.trail,
+                        .link_has_pipe = link.has_pipe,
+                        .link_empty_label = link.empty_label,
+                        .bold = self.bold,
+                        .italic = self.italic,
+                    };
+                },
+                .unbalanced => {
+                    const start = self.cursor;
+                    self.cursor = self.input.len;
+                    return .{
+                        .kind = .text,
+                        .text = self.input[start..],
+                        .literal_tail = true,
+                        .bold = self.bold,
+                        .italic = self.italic,
+                    };
+                },
+                .not_link, .invalid => {},
             }
             if (parseExternalLinkAt(self.input, self.cursor)) |link| {
                 self.cursor = link.end;
@@ -380,6 +395,13 @@ const ParsedInlineLink = struct {
     empty_label: bool,
 };
 
+const InlineLinkParse = union(enum) {
+    not_link,
+    unbalanced,
+    invalid,
+    link: ParsedInlineLink,
+};
+
 const ParsedExternalLink = struct {
     end: usize,
     target: []const u8,
@@ -417,27 +439,34 @@ fn parseTemplateAt(input: []const u8, start: usize) ?ParsedTemplate {
     return .{ .end = pair.end, .name = name, .body = body };
 }
 
-fn parseInlineLinkAt(input: []const u8, start: usize) ?ParsedInlineLink {
-    if (start + 4 > input.len or !std.mem.eql(u8, input[start .. start + 2], "[[")) return null;
-    const pair = syntax.balanced(input, start) orelse return null;
+fn parseInlineLinkAtDetailed(input: []const u8, start: usize) InlineLinkParse {
+    if (start + 2 > input.len or !std.mem.eql(u8, input[start .. start + 2], "[[")) return .not_link;
+    const pair = syntax.balanced(input, start) orelse return .unbalanced;
     const inside = input[start + 2 .. pair.inner_end];
-    if (inside.len == 0) return null;
+    if (inside.len == 0) return .invalid;
     const pipe = syntax.delimiter(inside, "|", 0);
     const raw_target = if (pipe) |index| inside[0..index] else inside;
     const target = std.mem.trim(u8, raw_target, " \t");
-    if (target.len == 0) return null;
+    if (target.len == 0) return .invalid;
     const raw_label = if (pipe) |index| inside[index + 1 ..] else target;
     const label = if (raw_label.len == 0) target else raw_label;
     var trail_end = pair.end;
     // English Wiktionary uses MediaWiki's default lowercase a-z link trail.
     while (trail_end < input.len and std.ascii.isLower(input[trail_end])) : (trail_end += 1) {}
-    return .{
+    return .{ .link = .{
         .end = trail_end,
         .target = target,
         .label = label,
         .trail = input[pair.end..trail_end],
         .has_pipe = pipe != null,
         .empty_label = pipe != null and raw_label.len == 0,
+    } };
+}
+
+fn parseInlineLinkAt(input: []const u8, start: usize) ?ParsedInlineLink {
+    return switch (parseInlineLinkAtDetailed(input, start)) {
+        .link => |link| link,
+        else => null,
     };
 }
 
