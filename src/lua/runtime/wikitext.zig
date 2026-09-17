@@ -6,6 +6,7 @@ const namespace_lib = @import("namespaces.zig");
 const preprocess = @import("lua_wikitext_preprocess");
 const parser_expr = @import("lua_wikitext_expression");
 const language_lib = @import("language.zig");
+const dateformat_lib = @import("dateformat.zig");
 const uri_lib = @import("uri.zig");
 const ustring_lib = @import("ustring.zig");
 const text_lib = @import("text.zig");
@@ -396,9 +397,9 @@ pub const Expander = struct {
 
     fn isEscapedTitleMagicName(raw: []const u8) bool {
         inline for (&.{
-            "PAGENAMEE",        "FULLPAGENAMEE",    "NAMESPACEE",        "BASEPAGENAMEE",
-            "ROOTPAGENAMEE",    "SUBPAGENAMEE",     "SUBJECTSPACEE",     "ARTICLESPACEE",
-            "TALKSPACEE",       "SUBJECTPAGENAMEE", "ARTICLEPAGENAMEE",  "TALKPAGENAMEE",
+            "PAGENAMEE",     "FULLPAGENAMEE",    "NAMESPACEE",       "BASEPAGENAMEE",
+            "ROOTPAGENAMEE", "SUBPAGENAMEE",     "SUBJECTSPACEE",    "ARTICLESPACEE",
+            "TALKSPACEE",    "SUBJECTPAGENAMEE", "ARTICLEPAGENAMEE", "TALKPAGENAMEE",
         }) |name| if (std.ascii.eqlIgnoreCase(raw, name)) return true;
         return false;
     }
@@ -696,6 +697,19 @@ pub const Expander = struct {
             pos += n;
         }
         return pos;
+    }
+
+    fn expandFormatDate(self: *Expander, raw_date: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        const date = try self.expandWikitext(raw_date, params, host_title, depth + 1);
+        const style: ?[]const u8 = if (args.len == 0)
+            null
+        else
+            try self.expandWikitext(args[0], params, host_title, depth + 1);
+        if (args.len > 1) {
+            for (args[1..]) |extra|
+                _ = try self.expandWikitext(extra, params, host_title, depth + 1);
+        }
+        return self.formattedDateSpan(date, style);
     }
 
     fn expandTimeParser(self: *Expander, raw_format: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
@@ -1007,6 +1021,8 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "urlencode")) return self.expandUrlencodeParser(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "padleft")) return self.expandPadParser(first, parts.items[1..], params, host_title, depth + 1, true);
             if (std.ascii.eqlIgnoreCase(name, "padright")) return self.expandPadParser(first, parts.items[1..], params, host_title, depth + 1, false);
+            if (std.ascii.eqlIgnoreCase(name, "#formatdate") or std.ascii.eqlIgnoreCase(name, "#dateformat"))
+                return self.expandFormatDate(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#time")) return self.expandTimeParser(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#len")) return self.expandLenParser(first, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#sub")) return self.expandSubParser(first, parts.items[1..], params, host_title, depth + 1);
@@ -1157,25 +1173,7 @@ pub const Expander = struct {
     }
 
     fn formattedDateSpan(self: *Expander, raw: []const u8, style_raw: ?[]const u8) ![]const u8 {
-        const parsed = language_lib.parseExplicitDate(raw) catch return raw;
-        if (!parsed.has_day) return raw;
-        const civil = parsed.civil;
-        const months = [_][]const u8{
-            "January", "February", "March",     "April",   "May",      "June",
-            "July",    "August",   "September", "October", "November", "December",
-        };
-        const canonical = try std.fmt.allocPrint(self.runtime.allocator, "{d:0>4}-{d:0>2}-{d:0>2}", .{ @as(u64, @intCast(civil.year)), civil.month, civil.day });
-        const style = if (style_raw) |value| std.mem.trim(u8, value, " \t\r\n") else "";
-        const display = if (style.len == 0)
-            raw
-        else if (std.ascii.eqlIgnoreCase(style, "dmy"))
-            try std.fmt.allocPrint(self.runtime.allocator, "{d} {s} {d}", .{ civil.day, months[civil.month - 1], civil.year })
-        else if (std.ascii.eqlIgnoreCase(style, "mdy"))
-            try std.fmt.allocPrint(self.runtime.allocator, "{s} {d}, {d}", .{ months[civil.month - 1], civil.day, civil.year })
-        else if (std.ascii.eqlIgnoreCase(style, "ymd"))
-            try std.fmt.allocPrint(self.runtime.allocator, "{d} {s} {d}", .{ civil.year, months[civil.month - 1], civil.day })
-        else if (std.ascii.eqlIgnoreCase(style, "ISO 8601")) canonical else raw;
-        return std.fmt.allocPrint(self.runtime.allocator, "<span class=\"mw-formatted-date\" title=\"{s}\">{s}</span>", .{ canonical, display });
+        return dateformat_lib.format(self.runtime.allocator, raw, style_raw);
     }
 
     fn frameParserTagAttrs(self: *Expander, args: *rt.Table, positional_start: usize) !?*rt.Table {
@@ -1265,7 +1263,7 @@ pub const Expander = struct {
             return self.recordDisplayTitle(first.?.string);
         }
         if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT")) return "";
-        if (std.ascii.eqlIgnoreCase(name, "#formatdate")) {
+        if (std.ascii.eqlIgnoreCase(name, "#formatdate") or std.ascii.eqlIgnoreCase(name, "#dateformat")) {
             if (first == null or first.? != .string) return error.StringExpected;
             const style: ?[]const u8 = if (second) |value| switch (value) {
                 .nil => null,
@@ -1463,7 +1461,7 @@ test "bundle title magic words resolve subject talk and parameterized namespaces
     try std.testing.expectEqualStrings("A_B/%C3%A9%3Fx|Appendix:A_B/%C3%A9%3Fx|Appendix|A_B|A_B|%C3%A9%3Fx|Appendix|Appendix_talk|Appendix:A_B/%C3%A9%3Fx|Appendix_talk:A_B/%C3%A9%3Fx|Appendix|Appendix:A_B/%C3%A9%3Fx", escaped);
 }
 
-test "bundle parser functions cover corpus time sub and iferror forms" {
+test "bundle parser functions cover corpus time date sub and iferror forms" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var runtime = try rt.Context.init(arena.allocator(), 24);
@@ -1472,9 +1470,9 @@ test "bundle parser functions cover corpus time sub and iferror forms" {
     try stdlib.install(&runtime);
     try installTestHost(&runtime, 18, 23);
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .page_metadata = TestProvider.pageMetadata } };
-    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#len:é猫}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{formatnum:11000}}|{{FORMATNUM:-1234567.89}}|{{formatnum:1,234.50|R}}|{{formatnum:1234.50|NOSEP}}|{{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}|{{anchorencode:a%20b}}|{{ucfirst:ßeta}}|{{ucfirst:ǰfoo}}|{{lcfirst:Éclair}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
+    const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#formatdate:2010-01-02|dmy}}|{{#dateformat:January 2|dmy}}|{{#formatdate:2-Jan-2010|dmy}}|{{#len:é猫}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{formatnum:11000}}|{{FORMATNUM:-1234567.89}}|{{formatnum:1,234.50|R}}|{{formatnum:1234.50|NOSEP}}|{{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}|{{anchorencode:a%20b}}|{{ucfirst:ßeta}}|{{ucfirst:ǰfoo}}|{{lcfirst:Éclair}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
     const got = try expander.expandFragment("Page", source, 1_670_803_200);
-    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|2|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|11,000|−1,234,567.89|1234.50|1234.50|A_B_x_C|a%2520b|ßeta|J̌foo|éclair|/Wiktionary/Wiktionary/Module", got);
+    try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|<span class=\"mw-formatted-date\" title=\"2010-01-02\">2 January 2010</span>|<span class=\"mw-formatted-date\" title=\"01-02\">2 January</span>|2-Jan-2010|2|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|11,000|−1,234,567.89|1234.50|1234.50|A_B_x_C|a%2520b|ßeta|J̌foo|éclair|/Wiktionary/Wiktionary/Module", got);
     try std.testing.expectError(error.InvalidNamespace, expander.expandFragment("Page", "{{ns:not-a-namespace}}", 1_670_803_200));
 
     expander.beginPage("Page", "source", 1_670_803_200);
@@ -1554,9 +1552,12 @@ test "native AOT frame callbacks recurse through the same page expander" {
     const revision_user = try runtime.callValue(parser, &.{ frame, .{ .string = "REVISIONUSER" }, .{ .string = "Other_page" } });
     defer rt.freeResults(revision_user);
     try std.testing.expectEqualStrings("Other editor", revision_user[0].string);
-    const date = try runtime.callValue(parser, &.{ frame, .{ .string = "#formatdate" }, .{ .string = "12-December-2022" }, .{ .string = "dmy" } });
+    const date = try runtime.callValue(parser, &.{ frame, .{ .string = "#formatdate" }, .{ .string = "2022-12-12" }, .{ .string = " dmy " } });
     defer rt.freeResults(date);
     try std.testing.expectEqualStrings("<span class=\"mw-formatted-date\" title=\"2022-12-12\">12 December 2022</span>", date[0].string);
+    const invalid_date = try runtime.callValue(parser, &.{ frame, .{ .string = "#dateformat" }, .{ .string = "12-December-2022" }, .{ .string = "dmy" } });
+    defer rt.freeResults(invalid_date);
+    try std.testing.expectEqualStrings("12-December-2022", invalid_date[0].string);
 
     const syntax_args = try runtime.newTable();
     try syntax_args.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "x" });
