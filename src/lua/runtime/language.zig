@@ -155,26 +155,6 @@ fn parseDelimitedDate(raw: []const u8) ?Civil {
         parseSpaceDate(raw);
 }
 
-pub const ParsedExplicitDate = struct {
-    civil: Civil,
-    timestamp: i64,
-    has_day: bool,
-};
-
-pub fn parseExplicitDate(raw_value: []const u8) !ParsedExplicitDate {
-    const raw = std.mem.trim(u8, raw_value, " \t\r\n");
-    const civil = parseDelimitedDate(raw) orelse return error.InvalidDate;
-    var fields: usize = 0;
-    if (std.mem.indexOfScalar(u8, raw, '-') != null) {
-        var it = std.mem.splitScalar(u8, raw, '-');
-        while (it.next()) |_| fields += 1;
-    } else {
-        var it = std.mem.tokenizeAny(u8, raw, " \t,");
-        while (it.next()) |_| fields += 1;
-    }
-    return .{ .civil = civil, .timestamp = try unixFromCivil(civil), .has_day = fields == 3 };
-}
-
 fn currentUnix(runtime: *const rt.Context) !i64 {
     const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
     return host.now_unix orelse error.MissingCurrentTime;
