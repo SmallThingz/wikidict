@@ -876,6 +876,13 @@ test "AOT title constructors and current title use the live host" {
     const collapsed = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "  foo__  bar  " }});
     defer rt.freeResults(collapsed);
     try std.testing.expectEqualStrings("foo bar", (try runtime.getIndex(collapsed[0], .{ .string = "prefixedText" })).string);
+    const fragment_only = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "#foo" }});
+    defer rt.freeResults(fragment_only);
+    try std.testing.expectEqualStrings("", (try runtime.getIndex(fragment_only[0], .{ .string = "prefixedText" })).string);
+    try std.testing.expectEqualStrings("foo", (try runtime.getIndex(fragment_only[0], .{ .string = "fragment" })).string);
+    const namespaced_fragment_only = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Template:#foo" }});
+    defer rt.freeResults(namespaced_fragment_only);
+    try std.testing.expect(namespaced_fragment_only[0] == .nil);
     const initial_colon = try callField(&runtime, .{ .table = title_lib }, "new", &.{ .{ .string = ":foo" }, .{ .number = 10 } });
     defer rt.freeResults(initial_colon);
     try std.testing.expectEqualStrings("foo", (try runtime.getIndex(initial_colon[0], .{ .string = "prefixedText" })).string);
