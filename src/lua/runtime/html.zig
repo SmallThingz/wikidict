@@ -81,6 +81,38 @@ fn returnSelf(node: *Node, a: std.mem.Allocator) ![]const Value {
     return one(a, .{ .table = node.table });
 }
 
+fn forEachPair(node: *Node, runtime: *rt.Context, table: *rt.Table, comptime visitor: anytype) !void {
+    const object = Value{ .table = table };
+    if (table.metatable) |mt| if (mt.rawGet(.{ .string = "__pairs" })) |method| {
+        const triple = try runtime.callValue(method, &.{object});
+        defer rt.freeResults(triple);
+        const iter = if (triple.len > 0) triple[0] else Value.nil;
+        const state = if (triple.len > 1) triple[1] else Value.nil;
+        var key = if (triple.len > 2) triple[2] else Value.nil;
+        while (true) {
+            const result = try runtime.callValue(iter, &.{ state, key });
+            defer rt.freeResults(result);
+            if (result.len == 0 or result[0] == .nil) break;
+            key = result[0];
+            try visitor(node, key, if (result.len > 1) result[1] else Value.nil);
+        }
+        return;
+    };
+    var it = table.iterator();
+    while (it.next()) |entry| try visitor(node, entry.key_ptr.*, entry.value_ptr.*);
+}
+
+fn applyAttrPair(node: *Node, key: Value, value: Value) !void {
+    if (key != .string or (value != .string and value != .number)) return error.HtmlAttributeTableExpected;
+    try setAttr(node, key.string, value);
+}
+
+fn applyCssPair(node: *Node, key: Value, value: Value) !void {
+    const name = try scalarText(node.html.allocator, key);
+    const text = try scalarText(node.html.allocator, value);
+    try setStyleProperty(node, name, text);
+}
+
 fn selfClosingTag(name: []const u8) bool {
     inline for (.{
         "area", "base", "br",    "col",    "command", "embed", "hr", "img", "input", "keygen",
@@ -209,12 +241,7 @@ fn cssCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]c
     if (args.len < 2) return error.HtmlCssNameExpected;
     if (args[1] == .table) {
         if (args.len > 2 and args[2] != .nil) return error.HtmlCssTableValue;
-        var it = args[1].table.iterator();
-        while (it.next()) |entry| {
-            const name = try scalarText(node.html.allocator, entry.key_ptr.*);
-            const value = try scalarText(node.html.allocator, entry.value_ptr.*);
-            try setStyleProperty(node, name, value);
-        }
+        try forEachPair(node, runtime, args[1].table, applyCssPair);
         return returnSelf(node, a);
     }
     const name = try scalarText(node.html.allocator, args[1]);
@@ -251,12 +278,7 @@ fn attrCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     if (args.len < 2) return error.HtmlAttributeNameExpected;
     if (args[1] == .table) {
         if (args.len > 2 and args[2] != .nil) return error.HtmlAttributeTableValue;
-        var it = args[1].table.iterator();
-        while (it.next()) |entry| {
-            if (entry.key_ptr.* != .string) return error.HtmlAttributeTableExpected;
-            if (entry.value_ptr.* != .string and entry.value_ptr.* != .number) return error.HtmlAttributeTableExpected;
-            try setAttr(node, entry.key_ptr.string, entry.value_ptr.*);
-        }
+        try forEachPair(node, runtime, args[1].table, applyAttrPair);
         return returnSelf(node, a);
     }
     if (args[1] != .string) return error.HtmlAttributeNameExpected;
@@ -298,6 +320,22 @@ fn appendAttribute(out: *std.ArrayList(u8), a: std.mem.Allocator, name: []const 
     try appendEscapedAttribute(out, a, try scalarText(a, value));
     try out.append(a, '"');
 }
+fn appendCssEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, text: []const u8) !void {
+    var pos: usize = 0;
+    while (pos < text.len) {
+        const len = std.unicode.utf8ByteSequenceLength(text[pos]) catch return error.InvalidUtf8;
+        if (pos + len > text.len) return error.InvalidUtf8;
+        const cp = std.unicode.utf8Decode(text[pos .. pos + len]) catch return error.InvalidUtf8;
+        if ((cp >= 32 and cp <= 57) or (cp >= 60 and cp <= 127)) {
+            try out.appendSlice(a, text[pos .. pos + len]);
+        } else {
+            var buffer: [16]u8 = undefined;
+            try out.appendSlice(a, try std.fmt.bufPrint(&buffer, "\\{X} ", .{cp}));
+        }
+        pos += len;
+    }
+}
+
 fn appendStyleValue(node: *Node, out: *std.ArrayList(u8)) !void {
     const a = node.html.allocator;
     for (node.styles.items, 0..) |style, i| {
@@ -305,9 +343,9 @@ fn appendStyleValue(node: *Node, out: *std.ArrayList(u8)) !void {
         switch (style) {
             .raw => |text| try out.appendSlice(a, text),
             .property => |pair| {
-                try out.appendSlice(a, pair.name);
+                try appendCssEncoded(out, a, pair.name);
                 try out.append(a, ':');
-                try out.appendSlice(a, pair.value);
+                try appendCssEncoded(out, a, pair.value);
             },
         }
     }
@@ -355,6 +393,65 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const html = try runtime.newNativeNamespace(.html);
     try html.rawSetNativeField(.html, "create", try runtime.newNative(html_ctx, createCall));
     try mw.rawSetNativeField(.mw, "html", .{ .table = html });
+}
+
+fn orderedPairsIter(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const key = if (args.len > 1) args[1] else Value.nil;
+    if (key == .nil) {
+        const out = try std.heap.smp_allocator.alloc(Value, 2);
+        out[0] = .{ .string = "ab" };
+        out[1] = .{ .string = "cd" };
+        return out;
+    }
+    if (key == .string and std.mem.eql(u8, key.string, "ab")) {
+        const out = try std.heap.smp_allocator.alloc(Value, 2);
+        out[0] = .{ .string = "foo" };
+        out[1] = .{ .string = "bar" };
+        return out;
+    }
+    return one(runtime.allocator, .nil);
+}
+
+fn orderedPairs(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .table) return error.TableExpected;
+    const out = try std.heap.smp_allocator.alloc(Value, 3);
+    out[0] = try runtime.newNative(null, orderedPairsIter);
+    out[1] = args[0];
+    out[2] = .nil;
+    return out;
+}
+
+test "html table setters honor pairs metamethod" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 0);
+    defer runtime.deinit();
+    const html = try a.create(Html);
+    html.* = .{ .allocator = a };
+
+    const values = try runtime.newTable();
+    try values.rawSet(a, .{ .string = "foo" }, .{ .string = "bar" });
+    try values.rawSet(a, .{ .string = "ab" }, .{ .string = "cd" });
+    const mt = try runtime.newTable();
+    try mt.rawSet(a, .{ .string = "__pairs" }, try runtime.newNative(null, orderedPairs));
+    values.metatable = mt;
+
+    const attr_root = try newNode(html, &runtime, null, "div");
+    try installNodeMethods(attr_root, &runtime);
+    const attr_result = try attrCall(attr_root, &runtime, &.{ .{ .table = attr_root.table }, .{ .table = values } });
+    defer rt.freeResults(attr_result);
+    var out: std.ArrayList(u8) = .empty;
+    try renderNode(attr_root, &out);
+    try std.testing.expectEqualStrings("<div ab=\"cd\" foo=\"bar\"></div>", out.items);
+
+    const css_root = try newNode(html, &runtime, null, "div");
+    try installNodeMethods(css_root, &runtime);
+    const css_result = try cssCall(css_root, &runtime, &.{ .{ .table = css_root.table }, .{ .table = values } });
+    defer rt.freeResults(css_result);
+    out.items.len = 0;
+    try renderNode(css_root, &out);
+    try std.testing.expectEqualStrings("<div style=\"ab:cd;foo:bar\"></div>", out.items);
 }
 
 test "html builder chaining and serialization" {
@@ -421,6 +518,15 @@ test "html builder matches MediaWiki attribute class and style semantics" {
     out.items.len = 0;
     try renderNode(root, &out);
     try std.testing.expectEqualStrings("<div town=\"Berlin\" class=\"foo bar\" style=\"color:red\"></div>", out.items);
+
+    const escaped = try newNode(html, &runtime, null, "div");
+    try installNodeMethods(escaped, &runtime);
+    const escaped_self = Value{ .table = escaped.table };
+    const css_escape = try cssCall(escaped, &runtime, &.{ escaped_self, .{ .string = "background" }, .{ .string = "red;display:none é" } });
+    defer rt.freeResults(css_escape);
+    out.items.len = 0;
+    try renderNode(escaped, &out);
+    try std.testing.expectEqualStrings("<div style=\"background:red\\3B display\\3A none \\E9 \"></div>", out.items);
 
     try std.testing.expectError(error.HtmlAttributeValueExpected, attrCall(root, &runtime, &.{ self, .{ .string = "bad" }, .{ .boolean = true } }));
     try std.testing.expectError(error.HtmlScalarExpected, cssCall(root, &runtime, &.{ self, .{ .boolean = true }, .{ .string = "x" } }));
