@@ -128,6 +128,7 @@ pub const Renderer = struct {
     body_depth: usize = 0,
     refs: std.ArrayList(Reference) = .empty,
     ref_defs: std.ArrayList(ReferenceDefinition) = .empty,
+    default_group_reference_count: usize = 0,
     media: std.ArrayList(media_types.Media) = .empty,
     media_depth: usize = 0,
     spans: std.ArrayList(Span) = .empty,
@@ -253,8 +254,13 @@ pub const Renderer = struct {
         if (!self.spend()) return null;
         const index = self.refs.items.len;
         var group_number: usize = 1;
-        for (self.refs.items) |ref| {
-            if (std.mem.eql(u8, ref.group, group)) group_number += 1;
+        if (group.len == 0) {
+            self.default_group_reference_count += 1;
+            group_number = self.default_group_reference_count;
+        } else {
+            for (self.refs.items) |ref| {
+                if (std.mem.eql(u8, ref.group, group)) group_number += 1;
+            }
         }
         try self.refs.append(self.a, .{ .number = index + 1, .group_number = group_number, .name = name, .group = group, .body = resolved_body });
         return index;
@@ -1786,4 +1792,22 @@ test "unclosed HTML opener storms are consumed once and preserve the tail" {
     const text_value = try flattened(a, spans);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "EDGE_SENTINEL") != null);
     try std.testing.expect(std.unicode.utf8ValidateSlice(text_value));
+}
+
+test "default reference numbering stays independent of named groups" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans(
+        "A<ref>a</ref> B<ref group='note'>b</ref> C<ref>c</ref> D<ref group='note'>d</ref>",
+        .{},
+    );
+    try std.testing.expectEqualStrings("A[1] B[note 1] C[2] D[note 2]", try flattened(a, spans));
+    const refs = try r.finishReferences();
+    try std.testing.expectEqual(@as(usize, 4), refs.len);
+    try std.testing.expectEqual(@as(usize, 1), refs[0].group_number);
+    try std.testing.expectEqual(@as(usize, 1), refs[1].group_number);
+    try std.testing.expectEqual(@as(usize, 2), refs[2].group_number);
+    try std.testing.expectEqual(@as(usize, 2), refs[3].group_number);
 }
