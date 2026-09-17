@@ -168,6 +168,9 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
 
     const ns = namespaceOf(prefixed.string);
     if (std.mem.eql(u8, key, "exists")) {
+        // Scribunto maps Media: title existence to file.exists, not page existence.
+        // File repository metadata is not part of the local bundle host.
+        if (ns.id == -2) return error.NotImplemented;
         const exists = try pageExists(runtime, prefixed.string);
         try table.rawSetNativeField(.title_value, "exists", .{ .boolean = exists });
         return one(.{ .boolean = exists });
@@ -828,6 +831,11 @@ test "AOT title subpage fields respect namespace settings" {
         try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
         runtime.clearAotErrorName();
     }
+    const media_title = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "Media:Example.svg" }});
+    defer rt.freeResults(media_title);
+    try std.testing.expectError(error.AotCallFailed, runtime.getIndex(media_title[0], .{ .string = "exists" }));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
 }
 
 test "AOT title constructors and current title use the live host" {
