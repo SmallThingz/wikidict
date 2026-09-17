@@ -72,6 +72,7 @@ fn promoteLoadData(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnm
             try seen.put(a, source, copy);
             var it = source.iterator();
             while (it.next()) |entry| {
+                if (entry.key_ptr.* == .table) return error.LoadDataTableKey;
                 const key = try promoteLoadData(a, entry.key_ptr.*, seen);
                 const item = try promoteLoadData(a, entry.value_ptr.*, seen);
                 try copy.rawSet(a, key, item);
@@ -152,9 +153,10 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
         runtime.adoptFailure(&child);
         return err;
     };
+    if (source != .table) return error.LoadDataTableExpected;
 
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
-    defer seen.deinit(eval_arena.allocator());
+    defer seen.deinit(state.allocator);
     const promoted = try promoteLoadData(state.allocator, source, &seen);
     try state.load_data_cache.put(state.allocator, module_id, promoted);
     return one(promoted);
@@ -176,7 +178,7 @@ fn loadJsonDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     const decoded = text_lib.jsonDecodeValue(runtime, source, 0) catch return error.InvalidJsonPage;
     if (decoded != .table) return error.LoadJsonDataTableExpected;
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
-    defer seen.deinit(runtime.allocator);
+    defer seen.deinit(state.allocator);
     const promoted = try promoteLoadData(state.allocator, decoded, &seen);
     const key = try state.allocator.dupe(u8, title);
     try state.load_json_cache.put(state.allocator, key, promoted);
@@ -253,12 +255,16 @@ const DataProbe = struct {
     fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
         if (std.mem.eql(u8, raw_name, "Module:Data")) return 0;
         if (std.mem.eql(u8, raw_name, "Module:DataFail")) return 1;
+        if (std.mem.eql(u8, raw_name, "Module:DataScalar")) return 2;
+        if (std.mem.eql(u8, raw_name, "Module:DataTableKey")) return 3;
         return null;
     }
     fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
         return switch (id) {
             0 => "Module:Data",
             1 => "Module:DataFail",
+            2 => "Module:DataScalar",
+            3 => "Module:DataTableKey",
             else => null,
         };
     }
@@ -277,14 +283,23 @@ const DataProbe = struct {
     fn fail(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
         return error.NotCallable;
     }
+    fn scalar(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        return one(.{ .string = "not a table" });
+    }
+    fn tableKey(runtime: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        const key = try runtime.newTable();
+        const table = try runtime.newTable();
+        try table.rawSet(runtime.allocator, .{ .table = key }, .{ .boolean = true });
+        return one(.{ .table = table });
+    }
 };
 
 test "AOT loadData runs in an isolated context and promotes a cached read-only graph" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 2);
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 4);
     defer runtime.deinit();
-    const functions = [_]rt.FunctionFn{ rt.stabilize(DataProbe.root), rt.stabilize(DataProbe.fail) };
+    const functions = [_]rt.FunctionFn{ rt.stabilize(DataProbe.root), rt.stabilize(DataProbe.fail), rt.stabilize(DataProbe.scalar), rt.stabilize(DataProbe.tableKey) };
     runtime.module_root_entries = &functions;
     runtime.configureModules(null, DataProbe.lookup, DataProbe.name);
     try rt.bindGlobalTable(&runtime, null, 0);
@@ -299,6 +314,15 @@ test "AOT loadData runs in an isolated context and promotes a cached read-only g
     try std.testing.expect(first[0] == .table and second[0] == .table);
     try std.testing.expectError(error.AotCallFailed, callField(&runtime, mw, "loadData", &.{.{ .string = "Module:DataFail" }}));
     try std.testing.expectEqualStrings("NotCallable", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+    inline for (.{
+        .{ "Module:DataScalar", "LoadDataTableExpected" },
+        .{ "Module:DataTableKey", "LoadDataTableKey" },
+    }) |case| {
+        try std.testing.expectError(error.AotCallFailed, callField(&runtime, mw, "loadData", &.{.{ .string = case[0] }}));
+        try std.testing.expectEqualStrings(case[1], runtime.aotErrorName().?);
+        runtime.clearAotErrorName();
+    }
     try std.testing.expect(first[0].table == second[0].table);
     try std.testing.expect(first[0].table.read_only);
     const nested = first[0].table.rawGet(.{ .string = "nested" }) orelse return error.MissingNestedData;
@@ -311,9 +335,9 @@ test "AOT loadData runs in an isolated context and promotes a cached read-only g
 test "AOT expander loadData cache survives fresh invoke contexts" {
     var page = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer page.deinit();
-    var runtime = try rt.Context.initProgram(page.allocator(), 24, 2);
+    var runtime = try rt.Context.initProgram(page.allocator(), 24, 4);
     defer runtime.deinit();
-    const functions = [_]rt.FunctionFn{ rt.stabilize(DataProbe.root), rt.stabilize(DataProbe.fail) };
+    const functions = [_]rt.FunctionFn{ rt.stabilize(DataProbe.root), rt.stabilize(DataProbe.fail), rt.stabilize(DataProbe.scalar), rt.stabilize(DataProbe.tableKey) };
     runtime.module_root_entries = &functions;
     runtime.configureModules(null, DataProbe.lookup, DataProbe.name);
 
