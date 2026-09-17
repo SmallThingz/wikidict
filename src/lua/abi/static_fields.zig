@@ -48,7 +48,7 @@ const names = [_][]const u8{
 const table_names = names[0..6];
 const string_names = names[6..19];
 const math_names = [_][]const u8{ "abs", "ceil", "floor", "sqrt", "exp", "log", "log10", "sin", "cos", "tan", "asin", "acos", "atan", "deg", "rad", "min", "max", "pow", "fmod", "mod", "modf", "pi", "huge", "random", "randomseed" };
-const debug_names = names[42..45];
+const debug_names = names[43..44];
 const mw_names = [_][]const u8{
     "loadData",   "loadJsonData", "clone", "getCurrentFrame", "ustring",            "dumpObject",  "log",      "logObject",
     "addWarning", "isSubsting",   "title", "text",            "site",               "uri",         "wikibase", "message",

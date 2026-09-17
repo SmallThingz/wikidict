@@ -825,23 +825,9 @@ fn mathModf(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Valu
     return two(a, .{ .number = ip }, .{ .number = x - ip });
 }
 
-fn debugGetMetatable(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
-    const runtime = ctx;
-    if (args.len == 0) return one(a, .nil);
-    const mt: ?*rt.Table = switch (args[0]) {
-        .table => |t| t.metatable,
-        .string => runtime.string_metatable,
-        else => null,
-    };
-    return one(a, if (mt) |t| .{ .table = t } else .nil);
-}
 fn debugTraceback(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     const a = ctx.allocator;
     return one(a, if (args.len != 0 and args[0] == .string) args[0] else .{ .string = "" });
-}
-fn debugGetInfo(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
-    return error.NotImplemented;
 }
 
 const MathRandomState = struct {
@@ -1110,9 +1096,7 @@ pub fn install(runtime: *rt.Context) !void {
     try installMathRandom(runtime, math);
     try runtime.setGlobal(global_abi.id("math"), .{ .table = math });
     const debug = try runtime.newNativeNamespace(.debug);
-    try setNative(runtime, debug, "getmetatable", debugGetMetatable);
     try setNative(runtime, debug, "traceback", debugTraceback);
-    try setNative(runtime, debug, "getinfo", debugGetInfo);
     try runtime.setGlobal(global_abi.id("debug"), .{ .table = debug });
 }
 
@@ -1239,6 +1223,13 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     defer ctx.deinit();
     try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
     try install(&ctx);
+
+    const debug = ctx.getGlobal(global_abi.id("debug"));
+    try std.testing.expect(debug == .table);
+    try std.testing.expect((try ctx.getIndex(debug, .{ .string = "getmetatable" })) == .nil);
+    try std.testing.expect((try ctx.getIndex(debug, .{ .string = "getinfo" })) == .nil);
+    try std.testing.expect((try ctx.getIndex(debug, .{ .string = "traceback" })) == .callable);
+    try std.testing.expectEqual(@as(usize, 0), debug.table.map.count());
 
     const package = ctx.getGlobal(global_abi.id("package"));
     try std.testing.expect(package == .table);
