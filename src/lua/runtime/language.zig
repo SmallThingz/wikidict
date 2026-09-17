@@ -394,6 +394,10 @@ fn languageGetDir(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) 
     const a = runtime.allocator;
     return one(a, .{ .string = "ltr" });
 }
+fn languageIsRtl(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+    _ = try requireEnglishLocale(ctx_raw);
+    return one(runtime.allocator, .{ .boolean = false });
+}
 fn languageGetFallbacks(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     _ = try requireEnglishLocale(ctx_raw);
     const a = runtime.allocator;
@@ -510,6 +514,7 @@ fn makeLanguage(runtime: *rt.Context, case_mapper: *ustring_lib.Normalizer, code
     try setNative(runtime, table, "ucfirst", ctx, languageUcfirst);
     try setNative(runtime, table, "lcfirst", ctx, languageLcfirst);
     try setNative(runtime, table, "getDir", ctx, languageGetDir);
+    try setNative(runtime, table, "isRTL", ctx, languageIsRtl);
     try setNative(runtime, table, "getFallbackLanguages", ctx, languageGetFallbacks);
     try setNative(runtime, table, "getArrow", ctx, languageGetArrow);
     try setNative(runtime, table, "gender", ctx, languageGender);
@@ -635,6 +640,9 @@ test "AOT language objects expose MediaWiki helpers" {
     const code = try callField(&runtime, language, "getCode", &.{language});
     defer rt.freeResults(code);
     try std.testing.expectEqualStrings("en", code[0].string);
+    const is_rtl = try callField(&runtime, language, "isRTL", &.{language});
+    defer rt.freeResults(is_rtl);
+    try std.testing.expect(!is_rtl[0].boolean);
     const dated = try callField(&runtime, language, "formatDate", &.{ language, .{ .string = "Y-m-d" }, .{ .string = "now" } });
     defer rt.freeResults(dated);
     try std.testing.expectEqualStrings("2022-12-12", dated[0].string);
@@ -672,6 +680,11 @@ test "AOT language objects expose MediaWiki helpers" {
     const italian_code = try callField(&runtime, italian[0], "getCode", &.{italian[0]});
     defer rt.freeResults(italian_code);
     try std.testing.expectEqualStrings("it", italian_code[0].string);
+    try std.testing.expect(italian[0].table.rawGet(.{ .string = "isRTL" }).? == .callable);
+    const italian_is_rtl = try runtime.getIndex(italian[0], .{ .string = "isRTL" });
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(italian_is_rtl, &.{italian[0]}));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
     const italian_ucfirst = try runtime.getIndex(italian[0], .{ .string = "ucfirst" });
     inline for (.{ .{ "istanza", "Istanza" }, .{ "éclair", "Éclair" }, .{ "ßeta", "ßeta" }, .{ "ǰfoo", "J̌foo" } }) |case| {
         const result = try runtime.callValue(italian_ucfirst, &.{ italian[0], .{ .string = case[0] } });
