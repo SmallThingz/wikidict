@@ -388,12 +388,42 @@ fn appendHtmlEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []co
     }
 }
 
-fn textEncodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn htmlEncodeMatchCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string or args[0].string.len == 0) return error.StringExpected;
+    const text = args[0].string;
+    const replacement: ?[]const u8 = if (std.mem.eql(u8, text, "\xc2\xa0"))
+        "&nbsp;"
+    else if (text.len == 1) switch (text[0]) {
+        '>' => "&gt;",
+        '<' => "&lt;",
+        '&' => "&amp;",
+        '"' => "&quot;",
+        '\'' => "&#039;",
+        else => null,
+    } else null;
+    if (replacement) |value| return one(runtime.allocator, .{ .string = value });
+    const n = try std.unicode.utf8ByteSequenceLength(text[0]);
+    if (n != text.len) return error.InvalidUtf8;
+    const cp = try std.unicode.utf8Decode(text[0..n]);
+    return one(runtime.allocator, .{ .string = try std.fmt.allocPrint(runtime.allocator, "&#{d};", .{cp}) });
+}
+
+fn textEncodeCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    if (args.len > 1 and args[1] != .nil) return error.NotImplemented;
-    var out: std.ArrayList(u8) = .empty;
-    try appendHtmlEncoded(&out, runtime.allocator, args[0].string);
-    return one(runtime.allocator, .{ .string = try out.toOwnedSlice(runtime.allocator) });
+    if (args.len < 2 or args[1] == .nil) {
+        var out: std.ArrayList(u8) = .empty;
+        try appendHtmlEncoded(&out, runtime.allocator, args[0].string);
+        return one(runtime.allocator, .{ .string = try out.toOwnedSlice(runtime.allocator) });
+    }
+    if (args[1] != .string) return error.StringExpected;
+    const host: *const Host = @ptrCast(@alignCast(raw orelse return error.MissingTextHost));
+    const gsub = host.ustring.rawGet(.{ .string = "gsub" }) orelse return error.NotImplemented;
+    const pattern = try std.fmt.allocPrint(runtime.allocator, "[{s}]", .{args[1].string});
+    const replacement = try runtime.newNative(null, htmlEncodeMatchCall);
+    const result = try runtime.callValue(gsub, &.{ .{ .string = args[0].string }, .{ .string = pattern }, replacement });
+    defer rt.freeResults(result);
+    if (result.len == 0 or result[0] != .string) return error.StringExpected;
+    return one(runtime.allocator, result[0]);
 }
 
 fn validTagAttributeName(name: []const u8) bool {
@@ -869,7 +899,8 @@ fn textDecodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
         try out.appendSlice(a, source[pos..amp]);
         var semi = amp + 1;
         while (semi < source.len and source[semi] != ';' and
-            (std.ascii.isAlphanumeric(source[semi]) or source[semi] == '#')) : (semi += 1) {}
+            (std.ascii.isAlphanumeric(source[semi]) or source[semi] == '#')) : (semi += 1)
+        {}
         if (semi >= source.len or source[semi] != ';') {
             try out.append(a, '&');
             pos = amp + 1;
@@ -1010,7 +1041,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setNative(runtime, text, "killMarkers", null, textKillMarkersCall);
     try setNative(runtime, text, "listToText", null, textListToTextCall);
     try setNative(runtime, text, "truncate", host, textTruncateCall);
-    try setNative(runtime, text, "encode", null, textEncodeCall);
+    try setNative(runtime, text, "encode", host, textEncodeCall);
     try setNative(runtime, text, "decode", null, textDecodeCall);
     try setNative(runtime, text, "jsonEncode", null, textJsonEncodeCall);
     try setNative(runtime, text, "jsonDecode", null, textJsonDecodeCall);
@@ -1022,6 +1053,35 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try mw.rawSetNativeField(.mw, "text", .{ .table = text });
 }
 
+test "mw.text encode honors selective Unicode charset" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const mw = try runtime.newNativeNamespace(.mw);
+    const ustring = try runtime.newNativeNamespace(.ustring);
+    _ = try @import("ustring.zig").install(&runtime, ustring);
+    try mw.rawSet(runtime.allocator, .{ .string = "ustring" }, .{ .table = ustring });
+    try install(&runtime, mw);
+    const text = mw.rawGet(.{ .string = "text" }).?.table;
+    const encode = text.rawGet(.{ .string = "encode" }).?;
+
+    const default = try runtime.callValue(encode, &.{.{ .string = "<>&\"'\xc2\xa0" }});
+    defer rt.freeResults(default);
+    try std.testing.expectEqualStrings("&lt;&gt;&amp;&quot;&#039;&nbsp;", default[0].string);
+
+    const amp_only = try runtime.callValue(encode, &.{ .{ .string = "<a&b>" }, .{ .string = "&" } });
+    defer rt.freeResults(amp_only);
+    try std.testing.expectEqualStrings("<a&amp;b>", amp_only[0].string);
+
+    const unicode = try runtime.callValue(encode, &.{ .{ .string = "<é&>" }, .{ .string = "é&" } });
+    defer rt.freeResults(unicode);
+    try std.testing.expectEqualStrings("<&#233;&amp;>", unicode[0].string);
+
+    const range = try runtime.callValue(encode, &.{ .{ .string = "abcd" }, .{ .string = "a-c" } });
+    defer rt.freeResults(range);
+    try std.testing.expectEqualStrings("&#97;&#98;&#99;d", range[0].string);
+}
 
 test "mw.text JSON encode accepts zero-based arrays" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
