@@ -50,7 +50,7 @@ const Encoder = struct {
         try self.count(values.len);
         for (values) |value| try self.index(value);
     }
-    fn enumByte(self: *Encoder, comptime E: type, value: anytype) !void {
+    fn enumTag(comptime E: type, value: anytype) !u8 {
         const Source = @TypeOf(value);
         const fields = std.meta.fields(Source);
         const invalid = std.math.maxInt(u8);
@@ -71,11 +71,12 @@ const Encoder = struct {
         };
         const mapped = map[@intFromEnum(value)];
         if (mapped == invalid) return error.UncompiledTemplate;
-        try self.byte(mapped);
+        return mapped;
+    }
+    fn enumByte(self: *Encoder, comptime E: type, value: anytype) !void {
+        try self.byte(try enumTag(E, value));
     }
     fn span(self: *Encoder, value: anytype) !void {
-        try self.enumByte(types.InlineKind, value.kind);
-        try self.enumByte(types.Role, value.role);
         var flags: u8 = 0;
         if (value.bold) flags |= 1 << 0;
         if (value.italic) flags |= 1 << 1;
@@ -85,8 +86,14 @@ const Encoder = struct {
         if (value.subscript) flags |= 1 << 5;
         if (value.strike) flags |= 1 << 6;
         if (value.underline) flags |= 1 << 7;
-        try self.byte(flags);
-        try self.string(value.text);
+        if (value.text.len > max_string_bytes) return error.PresentationTooLarge;
+        var header: [3 + @sizeOf(u32)]u8 = undefined;
+        header[0] = try enumTag(types.InlineKind, value.kind);
+        header[1] = try enumTag(types.Role, value.role);
+        header[2] = flags;
+        std.mem.writeInt(u32, header[3..], std.math.cast(u32, value.text.len) orelse return error.PresentationTooLarge, .little);
+        try self.out.appendSlice(self.a, &header);
+        try self.out.appendSlice(self.a, value.text);
         const trail: []const u8 = if (comptime @hasField(@TypeOf(value), "trail")) value.trail else "";
         const no_trailing_metadata = trail.len == 0 and value.language.len == 0 and value.classes.len == 0 and value.direction.len == 0;
         const empty_lengths = [_]u8{0} ** (5 * @sizeOf(u32));
