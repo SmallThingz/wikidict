@@ -50,7 +50,7 @@ const Encoder = struct {
         try self.count(values.len);
         for (values) |value| try self.index(value);
     }
-    fn enumTag(comptime E: type, value: anytype) !u8 {
+    inline fn enumByteValue(comptime E: type, value: anytype) !u8 {
         const Source = @TypeOf(value);
         const fields = std.meta.fields(Source);
         const invalid = std.math.maxInt(u8);
@@ -74,9 +74,11 @@ const Encoder = struct {
         return mapped;
     }
     fn enumByte(self: *Encoder, comptime E: type, value: anytype) !void {
-        try self.byte(try enumTag(E, value));
+        try self.byte(try enumByteValue(E, value));
     }
     fn span(self: *Encoder, value: anytype) !void {
+        const kind = try enumByteValue(types.InlineKind, value.kind);
+        const role = try enumByteValue(types.Role, value.role);
         var flags: u8 = 0;
         if (value.bold) flags |= 1 << 0;
         if (value.italic) flags |= 1 << 1;
@@ -86,30 +88,26 @@ const Encoder = struct {
         if (value.subscript) flags |= 1 << 5;
         if (value.strike) flags |= 1 << 6;
         if (value.underline) flags |= 1 << 7;
-        if (value.text.len > max_string_bytes) return error.PresentationTooLarge;
-        var header: [3 + @sizeOf(u32)]u8 = undefined;
-        header[0] = try enumTag(types.InlineKind, value.kind);
-        header[1] = try enumTag(types.Role, value.role);
-        header[2] = flags;
-        std.mem.writeInt(u32, header[3..], std.math.cast(u32, value.text.len) orelse return error.PresentationTooLarge, .little);
-        try self.out.appendSlice(self.a, &header);
-        try self.out.appendSlice(self.a, value.text);
         const trail: []const u8 = if (comptime @hasField(@TypeOf(value), "trail")) value.trail else "";
-        const no_trailing_metadata = trail.len == 0 and value.language.len == 0 and value.classes.len == 0 and value.direction.len == 0;
-        const empty_lengths = [_]u8{0} ** (5 * @sizeOf(u32));
-        if (value.target.len == 0 and no_trailing_metadata) {
-            try self.out.appendSlice(self.a, empty_lengths[0 .. 5 * @sizeOf(u32)]);
-            return;
+        const strings = [_][]const u8{ value.text, value.target, trail, value.language, value.classes, value.direction };
+        var encoded_len: usize = 3 + strings.len * @sizeOf(u32);
+        for (strings) |string_value| {
+            if (string_value.len > max_string_bytes) return error.PresentationTooLarge;
+            encoded_len += string_value.len;
         }
-        try self.string(value.target);
-        if (no_trailing_metadata) {
-            try self.out.appendSlice(self.a, empty_lengths[0 .. 4 * @sizeOf(u32)]);
-            return;
+        try self.out.ensureUnusedCapacity(self.a, encoded_len);
+        const encoded = self.out.addManyAsSliceAssumeCapacity(encoded_len);
+        encoded[0] = kind;
+        encoded[1] = role;
+        encoded[2] = flags;
+        var pos: usize = 3;
+        for (strings) |string_value| {
+            std.mem.writeInt(u32, encoded[pos..][0..4], @intCast(string_value.len), .little);
+            pos += 4;
+            @memcpy(encoded[pos..][0..string_value.len], string_value);
+            pos += string_value.len;
         }
-        try self.string(trail);
-        try self.string(value.language);
-        try self.string(value.classes);
-        try self.string(value.direction);
+        std.debug.assert(pos == encoded.len);
     }
     fn spans(self: *Encoder, values: anytype) !void {
         try self.count(values.len);
