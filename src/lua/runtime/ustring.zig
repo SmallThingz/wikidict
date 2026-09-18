@@ -485,6 +485,8 @@ pub fn install(runtime: *rt.Context, table: *rt.Table) !*Normalizer {
         ctx.* = .{ .normalizer = normalizer, .options = item[1] };
         try setNativeCtx(runtime, table, item[0], ctx, uNormalize);
     }
+    if (runtime.package_loaded) |loaded|
+        try loaded.rawSet(runtime.allocator, .{ .string = "mw.ustring" }, .{ .table = table });
     return normalizer;
 }
 

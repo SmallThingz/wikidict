@@ -52,8 +52,59 @@ fn setGlobalNative(runtime: *rt.Context, comptime name: []const u8, comptime cal
     try runtime.setGlobal(global_abi.id(name), try runtime.newNative(null, call));
 }
 
+fn strictGlobalName(ctx: *rt.Context, value: Value) ![]const u8 {
+    return switch (value) {
+        .string => |name| name,
+        .number => |number| try rt.numberToString(ctx.allocator, number),
+        else => valueTypeName(value),
+    };
+}
+
+fn strictNewIndex(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len < 3 or args[0] != .table) return error.TableExpected;
+    if (args[1] == .string and std.mem.eql(u8, args[1].string, "arg")) {
+        try args[0].table.rawSet(ctx.allocator, args[1], args[2]);
+        return &.{};
+    }
+    ctx.last_error = .{ .string = try std.fmt.allocPrint(
+        ctx.allocator,
+        "assign to undeclared variable '{s}'",
+        .{try strictGlobalName(ctx, args[1])},
+    ) };
+    return error.LuaRaised;
+}
+
+fn strictIndex(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len < 2 or args[0] != .table) return error.TableExpected;
+    if (args[1] == .string and std.mem.eql(u8, args[1].string, "arg"))
+        return one(ctx.allocator, args[0].table.rawGet(args[1]) orelse .nil);
+    ctx.last_error = .{ .string = try std.fmt.allocPrint(
+        ctx.allocator,
+        "variable '{s}' is not declared",
+        .{try strictGlobalName(ctx, args[1])},
+    ) };
+    return error.LuaRaised;
+}
+
+fn installStrict(ctx: *rt.Context) !Value {
+    const global = ctx.global_table orelse return error.GlobalTableNotBound;
+    const mt = global.metatable orelse try ctx.newTable();
+    try mt.rawSet(ctx.allocator, .{ .string = "__newindex" }, try ctx.newNative(null, strictNewIndex));
+    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, try ctx.newNative(null, strictIndex));
+    global.metatable = mt;
+    const result = Value{ .boolean = true };
+    const loaded = ctx.package_loaded orelse return error.MissingPackageLoaded;
+    try loaded.rawSet(ctx.allocator, .{ .string = "strict" }, result);
+    return result;
+}
+
 fn baseRequire(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    if (std.mem.eql(u8, args[0].string, "strict")) {
+        if (ctx.package_loaded) |loaded| if (loaded.rawGet(.{ .string = "strict" })) |value|
+            return one(ctx.allocator, value);
+        return one(ctx.allocator, try installStrict(ctx));
+    }
     return one(ctx.allocator, try ctx.requireByName(args[0].string));
 }
 
@@ -1024,6 +1075,17 @@ fn makeLibraryUtil(runtime: *rt.Context) !*rt.Table {
     return library_util;
 }
 
+fn registerLoadedGlobal(runtime: *rt.Context, loaded: *rt.Table, comptime name: []const u8) !void {
+    const value = runtime.getGlobal(global_abi.id(name));
+    if (value != .nil) try loaded.rawSet(runtime.allocator, .{ .string = name }, value);
+}
+
+fn registerStandardPackageLoaded(runtime: *rt.Context) !void {
+    const loaded = runtime.package_loaded orelse return error.MissingPackageLoaded;
+    inline for (.{ "_G", "table", "string", "math", "debug" }) |name|
+        try registerLoadedGlobal(runtime, loaded, name);
+}
+
 fn installPackage(runtime: *rt.Context) !void {
     const package = try runtime.newTable();
     const loaded = try runtime.newTable();
@@ -1037,6 +1099,8 @@ fn installPackage(runtime: *rt.Context) !void {
     try loaders.rawSet(runtime.allocator, .{ .number = 2 }, try runtime.newNative(loader_state, mainModuleLoader));
     runtime.package_loaded = loaded;
     try runtime.setGlobal(global_abi.id("package"), .{ .table = package });
+    try loaded.rawSet(runtime.allocator, .{ .string = "package" }, .{ .table = package });
+    try registerStandardPackageLoaded(runtime);
 }
 
 pub fn install(runtime: *rt.Context) !void {
@@ -1108,6 +1172,7 @@ pub fn install(runtime: *rt.Context) !void {
     const debug = try runtime.newNativeNamespace(.debug);
     try setNative(runtime, debug, "traceback", debugTraceback);
     try runtime.setGlobal(global_abi.id("debug"), .{ .table = debug });
+    try registerStandardPackageLoaded(runtime);
 }
 
 fn cloneTemplateNamespace(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
@@ -1247,6 +1312,15 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     try std.testing.expect(loaded == .table and ctx.package_loaded == loaded.table);
     const require = ctx.getGlobal(global_abi.id("require"));
     try std.testing.expect(require == .callable);
+    inline for (.{ "table", "string", "math", "debug", "package", "_G" }) |name| {
+        const required = try ctx.callValue(require, &.{.{ .string = name }});
+        defer rt.freeResults(required);
+        try std.testing.expect(required.len == 1 and required[0] == .table);
+    }
+    const strict = try ctx.callValue(require, &.{.{ .string = "strict" }});
+    defer rt.freeResults(strict);
+    try std.testing.expect(strict.len == 1 and strict[0] == .boolean and strict[0].boolean);
+    try std.testing.expect(ctx.global_table.?.metatable != null);
     const bit32_result = try ctx.callValue(require, &.{.{ .string = "bit32" }});
     defer rt.freeResults(bit32_result);
     try std.testing.expect(bit32_result.len == 1 and bit32_result[0] == .table);

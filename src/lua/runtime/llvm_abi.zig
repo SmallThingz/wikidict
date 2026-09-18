@@ -56,10 +56,30 @@ export fn dict_lua_value_to_number(input: *const rt.Value, out: *f64) callconv(.
     out.* = n;
     return 1;
 }
-export fn dict_lua_global_get(ctx: *rt.Context, slot: u32, out: *rt.Value) callconv(.c) void {
-    out.* = ctx.getGlobal(slot);
+export fn dict_lua_global_get(ctx: *rt.Context, slot: u32, out: *rt.Value) callconv(.c) u32 {
+    const value = ctx.getGlobal(slot);
+    if (value != .nil) {
+        out.* = value;
+        return 0;
+    }
+    const global = ctx.global_table orelse {
+        out.* = .nil;
+        return 0;
+    };
+    const key = global.fieldKey(slot) orelse {
+        out.* = .nil;
+        return 0;
+    };
+    out.* = ctx.getIndex(.{ .table = global }, key) catch |err| return fail(ctx, err);
+    return 0;
 }
 export fn dict_lua_global_set(ctx: *rt.Context, slot: u32, input: *const rt.Value) callconv(.c) u32 {
+    if (ctx.getGlobal(slot) == .nil) if (ctx.global_table) |global| {
+        if (global.metatable != null and global.fieldKey(slot) != null) {
+            ctx.setIndex(.{ .table = global }, global.fieldKey(slot).?, input.*) catch |err| return fail(ctx, err);
+            return 0;
+        }
+    };
     ctx.setGlobal(slot, input.*) catch |err| return fail(ctx, err);
     return 0;
 }

@@ -4,6 +4,7 @@ const analysis = @import("analysis.zig");
 const numbers = @import("numbers.zig");
 const shapes = @import("shapes.zig");
 const static_fields = @import("../abi/static_fields.zig");
+const global_abi = @import("../abi/globals.zig");
 
 const A = std.mem.Allocator;
 const value_size = 32;
@@ -128,7 +129,7 @@ fn emitPreamble(out: *std.ArrayList(u8), a: A) anyerror!void {
         "declare ptr @dict_lua_arg_ptr(ptr, i64, i64)\n" ++
         "declare void @dict_lua_arg_get(ptr, i64, i64, ptr)\n" ++
         "declare ptr @dict_lua_global_ptr(ptr, i32)\n" ++
-        "declare void @dict_lua_global_get(ptr, i32, ptr)\n" ++
+        "declare i32 @dict_lua_global_get(ptr, i32, ptr)\n" ++
         "declare i32 @dict_lua_global_set(ptr, i32, ptr)\n" ++
         "declare i32 @dict_lua_require_module_id(ptr, i32, ptr, i64, ptr)\n" ++
         "declare i32 @dict_lua_new_table(ptr, ptr)\n" ++
@@ -484,7 +485,7 @@ const FnEmitter = struct {
                 break :blk .{ .boxed = out };
             },
             .global => |slot| blk: {
-                if (self.module.globals.stableSlot(slot)) {
+                if (self.module.globals.stableSlot(slot) and slot < global_abi.count) {
                     const ptr = try self.temp("global");
                     try print(&self.code, self.a(), "  {s} = call ptr @dict_lua_global_ptr(ptr %ctx, i32 {d})\n", .{ ptr, slot });
                     const name = self.module.globals.names.items[slot];
@@ -493,7 +494,9 @@ const FnEmitter = struct {
                     break :blk .{ .boxed = ptr };
                 }
                 const out = try self.valueSlot();
-                try print(&self.code, self.a(), "  call void @dict_lua_global_get(ptr %ctx, i32 {d}, ptr {s})\n", .{ slot, out });
+                const status = try self.temp("st");
+                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_global_get(ptr %ctx, i32 {d}, ptr {s})\n", .{ status, slot, out });
+                try self.check(status);
                 break :blk .{ .boxed = out };
             },
         };

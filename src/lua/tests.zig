@@ -62,6 +62,21 @@ test "immutable numeric locals stay native LLVM SSA" {
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated.source, "call i32 @dict_lua_require_number"));
 }
 
+test "undeclared stable globals use checked access for global metatable semantics" {
+    const source = "return definitely_undeclared";
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer std.testing.allocator.free(generated.source);
+
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, generated.source, " = call i32 @dict_lua_global_get("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated.source, " = call ptr @dict_lua_global_ptr("));
+}
+
 test "mutable proven scalar locals stay native LLVM storage" {
     const source =
         \\local n = 1
@@ -330,7 +345,7 @@ test "immutable parameters borrow argument slots without Value copies" {
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated.source, "call void @dict_lua_arg_get"));
 }
 
-test "whole-corpus stable globals borrow their Context slot" {
+test "stable ABI globals borrow their Context slot while mutable globals stay checked" {
     const compile = struct {
         fn run(source: []const u8) ![]u8 {
             var chunk = try llvm_parser.parse(std.testing.allocator, source);
@@ -345,11 +360,11 @@ test "whole-corpus stable globals borrow their Context slot" {
     const stable = try compile("return math");
     defer std.testing.allocator.free(stable);
     try std.testing.expect(std.mem.indexOf(u8, stable, "call ptr @dict_lua_global_ptr") != null);
-    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, stable, "call void @dict_lua_global_get"));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, stable, " = call i32 @dict_lua_global_get("));
 
     const mutated = try compile("math = 1; return math");
     defer std.testing.allocator.free(mutated);
-    try std.testing.expect(std.mem.indexOf(u8, mutated, "call void @dict_lua_global_get") != null);
+    try std.testing.expect(std.mem.indexOf(u8, mutated, " = call i32 @dict_lua_global_get(") != null);
 }
 
 test "call-only local functions bypass callable boxing and dynamic dispatch" {

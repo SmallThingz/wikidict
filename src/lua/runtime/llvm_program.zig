@@ -110,19 +110,33 @@ pub const Program = struct {
         return dict_lua_program_module_lookup_name(index)[0..dict_lua_program_module_lookup_name_len(index)];
     }
 
-    fn lookup(raw: ?*const anyopaque, raw_name: []const u8) ?u32 {
-        const self: *const Program = @ptrCast(@alignCast(raw orelse return null));
+    fn lookupExact(self: *const Program, name: []const u8) ?u32 {
         var low: u32 = 0;
         var high = self.module_lookup_count;
         while (low < high) {
             const mid = low + (high - low) / 2;
-            switch (std.mem.order(u8, raw_name, lookupName(mid))) {
+            switch (std.mem.order(u8, name, lookupName(mid))) {
                 .lt => high = mid,
                 .gt => low = mid + 1,
                 .eq => return dict_lua_program_module_lookup_id(mid),
             }
         }
         return null;
+    }
+
+    fn lookup(raw: ?*const anyopaque, raw_name: []const u8) ?u32 {
+        const self: *const Program = @ptrCast(@alignCast(raw orelse return null));
+        if (self.lookupExact(raw_name)) |id| return id;
+        const colon = std.mem.indexOfScalar(u8, raw_name, ':') orelse return null;
+        const prefix_raw = raw_name[0..colon];
+        if (!std.ascii.eqlIgnoreCase(prefix_raw, "Module") and !std.ascii.eqlIgnoreCase(prefix_raw, "MOD")) return null;
+        const suffix = raw_name[colon + 1 ..];
+        var buffer: [4096]u8 = undefined;
+        const prefix = "Module:";
+        if (prefix.len + suffix.len > buffer.len) return null;
+        @memcpy(buffer[0..prefix.len], prefix);
+        @memcpy(buffer[prefix.len .. prefix.len + suffix.len], suffix);
+        return self.lookupExact(buffer[0 .. prefix.len + suffix.len]);
     }
 
     fn moduleName(raw: ?*const anyopaque, id: u32) ?[]const u8 {
