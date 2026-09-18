@@ -789,7 +789,8 @@ pub const Renderer = struct {
         }
         self.body_depth += 1;
         defer self.body_depth -= 1;
-        var blocks: std.ArrayList(Block) = .empty;
+        const line_capacity = std.mem.count(u8, input, "\n") + @intFromBool(input.len != 0 and input[input.len - 1] != '\n');
+        var blocks: std.ArrayList(Block) = try .initCapacity(self.a, line_capacity);
         var pos: usize = 0;
         var para: ?usize = null;
         var counts: [32]usize = @splat(0);
