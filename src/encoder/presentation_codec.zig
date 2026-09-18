@@ -87,7 +87,8 @@ const Encoder = struct {
         if (value.underline) flags |= 1 << 7;
         try self.byte(flags);
         try self.string(value.text);
-        const no_trailing_metadata = value.trail.len == 0 and value.language.len == 0 and value.classes.len == 0 and value.direction.len == 0;
+        const trail: []const u8 = if (comptime @hasField(@TypeOf(value), "trail")) value.trail else "";
+        const no_trailing_metadata = trail.len == 0 and value.language.len == 0 and value.classes.len == 0 and value.direction.len == 0;
         const empty_lengths = [_]u8{0} ** (5 * @sizeOf(u32));
         if (value.target.len == 0 and no_trailing_metadata) {
             try self.out.appendSlice(self.a, empty_lengths[0 .. 5 * @sizeOf(u32)]);
@@ -98,7 +99,7 @@ const Encoder = struct {
             try self.out.appendSlice(self.a, empty_lengths[0 .. 4 * @sizeOf(u32)]);
             return;
         }
-        try self.string(value.trail);
+        try self.string(trail);
         try self.string(value.language);
         try self.string(value.classes);
         try self.string(value.direction);

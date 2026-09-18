@@ -31,7 +31,6 @@ pub const Span = struct {
     kind: ir.InlineKind = .text,
     text: []const u8,
     target: []const u8 = "",
-    trail: []const u8 = "",
     language: []const u8 = "",
     classes: []const u8 = "",
     direction: []const u8 = "",
@@ -1113,7 +1112,6 @@ pub fn plainText(a: A, spans: []const Span) A.Error![]u8 {
             try out.appendSlice(a, span.target);
             try out.append(a, ']');
         } else if (span.kind == .line_break) try out.append(a, '\n') else try out.appendSlice(a, span.text);
-        try out.appendSlice(a, span.trail);
     }
     return out.toOwnedSlice(a);
 }
