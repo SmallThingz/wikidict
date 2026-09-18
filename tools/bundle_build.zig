@@ -18,26 +18,39 @@ fn sourcePath(a: std.mem.Allocator, relative: []const u8) ![]u8 {
     return std.fs.path.join(a, &.{ paths.project_root, relative });
 }
 
-fn fileExists(io: std.Io, path: []const u8) !bool {
+fn fileSize(io: std.Io, path: []const u8) !?u64 {
     var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return false,
+        error.FileNotFound => return null,
         else => return err,
     };
-    file.close(io);
-    return true;
+    defer file.close(io);
+    return (try file.stat(io)).size;
 }
+
+const modules_per_object: usize = 64;
+const large_ir_threshold: u64 = 4 * 1024 * 1024;
+
+fn irOptimization(size: u64) []const u8 {
+    return if (size >= large_ir_threshold) "-O0" else "-O3";
+}
+
 const CompileJob = struct {
     child: std.process.Child,
-    index: usize,
+    first_index: usize,
+    last_index: usize,
 };
 
 fn waitCompile(io: std.Io, job: *?CompileJob) !void {
     if (job.*) |*active| {
         const term = try active.child.wait(io);
-        const index = active.index;
+        const first_index = active.first_index;
+        const last_index = active.last_index;
         job.* = null;
         if (term != .exited or term.exited != 0) {
-            std.debug.print("dictionary build failed compiling LLVM module {d}; incomplete marker retained\n", .{index});
+            std.debug.print(
+                "dictionary build failed compiling LLVM modules {d}-{d}; incomplete marker retained\n",
+                .{ first_index, last_index },
+            );
             return error.PipelineStageFailed;
         }
     }
@@ -48,34 +61,62 @@ fn compileLlModules(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_d
     var objects: std.ArrayList([]const u8) = .empty;
     var jobs: [2]?CompileJob = .{ null, null };
     errdefer for (&jobs) |*job| if (job.*) |*active| active.child.kill(io);
+
     var index: usize = 0;
-    while (true) : (index += 1) {
-        const source = try std.fmt.allocPrint(a, "{s}/module_{d:0>6}.ll", .{ llvm_dir, index });
-        if (!try fileExists(io, source)) break;
-        const object = try std.fmt.allocPrint(a, "{s}/module_{d:0>6}.o", .{ llvm_dir, index });
+    var batch_index: usize = 0;
+    while (true) : (batch_index += 1) {
+        const first_source = try std.fmt.allocPrint(a, "{s}/module_{d:0>6}.ll", .{ llvm_dir, index });
+        const first_size = (try fileSize(io, first_source)) orelse break;
+        const optimize = irOptimization(first_size);
+
+        const first_index = index;
+        var argv: std.ArrayList([]const u8) = .empty;
+        errdefer argv.deinit(a);
+        try argv.appendSlice(a, &.{ paths.zig, "cc", optimize, "-c" });
+        if (first_size >= large_ir_threshold) {
+            try argv.append(a, first_source);
+            index += 1;
+        } else {
+            var batch_len: usize = 0;
+            while (batch_len < modules_per_object) : (batch_len += 1) {
+                const source = try std.fmt.allocPrint(a, "{s}/module_{d:0>6}.ll", .{ llvm_dir, index });
+                const size = (try fileSize(io, source)) orelse break;
+                if (size >= large_ir_threshold) break;
+                try argv.append(a, source);
+                index += 1;
+            }
+        }
+        const last_index = index - 1;
+        const object = try std.fmt.allocPrint(a, "{s}/module_batch_{d:0>6}.o", .{ llvm_dir, batch_index });
+        try argv.appendSlice(a, &.{ "-o", object });
         try objects.append(a, object);
-        const slot = index % jobs.len;
+
+        const slot = batch_index % jobs.len;
         try waitCompile(io, &jobs[slot]);
-        std.debug.print("dictionary build: compile LLVM module {d}\n", .{index});
+        std.debug.print("dictionary build: compile LLVM modules {d}-{d} ({s})\n", .{ first_index, last_index, optimize });
+        const child = try std.process.spawn(io, .{ .argv = argv.items, .stdin = .ignore });
+        argv.deinit(a);
         jobs[slot] = .{
-            .child = try std.process.spawn(io, .{
-                .argv = &.{ paths.zig, "cc", "-O3", "-c", source, "-o", object },
-                .stdin = .ignore,
-            }),
-            .index = index,
+            .child = child,
+            .first_index = first_index,
+            .last_index = last_index,
         };
     }
     if (objects.items.len == 0) return error.MissingLlvmModules;
     for (&jobs) |*job| try waitCompile(io, job);
 
     const program_source = try std.fs.path.join(a, &.{ llvm_dir, "program.ll" });
+    const program_size = (try fileSize(io, program_source)) orelse return error.MissingLlvmProgram;
     const program_object = try std.fs.path.join(a, &.{ llvm_dir, "program.o" });
-    try stage(io, marker, "compile LLVM program metadata", &.{
-        paths.zig, "cc", "-O3", "-c", program_source, "-o", program_object,
+    const program_optimize = irOptimization(program_size);
+    const program_stage = try std.fmt.allocPrint(a, "compile LLVM program metadata ({s})", .{program_optimize});
+    try stage(io, marker, program_stage, &.{
+        paths.zig, "cc", program_optimize, "-c", program_source, "-o", program_object,
     });
     try objects.append(a, program_object);
     return objects;
 }
+
 fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_dir: []const u8) ![]const u8 {
     const worker_core = try sourcePath(a, "src/lua/bundle_worker.zig");
     const zig_runtime = try sourcePath(a, "src/lua/runtime/core.zig");

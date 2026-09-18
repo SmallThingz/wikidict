@@ -118,7 +118,7 @@ zig build compile-lua -- \
   data/runtime/llvm
 ```
 
-`src/lua/direct/` analyzes the AST and emits LLVM IR directly. `src/lua/abi/` contains small stable slot/layout contracts, while `src/lua/runtime/` provides Zig runtime primitives through a C ABI. Bundle builds compile the emitted IR directly to optimized native objects with `zig cc -O3` and link the transient expander normally with Zig's bundled LLD. These compiler artifacts are transient and are deleted before publication.
+`src/lua/direct/` analyzes the AST and emits LLVM IR directly. `src/lua/abi/` contains small stable slot/layout contracts, while `src/lua/runtime/` provides Zig runtime primitives through a C ABI. Bundle builds compile emitted module IR directly to native objects and link the transient expander normally with Zig's bundled LLD. Ordinary module IR is compiled in bounded `-O3` batches; generated IR at or above 4 MiB, including large program metadata, uses `-O0` to avoid pathological optimizer cost. No LTO is used. These compiler artifacts are transient and are deleted before publication.
 
 ## Blob storage and XZ
 
