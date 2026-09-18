@@ -79,15 +79,20 @@ const Encoder = struct {
     fn span(self: *Encoder, value: anytype) !void {
         const kind = try enumByteValue(types.InlineKind, value.kind);
         const role = try enumByteValue(types.Role, value.role);
-        var flags: u8 = 0;
-        if (value.bold) flags |= 1 << 0;
-        if (value.italic) flags |= 1 << 1;
-        if (value.code) flags |= 1 << 2;
-        if (value.small) flags |= 1 << 3;
-        if (value.superscript) flags |= 1 << 4;
-        if (value.subscript) flags |= 1 << 5;
-        if (value.strike) flags |= 1 << 6;
-        if (value.underline) flags |= 1 << 7;
+        const flags: u8 = if (comptime @hasField(@TypeOf(value), "flags"))
+            @bitCast(value.flags)
+        else blk: {
+            var result: u8 = 0;
+            if (value.bold) result |= 1 << 0;
+            if (value.italic) result |= 1 << 1;
+            if (value.code) result |= 1 << 2;
+            if (value.small) result |= 1 << 3;
+            if (value.superscript) result |= 1 << 4;
+            if (value.subscript) result |= 1 << 5;
+            if (value.strike) result |= 1 << 6;
+            if (value.underline) result |= 1 << 7;
+            break :blk result;
+        };
         const trail: []const u8 = if (comptime @hasField(@TypeOf(value), "trail")) value.trail else "";
         const strings = [_][]const u8{ value.text, value.target, trail, value.language, value.classes, value.direction };
         var encoded_len: usize = 3 + strings.len * @sizeOf(u32);

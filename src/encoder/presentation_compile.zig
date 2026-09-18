@@ -27,13 +27,7 @@ pub const Style = struct {
     underline: bool = false,
     role: Role = .normal,
 };
-pub const Span = struct {
-    kind: ir.InlineKind = .text,
-    text: []const u8,
-    target: []const u8 = "",
-    language: []const u8 = "",
-    classes: []const u8 = "",
-    direction: []const u8 = "",
+pub const SpanFlags = packed struct(u8) {
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -42,6 +36,15 @@ pub const Span = struct {
     subscript: bool = false,
     strike: bool = false,
     underline: bool = false,
+};
+pub const Span = struct {
+    kind: ir.InlineKind = .text,
+    text: []const u8,
+    target: []const u8 = "",
+    language: []const u8 = "",
+    classes: []const u8 = "",
+    direction: []const u8 = "",
+    flags: SpanFlags = .{},
     role: Role = .normal,
 };
 pub const Feature = struct { kind: []const u8, language: []const u8 = "", data: []const u8 = "", tail_kind: []const u8 = "none", tail: []const u8 = "" };
@@ -165,7 +168,7 @@ pub const Renderer = struct {
             }
             return;
         }
-        try self.spans.append(self.a, .{ .kind = s.kind, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline, .role = s.role });
+        try self.spans.append(self.a, .{ .kind = s.kind, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .flags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline }, .role = s.role });
     }
     pub fn lineBreak(self: *Renderer, s: Style) Error!void {
         var style = s;
@@ -475,11 +478,11 @@ pub const Renderer = struct {
             return input.len;
         }
         const known = oneOf(tag.name, &.{
-            "b", "strong", "i", "em", "u", "s", "del", "strike", "ins", "sup", "sub", "small", "big",
-            "span", "font", "code", "tt", "kbd", "samp", "var", "cite", "dfn", "abbr", "q", "time", "mark",
-            "bdi", "bdo", "ruby", "rb", "rt", "rp", "wbr", "a", "div", "p", "blockquote", "center",
-            "ul", "ol", "li", "dl", "dt", "dd", "onlyinclude", "includeonly", "noinclude",
-            "table", "tbody", "thead", "tfoot", "tr", "td", "th", "caption",
+            "b",    "strong", "i",       "em", "u",   "s",           "del",         "strike",    "ins",   "sup",   "sub",        "small",  "big",
+            "span", "font",   "code",    "tt", "kbd", "samp",        "var",         "cite",      "dfn",   "abbr",  "q",          "time",   "mark",
+            "bdi",  "bdo",    "ruby",    "rb", "rt",  "rp",          "wbr",         "a",         "div",   "p",     "blockquote", "center", "ul",
+            "ol",   "li",     "dl",      "dt", "dd",  "onlyinclude", "includeonly", "noinclude", "table", "tbody", "thead",      "tfoot",  "tr",
+            "td",   "th",     "caption",
         });
         if (!known) return null;
         if (tag.closing or tag.self_closing) return tag.end;
@@ -502,7 +505,10 @@ pub const Renderer = struct {
             var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n");
             while (tokens.next()) |class| {
                 var safe = class.len != 0;
-                for (class) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) { safe = false; break; };
+                for (class) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) {
+                    safe = false;
+                    break;
+                };
                 if (!safe) continue;
                 if (safe_classes.items.len != 0) try safe_classes.append(self.a, ' ');
                 try safe_classes.appendSlice(self.a, class);
@@ -522,9 +528,7 @@ pub const Renderer = struct {
         }
         if (tag.attr("lang")) |lang| s.language = lang;
         if (tag.attr("dir")) |dir| {
-            if (std.ascii.eqlIgnoreCase(dir, "ltr")) s.direction = "ltr"
-            else if (std.ascii.eqlIgnoreCase(dir, "rtl")) s.direction = "rtl"
-            else if (std.ascii.eqlIgnoreCase(dir, "auto")) s.direction = "auto";
+            if (std.ascii.eqlIgnoreCase(dir, "ltr")) s.direction = "ltr" else if (std.ascii.eqlIgnoreCase(dir, "rtl")) s.direction = "rtl" else if (std.ascii.eqlIgnoreCase(dir, "auto")) s.direction = "auto";
         }
         const content = input[tag.end..pair.inner_end];
         if (tag.is("a")) {
@@ -1060,7 +1064,7 @@ test "renderer protects nowiki decodes entities once and never executes source H
     var both = false;
     for (spans) |s| {
         try std.testing.expect(!starts(s.target, "javascript:"));
-        if (std.mem.eql(u8, s.text, "both")) both = s.bold and s.italic;
+        if (std.mem.eql(u8, s.text, "both")) both = s.flags.bold and s.flags.italic;
     }
     try std.testing.expect(both);
     try std.testing.expect(!safeUrl("https://x\ninvalid"));
@@ -1123,7 +1127,7 @@ test "emphasis template boundaries and nested image captions render without raw 
     var r: Renderer = .{ .a = a, .context = .{} };
     const spans = try r.parseSpans("'''{{m|en|cat}}''' [[File:Cat.jpg|thumb|A [[domestic cat]]]] {{syn|en|kitty<q:rare>}}", .{});
     try std.testing.expectEqualStrings("cat [Image: A domestic cat] Synonyms: kitty (rare)", try flattened(a, spans));
-    try std.testing.expect(spans[0].bold);
+    try std.testing.expect(spans[0].flags.bold);
 }
 test "multitrans produces real blocks and malformed tables retain literal content" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -1166,7 +1170,7 @@ test "compiled template HTML tables retain cells and supplied inflections" {
     const t = blocks[0].table.?;
     try std.testing.expectEqualStrings("Forms", try flattened(a, t.caption));
     try std.testing.expectEqualStrings("mice", try flattened(a, t.rows[1].cells[1].spans));
-    try std.testing.expect(t.rows[1].cells[1].spans[0].bold);
+    try std.testing.expect(t.rows[1].cells[1].spans[0].flags.bold);
     try std.testing.expectEqual(Kind.definition, blocks[1].kind);
 }
 
@@ -1211,7 +1215,7 @@ test "supplied RQ passage is visible without claiming its citation template was 
     try std.testing.expectEqual(ir.InlineKind.template, spans[spans.len - 1].kind);
     try std.testing.expect(std.mem.indexOf(u8, spans[spans.len - 1].text, "page=17") != null);
     var bold_link = false;
-    for (spans) |s| if (s.kind == .link and s.bold and std.mem.eql(u8, s.target, "cat")) {
+    for (spans) |s| if (s.kind == .link and s.flags.bold and std.mem.eql(u8, s.target, "cat")) {
         bold_link = true;
     };
     try std.testing.expect(bold_link);
@@ -1383,7 +1387,7 @@ test "HTML comments and opaque bodies cannot prematurely close an outer element"
     try std.testing.expect(std.mem.indexOf(u8, text_value, "<!--") == null);
     var kept_bold = false;
     for (spans) |span| {
-        if (std.mem.eql(u8, span.text, "kept")) kept_bold = span.bold;
+        if (std.mem.eql(u8, span.text, "kept")) kept_bold = span.flags.bold;
     }
     try std.testing.expect(kept_bold);
 }
@@ -1632,7 +1636,7 @@ test "benign semantic HTML renders content while dangerous HTML stays inert" {
     try std.testing.expect(std.mem.indexOf(u8, text_value, "alert(1)") == null);
     var styled = false;
     for (spans) |span| {
-        if (std.mem.eql(u8, span.text, "cite") and span.italic) styled = true;
+        if (std.mem.eql(u8, span.text, "cite") and span.flags.italic) styled = true;
     }
     try std.testing.expect(styled);
 }
@@ -1819,4 +1823,17 @@ test "default reference numbering stays independent of named groups" {
     try std.testing.expectEqual(@as(usize, 1), refs[1].group_number);
     try std.testing.expectEqual(@as(usize, 2), refs[2].group_number);
     try std.testing.expectEqual(@as(usize, 2), refs[3].group_number);
+}
+
+test "packed compiler span flags preserve DPR2 bit positions" {
+    inline for ([_]struct { flags: SpanFlags, byte: u8 }{
+        .{ .flags = .{ .bold = true }, .byte = 1 << 0 },
+        .{ .flags = .{ .italic = true }, .byte = 1 << 1 },
+        .{ .flags = .{ .code = true }, .byte = 1 << 2 },
+        .{ .flags = .{ .small = true }, .byte = 1 << 3 },
+        .{ .flags = .{ .superscript = true }, .byte = 1 << 4 },
+        .{ .flags = .{ .subscript = true }, .byte = 1 << 5 },
+        .{ .flags = .{ .strike = true }, .byte = 1 << 6 },
+        .{ .flags = .{ .underline = true }, .byte = 1 << 7 },
+    }) |case| try std.testing.expectEqual(case.byte, @as(u8, @bitCast(case.flags)));
 }
