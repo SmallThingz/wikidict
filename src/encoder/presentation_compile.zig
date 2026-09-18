@@ -90,6 +90,24 @@ fn oneOf(name: []const u8, names: []const []const u8) bool {
     for (names) |n| if (std.ascii.eqlIgnoreCase(name, n)) return true;
     return false;
 }
+inline fn referenceStringEqual(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    if (a.len == 0) return true;
+    if (a.len < 4) {
+        const middle = a.len / 2;
+        return ((a[0] ^ b[0]) | (a[a.len - 1] ^ b[b.len - 1]) | (a[middle] ^ b[middle])) == 0;
+    }
+    if (a.len <= 8) {
+        return std.mem.readInt(u32, a[0..4], .little) == std.mem.readInt(u32, b[0..4], .little) and
+            std.mem.readInt(u32, a[a.len - 4 ..][0..4], .little) == std.mem.readInt(u32, b[b.len - 4 ..][0..4], .little);
+    }
+    if (a.len <= 16) {
+        return std.mem.readInt(u64, a[0..8], .little) == std.mem.readInt(u64, b[0..8], .little) and
+            std.mem.readInt(u64, a[a.len - 8 ..][0..8], .little) == std.mem.readInt(u64, b[b.len - 8 ..][0..8], .little);
+    }
+    return std.mem.eql(u8, a, b);
+}
+
 fn pipeTrickLabel(target: []const u8) []const u8 {
     // MediaWiki's pre-save pipe trick is intentionally syntactic: the first
     // colon prefix is removed even when it is not a registered namespace. It
@@ -241,8 +259,10 @@ pub const Renderer = struct {
         try self.inlineText(label, s, depth + 1);
     }
     fn referenceIndex(self: *Renderer, name: []const u8, group: []const u8, body: []const u8) Error!?usize {
+        const use_short_name_compare = self.refs.items.len >= 16;
         if (name.len != 0) for (self.refs.items, 0..) |*ref, i| {
-            if (!std.mem.eql(u8, ref.name, name) or !std.mem.eql(u8, ref.group, group)) continue;
+            const same_name = if (use_short_name_compare) referenceStringEqual(ref.name, name) else std.mem.eql(u8, ref.name, name);
+            if (!same_name or !std.mem.eql(u8, ref.group, group)) continue;
             if (ref.body.len == 0 and body.len != 0) ref.body = body;
             return i;
         };
@@ -1039,6 +1059,19 @@ fn flattened(a: A, spans: []const Span) ![]u8 {
     for (spans) |s| try out.appendSlice(a, s.text);
     return out.toOwnedSlice(a);
 }
+test "reference identity fast paths remain exact" {
+    try std.testing.expect(referenceStringEqual("", ""));
+    try std.testing.expect(referenceStringEqual("r7", "r7"));
+    try std.testing.expect(!referenceStringEqual("r7", "r8"));
+    try std.testing.expect(referenceStringEqual("abc", "abc"));
+    try std.testing.expect(!referenceStringEqual("abc", "abd"));
+    try std.testing.expect(referenceStringEqual("abcdefgh", "abcdefgh"));
+    try std.testing.expect(!referenceStringEqual("abcdefgh", "abcdxfgh"));
+    try std.testing.expect(referenceStringEqual("abcdefghijklmnop", "abcdefghijklmnop"));
+    try std.testing.expect(!referenceStringEqual("abcdefghijklmnop", "abcdefxhijklmnop"));
+    try std.testing.expect(!referenceStringEqual("same", "same!"));
+}
+
 test "renderer resolves Wiktionary definitions links labels and multiline quotations" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
