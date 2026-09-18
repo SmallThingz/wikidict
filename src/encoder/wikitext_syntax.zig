@@ -218,7 +218,36 @@ pub fn logicalEnd(text: []const u8, start: usize) usize {
     }
     return i;
 }
+fn delimiterByte(text: []const u8, needle: u8, start: usize) ?usize {
+    const interesting = [_]u8{ needle, '<', '{', '[' };
+    var i = start;
+    while (i < text.len) {
+        const relative = std.mem.indexOfAny(u8, text[i..], &interesting) orelse return null;
+        i += relative;
+        if (text[i] == needle) return i;
+        if (text[i] == '<') {
+            if (protectedEnd(text, i)) |end| {
+                i = end;
+                continue;
+            }
+            if (tagAt(text, i)) |tag| {
+                i = tag.end;
+                continue;
+            }
+        }
+        if (starts(text[i..], "{{") or starts(text[i..], "[[")) {
+            if (balanced(text, i)) |pair| {
+                i = pair.end;
+                continue;
+            }
+            return null;
+        }
+        i += 1;
+    }
+    return null;
+}
 pub fn delimiter(text: []const u8, needle: []const u8, start: usize) ?usize {
+    if (needle.len == 1) return delimiterByte(text, needle[0], start);
     var i = start;
     while (i < text.len) {
         if (starts(text[i..], needle)) return i;
@@ -347,6 +376,13 @@ test "template arguments scale to real Wiktionary columns while remaining bounde
     defer a.free(sparse.params);
     try std.testing.expectEqualStrings("override", sparse.get(2));
     try std.testing.expectEqualStrings("last", sparse.get(999_999_999));
+}
+
+test "single-byte delimiter jump scan preserves structural skipping" {
+    try std.testing.expectEqual(@as(?usize, 8), delimiter("a{{x|y}}|z", "|", 0));
+    const protected = "<nowiki>|</nowiki>|tail";
+    try std.testing.expectEqual(std.mem.lastIndexOfScalar(u8, protected, '|'), delimiter(protected, "|", 0));
+    try std.testing.expectEqual(@as(?usize, 1), delimiter("a||b", "||", 0));
 }
 
 test "opaque extension bodies never split template arguments" {
