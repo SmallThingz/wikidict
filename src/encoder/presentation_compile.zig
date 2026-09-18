@@ -129,12 +129,27 @@ pub fn safeUrl(url: []const u8) bool {
     return true;
 }
 fn safeInternalTarget(target: []const u8) bool {
+    var has_non_ascii = false;
+    for (target) |ch| {
+        if (ch < 32 or ch == 127) return false;
+        has_non_ascii = has_non_ascii or ch >= 128;
+    }
+    if (!has_non_ascii) return true;
     if (!std.unicode.utf8ValidateSlice(target)) return false;
     var view = std.unicode.Utf8View.initUnchecked(target);
     var it = view.iterator();
-    while (it.nextCodepoint()) |cp| if (cp < 32 or (cp >= 0x7f and cp <= 0x9f)) return false;
+    while (it.nextCodepoint()) |cp| if (cp >= 0x80 and cp <= 0x9f) return false;
     return true;
 }
+test "safe internal target ASCII fast path preserves Unicode and control checks" {
+    try std.testing.expect(safeInternalTarget("cat#section"));
+    try std.testing.expect(safeInternalTarget("caf\xc3\xa9"));
+    try std.testing.expect(safeInternalTarget("cat \xf0\x9f\x90\x88"));
+    try std.testing.expect(!safeInternalTarget("cat\x7f"));
+    try std.testing.expect(!safeInternalTarget("cat\xc2\x85"));
+    try std.testing.expect(!safeInternalTarget("cat\xff"));
+}
+
 /// The caller uses an arena for a page; returned arrays/text share its lifetime.
 pub const Renderer = struct {
     a: A,
