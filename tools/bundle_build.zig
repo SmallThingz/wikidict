@@ -123,20 +123,38 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     return output;
 }
 
+fn appendResponseArg(out: *std.ArrayList(u8), a: std.mem.Allocator, arg: []const u8) !void {
+    try out.append(a, '"');
+    for (arg) |byte| {
+        if (byte == '\\' or byte == '"') try out.append(a, '\\');
+        try out.append(a, byte);
+    }
+    try out.appendSlice(a, "\"\n");
+}
+
+fn writeResponseFile(io: std.Io, a: std.mem.Allocator, path: []const u8, args: []const []const u8) !void {
+    var data: std.ArrayList(u8) = .empty;
+    defer data.deinit(a);
+    for (args) |arg| try appendResponseArg(&data, a, arg);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = data.items });
+}
+
 fn linkNativeWorker(
     io: std.Io,
     a: std.mem.Allocator,
     marker: []const u8,
+    llvm_dir: []const u8,
     main_c: []const u8,
     worker: []const u8,
     lua_objects: []const []const u8,
     output: []const u8,
 ) !void {
-    var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(a, &.{ paths.zig, "cc", "-O3", "-pthread", "-s", main_c, worker });
-    try argv.appendSlice(a, lua_objects);
-    try argv.appendSlice(a, &.{ "-lm", "-lc", "-o", output });
-    try stage(io, marker, "link optimized native Lua worker", argv.items);
+    const response_path = try std.fs.path.join(a, &.{ llvm_dir, "module-objects.rsp" });
+    try writeResponseFile(io, a, response_path, lua_objects);
+    const response_arg = try std.fmt.allocPrint(a, "@{s}", .{response_path});
+    try stage(io, marker, "link optimized native Lua worker", &.{
+        paths.zig, "cc", "-O3", "-pthread", "-s", main_c, worker, response_arg, "-lm", "-lc", "-o", output,
+    });
 }
 
 fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, publish_root: []const u8, llvm_dir: []const u8) !void {
@@ -144,7 +162,7 @@ fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, pub
     const worker = try compileWorkerObject(io, a, marker, llvm_dir);
     const main_c = try sourcePath(a, "src/lua/bundle_worker_main.c");
     const output = try std.fs.path.join(a, &.{ publish_root, "dict-bundle-expander" });
-    try linkNativeWorker(io, a, marker, main_c, worker, lua_objects.items, output);
+    try linkNativeWorker(io, a, marker, llvm_dir, main_c, worker, lua_objects.items, output);
 }
 
 pub fn main(init: std.process.Init) !void {
