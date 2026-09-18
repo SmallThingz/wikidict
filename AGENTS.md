@@ -38,7 +38,7 @@
 - Use Zig primitives behind a C ABI for general hash maps, allocation, Unicode, patterns, host APIs, and other complex services; do not reimplement them in LLVM IR.
 - Program/corpus metadata should be immutable and process-lifetime during bundling. Page state must be explicit and local; do not rebuild/reset a global execution environment per operation when state can be split into static program data plus page-local mutation.
 - Constant module/name lookups should compile to IDs/direct references where semantics prove them; otherwise generated static tables/binary search are preferred to startup-built hash maps.
-- Compile generated IR to LLVM bitcode with `zig cc -flto=thin`. Final linking uses Zig's bundled `ld.lld` with an explicit bounded ThinLTO/thread job count so the memory limit is real.
+- Compile generated IR directly to optimized native objects with `zig cc -O3` and link the transient expander normally with Zig/LLD. Do not use LTO/ThinLTO for the corpus-wide expander; its measured whole-program link cost is not worth the build-time penalty.
 - Optimize total dictionary build time plus shipped-reader execution time. Code/binary/blob size is secondary unless it materially affects those times or operational limits.
 - String interning/deduplication, compression, canonicalization, or compact encodings are not goals by themselves. Remove or weaken them when measured compile+run time improves and correctness/operational limits remain acceptable.
 - Profile before retaining performance work. Reject changes that reduce instructions or size but regress measured cycles/task time on representative workloads.

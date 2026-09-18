@@ -52,14 +52,14 @@ fn compileLlModules(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_d
     while (true) : (index += 1) {
         const source = try std.fmt.allocPrint(a, "{s}/module_{d:0>6}.ll", .{ llvm_dir, index });
         if (!try fileExists(io, source)) break;
-        const object = try std.fmt.allocPrint(a, "{s}/module_{d:0>6}.bc", .{ llvm_dir, index });
+        const object = try std.fmt.allocPrint(a, "{s}/module_{d:0>6}.o", .{ llvm_dir, index });
         try objects.append(a, object);
         const slot = index % jobs.len;
         try waitCompile(io, &jobs[slot]);
         std.debug.print("dictionary build: compile LLVM module {d}\n", .{index});
         jobs[slot] = .{
             .child = try std.process.spawn(io, .{
-                .argv = &.{ paths.zig, "cc", "-O3", "-flto=thin", "-c", source, "-o", object },
+                .argv = &.{ paths.zig, "cc", "-O3", "-c", source, "-o", object },
                 .stdin = .ignore,
             }),
             .index = index,
@@ -69,14 +69,14 @@ fn compileLlModules(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_d
     for (&jobs) |*job| try waitCompile(io, job);
 
     const program_source = try std.fs.path.join(a, &.{ llvm_dir, "program.ll" });
-    const program_object = try std.fs.path.join(a, &.{ llvm_dir, "program.bc" });
+    const program_object = try std.fs.path.join(a, &.{ llvm_dir, "program.o" });
     try stage(io, marker, "compile LLVM program metadata", &.{
-        paths.zig, "cc", "-O3", "-flto=thin", "-c", program_source, "-o", program_object,
+        paths.zig, "cc", "-O3", "-c", program_source, "-o", program_object,
     });
     try objects.append(a, program_object);
     return objects;
 }
-fn compileWorkerBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_dir: []const u8) ![]const u8 {
+fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_dir: []const u8) ![]const u8 {
     const worker_core = try sourcePath(a, "src/lua/bundle_worker.zig");
     const zig_runtime = try sourcePath(a, "src/lua/runtime/core.zig");
     const lua_program = try sourcePath(a, "src/lua/runtime/llvm_program.zig");
@@ -88,7 +88,7 @@ fn compileWorkerBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, ll
     const preprocess = try sourcePath(a, "src/lua/wikitext/preprocess.zig");
     const expression = try sourcePath(a, "src/lua/wikitext/expression.zig");
     const shared_xml_decode = try sourcePath(a, "src/shared/xml_decode.zig");
-    const output = try std.fs.path.join(a, &.{ llvm_dir, "worker.bc" });
+    const output = try std.fs.path.join(a, &.{ llvm_dir, "worker.o" });
     const emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{output});
     const root = try std.fmt.allocPrint(a, "-Mroot={s}", .{worker_core});
     const runtime_mod = try std.fmt.allocPrint(a, "-Mzig_runtime={s}", .{zig_runtime});
@@ -103,7 +103,7 @@ fn compileWorkerBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, ll
     const xml_decode_mod = try std.fmt.allocPrint(a, "-Mshared_xml_decode={s}", .{shared_xml_decode});
 
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-flto", "-lc", emit });
+    try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-lc", emit });
     try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", "--dep", "shared_xml_decode", "--dep", "lua_wikitext_preprocess", root });
     try argv.appendSlice(a, &.{
         "--dep",                   "lua_static_fields",       runtime_mod,
@@ -116,76 +116,35 @@ fn compileWorkerBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, ll
         "zig_runtime",             "--dep",                   "zig_stdlib",
         "--dep",                   "lua_wikitext_preprocess", "--dep",
         "lua_wikitext_expression", "--dep",                   "shared_xml_decode",
-        scribunto_mod,             static_fields_mod,
-        globals_mod,               preprocess_mod,            expression_mod,
-        xml_decode_mod,
+        scribunto_mod,             static_fields_mod,         globals_mod,
+        preprocess_mod,            expression_mod,            xml_decode_mod,
     });
-    try stage(io, marker, "compile build-only Lua worker to LLVM bitcode", argv.items);
+    try stage(io, marker, "compile optimized build-only Lua worker object", argv.items);
     return output;
 }
 
-fn thinLtoLink(
+fn linkNativeWorker(
     io: std.Io,
     a: std.mem.Allocator,
     marker: []const u8,
-    llvm_dir: []const u8,
     main_c: []const u8,
     worker: []const u8,
     lua_objects: []const []const u8,
     output: []const u8,
 ) !void {
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "discover ThinLTO linker recipe" });
-    const probe = try std.fs.path.join(a, &.{ llvm_dir, "link-probe" });
-    const result = try std.process.run(a, io, .{
-        .argv = &.{ paths.zig, "cc", "-v", "-O3", "-flto=thin", "-pthread", "-s", main_c, "-lm", "-lc", "-o", probe },
-        .stdout_limit = .limited(1024 * 1024),
-        .stderr_limit = .limited(8 * 1024 * 1024),
-    });
-
-    var recipe: ?[]const u8 = null;
-    var lines = std.mem.splitScalar(u8, result.stderr, '\n');
-    while (lines.next()) |line| {
-        if (std.mem.startsWith(u8, line, "ld.lld ")) recipe = line["ld.lld ".len..];
-    }
-    const raw = recipe orelse {
-        std.debug.print("unable to discover Zig LLD recipe:\n{s}\n", .{result.stderr});
-        return error.MissingLldRecipe;
-    };
-
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(a, &.{ paths.zig, "ld.lld", "--thinlto-jobs=2", "--threads=2" });
-    var tokens = std.mem.splitScalar(u8, raw, ' ');
-    var replace_output = false;
-    var inserted = false;
-    while (tokens.next()) |token| {
-        if (token.len == 0) continue;
-        if (replace_output) {
-            try argv.append(a, output);
-            replace_output = false;
-            continue;
-        }
-        if (std.mem.eql(u8, token, "-o")) {
-            try argv.append(a, token);
-            replace_output = true;
-            continue;
-        }
-        if (!inserted and std.mem.eql(u8, token, "--as-needed")) {
-            try argv.append(a, worker);
-            try argv.appendSlice(a, lua_objects);
-            inserted = true;
-        }
-        try argv.append(a, token);
-    }
-    if (replace_output or !inserted) return error.InvalidLldRecipe;
-    try stage(io, marker, "ThinLTO link native Lua worker (2 jobs)", argv.items);
+    try argv.appendSlice(a, &.{ paths.zig, "cc", "-O3", "-pthread", "-s", main_c, worker });
+    try argv.appendSlice(a, lua_objects);
+    try argv.appendSlice(a, &.{ "-lm", "-lc", "-o", output });
+    try stage(io, marker, "link optimized native Lua worker", argv.items);
 }
 
 fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, publish_root: []const u8, llvm_dir: []const u8) !void {
     const lua_objects = try compileLlModules(io, a, marker, llvm_dir);
-    const worker = try compileWorkerBitcode(io, a, marker, llvm_dir);
+    const worker = try compileWorkerObject(io, a, marker, llvm_dir);
     const main_c = try sourcePath(a, "src/lua/bundle_worker_main.c");
     const output = try std.fs.path.join(a, &.{ publish_root, "dict-bundle-expander" });
-    try thinLtoLink(io, a, marker, llvm_dir, main_c, worker, lua_objects.items, output);
+    try linkNativeWorker(io, a, marker, main_c, worker, lua_objects.items, output);
 }
 
 pub fn main(init: std.process.Init) !void {

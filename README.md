@@ -54,7 +54,7 @@ The coordinated pipeline:
 
 1. extracts Scribunto modules and module redirects into a transient build directory;
 2. indexes raw dump page ranges for page-sensitive MediaWiki/Scribunto title lookups, then parses the Lua corpus and emits LLVM IR directly from the AST;
-3. compiles module/support bitcode and ThinLTO-links a bounded-concurrency transient expander;
+3. compiles module/support code to optimized native objects and normally links a transient expander;
 4. expands every bundled page with its concrete title/frame context;
 5. compiles the expanded wikitext into self-contained semantic presentation records;
 6. emits data-only `WIKBLB08` blobs and deletes the entire transient expander directory.
@@ -118,7 +118,7 @@ zig build compile-lua -- \
   data/runtime/llvm
 ```
 
-`src/lua/direct/` analyzes the AST and emits LLVM IR directly. `src/lua/abi/` contains small stable slot/layout contracts, while `src/lua/runtime/` provides Zig runtime primitives through a C ABI. Bundle builds compile the emitted IR with `zig cc -flto=thin` and perform a bounded ThinLTO link with Zig's bundled LLD. These compiler artifacts are transient and are deleted before publication.
+`src/lua/direct/` analyzes the AST and emits LLVM IR directly. `src/lua/abi/` contains small stable slot/layout contracts, while `src/lua/runtime/` provides Zig runtime primitives through a C ABI. Bundle builds compile the emitted IR directly to optimized native objects with `zig cc -O3` and link the transient expander normally with Zig's bundled LLD. These compiler artifacts are transient and are deleted before publication.
 
 ## Blob storage and XZ
 
