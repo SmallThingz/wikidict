@@ -330,6 +330,39 @@ fn analyzeManifest(
         var chunk = try lua.parse(sa, source);
         const module_index: u32 = @intCast(records.items.len);
 
+        try shape_registry.collect(module_index, chunk.body);
+        if (static_encode.rootLiteral(chunk.body)) |literal| {
+            var table_shapes = try shape_registry.moduleFacts(sa, module_index);
+            defer table_shapes.deinit(sa);
+            const blob = try static_encode.encode(sa, literal, &table_shapes);
+            const export_shape_id: ?u32 = switch (literal.*) {
+                .table => |table_expr| if (table_shapes.get(table_expr.span.start)) |fact| fact.id else null,
+                .paren => |paren| switch (paren.expr.*) {
+                    .table => |table_expr| if (table_shapes.get(table_expr.span.start)) |fact| fact.id else null,
+                    else => null,
+                },
+                else => null,
+            };
+            try records.append(a, .{
+                .title = try a.dupe(u8, row.title),
+                .path = try a.dupe(u8, row.path),
+                .source_bytes = row.bytes,
+                .source_index = module_index,
+                .function_base = function_base,
+                .function_count = 1,
+                .root_function = function_base,
+                .export_shape_id = export_shape_id,
+                .root_pure = true,
+                .root_bootstrap_safe = true,
+                .static_root = true,
+                .static_root_blob = try a.dupe(u8, blob),
+            });
+            function_base = std.math.add(u32, function_base, 1) catch return error.TooManyFunctions;
+            chunk.deinit();
+            _ = scratch.reset(.retain_capacity);
+            continue;
+        }
+
         var static_requires: std.ArrayList([]const u8) = .empty;
         var static_load_data: std.ArrayList([]const u8) = .empty;
         const dynamic_module_load = try usage.collectModuleLoadsDetailed(
@@ -350,7 +383,6 @@ fn analyzeManifest(
             });
         }
 
-        try shape_registry.collect(module_index, chunk.body);
         var model = module_model.Builder{ .allocator = sa, .source = chunk.source };
         try model.build(chunk.body);
         var export_shape_id: ?u32 = null;
@@ -415,7 +447,6 @@ fn analyzeManifest(
             .root_bootstrap_safe = model.root_bootstrap_safe,
             .root_requires = root_requires,
             .direct_exports = try direct_exports.toOwnedSlice(a),
-            .static_root = static_encode.rootLiteral(chunk.body) != null,
         });
         function_base = std.math.add(u32, function_base, count) catch return error.TooManyFunctions;
         module.deinit();
@@ -717,7 +748,6 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &globals,
         &shape_registry,
         &selected_module_ids,
-        source_root,
     );
     std.debug.print("LLVM_DONE modules={d} globals={d}\n", .{ selected_records.items.len, globals.names.items.len });
 }
