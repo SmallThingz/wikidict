@@ -24,6 +24,7 @@ const NamedModuleEdge = struct {
 const FunctionAnalysisStats = struct {
     functions: usize = 0,
     dead: usize = 0,
+    pure_data_roots: usize = 0,
 };
 
 fn readAll(io: std.Io, a: A, path: []const u8) ![]u8 {
@@ -355,6 +356,29 @@ fn analyzeManifest(
                 .static_root = true,
                 .static_root_blob = try a.dupe(u8, blob),
             });
+            try dead_functions_by_module.append(a, 0);
+            function_base = std.math.add(u32, function_base, 1) catch return error.TooManyFunctions;
+            chunk.deinit();
+            _ = scratch.reset(.retain_capacity);
+            continue;
+        }
+
+        if (try static_encode.encodePureDataRoot(sa, chunk.body, shape_registry, module_index)) |evaluated| {
+            try records.append(a, .{
+                .title = try a.dupe(u8, row.title),
+                .path = try a.dupe(u8, row.path),
+                .source_bytes = row.bytes,
+                .source_index = module_index,
+                .function_base = function_base,
+                .function_count = 1,
+                .root_function = function_base,
+                .export_shape_id = evaluated.export_shape_id,
+                .root_pure = true,
+                .root_bootstrap_safe = true,
+                .static_root = true,
+                .static_root_blob = try a.dupe(u8, evaluated.blob),
+            });
+            function_stats.pure_data_roots += 1;
             try dead_functions_by_module.append(a, 0);
             function_base = std.math.add(u32, function_base, 1) catch return error.TooManyFunctions;
             chunk.deinit();
@@ -725,6 +749,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         function_stats.dead,
         function_stats.functions,
     });
+    std.debug.print("LLVM_PURE_DATA_ROOTS modules={d}\n", .{function_stats.pure_data_roots});
     var synth_root_count: usize = 0;
     for (records) |record| synth_root_count += @intFromBool(record.synth_root);
     std.debug.print("LLVM_SYNTH_ROOTS modules={d}\n", .{synth_root_count});
