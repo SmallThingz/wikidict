@@ -847,7 +847,8 @@ test "eager pristine module export bypasses field lookup on direct branch" {
     const ir = try generated.toText(std.testing.allocator);
     defer std.testing.allocator.free(ir);
 
-    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_module_export_pristine") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_defer_require_module_ref") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_module_export_pristine") == null);
     const start = std.mem.indexOf(u8, ir, "pristine_export_multi:") orelse return error.MissingPristineExportBlock;
     const rest = ir[start..];
     const end = std.mem.indexOf(u8, rest, "pristine_export_multi_fallback:") orelse rest.len;

@@ -97,7 +97,7 @@ const StaticFunctionRef = struct {
 const StaticModuleRef = struct {
     module_id: u32,
     value: V,
-    no_lookup_export: bool = false,
+    pristine_ptr: ?V = null,
 };
 
 const ValueRef = union(enum) {
@@ -168,7 +168,7 @@ const Runtime = struct {
     require_number: V,
     observe_package: V,
     defer_require_module_id: V,
-    module_export_pristine: V,
+    defer_require_module_ref: V,
     arg_ptr: V,
     arg_get: V,
     global_ptr: V,
@@ -235,7 +235,7 @@ const Runtime = struct {
             .require_number = try declare(m, "dict_lua_require_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
             .observe_package = try declare(m, "dict_lua_observe_package", ty.i32, &.{ty.ptr}),
             .defer_require_module_id = try declare(m, "dict_lua_defer_require_module_id", ty.i8, &.{ ty.ptr, ty.i32, ty.ptr }),
-            .module_export_pristine = try declare(m, "dict_lua_module_export_pristine", ty.i8, &.{ ty.ptr, ty.i32 }),
+            .defer_require_module_ref = try declare(m, "dict_lua_defer_require_module_ref", ty.ptr, &.{ ty.ptr, ty.i32, ty.ptr }),
             .arg_ptr = try declare(m, "dict_lua_arg_ptr", ty.ptr, &.{ ty.ptr, ty.i64, ty.i64 }),
             .arg_get = try declare(m, "dict_lua_arg_get", ty.void, &.{ ty.ptr, ty.i64, ty.i64, ty.ptr }),
             .global_ptr = try declare(m, "dict_lua_global_ptr", ty.ptr, &.{ ty.ptr, ty.i32 }),
@@ -1195,11 +1195,7 @@ const FnEmitter = struct {
             },
             .paren => |paren| self.staticModuleExpr(paren.expr),
             .call => |call| if (try self.staticRequire(call.callee, null, call.args)) |request|
-                .{
-                    .module_id = request.module_id,
-                    .value = try self.directRequireValue(request),
-                    .no_lookup_export = self.module.facts.canDeferRequire(request.module_id, request.requested.bytes),
-                }
+                try self.directStaticModuleRequire(request)
             else
                 null,
             else => null,
@@ -1220,19 +1216,30 @@ const FnEmitter = struct {
                 const module = (try self.staticModuleExpr(index.object)) orelse break :blk null;
                 const export_fact = self.module.facts.exportFunction(module.module_id, field) orelse break :blk null;
 
-                if (export_fact.capture_count == 0 and module.no_lookup_export) {
-                    const pristine_raw = try llvm.call(self.builder, self.rt().module_export_pristine, &.{
-                        self.ctx(), try self.cI32(module.module_id),
-                    });
-                    const pristine = try llvm.icmp(self.builder, .ne, pristine_raw, try self.cI8(0));
+                if (export_fact.capture_count == 0) if (module.pristine_ptr) |sentinel| {
+                    const direct_slot = try self.nativeBoolSlot();
+                    try llvm.store(self.builder, try llvm.constInt(self.ty().i1, 0), direct_slot, 1);
+                    const check_block = try self.newBlock("export_callee_check_pristine");
+                    const selected_block = try self.newBlock("export_callee_pristine");
                     const fallback_block = try self.newBlock("export_callee_fallback");
                     const join = try self.newBlock("export_callee_join");
-                    try llvm.condBr(self.builder, pristine, join, fallback_block);
+                    const has_sentinel = try llvm.icmp(self.builder, .ne, sentinel, try self.nullPtr());
+                    try llvm.condBr(self.builder, has_sentinel, check_block, fallback_block);
+
+                    llvm.position(self.builder, check_block);
+                    const pristine_raw = try llvm.load(self.builder, self.ty().i8, sentinel, 1);
+                    const pristine = try llvm.icmp(self.builder, .ne, pristine_raw, try self.cI8(0));
+                    try llvm.condBr(self.builder, pristine, selected_block, fallback_block);
+
+                    llvm.position(self.builder, selected_block);
+                    try llvm.store(self.builder, try llvm.constInt(self.ty().i1, 1), direct_slot, 1);
+                    try llvm.br(self.builder, join);
 
                     llvm.position(self.builder, fallback_block);
                     const live = try self.getField(.{ .boxed = module.value }, field);
                     const callable = try self.box(live);
                     try llvm.br(self.builder, join);
+
                     llvm.position(self.builder, join);
                     break :blk .{
                         .function_id = export_fact.function_id,
@@ -1240,10 +1247,10 @@ const FnEmitter = struct {
                         .captures_ptr = try self.nullPtr(),
                         .captures_len = 0,
                         .direct_captures = null,
-                        .pristine_guard = pristine,
+                        .pristine_guard = try llvm.load(self.builder, self.ty().i1, direct_slot, 1),
                         .guard_callable = callable,
                     };
-                }
+                };
 
                 const live = try self.getField(.{ .boxed = module.value }, field);
                 const callable = try self.box(live);
@@ -1319,6 +1326,34 @@ const FnEmitter = struct {
         const requested = staticString(args_in[0]) orelse return null;
         const module_id = (try self.module.facts.moduleId(self.a(), requested)) orelse return null;
         return .{ .module_id = module_id, .requested = try self.stringRef(requested) };
+    }
+
+    fn directStaticModuleRequire(self: *FnEmitter, request: StaticRequire) anyerror!StaticModuleRef {
+        if (!self.module.facts.canDeferRequire(request.module_id, request.requested.bytes))
+            return .{ .module_id = request.module_id, .value = try self.directRequireValue(request) };
+
+        const loaded = try self.valueSlot();
+        const sentinel = try llvm.call(self.builder, self.rt().defer_require_module_ref, &.{
+            self.ctx(), try self.cI32(request.module_id), loaded,
+        });
+        const fast_block = try self.newBlock("require_ref_prepared");
+        const fallback_block = try self.newBlock("require_ref_fallback");
+        const join = try self.newBlock("require_ref_join");
+        const ready = try llvm.icmp(self.builder, .ne, sentinel, try self.nullPtr());
+        try llvm.condBr(self.builder, ready, fast_block, fallback_block);
+
+        llvm.position(self.builder, fast_block);
+        try llvm.br(self.builder, join);
+
+        llvm.position(self.builder, fallback_block);
+        const status = try llvm.call(self.builder, self.rt().require_module_id, &.{
+            self.ctx(),                           try self.cI32(request.module_id), request.requested.ptr,
+            try self.cI64(request.requested.len), loaded,
+        });
+        try self.check(status);
+        try llvm.br(self.builder, join);
+        llvm.position(self.builder, join);
+        return .{ .module_id = request.module_id, .value = loaded, .pristine_ptr = sentinel };
     }
 
     fn directRequireValue(self: *FnEmitter, request: StaticRequire) anyerror!V {
@@ -1947,16 +1982,8 @@ const FnEmitter = struct {
                     const call = s.values[0].call;
                     if (!binding_info.mutated and !binding_info.captured)
                         if (try self.staticRequire(call.callee, null, call.args)) |request| {
-                            const loaded = try self.directRequireValue(request);
                             const binding = try self.bindName(s.names[0]);
-                            self.storage[binding] = .{ .static_module = .{
-                                .module_id = request.module_id,
-                                .value = loaded,
-                                .no_lookup_export = self.module.facts.canDeferRequire(
-                                    request.module_id,
-                                    request.requested.bytes,
-                                ),
-                            } };
+                            self.storage[binding] = .{ .static_module = try self.directStaticModuleRequire(request) };
                             return false;
                         };
                 }

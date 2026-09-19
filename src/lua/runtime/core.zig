@@ -950,41 +950,39 @@ pub const Context = struct {
 
     pub fn observePackage(self: *Context) !void {
         if (self.package_observable) return;
-        if (self.package_loaded) |loaded| {
-            for (self.module_state_pages, 0..) |page, page_index| if (page) |states| {
-                for (states, 0..) |*state, slot| {
-                    if (!state.deferred_require_visibility) continue;
-                    const module_id_usize = (page_index << module_state_page_shift) | slot;
-                    if (module_id_usize >= self.module_count) break;
-                    const module_id: u32 = @intCast(module_id_usize);
-                    const value = state.value orelse state.preinitialized orelse continue;
-                    const name = self.canonicalModuleName(module_id, null) orelse continue;
-                    try loaded.rawSet(self.allocator, .{ .string = name }, value);
-                    state.deferred_require_visibility = false;
-                }
-            };
-        }
+        for (self.module_state_pages, 0..) |page, page_index| if (page) |states| {
+            for (states, 0..) |*state, slot| {
+                state.export_pristine = false;
+                if (!state.deferred_require_visibility) continue;
+                const module_id_usize = (page_index << module_state_page_shift) | slot;
+                if (module_id_usize >= self.module_count) break;
+                const loaded = self.package_loaded orelse continue;
+                const module_id: u32 = @intCast(module_id_usize);
+                const value = state.value orelse state.preinitialized orelse continue;
+                const name = self.canonicalModuleName(module_id, null) orelse continue;
+                try loaded.rawSet(self.allocator, .{ .string = name }, value);
+                state.deferred_require_visibility = false;
+            }
+        };
         self.package_observable = true;
     }
 
-    pub fn deferStaticRequire(self: *Context, module_id: u32) ?Value {
+    pub fn deferStaticRequireRef(self: *Context, module_id: u32, out: *Value) ?*const bool {
         if (self.package_observable) return null;
         const state = self.moduleState(module_id) orelse return null;
         const value = state.value orelse state.preinitialized orelse return null;
+        const canonical = self.canonicalModuleName(module_id, null) orelse return null;
+        if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = canonical })) |visible|
+            if (!rawEqual(visible, value)) return null;
         if (!self.eager_bootstrap) state.deferred_require_visibility = true;
-        return value;
+        out.* = value;
+        return &state.export_pristine;
     }
 
-    pub fn moduleExportPristine(self: *const Context, module_id: u32) bool {
-        if (self.package_observable) return false;
-        const state = self.moduleStateConst(module_id) orelse return false;
-        if (!state.export_pristine) return false;
-        const value = state.value orelse state.preinitialized orelse return false;
-        if (value != .table) return false;
-        const canonical = self.canonicalModuleName(module_id, null) orelse return false;
-        if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = canonical })) |visible|
-            if (!rawEqual(visible, value)) return false;
-        return true;
+    pub fn deferStaticRequire(self: *Context, module_id: u32) ?Value {
+        var value: Value = undefined;
+        _ = self.deferStaticRequireRef(module_id, &value) orelse return null;
+        return value;
     }
 
     fn canonicalModuleName(self: *const Context, module_id: u32, requested: ?[]const u8) ?[]const u8 {
@@ -1714,10 +1712,44 @@ test "eager module export mutation invalidates pristine direct-call state" {
     const exported = try ctx.newTable();
     try exported.rawSet(ctx.allocator, .{ .string = "run" }, .{ .number = 1 });
     try ctx.preinitializeModule(0, .{ .table = exported }, false);
-    try std.testing.expect(ctx.moduleExportPristine(0));
+    var loaded: Value = undefined;
+    const sentinel = ctx.deferStaticRequireRef(0, &loaded) orelse return error.MissingPreparedModule;
+    try std.testing.expect(loaded == .table and loaded.table == exported);
+    try std.testing.expect(sentinel.*);
 
     try exported.rawSet(ctx.allocator, .{ .string = "other" }, .{ .number = 2 });
-    try std.testing.expect(!ctx.moduleExportPristine(0));
+    try std.testing.expect(!sentinel.*);
+}
+
+test "prepared export sentinel invalidates on package observation and respects loaded override" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 1);
+    defer ctx.deinit();
+    ctx.package_loaded = try ctx.newTable();
+    ctx.configureModules(null, DeferredRequireProbe.lookup, DeferredRequireProbe.name);
+
+    const exported = try ctx.newTable();
+    try ctx.preinitializeModule(0, .{ .table = exported }, false);
+    var loaded: Value = undefined;
+    const sentinel = ctx.deferStaticRequireRef(0, &loaded) orelse return error.MissingPreparedModule;
+    try std.testing.expect(sentinel.*);
+    try ctx.observePackage();
+    try std.testing.expect(!sentinel.*);
+
+    var second = try Context.initProgram(arena.allocator(), 0, 1);
+    defer second.deinit();
+    second.package_loaded = try second.newTable();
+    second.configureModules(null, DeferredRequireProbe.lookup, DeferredRequireProbe.name);
+    const second_export = try second.newTable();
+    try second.preinitializeModule(0, .{ .table = second_export }, false);
+    try second.package_loaded.?.rawSet(
+        second.allocator,
+        .{ .string = "Module:Prepared" },
+        .{ .string = "override" },
+    );
+    var ignored: Value = undefined;
+    try std.testing.expect(second.deferStaticRequireRef(0, &ignored) == null);
 }
 
 test "prepared static require stays hidden until package becomes observable" {
