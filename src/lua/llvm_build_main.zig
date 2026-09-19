@@ -559,7 +559,7 @@ fn emitBatches(
         var selected: std.ArrayList(usize) = .empty;
         defer selected.deinit(a);
         for (modes, records, 0..) |candidate, record, index|
-            if (candidate == mode and !record.static_root) try selected.append(a, index);
+            if (candidate == mode and program.needsLlvmBatch(record)) try selected.append(a, index);
 
         var position: usize = 0;
         var batch_index: usize = 0;
@@ -624,9 +624,15 @@ fn emitBatches(
     }
     try plan.flush();
     var static_roots: usize = 0;
-    for (records) |record| static_roots += @intFromBool(record.static_root);
+    var bodyless_synth_roots: usize = 0;
+    for (records) |record| {
+        static_roots += @intFromBool(record.static_root);
+        bodyless_synth_roots += @intFromBool(record.synth_root and !program.needsLlvmBatch(record));
+    }
     std.debug.print("LLVM_STATIC_ROOTS modules={d} emitted={d}\n", .{ static_roots, emitted });
-    if (emitted + static_roots != records.len) return error.IncompleteLlvmEmission;
+    std.debug.print("LLVM_BODYLESS_SYNTH_ROOTS modules={d}\n", .{bodyless_synth_roots});
+    if (emitted + static_roots + bodyless_synth_roots != records.len)
+        return error.IncompleteLlvmEmission;
 }
 
 fn run(io: std.Io, a: A, args: []const []const u8) !void {
