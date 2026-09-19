@@ -18,6 +18,12 @@ const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
     \\local poison = require('Module:IntegrationPoison')
     \\assert(poison.probe() == 'poison' and type(next) == 'function')
+    \\local saved_next = next
+    \\next = 'local-poison'
+    \\local local_pairs_text = ''
+    \\for k, v in pairs({x = 1}) do local_pairs_text = local_pairs_text .. k .. v end
+    \\assert(local_pairs_text == 'x1' and next == 'local-poison')
+    \\next = saved_next
     \\local large_static = require('Module:IntegrationLargeStatic')
     \\assert(large_static.k129[1] == 129 and large_static.k129[2] == 'v129')
     \\local bit32 = require('bit32')

@@ -701,6 +701,9 @@ pub const Context = struct {
     host: ?*anyopaque = null,
     current_frame: ?*Table = null,
     package_loaded: ?*Table = null,
+    // Lua's base pairs() closes over the builtin next iterator. Rebinding the
+    // global name `next` must not change the iterator returned by pairs().
+    builtin_next: Value = .nil,
     global_table: ?*Table = null,
     root_global_table: ?*Table = null,
     global_env_slot: ?u32 = null,
