@@ -677,8 +677,7 @@ pub const Context = struct {
     program_shapes: []const Shape = &.{},
     module_export_shape_ids: []const u32 = &.{},
     module_root_entries: []const FunctionFn = &.{},
-    module_function_bases: []const u32 = &.{},
-    module_function_counts: []const u32 = &.{},
+    function_module_ids: []const u32 = &.{},
     string_metatable: ?*Table = null,
     last_error: Value = .nil,
     aot_error_name: StableErrorName = .{},
@@ -737,8 +736,7 @@ pub const Context = struct {
         child.program_shapes = self.program_shapes;
         child.module_export_shape_ids = self.module_export_shape_ids;
         child.module_root_entries = self.module_root_entries;
-        child.module_function_bases = self.module_function_bases;
-        child.module_function_counts = self.module_function_counts;
+        child.function_module_ids = self.function_module_ids;
         child.module_lookup_ctx = self.module_lookup_ctx;
         child.module_lookup = self.module_lookup;
         child.module_name = self.module_name;
@@ -925,9 +923,8 @@ pub const Context = struct {
         self.module_requirements = requirements;
     }
 
-    pub fn configureModuleFunctions(self: *Context, bases: []const u32, counts: []const u32) void {
-        self.module_function_bases = bases;
-        self.module_function_counts = counts;
+    pub fn configureFunctionModules(self: *Context, module_ids: []const u32) void {
+        self.function_module_ids = module_ids;
     }
 
     pub fn configureStaticModules(self: *Context, host: ?*const anyopaque, loader: StaticModuleFn) void {
@@ -1050,24 +1047,9 @@ pub const Context = struct {
     }
 
     fn moduleForFunction(self: *const Context, function_id: u32) ?u32 {
-        if (self.module_function_bases.len != self.module_function_counts.len or
-            self.module_function_bases.len != self.module_count)
-            return null;
-        var low: usize = 0;
-        var high = self.module_function_bases.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const base = self.module_function_bases[mid];
-            const end = @as(u64, base) + self.module_function_counts[mid];
-            if (function_id < base) {
-                high = mid;
-            } else if (@as(u64, function_id) >= end) {
-                low = mid + 1;
-            } else {
-                return @intCast(mid);
-            }
-        }
-        return null;
+        if (function_id >= self.function_module_ids.len) return null;
+        const module_id = self.function_module_ids[function_id];
+        return if (module_id < self.module_count) module_id else null;
     }
 
     fn enterModule(self: *Context, module_id: u32) !GlobalScope {
@@ -1898,10 +1880,9 @@ test "module globals are isolated for dynamic and static calls" {
         stabilize(ModuleGlobalIsolationProbe.rootA),
         stabilize(ModuleGlobalIsolationProbe.rootB),
     };
-    const bases = [_]u32{ 0, 2 };
-    const counts = [_]u32{ 2, 2 };
+    const function_modules = [_]u32{ 0, 0, 1, 1 };
     ctx.module_root_entries = &roots;
-    ctx.configureModuleFunctions(&bases, &counts);
+    ctx.configureFunctionModules(&function_modules);
     try bindGlobalTable(&ctx, null, 1);
     try ctx.setGlobal(0, .{ .string = "root" });
 

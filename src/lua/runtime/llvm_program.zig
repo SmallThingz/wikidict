@@ -61,8 +61,7 @@ pub const Program = struct {
     module_lookup_names: [][]const u8,
     module_lookup_ids: []u32,
     module_export_shape_ids: []u32,
-    module_function_bases: []u32,
-    module_function_counts: []u32,
+    function_module_ids: []u32,
     module_requirement_offsets: []u32,
     module_requirements: []rt.ModuleRequirement,
     module_static_root_blobs: [][]const u8,
@@ -131,18 +130,29 @@ pub const Program = struct {
                 return error.InvalidProgramMetadata;
         }
 
-        const module_function_bases = try allocator.alloc(u32, module_count);
-        errdefer allocator.free(module_function_bases);
-        const module_function_counts = try allocator.alloc(u32, module_count);
-        errdefer allocator.free(module_function_counts);
+        const FunctionRange = struct { base: u32, count: u32 };
+        const function_ranges = try allocator.alloc(FunctionRange, module_count);
+        defer allocator.free(function_ranges);
         var previous_end: u64 = 0;
-        for (module_function_bases, module_function_counts, 0..) |*base, *count, index| {
-            base.* = try reader.readU32();
-            count.* = try reader.readU32();
-            const end = @as(u64, base.*) + count.*;
-            if (index != 0 and @as(u64, base.*) < previous_end)
+        for (function_ranges, 0..) |*range, index| {
+            range.base = try reader.readU32();
+            range.count = try reader.readU32();
+            const end = @as(u64, range.base) + range.count;
+            if (end > std.math.maxInt(u32) or
+                (index != 0 and @as(u64, range.base) < previous_end))
                 return error.InvalidProgramMetadata;
             previous_end = end;
+        }
+        const function_count = std.math.cast(usize, previous_end) orelse
+            return error.ProgramMetadataTooLarge;
+        const function_module_ids = try allocator.alloc(u32, function_count);
+        errdefer allocator.free(function_module_ids);
+        @memset(function_module_ids, std.math.maxInt(u32));
+        for (function_ranges, 0..) |range, module_id| {
+            const start: usize = range.base;
+            const end: usize = start + range.count;
+            if (end > function_module_ids.len) return error.InvalidProgramMetadata;
+            @memset(function_module_ids[start..end], @intCast(module_id));
         }
 
         const module_requirement_offsets = try allocator.alloc(u32, @as(usize, module_count) + 1);
@@ -260,8 +270,7 @@ pub const Program = struct {
             .module_lookup_names = module_lookup_names,
             .module_lookup_ids = module_lookup_ids,
             .module_export_shape_ids = module_export_shape_ids,
-            .module_function_bases = module_function_bases,
-            .module_function_counts = module_function_counts,
+            .function_module_ids = function_module_ids,
             .module_requirement_offsets = module_requirement_offsets,
             .module_requirements = module_requirements,
             .module_static_root_blobs = module_static_root_blobs,
@@ -296,8 +305,7 @@ pub const Program = struct {
         self.allocator.free(self.module_static_root_blobs);
         self.allocator.free(self.module_requirements);
         self.allocator.free(self.module_requirement_offsets);
-        self.allocator.free(self.module_function_counts);
-        self.allocator.free(self.module_function_bases);
+        self.allocator.free(self.function_module_ids);
         self.allocator.free(self.module_export_shape_ids);
         self.allocator.free(self.module_lookup_ids);
         self.allocator.free(self.module_lookup_names);
@@ -388,7 +396,7 @@ pub const Program = struct {
         ctx.module_export_shape_ids = self.module_export_shape_ids;
         ctx.program_shapes = self.shapes;
         ctx.configureModules(self, lookup, moduleName);
-        ctx.configureModuleFunctions(self.module_function_bases, self.module_function_counts);
+        ctx.configureFunctionModules(self.function_module_ids);
         ctx.configureModuleRequirements(self, moduleRequirements);
         ctx.configureStaticModules(self, staticModule);
         ctx.configureProgramBootstrap(
