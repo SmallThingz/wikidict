@@ -4,6 +4,7 @@ const stdlib = @import("zig_stdlib");
 const scribunto = @import("zig_scribunto");
 const globals_abi = @import("lua_globals");
 const metadata = @import("lua_program_metadata");
+const static_decode = @import("lua_static_literal_decode");
 
 pub const Context = rt.Context;
 
@@ -54,6 +55,12 @@ pub const Program = struct {
     module_lookup_names: [][]const u8,
     module_lookup_ids: []u32,
     module_export_shape_ids: []u32,
+    module_function_bases: []u32,
+    module_function_counts: []u32,
+    module_requirement_offsets: []u32,
+    module_requirements: []rt.ModuleRequirement,
+    module_static_root_blobs: [][]const u8,
+    module_static_root_load_data: []bool,
     global_keys: []rt.Value,
     global_shape: rt.Shape,
     shapes: []rt.Shape,
@@ -76,12 +83,14 @@ pub const Program = struct {
         const global_count = try reader.readU32();
         const shape_count = try reader.readU32();
         const shape_field_total = try reader.readU32();
+        const module_requirement_total = try reader.readU32();
         const item_bound: u64 = mapped.bytes.len / 4 + 1;
         if (@as(u64, module_count) > item_bound or
             @as(u64, module_lookup_count) > item_bound or
             @as(u64, global_count) > item_bound or
             @as(u64, shape_count) > item_bound or
-            @as(u64, shape_field_total) > item_bound)
+            @as(u64, shape_field_total) > item_bound or
+            @as(u64, module_requirement_total) > item_bound)
             return error.InvalidProgramMetadata;
         if (global_count < globals_abi.count) return error.BadGlobalLayout;
 
@@ -108,6 +117,53 @@ pub const Program = struct {
             shape_id.* = try reader.readU32();
             if (shape_id.* != std.math.maxInt(u32) and shape_id.* >= shape_count)
                 return error.InvalidProgramMetadata;
+        }
+
+        const module_function_bases = try allocator.alloc(u32, module_count);
+        errdefer allocator.free(module_function_bases);
+        const module_function_counts = try allocator.alloc(u32, module_count);
+        errdefer allocator.free(module_function_counts);
+        var previous_end: u64 = 0;
+        for (module_function_bases, module_function_counts, 0..) |*base, *count, index| {
+            base.* = try reader.readU32();
+            count.* = try reader.readU32();
+            const end = @as(u64, base.*) + count.*;
+            if (index != 0 and @as(u64, base.*) < previous_end)
+                return error.InvalidProgramMetadata;
+            previous_end = end;
+        }
+
+        const module_requirement_offsets = try allocator.alloc(u32, @as(usize, module_count) + 1);
+        errdefer allocator.free(module_requirement_offsets);
+        const module_requirements = try allocator.alloc(rt.ModuleRequirement, module_requirement_total);
+        errdefer allocator.free(module_requirements);
+        var requirement_at: usize = 0;
+        for (0..module_count) |module_index| {
+            module_requirement_offsets[module_index] = @intCast(requirement_at);
+            const count: usize = @intCast(try reader.readU32());
+            if (count > module_requirements.len -| requirement_at)
+                return error.InvalidProgramMetadata;
+            for (module_requirements[requirement_at .. requirement_at + count]) |*requirement| {
+                requirement.module_id = try reader.readU32();
+                if (requirement.module_id >= module_count)
+                    return error.InvalidProgramMetadata;
+                requirement.requested = try reader.readString();
+            }
+            requirement_at += count;
+        }
+        if (requirement_at != module_requirements.len)
+            return error.InvalidProgramMetadata;
+        module_requirement_offsets[module_count] = @intCast(requirement_at);
+
+        const module_static_root_blobs = try allocator.alloc([]const u8, module_count);
+        errdefer allocator.free(module_static_root_blobs);
+        const module_static_root_load_data = try allocator.alloc(bool, module_count);
+        errdefer allocator.free(module_static_root_load_data);
+        for (module_static_root_blobs, module_static_root_load_data) |*blob, *snapshot| {
+            const flags = try reader.readU32();
+            if (flags > 1) return error.InvalidProgramMetadata;
+            snapshot.* = flags != 0;
+            blob.* = try reader.readString();
         }
 
         const global_keys = try allocator.alloc(rt.Value, global_count);
@@ -160,6 +216,12 @@ pub const Program = struct {
             .module_lookup_names = module_lookup_names,
             .module_lookup_ids = module_lookup_ids,
             .module_export_shape_ids = module_export_shape_ids,
+            .module_function_bases = module_function_bases,
+            .module_function_counts = module_function_counts,
+            .module_requirement_offsets = module_requirement_offsets,
+            .module_requirements = module_requirements,
+            .module_static_root_blobs = module_static_root_blobs,
+            .module_static_root_load_data = module_static_root_load_data,
             .global_keys = global_keys,
             .global_shape = .{
                 .field_keys = global_keys,
@@ -179,6 +241,12 @@ pub const Program = struct {
         self.allocator.free(self.shape_keys);
         self.allocator.free(self.shapes);
         self.allocator.free(self.global_keys);
+        self.allocator.free(self.module_static_root_load_data);
+        self.allocator.free(self.module_static_root_blobs);
+        self.allocator.free(self.module_requirements);
+        self.allocator.free(self.module_requirement_offsets);
+        self.allocator.free(self.module_function_counts);
+        self.allocator.free(self.module_function_bases);
         self.allocator.free(self.module_export_shape_ids);
         self.allocator.free(self.module_lookup_ids);
         self.allocator.free(self.module_lookup_names);
@@ -226,6 +294,22 @@ pub const Program = struct {
         return if (id < self.module_count) self.module_names[id] else null;
     }
 
+    fn moduleRequirements(raw: ?*const anyopaque, id: u32) []const rt.ModuleRequirement {
+        const self: *const Program = @ptrCast(@alignCast(raw orelse return &.{}));
+        if (id >= self.module_count) return &.{};
+        const start: usize = self.module_requirement_offsets[id];
+        const end: usize = self.module_requirement_offsets[id + 1];
+        return self.module_requirements[start..end];
+    }
+
+    fn staticModule(raw: ?*const anyopaque, ctx: *rt.Context, id: u32) anyerror!?rt.Value {
+        const self: *const Program = @ptrCast(@alignCast(raw orelse return null));
+        if (id >= self.module_count) return null;
+        const blob = self.module_static_root_blobs[id];
+        if (blob.len == 0) return null;
+        return try static_decode.decode(ctx, blob);
+    }
+
     pub fn initContext(self: *Program, allocator: std.mem.Allocator) !rt.Context {
         var ctx = try rt.Context.initProgram(
             allocator,
@@ -240,13 +324,25 @@ pub const Program = struct {
         ctx.module_export_shape_ids = self.module_export_shape_ids;
         ctx.program_shapes = self.shapes;
         ctx.configureModules(self, lookup, moduleName);
+        ctx.configureModuleFunctions(self.module_function_bases, self.module_function_counts);
+        ctx.configureModuleRequirements(self, moduleRequirements);
+        ctx.configureStaticModules(self, staticModule);
         ctx.configureProgramBootstrap(
             &self.stdlib_template,
             stdlib.Template.bootstrapOpaque,
         );
         try rt.bindGlobalTable(&ctx, &self.global_shape, globals_abi.id("_G"));
         _ = try ctx.bootstrapProgram();
-        if (dict_lua_program_eager_init(&ctx) != 0) return error.ProgramEagerInitFailed;
+        for (self.module_static_root_blobs, self.module_static_root_load_data, 0..) |blob, snapshot, module_id| {
+            if (blob.len == 0) continue;
+            var value = try static_decode.decode(&ctx, blob);
+            if (value == .nil) value = .{ .boolean = true };
+            try ctx.preinitializeModule(@intCast(module_id), value, snapshot);
+        }
+        ctx.beginEagerBootstrap();
+        const eager_status = dict_lua_program_eager_init(&ctx);
+        ctx.endEagerBootstrap();
+        if (eager_status != 0) return error.ProgramEagerInitFailed;
         return ctx;
     }
 };

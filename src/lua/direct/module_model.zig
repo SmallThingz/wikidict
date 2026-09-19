@@ -23,6 +23,8 @@ pub const Builder = struct {
     functions: std.AutoHashMapUnmanaged(u32, *const lua.Expr) = .empty,
     dynamic_top_level: bool = false,
     root_pure: bool = true,
+    root_bootstrap_safe: bool = true,
+    root_requires: std.ArrayList([]const u8) = .empty,
     owned_tables: std.ArrayList(*TableInfo) = .empty,
 
     pub fn deinit(self: *Builder) void {
@@ -31,6 +33,7 @@ pub const Builder = struct {
             self.allocator.destroy(table);
         }
         self.owned_tables.deinit(self.allocator);
+        self.root_requires.deinit(self.allocator);
         self.env.deinit(self.allocator);
         self.functions.deinit(self.allocator);
     }
@@ -127,6 +130,39 @@ pub const Builder = struct {
         self.env = saved;
     }
 
+    fn rootRequire(self: *Builder, expr: *const lua.Expr) ?[]const u8 {
+        if (expr.* != .call) return null;
+        const call = expr.call;
+        if (call.callee.* != .name or
+            !std.mem.eql(u8, call.callee.name.value, "require") or
+            self.env.contains("require") or
+            call.args.len != 1)
+            return null;
+        return stringConst(call.args[0]);
+    }
+
+    fn exprBootstrapSafe(self: *Builder, expr: *const lua.Expr) anyerror!bool {
+        if (self.rootRequire(expr)) |target| {
+            try self.root_requires.append(self.allocator, target);
+            return true;
+        }
+        return switch (expr.*) {
+            .nil_lit, .bool_lit, .number, .string, .function => true,
+            .name => |name| self.env.contains(name.value),
+            .paren => |value| self.exprBootstrapSafe(value.expr),
+            .table => |value| blk: {
+                for (value.fields) |field| switch (field) {
+                    .list => |item| if (!try self.exprBootstrapSafe(item)) break :blk false,
+                    .named => |item| if (!try self.exprBootstrapSafe(item.value)) break :blk false,
+                    .keyed => |item| if (!try self.exprBootstrapSafe(item.key) or
+                        !try self.exprBootstrapSafe(item.value)) break :blk false,
+                };
+                break :blk true;
+            },
+            .index, .call, .method_call, .unary, .binary, .vararg => false,
+        };
+    }
+
     fn exprPure(self: *Builder, expr: *const lua.Expr) bool {
         return switch (expr.*) {
             .nil_lit, .bool_lit, .number, .string, .function => true,
@@ -162,6 +198,7 @@ pub const Builder = struct {
             .local_assign => |s| {
                 for (s.values) |value| {
                     if (!self.exprPure(value)) self.root_pure = false;
+                    if (!try self.exprBootstrapSafe(value)) self.root_bootstrap_safe = false;
                 }
                 for (s.names, 0..) |name, i| {
                     const value = if (i < s.values.len) try self.eval(s.values[i]) else Binding.unknown;
@@ -171,25 +208,37 @@ pub const Builder = struct {
             .assign => |s| {
                 for (s.values) |value| {
                     if (!self.exprPure(value)) self.root_pure = false;
+                    if (!try self.exprBootstrapSafe(value)) self.root_bootstrap_safe = false;
                 }
                 for (s.targets, 0..) |target, i| {
-                    if (!self.targetPure(target)) self.root_pure = false;
+                    if (!self.targetPure(target)) {
+                        self.root_pure = false;
+                        self.root_bootstrap_safe = false;
+                    }
                     const value = if (i < s.values.len) try self.eval(s.values[i]) else Binding.unknown;
                     try self.assign(target, value);
                 }
             },
             .local_function => |s| try self.env.put(self.allocator, s.name, .{ .function = s.function.function.span.start }),
             .function_assign => |s| {
-                if (!self.targetPure(s.target)) self.root_pure = false;
+                if (!self.targetPure(s.target)) {
+                    self.root_pure = false;
+                    self.root_bootstrap_safe = false;
+                }
                 try self.assign(s.target, .{ .function = s.function.function.span.start });
             },
             .return_stmt => |s| {
                 for (s.values) |value| {
                     if (!self.exprPure(value)) self.root_pure = false;
+                    if (!try self.exprBootstrapSafe(value)) self.root_bootstrap_safe = false;
                 }
                 if (s.values.len != 0) self.return_binding = try self.eval(s.values[0]);
             },
-            .call => self.root_pure = false,
+            .call => |call_stmt| {
+                self.root_pure = false;
+                if (!try self.exprBootstrapSafe(call_stmt.expr))
+                    self.root_bootstrap_safe = false;
+            },
             .empty => {},
             .do_block => |s| {
                 // Preserve the conservative shape-analysis bit, but an
@@ -201,6 +250,7 @@ pub const Builder = struct {
             .while_loop, .repeat_loop, .if_stmt, .numeric_for, .generic_for, .break_stmt => {
                 self.dynamic_top_level = true;
                 self.root_pure = false;
+                self.root_bootstrap_safe = false;
             },
         }
     }

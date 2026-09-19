@@ -22,6 +22,40 @@ const llvm_analysis = @import("direct/analysis.zig");
 const llvm_emitter = @import("direct/emitter.zig");
 const llvm_shapes = @import("direct/shapes.zig");
 const llvm_module_model = @import("direct/module_model.zig");
+const llvm_program = @import("direct/program.zig");
+
+test "static module root table omits generated root symbol" {
+    const records = [_]llvm_program.ModuleRecord{
+        .{
+            .title = "Module:Static",
+            .path = "modules/static.lua",
+            .source_bytes = 10,
+            .source_index = 0,
+            .function_base = 40,
+            .function_count = 1,
+            .root_function = 40,
+            .export_shape_id = null,
+            .static_root = true,
+        },
+        .{
+            .title = "Module:Dynamic",
+            .path = "modules/dynamic.lua",
+            .source_bytes = 10,
+            .source_index = 1,
+            .function_base = 41,
+            .function_count = 1,
+            .root_function = 41,
+            .export_shape_id = null,
+        },
+    };
+    var generated = try llvm_program.generate(std.testing.allocator, &records);
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_static_module_root_unreachable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@lua_f_40") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@lua_f_41") != null);
+}
 
 test "direct LLVM emitter covers Lua control and closure surface" {
     const source =
@@ -322,6 +356,67 @@ test "constant require lowers to module id only when global is stable" {
     try std.testing.expect(std.mem.indexOf(u8, escaped, "call i32 @dict_lua_require_module_id") == null);
 }
 
+test "eager canonical require uses prepared module fast path with semantic fallback" {
+    var ids: llvm_emitter.ModuleIdMap = .empty;
+    defer ids.deinit(std.testing.allocator);
+    try ids.put(std.testing.allocator, "Module:Prepared", 0);
+    const modules = [_]llvm_emitter.ModuleFact{.{
+        .eager_prepared = true,
+        .canonical_name = "Module:Prepared",
+    }};
+    const facts = llvm_emitter.ProgramFacts{
+        .module_ids = &ids,
+        .module_facts = &modules,
+    };
+
+    const compile = struct {
+        fn run(source: []const u8, program_facts: llvm_emitter.ProgramFacts) ![]u8 {
+            var chunk = try llvm_parser.parse(std.testing.allocator, source);
+            defer chunk.deinit();
+            var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+            defer globals.deinit();
+            var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+            defer module.deinit();
+            var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, program_facts);
+            defer generated.deinit();
+            return generated.toText(std.testing.allocator);
+        }
+    }.run;
+
+    const ir = try compile("return require('Module:Prepared')", facts);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_defer_require_module_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "require_prepared") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_require_module_id") != null);
+
+    const alias_ir = try compile("return require('Prepared')", facts);
+    defer std.testing.allocator.free(alias_ir);
+    try std.testing.expect(std.mem.indexOf(u8, alias_ir, "require_prepared") == null);
+}
+
+test "reading package or global environment flushes deferred require visibility" {
+    const compile = struct {
+        fn run(source: []const u8) ![]u8 {
+            var chunk = try llvm_parser.parse(std.testing.allocator, source);
+            defer chunk.deinit();
+            var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+            defer globals.deinit();
+            var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+            defer module.deinit();
+            var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+            defer generated.deinit();
+            return generated.toText(std.testing.allocator);
+        }
+    }.run;
+
+    const package_ir = try compile("return package");
+    defer std.testing.allocator.free(package_ir);
+    try std.testing.expect(std.mem.indexOf(u8, package_ir, "@dict_lua_observe_package") != null);
+    const env_ir = try compile("return _G");
+    defer std.testing.allocator.free(env_ir);
+    try std.testing.expect(std.mem.indexOf(u8, env_ir, "@dict_lua_observe_package") != null);
+}
+
 test "pure string keyed tables lower to process shapes" {
     const source = "return { foo = 1, ['bar'] = 2 }";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);
@@ -518,7 +613,7 @@ test "call-only captured closures pass cells without materializing callable iden
     const generated_source = try generated.toText(std.testing.allocator);
     defer std.testing.allocator.free(generated_source);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "call %CallResult @dict_lua_call_static_multi") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated_source, "@dict_lua_call_static_multi(ptr %ctx, ptr @lua_f_1, ptr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "@dict_lua_call_static_multi(ptr %ctx, i32 1, ptr @lua_f_1, ptr") != null);
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, " = call i32 @dict_lua_make_function"));
 }
 
@@ -663,12 +758,55 @@ test "known module export emits guarded direct LLVM call" {
     try std.testing.expect(std.mem.indexOf(u8, ir, "dynamic_export") != null);
 }
 
-test "captured static module export keeps guarded direct target" {
+test "eager pristine module export bypasses field lookup on direct branch" {
     var ids: llvm_emitter.ModuleIdMap = .empty;
     defer ids.deinit(std.testing.allocator);
     try ids.put(std.testing.allocator, "Module:Target", 0);
     const exports = [_]llvm_emitter.DirectExport{
         .{ .name = "run", .function_id = 99 },
+    };
+    const modules = [_]llvm_emitter.ModuleFact{.{
+        .eager_prepared = true,
+        .canonical_name = "Module:Target",
+        .exports = &exports,
+    }};
+    const facts = llvm_emitter.ProgramFacts{
+        .module_ids = &ids,
+        .module_facts = &modules,
+    };
+
+    var chunk = try llvm_parser.parse(
+        std.testing.allocator,
+        "local target=require('Module:Target'); return target.run(4)",
+    );
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, facts);
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_module_export_pristine") != null);
+    const start = std.mem.indexOf(u8, ir, "pristine_export_multi:") orelse return error.MissingPristineExportBlock;
+    const rest = ir[start..];
+    const end = std.mem.indexOf(u8, rest, "pristine_export_multi_fallback:") orelse rest.len;
+    const block = rest[0..end];
+    try std.testing.expect(std.mem.indexOf(u8, block, "@dict_lua_get_field") == null);
+    try std.testing.expect(std.mem.indexOf(u8, block, "@dict_lua_value_is_function_id") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_99") != null);
+    const fallback_start = std.mem.indexOf(u8, ir, "export_callee_fallback:") orelse return error.MissingExportFallbackBlock;
+    try std.testing.expect(std.mem.indexOf(u8, ir[fallback_start..], "@dict_lua_get_field") != null);
+}
+
+test "captured static module export keeps guarded direct target" {
+    var ids: llvm_emitter.ModuleIdMap = .empty;
+    defer ids.deinit(std.testing.allocator);
+    try ids.put(std.testing.allocator, "Module:Target", 0);
+    const exports = [_]llvm_emitter.DirectExport{
+        .{ .name = "run", .function_id = 99, .capture_count = 1 },
     };
     const modules = [_]llvm_emitter.ModuleFact{
         .{ .exports = &exports },
@@ -694,6 +832,7 @@ test "captured static module export keeps guarded direct target" {
 
     try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_99") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_value_is_function_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_value_function_captures") != null);
 }
 
 test "module root purity only accepts context-free local construction" {
@@ -722,4 +861,37 @@ test "module root purity only accepts context-free local construction" {
     defer global_model.deinit();
     try global_model.build(global_chunk.body);
     try std.testing.expect(!global_model.root_pure);
+}
+
+test "module bootstrap safety admits literal require chains but rejects dynamic loads" {
+    const safe_source =
+        \\local dep = require('Module:Dependency')
+        \\local export = { dep = dep }
+        \\return export
+    ;
+    var safe_chunk = try llvm_parser.parse(std.testing.allocator, safe_source);
+    defer safe_chunk.deinit();
+    var safe = llvm_module_model.Builder{
+        .allocator = std.testing.allocator,
+        .source = safe_chunk.source,
+    };
+    defer safe.deinit();
+    try safe.build(safe_chunk.body);
+    try std.testing.expect(!safe.root_pure);
+    try std.testing.expect(safe.root_bootstrap_safe);
+    try std.testing.expectEqual(@as(usize, 1), safe.root_requires.items.len);
+    try std.testing.expectEqualStrings("Module:Dependency", safe.root_requires.items[0]);
+
+    var dynamic_chunk = try llvm_parser.parse(
+        std.testing.allocator,
+        "local name='Module:Dependency'; local dep=require(name); return dep",
+    );
+    defer dynamic_chunk.deinit();
+    var dynamic = llvm_module_model.Builder{
+        .allocator = std.testing.allocator,
+        .source = dynamic_chunk.source,
+    };
+    defer dynamic.deinit();
+    try dynamic.build(dynamic_chunk.body);
+    try std.testing.expect(!dynamic.root_bootstrap_safe);
 }

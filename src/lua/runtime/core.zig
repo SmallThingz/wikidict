@@ -4,7 +4,10 @@ const static_fields = @import("lua_static_fields");
 extern fn snprintf(buffer: [*]u8, size: usize, format: [*:0]const u8, ...) c_int;
 
 pub const Cell = struct { value: Value };
-pub const Env = struct { captures: []const *Cell };
+pub const Env = struct {
+    captures: []const *Cell,
+    capture_view: Captures,
+};
 pub const FunctionEnv = struct {
     raw: usize = 0,
 
@@ -46,8 +49,14 @@ pub const FunctionValue = struct {
 
     pub fn captures(self: FunctionValue) Captures {
         if (self.id == native_function_id) return .{ .native = self.env.nativePtr() };
-        if (self.env.closurePtr()) |env| return .{ .direct = env.captures };
+        if (self.env.closurePtr()) |env| return env.capture_view;
         return .{ .direct = &.{} };
+    }
+
+    pub fn capturesPtr(self: FunctionValue) ?*const Captures {
+        if (self.id == native_function_id) return null;
+        if (self.env.closurePtr()) |env| return &env.capture_view;
+        return null;
     }
 };
 pub const DirectFunctionFn = *const fn (*Context, Captures, []const Value) anyerror![]const Value;
@@ -61,6 +70,12 @@ pub const FunctionResult = extern struct {
 pub const FunctionFn = *const fn (*Context, *const Captures, [*]const Value, usize, ?[*]Value, usize) callconv(.c) FunctionResult;
 pub const ModuleLookupFn = *const fn (?*const anyopaque, []const u8) ?u32;
 pub const ModuleNameFn = *const fn (?*const anyopaque, u32) ?[]const u8;
+pub const ModuleRequirement = struct {
+    module_id: u32,
+    requested: []const u8,
+};
+pub const ModuleRequirementsFn = *const fn (?*const anyopaque, u32) []const ModuleRequirement;
+pub const StaticModuleFn = *const fn (?*const anyopaque, *Context, u32) anyerror!?Value;
 pub const ProgramBootstrapFn = *const fn (?*const anyopaque, *Context) anyerror!void;
 pub const Value = union(enum) {
     nil,
@@ -302,6 +317,11 @@ pub const Table = struct {
     metatable: ?*Table = null,
     append_index: u32 = 1,
     read_only: bool = false,
+    mutation_sentinel: ?*bool = null,
+
+    fn markMutated(self: *Table) void {
+        if (self.mutation_sentinel) |sentinel| sentinel.* = false;
+    }
 
     pub fn deinit(self: *Table, allocator: std.mem.Allocator) void {
         self.map.deinit(allocator);
@@ -369,6 +389,7 @@ pub const Table = struct {
 
     fn rawSetArraySlot(self: *Table, slot: u32, value: Value) void {
         std.debug.assert(self.shape == null and self.native_namespace == null and slot < self.slots.len);
+        self.markMutated();
         self.slots[slot] = value;
     }
 
@@ -382,6 +403,7 @@ pub const Table = struct {
         if (self.read_only) return error.ReadOnlyTable;
         if (self.shape == null and self.native_namespace == null) return error.BadShapeSlot;
         if (slot >= self.slots.len) return error.BadShapeSlot;
+        self.markMutated();
         self.slots[slot] = value;
     }
 
@@ -402,6 +424,7 @@ pub const Table = struct {
         if (self.read_only) return error.ReadOnlyTable;
         if (choice >= self.choices.len) return error.BadChoiceSlot;
         try validateTableKey(key);
+        self.markMutated();
         if (value == .nil) {
             if (rawEqual(self.choices[choice].key, key)) self.choices[choice] = .{};
             return;
@@ -432,6 +455,7 @@ pub const Table = struct {
     pub fn rawSet(self: *Table, allocator: std.mem.Allocator, key: Value, value: Value) !void {
         if (self.read_only) return error.ReadOnlyTable;
         try validateTableKey(key);
+        self.markMutated();
         if (key == .number) if (self.genericArrayIndex(key.number)) |index| {
             if (self.arraySlotForNumber(key.number)) |slot| {
                 _ = self.map.removeContext(key, .{});
@@ -633,17 +657,28 @@ const ModuleState = struct {
     value: ?Value = null,
     preinitialized: ?Value = null,
     load_data_snapshot: ?Value = null,
+    deferred_require_visibility: bool = false,
+    export_pristine: bool = false,
+    globals: ?[]Value = null,
+    global_table: ?*Table = null,
 };
 const ModuleStatePage = [module_state_page_len]ModuleState;
+const GlobalScope = struct {
+    globals: []Value,
+    global_table: ?*Table,
+};
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
     // Lua strings compare/hash by bytes; runtime concat results need ownership, not hash dedup.
     string_arena: std.heap.ArenaAllocator,
     globals: []Value,
+    root_globals: []Value,
     program_shapes: []const Shape = &.{},
     module_export_shape_ids: []const u32 = &.{},
     module_root_entries: []const FunctionFn = &.{},
+    module_function_bases: []const u32 = &.{},
+    module_function_counts: []const u32 = &.{},
     string_metatable: ?*Table = null,
     last_error: Value = .nil,
     aot_error_name: StableErrorName = .{},
@@ -655,13 +690,21 @@ pub const Context = struct {
     module_lookup_ctx: ?*const anyopaque = null,
     module_lookup: ?ModuleLookupFn = null,
     module_name: ?ModuleNameFn = null,
+    module_requirements_ctx: ?*const anyopaque = null,
+    module_requirements: ?ModuleRequirementsFn = null,
+    static_module_ctx: ?*const anyopaque = null,
+    static_module: ?StaticModuleFn = null,
+    eager_bootstrap: bool = false,
+    package_observable: bool = false,
     program_bootstrap_ctx: ?*const anyopaque = null,
     program_bootstrap: ?ProgramBootstrapFn = null,
     host: ?*anyopaque = null,
     current_frame: ?*Table = null,
     package_loaded: ?*Table = null,
-    builtin_next: Value = .nil,
     global_table: ?*Table = null,
+    root_global_table: ?*Table = null,
+    global_env_slot: ?u32 = null,
+    static_global_scopes: std.ArrayList(GlobalScope) = .empty,
     next_iteration_hint: ?NextIterationHint = null,
 
     pub fn init(allocator: std.mem.Allocator, global_count: usize) !Context {
@@ -680,19 +723,26 @@ pub const Context = struct {
             .allocator = allocator,
             .string_arena = .init(allocator),
             .globals = globals,
+            .root_globals = globals,
             .module_count = module_count,
             .module_state_pages = module_state_pages,
         };
     }
 
     pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
-        var child = try initProgram(allocator, self.globals.len, self.module_count);
+        var child = try initProgram(allocator, self.root_globals.len, self.module_count);
         child.program_shapes = self.program_shapes;
         child.module_export_shape_ids = self.module_export_shape_ids;
         child.module_root_entries = self.module_root_entries;
+        child.module_function_bases = self.module_function_bases;
+        child.module_function_counts = self.module_function_counts;
         child.module_lookup_ctx = self.module_lookup_ctx;
         child.module_lookup = self.module_lookup;
         child.module_name = self.module_name;
+        child.module_requirements_ctx = self.module_requirements_ctx;
+        child.module_requirements = self.module_requirements;
+        child.static_module_ctx = self.static_module_ctx;
+        child.static_module = self.static_module;
         child.program_bootstrap_ctx = self.program_bootstrap_ctx;
         child.program_bootstrap = self.program_bootstrap;
         child.max_depth = self.max_depth;
@@ -702,13 +752,23 @@ pub const Context = struct {
 
     pub fn deinit(self: *Context) void {
         self.string_arena.deinit();
-        for (self.module_state_pages) |page| if (page) |owned| self.allocator.destroy(owned);
+        self.static_global_scopes.deinit(self.allocator);
+        for (self.module_state_pages) |page| if (page) |owned| {
+            for (owned) |*state| {
+                if (state.global_table) |table| {
+                    table.deinit(self.allocator);
+                    self.allocator.destroy(table);
+                }
+                if (state.globals) |globals| self.allocator.free(globals);
+            }
+            self.allocator.destroy(owned);
+        };
         self.allocator.free(self.module_state_pages);
-        if (self.global_table) |table| {
+        if (self.root_global_table) |table| {
             table.deinit(self.allocator);
             self.allocator.destroy(table);
         }
-        self.allocator.free(self.globals);
+        self.allocator.free(self.root_globals);
     }
 
     pub fn setHost(self: *Context, host: ?*anyopaque) void {
@@ -759,7 +819,10 @@ pub const Context = struct {
         const env: FunctionEnv = if (captures.len == 0) .{} else blk: {
             const owned = try self.allocator.dupe(*Cell, captures);
             const value = try self.allocator.create(Env);
-            value.* = .{ .captures = owned };
+            value.* = .{
+                .captures = owned,
+                .capture_view = .{ .direct = owned },
+            };
             break :blk FunctionEnv.closure(value);
         };
         return .{ .callable = .{ .id = id, .env = env, .identity = identity, .entry = entry } };
@@ -797,6 +860,8 @@ pub const Context = struct {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
+        const previous = try self.enterFunctionModule(value.id);
+        defer if (previous) |scope| self.restoreGlobals(scope);
         return self.callEntryBuffered(value.entry, value.captures(), args, result_buffer);
     }
 
@@ -804,10 +869,12 @@ pub const Context = struct {
         return self.callFunctionBuffered(value, args, null);
     }
 
-    pub fn callStaticFunctionBuffered(self: *Context, entry: FunctionFn, captures: []const *Cell, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+    pub fn callStaticFunctionBuffered(self: *Context, function_id: u32, entry: FunctionFn, captures: []const *Cell, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
+        const previous = try self.enterFunctionModule(function_id);
+        defer if (previous) |scope| self.restoreGlobals(scope);
         return self.callEntryBuffered(entry, .{ .direct = captures }, args, result_buffer);
     }
 
@@ -815,6 +882,8 @@ pub const Context = struct {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
+        const previous = try self.enterFunctionModule(value.id);
+        defer if (previous) |scope| self.restoreGlobals(scope);
         return direct(self, value.captures(), args);
     }
 
@@ -822,6 +891,8 @@ pub const Context = struct {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
+        const previous = try self.enterFunctionModule(value.id);
+        defer if (previous) |scope| self.restoreGlobals(scope);
         return direct(self, value.captures(), args, result_buffer);
     }
 
@@ -840,6 +911,72 @@ pub const Context = struct {
         self.module_lookup_ctx = host;
         self.module_lookup = lookup;
         self.module_name = name;
+    }
+
+    pub fn configureModuleRequirements(
+        self: *Context,
+        host: ?*const anyopaque,
+        requirements: ModuleRequirementsFn,
+    ) void {
+        self.module_requirements_ctx = host;
+        self.module_requirements = requirements;
+    }
+
+    pub fn configureModuleFunctions(self: *Context, bases: []const u32, counts: []const u32) void {
+        self.module_function_bases = bases;
+        self.module_function_counts = counts;
+    }
+
+    pub fn configureStaticModules(self: *Context, host: ?*const anyopaque, loader: StaticModuleFn) void {
+        self.static_module_ctx = host;
+        self.static_module = loader;
+    }
+
+    pub fn beginEagerBootstrap(self: *Context) void {
+        self.eager_bootstrap = true;
+    }
+
+    pub fn endEagerBootstrap(self: *Context) void {
+        self.eager_bootstrap = false;
+    }
+
+    pub fn observePackage(self: *Context) !void {
+        if (self.package_observable) return;
+        if (self.package_loaded) |loaded| {
+            for (self.module_state_pages, 0..) |page, page_index| if (page) |states| {
+                for (states, 0..) |*state, slot| {
+                    if (!state.deferred_require_visibility) continue;
+                    const module_id_usize = (page_index << module_state_page_shift) | slot;
+                    if (module_id_usize >= self.module_count) break;
+                    const module_id: u32 = @intCast(module_id_usize);
+                    const value = state.value orelse state.preinitialized orelse continue;
+                    const name = self.canonicalModuleName(module_id, null) orelse continue;
+                    try loaded.rawSet(self.allocator, .{ .string = name }, value);
+                    state.deferred_require_visibility = false;
+                }
+            };
+        }
+        self.package_observable = true;
+    }
+
+    pub fn deferStaticRequire(self: *Context, module_id: u32) ?Value {
+        if (self.package_observable) return null;
+        const state = self.moduleState(module_id) orelse return null;
+        const value = state.value orelse state.preinitialized orelse return null;
+        if (!self.eager_bootstrap) state.deferred_require_visibility = true;
+        return value;
+    }
+
+    pub fn moduleExportPristine(self: *const Context, module_id: u32) bool {
+        if (self.package_observable) return false;
+        const state = self.moduleStateConst(module_id) orelse return false;
+        if (!state.export_pristine) return false;
+        const value = state.value orelse state.preinitialized orelse return false;
+        if (value != .table) return false;
+        const canonical = self.canonicalModuleName(module_id, null) orelse return false;
+        if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = canonical })) |visible|
+            if (!rawEqual(visible, value)) return false;
+        return true;
     }
 
     fn canonicalModuleName(self: *const Context, module_id: u32, requested: ?[]const u8) ?[]const u8 {
@@ -872,6 +1009,93 @@ pub const Context = struct {
         return &self.module_state_pages[page_index].?[@as(usize, module_id) & module_state_page_mask];
     }
 
+    fn ensureModuleGlobals(self: *Context, module_id: u32) !GlobalScope {
+        const state = try self.ensureModuleState(module_id);
+        if (state.globals == null) {
+            const globals = try self.allocator.dupe(Value, self.root_globals);
+            errdefer self.allocator.free(globals);
+            var table: ?*Table = null;
+            if (self.root_global_table) |root_table| {
+                const owned = try self.allocator.create(Table);
+                errdefer self.allocator.destroy(owned);
+                owned.* = .{
+                    .shape = root_table.shape,
+                    .slots = globals,
+                    .owns_slots = false,
+                };
+                if (self.global_env_slot) |slot| {
+                    if (slot >= globals.len) return error.BadGlobalSlot;
+                    globals[slot] = .{ .table = owned };
+                }
+                table = owned;
+            }
+            state.globals = globals;
+            state.global_table = table;
+        }
+        return .{
+            .globals = state.globals.?,
+            .global_table = state.global_table,
+        };
+    }
+
+    fn moduleForFunction(self: *const Context, function_id: u32) ?u32 {
+        if (self.module_function_bases.len != self.module_function_counts.len or
+            self.module_function_bases.len != self.module_count)
+            return null;
+        var low: usize = 0;
+        var high = self.module_function_bases.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const base = self.module_function_bases[mid];
+            const end = @as(u64, base) + self.module_function_counts[mid];
+            if (function_id < base) {
+                high = mid;
+            } else if (@as(u64, function_id) >= end) {
+                low = mid + 1;
+            } else {
+                return @intCast(mid);
+            }
+        }
+        return null;
+    }
+
+    fn enterModule(self: *Context, module_id: u32) !GlobalScope {
+        const previous = GlobalScope{
+            .globals = self.globals,
+            .global_table = self.global_table,
+        };
+        const target = try self.ensureModuleGlobals(module_id);
+        self.globals = target.globals;
+        self.global_table = target.global_table;
+        return previous;
+    }
+
+    fn enterFunctionModule(self: *Context, function_id: u32) !?GlobalScope {
+        const module_id = self.moduleForFunction(function_id) orelse return null;
+        return try self.enterModule(module_id);
+    }
+
+    fn restoreGlobals(self: *Context, previous: GlobalScope) void {
+        self.globals = previous.globals;
+        self.global_table = previous.global_table;
+    }
+
+    pub fn enterStaticFunction(self: *Context, function_id: u32) !void {
+        if (self.depth >= self.max_depth) return error.CallDepth;
+        self.depth += 1;
+        errdefer self.depth -= 1;
+        const previous = try self.enterFunctionModule(function_id);
+        try self.static_global_scopes.append(self.allocator, previous orelse .{
+            .globals = self.globals,
+            .global_table = self.global_table,
+        });
+    }
+
+    pub fn leaveStaticFunction(self: *Context) void {
+        if (self.static_global_scopes.pop()) |previous| self.restoreGlobals(previous);
+        if (self.depth != 0) self.depth -= 1;
+    }
+
     fn cloneSnapshotValue(
         self: *Context,
         value: Value,
@@ -897,8 +1121,13 @@ pub const Context = struct {
 
     pub fn preinitializeModule(self: *Context, module_id: u32, value: Value, snapshot_load_data: bool) !void {
         const state = try self.ensureModuleState(module_id);
-        if (state.value == null and state.preinitialized == null)
+        if (state.value == null and state.preinitialized == null) {
             state.preinitialized = value;
+            if (value == .table) {
+                state.export_pristine = true;
+                value.table.mutation_sentinel = &state.export_pristine;
+            }
+        }
         if (snapshot_load_data and state.load_data_snapshot == null) {
             var seen: std.AutoHashMapUnmanaged(*Table, *Table) = .empty;
             defer seen.deinit(self.allocator);
@@ -911,29 +1140,94 @@ pub const Context = struct {
         return state.load_data_snapshot;
     }
 
+    fn preparedModuleValue(self: *const Context, module_id: u32) ?Value {
+        const state = self.moduleStateConst(module_id) orelse return null;
+        return state.value orelse state.preinitialized;
+    }
+
+    fn requirementsFor(self: *const Context, module_id: u32) []const ModuleRequirement {
+        const get = self.module_requirements orelse return &.{};
+        return get(self.module_requirements_ctx, module_id);
+    }
+
+    fn adoptPreinitialized(
+        self: *Context,
+        module_id: u32,
+        requested: ?[]const u8,
+        state: *ModuleState,
+        value: Value,
+    ) anyerror!?Value {
+        state.preinitialized = null;
+        state.loading = true;
+        errdefer {
+            state.loading = false;
+            if (state.value == null and state.preinitialized == null)
+                state.preinitialized = value;
+        }
+
+        var valid = true;
+        for (self.requirementsFor(module_id)) |requirement| {
+            const expected = self.preparedModuleValue(requirement.module_id) orelse {
+                valid = false;
+                break;
+            };
+            const actual = try self.requireModuleId(requirement.module_id, requirement.requested);
+            if (!rawEqual(actual, expected)) {
+                valid = false;
+                break;
+            }
+        }
+
+        if (!valid) {
+            state.export_pristine = false;
+            state.loading = false;
+            return null;
+        }
+
+        const canonical = self.canonicalModuleName(module_id, requested);
+        if (canonical) |text| if (self.package_loaded) |loaded|
+            try loaded.rawSet(self.allocator, .{ .string = text }, value);
+        state.value = value;
+        state.loading = false;
+        return value;
+    }
+
     pub fn loadModule(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!Value {
         if (module_id >= self.module_count or module_id >= self.module_root_entries.len) return error.BadModuleId;
         if (self.moduleState(module_id)) |existing| {
             if (existing.value) |value| return value;
-            if (existing.preinitialized) |value| {
-                existing.preinitialized = null;
-                const canonical = self.canonicalModuleName(module_id, requested);
-                if (canonical) |text| if (self.package_loaded) |loaded|
-                    try loaded.rawSet(self.allocator, .{ .string = text }, value);
-                existing.value = value;
-                return value;
-            }
+            if (existing.preinitialized) |value|
+                if (try self.adoptPreinitialized(module_id, requested, existing, value)) |adopted|
+                    return adopted;
             if (existing.loading) return error.ModuleLoadLoop;
         }
         const state = try self.ensureModuleState(module_id);
+        state.export_pristine = false;
         state.loading = true;
         errdefer state.loading = false;
 
         const canonical = self.canonicalModuleName(module_id, requested);
-        const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
-        const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
-        defer freeResults(values);
-        var value: Value = if (values.len == 0) .nil else values[0];
+        var owned_values: ?[]const Value = null;
+        defer if (owned_values) |values| freeResults(values);
+        var value: Value = if (self.static_module) |load|
+            if (try load(self.static_module_ctx, self, module_id)) |static_value|
+                static_value
+            else blk: {
+                const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
+                const previous_globals = try self.enterModule(module_id);
+                defer self.restoreGlobals(previous_globals);
+                const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
+                owned_values = values;
+                break :blk if (values.len == 0) .nil else values[0];
+            }
+        else blk: {
+            const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
+            const previous_globals = try self.enterModule(module_id);
+            defer self.restoreGlobals(previous_globals);
+            const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
+            owned_values = values;
+            break :blk if (values.len == 0) .nil else values[0];
+        };
         if (value == .nil) {
             if (canonical) |text| if (self.package_loaded) |loaded| {
                 if (loaded.rawGet(.{ .string = text })) |existing| value = existing;
@@ -964,13 +1258,17 @@ pub const Context = struct {
     }
 
     pub fn requireModuleId(self: *Context, module_id: u32, raw_name: []const u8) anyerror!Value {
+        if (self.eager_bootstrap)
+            return self.preparedModuleValue(module_id) orelse error.EagerDependencyNotInitialized;
         if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
         const value = try self.loadModule(module_id, raw_name);
         if (self.package_loaded) |loaded| try loaded.rawSet(self.allocator, .{ .string = raw_name }, value);
+        if (self.moduleState(module_id)) |state| state.deferred_require_visibility = false;
         return value;
     }
 
     pub fn requireByName(self: *Context, raw_name: []const u8) anyerror!Value {
+        if (std.mem.eql(u8, raw_name, "package")) try self.observePackage();
         if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
         return self.requireModuleId(try self.resolveModule(raw_name), raw_name);
     }
@@ -1400,9 +1698,134 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     try std.testing.expectEqualStrings("ModuleLoadLoop", ctx.aotErrorName().?);
     ctx.clearAotErrorName();
     ctx.last_error = .nil;
-    try std.testing.expect(!ctx.module_loading.contains(2));
-    try std.testing.expect(ctx.module_values.get(2) == null);
+    const loop_state = ctx.moduleState(2) orelse return error.MissingModuleState;
+    try std.testing.expect(!loop_state.loading);
+    try std.testing.expect(loop_state.value == null);
     try std.testing.expectError(error.ModuleNotFound, ctx.requireByName("Module:Missing"));
+}
+
+const DeferredRequireProbe = struct {
+    fn lookup(_: ?*const anyopaque, module_name: []const u8) ?u32 {
+        return if (std.mem.eql(u8, module_name, "Module:Prepared")) 0 else null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return if (id == 0) "Module:Prepared" else null;
+    }
+};
+
+test "eager module export mutation invalidates pristine direct-call state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 1);
+    defer ctx.deinit();
+    ctx.package_loaded = try ctx.newTable();
+    ctx.configureModules(null, DeferredRequireProbe.lookup, DeferredRequireProbe.name);
+
+    const exported = try ctx.newTable();
+    try exported.rawSet(ctx.allocator, .{ .string = "run" }, .{ .number = 1 });
+    try ctx.preinitializeModule(0, .{ .table = exported }, false);
+    try std.testing.expect(ctx.moduleExportPristine(0));
+
+    try exported.rawSet(ctx.allocator, .{ .string = "other" }, .{ .number = 2 });
+    try std.testing.expect(!ctx.moduleExportPristine(0));
+}
+
+test "prepared static require stays hidden until package becomes observable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 1);
+    defer ctx.deinit();
+    ctx.package_loaded = try ctx.newTable();
+    ctx.configureModules(null, DeferredRequireProbe.lookup, DeferredRequireProbe.name);
+    try ctx.preinitializeModule(0, .{ .string = "prepared" }, false);
+
+    const fast = ctx.deferStaticRequire(0) orelse return error.MissingPreparedModule;
+    try std.testing.expectEqualStrings("prepared", fast.string);
+    try std.testing.expect(ctx.package_loaded.?.rawGet(.{ .string = "Module:Prepared" }) == null);
+
+    try ctx.observePackage();
+    try std.testing.expect(ctx.package_observable);
+    try std.testing.expectEqualStrings(
+        "prepared",
+        ctx.package_loaded.?.rawGet(.{ .string = "Module:Prepared" }).?.string,
+    );
+    try std.testing.expect(ctx.deferStaticRequire(0) == null);
+}
+
+test "eager bootstrap static require does not create deferred package visibility" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 1);
+    defer ctx.deinit();
+    ctx.package_loaded = try ctx.newTable();
+    ctx.configureModules(null, DeferredRequireProbe.lookup, DeferredRequireProbe.name);
+    try ctx.preinitializeModule(0, .{ .string = "prepared" }, false);
+
+    ctx.beginEagerBootstrap();
+    _ = ctx.deferStaticRequire(0) orelse return error.MissingPreparedModule;
+    ctx.endEagerBootstrap();
+    try ctx.observePackage();
+    try std.testing.expect(ctx.package_loaded.?.rawGet(.{ .string = "Module:Prepared" }) == null);
+}
+
+const EagerRequirementProbe = struct {
+    const requirements = [_]ModuleRequirement{
+        .{ .module_id = 1, .requested = "Module:Dep" },
+    };
+
+    fn requirementsFor(_: ?*const anyopaque, module_id: u32) []const ModuleRequirement {
+        return if (module_id == 0) &requirements else &.{};
+    }
+
+    fn parent(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        const dependency = try ctx.requireModuleId(1, "Module:Dep");
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = dependency;
+        return out;
+    }
+
+    fn dep(_: *Context, _: Captures, _: []const Value) ![]const Value {
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "lazy-dep" };
+        return out;
+    }
+};
+
+test "eager module dependencies stay private and fall back on package.loaded override" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 2);
+    defer ctx.deinit();
+    const functions = [_]FunctionFn{
+        stabilize(EagerRequirementProbe.parent),
+        stabilize(EagerRequirementProbe.dep),
+    };
+    ctx.module_root_entries = &functions;
+    ctx.package_loaded = try ctx.newTable();
+    ctx.configureModuleRequirements(null, EagerRequirementProbe.requirementsFor);
+
+    try ctx.preinitializeModule(1, .{ .string = "eager-dep" }, false);
+    try ctx.preinitializeModule(0, .{ .string = "eager-dep" }, false);
+
+    ctx.beginEagerBootstrap();
+    try std.testing.expectEqualStrings(
+        "eager-dep",
+        (try ctx.requireModuleId(1, "Module:Dep")).string,
+    );
+    ctx.endEagerBootstrap();
+    try std.testing.expect(ctx.package_loaded.?.rawGet(.{ .string = "Module:Dep" }) == null);
+
+    try ctx.package_loaded.?.rawSet(
+        ctx.allocator,
+        .{ .string = "Module:Dep" },
+        .{ .string = "override" },
+    );
+    const parent = try ctx.loadModule(0, "Module:Parent");
+    try std.testing.expectEqualStrings("override", parent.string);
+    try std.testing.expectEqualStrings(
+        "override",
+        ctx.package_loaded.?.rawGet(.{ .string = "Module:Dep" }).?.string,
+    );
 }
 
 const RecursiveModuleCacheProbe = struct {
@@ -1434,7 +1857,68 @@ test "recursive module loads keep distinct cache slots" {
     try std.testing.expectEqualStrings("outer", outer.string);
     try std.testing.expectEqualStrings("inner", loaded_inner.string);
     try std.testing.expectEqualStrings("outer", cached_outer.string);
-    try std.testing.expect(ctx.module_values.get(0) != null and ctx.module_values.get(1) != null);
+    try std.testing.expect(ctx.moduleState(0).?.value != null);
+    try std.testing.expect(ctx.moduleState(1).?.value != null);
+}
+
+const ModuleGlobalIsolationProbe = struct {
+    fn rootA(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        try ctx.setGlobal(0, .{ .string = "A" });
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = try ctx.makeFunctionKnown(1, read, &.{});
+        return out;
+    }
+    fn rootB(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        try ctx.setGlobal(0, .{ .string = "B" });
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = try ctx.makeFunctionKnown(3, read, &.{});
+        return out;
+    }
+    fn read(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = ctx.getGlobal(0);
+        return out;
+    }
+};
+
+test "module globals are isolated for dynamic and static calls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 2, 2);
+    defer ctx.deinit();
+    const roots = [_]FunctionFn{
+        stabilize(ModuleGlobalIsolationProbe.rootA),
+        stabilize(ModuleGlobalIsolationProbe.rootB),
+    };
+    const bases = [_]u32{ 0, 2 };
+    const counts = [_]u32{ 2, 2 };
+    ctx.module_root_entries = &roots;
+    ctx.configureModuleFunctions(&bases, &counts);
+    try bindGlobalTable(&ctx, null, 1);
+    try ctx.setGlobal(0, .{ .string = "root" });
+
+    const a = try ctx.loadModule(0, null);
+    const b = try ctx.loadModule(1, null);
+    try std.testing.expectEqualStrings("root", ctx.getGlobal(0).string);
+
+    const a_result = try ctx.callValue(a, &.{});
+    defer freeResults(a_result);
+    try std.testing.expectEqualStrings("A", a_result[0].string);
+    const b_result = try ctx.callValue(b, &.{});
+    defer freeResults(b_result);
+    try std.testing.expectEqualStrings("B", b_result[0].string);
+    try std.testing.expectEqualStrings("root", ctx.getGlobal(0).string);
+
+    const static_a = try ctx.callStaticFunctionBuffered(
+        1,
+        stabilize(ModuleGlobalIsolationProbe.read),
+        &.{},
+        &.{},
+        null,
+    );
+    defer freeResults(static_a);
+    try std.testing.expectEqualStrings("A", static_a[0].string);
+    try std.testing.expectEqualStrings("root", ctx.getGlobal(0).string);
 }
 
 const NativeHostProbe = struct {
@@ -1517,10 +2001,13 @@ pub inline fn touch(value: anytype) void {
     _ = value;
 }
 pub fn bindGlobalTable(ctx: *Context, shape: ?*const Shape, env_slot: u32) !void {
-    if (ctx.global_table != null) return error.GlobalTableAlreadyBound;
+    if (ctx.root_global_table != null) return error.GlobalTableAlreadyBound;
     const table = try ctx.allocator.create(Table);
     table.* = .{ .shape = shape, .slots = ctx.globals, .owns_slots = false };
     ctx.global_table = table;
+    ctx.root_global_table = table;
+    ctx.root_globals = ctx.globals;
+    ctx.global_env_slot = env_slot;
     try ctx.setGlobal(env_slot, .{ .table = table });
 }
 
@@ -1854,8 +2341,8 @@ test "AOT context startup stays independent of corpus module count" {
     defer ctx.deinit();
     try std.testing.expectEqual(@as(usize, 2), ctx.globals.len);
     try std.testing.expectEqual(@as(usize, 1_000_000), ctx.module_count);
-    try std.testing.expectEqual(@as(usize, 0), ctx.module_loading.count());
-    try std.testing.expectEqual(@as(usize, 0), ctx.module_values.count());
+    try std.testing.expect(ctx.module_state_pages.len > 0);
+    for (ctx.module_state_pages) |page| try std.testing.expect(page == null);
 }
 
 test "forked AOT context shares native module entries but resets runtime state" {
@@ -1870,14 +2357,14 @@ test "forked AOT context shares native module entries but resets runtime state" 
     parent.setHost(&host_marker);
     parent.current_frame = try parent.newTable();
     try parent.setGlobal(1, .{ .number = 9 });
-    try parent.module_values.put(parent.allocator, 0, .{ .number = 1 });
+    try parent.preinitializeModule(0, .{ .number = 1 }, false);
 
     var child = try parent.forkProgram(arena.allocator());
     defer child.deinit();
     try std.testing.expect(child.module_root_entries.ptr == parent.module_root_entries.ptr);
     try std.testing.expect(child.getGlobal(1) == .nil);
-    try std.testing.expectEqual(@as(usize, 0), child.module_values.count());
-    try std.testing.expectEqual(@as(usize, 1), parent.module_values.count());
+    try std.testing.expect(child.moduleState(0) == null);
+    try std.testing.expectEqual(@as(f64, 1), parent.preparedModuleValue(0).?.number);
     try std.testing.expect(child.host == parent.host);
     try std.testing.expect(child.current_frame == null);
     try std.testing.expectEqual(@as(u32, 0), try child.resolveModule("Module:A"));

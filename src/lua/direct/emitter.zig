@@ -6,7 +6,7 @@ const shapes = @import("shapes.zig");
 const static_fields = @import("../abi/static_fields.zig");
 const global_abi = @import("../abi/globals.zig");
 const llvm = @import("llvm.zig");
-const static_literal = @import("../runtime/static_literal_format.zig");
+const static_encode = @import("static_literal_encode.zig");
 
 const A = std.mem.Allocator;
 const V = llvm.ValueRef;
@@ -19,9 +19,12 @@ pub const ModuleIdMap = std.StringHashMapUnmanaged(u32);
 pub const DirectExport = struct {
     name: []const u8,
     function_id: u32,
+    capture_count: u32 = 0,
 };
 pub const ModuleFact = struct {
     root_pure: bool = false,
+    eager_prepared: bool = false,
+    canonical_name: []const u8 = "",
     exports: []const DirectExport = &.{},
 };
 pub const ProgramFacts = struct {
@@ -46,17 +49,24 @@ pub const ProgramFacts = struct {
         return table_shapes.get(span_start);
     }
 
-    pub fn exportFunction(self: ProgramFacts, module_id: u32, name: []const u8) ?u32 {
+    pub fn exportFunction(self: ProgramFacts, module_id: u32, name: []const u8) ?DirectExport {
         const facts = self.module_facts orelse return null;
         if (module_id >= facts.len) return null;
         for (facts[module_id].exports) |entry|
-            if (std.mem.eql(u8, entry.name, name)) return entry.function_id;
+            if (std.mem.eql(u8, entry.name, name)) return entry;
         return null;
     }
 
     pub fn moduleRootPure(self: ProgramFacts, module_id: u32) bool {
         const facts = self.module_facts orelse return false;
         return module_id < facts.len and facts[module_id].root_pure;
+    }
+
+    pub fn canDeferRequire(self: ProgramFacts, module_id: u32, raw: []const u8) bool {
+        const facts = self.module_facts orelse return false;
+        if (module_id >= facts.len) return false;
+        const fact = facts[module_id];
+        return fact.eager_prepared and std.mem.eql(u8, raw, fact.canonical_name);
     }
 };
 
@@ -76,12 +86,15 @@ const StaticFunctionRef = struct {
     function_id: u32,
     captures_ptr: V,
     captures_len: usize,
+    direct_captures: ?V = null,
+    pristine_guard: ?V = null,
     guard_callable: ?V = null,
 };
 
 const StaticModuleRef = struct {
     module_id: u32,
     value: V,
+    no_lookup_export: bool = false,
 };
 
 const ValueRef = union(enum) {
@@ -147,8 +160,12 @@ const Runtime = struct {
     value_copy: V,
     value_truthy: V,
     value_is_function_id: V,
+    value_function_captures: V,
     value_is_nil: V,
     require_number: V,
+    observe_package: V,
+    defer_require_module_id: V,
+    module_export_pristine: V,
     arg_ptr: V,
     arg_get: V,
     global_ptr: V,
@@ -210,8 +227,12 @@ const Runtime = struct {
             .value_copy = try declare(m, "dict_lua_value_copy", ty.void, &.{ ty.ptr, ty.ptr }),
             .value_truthy = try declare(m, "dict_lua_value_truthy", ty.i8, &.{ty.ptr}),
             .value_is_function_id = try declare(m, "dict_lua_value_is_function_id", ty.i8, &.{ ty.ptr, ty.i32 }),
+            .value_function_captures = try declare(m, "dict_lua_value_function_captures", ty.ptr, &.{ ty.ptr, ty.i32 }),
             .value_is_nil = try declare(m, "dict_lua_value_is_nil", ty.i8, &.{ty.ptr}),
             .require_number = try declare(m, "dict_lua_require_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
+            .observe_package = try declare(m, "dict_lua_observe_package", ty.i32, &.{ty.ptr}),
+            .defer_require_module_id = try declare(m, "dict_lua_defer_require_module_id", ty.i8, &.{ ty.ptr, ty.i32, ty.ptr }),
+            .module_export_pristine = try declare(m, "dict_lua_module_export_pristine", ty.i8, &.{ ty.ptr, ty.i32 }),
             .arg_ptr = try declare(m, "dict_lua_arg_ptr", ty.ptr, &.{ ty.ptr, ty.i64, ty.i64 }),
             .arg_get = try declare(m, "dict_lua_arg_get", ty.void, &.{ ty.ptr, ty.i64, ty.i64, ty.ptr }),
             .global_ptr = try declare(m, "dict_lua_global_ptr", ty.ptr, &.{ ty.ptr, ty.i32 }),
@@ -245,17 +266,17 @@ const Runtime = struct {
             .make_function = try declare(m, "dict_lua_make_function", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr }),
             .call_fixed = try declare(m, "dict_lua_call_fixed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .call_fixed_tail = try declare(m, "dict_lua_call_fixed_tail", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
-            .call_static_fixed = try declare(m, "dict_lua_call_static_fixed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
-            .call_static_fixed_tail = try declare(m, "dict_lua_call_static_fixed_tail", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
-            .enter_static_call = try declare(m, "dict_lua_enter_static_call", ty.i32, &.{ty.ptr}),
+            .call_static_fixed = try declare(m, "dict_lua_call_static_fixed", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_static_fixed_tail = try declare(m, "dict_lua_call_static_fixed_tail", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .enter_static_call = try declare(m, "dict_lua_enter_static_call", ty.i32, &.{ ty.ptr, ty.i32 }),
             .leave_static_call = try declare(m, "dict_lua_leave_static_call", ty.void, &.{ty.ptr}),
             .function_status = try declare(m, "dict_lua_function_status", ty.i32, &.{ ty.ptr, ty.i32 }),
             .call_discard = try declare(m, "dict_lua_call_discard", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64 }),
             .call_discard_tail = try declare(m, "dict_lua_call_discard_tail", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .call_multi = try declare(m, "dict_lua_call_multi", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64 }),
             .call_multi_tail = try declare(m, "dict_lua_call_multi_tail", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
-            .call_static_multi = try declare(m, "dict_lua_call_static_multi", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
-            .call_static_multi_tail = try declare(m, "dict_lua_call_static_multi_tail", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_static_multi = try declare(m, "dict_lua_call_static_multi", ty.call_result, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_static_multi_tail = try declare(m, "dict_lua_call_static_multi_tail", ty.call_result, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .results_free = try declare(m, "dict_lua_results_free", ty.void, &.{ ty.ptr, ty.i64 }),
             .return_values = try declare(m, "dict_lua_return_values", ty.function_result, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .return_join = try declare(m, "dict_lua_return_join", ty.function_result, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
@@ -361,95 +382,9 @@ const ModuleEmitter = struct {
         len: usize,
     };
 
-    fn blobU32(self: *ModuleEmitter, out: *std.ArrayList(u8), value: usize) anyerror!void {
-        var bytes: [4]u8 = undefined;
-        std.mem.writeInt(
-            u32,
-            &bytes,
-            std.math.cast(u32, value) orelse return error.StaticLiteralTooLarge,
-            .little,
-        );
-        try out.appendSlice(self.allocator, &bytes);
-    }
-
-    fn blobRawU32(self: *ModuleEmitter, out: *std.ArrayList(u8), value: u32) anyerror!void {
-        var bytes: [4]u8 = undefined;
-        std.mem.writeInt(u32, &bytes, value, .little);
-        try out.appendSlice(self.allocator, &bytes);
-    }
-
-    fn blobU64(self: *ModuleEmitter, out: *std.ArrayList(u8), value: u64) anyerror!void {
-        var bytes: [8]u8 = undefined;
-        std.mem.writeInt(u64, &bytes, value, .little);
-        try out.appendSlice(self.allocator, &bytes);
-    }
-
-    fn blobString(self: *ModuleEmitter, out: *std.ArrayList(u8), value: []const u8) anyerror!void {
-        try self.blobU32(out, value.len);
-        try out.appendSlice(self.allocator, value);
-    }
-
-    fn encodeStaticExpr(
-        self: *ModuleEmitter,
-        out: *std.ArrayList(u8),
-        value: *const lua.Expr,
-        depth: usize,
-    ) anyerror!void {
-        if (depth >= static_literal.max_depth) return error.StaticLiteralTooDeep;
-        switch (value.*) {
-            .nil_lit => try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.nil)),
-            .bool_lit => |literal| try out.append(
-                self.allocator,
-                @intFromEnum(if (literal.value) static_literal.ValueTag.true_ else static_literal.ValueTag.false_),
-            ),
-            .number => |literal| {
-                try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.number));
-                const number = try numbers.parse(literal.raw);
-                try self.blobU64(out, @bitCast(number));
-            },
-            .string => |literal| {
-                try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.string));
-                try self.blobString(out, literal.value);
-            },
-            .paren => |paren| try self.encodeStaticExpr(out, paren.expr, depth),
-            .table => |table_expr| {
-                try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.table));
-                const shape_id = if (self.facts.tableShape(table_expr.span.start)) |shape|
-                    shape.id
-                else
-                    static_literal.no_shape;
-                try self.blobRawU32(out, shape_id);
-                try self.blobU32(out, table_expr.fields.len);
-                var list_capacity: usize = 0;
-                for (table_expr.fields) |field| if (field == .list) {
-                    list_capacity += 1;
-                };
-                try self.blobU32(out, list_capacity);
-                for (table_expr.fields) |field| switch (field) {
-                    .list => |item| {
-                        try out.append(self.allocator, @intFromEnum(static_literal.FieldTag.list));
-                        try self.encodeStaticExpr(out, item, depth + 1);
-                    },
-                    .named => |item| {
-                        try out.append(self.allocator, @intFromEnum(static_literal.FieldTag.named));
-                        try self.blobString(out, item.name);
-                        try self.encodeStaticExpr(out, item.value, depth + 1);
-                    },
-                    .keyed => |item| {
-                        try out.append(self.allocator, @intFromEnum(static_literal.FieldTag.keyed));
-                        try self.encodeStaticExpr(out, item.key, depth + 1);
-                        try self.encodeStaticExpr(out, item.value, depth + 1);
-                    },
-                };
-            },
-            else => return error.NonStaticLiteral,
-        }
-    }
-
     fn staticLiteralBlob(self: *ModuleEmitter, value: *const lua.Expr) anyerror!StaticLiteralBlob {
-        var bytes: std.ArrayList(u8) = .empty;
-        defer bytes.deinit(self.allocator);
-        try self.encodeStaticExpr(&bytes, value, 0);
+        const bytes = try static_encode.encode(self.allocator, value, self.facts.table_shapes);
+        defer self.allocator.free(bytes);
 
         const id = self.static_literal_blobs;
         self.static_literal_blobs += 1;
@@ -459,36 +394,17 @@ const ModuleEmitter = struct {
             .{ self.function_base, id },
         );
         defer self.allocator.free(name);
-        const array_ty = try llvm.arrayType(self.llvm_module.types.i8, bytes.items.len);
+        const array_ty = try llvm.arrayType(self.llvm_module.types.i8, bytes.len);
         const global = try self.llvm_module.addGlobal(
             name,
             array_ty,
-            try llvm.constString(self.llvm_module.context, bytes.items),
+            try llvm.constString(self.llvm_module.context, bytes),
             .private,
             1,
         );
-        return .{ .ptr = global, .len = bytes.items.len };
+        return .{ .ptr = global, .len = bytes.len };
     }
 };
-
-fn isStaticLiteral(expr: *const lua.Expr) bool {
-    return switch (expr.*) {
-        .nil_lit, .bool_lit, .number, .string => true,
-        .paren => |paren| isStaticLiteral(paren.expr),
-        .table => |table_expr| isStaticFields(table_expr.fields),
-        else => false,
-    };
-}
-
-fn isStaticFields(fields: []const lua.TableField) bool {
-    for (fields) |field| switch (field) {
-        .list => |item| if (!isStaticLiteral(item)) return false,
-        .named => |item| if (!isStaticLiteral(item.value)) return false,
-        .keyed => |item| if (!isStaticLiteral(item.key) or !isStaticLiteral(item.value))
-            return false,
-    };
-    return true;
-}
 
 const Save = struct { name: []const u8, previous: ?u32 };
 const Resolved = union(enum) { local: u32, upvalue: u32, global: u32 };
@@ -836,6 +752,10 @@ const FnEmitter = struct {
                 break :blk .{ .boxed = out };
             },
             .global => |slot| blk: {
+                if (slot == global_abi.id("package") or slot == global_abi.id("_G")) {
+                    const status = try llvm.call(self.builder, self.rt().observe_package, &.{self.ctx()});
+                    try self.check(status);
+                }
                 if (self.module.globals.stableSlot(slot) and slot < global_abi.count) {
                     const ptr = try llvm.call(self.builder, self.rt().global_ptr, &.{ self.ctx(), try self.cI32(slot) });
                     const name = self.module.globals.names.items[slot];
@@ -1098,7 +1018,7 @@ const FnEmitter = struct {
     fn table(self: *FnEmitter, table_expr: anytype) anyerror!ValueRef {
         const fields = table_expr.fields;
         const shape = self.module.facts.tableShape(table_expr.span.start);
-        if (fields.len >= static_literal_blob_threshold and isStaticFields(fields)) {
+        if (fields.len >= static_literal_blob_threshold and static_encode.isFields(fields)) {
             var literal = lua.Expr{ .table = table_expr };
             const data = try self.module.staticLiteralBlob(&literal);
             const table_value = try self.valueSlot();
@@ -1267,7 +1187,11 @@ const FnEmitter = struct {
             },
             .paren => |paren| self.staticModuleExpr(paren.expr),
             .call => |call| if (try self.staticRequire(call.callee, null, call.args)) |request|
-                .{ .module_id = request.module_id, .value = try self.directRequireValue(request) }
+                .{
+                    .module_id = request.module_id,
+                    .value = try self.directRequireValue(request),
+                    .no_lookup_export = self.module.facts.canDeferRequire(request.module_id, request.requested.bytes),
+                }
             else
                 null,
             else => null,
@@ -1286,13 +1210,47 @@ const FnEmitter = struct {
             .index => |index| blk: {
                 const field = staticString(index.key) orelse break :blk null;
                 const module = (try self.staticModuleExpr(index.object)) orelse break :blk null;
-                const function_id = self.module.facts.exportFunction(module.module_id, field) orelse break :blk null;
+                const export_fact = self.module.facts.exportFunction(module.module_id, field) orelse break :blk null;
+
+                if (export_fact.capture_count == 0 and module.no_lookup_export) {
+                    const pristine_raw = try llvm.call(self.builder, self.rt().module_export_pristine, &.{
+                        self.ctx(), try self.cI32(module.module_id),
+                    });
+                    const pristine = try llvm.icmp(self.builder, .ne, pristine_raw, try self.cI8(0));
+                    const fallback_block = try self.newBlock("export_callee_fallback");
+                    const join = try self.newBlock("export_callee_join");
+                    try llvm.condBr(self.builder, pristine, join, fallback_block);
+
+                    llvm.position(self.builder, fallback_block);
+                    const live = try self.getField(.{ .boxed = module.value }, field);
+                    const callable = try self.box(live);
+                    try llvm.br(self.builder, join);
+                    llvm.position(self.builder, join);
+                    break :blk .{
+                        .function_id = export_fact.function_id,
+                        .captures_ptr = try self.nullPtr(),
+                        .captures_len = 0,
+                        .direct_captures = null,
+                        .pristine_guard = pristine,
+                        .guard_callable = callable,
+                    };
+                }
+
                 const live = try self.getField(.{ .boxed = module.value }, field);
+                const callable = try self.box(live);
+                const direct_captures = if (export_fact.capture_count == 0)
+                    try self.nullPtr()
+                else
+                    try llvm.call(self.builder, self.rt().value_function_captures, &.{
+                        callable,
+                        try self.cI32(export_fact.function_id),
+                    });
                 break :blk .{
-                    .function_id = function_id,
+                    .function_id = export_fact.function_id,
                     .captures_ptr = try self.nullPtr(),
                     .captures_len = 0,
-                    .guard_callable = try self.box(live),
+                    .direct_captures = direct_captures,
+                    .guard_callable = callable,
                 };
             },
             .paren => |paren| self.staticCallee(paren.expr),
@@ -1355,6 +1313,30 @@ const FnEmitter = struct {
 
     fn directRequireValue(self: *FnEmitter, request: StaticRequire) anyerror!V {
         const loaded = try self.valueSlot();
+        if (self.module.facts.canDeferRequire(request.module_id, request.requested.bytes)) {
+            const fast = try llvm.call(self.builder, self.rt().defer_require_module_id, &.{
+                self.ctx(), try self.cI32(request.module_id), loaded,
+            });
+            const fast_block = try self.newBlock("require_prepared");
+            const fallback_block = try self.newBlock("require_fallback");
+            const join = try self.newBlock("require_join");
+            const ready = try llvm.icmp(self.builder, .ne, fast, try self.cI8(0));
+            try llvm.condBr(self.builder, ready, fast_block, fallback_block);
+
+            llvm.position(self.builder, fast_block);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, fallback_block);
+            const status = try llvm.call(self.builder, self.rt().require_module_id, &.{
+                self.ctx(),                           try self.cI32(request.module_id), request.requested.ptr,
+                try self.cI64(request.requested.len), loaded,
+            });
+            try self.check(status);
+            try llvm.br(self.builder, join);
+            llvm.position(self.builder, join);
+            return loaded;
+        }
+
         const status = try llvm.call(self.builder, self.rt().require_module_id, &.{
             self.ctx(),                           try self.cI32(request.module_id), request.requested.ptr,
             try self.cI64(request.requested.len), loaded,
@@ -1381,13 +1363,16 @@ const FnEmitter = struct {
         output: V,
         count: usize,
     ) anyerror!void {
-        if (function.captures_len == 0 and prepared.tail == null) {
+        if ((function.captures_len == 0 or function.direct_captures != null) and prepared.tail == null) {
             for (0..count) |index|
                 _ = try llvm.call(self.builder, self.rt().value_nil, &.{try self.arrayElem(output, index)});
-            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{self.ctx()});
+            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{
+                self.ctx(), try self.cI32(function.function_id),
+            });
             try self.check(enter);
+            const capture_context = function.direct_captures orelse try self.nullPtr();
             const result = try llvm.call(self.builder, entry_fn, &.{
-                self.ctx(), try self.nullPtr(),   prepared.fixed, try self.cI64(prepared.fixed_len),
+                self.ctx(), capture_context,      prepared.fixed, try self.cI64(prepared.fixed_len),
                 output,     try self.cI64(count),
             });
             _ = try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
@@ -1399,14 +1384,15 @@ const FnEmitter = struct {
 
         const status = if (prepared.tail) |tail|
             try llvm.call(self.builder, self.rt().call_static_fixed_tail, &.{
-                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
-                prepared.fixed, try self.cI64(prepared.fixed_len), tail.ptr,              tail.len,
-                output,         try self.cI64(count),
+                self.ctx(),                           try self.cI32(function.function_id), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                      try self.cI64(prepared.fixed_len), tail.ptr,
+                tail.len,                             output,                              try self.cI64(count),
             })
         else
             try llvm.call(self.builder, self.rt().call_static_fixed, &.{
-                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
-                prepared.fixed, try self.cI64(prepared.fixed_len), output,                try self.cI64(count),
+                self.ctx(),                           try self.cI32(function.function_id), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                      try self.cI64(prepared.fixed_len), output,
+                try self.cI64(count),
             });
         try self.check(status);
     }
@@ -1445,7 +1431,32 @@ const FnEmitter = struct {
         const output = try self.valueArray(count);
         const entry_fn = try self.module.functionValue(function.function_id);
 
+        if (function.pristine_guard) |pristine| {
+            const callable = function.guard_callable orelse return error.MissingPristineFallback;
+            const direct_block = try self.newBlock("pristine_export");
+            const fallback_block = try self.newBlock("pristine_export_fallback");
+            const join = try self.newBlock("pristine_export_join");
+            try llvm.condBr(self.builder, pristine, direct_block, fallback_block);
+
+            llvm.position(self.builder, direct_block);
+            try self.emitStaticFixedPrepared(function, entry_fn, prepared, output, count);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, fallback_block);
+            try self.emitFallbackFixedPrepared(callable, prepared, output, count);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, join);
+            if (prepared.tail) |tail| try self.freeMulti(tail);
+            return if (count == 0) null else output;
+        }
+
         if (function.guard_callable) |callable| {
+            if (function.direct_captures != null and prepared.tail != null) {
+                try self.emitFallbackFixedPrepared(callable, prepared, output, count);
+                if (prepared.tail) |tail| try self.freeMulti(tail);
+                return if (count == 0) null else output;
+            }
             const is_expected = try llvm.call(self.builder, self.rt().value_is_function_id, &.{
                 callable, try self.cI32(function.function_id),
             });
@@ -1479,11 +1490,14 @@ const FnEmitter = struct {
         entry_fn: V,
         prepared: PreparedArgs,
     ) anyerror!MultiRef {
-        if (function.captures_len == 0 and prepared.tail == null) {
-            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{self.ctx()});
+        if ((function.captures_len == 0 or function.direct_captures != null) and prepared.tail == null) {
+            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{
+                self.ctx(), try self.cI32(function.function_id),
+            });
             try self.check(enter);
+            const capture_context = function.direct_captures orelse try self.nullPtr();
             const result = try llvm.call(self.builder, entry_fn, &.{
-                self.ctx(),         try self.nullPtr(), prepared.fixed, try self.cI64(prepared.fixed_len),
+                self.ctx(),         capture_context,  prepared.fixed, try self.cI64(prepared.fixed_len),
                 try self.nullPtr(), try self.cI64(0),
             });
             _ = try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
@@ -1499,13 +1513,14 @@ const FnEmitter = struct {
 
         const result = if (prepared.tail) |tail|
             try llvm.call(self.builder, self.rt().call_static_multi_tail, &.{
-                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
-                prepared.fixed, try self.cI64(prepared.fixed_len), tail.ptr,              tail.len,
+                self.ctx(),                           try self.cI32(function.function_id), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                      try self.cI64(prepared.fixed_len), tail.ptr,
+                tail.len,
             })
         else
             try llvm.call(self.builder, self.rt().call_static_multi, &.{
-                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
-                prepared.fixed, try self.cI64(prepared.fixed_len),
+                self.ctx(),                           try self.cI32(function.function_id), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                      try self.cI64(prepared.fixed_len),
             });
         try self.check(try llvm.extractValue(self.builder, result, 2));
         return .{
@@ -1536,7 +1551,42 @@ const FnEmitter = struct {
         const prepared = try self.prepareStaticArgs(args_in);
         const entry_fn = try self.module.functionValue(function.function_id);
 
+        if (function.pristine_guard) |pristine| {
+            const callable = function.guard_callable orelse return error.MissingPristineFallback;
+            const ptr_slot = try self.ptrSlot();
+            const len_slot = try self.i64Slot();
+            const direct_block = try self.newBlock("pristine_export_multi");
+            const fallback_block = try self.newBlock("pristine_export_multi_fallback");
+            const join = try self.newBlock("pristine_export_multi_join");
+            try llvm.condBr(self.builder, pristine, direct_block, fallback_block);
+
+            llvm.position(self.builder, direct_block);
+            const direct = try self.emitStaticMultiPrepared(function, entry_fn, prepared);
+            try llvm.store(self.builder, direct.ptr, ptr_slot, 8);
+            try llvm.store(self.builder, direct.len, len_slot, 8);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, fallback_block);
+            const fallback = try self.emitFallbackMultiPrepared(callable, prepared);
+            try llvm.store(self.builder, fallback.ptr, ptr_slot, 8);
+            try llvm.store(self.builder, fallback.len, len_slot, 8);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, join);
+            if (prepared.tail) |tail| try self.freeMulti(tail);
+            return .{
+                .ptr = try llvm.load(self.builder, self.ty().ptr, ptr_slot, 8),
+                .len = try llvm.load(self.builder, self.ty().i64, len_slot, 8),
+                .owned = true,
+            };
+        }
+
         if (function.guard_callable) |callable| {
+            if (function.direct_captures != null and prepared.tail != null) {
+                const fallback = try self.emitFallbackMultiPrepared(callable, prepared);
+                if (prepared.tail) |tail| try self.freeMulti(tail);
+                return fallback;
+            }
             const ptr_slot = try self.ptrSlot();
             const len_slot = try self.i64Slot();
             const is_expected = try llvm.call(self.builder, self.rt().value_is_function_id, &.{
@@ -1892,6 +1942,10 @@ const FnEmitter = struct {
                             self.storage[binding] = .{ .static_module = .{
                                 .module_id = request.module_id,
                                 .value = loaded,
+                                .no_lookup_export = self.module.facts.canDeferRequire(
+                                    request.module_id,
+                                    request.requested.bytes,
+                                ),
                             } };
                             return false;
                         };
