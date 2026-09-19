@@ -11,10 +11,12 @@ pub const ModuleRecord = struct {
     title: []const u8,
     path: []const u8,
     source_bytes: u64,
+    source_index: u32,
     function_base: u32,
     function_count: u32,
     root_function: u32,
     export_shape_id: ?u32,
+    dynamic_module_load: bool = false,
 };
 
 const ModuleLookupEntry = struct {

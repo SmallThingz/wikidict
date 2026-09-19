@@ -14,6 +14,16 @@ pub const Profile = struct {
     direct_module_fanin: []u32,
 };
 
+pub const PageSeeds = struct {
+    values: []u64,
+    dynamic_module_target: bool = false,
+
+    pub fn deinit(self: *PageSeeds, a: std.mem.Allocator) void {
+        a.free(self.values);
+        self.* = undefined;
+    }
+};
+
 pub const CompileMode = enum {
     o1,
     o2,
@@ -272,7 +282,7 @@ pub fn pageSeeds(
     path: []const u8,
     module_ids: *const std.StringHashMapUnmanaged(u32),
     module_count: usize,
-) ![]u64 {
+) !PageSeeds {
     const direct_page = try a.alloc(u64, module_count);
     @memset(direct_page, 0);
 
@@ -280,7 +290,7 @@ pub fn pageSeeds(
     defer file.close(io);
     const stat = try file.stat(io);
     const len = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
-    if (len == 0) return direct_page;
+    if (len == 0) return .{ .values = direct_page };
     defer a.free(direct_page);
 
     const bytes = try std.posix.mmap(
@@ -299,6 +309,7 @@ pub fn pageSeeds(
     defer invokes.deinit(a);
     var scratch = std.heap.ArenaAllocator.init(a);
     defer scratch.deinit();
+    var dynamic_module_target = false;
 
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     while (lines.next()) |line| {
@@ -342,6 +353,12 @@ pub fn pageSeeds(
                 if (module_ids.get(module_name)) |module_id|
                     direct_page[module_id] = saturatingAdd(direct_page[module_id], count);
             },
+            'D' => {
+                const kind = fields.next() orelse return error.InvalidUsageSnapshot;
+                if (!std.mem.eql(u8, kind, "module") or fields.next() != null)
+                    return error.InvalidUsageSnapshot;
+                dynamic_module_target = true;
+            },
             else => return error.InvalidUsageSnapshot,
         }
         _ = scratch.reset(.retain_capacity);
@@ -360,7 +377,7 @@ pub fn pageSeeds(
     for (invokes.items) |invoke|
         page_seed[invoke.module] = saturatingAdd(page_seed[invoke.module], template_usage[invoke.template]);
 
-    return page_seed;
+    return .{ .values = page_seed, .dynamic_module_target = dynamic_module_target };
 }
 
 pub fn buildProfile(
@@ -397,6 +414,26 @@ pub fn buildProfile(
         .direct_page_reach = direct_page,
         .direct_module_fanin = fanin,
     };
+}
+
+pub fn reachableModules(
+    a: std.mem.Allocator,
+    profile: Profile,
+    module_dynamic_load: []const bool,
+    dynamic_corpus_target: bool,
+) ![]bool {
+    if (profile.page_reach.len != module_dynamic_load.len)
+        return error.InvalidUsageProfile;
+    const reachable = try a.alloc(bool, profile.page_reach.len);
+    var retain_all = dynamic_corpus_target;
+    for (profile.page_reach, module_dynamic_load) |reach, dynamic_load|
+        if (reach != 0 and dynamic_load) {
+            retain_all = true;
+            break;
+        };
+    for (reachable, profile.page_reach) |*keep, reach|
+        keep.* = retain_all or reach != 0;
+    return reachable;
 }
 
 const Ranked = struct {
@@ -516,4 +553,34 @@ test "mode selection is usage first with a modest size penalty" {
     try std.testing.expectEqual(CompileMode.o2, modes[0]);
     try std.testing.expectEqual(CompileMode.o2, modes[1]);
     try std.testing.expectEqual(CompileMode.o1, modes[2]);
+}
+
+test "reachability prunes zero-reach modules without dynamic targets" {
+    const a = std.testing.allocator;
+    var profile = Profile{
+        .page_reach = try a.dupe(u64, &.{ 10, 0, 2, 0 }),
+        .module_reach = try a.dupe(u64, &.{ 0, 0, 0, 0 }),
+        .direct_page_reach = try a.dupe(u64, &.{ 10, 0, 2, 0 }),
+        .direct_module_fanin = try a.dupe(u32, &.{ 0, 0, 0, 0 }),
+    };
+    defer deinitProfile(a, &profile);
+    const dynamic = [_]bool{ false, false, false, false };
+    const reachable = try reachableModules(a, profile, &dynamic, false);
+    defer a.free(reachable);
+    try std.testing.expectEqualSlices(bool, &.{ true, false, true, false }, reachable);
+}
+
+test "reachable dynamic module load conservatively retains whole module set" {
+    const a = std.testing.allocator;
+    var profile = Profile{
+        .page_reach = try a.dupe(u64, &.{ 10, 0, 2 }),
+        .module_reach = try a.dupe(u64, &.{ 0, 0, 0 }),
+        .direct_page_reach = try a.dupe(u64, &.{ 10, 0, 2 }),
+        .direct_module_fanin = try a.dupe(u32, &.{ 0, 0, 0 }),
+    };
+    defer deinitProfile(a, &profile);
+    const dynamic = [_]bool{ true, false, false };
+    const reachable = try reachableModules(a, profile, &dynamic, false);
+    defer a.free(reachable);
+    try std.testing.expectEqualSlices(bool, &.{ true, true, true }, reachable);
 }

@@ -212,6 +212,7 @@ pub fn main(init: std.process.Init) !void {
     defer root_template_usage.deinit(init.arena.allocator());
     var root_module_usage: UsageCountMap = .empty;
     defer root_module_usage.deinit(init.arena.allocator());
+    var dynamic_module_usage = false;
 
     var redirects_file = try std.Io.Dir.cwd().createFile(init.io, redirects_path, .{ .truncate = true });
     defer redirects_file.close(init.io);
@@ -316,10 +317,13 @@ pub fn main(init: std.process.Init) !void {
                 else
                     text_raw;
                 var refs: std.ArrayList(lua_usage.Ref) = .empty;
-                if (parsed_ns == 10)
-                    try lua_usage.scanTemplateWikitext(arena.allocator(), usage_source, &refs)
+                const scan_flags = if (parsed_ns == 10)
+                    try lua_usage.scanTemplateWikitextFlags(arena.allocator(), usage_source, &refs)
                 else if (parsed_ns != 828)
-                    try lua_usage.scanWikitext(arena.allocator(), usage_source, &refs);
+                    try lua_usage.scanWikitextFlags(arena.allocator(), usage_source, &refs)
+                else
+                    lua_usage.ScanFlags{};
+                dynamic_module_usage = dynamic_module_usage or scan_flags.dynamic_module_target;
 
                 if (parsed_ns == 10) {
                     var seen_templates: std.StringHashMapUnmanaged(void) = .empty;
@@ -427,6 +431,7 @@ pub fn main(init: std.process.Init) !void {
     if (uw) |usage_out| {
         try writeUsageCounts(init.arena.allocator(), usage_out, 'R', &root_template_usage);
         try writeUsageCounts(init.arena.allocator(), usage_out, 'P', &root_module_usage);
+        if (dynamic_module_usage) try usage_out.writeAll("D\tmodule\n");
         try usage_out.flush();
     }
     try mw.flush();

@@ -98,21 +98,29 @@ fn firstTopLevelPart(body: []const u8) []const u8 {
     return std.mem.trim(u8, body[0..pipe], " \t\r\n");
 }
 
-fn classifyHead(a: std.mem.Allocator, head: []const u8, out: *std.ArrayList(Ref)) !void {
+pub const ScanFlags = struct {
+    dynamic_module_target: bool = false,
+};
+
+fn classifyHead(a: std.mem.Allocator, head: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags) !void {
     if (head.len == 0) return;
     if (preprocess.findTopDelimiter(head, ':')) |colon| {
         const name = std.mem.trim(u8, head[0..colon], " \t\r\n");
         if (std.ascii.eqlIgnoreCase(name, "#invoke")) {
             if (try canonicalModule(a, head[colon + 1 ..])) |target|
-                try out.append(a, .{ .kind = .module, .target = target });
+                try out.append(a, .{ .kind = .module, .target = target })
+            else
+                flags.dynamic_module_target = true;
             return;
         }
     }
     if (try canonicalTemplate(a, head)) |target|
-        try out.append(a, .{ .kind = .template, .target = target });
+        try out.append(a, .{ .kind = .template, .target = target })
+    else if (containsDynamicSyntax(head))
+        flags.dynamic_module_target = true;
 }
 
-fn scanRange(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref), depth: usize) anyerror!void {
+fn scanRange(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags, depth: usize) anyerror!void {
     if (depth >= 128) return;
     var pos: usize = 0;
     while (preprocess.findTemplateOpenOutsideLiteralTags(source, pos)) |open| {
@@ -126,7 +134,7 @@ fn scanRange(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref),
                 continue;
             };
             if (end > open + 3)
-                try scanRange(a, source[open + 3 .. end], out, depth + 1);
+                try scanRange(a, source[open + 3 .. end], out, flags, depth + 1);
             pos = @min(end + 3, source.len);
             continue;
         }
@@ -136,23 +144,35 @@ fn scanRange(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref),
             continue;
         };
         const body = source[open + 2 .. end];
-        try classifyHead(a, firstTopLevelPart(body), out);
-        if (body.len != 0) try scanRange(a, body, out, depth + 1);
+        try classifyHead(a, firstTopLevelPart(body), out, flags);
+        if (body.len != 0) try scanRange(a, body, out, flags, depth + 1);
         pos = @min(end + 2, source.len);
     }
 }
 
+pub fn scanWikitextFlags(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref)) !ScanFlags {
+    var flags: ScanFlags = .{};
+    try scanRange(a, source, out, &flags, 0);
+    return flags;
+}
+
 pub fn scanWikitext(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref)) !void {
-    try scanRange(a, source, out, 0);
+    _ = try scanWikitextFlags(a, source, out);
+}
+
+pub fn scanTemplateWikitextFlags(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref)) !ScanFlags {
+    const body = preprocess.transcludeDecodedAlloc(a, source) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return .{},
+    };
+    defer a.free(body);
+    var flags: ScanFlags = .{};
+    try scanRange(a, body, out, &flags, 0);
+    return flags;
 }
 
 pub fn scanTemplateWikitext(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref)) !void {
-    const body = preprocess.transcludeDecodedAlloc(a, source) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        else => return,
-    };
-    defer a.free(body);
-    try scanRange(a, body, out, 0);
+    _ = try scanTemplateWikitextFlags(a, source, out);
 }
 
 fn staticString(expr: *const lua.Expr) ?[]const u8 {
@@ -163,95 +183,117 @@ fn staticString(expr: *const lua.Expr) ?[]const u8 {
     };
 }
 
-fn collectExpr(a: std.mem.Allocator, expr: *const lua.Expr, out: *std.ArrayList([]const u8)) anyerror!void {
+fn isMwLoadData(expr: *const lua.Expr) bool {
+    if (expr.* != .index) return false;
+    const value = expr.index;
+    const key = staticString(value.key) orelse return false;
+    return value.object.* == .name and
+        std.mem.eql(u8, value.object.name.value, "mw") and
+        std.mem.eql(u8, key, "loadData");
+}
+
+fn collectExpr(a: std.mem.Allocator, expr: *const lua.Expr, out: *std.ArrayList([]const u8), dynamic: *bool) anyerror!void {
     switch (expr.*) {
-        .paren => |value| try collectExpr(a, value.expr, out),
+        .paren => |value| try collectExpr(a, value.expr, out, dynamic),
         .index => |value| {
-            try collectExpr(a, value.object, out);
-            try collectExpr(a, value.key, out);
+            try collectExpr(a, value.object, out, dynamic);
+            try collectExpr(a, value.key, out, dynamic);
         },
         .call => |value| {
-            if (value.callee.* == .name and std.mem.eql(u8, value.callee.name.value, "require") and
-                value.args.len != 0)
-            {
+            const module_loader =
+                (value.callee.* == .name and std.mem.eql(u8, value.callee.name.value, "require")) or
+                isMwLoadData(value.callee);
+            if (module_loader and value.args.len != 0) {
                 if (staticString(value.args[0])) |raw| {
                     if (try canonicalModule(a, raw)) |target| try out.append(a, target);
+                } else {
+                    dynamic.* = true;
                 }
             }
-            try collectExpr(a, value.callee, out);
-            for (value.args) |arg| try collectExpr(a, arg, out);
+            try collectExpr(a, value.callee, out, dynamic);
+            for (value.args) |arg| try collectExpr(a, arg, out, dynamic);
         },
         .method_call => |value| {
-            try collectExpr(a, value.object, out);
-            for (value.args) |arg| try collectExpr(a, arg, out);
+            try collectExpr(a, value.object, out, dynamic);
+            for (value.args) |arg| try collectExpr(a, arg, out, dynamic);
         },
-        .function => |value| try collectBlock(a, value.body, out),
+        .function => |value| try collectBlock(a, value.body, out, dynamic),
         .table => |value| for (value.fields) |field| switch (field) {
-            .list => |item| try collectExpr(a, item, out),
-            .named => |item| try collectExpr(a, item.value, out),
+            .list => |item| try collectExpr(a, item, out, dynamic),
+            .named => |item| try collectExpr(a, item.value, out, dynamic),
             .keyed => |item| {
-                try collectExpr(a, item.key, out);
-                try collectExpr(a, item.value, out);
+                try collectExpr(a, item.key, out, dynamic);
+                try collectExpr(a, item.value, out, dynamic);
             },
         },
-        .unary => |value| try collectExpr(a, value.expr, out),
+        .unary => |value| try collectExpr(a, value.expr, out, dynamic),
         .binary => |value| {
-            try collectExpr(a, value.lhs, out);
-            try collectExpr(a, value.rhs, out);
+            try collectExpr(a, value.lhs, out, dynamic);
+            try collectExpr(a, value.rhs, out, dynamic);
         },
         else => {},
     }
 }
 
-fn collectBlock(a: std.mem.Allocator, body: lua.Block, out: *std.ArrayList([]const u8)) anyerror!void {
+fn collectBlock(a: std.mem.Allocator, body: lua.Block, out: *std.ArrayList([]const u8), dynamic: *bool) anyerror!void {
     for (body) |stmt| switch (stmt.*) {
         .assign => |value| {
             for (value.targets) |target| switch (target) {
                 .name => {},
                 .index => |index| {
-                    try collectExpr(a, index.object, out);
-                    try collectExpr(a, index.key, out);
+                    try collectExpr(a, index.object, out, dynamic);
+                    try collectExpr(a, index.key, out, dynamic);
                 },
             };
-            for (value.values) |expr| try collectExpr(a, expr, out);
+            for (value.values) |expr| try collectExpr(a, expr, out, dynamic);
         },
-        .local_assign => |value| for (value.values) |expr| try collectExpr(a, expr, out),
-        .call => |value| try collectExpr(a, value.expr, out),
-        .do_block => |value| try collectBlock(a, value.body, out),
+        .local_assign => |value| for (value.values) |expr| try collectExpr(a, expr, out, dynamic),
+        .call => |value| try collectExpr(a, value.expr, out, dynamic),
+        .do_block => |value| try collectBlock(a, value.body, out, dynamic),
         .while_loop => |value| {
-            try collectExpr(a, value.cond, out);
-            try collectBlock(a, value.body, out);
+            try collectExpr(a, value.cond, out, dynamic);
+            try collectBlock(a, value.body, out, dynamic);
         },
         .repeat_loop => |value| {
-            try collectBlock(a, value.body, out);
-            try collectExpr(a, value.cond, out);
+            try collectBlock(a, value.body, out, dynamic);
+            try collectExpr(a, value.cond, out, dynamic);
         },
         .if_stmt => |value| {
             for (value.branches) |branch| {
-                try collectExpr(a, branch.cond, out);
-                try collectBlock(a, branch.body, out);
+                try collectExpr(a, branch.cond, out, dynamic);
+                try collectBlock(a, branch.body, out, dynamic);
             }
-            if (value.else_body) |else_body| try collectBlock(a, else_body, out);
+            if (value.else_body) |else_body| try collectBlock(a, else_body, out, dynamic);
         },
         .numeric_for => |value| {
-            try collectExpr(a, value.start, out);
-            try collectExpr(a, value.limit, out);
-            if (value.step) |step| try collectExpr(a, step, out);
-            try collectBlock(a, value.body, out);
+            try collectExpr(a, value.start, out, dynamic);
+            try collectExpr(a, value.limit, out, dynamic);
+            if (value.step) |step| try collectExpr(a, step, out, dynamic);
+            try collectBlock(a, value.body, out, dynamic);
         },
         .generic_for => |value| {
-            for (value.values) |expr| try collectExpr(a, expr, out);
-            try collectBlock(a, value.body, out);
+            for (value.values) |expr| try collectExpr(a, expr, out, dynamic);
+            try collectBlock(a, value.body, out, dynamic);
         },
-        .function_assign => |value| try collectExpr(a, value.function, out),
-        .local_function => |value| try collectExpr(a, value.function, out),
-        .return_stmt => |value| for (value.values) |expr| try collectExpr(a, expr, out),
+        .function_assign => |value| try collectExpr(a, value.function, out, dynamic),
+        .local_function => |value| try collectExpr(a, value.function, out, dynamic),
+        .return_stmt => |value| for (value.values) |expr| try collectExpr(a, expr, out, dynamic),
         .empty, .break_stmt => {},
     };
 }
 
+pub fn collectModuleLoads(
+    a: std.mem.Allocator,
+    body: lua.Block,
+    out: *std.ArrayList([]const u8),
+) !bool {
+    var dynamic = false;
+    try collectBlock(a, body, out, &dynamic);
+    return dynamic;
+}
+
 pub fn collectStaticRequires(a: std.mem.Allocator, body: lua.Block, out: *std.ArrayList([]const u8)) !void {
-    try collectBlock(a, body, out);
+    _ = try collectModuleLoads(a, body, out);
 }
 
 test "usage scanner finds static invokes and template references" {
@@ -313,4 +355,30 @@ test "static require scanner walks nested Lua functions" {
     try std.testing.expectEqual(@as(usize, 2), refs.items.len);
     try std.testing.expectEqualStrings("Module:A", refs.items[0]);
     try std.testing.expectEqualStrings("Module:B c", refs.items[1]);
+}
+
+test "module load scan includes mw.loadData and flags dynamic require" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "local a=mw.loadData('Module:Static_data'); local name='Module:'..'X'; return require(name)");
+    defer chunk.deinit();
+    var refs: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (refs.items) |ref| a.free(ref);
+        refs.deinit(a);
+    }
+    const dynamic = try collectModuleLoads(a, chunk.body, &refs);
+    try std.testing.expect(dynamic);
+    try std.testing.expectEqual(@as(usize, 1), refs.items.len);
+    try std.testing.expectEqualStrings("Module:Static data", refs.items[0]);
+}
+
+test "wikitext scan flags unresolved invoke and dynamic template targets" {
+    const a = std.testing.allocator;
+    var refs: std.ArrayList(Ref) = .empty;
+    defer {
+        for (refs.items) |ref| a.free(ref.target);
+        refs.deinit(a);
+    }
+    const flags = try scanWikitextFlags(a, "{{#invoke:{{{module}}}|run}} {{{{{template}}}|x}}", &refs);
+    try std.testing.expect(flags.dynamic_module_target);
 }

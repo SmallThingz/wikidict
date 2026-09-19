@@ -136,8 +136,10 @@ fn writeCompilePlan(
     records: []const ModuleRecord,
     modes: []const usage_profile.CompileMode,
     profile: usage_profile.Profile,
+    reachable: []const bool,
 ) !void {
-    if (modes.len != records.len or profile.page_reach.len != modes.len)
+    if (modes.len != records.len or profile.page_reach.len != modes.len or
+        reachable.len != records.len)
         return error.InvalidCompilePlan;
 
     const path = try std.fs.path.join(a, &.{ output_root, "compile-plan.tsv" });
@@ -147,19 +149,22 @@ fn writeCompilePlan(
     var buffer: [256 * 1024]u8 = undefined;
     var writer = file.writer(io, &buffer);
     const w = &writer.interface;
-    try w.writeAll("# dict-llvm-compile-plan-v2\n");
+    try w.writeAll("# dict-llvm-compile-plan-v3\n");
     try w.writeAll("# index\topt\tdirect_pages\tpage_reach\tdirect_module_fanin\tmodule_reach\tsource_bytes\n");
 
     var o1_count: usize = 0;
     var o2_count: usize = 0;
-    for (modes, records, 0..) |mode, record, index| {
-        switch (mode) {
+    var pruned_count: usize = 0;
+    for (modes, records, reachable, 0..) |mode, record, keep, index| {
+        if (keep) switch (mode) {
             .o1 => o1_count += 1,
             .o2 => o2_count += 1,
+        } else {
+            pruned_count += 1;
         }
         try w.print("{d}\t{s}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
             index,
-            mode.flag(),
+            if (keep) mode.flag() else "drop",
             profile.direct_page_reach[index],
             profile.page_reach[index],
             profile.direct_module_fanin[index],
@@ -168,7 +173,10 @@ fn writeCompilePlan(
         });
     }
     try w.flush();
-    std.debug.print("LLVM_OPT_PLAN o1={d} o2={d}\n", .{ o1_count, o2_count });
+    std.debug.print(
+        "LLVM_OPT_PLAN o1={d} o2={d} pruned={d}\n",
+        .{ o1_count, o2_count, pruned_count },
+    );
 }
 
 fn analyzeManifest(
@@ -198,7 +206,7 @@ fn analyzeManifest(
         const module_index: u32 = @intCast(records.items.len);
 
         var static_requires: std.ArrayList([]const u8) = .empty;
-        try usage.collectStaticRequires(sa, chunk.body, &static_requires);
+        const dynamic_module_load = try usage.collectModuleLoads(sa, chunk.body, &static_requires);
         var seen_requires: std.StringHashMapUnmanaged(void) = .empty;
         for (static_requires.items) |target| {
             if (seen_requires.contains(target)) continue;
@@ -233,10 +241,12 @@ fn analyzeManifest(
             .title = try a.dupe(u8, row.title),
             .path = try a.dupe(u8, row.path),
             .source_bytes = row.bytes,
+            .source_index = module_index,
             .function_base = function_base,
             .function_count = count,
             .root_function = module.root.id,
             .export_shape_id = export_shape_id,
+            .dynamic_module_load = dynamic_module_load,
         });
         function_base = std.math.add(u32, function_base, count) catch return error.TooManyFunctions;
         module.deinit();
@@ -276,7 +286,8 @@ fn appendModuleToBatch(
         module.functions.items.len != record.function_count)
         return error.FunctionAnalysisMismatch;
 
-    var table_shapes = try shape_registry.moduleFacts(scratch, @intCast(index));
+    _ = index;
+    var table_shapes = try shape_registry.moduleFacts(scratch, record.source_index);
     defer table_shapes.deinit(scratch);
     const facts = emitter.ProgramFacts{
         .module_ids = module_ids,
@@ -430,30 +441,61 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     defer a.free(module_edges);
     const usage_path = try std.fs.path.join(a, &.{ source_root, "lua-usage.tsv" });
     defer a.free(usage_path);
-    const page_seed = try usage_profile.pageSeeds(io, a, usage_path, &module_ids, records.len);
-    defer a.free(page_seed);
-    var profile = try usage_profile.buildProfile(a, page_seed, module_edges);
+    var page_seed = try usage_profile.pageSeeds(io, a, usage_path, &module_ids, records.len);
+    defer page_seed.deinit(a);
+    var profile = try usage_profile.buildProfile(a, page_seed.values, module_edges);
     defer usage_profile.deinitProfile(a, &profile);
 
     const module_sizes = try a.alloc(u64, records.len);
     defer a.free(module_sizes);
-    for (module_sizes, records) |*size, record| size.* = record.source_bytes;
+    const dynamic_module_load = try a.alloc(bool, records.len);
+    defer a.free(dynamic_module_load);
+    for (module_sizes, dynamic_module_load, records) |*size, *dynamic, record| {
+        size.* = record.source_bytes;
+        dynamic.* = record.dynamic_module_load;
+    }
     const modes = try usage_profile.chooseModes(a, profile, module_sizes);
     defer a.free(modes);
-    try writeCompilePlan(io, a, output_root, records, modes, profile);
+    const reachable = try usage_profile.reachableModules(
+        a,
+        profile,
+        dynamic_module_load,
+        page_seed.dynamic_module_target,
+    );
+    defer a.free(reachable);
+    try writeCompilePlan(io, a, output_root, records, modes, profile, reachable);
+
+    var selected_records: std.ArrayList(ModuleRecord) = .empty;
+    defer selected_records.deinit(a);
+    var selected_modes: std.ArrayList(usage_profile.CompileMode) = .empty;
+    defer selected_modes.deinit(a);
+    for (records, modes, reachable) |record, mode, keep| if (keep) {
+        try selected_records.append(a, record);
+        try selected_modes.append(a, mode);
+    };
+    if (selected_records.items.len == 0) return error.NoReachableModules;
+
+    var selected_module_ids = try buildModuleIds(io, a, source_root, selected_records.items);
+    defer selected_module_ids.deinit(a);
+    if (selected_module_ids.count() > std.math.maxInt(u32)) return error.TooManyModuleNames;
+    std.debug.print(
+        "LLVM_REACHABLE modules={d}/{d} dynamic_fallback={}\n",
+        .{ selected_records.items.len, records.len, page_seed.dynamic_module_target },
+    );
+
     try emitBatches(
         io,
         a,
-        records,
-        modes,
+        selected_records.items,
+        selected_modes.items,
         source_root,
         output_root,
         &globals,
-        &module_ids,
+        &selected_module_ids,
         &shape_registry,
     );
 
-    var program_module = try program.generate(a, records);
+    var program_module = try program.generate(a, selected_records.items);
     defer program_module.deinit();
     const program_path = try std.fs.path.join(a, &.{ output_root, "program.bc" });
     try program_module.writeBitcode(a, program_path);
@@ -463,12 +505,12 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         io,
         a,
         metadata_path,
-        records,
+        selected_records.items,
         &globals,
         &shape_registry,
-        &module_ids,
+        &selected_module_ids,
     );
-    std.debug.print("LLVM_DONE modules={d} globals={d}\n", .{ records.len, globals.names.items.len });
+    std.debug.print("LLVM_DONE modules={d} globals={d}\n", .{ selected_records.items.len, globals.names.items.len });
 }
 
 pub export fn dict_llvm_build_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
