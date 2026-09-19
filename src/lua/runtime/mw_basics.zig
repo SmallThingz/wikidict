@@ -614,6 +614,54 @@ fn setMwNative(runtime: *rt.Context, mw: *rt.Table, comptime name: []const u8, c
     try mw.rawSetNativeField(.mw, name, try runtime.newNative(null, call));
 }
 
+const wikibase_site_global_id = "enwiktionary";
+const wikibase_entity_url_prefix = "https://www.wikidata.org/wiki/Special:EntityPage/";
+
+fn validWikibaseNumericPart(digits: []const u8) bool {
+    if (digits.len == 0 or digits[0] == '0') return false;
+    const value = std.fmt.parseInt(u32, digits, 10) catch return false;
+    return value <= 2_147_483_647;
+}
+
+fn canonicalWikibaseEntityId(runtime: *rt.Context, raw: []const u8) !?[]const u8 {
+    if (raw.len < 2) return null;
+    if (raw[0] == 'L') {
+        if (std.mem.indexOfScalar(u8, raw, '-')) |dash| {
+            if (dash <= 1 or dash + 2 >= raw.len) return null;
+            if (raw[dash + 1] != 'F' and raw[dash + 1] != 'S') return null;
+            if (!std.ascii.isDigit(raw[1]) or raw[1] == '0') return null;
+            for (raw[1..dash]) |c| if (!std.ascii.isDigit(c)) return null;
+            const suffix = raw[dash + 2 ..];
+            if (suffix.len == 0 or suffix[0] == '0') return null;
+            for (suffix) |c| if (!std.ascii.isDigit(c)) return null;
+            return try runtime.allocator.dupe(u8, raw);
+        }
+    }
+    const prefix = std.ascii.toUpper(raw[0]);
+    if (prefix != 'Q' and prefix != 'P' and prefix != 'L') return null;
+    if (!validWikibaseNumericPart(raw[1..])) return null;
+    const out = try runtime.allocator.alloc(u8, raw.len);
+    out[0] = prefix;
+    @memcpy(out[1..], raw[1..]);
+    return out;
+}
+
+fn wikibaseGetGlobalSiteIdCall(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+    return one(.{ .string = wikibase_site_global_id });
+}
+
+fn wikibaseIsValidEntityIdCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    return one(.{ .boolean = (try canonicalWikibaseEntityId(runtime, args[0].string)) != null });
+}
+
+fn wikibaseGetEntityUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const id = (try canonicalWikibaseEntityId(runtime, args[0].string)) orelse return one(.nil);
+    const url = try std.fmt.allocPrint(runtime.allocator, "{s}{s}", .{ wikibase_entity_url_prefix, id });
+    return one(.{ .string = url });
+}
+
 pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setMwNative(runtime, mw, "dumpObject", dumpObjectCall);
     try setMwNative(runtime, mw, "log", noOpCall);
@@ -650,17 +698,17 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
         "getLabel",
         "getEntityIdForCurrentPage",
         "getSitelink",
-        "getEntityUrl",
         "getBestStatements",
         "getLabelWithLang",
         "getLabelByLang",
         "getAllStatements",
-        "getGlobalSiteId",
         "formatValue",
-        "isValidEntityId",
         "entityExists",
         "sitelink",
     }) |name| try setNative(runtime, wikibase, name, notImplementedCall);
+    try setNative(runtime, wikibase, "getEntityUrl", wikibaseGetEntityUrlCall);
+    try setNative(runtime, wikibase, "getGlobalSiteId", wikibaseGetGlobalSiteIdCall);
+    try setNative(runtime, wikibase, "isValidEntityId", wikibaseIsValidEntityIdCall);
     try mw.rawSetNativeField(.mw, "wikibase", .{ .table = wikibase });
 
     const message = try runtime.newTable();
@@ -774,6 +822,31 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, "formatValue", &.{.{ .string = "Q1" }}));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
+
+    const global_site = try callField(&runtime, .{ .table = wikibase }, "getGlobalSiteId", &.{});
+    defer rt.freeResults(global_site);
+    try std.testing.expectEqualStrings("enwiktionary", global_site[0].string);
+
+    inline for (.{ "Q1", "q1", "P31", "p31", "L1", "l1", "L1-F1", "L1-S1" }) |id| {
+        const valid = try callField(&runtime, .{ .table = wikibase }, "isValidEntityId", &.{.{ .string = id }});
+        defer rt.freeResults(valid);
+        try std.testing.expect(valid[0].boolean);
+    }
+    inline for (.{ "M1", "Q0", "Q01", "Q2147483648", "l1-f1", "l1-s1", "Property:P31", "" }) |id| {
+        const invalid = try callField(&runtime, .{ .table = wikibase }, "isValidEntityId", &.{.{ .string = id }});
+        defer rt.freeResults(invalid);
+        try std.testing.expect(!invalid[0].boolean);
+    }
+
+    const entity_url = try callField(&runtime, .{ .table = wikibase }, "getEntityUrl", &.{.{ .string = "q1" }});
+    defer rt.freeResults(entity_url);
+    try std.testing.expectEqualStrings("https://www.wikidata.org/wiki/Special:EntityPage/Q1", entity_url[0].string);
+    const form_url = try callField(&runtime, .{ .table = wikibase }, "getEntityUrl", &.{.{ .string = "L1-F1" }});
+    defer rt.freeResults(form_url);
+    try std.testing.expectEqualStrings("https://www.wikidata.org/wiki/Special:EntityPage/L1-F1", form_url[0].string);
+    const bad_url = try callField(&runtime, .{ .table = wikibase }, "getEntityUrl", &.{.{ .string = "Q0" }});
+    defer rt.freeResults(bad_url);
+    try std.testing.expect(bad_url[0] == .nil);
 
     const message = mw.rawGet(.{ .string = "message" }).?.table;
     inline for (.{ "new", "newFallbackSequence", "newRawMessage", "rawParam", "numParam", "getDefaultLanguage" }) |name| {
