@@ -860,6 +860,43 @@ test "eager pristine module export bypasses field lookup on direct branch" {
     try std.testing.expect(std.mem.indexOf(u8, ir[fallback_start..], "@dict_lua_get_field") != null);
 }
 
+test "captured eager module value keeps mutation-guarded direct export call" {
+    var ids: llvm_emitter.ModuleIdMap = .empty;
+    defer ids.deinit(std.testing.allocator);
+    try ids.put(std.testing.allocator, "Module:Target", 0);
+    const exports = [_]llvm_emitter.DirectExport{
+        .{ .name = "run", .function_id = 99 },
+    };
+    const modules = [_]llvm_emitter.ModuleFact{.{
+        .eager_prepared = true,
+        .canonical_name = "Module:Target",
+        .exports = &exports,
+    }};
+    const facts = llvm_emitter.ProgramFacts{
+        .module_ids = &ids,
+        .module_facts = &modules,
+    };
+
+    var chunk = try llvm_parser.parse(
+        std.testing.allocator,
+        "local target=require('Module:Target'); return function() return target.run(4) end",
+    );
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, facts);
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_module_value_sentinel") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_99") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "export_callee_check_pristine") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "export_callee_fallback") != null);
+}
+
 test "captured static module export keeps guarded direct target" {
     var ids: llvm_emitter.ModuleIdMap = .empty;
     defer ids.deinit(std.testing.allocator);

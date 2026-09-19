@@ -70,6 +70,11 @@ pub const ProgramFacts = struct {
         const fact = facts[module_id];
         return fact.eager_prepared and std.mem.eql(u8, raw, fact.canonical_name);
     }
+
+    pub fn moduleEagerPrepared(self: ProgramFacts, module_id: u32) bool {
+        const facts = self.module_facts orelse return false;
+        return module_id < facts.len and facts[module_id].eager_prepared;
+    }
 };
 
 const StringRef = struct {
@@ -169,6 +174,7 @@ const Runtime = struct {
     observe_package: V,
     defer_require_module_id: V,
     defer_require_module_ref: V,
+    module_value_sentinel: V,
     arg_ptr: V,
     arg_get: V,
     global_ptr: V,
@@ -236,6 +242,7 @@ const Runtime = struct {
             .observe_package = try declare(m, "dict_lua_observe_package", ty.i32, &.{ty.ptr}),
             .defer_require_module_id = try declare(m, "dict_lua_defer_require_module_id", ty.i8, &.{ ty.ptr, ty.i32, ty.ptr }),
             .defer_require_module_ref = try declare(m, "dict_lua_defer_require_module_ref", ty.ptr, &.{ ty.ptr, ty.i32, ty.ptr }),
+            .module_value_sentinel = try declare(m, "dict_lua_module_value_sentinel", ty.ptr, &.{ ty.ptr, ty.i32, ty.ptr }),
             .arg_ptr = try declare(m, "dict_lua_arg_ptr", ty.ptr, &.{ ty.ptr, ty.i64, ty.i64 }),
             .arg_get = try declare(m, "dict_lua_arg_get", ty.void, &.{ ty.ptr, ty.i64, ty.i64, ty.ptr }),
             .global_ptr = try declare(m, "dict_lua_global_ptr", ty.ptr, &.{ ty.ptr, ty.i32 }),
@@ -1191,7 +1198,14 @@ const FnEmitter = struct {
                 };
                 const module_id = self.module.staticModuleId(name.value) orelse break :blk null;
                 const value_ref = try self.loadResolved(resolved);
-                break :blk .{ .module_id = module_id, .value = try self.box(value_ref) };
+                const boxed = try self.box(value_ref);
+                const sentinel = if (self.module.facts.moduleEagerPrepared(module_id))
+                    try llvm.call(self.builder, self.rt().module_value_sentinel, &.{
+                        self.ctx(), try self.cI32(module_id), boxed,
+                    })
+                else
+                    null;
+                break :blk .{ .module_id = module_id, .value = boxed, .pristine_ptr = sentinel };
             },
             .paren => |paren| self.staticModuleExpr(paren.expr),
             .call => |call| if (try self.staticRequire(call.callee, null, call.args)) |request|

@@ -952,7 +952,6 @@ pub const Context = struct {
         if (self.package_observable) return;
         for (self.module_state_pages, 0..) |page, page_index| if (page) |states| {
             for (states, 0..) |*state, slot| {
-                state.export_pristine = false;
                 if (!state.deferred_require_visibility) continue;
                 const module_id_usize = (page_index << module_state_page_shift) | slot;
                 if (module_id_usize >= self.module_count) break;
@@ -976,6 +975,13 @@ pub const Context = struct {
             if (!rawEqual(visible, value)) return null;
         if (!self.eager_bootstrap) state.deferred_require_visibility = true;
         out.* = value;
+        return &state.export_pristine;
+    }
+
+    pub fn moduleValueSentinel(self: *const Context, module_id: u32, value: Value) ?*const bool {
+        const state = self.moduleStateConst(module_id) orelse return null;
+        const expected = state.value orelse state.preinitialized orelse return null;
+        if (!rawEqual(value, expected) or value != .table) return null;
         return &state.export_pristine;
     }
 
@@ -1735,7 +1741,10 @@ test "prepared export sentinel invalidates on package observation and respects l
     const sentinel = ctx.deferStaticRequireRef(0, &loaded) orelse return error.MissingPreparedModule;
     try std.testing.expect(sentinel.*);
     try ctx.observePackage();
-    try std.testing.expect(!sentinel.*);
+    try std.testing.expect(sentinel.*);
+    var ignored_after_observe: Value = undefined;
+    try std.testing.expect(ctx.deferStaticRequireRef(0, &ignored_after_observe) == null);
+    try std.testing.expect(ctx.moduleValueSentinel(0, loaded) == sentinel);
 
     var second = try Context.initProgram(arena.allocator(), 0, 1);
     defer second.deinit();

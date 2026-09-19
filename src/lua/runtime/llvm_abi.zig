@@ -71,6 +71,10 @@ export fn dict_lua_defer_require_module_ref(ctx: *rt.Context, module_id: u32, ou
     return ctx.deferStaticRequireRef(module_id, out);
 }
 
+export fn dict_lua_module_value_sentinel(ctx: *const rt.Context, module_id: u32, value: *const rt.Value) callconv(.c) ?*const bool {
+    return ctx.moduleValueSentinel(module_id, value.*);
+}
+
 export fn dict_lua_value_nil(out: *rt.Value) callconv(.c) void {
     out.* = .nil;
 }
