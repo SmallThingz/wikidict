@@ -87,6 +87,13 @@ fn monthNumber(raw: []const u8) ?u8 {
     return null;
 }
 
+fn parseDateYear(raw: []const u8) ?i64 {
+    const year = std.fmt.parseInt(i64, raw, 10) catch return null;
+    if (year < 0) return null;
+    if (raw.len <= 2) return if (year <= 69) 2000 + year else 1900 + year;
+    return year;
+}
+
 fn parseHyphenDate(raw: []const u8) ?Civil {
     var fields: [3][]const u8 = undefined;
     var it = std.mem.splitScalar(u8, raw, '-');
@@ -104,7 +111,7 @@ fn parseHyphenDate(raw: []const u8) ?Civil {
     }
     if (n != 3) return null;
     const first = std.fmt.parseInt(i64, fields[0], 10) catch return null;
-    const third = std.fmt.parseInt(i64, fields[2], 10) catch return null;
+    const third = parseDateYear(fields[2]) orelse return null;
     if (first >= 1000) {
         const month = monthNumber(fields[1]) orelse return null;
         const day = std.fmt.parseInt(u8, fields[2], 10) catch return null;
@@ -137,8 +144,7 @@ fn parseSpaceDate(raw: []const u8) ?Civil {
         return .{ .year = year, .month = month, .day = 1 };
     }
     if (n != 3) return null;
-    const year = std.fmt.parseInt(i64, fields[2], 10) catch return null;
-    if (year < 1000) return null;
+    const year = parseDateYear(fields[2]) orelse return null;
     if (std.fmt.parseInt(u8, fields[0], 10)) |day| {
         const month = monthNumber(fields[1]) orelse return null;
         return .{ .year = year, .month = month, .day = day };
@@ -694,6 +700,12 @@ test "MediaWiki partial and word date grammar" {
         .{ .raw = "1864 September", .expected = "1864-09-01" },
         .{ .raw = "July 1 2022", .expected = "2022-07-01" },
         .{ .raw = "1 July 2022", .expected = "2022-07-01" },
+        .{ .raw = "4 February 9", .expected = "2009-02-04" },
+        .{ .raw = "4 Feb 69", .expected = "2069-02-04" },
+        .{ .raw = "4 Feb 70", .expected = "1970-02-04" },
+        .{ .raw = "Feb 4 84", .expected = "1984-02-04" },
+        .{ .raw = "4-Feb-99", .expected = "1999-02-04" },
+        .{ .raw = "4 Feb 684", .expected = "0684-02-04" },
     };
     for (cases) |case| {
         const ts = try parseTimestamp(&ctx, .{ .string = case.raw });
@@ -702,6 +714,7 @@ test "MediaWiki partial and word date grammar" {
         try std.testing.expectEqualStrings(case.expected, got);
     }
     try std.testing.expectError(error.InvalidDate, parseTimestamp(&ctx, .{ .string = "2022 July 1" }));
+    try std.testing.expectError(error.InvalidDate, parseTimestamp(&ctx, .{ .string = "Feb 84" }));
     const shifted = try parseTimestampText(&ctx, "2013-3-31 +8 days");
     const shifted_text = try formatDateAlloc(std.testing.allocator, shifted, "Y M d");
     defer std.testing.allocator.free(shifted_text);
