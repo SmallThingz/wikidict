@@ -932,6 +932,14 @@ pub const Context = struct {
         self.static_module = loader;
     }
 
+    pub fn preinitializeSpecialModule(self: *Context, module_id: u32, snapshot_load_data: bool) !void {
+        const load = self.static_module orelse return error.MissingStaticModuleLoader;
+        var value = (try load(self.static_module_ctx, self, module_id)) orelse
+            return error.ModuleNotSpecial;
+        if (value == .nil) value = .{ .boolean = true };
+        try self.preinitializeModule(module_id, value, snapshot_load_data);
+    }
+
     pub fn beginEagerBootstrap(self: *Context) void {
         self.eager_bootstrap = true;
     }

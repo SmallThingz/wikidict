@@ -429,6 +429,25 @@ fn analyzeManifest(
             else => {},
         };
 
+        std.mem.sort(emitter.DirectExport, direct_exports.items, {}, struct {
+            fn lessThan(_: void, lhs: emitter.DirectExport, rhs: emitter.DirectExport) bool {
+                return std.mem.order(u8, lhs.name, rhs.name) == .lt;
+            }
+        }.lessThan);
+        var synth_root = false;
+        if (model.root_pure and !model.dynamic_top_level) switch (model.return_binding) {
+            .table => |table| {
+                synth_root = table.fields.count() == direct_exports.items.len;
+                if (synth_root) for (direct_exports.items) |entry| {
+                    if (entry.capture_count != 0) {
+                        synth_root = false;
+                        break;
+                    }
+                };
+            },
+            else => {},
+        };
+
         const root_requires = try a.alloc([]const u8, model.root_requires.items.len);
         for (root_requires, model.root_requires.items) |*owned, raw|
             owned.* = try a.dupe(u8, raw);
@@ -447,6 +466,7 @@ fn analyzeManifest(
             .root_bootstrap_safe = model.root_bootstrap_safe,
             .root_requires = root_requires,
             .direct_exports = try direct_exports.toOwnedSlice(a),
+            .synth_root = synth_root,
         });
         function_base = std.math.add(u32, function_base, count) catch return error.TooManyFunctions;
         module.deinit();
@@ -494,6 +514,7 @@ fn appendModuleToBatch(
         .module_ids = module_ids,
         .module_facts = module_facts,
         .table_shapes = &table_shapes,
+        .synth_root = record.synth_root,
     };
     const result = try batch.append(scratch, globals, &module, facts);
     if (result.root_function != record.root_function or
@@ -641,6 +662,9 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         globals.names.items.len,
         records[records.len - 1].function_base + records[records.len - 1].function_count,
     });
+    var synth_root_count: usize = 0;
+    for (records) |record| synth_root_count += @intFromBool(record.synth_root);
+    std.debug.print("LLVM_SYNTH_ROOTS modules={d}\n", .{synth_root_count});
 
     var module_ids = try buildModuleIds(io, a, source_root, records);
     defer module_ids.deinit(a);

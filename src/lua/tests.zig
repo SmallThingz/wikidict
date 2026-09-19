@@ -57,6 +57,62 @@ test "static module root table omits generated root symbol" {
     try std.testing.expect(std.mem.indexOf(u8, ir, "@lua_f_41") != null);
 }
 
+test "synthesized export module omits root body but keeps export function" {
+    const source =
+        \\local export = {}
+        \\function export.run(x) return x end
+        \\return export
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    try std.testing.expectEqual(@as(usize, 2), module.functions.items.len);
+    var generated = try llvm_emitter.generate(
+        std.testing.allocator,
+        &globals,
+        &module,
+        .{ .synth_root = true },
+    );
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "define %FunctionResult @lua_f_0") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "define %FunctionResult @lua_f_1") != null);
+}
+
+test "program root table stubs synthesized root and retains export entry" {
+    const exports = [_]llvm_emitter.DirectExport{
+        .{ .name = "run", .function_id = 41 },
+    };
+    const records = [_]llvm_program.ModuleRecord{.{
+        .title = "Module:Synth",
+        .path = "modules/synth.lua",
+        .source_bytes = 42,
+        .source_index = 0,
+        .function_base = 40,
+        .function_count = 2,
+        .root_function = 40,
+        .export_shape_id = 0,
+        .root_pure = true,
+        .root_bootstrap_safe = true,
+        .eager_order = 0,
+        .direct_exports = &exports,
+        .synth_root = true,
+    }};
+    var generated = try llvm_program.generate(std.testing.allocator, &records);
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_static_module_root_unreachable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_program_synth_export_entries") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@lua_f_40") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@lua_f_41") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_preinitialize_special_module") != null);
+}
+
 test "direct LLVM emitter covers Lua control and closure surface" {
     const source =
         \\local x = 1

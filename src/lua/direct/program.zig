@@ -31,6 +31,7 @@ pub const ModuleRecord = struct {
     direct_exports: []const emitter.DirectExport = &.{},
     static_root: bool = false,
     static_root_blob: []const u8 = &.{},
+    synth_root: bool = false,
 };
 
 const ModuleLookupEntry = struct {
@@ -104,7 +105,7 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
     defer a.free(roots);
     const static_stub = try m.addFunction("dict_lua_static_module_root_unreachable", generated_fn_ty);
     for (records, 0..) |record, index| {
-        if (record.static_root) {
+        if (record.static_root or record.synth_root) {
             roots[index] = static_stub;
             continue;
         }
@@ -129,6 +130,34 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
     llvm.position(builder, block);
     try llvm.ret(builder, roots_value);
 
+    var synth_entries: std.ArrayList(llvm.ValueRef) = .empty;
+    defer synth_entries.deinit(a);
+    for (records) |record| if (record.synth_root) {
+        for (record.direct_exports) |entry| {
+            if (entry.capture_count != 0) return error.InvalidSyntheticRootCapture;
+            const name = try std.fmt.allocPrint(a, "lua_f_{d}", .{entry.function_id});
+            defer a.free(name);
+            const function = m.getFunction(name) orelse try m.addFunction(name, generated_fn_ty);
+            try synth_entries.append(a, function);
+        }
+    };
+    const synth_accessor = try m.addFunction("dict_lua_program_synth_export_entries", accessor_ty);
+    const synth_block = try llvm.appendBlock(m.context, synth_accessor, "entry");
+    llvm.position(builder, synth_block);
+    if (synth_entries.items.len == 0) {
+        try llvm.ret(builder, try llvm.constNull(m.types.ptr));
+    } else {
+        const synth_ty = try llvm.arrayType(m.types.ptr, synth_entries.items.len);
+        const synth_value = try m.addGlobal(
+            "synth_export_entries",
+            synth_ty,
+            try llvm.constArray(m.types.ptr, synth_entries.items),
+            .private,
+            8,
+        );
+        try llvm.ret(builder, synth_value);
+    }
+
     const preinit_ty = try m.functionType(m.types.i32, &.{
         m.types.ptr,
         m.types.i32,
@@ -139,6 +168,8 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
         m.types.i32,
     });
     const preinit = try m.addFunction("dict_lua_preinitialize_module", preinit_ty);
+    const special_preinit_ty = try m.functionType(m.types.i32, &.{ m.types.ptr, m.types.i32, m.types.i32 });
+    const special_preinit = try m.addFunction("dict_lua_preinitialize_special_module", special_preinit_ty);
     const eager_ty = try m.functionType(m.types.i32, &.{m.types.ptr});
     const eager = try m.addFunction("dict_lua_program_eager_init", eager_ty);
     const eager_ctx = try llvm.param(eager, 0);
@@ -150,7 +181,7 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
     var eager_modules: std.ArrayList(u32) = .empty;
     defer eager_modules.deinit(a);
     for (records, 0..) |record, module_id|
-        if (!record.static_root and record.eager_order != std.math.maxInt(u32))
+        if (record.eager_order != std.math.maxInt(u32))
             try eager_modules.append(a, @intCast(module_id));
     std.mem.sort(u32, eager_modules.items, records, struct {
         fn lessThan(items: []const ModuleRecord, lhs: u32, rhs: u32) bool {
@@ -161,28 +192,36 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
     for (eager_modules.items) |module_id_u32| {
         const module_id: usize = @intCast(module_id_u32);
         const record = records[module_id];
-        const root = roots[module_id];
-        const result = try llvm.call(builder, root, &.{
-            eager_ctx,
-            null_ptr,
-            null_ptr,
-            zero_i64,
-            null_ptr,
-            zero_i64,
-        });
-        const values_ptr = try llvm.extractValue(builder, result, 0);
-        const values_len = try llvm.extractValue(builder, result, 1);
-        const raw_status = try llvm.extractValue(builder, result, 2);
-        const reserved = try llvm.extractValue(builder, result, 3);
-        const status = try llvm.call(builder, preinit, &.{
-            eager_ctx,
-            try llvm.constInt(m.types.i32, module_id),
-            try llvm.constInt(m.types.i32, @intFromBool(record.load_data_snapshot)),
-            values_ptr,
-            values_len,
-            raw_status,
-            reserved,
-        });
+        const status = if (record.static_root or record.synth_root)
+            try llvm.call(builder, special_preinit, &.{
+                eager_ctx,
+                try llvm.constInt(m.types.i32, module_id),
+                try llvm.constInt(m.types.i32, @intFromBool(record.load_data_snapshot)),
+            })
+        else blk: {
+            const root = roots[module_id];
+            const result = try llvm.call(builder, root, &.{
+                eager_ctx,
+                null_ptr,
+                null_ptr,
+                zero_i64,
+                null_ptr,
+                zero_i64,
+            });
+            const values_ptr = try llvm.extractValue(builder, result, 0);
+            const values_len = try llvm.extractValue(builder, result, 1);
+            const raw_status = try llvm.extractValue(builder, result, 2);
+            const reserved = try llvm.extractValue(builder, result, 3);
+            break :blk try llvm.call(builder, preinit, &.{
+                eager_ctx,
+                try llvm.constInt(m.types.i32, module_id),
+                try llvm.constInt(m.types.i32, @intFromBool(record.load_data_snapshot)),
+                values_ptr,
+                values_len,
+                raw_status,
+                reserved,
+            });
+        };
         const ok = try llvm.icmp(builder, .eq, status, try llvm.constInt(m.types.i32, 0));
         const next = try llvm.appendBlock(m.context, eager, "eager_next");
         const fail = try llvm.appendBlock(m.context, eager, "eager_fail");
@@ -223,6 +262,16 @@ pub fn writeMetadata(
             record.eager_requirements.len,
         ) catch return error.ProgramMetadataTooLarge;
     const module_requirement_total = try requireU32(module_requirement_total_usize);
+    var synth_export_total_usize: usize = 0;
+    for (records) |record| {
+        if (!record.synth_root) continue;
+        synth_export_total_usize = std.math.add(
+            usize,
+            synth_export_total_usize,
+            record.direct_exports.len,
+        ) catch return error.ProgramMetadataTooLarge;
+    }
+    const synth_export_total = try requireU32(synth_export_total_usize);
 
     var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
     defer file.close(io);
@@ -237,6 +286,7 @@ pub fn writeMetadata(
     try metadata.writeU32(w, shape_count);
     try metadata.writeU32(w, shape_field_total);
     try metadata.writeU32(w, module_requirement_total);
+    try metadata.writeU32(w, synth_export_total);
 
     for (records) |record| try metadata.writeString(w, record.title);
 
@@ -267,6 +317,17 @@ pub fn writeMetadata(
     for (records) |record| {
         try metadata.writeU32(w, @intFromBool(record.load_data_snapshot));
         try metadata.writeString(w, record.static_root_blob);
+    }
+
+    for (records) |record| {
+        try metadata.writeU32(w, @intFromBool(record.synth_root));
+        const exports = if (record.synth_root) record.direct_exports else &.{};
+        try metadata.writeU32(w, try requireU32(exports.len));
+        for (exports) |entry| {
+            if (entry.capture_count != 0) return error.InvalidSyntheticRootCapture;
+            try metadata.writeString(w, entry.name);
+            try metadata.writeU32(w, entry.function_id);
+        }
     }
 
     for (globals.names.items) |name| try metadata.writeString(w, name);

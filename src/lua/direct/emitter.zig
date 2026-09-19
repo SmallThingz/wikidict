@@ -31,6 +31,7 @@ pub const ProgramFacts = struct {
     module_ids: ?*const ModuleIdMap = null,
     module_facts: ?[]const ModuleFact = null,
     table_shapes: ?*const shapes.ModuleFacts = null,
+    synth_root: bool = false,
 
     pub fn moduleId(self: ProgramFacts, a: A, raw: []const u8) anyerror!?u32 {
         const ids = self.module_ids orelse return null;
@@ -2278,7 +2279,10 @@ pub const Batch = struct {
         defer emitter.deinit();
         try emitter.collectStaticModules();
 
-        for (module.functions.items) |info| try emitFunction(&emitter, info);
+        for (module.functions.items, 0..) |info, index| {
+            if (facts.synth_root and index == 0) continue;
+            try emitFunction(&emitter, info);
+        }
         return .{
             .root_function = module.root.id,
             .function_count = @intCast(module.functions.items.len),
