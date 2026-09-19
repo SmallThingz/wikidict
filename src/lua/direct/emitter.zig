@@ -13,6 +13,8 @@ const V = llvm.ValueRef;
 const T = llvm.TypeRef;
 const BB = llvm.BasicBlockRef;
 const value_align = 8;
+const captures_abi_size: usize = 24;
+const captures_abi_align: u32 = 8;
 const static_literal_blob_threshold: usize = 128;
 
 pub const ModuleIdMap = std.StringHashMapUnmanaged(u32);
@@ -205,6 +207,7 @@ const Runtime = struct {
     cell_get: V,
     cell_set: V,
     capture_cell: V,
+    init_direct_captures: V,
     make_function: V,
     call_fixed: V,
     call_fixed_tail: V,
@@ -275,6 +278,7 @@ const Runtime = struct {
             .cell_get = try declare(m, "dict_lua_cell_get", ty.void, &.{ ty.ptr, ty.ptr }),
             .cell_set = try declare(m, "dict_lua_cell_set", ty.void, &.{ ty.ptr, ty.ptr }),
             .capture_cell = try declare(m, "dict_lua_capture_cell", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr }),
+            .init_direct_captures = try declare(m, "dict_lua_init_direct_captures", ty.i32, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr }),
             .make_function = try declare(m, "dict_lua_make_function", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr }),
             .call_fixed = try declare(m, "dict_lua_call_fixed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .call_fixed_tail = try declare(m, "dict_lua_call_fixed_tail", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
@@ -1418,6 +1422,22 @@ const FnEmitter = struct {
         return output;
     }
 
+    fn capturesAbiSlot(self: *FnEmitter) anyerror!V {
+        const capture_storage_ty = try llvm.arrayType(self.ty().i8, captures_abi_size);
+        return llvm.alloca(self.alloca_builder, capture_storage_ty, captures_abi_align);
+    }
+
+    fn staticCaptureContext(self: *FnEmitter, function: StaticFunctionRef) anyerror!V {
+        if (function.direct_captures) |capture_context| return capture_context;
+        if (function.captures_len == 0) return self.nullPtr();
+        const capture_storage = try self.capturesAbiSlot();
+        const status = try llvm.call(self.builder, self.rt().init_direct_captures, &.{
+            self.ctx(), function.captures_ptr, try self.cI64(function.captures_len), capture_storage,
+        });
+        try self.check(status);
+        return capture_storage;
+    }
+
     fn sameModuleStaticCall(self: *const FnEmitter, function: StaticFunctionRef) bool {
         return function.module_id == self.module.facts.current_module_id;
     }
@@ -1434,7 +1454,7 @@ const FnEmitter = struct {
         output: V,
         count: usize,
     ) anyerror!void {
-        if ((function.captures_len == 0 or function.direct_captures != null) and prepared.tail == null) {
+        if (prepared.tail == null) {
             for (0..count) |index|
                 _ = try llvm.call(self.builder, self.rt().value_nil, &.{try self.arrayElem(output, index)});
             const same_module = self.sameModuleStaticCall(function);
@@ -1445,7 +1465,7 @@ const FnEmitter = struct {
                     self.ctx(), try self.cI32(function.module_id),
                 });
             try self.check(enter);
-            const capture_context = function.direct_captures orelse try self.nullPtr();
+            const capture_context = try self.staticCaptureContext(function);
             const result = try llvm.call(self.builder, entry_fn, &.{
                 self.ctx(), capture_context,      prepared.fixed, try self.cI64(prepared.fixed_len),
                 output,     try self.cI64(count),
@@ -1568,7 +1588,7 @@ const FnEmitter = struct {
         entry_fn: V,
         prepared: PreparedArgs,
     ) anyerror!MultiRef {
-        if ((function.captures_len == 0 or function.direct_captures != null) and prepared.tail == null) {
+        if (prepared.tail == null) {
             const same_module = self.sameModuleStaticCall(function);
             const enter = if (same_module)
                 try llvm.call(self.builder, self.rt().enter_local_static_call, &.{self.ctx()})
@@ -1577,7 +1597,7 @@ const FnEmitter = struct {
                     self.ctx(), try self.cI32(function.module_id),
                 });
             try self.check(enter);
-            const capture_context = function.direct_captures orelse try self.nullPtr();
+            const capture_context = try self.staticCaptureContext(function);
             const result = try llvm.call(self.builder, entry_fn, &.{
                 self.ctx(),         capture_context,  prepared.fixed, try self.cI64(prepared.fixed_len),
                 try self.nullPtr(), try self.cI64(0),

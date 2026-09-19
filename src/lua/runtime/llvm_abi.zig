@@ -5,6 +5,8 @@ const static_decode = @import("lua_static_literal_decode");
 comptime {
     if (@sizeOf(rt.Value) != 32 or @alignOf(rt.Value) != 8)
         @compileError("LLVM ABI requires the audited 32-byte, 8-byte-aligned runtime Value");
+    if (@sizeOf(rt.Captures) != 24 or @alignOf(rt.Captures) != 8)
+        @compileError("LLVM ABI requires the audited 24-byte, 8-byte-aligned Captures union");
     if (@sizeOf(rt.FunctionResult) != 24 or @alignOf(rt.FunctionResult) != 8)
         @compileError("LLVM ABI requires the audited FunctionResult layout");
 }
@@ -323,6 +325,19 @@ export fn dict_lua_cell_set(cell: *rt.Cell, input: *const rt.Value) callconv(.c)
 export fn dict_lua_capture_cell(ctx: *rt.Context, captures: *const rt.Captures, ordinal: u32, out: **rt.Cell) callconv(.c) u32 {
     const cell = captures.cell(ordinal) catch |err| return fail(ctx, err);
     out.* = cell;
+    return 0;
+}
+export fn dict_lua_init_direct_captures(
+    ctx: *rt.Context,
+    captures_ptr: ?[*]const *rt.Cell,
+    captures_len: usize,
+    out: *rt.Captures,
+) callconv(.c) u32 {
+    const captures: []const *rt.Cell = if (captures_len == 0)
+        &.{}
+    else
+        (captures_ptr orelse return fail(ctx, error.BadUpvalue))[0..captures_len];
+    out.* = .{ .direct = captures };
     return 0;
 }
 export fn dict_lua_make_function(ctx: *rt.Context, id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, out: *rt.Value) callconv(.c) u32 {
