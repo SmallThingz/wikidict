@@ -50,6 +50,15 @@ zig build -Doptimize=ReleaseFast build-dictionary -- \
   data/wiktionary-blobs
 ```
 
+LLVM bitcode compilation defaults to `1 + floor(logical CPU threads / 3)` concurrent Clang workers. Override the total worker count explicitly when needed:
+
+```sh
+zig build -Doptimize=ReleaseFast build-dictionary -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs \
+  --llvm-workers 8
+```
+
 Wiktionary modules that read Commons JsonConfig data through `mw.ext.data` require an explicit pinned snapshot. Supply it as a build input rather than allowing the compiler to consult live Wikimedia state:
 
 ```sh

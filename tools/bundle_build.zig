@@ -7,6 +7,7 @@ const Options = struct {
     root: []const u8,
     commons_data_snapshot: ?[]const u8 = null,
     category_stats_snapshot: ?[]const u8 = null,
+    llvm_workers: ?usize = null,
 };
 
 fn parseOptions(args: []const []const u8) !Options {
@@ -22,9 +23,24 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.category_stats_snapshot != null) return error.Usage;
             options.category_stats_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--llvm-workers")) {
+            index += 1;
+            if (index >= args.len or options.llvm_workers != null) return error.Usage;
+            const workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
+            if (workers == 0) return error.Usage;
+            options.llvm_workers = workers;
         } else return error.Usage;
     }
     return options;
+}
+
+fn defaultLlvmWorkersForCpuCount(logical_cpu_threads: usize) usize {
+    const threads = @max(logical_cpu_threads, 1);
+    return 1 + threads / 3;
+}
+
+fn defaultLlvmWorkers() usize {
+    return defaultLlvmWorkersForCpuCount(std.Thread.getCpuCount() catch 1);
 }
 
 fn stage(io: std.Io, marker: []const u8, name: []const u8, argv: []const []const u8) !void {
@@ -173,17 +189,24 @@ fn compileBitcodeModules(
     a: std.mem.Allocator,
     marker: []const u8,
     llvm_dir: []const u8,
+    llvm_workers: usize,
 ) !std.ArrayList([]const u8) {
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = marker,
         .data = "compile Lua LLVM bitcode batches",
     });
 
+    if (llvm_workers == 0) return error.InvalidWorkerCount;
     const plans = try readBatchPlan(io, a, llvm_dir);
     defer a.free(plans);
+    const worker_count = @min(llvm_workers, plans.len);
+    std.debug.print("dictionary build: LLVM compile workers={d}\n", .{worker_count});
+
     var objects: std.ArrayList([]const u8) = .empty;
-    var jobs: [2]?CompileJob = .{ null, null };
-    errdefer for (&jobs) |*job| if (job.*) |*active| active.child.kill(io);
+    const jobs = try a.alloc(?CompileJob, worker_count);
+    defer a.free(jobs);
+    @memset(jobs, null);
+    errdefer for (jobs) |*job| if (job.*) |*active| active.child.kill(io);
 
     for (plans, 0..) |plan, batch_index| {
         const source = try std.fs.path.join(a, &.{ llvm_dir, plan.file });
@@ -227,7 +250,7 @@ fn compileBitcodeModules(
             .count = plan.count,
         };
     }
-    for (&jobs) |*job| try waitCompile(io, job);
+    for (jobs) |*job| try waitCompile(io, job);
 
     const program_source = try std.fs.path.join(a, &.{ llvm_dir, "program.bc" });
     const program_object = try std.fs.path.join(a, &.{ llvm_dir, "program.o" });
@@ -329,8 +352,15 @@ fn linkNativeWorker(
     });
 }
 
-fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, publish_root: []const u8, llvm_dir: []const u8) !void {
-    const lua_objects = try compileBitcodeModules(io, a, marker, llvm_dir);
+fn compileNativeWorker(
+    io: std.Io,
+    a: std.mem.Allocator,
+    marker: []const u8,
+    publish_root: []const u8,
+    llvm_dir: []const u8,
+    llvm_workers: usize,
+) !void {
+    const lua_objects = try compileBitcodeModules(io, a, marker, llvm_dir, llvm_workers);
     const worker = try compileWorkerObject(io, a, marker, llvm_dir);
     const main_c = try sourcePath(a, "src/lua/bundle_worker_main.c");
     const output = try std.fs.path.join(a, &.{ publish_root, "dict-bundle-expander" });
@@ -341,16 +371,37 @@ fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, pub
     try std.Io.Dir.cwd().rename(metadata_source, std.Io.Dir.cwd(), metadata_destination, io);
 }
 
+test "default LLVM worker count is one plus one third logical CPUs" {
+    try std.testing.expectEqual(@as(usize, 1), defaultLlvmWorkersForCpuCount(1));
+    try std.testing.expectEqual(@as(usize, 1), defaultLlvmWorkersForCpuCount(2));
+    try std.testing.expectEqual(@as(usize, 2), defaultLlvmWorkersForCpuCount(3));
+    try std.testing.expectEqual(@as(usize, 5), defaultLlvmWorkersForCpuCount(12));
+}
+
+test "LLVM worker override accepts positive integers only" {
+    const options = try parseOptions(&.{ "dump.xml", "out", "--llvm-workers", "7" });
+    try std.testing.expectEqual(@as(?usize, 7), options.llvm_workers);
+    try std.testing.expectError(
+        error.Usage,
+        parseOptions(&.{ "dump.xml", "out", "--llvm-workers", "0" }),
+    );
+    try std.testing.expectError(
+        error.Usage,
+        parseOptions(&.{ "dump.xml", "out", "--llvm-workers", "nope" }),
+    );
+}
+
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--llvm-workers N]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
     const root = options.root;
     if (root.len == 0 or dump.len == 0) return error.Usage;
+    const llvm_workers = options.llvm_workers orelse defaultLlvmWorkers();
     if (std.fs.path.dirname(root)) |parent| if (parent.len != 0)
         try std.Io.Dir.cwd().createDirPath(init.io, parent);
     try std.Io.Dir.cwd().createDir(init.io, root, .default_dir);
@@ -374,7 +425,7 @@ pub fn main(init: std.process.Init) !void {
 
     // The native worker is a transient bundle compiler. It never belongs in the
     // shipped dictionary; full builds consume it immediately and delete .bundle-expander/.
-    try compileNativeWorker(init.io, a, marker, expander_root, llvm_dir);
+    try compileNativeWorker(init.io, a, marker, expander_root, llvm_dir, llvm_workers);
     try std.Io.Dir.cwd().deleteTree(init.io, llvm_dir);
 
     try std.Io.Dir.cwd().deleteFile(init.io, expander_marker);

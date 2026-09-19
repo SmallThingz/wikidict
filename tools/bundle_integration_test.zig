@@ -332,7 +332,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(exists(init.io, failed_marker), "failed build retains incomplete marker");
 
     const root = try std.fs.path.join(a, &.{ dir, "dictionary" });
-    _ = try h.run(&.{ pipeline, dump, root }, 0);
+    _ = try h.run(&.{ pipeline, dump, root, "--llvm-workers", "1" }, 0);
     _ = try h.run(&.{ verifier, root }, 0);
 
     const forbidden = [_][]const u8{
