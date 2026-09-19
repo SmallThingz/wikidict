@@ -7,6 +7,7 @@ comptime {
 }
 const pages = @import("bundle_pages.zig");
 const protocol = @import("bundle_protocol.zig");
+const RequestAllocator = @import("runtime/request_allocator.zig").RequestAllocator;
 const A = std.mem.Allocator;
 const L = std.os.linux;
 
@@ -129,7 +130,7 @@ pub fn run(io: std.Io, persistent: A) !void {
         };
         const length = std.mem.readInt(u32, &raw_length, .little);
         if (length == 0 or length > protocol.max_frame_bytes) return error.InvalidFrame;
-        var page = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        var page = RequestAllocator.init(std.heap.smp_allocator);
         defer page.deinit();
         const page_a = page.allocator();
         const bytes = try page_a.alloc(u8, length);

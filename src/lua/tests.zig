@@ -14,6 +14,7 @@ test {
     _ = @import("wikitext/preprocess.zig");
     _ = @import("runtime/pattern.zig");
     _ = @import("runtime/format_core.zig");
+    _ = @import("runtime/request_allocator.zig");
 }
 
 const std = @import("std");
