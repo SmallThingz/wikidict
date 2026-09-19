@@ -5,6 +5,7 @@ const emitter = @import("direct/emitter.zig");
 const program = @import("direct/program.zig");
 const shapes = @import("direct/shapes.zig");
 const module_model = @import("direct/module_model.zig");
+const static_encode = @import("direct/static_literal_encode.zig");
 const usage = @import("usage.zig");
 const usage_profile = @import("direct/usage_profile.zig");
 
@@ -274,17 +275,20 @@ fn writeCompilePlan(
 
     var o1_count: usize = 0;
     var o2_count: usize = 0;
+    var data_count: usize = 0;
     var pruned_count: usize = 0;
     for (modes, records, reachable, 0..) |mode, record, keep, index| {
-        if (keep) switch (mode) {
+        if (!keep) {
+            pruned_count += 1;
+        } else if (record.static_root) {
+            data_count += 1;
+        } else switch (mode) {
             .o1 => o1_count += 1,
             .o2 => o2_count += 1,
-        } else {
-            pruned_count += 1;
         }
         try w.print("{d}\t{s}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
             index,
-            if (keep) mode.flag() else "drop",
+            if (!keep) "drop" else if (record.static_root) "data" else mode.flag(),
             profile.direct_page_reach[index],
             profile.page_reach[index],
             profile.direct_module_fanin[index],
@@ -294,8 +298,8 @@ fn writeCompilePlan(
     }
     try w.flush();
     std.debug.print(
-        "LLVM_OPT_PLAN o1={d} o2={d} pruned={d}\n",
-        .{ o1_count, o2_count, pruned_count },
+        "LLVM_OPT_PLAN o1={d} o2={d} data={d} pruned={d}\n",
+        .{ o1_count, o2_count, data_count, pruned_count },
     );
 }
 
@@ -411,6 +415,7 @@ fn analyzeManifest(
             .root_bootstrap_safe = model.root_bootstrap_safe,
             .root_requires = root_requires,
             .direct_exports = try direct_exports.toOwnedSlice(a),
+            .static_root = static_encode.rootLiteral(chunk.body) != null,
         });
         function_base = std.math.add(u32, function_base, count) catch return error.TooManyFunctions;
         module.deinit();
@@ -501,8 +506,8 @@ fn emitBatches(
     inline for (&.{ usage_profile.CompileMode.o2, usage_profile.CompileMode.o1 }) |mode| {
         var selected: std.ArrayList(usize) = .empty;
         defer selected.deinit(a);
-        for (modes, 0..) |candidate, index|
-            if (candidate == mode) try selected.append(a, index);
+        for (modes, records, 0..) |candidate, record, index|
+            if (candidate == mode and !record.static_root) try selected.append(a, index);
 
         var position: usize = 0;
         var batch_index: usize = 0;
@@ -566,7 +571,10 @@ fn emitBatches(
         }
     }
     try plan.flush();
-    if (emitted != records.len) return error.IncompleteLlvmEmission;
+    var static_roots: usize = 0;
+    for (records) |record| static_roots += @intFromBool(record.static_root);
+    std.debug.print("LLVM_STATIC_ROOTS modules={d} emitted={d}\n", .{ static_roots, emitted });
+    if (emitted + static_roots != records.len) return error.IncompleteLlvmEmission;
 }
 
 fn run(io: std.Io, a: A, args: []const []const u8) !void {
@@ -709,6 +717,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &globals,
         &shape_registry,
         &selected_module_ids,
+        source_root,
     );
     std.debug.print("LLVM_DONE modules={d} globals={d}\n", .{ selected_records.items.len, globals.names.items.len });
 }

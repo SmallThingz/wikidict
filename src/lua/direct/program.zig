@@ -4,6 +4,8 @@ const emitter = @import("emitter.zig");
 const llvm = @import("llvm.zig");
 const shapes = @import("shapes.zig");
 const metadata = @import("../program_metadata.zig");
+const lua = @import("../parser/root.zig");
+const static_encode = @import("static_literal_encode.zig");
 
 const A = std.mem.Allocator;
 
@@ -29,6 +31,7 @@ pub const ModuleRecord = struct {
     eager_requirements: []const EagerRequirement = &.{},
     load_data_snapshot: bool = false,
     direct_exports: []const emitter.DirectExport = &.{},
+    static_root: bool = false,
 };
 
 const ModuleLookupEntry = struct {
@@ -100,7 +103,12 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
     });
     const roots = try a.alloc(llvm.ValueRef, records.len);
     defer a.free(roots);
+    const static_stub = try m.addFunction("dict_lua_static_module_root_unreachable", generated_fn_ty);
     for (records, 0..) |record, index| {
+        if (record.static_root) {
+            roots[index] = static_stub;
+            continue;
+        }
         const root_name = try std.fmt.allocPrint(a, "lua_f_{d}", .{record.root_function});
         defer a.free(root_name);
         roots[index] = try m.addFunction(root_name, generated_fn_ty);
@@ -143,7 +151,7 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
     var eager_modules: std.ArrayList(u32) = .empty;
     defer eager_modules.deinit(a);
     for (records, 0..) |record, module_id|
-        if (record.eager_order != std.math.maxInt(u32))
+        if (!record.static_root and record.eager_order != std.math.maxInt(u32))
             try eager_modules.append(a, @intCast(module_id));
     std.mem.sort(u32, eager_modules.items, records, struct {
         fn lessThan(items: []const ModuleRecord, lhs: u32, rhs: u32) bool {
@@ -190,6 +198,16 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
     return m;
 }
 
+fn readAll(io: std.Io, a: A, path: []const u8) ![]u8 {
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const stat = try file.stat(io);
+    const len = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
+    const bytes = try a.alloc(u8, len);
+    if (try file.readPositionalAll(io, bytes, 0) != len) return error.Truncated;
+    return bytes;
+}
+
 pub fn writeMetadata(
     io: std.Io,
     a: A,
@@ -198,6 +216,7 @@ pub fn writeMetadata(
     globals: *const analysis.Globals,
     shape_registry: *const shapes.Registry,
     module_ids: *const emitter.ModuleIdMap,
+    source_root: []const u8,
 ) !void {
     try validateRecords(a, records);
     const lookup_entries = try sortedLookupEntries(a, module_ids);
@@ -255,6 +274,27 @@ pub fn writeMetadata(
             try metadata.writeU32(w, requirement.module_id);
             try metadata.writeString(w, requirement.requested);
         }
+    }
+
+    var scratch = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer scratch.deinit();
+    for (records) |record| {
+        try metadata.writeU32(w, @intFromBool(record.load_data_snapshot));
+        if (!record.static_root) {
+            try metadata.writeString(w, "");
+            continue;
+        }
+        const sa = scratch.allocator();
+        const source_path = try std.fs.path.join(sa, &.{ source_root, record.path });
+        const source = try readAll(io, sa, source_path);
+        var chunk = try lua.parse(sa, source);
+        const literal = static_encode.rootLiteral(chunk.body) orelse return error.StaticRootAnalysisMismatch;
+        var table_shapes = try shape_registry.moduleFacts(sa, record.source_index);
+        const blob = try static_encode.encode(sa, literal, &table_shapes);
+        try metadata.writeString(w, blob);
+        table_shapes.deinit(sa);
+        chunk.deinit();
+        _ = scratch.reset(.retain_capacity);
     }
 
     for (globals.names.items) |name| try metadata.writeString(w, name);

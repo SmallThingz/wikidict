@@ -309,6 +309,8 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     const lua_program = try sourcePath(a, "src/lua/runtime/llvm_program.zig");
     const lua_program_metadata = try sourcePath(a, "src/lua/program_metadata.zig");
     const lua_llvm_abi = try sourcePath(a, "src/lua/runtime/llvm_abi.zig");
+    const lua_static_literal_decode = try sourcePath(a, "src/lua/runtime/static_literal_decode.zig");
+    const lua_static_literal_format = try sourcePath(a, "src/lua/runtime/static_literal_format.zig");
     const zig_stdlib = try sourcePath(a, "src/lua/runtime/stdlib.zig");
     const zig_scribunto = try sourcePath(a, "src/lua/runtime/scribunto.zig");
     const lua_static_fields = try sourcePath(a, "src/lua/abi/static_fields.zig");
@@ -323,6 +325,8 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     const program_mod = try std.fmt.allocPrint(a, "-Mlua_program={s}", .{lua_program});
     const program_metadata_mod = try std.fmt.allocPrint(a, "-Mlua_program_metadata={s}", .{lua_program_metadata});
     const llvm_abi_mod = try std.fmt.allocPrint(a, "-Mlua_llvm_abi={s}", .{lua_llvm_abi});
+    const static_literal_decode_mod = try std.fmt.allocPrint(a, "-Mlua_static_literal_decode={s}", .{lua_static_literal_decode});
+    const static_literal_format_mod = try std.fmt.allocPrint(a, "-Mlua_static_literal_format={s}", .{lua_static_literal_format});
     const stdlib_mod = try std.fmt.allocPrint(a, "-Mzig_stdlib={s}", .{zig_stdlib});
     const scribunto_mod = try std.fmt.allocPrint(a, "-Mzig_scribunto={s}", .{zig_scribunto});
     const static_fields_mod = try std.fmt.allocPrint(a, "-Mlua_static_fields={s}", .{lua_static_fields});
@@ -335,19 +339,23 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-lc", emit });
     try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", "--dep", "shared_xml_decode", "--dep", "lua_wikitext_preprocess", root });
     try argv.appendSlice(a, &.{
-        "--dep",                   "lua_static_fields", runtime_mod,
-        "--dep",                   "zig_runtime",       "--dep",
-        "zig_stdlib",              "--dep",             "zig_scribunto",
-        "--dep",                   "lua_globals",       "--dep",
-        "lua_program_metadata",    program_mod,         "--dep",
-        "zig_runtime",             llvm_abi_mod,        "--dep",
-        "zig_runtime",             "--dep",             "lua_globals",
-        stdlib_mod,                "--dep",             "zig_runtime",
-        "--dep",                   "zig_stdlib",        "--dep",
-        "lua_wikitext_preprocess", "--dep",             "lua_wikitext_expression",
-        "--dep",                   "shared_xml_decode", scribunto_mod,
-        static_fields_mod,         globals_mod,         program_metadata_mod,
-        preprocess_mod,            expression_mod,      xml_decode_mod,
+        "--dep",                     "lua_static_fields",         runtime_mod,
+        "--dep",                     "zig_runtime",               "--dep",
+        "zig_stdlib",                "--dep",                     "zig_scribunto",
+        "--dep",                     "lua_globals",               "--dep",
+        "lua_program_metadata",      "--dep",                     "lua_static_literal_decode",
+        program_mod,                 "--dep",                     "zig_runtime",
+        "--dep",                     "lua_static_literal_decode", "--dep",
+        "lua_static_literal_format", llvm_abi_mod,                "--dep",
+        "zig_runtime",               "--dep",                     "lua_static_literal_format",
+        static_literal_decode_mod,   static_literal_format_mod,   "--dep",
+        "zig_runtime",               "--dep",                     "lua_globals",
+        stdlib_mod,                  "--dep",                     "zig_runtime",
+        "--dep",                     "zig_stdlib",                "--dep",
+        "lua_wikitext_preprocess",   "--dep",                     "lua_wikitext_expression",
+        "--dep",                     "shared_xml_decode",         scribunto_mod,
+        static_fields_mod,           globals_mod,                 program_metadata_mod,
+        preprocess_mod,              expression_mod,              xml_decode_mod,
     });
     try stage(io, marker, "compile optimized build-only Lua worker object", argv.items);
     return output;

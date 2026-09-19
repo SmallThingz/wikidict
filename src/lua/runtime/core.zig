@@ -75,6 +75,7 @@ pub const ModuleRequirement = struct {
     requested: []const u8,
 };
 pub const ModuleRequirementsFn = *const fn (?*const anyopaque, u32) []const ModuleRequirement;
+pub const StaticModuleFn = *const fn (?*const anyopaque, *Context, u32) anyerror!?Value;
 pub const ProgramBootstrapFn = *const fn (?*const anyopaque, *Context) anyerror!void;
 pub const Value = union(enum) {
     nil,
@@ -691,6 +692,8 @@ pub const Context = struct {
     module_name: ?ModuleNameFn = null,
     module_requirements_ctx: ?*const anyopaque = null,
     module_requirements: ?ModuleRequirementsFn = null,
+    static_module_ctx: ?*const anyopaque = null,
+    static_module: ?StaticModuleFn = null,
     eager_bootstrap: bool = false,
     package_observable: bool = false,
     program_bootstrap_ctx: ?*const anyopaque = null,
@@ -738,6 +741,8 @@ pub const Context = struct {
         child.module_name = self.module_name;
         child.module_requirements_ctx = self.module_requirements_ctx;
         child.module_requirements = self.module_requirements;
+        child.static_module_ctx = self.static_module_ctx;
+        child.static_module = self.static_module;
         child.program_bootstrap_ctx = self.program_bootstrap_ctx;
         child.program_bootstrap = self.program_bootstrap;
         child.max_depth = self.max_depth;
@@ -920,6 +925,11 @@ pub const Context = struct {
     pub fn configureModuleFunctions(self: *Context, bases: []const u32, counts: []const u32) void {
         self.module_function_bases = bases;
         self.module_function_counts = counts;
+    }
+
+    pub fn configureStaticModules(self: *Context, host: ?*const anyopaque, loader: StaticModuleFn) void {
+        self.static_module_ctx = host;
+        self.static_module = loader;
     }
 
     pub fn beginEagerBootstrap(self: *Context) void {
@@ -1197,12 +1207,27 @@ pub const Context = struct {
         errdefer state.loading = false;
 
         const canonical = self.canonicalModuleName(module_id, requested);
-        const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
-        const previous_globals = try self.enterModule(module_id);
-        defer self.restoreGlobals(previous_globals);
-        const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
-        defer freeResults(values);
-        var value: Value = if (values.len == 0) .nil else values[0];
+        var owned_values: ?[]const Value = null;
+        defer if (owned_values) |values| freeResults(values);
+        var value: Value = if (self.static_module) |load|
+            if (try load(self.static_module_ctx, self, module_id)) |static_value|
+                static_value
+            else blk: {
+                const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
+                const previous_globals = try self.enterModule(module_id);
+                defer self.restoreGlobals(previous_globals);
+                const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
+                owned_values = values;
+                break :blk if (values.len == 0) .nil else values[0];
+            }
+        else blk: {
+            const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
+            const previous_globals = try self.enterModule(module_id);
+            defer self.restoreGlobals(previous_globals);
+            const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
+            owned_values = values;
+            break :blk if (values.len == 0) .nil else values[0];
+        };
         if (value == .nil) {
             if (canonical) |text| if (self.package_loaded) |loaded| {
                 if (loaded.rawGet(.{ .string = text })) |existing| value = existing;

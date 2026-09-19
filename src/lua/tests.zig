@@ -22,6 +22,40 @@ const llvm_analysis = @import("direct/analysis.zig");
 const llvm_emitter = @import("direct/emitter.zig");
 const llvm_shapes = @import("direct/shapes.zig");
 const llvm_module_model = @import("direct/module_model.zig");
+const llvm_program = @import("direct/program.zig");
+
+test "static module root table omits generated root symbol" {
+    const records = [_]llvm_program.ModuleRecord{
+        .{
+            .title = "Module:Static",
+            .path = "modules/static.lua",
+            .source_bytes = 10,
+            .source_index = 0,
+            .function_base = 40,
+            .function_count = 1,
+            .root_function = 40,
+            .export_shape_id = null,
+            .static_root = true,
+        },
+        .{
+            .title = "Module:Dynamic",
+            .path = "modules/dynamic.lua",
+            .source_bytes = 10,
+            .source_index = 1,
+            .function_base = 41,
+            .function_count = 1,
+            .root_function = 41,
+            .export_shape_id = null,
+        },
+    };
+    var generated = try llvm_program.generate(std.testing.allocator, &records);
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_static_module_root_unreachable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@lua_f_40") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@lua_f_41") != null);
+}
 
 test "direct LLVM emitter covers Lua control and closure surface" {
     const source =

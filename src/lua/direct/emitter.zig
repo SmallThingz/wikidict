@@ -6,7 +6,7 @@ const shapes = @import("shapes.zig");
 const static_fields = @import("../abi/static_fields.zig");
 const global_abi = @import("../abi/globals.zig");
 const llvm = @import("llvm.zig");
-const static_literal = @import("../runtime/static_literal_format.zig");
+const static_encode = @import("static_literal_encode.zig");
 
 const A = std.mem.Allocator;
 const V = llvm.ValueRef;
@@ -382,95 +382,9 @@ const ModuleEmitter = struct {
         len: usize,
     };
 
-    fn blobU32(self: *ModuleEmitter, out: *std.ArrayList(u8), value: usize) anyerror!void {
-        var bytes: [4]u8 = undefined;
-        std.mem.writeInt(
-            u32,
-            &bytes,
-            std.math.cast(u32, value) orelse return error.StaticLiteralTooLarge,
-            .little,
-        );
-        try out.appendSlice(self.allocator, &bytes);
-    }
-
-    fn blobRawU32(self: *ModuleEmitter, out: *std.ArrayList(u8), value: u32) anyerror!void {
-        var bytes: [4]u8 = undefined;
-        std.mem.writeInt(u32, &bytes, value, .little);
-        try out.appendSlice(self.allocator, &bytes);
-    }
-
-    fn blobU64(self: *ModuleEmitter, out: *std.ArrayList(u8), value: u64) anyerror!void {
-        var bytes: [8]u8 = undefined;
-        std.mem.writeInt(u64, &bytes, value, .little);
-        try out.appendSlice(self.allocator, &bytes);
-    }
-
-    fn blobString(self: *ModuleEmitter, out: *std.ArrayList(u8), value: []const u8) anyerror!void {
-        try self.blobU32(out, value.len);
-        try out.appendSlice(self.allocator, value);
-    }
-
-    fn encodeStaticExpr(
-        self: *ModuleEmitter,
-        out: *std.ArrayList(u8),
-        value: *const lua.Expr,
-        depth: usize,
-    ) anyerror!void {
-        if (depth >= static_literal.max_depth) return error.StaticLiteralTooDeep;
-        switch (value.*) {
-            .nil_lit => try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.nil)),
-            .bool_lit => |literal| try out.append(
-                self.allocator,
-                @intFromEnum(if (literal.value) static_literal.ValueTag.true_ else static_literal.ValueTag.false_),
-            ),
-            .number => |literal| {
-                try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.number));
-                const number = try numbers.parse(literal.raw);
-                try self.blobU64(out, @bitCast(number));
-            },
-            .string => |literal| {
-                try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.string));
-                try self.blobString(out, literal.value);
-            },
-            .paren => |paren| try self.encodeStaticExpr(out, paren.expr, depth),
-            .table => |table_expr| {
-                try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.table));
-                const shape_id = if (self.facts.tableShape(table_expr.span.start)) |shape|
-                    shape.id
-                else
-                    static_literal.no_shape;
-                try self.blobRawU32(out, shape_id);
-                try self.blobU32(out, table_expr.fields.len);
-                var list_capacity: usize = 0;
-                for (table_expr.fields) |field| if (field == .list) {
-                    list_capacity += 1;
-                };
-                try self.blobU32(out, list_capacity);
-                for (table_expr.fields) |field| switch (field) {
-                    .list => |item| {
-                        try out.append(self.allocator, @intFromEnum(static_literal.FieldTag.list));
-                        try self.encodeStaticExpr(out, item, depth + 1);
-                    },
-                    .named => |item| {
-                        try out.append(self.allocator, @intFromEnum(static_literal.FieldTag.named));
-                        try self.blobString(out, item.name);
-                        try self.encodeStaticExpr(out, item.value, depth + 1);
-                    },
-                    .keyed => |item| {
-                        try out.append(self.allocator, @intFromEnum(static_literal.FieldTag.keyed));
-                        try self.encodeStaticExpr(out, item.key, depth + 1);
-                        try self.encodeStaticExpr(out, item.value, depth + 1);
-                    },
-                };
-            },
-            else => return error.NonStaticLiteral,
-        }
-    }
-
     fn staticLiteralBlob(self: *ModuleEmitter, value: *const lua.Expr) anyerror!StaticLiteralBlob {
-        var bytes: std.ArrayList(u8) = .empty;
-        defer bytes.deinit(self.allocator);
-        try self.encodeStaticExpr(&bytes, value, 0);
+        const bytes = try static_encode.encode(self.allocator, value, self.facts.table_shapes);
+        defer self.allocator.free(bytes);
 
         const id = self.static_literal_blobs;
         self.static_literal_blobs += 1;
@@ -480,36 +394,17 @@ const ModuleEmitter = struct {
             .{ self.function_base, id },
         );
         defer self.allocator.free(name);
-        const array_ty = try llvm.arrayType(self.llvm_module.types.i8, bytes.items.len);
+        const array_ty = try llvm.arrayType(self.llvm_module.types.i8, bytes.len);
         const global = try self.llvm_module.addGlobal(
             name,
             array_ty,
-            try llvm.constString(self.llvm_module.context, bytes.items),
+            try llvm.constString(self.llvm_module.context, bytes),
             .private,
             1,
         );
-        return .{ .ptr = global, .len = bytes.items.len };
+        return .{ .ptr = global, .len = bytes.len };
     }
 };
-
-fn isStaticLiteral(expr: *const lua.Expr) bool {
-    return switch (expr.*) {
-        .nil_lit, .bool_lit, .number, .string => true,
-        .paren => |paren| isStaticLiteral(paren.expr),
-        .table => |table_expr| isStaticFields(table_expr.fields),
-        else => false,
-    };
-}
-
-fn isStaticFields(fields: []const lua.TableField) bool {
-    for (fields) |field| switch (field) {
-        .list => |item| if (!isStaticLiteral(item)) return false,
-        .named => |item| if (!isStaticLiteral(item.value)) return false,
-        .keyed => |item| if (!isStaticLiteral(item.key) or !isStaticLiteral(item.value))
-            return false,
-    };
-    return true;
-}
 
 const Save = struct { name: []const u8, previous: ?u32 };
 const Resolved = union(enum) { local: u32, upvalue: u32, global: u32 };
@@ -1123,7 +1018,7 @@ const FnEmitter = struct {
     fn table(self: *FnEmitter, table_expr: anytype) anyerror!ValueRef {
         const fields = table_expr.fields;
         const shape = self.module.facts.tableShape(table_expr.span.start);
-        if (fields.len >= static_literal_blob_threshold and isStaticFields(fields)) {
+        if (fields.len >= static_literal_blob_threshold and static_encode.isFields(fields)) {
             var literal = lua.Expr{ .table = table_expr };
             const data = try self.module.staticLiteralBlob(&literal);
             const table_value = try self.valueSlot();

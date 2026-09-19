@@ -4,6 +4,7 @@ const stdlib = @import("zig_stdlib");
 const scribunto = @import("zig_scribunto");
 const globals_abi = @import("lua_globals");
 const metadata = @import("lua_program_metadata");
+const static_decode = @import("lua_static_literal_decode");
 
 pub const Context = rt.Context;
 
@@ -58,6 +59,8 @@ pub const Program = struct {
     module_function_counts: []u32,
     module_requirement_offsets: []u32,
     module_requirements: []rt.ModuleRequirement,
+    module_static_root_blobs: [][]const u8,
+    module_static_root_load_data: []bool,
     global_keys: []rt.Value,
     global_shape: rt.Shape,
     shapes: []rt.Shape,
@@ -152,6 +155,17 @@ pub const Program = struct {
             return error.InvalidProgramMetadata;
         module_requirement_offsets[module_count] = @intCast(requirement_at);
 
+        const module_static_root_blobs = try allocator.alloc([]const u8, module_count);
+        errdefer allocator.free(module_static_root_blobs);
+        const module_static_root_load_data = try allocator.alloc(bool, module_count);
+        errdefer allocator.free(module_static_root_load_data);
+        for (module_static_root_blobs, module_static_root_load_data) |*blob, *snapshot| {
+            const flags = try reader.readU32();
+            if (flags > 1) return error.InvalidProgramMetadata;
+            snapshot.* = flags != 0;
+            blob.* = try reader.readString();
+        }
+
         const global_keys = try allocator.alloc(rt.Value, global_count);
         errdefer allocator.free(global_keys);
         for (global_keys) |*key|
@@ -206,6 +220,8 @@ pub const Program = struct {
             .module_function_counts = module_function_counts,
             .module_requirement_offsets = module_requirement_offsets,
             .module_requirements = module_requirements,
+            .module_static_root_blobs = module_static_root_blobs,
+            .module_static_root_load_data = module_static_root_load_data,
             .global_keys = global_keys,
             .global_shape = .{
                 .field_keys = global_keys,
@@ -225,6 +241,8 @@ pub const Program = struct {
         self.allocator.free(self.shape_keys);
         self.allocator.free(self.shapes);
         self.allocator.free(self.global_keys);
+        self.allocator.free(self.module_static_root_load_data);
+        self.allocator.free(self.module_static_root_blobs);
         self.allocator.free(self.module_requirements);
         self.allocator.free(self.module_requirement_offsets);
         self.allocator.free(self.module_function_counts);
@@ -284,6 +302,14 @@ pub const Program = struct {
         return self.module_requirements[start..end];
     }
 
+    fn staticModule(raw: ?*const anyopaque, ctx: *rt.Context, id: u32) anyerror!?rt.Value {
+        const self: *const Program = @ptrCast(@alignCast(raw orelse return null));
+        if (id >= self.module_count) return null;
+        const blob = self.module_static_root_blobs[id];
+        if (blob.len == 0) return null;
+        return try static_decode.decode(ctx, blob);
+    }
+
     pub fn initContext(self: *Program, allocator: std.mem.Allocator) !rt.Context {
         var ctx = try rt.Context.initProgram(
             allocator,
@@ -300,12 +326,19 @@ pub const Program = struct {
         ctx.configureModules(self, lookup, moduleName);
         ctx.configureModuleFunctions(self.module_function_bases, self.module_function_counts);
         ctx.configureModuleRequirements(self, moduleRequirements);
+        ctx.configureStaticModules(self, staticModule);
         ctx.configureProgramBootstrap(
             &self.stdlib_template,
             stdlib.Template.bootstrapOpaque,
         );
         try rt.bindGlobalTable(&ctx, &self.global_shape, globals_abi.id("_G"));
         _ = try ctx.bootstrapProgram();
+        for (self.module_static_root_blobs, self.module_static_root_load_data, 0..) |blob, snapshot, module_id| {
+            if (blob.len == 0) continue;
+            var value = try static_decode.decode(&ctx, blob);
+            if (value == .nil) value = .{ .boolean = true };
+            try ctx.preinitializeModule(@intCast(module_id), value, snapshot);
+        }
         ctx.beginEagerBootstrap();
         const eager_status = dict_lua_program_eager_init(&ctx);
         ctx.endEagerBootstrap();
