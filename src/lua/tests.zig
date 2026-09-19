@@ -695,6 +695,8 @@ test "call-only captured closures pass cells without materializing callable iden
     const generated_source = try generated.toText(std.testing.allocator);
     defer std.testing.allocator.free(generated_source);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_init_direct_captures") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, generated_source, "call i32 @dict_lua_direct_capture_cells"));
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "@dict_lua_capture_cell") == null);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_enter_local_static_call(ptr %ctx)") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "call %FunctionResult @lua_f_1") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "call %CallResult @dict_lua_call_static_multi") == null);

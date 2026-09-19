@@ -322,9 +322,19 @@ export fn dict_lua_cell_get(cell: *const rt.Cell, out: *rt.Value) callconv(.c) v
 export fn dict_lua_cell_set(cell: *rt.Cell, input: *const rt.Value) callconv(.c) void {
     cell.value = input.*;
 }
-export fn dict_lua_capture_cell(ctx: *rt.Context, captures: *const rt.Captures, ordinal: u32, out: **rt.Cell) callconv(.c) u32 {
-    const cell = captures.cell(ordinal) catch |err| return fail(ctx, err);
-    out.* = cell;
+export fn dict_lua_direct_capture_cells(
+    ctx: *rt.Context,
+    captures: *const rt.Captures,
+    expected_len: usize,
+    out: *[*]const *rt.Cell,
+) callconv(.c) u32 {
+    const cells = switch (captures.*) {
+        .direct => |direct_cells| direct_cells,
+        .native => return fail(ctx, error.BadUpvalue),
+    };
+    if (cells.len < expected_len or (expected_len != 0 and cells.len == 0))
+        return fail(ctx, error.BadUpvalue);
+    out.* = cells.ptr;
     return 0;
 }
 export fn dict_lua_init_direct_captures(

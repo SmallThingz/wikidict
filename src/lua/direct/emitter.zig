@@ -206,7 +206,7 @@ const Runtime = struct {
     cell_new: V,
     cell_get: V,
     cell_set: V,
-    capture_cell: V,
+    direct_capture_cells: V,
     init_direct_captures: V,
     make_function: V,
     call_fixed: V,
@@ -277,7 +277,7 @@ const Runtime = struct {
             .cell_new = try declare(m, "dict_lua_cell_new", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
             .cell_get = try declare(m, "dict_lua_cell_get", ty.void, &.{ ty.ptr, ty.ptr }),
             .cell_set = try declare(m, "dict_lua_cell_set", ty.void, &.{ ty.ptr, ty.ptr }),
-            .capture_cell = try declare(m, "dict_lua_capture_cell", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr }),
+            .direct_capture_cells = try declare(m, "dict_lua_direct_capture_cells", ty.i32, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr }),
             .init_direct_captures = try declare(m, "dict_lua_init_direct_captures", ty.i32, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr }),
             .make_function = try declare(m, "dict_lua_make_function", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr }),
             .call_fixed = try declare(m, "dict_lua_call_fixed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
@@ -2279,11 +2279,22 @@ const FnEmitter = struct {
     }
 
     fn emitInitialization(self: *FnEmitter) anyerror!void {
-        for (self.info.upvalues, 0..) |_, index| {
-            const status = try llvm.call(self.builder, self.rt().capture_cell, &.{
-                self.ctx(), self.captures(), try self.cI32(index), self.upvalue_slots[index],
+        if (self.info.upvalues.len != 0) {
+            const cells_slot = try self.ptrSlot();
+            const status = try llvm.call(self.builder, self.rt().direct_capture_cells, &.{
+                self.ctx(), self.captures(), try self.cI64(self.info.upvalues.len), cells_slot,
             });
             try self.check(status);
+            const cells = try llvm.load(self.builder, self.ty().ptr, cells_slot, 8);
+            for (self.info.upvalues, 0..) |_, index| {
+                const cell = try llvm.load(
+                    self.builder,
+                    self.ty().ptr,
+                    try self.pointerArrayElem(cells, index),
+                    8,
+                );
+                try llvm.store(self.builder, cell, self.upvalue_slots[index], 8);
+            }
         }
         for (self.info.params, 0..) |name, index| {
             const binding = try self.bindName(name);
