@@ -95,6 +95,7 @@ extern fn LLVMSetGlobalConstant(GlobalVar: ValueRef, IsConstant: c_int) void;
 extern fn LLVMSetLinkage(Global: ValueRef, Linkage: Linkage) void;
 extern fn LLVMSetAlignment(V: ValueRef, Bytes: c_uint) void;
 extern fn LLVMAddFunction(M: ModuleRef, Name: [*:0]const u8, FunctionTy: TypeRef) ?ValueRef;
+extern fn LLVMGetNamedFunction(M: ModuleRef, Name: [*:0]const u8) ?ValueRef;
 extern fn LLVMGlobalGetValueType(Global: ValueRef) ?TypeRef;
 extern fn LLVMGetParam(Fn: ValueRef, Index: c_uint) ?ValueRef;
 extern fn LLVMSetValueName2(Val: ValueRef, Name: [*]const u8, NameLen: usize) void;
@@ -203,6 +204,12 @@ pub const Module = struct {
         const z = try std.heap.smp_allocator.dupeZ(u8, name);
         defer std.heap.smp_allocator.free(z);
         return req(ValueRef, LLVMAddFunction(self.ref, z.ptr, ty));
+    }
+
+    pub fn getFunction(self: *const Module, name: []const u8) ?ValueRef {
+        const z = std.heap.smp_allocator.dupeZ(u8, name) catch return null;
+        defer std.heap.smp_allocator.free(z);
+        return LLVMGetNamedFunction(self.ref, z.ptr);
     }
 
     pub fn addGlobal(self: *const Module, name: []const u8, ty: TypeRef, initializer: ValueRef, linkage: Linkage, alignment: u32) !ValueRef {

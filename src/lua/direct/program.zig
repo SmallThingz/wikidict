@@ -17,6 +17,9 @@ pub const ModuleRecord = struct {
     root_function: u32,
     export_shape_id: ?u32,
     dynamic_module_load: bool = false,
+    root_pure: bool = false,
+    load_data_snapshot: bool = false,
+    direct_exports: []const emitter.DirectExport = &.{},
 };
 
 const ModuleLookupEntry = struct {
@@ -109,6 +112,57 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
     defer llvm.disposeBuilder(builder);
     llvm.position(builder, block);
     try llvm.ret(builder, roots_value);
+
+    const preinit_ty = try m.functionType(m.types.i32, &.{
+        m.types.ptr,
+        m.types.i32,
+        m.types.i32,
+        m.types.ptr,
+        m.types.i64,
+        m.types.i32,
+        m.types.i32,
+    });
+    const preinit = try m.addFunction("dict_lua_preinitialize_module", preinit_ty);
+    const eager_ty = try m.functionType(m.types.i32, &.{m.types.ptr});
+    const eager = try m.addFunction("dict_lua_program_eager_init", eager_ty);
+    const eager_ctx = try llvm.param(eager, 0);
+    const eager_entry = try llvm.appendBlock(m.context, eager, "entry");
+    llvm.position(builder, eager_entry);
+    const null_ptr = try llvm.constNull(m.types.ptr);
+    const zero_i64 = try llvm.constInt(m.types.i64, 0);
+
+    for (records, roots, 0..) |record, root, module_id| {
+        if (!record.root_pure) continue;
+        const result = try llvm.call(builder, root, &.{
+            eager_ctx,
+            null_ptr,
+            null_ptr,
+            zero_i64,
+            null_ptr,
+            zero_i64,
+        });
+        const values_ptr = try llvm.extractValue(builder, result, 0);
+        const values_len = try llvm.extractValue(builder, result, 1);
+        const raw_status = try llvm.extractValue(builder, result, 2);
+        const reserved = try llvm.extractValue(builder, result, 3);
+        const status = try llvm.call(builder, preinit, &.{
+            eager_ctx,
+            try llvm.constInt(m.types.i32, module_id),
+            try llvm.constInt(m.types.i32, @intFromBool(record.load_data_snapshot)),
+            values_ptr,
+            values_len,
+            raw_status,
+            reserved,
+        });
+        const ok = try llvm.icmp(builder, .eq, status, try llvm.constInt(m.types.i32, 0));
+        const next = try llvm.appendBlock(m.context, eager, "eager_next");
+        const fail = try llvm.appendBlock(m.context, eager, "eager_fail");
+        try llvm.condBr(builder, ok, next, fail);
+        llvm.position(builder, fail);
+        try llvm.ret(builder, status);
+        llvm.position(builder, next);
+    }
+    try llvm.ret(builder, try llvm.constInt(m.types.i32, 0));
 
     if (std.debug.runtime_safety) try m.verify(a);
     return m;

@@ -187,6 +187,7 @@ fn analyzeManifest(
     globals: *analysis.Globals,
     shape_registry: *shapes.Registry,
     named_module_edges: *std.ArrayList(NamedModuleEdge),
+    named_load_data_targets: *std.ArrayList([]const u8),
 ) ![]ModuleRecord {
     var records: std.ArrayList(ModuleRecord) = .empty;
     var scratch = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
@@ -206,7 +207,15 @@ fn analyzeManifest(
         const module_index: u32 = @intCast(records.items.len);
 
         var static_requires: std.ArrayList([]const u8) = .empty;
-        const dynamic_module_load = try usage.collectModuleLoads(sa, chunk.body, &static_requires);
+        var static_load_data: std.ArrayList([]const u8) = .empty;
+        const dynamic_module_load = try usage.collectModuleLoadsDetailed(
+            sa,
+            chunk.body,
+            &static_requires,
+            &static_load_data,
+        );
+        for (static_load_data.items) |target|
+            try named_load_data_targets.append(a, try a.dupe(u8, target));
         var seen_requires: std.StringHashMapUnmanaged(void) = .empty;
         for (static_requires.items) |target| {
             if (seen_requires.contains(target)) continue;
@@ -237,6 +246,33 @@ fn analyzeManifest(
         };
         var module = try analysis.analyze(sa, globals, &chunk, function_base);
         const count: u32 = @intCast(module.functions.items.len);
+
+        var direct_exports: std.ArrayList(emitter.DirectExport) = .empty;
+        if (!model.dynamic_top_level) switch (model.return_binding) {
+            .table => |table| {
+                var fields = table.fields.iterator();
+                while (fields.next()) |entry| switch (entry.value_ptr.*) {
+                    .function => |span_start| {
+                        var target: ?*const analysis.FunctionInfo = null;
+                        for (module.functions.items[1..]) |info| {
+                            if (info.span.start == span_start) {
+                                target = info;
+                                break;
+                            }
+                        }
+                        const info = target orelse continue;
+                        if (info.upvalues.len != 0) continue;
+                        try direct_exports.append(a, .{
+                            .name = try a.dupe(u8, entry.key_ptr.*),
+                            .function_id = info.id,
+                        });
+                    },
+                    else => {},
+                };
+            },
+            else => {},
+        };
+
         try records.append(a, .{
             .title = try a.dupe(u8, row.title),
             .path = try a.dupe(u8, row.path),
@@ -247,6 +283,8 @@ fn analyzeManifest(
             .root_function = module.root.id,
             .export_shape_id = export_shape_id,
             .dynamic_module_load = dynamic_module_load,
+            .root_pure = model.root_pure,
+            .direct_exports = try direct_exports.toOwnedSlice(a),
         });
         function_base = std.math.add(u32, function_base, count) catch return error.TooManyFunctions;
         module.deinit();
@@ -270,6 +308,7 @@ fn appendModuleToBatch(
     globals: *analysis.Globals,
     module_ids: *const emitter.ModuleIdMap,
     shape_registry: *const shapes.Registry,
+    module_facts: []const emitter.ModuleFact,
     batch: *emitter.Batch,
     frozen_global_count: usize,
 ) !void {
@@ -291,6 +330,7 @@ fn appendModuleToBatch(
     defer table_shapes.deinit(scratch);
     const facts = emitter.ProgramFacts{
         .module_ids = module_ids,
+        .module_facts = module_facts,
         .table_shapes = &table_shapes,
     };
     const result = try batch.append(scratch, globals, &module, facts);
@@ -309,6 +349,7 @@ fn emitBatches(
     globals: *analysis.Globals,
     module_ids: *const emitter.ModuleIdMap,
     shape_registry: *const shapes.Registry,
+    module_facts: []const emitter.ModuleFact,
 ) !void {
     if (records.len != modes.len) return error.InvalidCompilePlan;
 
@@ -365,6 +406,7 @@ fn emitBatches(
                     globals,
                     module_ids,
                     shape_registry,
+                    module_facts,
                     &batch,
                     frozen_global_count,
                 );
@@ -415,6 +457,8 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     defer shape_registry.deinit();
     var named_module_edges: std.ArrayList(NamedModuleEdge) = .empty;
     defer named_module_edges.deinit(a);
+    var named_load_data_targets: std.ArrayList([]const u8) = .empty;
+    defer named_load_data_targets.deinit(a);
     const records = try analyzeManifest(
         io,
         a,
@@ -423,6 +467,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &globals,
         &shape_registry,
         &named_module_edges,
+        &named_load_data_targets,
     );
     if (records.len == 0) return error.EmptyManifest;
     if (records.len > std.math.maxInt(u32) - 2) return error.TooManyModules;
@@ -478,10 +523,24 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     var selected_module_ids = try buildModuleIds(io, a, source_root, selected_records.items);
     defer selected_module_ids.deinit(a);
     if (selected_module_ids.count() > std.math.maxInt(u32)) return error.TooManyModuleNames;
+    for (named_load_data_targets.items) |target| {
+        const id = selected_module_ids.get(target) orelse continue;
+        if (id < selected_records.items.len and selected_records.items[id].root_pure)
+            selected_records.items[id].load_data_snapshot = true;
+    }
     std.debug.print(
         "LLVM_REACHABLE modules={d}/{d} dynamic_fallback={}\n",
         .{ selected_records.items.len, records.len, page_seed.dynamic_module_target },
     );
+
+    const selected_module_facts = try a.alloc(emitter.ModuleFact, selected_records.items.len);
+    defer a.free(selected_module_facts);
+    for (selected_module_facts, selected_records.items) |*fact, record| {
+        fact.* = .{
+            .root_pure = record.root_pure,
+            .exports = record.direct_exports,
+        };
+    }
 
     try emitBatches(
         io,
@@ -493,6 +552,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &globals,
         &selected_module_ids,
         &shape_registry,
+        selected_module_facts,
     );
 
     var program_module = try program.generate(a, selected_records.items);

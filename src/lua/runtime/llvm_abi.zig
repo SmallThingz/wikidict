@@ -138,6 +138,9 @@ export fn dict_lua_value_copy(out: *rt.Value, input: *const rt.Value) callconv(.
 export fn dict_lua_value_truthy(input: *const rt.Value) callconv(.c) u8 {
     return @intFromBool(input.*.truthy());
 }
+export fn dict_lua_value_is_function_id(input: *const rt.Value, function_id: u32) callconv(.c) u8 {
+    return @intFromBool(input.* == .callable and input.callable.id == function_id);
+}
 export fn dict_lua_value_to_number(input: *const rt.Value, out: *f64) callconv(.c) u8 {
     const n = rt.toNumber(input.*) orelse return 0;
     out.* = n;
@@ -172,6 +175,28 @@ export fn dict_lua_global_set(ctx: *rt.Context, slot: u32, input: *const rt.Valu
 }
 export fn dict_lua_require_module_id(ctx: *rt.Context, module_id: u32, name: [*]const u8, len: usize, out: *rt.Value) callconv(.c) u32 {
     out.* = ctx.requireModuleId(module_id, name[0..len]) catch |err| return fail(ctx, err);
+    return 0;
+}
+export fn dict_lua_preinitialize_module(
+    ctx: *rt.Context,
+    module_id: u32,
+    snapshot_load_data: u32,
+    values_ptr: ?[*]const rt.Value,
+    values_len: usize,
+    status: u32,
+    reserved: u32,
+) callconv(.c) u32 {
+    if (reserved != 0 or status > 1) return fail(ctx, error.BadAotFunctionResult);
+    if (status != 0) {
+        if (ctx.aotErrorName() == null) ctx.setAotErrorName("AotCallFailed");
+        return 1;
+    }
+    if (values_len != 0 and values_ptr == null) return fail(ctx, error.BadAotFunctionResult);
+    const result = if (values_len == 0) &.{} else values_ptr.?[0..values_len];
+    defer if (result.len != 0) rt.freeResults(result);
+    var value: rt.Value = if (result.len == 0) .nil else result[0];
+    if (value == .nil) value = .{ .boolean = true };
+    ctx.preinitializeModule(module_id, value, snapshot_load_data != 0) catch |err| return fail(ctx, err);
     return 0;
 }
 export fn dict_lua_new_table(ctx: *rt.Context, out: *rt.Value) callconv(.c) u32 {

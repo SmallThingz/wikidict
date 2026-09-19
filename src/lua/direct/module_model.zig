@@ -22,6 +22,7 @@ pub const Builder = struct {
     return_binding: Binding = .unknown,
     functions: std.AutoHashMapUnmanaged(u32, *const lua.Expr) = .empty,
     dynamic_top_level: bool = false,
+    root_pure: bool = true,
     owned_tables: std.ArrayList(*TableInfo) = .empty,
 
     pub fn deinit(self: *Builder) void {
@@ -126,37 +127,81 @@ pub const Builder = struct {
         self.env = saved;
     }
 
+    fn exprPure(self: *Builder, expr: *const lua.Expr) bool {
+        return switch (expr.*) {
+            .nil_lit, .bool_lit, .number, .string, .function => true,
+            .name => |name| self.env.contains(name.value),
+            .paren => |value| self.exprPure(value.expr),
+            .table => |value| blk: {
+                for (value.fields) |field| switch (field) {
+                    .list => |item| if (!self.exprPure(item)) break :blk false,
+                    .named => |item| if (!self.exprPure(item.value)) break :blk false,
+                    .keyed => |item| if (!self.exprPure(item.key) or !self.exprPure(item.value)) break :blk false,
+                };
+                break :blk true;
+            },
+            // Indexing, arithmetic/comparison, and calls can invoke metamethods or
+            // module/host code. Do not reorder them across program initialization.
+            .index, .call, .method_call, .unary, .binary, .vararg => false,
+        };
+    }
+
+    fn targetPure(self: *Builder, target: lua.LValue) bool {
+        return switch (target) {
+            .name => |name| self.env.contains(name),
+            .index => |idx| blk: {
+                const object = self.eval(idx.object) catch break :blk false;
+                if (object != .table or stringConst(idx.key) == null) break :blk false;
+                break :blk true;
+            },
+        };
+    }
+
     fn topStmt(self: *Builder, stmt: *const lua.Stmt) !void {
         switch (stmt.*) {
             .local_assign => |s| {
+                for (s.values) |value| {
+                    if (!self.exprPure(value)) self.root_pure = false;
+                }
                 for (s.names, 0..) |name, i| {
                     const value = if (i < s.values.len) try self.eval(s.values[i]) else Binding.unknown;
                     try self.env.put(self.allocator, name, value);
                 }
             },
             .assign => |s| {
+                for (s.values) |value| {
+                    if (!self.exprPure(value)) self.root_pure = false;
+                }
                 for (s.targets, 0..) |target, i| {
+                    if (!self.targetPure(target)) self.root_pure = false;
                     const value = if (i < s.values.len) try self.eval(s.values[i]) else Binding.unknown;
                     try self.assign(target, value);
                 }
             },
             .local_function => |s| try self.env.put(self.allocator, s.name, .{ .function = s.function.function.span.start }),
-            .function_assign => |s| try self.assign(s.target, .{ .function = s.function.function.span.start }),
-            .return_stmt => |s| if (s.values.len != 0) {
-                self.return_binding = try self.eval(s.values[0]);
+            .function_assign => |s| {
+                if (!self.targetPure(s.target)) self.root_pure = false;
+                try self.assign(s.target, .{ .function = s.function.function.span.start });
             },
-            .call => {},
+            .return_stmt => |s| {
+                for (s.values) |value| {
+                    if (!self.exprPure(value)) self.root_pure = false;
+                }
+                if (s.values.len != 0) self.return_binding = try self.eval(s.values[0]);
+            },
+            .call => self.root_pure = false,
             .empty => {},
-            // `do ... end` is unconditional. Evaluate it in an isolated lexical
-            // environment so table mutations (notably export.foo assignments) are
-            // visible while block-local names do not escape. Keep the dynamic bit
-            // conservative because scalar outer-variable writes are not modeled.
             .do_block => |s| {
+                // Preserve the conservative shape-analysis bit, but an
+                // unconditional lexical block can still be side-effect-free.
                 self.dynamic_top_level = true;
                 try self.topScopedBlock(s.body);
             },
-            // Runtime-dependent top-level control flow is not guessed.
-            .while_loop, .repeat_loop, .if_stmt, .numeric_for, .generic_for, .break_stmt => self.dynamic_top_level = true,
+            // Runtime-dependent control flow is not reordered during bootstrap.
+            .while_loop, .repeat_loop, .if_stmt, .numeric_for, .generic_for, .break_stmt => {
+                self.dynamic_top_level = true;
+                self.root_pure = false;
+            },
         }
     }
 

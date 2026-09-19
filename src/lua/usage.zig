@@ -192,12 +192,12 @@ fn isMwLoadData(expr: *const lua.Expr) bool {
         std.mem.eql(u8, key, "loadData");
 }
 
-fn collectExpr(a: std.mem.Allocator, expr: *const lua.Expr, out: *std.ArrayList([]const u8), dynamic: *bool) anyerror!void {
+fn collectExpr(a: std.mem.Allocator, expr: *const lua.Expr, out: *std.ArrayList([]const u8), load_data: ?*std.ArrayList([]const u8), dynamic: *bool) anyerror!void {
     switch (expr.*) {
-        .paren => |value| try collectExpr(a, value.expr, out, dynamic),
+        .paren => |value| try collectExpr(a, value.expr, out, load_data, dynamic),
         .index => |value| {
-            try collectExpr(a, value.object, out, dynamic);
-            try collectExpr(a, value.key, out, dynamic);
+            try collectExpr(a, value.object, out, load_data, dynamic);
+            try collectExpr(a, value.key, out, load_data, dynamic);
         },
         .call => |value| {
             const module_loader =
@@ -205,81 +205,96 @@ fn collectExpr(a: std.mem.Allocator, expr: *const lua.Expr, out: *std.ArrayList(
                 isMwLoadData(value.callee);
             if (module_loader and value.args.len != 0) {
                 if (staticString(value.args[0])) |raw| {
-                    if (try canonicalModule(a, raw)) |target| try out.append(a, target);
+                    if (try canonicalModule(a, raw)) |target| {
+                        try out.append(a, target);
+                        if (isMwLoadData(value.callee)) if (load_data) |items|
+                            try items.append(a, target);
+                    }
                 } else {
                     dynamic.* = true;
                 }
             }
-            try collectExpr(a, value.callee, out, dynamic);
-            for (value.args) |arg| try collectExpr(a, arg, out, dynamic);
+            try collectExpr(a, value.callee, out, load_data, dynamic);
+            for (value.args) |arg| try collectExpr(a, arg, out, load_data, dynamic);
         },
         .method_call => |value| {
-            try collectExpr(a, value.object, out, dynamic);
-            for (value.args) |arg| try collectExpr(a, arg, out, dynamic);
+            try collectExpr(a, value.object, out, load_data, dynamic);
+            for (value.args) |arg| try collectExpr(a, arg, out, load_data, dynamic);
         },
-        .function => |value| try collectBlock(a, value.body, out, dynamic),
+        .function => |value| try collectBlock(a, value.body, out, load_data, dynamic),
         .table => |value| for (value.fields) |field| switch (field) {
-            .list => |item| try collectExpr(a, item, out, dynamic),
-            .named => |item| try collectExpr(a, item.value, out, dynamic),
+            .list => |item| try collectExpr(a, item, out, load_data, dynamic),
+            .named => |item| try collectExpr(a, item.value, out, load_data, dynamic),
             .keyed => |item| {
-                try collectExpr(a, item.key, out, dynamic);
-                try collectExpr(a, item.value, out, dynamic);
+                try collectExpr(a, item.key, out, load_data, dynamic);
+                try collectExpr(a, item.value, out, load_data, dynamic);
             },
         },
-        .unary => |value| try collectExpr(a, value.expr, out, dynamic),
+        .unary => |value| try collectExpr(a, value.expr, out, load_data, dynamic),
         .binary => |value| {
-            try collectExpr(a, value.lhs, out, dynamic);
-            try collectExpr(a, value.rhs, out, dynamic);
+            try collectExpr(a, value.lhs, out, load_data, dynamic);
+            try collectExpr(a, value.rhs, out, load_data, dynamic);
         },
         else => {},
     }
 }
 
-fn collectBlock(a: std.mem.Allocator, body: lua.Block, out: *std.ArrayList([]const u8), dynamic: *bool) anyerror!void {
+fn collectBlock(a: std.mem.Allocator, body: lua.Block, out: *std.ArrayList([]const u8), load_data: ?*std.ArrayList([]const u8), dynamic: *bool) anyerror!void {
     for (body) |stmt| switch (stmt.*) {
         .assign => |value| {
             for (value.targets) |target| switch (target) {
                 .name => {},
                 .index => |index| {
-                    try collectExpr(a, index.object, out, dynamic);
-                    try collectExpr(a, index.key, out, dynamic);
+                    try collectExpr(a, index.object, out, load_data, dynamic);
+                    try collectExpr(a, index.key, out, load_data, dynamic);
                 },
             };
-            for (value.values) |expr| try collectExpr(a, expr, out, dynamic);
+            for (value.values) |expr| try collectExpr(a, expr, out, load_data, dynamic);
         },
-        .local_assign => |value| for (value.values) |expr| try collectExpr(a, expr, out, dynamic),
-        .call => |value| try collectExpr(a, value.expr, out, dynamic),
-        .do_block => |value| try collectBlock(a, value.body, out, dynamic),
+        .local_assign => |value| for (value.values) |expr| try collectExpr(a, expr, out, load_data, dynamic),
+        .call => |value| try collectExpr(a, value.expr, out, load_data, dynamic),
+        .do_block => |value| try collectBlock(a, value.body, out, load_data, dynamic),
         .while_loop => |value| {
-            try collectExpr(a, value.cond, out, dynamic);
-            try collectBlock(a, value.body, out, dynamic);
+            try collectExpr(a, value.cond, out, load_data, dynamic);
+            try collectBlock(a, value.body, out, load_data, dynamic);
         },
         .repeat_loop => |value| {
-            try collectBlock(a, value.body, out, dynamic);
-            try collectExpr(a, value.cond, out, dynamic);
+            try collectBlock(a, value.body, out, load_data, dynamic);
+            try collectExpr(a, value.cond, out, load_data, dynamic);
         },
         .if_stmt => |value| {
             for (value.branches) |branch| {
-                try collectExpr(a, branch.cond, out, dynamic);
-                try collectBlock(a, branch.body, out, dynamic);
+                try collectExpr(a, branch.cond, out, load_data, dynamic);
+                try collectBlock(a, branch.body, out, load_data, dynamic);
             }
-            if (value.else_body) |else_body| try collectBlock(a, else_body, out, dynamic);
+            if (value.else_body) |else_body| try collectBlock(a, else_body, out, load_data, dynamic);
         },
         .numeric_for => |value| {
-            try collectExpr(a, value.start, out, dynamic);
-            try collectExpr(a, value.limit, out, dynamic);
-            if (value.step) |step| try collectExpr(a, step, out, dynamic);
-            try collectBlock(a, value.body, out, dynamic);
+            try collectExpr(a, value.start, out, load_data, dynamic);
+            try collectExpr(a, value.limit, out, load_data, dynamic);
+            if (value.step) |step| try collectExpr(a, step, out, load_data, dynamic);
+            try collectBlock(a, value.body, out, load_data, dynamic);
         },
         .generic_for => |value| {
-            for (value.values) |expr| try collectExpr(a, expr, out, dynamic);
-            try collectBlock(a, value.body, out, dynamic);
+            for (value.values) |expr| try collectExpr(a, expr, out, load_data, dynamic);
+            try collectBlock(a, value.body, out, load_data, dynamic);
         },
-        .function_assign => |value| try collectExpr(a, value.function, out, dynamic),
-        .local_function => |value| try collectExpr(a, value.function, out, dynamic),
-        .return_stmt => |value| for (value.values) |expr| try collectExpr(a, expr, out, dynamic),
+        .function_assign => |value| try collectExpr(a, value.function, out, load_data, dynamic),
+        .local_function => |value| try collectExpr(a, value.function, out, load_data, dynamic),
+        .return_stmt => |value| for (value.values) |expr| try collectExpr(a, expr, out, load_data, dynamic),
         .empty, .break_stmt => {},
     };
+}
+
+pub fn collectModuleLoadsDetailed(
+    a: std.mem.Allocator,
+    body: lua.Block,
+    out: *std.ArrayList([]const u8),
+    load_data: ?*std.ArrayList([]const u8),
+) !bool {
+    var dynamic = false;
+    try collectBlock(a, body, out, load_data, &dynamic);
+    return dynamic;
 }
 
 pub fn collectModuleLoads(
@@ -287,9 +302,7 @@ pub fn collectModuleLoads(
     body: lua.Block,
     out: *std.ArrayList([]const u8),
 ) !bool {
-    var dynamic = false;
-    try collectBlock(a, body, out, &dynamic);
-    return dynamic;
+    return collectModuleLoadsDetailed(a, body, out, null);
 }
 
 pub fn collectStaticRequires(a: std.mem.Allocator, body: lua.Block, out: *std.ArrayList([]const u8)) !void {

@@ -8,6 +8,7 @@ const metadata = @import("lua_program_metadata");
 pub const Context = rt.Context;
 
 extern fn dict_lua_program_module_roots() callconv(.c) *const anyopaque;
+extern fn dict_lua_program_eager_init(ctx: *rt.Context) callconv(.c) u32;
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
@@ -245,6 +246,7 @@ pub const Program = struct {
         );
         try rt.bindGlobalTable(&ctx, &self.global_shape, globals_abi.id("_G"));
         _ = try ctx.bootstrapProgram();
+        if (dict_lua_program_eager_init(&ctx) != 0) return error.ProgramEagerInitFailed;
         return ctx;
     }
 };

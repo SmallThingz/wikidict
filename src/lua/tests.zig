@@ -626,3 +626,100 @@ test "recursive local function keeps callable self cell" {
     try std.testing.expect(std.mem.indexOf(u8, generated_source, " = call i32 @dict_lua_make_function") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_cell_new") != null);
 }
+
+test "known module export emits guarded direct LLVM call" {
+    var ids: llvm_emitter.ModuleIdMap = .empty;
+    defer ids.deinit(std.testing.allocator);
+    try ids.put(std.testing.allocator, "Module:Target", 0);
+    const exports = [_]llvm_emitter.DirectExport{
+        .{ .name = "run", .function_id = 99 },
+    };
+    const modules = [_]llvm_emitter.ModuleFact{
+        .{ .root_pure = false, .exports = &exports },
+    };
+    const facts = llvm_emitter.ProgramFacts{
+        .module_ids = &ids,
+        .module_facts = &modules,
+    };
+
+    var chunk = try llvm_parser.parse(
+        std.testing.allocator,
+        "local target=require('Module:Target'); return target.run(4)",
+    );
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, facts);
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_require_module_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_value_is_function_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_99") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "direct_export") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "dynamic_export") != null);
+}
+
+test "captured static module export keeps guarded direct target" {
+    var ids: llvm_emitter.ModuleIdMap = .empty;
+    defer ids.deinit(std.testing.allocator);
+    try ids.put(std.testing.allocator, "Module:Target", 0);
+    const exports = [_]llvm_emitter.DirectExport{
+        .{ .name = "run", .function_id = 99 },
+    };
+    const modules = [_]llvm_emitter.ModuleFact{
+        .{ .exports = &exports },
+    };
+    const facts = llvm_emitter.ProgramFacts{
+        .module_ids = &ids,
+        .module_facts = &modules,
+    };
+
+    var chunk = try llvm_parser.parse(
+        std.testing.allocator,
+        "local target=require('Module:Target'); return function() return target.run(4) end",
+    );
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, facts);
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_99") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_value_is_function_id") != null);
+}
+
+test "module root purity only accepts context-free local construction" {
+    const pure_source =
+        \\local export = {}
+        \\function export.run(x) return x end
+        \\return export
+    ;
+    var pure_chunk = try llvm_parser.parse(std.testing.allocator, pure_source);
+    defer pure_chunk.deinit();
+    var pure = llvm_module_model.Builder{ .allocator = std.testing.allocator, .source = pure_chunk.source };
+    defer pure.deinit();
+    try pure.build(pure_chunk.body);
+    try std.testing.expect(pure.root_pure);
+
+    var require_chunk = try llvm_parser.parse(std.testing.allocator, "local m=require('Module:X'); return m");
+    defer require_chunk.deinit();
+    var require_model = llvm_module_model.Builder{ .allocator = std.testing.allocator, .source = require_chunk.source };
+    defer require_model.deinit();
+    try require_model.build(require_chunk.body);
+    try std.testing.expect(!require_model.root_pure);
+
+    var global_chunk = try llvm_parser.parse(std.testing.allocator, "local x=mw; return x");
+    defer global_chunk.deinit();
+    var global_model = llvm_module_model.Builder{ .allocator = std.testing.allocator, .source = global_chunk.source };
+    defer global_model.deinit();
+    try global_model.build(global_chunk.body);
+    try std.testing.expect(!global_model.root_pure);
+}

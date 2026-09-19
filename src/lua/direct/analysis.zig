@@ -76,6 +76,7 @@ pub const Binding = struct {
     function_span: ?lua.Span = null,
     late_function_init: bool = false,
     static_type: StaticType = .unknown,
+    static_module: ?[]const u8 = null,
 
     pub fn directCallOnly(self: Binding) bool {
         return self.function_span != null and self.called and !self.value_used and !self.captured and !self.mutated;
@@ -210,6 +211,35 @@ const Analyzer = struct {
         };
     }
 
+    fn staticString(value: *const lua.Expr) ?[]const u8 {
+        return switch (value.*) {
+            .string => |literal| literal.value,
+            .paren => |paren| staticString(paren.expr),
+            else => null,
+        };
+    }
+
+    fn staticModuleValue(self: *Analyzer, value: *const lua.Expr) anyerror!?[]const u8 {
+        return switch (value.*) {
+            .call => |call| blk: {
+                if (call.args.len != 1 or call.callee.* != .name or
+                    !std.mem.eql(u8, call.callee.name.value, "require"))
+                    break :blk null;
+                switch (try self.resolve("require")) {
+                    .global => {},
+                    else => break :blk null,
+                }
+                break :blk staticString(call.args[0]);
+            },
+            .paren => |paren| self.staticModuleValue(paren.expr),
+            .name => |name| switch (try self.resolve(name.value)) {
+                .local => |binding| self.bindings.items[binding].static_module,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
     fn exprStaticType(self: *const Analyzer, value: *const lua.Expr) StaticType {
         return switch (value.*) {
             .nil_lit => .nil,
@@ -305,7 +335,10 @@ const Analyzer = struct {
     fn analyzeWriteTarget(self: *Analyzer, target: lua.LValue) anyerror!void {
         switch (target) {
             .name => |name| switch (try self.resolve(name)) {
-                .local => |binding| self.bindings.items[binding].mutated = true,
+                .local => |binding| {
+                    self.bindings.items[binding].mutated = true;
+                    self.bindings.items[binding].static_module = null;
+                },
                 .upvalue => {},
                 .global => try self.globals.markMutated(name),
             },
@@ -368,6 +401,10 @@ const Analyzer = struct {
             .empty, .break_stmt => {},
             .local_assign => |s| {
                 for (s.values) |value| try self.expr(value);
+                const static_module = if (s.names.len == 1 and s.values.len == 1)
+                    try self.staticModuleValue(s.values[0])
+                else
+                    null;
                 const types = try self.rhsTypes(s.values, s.names.len);
                 defer self.allocator.free(types);
                 const sources = try self.allocator.alloc(std.ArrayList(u32), s.names.len);
@@ -379,6 +416,7 @@ const Analyzer = struct {
                 for (s.names, types, 0..) |name, static_type, index| {
                     const binding = try self.bind(name);
                     self.bindings.items[binding].static_type = static_type;
+                    if (index == 0) self.bindings.items[binding].static_module = static_module;
                     for (sources[index].items) |source| try self.addTypeDependency(source, binding);
                     if (s.values.len == s.names.len and s.values[index].* == .function)
                         self.bindings.items[binding].function_span = s.values[index].function.span;

@@ -16,8 +16,17 @@ const value_align = 8;
 const static_literal_blob_threshold: usize = 128;
 
 pub const ModuleIdMap = std.StringHashMapUnmanaged(u32);
+pub const DirectExport = struct {
+    name: []const u8,
+    function_id: u32,
+};
+pub const ModuleFact = struct {
+    root_pure: bool = false,
+    exports: []const DirectExport = &.{},
+};
 pub const ProgramFacts = struct {
     module_ids: ?*const ModuleIdMap = null,
+    module_facts: ?[]const ModuleFact = null,
     table_shapes: ?*const shapes.ModuleFacts = null,
 
     pub fn moduleId(self: ProgramFacts, a: A, raw: []const u8) anyerror!?u32 {
@@ -36,6 +45,19 @@ pub const ProgramFacts = struct {
         const table_shapes = self.table_shapes orelse return null;
         return table_shapes.get(span_start);
     }
+
+    pub fn exportFunction(self: ProgramFacts, module_id: u32, name: []const u8) ?u32 {
+        const facts = self.module_facts orelse return null;
+        if (module_id >= facts.len) return null;
+        for (facts[module_id].exports) |entry|
+            if (std.mem.eql(u8, entry.name, name)) return entry.function_id;
+        return null;
+    }
+
+    pub fn moduleRootPure(self: ProgramFacts, module_id: u32) bool {
+        const facts = self.module_facts orelse return false;
+        return module_id < facts.len and facts[module_id].root_pure;
+    }
 };
 
 const StringRef = struct {
@@ -51,9 +73,15 @@ const TableRef = struct {
 };
 
 const StaticFunctionRef = struct {
-    target: *const analysis.FunctionInfo,
+    function_id: u32,
     captures_ptr: V,
     captures_len: usize,
+    guard_callable: ?V = null,
+};
+
+const StaticModuleRef = struct {
+    module_id: u32,
+    value: V,
 };
 
 const ValueRef = union(enum) {
@@ -85,6 +113,7 @@ const LocalStorage = union(enum) {
     uninitialized,
     direct: ValueRef,
     static_function: StaticFunctionRef,
+    static_module: StaticModuleRef,
     number: V,
     boolean: V,
     value: V,
@@ -117,6 +146,7 @@ const Runtime = struct {
     value_string: V,
     value_copy: V,
     value_truthy: V,
+    value_is_function_id: V,
     value_is_nil: V,
     require_number: V,
     arg_ptr: V,
@@ -179,6 +209,7 @@ const Runtime = struct {
             .value_string = try declare(m, "dict_lua_value_string", ty.void, &.{ ty.ptr, ty.ptr, ty.i64 }),
             .value_copy = try declare(m, "dict_lua_value_copy", ty.void, &.{ ty.ptr, ty.ptr }),
             .value_truthy = try declare(m, "dict_lua_value_truthy", ty.i8, &.{ty.ptr}),
+            .value_is_function_id = try declare(m, "dict_lua_value_is_function_id", ty.i8, &.{ ty.ptr, ty.i32 }),
             .value_is_nil = try declare(m, "dict_lua_value_is_nil", ty.i8, &.{ty.ptr}),
             .require_number = try declare(m, "dict_lua_require_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
             .arg_ptr = try declare(m, "dict_lua_arg_ptr", ty.ptr, &.{ ty.ptr, ty.i64, ty.i64 }),
@@ -247,13 +278,51 @@ const ModuleEmitter = struct {
     facts: ProgramFacts,
     runtime: Runtime,
     strings: StringPool = .{},
+    static_modules: std.StringHashMapUnmanaged(u32) = .empty,
     static_literal_blobs: u32 = 0,
     functions: []V,
     function_base: u32,
 
     fn deinit(self: *ModuleEmitter) void {
         self.strings.deinit(self.allocator);
+        self.static_modules.deinit(self.allocator);
         self.allocator.free(self.functions);
+    }
+
+    fn collectStaticModules(self: *ModuleEmitter) anyerror!void {
+        if (!self.globals.stable("require")) return;
+        var invalid: std.StringHashMapUnmanaged(void) = .empty;
+        defer invalid.deinit(self.allocator);
+        for (self.module.functions.items) |info| {
+            for (info.bindings) |binding| {
+                if (invalid.contains(binding.name)) continue;
+                const candidate = if (!binding.mutated)
+                    if (binding.static_module) |raw| try self.facts.moduleId(self.allocator, raw) else null
+                else
+                    null;
+                if (candidate) |module_id| {
+                    if (self.static_modules.get(binding.name)) |existing| {
+                        if (existing != module_id) {
+                            _ = self.static_modules.remove(binding.name);
+                            try invalid.put(self.allocator, binding.name, {});
+                        }
+                    } else {
+                        try self.static_modules.put(self.allocator, binding.name, module_id);
+                    }
+                } else if (self.static_modules.contains(binding.name)) {
+                    _ = self.static_modules.remove(binding.name);
+                    try invalid.put(self.allocator, binding.name, {});
+                } else {
+                    // A non-module binding with this spelling can shadow a module
+                    // binding in a nested scope. Mark the spelling unusable globally.
+                    try invalid.put(self.allocator, binding.name, {});
+                }
+            }
+        }
+    }
+
+    fn staticModuleId(self: *const ModuleEmitter, name: []const u8) ?u32 {
+        return self.static_modules.get(name);
     }
 
     fn functionForSpan(self: *const ModuleEmitter, span: lua.Span) anyerror!*const analysis.FunctionInfo {
@@ -263,10 +332,14 @@ const ModuleEmitter = struct {
     }
 
     fn functionValue(self: *const ModuleEmitter, id: u32) anyerror!V {
-        if (id < self.function_base) return error.FunctionAnalysisMismatch;
-        const index: usize = @intCast(id - self.function_base);
-        if (index >= self.functions.len) return error.FunctionAnalysisMismatch;
-        return self.functions[index];
+        if (id >= self.function_base) {
+            const index: usize = @intCast(id - self.function_base);
+            if (index < self.functions.len) return self.functions[index];
+        }
+        const name = try std.fmt.allocPrint(self.allocator, "lua_f_{d}", .{id});
+        defer self.allocator.free(name);
+        if (self.llvm_module.getFunction(name)) |function| return function;
+        return self.llvm_module.addFunction(name, try generatedFunctionType(self.llvm_module));
     }
 
     fn stringRef(self: *ModuleEmitter, value: []const u8) anyerror!StringRef {
@@ -583,6 +656,10 @@ const FnEmitter = struct {
         return llvm.alloca(self.alloca_builder, self.ty().ptr, 8);
     }
 
+    fn i64Slot(self: *FnEmitter) anyerror!V {
+        return llvm.alloca(self.alloca_builder, self.ty().i64, 8);
+    }
+
     fn nativeNumberSlot(self: *FnEmitter) anyerror!V {
         return llvm.alloca(self.alloca_builder, self.ty().double, 8);
     }
@@ -713,7 +790,7 @@ const FnEmitter = struct {
     fn initBinding(self: *FnEmitter, binding: u32, value: ValueRef) anyerror!void {
         switch (self.storage[binding]) {
             .uninitialized => self.storage[binding] = .{ .direct = value },
-            .direct, .static_function => return error.BindingInitializedTwice,
+            .direct, .static_function, .static_module => return error.BindingInitializedTwice,
             .number => |slot| {
                 if (value != .number) return error.StaticTypeMismatch;
                 try llvm.store(self.builder, value.number, slot, 8);
@@ -737,6 +814,7 @@ const FnEmitter = struct {
                 .uninitialized => error.UninitializedBinding,
                 .direct => |value| value,
                 .static_function => error.DirectFunctionUsedAsValue,
+                .static_module => |module| .{ .boxed = module.value },
                 .number => |slot| .{ .number = try llvm.load(self.builder, self.ty().double, slot, 8) },
                 .boolean => |slot| .{ .boolean = try llvm.load(self.builder, self.ty().i1, slot, 1) },
                 .value => |slot| blk: {
@@ -776,7 +854,7 @@ const FnEmitter = struct {
     fn storeResolved(self: *FnEmitter, resolved: Resolved, value: ValueRef) anyerror!void {
         switch (resolved) {
             .local => |binding| switch (self.storage[binding]) {
-                .uninitialized, .direct, .static_function => return error.MutationAnalysisMismatch,
+                .uninitialized, .direct, .static_function, .static_module => return error.MutationAnalysisMismatch,
                 .number => |slot| {
                     if (value != .number) return error.StaticTypeMismatch;
                     try llvm.store(self.builder, value.number, slot, 8);
@@ -980,14 +1058,14 @@ const FnEmitter = struct {
                 const cell = switch (upvalue.source) {
                     .local => |binding| switch (self.storage[binding]) {
                         .cell => |slot| try llvm.load(self.builder, self.ty().ptr, slot, 8),
-                        .uninitialized, .direct, .static_function, .number, .boolean, .value => return error.CaptureAnalysisMismatch,
+                        .uninitialized, .direct, .static_function, .static_module, .number, .boolean, .value => return error.CaptureAnalysisMismatch,
                     },
                     .upvalue => |ordinal| try llvm.load(self.builder, self.ty().ptr, self.upvalue_slots[ordinal], 8),
                 };
                 try llvm.store(self.builder, cell, try self.pointerArrayElem(capture_array, index), 8);
             }
         }
-        return .{ .target = target, .captures_ptr = captures_ptr, .captures_len = target.upvalues.len };
+        return .{ .function_id = target.id, .captures_ptr = captures_ptr, .captures_len = target.upvalues.len };
     }
 
     fn closure(self: *FnEmitter, target: *const analysis.FunctionInfo) anyerror!ValueRef {
@@ -1175,6 +1253,27 @@ const FnEmitter = struct {
         return .{ .fixed = fixed, .fixed_len = fixed_args.len, .tail = tail };
     }
 
+    fn staticModuleExpr(self: *FnEmitter, value: *const lua.Expr) anyerror!?StaticModuleRef {
+        return switch (value.*) {
+            .name => |name| blk: {
+                const resolved = try self.resolve(name.value);
+                if (resolved == .local) switch (self.storage[resolved.local]) {
+                    .static_module => |module| break :blk module,
+                    else => {},
+                };
+                const module_id = self.module.staticModuleId(name.value) orelse break :blk null;
+                const value_ref = try self.loadResolved(resolved);
+                break :blk .{ .module_id = module_id, .value = try self.box(value_ref) };
+            },
+            .paren => |paren| self.staticModuleExpr(paren.expr),
+            .call => |call| if (try self.staticRequire(call.callee, null, call.args)) |request|
+                .{ .module_id = request.module_id, .value = try self.directRequireValue(request) }
+            else
+                null,
+            else => null,
+        };
+    }
+
     fn staticCallee(self: *FnEmitter, value: *const lua.Expr) anyerror!?StaticFunctionRef {
         return switch (value.*) {
             .name => |name| switch (try self.resolve(name.value)) {
@@ -1183,6 +1282,18 @@ const FnEmitter = struct {
                     else => null,
                 },
                 else => null,
+            },
+            .index => |index| blk: {
+                const field = staticString(index.key) orelse break :blk null;
+                const module = (try self.staticModuleExpr(index.object)) orelse break :blk null;
+                const function_id = self.module.facts.exportFunction(module.module_id, field) orelse break :blk null;
+                const live = try self.getField(.{ .boxed = module.value }, field);
+                break :blk .{
+                    .function_id = function_id,
+                    .captures_ptr = try self.nullPtr(),
+                    .captures_len = 0,
+                    .guard_callable = try self.box(live),
+                };
             },
             .paren => |paren| self.staticCallee(paren.expr),
             else => null,
@@ -1262,10 +1373,14 @@ const FnEmitter = struct {
         return output;
     }
 
-    fn directStaticFixed(self: *FnEmitter, function: StaticFunctionRef, args_in: []const *lua.Expr, count: usize) anyerror!?V {
-        const prepared = try self.prepareStaticArgs(args_in);
-        const output = try self.valueArray(count);
-        const entry_fn = try self.module.functionValue(function.target.id);
+    fn emitStaticFixedPrepared(
+        self: *FnEmitter,
+        function: StaticFunctionRef,
+        entry_fn: V,
+        prepared: PreparedArgs,
+        output: V,
+        count: usize,
+    ) anyerror!void {
         if (function.captures_len == 0 and prepared.tail == null) {
             for (0..count) |index|
                 _ = try llvm.call(self.builder, self.rt().value_nil, &.{try self.arrayElem(output, index)});
@@ -1279,7 +1394,7 @@ const FnEmitter = struct {
             const raw_status = try llvm.extractValue(self.builder, result, 2);
             const status = try llvm.call(self.builder, self.rt().function_status, &.{ self.ctx(), raw_status });
             try self.check(status);
-            return if (count == 0) null else output;
+            return;
         }
 
         const status = if (prepared.tail) |tail|
@@ -1294,13 +1409,76 @@ const FnEmitter = struct {
                 prepared.fixed, try self.cI64(prepared.fixed_len), output,                try self.cI64(count),
             });
         try self.check(status);
+    }
+
+    fn emitFallbackFixedPrepared(
+        self: *FnEmitter,
+        callable: V,
+        prepared: PreparedArgs,
+        output: V,
+        count: usize,
+    ) anyerror!void {
+        const status = if (count == 0)
+            if (prepared.tail) |tail|
+                try llvm.call(self.builder, self.rt().call_discard_tail, &.{
+                    self.ctx(), callable, prepared.fixed, try self.cI64(prepared.fixed_len), tail.ptr, tail.len,
+                })
+            else
+                try llvm.call(self.builder, self.rt().call_discard, &.{
+                    self.ctx(), callable, prepared.fixed, try self.cI64(prepared.fixed_len),
+                })
+        else if (prepared.tail) |tail|
+            try llvm.call(self.builder, self.rt().call_fixed_tail, &.{
+                self.ctx(), callable, prepared.fixed, try self.cI64(prepared.fixed_len),
+                tail.ptr,   tail.len, output,         try self.cI64(count),
+            })
+        else
+            try llvm.call(self.builder, self.rt().call_fixed, &.{
+                self.ctx(), callable,             prepared.fixed, try self.cI64(prepared.fixed_len),
+                output,     try self.cI64(count),
+            });
+        try self.check(status);
+    }
+
+    fn directStaticFixed(self: *FnEmitter, function: StaticFunctionRef, args_in: []const *lua.Expr, count: usize) anyerror!?V {
+        const prepared = try self.prepareStaticArgs(args_in);
+        const output = try self.valueArray(count);
+        const entry_fn = try self.module.functionValue(function.function_id);
+
+        if (function.guard_callable) |callable| {
+            const is_expected = try llvm.call(self.builder, self.rt().value_is_function_id, &.{
+                callable, try self.cI32(function.function_id),
+            });
+            const direct_block = try self.newBlock("direct_export");
+            const fallback_block = try self.newBlock("dynamic_export");
+            const join = try self.newBlock("export_join");
+            const matches = try llvm.icmp(self.builder, .ne, is_expected, try self.cI8(0));
+            try llvm.condBr(self.builder, matches, direct_block, fallback_block);
+
+            llvm.position(self.builder, direct_block);
+            try self.emitStaticFixedPrepared(function, entry_fn, prepared, output, count);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, fallback_block);
+            try self.emitFallbackFixedPrepared(callable, prepared, output, count);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, join);
+            if (prepared.tail) |tail| try self.freeMulti(tail);
+            return if (count == 0) null else output;
+        }
+
+        try self.emitStaticFixedPrepared(function, entry_fn, prepared, output, count);
         if (prepared.tail) |tail| try self.freeMulti(tail);
         return if (count == 0) null else output;
     }
 
-    fn directStaticMulti(self: *FnEmitter, function: StaticFunctionRef, args_in: []const *lua.Expr) anyerror!MultiRef {
-        const prepared = try self.prepareStaticArgs(args_in);
-        const entry_fn = try self.module.functionValue(function.target.id);
+    fn emitStaticMultiPrepared(
+        self: *FnEmitter,
+        function: StaticFunctionRef,
+        entry_fn: V,
+        prepared: PreparedArgs,
+    ) anyerror!MultiRef {
         if (function.captures_len == 0 and prepared.tail == null) {
             const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{self.ctx()});
             try self.check(enter);
@@ -1329,13 +1507,71 @@ const FnEmitter = struct {
                 self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
                 prepared.fixed, try self.cI64(prepared.fixed_len),
             });
-        if (prepared.tail) |tail| try self.freeMulti(tail);
         try self.check(try llvm.extractValue(self.builder, result, 2));
         return .{
             .ptr = try llvm.extractValue(self.builder, result, 0),
             .len = try llvm.extractValue(self.builder, result, 1),
             .owned = true,
         };
+    }
+
+    fn emitFallbackMultiPrepared(self: *FnEmitter, callable: V, prepared: PreparedArgs) anyerror!MultiRef {
+        const result = if (prepared.tail) |tail|
+            try llvm.call(self.builder, self.rt().call_multi_tail, &.{
+                self.ctx(), callable, prepared.fixed, try self.cI64(prepared.fixed_len), tail.ptr, tail.len,
+            })
+        else
+            try llvm.call(self.builder, self.rt().call_multi, &.{
+                self.ctx(), callable, prepared.fixed, try self.cI64(prepared.fixed_len),
+            });
+        try self.check(try llvm.extractValue(self.builder, result, 2));
+        return .{
+            .ptr = try llvm.extractValue(self.builder, result, 0),
+            .len = try llvm.extractValue(self.builder, result, 1),
+            .owned = true,
+        };
+    }
+
+    fn directStaticMulti(self: *FnEmitter, function: StaticFunctionRef, args_in: []const *lua.Expr) anyerror!MultiRef {
+        const prepared = try self.prepareStaticArgs(args_in);
+        const entry_fn = try self.module.functionValue(function.function_id);
+
+        if (function.guard_callable) |callable| {
+            const ptr_slot = try self.ptrSlot();
+            const len_slot = try self.i64Slot();
+            const is_expected = try llvm.call(self.builder, self.rt().value_is_function_id, &.{
+                callable, try self.cI32(function.function_id),
+            });
+            const direct_block = try self.newBlock("direct_export_multi");
+            const fallback_block = try self.newBlock("dynamic_export_multi");
+            const join = try self.newBlock("export_multi_join");
+            const matches = try llvm.icmp(self.builder, .ne, is_expected, try self.cI8(0));
+            try llvm.condBr(self.builder, matches, direct_block, fallback_block);
+
+            llvm.position(self.builder, direct_block);
+            const direct = try self.emitStaticMultiPrepared(function, entry_fn, prepared);
+            try llvm.store(self.builder, direct.ptr, ptr_slot, 8);
+            try llvm.store(self.builder, direct.len, len_slot, 8);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, fallback_block);
+            const fallback = try self.emitFallbackMultiPrepared(callable, prepared);
+            try llvm.store(self.builder, fallback.ptr, ptr_slot, 8);
+            try llvm.store(self.builder, fallback.len, len_slot, 8);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, join);
+            if (prepared.tail) |tail| try self.freeMulti(tail);
+            return .{
+                .ptr = try llvm.load(self.builder, self.ty().ptr, ptr_slot, 8),
+                .len = try llvm.load(self.builder, self.ty().i64, len_slot, 8),
+                .owned = true,
+            };
+        }
+
+        const result = try self.emitStaticMultiPrepared(function, entry_fn, prepared);
+        if (prepared.tail) |tail| try self.freeMulti(tail);
+        return result;
     }
 
     fn callFixed(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr, count: usize) anyerror!?V {
@@ -1646,6 +1882,20 @@ const FnEmitter = struct {
                 return true;
             },
             .local_assign => |s| {
+                if (s.names.len == 1 and s.values.len == 1 and s.values[0].* == .call and self.binding_next < self.info.bindings.len) {
+                    const binding_info = self.info.bindings[self.binding_next];
+                    const call = s.values[0].call;
+                    if (!binding_info.mutated and !binding_info.captured)
+                        if (try self.staticRequire(call.callee, null, call.args)) |request| {
+                            const loaded = try self.directRequireValue(request);
+                            const binding = try self.bindName(s.names[0]);
+                            self.storage[binding] = .{ .static_module = .{
+                                .module_id = request.module_id,
+                                .value = loaded,
+                            } };
+                            return false;
+                        };
+                }
                 if (s.names.len == 1 and s.values.len == 1 and s.values[0].* == .function and self.binding_next < self.info.bindings.len and self.info.bindings[self.binding_next].directCallOnly()) {
                     const target = try self.module.functionForSpan(s.values[0].function.span);
                     const direct = try self.staticFunction(target);
@@ -1953,7 +2203,8 @@ pub const Batch = struct {
         for (module.functions.items, 0..) |info, index| {
             const name = try std.fmt.allocPrint(allocator, "lua_f_{d}", .{info.id});
             defer allocator.free(name);
-            functions[index] = try self.module.addFunction(name, function_ty);
+            functions[index] = self.module.getFunction(name) orelse
+                try self.module.addFunction(name, function_ty);
             const param_names = [_][]const u8{ "ctx", "captures", "args", "args_len", "result_ptr", "result_len" };
             for (param_names, 0..) |param_name, param_index|
                 llvm.setName(try llvm.param(functions[index], param_index), param_name);
@@ -1971,6 +2222,7 @@ pub const Batch = struct {
             .function_base = function_base,
         };
         defer emitter.deinit();
+        try emitter.collectStaticModules();
 
         for (module.functions.items) |info| try emitFunction(&emitter, info);
         return .{
