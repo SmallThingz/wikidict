@@ -21,6 +21,10 @@ const NamedModuleEdge = struct {
     from: u32,
     target: []const u8,
 };
+const FunctionAnalysisStats = struct {
+    functions: usize = 0,
+    dead: usize = 0,
+};
 
 fn readAll(io: std.Io, a: A, path: []const u8) ![]u8 {
     var file = try std.Io.Dir.cwd().openFile(io, path, .{});
@@ -312,6 +316,8 @@ fn analyzeManifest(
     shape_registry: *shapes.Registry,
     named_module_edges: *std.ArrayList(NamedModuleEdge),
     named_load_data_targets: *std.ArrayList([]const u8),
+    function_stats: *FunctionAnalysisStats,
+    dead_functions_by_module: *std.ArrayList(u32),
 ) ![]ModuleRecord {
     var records: std.ArrayList(ModuleRecord) = .empty;
     var scratch = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
@@ -357,6 +363,7 @@ fn analyzeManifest(
                 .static_root = true,
                 .static_root_blob = try a.dupe(u8, blob),
             });
+            try dead_functions_by_module.append(a, 0);
             function_base = std.math.add(u32, function_base, 1) catch return error.TooManyFunctions;
             chunk.deinit();
             _ = scratch.reset(.retain_capacity);
@@ -402,6 +409,11 @@ fn analyzeManifest(
         };
         var module = try analysis.analyze(sa, globals, &chunk, function_base);
         const count: u32 = @intCast(module.functions.items.len);
+        function_stats.functions += module.functions.items.len;
+        var module_dead_functions: u32 = 0;
+        for (module.functions.items) |info| module_dead_functions += @intFromBool(info.dead);
+        function_stats.dead += module_dead_functions;
+        try dead_functions_by_module.append(a, module_dead_functions);
 
         var direct_exports: std.ArrayList(emitter.DirectExport) = .empty;
         if (!model.dynamic_top_level) switch (model.return_binding) {
@@ -675,7 +687,9 @@ fn emitBatches(
 }
 
 fn run(io: std.Io, a: A, args: []const []const u8) !void {
-    if (args.len != 4) return error.Usage;
+    if (args.len != 4 and args.len != 5) return error.Usage;
+    const analysis_only = args.len == 5 and std.mem.eql(u8, args[4], "--analysis-only");
+    if (args.len == 5 and !analysis_only) return error.Usage;
     const manifest_path = args[1];
     const source_root = args[2];
     const output_root = args[3];
@@ -690,6 +704,9 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     defer named_module_edges.deinit(a);
     var named_load_data_targets: std.ArrayList([]const u8) = .empty;
     defer named_load_data_targets.deinit(a);
+    var function_stats: FunctionAnalysisStats = .{};
+    var dead_functions_by_module: std.ArrayList(u32) = .empty;
+    defer dead_functions_by_module.deinit(a);
     const records = try analyzeManifest(
         io,
         a,
@@ -699,13 +716,20 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &shape_registry,
         &named_module_edges,
         &named_load_data_targets,
+        &function_stats,
+        &dead_functions_by_module,
     );
     if (records.len == 0) return error.EmptyManifest;
+    if (dead_functions_by_module.items.len != records.len) return error.FunctionAnalysisMismatch;
     if (records.len > std.math.maxInt(u32) - 2) return error.TooManyModules;
     std.debug.print("LLVM_ANALYZE modules={d} globals={d} functions={d}\n", .{
         records.len,
         globals.names.items.len,
         records[records.len - 1].function_base + records[records.len - 1].function_count,
+    });
+    std.debug.print("LLVM_FUNCTION_LIVENESS dead={d}/{d}\n", .{
+        function_stats.dead,
+        function_stats.functions,
     });
     var synth_root_count: usize = 0;
     for (records) |record| synth_root_count += @intFromBool(record.synth_root);
@@ -779,6 +803,52 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         .{ selected_records.items.len, records.len, page_seed.dynamic_module_target },
     );
 
+    var reachable_static: usize = 0;
+    var reachable_synth: usize = 0;
+    var reachable_llvm: usize = 0;
+    var executable_o1: usize = 0;
+    var executable_o2: usize = 0;
+    var reachable_analysis_functions: usize = 0;
+    var reachable_dead_functions: usize = 0;
+    var selected_index: usize = 0;
+    for (records, modes, reachable, dead_functions_by_module.items) |record, mode, keep, dead_count| {
+        if (!keep) continue;
+        reachable_static += @intFromBool(record.static_root);
+        reachable_synth += @intFromBool(record.synth_root);
+        if (!record.static_root) {
+            reachable_analysis_functions += record.function_count;
+            reachable_dead_functions += dead_count;
+        }
+        if (program.needsLlvmBatch(record)) {
+            reachable_llvm += 1;
+            switch (mode) {
+                .o1 => executable_o1 += 1,
+                .o2 => executable_o2 += 1,
+            }
+        }
+        if (selected_index >= selected_records.items.len or
+            !std.mem.eql(u8, selected_records.items[selected_index].title, record.title))
+            return error.InvalidCompilePlan;
+        selected_index += 1;
+    }
+    if (selected_index != selected_records.items.len) return error.InvalidCompilePlan;
+    std.debug.print(
+        "LLVM_REACHABLE_ROOTS static={d} synth={d} llvm={d}\n",
+        .{ reachable_static, reachable_synth, reachable_llvm },
+    );
+    std.debug.print(
+        "LLVM_EXEC_OPT o1={d} o2={d}\n",
+        .{ executable_o1, executable_o2 },
+    );
+    std.debug.print(
+        "LLVM_REACHABLE_FUNCTION_LIVENESS dead={d}/{d}\n",
+        .{ reachable_dead_functions, reachable_analysis_functions },
+    );
+    if (analysis_only) {
+        std.debug.print("LLVM_ANALYSIS_ONLY_DONE modules={d}\n", .{selected_records.items.len});
+        return;
+    }
+
     const selected_module_facts = try a.alloc(emitter.ModuleFact, selected_records.items.len);
     defer a.free(selected_module_facts);
     for (selected_module_facts, selected_records.items) |*fact, record| {
@@ -822,8 +892,8 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
 }
 
 pub export fn dict_llvm_build_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
-    if (argc != 4) {
-        std.debug.print("usage: dict-llvm-build MANIFEST SOURCE_ROOT OUTPUT_DIR\n", .{});
+    if (argc != 4 and argc != 5) {
+        std.debug.print("usage: dict-llvm-build MANIFEST SOURCE_ROOT OUTPUT_DIR [--analysis-only]\n", .{});
         return 2;
     }
 
@@ -832,9 +902,9 @@ pub export fn dict_llvm_build_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c
     var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();
 
-    var args: [4][]const u8 = undefined;
-    for (&args, 0..) |*arg, index| arg.* = std.mem.span(argv[index]);
-    run(threaded.io(), arena.allocator(), &args) catch |err| {
+    var args: [5][]const u8 = undefined;
+    for (args[0..@intCast(argc)], 0..) |*arg, index| arg.* = std.mem.span(argv[index]);
+    run(threaded.io(), arena.allocator(), args[0..@intCast(argc)]) catch |err| {
         std.debug.print("dict-llvm-build: {s}\n", .{@errorName(err)});
         return 1;
     };

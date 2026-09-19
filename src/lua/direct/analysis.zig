@@ -85,6 +85,7 @@ pub const Binding = struct {
 
 pub const FunctionInfo = struct {
     id: u32,
+    parent_id: ?u32 = null,
     params: []const []const u8,
     is_vararg: bool,
     body: lua.Block,
@@ -92,6 +93,7 @@ pub const FunctionInfo = struct {
     bindings: []Binding,
     upvalues: []Upvalue,
     direct_only: bool = false,
+    dead: bool = false,
 };
 
 pub const Module = struct {
@@ -505,7 +507,16 @@ fn analyzeFunction(
     const info = try allocator.create(FunctionInfo);
     errdefer allocator.destroy(info);
     const id: u32 = module.base_id + @as(u32, @intCast(module.functions.items.len));
-    info.* = .{ .id = id, .params = params, .is_vararg = is_vararg, .body = body, .span = span, .bindings = &.{}, .upvalues = &.{} };
+    info.* = .{
+        .id = id,
+        .parent_id = if (parent) |owner| owner.info.id else null,
+        .params = params,
+        .is_vararg = is_vararg,
+        .body = body,
+        .span = span,
+        .bindings = &.{},
+        .upvalues = &.{},
+    };
     try module.functions.append(allocator, info);
     var analyzer = Analyzer{
         .allocator = allocator,
@@ -517,18 +528,120 @@ fn analyzeFunction(
     defer analyzer.deinit();
     for (params) |name| _ = try analyzer.bind(name);
     try analyzer.block(body);
-    for (analyzer.bindings.items) |binding| if (binding.directCallOnly()) {
-        const target_span = binding.function_span.?;
+    for (analyzer.bindings.items) |binding| if (binding.function_span) |target_span| {
         for (module.functions.items) |target| {
-            if (target.span.start == target_span.start and target.span.end == target_span.end) {
-                target.direct_only = true;
-                break;
-            }
+            if (target.span.start != target_span.start or target.span.end != target_span.end) continue;
+            if (binding.directCallOnly()) target.direct_only = true;
+            break;
         }
     };
     info.bindings = try analyzer.bindings.toOwnedSlice(allocator);
     info.upvalues = try analyzer.upvalues.toOwnedSlice(allocator);
     return info;
+}
+
+const FunctionOrigin = struct {
+    owner_index: usize,
+    binding: u32,
+};
+
+fn functionIndex(module: *const Module, id: u32) ?usize {
+    if (id < module.base_id) return null;
+    const index: usize = @intCast(id - module.base_id);
+    return if (index < module.functions.items.len) index else null;
+}
+
+fn upvalueOrigin(module: *const Module, function_index: usize, ordinal: u32) ?FunctionOrigin {
+    var current_index = function_index;
+    var current_ordinal = ordinal;
+    while (true) {
+        const current = module.functions.items[current_index];
+        if (current_ordinal >= current.upvalues.len) return null;
+        const parent_index = functionIndex(module, current.parent_id orelse return null) orelse return null;
+        switch (current.upvalues[current_ordinal].source) {
+            .local => |binding| return .{ .owner_index = parent_index, .binding = binding },
+            .upvalue => |parent_ordinal| {
+                current_index = parent_index;
+                current_ordinal = parent_ordinal;
+            },
+        }
+    }
+}
+
+fn addFunctionEdge(adjacency: []std.ArrayList(u32), allocator: std.mem.Allocator, from: usize, to: usize) !void {
+    for (adjacency[from].items) |existing| if (existing == to) return;
+    try adjacency[from].append(allocator, @intCast(to));
+}
+
+fn computeFunctionLiveness(allocator: std.mem.Allocator, module: *Module) !void {
+    if (module.functions.items.len == 0) return;
+
+    var by_span: std.AutoHashMapUnmanaged(u32, u32) = .empty;
+    defer by_span.deinit(allocator);
+    for (module.functions.items, 0..) |info, index|
+        try by_span.put(allocator, info.span.start, @intCast(index));
+
+    const bound = try allocator.alloc(bool, module.functions.items.len);
+    defer allocator.free(bound);
+    @memset(bound, false);
+
+    const adjacency = try allocator.alloc(std.ArrayList(u32), module.functions.items.len);
+    defer allocator.free(adjacency);
+    for (adjacency) |*edges| edges.* = .empty;
+    defer for (adjacency) |*edges| edges.deinit(allocator);
+
+    for (module.functions.items, 0..) |owner, owner_index| {
+        for (owner.bindings) |binding| if (binding.function_span) |span| {
+            const target_index_u32 = by_span.get(span.start) orelse continue;
+            const target_index: usize = @intCast(target_index_u32);
+            const target = module.functions.items[target_index];
+            if (target.span.end != span.end or target.parent_id != owner.id) continue;
+            bound[target_index] = true;
+            if (binding.called or binding.value_used or binding.mutated)
+                try addFunctionEdge(adjacency, allocator, owner_index, target_index);
+        };
+    }
+
+    for (module.functions.items[1..], 1..) |info, index| {
+        if (bound[index]) continue;
+        const parent_index = functionIndex(module, info.parent_id orelse continue) orelse continue;
+        try addFunctionEdge(adjacency, allocator, parent_index, index);
+    }
+
+    for (module.functions.items, 0..) |info, source_index| {
+        for (info.upvalues, 0..) |_, ordinal| {
+            const origin = upvalueOrigin(module, source_index, @intCast(ordinal)) orelse continue;
+            const owner = module.functions.items[origin.owner_index];
+            if (origin.binding >= owner.bindings.len) return error.FunctionAnalysisMismatch;
+            const span = owner.bindings[origin.binding].function_span orelse continue;
+            const target_index_u32 = by_span.get(span.start) orelse continue;
+            const target_index: usize = @intCast(target_index_u32);
+            const target = module.functions.items[target_index];
+            if (target.span.end != span.end or target.parent_id != owner.id) continue;
+            try addFunctionEdge(adjacency, allocator, source_index, target_index);
+        }
+    }
+
+    const live = try allocator.alloc(bool, module.functions.items.len);
+    defer allocator.free(live);
+    @memset(live, false);
+    const queue = try allocator.alloc(u32, module.functions.items.len);
+    defer allocator.free(queue);
+    live[0] = true;
+    queue[0] = 0;
+    var read_at: usize = 0;
+    var write_at: usize = 1;
+    while (read_at < write_at) : (read_at += 1) {
+        const source: usize = @intCast(queue[read_at]);
+        for (adjacency[source].items) |target_u32| {
+            const target: usize = @intCast(target_u32);
+            if (live[target]) continue;
+            live[target] = true;
+            queue[write_at] = target_u32;
+            write_at += 1;
+        }
+    }
+    for (module.functions.items, live) |info, is_live| info.dead = !is_live;
 }
 
 pub fn analyze(
@@ -541,7 +654,79 @@ pub fn analyze(
     errdefer module.deinit();
     const synthetic_span = lua.Span{ .start = 0, .end = @intCast(chunk.source.len) };
     module.root = try analyzeFunction(allocator, globals, &module, null, &.{}, true, chunk.body, synthetic_span);
+    try computeFunctionLiveness(allocator, &module);
     return module;
+}
+
+test "analysis marks unused local functions and descendants dead" {
+    const source =
+        \\local function dead()
+        \\  local function child() return 1 end
+        \\  return child
+        \\end
+        \\local function live() return 2 end
+        \\return live
+    ;
+    var chunk = try @import("../parser/root.zig").parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try analyze(std.testing.allocator, &globals, &chunk, 20);
+    defer module.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), module.functions.items.len);
+    try std.testing.expect(!module.functions.items[0].dead);
+    try std.testing.expect(module.functions.items[1].dead);
+    try std.testing.expect(module.functions.items[2].dead);
+    try std.testing.expect(!module.functions.items[3].dead);
+    try std.testing.expectEqual(@as(?u32, 20), module.functions.items[1].parent_id);
+    try std.testing.expectEqual(@as(?u32, 21), module.functions.items[2].parent_id);
+}
+
+test "analysis prunes unrooted recursive functions but keeps called recursion" {
+    const source =
+        \\local function called() return 1 end
+        \\local function dead_recursive() return dead_recursive() end
+        \\local function live_recursive(n)
+        \\  if n == 0 then return 0 end
+        \\  return live_recursive(n - 1)
+        \\end
+        \\called()
+        \\return live_recursive(2)
+    ;
+    var chunk = try @import("../parser/root.zig").parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+
+    try std.testing.expect(!module.functions.items[1].dead);
+    try std.testing.expect(module.functions.items[1].direct_only);
+    try std.testing.expect(module.functions.items[2].dead);
+    try std.testing.expect(!module.functions.items[3].dead);
+}
+
+test "analysis roots function values through live captured dependencies only" {
+    const source =
+        \\local hidden = function() return 7 end
+        \\local function dead_wrapper() return hidden end
+        \\local kept = function() return 9 end
+        \\local function live_wrapper() return kept() end
+        \\return live_wrapper
+    ;
+    var chunk = try @import("../parser/root.zig").parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+
+    try std.testing.expectEqual(@as(usize, 5), module.functions.items.len);
+    try std.testing.expect(module.functions.items[1].dead);
+    try std.testing.expect(module.functions.items[2].dead);
+    try std.testing.expect(!module.functions.items[3].dead);
+    try std.testing.expect(!module.functions.items[4].dead);
 }
 
 fn isMultiExpr(value: *const lua.Expr) bool {
