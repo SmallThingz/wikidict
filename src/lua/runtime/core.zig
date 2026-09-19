@@ -316,6 +316,11 @@ pub const Table = struct {
     metatable: ?*Table = null,
     append_index: u32 = 1,
     read_only: bool = false,
+    mutation_sentinel: ?*bool = null,
+
+    fn markMutated(self: *Table) void {
+        if (self.mutation_sentinel) |sentinel| sentinel.* = false;
+    }
 
     pub fn deinit(self: *Table, allocator: std.mem.Allocator) void {
         self.map.deinit(allocator);
@@ -383,6 +388,7 @@ pub const Table = struct {
 
     fn rawSetArraySlot(self: *Table, slot: u32, value: Value) void {
         std.debug.assert(self.shape == null and self.native_namespace == null and slot < self.slots.len);
+        self.markMutated();
         self.slots[slot] = value;
     }
 
@@ -396,6 +402,7 @@ pub const Table = struct {
         if (self.read_only) return error.ReadOnlyTable;
         if (self.shape == null and self.native_namespace == null) return error.BadShapeSlot;
         if (slot >= self.slots.len) return error.BadShapeSlot;
+        self.markMutated();
         self.slots[slot] = value;
     }
 
@@ -416,6 +423,7 @@ pub const Table = struct {
         if (self.read_only) return error.ReadOnlyTable;
         if (choice >= self.choices.len) return error.BadChoiceSlot;
         try validateTableKey(key);
+        self.markMutated();
         if (value == .nil) {
             if (rawEqual(self.choices[choice].key, key)) self.choices[choice] = .{};
             return;
@@ -446,6 +454,7 @@ pub const Table = struct {
     pub fn rawSet(self: *Table, allocator: std.mem.Allocator, key: Value, value: Value) !void {
         if (self.read_only) return error.ReadOnlyTable;
         try validateTableKey(key);
+        self.markMutated();
         if (key == .number) if (self.genericArrayIndex(key.number)) |index| {
             if (self.arraySlotForNumber(key.number)) |slot| {
                 _ = self.map.removeContext(key, .{});
@@ -648,6 +657,7 @@ const ModuleState = struct {
     preinitialized: ?Value = null,
     load_data_snapshot: ?Value = null,
     deferred_require_visibility: bool = false,
+    export_pristine: bool = false,
     globals: ?[]Value = null,
     global_table: ?*Table = null,
 };
@@ -947,6 +957,18 @@ pub const Context = struct {
         return value;
     }
 
+    pub fn moduleExportPristine(self: *const Context, module_id: u32) bool {
+        if (self.package_observable) return false;
+        const state = self.moduleStateConst(module_id) orelse return false;
+        if (!state.export_pristine) return false;
+        const value = state.value orelse state.preinitialized orelse return false;
+        if (value != .table) return false;
+        const canonical = self.canonicalModuleName(module_id, null) orelse return false;
+        if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = canonical })) |visible|
+            if (!rawEqual(visible, value)) return false;
+        return true;
+    }
+
     fn canonicalModuleName(self: *const Context, module_id: u32, requested: ?[]const u8) ?[]const u8 {
         if (self.module_name) |name| if (name(self.module_lookup_ctx, module_id)) |text| return text;
         return requested;
@@ -1089,8 +1111,13 @@ pub const Context = struct {
 
     pub fn preinitializeModule(self: *Context, module_id: u32, value: Value, snapshot_load_data: bool) !void {
         const state = try self.ensureModuleState(module_id);
-        if (state.value == null and state.preinitialized == null)
+        if (state.value == null and state.preinitialized == null) {
             state.preinitialized = value;
+            if (value == .table) {
+                state.export_pristine = true;
+                value.table.mutation_sentinel = &state.export_pristine;
+            }
+        }
         if (snapshot_load_data and state.load_data_snapshot == null) {
             var seen: std.AutoHashMapUnmanaged(*Table, *Table) = .empty;
             defer seen.deinit(self.allocator);
@@ -1142,6 +1169,7 @@ pub const Context = struct {
         }
 
         if (!valid) {
+            state.export_pristine = false;
             state.loading = false;
             return null;
         }
@@ -1164,6 +1192,7 @@ pub const Context = struct {
             if (existing.loading) return error.ModuleLoadLoop;
         }
         const state = try self.ensureModuleState(module_id);
+        state.export_pristine = false;
         state.loading = true;
         errdefer state.loading = false;
 
@@ -1658,6 +1687,23 @@ const DeferredRequireProbe = struct {
         return if (id == 0) "Module:Prepared" else null;
     }
 };
+
+test "eager module export mutation invalidates pristine direct-call state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 1);
+    defer ctx.deinit();
+    ctx.package_loaded = try ctx.newTable();
+    ctx.configureModules(null, DeferredRequireProbe.lookup, DeferredRequireProbe.name);
+
+    const exported = try ctx.newTable();
+    try exported.rawSet(ctx.allocator, .{ .string = "run" }, .{ .number = 1 });
+    try ctx.preinitializeModule(0, .{ .table = exported }, false);
+    try std.testing.expect(ctx.moduleExportPristine(0));
+
+    try exported.rawSet(ctx.allocator, .{ .string = "other" }, .{ .number = 2 });
+    try std.testing.expect(!ctx.moduleExportPristine(0));
+}
 
 test "prepared static require stays hidden until package becomes observable" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

@@ -724,6 +724,49 @@ test "known module export emits guarded direct LLVM call" {
     try std.testing.expect(std.mem.indexOf(u8, ir, "dynamic_export") != null);
 }
 
+test "eager pristine module export bypasses field lookup on direct branch" {
+    var ids: llvm_emitter.ModuleIdMap = .empty;
+    defer ids.deinit(std.testing.allocator);
+    try ids.put(std.testing.allocator, "Module:Target", 0);
+    const exports = [_]llvm_emitter.DirectExport{
+        .{ .name = "run", .function_id = 99 },
+    };
+    const modules = [_]llvm_emitter.ModuleFact{.{
+        .eager_prepared = true,
+        .canonical_name = "Module:Target",
+        .exports = &exports,
+    }};
+    const facts = llvm_emitter.ProgramFacts{
+        .module_ids = &ids,
+        .module_facts = &modules,
+    };
+
+    var chunk = try llvm_parser.parse(
+        std.testing.allocator,
+        "local target=require('Module:Target'); return target.run(4)",
+    );
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, facts);
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_module_export_pristine") != null);
+    const start = std.mem.indexOf(u8, ir, "pristine_export_multi:") orelse return error.MissingPristineExportBlock;
+    const rest = ir[start..];
+    const end = std.mem.indexOf(u8, rest, "pristine_export_multi_fallback:") orelse rest.len;
+    const block = rest[0..end];
+    try std.testing.expect(std.mem.indexOf(u8, block, "@dict_lua_get_field") == null);
+    try std.testing.expect(std.mem.indexOf(u8, block, "@dict_lua_value_is_function_id") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_99") != null);
+    const fallback_start = std.mem.indexOf(u8, ir, "export_callee_fallback:") orelse return error.MissingExportFallbackBlock;
+    try std.testing.expect(std.mem.indexOf(u8, ir[fallback_start..], "@dict_lua_get_field") != null);
+}
+
 test "captured static module export keeps guarded direct target" {
     var ids: llvm_emitter.ModuleIdMap = .empty;
     defer ids.deinit(std.testing.allocator);

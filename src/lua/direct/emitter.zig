@@ -87,12 +87,14 @@ const StaticFunctionRef = struct {
     captures_ptr: V,
     captures_len: usize,
     direct_captures: ?V = null,
+    pristine_guard: ?V = null,
     guard_callable: ?V = null,
 };
 
 const StaticModuleRef = struct {
     module_id: u32,
     value: V,
+    no_lookup_export: bool = false,
 };
 
 const ValueRef = union(enum) {
@@ -163,6 +165,7 @@ const Runtime = struct {
     require_number: V,
     observe_package: V,
     defer_require_module_id: V,
+    module_export_pristine: V,
     arg_ptr: V,
     arg_get: V,
     global_ptr: V,
@@ -229,6 +232,7 @@ const Runtime = struct {
             .require_number = try declare(m, "dict_lua_require_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
             .observe_package = try declare(m, "dict_lua_observe_package", ty.i32, &.{ty.ptr}),
             .defer_require_module_id = try declare(m, "dict_lua_defer_require_module_id", ty.i8, &.{ ty.ptr, ty.i32, ty.ptr }),
+            .module_export_pristine = try declare(m, "dict_lua_module_export_pristine", ty.i8, &.{ ty.ptr, ty.i32 }),
             .arg_ptr = try declare(m, "dict_lua_arg_ptr", ty.ptr, &.{ ty.ptr, ty.i64, ty.i64 }),
             .arg_get = try declare(m, "dict_lua_arg_get", ty.void, &.{ ty.ptr, ty.i64, ty.i64, ty.ptr }),
             .global_ptr = try declare(m, "dict_lua_global_ptr", ty.ptr, &.{ ty.ptr, ty.i32 }),
@@ -1288,7 +1292,11 @@ const FnEmitter = struct {
             },
             .paren => |paren| self.staticModuleExpr(paren.expr),
             .call => |call| if (try self.staticRequire(call.callee, null, call.args)) |request|
-                .{ .module_id = request.module_id, .value = try self.directRequireValue(request) }
+                .{
+                    .module_id = request.module_id,
+                    .value = try self.directRequireValue(request),
+                    .no_lookup_export = self.module.facts.canDeferRequire(request.module_id, request.requested.bytes),
+                }
             else
                 null,
             else => null,
@@ -1308,6 +1316,31 @@ const FnEmitter = struct {
                 const field = staticString(index.key) orelse break :blk null;
                 const module = (try self.staticModuleExpr(index.object)) orelse break :blk null;
                 const export_fact = self.module.facts.exportFunction(module.module_id, field) orelse break :blk null;
+
+                if (export_fact.capture_count == 0 and module.no_lookup_export) {
+                    const pristine_raw = try llvm.call(self.builder, self.rt().module_export_pristine, &.{
+                        self.ctx(), try self.cI32(module.module_id),
+                    });
+                    const pristine = try llvm.icmp(self.builder, .ne, pristine_raw, try self.cI8(0));
+                    const fallback_block = try self.newBlock("export_callee_fallback");
+                    const join = try self.newBlock("export_callee_join");
+                    try llvm.condBr(self.builder, pristine, join, fallback_block);
+
+                    llvm.position(self.builder, fallback_block);
+                    const live = try self.getField(.{ .boxed = module.value }, field);
+                    const callable = try self.box(live);
+                    try llvm.br(self.builder, join);
+                    llvm.position(self.builder, join);
+                    break :blk .{
+                        .function_id = export_fact.function_id,
+                        .captures_ptr = try self.nullPtr(),
+                        .captures_len = 0,
+                        .direct_captures = null,
+                        .pristine_guard = pristine,
+                        .guard_callable = callable,
+                    };
+                }
+
                 const live = try self.getField(.{ .boxed = module.value }, field);
                 const callable = try self.box(live);
                 const direct_captures = if (export_fact.capture_count == 0)
@@ -1503,6 +1536,26 @@ const FnEmitter = struct {
         const output = try self.valueArray(count);
         const entry_fn = try self.module.functionValue(function.function_id);
 
+        if (function.pristine_guard) |pristine| {
+            const callable = function.guard_callable orelse return error.MissingPristineFallback;
+            const direct_block = try self.newBlock("pristine_export");
+            const fallback_block = try self.newBlock("pristine_export_fallback");
+            const join = try self.newBlock("pristine_export_join");
+            try llvm.condBr(self.builder, pristine, direct_block, fallback_block);
+
+            llvm.position(self.builder, direct_block);
+            try self.emitStaticFixedPrepared(function, entry_fn, prepared, output, count);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, fallback_block);
+            try self.emitFallbackFixedPrepared(callable, prepared, output, count);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, join);
+            if (prepared.tail) |tail| try self.freeMulti(tail);
+            return if (count == 0) null else output;
+        }
+
         if (function.guard_callable) |callable| {
             if (function.direct_captures != null and prepared.tail != null) {
                 try self.emitFallbackFixedPrepared(callable, prepared, output, count);
@@ -1602,6 +1655,36 @@ const FnEmitter = struct {
     fn directStaticMulti(self: *FnEmitter, function: StaticFunctionRef, args_in: []const *lua.Expr) anyerror!MultiRef {
         const prepared = try self.prepareStaticArgs(args_in);
         const entry_fn = try self.module.functionValue(function.function_id);
+
+        if (function.pristine_guard) |pristine| {
+            const callable = function.guard_callable orelse return error.MissingPristineFallback;
+            const ptr_slot = try self.ptrSlot();
+            const len_slot = try self.i64Slot();
+            const direct_block = try self.newBlock("pristine_export_multi");
+            const fallback_block = try self.newBlock("pristine_export_multi_fallback");
+            const join = try self.newBlock("pristine_export_multi_join");
+            try llvm.condBr(self.builder, pristine, direct_block, fallback_block);
+
+            llvm.position(self.builder, direct_block);
+            const direct = try self.emitStaticMultiPrepared(function, entry_fn, prepared);
+            try llvm.store(self.builder, direct.ptr, ptr_slot, 8);
+            try llvm.store(self.builder, direct.len, len_slot, 8);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, fallback_block);
+            const fallback = try self.emitFallbackMultiPrepared(callable, prepared);
+            try llvm.store(self.builder, fallback.ptr, ptr_slot, 8);
+            try llvm.store(self.builder, fallback.len, len_slot, 8);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, join);
+            if (prepared.tail) |tail| try self.freeMulti(tail);
+            return .{
+                .ptr = try llvm.load(self.builder, self.ty().ptr, ptr_slot, 8),
+                .len = try llvm.load(self.builder, self.ty().i64, len_slot, 8),
+                .owned = true,
+            };
+        }
 
         if (function.guard_callable) |callable| {
             if (function.direct_captures != null and prepared.tail != null) {
@@ -1964,6 +2047,10 @@ const FnEmitter = struct {
                             self.storage[binding] = .{ .static_module = .{
                                 .module_id = request.module_id,
                                 .value = loaded,
+                                .no_lookup_export = self.module.facts.canDeferRequire(
+                                    request.module_id,
+                                    request.requested.bytes,
+                                ),
                             } };
                             return false;
                         };

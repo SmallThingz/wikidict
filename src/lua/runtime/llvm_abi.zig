@@ -131,6 +131,10 @@ export fn dict_lua_defer_require_module_id(ctx: *rt.Context, module_id: u32, out
     return 1;
 }
 
+export fn dict_lua_module_export_pristine(ctx: *const rt.Context, module_id: u32) callconv(.c) u8 {
+    return @intFromBool(ctx.moduleExportPristine(module_id));
+}
+
 export fn dict_lua_value_nil(out: *rt.Value) callconv(.c) void {
     out.* = .nil;
 }
