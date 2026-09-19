@@ -36,16 +36,22 @@ const Encoder = struct {
     table_shapes: ?*const shapes.ModuleFacts,
     out: std.ArrayList(u8) = .empty,
 
-    fn writeU32(self: *Encoder, value: usize) !void {
-        var bytes: [4]u8 = undefined;
-        std.mem.writeInt(u32, &bytes, std.math.cast(u32, value) orelse return error.StaticLiteralTooLarge, .little);
-        try self.out.appendSlice(self.allocator, &bytes);
+    fn beginCompact(self: *Encoder) !void {
+        try self.out.append(self.allocator, format.compact_marker);
+        try self.out.append(self.allocator, format.compact_version);
     }
 
-    fn writeRawU32(self: *Encoder, value: u32) !void {
-        var bytes: [4]u8 = undefined;
-        std.mem.writeInt(u32, &bytes, value, .little);
-        try self.out.appendSlice(self.allocator, &bytes);
+    fn writeVarU32(self: *Encoder, value_in: u32) !void {
+        var value = value_in;
+        while (value >= 0x80) {
+            try self.out.append(self.allocator, @as(u8, @intCast(value & 0x7f)) | 0x80);
+            value >>= 7;
+        }
+        try self.out.append(self.allocator, @intCast(value));
+    }
+
+    fn writeVarSize(self: *Encoder, value: usize) !void {
+        try self.writeVarU32(std.math.cast(u32, value) orelse return error.StaticLiteralTooLarge);
     }
 
     fn writeU64(self: *Encoder, value: u64) !void {
@@ -55,7 +61,7 @@ const Encoder = struct {
     }
 
     fn writeString(self: *Encoder, value: []const u8) !void {
-        try self.writeU32(value.len);
+        try self.writeVarSize(value.len);
         try self.out.appendSlice(self.allocator, value);
     }
 
@@ -78,17 +84,18 @@ const Encoder = struct {
             .paren => |paren| try self.expr(paren.expr, depth),
             .table => |table_expr| {
                 try self.out.append(self.allocator, @intFromEnum(format.ValueTag.table));
-                const shape_id = if (self.table_shapes) |facts|
-                    if (facts.get(table_expr.span.start)) |shape| shape.id else format.no_shape
+                const shape_id: ?u32 = if (self.table_shapes) |facts|
+                    if (facts.get(table_expr.span.start)) |shape| shape.id else null
                 else
-                    format.no_shape;
-                try self.writeRawU32(shape_id);
-                try self.writeU32(table_expr.fields.len);
+                    null;
+                try self.out.append(self.allocator, if (shape_id != null) format.table_has_shape else 0);
+                if (shape_id) |id| try self.writeVarU32(id);
+                try self.writeVarSize(table_expr.fields.len);
                 var list_capacity: usize = 0;
                 for (table_expr.fields) |field| if (field == .list) {
                     list_capacity += 1;
                 };
-                try self.writeU32(list_capacity);
+                try self.writeVarSize(list_capacity);
                 for (table_expr.fields) |field| switch (field) {
                     .list => |item| {
                         try self.out.append(self.allocator, @intFromEnum(format.FieldTag.list));
@@ -114,6 +121,7 @@ const Encoder = struct {
 pub fn encode(a: A, value: *const lua.Expr, table_shapes: ?*const shapes.ModuleFacts) ![]u8 {
     var encoder = Encoder{ .allocator = a, .table_shapes = table_shapes };
     errdefer encoder.out.deinit(a);
+    try encoder.beginCompact();
     try encoder.expr(value, 0);
     return encoder.out.toOwnedSlice(a);
 }
@@ -471,13 +479,14 @@ fn staticValue(self: *Encoder, value: StaticValue, depth: usize, shape_id: ?u32)
         },
         .table => |table_value| {
             try self.out.append(self.allocator, @intFromEnum(format.ValueTag.table));
-            try self.writeRawU32(shape_id orelse format.no_shape);
-            try self.writeU32(table_value.fields.items.len);
+            try self.out.append(self.allocator, if (shape_id != null) format.table_has_shape else 0);
+            if (shape_id) |id| try self.writeVarU32(id);
+            try self.writeVarSize(table_value.fields.items.len);
             var list_capacity: usize = 0;
             for (table_value.fields.items) |field| {
                 if (field == .list) list_capacity += 1;
             }
-            try self.writeU32(list_capacity);
+            try self.writeVarSize(list_capacity);
             for (table_value.fields.items) |field| switch (field) {
                 .list => |item| {
                     try self.out.append(self.allocator, @intFromEnum(format.FieldTag.list));
@@ -529,11 +538,24 @@ pub fn encodePureDataRoot(
     }
     var encoder = Encoder{ .allocator = a, .table_shapes = null };
     errdefer encoder.out.deinit(a);
+    try encoder.beginCompact();
     try staticValue(&encoder, root, 0, export_shape_id);
     return .{
         .blob = try encoder.out.toOwnedSlice(a),
         .export_shape_id = export_shape_id,
     };
+}
+
+test "static literal encoder uses compact self-identifying framing" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a, "return { short = 'abc', { true, 12 } }");
+    defer chunk.deinit();
+    const literal = rootLiteral(chunk.body) orelse return error.ExpectedStaticLiteral;
+    const blob = try encode(a, literal, null);
+    defer a.free(blob);
+    try std.testing.expect(blob.len > 3);
+    try std.testing.expectEqual(format.compact_marker, blob[0]);
+    try std.testing.expectEqual(format.compact_version, blob[1]);
 }
 
 test "pure incremental data builder lowers to static literal" {
