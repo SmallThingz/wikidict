@@ -28,33 +28,34 @@ const Builder = struct {
     a: A,
     renderer: *compiler.Renderer,
     sections: std.ArrayList(WorkSection) = .empty,
-    blocks: std.ArrayList(compiler.Block) = .empty,
     title: []const u8,
     level: u8 = 2,
     started: bool = false,
 
-    fn flush(self: *Builder) !void {
+    fn flush(self: *Builder, blocks: []const compiler.Block) !void {
         if (!self.started) return;
         try self.sections.append(self.a, .{
             .level = self.level,
             .title = self.title,
-            .blocks = try self.blocks.toOwnedSlice(self.a),
+            .blocks = blocks,
         });
-        self.blocks = .empty;
     }
 
     fn render(self: *Builder, source: []const u8) !void {
-        for (try self.renderer.renderBody(source)) |item| {
+        const rendered = try self.renderer.renderBody(source);
+        var section_start: usize = 0;
+        for (rendered, 0..) |item, i| {
             if (item.kind == .heading) {
-                try self.flush();
+                try self.flush(rendered[section_start..i]);
                 self.started = true;
                 self.title = try compiler.plainText(self.a, item.spans);
                 self.level = item.level;
+                section_start = i + 1;
             } else {
                 self.started = true;
-                try self.blocks.append(self.a, item);
             }
         }
+        try self.flush(rendered[section_start..]);
     }
 };
 fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8) !Work {
@@ -68,7 +69,6 @@ fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8) 
         .title = if (language.len == 0) title else language,
     };
     try builder.render(source);
-    try builder.flush();
     return .{
         .sections = try builder.sections.toOwnedSlice(a),
         .references = try renderer.finishReferences(),
@@ -109,6 +109,22 @@ pub fn compileAlloc(
     const layout = try semantic.build(a, work.sections);
     const display_spans = try displayTitleSpansAlloc(a, display_title, language orelse "");
     return codec.encodeBuildAlloc(a, display_spans, work.sections, layout, work.references, work.media);
+}
+
+test "builder sections borrow contiguous rendered block slices" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const work = try workAlloc(a, "page", "English", "preamble\n===First===\n# one\n===Second===\n===Third===\n# three\n");
+    try std.testing.expectEqual(@as(usize, 4), work.sections.len);
+    try std.testing.expectEqualStrings("English", work.sections[0].title);
+    try std.testing.expectEqual(@as(usize, 1), work.sections[0].blocks.len);
+    try std.testing.expectEqualStrings("First", work.sections[1].title);
+    try std.testing.expectEqual(@as(usize, 1), work.sections[1].blocks.len);
+    try std.testing.expectEqualStrings("Second", work.sections[2].title);
+    try std.testing.expectEqual(@as(usize, 0), work.sections[2].blocks.len);
+    try std.testing.expectEqualStrings("Third", work.sections[3].title);
+    try std.testing.expectEqual(@as(usize, 1), work.sections[3].blocks.len);
 }
 
 test "compiled presentation contains no executable template syntax" {
