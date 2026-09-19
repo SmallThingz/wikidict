@@ -34,6 +34,11 @@ pub const ModuleRecord = struct {
     synth_root: bool = false,
 };
 
+pub fn needsLlvmBatch(record: ModuleRecord) bool {
+    if (record.static_root) return false;
+    return !(record.synth_root and record.function_count == 1);
+}
+
 const ModuleLookupEntry = struct {
     name: []const u8,
     id: u32,

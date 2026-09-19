@@ -83,6 +83,31 @@ test "synthesized export module omits root body but keeps export function" {
     try std.testing.expect(std.mem.indexOf(u8, ir, "define %FunctionResult @lua_f_1") != null);
 }
 
+test "LLVM batch planning omits roots with no emitted function body" {
+    const base = llvm_program.ModuleRecord{
+        .title = "Module:Base",
+        .path = "modules/base.lua",
+        .source_bytes = 1,
+        .source_index = 0,
+        .function_base = 0,
+        .function_count = 1,
+        .root_function = 0,
+        .export_shape_id = null,
+    };
+    var static_root = base;
+    static_root.static_root = true;
+    try std.testing.expect(!llvm_program.needsLlvmBatch(static_root));
+
+    var empty_synth = base;
+    empty_synth.synth_root = true;
+    try std.testing.expect(!llvm_program.needsLlvmBatch(empty_synth));
+
+    var function_synth = empty_synth;
+    function_synth.function_count = 2;
+    try std.testing.expect(llvm_program.needsLlvmBatch(function_synth));
+    try std.testing.expect(llvm_program.needsLlvmBatch(base));
+}
+
 test "program root table stubs synthesized root and retains export entry" {
     const exports = [_]llvm_emitter.DirectExport{
         .{ .name = "run", .function_id = 41 },
