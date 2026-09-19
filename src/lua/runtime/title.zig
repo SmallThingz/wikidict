@@ -157,73 +157,20 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         if (fragment.string.len == 0) return one(prefixed);
         return one(.{ .string = try std.fmt.allocPrint(runtime.allocator, "{s}#{s}", .{ prefixed.string, fragment.string }) });
     }
-    const interwiki = table.rawGet(.{ .string = "interwiki" }) orelse Value{ .string = "" };
-    const is_external = interwiki == .string and interwiki.string.len != 0;
-    if (is_external) {
-        if (std.mem.eql(u8, key, "content")) {
-            try table.rawSetNativeField(.title_value, "content", .{ .boolean = false });
-            return one(.{ .boolean = false });
-        }
-        if (std.mem.eql(u8, key, "exists")) {
-            try table.rawSetNativeField(.title_value, "exists", .{ .boolean = false });
-            return one(.{ .boolean = false });
-        }
-        if (std.mem.eql(u8, key, "id")) return one(.{ .number = 0 });
-        if (std.mem.eql(u8, key, "isRedirect")) return one(.{ .boolean = false });
-        if (std.mem.eql(u8, key, "redirectTarget")) {
-            try table.rawSet(runtime.allocator, .{ .string = "redirectTarget" }, .{ .boolean = false });
-            return one(.{ .boolean = false });
-        }
-        if (std.mem.eql(u8, key, "isTalkPage") or
-            std.mem.eql(u8, key, "isContentPage") or
-            std.mem.eql(u8, key, "subjectPageTitle") or
-            std.mem.eql(u8, key, "talkPageTitle") or
-            std.mem.eql(u8, key, "basePageTitle") or
-            std.mem.eql(u8, key, "rootPageTitle") or
-            std.mem.eql(u8, key, "contentModel") or
-            std.mem.eql(u8, key, "subjectNsText") or
-            std.mem.eql(u8, key, "talkNsText") or
-            std.mem.eql(u8, key, "canTalk"))
-            return one(.nil);
-    }
     if (std.mem.eql(u8, key, "content")) {
         const content = try titleContentValue(runtime, prefixed.string);
         const value: Value = if (content) |source| .{ .string = source } else .{ .boolean = false };
         try table.rawSetNativeField(.title_value, "content", value);
         return one(value);
     }
+    if (std.mem.eql(u8, key, "file") or std.mem.eql(u8, key, "fileExists"))
+        return error.NotImplemented;
+
     const ns = namespaceOf(prefixed.string);
-    if (std.mem.eql(u8, key, "file") or std.mem.eql(u8, key, "fileExists")) {
-        const canonical_file_title = if (ns.id == 6)
-            prefixed.string
-        else if (ns.id == -2)
-            try std.fmt.allocPrint(runtime.allocator, "File:{s}", .{ns.text})
-        else
-            return one(.nil);
-        const host = host_api.get(runtime) orelse return error.NotImplemented;
-        const get = host.file_metadata orelse return error.NotImplemented;
-        const metadata = try get(host.ctx, canonical_file_title);
-        const file = try runtime.newTable();
-        try file.rawSet(runtime.allocator, .{ .string = "exists" }, .{ .boolean = metadata.exists });
-        if (metadata.exists) {
-            try file.rawSet(runtime.allocator, .{ .string = "width" }, .{ .number = @floatFromInt(metadata.width) });
-            try file.rawSet(runtime.allocator, .{ .string = "height" }, .{ .number = @floatFromInt(metadata.height) });
-        }
-        try table.rawSetNativeField(.title_value, "file", .{ .table = file });
-        try table.rawSetNativeField(.title_value, "fileExists", .{ .boolean = metadata.exists });
-        return one(if (std.mem.eql(u8, key, "file")) .{ .table = file } else .{ .boolean = metadata.exists });
-    }
     if (std.mem.eql(u8, key, "exists")) {
         // Scribunto maps Media: title existence to file.exists, not page existence.
-        if (ns.id == -2) {
-            const canonical_file_title = try std.fmt.allocPrint(runtime.allocator, "File:{s}", .{ns.text});
-            const host = host_api.get(runtime) orelse return error.NotImplemented;
-            const get = host.file_metadata orelse return error.NotImplemented;
-            const metadata = try get(host.ctx, canonical_file_title);
-            try table.rawSetNativeField(.title_value, "exists", .{ .boolean = metadata.exists });
-            try table.rawSetNativeField(.title_value, "fileExists", .{ .boolean = metadata.exists });
-            return one(.{ .boolean = metadata.exists });
-        }
+        // File repository metadata is not part of the local bundle host.
+        if (ns.id == -2) return error.NotImplemented;
         const exists = try pageExists(runtime, prefixed.string);
         try table.rawSetNativeField(.title_value, "exists", .{ .boolean = exists });
         return one(.{ .boolean = exists });
@@ -315,11 +262,7 @@ fn pageExists(runtime: *rt.Context, title: []const u8) !bool {
     return false;
 }
 
-const TitleCtx = struct {
-    title: []const u8,
-    state: *State,
-    is_external: bool = false,
-};
+const TitleCtx = struct { title: []const u8, state: *State };
 
 fn checkedNamespaceId(value: Value) !i32 {
     const number = switch (value) {
@@ -372,7 +315,6 @@ fn isSubpageOfCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const
 
 fn subPageTitleCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const ctx: *TitleCtx = @ptrCast(@alignCast(raw orelse return error.MissingTitleContext));
-    if (ctx.is_external) return one(.nil);
     if (args.len < 2 or args[1] != .string) return one(.nil);
     const ns = namespaceOf(ctx.title);
     const text = try std.fmt.allocPrint(runtime.allocator, "{s}/{s}", .{ ns.text, args[1].string });
@@ -417,21 +359,8 @@ fn titleContentValue(runtime: *rt.Context, title: []const u8) !?[]const u8 {
 
 fn getContentCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const ctx: *TitleCtx = @ptrCast(@alignCast(raw orelse return error.MissingTitleContext));
-    if (ctx.is_external) return one(.nil);
     const content = try titleContentValue(runtime, ctx.title);
     return one(if (content) |source| .{ .string = source } else .nil);
-}
-
-fn finishTitleValue(runtime: *rt.Context, state: *State, table: *rt.Table, ctx: *TitleCtx) !Value {
-    table.metatable = try ensureMetatable(runtime, state);
-    try table.rawSetNativeField(.title_value, "getContent", try runtime.newNative(ctx, getContentCall));
-    try table.rawSetNativeField(.title_value, "fullUrl", try runtime.newNative(null, fullUrlCall));
-    try table.rawSetNativeField(.title_value, "localUrl", try runtime.newNative(null, localUrlCall));
-    try table.rawSetNativeField(.title_value, "canonicalUrl", try runtime.newNative(null, canonicalUrlCall));
-    try table.rawSetNativeField(.title_value, "inNamespace", try runtime.newNative(null, inNamespaceCall));
-    try table.rawSetNativeField(.title_value, "isSubpageOf", try runtime.newNative(null, isSubpageOfCall));
-    try table.rawSetNativeField(.title_value, "subPageTitle", try runtime.newNative(ctx, subPageTitleCall));
-    return .{ .table = table };
 }
 
 fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !Value {
@@ -457,44 +386,17 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
     try table.rawSetNativeField(.title_value, "interwiki", .{ .string = "" });
     try table.rawSetNativeField(.title_value, "isExternal", .{ .boolean = false });
     try table.rawSetNativeField(.title_value, "isLocal", .{ .boolean = true });
+    table.metatable = try ensureMetatable(runtime, state);
     const ctx = try runtime.allocator.create(TitleCtx);
     ctx.* = .{ .title = base_title, .state = state };
-    return finishTitleValue(runtime, state, table, ctx);
-}
-
-fn makeExternalTitleValue(
-    runtime: *rt.Context,
-    state: *State,
-    prefix: []const u8,
-    raw_body: []const u8,
-) !?Value {
-    const body = (try normalizeName(runtime.allocator, raw_body)) orelse return null;
-    const main_spec = namespaceSpecById(0).?;
-    if (!validTitleBody(main_spec, body)) return null;
-    const hash = std.mem.indexOfScalar(u8, body, '#');
-    const base_body = if (hash) |pos| body[0..pos] else body;
-    const fragment_raw = if (hash) |pos| body[pos + 1 ..] else "";
-    if (base_body.len == 0) return null;
-    const fragment = try normalizeFragment(runtime.allocator, fragment_raw);
-    const normalized_prefix = (try normalizeName(runtime.allocator, prefix)) orelse return null;
-    if (normalized_prefix.len == 0) return null;
-    const prefixed = try std.fmt.allocPrint(runtime.allocator, "{s}:{s}", .{ normalized_prefix, base_body });
-    const table = try runtime.newNativeNamespace(.title_value);
-    try table.rawSetNativeField(.title_value, "text", .{ .string = base_body });
-    try table.rawSetNativeField(.title_value, "prefixedText", .{ .string = prefixed });
-    try table.rawSetNativeField(.title_value, "__fragment", .{ .string = fragment });
-    try table.rawSetNativeField(.title_value, "namespace", .{ .number = 0 });
-    try table.rawSetNativeField(.title_value, "nsText", .{ .string = "" });
-    try table.rawSetNativeField(.title_value, "subpageText", .{ .string = base_body });
-    try table.rawSetNativeField(.title_value, "baseText", .{ .string = base_body });
-    try table.rawSetNativeField(.title_value, "rootText", .{ .string = base_body });
-    try table.rawSetNativeField(.title_value, "isSubpage", .{ .boolean = false });
-    try table.rawSetNativeField(.title_value, "interwiki", .{ .string = normalized_prefix });
-    try table.rawSetNativeField(.title_value, "isExternal", .{ .boolean = true });
-    try table.rawSetNativeField(.title_value, "isLocal", .{ .boolean = false });
-    const ctx = try runtime.allocator.create(TitleCtx);
-    ctx.* = .{ .title = prefixed, .state = state, .is_external = true };
-    return @as(?Value, try finishTitleValue(runtime, state, table, ctx));
+    try table.rawSetNativeField(.title_value, "getContent", try runtime.newNative(ctx, getContentCall));
+    try table.rawSetNativeField(.title_value, "fullUrl", try runtime.newNative(null, fullUrlCall));
+    try table.rawSetNativeField(.title_value, "localUrl", try runtime.newNative(null, localUrlCall));
+    try table.rawSetNativeField(.title_value, "canonicalUrl", try runtime.newNative(null, canonicalUrlCall));
+    try table.rawSetNativeField(.title_value, "inNamespace", try runtime.newNative(null, inNamespaceCall));
+    try table.rawSetNativeField(.title_value, "isSubpageOf", try runtime.newNative(null, isSubpageOfCall));
+    try table.rawSetNativeField(.title_value, "subPageTitle", try runtime.newNative(ctx, subPageTitleCall));
+    return .{ .table = table };
 }
 fn normalizedNewText(runtime: *rt.Context, state: *State, raw: []const u8) ![]const u8 {
     const decoded = try shared_xml_decode.decodeSinglePassAlloc(runtime.allocator, raw);
@@ -593,30 +495,6 @@ fn interwikiDisposition(runtime: *rt.Context, prefix: []const u8) !InterwikiDisp
     return .none;
 }
 
-const ExternalInterwiki = struct {
-    prefix: []const u8,
-    body: []const u8,
-};
-
-fn externalInterwikiParts(
-    runtime: *rt.Context,
-    state: *State,
-    text_raw: []const u8,
-    decode_entities: bool,
-) !?ExternalInterwiki {
-    const source = if (decode_entities) try normalizedNewText(runtime, state, text_raw) else text_raw;
-    const text = (try normalizeName(runtime.allocator, source)) orelse return null;
-    if (text.len == 0 or text[0] == ':') return null;
-    const colon = std.mem.indexOfScalar(u8, text, ':') orelse return null;
-    if (colon == 0) return null;
-    const prefix = std.mem.trim(u8, text[0..colon], " ");
-    if (prefix.len == 0 or namespaceSpecByName(prefix) != null) return null;
-    if (try interwikiDisposition(runtime, prefix) != .external) return null;
-    const body = std.mem.trimStart(u8, text[colon + 1 ..], " ");
-    if (body.len == 0) return null;
-    return .{ .prefix = prefix, .body = body };
-}
-
 fn titleWithNamespace(runtime: *rt.Context, state: *State, text_raw: []const u8, namespace: ?Value, force_namespace: bool, decode_entities: bool) !?[]const u8 {
     const a = runtime.allocator;
     const source = if (decode_entities) try normalizedNewText(runtime, state, text_raw) else text_raw;
@@ -655,12 +533,6 @@ fn buildBatchTitles(runtime: *rt.Context, batch: *BatchState) !*rt.Table {
         const index: f64 = @floatFromInt(i + 1);
         const value = batch.source.rawGet(.{ .number = index }) orelse continue;
         if (value != .string) return error.StringExpected;
-        if (batch.namespace == null)
-            if (try externalInterwikiParts(runtime, batch.title_state, value.string, true)) |external| {
-                const title = (try makeExternalTitleValue(runtime, batch.title_state, external.prefix, external.body)) orelse continue;
-                try titles.rawSet(runtime.allocator, .{ .number = index }, title);
-                continue;
-            };
         const title = try titleWithNamespace(runtime, batch.title_state, value.string, batch.namespace, false, true) orelse continue;
         try titles.rawSet(runtime.allocator, .{ .number = index }, try makeTitleValue(runtime, batch.title_state, title));
     }
@@ -708,8 +580,6 @@ fn newBatchCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
 fn newCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
     if (args.len == 0 or args[0] != .string) return one(.nil);
-    if (try externalInterwikiParts(runtime, state, args[0].string, true)) |external|
-        return one((try makeExternalTitleValue(runtime, state, external.prefix, external.body)) orelse .nil);
     const title = try titleWithNamespace(runtime, state, args[0].string, if (args.len > 1) args[1] else null, false, true) orelse return one(.nil);
     return one(try makeTitleValue(runtime, state, title));
 }
@@ -723,19 +593,7 @@ fn makeCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]cons
     } else "";
     if (args.len > 3 and args[3] != .nil) {
         if (args[3] != .string) return error.StringExpected;
-        if (args[3].string.len != 0) {
-            switch (try interwikiDisposition(runtime, args[3].string)) {
-                .none => return one(.nil),
-                .current_wiki => {},
-                .external => {
-                    const body = if (fragment.len == 0)
-                        args[1].string
-                    else
-                        try std.fmt.allocPrint(runtime.allocator, "{s}#{s}", .{ args[1].string, fragment });
-                    return one((try makeExternalTitleValue(runtime, state, args[3].string, body)) orelse .nil);
-                },
-            }
-        }
+        if (args[3].string.len != 0) return error.NotImplemented;
     }
     const title = try titleWithNamespace(runtime, state, args[1].string, args[0], true, false) orelse return one(.nil);
     if (fragment.len == 0) return one(try makeTitleValue(runtime, state, title));
@@ -787,20 +645,12 @@ fn testPageContentModel(_: ?*anyopaque, title: []const u8) !?[]const u8 {
 }
 
 const test_interwiki_rows = [_]host_api.InterwikiRow{
-    .{ .prefix = "w", .url = "https://example.test/$1", .is_local = false, .is_current_wiki = false, .is_protocol_relative = false, .is_transcludable = false },
-    .{ .prefix = "self", .url = "https://local.test/$1", .is_local = true, .is_current_wiki = true, .is_protocol_relative = false, .is_transcludable = false },
+    .{ .prefix = "w", .url = "https://example.test/$1", .is_local = false, .is_current_wiki = false, .is_protocol_relative = false },
+    .{ .prefix = "self", .url = "https://local.test/$1", .is_local = true, .is_current_wiki = true, .is_protocol_relative = false },
 };
 
 fn testInterwikiMap(_: ?*anyopaque) ![]const host_api.InterwikiRow {
     return &test_interwiki_rows;
-}
-
-fn testFileMetadata(_: ?*anyopaque, title: []const u8) !host_api.FileMetadata {
-    if (std.mem.eql(u8, title, "File:Example.svg"))
-        return .{ .exists = true, .width = 640, .height = 480 };
-    if (std.mem.eql(u8, title, "File:Missing.svg"))
-        return .{ .exists = false };
-    return error.FileMetadataSnapshotMissing;
 }
 
 fn testPageContent(_: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
@@ -986,27 +836,6 @@ test "AOT title subpage fields respect namespace settings" {
     try std.testing.expectError(error.AotCallFailed, runtime.getIndex(media_title[0], .{ .string = "exists" }));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
-
-    var file_host = host_api.Host{ .file_metadata = testFileMetadata };
-    host_api.set(&runtime, &file_host);
-    const file = try runtime.getIndex(file_title[0], .{ .string = "file" });
-    try std.testing.expect(file == .table);
-    try std.testing.expect((try runtime.getIndex(file, .{ .string = "exists" })).boolean);
-    try std.testing.expectEqual(@as(f64, 640), (try runtime.getIndex(file, .{ .string = "width" })).number);
-    try std.testing.expectEqual(@as(f64, 480), (try runtime.getIndex(file, .{ .string = "height" })).number);
-    try std.testing.expect((try runtime.getIndex(file_title[0], .{ .string = "fileExists" })).boolean);
-    try std.testing.expect((try runtime.getIndex(media_title[0], .{ .string = "exists" })).boolean);
-    const missing_file_title = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "File:Missing.svg" }});
-    defer rt.freeResults(missing_file_title);
-    const missing_file = try runtime.getIndex(missing_file_title[0], .{ .string = "file" });
-    try std.testing.expect(missing_file == .table);
-    try std.testing.expect(!(try runtime.getIndex(missing_file, .{ .string = "exists" })).boolean);
-    try std.testing.expect((try runtime.getIndex(missing_file, .{ .string = "width" })) == .nil);
-    const unknown_file_title = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "File:Unknown.svg" }});
-    defer rt.freeResults(unknown_file_title);
-    try std.testing.expectError(error.AotCallFailed, runtime.getIndex(unknown_file_title[0], .{ .string = "file" }));
-    try std.testing.expectEqualStrings("FileMetadataSnapshotMissing", runtime.aotErrorName().?);
-    runtime.clearAotErrorName();
 }
 
 test "AOT title constructors and current title use the live host" {
@@ -1097,35 +926,20 @@ test "AOT title constructors and current title use the live host" {
     try std.testing.expectError(error.AotCallFailed, runtime.callValue(make_fn, &.{ .{ .number = 0 }, .{ .string = "Thing" }, .{ .number = 1 } }));
     try std.testing.expectEqualStrings("StringExpected", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(make_fn, &.{ .{ .number = 0 }, .{ .string = "Thing" }, .nil, .{ .string = "w" } }));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
     const new_fn = title_lib.rawGet(.{ .string = "new" }).?;
     try std.testing.expectError(error.AotCallFailed, runtime.callValue(new_fn, &.{ .{ .string = "Thing" }, .{ .string = "not-a-namespace" } }));
     try std.testing.expectEqualStrings("InvalidNamespace", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(new_fn, &.{.{ .string = "w:Thing" }}));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
     host.site_interwiki_map = testInterwikiMap;
-    const external = try runtime.callValue(new_fn, &.{.{ .string = "w:Module:Thing#frag" }});
-    defer rt.freeResults(external);
-    try std.testing.expectEqualStrings("Module:Thing", (try runtime.getIndex(external[0], .{ .string = "text" })).string);
-    try std.testing.expectEqualStrings("w:Module:Thing", (try runtime.getIndex(external[0], .{ .string = "prefixedText" })).string);
-    try std.testing.expectEqualStrings("frag", (try runtime.getIndex(external[0], .{ .string = "fragment" })).string);
-    try std.testing.expectEqualStrings("w", (try runtime.getIndex(external[0], .{ .string = "interwiki" })).string);
-    try std.testing.expectEqual(@as(f64, 0), (try runtime.getIndex(external[0], .{ .string = "namespace" })).number);
-    try std.testing.expect((try runtime.getIndex(external[0], .{ .string = "isExternal" })).boolean);
-    try std.testing.expect(!(try runtime.getIndex(external[0], .{ .string = "isLocal" })).boolean);
-    try std.testing.expect(!(try runtime.getIndex(external[0], .{ .string = "isSubpage" })).boolean);
-    try std.testing.expect((try runtime.getIndex(external[0], .{ .string = "isTalkPage" })) == .nil);
-    try std.testing.expect((try runtime.getIndex(external[0], .{ .string = "getContent" })) == .callable);
-    const external_content = try runtime.callValue(try runtime.getIndex(external[0], .{ .string = "getContent" }), &.{external[0]});
-    defer rt.freeResults(external_content);
-    try std.testing.expect(external_content[0] == .nil);
-    const external_with_default_ns = try runtime.callValue(new_fn, &.{ .{ .string = "w:Thing" }, .{ .number = 10 } });
-    defer rt.freeResults(external_with_default_ns);
-    try std.testing.expectEqualStrings("w:Thing", (try runtime.getIndex(external_with_default_ns[0], .{ .string = "prefixedText" })).string);
-    try std.testing.expect((try runtime.getIndex(external_with_default_ns[0], .{ .string = "isExternal" })).boolean);
-    const external_made = try runtime.callValue(make_fn, &.{ .{ .number = 0 }, .{ .string = "Thing" }, .{ .string = "frag" }, .{ .string = "w" } });
-    defer rt.freeResults(external_made);
-    try std.testing.expectEqualStrings("w:Thing", (try runtime.getIndex(external_made[0], .{ .string = "prefixedText" })).string);
-    try std.testing.expectEqualStrings("w", (try runtime.getIndex(external_made[0], .{ .string = "interwiki" })).string);
-    try std.testing.expectEqualStrings("frag", (try runtime.getIndex(external_made[0], .{ .string = "fragment" })).string);
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(new_fn, &.{.{ .string = "w:Thing" }}));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
     const local_interwiki = try runtime.callValue(new_fn, &.{.{ .string = "self:Template:Thing" }});
     defer rt.freeResults(local_interwiki);
     try std.testing.expectEqualStrings("Template:Thing", (try runtime.getIndex(local_interwiki[0], .{ .string = "prefixedText" })).string);

@@ -299,6 +299,7 @@ fn dumpObjectCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
 const MessageCtx = struct {
     key: ?[]const u8 = null,
     raw_message: ?[]const u8 = null,
+    language: ?[]const u8 = null,
     params: std.ArrayList(Value) = .empty,
 };
 
@@ -313,12 +314,33 @@ fn messageTitleAlloc(a: std.mem.Allocator, key_raw: []const u8) ![]const u8 {
     return out;
 }
 
+fn snapshotMessageSource(runtime: *rt.Context, host: *host_api.Host, language: []const u8, key: []const u8) !?[]const u8 {
+    const get = host.interface_message orelse return error.NotImplemented;
+    const resolved = (try get(host.ctx, runtime.allocator, language, key)) orelse return error.NotImplemented;
+    if (resolved.source) |source| {
+        if (std.mem.indexOf(u8, source, "{{") != null) return error.NotImplemented;
+        return source;
+    }
+    return null;
+}
+
 fn messageSource(runtime: *rt.Context, ctx: *const MessageCtx) !?[]const u8 {
-    if (ctx.raw_message) |source| return source;
+    if (ctx.raw_message) |source| {
+        if (ctx.language != null) return error.NotImplemented;
+        return source;
+    }
     const key = ctx.key orelse return error.MissingMessageKey;
     const host = host_api.get(runtime) orelse return error.NotImplemented;
-    const get = host.page_content orelse return error.NotImplemented;
-    return get(host.ctx, runtime.allocator, try messageTitleAlloc(runtime.allocator, key));
+    if (ctx.language) |language|
+        return snapshotMessageSource(runtime, host, language, key);
+
+    if (host.page_content) |get| {
+        if (try get(host.ctx, runtime.allocator, try messageTitleAlloc(runtime.allocator, key))) |source|
+            return source;
+    }
+    if (host.interface_message != null)
+        return snapshotMessageSource(runtime, host, "en", key);
+    return null;
 }
 
 fn messageParamString(runtime: *rt.Context, value: Value) ![]const u8 {
@@ -399,6 +421,13 @@ fn messageIsDisabledCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Valu
     return one(.{ .boolean = source == null or source.?.len == 0 or std.mem.eql(u8, source.?, "-") });
 }
 
+fn messageInLanguageCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const ctx: *MessageCtx = @ptrCast(@alignCast(raw orelse return error.MissingMessageContext));
+    if (args.len < 2 or args[1] != .string) return error.NotImplemented;
+    ctx.language = try runtime.allocator.dupe(u8, args[1].string);
+    return one(args[0]);
+}
+
 fn makeMessageObject(runtime: *rt.Context, ctx: *MessageCtx) ![]const Value {
     const object = try runtime.newTable();
     const plain = try runtime.newNative(ctx, messagePlainCall);
@@ -406,7 +435,8 @@ fn makeMessageObject(runtime: *rt.Context, ctx: *MessageCtx) ![]const Value {
     try object.rawSet(runtime.allocator, .{ .string = "exists" }, try runtime.newNative(ctx, messageExistsCall));
     try object.rawSet(runtime.allocator, .{ .string = "isBlank" }, try runtime.newNative(ctx, messageIsBlankCall));
     try object.rawSet(runtime.allocator, .{ .string = "isDisabled" }, try runtime.newNative(ctx, messageIsDisabledCall));
-    inline for (.{ "params", "rawParams", "numParams", "inLanguage", "useDatabase" }) |name|
+    try object.rawSet(runtime.allocator, .{ .string = "inLanguage" }, try runtime.newNative(ctx, messageInLanguageCall));
+    inline for (.{ "params", "rawParams", "numParams", "useDatabase" }) |name|
         try setNative(runtime, object, name, notImplementedCall);
     const mt = try runtime.newTable();
     try mt.rawSet(runtime.allocator, .{ .string = "__tostring" }, plain);
@@ -598,7 +628,7 @@ fn interwikiMapCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
         try entry.rawSet(runtime.allocator, .{ .string = "url" }, .{ .string = row.url });
         try entry.rawSet(runtime.allocator, .{ .string = "isProtocolRelative" }, .{ .boolean = row.is_protocol_relative });
         try entry.rawSet(runtime.allocator, .{ .string = "isLocal" }, .{ .boolean = row.is_local });
-        try entry.rawSet(runtime.allocator, .{ .string = "isTranscludable" }, .{ .boolean = row.is_transcludable });
+        try entry.rawSet(runtime.allocator, .{ .string = "isTranscludable" }, .{ .boolean = false });
         try entry.rawSet(runtime.allocator, .{ .string = "isCurrentWiki" }, .{ .boolean = row.is_current_wiki });
         try entry.rawSet(runtime.allocator, .{ .string = "isExtraLanguageLink" }, .{ .boolean = false });
         try map.rawSet(runtime.allocator, .{ .string = row.prefix }, .{ .table = entry });
@@ -662,58 +692,6 @@ fn wikibaseGetEntityUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const 
     return one(.{ .string = url });
 }
 
-fn wikibaseGetSitelinkCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    const global_site_id = if (args.len < 2 or args[1] == .nil)
-        wikibase_site_global_id
-    else if (args[1] == .string)
-        args[1].string
-    else
-        return error.StringExpected;
-    const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
-    const get = host.wikibase_sitelink orelse return error.NotImplemented;
-    const title = get(host.ctx, args[0].string, global_site_id) catch |err| {
-        if (err == error.WikibaseSitelinkSnapshotMissing) {
-            runtime.last_error = .{ .string = try std.fmt.allocPrint(
-                runtime.allocator,
-                "Wikibase sitelink snapshot missing entity={s} site={s}",
-                .{ args[0].string, global_site_id },
-            ) };
-            return error.LuaRaised;
-        }
-        return err;
-    };
-    return one(if (title) |value| .{ .string = value } else .nil);
-}
-
-fn wikibaseEntityText(runtime: *rt.Context, args: []const Value) !?host_api.WikibaseEntityText {
-    if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    const entity_id = (try canonicalWikibaseEntityId(runtime, args[0].string)) orelse return null;
-    const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
-    const get = host.wikibase_entity_text orelse return error.NotImplemented;
-    return get(host.ctx, entity_id) catch |err| {
-        if (err == error.WikibaseEntityTextSnapshotMissing) {
-            runtime.last_error = .{ .string = try std.fmt.allocPrint(
-                runtime.allocator,
-                "Wikibase entity-text snapshot missing entity={s}",
-                .{entity_id},
-            ) };
-            return error.LuaRaised;
-        }
-        return err;
-    };
-}
-
-fn wikibaseGetLabelCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const entity = (try wikibaseEntityText(runtime, args)) orelse return one(.nil);
-    return one(if (entity.label) |label| .{ .string = label } else .nil);
-}
-
-fn wikibaseGetDescriptionCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const entity = (try wikibaseEntityText(runtime, args)) orelse return one(.nil);
-    return one(if (entity.description) |description| .{ .string = description } else .nil);
-}
-
 pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setMwNative(runtime, mw, "dumpObject", dumpObjectCall);
     try setMwNative(runtime, mw, "log", noOpCall);
@@ -746,18 +724,18 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     inline for (.{
         "getEntity",
         "getEntityIdForTitle",
+        "getDescription",
+        "getLabel",
         "getEntityIdForCurrentPage",
+        "getSitelink",
         "getBestStatements",
         "getLabelWithLang",
         "getLabelByLang",
         "getAllStatements",
         "formatValue",
         "entityExists",
+        "sitelink",
     }) |name| try setNative(runtime, wikibase, name, notImplementedCall);
-    try setNative(runtime, wikibase, "getDescription", wikibaseGetDescriptionCall);
-    try setNative(runtime, wikibase, "getLabel", wikibaseGetLabelCall);
-    try setNative(runtime, wikibase, "getSitelink", wikibaseGetSitelinkCall);
-    try setNative(runtime, wikibase, "sitelink", wikibaseGetSitelinkCall);
     try setNative(runtime, wikibase, "getEntityUrl", wikibaseGetEntityUrlCall);
     try setNative(runtime, wikibase, "getGlobalSiteId", wikibaseGetGlobalSiteIdCall);
     try setNative(runtime, wikibase, "isValidEntityId", wikibaseIsValidEntityIdCall);
@@ -1059,6 +1037,18 @@ const MessageProbe = struct {
             return null;
         return try a.dupe(u8, source);
     }
+
+    fn interfaceMessage(_: ?*anyopaque, _: std.mem.Allocator, language: []const u8, key: []const u8) !?host_api.InterfaceMessage {
+        if (std.mem.eql(u8, language, "en") and std.mem.eql(u8, key, "Word-separator"))
+            return .{ .source = " " };
+        if (std.mem.eql(u8, language, "fr") and std.mem.eql(u8, key, "parentheses"))
+            return .{ .source = "[$1]" };
+        if (std.mem.eql(u8, language, "fr") and std.mem.eql(u8, key, "known-missing"))
+            return .{ .source = null };
+        if (std.mem.eql(u8, language, "fr") and std.mem.eql(u8, key, "magic"))
+            return .{ .source = "{{PLURAL:$1|one|many}}" };
+        return null;
+    }
 };
 
 test "AOT mw message reads dump-backed interface messages" {
@@ -1119,12 +1109,13 @@ test "AOT mw message reads dump-backed interface messages" {
     const parameterized_plain = try callField(&runtime, parameterized[0], "plain", &.{parameterized[0]});
     defer rt.freeResults(parameterized_plain);
     try std.testing.expectEqualStrings("{{ns:Project}}:Main Page", parameterized_plain[0].string);
+
 }
 
 const InterwikiProbe = struct {
     const rows = [_]host_api.InterwikiRow{
-        .{ .prefix = "local", .url = "//local.example/$1", .is_local = true, .is_current_wiki = true, .is_protocol_relative = true, .is_transcludable = true },
-        .{ .prefix = "ext", .url = "https://ext.example/$1", .is_local = false, .is_current_wiki = false, .is_protocol_relative = false, .is_transcludable = false },
+        .{ .prefix = "local", .url = "//local.example/$1", .is_local = true, .is_current_wiki = true, .is_protocol_relative = true },
+        .{ .prefix = "ext", .url = "https://ext.example/$1", .is_local = false, .is_current_wiki = false, .is_protocol_relative = false },
     };
     fn get(_: ?*anyopaque) ![]const host_api.InterwikiRow {
         return &rows;
@@ -1147,7 +1138,6 @@ test "AOT mw site interwikiMap uses typed host rows and filters" {
     const local = all[0].table.rawGet(.{ .string = "local" }).?.table;
     try std.testing.expect(local.rawGet(.{ .string = "isLocal" }).?.boolean);
     try std.testing.expect(local.rawGet(.{ .string = "isCurrentWiki" }).?.boolean);
-    try std.testing.expect(local.rawGet(.{ .string = "isTranscludable" }).?.boolean);
     try std.testing.expectEqualStrings("//local.example/$1", local.rawGet(.{ .string = "url" }).?.string);
 
     const local_only = try callField(&runtime, .{ .table = site }, "interwikiMap", &.{.{ .string = "local" }});
@@ -1158,84 +1148,4 @@ test "AOT mw site interwikiMap uses typed host rows and filters" {
     defer rt.freeResults(external_only);
     try std.testing.expect(external_only[0].table.rawGet(.{ .string = "local" }) == null);
     try std.testing.expect(external_only[0].table.rawGet(.{ .string = "ext" }) != null);
-    try std.testing.expect(!external_only[0].table.rawGet(.{ .string = "ext" }).?.table.rawGet(.{ .string = "isTranscludable" }).?.boolean);
-}
-
-const WikibaseSitelinkProbe = struct {
-    fn get(_: ?*anyopaque, entity_id: []const u8, global_site_id: []const u8) !?[]const u8 {
-        if (std.mem.eql(u8, entity_id, "Q42") and std.mem.eql(u8, global_site_id, "enwiki"))
-            return "Douglas Adams";
-        if (std.mem.eql(u8, entity_id, "Q1") and std.mem.eql(u8, global_site_id, wikibase_site_global_id))
-            return null;
-        return error.WikibaseSitelinkSnapshotMissing;
-    }
-};
-
-test "AOT mw wikibase sitelink uses pinned host state and legacy alias" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var runtime = try rt.Context.init(arena.allocator(), 0);
-    defer runtime.deinit();
-    const mw = try runtime.newNativeNamespace(.mw);
-    try install(&runtime, mw);
-    var host = host_api.Host{ .wikibase_sitelink = WikibaseSitelinkProbe.get };
-    host_api.set(&runtime, &host);
-    const wikibase = mw.rawGet(.{ .string = "wikibase" }).?.table;
-
-    const explicit = try callField(&runtime, .{ .table = wikibase }, "getSitelink", &.{
-        .{ .string = "Q42" },
-        .{ .string = "enwiki" },
-    });
-    defer rt.freeResults(explicit);
-    try std.testing.expectEqualStrings("Douglas Adams", explicit[0].string);
-
-    const missing = try callField(&runtime, .{ .table = wikibase }, "sitelink", &.{.{ .string = "Q1" }});
-    defer rt.freeResults(missing);
-    try std.testing.expect(missing[0] == .nil);
-
-    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, "getSitelink", &.{
-        .{ .string = "Q2" },
-        .{ .string = "enwiki" },
-    }));
-    try std.testing.expectEqualStrings("LuaRaised", runtime.aotErrorName().?);
-    try std.testing.expectEqualStrings("Wikibase sitelink snapshot missing entity=Q2 site=enwiki", runtime.last_error.string);
-}
-
-const WikibaseEntityTextProbe = struct {
-    fn get(_: ?*anyopaque, entity_id: []const u8) !host_api.WikibaseEntityText {
-        if (std.mem.eql(u8, entity_id, "Q42"))
-            return .{ .label = "Douglas Adams", .description = "English writer and humorist" };
-        if (std.mem.eql(u8, entity_id, "Q1"))
-            return .{ .label = null, .description = "universe" };
-        return error.WikibaseEntityTextSnapshotMissing;
-    }
-};
-
-test "AOT mw wikibase label and description use pinned host state" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var runtime = try rt.Context.init(arena.allocator(), 0);
-    defer runtime.deinit();
-    const mw = try runtime.newNativeNamespace(.mw);
-    try install(&runtime, mw);
-    var host = host_api.Host{ .wikibase_entity_text = WikibaseEntityTextProbe.get };
-    host_api.set(&runtime, &host);
-    const wikibase = mw.rawGet(.{ .string = "wikibase" }).?.table;
-
-    const label = try callField(&runtime, .{ .table = wikibase }, "getLabel", &.{.{ .string = "q42" }});
-    defer rt.freeResults(label);
-    try std.testing.expectEqualStrings("Douglas Adams", label[0].string);
-    const description = try callField(&runtime, .{ .table = wikibase }, "getDescription", &.{.{ .string = "Q42" }});
-    defer rt.freeResults(description);
-    try std.testing.expectEqualStrings("English writer and humorist", description[0].string);
-    const absent_label = try callField(&runtime, .{ .table = wikibase }, "getLabel", &.{.{ .string = "Q1" }});
-    defer rt.freeResults(absent_label);
-    try std.testing.expect(absent_label[0] == .nil);
-    const invalid = try callField(&runtime, .{ .table = wikibase }, "getLabel", &.{.{ .string = "bad" }});
-    defer rt.freeResults(invalid);
-    try std.testing.expect(invalid[0] == .nil);
-
-    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, "getDescription", &.{.{ .string = "Q2" }}));
-    try std.testing.expectEqualStrings("LuaRaised", runtime.aotErrorName().?);
-    try std.testing.expectEqualStrings("Wikibase entity-text snapshot missing entity=Q2", runtime.last_error.string);
 }

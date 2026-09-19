@@ -182,11 +182,6 @@ fn isLiteralParserTag(name: []const u8) bool {
     return false;
 }
 
-fn isTagNameBoundary(s: []const u8, pos: usize) bool {
-    if (pos >= s.len) return true;
-    return s[pos] == '>' or s[pos] == '/' or std.ascii.isWhitespace(s[pos]);
-}
-
 fn rawTagEnd(s: []const u8, start: usize) ?usize {
     var quote: u8 = 0;
     var i = start + 1;
@@ -213,7 +208,7 @@ pub fn findTemplateOpenOutsideLiteralTags(s: []const u8, start: usize) ?usize {
             while (p < s.len and std.ascii.isWhitespace(s[p])) : (p += 1) {}
             const name_start = p;
             while (p < s.len and (std.ascii.isAlphanumeric(s[p]) or s[p] == '-')) : (p += 1) {}
-            if (p > name_start and isTagNameBoundary(s, p) and isLiteralParserTag(s[name_start..p])) {
+            if (p > name_start and isLiteralParserTag(s[name_start..p])) {
                 const name = s[name_start..p];
                 const open_end = rawTagEnd(s, i) orelse return null;
                 var before_gt = open_end - 1;
@@ -259,7 +254,6 @@ fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
     const name_start = p;
     while (p < s.len and (std.ascii.isAlphanumeric(s[p]) or s[p] == '-')) : (p += 1) {}
     if (p == name_start) return null;
-    if (!isTagNameBoundary(s, p)) return null;
     const name = s[name_start..p];
     if (!isOpaqueParserTag(name)) return null;
     const open_end = rawTagEnd(s, start) orelse return s.len;
@@ -359,7 +353,6 @@ test "template opener scan skips literal extension bodies but enters wikitext ex
     try std.testing.expectEqual(std.mem.indexOf(u8, syntax, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(syntax, 0).?);
     try std.testing.expectEqual(@as(usize, 5), findTemplateOpenOutsideLiteralTags("<ref>{{visible}}</ref>", 0).?);
     try std.testing.expectEqual(@as(usize, 6), findTemplateOpenOutsideLiteralTags("<poem>{{visible}}</poem>", 0).?);
-    try std.testing.expectEqual(@as(usize, 5), findTemplateOpenOutsideLiteralTags("<pre:{{visible}}>", 0).?);
 }
 
 test "nested template and parameter boundaries match MediaWiki preprocessing" {
@@ -369,15 +362,6 @@ test "nested template and parameter boundaries match MediaWiki preprocessing" {
     try std.testing.expectEqual(parameter.len - 3, findParamEnd(parameter, 0).?);
     try std.testing.expect(findTopDelimiter("x=<math>a=b</math>", '=') == 1);
     try std.testing.expect(findTopDelimiter("<math>a=b</math>", '=') == null);
-    const pronunciation =
-        "it-pr|À*<pre:{{q|letter name}}><hmp:a>|a<pre:{{q|phonemic realization}}><rhyme:->";
-    var parts: std.ArrayList([]const u8) = .empty;
-    defer parts.deinit(std.testing.allocator);
-    try splitWikitextTop(std.testing.allocator, pronunciation, '|', &parts);
-    try std.testing.expectEqual(@as(usize, 3), parts.items.len);
-    try std.testing.expectEqualStrings("it-pr", parts.items[0]);
-    try std.testing.expectEqualStrings("À*<pre:{{q|letter name}}><hmp:a>", parts.items[1]);
-    try std.testing.expectEqualStrings("a<pre:{{q|phonemic realization}}><rhyme:->", parts.items[2]);
 }
 
 test "decoded comments and transclusion tags share one preprocessing core" {

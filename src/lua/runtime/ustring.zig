@@ -416,10 +416,7 @@ fn uGsub(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     const source = try stringArg(a, args[0]);
     const pat = try stringArg(a, args[1]);
     var replacement = args[2];
-    if (replacement == .number) {
-        const number = replacement.number;
-        replacement = .{ .string = try rt.numberToString(a, number) };
-    }
+    if (replacement == .number) replacement = .{ .string = try rt.numberToString(a, replacement.number) };
     if (replacement != .string and replacement != .table and replacement != .callable)
         return error.InvalidReplacement;
     const max_count: usize = if (args.len > 3 and args[3] != .nil)
@@ -607,13 +604,4 @@ test "AOT Unicode gsub supports table and callable replacements" {
     defer rt.freeResults(lua_out);
     try std.testing.expectEqualStrings("CD", lua_out[0].string);
     try std.testing.expectEqual(@as(f64, 2), lua_out[1].number);
-
-    const numeric_out = try runtime.callValue(gsub, &.{
-        .{ .string = "aβ" },
-        .{ .string = "β" },
-        .{ .number = 123 },
-    });
-    defer rt.freeResults(numeric_out);
-    try std.testing.expectEqualStrings("a123", numeric_out[0].string);
-    try std.testing.expectEqual(@as(f64, 1), numeric_out[1].number);
 }

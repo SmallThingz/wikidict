@@ -1,6 +1,8 @@
 const std = @import("std");
 const static_fields = @import("lua_static_fields");
 
+extern fn snprintf(buffer: [*]u8, size: usize, format: [*:0]const u8, ...) c_int;
+
 pub const Cell = struct { value: Value };
 pub const Env = struct { captures: []const *Cell };
 pub const FunctionEnv = struct {
@@ -565,12 +567,17 @@ pub fn toNumber(value: Value) ?f64 {
     };
 }
 
+fn numberToBuffer(buffer: []u8, number: f64) ![]const u8 {
+    const written = snprintf(buffer.ptr, buffer.len, "%.14g", number);
+    if (written < 0) return error.NumberFormatFailed;
+    const len: usize = @intCast(written);
+    if (len >= buffer.len) return error.NumberFormatTooLong;
+    return buffer[0..len];
+}
+
 pub fn numberToString(allocator: std.mem.Allocator, number: f64) ![]const u8 {
-    if (std.math.isNan(number)) return "nan";
-    if (std.math.isInf(number)) return if (number < 0) "-inf" else "inf";
-    if (@floor(number) == number and number >= @as(f64, @floatFromInt(std.math.minInt(i64))) and number <= @as(f64, @floatFromInt(std.math.maxInt(i64))))
-        return std.fmt.allocPrint(allocator, "{d}", .{@as(i64, @intFromFloat(number))});
-    return std.fmt.allocPrint(allocator, "{d}", .{number});
+    var buffer: [64]u8 = undefined;
+    return allocator.dupe(u8, try numberToBuffer(&buffer, number));
 }
 
 pub fn toConcatString(allocator: std.mem.Allocator, value: Value) ![]const u8 {
@@ -618,6 +625,17 @@ pub const NextIterationHint = struct {
     position: Table.Iterator.Position,
 };
 
+const module_state_page_shift = 8;
+const module_state_page_len = 1 << module_state_page_shift;
+const module_state_page_mask = module_state_page_len - 1;
+const ModuleState = struct {
+    loading: bool = false,
+    value: ?Value = null,
+    preinitialized: ?Value = null,
+    load_data_snapshot: ?Value = null,
+};
+const ModuleStatePage = [module_state_page_len]ModuleState;
+
 pub const Context = struct {
     allocator: std.mem.Allocator,
     // Lua strings compare/hash by bytes; runtime concat results need ownership, not hash dedup.
@@ -633,8 +651,7 @@ pub const Context = struct {
     max_depth: usize = 1000,
     next_identity: u32 = 1,
     module_count: usize = 0,
-    module_loading: std.AutoHashMapUnmanaged(u32, void) = .empty,
-    module_values: std.AutoHashMapUnmanaged(u32, Value) = .empty,
+    module_state_pages: []?*ModuleStatePage = &.{},
     module_lookup_ctx: ?*const anyopaque = null,
     module_lookup: ?ModuleLookupFn = null,
     module_name: ?ModuleNameFn = null,
@@ -654,7 +671,17 @@ pub const Context = struct {
         const globals = try allocator.alloc(Value, global_count);
         errdefer allocator.free(globals);
         @memset(globals, .nil);
-        return .{ .allocator = allocator, .string_arena = .init(allocator), .globals = globals, .module_count = module_count };
+        const page_count = (module_count + module_state_page_len - 1) / module_state_page_len;
+        const module_state_pages = try allocator.alloc(?*ModuleStatePage, page_count);
+        errdefer allocator.free(module_state_pages);
+        @memset(module_state_pages, null);
+        return .{
+            .allocator = allocator,
+            .string_arena = .init(allocator),
+            .globals = globals,
+            .module_count = module_count,
+            .module_state_pages = module_state_pages,
+        };
     }
 
     pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
@@ -674,8 +701,8 @@ pub const Context = struct {
 
     pub fn deinit(self: *Context) void {
         self.string_arena.deinit();
-        self.module_loading.deinit(self.allocator);
-        self.module_values.deinit(self.allocator);
+        for (self.module_state_pages) |page| if (page) |owned| self.allocator.destroy(owned);
+        self.allocator.free(self.module_state_pages);
         if (self.global_table) |table| {
             table.deinit(self.allocator);
             self.allocator.destroy(table);
@@ -699,17 +726,8 @@ pub const Context = struct {
         return self.aot_error_name.get();
     }
 
-    pub fn adoptFailure(self: *Context, child: *const Context) !void {
-        if (child.last_error == .string) {
-            self.last_error = .{ .string = try self.allocator.dupe(u8, child.last_error.string) };
-        } else {
-            self.last_error = .nil;
-        }
-        if (child.aotErrorName()) |name| {
-            self.setAotErrorName(name);
-        } else {
-            self.clearAotErrorName();
-        }
+    pub fn adoptFailure(self: *Context, child: *const Context) void {
+        if (child.aotErrorName()) |name| self.setAotErrorName(name) else self.clearAotErrorName();
     }
 
     pub fn getGlobal(self: *const Context, slot: u32) Value {
@@ -819,12 +837,87 @@ pub const Context = struct {
         return requested;
     }
 
+    fn moduleState(self: *Context, module_id: u32) ?*ModuleState {
+        if (module_id >= self.module_count) return null;
+        const page_index: usize = @as(usize, module_id) >> module_state_page_shift;
+        const page = self.module_state_pages[page_index] orelse return null;
+        return &page[@as(usize, module_id) & module_state_page_mask];
+    }
+
+    fn moduleStateConst(self: *const Context, module_id: u32) ?*const ModuleState {
+        if (module_id >= self.module_count) return null;
+        const page_index: usize = @as(usize, module_id) >> module_state_page_shift;
+        const page = self.module_state_pages[page_index] orelse return null;
+        return &page[@as(usize, module_id) & module_state_page_mask];
+    }
+
+    fn ensureModuleState(self: *Context, module_id: u32) !*ModuleState {
+        if (module_id >= self.module_count) return error.BadModuleId;
+        const page_index: usize = @as(usize, module_id) >> module_state_page_shift;
+        if (self.module_state_pages[page_index] == null) {
+            const page = try self.allocator.create(ModuleStatePage);
+            page.* = [_]ModuleState{.{}} ** module_state_page_len;
+            self.module_state_pages[page_index] = page;
+        }
+        return &self.module_state_pages[page_index].?[@as(usize, module_id) & module_state_page_mask];
+    }
+
+    fn cloneSnapshotValue(
+        self: *Context,
+        value: Value,
+        seen: *std.AutoHashMapUnmanaged(*Table, *Table),
+    ) anyerror!Value {
+        if (value != .table) return value;
+        if (seen.get(value.table)) |existing| return .{ .table = existing };
+        const copy = try self.allocator.create(Table);
+        copy.* = .{};
+        try seen.put(self.allocator, value.table, copy);
+        var it = value.table.iterator();
+        while (it.next()) |entry| {
+            const key = try self.cloneSnapshotValue(entry.key_ptr.*, seen);
+            const item = try self.cloneSnapshotValue(entry.value_ptr.*, seen);
+            try copy.rawSet(self.allocator, key, item);
+        }
+        copy.append_index = value.table.append_index;
+        if (value.table.metatable) |metatable|
+            copy.metatable = (try self.cloneSnapshotValue(.{ .table = metatable }, seen)).table;
+        copy.read_only = value.table.read_only;
+        return .{ .table = copy };
+    }
+
+    pub fn preinitializeModule(self: *Context, module_id: u32, value: Value, snapshot_load_data: bool) !void {
+        const state = try self.ensureModuleState(module_id);
+        if (state.value == null and state.preinitialized == null)
+            state.preinitialized = value;
+        if (snapshot_load_data and state.load_data_snapshot == null) {
+            var seen: std.AutoHashMapUnmanaged(*Table, *Table) = .empty;
+            defer seen.deinit(self.allocator);
+            state.load_data_snapshot = try self.cloneSnapshotValue(value, &seen);
+        }
+    }
+
+    pub fn loadDataSnapshot(self: *const Context, module_id: u32) ?Value {
+        const state = self.moduleStateConst(module_id) orelse return null;
+        return state.load_data_snapshot;
+    }
+
     pub fn loadModule(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!Value {
         if (module_id >= self.module_count or module_id >= self.module_root_entries.len) return error.BadModuleId;
-        if (self.module_values.get(module_id)) |value| return value;
-        if (self.module_loading.contains(module_id)) return error.ModuleLoadLoop;
-        try self.module_loading.put(self.allocator, module_id, {});
-        errdefer _ = self.module_loading.remove(module_id);
+        if (self.moduleState(module_id)) |existing| {
+            if (existing.value) |value| return value;
+            if (existing.preinitialized) |value| {
+                existing.preinitialized = null;
+                const canonical = self.canonicalModuleName(module_id, requested);
+                if (canonical) |text| if (self.package_loaded) |loaded|
+                    try loaded.rawSet(self.allocator, .{ .string = text }, value);
+                existing.value = value;
+                return value;
+            }
+            if (existing.loading) return error.ModuleLoadLoop;
+        }
+        const state = try self.ensureModuleState(module_id);
+        state.loading = true;
+        errdefer state.loading = false;
 
         const canonical = self.canonicalModuleName(module_id, requested);
         const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
@@ -837,11 +930,10 @@ pub const Context = struct {
             };
             if (value == .nil) value = .{ .boolean = true };
         }
-        try self.module_values.ensureUnusedCapacity(self.allocator, 1);
         if (canonical) |text| if (self.package_loaded) |loaded|
             try loaded.rawSet(self.allocator, .{ .string = text }, value);
-        self.module_values.putAssumeCapacity(module_id, value);
-        _ = self.module_loading.remove(module_id);
+        state.value = value;
+        state.loading = false;
         return value;
     }
 
@@ -1124,12 +1216,8 @@ pub const Context = struct {
         for (values) |value| switch (value) {
             .string => |text| try out.appendSlice(allocator, text),
             .number => |number| {
-                var buf: [128]u8 = undefined;
-                const text = if (@floor(number) == number)
-                    try std.fmt.bufPrint(&buf, "{d}", .{@as(i64, @intFromFloat(number))})
-                else
-                    try std.fmt.bufPrint(&buf, "{d}", .{number});
-                try out.appendSlice(allocator, text);
+                var buffer: [64]u8 = undefined;
+                try out.appendSlice(allocator, try numberToBuffer(&buffer, number));
             },
             else => return error.ConcatType,
         };
@@ -1231,6 +1319,30 @@ test "Lua numeric coercion trims whitespace and accepts hexadecimal strings" {
     try std.testing.expectEqual(@as(f64, 3), spaced.number);
     const hex = try ctx.binaryArith(.add, .{ .number = 1 }, .{ .string = "0x10" });
     try std.testing.expectEqual(@as(f64, 17), hex.number);
+}
+
+test "Lua 5.1 number stringification uses fourteen significant digits" {
+    const cases = [_]struct { value: f64, expected: []const u8 }{
+        .{ .value = 1.0 / 3.0, .expected = "0.33333333333333" },
+        .{ .value = 1.234567890123456, .expected = "1.2345678901235" },
+        .{ .value = 1e13, .expected = "10000000000000" },
+        .{ .value = 1e14, .expected = "1e+14" },
+        .{ .value = 1e-6, .expected = "1e-06" },
+        .{ .value = 1e-7, .expected = "1e-07" },
+        .{ .value = -0.0, .expected = "-0" },
+    };
+    for (cases) |case| {
+        const actual = try numberToString(std.testing.allocator, case.value);
+        defer std.testing.allocator.free(actual);
+        try std.testing.expectEqualStrings(case.expected, actual);
+    }
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const concat = try ctx.concatValues(&.{ .{ .number = -0.0 }, .{ .string = "/" }, .{ .number = 1e14 } });
+    try std.testing.expectEqualStrings("-0/1e+14", concat.string);
 }
 
 test "string value hashing preserves prior iteration order" {

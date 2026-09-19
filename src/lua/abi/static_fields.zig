@@ -68,7 +68,7 @@ const frame_names = [_][]const u8{ "args", "getParent", "getTitle", "expandTempl
 const title_value_names = [_][]const u8{
     "text",         "prefixedText", "__fragment",  "namespace",    "nsText",  "subpageText", "baseText", "rootText",
     "isSubpage",    "interwiki",    "isExternal",  "isLocal",      "exists",  "getContent",  "fullUrl",  "localUrl",
-    "canonicalUrl", "inNamespace",  "isSubpageOf", "subPageTitle", "content", "file",        "fileExists",
+    "canonicalUrl", "inNamespace",  "isSubpageOf", "subPageTitle", "content",
 };
 const language_value_names = [_][]const u8{
     "code",  "getCode",              "formatDate", "uc",     "lc",        "ucfirst",              "lcfirst", "getDir",

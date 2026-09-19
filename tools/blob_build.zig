@@ -169,15 +169,8 @@ pub fn main(init: std.process.Init) !void {
                 try dump_source.decodeSourceAlloc(page_allocator, raw_source)
             else
                 raw_source;
-            if (try worker.expand(page_allocator, @intCast(pages_seen - 1), page.title, source)) |expanded| {
-                writer.addPage(page_allocator, page.ns, page.title, expanded.source, expanded.display_title) catch |err| {
-                    std.debug.print(
-                        "blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n",
-                        .{ page.title, pages_seen - 1, page.ns, source.len, expanded.source.len, @errorName(err) },
-                    );
-                    return err;
-                };
-            }
+            const expanded = try worker.expand(page_allocator, page.title, source);
+            try writer.addPage(page_allocator, page.ns, page.title, expanded.source, expanded.display_title);
         }
         _ = page_arena.reset(.retain_capacity);
     }

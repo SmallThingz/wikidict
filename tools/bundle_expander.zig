@@ -68,33 +68,28 @@ pub const Worker = struct {
         }
     }
 
-    fn writeRequest(self: *Worker, child: *std.process.Child, page_ordinal: u64, title: []const u8, source: []const u8) !void {
+    fn writeRequest(self: *Worker, child: *std.process.Child, title: []const u8, source: []const u8) !void {
         var buffer: [8192]u8 = undefined;
         var writer = child.stdin.?.writer(self.io, &buffer);
         try protocol.writeRequest(&writer.interface, .{
             .root = self.root,
             .dump = self.dump,
             .now_unix = self.now_unix,
-            .page_ordinal = page_ordinal,
             .title = title,
             .source = source,
         });
     }
 
-    pub fn expand(self: *Worker, a: A, page_ordinal: u64, title: []const u8, source: []const u8) !?Expansion {
+    pub fn expand(self: *Worker, a: A, title: []const u8, source: []const u8) !Expansion {
         if (source.len > protocol.max_source_bytes) return error.RequestTooLarge;
         const child = try self.ensure();
-        self.writeRequest(child, page_ordinal, title, source) catch |err| {
+        self.writeRequest(child, title, source) catch |err| {
             self.reset();
             return err;
         };
         const deadline = std.Io.Clock.awake.now(self.io).toNanoseconds() + @as(i128, self.timeout_ms) * std.time.ns_per_ms;
         var raw_length: [4]u8 = undefined;
         self.readExact(child.stdout.?, &raw_length, deadline) catch |err| {
-            if (err == error.Timeout) std.debug.print(
-                "bundle expansion timed out title={s} ordinal={d} source_bytes={d} timeout_ms={d}\n",
-                .{ title, page_ordinal, source.len, self.timeout_ms },
-            );
             self.reset();
             return err;
         };
@@ -105,10 +100,6 @@ pub const Worker = struct {
         }
         const response = try a.alloc(u8, response_len);
         self.readExact(child.stdout.?, response, deadline) catch |err| {
-            if (err == error.Timeout) std.debug.print(
-                "bundle expansion response timed out title={s} ordinal={d} source_bytes={d} response_bytes={d} timeout_ms={d}\n",
-                .{ title, page_ordinal, source.len, response_len, self.timeout_ms },
-            );
             self.reset();
             return err;
         };
@@ -118,7 +109,6 @@ pub const Worker = struct {
                 .source = success.output,
                 .display_title = if (success.display_title.len == 0) null else success.display_title,
             },
-            .skip => return null,
             .failure => |failure| {
                 std.debug.print("bundle expansion failed title={s} stage={s} error={s}{s}{s}\n", .{
                     title,

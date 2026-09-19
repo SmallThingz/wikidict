@@ -54,6 +54,9 @@ const module_source =
     \\assert(tonumber('+0xFF', 16) == 255 and tonumber(10, 16) == 16 and tonumber('0xFF', 34) == 38673)
     \\assert(tonumber('-FFFFFFFFFFFFFFFF', 16) == 1 and tonumber('F.F', 16) == nil)
     \\assert(1 + ' 2 ' == 3 and 1 + '0x10' == 17)
+    \\assert(tostring(1 / 3) == '0.33333333333333' and tostring(1e14) == '1e+14' and tostring(1e13) == '10000000000000')
+    \\assert(tostring(1e-6) == '1e-06' and tostring(-0) == '-0' and (-0) .. '/' .. 1e14 == '-0/1e+14')
+    \\assert(string.format('%s', 1 / 3) == '0.33333333333333')
     \\local base_type_ok = pcall(tonumber, true, 16)
     \\assert(not base_type_ok)
     \\local alias_name = 'Module:IntegrationFormsAlias'
@@ -297,7 +300,7 @@ fn deadlineProbe(io: std.Io, a: std.mem.Allocator, dir: []const u8) !void {
     var worker = expander.Worker.init(io, dir, "tail", "missing-dump.xml");
     worker.timeout_ms = 100;
     defer worker.deinit();
-    try std.testing.expectError(error.Timeout, worker.expand(a, 0, "probe", "==English==\n"));
+    try std.testing.expectError(error.Timeout, worker.expand(a, "probe", "==English==\n"));
 }
 
 pub fn main(init: std.process.Init) !void {

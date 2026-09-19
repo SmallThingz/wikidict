@@ -90,21 +90,17 @@ const Engine = struct {
         self.program.deinit();
     }
 
-    fn expand(self: *Engine, page_a: A, request: Request, stage: *[]const u8, detail: *?[]const u8) !?Expansion {
+    fn expand(self: *Engine, page_a: A, request: Request, stage: *[]const u8, detail: *?[]const u8) !Expansion {
         if (!std.mem.eql(u8, request.root, self.requested_root)) return error.BundleRootChanged;
         if (!std.mem.eql(u8, request.dump, self.requested_dump)) return error.BundleDumpChanged;
         if (request.now_unix != self.requested_now_unix) return error.BundleTimeChanged;
-        if (!self.provider.isCanonicalPage(request.title, request.page_ordinal)) return null;
         stage.* = "install";
         var ctx = try self.program.initContext(page_a);
         defer ctx.deinit();
         var expander = lua_program.initExpander(&ctx, self.provider.api());
         stage.* = "expand";
         const output = expander.expandFragment(request.title, request.source, self.requested_now_unix) catch |err| {
-            detail.* = try page_a.dupe(u8, if (ctx.last_error == .string)
-                ctx.last_error.string
-            else
-                ctx.aotErrorName() orelse @errorName(err));
+            detail.* = try page_a.dupe(u8, ctx.aotErrorName() orelse @errorName(err));
             return err;
         };
         return .{ .output = output, .display_title = expander.display_title orelse "" };
@@ -159,15 +155,11 @@ pub fn run(io: std.Io, persistent: A) !void {
             try protocol.writeError(&output.interface, stage, detail orelse @errorName(err), detail orelse "");
             continue;
         };
-        if (expanded) |value| {
-            if (value.output.len > protocol.max_source_bytes or value.display_title.len > protocol.max_display_title_bytes) {
-                try protocol.writeError(&output.interface, stage, "ExpandedSourceTooLarge", "");
-                continue;
-            }
-            try protocol.writeSuccess(&output.interface, value.output, value.display_title);
-        } else {
-            try protocol.writeSkip(&output.interface);
+        if (expanded.output.len > protocol.max_source_bytes or expanded.display_title.len > protocol.max_display_title_bytes) {
+            try protocol.writeError(&output.interface, stage, "ExpandedSourceTooLarge", "");
+            continue;
         }
+        try protocol.writeSuccess(&output.interface, expanded.output, expanded.display_title);
     }
 }
 

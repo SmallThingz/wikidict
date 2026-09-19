@@ -155,27 +155,6 @@ fn parseDelimitedDate(raw: []const u8) ?Civil {
         parseSpaceDate(raw);
 }
 
-fn parseIsoDateTime(raw: []const u8) ?Civil {
-    const body = if (raw.len == 20 and raw[19] == 'Z') raw[0..19] else raw;
-    if (body.len != 19 or
-        body[4] != '-' or body[7] != '-' or
-        (body[10] != 'T' and body[10] != ' ') or
-        body[13] != ':' or body[16] != ':')
-        return null;
-    return .{
-        .year = std.fmt.parseInt(i64, body[0..4], 10) catch return null,
-        .month = std.fmt.parseInt(u8, body[5..7], 10) catch return null,
-        .day = std.fmt.parseInt(u8, body[8..10], 10) catch return null,
-        .hour = std.fmt.parseInt(u8, body[11..13], 10) catch return null,
-        .minute = std.fmt.parseInt(u8, body[14..16], 10) catch return null,
-        .second = std.fmt.parseInt(u8, body[17..19], 10) catch return null,
-    };
-}
-
-fn parseCivil(raw: []const u8) ?Civil {
-    return parseIsoDateTime(raw) orelse parseDelimitedDate(raw);
-}
-
 fn currentUnix(runtime: *const rt.Context) !i64 {
     const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
     return host.now_unix orelse error.MissingCurrentTime;
@@ -204,25 +183,6 @@ pub fn parseTimestampText(runtime: *const rt.Context, raw_value: ?[]const u8) !i
             return addDays(try currentUnix(runtime), signed);
         }
     }
-    inline for (.{ .{ '+', @as(i64, 1) }, .{ '-', @as(i64, -1) } }) |entry| {
-        if (std.mem.lastIndexOfScalar(u8, raw, entry[0])) |at| {
-            if (at != 0) {
-                const suffix = std.mem.trim(u8, raw[at + 1 ..], " \t\r\n");
-                if (std.mem.indexOfScalar(u8, suffix, ' ')) |space| {
-                    if (std.fmt.parseInt(i64, suffix[0..space], 10)) |count| {
-                        const unit = std.mem.trim(u8, suffix[space + 1 ..], " \t\r\n");
-                        if (std.ascii.eqlIgnoreCase(unit, "day") or std.ascii.eqlIgnoreCase(unit, "days")) {
-                            const base_raw = std.mem.trim(u8, raw[0..at], " \t\r\n");
-                            if (parseCivil(base_raw)) |civil| {
-                                const signed = std.math.mul(i64, entry[1], count) catch return error.InvalidDate;
-                                return addDays(try unixFromCivil(civil), signed);
-                            }
-                        }
-                    } else |_| {}
-                }
-            }
-        }
-    }
     inline for (.{ .{ " +", @as(i64, 1) }, .{ " -", @as(i64, -1) } }) |entry| {
         if (std.mem.lastIndexOf(u8, raw, entry[0])) |at| {
             const base_raw = std.mem.trim(u8, raw[0..at], " \t\r\n");
@@ -233,13 +193,13 @@ pub fn parseTimestampText(runtime: *const rt.Context, raw_value: ?[]const u8) !i
                 const unit = std.mem.trim(u8, suffix[space + 1 ..], " \t\r\n");
                 if (!std.ascii.eqlIgnoreCase(unit, "day") and !std.ascii.eqlIgnoreCase(unit, "days"))
                     return error.InvalidDate;
-                const civil = parseCivil(base_raw) orelse return error.InvalidDate;
+                const civil = parseDelimitedDate(base_raw) orelse return error.InvalidDate;
                 const signed = std.math.mul(i64, entry[1], count) catch return error.InvalidDate;
                 return addDays(try unixFromCivil(civil), signed);
             }
         }
     }
-    const civil = parseCivil(raw) orelse return error.InvalidDate;
+    const civil = parseDelimitedDate(raw) orelse return error.InvalidDate;
     return unixFromCivil(civil);
 }
 
@@ -387,12 +347,6 @@ fn wmfUcfirstOverride(cp: u21) bool {
 
 pub fn firstCaseAlloc(case_mapper: *ustring_lib.Normalizer, a: std.mem.Allocator, source: []const u8, upper: bool) ![]const u8 {
     if (source.len == 0) return source;
-    if (!std.unicode.utf8ValidateSlice(source)) {
-        const out = try a.dupe(u8, source);
-        if (out[0] < 0x80)
-            out[0] = if (upper) std.ascii.toUpper(out[0]) else std.ascii.toLower(out[0]);
-        return out;
-    }
     if (source[0] < 0x80) {
         const out = try a.dupe(u8, source);
         out[0] = if (upper) std.ascii.toUpper(out[0]) else std.ascii.toLower(out[0]);
@@ -411,54 +365,16 @@ pub fn firstCaseAlloc(case_mapper: *ustring_lib.Normalizer, a: std.mem.Allocator
     return out;
 }
 
-fn mediaWikiCaseAlloc(
-    case_mapper: *ustring_lib.Normalizer,
-    a: std.mem.Allocator,
-    source: []const u8,
-    upper: bool,
-) ![]const u8 {
-    if (std.unicode.utf8ValidateSlice(source))
-        return ustring_lib.caseAlloc(case_mapper, a, source, if (upper) .upper else .lower);
-
-    // MediaWiki Language::uc/lc falls back to byte strtoupper/strtolower
-    // when mb_strlen does not classify the input as multibyte. This matters
-    // for Lua code which slices a multibyte character with string.sub() and
-    // then passes an individual byte through mw.ustring.upper/lower, because
-    // Scribunto aliases those functions to the content language.
-    const out = try a.dupe(u8, source);
-    for (out) |*byte| {
-        if (byte.* < 0x80)
-            byte.* = if (upper) std.ascii.toUpper(byte.*) else std.ascii.toLower(byte.*);
-    }
-    return out;
-}
-
 fn languageUc(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const ctx = try requireBaseCaseLocale(ctx_raw);
     const a = runtime.allocator;
-    return one(a, .{ .string = try mediaWikiCaseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), true) });
+    return one(a, .{ .string = try ustring_lib.caseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), .upper) });
 }
 
 fn languageLc(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const ctx = try requireBaseCaseLocale(ctx_raw);
     const a = runtime.allocator;
-    return one(a, .{ .string = try mediaWikiCaseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), false) });
-}
-
-fn contentLanguageUpper(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const ctx = try requireEnglishLocale(ctx_raw);
-    if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    return one(runtime.allocator, .{
-        .string = try mediaWikiCaseAlloc(ctx.case_mapper, runtime.allocator, args[0].string, true),
-    });
-}
-
-fn contentLanguageLower(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const ctx = try requireEnglishLocale(ctx_raw);
-    if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    return one(runtime.allocator, .{
-        .string = try mediaWikiCaseAlloc(ctx.case_mapper, runtime.allocator, args[0].string, false),
-    });
+    return one(a, .{ .string = try ustring_lib.caseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), .lower) });
 }
 
 fn languageUcfirst(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -623,9 +539,7 @@ fn isKnownLanguageTag(_: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     const a = runtime.allocator;
     if (args.len == 0 or args[0] != .string) return one(a, .{ .boolean = false });
     if (std.mem.eql(u8, args[0].string, "en")) return one(a, .{ .boolean = true });
-    const host = host_api.get(runtime) orelse return error.NotImplemented;
-    const get = host.language_known_tag orelse return error.NotImplemented;
-    return one(a, .{ .boolean = try get(host.ctx, args[0].string) });
+    return error.NotImplemented;
 }
 
 fn fetchLanguageName(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -653,23 +567,6 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table, case_mapper: *ustring_lib.No
     try mw.rawSet(runtime.allocator, .{ .string = "language" }, .{ .table = language });
     try setNative(runtime, mw, "getContentLanguage", factory, getContentLanguage);
     try setNative(runtime, mw, "getLanguage", factory, languageNew);
-
-    // Scribunto replaces mw.ustring.upper/lower with the content-language
-    // methods after installing mw.language.
-    if (mw.rawGet(.{ .string = "ustring" })) |ustring_value| if (ustring_value == .table) {
-        const content_ctx = try runtime.allocator.create(LanguageCtx);
-        content_ctx.* = .{ .code = "en", .case_mapper = case_mapper };
-        try ustring_value.table.rawSetNativeField(
-            .ustring,
-            "upper",
-            try runtime.newNative(content_ctx, contentLanguageUpper),
-        );
-        try ustring_value.table.rawSetNativeField(
-            .ustring,
-            "lower",
-            try runtime.newNative(content_ctx, contentLanguageLower),
-        );
-    };
 }
 
 test "civil conversion round trips unix epoch and leap dates" {
@@ -706,14 +603,6 @@ test "MediaWiki partial and word date grammar" {
     const shifted_text = try formatDateAlloc(std.testing.allocator, shifted, "Y M d");
     defer std.testing.allocator.free(shifted_text);
     try std.testing.expectEqualStrings("2013 Apr 08", shifted_text);
-    const julian_shift = try parseTimestampText(&ctx, "22 February 1735+11 day");
-    const julian_shift_text = try formatDateAlloc(std.testing.allocator, julian_shift, "j F Y");
-    defer std.testing.allocator.free(julian_shift_text);
-    try std.testing.expectEqualStrings("5 March 1735", julian_shift_text);
-    const attached_negative = try parseTimestampText(&ctx, "2013-04-08-8 days");
-    const attached_negative_text = try formatDateAlloc(std.testing.allocator, attached_negative, "Y M d");
-    defer std.testing.allocator.free(attached_negative_text);
-    try std.testing.expectEqualStrings("2013 Mar 31", attached_negative_text);
 }
 
 test "parse date forms used by Wiktionary modules" {
@@ -726,12 +615,6 @@ test "parse date forms used by Wiktionary modules" {
     const out = try formatDateAlloc(a, a_ts, "YmdHis");
     defer a.free(out);
     try std.testing.expectEqualStrings("20221212000000", out);
-    const iso = try parseTimestampText(&ctx, "2002-12-18T04:19:52");
-    const iso_out = try formatDateAlloc(a, iso, "Y-m-d H:i:s");
-    defer a.free(iso_out);
-    try std.testing.expectEqualStrings("2002-12-18 04:19:52", iso_out);
-    const iso_z = try parseTimestampText(&ctx, "2002-12-18T04:19:52Z");
-    try std.testing.expectEqual(iso, iso_z);
 }
 
 fn callField(runtime: *rt.Context, object: Value, name: []const u8, args: []const Value) ![]const Value {
@@ -776,10 +659,6 @@ test "AOT language objects expose MediaWiki helpers" {
     const upper = try callField(&runtime, language, "uc", &.{ language, .{ .string = "straße ﬃ" } });
     defer rt.freeResults(upper);
     try std.testing.expectEqualStrings("STRASSE FFI", upper[0].string);
-    const broken = [_]u8{0xc9};
-    const broken_upper = try callField(&runtime, language, "uc", &.{ language, .{ .string = &broken } });
-    defer rt.freeResults(broken_upper);
-    try std.testing.expectEqualSlices(u8, &broken, broken_upper[0].string);
     const lower = try callField(&runtime, language, "lc", &.{ language, .{ .string = "ÉCLAIR İ ΣΊΣΥΦΟΣ" } });
     defer rt.freeResults(lower);
     try std.testing.expectEqualStrings("éclair i̇ σίσυφος", lower[0].string);
@@ -834,31 +713,4 @@ test "AOT language objects expose MediaWiki helpers" {
     try std.testing.expectError(error.AotCallFailed, runtime.callValue(upper_fn, &.{ french[0], .{ .string = "abc" } }));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
-}
-
-const KnownLanguageTagProbe = struct {
-    fn get(_: ?*anyopaque, code: []const u8) !bool {
-        return std.mem.eql(u8, code, "fr") or std.mem.eql(u8, code, "es");
-    }
-};
-
-test "AOT language known tags use pinned host registry" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var runtime = try rt.Context.init(arena.allocator(), 0);
-    defer runtime.deinit();
-    var host = host_api.Host{ .language_known_tag = KnownLanguageTagProbe.get };
-    host_api.set(&runtime, &host);
-    const mw = try runtime.newTable();
-    const ustring = try runtime.newNativeNamespace(.ustring);
-    const case_mapper = try ustring_lib.install(&runtime, ustring);
-    try install(&runtime, mw, case_mapper);
-    const language_api = mw.rawGet(.{ .string = "language" }).?.table;
-
-    const french = try callField(&runtime, .{ .table = language_api }, "isKnownLanguageTag", &.{.{ .string = "fr" }});
-    defer rt.freeResults(french);
-    try std.testing.expect(french[0].boolean);
-    const unknown = try callField(&runtime, .{ .table = language_api }, "isKnownLanguageTag", &.{.{ .string = "zz-invalid" }});
-    defer rt.freeResults(unknown);
-    try std.testing.expect(!unknown[0].boolean);
 }

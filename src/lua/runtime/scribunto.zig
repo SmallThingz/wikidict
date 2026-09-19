@@ -33,6 +33,7 @@ const State = struct {
     load_data_cache: std.AutoHashMapUnmanaged(u32, Value) = .empty,
     load_data_loading: std.AutoHashMapUnmanaged(u32, void) = .empty,
     load_json_cache: std.StringHashMapUnmanaged(Value) = .empty,
+    load_data_metatable: ?*rt.Table = null,
 };
 
 fn one(value: Value) ![]const Value {
@@ -58,7 +59,18 @@ fn cloneValue(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnmanage
     return .{ .table = copy };
 }
 
-fn promoteLoadData(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnmanaged(*rt.Table, *rt.Table)) !Value {
+fn loadDataMetatable(state: *State) !*rt.Table {
+    if (state.load_data_metatable) |table| return table;
+    const table = try state.allocator.create(rt.Table);
+    table.* = .{};
+    try table.rawSet(state.allocator, .{ .string = "mw_loadData" }, .{ .boolean = true });
+    try table.rawSet(state.allocator, .{ .string = "__metatable" }, .{ .table = table });
+    table.read_only = true;
+    state.load_data_metatable = table;
+    return table;
+}
+
+fn promoteLoadData(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnmanaged(*rt.Table, *rt.Table), metatable: *rt.Table) !Value {
     return switch (value) {
         .nil, .boolean, .number => value,
         .string => |text| .{ .string = try a.dupe(u8, text) },
@@ -72,11 +84,12 @@ fn promoteLoadData(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnm
             var it = source.iterator();
             while (it.next()) |entry| {
                 if (entry.key_ptr.* == .table) return error.LoadDataTableKey;
-                const key = try promoteLoadData(a, entry.key_ptr.*, seen);
-                const item = try promoteLoadData(a, entry.value_ptr.*, seen);
+                const key = try promoteLoadData(a, entry.key_ptr.*, seen, metatable);
+                const item = try promoteLoadData(a, entry.value_ptr.*, seen, metatable);
                 try copy.rawSet(a, key, item);
             }
             copy.append_index = source.append_index;
+            copy.metatable = metatable;
             copy.read_only = true;
             break :blk .{ .table = copy };
         },
@@ -113,11 +126,11 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
         try ustring.rawSet(runtime.allocator, entry.key_ptr.*, entry.value_ptr.*);
     const case_mapper = try ustring_lib.install(runtime, ustring);
     try html_lib.install(runtime, mw);
+    try installStringAliases(runtime, string.table, ustring);
     try mw.rawSetNativeField(.mw, "ustring", .{ .table = ustring });
     try text_lib.install(runtime, mw);
     try title_lib.install(runtime, mw, case_mapper);
     try language_lib.install(runtime, mw, case_mapper);
-    try installStringAliases(runtime, string.table, ustring);
     try frame_lib.install(runtime, mw);
     try uri_lib.install(runtime, mw);
     try basics_lib.install(runtime, mw);
@@ -133,6 +146,14 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingScribuntoState));
     const module_id = try runtime.resolveModule(args[0].string);
     if (state.load_data_cache.get(module_id)) |value| return one(value);
+    if (runtime.loadDataSnapshot(module_id)) |source| {
+        if (source != .table) return error.LoadDataTableExpected;
+        var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
+        defer seen.deinit(state.allocator);
+        const promoted = try promoteLoadData(state.allocator, source, &seen, try loadDataMetatable(state));
+        try state.load_data_cache.put(state.allocator, module_id, promoted);
+        return one(promoted);
+    }
     if (state.load_data_loading.contains(module_id)) return error.LoadDataLoop;
     try state.load_data_loading.put(state.allocator, module_id, {});
     defer _ = state.load_data_loading.remove(module_id);
@@ -149,14 +170,14 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     const empty_frame = try frame_lib.makeFrameFromTable(&child, "empty", empty_args, null);
     child.current_frame = empty_frame.table;
     const source = child.requireByName(args[0].string) catch |err| {
-        try runtime.adoptFailure(&child);
+        runtime.adoptFailure(&child);
         return err;
     };
     if (source != .table) return error.LoadDataTableExpected;
 
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
     defer seen.deinit(state.allocator);
-    const promoted = try promoteLoadData(state.allocator, source, &seen);
+    const promoted = try promoteLoadData(state.allocator, source, &seen, try loadDataMetatable(state));
     try state.load_data_cache.put(state.allocator, module_id, promoted);
     return one(promoted);
 }
@@ -178,7 +199,7 @@ fn loadJsonDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     if (decoded != .table) return error.LoadJsonDataTableExpected;
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
     defer seen.deinit(state.allocator);
-    const promoted = try promoteLoadData(state.allocator, decoded, &seen);
+    const promoted = try promoteLoadData(state.allocator, decoded, &seen, try loadDataMetatable(state));
     const key = try state.allocator.dupe(u8, title);
     try state.load_json_cache.put(state.allocator, key, promoted);
     return one(promoted);
@@ -240,21 +261,10 @@ test "AOT Scribunto installs mw.ustring, html, loadData, clone, and string alias
     const len = try callField(&runtime, ustring, "len", &.{.{ .string = "hé猫" }});
     defer rt.freeResults(len);
     try std.testing.expectEqual(@as(f64, 3), len[0].number);
-    const broken = [_]u8{0xc9};
-    const upper = try callField(&runtime, ustring, "upper", &.{.{ .string = &broken }});
-    defer rt.freeResults(upper);
-    try std.testing.expectEqualSlices(u8, &broken, upper[0].string);
-    const unicode_upper = try callField(&runtime, ustring, "upper", &.{.{ .string = "éclair" }});
-    defer rt.freeResults(unicode_upper);
-    try std.testing.expectEqualStrings("ÉCLAIR", unicode_upper[0].string);
     const string = runtime.getGlobal(1);
     const alias = try runtime.getIndex(string, .{ .string = "ulen" });
     const direct = try runtime.getIndex(ustring, .{ .string = "len" });
     try std.testing.expect(rt.rawEqual(alias, direct));
-    const string_upper = try runtime.getIndex(string, .{ .string = "uupper" });
-    const broken_alias = try runtime.callValue(string_upper, &.{.{ .string = &broken }});
-    defer rt.freeResults(broken_alias);
-    try std.testing.expectEqualSlices(u8, &broken, broken_alias[0].string);
     try std.testing.expect((try runtime.getIndex(mw, .{ .string = "html" })) == .table);
     try std.testing.expect((try runtime.getIndex(mw, .{ .string = "loadData" })) == .callable);
     try std.testing.expect((try runtime.getIndex(mw, .{ .string = "loadJsonData" })) == .callable);
@@ -335,8 +345,21 @@ test "AOT loadData runs in an isolated context and promotes a cached read-only g
     }
     try std.testing.expect(first[0].table == second[0].table);
     try std.testing.expect(first[0].table.read_only);
+    const marker = first[0].table.metatable orelse return error.MissingLoadDataMetatable;
+    try std.testing.expect(marker.read_only);
+    try std.testing.expect(marker.rawGet(.{ .string = "mw_loadData" }).?.boolean);
+    try std.testing.expect(marker.rawGet(.{ .string = "__metatable" }).?.table == marker);
+    const getmetatable_fn = runtime.getGlobal(7);
+    const exposed = try runtime.callValue(getmetatable_fn, &.{first[0]});
+    defer rt.freeResults(exposed);
+    try std.testing.expect(exposed[0] == .table and exposed[0].table == marker);
+    const setmetatable_fn = runtime.getGlobal(8);
+    try std.testing.expectError(error.AotCallFailed, runtime.callValue(setmetatable_fn, &.{ first[0], .{ .table = try runtime.newTable() } }));
+    try std.testing.expectEqualStrings("ProtectedMetatable", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
     const nested = first[0].table.rawGet(.{ .string = "nested" }) orelse return error.MissingNestedData;
     try std.testing.expect(nested == .table and nested.table.read_only);
+    try std.testing.expect(nested.table.metatable == marker);
     try std.testing.expectEqual(@as(f64, 7), nested.table.rawGet(.{ .string = "x" }).?.number);
     try std.testing.expectError(error.ReadOnlyTable, first[0].table.rawSet(runtime.allocator, .{ .string = "y" }, .{ .number = 1 }));
     try std.testing.expectEqual(@as(f64, 40), runtime.getGlobal(1).number);
@@ -717,4 +740,28 @@ pub fn makeWikitextExpander(runtime: *rt.Context, env_slot: u32, string_slot: u3
         .provider = provider,
         .install_scribunto = installForExpander,
     };
+}
+
+test "AOT loadData uses eager private snapshot without exposing mutable module value" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    runtime.configureModules(null, DataProbe.lookup, DataProbe.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+
+    const source = try runtime.newTable();
+    try source.rawSet(runtime.allocator, .{ .string = "x" }, .{ .number = 7 });
+    try runtime.preinitializeModule(0, .{ .table = source }, true);
+    try std.testing.expect(runtime.package_loaded.?.rawGet(.{ .string = "Module:Data" }) == null);
+    try source.rawSet(runtime.allocator, .{ .string = "x" }, .{ .number = 99 });
+
+    try install(&runtime, 0, 18, 23);
+    const mw = runtime.getGlobal(23);
+    const loaded = try callField(&runtime, mw, "loadData", &.{.{ .string = "Module:Data" }});
+    defer rt.freeResults(loaded);
+    try std.testing.expect(loaded[0] == .table and loaded[0].table.read_only);
+    try std.testing.expectEqual(@as(f64, 7), loaded[0].table.rawGet(.{ .string = "x" }).?.number);
+    try std.testing.expect(runtime.package_loaded.?.rawGet(.{ .string = "Module:Data" }) == null);
 }
