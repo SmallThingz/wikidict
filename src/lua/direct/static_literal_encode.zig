@@ -169,6 +169,7 @@ const Evaluator = struct {
     allocator: A,
     env: std.StringHashMapUnmanaged(StaticValue) = .empty,
     tables: std.ArrayList(*StaticTable) = .empty,
+    owned_strings: std.ArrayList([]u8) = .empty,
 
     fn deinit(self: *Evaluator) void {
         for (self.tables.items) |owned_table| {
@@ -176,6 +177,8 @@ const Evaluator = struct {
             self.allocator.destroy(owned_table);
         }
         self.tables.deinit(self.allocator);
+        for (self.owned_strings.items) |owned| self.allocator.free(owned);
+        self.owned_strings.deinit(self.allocator);
         self.env.deinit(self.allocator);
     }
 
@@ -197,6 +200,69 @@ const Evaluator = struct {
             .paren => |paren| self.evalValue(paren.expr),
             .index => self.evalIndex(expr),
             .table => |table_expr| try self.evalTable(table_expr.fields),
+            .unary => |unary| try self.evalUnary(unary.op, unary.expr),
+            .binary => |binary| try self.evalBinary(binary.op, binary.lhs, binary.rhs),
+            else => error.NonStaticData,
+        };
+    }
+
+    fn truthy(value: StaticValue) bool {
+        return switch (value) {
+            .nil => false,
+            .boolean => |item| item,
+            .number, .string, .table => true,
+        };
+    }
+
+    fn denseListLength(table_value: *const StaticTable) ?usize {
+        var expected: u32 = 1;
+        for (table_value.fields.items) |field| switch (field) {
+            .list => |item| {
+                if (item.index != expected) return null;
+                expected = std.math.add(u32, expected, 1) catch return null;
+            },
+            else => return null,
+        };
+        return expected - 1;
+    }
+
+    fn evalUnary(self: *Evaluator, op: lua.UnaryOp, operand_expr: *const lua.Expr) anyerror!StaticValue {
+        const operand = try self.evalValue(operand_expr);
+        return switch (op) {
+            .not_ => .{ .boolean = !truthy(operand) },
+            .neg => if (operand == .number)
+                .{ .number = -operand.number }
+            else
+                error.NonStaticData,
+            .len => switch (operand) {
+                .string => |item| .{ .number = @floatFromInt(item.len) },
+                .table => |table_value| if (denseListLength(table_value)) |len|
+                    .{ .number = @floatFromInt(len) }
+                else
+                    error.NonStaticData,
+                else => error.NonStaticData,
+            },
+        };
+    }
+
+    fn evalBinary(
+        self: *Evaluator,
+        op: lua.BinaryOp,
+        lhs_expr: *const lua.Expr,
+        rhs_expr: *const lua.Expr,
+    ) anyerror!StaticValue {
+        const lhs = try self.evalValue(lhs_expr);
+        return switch (op) {
+            .and_ => if (!truthy(lhs)) lhs else try self.evalValue(rhs_expr),
+            .or_ => if (truthy(lhs)) lhs else try self.evalValue(rhs_expr),
+            .concat => blk: {
+                const rhs = try self.evalValue(rhs_expr);
+                if (lhs != .string or rhs != .string) return error.NonStaticData;
+                const combined = try std.mem.concat(self.allocator, u8, &.{ lhs.string, rhs.string });
+                errdefer self.allocator.free(combined);
+                try self.owned_strings.append(self.allocator, combined);
+                break :blk .{ .string = combined };
+            },
             else => error.NonStaticData,
         };
     }
@@ -476,7 +542,9 @@ test "pure incremental data builder lowers to static literal" {
         \\local m = {}
         \\m["alpha"] = {1, 2}
         \\m.beta = { ok = true }
-        \\m.beta.extra = "x"
+        \\m.beta.extra = "x" .. "y"
+        \\m.coords = {-27.5, 153.0}
+        \\m.coords.length = #m.coords
         \\return m
     );
     defer chunk.deinit();
