@@ -342,6 +342,15 @@ fn fixedCall(ctx: *rt.Context, callable: rt.Value, args: []const rt.Value, out: 
     }
     return 0;
 }
+export fn dict_lua_enter_local_static_call(ctx: *rt.Context) callconv(.c) u32 {
+    ctx.enterLocalStaticFunction() catch |err| return fail(ctx, err);
+    return 0;
+}
+
+export fn dict_lua_leave_local_static_call(ctx: *rt.Context) callconv(.c) void {
+    ctx.leaveLocalStaticFunction();
+}
+
 export fn dict_lua_enter_static_call(ctx: *rt.Context, module_id: u32) callconv(.c) u32 {
     ctx.enterStaticModule(module_id) catch |err| return fail(ctx, err);
     return 0;

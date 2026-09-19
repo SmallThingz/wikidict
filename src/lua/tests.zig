@@ -677,7 +677,8 @@ test "call-only local functions bypass callable boxing and dynamic dispatch" {
     defer std.testing.allocator.free(generated_source);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "define internal %FunctionResult @lua_f_1") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "call %FunctionResult @lua_f_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_enter_static_call") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_enter_local_static_call(ptr %ctx)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_enter_static_call(") == null);
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, " = call i32 @dict_lua_make_function"));
 }
 
@@ -694,7 +695,8 @@ test "call-only captured closures pass cells without materializing callable iden
     const generated_source = try generated.toText(std.testing.allocator);
     defer std.testing.allocator.free(generated_source);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "call %CallResult @dict_lua_call_static_multi") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated_source, "@dict_lua_call_static_multi(ptr %ctx, i32 0, ptr @lua_f_1, ptr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "@dict_lua_call_static_multi(ptr %ctx, i32 -1, ptr @lua_f_1, ptr") != null or
+        std.mem.indexOf(u8, generated_source, "@dict_lua_call_static_multi(ptr %ctx, i32 4294967295, ptr @lua_f_1, ptr") != null);
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, " = call i32 @dict_lua_make_function"));
 }
 
@@ -783,7 +785,8 @@ test "nonrecursive local function syntax uses direct static call" {
     const generated_source = try generated.toText(std.testing.allocator);
     defer std.testing.allocator.free(generated_source);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "define internal %FunctionResult @lua_f_1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_enter_static_call") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_enter_local_static_call(ptr %ctx)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_enter_static_call(") == null);
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, " = call i32 @dict_lua_make_function"));
 }
 
@@ -816,6 +819,7 @@ test "known module export emits guarded direct LLVM call" {
     const facts = llvm_emitter.ProgramFacts{
         .module_ids = &ids,
         .module_facts = &modules,
+        .current_module_id = 1,
     };
 
     var chunk = try llvm_parser.parse(

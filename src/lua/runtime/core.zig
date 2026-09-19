@@ -874,6 +874,8 @@ pub const Context = struct {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
+        if (module_id == std.math.maxInt(u32))
+            return self.callEntryBuffered(entry, .{ .direct = captures }, args, result_buffer);
         const previous = try self.enterModule(module_id);
         defer self.restoreGlobals(previous);
         return self.callEntryBuffered(entry, .{ .direct = captures }, args, result_buffer);
@@ -1075,6 +1077,15 @@ pub const Context = struct {
     fn restoreGlobals(self: *Context, previous: GlobalScope) void {
         self.globals = previous.globals;
         self.global_table = previous.global_table;
+    }
+
+    pub fn enterLocalStaticFunction(self: *Context) !void {
+        if (self.depth >= self.max_depth) return error.CallDepth;
+        self.depth += 1;
+    }
+
+    pub fn leaveLocalStaticFunction(self: *Context) void {
+        if (self.depth != 0) self.depth -= 1;
     }
 
     pub fn enterStaticModule(self: *Context, module_id: u32) !void {
@@ -1948,6 +1959,16 @@ test "module globals are isolated for dynamic and static calls" {
     );
     defer freeResults(static_a);
     try std.testing.expectEqualStrings("A", static_a[0].string);
+    try ctx.setGlobal(0, .{ .string = "current" });
+    const same_module = try ctx.callStaticFunctionBuffered(
+        std.math.maxInt(u32),
+        stabilize(ModuleGlobalIsolationProbe.read),
+        &.{},
+        &.{},
+        null,
+    );
+    defer freeResults(same_module);
+    try std.testing.expectEqualStrings("current", same_module[0].string);
     try std.testing.expectEqualStrings("root", ctx.getGlobal(0).string);
 }
 

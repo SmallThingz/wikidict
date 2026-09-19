@@ -210,6 +210,8 @@ const Runtime = struct {
     call_fixed_tail: V,
     call_static_fixed: V,
     call_static_fixed_tail: V,
+    enter_local_static_call: V,
+    leave_local_static_call: V,
     enter_static_call: V,
     leave_static_call: V,
     function_status: V,
@@ -278,6 +280,8 @@ const Runtime = struct {
             .call_fixed_tail = try declare(m, "dict_lua_call_fixed_tail", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .call_static_fixed = try declare(m, "dict_lua_call_static_fixed", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .call_static_fixed_tail = try declare(m, "dict_lua_call_static_fixed_tail", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .enter_local_static_call = try declare(m, "dict_lua_enter_local_static_call", ty.i32, &.{ty.ptr}),
+            .leave_local_static_call = try declare(m, "dict_lua_leave_local_static_call", ty.void, &.{ty.ptr}),
             .enter_static_call = try declare(m, "dict_lua_enter_static_call", ty.i32, &.{ ty.ptr, ty.i32 }),
             .leave_static_call = try declare(m, "dict_lua_leave_static_call", ty.void, &.{ty.ptr}),
             .function_status = try declare(m, "dict_lua_function_status", ty.i32, &.{ ty.ptr, ty.i32 }),
@@ -1414,6 +1418,14 @@ const FnEmitter = struct {
         return output;
     }
 
+    fn sameModuleStaticCall(self: *const FnEmitter, function: StaticFunctionRef) bool {
+        return function.module_id == self.module.facts.current_module_id;
+    }
+
+    fn staticCallModuleId(self: *const FnEmitter, function: StaticFunctionRef) u32 {
+        return if (self.sameModuleStaticCall(function)) std.math.maxInt(u32) else function.module_id;
+    }
+
     fn emitStaticFixedPrepared(
         self: *FnEmitter,
         function: StaticFunctionRef,
@@ -1425,16 +1437,23 @@ const FnEmitter = struct {
         if ((function.captures_len == 0 or function.direct_captures != null) and prepared.tail == null) {
             for (0..count) |index|
                 _ = try llvm.call(self.builder, self.rt().value_nil, &.{try self.arrayElem(output, index)});
-            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{
-                self.ctx(), try self.cI32(function.module_id),
-            });
+            const same_module = self.sameModuleStaticCall(function);
+            const enter = if (same_module)
+                try llvm.call(self.builder, self.rt().enter_local_static_call, &.{self.ctx()})
+            else
+                try llvm.call(self.builder, self.rt().enter_static_call, &.{
+                    self.ctx(), try self.cI32(function.module_id),
+                });
             try self.check(enter);
             const capture_context = function.direct_captures orelse try self.nullPtr();
             const result = try llvm.call(self.builder, entry_fn, &.{
                 self.ctx(), capture_context,      prepared.fixed, try self.cI64(prepared.fixed_len),
                 output,     try self.cI64(count),
             });
-            _ = try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
+            _ = if (same_module)
+                try llvm.call(self.builder, self.rt().leave_local_static_call, &.{self.ctx()})
+            else
+                try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
             const raw_status = try llvm.extractValue(self.builder, result, 2);
             const status = try llvm.call(self.builder, self.rt().function_status, &.{ self.ctx(), raw_status });
             try self.check(status);
@@ -1443,14 +1462,14 @@ const FnEmitter = struct {
 
         const status = if (prepared.tail) |tail|
             try llvm.call(self.builder, self.rt().call_static_fixed_tail, &.{
-                self.ctx(),                           try self.cI32(function.module_id), entry_fn,                          function.captures_ptr,
-                try self.cI64(function.captures_len), prepared.fixed,                    try self.cI64(prepared.fixed_len), tail.ptr,
-                tail.len,                             output,                            try self.cI64(count),
+                self.ctx(),                           try self.cI32(self.staticCallModuleId(function)), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                                   try self.cI64(prepared.fixed_len), tail.ptr,
+                tail.len,                             output,                                           try self.cI64(count),
             })
         else
             try llvm.call(self.builder, self.rt().call_static_fixed, &.{
-                self.ctx(),                           try self.cI32(function.module_id), entry_fn,                          function.captures_ptr,
-                try self.cI64(function.captures_len), prepared.fixed,                    try self.cI64(prepared.fixed_len), output,
+                self.ctx(),                           try self.cI32(self.staticCallModuleId(function)), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                                   try self.cI64(prepared.fixed_len), output,
                 try self.cI64(count),
             });
         try self.check(status);
@@ -1550,16 +1569,23 @@ const FnEmitter = struct {
         prepared: PreparedArgs,
     ) anyerror!MultiRef {
         if ((function.captures_len == 0 or function.direct_captures != null) and prepared.tail == null) {
-            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{
-                self.ctx(), try self.cI32(function.module_id),
-            });
+            const same_module = self.sameModuleStaticCall(function);
+            const enter = if (same_module)
+                try llvm.call(self.builder, self.rt().enter_local_static_call, &.{self.ctx()})
+            else
+                try llvm.call(self.builder, self.rt().enter_static_call, &.{
+                    self.ctx(), try self.cI32(function.module_id),
+                });
             try self.check(enter);
             const capture_context = function.direct_captures orelse try self.nullPtr();
             const result = try llvm.call(self.builder, entry_fn, &.{
                 self.ctx(),         capture_context,  prepared.fixed, try self.cI64(prepared.fixed_len),
                 try self.nullPtr(), try self.cI64(0),
             });
-            _ = try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
+            _ = if (same_module)
+                try llvm.call(self.builder, self.rt().leave_local_static_call, &.{self.ctx()})
+            else
+                try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
             const raw_status = try llvm.extractValue(self.builder, result, 2);
             const status = try llvm.call(self.builder, self.rt().function_status, &.{ self.ctx(), raw_status });
             try self.check(status);
@@ -1572,14 +1598,14 @@ const FnEmitter = struct {
 
         const result = if (prepared.tail) |tail|
             try llvm.call(self.builder, self.rt().call_static_multi_tail, &.{
-                self.ctx(),                           try self.cI32(function.module_id), entry_fn,                          function.captures_ptr,
-                try self.cI64(function.captures_len), prepared.fixed,                    try self.cI64(prepared.fixed_len), tail.ptr,
+                self.ctx(),                           try self.cI32(self.staticCallModuleId(function)), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                                   try self.cI64(prepared.fixed_len), tail.ptr,
                 tail.len,
             })
         else
             try llvm.call(self.builder, self.rt().call_static_multi, &.{
-                self.ctx(),                           try self.cI32(function.module_id), entry_fn,                          function.captures_ptr,
-                try self.cI64(function.captures_len), prepared.fixed,                    try self.cI64(prepared.fixed_len),
+                self.ctx(),                           try self.cI32(self.staticCallModuleId(function)), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                                   try self.cI64(prepared.fixed_len),
             });
         try self.check(try llvm.extractValue(self.builder, result, 2));
         return .{
