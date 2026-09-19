@@ -132,6 +132,15 @@ export fn dict_lua_require_module_id(ctx: *rt.Context, module_id: u32, name: [*]
     out.* = ctx.requireModuleId(module_id, name[0..len]) catch |err| return fail(ctx, err);
     return 0;
 }
+export fn dict_lua_preinitialize_special_module(
+    ctx: *rt.Context,
+    module_id: u32,
+    snapshot_load_data: u32,
+) callconv(.c) u32 {
+    ctx.preinitializeSpecialModule(module_id, snapshot_load_data != 0) catch |err| return fail(ctx, err);
+    return 0;
+}
+
 export fn dict_lua_preinitialize_module(
     ctx: *rt.Context,
     module_id: u32,
