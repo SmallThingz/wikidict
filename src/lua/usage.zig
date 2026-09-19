@@ -108,6 +108,75 @@ pub const ScanFlags = struct {
     dynamic_template_target: bool = false,
 };
 
+fn appendLiteralTemplateCandidate(
+    a: std.mem.Allocator,
+    raw: []const u8,
+    out: *std.ArrayList(Ref),
+) !bool {
+    const value = std.mem.trim(u8, raw, " \t\r\n");
+    if (value.len == 0) return true;
+    const target = try canonicalTemplate(a, value) orelse return false;
+    try out.append(a, .{ .kind = .template, .target = target });
+    return true;
+}
+
+fn expandFiniteDynamicTemplateHead(
+    a: std.mem.Allocator,
+    head_raw: []const u8,
+    out: *std.ArrayList(Ref),
+) !bool {
+    const head = std.mem.trim(u8, head_raw, " \t\r\n");
+    if (head.len < 4 or !std.mem.startsWith(u8, head, "{{")) return false;
+    const end = preprocess.findTemplateEnd(head, 0) orelse return false;
+    if (end + 2 != head.len) return false;
+
+    var parts: std.ArrayList([]const u8) = .empty;
+    defer parts.deinit(a);
+    try preprocess.splitWikitextTop(a, head[2..end], '|', &parts);
+    if (parts.items.len == 0) return false;
+    const first = std.mem.trim(u8, parts.items[0], " \t\r\n");
+    const colon = preprocess.findTopDelimiter(first, ':') orelse return false;
+    const name = std.mem.trim(u8, first[0..colon], " \t\r\n");
+
+    if (std.ascii.eqlIgnoreCase(name, "#if")) {
+        if (parts.items.len < 2) return false;
+        const checkpoint = out.items.len;
+        if (!try appendLiteralTemplateCandidate(a, parts.items[1], out)) {
+            while (out.items.len > checkpoint) a.free(out.pop().?.target);
+            return false;
+        }
+        if (parts.items.len >= 3 and !try appendLiteralTemplateCandidate(a, parts.items[2], out)) {
+            while (out.items.len > checkpoint) a.free(out.pop().?.target);
+            return false;
+        }
+        if (parts.items.len > 3) {
+            while (out.items.len > checkpoint) a.free(out.pop().?.target);
+            return false;
+        }
+        return true;
+    }
+
+    if (std.ascii.eqlIgnoreCase(name, "#ifeq")) {
+        if (parts.items.len < 3) return false;
+        const checkpoint = out.items.len;
+        if (!try appendLiteralTemplateCandidate(a, parts.items[2], out)) {
+            while (out.items.len > checkpoint) a.free(out.pop().?.target);
+            return false;
+        }
+        if (parts.items.len >= 4 and !try appendLiteralTemplateCandidate(a, parts.items[3], out)) {
+            while (out.items.len > checkpoint) a.free(out.pop().?.target);
+            return false;
+        }
+        if (parts.items.len > 4) {
+            while (out.items.len > checkpoint) a.free(out.pop().?.target);
+            return false;
+        }
+        return true;
+    }
+
+    return false;
+}
+
 fn classifyHead(a: std.mem.Allocator, head_raw: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags) !void {
     const head = std.mem.trim(u8, head_raw, " \t\r\n");
     if (head.len == 0) return;
@@ -125,10 +194,12 @@ fn classifyHead(a: std.mem.Allocator, head_raw: []const u8, out: *std.ArrayList(
     } else if (head[0] == '#') {
         return;
     }
-    if (try canonicalTemplate(a, head)) |target|
-        try out.append(a, .{ .kind = .template, .target = target })
-    else if (containsDynamicSyntax(head))
-        flags.dynamic_template_target = true;
+    if (try canonicalTemplate(a, head)) |target| {
+        try out.append(a, .{ .kind = .template, .target = target });
+    } else if (containsDynamicSyntax(head)) {
+        if (!try expandFiniteDynamicTemplateHead(a, head, out))
+            flags.dynamic_template_target = true;
+    }
 }
 
 fn scanRange(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags, depth: usize) anyerror!void {
@@ -139,7 +210,9 @@ fn scanRange(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref),
             pos = open + 2;
             continue;
         }
-        if (open + 2 < source.len and source[open + 2] == '{') {
+        const nested_template_name = open + 3 < source.len and
+            std.mem.eql(u8, source[open .. open + 4], "{{{{");
+        if (!nested_template_name and open + 2 < source.len and source[open + 2] == '{') {
             const end = preprocess.findParamEnd(source, open) orelse {
                 pos = open + 3;
                 continue;
@@ -394,6 +467,37 @@ test "module load scan includes mw.loadData and flags dynamic require" {
     try std.testing.expect(dynamic);
     try std.testing.expectEqual(@as(usize, 1), refs.items.len);
     try std.testing.expectEqualStrings("Module:Static data", refs.items[0]);
+}
+
+test "wikitext scan expands finite dynamic template heads" {
+    const a = std.testing.allocator;
+    var refs: std.ArrayList(Ref) = .empty;
+    defer {
+        for (refs.items) |ref| a.free(ref.target);
+        refs.deinit(a);
+    }
+
+    const flags = try scanWikitextFlags(
+        a,
+        "{{ {{#if:{{{lang|}}}|check deprecated lang param usage|no deprecated lang param usage}}|x=1 }}",
+        &refs,
+    );
+    try std.testing.expect(!flags.dynamic_template_target);
+    try std.testing.expectEqual(@as(usize, 2), refs.items.len);
+    try std.testing.expectEqualStrings("Template:check deprecated lang param usage", refs.items[0].target);
+    try std.testing.expectEqualStrings("Template:no deprecated lang param usage", refs.items[1].target);
+
+    for (refs.items) |ref| a.free(ref.target);
+    refs.clearRetainingCapacity();
+    const ifeq_flags = try scanWikitextFlags(
+        a,
+        "{{{{#ifeq:{{{x|}}}|yes|alpha|beta}}|1}}",
+        &refs,
+    );
+    try std.testing.expect(!ifeq_flags.dynamic_template_target);
+    try std.testing.expectEqual(@as(usize, 2), refs.items.len);
+    try std.testing.expectEqualStrings("Template:alpha", refs.items[0].target);
+    try std.testing.expectEqualStrings("Template:beta", refs.items[1].target);
 }
 
 test "wikitext scan separates unresolved invokes from dynamic template targets" {
