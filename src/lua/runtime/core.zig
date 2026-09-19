@@ -699,8 +699,17 @@ pub const Context = struct {
         return self.aot_error_name.get();
     }
 
-    pub fn adoptFailure(self: *Context, child: *const Context) void {
-        if (child.aotErrorName()) |name| self.setAotErrorName(name) else self.clearAotErrorName();
+    pub fn adoptFailure(self: *Context, child: *const Context) !void {
+        if (child.last_error == .string) {
+            self.last_error = .{ .string = try self.allocator.dupe(u8, child.last_error.string) };
+        } else {
+            self.last_error = .nil;
+        }
+        if (child.aotErrorName()) |name| {
+            self.setAotErrorName(name);
+        } else {
+            self.clearAotErrorName();
+        }
     }
 
     pub fn getGlobal(self: *const Context, slot: u32) Value {

@@ -799,7 +799,13 @@ fn stringGsub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
     const runtime = ctx;
     const source = try str(a, args[0]);
     const pat = try str(a, args[1]);
-    const replacement = args[2];
+    var replacement = args[2];
+    if (replacement == .number) {
+        const number = replacement.number;
+        replacement = .{ .string = try rt.numberToString(a, number) };
+    }
+    if (replacement != .string and replacement != .table and replacement != .callable)
+        return error.InvalidReplacement;
     const max_count: usize = if (args.len > 3 and args[3] != .nil)
         @intCast(@max(@as(i64, 0), try integer(args[3])))
     else
@@ -813,7 +819,8 @@ fn stringGsub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
         const m = try pattern.find(source, pat, @intCast(search + 1)) orelse break;
         if (m.start < cursor) return error.BadPatternProgress;
         try out.appendSlice(a, source[cursor..m.start]);
-        if (try replacementValue(runtime, replacement, source, m, a)) |text|
+        const replacement_text = try replacementValue(runtime, replacement, source, m, a);
+        if (replacement_text) |text|
             try out.appendSlice(a, text)
         else
             try out.appendSlice(a, source[m.start..m.end]);
@@ -1401,6 +1408,14 @@ test "AOT standard library installs numeric globals and executes core helpers" {
     const sub = try callField(&ctx, string, "sub", &.{ .{ .string = "abcdef" }, .{ .number = 2 }, .{ .number = -2 } });
     defer rt.freeResults(sub);
     try std.testing.expectEqualStrings("bcde", sub[0].string);
+    const numeric_gsub = try callField(&ctx, string, "gsub", &.{
+        .{ .string = "a\x01b" },
+        .{ .string = "\x01" },
+        .{ .number = 123 },
+    });
+    defer rt.freeResults(numeric_gsub);
+    try std.testing.expectEqualStrings("a123b", numeric_gsub[0].string);
+    try std.testing.expectEqual(@as(f64, 1), numeric_gsub[1].number);
 
     const select_fn = ctx.getGlobal(global_abi.id("select"));
     const tail = try ctx.callValue(select_fn, &.{ .{ .number = -2 }, .{ .string = "a" }, .{ .string = "b" }, .{ .string = "c" } });
