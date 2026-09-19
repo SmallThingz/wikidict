@@ -16,7 +16,6 @@ const CategoryTreeRange = struct {
     len: u16,
 };
 
-const CorpusPage = struct { offset: u64, len: usize, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
 const InterfaceMessageEntry = struct { source_raw: ?[]const u8 };
 const CorpusPage = struct { title: []const u8, offset: u64, len: usize, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
 
@@ -334,7 +333,6 @@ pub const Provider = struct {
         self.file_metadata_storage = mapped;
         self.file_metadata_available = true;
     }
-    }
 
     fn loadInterwikiMap(self: *Provider) !void {
         var mapped = (try self.mapOptional("interwiki-map.tsv")) orelse return;
@@ -644,6 +642,8 @@ pub const Provider = struct {
         defer a.free(lookup_key);
         const entry = self.interface_messages.get(lookup_key) orelse return null;
         return .{ .source = if (entry.source_raw) |raw| try unescapeFieldAlloc(a, raw) else null };
+    }
+
     fn categoryTree(ctx: ?*anyopaque, db_key: []const u8) anyerror![]const []const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         const range = self.category_tree_ranges.get(db_key) orelse return error.CategoryTreeSnapshotMissing;

@@ -211,6 +211,11 @@ pub fn writeMetadata(
     for (records) |record|
         try metadata.writeU32(w, record.export_shape_id orelse std.math.maxInt(u32));
 
+    for (records) |record| {
+        try metadata.writeU32(w, record.function_base);
+        try metadata.writeU32(w, record.function_count);
+    }
+
     for (globals.names.items) |name| try metadata.writeString(w, name);
 
     for (0..shape_registry.count()) |shape_index| {

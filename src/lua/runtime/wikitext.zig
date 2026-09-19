@@ -120,7 +120,7 @@ pub const Expander = struct {
         self.host.text_unstrip_no_wiki = hostTextUnstripNoWiki;
         self.host.external_data = hostExternalData;
         self.host.category_stats = hostCategoryStats;
-        self.host.interface_message = hostInterfaceMessage;
+        self.host.interface_message = if (self.provider.interface_message != null) hostInterfaceMessage else null;
         self.host.file_metadata = hostFileMetadata;
         self.host.site_interwiki_map = hostSiteInterwikiMap;
         self.host.wikibase_sitelink = hostWikibaseSitelink;
@@ -197,8 +197,10 @@ pub const Expander = struct {
 
     fn hostInterfaceMessage(raw: ?*anyopaque, a: std.mem.Allocator, language: []const u8, key: []const u8) anyerror!?host_api.InterfaceMessage {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        const get = self.provider.interface_message orelse return error.NotImplemented;
+        const get = self.provider.interface_message orelse return null;
         return get(self.provider.ctx, a, language, key);
+    }
+
     fn hostFileMetadata(raw: ?*anyopaque, title: []const u8) anyerror!host_api.FileMetadata {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.file_metadata orelse return error.NotImplemented;

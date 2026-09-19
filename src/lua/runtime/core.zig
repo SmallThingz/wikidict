@@ -633,17 +633,26 @@ const ModuleState = struct {
     value: ?Value = null,
     preinitialized: ?Value = null,
     load_data_snapshot: ?Value = null,
+    globals: ?[]Value = null,
+    global_table: ?*Table = null,
 };
 const ModuleStatePage = [module_state_page_len]ModuleState;
+const GlobalScope = struct {
+    globals: []Value,
+    global_table: ?*Table,
+};
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
     // Lua strings compare/hash by bytes; runtime concat results need ownership, not hash dedup.
     string_arena: std.heap.ArenaAllocator,
     globals: []Value,
+    root_globals: []Value,
     program_shapes: []const Shape = &.{},
     module_export_shape_ids: []const u32 = &.{},
     module_root_entries: []const FunctionFn = &.{},
+    module_function_bases: []const u32 = &.{},
+    module_function_counts: []const u32 = &.{},
     string_metatable: ?*Table = null,
     last_error: Value = .nil,
     aot_error_name: StableErrorName = .{},
@@ -661,6 +670,9 @@ pub const Context = struct {
     current_frame: ?*Table = null,
     package_loaded: ?*Table = null,
     global_table: ?*Table = null,
+    root_global_table: ?*Table = null,
+    global_env_slot: ?u32 = null,
+    static_global_scopes: std.ArrayList(GlobalScope) = .empty,
     next_iteration_hint: ?NextIterationHint = null,
 
     pub fn init(allocator: std.mem.Allocator, global_count: usize) !Context {
@@ -679,16 +691,19 @@ pub const Context = struct {
             .allocator = allocator,
             .string_arena = .init(allocator),
             .globals = globals,
+            .root_globals = globals,
             .module_count = module_count,
             .module_state_pages = module_state_pages,
         };
     }
 
     pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
-        var child = try initProgram(allocator, self.globals.len, self.module_count);
+        var child = try initProgram(allocator, self.root_globals.len, self.module_count);
         child.program_shapes = self.program_shapes;
         child.module_export_shape_ids = self.module_export_shape_ids;
         child.module_root_entries = self.module_root_entries;
+        child.module_function_bases = self.module_function_bases;
+        child.module_function_counts = self.module_function_counts;
         child.module_lookup_ctx = self.module_lookup_ctx;
         child.module_lookup = self.module_lookup;
         child.module_name = self.module_name;
@@ -701,13 +716,23 @@ pub const Context = struct {
 
     pub fn deinit(self: *Context) void {
         self.string_arena.deinit();
-        for (self.module_state_pages) |page| if (page) |owned| self.allocator.destroy(owned);
+        self.static_global_scopes.deinit(self.allocator);
+        for (self.module_state_pages) |page| if (page) |owned| {
+            for (owned) |*state| {
+                if (state.global_table) |table| {
+                    table.deinit(self.allocator);
+                    self.allocator.destroy(table);
+                }
+                if (state.globals) |globals| self.allocator.free(globals);
+            }
+            self.allocator.destroy(owned);
+        };
         self.allocator.free(self.module_state_pages);
-        if (self.global_table) |table| {
+        if (self.root_global_table) |table| {
             table.deinit(self.allocator);
             self.allocator.destroy(table);
         }
-        self.allocator.free(self.globals);
+        self.allocator.free(self.root_globals);
     }
 
     pub fn setHost(self: *Context, host: ?*anyopaque) void {
@@ -796,6 +821,8 @@ pub const Context = struct {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
+        const previous = try self.enterFunctionModule(value.id);
+        defer if (previous) |scope| self.restoreGlobals(scope);
         return self.callEntryBuffered(value.entry, value.captures(), args, result_buffer);
     }
 
@@ -803,10 +830,12 @@ pub const Context = struct {
         return self.callFunctionBuffered(value, args, null);
     }
 
-    pub fn callStaticFunctionBuffered(self: *Context, entry: FunctionFn, captures: []const *Cell, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+    pub fn callStaticFunctionBuffered(self: *Context, function_id: u32, entry: FunctionFn, captures: []const *Cell, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
+        const previous = try self.enterFunctionModule(function_id);
+        defer if (previous) |scope| self.restoreGlobals(scope);
         return self.callEntryBuffered(entry, .{ .direct = captures }, args, result_buffer);
     }
 
@@ -814,6 +843,8 @@ pub const Context = struct {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
+        const previous = try self.enterFunctionModule(value.id);
+        defer if (previous) |scope| self.restoreGlobals(scope);
         return direct(self, value.captures(), args);
     }
 
@@ -821,6 +852,8 @@ pub const Context = struct {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
+        const previous = try self.enterFunctionModule(value.id);
+        defer if (previous) |scope| self.restoreGlobals(scope);
         return direct(self, value.captures(), args, result_buffer);
     }
 
@@ -839,6 +872,11 @@ pub const Context = struct {
         self.module_lookup_ctx = host;
         self.module_lookup = lookup;
         self.module_name = name;
+    }
+
+    pub fn configureModuleFunctions(self: *Context, bases: []const u32, counts: []const u32) void {
+        self.module_function_bases = bases;
+        self.module_function_counts = counts;
     }
 
     fn canonicalModuleName(self: *const Context, module_id: u32, requested: ?[]const u8) ?[]const u8 {
@@ -869,6 +907,93 @@ pub const Context = struct {
             self.module_state_pages[page_index] = page;
         }
         return &self.module_state_pages[page_index].?[@as(usize, module_id) & module_state_page_mask];
+    }
+
+    fn ensureModuleGlobals(self: *Context, module_id: u32) !GlobalScope {
+        const state = try self.ensureModuleState(module_id);
+        if (state.globals == null) {
+            const globals = try self.allocator.dupe(Value, self.root_globals);
+            errdefer self.allocator.free(globals);
+            var table: ?*Table = null;
+            if (self.root_global_table) |root_table| {
+                const owned = try self.allocator.create(Table);
+                errdefer self.allocator.destroy(owned);
+                owned.* = .{
+                    .shape = root_table.shape,
+                    .slots = globals,
+                    .owns_slots = false,
+                };
+                if (self.global_env_slot) |slot| {
+                    if (slot >= globals.len) return error.BadGlobalSlot;
+                    globals[slot] = .{ .table = owned };
+                }
+                table = owned;
+            }
+            state.globals = globals;
+            state.global_table = table;
+        }
+        return .{
+            .globals = state.globals.?,
+            .global_table = state.global_table,
+        };
+    }
+
+    fn moduleForFunction(self: *const Context, function_id: u32) ?u32 {
+        if (self.module_function_bases.len != self.module_function_counts.len or
+            self.module_function_bases.len != self.module_count)
+            return null;
+        var low: usize = 0;
+        var high = self.module_function_bases.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const base = self.module_function_bases[mid];
+            const end = @as(u64, base) + self.module_function_counts[mid];
+            if (function_id < base) {
+                high = mid;
+            } else if (@as(u64, function_id) >= end) {
+                low = mid + 1;
+            } else {
+                return @intCast(mid);
+            }
+        }
+        return null;
+    }
+
+    fn enterModule(self: *Context, module_id: u32) !GlobalScope {
+        const previous = GlobalScope{
+            .globals = self.globals,
+            .global_table = self.global_table,
+        };
+        const target = try self.ensureModuleGlobals(module_id);
+        self.globals = target.globals;
+        self.global_table = target.global_table;
+        return previous;
+    }
+
+    fn enterFunctionModule(self: *Context, function_id: u32) !?GlobalScope {
+        const module_id = self.moduleForFunction(function_id) orelse return null;
+        return try self.enterModule(module_id);
+    }
+
+    fn restoreGlobals(self: *Context, previous: GlobalScope) void {
+        self.globals = previous.globals;
+        self.global_table = previous.global_table;
+    }
+
+    pub fn enterStaticFunction(self: *Context, function_id: u32) !void {
+        if (self.depth >= self.max_depth) return error.CallDepth;
+        self.depth += 1;
+        errdefer self.depth -= 1;
+        const previous = try self.enterFunctionModule(function_id);
+        try self.static_global_scopes.append(self.allocator, previous orelse .{
+            .globals = self.globals,
+            .global_table = self.global_table,
+        });
+    }
+
+    pub fn leaveStaticFunction(self: *Context) void {
+        if (self.static_global_scopes.pop()) |previous| self.restoreGlobals(previous);
+        if (self.depth != 0) self.depth -= 1;
     }
 
     fn cloneSnapshotValue(
@@ -930,6 +1055,8 @@ pub const Context = struct {
 
         const canonical = self.canonicalModuleName(module_id, requested);
         const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
+        const previous_globals = try self.enterModule(module_id);
+        defer self.restoreGlobals(previous_globals);
         const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
         defer freeResults(values);
         var value: Value = if (values.len == 0) .nil else values[0];
@@ -1436,6 +1563,66 @@ test "recursive module loads keep distinct cache slots" {
     try std.testing.expect(ctx.module_values.get(0) != null and ctx.module_values.get(1) != null);
 }
 
+const ModuleGlobalIsolationProbe = struct {
+    fn rootA(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        try ctx.setGlobal(0, .{ .string = "A" });
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = try ctx.makeFunctionKnown(1, read, &.{});
+        return out;
+    }
+    fn rootB(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        try ctx.setGlobal(0, .{ .string = "B" });
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = try ctx.makeFunctionKnown(3, read, &.{});
+        return out;
+    }
+    fn read(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = ctx.getGlobal(0);
+        return out;
+    }
+};
+
+test "module globals are isolated for dynamic and static calls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 2, 2);
+    defer ctx.deinit();
+    const roots = [_]FunctionFn{
+        stabilize(ModuleGlobalIsolationProbe.rootA),
+        stabilize(ModuleGlobalIsolationProbe.rootB),
+    };
+    const bases = [_]u32{ 0, 2 };
+    const counts = [_]u32{ 2, 2 };
+    ctx.module_root_entries = &roots;
+    ctx.configureModuleFunctions(&bases, &counts);
+    try bindGlobalTable(&ctx, null, 1);
+    try ctx.setGlobal(0, .{ .string = "root" });
+
+    const a = try ctx.loadModule(0, null);
+    const b = try ctx.loadModule(1, null);
+    try std.testing.expectEqualStrings("root", ctx.getGlobal(0).string);
+
+    const a_result = try ctx.callValue(a, &.{});
+    defer freeResults(a_result);
+    try std.testing.expectEqualStrings("A", a_result[0].string);
+    const b_result = try ctx.callValue(b, &.{});
+    defer freeResults(b_result);
+    try std.testing.expectEqualStrings("B", b_result[0].string);
+    try std.testing.expectEqualStrings("root", ctx.getGlobal(0).string);
+
+    const static_a = try ctx.callStaticFunctionBuffered(
+        1,
+        stabilize(ModuleGlobalIsolationProbe.read),
+        &.{},
+        &.{},
+        null,
+    );
+    defer freeResults(static_a);
+    try std.testing.expectEqualStrings("A", static_a[0].string);
+    try std.testing.expectEqualStrings("root", ctx.getGlobal(0).string);
+}
+
 const NativeHostProbe = struct {
     value: f64,
     fn call(raw: ?*anyopaque, ctx: *Context, args: []const Value) ![]const Value {
@@ -1516,10 +1703,13 @@ pub inline fn touch(value: anytype) void {
     _ = value;
 }
 pub fn bindGlobalTable(ctx: *Context, shape: ?*const Shape, env_slot: u32) !void {
-    if (ctx.global_table != null) return error.GlobalTableAlreadyBound;
+    if (ctx.root_global_table != null) return error.GlobalTableAlreadyBound;
     const table = try ctx.allocator.create(Table);
     table.* = .{ .shape = shape, .slots = ctx.globals, .owns_slots = false };
     ctx.global_table = table;
+    ctx.root_global_table = table;
+    ctx.root_globals = ctx.globals;
+    ctx.global_env_slot = env_slot;
     try ctx.setGlobal(env_slot, .{ .table = table });
 }
 
