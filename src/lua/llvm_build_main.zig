@@ -507,7 +507,6 @@ fn appendModuleToBatch(
         module.functions.items.len != record.function_count)
         return error.FunctionAnalysisMismatch;
 
-    _ = index;
     var table_shapes = try shape_registry.moduleFacts(scratch, record.source_index);
     defer table_shapes.deinit(scratch);
     const facts = emitter.ProgramFacts{
@@ -515,6 +514,7 @@ fn appendModuleToBatch(
         .module_facts = module_facts,
         .table_shapes = &table_shapes,
         .synth_root = record.synth_root,
+        .current_module_id = @intCast(index),
     };
     const result = try batch.append(scratch, globals, &module, facts);
     if (result.root_function != record.root_function or

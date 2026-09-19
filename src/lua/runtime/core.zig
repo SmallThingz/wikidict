@@ -869,12 +869,12 @@ pub const Context = struct {
         return self.callFunctionBuffered(value, args, null);
     }
 
-    pub fn callStaticFunctionBuffered(self: *Context, function_id: u32, entry: FunctionFn, captures: []const *Cell, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+    pub fn callStaticFunctionBuffered(self: *Context, module_id: u32, entry: FunctionFn, captures: []const *Cell, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         defer self.depth -= 1;
-        const previous = try self.enterFunctionModule(function_id);
-        defer if (previous) |scope| self.restoreGlobals(scope);
+        const previous = try self.enterModule(module_id);
+        defer self.restoreGlobals(previous);
         return self.callEntryBuffered(entry, .{ .direct = captures }, args, result_buffer);
     }
 
@@ -1088,15 +1088,12 @@ pub const Context = struct {
         self.global_table = previous.global_table;
     }
 
-    pub fn enterStaticFunction(self: *Context, function_id: u32) !void {
+    pub fn enterStaticModule(self: *Context, module_id: u32) !void {
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
         errdefer self.depth -= 1;
-        const previous = try self.enterFunctionModule(function_id);
-        try self.static_global_scopes.append(self.allocator, previous orelse .{
-            .globals = self.globals,
-            .global_table = self.global_table,
-        });
+        const previous = try self.enterModule(module_id);
+        try self.static_global_scopes.append(self.allocator, previous);
     }
 
     pub fn leaveStaticFunction(self: *Context) void {
@@ -1918,7 +1915,7 @@ test "module globals are isolated for dynamic and static calls" {
     try std.testing.expectEqualStrings("root", ctx.getGlobal(0).string);
 
     const static_a = try ctx.callStaticFunctionBuffered(
-        1,
+        0,
         stabilize(ModuleGlobalIsolationProbe.read),
         &.{},
         &.{},

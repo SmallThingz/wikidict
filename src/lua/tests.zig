@@ -669,7 +669,7 @@ test "call-only captured closures pass cells without materializing callable iden
     const generated_source = try generated.toText(std.testing.allocator);
     defer std.testing.allocator.free(generated_source);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "call %CallResult @dict_lua_call_static_multi") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated_source, "@dict_lua_call_static_multi(ptr %ctx, i32 1, ptr @lua_f_1, ptr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "@dict_lua_call_static_multi(ptr %ctx, i32 0, ptr @lua_f_1, ptr") != null);
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, " = call i32 @dict_lua_make_function"));
 }
 
@@ -810,6 +810,8 @@ test "known module export emits guarded direct LLVM call" {
     try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_require_module_id") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_value_is_function_id") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_99") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_enter_static_call(ptr %ctx, i32 0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_enter_static_call(ptr %ctx, i32 99)") == null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "direct_export") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "dynamic_export") != null);
 }

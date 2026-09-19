@@ -338,8 +338,8 @@ fn fixedCall(ctx: *rt.Context, callable: rt.Value, args: []const rt.Value, out: 
     }
     return 0;
 }
-export fn dict_lua_enter_static_call(ctx: *rt.Context, function_id: u32) callconv(.c) u32 {
-    ctx.enterStaticFunction(function_id) catch |err| return fail(ctx, err);
+export fn dict_lua_enter_static_call(ctx: *rt.Context, module_id: u32) callconv(.c) u32 {
+    ctx.enterStaticModule(module_id) catch |err| return fail(ctx, err);
     return 0;
 }
 
@@ -358,11 +358,11 @@ fn captureSlice(ptr: ?[*]const *rt.Cell, len: usize) ?[]const *rt.Cell {
     return (ptr orelse return null)[0..len];
 }
 
-fn staticFixedCall(ctx: *rt.Context, function_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, args: []const rt.Value, out: []rt.Value) u32 {
+fn staticFixedCall(ctx: *rt.Context, module_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, args: []const rt.Value, out: []rt.Value) u32 {
     const captures = captureSlice(captures_ptr, captures_len) orelse return fail(ctx, error.BadUpvalue);
     const entry: rt.FunctionFn = @ptrCast(entry_raw);
     @memset(out, .nil);
-    const result = ctx.callStaticFunctionBuffered(function_id, entry, captures, args, out) catch |err| return fail(ctx, err);
+    const result = ctx.callStaticFunctionBuffered(module_id, entry, captures, args, out) catch |err| return fail(ctx, err);
     const owned = result.len != 0 and result.ptr != out.ptr;
     defer if (owned) rt.freeResults(result);
     if (result.ptr != out.ptr) {
@@ -372,8 +372,8 @@ fn staticFixedCall(ctx: *rt.Context, function_id: u32, entry_raw: *const anyopaq
     return 0;
 }
 
-export fn dict_lua_call_static_fixed(ctx: *rt.Context, function_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, args_ptr: [*]const rt.Value, args_len: usize, out_ptr: [*]rt.Value, out_len: usize) callconv(.c) u32 {
-    return staticFixedCall(ctx, function_id, entry_raw, captures_ptr, captures_len, values(args_ptr, args_len), out_ptr[0..out_len]);
+export fn dict_lua_call_static_fixed(ctx: *rt.Context, module_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, args_ptr: [*]const rt.Value, args_len: usize, out_ptr: [*]rt.Value, out_len: usize) callconv(.c) u32 {
+    return staticFixedCall(ctx, module_id, entry_raw, captures_ptr, captures_len, values(args_ptr, args_len), out_ptr[0..out_len]);
 }
 
 export fn dict_lua_call_fixed(ctx: *rt.Context, callable: *const rt.Value, args_ptr: [*]const rt.Value, args_len: usize, out_ptr: [*]rt.Value, out_len: usize) callconv(.c) u32 {
@@ -392,38 +392,38 @@ fn mergeCallArgs(fixed: []const rt.Value, tail: []const rt.Value, storage: []rt.
     return merged;
 }
 
-export fn dict_lua_call_static_fixed_tail(ctx: *rt.Context, function_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, fixed_ptr: [*]const rt.Value, fixed_len: usize, tail_ptr: [*]const rt.Value, tail_len: usize, out_ptr: [*]rt.Value, out_len: usize) callconv(.c) u32 {
+export fn dict_lua_call_static_fixed_tail(ctx: *rt.Context, module_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, fixed_ptr: [*]const rt.Value, fixed_len: usize, tail_ptr: [*]const rt.Value, tail_len: usize, out_ptr: [*]rt.Value, out_len: usize) callconv(.c) u32 {
     var storage: [8]rt.Value = undefined;
     const args = mergeCallArgs(values(fixed_ptr, fixed_len), values(tail_ptr, tail_len), &storage) catch |err| return fail(ctx, err);
     defer if (args.ptr != storage[0..].ptr) std.heap.smp_allocator.free(args);
-    return staticFixedCall(ctx, function_id, entry_raw, captures_ptr, captures_len, args, out_ptr[0..out_len]);
+    return staticFixedCall(ctx, module_id, entry_raw, captures_ptr, captures_len, args, out_ptr[0..out_len]);
 }
 
-fn staticMultiResult(ctx: *rt.Context, function_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, args: []const rt.Value) CallResult {
+fn staticMultiResult(ctx: *rt.Context, module_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, args: []const rt.Value) CallResult {
     const captures = captureSlice(captures_ptr, captures_len) orelse {
         _ = fail(ctx, error.BadUpvalue);
         return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
     };
     const entry: rt.FunctionFn = @ptrCast(entry_raw);
-    const result = ctx.callStaticFunctionBuffered(function_id, entry, captures, args, null) catch |err| {
+    const result = ctx.callStaticFunctionBuffered(module_id, entry, captures, args, null) catch |err| {
         _ = fail(ctx, err);
         return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
     };
     return .{ .values_ptr = if (result.len == 0) null else result.ptr, .values_len = result.len, .status = 0, .reserved = 0 };
 }
 
-export fn dict_lua_call_static_multi(ctx: *rt.Context, function_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, args_ptr: [*]const rt.Value, args_len: usize) callconv(.c) CallResult {
-    return staticMultiResult(ctx, function_id, entry_raw, captures_ptr, captures_len, values(args_ptr, args_len));
+export fn dict_lua_call_static_multi(ctx: *rt.Context, module_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, args_ptr: [*]const rt.Value, args_len: usize) callconv(.c) CallResult {
+    return staticMultiResult(ctx, module_id, entry_raw, captures_ptr, captures_len, values(args_ptr, args_len));
 }
 
-export fn dict_lua_call_static_multi_tail(ctx: *rt.Context, function_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, fixed_ptr: [*]const rt.Value, fixed_len: usize, tail_ptr: [*]const rt.Value, tail_len: usize) callconv(.c) CallResult {
+export fn dict_lua_call_static_multi_tail(ctx: *rt.Context, module_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, fixed_ptr: [*]const rt.Value, fixed_len: usize, tail_ptr: [*]const rt.Value, tail_len: usize) callconv(.c) CallResult {
     var storage: [8]rt.Value = undefined;
     const args = mergeCallArgs(values(fixed_ptr, fixed_len), values(tail_ptr, tail_len), &storage) catch |err| {
         _ = fail(ctx, err);
         return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
     };
     defer if (args.ptr != storage[0..].ptr) std.heap.smp_allocator.free(args);
-    return staticMultiResult(ctx, function_id, entry_raw, captures_ptr, captures_len, args);
+    return staticMultiResult(ctx, module_id, entry_raw, captures_ptr, captures_len, args);
 }
 
 export fn dict_lua_call_fixed_tail(ctx: *rt.Context, callable: *const rt.Value, fixed_ptr: [*]const rt.Value, fixed_len: usize, tail_ptr: [*]const rt.Value, tail_len: usize, out_ptr: [*]rt.Value, out_len: usize) callconv(.c) u32 {
