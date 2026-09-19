@@ -2,6 +2,8 @@ const std = @import("std");
 const rt = @import("zig_runtime");
 const format = @import("lua_static_literal_format");
 
+pub const synth_callable_marker = format.synth_callable_marker;
+
 const Reader = struct {
     bytes: []const u8,
     pos: usize = 0,

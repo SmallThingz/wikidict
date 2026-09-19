@@ -22,3 +22,4 @@ pub const compact_marker: u8 = 0xf0;
 pub const compact_version: u8 = 1;
 pub const table_has_shape: u8 = 1 << 0;
 pub const table_flags_mask: u8 = table_has_shape;
+pub const synth_callable_marker: u8 = 0xf1;

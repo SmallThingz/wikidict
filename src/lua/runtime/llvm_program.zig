@@ -370,6 +370,38 @@ pub const Program = struct {
             return null;
         }
 
+        const start: usize = self.module_synth_offsets[id];
+        const end: usize = self.module_synth_offsets[id + 1];
+        if (blob.len != 0 and blob[0] == static_decode.synth_callable_marker) {
+            if (end - start != 1) return error.InvalidSyntheticCallableRoot;
+            const meta = self.synth_exports[start];
+            if (meta.name.len != 0) return error.InvalidSyntheticCallableRoot;
+            const captures_value = try static_decode.decode(ctx, blob[1..]);
+            if (captures_value != .table) return error.InvalidSyntheticCallableCaptures;
+            const capture_table = captures_value.table;
+            defer {
+                capture_table.deinit(ctx.allocator);
+                ctx.allocator.destroy(capture_table);
+            }
+            if (capture_table.shape != null or capture_table.native_namespace != null or
+                capture_table.append_index == 0)
+                return error.InvalidSyntheticCallableCaptures;
+            const capture_count: usize = capture_table.append_index - 1;
+            if (capture_count > capture_table.slots.len) return error.InvalidSyntheticCallableCaptures;
+            const cells = try ctx.allocator.alloc(*rt.Cell, capture_count);
+            defer ctx.allocator.free(cells);
+            for (cells, 0..) |*cell_out, capture_index| {
+                const cell = try ctx.allocator.create(rt.Cell);
+                cell.* = .{ .value = capture_table.slots[capture_index] };
+                cell_out.* = cell;
+            }
+            return try ctx.makeFunction(
+                meta.function_id,
+                self.synth_export_entries[start],
+                cells,
+            );
+        }
+
         const table = if (blob.len != 0) blk: {
             const seed = try static_decode.decode(ctx, blob);
             if (seed != .table) return error.InvalidSyntheticRootSeed;
@@ -381,8 +413,6 @@ pub const Program = struct {
             else
                 try ctx.newProgramShape(shape_id);
         };
-        const start: usize = self.module_synth_offsets[id];
-        const end: usize = self.module_synth_offsets[id + 1];
         for (self.synth_exports[start..end], self.synth_export_entries[start..end]) |meta, entry| {
             const callable = try ctx.makeFunction(meta.function_id, entry, &.{});
             try table.rawSet(ctx.allocator, .{ .string = meta.name }, callable);

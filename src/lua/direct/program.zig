@@ -32,6 +32,7 @@ pub const ModuleRecord = struct {
     static_root: bool = false,
     static_root_blob: []const u8 = &.{},
     synth_root: bool = false,
+    synth_callable_root: bool = false,
 };
 
 pub fn needsLlvmBatch(record: ModuleRecord) bool {
@@ -138,8 +139,11 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
     var synth_entries: std.ArrayList(llvm.ValueRef) = .empty;
     defer synth_entries.deinit(a);
     for (records) |record| if (record.synth_root) {
+        if (record.synth_callable_root and record.direct_exports.len != 1)
+            return error.InvalidSyntheticCallableRoot;
         for (record.direct_exports) |entry| {
-            if (entry.capture_count != 0) return error.InvalidSyntheticRootCapture;
+            if (!record.synth_callable_root and entry.capture_count != 0)
+                return error.InvalidSyntheticRootCapture;
             const name = try std.fmt.allocPrint(a, "lua_f_{d}", .{entry.function_id});
             defer a.free(name);
             const function = m.getFunction(name) orelse try m.addFunction(name, generated_fn_ty);
@@ -328,8 +332,11 @@ pub fn writeMetadata(
         try metadata.writeU32(w, @intFromBool(record.synth_root));
         const exports = if (record.synth_root) record.direct_exports else &.{};
         try metadata.writeU32(w, try requireU32(exports.len));
+        if (record.synth_callable_root and exports.len != 1)
+            return error.InvalidSyntheticCallableRoot;
         for (exports) |entry| {
-            if (entry.capture_count != 0) return error.InvalidSyntheticRootCapture;
+            if (!record.synth_callable_root and entry.capture_count != 0)
+                return error.InvalidSyntheticRootCapture;
             try metadata.writeString(w, entry.name);
             try metadata.writeU32(w, entry.function_id);
         }

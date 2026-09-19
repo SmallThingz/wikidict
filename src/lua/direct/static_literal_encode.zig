@@ -5,6 +5,15 @@ const shapes = @import("shapes.zig");
 const format = @import("../runtime/static_literal_format.zig");
 
 const A = std.mem.Allocator;
+pub const synth_callable_marker = format.synth_callable_marker;
+
+pub fn isScalarLiteral(expr: *const lua.Expr) bool {
+    return switch (expr.*) {
+        .nil_lit, .bool_lit, .number, .string => true,
+        .paren => |paren| isScalarLiteral(paren.expr),
+        else => false,
+    };
+}
 
 pub fn isLiteral(expr: *const lua.Expr) bool {
     return switch (expr.*) {
@@ -124,6 +133,20 @@ pub fn encode(a: A, value: *const lua.Expr, table_shapes: ?*const shapes.ModuleF
     try encoder.beginCompact();
     try encoder.expr(value, 0);
     return encoder.out.toOwnedSlice(a);
+}
+
+pub fn encodeScalarLiteralList(a: A, values: []const *const lua.Expr) ![]u8 {
+    const fields = try a.alloc(lua.TableField, values.len);
+    defer a.free(fields);
+    for (fields, values) |*field, value| {
+        if (!isScalarLiteral(value)) return error.NonStaticLiteral;
+        field.* = .{ .list = @constCast(value) };
+    }
+    var expr: lua.Expr = .{ .table = .{
+        .fields = fields,
+        .span = .{ .start = 0, .end = 0 },
+    } };
+    return encode(a, &expr, null);
 }
 
 pub const NamedLiteralField = struct {
