@@ -2037,6 +2037,32 @@ const FnEmitter = struct {
                 return true;
             },
             .local_assign => |s| {
+                if (s.values.len == s.names.len and self.binding_next + s.names.len <= self.info.bindings.len) {
+                    const dead = try self.a().alloc(bool, s.names.len);
+                    defer self.a().free(dead);
+                    @memset(dead, false);
+                    var any_dead = false;
+                    for (s.values, 0..) |value, index| {
+                        if (value.* != .function) continue;
+                        const binding_info = self.info.bindings[self.binding_next + index];
+                        const span = binding_info.function_span orelse continue;
+                        if (span.start != value.function.span.start or span.end != value.function.span.end) continue;
+                        const target = try self.module.functionForSpan(value.function.span);
+                        dead[index] = target.dead;
+                        any_dead = any_dead or target.dead;
+                    }
+                    if (any_dead) {
+                        const values_out = try self.a().alloc(ValueRef, s.values.len);
+                        defer self.a().free(values_out);
+                        for (s.values, dead, 0..) |value, is_dead, index|
+                            values_out[index] = if (is_dead) .nil else try self.expr(value);
+                        for (s.names, dead, 0..) |name, is_dead, index| {
+                            const binding = try self.bindName(name);
+                            if (!is_dead) try self.initBinding(binding, values_out[index]);
+                        }
+                        return false;
+                    }
+                }
                 if (s.names.len == 1 and s.values.len == 1 and s.values[0].* == .call and self.binding_next < self.info.bindings.len) {
                     const binding_info = self.info.bindings[self.binding_next];
                     const call = s.values[0].call;
@@ -2086,8 +2112,12 @@ const FnEmitter = struct {
                 return false;
             },
             .local_function => |s| {
+                const target = try self.module.functionForSpan(s.function.function.span);
+                if (target.dead) {
+                    _ = try self.bindName(s.name);
+                    return false;
+                }
                 if (self.binding_next < self.info.bindings.len and self.info.bindings[self.binding_next].directCallOnly()) {
-                    const target = try self.module.functionForSpan(s.function.function.span);
                     const direct = try self.staticFunction(target);
                     const binding = try self.bindName(s.name);
                     self.storage[binding] = .{ .static_function = direct };
@@ -2351,6 +2381,20 @@ pub const Batch = struct {
         self.* = undefined;
     }
 
+    fn deadFunctionStub(self: *Batch, function_ty: T) anyerror!V {
+        const name = "dict_lua_dead_function_unreachable";
+        if (self.module.getFunction(name)) |existing| return existing;
+        const function = try self.module.addFunction(name, function_ty);
+        llvm.setLinkage(function, .internal);
+        const block = try llvm.appendBlock(self.module.context, function, "entry");
+        const builder = try llvm.createBuilder(self.module.context);
+        defer llvm.disposeBuilder(builder);
+        llvm.position(builder, block);
+        const result = try llvm.call(builder, self.runtime.function_error, &.{});
+        try llvm.ret(builder, result);
+        return function;
+    }
+
     pub fn append(
         self: *Batch,
         allocator: A,
@@ -2363,6 +2407,10 @@ pub const Batch = struct {
         const function_base = module.functions.items[0].id;
         const function_ty = try generatedFunctionType(&self.module);
         for (module.functions.items, 0..) |info, index| {
+            if (info.dead) {
+                functions[index] = try self.deadFunctionStub(function_ty);
+                continue;
+            }
             const name = try std.fmt.allocPrint(allocator, "lua_f_{d}", .{info.id});
             defer allocator.free(name);
             functions[index] = self.module.getFunction(name) orelse
@@ -2387,7 +2435,7 @@ pub const Batch = struct {
         try emitter.collectStaticModules();
 
         for (module.functions.items, 0..) |info, index| {
-            if (facts.synth_root and index == 0) continue;
+            if (info.dead or (facts.synth_root and index == 0)) continue;
             try emitFunction(&emitter, info);
         }
         return .{
@@ -2437,4 +2485,34 @@ test "direct LLVM module smoke" {
     defer std.testing.allocator.free(text_ir);
     try std.testing.expect(std.mem.indexOf(u8, text_ir, "define %FunctionResult @lua_f_0") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_ir, "fadd double") != null);
+}
+
+test "dead local functions do not enter LLVM" {
+    const source =
+        \\local function dead()
+        \\  local function child() return 1 end
+        \\  return child
+        \\end
+        \\local function live(x) return x + 1 end
+        \\return live
+    ;
+    var chunk = try lua.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    try std.testing.expect(module.functions.items[1].dead);
+    try std.testing.expect(module.functions.items[2].dead);
+    try std.testing.expect(!module.functions.items[3].dead);
+
+    var generated = try generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@lua_f_1") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@lua_f_2") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "define %FunctionResult @lua_f_3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "define internal %FunctionResult @dict_lua_dead_function_unreachable") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call i32 @dict_lua_make_function"));
 }
