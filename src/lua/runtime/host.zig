@@ -33,6 +33,12 @@ pub const InterfaceMessage = struct {
     source: ?[]const u8,
 };
 pub const InterfaceMessageFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, []const u8) anyerror!?InterfaceMessage;
+pub const FileMetadata = struct {
+    exists: bool,
+    width: u32 = 0,
+    height: u32 = 0,
+};
+pub const FileMetadataFn = *const fn (?*anyopaque, []const u8) anyerror!FileMetadata;
 
 pub const InterwikiRow = struct {
     prefix: []const u8,
@@ -40,8 +46,16 @@ pub const InterwikiRow = struct {
     is_local: bool,
     is_current_wiki: bool,
     is_protocol_relative: bool,
+    is_transcludable: bool,
 };
 pub const SiteInterwikiMapFn = *const fn (?*anyopaque) anyerror![]const InterwikiRow;
+pub const WikibaseSitelinkFn = *const fn (?*anyopaque, []const u8, []const u8) anyerror!?[]const u8;
+pub const WikibaseEntityText = struct {
+    label: ?[]const u8,
+    description: ?[]const u8,
+};
+pub const WikibaseEntityTextFn = *const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityText;
+pub const LanguageKnownTagFn = *const fn (?*anyopaque, []const u8) anyerror!bool;
 
 pub const Host = struct {
     ctx: ?*anyopaque = null,
@@ -61,7 +75,11 @@ pub const Host = struct {
     external_data: ?ExternalDataFn = null,
     category_stats: ?CategoryStatsFn = null,
     interface_message: ?InterfaceMessageFn = null,
+    file_metadata: ?FileMetadataFn = null,
     site_interwiki_map: ?SiteInterwikiMapFn = null,
+    wikibase_sitelink: ?WikibaseSitelinkFn = null,
+    wikibase_entity_text: ?WikibaseEntityTextFn = null,
+    language_known_tag: ?LanguageKnownTagFn = null,
 };
 
 pub fn set(runtime: *rt.Context, host: ?*Host) void {

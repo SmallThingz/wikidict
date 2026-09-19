@@ -7,11 +7,18 @@ const preprocess = @import("lua_wikitext_preprocess");
 const ExternalData = lua_program.WikitextProvider.ExternalData;
 const CategoryStats = lua_program.WikitextProvider.CategoryStats;
 const InterfaceMessage = lua_program.WikitextProvider.InterfaceMessage;
+const FileMetadata = lua_program.WikitextProvider.FileMetadata;
 const InterwikiRow = lua_program.WikitextProvider.InterwikiRow;
+const WikibaseEntityText = lua_program.WikitextProvider.WikibaseEntityText;
 const TransclusionBody = lua_program.WikitextProvider.TransclusionBody;
+const CategoryTreeRange = struct {
+    start: u32,
+    len: u16,
+};
 
 const CorpusPage = struct { offset: u64, len: usize, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
 const InterfaceMessageEntry = struct { source_raw: ?[]const u8 };
+const CorpusPage = struct { title: []const u8, offset: u64, len: usize, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
 
 const max_transclusion_cache_bytes: usize = 64 * 1024 * 1024;
 const max_transclusion_cache_entries: usize = 65_536;
@@ -45,8 +52,24 @@ pub const Provider = struct {
     interface_messages: std.StringHashMapUnmanaged(InterfaceMessageEntry) = .empty,
     interface_messages_storage: ?Mapped = null,
     interface_messages_available: bool = false,
+    category_tree_ranges: std.StringHashMapUnmanaged(CategoryTreeRange) = .empty,
+    category_tree_members: std.ArrayList([]const u8) = .empty,
+    category_tree_storage: ?Mapped = null,
+    category_tree_available: bool = false,
+    file_metadata: std.StringHashMapUnmanaged(FileMetadata) = .empty,
+    file_metadata_storage: ?Mapped = null,
+    file_metadata_available: bool = false,
     interwiki_rows: std.ArrayList(InterwikiRow) = .empty,
     interwiki_available: bool = false,
+    wikibase_sitelinks: std.StringHashMapUnmanaged(std.StringHashMapUnmanaged([]const u8)) = .empty,
+    wikibase_sitelinks_storage: ?Mapped = null,
+    wikibase_sitelinks_available: bool = false,
+    wikibase_entity_text: std.StringHashMapUnmanaged(WikibaseEntityText) = .empty,
+    wikibase_entity_text_storage: ?Mapped = null,
+    wikibase_entity_text_available: bool = false,
+    language_registry: std.StringHashMapUnmanaged([]const u8) = .empty,
+    language_registry_storage: ?Mapped = null,
+    language_registry_available: bool = false,
 
     pub fn init(io: std.Io, a: A, root: []const u8, dump_path: []const u8) !Provider {
         const owned_root = try a.dupe(u8, root);
@@ -56,7 +79,12 @@ pub const Provider = struct {
         try self.loadExternalData();
         try self.loadCategoryStats();
         try self.loadInterfaceMessages();
+        try self.loadCategoryTree();
+        try self.loadFileMetadata();
         try self.loadInterwikiMap();
+        try self.loadWikibaseSitelinks();
+        try self.loadWikibaseEntityText();
+        try self.loadLanguageRegistry();
         return self;
     }
 
@@ -74,11 +102,24 @@ pub const Provider = struct {
         if (self.category_stats_storage) |*mapped| mapped.deinit();
         self.interface_messages.deinit(self.a);
         if (self.interface_messages_storage) |*mapped| mapped.deinit();
+        self.category_tree_ranges.deinit(self.a);
+        self.category_tree_members.deinit(self.a);
+        if (self.category_tree_storage) |*mapped| mapped.deinit();
+        self.file_metadata.deinit(self.a);
+        if (self.file_metadata_storage) |*mapped| mapped.deinit();
         for (self.interwiki_rows.items) |row| {
             self.a.free((row.prefix));
             self.a.free((row.url));
         }
         self.interwiki_rows.deinit(self.a);
+        var sitelinks = self.wikibase_sitelinks.valueIterator();
+        while (sitelinks.next()) |site_map| site_map.deinit(self.a);
+        self.wikibase_sitelinks.deinit(self.a);
+        if (self.wikibase_sitelinks_storage) |*mapped| mapped.deinit();
+        self.wikibase_entity_text.deinit(self.a);
+        if (self.wikibase_entity_text_storage) |*mapped| mapped.deinit();
+        self.language_registry.deinit(self.a);
+        if (self.language_registry_storage) |*mapped| mapped.deinit();
         self.a.free(self.root);
         self.root = "";
     }
@@ -95,7 +136,12 @@ pub const Provider = struct {
             .external_data = if (self.external_data_available) externalData else null,
             .category_stats = if (self.category_stats_available) categoryStats else null,
             .interface_message = if (self.interface_messages_available) interfaceMessage else null,
+            .category_tree = if (self.category_tree_available) categoryTree else null,
+            .file_metadata = if (self.file_metadata_available) fileMetadata else null,
             .interwiki_map = if (self.interwiki_available) interwikiMap else null,
+            .wikibase_sitelink = if (self.wikibase_sitelinks_available) wikibaseSitelink else null,
+            .wikibase_entity_text = if (self.wikibase_entity_text_available) wikibaseEntityText else null,
+            .language_known_tag = if (self.language_registry_available) languageKnownTag else null,
         };
     }
 
@@ -218,6 +264,78 @@ pub const Provider = struct {
         self.interface_messages_available = true;
     }
 
+    fn loadCategoryTree(self: *Provider) !void {
+        var mapped = (try self.mapOptional("category-tree.tsv")) orelse return;
+        errdefer mapped.deinit();
+        var ranges: std.StringHashMapUnmanaged(CategoryTreeRange) = .empty;
+        errdefer ranges.deinit(self.a);
+        var members: std.ArrayList([]const u8) = .empty;
+        errdefer members.deinit(self.a);
+        const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
+            return error.CategoryTreeSnapshotTooLarge;
+        try ranges.ensureTotalCapacity(self.a, capacity);
+
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            var fields = std.mem.splitScalar(u8, line, '\t');
+            const category = fields.next() orelse return error.InvalidCategoryTreeSnapshot;
+            if (category.len == 0) return error.InvalidCategoryTreeSnapshot;
+            const start = std.math.cast(u32, members.items.len) orelse return error.CategoryTreeSnapshotTooLarge;
+            var count: usize = 0;
+            while (fields.next()) |title| {
+                if (title.len == 0 or count >= 200) return error.InvalidCategoryTreeSnapshot;
+                try members.append(self.a, title);
+                count += 1;
+            }
+            const result = try ranges.getOrPut(self.a, category);
+            if (result.found_existing) return error.DuplicateCategoryTree;
+            result.value_ptr.* = .{
+                .start = start,
+                .len = std.math.cast(u16, count) orelse return error.CategoryTreeSnapshotTooLarge,
+            };
+        }
+        self.category_tree_ranges = ranges;
+        self.category_tree_members = members;
+        self.category_tree_storage = mapped;
+        self.category_tree_available = true;
+    }
+
+    fn loadFileMetadata(self: *Provider) !void {
+        var mapped = (try self.mapOptional("file-metadata.tsv")) orelse return;
+        errdefer mapped.deinit();
+        var entries: std.StringHashMapUnmanaged(FileMetadata) = .empty;
+        errdefer entries.deinit(self.a);
+        const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
+            return error.FileMetadataSnapshotTooLarge;
+        try entries.ensureTotalCapacity(self.a, capacity);
+
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            var fields = std.mem.splitScalar(u8, line, '\t');
+            const title = fields.next() orelse return error.InvalidFileMetadataSnapshot;
+            const exists_raw = fields.next() orelse return error.InvalidFileMetadataSnapshot;
+            const width = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidFileMetadataSnapshot, 10);
+            const height = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidFileMetadataSnapshot, 10);
+            if (title.len == 0 or fields.next() != null) return error.InvalidFileMetadataSnapshot;
+            const exists_flag = if (std.mem.eql(u8, exists_raw, "1"))
+                true
+            else if (std.mem.eql(u8, exists_raw, "0"))
+                false
+            else
+                return error.InvalidFileMetadataSnapshot;
+            if (!exists_flag and (width != 0 or height != 0)) return error.InvalidFileMetadataSnapshot;
+            const result = try entries.getOrPut(self.a, title);
+            if (result.found_existing) return error.DuplicateFileMetadata;
+            result.value_ptr.* = .{ .exists = exists_flag, .width = width, .height = height };
+        }
+        self.file_metadata = entries;
+        self.file_metadata_storage = mapped;
+        self.file_metadata_available = true;
+    }
+    }
+
     fn loadInterwikiMap(self: *Provider) !void {
         var mapped = (try self.mapOptional("interwiki-map.tsv")) orelse return;
         defer mapped.deinit();
@@ -231,7 +349,9 @@ pub const Provider = struct {
             const local_raw = fields.next() orelse continue;
             const current_raw = fields.next() orelse continue;
             const protocol_raw = fields.next() orelse continue;
+            const transcludable_raw = fields.next() orelse continue;
             const url_raw = fields.next() orelse continue;
+            if (fields.next() != null) return error.InvalidInterwikiSnapshot;
             const prefix = try unescapeFieldAlloc(self.a, prefix_raw);
             errdefer self.a.free(prefix);
             const url = try unescapeFieldAlloc(self.a, url_raw);
@@ -242,8 +362,104 @@ pub const Provider = struct {
                 .is_local = std.mem.eql(u8, local_raw, "1"),
                 .is_current_wiki = std.mem.eql(u8, current_raw, "1"),
                 .is_protocol_relative = std.mem.eql(u8, protocol_raw, "1"),
+                .is_transcludable = std.mem.eql(u8, transcludable_raw, "1"),
             });
         }
+    }
+
+    fn loadWikibaseSitelinks(self: *Provider) !void {
+        var mapped = (try self.mapOptional("wikibase-sitelinks.tsv")) orelse return;
+        errdefer mapped.deinit();
+        var entities: std.StringHashMapUnmanaged(std.StringHashMapUnmanaged([]const u8)) = .empty;
+        errdefer {
+            var values = entities.valueIterator();
+            while (values.next()) |site_map| site_map.deinit(self.a);
+            entities.deinit(self.a);
+        }
+
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            const first_tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidWikibaseSitelinkSnapshot;
+            const second_tab = std.mem.indexOfScalarPos(u8, line, first_tab + 1, '\t') orelse return error.InvalidWikibaseSitelinkSnapshot;
+            if (std.mem.indexOfScalarPos(u8, line, second_tab + 1, '\t') != null)
+                return error.InvalidWikibaseSitelinkSnapshot;
+            const entity_id = line[0..first_tab];
+            const global_site_id = line[first_tab + 1 .. second_tab];
+            const title = line[second_tab + 1 ..];
+            if (entity_id.len == 0 or global_site_id.len == 0) return error.InvalidWikibaseSitelinkSnapshot;
+            if (std.mem.eql(u8, global_site_id, "*") and title.len != 0)
+                return error.InvalidWikibaseSitelinkSnapshot;
+
+            const entity = try entities.getOrPut(self.a, entity_id);
+            if (!entity.found_existing) entity.value_ptr.* = .empty;
+            const site = try entity.value_ptr.getOrPut(self.a, global_site_id);
+            if (site.found_existing) return error.DuplicateWikibaseSitelink;
+            site.value_ptr.* = title;
+        }
+        self.wikibase_sitelinks = entities;
+        self.wikibase_sitelinks_storage = mapped;
+        self.wikibase_sitelinks_available = true;
+    }
+
+    fn loadWikibaseEntityText(self: *Provider) !void {
+        var mapped = (try self.mapOptional("wikibase-entity-text.tsv")) orelse return;
+        errdefer mapped.deinit();
+        var entries: std.StringHashMapUnmanaged(WikibaseEntityText) = .empty;
+        errdefer entries.deinit(self.a);
+        const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
+            return error.WikibaseEntityTextSnapshotTooLarge;
+        try entries.ensureTotalCapacity(self.a, capacity);
+
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            const first_tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidWikibaseEntityTextSnapshot;
+            const second_tab = std.mem.indexOfScalarPos(u8, line, first_tab + 1, '\t') orelse
+                return error.InvalidWikibaseEntityTextSnapshot;
+            if (std.mem.indexOfScalarPos(u8, line, second_tab + 1, '\t') != null)
+                return error.InvalidWikibaseEntityTextSnapshot;
+            const entity_id = line[0..first_tab];
+            const label = line[first_tab + 1 .. second_tab];
+            const description = line[second_tab + 1 ..];
+            if (entity_id.len == 0) return error.InvalidWikibaseEntityTextSnapshot;
+            const result = try entries.getOrPut(self.a, entity_id);
+            if (result.found_existing) return error.DuplicateWikibaseEntityText;
+            result.value_ptr.* = .{
+                .label = if (label.len == 0) null else label,
+                .description = if (description.len == 0) null else description,
+            };
+        }
+        self.wikibase_entity_text = entries;
+        self.wikibase_entity_text_storage = mapped;
+        self.wikibase_entity_text_available = true;
+    }
+
+    fn loadLanguageRegistry(self: *Provider) !void {
+        var mapped = (try self.mapOptional("language-registry.tsv")) orelse return;
+        errdefer mapped.deinit();
+        var entries: std.StringHashMapUnmanaged([]const u8) = .empty;
+        errdefer entries.deinit(self.a);
+        const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
+            return error.LanguageRegistrySnapshotTooLarge;
+        try entries.ensureTotalCapacity(self.a, capacity);
+
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            const tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidLanguageRegistrySnapshot;
+            if (std.mem.indexOfScalarPos(u8, line, tab + 1, '\t') != null)
+                return error.InvalidLanguageRegistrySnapshot;
+            const code = line[0..tab];
+            const name = line[tab + 1 ..];
+            if (code.len == 0 or name.len == 0) return error.InvalidLanguageRegistrySnapshot;
+            const result = try entries.getOrPut(self.a, code);
+            if (result.found_existing) return error.DuplicateLanguageRegistryCode;
+            result.value_ptr.* = name;
+        }
+        self.language_registry = entries;
+        self.language_registry_storage = mapped;
+        self.language_registry_available = true;
     }
 
     fn loadCorpusPages(self: *Provider, dump_path: []const u8) !void {
@@ -287,14 +503,21 @@ pub const Provider = struct {
             const end = std.math.add(u64, offset, len) catch return error.InvalidPageIndex;
             if (end > dump_size) return error.InvalidPageIndex;
             const result = try pages.getOrPut(self.a, title);
-            if (result.found_existing) return error.DuplicatePage;
+            // Wikimedia dump jobs can observe a title before and after a delete/recreate
+            // while walking page IDs. The later row is the state seen later in the dump.
             result.key_ptr.* = title;
-            result.value_ptr.* = .{ .offset = offset, .len = len, .page_id = page_id, .revision_id = revision_id, .revision_timestamp = revision_timestamp, .revision_user = revision_user, .content_model = content_model, .ns = ns, .ordinal = ordinal, .source_needs_decode = source_needs_decode, .redirect = redirect };
+            result.value_ptr.* = .{ .title = title, .offset = offset, .len = len, .page_id = page_id, .revision_id = revision_id, .revision_timestamp = revision_timestamp, .revision_user = revision_user, .content_model = content_model, .ns = ns, .ordinal = ordinal, .source_needs_decode = source_needs_decode, .redirect = redirect };
         }
         self.corpus_pages = pages;
         self.corpus_pages_storage = mapped;
         self.dump_file = file;
         self.transclusion_seen = seen_words orelse &.{};
+    }
+
+    pub fn isCanonicalPage(self: *const Provider, title: []const u8, ordinal: u64) bool {
+        const page = self.corpus_pages.get(title) orelse return false;
+        const wanted = std.math.cast(usize, ordinal) orelse return false;
+        return page.ordinal == wanted;
     }
 
     fn readCorpusSource(self: *Provider, a: A, page: CorpusPage) ![]const u8 {
@@ -348,40 +571,40 @@ pub const Provider = struct {
 
     fn transclusionBody(self: *Provider, a: A, raw_title: []const u8) !?TransclusionBody {
         const page = (try self.finalTransclusionPage(raw_title)) orelse return null;
-        if (self.transclusion_body_cache.get(page.page_id)) |body| return .{ .text = body, .borrowed = true };
+        if (self.transclusion_body_cache.get(page.page_id)) |body| return .{ .text = body, .title = page.title, .borrowed = true };
 
         const raw = try self.readCorpusSource(a, page);
         defer if (page.len != 0) a.free(raw);
         const body = try preprocess.transcludeDecodedAlloc(a, raw);
-        if (page.ns != 10 or page.len > max_transclusion_cache_entry_bytes) return .{ .text = body, .borrowed = false };
+        if (page.ns != 10 or page.len > max_transclusion_cache_entry_bytes) return .{ .text = body, .title = page.title, .borrowed = false };
 
         const bits_per_word = @bitSizeOf(usize);
         const word_index = page.ordinal / bits_per_word;
         const bit = @as(usize, 1) << @intCast(page.ordinal % bits_per_word);
-        if (word_index >= self.transclusion_seen.len) return .{ .text = body, .borrowed = false };
+        if (word_index >= self.transclusion_seen.len) return .{ .text = body, .title = page.title, .borrowed = false };
         if (self.transclusion_seen[word_index] & bit == 0) {
             self.transclusion_seen[word_index] |= bit;
-            return .{ .text = body, .borrowed = false };
+            return .{ .text = body, .title = page.title, .borrowed = false };
         }
         if (self.transclusion_body_cache.count() >= max_transclusion_cache_entries or
             body.len > max_transclusion_cache_entry_bytes or
             self.transclusion_body_cache_bytes > max_transclusion_cache_bytes -| body.len)
-            return .{ .text = body, .borrowed = false };
+            return .{ .text = body, .title = page.title, .borrowed = false };
 
-        const owned = self.a.dupe(u8, body) catch return .{ .text = body, .borrowed = false };
+        const owned = self.a.dupe(u8, body) catch return .{ .text = body, .title = page.title, .borrowed = false };
         const result = self.transclusion_body_cache.getOrPut(self.a, page.page_id) catch {
             self.a.free(owned);
-            return .{ .text = body, .borrowed = false };
+            return .{ .text = body, .title = page.title, .borrowed = false };
         };
         if (result.found_existing) {
             self.a.free(owned);
             a.free(body);
-            return .{ .text = result.value_ptr.*, .borrowed = true };
+            return .{ .text = result.value_ptr.*, .title = page.title, .borrowed = true };
         }
         a.free(body);
         result.value_ptr.* = owned;
         self.transclusion_body_cache_bytes += owned.len;
-        return .{ .text = owned, .borrowed = true };
+        return .{ .text = owned, .title = page.title, .borrowed = true };
     }
     fn getTransclusion(ctx: ?*anyopaque, a: A, title: []const u8) anyerror!?[]const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
@@ -421,11 +644,42 @@ pub const Provider = struct {
         defer a.free(lookup_key);
         const entry = self.interface_messages.get(lookup_key) orelse return null;
         return .{ .source = if (entry.source_raw) |raw| try unescapeFieldAlloc(a, raw) else null };
+    fn categoryTree(ctx: ?*anyopaque, db_key: []const u8) anyerror![]const []const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        const range = self.category_tree_ranges.get(db_key) orelse return error.CategoryTreeSnapshotMissing;
+        const start: usize = range.start;
+        const end = start + range.len;
+        return self.category_tree_members.items[start..end];
+    }
+
+    fn fileMetadata(ctx: ?*anyopaque, title: []const u8) anyerror!FileMetadata {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return self.file_metadata.get(title) orelse error.FileMetadataSnapshotMissing;
     }
 
     fn interwikiMap(ctx: ?*anyopaque) anyerror![]const InterwikiRow {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return self.interwiki_rows.items;
+    }
+
+    fn wikibaseSitelink(ctx: ?*anyopaque, entity_id: []const u8, global_site_id: []const u8) anyerror!?[]const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        const sites = self.wikibase_sitelinks.get(entity_id) orelse return error.WikibaseSitelinkSnapshotMissing;
+        const title = sites.get(global_site_id) orelse {
+            if (sites.contains("*")) return null;
+            return error.WikibaseSitelinkSnapshotMissing;
+        };
+        return if (title.len == 0) null else title;
+    }
+
+    fn wikibaseEntityText(ctx: ?*anyopaque, entity_id: []const u8) anyerror!WikibaseEntityText {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return self.wikibase_entity_text.get(entity_id) orelse error.WikibaseEntityTextSnapshotMissing;
+    }
+
+    fn languageKnownTag(ctx: ?*anyopaque, code: []const u8) anyerror!bool {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return self.language_registry.contains(code);
     }
 
     fn get(ctx: ?*anyopaque, a: A, title: []const u8) anyerror!?[]const u8 {
@@ -439,6 +693,185 @@ pub const Provider = struct {
         return (try self.lookup(self.a, title, false)) != null;
     }
 };
+
+test "provider keeps the later duplicate page row as canonical" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const dump_path = try std.fs.path.join(a, &.{ root, "dump.xml" });
+    defer a.free(dump_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = "oldnew" });
+    const page_index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    defer a.free(page_index_path);
+    const page_index =
+        "0\t3\tSame\t\t1\t11\t2024-01-01T00:00:00Z\tOld\twikitext\t0\t1\t0\n" ++
+        "3\t3\tSame\t\t2\t22\t2024-01-02T00:00:00Z\tNew\twikitext\t0\t1\t0\n";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = page_index_path, .data = page_index });
+
+    var provider = try Provider.init(io, a, root, dump_path);
+    defer provider.deinit();
+    try std.testing.expect(!provider.isCanonicalPage("Same", 0));
+    try std.testing.expect(provider.isCanonicalPage("Same", 1));
+    try std.testing.expect(!provider.isCanonicalPage("Missing", 1));
+
+    var page_arena = std.heap.ArenaAllocator.init(a);
+    defer page_arena.deinit();
+    const content = (try provider.lookup(page_arena.allocator(), "Same", true)) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("new", content);
+    const metadata = (try Provider.pageMetadata(&provider, "Same")).?;
+    try std.testing.expectEqual(@as(u64, 2), metadata.page_id);
+    try std.testing.expectEqual(@as(u64, 22), metadata.revision_id);
+    try std.testing.expectEqualStrings("2024-01-02T00:00:00Z", metadata.revision_timestamp);
+}
+
+test "provider loads exact Wikibase sitelinks and fails closed on unknown pairs" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const snapshot_path = try std.fs.path.join(a, &.{ root, "wikibase-sitelinks.tsv" });
+    defer a.free(snapshot_path);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = snapshot_path,
+        .data =
+        "# entity_id\tglobal_site_id\tpage_title\n" ++
+            "Q42\tenwiki\tDouglas Adams\n" ++
+            "Q42\t*\t\n" ++
+            "Q1\tenwiktionary\t\n" ++
+            "Q2\tenwiki\tExample\n",
+    });
+
+    var provider = try Provider.init(io, a, root, "unused-dump.xml");
+    defer provider.deinit();
+    const get = provider.api().wikibase_sitelink orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("Douglas Adams", (try get(&provider, "Q42", "enwiki")).?);
+    try std.testing.expect((try get(&provider, "Q42", "dewiki")) == null);
+    try std.testing.expect((try get(&provider, "Q1", "enwiktionary")) == null);
+    try std.testing.expectError(error.WikibaseSitelinkSnapshotMissing, get(&provider, "Q1", "dewiki"));
+    try std.testing.expectError(error.WikibaseSitelinkSnapshotMissing, get(&provider, "Q2", "dewiki"));
+    try std.testing.expectError(error.WikibaseSitelinkSnapshotMissing, get(&provider, "Q3", "enwiki"));
+}
+
+test "provider loads pinned Wikibase entity text and fails closed on unknown entities" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const snapshot_path = try std.fs.path.join(a, &.{ root, "wikibase-entity-text.tsv" });
+    defer a.free(snapshot_path);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = snapshot_path,
+        .data =
+        "# entity_id\tlabel\tdescription\n" ++
+            "Q42\tDouglas Adams\tEnglish writer and humorist\n" ++
+            "Q1\t\tuniverse\n" ++
+            "Q2\tEarth\t\n",
+    });
+
+    var provider = try Provider.init(io, a, root, "unused-dump.xml");
+    defer provider.deinit();
+    const get = provider.api().wikibase_entity_text orelse return error.TestExpectedEqual;
+    const q42 = try get(&provider, "Q42");
+    try std.testing.expectEqualStrings("Douglas Adams", q42.label.?);
+    try std.testing.expectEqualStrings("English writer and humorist", q42.description.?);
+    const q1 = try get(&provider, "Q1");
+    try std.testing.expect(q1.label == null);
+    try std.testing.expectEqualStrings("universe", q1.description.?);
+    const q2 = try get(&provider, "Q2");
+    try std.testing.expectEqualStrings("Earth", q2.label.?);
+    try std.testing.expect(q2.description == null);
+    try std.testing.expectError(error.WikibaseEntityTextSnapshotMissing, get(&provider, "Q3"));
+}
+
+test "provider loads pinned category tree members and fails closed on unknown categories" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const snapshot_path = try std.fs.path.join(a, &.{ root, "category-tree.tsv" });
+    defer a.free(snapshot_path);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = snapshot_path,
+        .data =
+        "# category_db_key\tpage_title_1...\n" ++
+            "English_terms_prefixed_with_un-\tunable\tunclear\n" ++
+            "Empty_category\n",
+    });
+
+    var provider = try Provider.init(io, a, root, "unused-dump.xml");
+    defer provider.deinit();
+    const get = provider.api().category_tree orelse return error.TestExpectedEqual;
+    const members = try get(&provider, "English_terms_prefixed_with_un-");
+    try std.testing.expectEqual(@as(usize, 2), members.len);
+    try std.testing.expectEqualStrings("unable", members[0]);
+    try std.testing.expectEqualStrings("unclear", members[1]);
+    const empty = try get(&provider, "Empty_category");
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
+    try std.testing.expectError(error.CategoryTreeSnapshotMissing, get(&provider, "Missing_category"));
+}
+
+test "provider loads complete known-language registry" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const snapshot_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" });
+    defer a.free(snapshot_path);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = snapshot_path,
+        .data =
+        "# code\tname\n" ++
+            "en\tEnglish\n" ++
+            "es\tespañol\n",
+    });
+
+    var provider = try Provider.init(io, a, root, "unused-dump.xml");
+    defer provider.deinit();
+    const known = provider.api().language_known_tag orelse return error.TestExpectedEqual;
+    try std.testing.expect(try known(&provider, "en"));
+    try std.testing.expect(try known(&provider, "es"));
+    try std.testing.expect(!try known(&provider, "zz-invalid"));
+}
+
+test "provider loads pinned file metadata and fails closed on unknown files" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const snapshot_path = try std.fs.path.join(a, &.{ root, "file-metadata.tsv" });
+    defer a.free(snapshot_path);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = snapshot_path,
+        .data =
+        "# title\texists\twidth\theight\n" ++
+            "File:Example.svg\t1\t640\t480\n" ++
+            "File:Missing.svg\t0\t0\t0\n",
+    });
+
+    var provider = try Provider.init(io, a, root, "unused-dump.xml");
+    defer provider.deinit();
+    const get = provider.api().file_metadata orelse return error.TestExpectedEqual;
+    const existing = try get(&provider, "File:Example.svg");
+    try std.testing.expect(existing.exists);
+    try std.testing.expectEqual(@as(u32, 640), existing.width);
+    try std.testing.expectEqual(@as(u32, 480), existing.height);
+    const missing = try get(&provider, "File:Missing.svg");
+    try std.testing.expect(!missing.exists);
+    try std.testing.expectError(error.FileMetadataSnapshotMissing, get(&provider, "File:Unknown.svg"));
+}
 
 test "provider owns paths and separates raw content from redirect-following transclusion" {
     const a = std.testing.allocator;
@@ -483,6 +916,7 @@ test "provider owns paths and separates raw content from redirect-following tran
     const template_body = (try Provider.getTransclusionBody(&provider, page_a, "Template:Alias")) orelse return error.TestExpectedEqual;
     defer if (!template_body.borrowed) page_a.free(template_body.text);
     try std.testing.expectEqualStrings("lazy body", template_body.text);
+    try std.testing.expectEqualStrings("Template:Lazy", template_body.title);
     const persistent_a = provider.a;
     var cache_alloc = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
     provider.a = cache_alloc.allocator();
@@ -491,6 +925,7 @@ test "provider owns paths and separates raw content from redirect-following tran
     defer if (!uncached_body.borrowed) page_a.free(uncached_body.text);
     try std.testing.expect(!uncached_body.borrowed);
     try std.testing.expectEqualStrings("lazy body", uncached_body.text);
+    try std.testing.expectEqualStrings("Template:Lazy", uncached_body.title);
     const admitted_body = (try Provider.getTransclusionBody(&provider, page_a, "Template:Lazy")) orelse return error.TestExpectedEqual;
     try std.testing.expect(admitted_body.borrowed);
     try std.testing.expectEqualStrings("lazy body", admitted_body.text);

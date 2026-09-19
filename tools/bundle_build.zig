@@ -8,6 +8,12 @@ const Options = struct {
     commons_data_snapshot: ?[]const u8 = null,
     category_stats_snapshot: ?[]const u8 = null,
     interface_messages_snapshot: ?[]const u8 = null,
+    category_tree_snapshot: ?[]const u8 = null,
+    interwiki_map_snapshot: ?[]const u8 = null,
+    wikibase_sitelinks_snapshot: ?[]const u8 = null,
+    wikibase_entity_text_snapshot: ?[]const u8 = null,
+    language_registry_snapshot: ?[]const u8 = null,
+    file_metadata_snapshot: ?[]const u8 = null,
     llvm_workers: ?usize = null,
 };
 
@@ -28,6 +34,30 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.interface_messages_snapshot != null) return error.Usage;
             options.interface_messages_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--category-tree-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.category_tree_snapshot != null) return error.Usage;
+            options.category_tree_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--interwiki-map-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.interwiki_map_snapshot != null) return error.Usage;
+            options.interwiki_map_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--wikibase-sitelinks-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.wikibase_sitelinks_snapshot != null) return error.Usage;
+            options.wikibase_sitelinks_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--wikibase-entity-text-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.wikibase_entity_text_snapshot != null) return error.Usage;
+            options.wikibase_entity_text_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--language-registry-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.language_registry_snapshot != null) return error.Usage;
+            options.language_registry_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--file-metadata-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.file_metadata_snapshot != null) return error.Usage;
+            options.file_metadata_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--llvm-workers")) {
             index += 1;
             if (index >= args.len or options.llvm_workers != null) return error.Usage;
@@ -400,7 +430,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--llvm-workers N]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -422,6 +452,18 @@ pub fn main(init: std.process.Init) !void {
         try installSnapshot(init.io, a, snapshot, expander_root, "category-stats.tsv");
     if (options.interface_messages_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "interface-messages.tsv");
+    if (options.category_tree_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "category-tree.tsv");
+    if (options.interwiki_map_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "interwiki-map.tsv");
+    if (options.wikibase_sitelinks_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "wikibase-sitelinks.tsv");
+    if (options.wikibase_entity_text_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "wikibase-entity-text.tsv");
+    if (options.language_registry_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "language-registry.tsv");
+    if (options.file_metadata_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "file-metadata.tsv");
 
     try stage(init.io, marker, "extract modules, redirects, and corpus index", &.{ paths.modules, dump, expander_root, "--page-index" });
 

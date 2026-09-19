@@ -300,7 +300,7 @@ fn deadlineProbe(io: std.Io, a: std.mem.Allocator, dir: []const u8) !void {
     var worker = expander.Worker.init(io, dir, "tail", "missing-dump.xml");
     worker.timeout_ms = 100;
     defer worker.deinit();
-    try std.testing.expectError(error.Timeout, worker.expand(a, "probe", "==English==\n"));
+    try std.testing.expectError(error.Timeout, worker.expand(a, 0, "probe", "==English==\n"));
 }
 
 pub fn main(init: std.process.Init) !void {

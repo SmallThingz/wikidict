@@ -91,7 +91,138 @@ zig build -Doptimize=ReleaseFast build-dictionary -- \
 CATEGORY_DB_KEY<TAB>ALL<TAB>SUBCATS<TAB>FILES
 ```
 
-The `pages` count is derived exactly as MediaWiki does: `ALL - SUBCATS - FILES`. Category lookup preserves case, normalizes spaces/underscores, and ignores title fragments. A missing category in a supplied snapshot has zero members; if the snapshot itself is absent, `pagesInCategory` remains explicitly unsupported. This snapshot is also transient build input and is never published. Both snapshot flags may be supplied together.
+The `pages` count is derived exactly as MediaWiki does: `ALL - SUBCATS - FILES`. Category lookup preserves case, normalizes spaces/underscores, and ignores title fragments. A missing category in a supplied snapshot has zero members; if the snapshot itself is absent, `pagesInCategory` remains explicitly unsupported. This snapshot is also transient build input and is never published.
+
+
+`#categorytree` page-member expansion requires the matching category membership
+state as well as counts. For bundle inputs that use CategoryTree, provide a
+pinned snapshot derived from the matching `linktarget.sql.gz`,
+`categorylinks.sql.gz`, and page dump:
+
+```sh
+zig build -Doptimize=ReleaseFast build-dictionary -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs \
+  --category-tree-snapshot data/category-tree.tsv
+```
+
+`category-tree.tsv` stores the page members already filtered and sorted for the
+supported production CategoryTree request (`type=pages`, `depth=1`, main
+namespace, maximum 200 children):
+
+```text
+CATEGORY_DB_KEY<TAB>PAGE_TITLE_1<TAB>...<TAB>PAGE_TITLE_200
+```
+
+An empty category is represented by its category key alone. A category absent
+from a supplied snapshot fails closed, as do unsupported CategoryTree options.
+The root count still comes from `category-stats.tsv`. This snapshot is
+transient build input and is never published.
+
+Interwiki-aware Lua such as `mw.site.interwikiMap()` and `mw.title.new("w:...")` requires a pinned site interwiki map:
+
+```sh
+zig build -Doptimize=ReleaseFast build-dictionary -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs \
+  --interwiki-map-snapshot data/interwiki-map.tsv
+```
+
+`interwiki-map.tsv` uses one record per non-comment line:
+
+```text
+PREFIX<TAB>IS_LOCAL<TAB>IS_CURRENT_WIKI<TAB>IS_PROTOCOL_RELATIVE<TAB>IS_TRANSCLUDABLE<TAB>URL
+```
+
+The boolean fields are `0` or `1`. For MediaWiki siteinfo snapshots, `local` maps to `IS_LOCAL`, `localinterwiki` maps to `IS_CURRENT_WIKI`, `protorel` maps to `IS_PROTOCOL_RELATIVE`, and `trans` maps to `IS_TRANSCLUDABLE`. If the snapshot is absent, interwiki-map APIs remain explicitly unsupported rather than guessing site configuration. All snapshot flags may be supplied together, and every snapshot is copied only into the transient expander.
+
+Wikibase sitelinks are also external state. Modules that call `mw.wikibase.getSitelink` or its legacy alias `mw.wikibase.sitelink` require an explicit snapshot:
+
+```sh
+zig build -Doptimize=ReleaseFast build-dictionary -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs \
+  --wikibase-sitelinks-snapshot data/wikibase-sitelinks.tsv
+```
+
+`wikibase-sitelinks.tsv` contains exact entity/site lookups:
+
+```text
+ENTITY_ID<TAB>GLOBAL_SITE_ID<TAB>PAGE_TITLE
+```
+
+An empty `PAGE_TITLE` records an authoritative no-sitelink result. A special
+`GLOBAL_SITE_ID` of `*` with an empty title marks an entity whose complete
+sitelink set was captured; for such an entity, an unlisted site is
+authoritatively absent. Without that marker, an unlisted entity/site pair
+fails closed as an incomplete snapshot. Absence of the snapshot leaves the API
+explicitly unsupported. The optional `globalSiteId` argument defaults to
+`enwiktionary`, matching this bundle's site identity.
+
+Wikibase labels and descriptions are separate data-backed entity state. Modules
+that call `mw.wikibase.getLabel` or `mw.wikibase.getDescription` require an
+explicit English entity-text snapshot:
+
+```sh
+zig build -Doptimize=ReleaseFast build-dictionary -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs \
+  --wikibase-entity-text-snapshot data/wikibase-entity-text.tsv
+```
+
+`wikibase-entity-text.tsv` contains one authoritative entity per
+non-comment line:
+
+```text
+ENTITY_ID<TAB>ENGLISH_LABEL<TAB>ENGLISH_DESCRIPTION
+```
+
+An empty label or description records an authoritative absence. An entity
+missing from a supplied snapshot fails closed rather than synthesizing text.
+If the snapshot itself is absent, these data-backed Wikibase calls remain
+explicitly unsupported. This input is transient and is not copied into shipped
+blobs.
+
+MediaWiki's known-language-tag registry is site/version configuration rather than Wiktionary dump data. Interwiki translation helpers that call `mw.language.isKnownLanguageTag` require a pinned registry:
+
+```sh
+zig build -Doptimize=ReleaseFast build-dictionary -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs \
+  --language-registry-snapshot data/language-registry.tsv
+```
+
+`language-registry.tsv` contains the complete siteinfo language list as:
+
+```text
+CODE<TAB>NAME
+```
+
+Presence means `isKnownLanguageTag(CODE)` is true; absence means false. Without the snapshot, non-English known-tag queries remain explicitly unsupported. This input is transient and is not copied into shipped blobs.
+
+Shared file-repository state used by `mw.title.file`, legacy `fileExists`, and
+`Media:... .exists` is not present in the Wiktionary XML dump. Bundle builds
+that need file dimensions or repository existence must provide a pinned
+snapshot:
+
+```sh
+zig build -Doptimize=ReleaseFast build-dictionary -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs \
+  --file-metadata-snapshot data/file-metadata.tsv
+```
+
+`file-metadata.tsv` contains one authoritative lookup per file title:
+
+```text
+FILE_TITLE<TAB>EXISTS<TAB>WIDTH<TAB>HEIGHT
+```
+
+`EXISTS` is `0` or `1`. Missing files use zero width and height. A title
+absent from a supplied snapshot fails closed as an incomplete snapshot; if the
+snapshot itself is absent, file-repository APIs remain explicitly unsupported.
+`Media:` existence is resolved through the corresponding `File:` record.
+This snapshot is transient and is not copied into shipped blobs.
 
 The coordinated pipeline:
 
