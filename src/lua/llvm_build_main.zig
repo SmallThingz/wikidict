@@ -336,19 +336,11 @@ fn analyzeManifest(
         var chunk = try lua.parse(sa, source);
         const module_index: u32 = @intCast(records.items.len);
 
-        try shape_registry.collect(module_index, chunk.body);
         if (static_encode.rootLiteral(chunk.body)) |literal| {
+            const export_shape_id = try shape_registry.collectRootExpr(module_index, literal);
             var table_shapes = try shape_registry.moduleFacts(sa, module_index);
             defer table_shapes.deinit(sa);
             const blob = try static_encode.encode(sa, literal, &table_shapes);
-            const export_shape_id: ?u32 = switch (literal.*) {
-                .table => |table_expr| if (table_shapes.get(table_expr.span.start)) |fact| fact.id else null,
-                .paren => |paren| switch (paren.expr.*) {
-                    .table => |table_expr| if (table_shapes.get(table_expr.span.start)) |fact| fact.id else null,
-                    else => null,
-                },
-                else => null,
-            };
             try records.append(a, .{
                 .title = try a.dupe(u8, row.title),
                 .path = try a.dupe(u8, row.path),
@@ -369,6 +361,8 @@ fn analyzeManifest(
             _ = scratch.reset(.retain_capacity);
             continue;
         }
+
+        try shape_registry.collect(module_index, chunk.body);
 
         var static_requires: std.ArrayList([]const u8) = .empty;
         var static_load_data: std.ArrayList([]const u8) = .empty;
@@ -734,6 +728,10 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     var synth_root_count: usize = 0;
     for (records) |record| synth_root_count += @intFromBool(record.synth_root);
     std.debug.print("LLVM_SYNTH_ROOTS modules={d}\n", .{synth_root_count});
+    std.debug.print("LLVM_SHAPES count={d} fields={d}\n", .{
+        shape_registry.count(),
+        shape_registry.fieldCount(),
+    });
 
     var module_ids = try buildModuleIds(io, a, source_root, records);
     defer module_ids.deinit(a);

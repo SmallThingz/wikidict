@@ -33,6 +33,24 @@ pub const Registry = struct {
         return self.records.items.len;
     }
 
+    pub fn fieldCount(self: *const Registry) usize {
+        var total: usize = 0;
+        for (self.records.items) |entry| total += entry.fields.len;
+        return total;
+    }
+
+    pub fn collectRootExpr(self: *Registry, module_index: u32, value: *const lua.Expr) !?u32 {
+        return switch (value.*) {
+            .paren => |paren| self.collectRootExpr(module_index, paren.expr),
+            .table => |table| blk: {
+                const before = self.records.items.len;
+                try self.maybeTable(module_index, table.span, table.fields);
+                break :blk if (self.records.items.len != before) @as(u32, @intCast(before)) else null;
+            },
+            else => null,
+        };
+    }
+
     pub fn record(self: *const Registry, id: u32) Fact {
         const value = self.records.items[id];
         return .{ .id = id, .fields = value.fields };
@@ -190,4 +208,22 @@ fn staticString(value: *const lua.Expr) ?[]const u8 {
         .paren => |v| staticString(v.expr),
         else => null,
     };
+}
+
+test "static root shape collection keeps only top-level table" {
+    var chunk = try lua.parse(std.testing.allocator, "return { top = 1, nested = { a = 2, b = 3 } }");
+    defer chunk.deinit();
+    const root = chunk.body[0].return_stmt.values[0];
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    const id = try registry.collectRootExpr(0, root);
+    try std.testing.expectEqual(@as(?u32, 0), id);
+    try std.testing.expectEqual(@as(usize, 1), registry.count());
+    try std.testing.expectEqual(@as(usize, 2), registry.fieldCount());
+    var facts = try registry.moduleFacts(std.testing.allocator, 0);
+    defer facts.deinit(std.testing.allocator);
+    try std.testing.expect(facts.get(root.table.span.start) != null);
+    const nested = root.table.fields[1].named.value;
+    try std.testing.expect(nested.* == .table);
+    try std.testing.expect(facts.get(nested.table.span.start) == null);
 }
