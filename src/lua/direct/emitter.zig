@@ -249,17 +249,17 @@ const Runtime = struct {
             .make_function = try declare(m, "dict_lua_make_function", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr }),
             .call_fixed = try declare(m, "dict_lua_call_fixed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .call_fixed_tail = try declare(m, "dict_lua_call_fixed_tail", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
-            .call_static_fixed = try declare(m, "dict_lua_call_static_fixed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
-            .call_static_fixed_tail = try declare(m, "dict_lua_call_static_fixed_tail", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
-            .enter_static_call = try declare(m, "dict_lua_enter_static_call", ty.i32, &.{ty.ptr}),
+            .call_static_fixed = try declare(m, "dict_lua_call_static_fixed", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_static_fixed_tail = try declare(m, "dict_lua_call_static_fixed_tail", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .enter_static_call = try declare(m, "dict_lua_enter_static_call", ty.i32, &.{ ty.ptr, ty.i32 }),
             .leave_static_call = try declare(m, "dict_lua_leave_static_call", ty.void, &.{ty.ptr}),
             .function_status = try declare(m, "dict_lua_function_status", ty.i32, &.{ ty.ptr, ty.i32 }),
             .call_discard = try declare(m, "dict_lua_call_discard", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64 }),
             .call_discard_tail = try declare(m, "dict_lua_call_discard_tail", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .call_multi = try declare(m, "dict_lua_call_multi", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64 }),
             .call_multi_tail = try declare(m, "dict_lua_call_multi_tail", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
-            .call_static_multi = try declare(m, "dict_lua_call_static_multi", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
-            .call_static_multi_tail = try declare(m, "dict_lua_call_static_multi_tail", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_static_multi = try declare(m, "dict_lua_call_static_multi", ty.call_result, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_static_multi_tail = try declare(m, "dict_lua_call_static_multi_tail", ty.call_result, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .results_free = try declare(m, "dict_lua_results_free", ty.void, &.{ ty.ptr, ty.i64 }),
             .return_values = try declare(m, "dict_lua_return_values", ty.function_result, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .return_join = try declare(m, "dict_lua_return_join", ty.function_result, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
@@ -1397,7 +1397,9 @@ const FnEmitter = struct {
         if ((function.captures_len == 0 or function.direct_captures != null) and prepared.tail == null) {
             for (0..count) |index|
                 _ = try llvm.call(self.builder, self.rt().value_nil, &.{try self.arrayElem(output, index)});
-            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{self.ctx()});
+            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{
+                self.ctx(), try self.cI32(function.function_id),
+            });
             try self.check(enter);
             const capture_context = function.direct_captures orelse try self.nullPtr();
             const result = try llvm.call(self.builder, entry_fn, &.{
@@ -1413,14 +1415,15 @@ const FnEmitter = struct {
 
         const status = if (prepared.tail) |tail|
             try llvm.call(self.builder, self.rt().call_static_fixed_tail, &.{
-                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
-                prepared.fixed, try self.cI64(prepared.fixed_len), tail.ptr,              tail.len,
-                output,         try self.cI64(count),
+                self.ctx(),                           try self.cI32(function.function_id), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                      try self.cI64(prepared.fixed_len), tail.ptr,
+                tail.len,                             output,                              try self.cI64(count),
             })
         else
             try llvm.call(self.builder, self.rt().call_static_fixed, &.{
-                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
-                prepared.fixed, try self.cI64(prepared.fixed_len), output,                try self.cI64(count),
+                self.ctx(),                           try self.cI32(function.function_id), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                      try self.cI64(prepared.fixed_len), output,
+                try self.cI64(count),
             });
         try self.check(status);
     }
@@ -1499,7 +1502,9 @@ const FnEmitter = struct {
         prepared: PreparedArgs,
     ) anyerror!MultiRef {
         if ((function.captures_len == 0 or function.direct_captures != null) and prepared.tail == null) {
-            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{self.ctx()});
+            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{
+                self.ctx(), try self.cI32(function.function_id),
+            });
             try self.check(enter);
             const capture_context = function.direct_captures orelse try self.nullPtr();
             const result = try llvm.call(self.builder, entry_fn, &.{
@@ -1519,13 +1524,14 @@ const FnEmitter = struct {
 
         const result = if (prepared.tail) |tail|
             try llvm.call(self.builder, self.rt().call_static_multi_tail, &.{
-                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
-                prepared.fixed, try self.cI64(prepared.fixed_len), tail.ptr,              tail.len,
+                self.ctx(),                           try self.cI32(function.function_id), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                      try self.cI64(prepared.fixed_len), tail.ptr,
+                tail.len,
             })
         else
             try llvm.call(self.builder, self.rt().call_static_multi, &.{
-                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
-                prepared.fixed, try self.cI64(prepared.fixed_len),
+                self.ctx(),                           try self.cI32(function.function_id), entry_fn,                          function.captures_ptr,
+                try self.cI64(function.captures_len), prepared.fixed,                      try self.cI64(prepared.fixed_len),
             });
         try self.check(try llvm.extractValue(self.builder, result, 2));
         return .{

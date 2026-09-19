@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const magic = "DLPMETA2";
+pub const magic = "DLPMETA3";
 
 pub fn writeU32(w: *std.Io.Writer, value: u32) !void {
     const bytes = [_]u8{

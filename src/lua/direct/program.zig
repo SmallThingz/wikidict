@@ -243,6 +243,11 @@ pub fn writeMetadata(
         try metadata.writeU32(w, record.export_shape_id orelse std.math.maxInt(u32));
 
     for (records) |record| {
+        try metadata.writeU32(w, record.function_base);
+        try metadata.writeU32(w, record.function_count);
+    }
+
+    for (records) |record| {
         try metadata.writeU32(w, try requireU32(record.eager_requirements.len));
         for (record.eager_requirements) |requirement| {
             if (requirement.module_id >= module_count)

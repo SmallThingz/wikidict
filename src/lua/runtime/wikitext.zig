@@ -50,7 +50,9 @@ pub const Provider = struct {
     pub const ExternalData = host_api.ExternalData;
     pub const CategoryStats = host_api.CategoryStats;
     pub const InterfaceMessage = host_api.InterfaceMessage;
+    pub const FileMetadata = host_api.FileMetadata;
     pub const InterwikiRow = host_api.InterwikiRow;
+    pub const WikibaseEntityText = host_api.WikibaseEntityText;
     pub const SymbolKind = CallSymbolKind;
     pub const Symbol = CallSymbol;
     pub const PageMetadata = struct {
@@ -62,6 +64,7 @@ pub const Provider = struct {
     };
     pub const TransclusionBody = struct {
         text: []const u8,
+        title: []const u8,
         borrowed: bool,
     };
     ctx: ?*anyopaque = null,
@@ -74,7 +77,12 @@ pub const Provider = struct {
     external_data: ?*const fn (?*anyopaque, []const u8) anyerror!?ExternalData = null,
     category_stats: ?*const fn (?*anyopaque, []const u8) anyerror!?CategoryStats = null,
     interface_message: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, []const u8) anyerror!?InterfaceMessage = null,
+    file_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!FileMetadata = null,
+    category_tree: ?*const fn (?*anyopaque, []const u8) anyerror![]const []const u8 = null,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
+    wikibase_sitelink: ?*const fn (?*anyopaque, []const u8, []const u8) anyerror!?[]const u8 = null,
+    wikibase_entity_text: ?*const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityText = null,
+    language_known_tag: ?*const fn (?*anyopaque, []const u8) anyerror!bool = null,
     resolve_call_symbol: ?*const fn (?*anyopaque, *rt.Context, []const u8, CallSymbolKind) anyerror!?CallSymbol = null,
     get_template_symbol: ?*const fn (?*anyopaque, std.mem.Allocator, usize) anyerror!?[]const u8 = null,
 };
@@ -112,8 +120,12 @@ pub const Expander = struct {
         self.host.text_unstrip_no_wiki = hostTextUnstripNoWiki;
         self.host.external_data = hostExternalData;
         self.host.category_stats = hostCategoryStats;
-        self.host.interface_message = hostInterfaceMessage;
+        self.host.interface_message = if (self.provider.interface_message != null) hostInterfaceMessage else null;
+        self.host.file_metadata = hostFileMetadata;
         self.host.site_interwiki_map = hostSiteInterwikiMap;
+        self.host.wikibase_sitelink = hostWikibaseSitelink;
+        self.host.wikibase_entity_text = hostWikibaseEntityText;
+        self.host.language_known_tag = hostLanguageKnownTag;
         host_api.set(self.runtime, &self.host);
     }
 
@@ -185,14 +197,38 @@ pub const Expander = struct {
 
     fn hostInterfaceMessage(raw: ?*anyopaque, a: std.mem.Allocator, language: []const u8, key: []const u8) anyerror!?host_api.InterfaceMessage {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        const get = self.provider.interface_message orelse return error.NotImplemented;
+        const get = self.provider.interface_message orelse return null;
         return get(self.provider.ctx, a, language, key);
+    }
+
+    fn hostFileMetadata(raw: ?*anyopaque, title: []const u8) anyerror!host_api.FileMetadata {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const get = self.provider.file_metadata orelse return error.NotImplemented;
+        return get(self.provider.ctx, title);
     }
 
     fn hostSiteInterwikiMap(raw: ?*anyopaque) anyerror![]const host_api.InterwikiRow {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.interwiki_map orelse return error.NotImplemented;
         return get(self.provider.ctx);
+    }
+
+    fn hostWikibaseSitelink(raw: ?*anyopaque, entity_id: []const u8, global_site_id: []const u8) anyerror!?[]const u8 {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const get = self.provider.wikibase_sitelink orelse return error.NotImplemented;
+        return get(self.provider.ctx, entity_id, global_site_id);
+    }
+
+    fn hostWikibaseEntityText(raw: ?*anyopaque, entity_id: []const u8) anyerror!host_api.WikibaseEntityText {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const get = self.provider.wikibase_entity_text orelse return error.NotImplemented;
+        return get(self.provider.ctx, entity_id);
+    }
+
+    fn hostLanguageKnownTag(raw: ?*anyopaque, code: []const u8) anyerror!bool {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const get = self.provider.language_known_tag orelse return error.NotImplemented;
+        return get(self.provider.ctx, code);
     }
 
     fn hostPageExists(raw: ?*anyopaque, title: []const u8) anyerror!bool {
@@ -312,6 +348,31 @@ pub const Expander = struct {
         return out;
     }
 
+    const InterwikiTransclusion = union(enum) {
+        normal,
+        current_wiki: []const u8,
+        literal,
+        external,
+    };
+
+    fn classifyInterwikiTransclusion(self: *Expander, raw_name: []const u8) anyerror!InterwikiTransclusion {
+        const name = std.mem.trim(u8, raw_name, " \t\r\n");
+        if (name.len == 0 or name[0] == ':') return .normal;
+        const colon = std.mem.indexOfScalar(u8, name, ':') orelse return .normal;
+        if (colon == 0) return .normal;
+        const prefix = std.mem.trim(u8, name[0..colon], " \t\r\n");
+        if (prefix.len == 0 or namespace_lib.byName(prefix) != null) return .normal;
+        const get = self.provider.interwiki_map orelse return .normal;
+        const rows = try get(self.provider.ctx);
+        for (rows) |row| {
+            if (!std.ascii.eqlIgnoreCase(row.prefix, prefix)) continue;
+            const body = std.mem.trimStart(u8, name[colon + 1 ..], " \t\r\n");
+            if (row.is_current_wiki) return .{ .current_wiki = body };
+            return if (row.is_transcludable) .external else .literal;
+        }
+        return .normal;
+    }
+
     fn expandTemplateSource(self: *Expander, title: []const u8, raw: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
         const body = try preprocess.transcludeDecodedAlloc(self.runtime.allocator, raw);
         defer self.runtime.allocator.free(body);
@@ -324,7 +385,7 @@ pub const Expander = struct {
         if (self.provider.get_transclusion_body) |get| {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
-            return self.expandWikitext(body.text, args, title, depth + 1);
+            return self.expandWikitext(body.text, args, body.title, depth + 1);
         }
         const raw = if (self.provider.get_transclusion) |get|
             (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound
@@ -339,7 +400,7 @@ pub const Expander = struct {
         if (self.provider.get_template_symbol == null) if (self.provider.get_transclusion_body) |get| {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
-            return self.expandWikitext(body.text, args, title, depth + 1);
+            return self.expandWikitext(body.text, args, body.title, depth + 1);
         };
         const raw = if (self.provider.get_template_symbol) |get|
             (try get(self.provider.ctx, self.runtime.allocator, symbol.id)) orelse return error.TemplateNotFound
@@ -647,6 +708,10 @@ pub const Expander = struct {
         return std.mem.eql(u8, lhs, rhs) or numericStringEqual(lhs, rhs);
     }
 
+    fn expandTrimmedParserArgument(self: *Expander, raw: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        return std.mem.trim(u8, try self.expandWikitext(raw, params, host_title, depth + 1), " \t\r\n");
+    }
+
     fn expandIfEq(self: *Expander, lhs_raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const lhs = std.mem.trim(u8, try self.expandWikitext(lhs_raw, params, host_title, depth + 1), " \t\r\n");
         const rhs = if (args.len != 0) std.mem.trim(u8, try self.expandWikitext(args[0], params, host_title, depth + 1), " \t\r\n") else "";
@@ -654,7 +719,7 @@ pub const Expander = struct {
             (if (args.len > 1) args[1] else "")
         else
             (if (args.len > 2) args[2] else "");
-        return self.expandWikitext(chosen, params, host_title, depth + 1);
+        return self.expandTrimmedParserArgument(chosen, params, host_title, depth + 1);
     }
 
     fn expandSwitch(self: *Expander, key_raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
@@ -662,26 +727,29 @@ pub const Expander = struct {
         var pending = false;
         var fallback: ?[]const u8 = null;
         var trailing: ?[]const u8 = null;
-        for (args) |raw_case| {
+        for (args, 0..) |raw_case, index| {
             if (preprocess.findTopDelimiter(raw_case, '=')) |eq| {
                 const label_raw = std.mem.trim(u8, raw_case[0..eq], " \t\r\n");
                 const value_raw = raw_case[eq + 1 ..];
                 if (std.ascii.eqlIgnoreCase(label_raw, "#default")) {
                     fallback = value_raw;
-                    if (pending) return self.expandWikitext(value_raw, params, host_title, depth + 1);
+                    if (pending) return self.expandTrimmedParserArgument(value_raw, params, host_title, depth + 1);
                     continue;
                 }
                 const label = std.mem.trim(u8, try self.expandWikitext(label_raw, params, host_title, depth + 1), " \t\r\n");
-                if (pending or std.mem.eql(u8, key, label)) return self.expandWikitext(value_raw, params, host_title, depth + 1);
+                if (pending or std.mem.eql(u8, key, label)) return self.expandTrimmedParserArgument(value_raw, params, host_title, depth + 1);
                 pending = false;
             } else {
-                trailing = raw_case;
+                if (index + 1 == args.len) {
+                    trailing = raw_case;
+                    continue;
+                }
                 const label = std.mem.trim(u8, try self.expandWikitext(raw_case, params, host_title, depth + 1), " \t\r\n");
                 if (std.mem.eql(u8, key, label)) pending = true;
             }
         }
-        if (fallback) |value| return self.expandWikitext(value, params, host_title, depth + 1);
-        if (trailing) |value| return self.expandWikitext(value, params, host_title, depth + 1);
+        if (fallback) |value| return self.expandTrimmedParserArgument(value, params, host_title, depth + 1);
+        if (trailing) |value| return self.expandTrimmedParserArgument(value, params, host_title, depth + 1);
         return "";
     }
 
@@ -691,7 +759,7 @@ pub const Expander = struct {
         if (std.mem.indexOfScalar(u8, title, '#')) |hash| title = title[0..hash];
         const exists = title.len != 0 and try hostPageExists(self, title);
         const chosen = if (exists) (if (args.len > 0) args[0] else "") else (if (args.len > 1) args[1] else "");
-        return self.expandWikitext(chosen, params, host_title, depth + 1);
+        return self.expandTrimmedParserArgument(chosen, params, host_title, depth + 1);
     }
 
     fn parserError(self: *Expander, label: []const u8, err: anyerror) ![]const u8 {
@@ -793,11 +861,11 @@ pub const Expander = struct {
     }
 
     fn expandIfError(self: *Expander, raw_test: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
-        const tested = try self.expandWikitext(raw_test, params, host_title, depth + 1);
+        const tested = std.mem.trim(u8, try self.expandWikitext(raw_test, params, host_title, depth + 1), " \t\r\n");
         const failed = std.mem.indexOf(u8, tested, "class=\"error\"") != null;
         if (failed)
-            return self.expandWikitext(if (args.len > 0) args[0] else "", params, host_title, depth + 1);
-        if (args.len > 1) return self.expandWikitext(args[1], params, host_title, depth + 1);
+            return self.expandTrimmedParserArgument(if (args.len > 0) args[0] else "", params, host_title, depth + 1);
+        if (args.len > 1) return self.expandTrimmedParserArgument(args[1], params, host_title, depth + 1);
         return tested;
     }
 
@@ -851,15 +919,18 @@ pub const Expander = struct {
 
     fn expandExprParser(self: *Expander, raw: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const expanded = std.mem.trim(u8, try self.expandWikitext(raw, params, host_title, depth + 1), " \t\r\n");
+        if (expanded.len == 0) return "";
         const value = parser_expr.eval(self.runtime.allocator, expanded) catch |err| return self.exprError(err);
         return parser_expr.format(self.runtime.allocator, value) catch |err| return self.exprError(err);
     }
 
     fn expandIfExpr(self: *Expander, raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const expanded = std.mem.trim(u8, try self.expandWikitext(raw, params, host_title, depth + 1), " \t\r\n");
+        if (expanded.len == 0)
+            return self.expandTrimmedParserArgument(if (args.len > 1) args[1] else "", params, host_title, depth + 1);
         const value = parser_expr.eval(self.runtime.allocator, expanded) catch |err| return self.exprError(err);
         const chosen = if (value != 0) (if (args.len > 0) args[0] else "") else (if (args.len > 1) args[1] else "");
-        return self.expandWikitext(chosen, params, host_title, depth + 1);
+        return self.expandTrimmedParserArgument(chosen, params, host_title, depth + 1);
     }
 
     fn appendRepeatedPad(out: *std.ArrayList(u8), a: std.mem.Allocator, pad: []const u8, count: usize) !void {
@@ -939,6 +1010,57 @@ pub const Expander = struct {
         return resolve(self.provider.ctx, self.runtime, raw, kind);
     }
 
+    fn invokeFresh(
+        self: *Expander,
+        module_id: ?u32,
+        module_name: []const u8,
+        function_name: []const u8,
+        invoke_args: *rt.Table,
+        existing_parent: ?Value,
+        parent_title: ?[]const u8,
+        parent_args: ?*rt.Table,
+    ) anyerror![]const u8 {
+        const install = self.install_scribunto orelse return error.MissingScribuntoInstaller;
+        const page_a = self.page_allocator orelse self.runtime.allocator;
+        const outer_runtime = self.runtime;
+
+        var invoke_arena = std.heap.ArenaAllocator.init(page_a);
+        defer invoke_arena.deinit();
+        var child = try outer_runtime.forkProgram(invoke_arena.allocator());
+        defer child.deinit();
+        const global_shape = if (outer_runtime.global_table) |global| global.shape else null;
+        try rt.bindGlobalTable(&child, global_shape, self.env_slot);
+        if (!try child.bootstrapProgram()) try stdlib.install(&child);
+        try install(&self.scribunto_state, page_a, &child, self.env_slot, self.string_slot, self.mw_slot);
+
+        const saved_runtime = self.runtime;
+        self.runtime = &child;
+        defer self.runtime = saved_runtime;
+
+        const copied_invoke_args = try copyArgsTable(&child, invoke_args);
+        const parent: ?Value = if (existing_parent) |frame|
+            frame
+        else if (parent_title) |title| blk: {
+            const source_args = parent_args orelse return error.MissingInvokeParentArgs;
+            const copied_parent_args = try copyArgsTable(&child, source_args);
+            break :blk try frame_lib.makeFrameFromTable(&child, title, copied_parent_args, null);
+        } else null;
+        const frame = try frame_lib.makeFrameFromTable(&child, module_name, copied_invoke_args, parent);
+        const result = if (module_id) |id|
+            frame_lib.invokeModuleId(&child, id, module_name, function_name, frame) catch |err| {
+                try outer_runtime.adoptFailure(&child);
+                return err;
+            }
+        else
+            frame_lib.invoke(&child, module_name, function_name, frame) catch |err| {
+                try outer_runtime.adoptFailure(&child);
+                return err;
+            };
+        defer rt.freeResults(result);
+        const text = if (result.len == 0) "" else try self.valueToWikitext(result[0]);
+        return page_a.dupe(u8, text);
+    }
+
     fn expandInvoke(self: *Expander, module_expr: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const module_symbol = try self.callSymbol(module_expr, .module);
         const module_raw = if (module_symbol) |symbol|
@@ -961,19 +1083,17 @@ pub const Expander = struct {
 
         const runtime = self.runtime;
         const invoke_args = try self.buildExpandedArgs(if (args.len > 0) args[1..] else &.{}, params, host_title, depth + 1);
-        const parent_args = try copyArgsTable(runtime, params);
-        const parent = try frame_lib.makeFrameFromTable(runtime, host_title, parent_args, null);
-        const frame = try frame_lib.makeFrameFromTable(runtime, module_name, invoke_args, parent);
-        const result = if (module_symbol) |symbol|
-            if (symbol.module_id) |module_id|
-                try frame_lib.invokeModuleId(runtime, module_id, module_name, function_name, frame)
-            else
-                try frame_lib.invoke(runtime, module_name, function_name, frame)
-        else
-            try frame_lib.invoke(runtime, module_name, function_name, frame);
-        defer rt.freeResults(result);
-        if (result.len == 0) return "";
-        return self.valueToWikitext(result[0]);
+        _ = runtime;
+        const generated = try self.invokeFresh(
+            if (module_symbol) |symbol| symbol.module_id else null,
+            module_name,
+            function_name,
+            invoke_args,
+            null,
+            host_title,
+            params,
+        );
+        return self.expandWikitext(generated, params, host_title, depth + 1);
     }
 
     fn expandTagParser(self: *Expander, raw_tag: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
@@ -1056,13 +1176,15 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "#titleparts")) return self.expandTitleParts(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#iferror")) return self.expandIfError(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#invoke")) return self.expandInvoke(first, parts.items[1..], params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#categorytree"))
+                return self.expandCategoryTreeParser(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#if")) {
                 const condition = try self.expandWikitext(first, params, host_title, depth + 1);
                 const chosen = if (std.mem.trim(u8, condition, " \t\r\n").len != 0)
                     (if (parts.items.len > 1) parts.items[1] else "")
                 else
                     (if (parts.items.len > 2) parts.items[2] else "");
-                return self.expandWikitext(chosen, params, host_title, depth + 1);
+                return self.expandTrimmedParserArgument(chosen, params, host_title, depth + 1);
             }
             if (std.ascii.eqlIgnoreCase(name, "#ifeq")) return self.expandIfEq(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#ifexist")) return self.expandIfExist(first, parts.items[1..], params, host_title, depth + 1);
@@ -1073,6 +1195,16 @@ pub const Expander = struct {
             if (name.len != 0 and name[0] == '#') return error.UnsupportedParserFunction;
         }
         if (raw_head[0] == '#') return error.UnsupportedParserFunction;
+        switch (try self.classifyInterwikiTransclusion(raw_head)) {
+            .normal => {},
+            .current_wiki => |local_name| raw_head = local_name,
+            .literal => return std.fmt.allocPrint(
+                self.runtime.allocator,
+                "<nowiki>{{{{{s}}}}}</nowiki>",
+                .{content},
+            ),
+            .external => return error.ExternalInterwikiTransclusionUnsupported,
+        }
         if (try self.callSymbol(raw_head, .template)) |symbol| {
             const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
             return self.expandTemplateBySymbol(symbol, args, depth + 1);
@@ -1264,11 +1396,108 @@ pub const Expander = struct {
             else => {},
         };
         const parent: ?Value = if (self.runtime.current_frame) |frame| .{ .table = frame } else null;
-        const frame = try frame_lib.makeFrameFromTable(self.runtime, module_name, invoke_args, parent);
-        const result = try frame_lib.invoke(self.runtime, module_name, function_name, frame);
-        defer rt.freeResults(result);
-        if (result.len == 0) return "";
-        return self.valueToWikitext(result[0]);
+        return self.invokeFresh(null, module_name, function_name, invoke_args, parent, null, null);
+    }
+
+    fn categoryTreeArg(args: *rt.Table, key: []const u8) ?[]const u8 {
+        const value = args.rawGet(.{ .string = key }) orelse return null;
+        return if (value == .string) value.string else null;
+    }
+
+    fn expandCategoryTree(self: *Expander, args: *rt.Table) ![]const u8 {
+        const first = args.rawGet(.{ .number = 1 }) orelse return error.StringExpected;
+        if (first != .string) return error.StringExpected;
+        const raw_category = std.mem.trim(u8, first.string, " \t\r\n");
+        if (raw_category.len == 0) return "";
+
+        const category = try self.runtime.allocator.dupe(u8, raw_category);
+        for (category) |*byte| {
+            if (byte.* == ' ') byte.* = '_';
+        }
+
+        const kind = categoryTreeArg(args, "type") orelse "pages";
+        const depth = categoryTreeArg(args, "depth") orelse "1";
+        const namespaces = categoryTreeArg(args, "namespaces") orelse "-";
+        const hideprefix = categoryTreeArg(args, "hideprefix") orelse "always";
+        const hideroot = categoryTreeArg(args, "hideroot") orelse "off";
+        const showcount = categoryTreeArg(args, "showcount") orelse "on";
+        if (!std.ascii.eqlIgnoreCase(kind, "pages") or
+            !std.mem.eql(u8, depth, "1") or
+            !std.mem.eql(u8, namespaces, "-") or
+            !std.ascii.eqlIgnoreCase(hideprefix, "always") or
+            !std.ascii.eqlIgnoreCase(hideroot, "off") or
+            !std.ascii.eqlIgnoreCase(showcount, "on"))
+            return error.UnsupportedCategoryTreeOptions;
+
+        const get = self.provider.category_tree orelse return error.NotImplemented;
+        const members = try get(self.provider.ctx, category);
+        const display = try self.runtime.allocator.dupe(u8, category);
+        for (display) |*byte| {
+            if (byte.* == '_') byte.* = ' ';
+        }
+
+        var page_count: usize = members.len;
+        if (self.provider.category_stats) |stats_get| {
+            if (try stats_get(self.provider.ctx, category)) |stats|
+                page_count = stats.all -| stats.subcats -| stats.files;
+        }
+
+        var out: std.ArrayList(u8) = .empty;
+        const a = self.runtime.allocator;
+        try out.appendSlice(a, "<div class=\"CategoryTreeTag\"><div class=\"CategoryTreeItem\"><span class=\"CategoryTreeBullet\">►</span> [[:Category:");
+        try out.appendSlice(a, display);
+        try out.append(a, '|');
+        try out.appendSlice(a, display);
+        try out.appendSlice(a, "]] <span class=\"CategoryTreeCount\">(");
+        const count_text = try std.fmt.allocPrint(a, "{d}", .{page_count});
+        defer a.free(count_text);
+        try out.appendSlice(a, count_text);
+        try out.appendSlice(a, ")</span></div><div class=\"CategoryTreeChildren\" style=\"display:block\">");
+        for (members) |title| {
+            try out.appendSlice(a, "<div class=\"CategoryTreeItem\"><span class=\"CategoryTreeEmptyBullet\">►</span> [[");
+            try out.appendSlice(a, title);
+            try out.appendSlice(a, "]]</div>");
+        }
+        try out.appendSlice(a, "</div></div>");
+        return out.toOwnedSlice(a);
+    }
+
+    fn expandCategoryTreeParser(
+        self: *Expander,
+        raw_category: []const u8,
+        raw_args: []const []const u8,
+        params: *rt.Table,
+        host_title: []const u8,
+        depth: usize,
+    ) ![]const u8 {
+        const args = try self.runtime.newTable();
+        try args.rawSet(
+            self.runtime.allocator,
+            .{ .number = 1 },
+            .{ .string = try self.expandWikitext(raw_category, params, host_title, depth + 1) },
+        );
+        var positional: usize = 2;
+        for (raw_args) |raw| {
+            if (preprocess.findTopDelimiter(raw, '=')) |eq| {
+                const key = std.mem.trim(
+                    u8,
+                    try self.expandWikitext(raw[0..eq], params, host_title, depth + 1),
+                    " \t\r\n",
+                );
+                if (key.len == 0) continue;
+                const value = try self.expandWikitext(raw[eq + 1 ..], params, host_title, depth + 1);
+                try args.rawSet(self.runtime.allocator, .{ .string = key }, .{ .string = value });
+            } else {
+                const value = try self.expandWikitext(raw, params, host_title, depth + 1);
+                try args.rawSet(
+                    self.runtime.allocator,
+                    .{ .number = @floatFromInt(positional) },
+                    .{ .string = value },
+                );
+                positional += 1;
+            }
+        }
+        return self.expandCategoryTree(args);
     }
 
     fn hostFrameParserFunction(raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, args: *rt.Table) anyerror![]const u8 {
@@ -1284,6 +1513,7 @@ pub const Expander = struct {
             return (try self.revisionMagic(name, page)) orelse unreachable;
         }
         if (std.ascii.eqlIgnoreCase(name, "#invoke")) return self.frameParserInvoke(args);
+        if (std.ascii.eqlIgnoreCase(name, "#categorytree")) return self.expandCategoryTree(args);
         if (std.ascii.eqlIgnoreCase(name, "#tag") or std.ascii.startsWithIgnoreCase(name, "#tag:")) return self.frameParserTag(raw, a, name, args);
         if (std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) {
             if (first == null or first.? != .string) return error.StringExpected;
@@ -1330,7 +1560,25 @@ fn installTestHost(runtime: *rt.Context, string_slot: u32, mw_slot: u32) !void {
     try runtime.setGlobal(mw_slot, .{ .table = mw });
 }
 
+fn installTestInvoke(
+    _: *?*anyopaque,
+    _: std.mem.Allocator,
+    runtime: *rt.Context,
+    _: u32,
+    string_slot: u32,
+    mw_slot: u32,
+) !void {
+    try installTestHost(runtime, string_slot, mw_slot);
+}
+
 const TestProvider = struct {
+    const category_tree_members = [_][]const u8{ "alpha", "beta" };
+    const interwiki_rows = [_]Provider.InterwikiRow{
+        .{ .prefix = "w", .url = "https://example.test/$1", .is_local = true, .is_current_wiki = false, .is_protocol_relative = false, .is_transcludable = false },
+        .{ .prefix = "self", .url = "https://local.test/$1", .is_local = true, .is_current_wiki = true, .is_protocol_relative = false, .is_transcludable = false },
+        .{ .prefix = "remote", .url = "https://remote.test/$1", .is_local = true, .is_current_wiki = false, .is_protocol_relative = false, .is_transcludable = true },
+    };
+
     fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
         if (std.mem.eql(u8, title, "Template:Hello")) return "Hi {{{1|friend}}} {{#if:{{{2|}}}|Y|N}}";
         if (std.mem.eql(u8, title, "Template:Only")) return "A<noinclude>X</noinclude>B<includeonly>C</includeonly>D";
@@ -1359,6 +1607,18 @@ const TestProvider = struct {
     fn getTemplateSymbol(_: ?*anyopaque, _: std.mem.Allocator, id: usize) !?[]const u8 {
         return if (id == 3) "Hi {{{1|friend}}} {{#if:{{{2|}}}|Y|N}}" else null;
     }
+    fn interwikiMap(_: ?*anyopaque) ![]const Provider.InterwikiRow {
+        return &interwiki_rows;
+    }
+    fn categoryTree(_: ?*anyopaque, db_key: []const u8) ![]const []const u8 {
+        if (!std.mem.eql(u8, db_key, "English_terms_prefixed_with_un-"))
+            return error.CategoryTreeSnapshotMissing;
+        return &category_tree_members;
+    }
+    fn categoryStats(_: ?*anyopaque, db_key: []const u8) !?Provider.CategoryStats {
+        if (!std.mem.eql(u8, db_key, "English_terms_prefixed_with_un-")) return null;
+        return .{ .all = 4, .subcats = 1, .files = 0 };
+    }
 };
 
 const TestModule = struct {
@@ -1373,6 +1633,10 @@ const TestModule = struct {
         try exports.rawSet(ctx.allocator, .{ .string = "run" }, try ctx.makeFunctionKnown(1, run, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "fail" }, try ctx.makeFunctionKnown(2, fail, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "random" }, try ctx.makeFunctionKnown(3, random, &.{}));
+        const state = try ctx.allocator.create(rt.Cell);
+        state.* = .{ .value = .{ .number = 0 } };
+        try exports.rawSet(ctx.allocator, .{ .string = "stateful" }, try ctx.makeFunctionKnown(4, stateful, &.{state}));
+        try exports.rawSet(ctx.allocator, .{ .string = "nested" }, try ctx.makeFunctionKnown(5, nested, &.{}));
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
         return out;
@@ -1394,6 +1658,22 @@ const TestModule = struct {
         const call = try ctx.getIndex(math, .{ .string = "random" });
         return ctx.callValue(call, &.{.{ .number = 10 }});
     }
+    fn stateful(_: *rt.Context, captures: rt.Captures, _: []const Value) ![]const Value {
+        const state = try captures.cell(0);
+        const next = switch (state.value) {
+            .number => |number| number + 1,
+            else => 1,
+        };
+        state.value = .{ .number = next };
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .number = next };
+        return out;
+    }
+    fn nested(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "<ref>{{Hello|R|1}}</ref>" };
+        return out;
+    }
 };
 
 test "native AOT wikitext expands templates parser functions and invoke" {
@@ -1401,26 +1681,41 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     defer arena.deinit();
     var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
     defer runtime.deinit();
-    const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail), rt.stabilize(TestModule.random) };
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail), rt.stabilize(TestModule.random), rt.stabilize(TestModule.stateful), rt.stabilize(TestModule.nested) };
     runtime.module_root_entries = &functions;
     runtime.configureModules(null, TestModule.lookup, TestModule.name);
     try rt.bindGlobalTable(&runtime, null, 0);
     try stdlib.install(&runtime);
     try installTestHost(&runtime, 18, 23);
 
-    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists }, .install_scribunto = installTestInvoke };
+    expander.provider.category_tree = TestProvider.categoryTree;
+    expander.provider.category_stats = TestProvider.categoryStats;
     const source = "{{Hello|Bob|1}}|{{Only}}|{{:Main_page}}|{{WT:Sandbox}}|{{T:Hello|Z|1}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{#ifexist:WT:Sandbox|W|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
     expander.provider.page_metadata = TestProvider.pageMetadata;
     const current_magic = try expander.expandFragment("Appendix:Page/Sub", "{{CURRENTDAYNAME}}|{{CURRENTWEEK}}|{{CURRENTMONTHNAMEGEN}}|{{PAGEID}}|{{REVISIONID}}|{{REVISIONTIMESTAMP}}|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}|{{REVISIONUSER}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Monday|50|December|42|420|20240304050607|2024-03-4|Test editor", current_magic);
     const site_magic = try expander.expandFragment("Page", "{{SERVER}}|{{SERVERNAME}}", 1_670_803_200);
     try std.testing.expectEqualStrings("//en.wiktionary.org|en.wiktionary.org", site_magic);
+    const category_tree = try expander.expandFragment(
+        "Page",
+        "{{#categorytree:English terms prefixed with un-|type=pages|depth=1|namespaces=-|hideprefix=always|hideroot=off|showcount=on}}",
+        1_670_803_200,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, category_tree, "[[:Category:English terms prefixed with un-|English terms prefixed with un-]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree, "(3)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree, "[[alpha]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree, "[[beta]]") != null);
     const other_magic = try expander.expandFragment("Page", "{{PAGEID:Other_page}}|{{REVISIONID:Other page}}|{{REVISIONTIMESTAMP:Other page}}|{{REVISIONUSER:Other_page}}|{{PAGEID:Missing page}}", 1_670_803_200);
     try std.testing.expectEqualStrings("99|990|20250607080910|Other editor|", other_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
     const random_top_level = try expander.expandFragment("Page", "{{#invoke:Test|random}}|{{#invoke:Test|random}}", 1_670_803_200);
     try std.testing.expectEqualStrings("9|9", random_top_level);
+    const isolated_module_state = try expander.expandFragment("Page", "{{#invoke:Test|stateful}}|{{#invoke:Test|stateful}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("1|1", isolated_module_state);
+    const nested_invoke_wikitext = try expander.expandFragment("Page", "{{#invoke:Test|nested}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<ref>Hi R Y</ref>", nested_invoke_wikitext);
 
     const display_body = try expander.expandFragment("Page", "{{DISPLAYTITLE:''Page''}}body", 1_670_803_200);
     try std.testing.expectEqualStrings("body", display_body);
@@ -1449,6 +1744,15 @@ test "native AOT wikitext expands templates parser functions and invoke" {
 
     const protected = try expander.expandFragment("Page", "<nowiki>{{Hello|Bob|1}}</nowiki>|{{Hello|A|}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{Hello|Bob|1}}</nowiki>|Hi A N", protected);
+    expander.provider.interwiki_map = TestProvider.interwikiMap;
+    const inert_interwiki = try expander.expandFragment("Page", "{{w:Numa Pompilius|King Numa}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{w:Numa Pompilius|King Numa}}</nowiki>", inert_interwiki);
+    const local_interwiki = try expander.expandFragment("Page", "{{self:Hello|A|1}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Hi A Y", local_interwiki);
+    try std.testing.expectError(
+        error.ExternalInterwikiTransclusionUnsupported,
+        expander.expandFragment("Page", "{{remote:Thing}}", 1_670_803_200),
+    );
     const extension_bodies = try expander.expandFragment(
         "Page",
         "<math>{{Hello|M|1}}</math>|<syntaxhighlight>{{Hello|S|1}}</syntaxhighlight>|<ref>{{Hello|R|1}}</ref>|<poem>{{Hello|P|1}}</poem>",
@@ -1459,7 +1763,7 @@ test "native AOT wikitext expands templates parser functions and invoke" {
         extension_bodies,
     );
     try std.testing.expect(runtime.current_frame == null);
-    var symbolic_expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .resolve_call_symbol = TestProvider.resolveCallSymbol, .get_template_symbol = TestProvider.getTemplateSymbol } };
+    var symbolic_expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .resolve_call_symbol = TestProvider.resolveCallSymbol, .get_template_symbol = TestProvider.getTemplateSymbol }, .install_scribunto = installTestInvoke };
     const symbolic = try symbolic_expander.expandFragment("Page", "{{PAGENAME}}|{{@template|Bob|1}}|{{#invoke:@module|@function|x=symbolic}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Page|Hi Bob Y|symbolic", symbolic);
     try std.testing.expectError(error.AotCallFailed, expander.expandFragment("Page", "{{#invoke:Test|fail}}", 1_670_803_200));
@@ -1500,6 +1804,20 @@ test "bundle parser functions cover corpus time date sub and iferror forms" {
     const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#formatdate:2010-01-02|dmy}}|{{#dateformat:January 2|dmy}}|{{#formatdate:2-Jan-2010|dmy}}|{{#len:é猫}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{formatnum:11000}}|{{FORMATNUM:-1234567.89}}|{{formatnum:1,234.50|R}}|{{formatnum:1234.50|NOSEP}}|{{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}|{{anchorencode:a%20b}}|{{ucfirst:ßeta}}|{{ucfirst:ǰfoo}}|{{lcfirst:Éclair}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
     const got = try expander.expandFragment("Page", source, 1_670_803_200);
     try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|<span class=\"mw-formatted-date\" title=\"2010-01-02\">2 January 2010</span>|<span class=\"mw-formatted-date\" title=\"01-02\">2 January</span>|2-Jan-2010|2|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|11,000|−1,234,567.89|1234.50|1234.50|A_B_x_C|a%2520b|ßeta|J̌foo|éclair|/Wiktionary/Wiktionary/Module", got);
+    const empty_expr = try expander.expandFragment("Page", "{{#expr:}}|{{#expr:   }}|{{#ifexpr:|YES|NO}}|{{#ifexpr:   |YES|NO}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("||NO|NO", empty_expr);
+    const trimmed = try expander.expandFragment(
+        "Page",
+        "{{#if:1| X | Y }}|{{#ifeq:a|a| X | Y }}|{{#ifexist:Exists| X | Y }}|{{#ifexpr:1| X | Y }}|{{#iferror:plain| X | Y }}|{{#switch:x|x= X |#default= Y }}|https://{{#if:1|\n  example.test\n|\n  invalid.test\n}}|{{#if:1| <!--comment--> X |Y}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings("X|X|X|X|Y|X|https://example.test|X", trimmed);
+    const grouped_switch = try expander.expandFragment(
+        "Page",
+        "{{#switch:V|L|W = 2014|P|X = p. 2011}}|{{#switch:W|L|W = 2014|P|X = p. 2011}}|{{#switch:L|L|W = 2014|P|X = p. 2011}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings("|2014|2014", grouped_switch);
     try std.testing.expectError(error.InvalidNamespace, expander.expandFragment("Page", "{{ns:not-a-namespace}}", 1_670_803_200));
 
     expander.beginPage("Page", "source", 1_670_803_200);

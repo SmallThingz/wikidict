@@ -126,11 +126,11 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
         try ustring.rawSet(runtime.allocator, entry.key_ptr.*, entry.value_ptr.*);
     const case_mapper = try ustring_lib.install(runtime, ustring);
     try html_lib.install(runtime, mw);
-    try installStringAliases(runtime, string.table, ustring);
     try mw.rawSetNativeField(.mw, "ustring", .{ .table = ustring });
     try text_lib.install(runtime, mw);
     try title_lib.install(runtime, mw, case_mapper);
     try language_lib.install(runtime, mw, case_mapper);
+    try installStringAliases(runtime, string.table, ustring);
     try frame_lib.install(runtime, mw);
     try uri_lib.install(runtime, mw);
     try basics_lib.install(runtime, mw);
@@ -170,7 +170,7 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     const empty_frame = try frame_lib.makeFrameFromTable(&child, "empty", empty_args, null);
     child.current_frame = empty_frame.table;
     const source = child.requireByName(args[0].string) catch |err| {
-        runtime.adoptFailure(&child);
+        try runtime.adoptFailure(&child);
         return err;
     };
     if (source != .table) return error.LoadDataTableExpected;
@@ -261,10 +261,21 @@ test "AOT Scribunto installs mw.ustring, html, loadData, clone, and string alias
     const len = try callField(&runtime, ustring, "len", &.{.{ .string = "hé猫" }});
     defer rt.freeResults(len);
     try std.testing.expectEqual(@as(f64, 3), len[0].number);
+    const broken = [_]u8{0xc9};
+    const upper = try callField(&runtime, ustring, "upper", &.{.{ .string = &broken }});
+    defer rt.freeResults(upper);
+    try std.testing.expectEqualSlices(u8, &broken, upper[0].string);
+    const unicode_upper = try callField(&runtime, ustring, "upper", &.{.{ .string = "éclair" }});
+    defer rt.freeResults(unicode_upper);
+    try std.testing.expectEqualStrings("ÉCLAIR", unicode_upper[0].string);
     const string = runtime.getGlobal(1);
     const alias = try runtime.getIndex(string, .{ .string = "ulen" });
     const direct = try runtime.getIndex(ustring, .{ .string = "len" });
     try std.testing.expect(rt.rawEqual(alias, direct));
+    const string_upper = try runtime.getIndex(string, .{ .string = "uupper" });
+    const broken_alias = try runtime.callValue(string_upper, &.{.{ .string = &broken }});
+    defer rt.freeResults(broken_alias);
+    try std.testing.expectEqualSlices(u8, &broken, broken_alias[0].string);
     try std.testing.expect((try runtime.getIndex(mw, .{ .string = "html" })) == .table);
     try std.testing.expect((try runtime.getIndex(mw, .{ .string = "loadData" })) == .callable);
     try std.testing.expect((try runtime.getIndex(mw, .{ .string = "loadJsonData" })) == .callable);

@@ -76,7 +76,11 @@ const Matcher = struct {
                 i += 2;
                 continue;
             }
-            if (i + 2 < ep and self.pattern[i + 1] == '-') {
+            // ep points one byte past the closing ']'. A range endpoint must
+            // be inside the class, not the closing bracket itself. Without
+            // this guard a trailing literal '-' in e.g. [a-z._-] is consumed
+            // as the middle of a bogus '_-]' range.
+            if (i + 3 < ep and self.pattern[i + 1] == '-') {
                 if (self.pattern[i] <= c and c <= self.pattern[i + 2]) return sig;
                 i += 3;
                 continue;
@@ -348,6 +352,13 @@ test "literal classes captures and anchors" {
     try std.testing.expectEqualStrings("123", try captureText("abc 123 xyz", m.captures[1]));
     try std.testing.expect((try find("zabc", "^abc", 1)) == null);
     try std.testing.expect((try find("zabc", "abc", 1)) != null);
+}
+
+test "language-code class accepts literal trailing hyphen" {
+    const m = (try find("roa-opt:frei", "^([a-zA-Z][a-zA-Z0-9._-]*):(.*)$", 1)).?;
+    try std.testing.expectEqual(@as(u8, 2), m.capture_count);
+    try std.testing.expectEqualStrings("roa-opt", try captureText("roa-opt:frei", m.captures[0]));
+    try std.testing.expectEqualStrings("frei", try captureText("roa-opt:frei", m.captures[1]));
 }
 
 test "literal and required-prefix searches skip impossible starts without changing pattern semantics" {

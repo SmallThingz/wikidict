@@ -54,6 +54,8 @@ pub const Program = struct {
     module_lookup_names: [][]const u8,
     module_lookup_ids: []u32,
     module_export_shape_ids: []u32,
+    module_function_bases: []u32,
+    module_function_counts: []u32,
     module_requirement_offsets: []u32,
     module_requirements: []rt.ModuleRequirement,
     global_keys: []rt.Value,
@@ -112,6 +114,20 @@ pub const Program = struct {
             shape_id.* = try reader.readU32();
             if (shape_id.* != std.math.maxInt(u32) and shape_id.* >= shape_count)
                 return error.InvalidProgramMetadata;
+        }
+
+        const module_function_bases = try allocator.alloc(u32, module_count);
+        errdefer allocator.free(module_function_bases);
+        const module_function_counts = try allocator.alloc(u32, module_count);
+        errdefer allocator.free(module_function_counts);
+        var previous_end: u64 = 0;
+        for (module_function_bases, module_function_counts, 0..) |*base, *count, index| {
+            base.* = try reader.readU32();
+            count.* = try reader.readU32();
+            const end = @as(u64, base.*) + count.*;
+            if (index != 0 and @as(u64, base.*) < previous_end)
+                return error.InvalidProgramMetadata;
+            previous_end = end;
         }
 
         const module_requirement_offsets = try allocator.alloc(u32, @as(usize, module_count) + 1);
@@ -186,6 +202,8 @@ pub const Program = struct {
             .module_lookup_names = module_lookup_names,
             .module_lookup_ids = module_lookup_ids,
             .module_export_shape_ids = module_export_shape_ids,
+            .module_function_bases = module_function_bases,
+            .module_function_counts = module_function_counts,
             .module_requirement_offsets = module_requirement_offsets,
             .module_requirements = module_requirements,
             .global_keys = global_keys,
@@ -209,6 +227,8 @@ pub const Program = struct {
         self.allocator.free(self.global_keys);
         self.allocator.free(self.module_requirements);
         self.allocator.free(self.module_requirement_offsets);
+        self.allocator.free(self.module_function_counts);
+        self.allocator.free(self.module_function_bases);
         self.allocator.free(self.module_export_shape_ids);
         self.allocator.free(self.module_lookup_ids);
         self.allocator.free(self.module_lookup_names);
@@ -278,6 +298,7 @@ pub const Program = struct {
         ctx.module_export_shape_ids = self.module_export_shape_ids;
         ctx.program_shapes = self.shapes;
         ctx.configureModules(self, lookup, moduleName);
+        ctx.configureModuleFunctions(self.module_function_bases, self.module_function_counts);
         ctx.configureModuleRequirements(self, moduleRequirements);
         ctx.configureProgramBootstrap(
             &self.stdlib_template,
