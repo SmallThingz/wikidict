@@ -2,6 +2,7 @@ const std = @import("std");
 const rt = @import("zig_runtime");
 const namespace_lib = @import("namespaces.zig");
 const host_api = @import("host.zig");
+const text_lib = @import("text.zig");
 const Value = rt.Value;
 
 fn one(value: Value) ![]const Value {
@@ -382,6 +383,152 @@ fn messageNewRawCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) 
     return makeMessageObject(runtime, ctx);
 }
 
+fn tableField(table: *rt.Table, name: []const u8) ?Value {
+    return table.rawGet(.{ .string = name });
+}
+
+fn localizedEnglish(value: Value) !Value {
+    if (value != .table) return error.InvalidExternalDataSnapshot;
+    const english = tableField(value.table, "en") orelse return error.NotImplemented;
+    if (english != .string) return error.InvalidExternalDataSnapshot;
+    return english;
+}
+
+fn englishLicense(runtime: *rt.Context, code: []const u8) !Value {
+    if (!std.mem.eql(u8, code, "CC-BY-SA-4.0")) return error.NotImplemented;
+    const license = try runtime.newTable();
+    try license.rawSet(runtime.allocator, .{ .string = "code" }, .{ .string = "CC-BY-SA-4.0" });
+    try license.rawSet(runtime.allocator, .{ .string = "text" }, .{ .string = "Creative Commons Attribution-Share Alike 4.0" });
+    try license.rawSet(runtime.allocator, .{ .string = "url" }, .{ .string = "https://creativecommons.org/licenses/by-sa/4.0/deed.en" });
+    return .{ .table = license };
+}
+
+fn reindexPreservedArray(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
+    const len = source.append_index;
+    if (len == std.math.maxInt(u32)) return error.InvalidExternalDataSnapshot;
+    const out = try runtime.newArrayTable(len);
+    var index: u32 = 0;
+    while (index < len) : (index += 1) {
+        if (source.rawGetNumber(@floatFromInt(index))) |value|
+            try out.rawSet(runtime.allocator, .{ .number = @floatFromInt(index + 1) }, value);
+    }
+    out.append_index = len + 1;
+    return out;
+}
+
+fn reindexTabularRaw(runtime: *rt.Context, raw: *rt.Table) !void {
+    const schema_value = tableField(raw, "schema") orelse return error.InvalidExternalDataSnapshot;
+    if (schema_value != .table) return error.InvalidExternalDataSnapshot;
+    const fields_value = tableField(schema_value.table, "fields") orelse return error.InvalidExternalDataSnapshot;
+    if (fields_value != .table) return error.InvalidExternalDataSnapshot;
+    const fields = try reindexPreservedArray(runtime, fields_value.table);
+    try schema_value.table.rawSet(runtime.allocator, .{ .string = "fields" }, .{ .table = fields });
+
+    const data_value = tableField(raw, "data") orelse return error.InvalidExternalDataSnapshot;
+    if (data_value != .table) return error.InvalidExternalDataSnapshot;
+    const row_count = data_value.table.append_index;
+    if (row_count == std.math.maxInt(u32)) return error.InvalidExternalDataSnapshot;
+    const data = try runtime.newArrayTable(row_count);
+    var row_index: u32 = 0;
+    while (row_index < row_count) : (row_index += 1) {
+        const row_value = data_value.table.rawGetNumber(@floatFromInt(row_index)) orelse continue;
+        if (row_value != .table) return error.InvalidExternalDataSnapshot;
+        const row = try reindexPreservedArray(runtime, row_value.table);
+        try data.rawSet(runtime.allocator, .{ .number = @floatFromInt(row_index + 1) }, .{ .table = row });
+    }
+    data.append_index = row_count + 1;
+    try raw.rawSet(runtime.allocator, .{ .string = "data" }, .{ .table = data });
+}
+
+fn localizedTabular(runtime: *rt.Context, raw: *rt.Table) !Value {
+    const out = try runtime.newTable();
+    if (tableField(raw, "description")) |description|
+        try out.rawSet(runtime.allocator, .{ .string = "description" }, try localizedEnglish(description));
+    if (tableField(raw, "license")) |license| {
+        if (license != .string) return error.InvalidExternalDataSnapshot;
+        try out.rawSet(runtime.allocator, .{ .string = "license" }, try englishLicense(runtime, license.string));
+    }
+    if (tableField(raw, "sources")) |sources|
+        try out.rawSet(runtime.allocator, .{ .string = "sources" }, sources);
+    if (tableField(raw, "mediawikiCategories")) |categories|
+        try out.rawSet(runtime.allocator, .{ .string = "mediawikiCategories" }, categories);
+
+    const schema_value = tableField(raw, "schema") orelse return error.InvalidExternalDataSnapshot;
+    if (schema_value != .table) return error.InvalidExternalDataSnapshot;
+    const fields_value = tableField(schema_value.table, "fields") orelse return error.InvalidExternalDataSnapshot;
+    if (fields_value != .table) return error.InvalidExternalDataSnapshot;
+    const out_schema = try runtime.newTable();
+    const out_fields = try runtime.newTable();
+    var localized_columns: std.ArrayList(bool) = .empty;
+    defer localized_columns.deinit(runtime.allocator);
+
+    var field_index: usize = 1;
+    while (fields_value.table.rawGetNumber(@floatFromInt(field_index))) |field_value| : (field_index += 1) {
+        if (field_value != .table) return error.InvalidExternalDataSnapshot;
+        const name = tableField(field_value.table, "name") orelse return error.InvalidExternalDataSnapshot;
+        const field_type = tableField(field_value.table, "type") orelse return error.InvalidExternalDataSnapshot;
+        if (name != .string or field_type != .string) return error.InvalidExternalDataSnapshot;
+        const out_field = try runtime.newTable();
+        try out_field.rawSet(runtime.allocator, .{ .string = "name" }, name);
+        try out_field.rawSet(runtime.allocator, .{ .string = "type" }, field_type);
+        const title = if (tableField(field_value.table, "title")) |value| try localizedEnglish(value) else name;
+        try out_field.rawSet(runtime.allocator, .{ .string = "title" }, title);
+        try out_fields.rawSet(runtime.allocator, .{ .number = @floatFromInt(field_index) }, .{ .table = out_field });
+        try localized_columns.append(runtime.allocator, std.mem.eql(u8, field_type.string, "localized"));
+    }
+    try out_schema.rawSet(runtime.allocator, .{ .string = "fields" }, .{ .table = out_fields });
+    try out.rawSet(runtime.allocator, .{ .string = "schema" }, .{ .table = out_schema });
+
+    const data_value: Value = tableField(raw, "data") orelse .{ .table = try runtime.newTable() };
+    if (data_value != .table) return error.InvalidExternalDataSnapshot;
+    var has_localized = false;
+    for (localized_columns.items) |is_localized| has_localized = has_localized or is_localized;
+    if (!has_localized) {
+        try out.rawSet(runtime.allocator, .{ .string = "data" }, data_value);
+        return .{ .table = out };
+    }
+
+    const out_data = try runtime.newTable();
+    var row_index: usize = 1;
+    while (data_value.table.rawGetNumber(@floatFromInt(row_index))) |row_value| : (row_index += 1) {
+        if (row_value != .table) return error.InvalidExternalDataSnapshot;
+        const out_row = try runtime.newTable();
+        for (localized_columns.items, 0..) |is_localized, column_zero| {
+            const column: f64 = @floatFromInt(column_zero + 1);
+            const value = row_value.table.rawGetNumber(column) orelse .nil;
+            const converted = if (is_localized and value != .nil) try localizedEnglish(value) else value;
+            if (converted != .nil) try out_row.rawSet(runtime.allocator, .{ .number = column }, converted);
+        }
+        try out_data.rawSet(runtime.allocator, .{ .number = @floatFromInt(row_index) }, .{ .table = out_row });
+    }
+    try out.rawSet(runtime.allocator, .{ .string = "data" }, .{ .table = out_data });
+    return .{ .table = out };
+}
+
+fn externalDataGetCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const raw = if (args.len < 2 or args[1] == .nil)
+        false
+    else if (args[1] != .string)
+        return error.StringExpected
+    else if (std.mem.eql(u8, args[1].string, "_"))
+        true
+    else if (std.mem.eql(u8, args[1].string, "en"))
+        false
+    else
+        return error.NotImplemented;
+
+    if (!std.mem.endsWith(u8, args[0].string, ".tab")) return error.NotImplemented;
+    const host = host_api.get(runtime) orelse return error.NotImplemented;
+    const get = host.external_data orelse return error.NotImplemented;
+    const entry = (try get(host.ctx, args[0].string)) orelse return one(.{ .boolean = false });
+    if (!std.mem.eql(u8, entry.content_model, "Tabular.JsonConfig")) return error.NotImplemented;
+    const decoded = text_lib.jsonDecodeValue(runtime, entry.source, text_lib.json_preserve_keys) catch return error.InvalidExternalDataSnapshot;
+    if (decoded != .table) return error.InvalidExternalDataSnapshot;
+    try reindexTabularRaw(runtime, decoded.table);
+    return one(if (raw) decoded else try localizedTabular(runtime, decoded.table));
+}
+
 fn interwikiMapCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const filter: enum { all, local, nonlocal } = if (args.len == 0 or args[0] == .nil)
         .all
@@ -443,7 +590,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
 
     const ext = try runtime.newTable();
     const ext_data = try runtime.newTable();
-    try setNative(runtime, ext_data, "get", notImplementedCall);
+    try setNative(runtime, ext_data, "get", externalDataGetCall);
     try ext.rawSet(runtime.allocator, .{ .string = "data" }, .{ .table = ext_data });
     try mw.rawSetNativeField(.mw, "ext", .{ .table = ext });
 
@@ -607,6 +754,74 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
     try std.testing.expectError(error.AotCallFailed, runtime.getIndex(.{ .table = stats }, .{ .string = "pages" }));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+}
+
+const ExternalDataProbe = struct {
+    const source =
+        \\{"license":"CC-BY-SA-4.0","description":{"en":"Example","fr":"Exemple"},"sources":"source","mediawikiCategories":[{"name":"Data"}],"schema":{"fields":[{"name":"key","type":"string","title":{"en":"Key"}},{"name":"label","type":"localized","title":{"en":"Label"}}]},"data":[["0x41",{"en":"A","fr":"Une"}]]}
+    ;
+
+    fn get(_: ?*anyopaque, title: []const u8) !?host_api.ExternalData {
+        if (std.mem.eql(u8, title, "Example.tab"))
+            return .{ .content_model = "Tabular.JsonConfig", .source = source };
+        if (std.mem.eql(u8, title, "Other.map"))
+            return .{ .content_model = "Map.JsonConfig", .source = "{}" };
+        return null;
+    }
+};
+
+test "AOT mw ext data reads explicit tabular snapshot exactly and fails closed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{ .external_data = ExternalDataProbe.get };
+    host_api.set(&runtime, &host);
+    const mw = try runtime.newNativeNamespace(.mw);
+    try install(&runtime, mw);
+    const ext_data = mw.rawGet(.{ .string = "ext" }).?.table.rawGet(.{ .string = "data" }).?.table;
+
+    const first = try callField(&runtime, .{ .table = ext_data }, "get", &.{.{ .string = "Example.tab" }});
+    defer rt.freeResults(first);
+    const second = try callField(&runtime, .{ .table = ext_data }, "get", &.{.{ .string = "Example.tab" }});
+    defer rt.freeResults(second);
+    try std.testing.expect(first[0] == .table and second[0] == .table and first[0].table != second[0].table);
+    try std.testing.expectEqualStrings("Example", first[0].table.rawGet(.{ .string = "description" }).?.string);
+    const license = first[0].table.rawGet(.{ .string = "license" }).?.table;
+    try std.testing.expectEqualStrings("CC-BY-SA-4.0", license.rawGet(.{ .string = "code" }).?.string);
+    try std.testing.expectEqualStrings("Creative Commons Attribution-Share Alike 4.0", license.rawGet(.{ .string = "text" }).?.string);
+    const fields = first[0].table.rawGet(.{ .string = "schema" }).?.table.rawGet(.{ .string = "fields" }).?.table;
+    try std.testing.expect(fields.rawGetNumber(0) == null);
+    try std.testing.expectEqualStrings("Key", fields.rawGetNumber(1).?.table.rawGet(.{ .string = "title" }).?.string);
+    const data = first[0].table.rawGet(.{ .string = "data" }).?.table;
+    try std.testing.expect(data.rawGetNumber(0) == null);
+    try std.testing.expectEqualStrings("A", data.rawGetNumber(1).?.table.rawGetNumber(2).?.string);
+    const categories = first[0].table.rawGet(.{ .string = "mediawikiCategories" }).?.table;
+    try std.testing.expectEqualStrings("Data", categories.rawGetNumber(0).?.table.rawGet(.{ .string = "name" }).?.string);
+    try std.testing.expect(categories.rawGetNumber(1) == null);
+
+    try first[0].table.rawSet(runtime.allocator, .{ .string = "probe" }, .{ .boolean = true });
+    try std.testing.expect(second[0].table.rawGet(.{ .string = "probe" }) == null);
+
+    const raw = try callField(&runtime, .{ .table = ext_data }, "get", &.{ .{ .string = "Example.tab" }, .{ .string = "_" } });
+    defer rt.freeResults(raw);
+    try std.testing.expect(raw[0].table.rawGet(.{ .string = "description" }).? == .table);
+    try std.testing.expectEqualStrings("CC-BY-SA-4.0", raw[0].table.rawGet(.{ .string = "license" }).?.string);
+    const raw_categories = raw[0].table.rawGet(.{ .string = "mediawikiCategories" }).?.table;
+    try std.testing.expectEqualStrings("Data", raw_categories.rawGetNumber(0).?.table.rawGet(.{ .string = "name" }).?.string);
+    try std.testing.expect(raw_categories.rawGetNumber(1) == null);
+    const raw_label = raw[0].table.rawGet(.{ .string = "data" }).?.table.rawGetNumber(1).?.table.rawGetNumber(2).?.table;
+    try std.testing.expectEqualStrings("Une", raw_label.rawGet(.{ .string = "fr" }).?.string);
+
+    const missing = try callField(&runtime, .{ .table = ext_data }, "get", &.{.{ .string = "Missing.tab" }});
+    defer rt.freeResults(missing);
+    try std.testing.expect(missing[0] == .boolean and !missing[0].boolean);
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = ext_data }, "get", &.{ .{ .string = "Example.tab" }, .{ .string = "fr" } }));
+    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = ext_data }, "get", &.{.{ .string = "Other.map" }}));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
 }

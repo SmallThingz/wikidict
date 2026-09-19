@@ -528,7 +528,7 @@ fn textTagCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     return one(runtime.allocator, .{ .string = try out.toOwnedSlice(runtime.allocator) });
 }
 
-const json_preserve_keys: u32 = 1;
+pub const json_preserve_keys: u32 = 1;
 const json_try_fixing: u32 = 2;
 const json_pretty: u32 = 4;
 

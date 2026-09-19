@@ -12,6 +12,12 @@ pub const FrameExtensionTagFn = *const fn (?*anyopaque, std.mem.Allocator, []con
 pub const FrameParserFunctionFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, *rt.Table) anyerror![]const u8;
 pub const TextUnstripNoWikiFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror![]const u8;
 
+pub const ExternalData = struct {
+    content_model: []const u8,
+    source: []const u8,
+};
+pub const ExternalDataFn = *const fn (?*anyopaque, []const u8) anyerror!?ExternalData;
+
 pub const InterwikiRow = struct {
     prefix: []const u8,
     url: []const u8,
@@ -36,6 +42,7 @@ pub const Host = struct {
     frame_extension_tag: ?FrameExtensionTagFn = null,
     frame_parser_function: ?FrameParserFunctionFn = null,
     text_unstrip_no_wiki: ?TextUnstripNoWikiFn = null,
+    external_data: ?ExternalDataFn = null,
     site_interwiki_map: ?SiteInterwikiMapFn = null,
 };
 

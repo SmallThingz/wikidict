@@ -47,6 +47,7 @@ pub const CallSymbol = struct {
 };
 
 pub const Provider = struct {
+    pub const ExternalData = host_api.ExternalData;
     pub const InterwikiRow = host_api.InterwikiRow;
     pub const SymbolKind = CallSymbolKind;
     pub const Symbol = CallSymbol;
@@ -68,6 +69,7 @@ pub const Provider = struct {
     redirect_target: ?*const fn (?*anyopaque, []const u8) anyerror!?[]const u8 = null,
     page_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!?PageMetadata = null,
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
+    external_data: ?*const fn (?*anyopaque, []const u8) anyerror!?ExternalData = null,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
     resolve_call_symbol: ?*const fn (?*anyopaque, *rt.Context, []const u8, CallSymbolKind) anyerror!?CallSymbol = null,
     get_template_symbol: ?*const fn (?*anyopaque, std.mem.Allocator, usize) anyerror!?[]const u8 = null,
@@ -104,6 +106,7 @@ pub const Expander = struct {
         self.host.frame_extension_tag = hostFrameExtensionTag;
         self.host.frame_parser_function = hostFrameParserFunction;
         self.host.text_unstrip_no_wiki = hostTextUnstripNoWiki;
+        self.host.external_data = hostExternalData;
         self.host.site_interwiki_map = hostSiteInterwikiMap;
         host_api.set(self.runtime, &self.host);
     }
@@ -160,6 +163,12 @@ pub const Expander = struct {
         const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, title);
         const metadata = (try get(self.provider.ctx, canonical)) orelse return null;
         return metadata.content_model;
+    }
+
+    fn hostExternalData(raw: ?*anyopaque, title: []const u8) anyerror!?host_api.ExternalData {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const get = self.provider.external_data orelse return error.NotImplemented;
+        return get(self.provider.ctx, title);
     }
 
     fn hostSiteInterwikiMap(raw: ?*anyopaque) anyerror![]const host_api.InterwikiRow {

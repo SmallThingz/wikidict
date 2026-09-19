@@ -4,6 +4,7 @@ const A = std.mem.Allocator;
 const lua_program = @import("lua_program");
 const xml_decode = @import("shared_xml_decode");
 const preprocess = @import("lua_wikitext_preprocess");
+const ExternalData = lua_program.WikitextProvider.ExternalData;
 const InterwikiRow = lua_program.WikitextProvider.InterwikiRow;
 const TransclusionBody = lua_program.WikitextProvider.TransclusionBody;
 
@@ -32,6 +33,9 @@ pub const Provider = struct {
     transclusion_body_cache: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
     transclusion_body_cache_bytes: usize = 0,
     transclusion_seen: []usize = &.{},
+    external_data: std.StringHashMapUnmanaged(ExternalData) = .empty,
+    external_data_storage: ?Mapped = null,
+    external_data_available: bool = false,
     interwiki_rows: std.ArrayList(InterwikiRow) = .empty,
     interwiki_available: bool = false,
 
@@ -40,6 +44,7 @@ pub const Provider = struct {
         var self: Provider = .{ .io = io, .a = a, .root = owned_root };
         errdefer self.deinit();
         try self.loadCorpusPages(dump_path);
+        try self.loadExternalData();
         try self.loadInterwikiMap();
         return self;
     }
@@ -52,6 +57,8 @@ pub const Provider = struct {
         while (cached.next()) |body| self.a.free(body.*);
         self.transclusion_body_cache.deinit(self.a);
         self.a.free(self.transclusion_seen);
+        self.external_data.deinit(self.a);
+        if (self.external_data_storage) |*mapped| mapped.deinit();
         for (self.interwiki_rows.items) |row| {
             self.a.free((row.prefix));
             self.a.free((row.url));
@@ -70,6 +77,7 @@ pub const Provider = struct {
             .redirect_target = redirectTarget,
             .page_metadata = pageMetadata,
             .exists = exists,
+            .external_data = if (self.external_data_available) externalData else null,
             .interwiki_map = if (self.interwiki_available) interwikiMap else null,
         };
     }
@@ -107,6 +115,32 @@ pub const Provider = struct {
             });
         }
         return out.toOwnedSlice(a);
+    }
+
+    fn loadExternalData(self: *Provider) !void {
+        var mapped = (try self.mapOptional("commons-data.tsv")) orelse return;
+        errdefer mapped.deinit();
+        var entries: std.StringHashMapUnmanaged(ExternalData) = .empty;
+        errdefer entries.deinit(self.a);
+        const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse return error.ExternalDataSnapshotTooLarge;
+        try entries.ensureTotalCapacity(self.a, capacity);
+
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            const first_tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidExternalDataSnapshot;
+            const second_tab = std.mem.indexOfScalarPos(u8, line, first_tab + 1, '\t') orelse return error.InvalidExternalDataSnapshot;
+            const name = line[0..first_tab];
+            const content_model = line[first_tab + 1 .. second_tab];
+            const source = line[second_tab + 1 ..];
+            if (name.len == 0 or content_model.len == 0 or source.len == 0) return error.InvalidExternalDataSnapshot;
+            const result = try entries.getOrPut(self.a, name);
+            if (result.found_existing) return error.DuplicateExternalData;
+            result.value_ptr.* = .{ .content_model = content_model, .source = source };
+        }
+        self.external_data = entries;
+        self.external_data_storage = mapped;
+        self.external_data_available = true;
     }
 
     fn loadInterwikiMap(self: *Provider) !void {
@@ -294,6 +328,11 @@ pub const Provider = struct {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         const page = (try self.findPage(title)) orelse return null;
         return .{ .page_id = page.page_id, .revision_id = page.revision_id, .revision_timestamp = page.revision_timestamp, .revision_user = page.revision_user, .content_model = page.content_model };
+    }
+
+    fn externalData(ctx: ?*anyopaque, title: []const u8) anyerror!?ExternalData {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return self.external_data.get(title);
     }
 
     fn interwikiMap(ctx: ?*anyopaque) anyerror![]const InterwikiRow {

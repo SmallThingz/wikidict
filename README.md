@@ -50,6 +50,23 @@ zig build -Doptimize=ReleaseFast build-dictionary -- \
   data/wiktionary-blobs
 ```
 
+Wiktionary modules that read Commons JsonConfig data through `mw.ext.data` require an explicit pinned snapshot. Supply it as a build input rather than allowing the compiler to consult live Wikimedia state:
+
+```sh
+zig build -Doptimize=ReleaseFast build-dictionary -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs \
+  --commons-data-snapshot data/commons-data.tsv
+```
+
+`commons-data.tsv` uses one record per non-comment line:
+
+```text
+DATA_TITLE<TAB>CONTENT_MODEL<TAB>COMPACT_JSON
+```
+
+For example, the title field is `Unicode data/images/000.tab` and the content model is `Tabular.JsonConfig`. The snapshot is copied only into the transient bundle expander and is deleted with it; it is never published in the dictionary blobs. If no snapshot is supplied, `mw.ext.data` remains explicitly unsupported. Missing titles in a supplied snapshot return the same `false` result as JsonConfig, while unsupported content models or localization paths fail closed rather than inventing Wikimedia state.
+
 The coordinated pipeline:
 
 1. extracts Scribunto modules and module redirects into a transient build directory;
