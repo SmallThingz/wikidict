@@ -118,6 +118,30 @@ pub fn encode(a: A, value: *const lua.Expr, table_shapes: ?*const shapes.ModuleF
     return encoder.out.toOwnedSlice(a);
 }
 
+pub const NamedLiteralField = struct {
+    name: []const u8,
+    value: *const lua.Expr,
+};
+
+pub fn encodeNamedTable(
+    a: A,
+    span_start: u32,
+    fields: []const NamedLiteralField,
+    table_shapes: ?*const shapes.ModuleFacts,
+) ![]u8 {
+    const table_fields = try a.alloc(lua.TableField, fields.len);
+    defer a.free(table_fields);
+    for (table_fields, fields) |*out, field| {
+        if (!isLiteral(field.value)) return error.NonStaticLiteral;
+        out.* = .{ .named = .{ .name = field.name, .value = @constCast(field.value) } };
+    }
+    var expr: lua.Expr = .{ .table = .{
+        .fields = table_fields,
+        .span = .{ .start = span_start, .end = span_start },
+    } };
+    return encode(a, &expr, table_shapes);
+}
+
 test "static root literal detection excludes executable values" {
     const a = std.testing.allocator;
     var static_chunk = try lua.parse(a, "return { a = 1, { true, 'x' } }");

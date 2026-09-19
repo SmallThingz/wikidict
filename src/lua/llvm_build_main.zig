@@ -434,10 +434,32 @@ fn analyzeManifest(
                 return std.mem.order(u8, lhs.name, rhs.name) == .lt;
             }
         }.lessThan);
+
+        var synth_literals: std.ArrayList(static_encode.NamedLiteralField) = .empty;
+        if (!model.dynamic_top_level) switch (model.return_binding) {
+            .table => |table| {
+                var fields = table.fields.iterator();
+                while (fields.next()) |entry| switch (entry.value_ptr.*) {
+                    .literal => |value| try synth_literals.append(sa, .{
+                        .name = entry.key_ptr.*,
+                        .value = value,
+                    }),
+                    else => {},
+                };
+            },
+            else => {},
+        };
+        std.mem.sort(static_encode.NamedLiteralField, synth_literals.items, {}, struct {
+            fn lessThan(_: void, lhs: static_encode.NamedLiteralField, rhs: static_encode.NamedLiteralField) bool {
+                return std.mem.order(u8, lhs.name, rhs.name) == .lt;
+            }
+        }.lessThan);
+
         var synth_root = false;
         if (model.root_pure and !model.dynamic_top_level) switch (model.return_binding) {
             .table => |table| {
-                synth_root = table.fields.count() == direct_exports.items.len;
+                synth_root = table.shape_eligible and
+                    table.fields.count() == direct_exports.items.len + synth_literals.items.len;
                 if (synth_root) for (direct_exports.items) |entry| {
                     if (entry.capture_count != 0) {
                         synth_root = false;
@@ -446,6 +468,22 @@ fn analyzeManifest(
                 };
             },
             else => {},
+        };
+
+        var synth_seed_blob: []const u8 = &.{};
+        if (synth_root and synth_literals.items.len != 0) switch (model.return_binding) {
+            .table => |table| {
+                var table_shapes = try shape_registry.moduleFacts(sa, module_index);
+                defer table_shapes.deinit(sa);
+                const seed = try static_encode.encodeNamedTable(
+                    sa,
+                    table.span_start,
+                    synth_literals.items,
+                    &table_shapes,
+                );
+                synth_seed_blob = try a.dupe(u8, seed);
+            },
+            else => unreachable,
         };
 
         const root_requires = try a.alloc([]const u8, model.root_requires.items.len);
@@ -466,6 +504,7 @@ fn analyzeManifest(
             .root_bootstrap_safe = model.root_bootstrap_safe,
             .root_requires = root_requires,
             .direct_exports = try direct_exports.toOwnedSlice(a),
+            .static_root_blob = synth_seed_blob,
             .synth_root = synth_root,
         });
         function_base = std.math.add(u32, function_base, count) catch return error.TooManyFunctions;

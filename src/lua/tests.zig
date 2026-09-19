@@ -963,6 +963,50 @@ test "captured static module export keeps guarded direct target" {
     try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_value_function_captures") != null);
 }
 
+test "module model preserves static literal export fields and rejects untracked list roots" {
+    const source =
+        \\local answer = 42
+        \\local export = { kind = 'mixed', nested = { ok = true } }
+        \\local alias = export
+        \\alias.answer = answer
+        \\function alias.run(x) return x end
+        \\return export
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var model = llvm_module_model.Builder{ .allocator = std.testing.allocator, .source = chunk.source };
+    defer model.deinit();
+    try model.build(chunk.body);
+    try std.testing.expect(model.root_pure);
+    try std.testing.expect(!model.dynamic_top_level);
+    const table = switch (model.return_binding) {
+        .table => |value| value,
+        else => return error.ExpectedTableModel,
+    };
+    try std.testing.expect(table.shape_eligible);
+    try std.testing.expect(table.fields.get("kind").? == .literal);
+    try std.testing.expect(table.fields.get("nested").? == .literal);
+    try std.testing.expect(table.fields.get("answer").? == .literal);
+    try std.testing.expect(table.fields.get("run").? == .function);
+
+    var list_chunk = try llvm_parser.parse(
+        std.testing.allocator,
+        "local export={11,22}; return export",
+    );
+    defer list_chunk.deinit();
+    var list_model = llvm_module_model.Builder{
+        .allocator = std.testing.allocator,
+        .source = list_chunk.source,
+    };
+    defer list_model.deinit();
+    try list_model.build(list_chunk.body);
+    const list_table = switch (list_model.return_binding) {
+        .table => |value| value,
+        else => return error.ExpectedTableModel,
+    };
+    try std.testing.expect(!list_table.shape_eligible);
+}
+
 test "module root purity only accepts context-free local construction" {
     const pure_source =
         \\local export = {}

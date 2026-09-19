@@ -4,6 +4,7 @@ const lua = @import("../parser/root.zig");
 pub const ModuleExport = struct { module: []const u8, name: []const u8 };
 pub const Binding = union(enum) {
     unknown,
+    literal: *const lua.Expr,
     function: u32,
     module: []const u8,
     module_export: ModuleExport,
@@ -257,7 +258,9 @@ pub const Builder = struct {
 
     fn eval(self: *Builder, expr: *const lua.Expr) anyerror!Binding {
         return switch (expr.*) {
+            .nil_lit, .bool_lit, .number, .string => .{ .literal = expr },
             .name => |n| self.env.get(n.value) orelse .unknown,
+            .paren => |p| if (literalExpr(expr)) .{ .literal = expr } else try self.eval(p.expr),
             .function => |f| .{ .function = f.span.start },
             .table => |t| try self.evalTable(t.span.start, t.fields),
             .index => |e| blk: {
@@ -294,16 +297,21 @@ pub const Builder = struct {
             return err;
         };
         for (fields) |field| switch (field) {
-            .named => |v| try table.fields.put(self.allocator, v.name, try self.eval(v.value)),
+            .named => |v| try table.fields.put(self.allocator, v.name, try self.evalField(v.value)),
             .keyed => |v| {
                 if (stringConst(v.key)) |key|
-                    try table.fields.put(self.allocator, key, try self.eval(v.value))
+                    try table.fields.put(self.allocator, key, try self.evalField(v.value))
                 else
                     table.shape_eligible = false;
             },
             .list => table.shape_eligible = false,
         };
         return .{ .table = table };
+    }
+
+    fn evalField(self: *Builder, expr: *const lua.Expr) anyerror!Binding {
+        if (literalExpr(expr)) return .{ .literal = expr };
+        return self.eval(expr);
     }
 
     fn assign(self: *Builder, target: lua.LValue, value: Binding) !void {
@@ -320,6 +328,22 @@ pub const Builder = struct {
         }
     }
 };
+
+fn literalExpr(expr: *const lua.Expr) bool {
+    return switch (expr.*) {
+        .nil_lit, .bool_lit, .number, .string => true,
+        .paren => |p| literalExpr(p.expr),
+        .table => |table| blk: {
+            for (table.fields) |field| switch (field) {
+                .list => |item| if (!literalExpr(item)) break :blk false,
+                .named => |item| if (!literalExpr(item.value)) break :blk false,
+                .keyed => |item| if (!literalExpr(item.key) or !literalExpr(item.value)) break :blk false,
+            };
+            break :blk true;
+        },
+        else => false,
+    };
+}
 
 fn stringConst(expr: *const lua.Expr) ?[]const u8 {
     return switch (expr.*) {

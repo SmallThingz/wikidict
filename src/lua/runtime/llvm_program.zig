@@ -365,14 +365,22 @@ pub const Program = struct {
         const self: *const Program = @ptrCast(@alignCast(raw orelse return null));
         if (id >= self.module_count) return null;
         const blob = self.module_static_root_blobs[id];
-        if (blob.len != 0) return try static_decode.decode(ctx, blob);
-        if (!self.module_synth_roots[id]) return null;
+        if (!self.module_synth_roots[id]) {
+            if (blob.len != 0) return try static_decode.decode(ctx, blob);
+            return null;
+        }
 
-        const shape_id = self.module_export_shape_ids[id];
-        const table = if (shape_id == std.math.maxInt(u32))
-            try ctx.newTable()
-        else
-            try ctx.newProgramShape(shape_id);
+        const table = if (blob.len != 0) blk: {
+            const seed = try static_decode.decode(ctx, blob);
+            if (seed != .table) return error.InvalidSyntheticRootSeed;
+            break :blk seed.table;
+        } else blk: {
+            const shape_id = self.module_export_shape_ids[id];
+            break :blk if (shape_id == std.math.maxInt(u32))
+                try ctx.newTable()
+            else
+                try ctx.newProgramShape(shape_id);
+        };
         const start: usize = self.module_synth_offsets[id];
         const end: usize = self.module_synth_offsets[id + 1];
         for (self.synth_exports[start..end], self.synth_export_entries[start..end]) |meta, entry| {

@@ -18,6 +18,7 @@ const source =
 const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
     \\local synth = require('Module:IntegrationSynth')
+    \\assert(synth.kind == 'mixed' and synth.answer == 42 and synth.nested.ok == true)
     \\assert(synth.run('direct') == 'synth:direct')
     \\synth.run = function(x) return 'mutated:' .. x end
     \\assert(synth.run('direct') == 'mutated:direct')
@@ -252,7 +253,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Template:Template:nested", .ns = 10, .id = 12, .body = "nested namespace retained" },
         .{ .title = "Template:nested", .ns = 10, .id = 13, .body = "ordinary namespace distinct" },
         .{ .title = "Module:IntegrationForms", .ns = 828, .id = 1, .body = module_source },
-        .{ .title = "Module:IntegrationSynth", .ns = 828, .id = 8, .body = "local export = {}; function export.run(x) if type(x) == 'table' then return 'synth:' .. x.args[1] end; return 'synth:' .. x end; return export" },
+        .{ .title = "Module:IntegrationSynth", .ns = 828, .id = 8, .body = "local answer = 42; local export = { kind = 'mixed', nested = { ok = true } }; local alias = export; alias.answer = answer; function alias.run(x) if type(x) == 'table' then return 'synth:' .. x.args[1] end; return 'synth:' .. x end; return export" },
         .{ .title = "Module:languages/canonical names", .ns = 828, .id = 3, .body = "return { [\"English\"] = \"en\" }" },
         .{ .title = "Module:IntegrationFormsData", .ns = 828, .id = 2, .body = "return { mouse = 'mice' }" },
         .{ .title = "Module:IntegrationPoison", .ns = 828, .id = 7, .body = "next = 'poison'; return { probe = function() return next end }" },
