@@ -23,6 +23,32 @@ fn limit(resource: std.posix.rlimit_resource, value: u64) !void {
     try std.posix.setrlimit(resource, .{ .cur = @intCast(n), .max = @intCast(n) });
 }
 
+fn currentVirtualBytes(io: std.Io) !u64 {
+    var file = try std.Io.Dir.openFileAbsolute(io, "/proc/self/status", .{});
+    defer file.close(io);
+    var buffer: [8192]u8 = undefined;
+    var reader = file.reader(io, &buffer);
+    const marker = "VmSize:";
+    while (try reader.interface.takeDelimiter('\n')) |line| {
+        if (!std.mem.startsWith(u8, line, marker)) continue;
+        var fields = std.mem.tokenizeAny(u8, line[marker.len..], " \t");
+        const kib = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidProcStatus, 10);
+        if (!std.mem.eql(u8, fields.next() orelse return error.InvalidProcStatus, "kB") or fields.next() != null)
+            return error.InvalidProcStatus;
+        return std.math.mul(u64, kib, 1024) catch return error.AddressSpaceOverflow;
+    }
+    return error.MissingProcVmSize;
+}
+
+fn limitAddressSpaceAfterAssets(io: std.Io, headroom: u64) !void {
+    const used = try currentVirtualBytes(io);
+    const desired = std.math.add(u64, used, headroom) catch std.math.maxInt(u64);
+    const old = try std.posix.getrlimit(.AS);
+    const n = @min(desired, old.cur);
+    if (n == old.cur) return;
+    try std.posix.setrlimit(.AS, .{ .cur = @intCast(n), .max = old.max });
+}
+
 const Engine = struct {
     io: std.Io,
     requested_root: []const u8,
@@ -85,7 +111,6 @@ pub fn run(io: std.Io, persistent: A) !void {
     try limit(.CORE, 0);
     if (L.errno(L.prctl(@intFromEnum(L.PR.SET_PDEATHSIG), @intFromEnum(L.SIG.KILL), 0, 0, 0)) != .SUCCESS) return error.ParentDeathSignalFailed;
     if (L.getppid() == 1) return error.ParentExited;
-    try limit(.AS, 4 * 1024 * 1024 * 1024);
     var engine: ?Engine = null;
     defer if (engine) |*value| value.deinit();
     var in_buf: [8192]u8 = undefined;
@@ -111,6 +136,15 @@ pub fn run(io: std.Io, persistent: A) !void {
         };
         if (engine == null) {
             engine = Engine.init(io, persistent, request.root, request.dump, request.now_unix) catch |err| {
+                try protocol.writeError(&output.interface, "assets", @errorName(err), "");
+                continue;
+            };
+            // Generated code and the corpus index are trusted build assets and can
+            // legitimately occupy several GiB of virtual address space. Cap only
+            // additional expansion growth after those assets are resident.
+            limitAddressSpaceAfterAssets(io, 4 * 1024 * 1024 * 1024) catch |err| {
+                engine.?.deinit();
+                engine = null;
                 try protocol.writeError(&output.interface, "assets", @errorName(err), "");
                 continue;
             };
