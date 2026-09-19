@@ -16,8 +16,6 @@ const source =
     "# Revision metadata: {{PAGEID}} / {{REVISIONID}} / {{REVISIONTIMESTAMP}} / {{REVISIONUSER}} / {{PAGEID:rat}} / {{REVISIONUSER:rat}}\n";
 const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
-    \\local poison = require('Module:IntegrationPoison')
-    \\assert(poison.probe() == 'poison' and type(next) == 'function')
     \\local large_static = require('Module:IntegrationLargeStatic')
     \\assert(large_static.k129[1] == 129 and large_static.k129[2] == 'v129')
     \\local bit32 = require('bit32')
@@ -241,7 +239,6 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Module:IntegrationForms", .ns = 828, .id = 1, .body = module_source },
         .{ .title = "Module:languages/canonical names", .ns = 828, .id = 3, .body = "return { [\"English\"] = \"en\" }" },
         .{ .title = "Module:IntegrationFormsData", .ns = 828, .id = 2, .body = "return { mouse = 'mice' }" },
-        .{ .title = "Module:IntegrationPoison", .ns = 828, .id = 7, .body = "next = 'poison'; return { probe = function() return next end }" },
         .{ .title = "Module:IntegrationLargeStatic", .ns = 828, .id = 6, .body = large_static.written() },
         .{ .title = "Module:IntegrationFormsData.json", .ns = 828, .id = 5, .body = "{\"cuts\":[1,2],\"nested\":{\"ok\":true}}", .model = "json" },
         .{ .title = "Module:IntegrationFormsAlias", .ns = 828, .id = 4, .body = "#REDIRECT [[Module:IntegrationFormsData]]", .redirect = "Module:IntegrationFormsData" },

@@ -351,9 +351,9 @@ fn basePairs(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Val
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
     if (iterationMetamethod(args[0], "__pairs")) |method|
         return iteratorTripleFromCall(ctx, method, args[0]);
-    const nxt = ctx.getGlobal(global_abi.id("next"));
+    if (ctx.builtin_next != .callable) return error.MissingBuiltinNext;
     const out = try std.heap.smp_allocator.alloc(Value, 3);
-    out[0] = nxt;
+    out[0] = ctx.builtin_next;
     out[1] = args[0];
     out[2] = .nil;
     return out;
@@ -1123,7 +1123,8 @@ pub fn install(runtime: *rt.Context) !void {
     try setGlobalNative(runtime, "tonumber", baseToNumber);
     try setGlobalNative(runtime, "select", baseSelect);
     try setGlobalNative(runtime, "unpack", baseUnpack);
-    try runtime.setGlobal(global_abi.id("next"), try runtime.newNativeBuffered(null, baseNext));
+    runtime.builtin_next = try runtime.newNativeBuffered(null, baseNext);
+    try runtime.setGlobal(global_abi.id("next"), runtime.builtin_next);
     try setGlobalNative(runtime, "pairs", basePairs);
     try setGlobalNative(runtime, "ipairs", baseIpairs);
     try setGlobalNative(runtime, "pcall", basePcall);
@@ -1232,6 +1233,7 @@ pub const Template = struct {
         const page_global = runtime.global_table.?;
         @memcpy(runtime.globals[0..self.base.globals.len], self.base.globals);
         runtime.next_identity = self.base.next_identity;
+        runtime.builtin_next = self.base.builtin_next;
         try runtime.setGlobal(global_abi.id("_G"), .{ .table = page_global });
 
         const table = try cloneTemplateNamespace(runtime, try self.namespace("table"));
@@ -1670,6 +1672,29 @@ test "AOT pairs and ipairs use hidden real metamethods including false call erro
     try bad_ipairs_mt.rawSet(ctx.allocator, .{ .string = "__ipairs" }, .{ .boolean = false });
     bad_ipairs.metatable = bad_ipairs_mt;
     try std.testing.expectError(error.NotCallable, baseIpairs(null, &ctx, &.{.{ .table = bad_ipairs }}));
+}
+
+test "AOT pairs returns builtin next after global next is overwritten" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try install(&ctx);
+
+    const builtin_next = ctx.builtin_next;
+    try std.testing.expect(builtin_next == .callable);
+    try ctx.setGlobal(global_abi.id("next"), .{ .string = "poison" });
+
+    const values = try ctx.newTable();
+    try values.rawSet(ctx.allocator, .{ .string = "x" }, .{ .number = 1 });
+    const triple = try basePairs(null, &ctx, &.{.{ .table = values }});
+    defer rt.freeResults(triple);
+    try std.testing.expect(rt.rawEqual(builtin_next, triple[0]));
+
+    const first = try ctx.callValue(triple[0], triple[1..3]);
+    defer rt.freeResults(first);
+    try std.testing.expectEqualStrings("x", first[0].string);
+    try std.testing.expectEqual(@as(f64, 1), first[1].number);
 }
 
 test "AOT next resumes sequential table iteration and falls back after interleaving" {
