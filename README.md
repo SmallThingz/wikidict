@@ -67,6 +67,23 @@ DATA_TITLE<TAB>CONTENT_MODEL<TAB>COMPACT_JSON
 
 For example, the title field is `Unicode data/images/000.tab` and the content model is `Tabular.JsonConfig`. The snapshot is copied only into the transient bundle expander and is deleted with it; it is never published in the dictionary blobs. If no snapshot is supplied, `mw.ext.data` remains explicitly unsupported. Missing titles in a supplied snapshot return the same `false` result as JsonConfig, while unsupported content models or localization paths fail closed rather than inventing Wikimedia state.
 
+Category counts used by `mw.site.stats.pagesInCategory` likewise require a snapshot from the matching Wikimedia `category.sql.gz` dump date:
+
+```sh
+zig build -Doptimize=ReleaseFast build-dictionary -- \
+  data/wiktionary.xml \
+  data/wiktionary-blobs \
+  --category-stats-snapshot data/category-stats.tsv
+```
+
+`category-stats.tsv` uses the category database key and the three stored MediaWiki category counts:
+
+```text
+CATEGORY_DB_KEY<TAB>ALL<TAB>SUBCATS<TAB>FILES
+```
+
+The `pages` count is derived exactly as MediaWiki does: `ALL - SUBCATS - FILES`. Category lookup preserves case, normalizes spaces/underscores, and ignores title fragments. A missing category in a supplied snapshot has zero members; if the snapshot itself is absent, `pagesInCategory` remains explicitly unsupported. This snapshot is also transient build input and is never published. Both snapshot flags may be supplied together.
+
 The coordinated pipeline:
 
 1. extracts Scribunto modules and module redirects into a transient build directory;

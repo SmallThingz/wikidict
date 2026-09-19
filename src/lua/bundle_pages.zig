@@ -5,6 +5,7 @@ const lua_program = @import("lua_program");
 const xml_decode = @import("shared_xml_decode");
 const preprocess = @import("lua_wikitext_preprocess");
 const ExternalData = lua_program.WikitextProvider.ExternalData;
+const CategoryStats = lua_program.WikitextProvider.CategoryStats;
 const InterwikiRow = lua_program.WikitextProvider.InterwikiRow;
 const TransclusionBody = lua_program.WikitextProvider.TransclusionBody;
 
@@ -36,6 +37,9 @@ pub const Provider = struct {
     external_data: std.StringHashMapUnmanaged(ExternalData) = .empty,
     external_data_storage: ?Mapped = null,
     external_data_available: bool = false,
+    category_stats: std.StringHashMapUnmanaged(CategoryStats) = .empty,
+    category_stats_storage: ?Mapped = null,
+    category_stats_available: bool = false,
     interwiki_rows: std.ArrayList(InterwikiRow) = .empty,
     interwiki_available: bool = false,
 
@@ -45,6 +49,7 @@ pub const Provider = struct {
         errdefer self.deinit();
         try self.loadCorpusPages(dump_path);
         try self.loadExternalData();
+        try self.loadCategoryStats();
         try self.loadInterwikiMap();
         return self;
     }
@@ -59,6 +64,8 @@ pub const Provider = struct {
         self.a.free(self.transclusion_seen);
         self.external_data.deinit(self.a);
         if (self.external_data_storage) |*mapped| mapped.deinit();
+        self.category_stats.deinit(self.a);
+        if (self.category_stats_storage) |*mapped| mapped.deinit();
         for (self.interwiki_rows.items) |row| {
             self.a.free((row.prefix));
             self.a.free((row.url));
@@ -78,6 +85,7 @@ pub const Provider = struct {
             .page_metadata = pageMetadata,
             .exists = exists,
             .external_data = if (self.external_data_available) externalData else null,
+            .category_stats = if (self.category_stats_available) categoryStats else null,
             .interwiki_map = if (self.interwiki_available) interwikiMap else null,
         };
     }
@@ -141,6 +149,33 @@ pub const Provider = struct {
         self.external_data = entries;
         self.external_data_storage = mapped;
         self.external_data_available = true;
+    }
+
+    fn loadCategoryStats(self: *Provider) !void {
+        var mapped = (try self.mapOptional("category-stats.tsv")) orelse return;
+        errdefer mapped.deinit();
+        var entries: std.StringHashMapUnmanaged(CategoryStats) = .empty;
+        errdefer entries.deinit(self.a);
+        const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse return error.CategoryStatsSnapshotTooLarge;
+        try entries.ensureTotalCapacity(self.a, capacity);
+
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            var fields = std.mem.splitScalar(u8, line, '\t');
+            const key = fields.next() orelse return error.InvalidCategoryStatsSnapshot;
+            const all = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidCategoryStatsSnapshot, 10);
+            const subcats = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidCategoryStatsSnapshot, 10);
+            const files = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidCategoryStatsSnapshot, 10);
+            if (key.len == 0 or fields.next() != null or subcats > all or files > all - subcats)
+                return error.InvalidCategoryStatsSnapshot;
+            const result = try entries.getOrPut(self.a, key);
+            if (result.found_existing) return error.DuplicateCategoryStats;
+            result.value_ptr.* = .{ .all = all, .subcats = subcats, .files = files };
+        }
+        self.category_stats = entries;
+        self.category_stats_storage = mapped;
+        self.category_stats_available = true;
     }
 
     fn loadInterwikiMap(self: *Provider) !void {
@@ -333,6 +368,11 @@ pub const Provider = struct {
     fn externalData(ctx: ?*anyopaque, title: []const u8) anyerror!?ExternalData {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return self.external_data.get(title);
+    }
+
+    fn categoryStats(ctx: ?*anyopaque, db_key: []const u8) anyerror!?CategoryStats {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return self.category_stats.get(db_key);
     }
 
     fn interwikiMap(ctx: ?*anyopaque) anyerror![]const InterwikiRow {

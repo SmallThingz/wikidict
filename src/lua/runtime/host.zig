@@ -18,6 +18,17 @@ pub const ExternalData = struct {
 };
 pub const ExternalDataFn = *const fn (?*anyopaque, []const u8) anyerror!?ExternalData;
 
+pub const CategoryStats = struct {
+    all: u32,
+    subcats: u32,
+    files: u32,
+
+    pub fn pages(self: CategoryStats) u32 {
+        return self.all - self.subcats - self.files;
+    }
+};
+pub const CategoryStatsFn = *const fn (?*anyopaque, []const u8) anyerror!?CategoryStats;
+
 pub const InterwikiRow = struct {
     prefix: []const u8,
     url: []const u8,
@@ -43,6 +54,7 @@ pub const Host = struct {
     frame_parser_function: ?FrameParserFunctionFn = null,
     text_unstrip_no_wiki: ?TextUnstripNoWikiFn = null,
     external_data: ?ExternalDataFn = null,
+    category_stats: ?CategoryStatsFn = null,
     site_interwiki_map: ?SiteInterwikiMapFn = null,
 };
 

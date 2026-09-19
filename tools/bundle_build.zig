@@ -6,6 +6,7 @@ const Options = struct {
     dump: []const u8,
     root: []const u8,
     commons_data_snapshot: ?[]const u8 = null,
+    category_stats_snapshot: ?[]const u8 = null,
 };
 
 fn parseOptions(args: []const []const u8) !Options {
@@ -17,6 +18,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.commons_data_snapshot != null) return error.Usage;
             options.commons_data_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--category-stats-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.category_stats_snapshot != null) return error.Usage;
+            options.category_stats_snapshot = args[index];
         } else return error.Usage;
     }
     return options;
@@ -47,8 +52,8 @@ fn fileSize(io: std.Io, path: []const u8) !?u64 {
     return (try file.stat(io)).size;
 }
 
-fn installCommonsDataSnapshot(io: std.Io, a: std.mem.Allocator, source: []const u8, root: []const u8) !void {
-    const destination = try std.fs.path.join(a, &.{ root, "commons-data.tsv" });
+fn installSnapshot(io: std.Io, a: std.mem.Allocator, source: []const u8, root: []const u8, name: []const u8) !void {
+    const destination = try std.fs.path.join(a, &.{ root, name });
     const allocator = std.heap.smp_allocator;
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, source, allocator, .unlimited);
     defer allocator.free(bytes);
@@ -238,7 +243,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -254,7 +259,9 @@ pub fn main(init: std.process.Init) !void {
     const expander_marker = try std.fs.path.join(a, &.{ expander_root, ".incomplete" });
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = expander_marker, .data = "building" });
     if (options.commons_data_snapshot) |snapshot|
-        try installCommonsDataSnapshot(init.io, a, snapshot, expander_root);
+        try installSnapshot(init.io, a, snapshot, expander_root, "commons-data.tsv");
+    if (options.category_stats_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "category-stats.tsv");
 
     try stage(init.io, marker, "extract modules, redirects, and corpus index", &.{ paths.modules, dump, expander_root, "--page-index" });
 

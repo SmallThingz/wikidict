@@ -48,6 +48,7 @@ pub const CallSymbol = struct {
 
 pub const Provider = struct {
     pub const ExternalData = host_api.ExternalData;
+    pub const CategoryStats = host_api.CategoryStats;
     pub const InterwikiRow = host_api.InterwikiRow;
     pub const SymbolKind = CallSymbolKind;
     pub const Symbol = CallSymbol;
@@ -70,6 +71,7 @@ pub const Provider = struct {
     page_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!?PageMetadata = null,
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
     external_data: ?*const fn (?*anyopaque, []const u8) anyerror!?ExternalData = null,
+    category_stats: ?*const fn (?*anyopaque, []const u8) anyerror!?CategoryStats = null,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
     resolve_call_symbol: ?*const fn (?*anyopaque, *rt.Context, []const u8, CallSymbolKind) anyerror!?CallSymbol = null,
     get_template_symbol: ?*const fn (?*anyopaque, std.mem.Allocator, usize) anyerror!?[]const u8 = null,
@@ -107,6 +109,7 @@ pub const Expander = struct {
         self.host.frame_parser_function = hostFrameParserFunction;
         self.host.text_unstrip_no_wiki = hostTextUnstripNoWiki;
         self.host.external_data = hostExternalData;
+        self.host.category_stats = hostCategoryStats;
         self.host.site_interwiki_map = hostSiteInterwikiMap;
         host_api.set(self.runtime, &self.host);
     }
@@ -169,6 +172,12 @@ pub const Expander = struct {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.external_data orelse return error.NotImplemented;
         return get(self.provider.ctx, title);
+    }
+
+    fn hostCategoryStats(raw: ?*anyopaque, db_key: []const u8) anyerror!?host_api.CategoryStats {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const get = self.provider.category_stats orelse return error.NotImplemented;
+        return get(self.provider.ctx, db_key);
     }
 
     fn hostSiteInterwikiMap(raw: ?*anyopaque) anyerror![]const host_api.InterwikiRow {

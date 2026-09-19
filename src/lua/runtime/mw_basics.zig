@@ -35,6 +35,53 @@ fn statsIndexCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const 
     return one(.nil);
 }
 
+fn categoryDbKey(runtime: *rt.Context, raw: []const u8) ![]const u8 {
+    const without_fragment = raw[0 .. std.mem.indexOfScalar(u8, raw, '#') orelse raw.len];
+    const trimmed = std.mem.trim(u8, without_fragment, " _");
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(runtime.allocator);
+    var pending_separator = false;
+    for (trimmed) |c| {
+        if (c == ' ' or c == '_') {
+            pending_separator = out.items.len != 0;
+            continue;
+        }
+        if (pending_separator) try out.append(runtime.allocator, '_');
+        pending_separator = false;
+        try out.append(runtime.allocator, c);
+    }
+    return out.toOwnedSlice(runtime.allocator);
+}
+
+fn pagesInCategoryCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const which = if (args.len < 2 or args[1] == .nil)
+        "all"
+    else if (args[1] != .string)
+        return error.StringExpected
+    else
+        args[1].string;
+
+    const host = host_api.get(runtime) orelse return error.NotImplemented;
+    const get = host.category_stats orelse return error.NotImplemented;
+    const key = try categoryDbKey(runtime, args[0].string);
+    const stats = (try get(host.ctx, key)) orelse host_api.CategoryStats{ .all = 0, .subcats = 0, .files = 0 };
+
+    if (std.mem.eql(u8, which, "*")) {
+        const result = try runtime.newTable();
+        try result.rawSet(runtime.allocator, .{ .string = "all" }, .{ .number = @floatFromInt(stats.all) });
+        try result.rawSet(runtime.allocator, .{ .string = "pages" }, .{ .number = @floatFromInt(stats.pages()) });
+        try result.rawSet(runtime.allocator, .{ .string = "subcats" }, .{ .number = @floatFromInt(stats.subcats) });
+        try result.rawSet(runtime.allocator, .{ .string = "files" }, .{ .number = @floatFromInt(stats.files) });
+        return one(.{ .table = result });
+    }
+    if (std.mem.eql(u8, which, "all")) return one(.{ .number = @floatFromInt(stats.all) });
+    if (std.mem.eql(u8, which, "pages")) return one(.{ .number = @floatFromInt(stats.pages()) });
+    if (std.mem.eql(u8, which, "subcats")) return one(.{ .number = @floatFromInt(stats.subcats) });
+    if (std.mem.eql(u8, which, "files")) return one(.{ .number = @floatFromInt(stats.files) });
+    return error.InvalidCategoryCountKind;
+}
+
 const DumpState = struct {
     runtime: *rt.Context,
     table_labels: std.AutoHashMapUnmanaged(*rt.Table, []const u8) = .empty,
@@ -579,7 +626,8 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const namespaces = try namespace_lib.makeTable(runtime);
     try site.rawSet(runtime.allocator, .{ .string = "namespaces" }, .{ .table = namespaces });
     const stats = try runtime.newTable();
-    inline for (.{ "pagesInCategory", "pagesInNamespace", "usersInGroup" }) |name|
+    try setNative(runtime, stats, "pagesInCategory", pagesInCategoryCall);
+    inline for (.{ "pagesInNamespace", "usersInGroup" }) |name|
         try setNative(runtime, stats, name, notImplementedCall);
     const stats_mt = try runtime.newTable();
     try stats_mt.rawSet(runtime.allocator, .{ .string = "__index" }, try runtime.newNative(null, statsIndexCall));
@@ -823,6 +871,56 @@ test "AOT mw ext data reads explicit tabular snapshot exactly and fails closed" 
     runtime.clearAotErrorName();
     try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = ext_data }, "get", &.{.{ .string = "Other.map" }}));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
+}
+
+const CategoryStatsProbe = struct {
+    fn get(_: ?*anyopaque, key: []const u8) !?host_api.CategoryStats {
+        if (std.mem.eql(u8, key, "English_lemmas"))
+            return .{ .all = 878_433, .subcats = 16, .files = 0 };
+        return null;
+    }
+};
+
+test "AOT mw site pagesInCategory reads pinned category statistics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{ .category_stats = CategoryStatsProbe.get };
+    host_api.set(&runtime, &host);
+    const mw = try runtime.newNativeNamespace(.mw);
+    try install(&runtime, mw);
+    const stats = mw.rawGet(.{ .string = "site" }).?.table.rawGet(.{ .string = "stats" }).?.table;
+
+    inline for (.{
+        .{ "English lemmas", "all", 878_433 },
+        .{ "English__lemmas", "pages", 878_417 },
+        .{ " _English_lemmas_#fragment", "subcats", 16 },
+        .{ "English lemmas", "files", 0 },
+        .{ "english lemmas", "all", 0 },
+        .{ "English\tlemmas", "all", 0 },
+    }) |probe| {
+        const result = try callField(&runtime, .{ .table = stats }, "pagesInCategory", &.{ .{ .string = probe[0] }, .{ .string = probe[1] } });
+        defer rt.freeResults(result);
+        try std.testing.expect(result[0] == .number);
+        try std.testing.expectEqual(@as(f64, probe[2]), result[0].number);
+    }
+
+    const all_counts = try callField(&runtime, .{ .table = stats }, "pagesInCategory", &.{ .{ .string = "English lemmas" }, .{ .string = "*" } });
+    defer rt.freeResults(all_counts);
+    try std.testing.expect(all_counts[0] == .table);
+    try std.testing.expectEqual(@as(f64, 878_433), all_counts[0].table.rawGet(.{ .string = "all" }).?.number);
+    try std.testing.expectEqual(@as(f64, 878_417), all_counts[0].table.rawGet(.{ .string = "pages" }).?.number);
+    try std.testing.expectEqual(@as(f64, 16), all_counts[0].table.rawGet(.{ .string = "subcats" }).?.number);
+    try std.testing.expectEqual(@as(f64, 0), all_counts[0].table.rawGet(.{ .string = "files" }).?.number);
+
+    const default_count = try callField(&runtime, .{ .table = stats }, "pagesInCategory", &.{.{ .string = "English lemmas" }});
+    defer rt.freeResults(default_count);
+    try std.testing.expectEqual(@as(f64, 878_433), default_count[0].number);
+
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = stats }, "pagesInCategory", &.{ .{ .string = "English lemmas" }, .{ .string = "bogus" } }));
+    try std.testing.expectEqualStrings("InvalidCategoryCountKind", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
 }
 
