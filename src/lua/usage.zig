@@ -26,6 +26,30 @@ fn nameEqual(raw: []const u8, expected: []const u8) bool {
     return true;
 }
 
+fn isNonTemplateNamespace(raw: []const u8) bool {
+    inline for (&.{
+        "Media",          "Special",         "Talk",
+        "User",           "User talk",       "Wiktionary",
+        "Project",        "WT",              "Wiktionary talk",
+        "Project talk",   "File",            "Image",
+        "File talk",      "Image talk",      "MediaWiki",
+        "MediaWiki talk", "Template talk",   "Help",
+        "Help talk",      "Category",        "CAT",
+        "Category talk",  "Thread",          "Thread talk",
+        "Summary",        "Summary talk",    "Appendix",
+        "AP",             "Appendix talk",   "Rhymes",
+        "Rhymes talk",    "Transwiki",       "Transwiki talk",
+        "Thesaurus",      "WS",              "Wikisaurus",
+        "Thesaurus talk", "Wikisaurus talk", "Citations",
+        "Citations talk", "Sign gloss",      "Sign gloss talk",
+        "Reconstruction", "RC",              "Reconstruction talk",
+        "TimedText",      "TimedText talk",  "Module",
+        "MOD",            "Module talk",     "Event",
+        "Event talk",     "Topic",
+    }) |namespace| if (nameEqual(raw, namespace)) return true;
+    return false;
+}
+
 fn stripSubst(raw: []const u8) []const u8 {
     var value = std.mem.trim(u8, raw, " \t\r\n");
     inline for (&.{ "subst:", "safesubst:" }) |prefix| {
@@ -50,26 +74,7 @@ pub fn canonicalTemplate(a: std.mem.Allocator, raw_in: []const u8) !?[]const u8 
             return out;
         }
 
-        inline for (&.{
-            "Media",          "Special",         "Talk",
-            "User",           "User talk",       "Wiktionary",
-            "Project",        "WT",              "Wiktionary talk",
-            "Project talk",   "File",            "Image",
-            "File talk",      "Image talk",      "MediaWiki",
-            "MediaWiki talk", "Template talk",   "Help",
-            "Help talk",      "Category",        "CAT",
-            "Category talk",  "Thread",          "Thread talk",
-            "Summary",        "Summary talk",    "Appendix",
-            "AP",             "Appendix talk",   "Rhymes",
-            "Rhymes talk",    "Transwiki",       "Transwiki talk",
-            "Thesaurus",      "WS",              "Wikisaurus",
-            "Thesaurus talk", "Wikisaurus talk", "Citations",
-            "Citations talk", "Sign gloss",      "Sign gloss talk",
-            "Reconstruction", "RC",              "Reconstruction talk",
-            "TimedText",      "TimedText talk",  "Module",
-            "MOD",            "Module talk",     "Event",
-            "Event talk",     "Topic",
-        }) |namespace| if (nameEqual(prefix, namespace)) return null;
+        if (isNonTemplateNamespace(prefix)) return null;
     }
 
     const out = try std.fmt.allocPrint(a, "Template:{s}", .{raw});
@@ -103,7 +108,8 @@ pub const ScanFlags = struct {
     dynamic_template_target: bool = false,
 };
 
-fn classifyHead(a: std.mem.Allocator, head: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags) !void {
+fn classifyHead(a: std.mem.Allocator, head_raw: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags) !void {
+    const head = std.mem.trim(u8, head_raw, " \t\r\n");
     if (head.len == 0) return;
     if (preprocess.findTopDelimiter(head, ':')) |colon| {
         const name = std.mem.trim(u8, head[0..colon], " \t\r\n");
@@ -114,6 +120,10 @@ fn classifyHead(a: std.mem.Allocator, head: []const u8, out: *std.ArrayList(Ref)
                 flags.dynamic_module_target = true;
             return;
         }
+        if (name.len != 0 and name[0] == '#') return;
+        if (!containsDynamicSyntax(name) and isNonTemplateNamespace(name)) return;
+    } else if (head[0] == '#') {
+        return;
     }
     if (try canonicalTemplate(a, head)) |target|
         try out.append(a, .{ .kind = .template, .target = target })
@@ -401,4 +411,13 @@ test "wikitext scan separates unresolved invokes from dynamic template targets" 
     const template_only = try scanWikitextFlags(a, "{{foo{{{template}}}|x}}", &refs);
     try std.testing.expect(!template_only.dynamic_module_target);
     try std.testing.expect(template_only.dynamic_template_target);
+
+    refs.clearRetainingCapacity();
+    const non_templates = try scanWikitextFlags(
+        a,
+        "{{#if:{{{x}}}|yes|no}} {{Module:foo{{{x}}}}} {{Template:foo{{{x}}}}}",
+        &refs,
+    );
+    try std.testing.expect(!non_templates.dynamic_module_target);
+    try std.testing.expect(non_templates.dynamic_template_target);
 }
