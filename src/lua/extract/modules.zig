@@ -103,6 +103,16 @@ fn writeUsageEdge(w: *std.Io.Writer, kind: u8, source: []const u8, target: []con
     try w.writeByte('\n');
 }
 
+fn writeDynamicUsage(w: *std.Io.Writer, kind: []const u8, source: ?[]const u8) !void {
+    try w.writeAll("D\t");
+    try w.writeAll(kind);
+    if (source) |name| {
+        try w.writeByte('\t');
+        try writeTsvField(w, name);
+    }
+    try w.writeByte('\n');
+}
+
 fn writeUsageCounts(
     a: std.mem.Allocator,
     w: *std.Io.Writer,
@@ -176,10 +186,10 @@ fn writeManifestRow(
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3 or args.len > 4) return error.Usage;
-    const emit_page_index = if (args.len == 4) blk: {
-        if (!std.mem.eql(u8, args[3], "--page-index")) return error.Usage;
-        break :blk true;
-    } else false;
+    const option = if (args.len == 4) args[3] else "";
+    const emit_page_index = std.mem.eql(u8, option, "--page-index");
+    const usage_only = std.mem.eql(u8, option, "--usage-only");
+    if (args.len == 4 and !emit_page_index and !usage_only) return error.Usage;
     const input_path = args[1];
     const output_root = args[2];
     const modules_dir = try std.fmt.allocPrint(init.arena.allocator(), "{s}/modules", .{output_root});
@@ -198,7 +208,7 @@ pub fn main(init: std.process.Init) !void {
     var page_index_writer = if (page_index_file) |*file| file.writer(init.io, &page_index_buf) else null;
     const pw: ?*std.Io.Writer = if (page_index_writer) |*writer| &writer.interface else null;
 
-    var usage_file: ?std.Io.File = if (emit_page_index)
+    var usage_file: ?std.Io.File = if (emit_page_index or usage_only)
         try std.Io.Dir.cwd().createFile(init.io, usage_path, .{ .truncate = true })
     else
         null;
@@ -212,7 +222,8 @@ pub fn main(init: std.process.Init) !void {
     defer root_template_usage.deinit(init.arena.allocator());
     var root_module_usage: UsageCountMap = .empty;
     defer root_module_usage.deinit(init.arena.allocator());
-    var dynamic_module_usage = false;
+    var dynamic_root_module = false;
+    var dynamic_root_template = false;
 
     var redirects_file = try std.Io.Dir.cwd().createFile(init.io, redirects_path, .{ .truncate = true });
     defer redirects_file.close(init.io);
@@ -244,7 +255,7 @@ pub fn main(init: std.process.Init) !void {
         pos = page_end;
         pages += 1;
         const looks_like_module = std.mem.indexOf(u8, page, "<ns>828</ns>") != null;
-        if (!emit_page_index and !looks_like_module) continue;
+        if (!emit_page_index and !usage_only and !looks_like_module) continue;
 
         var capture: Capture = .{};
         try parser.parse(page, &capture, Capture.onNode);
@@ -253,7 +264,7 @@ pub fn main(init: std.process.Init) !void {
         var indexed_page_id: ?u64 = null;
         var indexed_revision_id: ?u64 = null;
 
-        if (pw) |page_writer| {
+        if (pw != null or usage_only) {
             const ns_raw = capture.ns_raw orelse {
                 _ = arena.reset(.retain_capacity);
                 continue;
@@ -287,7 +298,7 @@ pub fn main(init: std.process.Init) !void {
             if (std.mem.indexOfAny(u8, title, "\t\r\n") != null) return error.InvalidPageTitle;
             if (redirect) |target| if (std.mem.indexOfAny(u8, target, "\t\r\n") != null) return error.InvalidPageTitle;
             if (content_model.len == 0 or std.mem.indexOfAny(u8, revision_timestamp, "\t\r\n") != null or std.mem.indexOfAny(u8, revision_user, "\t\r\n") != null or std.mem.indexOfAny(u8, content_model, "\t\r\n") != null) return error.InvalidPageMetadata;
-            try page_writer.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{d}\n", .{
+            if (pw) |page_writer| try page_writer.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{d}\n", .{
                 source_offset,
                 text_raw.len,
                 title,
@@ -323,9 +334,11 @@ pub fn main(init: std.process.Init) !void {
                     try lua_usage.scanWikitextFlags(arena.allocator(), usage_source, &refs)
                 else
                     lua_usage.ScanFlags{};
-                dynamic_module_usage = dynamic_module_usage or scan_flags.dynamic_module_target;
-
                 if (parsed_ns == 10) {
+                    if (scan_flags.dynamic_module_target)
+                        try writeDynamicUsage(usage_out, "module", title);
+                    if (scan_flags.dynamic_template_target)
+                        try writeDynamicUsage(usage_out, "template", title);
                     var seen_templates: std.StringHashMapUnmanaged(void) = .empty;
                     var seen_modules: std.StringHashMapUnmanaged(void) = .empty;
                     for (refs.items) |ref| switch (ref.kind) {
@@ -341,6 +354,8 @@ pub fn main(init: std.process.Init) !void {
                         },
                     };
                 } else if (parsed_ns != 828) {
+                    dynamic_root_module = dynamic_root_module or scan_flags.dynamic_module_target;
+                    dynamic_root_template = dynamic_root_template or scan_flags.dynamic_template_target;
                     var seen_templates: std.StringHashMapUnmanaged(void) = .empty;
                     var seen_modules: std.StringHashMapUnmanaged(void) = .empty;
                     for (refs.items) |ref| switch (ref.kind) {
@@ -358,7 +373,7 @@ pub fn main(init: std.process.Init) !void {
                 }
             };
 
-            if (parsed_ns != 828) {
+            if (usage_only or parsed_ns != 828) {
                 _ = arena.reset(.retain_capacity);
                 continue;
             }
@@ -431,7 +446,8 @@ pub fn main(init: std.process.Init) !void {
     if (uw) |usage_out| {
         try writeUsageCounts(init.arena.allocator(), usage_out, 'R', &root_template_usage);
         try writeUsageCounts(init.arena.allocator(), usage_out, 'P', &root_module_usage);
-        if (dynamic_module_usage) try usage_out.writeAll("D\tmodule\n");
+        if (dynamic_root_module) try writeDynamicUsage(usage_out, "module", null);
+        if (dynamic_root_template) try writeDynamicUsage(usage_out, "template", null);
         try usage_out.flush();
     }
     try mw.flush();

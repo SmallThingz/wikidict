@@ -100,6 +100,7 @@ fn firstTopLevelPart(body: []const u8) []const u8 {
 
 pub const ScanFlags = struct {
     dynamic_module_target: bool = false,
+    dynamic_template_target: bool = false,
 };
 
 fn classifyHead(a: std.mem.Allocator, head: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags) !void {
@@ -117,7 +118,7 @@ fn classifyHead(a: std.mem.Allocator, head: []const u8, out: *std.ArrayList(Ref)
     if (try canonicalTemplate(a, head)) |target|
         try out.append(a, .{ .kind = .template, .target = target })
     else if (containsDynamicSyntax(head))
-        flags.dynamic_module_target = true;
+        flags.dynamic_template_target = true;
 }
 
 fn scanRange(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags, depth: usize) anyerror!void {
@@ -385,13 +386,19 @@ test "module load scan includes mw.loadData and flags dynamic require" {
     try std.testing.expectEqualStrings("Module:Static data", refs.items[0]);
 }
 
-test "wikitext scan flags unresolved invoke and dynamic template targets" {
+test "wikitext scan separates unresolved invokes from dynamic template targets" {
     const a = std.testing.allocator;
     var refs: std.ArrayList(Ref) = .empty;
     defer {
         for (refs.items) |ref| a.free(ref.target);
         refs.deinit(a);
     }
-    const flags = try scanWikitextFlags(a, "{{#invoke:{{{module}}}|run}} {{{{{template}}}|x}}", &refs);
+    const flags = try scanWikitextFlags(a, "{{#invoke:{{{module}}}|run}} {{foo{{{template}}}|x}}", &refs);
     try std.testing.expect(flags.dynamic_module_target);
+    try std.testing.expect(flags.dynamic_template_target);
+
+    refs.clearRetainingCapacity();
+    const template_only = try scanWikitextFlags(a, "{{foo{{{template}}}|x}}", &refs);
+    try std.testing.expect(!template_only.dynamic_module_target);
+    try std.testing.expect(template_only.dynamic_template_target);
 }

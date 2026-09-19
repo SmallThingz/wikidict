@@ -139,6 +139,7 @@ pub fn build(b: *std.Build) void {
         .use_llvm = true,
         .use_lld = true,
     });
+    addPublicRunStep(b, "extract-lua", "Extract Lua modules or rebuild Lua usage metadata", addRunArtifactCommand(b, module_extract_exe, &.{}, b.args), &.{});
     addPublicRunStep(b, "compile-lua", "Compile extracted Lua AST directly to LLVM bitcode", addRunArtifactCommand(b, llvm_exe, &.{}, b.args), &.{});
     const pipeline_paths = b.addOptions();
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());

@@ -307,9 +307,14 @@ pub fn pageSeeds(
     defer templates.deinit(a);
     var invokes: std.ArrayList(TemplateInvoke) = .empty;
     defer invokes.deinit(a);
+    var dynamic_module_templates: std.ArrayList(u32) = .empty;
+    defer dynamic_module_templates.deinit(a);
+    var dynamic_template_templates: std.ArrayList(u32) = .empty;
+    defer dynamic_template_templates.deinit(a);
     var scratch = std.heap.ArenaAllocator.init(a);
     defer scratch.deinit();
     var dynamic_module_target = false;
+    var dynamic_template_root = false;
 
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     while (lines.next()) |line| {
@@ -355,9 +360,26 @@ pub fn pageSeeds(
             },
             'D' => {
                 const kind = fields.next() orelse return error.InvalidUsageSnapshot;
-                if (!std.mem.eql(u8, kind, "module") or fields.next() != null)
+                const source_raw = fields.next();
+                if (fields.next() != null) return error.InvalidUsageSnapshot;
+                if (std.mem.eql(u8, kind, "module")) {
+                    if (source_raw) |raw| {
+                        const source = try unescapeField(sa, raw);
+                        try dynamic_module_templates.append(a, try templates.id(a, source));
+                    } else {
+                        // Legacy/global D\tmodule remains the conservative all-module fallback.
+                        dynamic_module_target = true;
+                    }
+                } else if (std.mem.eql(u8, kind, "template")) {
+                    if (source_raw) |raw| {
+                        const source = try unescapeField(sa, raw);
+                        try dynamic_template_templates.append(a, try templates.id(a, source));
+                    } else {
+                        dynamic_template_root = true;
+                    }
+                } else {
                     return error.InvalidUsageSnapshot;
-                dynamic_module_target = true;
+                }
             },
             else => return error.InvalidUsageSnapshot,
         }
@@ -365,13 +387,40 @@ pub fn pageSeeds(
     }
 
     dedupeEdges(&templates.edges);
-    const template_usage = try propagate(
+    var template_usage = try propagate(
         a,
         templates.root_seed.items.len,
         templates.edges.items,
         templates.root_seed.items,
     );
     defer a.free(template_usage);
+
+    var all_templates_reachable = dynamic_template_root;
+    if (!all_templates_reachable) for (dynamic_template_templates.items) |template| {
+        if (template < template_usage.len and template_usage[template] != 0) {
+            all_templates_reachable = true;
+            break;
+        }
+    };
+    if (all_templates_reachable) {
+        a.free(template_usage);
+        for (templates.root_seed.items) |*seed| {
+            if (seed.* == 0) seed.* = 1;
+        }
+        template_usage = try propagate(
+            a,
+            templates.root_seed.items.len,
+            templates.edges.items,
+            templates.root_seed.items,
+        );
+    }
+
+    if (!dynamic_module_target) for (dynamic_module_templates.items) |template| {
+        if (template < template_usage.len and template_usage[template] != 0) {
+            dynamic_module_target = true;
+            break;
+        }
+    };
 
     const page_seed = try a.dupe(u64, direct_page);
     for (invokes.items) |invoke|
