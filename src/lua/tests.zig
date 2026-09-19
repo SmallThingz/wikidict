@@ -668,7 +668,7 @@ test "captured static module export keeps guarded direct target" {
     defer ids.deinit(std.testing.allocator);
     try ids.put(std.testing.allocator, "Module:Target", 0);
     const exports = [_]llvm_emitter.DirectExport{
-        .{ .name = "run", .function_id = 99 },
+        .{ .name = "run", .function_id = 99, .capture_count = 1 },
     };
     const modules = [_]llvm_emitter.ModuleFact{
         .{ .exports = &exports },
@@ -694,6 +694,7 @@ test "captured static module export keeps guarded direct target" {
 
     try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_99") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_value_is_function_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_value_function_captures") != null);
 }
 
 test "module root purity only accepts context-free local construction" {
@@ -722,4 +723,37 @@ test "module root purity only accepts context-free local construction" {
     defer global_model.deinit();
     try global_model.build(global_chunk.body);
     try std.testing.expect(!global_model.root_pure);
+}
+
+test "module bootstrap safety admits literal require chains but rejects dynamic loads" {
+    const safe_source =
+        \\local dep = require('Module:Dependency')
+        \\local export = { dep = dep }
+        \\return export
+    ;
+    var safe_chunk = try llvm_parser.parse(std.testing.allocator, safe_source);
+    defer safe_chunk.deinit();
+    var safe = llvm_module_model.Builder{
+        .allocator = std.testing.allocator,
+        .source = safe_chunk.source,
+    };
+    defer safe.deinit();
+    try safe.build(safe_chunk.body);
+    try std.testing.expect(!safe.root_pure);
+    try std.testing.expect(safe.root_bootstrap_safe);
+    try std.testing.expectEqual(@as(usize, 1), safe.root_requires.items.len);
+    try std.testing.expectEqualStrings("Module:Dependency", safe.root_requires.items[0]);
+
+    var dynamic_chunk = try llvm_parser.parse(
+        std.testing.allocator,
+        "local name='Module:Dependency'; local dep=require(name); return dep",
+    );
+    defer dynamic_chunk.deinit();
+    var dynamic = llvm_module_model.Builder{
+        .allocator = std.testing.allocator,
+        .source = dynamic_chunk.source,
+    };
+    defer dynamic.deinit();
+    try dynamic.build(dynamic_chunk.body);
+    try std.testing.expect(!dynamic.root_bootstrap_safe);
 }

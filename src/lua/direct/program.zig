@@ -7,6 +7,11 @@ const metadata = @import("../program_metadata.zig");
 
 const A = std.mem.Allocator;
 
+pub const EagerRequirement = struct {
+    module_id: u32,
+    requested: []const u8,
+};
+
 pub const ModuleRecord = struct {
     title: []const u8,
     path: []const u8,
@@ -18,6 +23,10 @@ pub const ModuleRecord = struct {
     export_shape_id: ?u32,
     dynamic_module_load: bool = false,
     root_pure: bool = false,
+    root_bootstrap_safe: bool = false,
+    root_requires: []const []const u8 = &.{},
+    eager_order: u32 = std.math.maxInt(u32),
+    eager_requirements: []const EagerRequirement = &.{},
     load_data_snapshot: bool = false,
     direct_exports: []const emitter.DirectExport = &.{},
 };
@@ -131,8 +140,21 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
     const null_ptr = try llvm.constNull(m.types.ptr);
     const zero_i64 = try llvm.constInt(m.types.i64, 0);
 
-    for (records, roots, 0..) |record, root, module_id| {
-        if (!record.root_pure) continue;
+    var eager_modules: std.ArrayList(u32) = .empty;
+    defer eager_modules.deinit(a);
+    for (records, 0..) |record, module_id|
+        if (record.eager_order != std.math.maxInt(u32))
+            try eager_modules.append(a, @intCast(module_id));
+    std.mem.sort(u32, eager_modules.items, records, struct {
+        fn lessThan(items: []const ModuleRecord, lhs: u32, rhs: u32) bool {
+            return items[lhs].eager_order < items[rhs].eager_order;
+        }
+    }.lessThan);
+
+    for (eager_modules.items) |module_id_u32| {
+        const module_id: usize = @intCast(module_id_u32);
+        const record = records[module_id];
+        const root = roots[module_id];
         const result = try llvm.call(builder, root, &.{
             eager_ctx,
             null_ptr,
@@ -186,6 +208,14 @@ pub fn writeMetadata(
     const global_count = try requireU32(globals.names.items.len);
     const shape_count = try requireU32(shape_registry.count());
     const shape_field_total = try shapeFieldTotal(shape_registry);
+    var module_requirement_total_usize: usize = 0;
+    for (records) |record|
+        module_requirement_total_usize = std.math.add(
+            usize,
+            module_requirement_total_usize,
+            record.eager_requirements.len,
+        ) catch return error.ProgramMetadataTooLarge;
+    const module_requirement_total = try requireU32(module_requirement_total_usize);
 
     var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
     defer file.close(io);
@@ -199,6 +229,7 @@ pub fn writeMetadata(
     try metadata.writeU32(w, global_count);
     try metadata.writeU32(w, shape_count);
     try metadata.writeU32(w, shape_field_total);
+    try metadata.writeU32(w, module_requirement_total);
 
     for (records) |record| try metadata.writeString(w, record.title);
 
@@ -210,6 +241,16 @@ pub fn writeMetadata(
 
     for (records) |record|
         try metadata.writeU32(w, record.export_shape_id orelse std.math.maxInt(u32));
+
+    for (records) |record| {
+        try metadata.writeU32(w, try requireU32(record.eager_requirements.len));
+        for (record.eager_requirements) |requirement| {
+            if (requirement.module_id >= module_count)
+                return error.InvalidModuleRequirementId;
+            try metadata.writeU32(w, requirement.module_id);
+            try metadata.writeString(w, requirement.requested);
+        }
+    }
 
     for (globals.names.items) |name| try metadata.writeString(w, name);
 

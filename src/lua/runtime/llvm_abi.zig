@@ -141,6 +141,10 @@ export fn dict_lua_value_truthy(input: *const rt.Value) callconv(.c) u8 {
 export fn dict_lua_value_is_function_id(input: *const rt.Value, function_id: u32) callconv(.c) u8 {
     return @intFromBool(input.* == .callable and input.callable.id == function_id);
 }
+export fn dict_lua_value_function_captures(input: *const rt.Value, function_id: u32) callconv(.c) ?*const rt.Captures {
+    if (input.* != .callable or input.callable.id != function_id) return null;
+    return input.callable.capturesPtr();
+}
 export fn dict_lua_value_to_number(input: *const rt.Value, out: *f64) callconv(.c) u8 {
     const n = rt.toNumber(input.*) orelse return 0;
     out.* = n;

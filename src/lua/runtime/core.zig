@@ -4,7 +4,10 @@ const static_fields = @import("lua_static_fields");
 extern fn snprintf(buffer: [*]u8, size: usize, format: [*:0]const u8, ...) c_int;
 
 pub const Cell = struct { value: Value };
-pub const Env = struct { captures: []const *Cell };
+pub const Env = struct {
+    captures: []const *Cell,
+    capture_view: Captures,
+};
 pub const FunctionEnv = struct {
     raw: usize = 0,
 
@@ -46,8 +49,14 @@ pub const FunctionValue = struct {
 
     pub fn captures(self: FunctionValue) Captures {
         if (self.id == native_function_id) return .{ .native = self.env.nativePtr() };
-        if (self.env.closurePtr()) |env| return .{ .direct = env.captures };
+        if (self.env.closurePtr()) |env| return env.capture_view;
         return .{ .direct = &.{} };
+    }
+
+    pub fn capturesPtr(self: FunctionValue) ?*const Captures {
+        if (self.id == native_function_id) return null;
+        if (self.env.closurePtr()) |env| return &env.capture_view;
+        return null;
     }
 };
 pub const DirectFunctionFn = *const fn (*Context, Captures, []const Value) anyerror![]const Value;
@@ -61,6 +70,11 @@ pub const FunctionResult = extern struct {
 pub const FunctionFn = *const fn (*Context, *const Captures, [*]const Value, usize, ?[*]Value, usize) callconv(.c) FunctionResult;
 pub const ModuleLookupFn = *const fn (?*const anyopaque, []const u8) ?u32;
 pub const ModuleNameFn = *const fn (?*const anyopaque, u32) ?[]const u8;
+pub const ModuleRequirement = struct {
+    module_id: u32,
+    requested: []const u8,
+};
+pub const ModuleRequirementsFn = *const fn (?*const anyopaque, u32) []const ModuleRequirement;
 pub const ProgramBootstrapFn = *const fn (?*const anyopaque, *Context) anyerror!void;
 pub const Value = union(enum) {
     nil,
@@ -655,6 +669,9 @@ pub const Context = struct {
     module_lookup_ctx: ?*const anyopaque = null,
     module_lookup: ?ModuleLookupFn = null,
     module_name: ?ModuleNameFn = null,
+    module_requirements_ctx: ?*const anyopaque = null,
+    module_requirements: ?ModuleRequirementsFn = null,
+    eager_bootstrap: bool = false,
     program_bootstrap_ctx: ?*const anyopaque = null,
     program_bootstrap: ?ProgramBootstrapFn = null,
     host: ?*anyopaque = null,
@@ -692,6 +709,8 @@ pub const Context = struct {
         child.module_lookup_ctx = self.module_lookup_ctx;
         child.module_lookup = self.module_lookup;
         child.module_name = self.module_name;
+        child.module_requirements_ctx = self.module_requirements_ctx;
+        child.module_requirements = self.module_requirements;
         child.program_bootstrap_ctx = self.program_bootstrap_ctx;
         child.program_bootstrap = self.program_bootstrap;
         child.max_depth = self.max_depth;
@@ -749,7 +768,10 @@ pub const Context = struct {
         const env: FunctionEnv = if (captures.len == 0) .{} else blk: {
             const owned = try self.allocator.dupe(*Cell, captures);
             const value = try self.allocator.create(Env);
-            value.* = .{ .captures = owned };
+            value.* = .{
+                .captures = owned,
+                .capture_view = .{ .direct = owned },
+            };
             break :blk FunctionEnv.closure(value);
         };
         return .{ .callable = .{ .id = id, .env = env, .identity = identity, .entry = entry } };
@@ -832,6 +854,23 @@ pub const Context = struct {
         self.module_name = name;
     }
 
+    pub fn configureModuleRequirements(
+        self: *Context,
+        host: ?*const anyopaque,
+        requirements: ModuleRequirementsFn,
+    ) void {
+        self.module_requirements_ctx = host;
+        self.module_requirements = requirements;
+    }
+
+    pub fn beginEagerBootstrap(self: *Context) void {
+        self.eager_bootstrap = true;
+    }
+
+    pub fn endEagerBootstrap(self: *Context) void {
+        self.eager_bootstrap = false;
+    }
+
     fn canonicalModuleName(self: *const Context, module_id: u32, requested: ?[]const u8) ?[]const u8 {
         if (self.module_name) |name| if (name(self.module_lookup_ctx, module_id)) |text| return text;
         return requested;
@@ -901,18 +940,64 @@ pub const Context = struct {
         return state.load_data_snapshot;
     }
 
+    fn preparedModuleValue(self: *const Context, module_id: u32) ?Value {
+        const state = self.moduleStateConst(module_id) orelse return null;
+        return state.value orelse state.preinitialized;
+    }
+
+    fn requirementsFor(self: *const Context, module_id: u32) []const ModuleRequirement {
+        const get = self.module_requirements orelse return &.{};
+        return get(self.module_requirements_ctx, module_id);
+    }
+
+    fn adoptPreinitialized(
+        self: *Context,
+        module_id: u32,
+        requested: ?[]const u8,
+        state: *ModuleState,
+        value: Value,
+    ) anyerror!?Value {
+        state.preinitialized = null;
+        state.loading = true;
+        errdefer {
+            state.loading = false;
+            if (state.value == null and state.preinitialized == null)
+                state.preinitialized = value;
+        }
+
+        var valid = true;
+        for (self.requirementsFor(module_id)) |requirement| {
+            const expected = self.preparedModuleValue(requirement.module_id) orelse {
+                valid = false;
+                break;
+            };
+            const actual = try self.requireModuleId(requirement.module_id, requirement.requested);
+            if (!rawEqual(actual, expected)) {
+                valid = false;
+                break;
+            }
+        }
+
+        if (!valid) {
+            state.loading = false;
+            return null;
+        }
+
+        const canonical = self.canonicalModuleName(module_id, requested);
+        if (canonical) |text| if (self.package_loaded) |loaded|
+            try loaded.rawSet(self.allocator, .{ .string = text }, value);
+        state.value = value;
+        state.loading = false;
+        return value;
+    }
+
     pub fn loadModule(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!Value {
         if (module_id >= self.module_count or module_id >= self.module_root_entries.len) return error.BadModuleId;
         if (self.moduleState(module_id)) |existing| {
             if (existing.value) |value| return value;
-            if (existing.preinitialized) |value| {
-                existing.preinitialized = null;
-                const canonical = self.canonicalModuleName(module_id, requested);
-                if (canonical) |text| if (self.package_loaded) |loaded|
-                    try loaded.rawSet(self.allocator, .{ .string = text }, value);
-                existing.value = value;
-                return value;
-            }
+            if (existing.preinitialized) |value|
+                if (try self.adoptPreinitialized(module_id, requested, existing, value)) |adopted|
+                    return adopted;
             if (existing.loading) return error.ModuleLoadLoop;
         }
         const state = try self.ensureModuleState(module_id);
@@ -954,6 +1039,8 @@ pub const Context = struct {
     }
 
     pub fn requireModuleId(self: *Context, module_id: u32, raw_name: []const u8) anyerror!Value {
+        if (self.eager_bootstrap)
+            return self.preparedModuleValue(module_id) orelse error.EagerDependencyNotInitialized;
         if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
         const value = try self.loadModule(module_id, raw_name);
         if (self.package_loaded) |loaded| try loaded.rawSet(self.allocator, .{ .string = raw_name }, value);
@@ -1390,9 +1477,70 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     try std.testing.expectEqualStrings("ModuleLoadLoop", ctx.aotErrorName().?);
     ctx.clearAotErrorName();
     ctx.last_error = .nil;
-    try std.testing.expect(!ctx.module_loading.contains(2));
-    try std.testing.expect(ctx.module_values.get(2) == null);
+    const loop_state = ctx.moduleState(2) orelse return error.MissingModuleState;
+    try std.testing.expect(!loop_state.loading);
+    try std.testing.expect(loop_state.value == null);
     try std.testing.expectError(error.ModuleNotFound, ctx.requireByName("Module:Missing"));
+}
+
+const EagerRequirementProbe = struct {
+    const requirements = [_]ModuleRequirement{
+        .{ .module_id = 1, .requested = "Module:Dep" },
+    };
+
+    fn requirementsFor(_: ?*const anyopaque, module_id: u32) []const ModuleRequirement {
+        return if (module_id == 0) &requirements else &.{};
+    }
+
+    fn parent(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        const dependency = try ctx.requireModuleId(1, "Module:Dep");
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = dependency;
+        return out;
+    }
+
+    fn dep(_: *Context, _: Captures, _: []const Value) ![]const Value {
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "lazy-dep" };
+        return out;
+    }
+};
+
+test "eager module dependencies stay private and fall back on package.loaded override" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 2);
+    defer ctx.deinit();
+    const functions = [_]FunctionFn{
+        stabilize(EagerRequirementProbe.parent),
+        stabilize(EagerRequirementProbe.dep),
+    };
+    ctx.module_root_entries = &functions;
+    ctx.package_loaded = try ctx.newTable();
+    ctx.configureModuleRequirements(null, EagerRequirementProbe.requirementsFor);
+
+    try ctx.preinitializeModule(1, .{ .string = "eager-dep" }, false);
+    try ctx.preinitializeModule(0, .{ .string = "eager-dep" }, false);
+
+    ctx.beginEagerBootstrap();
+    try std.testing.expectEqualStrings(
+        "eager-dep",
+        (try ctx.requireModuleId(1, "Module:Dep")).string,
+    );
+    ctx.endEagerBootstrap();
+    try std.testing.expect(ctx.package_loaded.?.rawGet(.{ .string = "Module:Dep" }) == null);
+
+    try ctx.package_loaded.?.rawSet(
+        ctx.allocator,
+        .{ .string = "Module:Dep" },
+        .{ .string = "override" },
+    );
+    const parent = try ctx.loadModule(0, "Module:Parent");
+    try std.testing.expectEqualStrings("override", parent.string);
+    try std.testing.expectEqualStrings(
+        "override",
+        ctx.package_loaded.?.rawGet(.{ .string = "Module:Dep" }).?.string,
+    );
 }
 
 const RecursiveModuleCacheProbe = struct {
@@ -1424,7 +1572,8 @@ test "recursive module loads keep distinct cache slots" {
     try std.testing.expectEqualStrings("outer", outer.string);
     try std.testing.expectEqualStrings("inner", loaded_inner.string);
     try std.testing.expectEqualStrings("outer", cached_outer.string);
-    try std.testing.expect(ctx.module_values.get(0) != null and ctx.module_values.get(1) != null);
+    try std.testing.expect(ctx.moduleState(0).?.value != null);
+    try std.testing.expect(ctx.moduleState(1).?.value != null);
 }
 
 const NativeHostProbe = struct {
@@ -1844,8 +1993,8 @@ test "AOT context startup stays independent of corpus module count" {
     defer ctx.deinit();
     try std.testing.expectEqual(@as(usize, 2), ctx.globals.len);
     try std.testing.expectEqual(@as(usize, 1_000_000), ctx.module_count);
-    try std.testing.expectEqual(@as(usize, 0), ctx.module_loading.count());
-    try std.testing.expectEqual(@as(usize, 0), ctx.module_values.count());
+    try std.testing.expect(ctx.module_state_pages.len > 0);
+    for (ctx.module_state_pages) |page| try std.testing.expect(page == null);
 }
 
 test "forked AOT context shares native module entries but resets runtime state" {
@@ -1860,14 +2009,14 @@ test "forked AOT context shares native module entries but resets runtime state" 
     parent.setHost(&host_marker);
     parent.current_frame = try parent.newTable();
     try parent.setGlobal(1, .{ .number = 9 });
-    try parent.module_values.put(parent.allocator, 0, .{ .number = 1 });
+    try parent.preinitializeModule(0, .{ .number = 1 }, false);
 
     var child = try parent.forkProgram(arena.allocator());
     defer child.deinit();
     try std.testing.expect(child.module_root_entries.ptr == parent.module_root_entries.ptr);
     try std.testing.expect(child.getGlobal(1) == .nil);
-    try std.testing.expectEqual(@as(usize, 0), child.module_values.count());
-    try std.testing.expectEqual(@as(usize, 1), parent.module_values.count());
+    try std.testing.expect(child.moduleState(0) == null);
+    try std.testing.expectEqual(@as(f64, 1), parent.preparedModuleValue(0).?.number);
     try std.testing.expect(child.host == parent.host);
     try std.testing.expect(child.current_frame == null);
     try std.testing.expectEqual(@as(u32, 0), try child.resolveModule("Module:A"));

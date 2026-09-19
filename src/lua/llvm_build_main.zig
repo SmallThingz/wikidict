@@ -129,6 +129,126 @@ fn resolveModuleEdges(
     return edges.toOwnedSlice(a);
 }
 
+const EagerEdge = struct {
+    from: u32,
+    to: u32,
+};
+
+fn eagerEdgeLess(_: void, lhs: EagerEdge, rhs: EagerEdge) bool {
+    return lhs.from < rhs.from or (lhs.from == rhs.from and lhs.to < rhs.to);
+}
+
+fn resolveEagerModule(
+    a: A,
+    module_ids: *const emitter.ModuleIdMap,
+    raw: []const u8,
+) !?u32 {
+    const canonical = (try usage.canonicalModule(a, raw)) orelse return null;
+    defer a.free(canonical);
+    return module_ids.get(canonical);
+}
+
+fn planEagerInit(
+    a: A,
+    records: []ModuleRecord,
+    module_ids: *const emitter.ModuleIdMap,
+    stable_require: bool,
+) !usize {
+    const candidate = try a.alloc(bool, records.len);
+    defer a.free(candidate);
+    const blocked = try a.alloc(bool, records.len);
+    defer a.free(blocked);
+    @memset(blocked, false);
+    for (candidate, records) |*out, record|
+        out.* = record.root_bootstrap_safe and
+            (record.root_requires.len == 0 or stable_require);
+
+    var edges: std.ArrayList(EagerEdge) = .empty;
+    defer edges.deinit(a);
+    for (records, 0..) |record, module_index| {
+        if (!candidate[module_index]) continue;
+        for (record.root_requires) |raw| {
+            const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse {
+                blocked[module_index] = true;
+                continue;
+            };
+            if (dependency >= records.len or !candidate[dependency]) {
+                blocked[module_index] = true;
+                continue;
+            }
+            try edges.append(a, .{
+                .from = dependency,
+                .to = @intCast(module_index),
+            });
+        }
+    }
+
+    std.mem.sort(EagerEdge, edges.items, {}, eagerEdgeLess);
+    if (edges.items.len > 1) {
+        var write: usize = 1;
+        var previous = edges.items[0];
+        for (edges.items[1..]) |edge| {
+            if (edge.from == previous.from and edge.to == previous.to) continue;
+            edges.items[write] = edge;
+            write += 1;
+            previous = edge;
+        }
+        edges.items.len = write;
+    }
+
+    const indegree = try a.alloc(u32, records.len);
+    defer a.free(indegree);
+    @memset(indegree, 0);
+    const offsets = try a.alloc(u32, records.len + 1);
+    defer a.free(offsets);
+    @memset(offsets, 0);
+    for (edges.items) |edge| {
+        indegree[edge.to] += 1;
+        offsets[edge.from + 1] += 1;
+    }
+    for (1..offsets.len) |index|
+        offsets[index] += offsets[index - 1];
+
+    var queue: std.ArrayList(u32) = .empty;
+    defer queue.deinit(a);
+    for (candidate, blocked, indegree, 0..) |can, is_blocked, degree, index|
+        if (can and !is_blocked and degree == 0)
+            try queue.append(a, @intCast(index));
+
+    var read: usize = 0;
+    var eager_count: usize = 0;
+    while (read < queue.items.len) : (read += 1) {
+        const module_id = queue.items[read];
+        records[module_id].eager_order = @intCast(eager_count);
+        eager_count += 1;
+        for (edges.items[offsets[module_id]..offsets[module_id + 1]]) |edge| {
+            indegree[edge.to] -= 1;
+            if (indegree[edge.to] == 0 and
+                candidate[edge.to] and !blocked[edge.to])
+                try queue.append(a, edge.to);
+        }
+    }
+
+    for (records) |*record| {
+        if (record.eager_order == std.math.maxInt(u32)) {
+            record.eager_requirements = &.{};
+            continue;
+        }
+        const requirements = try a.alloc(program.EagerRequirement, record.root_requires.len);
+        for (requirements, record.root_requires) |*requirement, raw| {
+            const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse
+                return error.InvalidEagerPlan;
+            requirement.* = .{
+                .module_id = dependency,
+                .requested = raw,
+            };
+        }
+        record.eager_requirements = requirements;
+    }
+
+    return eager_count;
+}
+
 fn writeCompilePlan(
     io: std.Io,
     a: A,
@@ -261,10 +381,10 @@ fn analyzeManifest(
                             }
                         }
                         const info = target orelse continue;
-                        if (info.upvalues.len != 0) continue;
                         try direct_exports.append(a, .{
                             .name = try a.dupe(u8, entry.key_ptr.*),
                             .function_id = info.id,
+                            .capture_count = @intCast(info.upvalues.len),
                         });
                     },
                     else => {},
@@ -272,6 +392,10 @@ fn analyzeManifest(
             },
             else => {},
         };
+
+        const root_requires = try a.alloc([]const u8, model.root_requires.items.len);
+        for (root_requires, model.root_requires.items) |*owned, raw|
+            owned.* = try a.dupe(u8, raw);
 
         try records.append(a, .{
             .title = try a.dupe(u8, row.title),
@@ -284,6 +408,8 @@ fn analyzeManifest(
             .export_shape_id = export_shape_id,
             .dynamic_module_load = dynamic_module_load,
             .root_pure = model.root_pure,
+            .root_bootstrap_safe = model.root_bootstrap_safe,
+            .root_requires = root_requires,
             .direct_exports = try direct_exports.toOwnedSlice(a),
         });
         function_base = std.math.add(u32, function_base, count) catch return error.TooManyFunctions;
@@ -523,6 +649,18 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     var selected_module_ids = try buildModuleIds(io, a, source_root, selected_records.items);
     defer selected_module_ids.deinit(a);
     if (selected_module_ids.count() > std.math.maxInt(u32)) return error.TooManyModuleNames;
+
+    const eager_count = try planEagerInit(
+        a,
+        selected_records.items,
+        &selected_module_ids,
+        globals.stable("require"),
+    );
+    std.debug.print("LLVM_EAGER_INIT modules={d}/{d}\n", .{
+        eager_count,
+        selected_records.items.len,
+    });
+
     for (named_load_data_targets.items) |target| {
         const id = selected_module_ids.get(target) orelse continue;
         if (id < selected_records.items.len and selected_records.items[id].root_pure)

@@ -19,6 +19,7 @@ pub const ModuleIdMap = std.StringHashMapUnmanaged(u32);
 pub const DirectExport = struct {
     name: []const u8,
     function_id: u32,
+    capture_count: u32 = 0,
 };
 pub const ModuleFact = struct {
     root_pure: bool = false,
@@ -46,11 +47,11 @@ pub const ProgramFacts = struct {
         return table_shapes.get(span_start);
     }
 
-    pub fn exportFunction(self: ProgramFacts, module_id: u32, name: []const u8) ?u32 {
+    pub fn exportFunction(self: ProgramFacts, module_id: u32, name: []const u8) ?DirectExport {
         const facts = self.module_facts orelse return null;
         if (module_id >= facts.len) return null;
         for (facts[module_id].exports) |entry|
-            if (std.mem.eql(u8, entry.name, name)) return entry.function_id;
+            if (std.mem.eql(u8, entry.name, name)) return entry;
         return null;
     }
 
@@ -76,6 +77,7 @@ const StaticFunctionRef = struct {
     function_id: u32,
     captures_ptr: V,
     captures_len: usize,
+    direct_captures: ?V = null,
     guard_callable: ?V = null,
 };
 
@@ -147,6 +149,7 @@ const Runtime = struct {
     value_copy: V,
     value_truthy: V,
     value_is_function_id: V,
+    value_function_captures: V,
     value_is_nil: V,
     require_number: V,
     arg_ptr: V,
@@ -210,6 +213,7 @@ const Runtime = struct {
             .value_copy = try declare(m, "dict_lua_value_copy", ty.void, &.{ ty.ptr, ty.ptr }),
             .value_truthy = try declare(m, "dict_lua_value_truthy", ty.i8, &.{ty.ptr}),
             .value_is_function_id = try declare(m, "dict_lua_value_is_function_id", ty.i8, &.{ ty.ptr, ty.i32 }),
+            .value_function_captures = try declare(m, "dict_lua_value_function_captures", ty.ptr, &.{ ty.ptr, ty.i32 }),
             .value_is_nil = try declare(m, "dict_lua_value_is_nil", ty.i8, &.{ty.ptr}),
             .require_number = try declare(m, "dict_lua_require_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
             .arg_ptr = try declare(m, "dict_lua_arg_ptr", ty.ptr, &.{ ty.ptr, ty.i64, ty.i64 }),
@@ -1286,13 +1290,22 @@ const FnEmitter = struct {
             .index => |index| blk: {
                 const field = staticString(index.key) orelse break :blk null;
                 const module = (try self.staticModuleExpr(index.object)) orelse break :blk null;
-                const function_id = self.module.facts.exportFunction(module.module_id, field) orelse break :blk null;
+                const export_fact = self.module.facts.exportFunction(module.module_id, field) orelse break :blk null;
                 const live = try self.getField(.{ .boxed = module.value }, field);
+                const callable = try self.box(live);
+                const direct_captures = if (export_fact.capture_count == 0)
+                    try self.nullPtr()
+                else
+                    try llvm.call(self.builder, self.rt().value_function_captures, &.{
+                        callable,
+                        try self.cI32(export_fact.function_id),
+                    });
                 break :blk .{
-                    .function_id = function_id,
+                    .function_id = export_fact.function_id,
                     .captures_ptr = try self.nullPtr(),
                     .captures_len = 0,
-                    .guard_callable = try self.box(live),
+                    .direct_captures = direct_captures,
+                    .guard_callable = callable,
                 };
             },
             .paren => |paren| self.staticCallee(paren.expr),
@@ -1381,13 +1394,14 @@ const FnEmitter = struct {
         output: V,
         count: usize,
     ) anyerror!void {
-        if (function.captures_len == 0 and prepared.tail == null) {
+        if ((function.captures_len == 0 or function.direct_captures != null) and prepared.tail == null) {
             for (0..count) |index|
                 _ = try llvm.call(self.builder, self.rt().value_nil, &.{try self.arrayElem(output, index)});
             const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{self.ctx()});
             try self.check(enter);
+            const capture_context = function.direct_captures orelse try self.nullPtr();
             const result = try llvm.call(self.builder, entry_fn, &.{
-                self.ctx(), try self.nullPtr(),   prepared.fixed, try self.cI64(prepared.fixed_len),
+                self.ctx(), capture_context,      prepared.fixed, try self.cI64(prepared.fixed_len),
                 output,     try self.cI64(count),
             });
             _ = try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
@@ -1446,6 +1460,11 @@ const FnEmitter = struct {
         const entry_fn = try self.module.functionValue(function.function_id);
 
         if (function.guard_callable) |callable| {
+            if (function.direct_captures != null and prepared.tail != null) {
+                try self.emitFallbackFixedPrepared(callable, prepared, output, count);
+                if (prepared.tail) |tail| try self.freeMulti(tail);
+                return if (count == 0) null else output;
+            }
             const is_expected = try llvm.call(self.builder, self.rt().value_is_function_id, &.{
                 callable, try self.cI32(function.function_id),
             });
@@ -1479,11 +1498,12 @@ const FnEmitter = struct {
         entry_fn: V,
         prepared: PreparedArgs,
     ) anyerror!MultiRef {
-        if (function.captures_len == 0 and prepared.tail == null) {
+        if ((function.captures_len == 0 or function.direct_captures != null) and prepared.tail == null) {
             const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{self.ctx()});
             try self.check(enter);
+            const capture_context = function.direct_captures orelse try self.nullPtr();
             const result = try llvm.call(self.builder, entry_fn, &.{
-                self.ctx(),         try self.nullPtr(), prepared.fixed, try self.cI64(prepared.fixed_len),
+                self.ctx(),         capture_context,  prepared.fixed, try self.cI64(prepared.fixed_len),
                 try self.nullPtr(), try self.cI64(0),
             });
             _ = try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
@@ -1537,6 +1557,11 @@ const FnEmitter = struct {
         const entry_fn = try self.module.functionValue(function.function_id);
 
         if (function.guard_callable) |callable| {
+            if (function.direct_captures != null and prepared.tail != null) {
+                const fallback = try self.emitFallbackMultiPrepared(callable, prepared);
+                if (prepared.tail) |tail| try self.freeMulti(tail);
+                return fallback;
+            }
             const ptr_slot = try self.ptrSlot();
             const len_slot = try self.i64Slot();
             const is_expected = try llvm.call(self.builder, self.rt().value_is_function_id, &.{
