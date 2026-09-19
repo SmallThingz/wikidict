@@ -23,6 +23,8 @@ pub const DirectExport = struct {
 };
 pub const ModuleFact = struct {
     root_pure: bool = false,
+    eager_prepared: bool = false,
+    canonical_name: []const u8 = "",
     exports: []const DirectExport = &.{},
 };
 pub const ProgramFacts = struct {
@@ -58,6 +60,13 @@ pub const ProgramFacts = struct {
     pub fn moduleRootPure(self: ProgramFacts, module_id: u32) bool {
         const facts = self.module_facts orelse return false;
         return module_id < facts.len and facts[module_id].root_pure;
+    }
+
+    pub fn canDeferRequire(self: ProgramFacts, module_id: u32, raw: []const u8) bool {
+        const facts = self.module_facts orelse return false;
+        if (module_id >= facts.len) return false;
+        const fact = facts[module_id];
+        return fact.eager_prepared and std.mem.eql(u8, raw, fact.canonical_name);
     }
 };
 
@@ -152,6 +161,8 @@ const Runtime = struct {
     value_function_captures: V,
     value_is_nil: V,
     require_number: V,
+    observe_package: V,
+    defer_require_module_id: V,
     arg_ptr: V,
     arg_get: V,
     global_ptr: V,
@@ -216,6 +227,8 @@ const Runtime = struct {
             .value_function_captures = try declare(m, "dict_lua_value_function_captures", ty.ptr, &.{ ty.ptr, ty.i32 }),
             .value_is_nil = try declare(m, "dict_lua_value_is_nil", ty.i8, &.{ty.ptr}),
             .require_number = try declare(m, "dict_lua_require_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
+            .observe_package = try declare(m, "dict_lua_observe_package", ty.i32, &.{ty.ptr}),
+            .defer_require_module_id = try declare(m, "dict_lua_defer_require_module_id", ty.i8, &.{ ty.ptr, ty.i32, ty.ptr }),
             .arg_ptr = try declare(m, "dict_lua_arg_ptr", ty.ptr, &.{ ty.ptr, ty.i64, ty.i64 }),
             .arg_get = try declare(m, "dict_lua_arg_get", ty.void, &.{ ty.ptr, ty.i64, ty.i64, ty.ptr }),
             .global_ptr = try declare(m, "dict_lua_global_ptr", ty.ptr, &.{ ty.ptr, ty.i32 }),
@@ -840,6 +853,10 @@ const FnEmitter = struct {
                 break :blk .{ .boxed = out };
             },
             .global => |slot| blk: {
+                if (slot == global_abi.id("package") or slot == global_abi.id("_G")) {
+                    const status = try llvm.call(self.builder, self.rt().observe_package, &.{self.ctx()});
+                    try self.check(status);
+                }
                 if (self.module.globals.stableSlot(slot) and slot < global_abi.count) {
                     const ptr = try llvm.call(self.builder, self.rt().global_ptr, &.{ self.ctx(), try self.cI32(slot) });
                     const name = self.module.globals.names.items[slot];
@@ -1368,6 +1385,30 @@ const FnEmitter = struct {
 
     fn directRequireValue(self: *FnEmitter, request: StaticRequire) anyerror!V {
         const loaded = try self.valueSlot();
+        if (self.module.facts.canDeferRequire(request.module_id, request.requested.bytes)) {
+            const fast = try llvm.call(self.builder, self.rt().defer_require_module_id, &.{
+                self.ctx(), try self.cI32(request.module_id), loaded,
+            });
+            const fast_block = try self.newBlock("require_prepared");
+            const fallback_block = try self.newBlock("require_fallback");
+            const join = try self.newBlock("require_join");
+            const ready = try llvm.icmp(self.builder, .ne, fast, try self.cI8(0));
+            try llvm.condBr(self.builder, ready, fast_block, fallback_block);
+
+            llvm.position(self.builder, fast_block);
+            try llvm.br(self.builder, join);
+
+            llvm.position(self.builder, fallback_block);
+            const status = try llvm.call(self.builder, self.rt().require_module_id, &.{
+                self.ctx(),                           try self.cI32(request.module_id), request.requested.ptr,
+                try self.cI64(request.requested.len), loaded,
+            });
+            try self.check(status);
+            try llvm.br(self.builder, join);
+            llvm.position(self.builder, join);
+            return loaded;
+        }
+
         const status = try llvm.call(self.builder, self.rt().require_module_id, &.{
             self.ctx(),                           try self.cI32(request.module_id), request.requested.ptr,
             try self.cI64(request.requested.len), loaded,

@@ -322,6 +322,67 @@ test "constant require lowers to module id only when global is stable" {
     try std.testing.expect(std.mem.indexOf(u8, escaped, "call i32 @dict_lua_require_module_id") == null);
 }
 
+test "eager canonical require uses prepared module fast path with semantic fallback" {
+    var ids: llvm_emitter.ModuleIdMap = .empty;
+    defer ids.deinit(std.testing.allocator);
+    try ids.put(std.testing.allocator, "Module:Prepared", 0);
+    const modules = [_]llvm_emitter.ModuleFact{.{
+        .eager_prepared = true,
+        .canonical_name = "Module:Prepared",
+    }};
+    const facts = llvm_emitter.ProgramFacts{
+        .module_ids = &ids,
+        .module_facts = &modules,
+    };
+
+    const compile = struct {
+        fn run(source: []const u8, program_facts: llvm_emitter.ProgramFacts) ![]u8 {
+            var chunk = try llvm_parser.parse(std.testing.allocator, source);
+            defer chunk.deinit();
+            var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+            defer globals.deinit();
+            var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+            defer module.deinit();
+            var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, program_facts);
+            defer generated.deinit();
+            return generated.toText(std.testing.allocator);
+        }
+    }.run;
+
+    const ir = try compile("return require('Module:Prepared')", facts);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_defer_require_module_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "require_prepared") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_require_module_id") != null);
+
+    const alias_ir = try compile("return require('Prepared')", facts);
+    defer std.testing.allocator.free(alias_ir);
+    try std.testing.expect(std.mem.indexOf(u8, alias_ir, "require_prepared") == null);
+}
+
+test "reading package or global environment flushes deferred require visibility" {
+    const compile = struct {
+        fn run(source: []const u8) ![]u8 {
+            var chunk = try llvm_parser.parse(std.testing.allocator, source);
+            defer chunk.deinit();
+            var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+            defer globals.deinit();
+            var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+            defer module.deinit();
+            var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+            defer generated.deinit();
+            return generated.toText(std.testing.allocator);
+        }
+    }.run;
+
+    const package_ir = try compile("return package");
+    defer std.testing.allocator.free(package_ir);
+    try std.testing.expect(std.mem.indexOf(u8, package_ir, "@dict_lua_observe_package") != null);
+    const env_ir = try compile("return _G");
+    defer std.testing.allocator.free(env_ir);
+    try std.testing.expect(std.mem.indexOf(u8, env_ir, "@dict_lua_observe_package") != null);
+}
+
 test "pure string keyed tables lower to process shapes" {
     const source = "return { foo = 1, ['bar'] = 2 }";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);

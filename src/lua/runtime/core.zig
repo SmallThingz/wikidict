@@ -647,6 +647,7 @@ const ModuleState = struct {
     value: ?Value = null,
     preinitialized: ?Value = null,
     load_data_snapshot: ?Value = null,
+    deferred_require_visibility: bool = false,
     globals: ?[]Value = null,
     global_table: ?*Table = null,
 };
@@ -681,6 +682,7 @@ pub const Context = struct {
     module_requirements_ctx: ?*const anyopaque = null,
     module_requirements: ?ModuleRequirementsFn = null,
     eager_bootstrap: bool = false,
+    package_observable: bool = false,
     program_bootstrap_ctx: ?*const anyopaque = null,
     program_bootstrap: ?ProgramBootstrapFn = null,
     host: ?*anyopaque = null,
@@ -916,6 +918,33 @@ pub const Context = struct {
 
     pub fn endEagerBootstrap(self: *Context) void {
         self.eager_bootstrap = false;
+    }
+
+    pub fn observePackage(self: *Context) !void {
+        if (self.package_observable) return;
+        if (self.package_loaded) |loaded| {
+            for (self.module_state_pages, 0..) |page, page_index| if (page) |states| {
+                for (states, 0..) |*state, slot| {
+                    if (!state.deferred_require_visibility) continue;
+                    const module_id_usize = (page_index << module_state_page_shift) | slot;
+                    if (module_id_usize >= self.module_count) break;
+                    const module_id: u32 = @intCast(module_id_usize);
+                    const value = state.value orelse state.preinitialized orelse continue;
+                    const name = self.canonicalModuleName(module_id, null) orelse continue;
+                    try loaded.rawSet(self.allocator, .{ .string = name }, value);
+                    state.deferred_require_visibility = false;
+                }
+            };
+        }
+        self.package_observable = true;
+    }
+
+    pub fn deferStaticRequire(self: *Context, module_id: u32) ?Value {
+        if (self.package_observable) return null;
+        const state = self.moduleState(module_id) orelse return null;
+        const value = state.value orelse state.preinitialized orelse return null;
+        if (!self.eager_bootstrap) state.deferred_require_visibility = true;
+        return value;
     }
 
     fn canonicalModuleName(self: *const Context, module_id: u32, requested: ?[]const u8) ?[]const u8 {
@@ -1180,10 +1209,12 @@ pub const Context = struct {
         if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
         const value = try self.loadModule(module_id, raw_name);
         if (self.package_loaded) |loaded| try loaded.rawSet(self.allocator, .{ .string = raw_name }, value);
+        if (self.moduleState(module_id)) |state| state.deferred_require_visibility = false;
         return value;
     }
 
     pub fn requireByName(self: *Context, raw_name: []const u8) anyerror!Value {
+        if (std.mem.eql(u8, raw_name, "package")) try self.observePackage();
         if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
         return self.requireModuleId(try self.resolveModule(raw_name), raw_name);
     }
@@ -1617,6 +1648,53 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     try std.testing.expect(!loop_state.loading);
     try std.testing.expect(loop_state.value == null);
     try std.testing.expectError(error.ModuleNotFound, ctx.requireByName("Module:Missing"));
+}
+
+const DeferredRequireProbe = struct {
+    fn lookup(_: ?*const anyopaque, module_name: []const u8) ?u32 {
+        return if (std.mem.eql(u8, module_name, "Module:Prepared")) 0 else null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return if (id == 0) "Module:Prepared" else null;
+    }
+};
+
+test "prepared static require stays hidden until package becomes observable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 1);
+    defer ctx.deinit();
+    ctx.package_loaded = try ctx.newTable();
+    ctx.configureModules(null, DeferredRequireProbe.lookup, DeferredRequireProbe.name);
+    try ctx.preinitializeModule(0, .{ .string = "prepared" }, false);
+
+    const fast = ctx.deferStaticRequire(0) orelse return error.MissingPreparedModule;
+    try std.testing.expectEqualStrings("prepared", fast.string);
+    try std.testing.expect(ctx.package_loaded.?.rawGet(.{ .string = "Module:Prepared" }) == null);
+
+    try ctx.observePackage();
+    try std.testing.expect(ctx.package_observable);
+    try std.testing.expectEqualStrings(
+        "prepared",
+        ctx.package_loaded.?.rawGet(.{ .string = "Module:Prepared" }).?.string,
+    );
+    try std.testing.expect(ctx.deferStaticRequire(0) == null);
+}
+
+test "eager bootstrap static require does not create deferred package visibility" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 1);
+    defer ctx.deinit();
+    ctx.package_loaded = try ctx.newTable();
+    ctx.configureModules(null, DeferredRequireProbe.lookup, DeferredRequireProbe.name);
+    try ctx.preinitializeModule(0, .{ .string = "prepared" }, false);
+
+    ctx.beginEagerBootstrap();
+    _ = ctx.deferStaticRequire(0) orelse return error.MissingPreparedModule;
+    ctx.endEagerBootstrap();
+    try ctx.observePackage();
+    try std.testing.expect(ctx.package_loaded.?.rawGet(.{ .string = "Module:Prepared" }) == null);
 }
 
 const EagerRequirementProbe = struct {

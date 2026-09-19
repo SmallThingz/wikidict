@@ -676,6 +676,8 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     for (selected_module_facts, selected_records.items) |*fact, record| {
         fact.* = .{
             .root_pure = record.root_pure,
+            .eager_prepared = record.eager_order != std.math.maxInt(u32),
+            .canonical_name = record.title,
             .exports = record.direct_exports,
         };
     }

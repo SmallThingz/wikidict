@@ -120,6 +120,17 @@ export fn dict_lua_global_ptr(ctx: *const rt.Context, slot: u32) callconv(.c) *c
     if (slot >= ctx.globals.len) return &nil_value;
     return &ctx.globals[slot];
 }
+export fn dict_lua_observe_package(ctx: *rt.Context) callconv(.c) u32 {
+    ctx.observePackage() catch |err| return fail(ctx, err);
+    return 0;
+}
+
+export fn dict_lua_defer_require_module_id(ctx: *rt.Context, module_id: u32, out: *rt.Value) callconv(.c) u8 {
+    const value = ctx.deferStaticRequire(module_id) orelse return 0;
+    out.* = value;
+    return 1;
+}
+
 export fn dict_lua_value_nil(out: *rt.Value) callconv(.c) void {
     out.* = .nil;
 }
