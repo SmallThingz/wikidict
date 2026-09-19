@@ -2,9 +2,13 @@ test {
     _ = @import("parser/root.zig");
     _ = @import("direct/analysis.zig");
     _ = @import("direct/emitter.zig");
+    _ = @import("direct/program.zig");
     _ = @import("direct/numbers.zig");
     _ = @import("direct/module_model.zig");
     _ = @import("direct/shapes.zig");
+    _ = @import("usage.zig");
+    _ = @import("direct/usage_profile.zig");
+    _ = @import("program_metadata.zig");
     _ = @import("extract/modules.zig");
     _ = @import("wikitext/expression.zig");
     _ = @import("wikitext/preprocess.zig");
@@ -38,11 +42,106 @@ test "direct LLVM emitter covers Lua control and closure surface" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "define %FunctionResult @lua_f_0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fadd double") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "dict_lua_make_function") != null);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "define %FunctionResult @lua_f_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "fadd double") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "dict_lua_make_function") != null);
+}
+
+test "large static string lists lower to compact static literal data" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+    try source.appendSlice(std.testing.allocator, "return {");
+    for (0..130) |index| {
+        if (index != 0) try source.append(std.testing.allocator, ',');
+        try source.appendSlice(std.testing.allocator, "\"item\"");
+    }
+    try source.append(std.testing.allocator, '}');
+
+    var chunk = try llvm_parser.parse(std.testing.allocator, source.items);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        std.mem.count(u8, generated_source, "call i32 @dict_lua_decode_static_literal("),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        std.mem.count(u8, generated_source, "call i32 @dict_lua_table_append("),
+    );
+}
+
+test "large static string rows lower to compact static literal data" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+    try source.appendSlice(std.testing.allocator, "return {");
+    for (0..130) |index| {
+        if (index != 0) try source.append(std.testing.allocator, ',');
+        try source.appendSlice(std.testing.allocator, "{\"a\",\"b\",\"c\"}");
+    }
+    try source.append(std.testing.allocator, '}');
+
+    var chunk = try llvm_parser.parse(std.testing.allocator, source.items);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        std.mem.count(u8, generated_source, "call i32 @dict_lua_decode_static_literal("),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        std.mem.count(u8, generated_source, "call i32 @lua_sth_"),
+    );
+}
+
+test "large nested static tables lower to compact static literal data" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+    try source.appendSlice(std.testing.allocator, "return {");
+    for (0..130) |index| {
+        if (index != 0) try source.append(std.testing.allocator, ',');
+        try source.appendSlice(std.testing.allocator, "{1,\"item\"}");
+    }
+    try source.append(std.testing.allocator, '}');
+
+    var chunk = try llvm_parser.parse(std.testing.allocator, source.items);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        std.mem.count(u8, generated_source, "call i32 @dict_lua_decode_static_literal("),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        std.mem.count(u8, generated_source, "call i32 @lua_sth_"),
+    );
 }
 
 test "immutable numeric locals stay native LLVM SSA" {
@@ -53,13 +152,14 @@ test "immutable numeric locals stay native LLVM SSA" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fadd double") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "fmul double") != null);
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, generated.source, "call void @dict_lua_value_number"));
-    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated.source, "call i32 @dict_lua_require_number"));
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    // LLVM's builder may constant-fold the native scalar arithmetic immediately.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, generated_source, "call void @dict_lua_value_number"));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, "call i32 @dict_lua_require_number"));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, "call i32 @dict_lua_binary"));
 }
 
 test "undeclared stable globals use checked access for global metatable semantics" {
@@ -70,11 +170,13 @@ test "undeclared stable globals use checked access for global metatable semantic
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
 
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, generated.source, " = call i32 @dict_lua_global_get("));
-    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated.source, " = call ptr @dict_lua_global_ptr("));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, generated_source, " = call i32 @dict_lua_global_get("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, " = call ptr @dict_lua_global_ptr("));
 }
 
 test "mutable proven scalar locals stay native LLVM storage" {
@@ -91,12 +193,14 @@ test "mutable proven scalar locals stay native LLVM storage" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "alloca double") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "alloca i1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_binary") == null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_require_number") == null);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "alloca double") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "alloca i1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_binary") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_require_number") == null);
 }
 
 test "mutable logical results use generic storage" {
@@ -117,8 +221,10 @@ test "mutable logical results use generic storage" {
         try std.testing.expectEqual(llvm_analysis.StaticType.unknown, binding.static_type);
     };
     try std.testing.expect(saw_ok);
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
 }
 
 test "loop-carried scalar dependencies invalidate stale aliases" {
@@ -150,8 +256,10 @@ test "loop-carried scalar dependencies invalidate stale aliases" {
     try std.testing.expectEqual(llvm_analysis.StaticType.unknown, state_type.?);
     try std.testing.expectEqual(llvm_analysis.StaticType.unknown, copy_type.?);
     try std.testing.expectEqual(llvm_analysis.StaticType.number, count_type.?);
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
 }
 
 test "late capture invalidates native scalar aliases" {
@@ -176,8 +284,10 @@ test "late capture invalidates native scalar aliases" {
     }
     try std.testing.expectEqual(llvm_analysis.StaticType.unknown, value_type.?);
     try std.testing.expectEqual(llvm_analysis.StaticType.unknown, copy_type.?);
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
 }
 
 test "constant require lowers to module id only when global is stable" {
@@ -193,7 +303,9 @@ test "constant require lowers to module id only when global is stable" {
             defer globals.deinit();
             var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
             defer module.deinit();
-            return (try llvm_emitter.generate(std.testing.allocator, &globals, &module, program_facts)).source;
+            var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, program_facts);
+            defer generated.deinit();
+            return generated.toText(std.testing.allocator);
         }
     }.run;
 
@@ -224,11 +336,13 @@ test "pure string keyed tables lower to process shapes" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{ .table_shapes = &shape_facts });
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_new_shaped_table(ptr %ctx, i32 0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_set_shape_slot(ptr %ctx") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, " = call i32 @dict_lua_set_field") == null);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{ .table_shapes = &shape_facts });
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_new_shaped_table(ptr %ctx, i32 0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_set_shape_slot(ptr %ctx") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, " = call i32 @dict_lua_set_field") == null);
 }
 
 test "mixed list tables keep generic dense array semantics" {
@@ -307,26 +421,28 @@ test "module model promotes incremental exports to guarded shape slots" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(
+    var generated = try llvm_emitter.generate(
         std.testing.allocator,
         &globals,
         &module,
         .{ .table_shapes = &shape_facts },
     );
-    defer std.testing.allocator.free(generated.source);
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
     try std.testing.expect(std.mem.indexOf(
         u8,
-        generated.source,
+        generated_source,
         "call i32 @dict_lua_new_shaped_table",
     ) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
-        generated.source,
+        generated_source,
         "call i32 @dict_lua_set_known_shape_field",
     ) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
-        generated.source,
+        generated_source,
         "call i32 @dict_lua_get_known_shape_field",
     ) != null);
 }
@@ -339,10 +455,12 @@ test "immutable parameters borrow argument slots without Value copies" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expect(std.mem.count(u8, generated.source, "call ptr @dict_lua_arg_ptr") >= 2);
-    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated.source, "call void @dict_lua_arg_get"));
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expect(std.mem.count(u8, generated_source, "call ptr @dict_lua_arg_ptr") >= 2);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, "call void @dict_lua_arg_get"));
 }
 
 test "stable ABI globals borrow their Context slot while mutable globals stay checked" {
@@ -354,7 +472,9 @@ test "stable ABI globals borrow their Context slot while mutable globals stay ch
             defer globals.deinit();
             var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
             defer module.deinit();
-            return (try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{})).source;
+            var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+            defer generated.deinit();
+            return generated.toText(std.testing.allocator);
         }
     }.run;
     const stable = try compile("return math");
@@ -375,12 +495,14 @@ test "call-only local functions bypass callable boxing and dynamic dispatch" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "define internal %FunctionResult @lua_f_1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call %FunctionResult @lua_f_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_enter_static_call") != null);
-    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated.source, " = call i32 @dict_lua_make_function"));
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "define internal %FunctionResult @lua_f_1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call %FunctionResult @lua_f_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_enter_static_call") != null);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, " = call i32 @dict_lua_make_function"));
 }
 
 test "call-only captured closures pass cells without materializing callable identity" {
@@ -391,11 +513,13 @@ test "call-only captured closures pass cells without materializing callable iden
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call %CallResult @dict_lua_call_static_multi") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "_cap, ptr") != null);
-    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated.source, " = call i32 @dict_lua_make_function"));
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call %CallResult @dict_lua_call_static_multi") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "@dict_lua_call_static_multi(ptr %ctx, ptr @lua_f_1, ptr") != null);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, " = call i32 @dict_lua_make_function"));
 }
 
 test "escaping local functions keep Lua callable identity" {
@@ -406,9 +530,11 @@ test "escaping local functions keep Lua callable identity" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, " = call i32 @dict_lua_make_function") != null);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, " = call i32 @dict_lua_make_function") != null);
 }
 
 test "stable native namespaces use compile-time field slots" {
@@ -419,10 +545,12 @@ test "stable native namespaces use compile-time field slots" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_get_native_slot") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_set_native_slot") != null);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_get_native_slot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_set_native_slot") != null);
 }
 
 test "global table escape disables native namespace slot assumptions" {
@@ -433,10 +561,12 @@ test "global table escape disables native namespace slot assumptions" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated.source, "call i32 @dict_lua_get_native_slot"));
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_get_field") != null);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, "call i32 @dict_lua_get_native_slot"));
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_get_field") != null);
 }
 
 test "length and dynamic comparison stay native scalar values" {
@@ -454,12 +584,14 @@ test "length and dynamic comparison stay native scalar values" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_len_number") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_compare_bool") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "store double") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "store i1") != null);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_len_number") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_compare_bool") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "store double") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "store i1") != null);
 }
 
 test "nonrecursive local function syntax uses direct static call" {
@@ -470,11 +602,13 @@ test "nonrecursive local function syntax uses direct static call" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "define internal %FunctionResult @lua_f_1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_enter_static_call") != null);
-    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated.source, " = call i32 @dict_lua_make_function"));
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "define internal %FunctionResult @lua_f_1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_enter_static_call") != null);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, " = call i32 @dict_lua_make_function"));
 }
 
 test "recursive local function keeps callable self cell" {
@@ -485,8 +619,10 @@ test "recursive local function keeps callable self cell" {
     defer globals.deinit();
     var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
     defer module.deinit();
-    const generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
-    defer std.testing.allocator.free(generated.source);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, " = call i32 @dict_lua_make_function") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generated.source, "call i32 @dict_lua_cell_new") != null);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const generated_source = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(generated_source);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, " = call i32 @dict_lua_make_function") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_cell_new") != null);
 }

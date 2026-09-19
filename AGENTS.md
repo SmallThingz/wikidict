@@ -20,9 +20,9 @@
 
 ## Build-time Lua architecture
 
-- There is one Lua execution path used by the bundler: `Lua source -> AST -> LLVM IR -> native code`.
+- There is one Lua execution path used by the bundler: `Lua source -> AST -> LLVM module -> LLVM bitcode -> native code`.
 - `src/lua/parser/` owns Lua 5.1 syntax and ASTs.
-- `src/lua/direct/` owns whole-program static analysis and direct LLVM emission. Analysis metadata is allowed; a second executable/custom instruction IR is not.
+- `src/lua/direct/` owns whole-program static analysis and direct LLVM module emission. Analysis metadata is allowed; a second executable/custom instruction IR is not.
 - `src/lua/abi/` owns small stable compiler/runtime layouts such as global and native-namespace slots.
 - `src/lua/runtime/` owns Zig primitives and the C ABI used by generated LLVM during bundling.
 - `src/lua/wikitext/` and `src/lua/extract/` own MediaWiki preprocessing and dump extraction used during bundling.
@@ -38,7 +38,7 @@
 - Use Zig primitives behind a C ABI for general hash maps, allocation, Unicode, patterns, host APIs, and other complex services; do not reimplement them in LLVM IR.
 - Program/corpus metadata should be immutable and process-lifetime during bundling. Page state must be explicit and local; do not rebuild/reset a global execution environment per operation when state can be split into static program data plus page-local mutation.
 - Constant module/name lookups should compile to IDs/direct references where semantics prove them; otherwise generated static tables/binary search are preferred to startup-built hash maps.
-- Compile generated IR directly to native objects and link the transient expander normally with Zig/LLD. Batch ordinary module IR at `-O3`, but compile generated IR at or above 4 MiB at `-O0` to avoid pathological optimizer cost; apply the same size rule to generated program metadata. Do not use LTO/ThinLTO for the corpus-wide expander.
+- Serialize executable LLVM modules directly to transient bitcode, compile that bitcode to native objects, and link the expander normally with Zig/LLD. Keep semantic corpus metadata and large static literal graphs out of optimizer-visible LLVM instruction graphs. Choose production module optimization from corpus usage: dominant page/module reach uses `-O2`, the remainder uses `-O1`, and source size is only a secondary ranking cost. Keep `-O0` for tests/diagnostics only; the compact program root table uses `-O1`. Do not use LTO/ThinLTO for the corpus-wide expander.
 - Optimize total dictionary build time plus shipped-reader execution time. Code/binary/blob size is secondary unless it materially affects those times or operational limits.
 - String interning/deduplication, compression, canonicalization, or compact encodings are not goals by themselves. Remove or weaken them when measured compile+run time improves and correctness/operational limits remain acceptable.
 - Profile before retaining performance work. Reject changes that reduce instructions or size but regress measured cycles/task time on representative workloads.

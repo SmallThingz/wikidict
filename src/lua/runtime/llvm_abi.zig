@@ -1,5 +1,6 @@
 const std = @import("std");
 const rt = @import("zig_runtime");
+const static_literal = @import("static_literal_format.zig");
 
 comptime {
     if (@sizeOf(rt.Value) != 32 or @alignOf(rt.Value) != 8)
@@ -18,6 +19,92 @@ pub const CallResult = extern struct {
 fn fail(ctx: *rt.Context, err: anyerror) u32 {
     if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
     return 1;
+}
+
+const StaticLiteralReader = struct {
+    bytes: []const u8,
+    pos: usize = 0,
+
+    fn take(self: *StaticLiteralReader, len: usize) ![]const u8 {
+        if (len > self.bytes.len -| self.pos) return error.InvalidStaticLiteral;
+        const out = self.bytes[self.pos .. self.pos + len];
+        self.pos += len;
+        return out;
+    }
+
+    fn byte(self: *StaticLiteralReader) !u8 {
+        return (try self.take(1))[0];
+    }
+
+    fn readU32(self: *StaticLiteralReader) !u32 {
+        return std.mem.readInt(u32, (try self.take(4))[0..4], .little);
+    }
+
+    fn readU64(self: *StaticLiteralReader) !u64 {
+        return std.mem.readInt(u64, (try self.take(8))[0..8], .little);
+    }
+
+    fn string(self: *StaticLiteralReader) ![]const u8 {
+        const len: usize = @intCast(try self.readU32());
+        return self.take(len);
+    }
+
+    fn value(self: *StaticLiteralReader, ctx: *rt.Context, depth: usize) anyerror!rt.Value {
+        if (depth >= static_literal.max_depth) return error.InvalidStaticLiteral;
+        return switch (try self.byte()) {
+            @intFromEnum(static_literal.ValueTag.nil) => .nil,
+            @intFromEnum(static_literal.ValueTag.false_) => .{ .boolean = false },
+            @intFromEnum(static_literal.ValueTag.true_) => .{ .boolean = true },
+            @intFromEnum(static_literal.ValueTag.number) => .{ .number = @bitCast(try self.readU64()) },
+            @intFromEnum(static_literal.ValueTag.string) => .{ .string = try self.string() },
+            @intFromEnum(static_literal.ValueTag.table) => try self.table(ctx, depth + 1),
+            else => error.InvalidStaticLiteral,
+        };
+    }
+
+    fn table(self: *StaticLiteralReader, ctx: *rt.Context, depth: usize) anyerror!rt.Value {
+        const shape_id = try self.readU32();
+        const field_count = try self.readU32();
+        const list_capacity = try self.readU32();
+        const table_value = if (shape_id != static_literal.no_shape)
+            try ctx.newProgramShape(shape_id)
+        else if (list_capacity != 0)
+            try ctx.newArrayTable(list_capacity)
+        else
+            try ctx.newTable();
+
+        for (0..field_count) |_| switch (try self.byte()) {
+            @intFromEnum(static_literal.FieldTag.list) => try table_value.append(ctx.allocator, try self.value(ctx, depth)),
+            @intFromEnum(static_literal.FieldTag.named) => {
+                const key = try self.string();
+                try table_value.rawSet(
+                    ctx.allocator,
+                    .{ .string = key },
+                    try self.value(ctx, depth),
+                );
+            },
+            @intFromEnum(static_literal.FieldTag.keyed) => {
+                const key = try self.value(ctx, depth);
+                const item = try self.value(ctx, depth);
+                try table_value.rawSet(ctx.allocator, key, item);
+            },
+            else => return error.InvalidStaticLiteral,
+        };
+        return .{ .table = table_value };
+    }
+};
+
+export fn dict_lua_decode_static_literal(
+    ctx: *rt.Context,
+    ptr: [*]const u8,
+    len: usize,
+    out: *rt.Value,
+) callconv(.c) u32 {
+    var reader = StaticLiteralReader{ .bytes = ptr[0..len] };
+    const decoded = reader.value(ctx, 0) catch |err| return fail(ctx, err);
+    if (reader.pos != len) return fail(ctx, error.InvalidStaticLiteral);
+    out.* = decoded;
+    return 0;
 }
 
 fn values(ptr: [*]const rt.Value, len: usize) []const rt.Value {
@@ -444,6 +531,64 @@ test "LLVM ABI layouts and primitive helpers" {
     try std.testing.expectEqual(@as(f64, 7), value.number);
     try std.testing.expectEqual(@as(u8, 1), dict_lua_value_truthy(&value));
 }
+test "static literal decoder materializes list named and keyed fields" {
+    const W = struct {
+        fn writeU32(out: *std.ArrayList(u8), value: u32) !void {
+            var raw: [4]u8 = undefined;
+            std.mem.writeInt(u32, &raw, value, .little);
+            try out.appendSlice(std.testing.allocator, &raw);
+        }
+        fn writeU64(out: *std.ArrayList(u8), value: u64) !void {
+            var raw: [8]u8 = undefined;
+            std.mem.writeInt(u64, &raw, value, .little);
+            try out.appendSlice(std.testing.allocator, &raw);
+        }
+        fn string(out: *std.ArrayList(u8), value: []const u8) !void {
+            try writeU32(out, @intCast(value.len));
+            try out.appendSlice(std.testing.allocator, value);
+        }
+    };
+
+    var bytes: std.ArrayList(u8) = .empty;
+    defer bytes.deinit(std.testing.allocator);
+    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.ValueTag.table));
+    try W.writeU32(&bytes, static_literal.no_shape);
+    try W.writeU32(&bytes, 3);
+    try W.writeU32(&bytes, 1);
+
+    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.FieldTag.list));
+    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.ValueTag.string));
+    try W.string(&bytes, "one");
+
+    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.FieldTag.named));
+    try W.string(&bytes, "flag");
+    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.ValueTag.true_));
+
+    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.FieldTag.keyed));
+    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.ValueTag.number));
+    try W.writeU64(&bytes, @bitCast(@as(f64, 2)));
+    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.ValueTag.string));
+    try W.string(&bytes, "two");
+
+    var ctx = try rt.Context.init(std.testing.allocator, 1);
+    defer ctx.deinit();
+    var decoded: rt.Value = undefined;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        dict_lua_decode_static_literal(&ctx, bytes.items.ptr, bytes.items.len, &decoded),
+    );
+    try std.testing.expect(decoded == .table);
+    try std.testing.expectEqualStrings(
+        "one",
+        decoded.table.rawGet(.{ .number = 1 }).?.string,
+    );
+    try std.testing.expectEqual(true, decoded.table.rawGet(.{ .string = "flag" }).?.boolean);
+    try std.testing.expectEqualStrings(
+        "two",
+        decoded.table.rawGet(.{ .number = 2 }).?.string,
+    );
+}
+
 export fn dict_lua_require_number(ctx: *rt.Context, input: *const rt.Value, out: *f64) callconv(.c) u32 {
     out.* = rt.toNumber(input.*) orelse return fail(ctx, error.ArithmeticType);
     return 0;

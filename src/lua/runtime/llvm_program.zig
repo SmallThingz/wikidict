@@ -3,32 +3,56 @@ const rt = @import("zig_runtime");
 const stdlib = @import("zig_stdlib");
 const scribunto = @import("zig_scribunto");
 const globals_abi = @import("lua_globals");
+const metadata = @import("lua_program_metadata");
 
 pub const Context = rt.Context;
 
-extern fn dict_lua_program_module_count() callconv(.c) u32;
-extern fn dict_lua_program_global_count() callconv(.c) u32;
-extern fn dict_lua_program_shape_count() callconv(.c) u32;
-extern fn dict_lua_program_shape_field_total() callconv(.c) u32;
 extern fn dict_lua_program_module_roots() callconv(.c) *const anyopaque;
-extern fn dict_lua_program_module_export_shape_ids() callconv(.c) *const anyopaque;
-extern fn dict_lua_program_module_name(id: u32) callconv(.c) [*]const u8;
-extern fn dict_lua_program_module_name_len(id: u32) callconv(.c) usize;
-extern fn dict_lua_program_module_lookup_count() callconv(.c) u32;
-extern fn dict_lua_program_module_lookup_name(index: u32) callconv(.c) [*]const u8;
-extern fn dict_lua_program_module_lookup_name_len(index: u32) callconv(.c) usize;
-extern fn dict_lua_program_module_lookup_id(index: u32) callconv(.c) u32;
-extern fn dict_lua_program_global_name(id: u32) callconv(.c) [*]const u8;
-extern fn dict_lua_program_global_name_len(id: u32) callconv(.c) usize;
-extern fn dict_lua_program_shape_field_count(id: u32) callconv(.c) u32;
-extern fn dict_lua_program_shape_sorted_slot(id: u32, rank: u32) callconv(.c) u32;
-extern fn dict_lua_program_shape_field_name(id: u32, field: u32) callconv(.c) [*]const u8;
-extern fn dict_lua_program_shape_field_name_len(id: u32, field: u32) callconv(.c) usize;
+
+const Mapped = struct {
+    bytes: []align(std.heap.page_size_min) const u8,
+
+    fn deinit(self: *Mapped) void {
+        std.posix.munmap(self.bytes);
+        self.* = undefined;
+    }
+};
+
+fn mapMetadata(io: std.Io, allocator: std.mem.Allocator, root: []const u8) !Mapped {
+    const path = try std.fs.path.join(allocator, &.{ root, "lua-program.meta" });
+    defer allocator.free(path);
+    const fd = try std.posix.openat(
+        std.posix.AT.FDCWD,
+        path,
+        .{ .ACCMODE = .RDONLY, .CLOEXEC = true },
+        0,
+    );
+    var file: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
+    defer file.close(io);
+    const stat = try file.stat(io);
+    const len = std.math.cast(usize, stat.size) orelse return error.ProgramMetadataTooLarge;
+    if (len == 0) return error.InvalidProgramMetadata;
+    return .{
+        .bytes = try std.posix.mmap(
+            null,
+            len,
+            .{ .READ = true },
+            .{ .TYPE = .PRIVATE },
+            fd,
+            0,
+        ),
+    };
+}
 
 pub const Program = struct {
     allocator: std.mem.Allocator,
+    mapped: Mapped,
     module_count: u32,
     module_lookup_count: u32,
+    module_names: [][]const u8,
+    module_lookup_names: [][]const u8,
+    module_lookup_ids: []u32,
+    module_export_shape_ids: []u32,
     global_keys: []rt.Value,
     global_shape: rt.Shape,
     shapes: []rt.Shape,
@@ -36,62 +60,116 @@ pub const Program = struct {
     shape_sorted_slots: []u32,
     stdlib_template: stdlib.Template,
 
-    pub fn init(allocator: std.mem.Allocator) !Program {
-        const module_count = dict_lua_program_module_count();
-        const module_lookup_count = dict_lua_program_module_lookup_count();
-        const global_count = dict_lua_program_global_count();
+    pub fn init(
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        root: []const u8,
+    ) !Program {
+        var mapped = try mapMetadata(io, allocator, root);
+        errdefer mapped.deinit();
+
+        var reader = metadata.Reader{ .bytes = mapped.bytes };
+        try reader.expectMagic();
+        const module_count = try reader.readU32();
+        const module_lookup_count = try reader.readU32();
+        const global_count = try reader.readU32();
+        const shape_count = try reader.readU32();
+        const shape_field_total = try reader.readU32();
+        const item_bound: u64 = mapped.bytes.len / 4 + 1;
+        if (@as(u64, module_count) > item_bound or
+            @as(u64, module_lookup_count) > item_bound or
+            @as(u64, global_count) > item_bound or
+            @as(u64, shape_count) > item_bound or
+            @as(u64, shape_field_total) > item_bound)
+            return error.InvalidProgramMetadata;
         if (global_count < globals_abi.count) return error.BadGlobalLayout;
+
+        const module_names = try allocator.alloc([]const u8, module_count);
+        errdefer allocator.free(module_names);
+        for (module_names) |*name| name.* = try reader.readString();
+
+        const module_lookup_names = try allocator.alloc([]const u8, module_lookup_count);
+        errdefer allocator.free(module_lookup_names);
+        const module_lookup_ids = try allocator.alloc(u32, module_lookup_count);
+        errdefer allocator.free(module_lookup_ids);
+        for (module_lookup_names, module_lookup_ids, 0..) |*name, *id, index| {
+            name.* = try reader.readString();
+            id.* = try reader.readU32();
+            if (id.* >= module_count) return error.InvalidProgramMetadata;
+            if (index != 0 and
+                std.mem.order(u8, module_lookup_names[index - 1], name.*) != .lt)
+                return error.InvalidProgramMetadata;
+        }
+
+        const module_export_shape_ids = try allocator.alloc(u32, module_count);
+        errdefer allocator.free(module_export_shape_ids);
+        for (module_export_shape_ids) |*shape_id| {
+            shape_id.* = try reader.readU32();
+            if (shape_id.* != std.math.maxInt(u32) and shape_id.* >= shape_count)
+                return error.InvalidProgramMetadata;
+        }
+
         const global_keys = try allocator.alloc(rt.Value, global_count);
         errdefer allocator.free(global_keys);
-        const shape_count: usize = @intCast(dict_lua_program_shape_count());
-        const shape_field_total: usize = @intCast(dict_lua_program_shape_field_total());
+        for (global_keys) |*key|
+            key.* = .{ .string = try reader.readString() };
+
         const program_shapes = try allocator.alloc(rt.Shape, shape_count);
         errdefer allocator.free(program_shapes);
         const shape_keys = try allocator.alloc(rt.Value, shape_field_total);
         errdefer allocator.free(shape_keys);
         const shape_sorted_slots = try allocator.alloc(u32, shape_field_total);
         errdefer allocator.free(shape_sorted_slots);
+
+        var shape_offset: usize = 0;
+        for (program_shapes) |*shape| {
+            const field_count_u32 = try reader.readU32();
+            const field_count: usize = @intCast(field_count_u32);
+            if (field_count > shape_keys.len -| shape_offset)
+                return error.InvalidProgramMetadata;
+
+            const keys = shape_keys[shape_offset .. shape_offset + field_count];
+            const sorted_slots = shape_sorted_slots[shape_offset .. shape_offset + field_count];
+            for (keys) |*key|
+                key.* = .{ .string = try reader.readString() };
+            for (sorted_slots) |*slot| {
+                slot.* = try reader.readU32();
+                if (slot.* >= field_count_u32) return error.InvalidProgramMetadata;
+            }
+            shape.* = .{
+                .field_keys = keys,
+                .sorted_string_slots = sorted_slots,
+                .field_count = field_count_u32,
+                .open = true,
+            };
+            shape_offset += field_count;
+        }
+        if (shape_offset != shape_field_total) return error.InvalidProgramMetadata;
+        try reader.finish();
+
         var stdlib_template = try stdlib.Template.init();
         errdefer stdlib_template.deinit();
 
-        var self = Program{
+        return .{
             .allocator = allocator,
+            .mapped = mapped,
             .module_count = module_count,
             .module_lookup_count = module_lookup_count,
+            .module_names = module_names,
+            .module_lookup_names = module_lookup_names,
+            .module_lookup_ids = module_lookup_ids,
+            .module_export_shape_ids = module_export_shape_ids,
             .global_keys = global_keys,
-            .global_shape = .{},
+            .global_shape = .{
+                .field_keys = global_keys,
+                .field_count = global_count,
+                .open = true,
+            },
             .shapes = program_shapes,
             .shape_keys = shape_keys,
             .shape_sorted_slots = shape_sorted_slots,
             .stdlib_template = stdlib_template,
         };
-        for (0..global_count) |index| {
-            const id: u32 = @intCast(index);
-            const name = dict_lua_program_global_name(id)[0..dict_lua_program_global_name_len(id)];
-            self.global_keys[index] = .{ .string = name };
-        }
-        self.global_shape = .{
-            .field_keys = self.global_keys,
-            .field_count = global_count,
-            .open = true,
-        };
-        var shape_offset: usize = 0;
-        for (0..shape_count) |shape_index| {
-            const shape_id: u32 = @intCast(shape_index);
-            const field_count: usize = @intCast(dict_lua_program_shape_field_count(shape_id));
-            const keys = self.shape_keys[shape_offset .. shape_offset + field_count];
-            const sorted_slots = self.shape_sorted_slots[shape_offset .. shape_offset + field_count];
-            for (keys, 0..) |*key, field_index| {
-                const field_id: u32 = @intCast(field_index);
-                const ptr = dict_lua_program_shape_field_name(shape_id, field_id);
-                key.* = .{ .string = ptr[0..dict_lua_program_shape_field_name_len(shape_id, field_id)] };
-                sorted_slots[field_index] = dict_lua_program_shape_sorted_slot(shape_id, field_id);
-            }
-            self.shapes[shape_index] = .{ .field_keys = keys, .sorted_string_slots = sorted_slots, .field_count = @intCast(field_count), .open = true };
-            shape_offset += field_count;
-        }
-        if (shape_offset != shape_field_total) return error.BadShapeLayout;
-        return self;
     }
 
     pub fn deinit(self: *Program) void {
@@ -100,14 +178,16 @@ pub const Program = struct {
         self.allocator.free(self.shape_keys);
         self.allocator.free(self.shapes);
         self.allocator.free(self.global_keys);
+        self.allocator.free(self.module_export_shape_ids);
+        self.allocator.free(self.module_lookup_ids);
+        self.allocator.free(self.module_lookup_names);
+        self.allocator.free(self.module_names);
+        self.mapped.deinit();
+        self.* = undefined;
     }
 
-    inline fn moduleNameById(id: u32) []const u8 {
-        return dict_lua_program_module_name(id)[0..dict_lua_program_module_name_len(id)];
-    }
-
-    inline fn lookupName(index: u32) []const u8 {
-        return dict_lua_program_module_lookup_name(index)[0..dict_lua_program_module_lookup_name_len(index)];
+    inline fn lookupName(self: *const Program, index: u32) []const u8 {
+        return self.module_lookup_names[index];
     }
 
     fn lookupExact(self: *const Program, name: []const u8) ?u32 {
@@ -115,10 +195,10 @@ pub const Program = struct {
         var high = self.module_lookup_count;
         while (low < high) {
             const mid = low + (high - low) / 2;
-            switch (std.mem.order(u8, name, lookupName(mid))) {
+            switch (std.mem.order(u8, name, self.lookupName(mid))) {
                 .lt => high = mid,
                 .gt => low = mid + 1,
-                .eq => return dict_lua_program_module_lookup_id(mid),
+                .eq => return self.module_lookup_ids[mid],
             }
         }
         return null;
@@ -129,7 +209,8 @@ pub const Program = struct {
         if (self.lookupExact(raw_name)) |id| return id;
         const colon = std.mem.indexOfScalar(u8, raw_name, ':') orelse return null;
         const prefix_raw = raw_name[0..colon];
-        if (!std.ascii.eqlIgnoreCase(prefix_raw, "Module") and !std.ascii.eqlIgnoreCase(prefix_raw, "MOD")) return null;
+        if (!std.ascii.eqlIgnoreCase(prefix_raw, "Module") and
+            !std.ascii.eqlIgnoreCase(prefix_raw, "MOD")) return null;
         const suffix = raw_name[colon + 1 ..];
         var buffer: [4096]u8 = undefined;
         const prefix = "Module:";
@@ -141,19 +222,27 @@ pub const Program = struct {
 
     fn moduleName(raw: ?*const anyopaque, id: u32) ?[]const u8 {
         const self: *const Program = @ptrCast(@alignCast(raw orelse return null));
-        return if (id < self.module_count) moduleNameById(id) else null;
+        return if (id < self.module_count) self.module_names[id] else null;
     }
 
     pub fn initContext(self: *Program, allocator: std.mem.Allocator) !rt.Context {
-        var ctx = try rt.Context.initProgram(allocator, self.global_keys.len, self.module_count);
+        var ctx = try rt.Context.initProgram(
+            allocator,
+            self.global_keys.len,
+            self.module_count,
+        );
         errdefer ctx.deinit();
-        const roots: [*]const rt.FunctionFn = @ptrCast(@alignCast(dict_lua_program_module_roots()));
+        const roots: [*]const rt.FunctionFn = @ptrCast(
+            @alignCast(dict_lua_program_module_roots()),
+        );
         ctx.module_root_entries = roots[0..self.module_count];
-        const export_shapes: [*]const u32 = @ptrCast(@alignCast(dict_lua_program_module_export_shape_ids()));
-        ctx.module_export_shape_ids = export_shapes[0..self.module_count];
+        ctx.module_export_shape_ids = self.module_export_shape_ids;
         ctx.program_shapes = self.shapes;
         ctx.configureModules(self, lookup, moduleName);
-        ctx.configureProgramBootstrap(&self.stdlib_template, stdlib.Template.bootstrapOpaque);
+        ctx.configureProgramBootstrap(
+            &self.stdlib_template,
+            stdlib.Template.bootstrapOpaque,
+        );
         try rt.bindGlobalTable(&ctx, &self.global_shape, globals_abi.id("_G"));
         _ = try ctx.bootstrapProgram();
         return ctx;
@@ -164,6 +253,16 @@ pub const Host = scribunto.Host;
 pub const FrameArg = scribunto.FrameArg;
 pub const WikitextProvider = scribunto.WikitextProvider;
 pub const WikitextExpander = scribunto.WikitextExpander;
-pub fn initExpander(ctx: *rt.Context, provider: WikitextProvider) WikitextExpander {
-    return scribunto.makeWikitextExpander(ctx, globals_abi.id("_G"), globals_abi.id("string"), globals_abi.id("mw"), provider);
+
+pub fn initExpander(
+    ctx: *rt.Context,
+    provider: WikitextProvider,
+) WikitextExpander {
+    return scribunto.makeWikitextExpander(
+        ctx,
+        globals_abi.id("_G"),
+        globals_abi.id("string"),
+        globals_abi.id("mw"),
+        provider,
+    );
 }

@@ -93,9 +93,15 @@ pub fn build(b: *std.Build) void {
     });
     blob_decoder_mod_wasm.addImport("blob_encoder", blob_encoder_mod_wasm);
 
+    const lua_usage_mod = b.createModule(.{
+        .root_source_file = b.path("src/lua/usage.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const module_extract_exe = addCliExecutable(b, "dict-module-extract", b.path("src/lua/module_extract_main.zig"), target, optimize, &.{
         .{ .name = "zxml", .module = zxml_dep.module("zxml") },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
+        .{ .name = "lua_usage", .module = lua_usage_mod },
     });
     const blob_build_exe = addCliExecutable(b, "dict-blob-build", b.path("tools/blob_build.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
@@ -107,12 +113,38 @@ pub fn build(b: *std.Build) void {
         .{ .name = "encoder", .module = encoder_mod },
     });
 
-    const llvm_exe = addCliExecutable(b, "dict-llvm-build", b.path("src/lua/llvm_build_main.zig"), target, optimize, &.{});
-    addPublicRunStep(b, "compile-lua", "Compile extracted Lua AST directly to LLVM IR", addRunArtifactCommand(b, llvm_exe, &.{}, b.args), &.{});
+    const llvm_obj = b.addObject(.{
+        .name = "dict-llvm-build-core",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/lua/llvm_build_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    const llvm_exe_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    llvm_exe_mod.addCSourceFile(.{
+        .file = b.path("tools/llvm_build_main.c"),
+        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" },
+    });
+    llvm_exe_mod.addObject(llvm_obj);
+    llvm_exe_mod.linkSystemLibrary("LLVM", .{ .use_pkg_config = .no });
+    const llvm_exe = b.addExecutable(.{
+        .name = "dict-llvm-build",
+        .root_module = llvm_exe_mod,
+        .use_llvm = true,
+        .use_lld = true,
+    });
+    addPublicRunStep(b, "compile-lua", "Compile extracted Lua AST directly to LLVM bitcode", addRunArtifactCommand(b, llvm_exe, &.{}, b.args), &.{});
     const pipeline_paths = b.addOptions();
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
     pipeline_paths.addOptionPath("llvm", llvm_exe.getEmittedBin());
     pipeline_paths.addOption([]const u8, "zig", b.graph.zig_exe);
+    pipeline_paths.addOption([]const u8, "clang", "clang");
     pipeline_paths.addOption([]const u8, "project_root", b.pathFromRoot("."));
     pipeline_paths.addOptionPath("blobs", blob_build_exe.getEmittedBin());
     const pipeline_exe = addCliExecutable(b, "dict-bundle-build", b.path("tools/bundle_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
@@ -224,6 +256,7 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    lua_tests.root_module.linkSystemLibrary("LLVM", .{ .use_pkg_config = .no });
     const lua_static_fields_test_mod = b.createModule(.{
         .root_source_file = b.path("src/lua/abi/static_fields.zig"),
         .target = target,

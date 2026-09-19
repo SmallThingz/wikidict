@@ -1,6 +1,7 @@
 const std = @import("std");
 const zxml = @import("zxml");
 const xml_decode = @import("xml_decode");
+const lua_usage = @import("lua_usage");
 
 const parse_opts: zxml.ParseOptions = .{
     .mode = .strict,
@@ -81,6 +82,51 @@ fn writeTsvField(w: *std.Io.Writer, text: []const u8) !void {
     };
 }
 
+const UsageCountMap = std.StringHashMapUnmanaged(u64);
+
+fn incrementUsageCount(a: std.mem.Allocator, counts: *UsageCountMap, key: []const u8) !void {
+    if (counts.getPtr(key)) |value| {
+        value.* = std.math.add(u64, value.*, 1) catch std.math.maxInt(u64);
+        return;
+    }
+    const owned = try a.dupe(u8, key);
+    errdefer a.free(owned);
+    try counts.put(a, owned, 1);
+}
+
+fn writeUsageEdge(w: *std.Io.Writer, kind: u8, source: []const u8, target: []const u8) !void {
+    try w.writeByte(kind);
+    try w.writeByte('\t');
+    try writeTsvField(w, source);
+    try w.writeByte('\t');
+    try writeTsvField(w, target);
+    try w.writeByte('\n');
+}
+
+fn writeUsageCounts(
+    a: std.mem.Allocator,
+    w: *std.Io.Writer,
+    kind: u8,
+    counts: *const UsageCountMap,
+) !void {
+    const keys = try a.alloc([]const u8, counts.count());
+    defer a.free(keys);
+    var it = counts.keyIterator();
+    var at: usize = 0;
+    while (it.next()) |key| : (at += 1) keys[at] = key.*;
+    std.mem.sort([]const u8, keys, {}, struct {
+        fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
+            return std.mem.order(u8, lhs, rhs) == .lt;
+        }
+    }.lessThan);
+    for (keys) |key| {
+        try w.writeByte(kind);
+        try w.writeByte('\t');
+        try writeTsvField(w, key);
+        try w.print("\t{d}\n", .{counts.get(key).?});
+    }
+}
+
 fn writeJsonString(w: *std.Io.Writer, value: []const u8) !void {
     const hex = "0123456789abcdef";
     try w.writeByte('"');
@@ -140,6 +186,7 @@ pub fn main(init: std.process.Init) !void {
     const manifest_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/manifest.jsonl", .{output_root});
     const redirects_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/module-redirects.tsv", .{output_root});
     const page_index_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/page-index.tsv", .{output_root});
+    const usage_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/lua-usage.tsv", .{output_root});
     try std.Io.Dir.cwd().createDirPath(init.io, modules_dir);
 
     var page_index_file: ?std.Io.File = if (emit_page_index)
@@ -150,6 +197,21 @@ pub fn main(init: std.process.Init) !void {
     var page_index_buf: [256 * 1024]u8 = undefined;
     var page_index_writer = if (page_index_file) |*file| file.writer(init.io, &page_index_buf) else null;
     const pw: ?*std.Io.Writer = if (page_index_writer) |*writer| &writer.interface else null;
+
+    var usage_file: ?std.Io.File = if (emit_page_index)
+        try std.Io.Dir.cwd().createFile(init.io, usage_path, .{ .truncate = true })
+    else
+        null;
+    defer if (usage_file) |*file| file.close(init.io);
+    var usage_buf: [256 * 1024]u8 = undefined;
+    var usage_writer = if (usage_file) |*file| file.writer(init.io, &usage_buf) else null;
+    const uw: ?*std.Io.Writer = if (usage_writer) |*writer| &writer.interface else null;
+    if (uw) |writer| try writer.writeAll("# dict-lua-usage-v1\n");
+
+    var root_template_usage: UsageCountMap = .empty;
+    defer root_template_usage.deinit(init.arena.allocator());
+    var root_module_usage: UsageCountMap = .empty;
+    defer root_module_usage.deinit(init.arena.allocator());
 
     var redirects_file = try std.Io.Dir.cwd().createFile(init.io, redirects_path, .{ .truncate = true });
     defer redirects_file.close(init.io);
@@ -242,6 +304,56 @@ pub fn main(init: std.process.Init) !void {
             decoded_redirect = redirect;
             indexed_page_id = page_id;
             indexed_revision_id = revision_id;
+
+            if (uw) |usage_out| if (parsed_ns == 10 and redirect != null)
+                try writeUsageEdge(usage_out, 'T', title, redirect.?);
+
+            if (uw) |usage_out| if (redirect == null and std.mem.eql(u8, content_model, "wikitext") and
+                std.mem.indexOf(u8, text_raw, "{{") != null)
+            {
+                const usage_source = if (std.mem.indexOfScalar(u8, text_raw, '&') != null)
+                    try xml_decode.decodeSinglePassAlloc(arena.allocator(), text_raw)
+                else
+                    text_raw;
+                var refs: std.ArrayList(lua_usage.Ref) = .empty;
+                if (parsed_ns == 10)
+                    try lua_usage.scanTemplateWikitext(arena.allocator(), usage_source, &refs)
+                else if (parsed_ns != 828)
+                    try lua_usage.scanWikitext(arena.allocator(), usage_source, &refs);
+
+                if (parsed_ns == 10) {
+                    var seen_templates: std.StringHashMapUnmanaged(void) = .empty;
+                    var seen_modules: std.StringHashMapUnmanaged(void) = .empty;
+                    for (refs.items) |ref| switch (ref.kind) {
+                        .template => {
+                            if (seen_templates.contains(ref.target)) continue;
+                            try seen_templates.put(arena.allocator(), ref.target, {});
+                            try writeUsageEdge(usage_out, 'T', title, ref.target);
+                        },
+                        .module => {
+                            if (seen_modules.contains(ref.target)) continue;
+                            try seen_modules.put(arena.allocator(), ref.target, {});
+                            try writeUsageEdge(usage_out, 'I', title, ref.target);
+                        },
+                    };
+                } else if (parsed_ns != 828) {
+                    var seen_templates: std.StringHashMapUnmanaged(void) = .empty;
+                    var seen_modules: std.StringHashMapUnmanaged(void) = .empty;
+                    for (refs.items) |ref| switch (ref.kind) {
+                        .template => {
+                            if (seen_templates.contains(ref.target)) continue;
+                            try seen_templates.put(arena.allocator(), ref.target, {});
+                            try incrementUsageCount(init.arena.allocator(), &root_template_usage, ref.target);
+                        },
+                        .module => {
+                            if (seen_modules.contains(ref.target)) continue;
+                            try seen_modules.put(arena.allocator(), ref.target, {});
+                            try incrementUsageCount(init.arena.allocator(), &root_module_usage, ref.target);
+                        },
+                    };
+                }
+            };
+
             if (parsed_ns != 828) {
                 _ = arena.reset(.retain_capacity);
                 continue;
@@ -312,8 +424,16 @@ pub fn main(init: std.process.Init) !void {
         }
         _ = arena.reset(.retain_capacity);
     }
+    if (uw) |usage_out| {
+        try writeUsageCounts(init.arena.allocator(), usage_out, 'R', &root_template_usage);
+        try writeUsageCounts(init.arena.allocator(), usage_out, 'P', &root_module_usage);
+        try usage_out.flush();
+    }
     try mw.flush();
     try rw.flush();
     if (pw) |page_writer| try page_writer.flush();
-    std.debug.print("TOTAL pages={d} modules={d} redirects={d} source_bytes={d}\n", .{ pages, modules, redirects, source_bytes });
+    std.debug.print(
+        "TOTAL pages={d} modules={d} redirects={d} source_bytes={d} root_templates={d} root_modules={d}\n",
+        .{ pages, modules, redirects, source_bytes, root_template_usage.count(), root_module_usage.count() },
+    );
 }

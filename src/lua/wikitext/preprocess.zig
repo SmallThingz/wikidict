@@ -22,6 +22,7 @@ fn decodedSelfClosing(text: []const u8, start: usize, end: usize) bool {
 
 pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
     var pos: usize = 0;
     while (findCiPos(text, pos, "<!--")) |open| {
         try out.appendSlice(a, text[pos..open]);
@@ -76,6 +77,7 @@ pub fn transcludeDecodedAlloc(a: std.mem.Allocator, text: []const u8) ![]u8 {
     const no_comments = try stripDecodedComments(a, text);
     defer a.free(no_comments);
     var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
     if (findCiPos(no_comments, 0, "<onlyinclude")) |_| {
         var pos: usize = 0;
         while (findCiPos(no_comments, pos, "<onlyinclude")) |open| {

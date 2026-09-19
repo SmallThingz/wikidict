@@ -16,6 +16,8 @@ const source =
     "# Revision metadata: {{PAGEID}} / {{REVISIONID}} / {{REVISIONTIMESTAMP}} / {{REVISIONUSER}} / {{PAGEID:rat}} / {{REVISIONUSER:rat}}\n";
 const module_source =
     \\local forms = require('Module:IntegrationFormsAlias')
+    \\local large_static = require('Module:IntegrationLargeStatic')
+    \\assert(large_static.k129[1] == 129 and large_static.k129[2] == 'v129')
     \\local bit32 = require('bit32')
     \\assert(bit32.band(240, 60) == 48 and bit32.bor(16, 3, 64) == 83)
     \\assert(require('bit32') == bit32)
@@ -212,6 +214,13 @@ fn xml(w: *std.Io.Writer, text: []const u8) !void {
 }
 
 fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
+    var large_static: std.Io.Writer.Allocating = .init(a);
+    defer large_static.deinit();
+    try large_static.writer.writeAll("return {");
+    for (0..130) |index|
+        try large_static.writer.print("k{d}={{{d},'v{d}'}},", .{ index, index, index });
+    try large_static.writer.writeByte('}');
+
     const pages = [_]Page{
         .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
         .{ .title = "rat", .ns = 0, .id = 22, .body = "==English==\n===Noun===\n# Another rodent.\n", .user = "Rat editor" },
@@ -227,6 +236,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Module:IntegrationForms", .ns = 828, .id = 1, .body = module_source },
         .{ .title = "Module:languages/canonical names", .ns = 828, .id = 3, .body = "return { [\"English\"] = \"en\" }" },
         .{ .title = "Module:IntegrationFormsData", .ns = 828, .id = 2, .body = "return { mouse = 'mice' }" },
+        .{ .title = "Module:IntegrationLargeStatic", .ns = 828, .id = 6, .body = large_static.written() },
         .{ .title = "Module:IntegrationFormsData.json", .ns = 828, .id = 5, .body = "{\"cuts\":[1,2],\"nested\":{\"ok\":true}}", .model = "json" },
         .{ .title = "Module:IntegrationFormsAlias", .ns = 828, .id = 4, .body = "#REDIRECT [[Module:IntegrationFormsData]]", .redirect = "Module:IntegrationFormsData" },
     };

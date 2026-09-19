@@ -71,7 +71,7 @@ const Engine = struct {
         if (try fileExists(io, marker)) return error.BundleAssetsIncomplete;
         const manifest = try std.fs.path.join(a, &.{ requested_root, "manifest.jsonl" });
         if (!try fileExists(io, manifest)) return error.BundleAssetsMissing;
-        var program = try lua_program.Program.init(a);
+        var program = try lua_program.Program.init(io, a, requested_root);
         errdefer program.deinit();
         var provider = try pages.Provider.init(io, a, requested_root, requested_dump);
         errdefer provider.deinit();

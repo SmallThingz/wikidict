@@ -18,7 +18,7 @@ tools/              build, verification, indexing, integration tools
 data/               ignored local datasets and generated artifacts
 ```
 
-Lua is a build-time compiler path only: `Lua source -> AST -> LLVM IR -> native code`. The bundler creates a transient native expander, executes templates/modules for each concrete page, encodes the resulting semantic presentation data, then deletes the expander. No Lua, template source, LLVM bitcode, native worker, bytecode, or other executable corpus representation is shipped.
+Lua is a build-time compiler path only: `Lua source -> AST -> LLVM module -> LLVM bitcode -> native code`. The bundler creates a transient native expander, executes templates/modules for each concrete page, encodes the resulting semantic presentation data, then deletes the expander. No Lua, template source, LLVM bitcode, native worker, bytecode, or other executable corpus representation is shipped.
 
 ## Build
 
@@ -87,7 +87,7 @@ The `pages` count is derived exactly as MediaWiki does: `ALL - SUBCATS - FILES`.
 The coordinated pipeline:
 
 1. extracts Scribunto modules and module redirects into a transient build directory;
-2. indexes raw dump page ranges for page-sensitive MediaWiki/Scribunto title lookups, then parses the Lua corpus and emits LLVM IR directly from the AST;
+2. indexes raw dump page ranges for page-sensitive MediaWiki/Scribunto title lookups, then parses the Lua corpus, builds LLVM modules directly from the AST, and serializes transient LLVM bitcode;
 3. compiles module/support code to optimized native objects and normally links a transient expander;
 4. expands every bundled page with its concrete title/frame context;
 5. compiles the expanded wikitext into self-contained semantic presentation records;
@@ -143,7 +143,7 @@ Extract Scribunto modules directly:
 zig build extract-modules -- data/wiktionary.xml data/runtime
 ```
 
-Compile extracted modules directly to LLVM IR:
+Compile extracted modules directly to LLVM bitcode:
 
 ```sh
 zig build compile-lua -- \
@@ -152,7 +152,7 @@ zig build compile-lua -- \
   data/runtime/llvm
 ```
 
-`src/lua/direct/` analyzes the AST and emits LLVM IR directly. `src/lua/abi/` contains small stable slot/layout contracts, while `src/lua/runtime/` provides Zig runtime primitives through a C ABI. Bundle builds compile emitted module IR directly to native objects and link the transient expander normally with Zig's bundled LLD. Ordinary module IR is compiled in bounded `-O3` batches; generated IR at or above 4 MiB, including large program metadata, uses `-O0` to avoid pathological optimizer cost. No LTO is used. These compiler artifacts are transient and are deleted before publication.
+`src/lua/direct/` analyzes the AST and constructs LLVM modules directly through LLVM's C API; production does not print or reparse textual LLVM IR. The build therefore requires the host LLVM shared library and matching Clang toolchain. Executable Lua modules are grouped into bounded in-memory LLVM modules and serialized once as transient bitcode; the compact root-function table is separate bitcode, while names, lookups, shapes, and other semantic corpus metadata use a build-only binary format and bypass LLVM entirely. Large static Lua literal graphs are likewise encoded as constant data and materialized by the Zig runtime instead of becoming optimizer-visible table-building instruction graphs. `src/lua/abi/` contains small stable slot/layout contracts, while `src/lua/runtime/` provides Zig runtime primitives through a C ABI. Production optimization is usage-driven: modules covering the dominant page and module reach compile at `-O2`, while the rest use `-O1`; source size is only a secondary ranking cost. `-O0` is reserved for tests and diagnostics. No LTO is used. Bitcode and the native expander are build-only artifacts and are deleted before publication.
 
 ## Blob storage and XZ
 

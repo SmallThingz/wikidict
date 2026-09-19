@@ -5,17 +5,22 @@ const numbers = @import("numbers.zig");
 const shapes = @import("shapes.zig");
 const static_fields = @import("../abi/static_fields.zig");
 const global_abi = @import("../abi/globals.zig");
+const llvm = @import("llvm.zig");
+const static_literal = @import("../runtime/static_literal_format.zig");
 
 const A = std.mem.Allocator;
-const value_size = 32;
+const V = llvm.ValueRef;
+const T = llvm.TypeRef;
+const BB = llvm.BasicBlockRef;
 const value_align = 8;
+const static_literal_blob_threshold: usize = 128;
 
 pub const ModuleIdMap = std.StringHashMapUnmanaged(u32);
 pub const ProgramFacts = struct {
     module_ids: ?*const ModuleIdMap = null,
     table_shapes: ?*const shapes.ModuleFacts = null,
 
-    pub fn moduleId(self: ProgramFacts, a: A, raw: []const u8) !?u32 {
+    pub fn moduleId(self: ProgramFacts, a: A, raw: []const u8) anyerror!?u32 {
         const ids = self.module_ids orelse return null;
         if (ids.get(raw)) |id| return id;
         const trimmed = std.mem.trim(u8, raw, " \t\r\n");
@@ -33,51 +38,46 @@ pub const ProgramFacts = struct {
     }
 };
 
-fn text(out: *std.ArrayList(u8), a: A, bytes: []const u8) anyerror!void {
-    try out.appendSlice(a, bytes);
-}
-fn print(out: *std.ArrayList(u8), a: A, comptime format: []const u8, args: anytype) anyerror!void {
-    const bytes = try std.fmt.allocPrint(a, format, args);
-    defer a.free(bytes);
-    try out.appendSlice(a, bytes);
-}
+const StringRef = struct {
+    ptr: V,
+    bytes: []const u8,
+    len: usize,
+};
 
-const StringRef = struct { id: u32, len: usize };
-const TableRef = struct { ptr: []const u8, shape: ?shapes.Fact = null, native_namespace: ?static_fields.Namespace = null };
+const TableRef = struct {
+    ptr: V,
+    shape: ?shapes.Fact = null,
+    native_namespace: ?static_fields.Namespace = null,
+};
+
 const StaticFunctionRef = struct {
     target: *const analysis.FunctionInfo,
-    captures_ptr: []const u8,
+    captures_ptr: V,
     captures_len: usize,
 };
+
 const ValueRef = union(enum) {
     nil,
-    boolean: []const u8,
-    number: []const u8,
+    boolean: V,
+    number: V,
     string: StringRef,
     table: TableRef,
-    boxed: []const u8,
+    boxed: V,
 };
+
 const MultiRef = struct {
-    ptr: []const u8,
-    len: []const u8,
+    ptr: V,
+    len: V,
     owned: bool,
 };
 
 const StringPool = struct {
     map: std.StringHashMapUnmanaged(u32) = .empty,
-    items: std.ArrayList([]const u8) = .empty,
+    items: std.ArrayList(StringRef) = .empty,
 
     fn deinit(self: *StringPool, a: A) void {
         self.map.deinit(a);
         self.items.deinit(a);
-    }
-
-    fn intern(self: *StringPool, a: A, value: []const u8) anyerror!StringRef {
-        if (self.map.get(value)) |id| return .{ .id = id, .len = value.len };
-        const id: u32 = @intCast(self.items.items.len);
-        try self.items.append(a, value);
-        try self.map.put(a, value, id);
-        return .{ .id = id, .len = value.len };
     }
 };
 
@@ -85,28 +85,175 @@ const LocalStorage = union(enum) {
     uninitialized,
     direct: ValueRef,
     static_function: StaticFunctionRef,
-    number: []const u8,
-    boolean: []const u8,
-    value: []const u8,
-    cell: []const u8,
+    number: V,
+    boolean: V,
+    value: V,
+    cell: V,
 };
+
 pub const Generated = struct {
-    source: []u8,
+    module: llvm.Module,
     root_function: u32,
     function_count: u32,
+
+    pub fn deinit(self: *Generated) void {
+        self.module.deinit();
+    }
+
+    pub fn writeBitcode(self: *const Generated, allocator: A, path: []const u8) anyerror!void {
+        if (std.debug.runtime_safety) try self.module.verify(allocator);
+        try self.module.writeBitcode(allocator, path);
+    }
+
+    pub fn toText(self: *const Generated, allocator: A) anyerror![]u8 {
+        return self.module.toText(allocator);
+    }
+};
+
+const Runtime = struct {
+    value_nil: V,
+    value_bool: V,
+    value_number: V,
+    value_string: V,
+    value_copy: V,
+    value_truthy: V,
+    value_is_nil: V,
+    require_number: V,
+    arg_ptr: V,
+    arg_get: V,
+    global_ptr: V,
+    global_get: V,
+    global_set: V,
+    require_module_id: V,
+    new_table: V,
+    new_array_table: V,
+    new_shaped_table: V,
+    table_append: V,
+    table_append_many: V,
+    decode_static_literal: V,
+    get_index: V,
+    set_index: V,
+    get_field: V,
+    set_field: V,
+    set_shape_slot: V,
+    get_known_shape_field: V,
+    set_known_shape_field: V,
+    get_native_slot: V,
+    set_native_slot: V,
+    len_number: V,
+    neg: V,
+    binary: V,
+    compare_bool: V,
+    concat: V,
+    cell_new: V,
+    cell_get: V,
+    cell_set: V,
+    capture_cell: V,
+    make_function: V,
+    call_fixed: V,
+    call_fixed_tail: V,
+    call_static_fixed: V,
+    call_static_fixed_tail: V,
+    enter_static_call: V,
+    leave_static_call: V,
+    function_status: V,
+    call_discard: V,
+    call_discard_tail: V,
+    call_multi: V,
+    call_multi_tail: V,
+    call_static_multi: V,
+    call_static_multi_tail: V,
+    results_free: V,
+    return_values: V,
+    return_join: V,
+    function_error: V,
+    floor: V,
+    pow: V,
+
+    fn init(m: *const llvm.Module) anyerror!Runtime {
+        const ty = m.types;
+        return .{
+            .value_nil = try declare(m, "dict_lua_value_nil", ty.void, &.{ty.ptr}),
+            .value_bool = try declare(m, "dict_lua_value_bool", ty.void, &.{ ty.ptr, ty.i8 }),
+            .value_number = try declare(m, "dict_lua_value_number", ty.void, &.{ ty.ptr, ty.double }),
+            .value_string = try declare(m, "dict_lua_value_string", ty.void, &.{ ty.ptr, ty.ptr, ty.i64 }),
+            .value_copy = try declare(m, "dict_lua_value_copy", ty.void, &.{ ty.ptr, ty.ptr }),
+            .value_truthy = try declare(m, "dict_lua_value_truthy", ty.i8, &.{ty.ptr}),
+            .value_is_nil = try declare(m, "dict_lua_value_is_nil", ty.i8, &.{ty.ptr}),
+            .require_number = try declare(m, "dict_lua_require_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
+            .arg_ptr = try declare(m, "dict_lua_arg_ptr", ty.ptr, &.{ ty.ptr, ty.i64, ty.i64 }),
+            .arg_get = try declare(m, "dict_lua_arg_get", ty.void, &.{ ty.ptr, ty.i64, ty.i64, ty.ptr }),
+            .global_ptr = try declare(m, "dict_lua_global_ptr", ty.ptr, &.{ ty.ptr, ty.i32 }),
+            .global_get = try declare(m, "dict_lua_global_get", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr }),
+            .global_set = try declare(m, "dict_lua_global_set", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr }),
+            .require_module_id = try declare(m, "dict_lua_require_module_id", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.i64, ty.ptr }),
+            .new_table = try declare(m, "dict_lua_new_table", ty.i32, &.{ ty.ptr, ty.ptr }),
+            .new_array_table = try declare(m, "dict_lua_new_array_table", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr }),
+            .new_shaped_table = try declare(m, "dict_lua_new_shaped_table", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr }),
+            .table_append = try declare(m, "dict_lua_table_append", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
+            .table_append_many = try declare(m, "dict_lua_table_append_many", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64 }),
+            .decode_static_literal = try declare(m, "dict_lua_decode_static_literal", ty.i32, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr }),
+            .get_index = try declare(m, "dict_lua_get_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
+            .set_index = try declare(m, "dict_lua_set_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
+            .get_field = try declare(m, "dict_lua_get_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr }),
+            .set_field = try declare(m, "dict_lua_set_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr }),
+            .set_shape_slot = try declare(m, "dict_lua_set_shape_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr }),
+            .get_known_shape_field = try declare(m, "dict_lua_get_known_shape_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.i64, ty.ptr }),
+            .set_known_shape_field = try declare(m, "dict_lua_set_known_shape_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.i64, ty.ptr }),
+            .get_native_slot = try declare(m, "dict_lua_get_native_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr, ty.i64, ty.ptr }),
+            .set_native_slot = try declare(m, "dict_lua_set_native_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr, ty.i64, ty.ptr }),
+            .len_number = try declare(m, "dict_lua_len_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
+            .neg = try declare(m, "dict_lua_neg", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
+            .binary = try declare(m, "dict_lua_binary", ty.i32, &.{ ty.ptr, ty.i8, ty.ptr, ty.ptr, ty.ptr }),
+            .compare_bool = try declare(m, "dict_lua_compare_bool", ty.i32, &.{ ty.ptr, ty.i8, ty.ptr, ty.ptr, ty.ptr }),
+            .concat = try declare(m, "dict_lua_concat", ty.i32, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr }),
+            .cell_new = try declare(m, "dict_lua_cell_new", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
+            .cell_get = try declare(m, "dict_lua_cell_get", ty.void, &.{ ty.ptr, ty.ptr }),
+            .cell_set = try declare(m, "dict_lua_cell_set", ty.void, &.{ ty.ptr, ty.ptr }),
+            .capture_cell = try declare(m, "dict_lua_capture_cell", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr }),
+            .make_function = try declare(m, "dict_lua_make_function", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.ptr, ty.i64, ty.ptr }),
+            .call_fixed = try declare(m, "dict_lua_call_fixed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_fixed_tail = try declare(m, "dict_lua_call_fixed_tail", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_static_fixed = try declare(m, "dict_lua_call_static_fixed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_static_fixed_tail = try declare(m, "dict_lua_call_static_fixed_tail", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .enter_static_call = try declare(m, "dict_lua_enter_static_call", ty.i32, &.{ty.ptr}),
+            .leave_static_call = try declare(m, "dict_lua_leave_static_call", ty.void, &.{ty.ptr}),
+            .function_status = try declare(m, "dict_lua_function_status", ty.i32, &.{ ty.ptr, ty.i32 }),
+            .call_discard = try declare(m, "dict_lua_call_discard", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64 }),
+            .call_discard_tail = try declare(m, "dict_lua_call_discard_tail", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_multi = try declare(m, "dict_lua_call_multi", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64 }),
+            .call_multi_tail = try declare(m, "dict_lua_call_multi_tail", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_static_multi = try declare(m, "dict_lua_call_static_multi", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .call_static_multi_tail = try declare(m, "dict_lua_call_static_multi_tail", ty.call_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .results_free = try declare(m, "dict_lua_results_free", ty.void, &.{ ty.ptr, ty.i64 }),
+            .return_values = try declare(m, "dict_lua_return_values", ty.function_result, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .return_join = try declare(m, "dict_lua_return_join", ty.function_result, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .function_error = try declare(m, "dict_lua_function_error", ty.function_result, &.{}),
+            .floor = try declare(m, "floor", ty.double, &.{ty.double}),
+            .pow = try declare(m, "pow", ty.double, &.{ ty.double, ty.double }),
+        };
+    }
+
+    fn declare(m: *const llvm.Module, name: []const u8, ret: T, params: []const T) anyerror!V {
+        return m.addFunction(name, try m.functionType(ret, params));
+    }
 };
 
 const ModuleEmitter = struct {
     allocator: A,
+    llvm_module: *llvm.Module,
     globals: *const analysis.Globals,
     module: *const analysis.Module,
     facts: ProgramFacts,
+    runtime: Runtime,
     strings: StringPool = .{},
-    out: std.ArrayList(u8) = .empty,
+    static_literal_blobs: u32 = 0,
+    functions: []V,
+    function_base: u32,
 
     fn deinit(self: *ModuleEmitter) void {
         self.strings.deinit(self.allocator);
-        self.out.deinit(self.allocator);
+        self.allocator.free(self.functions);
     }
 
     fn functionForSpan(self: *const ModuleEmitter, span: lua.Span) anyerror!*const analysis.FunctionInfo {
@@ -114,87 +261,160 @@ const ModuleEmitter = struct {
             if (info.span.start == span.start and info.span.end == span.end) return info;
         return error.MissingFunctionAnalysis;
     }
+
+    fn functionValue(self: *const ModuleEmitter, id: u32) anyerror!V {
+        if (id < self.function_base) return error.FunctionAnalysisMismatch;
+        const index: usize = @intCast(id - self.function_base);
+        if (index >= self.functions.len) return error.FunctionAnalysisMismatch;
+        return self.functions[index];
+    }
+
+    fn stringRef(self: *ModuleEmitter, value: []const u8) anyerror!StringRef {
+        if (self.strings.map.get(value)) |id| return self.strings.items.items[id];
+        const id: u32 = @intCast(self.strings.items.items.len);
+        const initializer = try llvm.constString(self.llvm_module.context, value);
+        const array_ty = try llvm.arrayType(self.llvm_module.types.i8, value.len);
+        const name = try std.fmt.allocPrint(self.allocator, "lua_s_{d}_{d}", .{ self.function_base, id });
+        defer self.allocator.free(name);
+        const global = try self.llvm_module.addGlobal(name, array_ty, initializer, .private, 1);
+        const ref = StringRef{ .ptr = global, .bytes = value, .len = value.len };
+        try self.strings.items.append(self.allocator, ref);
+        try self.strings.map.put(self.allocator, value, id);
+        return ref;
+    }
+
+    const StaticLiteralBlob = struct {
+        ptr: V,
+        len: usize,
+    };
+
+    fn blobU32(self: *ModuleEmitter, out: *std.ArrayList(u8), value: usize) anyerror!void {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(
+            u32,
+            &bytes,
+            std.math.cast(u32, value) orelse return error.StaticLiteralTooLarge,
+            .little,
+        );
+        try out.appendSlice(self.allocator, &bytes);
+    }
+
+    fn blobRawU32(self: *ModuleEmitter, out: *std.ArrayList(u8), value: u32) anyerror!void {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &bytes, value, .little);
+        try out.appendSlice(self.allocator, &bytes);
+    }
+
+    fn blobU64(self: *ModuleEmitter, out: *std.ArrayList(u8), value: u64) anyerror!void {
+        var bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &bytes, value, .little);
+        try out.appendSlice(self.allocator, &bytes);
+    }
+
+    fn blobString(self: *ModuleEmitter, out: *std.ArrayList(u8), value: []const u8) anyerror!void {
+        try self.blobU32(out, value.len);
+        try out.appendSlice(self.allocator, value);
+    }
+
+    fn encodeStaticExpr(
+        self: *ModuleEmitter,
+        out: *std.ArrayList(u8),
+        value: *const lua.Expr,
+        depth: usize,
+    ) anyerror!void {
+        if (depth >= static_literal.max_depth) return error.StaticLiteralTooDeep;
+        switch (value.*) {
+            .nil_lit => try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.nil)),
+            .bool_lit => |literal| try out.append(
+                self.allocator,
+                @intFromEnum(if (literal.value) static_literal.ValueTag.true_ else static_literal.ValueTag.false_),
+            ),
+            .number => |literal| {
+                try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.number));
+                const number = try numbers.parse(literal.raw);
+                try self.blobU64(out, @bitCast(number));
+            },
+            .string => |literal| {
+                try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.string));
+                try self.blobString(out, literal.value);
+            },
+            .paren => |paren| try self.encodeStaticExpr(out, paren.expr, depth),
+            .table => |table_expr| {
+                try out.append(self.allocator, @intFromEnum(static_literal.ValueTag.table));
+                const shape_id = if (self.facts.tableShape(table_expr.span.start)) |shape|
+                    shape.id
+                else
+                    static_literal.no_shape;
+                try self.blobRawU32(out, shape_id);
+                try self.blobU32(out, table_expr.fields.len);
+                var list_capacity: usize = 0;
+                for (table_expr.fields) |field| if (field == .list) {
+                    list_capacity += 1;
+                };
+                try self.blobU32(out, list_capacity);
+                for (table_expr.fields) |field| switch (field) {
+                    .list => |item| {
+                        try out.append(self.allocator, @intFromEnum(static_literal.FieldTag.list));
+                        try self.encodeStaticExpr(out, item, depth + 1);
+                    },
+                    .named => |item| {
+                        try out.append(self.allocator, @intFromEnum(static_literal.FieldTag.named));
+                        try self.blobString(out, item.name);
+                        try self.encodeStaticExpr(out, item.value, depth + 1);
+                    },
+                    .keyed => |item| {
+                        try out.append(self.allocator, @intFromEnum(static_literal.FieldTag.keyed));
+                        try self.encodeStaticExpr(out, item.key, depth + 1);
+                        try self.encodeStaticExpr(out, item.value, depth + 1);
+                    },
+                };
+            },
+            else => return error.NonStaticLiteral,
+        }
+    }
+
+    fn staticLiteralBlob(self: *ModuleEmitter, value: *const lua.Expr) anyerror!StaticLiteralBlob {
+        var bytes: std.ArrayList(u8) = .empty;
+        defer bytes.deinit(self.allocator);
+        try self.encodeStaticExpr(&bytes, value, 0);
+
+        const id = self.static_literal_blobs;
+        self.static_literal_blobs += 1;
+        const name = try std.fmt.allocPrint(
+            self.allocator,
+            "lua_slb_{d}_{d}",
+            .{ self.function_base, id },
+        );
+        defer self.allocator.free(name);
+        const array_ty = try llvm.arrayType(self.llvm_module.types.i8, bytes.items.len);
+        const global = try self.llvm_module.addGlobal(
+            name,
+            array_ty,
+            try llvm.constString(self.llvm_module.context, bytes.items),
+            .private,
+            1,
+        );
+        return .{ .ptr = global, .len = bytes.items.len };
+    }
 };
 
-fn emitPreamble(out: *std.ArrayList(u8), a: A) anyerror!void {
-    try text(out, a, "%FunctionResult = type { ptr, i64, i32, i32 }\n%CallResult = type { ptr, i64, i32, i32 }\n%Value = type [32 x i8]\n\n");
-    try text(out, a, "declare void @dict_lua_value_nil(ptr)\n" ++
-        "declare void @dict_lua_value_bool(ptr, i8)\n" ++
-        "declare void @dict_lua_value_number(ptr, double)\n" ++
-        "declare void @dict_lua_value_string(ptr, ptr, i64)\n" ++
-        "declare void @dict_lua_value_copy(ptr, ptr)\n" ++
-        "declare i8 @dict_lua_value_truthy(ptr)\n" ++
-        "declare i8 @dict_lua_value_is_nil(ptr)\n" ++
-        "declare i32 @dict_lua_require_number(ptr, ptr, ptr)\n" ++
-        "declare ptr @dict_lua_arg_ptr(ptr, i64, i64)\n" ++
-        "declare void @dict_lua_arg_get(ptr, i64, i64, ptr)\n" ++
-        "declare ptr @dict_lua_global_ptr(ptr, i32)\n" ++
-        "declare i32 @dict_lua_global_get(ptr, i32, ptr)\n" ++
-        "declare i32 @dict_lua_global_set(ptr, i32, ptr)\n" ++
-        "declare i32 @dict_lua_require_module_id(ptr, i32, ptr, i64, ptr)\n" ++
-        "declare i32 @dict_lua_new_table(ptr, ptr)\n" ++
-        "declare i32 @dict_lua_new_array_table(ptr, i32, ptr)\n" ++
-        "declare i32 @dict_lua_new_shaped_table(ptr, i32, ptr)\n" ++
-        "declare i32 @dict_lua_table_append(ptr, ptr, ptr)\n" ++
-        "declare i32 @dict_lua_table_append_many(ptr, ptr, ptr, i64)\n" ++
-        "declare i32 @dict_lua_get_index(ptr, ptr, ptr, ptr)\n" ++
-        "declare i32 @dict_lua_set_index(ptr, ptr, ptr, ptr)\n");
-    try text(out, a, "declare i32 @dict_lua_get_field(ptr, ptr, ptr, i64, ptr)\n" ++
-        "declare i32 @dict_lua_set_field(ptr, ptr, ptr, i64, ptr)\n" ++
-        "declare i32 @dict_lua_set_shape_slot(ptr, ptr, i32, ptr)\n" ++
-        "declare i32 @dict_lua_get_known_shape_field(ptr, ptr, i32, i32, ptr, i64, ptr)\n" ++
-        "declare i32 @dict_lua_set_known_shape_field(ptr, ptr, i32, i32, ptr, i64, ptr)\n" ++
-        "declare i32 @dict_lua_get_native_slot(ptr, ptr, i32, ptr, i64, ptr)\n" ++
-        "declare i32 @dict_lua_set_native_slot(ptr, ptr, i32, ptr, i64, ptr)\n" ++
-        "declare i32 @dict_lua_len_number(ptr, ptr, ptr)\n" ++
-        "declare i32 @dict_lua_neg(ptr, ptr, ptr)\n" ++
-        "declare i32 @dict_lua_binary(ptr, i8, ptr, ptr, ptr)\n" ++
-        "declare i32 @dict_lua_compare_bool(ptr, i8, ptr, ptr, ptr)\n" ++
-        "declare i32 @dict_lua_concat(ptr, ptr, i64, ptr)\n" ++
-        "declare i32 @dict_lua_cell_new(ptr, ptr, ptr)\n" ++
-        "declare void @dict_lua_cell_get(ptr, ptr)\n" ++
-        "declare void @dict_lua_cell_set(ptr, ptr)\n" ++
-        "declare i32 @dict_lua_capture_cell(ptr, ptr, i32, ptr)\n" ++
-        "declare i32 @dict_lua_make_function(ptr, i32, ptr, ptr, i64, ptr)\n" ++
-        "declare i32 @dict_lua_call_fixed(ptr, ptr, ptr, i64, ptr, i64)\n" ++
-        "declare i32 @dict_lua_call_fixed_tail(ptr, ptr, ptr, i64, ptr, i64, ptr, i64)\n" ++
-        "declare i32 @dict_lua_call_static_fixed(ptr, ptr, ptr, i64, ptr, i64, ptr, i64)\n" ++
-        "declare i32 @dict_lua_call_static_fixed_tail(ptr, ptr, ptr, i64, ptr, i64, ptr, i64, ptr, i64)\n" ++
-        "declare i32 @dict_lua_enter_static_call(ptr)\n" ++
-        "declare void @dict_lua_leave_static_call(ptr)\n" ++
-        "declare i32 @dict_lua_function_status(ptr, i32)\n");
-    try text(out, a, "declare i32 @dict_lua_call_discard(ptr, ptr, ptr, i64)\n" ++
-        "declare i32 @dict_lua_call_discard_tail(ptr, ptr, ptr, i64, ptr, i64)\n" ++
-        "declare %CallResult @dict_lua_call_multi(ptr, ptr, ptr, i64)\n" ++
-        "declare %CallResult @dict_lua_call_multi_tail(ptr, ptr, ptr, i64, ptr, i64)\n" ++
-        "declare %CallResult @dict_lua_call_static_multi(ptr, ptr, ptr, i64, ptr, i64)\n" ++
-        "declare %CallResult @dict_lua_call_static_multi_tail(ptr, ptr, ptr, i64, ptr, i64, ptr, i64)\n" ++
-        "declare void @dict_lua_results_free(ptr, i64)\n" ++
-        "declare %FunctionResult @dict_lua_return_values(ptr, ptr, i64, ptr, i64)\n" ++
-        "declare %FunctionResult @dict_lua_return_join(ptr, ptr, i64, ptr, i64, ptr, i64)\n" ++
-        "declare %FunctionResult @dict_lua_function_error()\n" ++
-        "declare double @llvm.floor.f64(double)\n" ++
-        "declare double @llvm.pow.f64(double, double)\n\n");
+fn isStaticLiteral(expr: *const lua.Expr) bool {
+    return switch (expr.*) {
+        .nil_lit, .bool_lit, .number, .string => true,
+        .paren => |paren| isStaticLiteral(paren.expr),
+        .table => |table_expr| isStaticFields(table_expr.fields),
+        else => false,
+    };
 }
 
-fn llvmByte(out: *std.ArrayList(u8), a: A, byte: u8) anyerror!void {
-    if (byte >= 0x20 and byte <= 0x7e and byte != '"' and byte != '\\')
-        try out.append(a, byte)
-    else
-        try print(out, a, "\\{X:0>2}", .{byte});
-}
-fn emitStrings(emitter: *ModuleEmitter) anyerror!void {
-    if (emitter.strings.items.items.len == 0) return;
-    try text(&emitter.out, emitter.allocator, "\n; module-local immutable strings\n");
-    for (emitter.strings.items.items, 0..) |value, id| {
-        try print(&emitter.out, emitter.allocator, "@lua_s_{d} = private unnamed_addr constant [{d} x i8] c\"", .{ id, value.len });
-        for (value) |byte| try llvmByte(&emitter.out, emitter.allocator, byte);
-        try text(&emitter.out, emitter.allocator, "\", align 1\n");
-    }
-}
-
-fn functionName(a: A, id: u32) anyerror![]u8 {
-    return std.fmt.allocPrint(a, "@lua_f_{d}", .{id});
+fn isStaticFields(fields: []const lua.TableField) bool {
+    for (fields) |field| switch (field) {
+        .list => |item| if (!isStaticLiteral(item)) return false,
+        .named => |item| if (!isStaticLiteral(item.value)) return false,
+        .keyed => |item| if (!isStaticLiteral(item.key) or !isStaticLiteral(item.value))
+            return false,
+    };
+    return true;
 }
 
 const Save = struct { name: []const u8, previous: ?u32 };
@@ -204,171 +424,118 @@ const PreparedTarget = union(enum) {
     index: struct { object: ValueRef, key: ValueRef },
     field: struct { object: ValueRef, key: StringRef },
 };
-fn tempNameAlloc(a: A, prefix: []const u8, id: u32) ![]u8 {
-    return std.fmt.allocPrint(a, "%t{d}_{s}", .{ id, prefix });
-}
-
-fn labelNameAlloc(a: A, prefix: []const u8, id: u32) ![]u8 {
-    return std.fmt.allocPrint(a, "bb_{d}_{s}", .{ id, prefix });
-}
 
 const FnEmitter = struct {
     module: *ModuleEmitter,
     info: *const analysis.FunctionInfo,
-    allocas: std.ArrayList(u8) = .empty,
-    code: std.ArrayList(u8) = .empty,
+    function: V,
+    builder: llvm.BuilderRef,
+    alloca_builder: llvm.BuilderRef,
+    entry: BB,
+    start: BB,
+    error_block: ?BB = null,
     locals: std.StringHashMapUnmanaged(u32) = .empty,
     saves: std.ArrayList(Save) = .empty,
     storage: []LocalStorage,
-    upvalue_slots: [][]const u8,
+    upvalue_slots: []V,
     binding_next: u32 = 0,
-    temp_next: u32 = 0,
-    label_next: u32 = 0,
-    array_next: u32 = 0,
-    breaks: std.ArrayList([]const u8) = .empty,
-    owned_names: std.ArrayList([]u8) = .empty,
-    error_used: bool = false,
+    breaks: std.ArrayList(BB) = .empty,
 
     fn a(self: *FnEmitter) A {
         return self.module.allocator;
     }
 
+    fn ty(self: *FnEmitter) llvm.Types {
+        return self.module.llvm_module.types;
+    }
+
+    fn rt(self: *FnEmitter) *const Runtime {
+        return &self.module.runtime;
+    }
+
+    fn ctx(self: *FnEmitter) V {
+        return llvm.param(self.function, 0) catch unreachable;
+    }
+
+    fn captures(self: *FnEmitter) V {
+        return llvm.param(self.function, 1) catch unreachable;
+    }
+
+    fn args(self: *FnEmitter) V {
+        return llvm.param(self.function, 2) catch unreachable;
+    }
+
+    fn argsLen(self: *FnEmitter) V {
+        return llvm.param(self.function, 3) catch unreachable;
+    }
+
+    fn resultPtr(self: *FnEmitter) V {
+        return llvm.param(self.function, 4) catch unreachable;
+    }
+
+    fn resultLen(self: *FnEmitter) V {
+        return llvm.param(self.function, 5) catch unreachable;
+    }
+
+    fn cI1(self: *FnEmitter, value: bool) anyerror!V {
+        return llvm.constInt(self.ty().i1, @intFromBool(value));
+    }
+
+    fn cI8(self: *FnEmitter, value: u8) anyerror!V {
+        return llvm.constInt(self.ty().i8, value);
+    }
+
+    fn cI32(self: *FnEmitter, value: anytype) anyerror!V {
+        return llvm.constInt(self.ty().i32, value);
+    }
+
+    fn cI64(self: *FnEmitter, value: anytype) anyerror!V {
+        return llvm.constInt(self.ty().i64, value);
+    }
+
+    fn cDouble(self: *FnEmitter, value: f64) anyerror!V {
+        return llvm.constReal(self.ty().double, value);
+    }
+
+    fn nullPtr(self: *FnEmitter) anyerror!V {
+        return llvm.constNull(self.ty().ptr);
+    }
+
     fn deinit(self: *FnEmitter) void {
-        self.allocas.deinit(self.a());
-        self.code.deinit(self.a());
+        llvm.disposeBuilder(self.builder);
+        llvm.disposeBuilder(self.alloca_builder);
         self.locals.deinit(self.a());
         self.saves.deinit(self.a());
         self.a().free(self.storage);
         self.a().free(self.upvalue_slots);
         self.breaks.deinit(self.a());
-        for (self.owned_names.items) |value| self.a().free(value);
-        self.owned_names.deinit(self.a());
-    }
-    fn ownFmt(self: *FnEmitter, comptime format: []const u8, args: anytype) anyerror![]const u8 {
-        const value = try std.fmt.allocPrint(self.a(), format, args);
-        errdefer self.a().free(value);
-        try self.owned_names.append(self.a(), value);
-        return value;
-    }
-    fn temp(self: *FnEmitter, prefix: []const u8) anyerror![]const u8 {
-        const id = self.temp_next;
-        self.temp_next += 1;
-        const value = try tempNameAlloc(self.a(), prefix, id);
-        errdefer self.a().free(value);
-        try self.owned_names.append(self.a(), value);
-        return value;
     }
 
-    fn label(self: *FnEmitter, prefix: []const u8) anyerror![]const u8 {
-        const id = self.label_next;
-        self.label_next += 1;
-        const value = try labelNameAlloc(self.a(), prefix, id);
-        errdefer self.a().free(value);
-        try self.owned_names.append(self.a(), value);
-        return value;
-    }
-
-    fn valueSlot(self: *FnEmitter) anyerror![]const u8 {
-        const slot = try self.temp("v");
-        try print(&self.allocas, self.a(), "  {s} = alloca %Value, align {d}\n", .{ slot, value_align });
-        return slot;
-    }
-
-    fn ptrSlot(self: *FnEmitter) anyerror![]const u8 {
-        const slot = try self.temp("p");
-        try print(&self.allocas, self.a(), "  {s} = alloca ptr, align 8\n", .{slot});
-        return slot;
-    }
-
-    fn nativeNumberSlot(self: *FnEmitter) anyerror![]const u8 {
-        const slot = try self.temp("numlocal");
-        try print(&self.allocas, self.a(), "  {s} = alloca double, align 8\n", .{slot});
-        return slot;
-    }
-
-    fn nativeBoolSlot(self: *FnEmitter) anyerror![]const u8 {
-        const slot = try self.temp("boollocal");
-        try print(&self.allocas, self.a(), "  {s} = alloca i1, align 1\n", .{slot});
-        return slot;
-    }
-
-    fn valueArray(self: *FnEmitter, count: usize) anyerror![]const u8 {
-        const id = self.array_next;
-        self.array_next += 1;
-        const slot = try self.ownFmt("%a{d}", .{id});
-        try print(&self.allocas, self.a(), "  {s} = alloca [{d} x %Value], align {d}\n", .{ slot, @max(count, 1), value_align });
-        return slot;
-    }
-    fn arrayElem(self: *FnEmitter, array: []const u8, index: usize) anyerror![]const u8 {
-        const ptr = try self.temp("e");
-        try print(&self.code, self.a(), "  {s} = getelementptr %Value, ptr {s}, i64 {d}\n", .{ ptr, array, index });
-        return ptr;
-    }
-
-    fn check(self: *FnEmitter, status: []const u8) anyerror!void {
-        self.error_used = true;
-        const ok = try self.temp("ok");
-        const cont = try self.label("ok");
-        try print(&self.code, self.a(), "  {s} = icmp eq i32 {s}, 0\n", .{ ok, status });
-        try print(&self.code, self.a(), "  br i1 {s}, label %{s}, label %error\n{s}:\n", .{ ok, cont, cont });
-    }
-
-    fn copyValue(self: *FnEmitter, dst: []const u8, src: []const u8) anyerror!void {
-        try print(&self.code, self.a(), "  call void @dict_lua_value_copy(ptr {s}, ptr {s})\n", .{ dst, src });
-    }
-
-    fn stringRef(self: *FnEmitter, value: []const u8) anyerror!StringRef {
-        return self.module.strings.intern(self.a(), value);
-    }
-
-    fn box(self: *FnEmitter, value: ValueRef) anyerror![]const u8 {
-        switch (value) {
-            .boxed => |ptr| return ptr,
-            .table => |table_value| return table_value.ptr,
-            else => {},
-        }
-        const out = try self.valueSlot();
-        switch (value) {
-            .nil => try print(&self.code, self.a(), "  call void @dict_lua_value_nil(ptr {s})\n", .{out}),
-            .number => |operand| try print(&self.code, self.a(), "  call void @dict_lua_value_number(ptr {s}, double {s})\n", .{ out, operand }),
-            .boolean => |operand| {
-                const wide = try self.temp("b8");
-                try print(&self.code, self.a(), "  {s} = zext i1 {s} to i8\n", .{ wide, operand });
-                try print(&self.code, self.a(), "  call void @dict_lua_value_bool(ptr {s}, i8 {s})\n", .{ out, wide });
-            },
-            .string => |s| try print(&self.code, self.a(), "  call void @dict_lua_value_string(ptr {s}, ptr @lua_s_{d}, i64 {d})\n", .{ out, s.id, s.len }),
-            .table, .boxed => unreachable,
-        }
-        return out;
-    }
-
-    fn materializeCopy(self: *FnEmitter, value: ValueRef) anyerror![]const u8 {
-        const boxed = try self.box(value);
-        const out = try self.valueSlot();
-        try self.copyValue(out, boxed);
-        return out;
-    }
-
-    fn truthy(self: *FnEmitter, value: ValueRef) anyerror![]const u8 {
-        return switch (value) {
-            .nil => "false",
-            .boolean => |v| v,
-            .number, .string, .table => "true",
-            .boxed => |ptr| blk: {
-                const raw = try self.temp("truth");
-                const out = try self.temp("truth1");
-                try print(&self.code, self.a(), "  {s} = call i8 @dict_lua_value_truthy(ptr {s})\n", .{ raw, ptr });
-                try print(&self.code, self.a(), "  {s} = icmp ne i8 {s}, 0\n", .{ out, raw });
-                break :blk out;
-            },
-        };
-    }
     fn init(module: *ModuleEmitter, info: *const analysis.FunctionInfo) anyerror!FnEmitter {
+        const function = try module.functionValue(info.id);
+        const entry = try llvm.appendBlock(module.llvm_module.context, function, "entry");
+        const start = try llvm.appendBlock(module.llvm_module.context, function, "start");
+        const alloca_builder = try llvm.createBuilder(module.llvm_module.context);
+        errdefer llvm.disposeBuilder(alloca_builder);
+        llvm.position(alloca_builder, entry);
+        const builder = try llvm.createBuilder(module.llvm_module.context);
+        errdefer llvm.disposeBuilder(builder);
+        llvm.position(builder, start);
         const storage = try module.allocator.alloc(LocalStorage, info.bindings.len);
         errdefer module.allocator.free(storage);
-        const upvalue_slots = try module.allocator.alloc([]const u8, info.upvalues.len);
+        const upvalue_slots = try module.allocator.alloc(V, info.upvalues.len);
         errdefer module.allocator.free(upvalue_slots);
-        var self = FnEmitter{ .module = module, .info = info, .storage = storage, .upvalue_slots = upvalue_slots };
+        var self = FnEmitter{
+            .module = module,
+            .info = info,
+            .function = function,
+            .builder = builder,
+            .alloca_builder = alloca_builder,
+            .entry = entry,
+            .start = start,
+            .storage = storage,
+            .upvalue_slots = upvalue_slots,
+        };
         errdefer self.deinit();
         for (info.bindings, 0..) |binding, index| {
             self.storage[index] = if (binding.captured)
@@ -387,6 +554,121 @@ const FnEmitter = struct {
         return self;
     }
 
+    fn finish(self: *FnEmitter) anyerror!void {
+        llvm.position(self.alloca_builder, self.entry);
+        try llvm.br(self.alloca_builder, self.start);
+        if (self.error_block) |error_block| {
+            llvm.position(self.builder, error_block);
+            const result = try llvm.call(self.builder, self.rt().function_error, &.{});
+            try llvm.ret(self.builder, result);
+        }
+    }
+
+    fn newBlock(self: *FnEmitter, name: []const u8) anyerror!BB {
+        return llvm.appendBlock(self.module.llvm_module.context, self.function, name);
+    }
+
+    fn errorBlock(self: *FnEmitter) anyerror!BB {
+        if (self.error_block) |bb| return bb;
+        const bb = try self.newBlock("error");
+        self.error_block = bb;
+        return bb;
+    }
+
+    fn valueSlot(self: *FnEmitter) anyerror!V {
+        return llvm.alloca(self.alloca_builder, self.ty().value, value_align);
+    }
+
+    fn ptrSlot(self: *FnEmitter) anyerror!V {
+        return llvm.alloca(self.alloca_builder, self.ty().ptr, 8);
+    }
+
+    fn nativeNumberSlot(self: *FnEmitter) anyerror!V {
+        return llvm.alloca(self.alloca_builder, self.ty().double, 8);
+    }
+
+    fn nativeBoolSlot(self: *FnEmitter) anyerror!V {
+        return llvm.alloca(self.alloca_builder, self.ty().i1, 1);
+    }
+
+    fn valueArray(self: *FnEmitter, count: usize) anyerror!V {
+        const array_ty = try llvm.arrayType(self.ty().value, @max(count, 1));
+        return llvm.alloca(self.alloca_builder, array_ty, value_align);
+    }
+
+    fn arrayElem(self: *FnEmitter, array: V, index: usize) anyerror!V {
+        var indices = [_]V{try self.cI64(index)};
+        return llvm.gep(self.builder, self.ty().value, array, &indices);
+    }
+
+    fn pointerArray(self: *FnEmitter, count: usize) anyerror!V {
+        const array_ty = try llvm.arrayType(self.ty().ptr, @max(count, 1));
+        return llvm.alloca(self.alloca_builder, array_ty, 8);
+    }
+
+    fn pointerArrayElem(self: *FnEmitter, array: V, index: usize) anyerror!V {
+        var indices = [_]V{try self.cI64(index)};
+        return llvm.gep(self.builder, self.ty().ptr, array, &indices);
+    }
+
+    fn doubleSlot(self: *FnEmitter) anyerror!V {
+        return llvm.alloca(self.alloca_builder, self.ty().double, 8);
+    }
+
+    fn check(self: *FnEmitter, status: V) anyerror!void {
+        const ok = try llvm.icmp(self.builder, .eq, status, try self.cI32(0));
+        const cont = try self.newBlock("ok");
+        try llvm.condBr(self.builder, ok, cont, try self.errorBlock());
+        llvm.position(self.builder, cont);
+    }
+
+    fn copyValue(self: *FnEmitter, dst: V, src: V) anyerror!void {
+        _ = try llvm.call(self.builder, self.rt().value_copy, &.{ dst, src });
+    }
+
+    fn stringRef(self: *FnEmitter, value: []const u8) anyerror!StringRef {
+        return self.module.stringRef(value);
+    }
+
+    fn box(self: *FnEmitter, value: ValueRef) anyerror!V {
+        switch (value) {
+            .boxed => |ptr| return ptr,
+            .table => |table_value| return table_value.ptr,
+            else => {},
+        }
+        const out = try self.valueSlot();
+        switch (value) {
+            .nil => _ = try llvm.call(self.builder, self.rt().value_nil, &.{out}),
+            .number => |operand| _ = try llvm.call(self.builder, self.rt().value_number, &.{ out, operand }),
+            .boolean => |operand| {
+                const wide = try llvm.zext(self.builder, operand, self.ty().i8);
+                _ = try llvm.call(self.builder, self.rt().value_bool, &.{ out, wide });
+            },
+            .string => |s| _ = try llvm.call(self.builder, self.rt().value_string, &.{ out, s.ptr, try self.cI64(s.len) }),
+            .table, .boxed => unreachable,
+        }
+        return out;
+    }
+
+    fn materializeCopy(self: *FnEmitter, value: ValueRef) anyerror!V {
+        const boxed = try self.box(value);
+        const out = try self.valueSlot();
+        try self.copyValue(out, boxed);
+        return out;
+    }
+
+    fn truthy(self: *FnEmitter, value: ValueRef) anyerror!V {
+        return switch (value) {
+            .nil => try self.cI1(false),
+            .boolean => |v| v,
+            .number, .string, .table => try self.cI1(true),
+            .boxed => |ptr| blk: {
+                const raw = try llvm.call(self.builder, self.rt().value_truthy, &.{ptr});
+                break :blk try llvm.icmp(self.builder, .ne, raw, try self.cI8(0));
+            },
+        };
+    }
+
     fn bindName(self: *FnEmitter, name: []const u8) anyerror!u32 {
         if (self.binding_next >= self.info.bindings.len) return error.BindingAnalysisMismatch;
         const id = self.binding_next;
@@ -396,6 +678,7 @@ const FnEmitter = struct {
         try self.locals.put(self.a(), name, id);
         return id;
     }
+
     fn endScope(self: *FnEmitter, mark: usize) void {
         while (self.saves.items.len > mark) {
             const save = self.saves.pop().?;
@@ -433,37 +716,29 @@ const FnEmitter = struct {
             .direct, .static_function => return error.BindingInitializedTwice,
             .number => |slot| {
                 if (value != .number) return error.StaticTypeMismatch;
-                try print(&self.code, self.a(), "  store double {s}, ptr {s}, align 8\n", .{ value.number, slot });
+                try llvm.store(self.builder, value.number, slot, 8);
             },
             .boolean => |slot| {
                 if (value != .boolean) return error.StaticTypeMismatch;
-                try print(&self.code, self.a(), "  store i1 {s}, ptr {s}, align 1\n", .{ value.boolean, slot });
+                try llvm.store(self.builder, value.boolean, slot, 1);
             },
             .value => |slot| try self.copyValue(slot, try self.box(value)),
             .cell => |slot| {
                 const boxed = try self.box(value);
-                const status = try self.temp("st");
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_cell_new(ptr %ctx, ptr {s}, ptr {s})\n", .{ status, boxed, slot });
+                const status = try llvm.call(self.builder, self.rt().cell_new, &.{ self.ctx(), boxed, slot });
                 try self.check(status);
             },
         }
     }
+
     fn loadResolved(self: *FnEmitter, resolved: Resolved) anyerror!ValueRef {
         return switch (resolved) {
             .local => |binding| switch (self.storage[binding]) {
                 .uninitialized => error.UninitializedBinding,
                 .direct => |value| value,
                 .static_function => error.DirectFunctionUsedAsValue,
-                .number => |slot| blk: {
-                    const out = try self.temp("numlocal_load");
-                    try print(&self.code, self.a(), "  {s} = load double, ptr {s}, align 8\n", .{ out, slot });
-                    break :blk .{ .number = out };
-                },
-                .boolean => |slot| blk: {
-                    const out = try self.temp("boollocal_load");
-                    try print(&self.code, self.a(), "  {s} = load i1, ptr {s}, align 1\n", .{ out, slot });
-                    break :blk .{ .boolean = out };
-                },
+                .number => |slot| .{ .number = try llvm.load(self.builder, self.ty().double, slot, 8) },
+                .boolean => |slot| .{ .boolean = try llvm.load(self.builder, self.ty().i1, slot, 1) },
                 .value => |slot| blk: {
                     const out = try self.valueSlot();
                     try self.copyValue(out, slot);
@@ -471,31 +746,27 @@ const FnEmitter = struct {
                 },
                 .cell => |slot| blk: {
                     const out = try self.valueSlot();
-                    const cell = try self.temp("cell");
-                    try print(&self.code, self.a(), "  {s} = load ptr, ptr {s}, align 8\n", .{ cell, slot });
-                    try print(&self.code, self.a(), "  call void @dict_lua_cell_get(ptr {s}, ptr {s})\n", .{ cell, out });
+                    const cell = try llvm.load(self.builder, self.ty().ptr, slot, 8);
+                    _ = try llvm.call(self.builder, self.rt().cell_get, &.{ cell, out });
                     break :blk .{ .boxed = out };
                 },
             },
             .upvalue => |ordinal| blk: {
                 const out = try self.valueSlot();
-                const cell = try self.temp("cell");
-                try print(&self.code, self.a(), "  {s} = load ptr, ptr {s}, align 8\n", .{ cell, self.upvalue_slots[ordinal] });
-                try print(&self.code, self.a(), "  call void @dict_lua_cell_get(ptr {s}, ptr {s})\n", .{ cell, out });
+                const cell = try llvm.load(self.builder, self.ty().ptr, self.upvalue_slots[ordinal], 8);
+                _ = try llvm.call(self.builder, self.rt().cell_get, &.{ cell, out });
                 break :blk .{ .boxed = out };
             },
             .global => |slot| blk: {
                 if (self.module.globals.stableSlot(slot) and slot < global_abi.count) {
-                    const ptr = try self.temp("global");
-                    try print(&self.code, self.a(), "  {s} = call ptr @dict_lua_global_ptr(ptr %ctx, i32 {d})\n", .{ ptr, slot });
+                    const ptr = try llvm.call(self.builder, self.rt().global_ptr, &.{ self.ctx(), try self.cI32(slot) });
                     const name = self.module.globals.names.items[slot];
                     if (nativeGlobalNamespace(name)) |namespace|
                         break :blk .{ .table = .{ .ptr = ptr, .native_namespace = namespace } };
                     break :blk .{ .boxed = ptr };
                 }
                 const out = try self.valueSlot();
-                const status = try self.temp("st");
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_global_get(ptr %ctx, i32 {d}, ptr {s})\n", .{ status, slot, out });
+                const status = try llvm.call(self.builder, self.rt().global_get, &.{ self.ctx(), try self.cI32(slot), out });
                 try self.check(status);
                 break :blk .{ .boxed = out };
             },
@@ -508,80 +779,71 @@ const FnEmitter = struct {
                 .uninitialized, .direct, .static_function => return error.MutationAnalysisMismatch,
                 .number => |slot| {
                     if (value != .number) return error.StaticTypeMismatch;
-                    try print(&self.code, self.a(), "  store double {s}, ptr {s}, align 8\n", .{ value.number, slot });
+                    try llvm.store(self.builder, value.number, slot, 8);
                 },
                 .boolean => |slot| {
                     if (value != .boolean) return error.StaticTypeMismatch;
-                    try print(&self.code, self.a(), "  store i1 {s}, ptr {s}, align 1\n", .{ value.boolean, slot });
+                    try llvm.store(self.builder, value.boolean, slot, 1);
                 },
                 .value => |slot| try self.copyValue(slot, try self.box(value)),
                 .cell => |slot| {
                     const boxed = try self.box(value);
-                    const cell = try self.temp("cell");
-                    try print(&self.code, self.a(), "  {s} = load ptr, ptr {s}, align 8\n", .{ cell, slot });
-                    try print(&self.code, self.a(), "  call void @dict_lua_cell_set(ptr {s}, ptr {s})\n", .{ cell, boxed });
+                    const cell = try llvm.load(self.builder, self.ty().ptr, slot, 8);
+                    _ = try llvm.call(self.builder, self.rt().cell_set, &.{ cell, boxed });
                 },
             },
             .upvalue => |ordinal| {
                 const boxed = try self.box(value);
-                const cell = try self.temp("cell");
-                try print(&self.code, self.a(), "  {s} = load ptr, ptr {s}, align 8\n", .{ cell, self.upvalue_slots[ordinal] });
-                try print(&self.code, self.a(), "  call void @dict_lua_cell_set(ptr {s}, ptr {s})\n", .{ cell, boxed });
+                const cell = try llvm.load(self.builder, self.ty().ptr, self.upvalue_slots[ordinal], 8);
+                _ = try llvm.call(self.builder, self.rt().cell_set, &.{ cell, boxed });
             },
             .global => |slot| {
                 const boxed = try self.box(value);
-                const status = try self.temp("st");
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_global_set(ptr %ctx, i32 {d}, ptr {s})\n", .{ status, slot, boxed });
+                const status = try llvm.call(self.builder, self.rt().global_set, &.{ self.ctx(), try self.cI32(slot), boxed });
                 try self.check(status);
             },
         }
     }
 
-    fn numberOperand(self: *FnEmitter, raw: []const u8) anyerror![]const u8 {
-        const value = try numbers.parse(raw);
-        return self.ownFmt("0x{X:0>16}", .{@as(u64, @bitCast(value))});
+    fn numberOperand(self: *FnEmitter, raw: []const u8) anyerror!V {
+        return self.cDouble(try numbers.parse(raw));
     }
-    fn nativeArith(self: *FnEmitter, op: lua.BinaryOp, lhs: []const u8, rhs: []const u8) anyerror!ValueRef {
-        const out = try self.temp("n");
-        switch (op) {
-            .add => try print(&self.code, self.a(), "  {s} = fadd double {s}, {s}\n", .{ out, lhs, rhs }),
-            .sub => try print(&self.code, self.a(), "  {s} = fsub double {s}, {s}\n", .{ out, lhs, rhs }),
-            .mul => try print(&self.code, self.a(), "  {s} = fmul double {s}, {s}\n", .{ out, lhs, rhs }),
-            .div => try print(&self.code, self.a(), "  {s} = fdiv double {s}, {s}\n", .{ out, lhs, rhs }),
-            .pow => try print(&self.code, self.a(), "  {s} = call double @llvm.pow.f64(double {s}, double {s})\n", .{ out, lhs, rhs }),
-            .mod => {
-                const div = try self.temp("div");
-                const floor = try self.temp("floor");
-                const product = try self.temp("mul");
-                try print(&self.code, self.a(), "  {s} = fdiv double {s}, {s}\n", .{ div, lhs, rhs });
-                try print(&self.code, self.a(), "  {s} = call double @llvm.floor.f64(double {s})\n", .{ floor, div });
-                try print(&self.code, self.a(), "  {s} = fmul double {s}, {s}\n", .{ product, floor, rhs });
-                try print(&self.code, self.a(), "  {s} = fsub double {s}, {s}\n", .{ out, lhs, product });
+
+    fn nativeArith(self: *FnEmitter, op: lua.BinaryOp, lhs: V, rhs: V) anyerror!ValueRef {
+        const out = switch (op) {
+            .add => try llvm.fadd(self.builder, lhs, rhs),
+            .sub => try llvm.fsub(self.builder, lhs, rhs),
+            .mul => try llvm.fmul(self.builder, lhs, rhs),
+            .div => try llvm.fdiv(self.builder, lhs, rhs),
+            .pow => try llvm.call(self.builder, self.rt().pow, &.{ lhs, rhs }),
+            .mod => blk: {
+                const div = try llvm.fdiv(self.builder, lhs, rhs);
+                const floor = try llvm.call(self.builder, self.rt().floor, &.{div});
+                const product = try llvm.fmul(self.builder, floor, rhs);
+                break :blk try llvm.fsub(self.builder, lhs, product);
             },
             else => unreachable,
-        }
+        };
         return .{ .number = out };
     }
-    fn nativeCompare(self: *FnEmitter, op: lua.BinaryOp, lhs: []const u8, rhs: []const u8) anyerror!ValueRef {
-        const predicate: []const u8 = switch (op) {
-            .eq => "oeq",
-            .ne => "une",
-            .lt => "olt",
-            .le => "ole",
-            .gt => "ogt",
-            .ge => "oge",
+
+    fn nativeCompare(self: *FnEmitter, op: lua.BinaryOp, lhs: V, rhs: V) anyerror!ValueRef {
+        const predicate: llvm.RealPredicate = switch (op) {
+            .eq => .oeq,
+            .ne => .une,
+            .lt => .olt,
+            .le => .ole,
+            .gt => .ogt,
+            .ge => .oge,
             else => unreachable,
         };
-        const out = try self.temp("cmp");
-        try print(&self.code, self.a(), "  {s} = fcmp {s} double {s}, {s}\n", .{ out, predicate, lhs, rhs });
-        return .{ .boolean = out };
+        return .{ .boolean = try llvm.fcmp(self.builder, predicate, lhs, rhs) };
     }
 
     fn dynamicBinary(self: *FnEmitter, op: lua.BinaryOp, lhs: ValueRef, rhs: ValueRef) anyerror!ValueRef {
         const lhs_box = try self.box(lhs);
         const rhs_box = try self.box(rhs);
         const out = try self.valueSlot();
-        const status = try self.temp("st");
         const raw: u8 = switch (op) {
             .add => 0,
             .sub => 1,
@@ -591,7 +853,9 @@ const FnEmitter = struct {
             .pow => 5,
             else => unreachable,
         };
-        try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_binary(ptr %ctx, i8 {d}, ptr {s}, ptr {s}, ptr {s})\n", .{ status, raw, lhs_box, rhs_box, out });
+        const status = try llvm.call(self.builder, self.rt().binary, &.{
+            self.ctx(), try self.cI8(raw), lhs_box, rhs_box, out,
+        });
         try self.check(status);
         return .{ .boxed = out };
     }
@@ -599,9 +863,7 @@ const FnEmitter = struct {
     fn dynamicCompare(self: *FnEmitter, op: lua.BinaryOp, lhs: ValueRef, rhs: ValueRef) anyerror!ValueRef {
         const lhs_box = try self.box(lhs);
         const rhs_box = try self.box(rhs);
-        const raw_slot = try self.temp("cmp8slot");
-        try print(&self.allocas, self.a(), "  {s} = alloca i8, align 1\n", .{raw_slot});
-        const status = try self.temp("st");
+        const raw_slot = try llvm.alloca(self.alloca_builder, self.ty().i8, 1);
         const raw: u8 = switch (op) {
             .eq => 0,
             .ne => 1,
@@ -611,12 +873,12 @@ const FnEmitter = struct {
             .ge => 5,
             else => unreachable,
         };
-        try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_compare_bool(ptr %ctx, i8 {d}, ptr {s}, ptr {s}, ptr {s})\n", .{ status, raw, lhs_box, rhs_box, raw_slot });
+        const status = try llvm.call(self.builder, self.rt().compare_bool, &.{
+            self.ctx(), try self.cI8(raw), lhs_box, rhs_box, raw_slot,
+        });
         try self.check(status);
-        const raw_value = try self.temp("cmp8");
-        const out = try self.temp("cmp1");
-        try print(&self.code, self.a(), "  {s} = load i8, ptr {s}, align 1\n  {s} = icmp ne i8 {s}, 0\n", .{ raw_value, raw_slot, out, raw_value });
-        return .{ .boolean = out };
+        const raw_value = try llvm.load(self.builder, self.ty().i8, raw_slot, 1);
+        return .{ .boolean = try llvm.icmp(self.builder, .ne, raw_value, try self.cI8(0)) };
     }
 
     fn binary(self: *FnEmitter, op: lua.BinaryOp, lhs_expr: *const lua.Expr, rhs_expr: *const lua.Expr) anyerror!ValueRef {
@@ -636,25 +898,25 @@ const FnEmitter = struct {
             else => unreachable,
         }
     }
+
     fn shortCircuit(self: *FnEmitter, op: lua.BinaryOp, lhs_expr: *const lua.Expr, rhs_expr: *const lua.Expr) anyerror!ValueRef {
         const lhs = try self.expr(lhs_expr);
         if (lhs == .nil) return if (op == .and_) lhs else try self.expr(rhs_expr);
         if (lhs == .number or lhs == .string or lhs == .table) return if (op == .or_) lhs else try self.expr(rhs_expr);
         const out = try self.valueSlot();
-        const lhs_box = try self.box(lhs);
-        try self.copyValue(out, lhs_box);
+        try self.copyValue(out, try self.box(lhs));
         const condition = try self.truthy(lhs);
-        const rhs_label = try self.label("sc_rhs");
-        const done = try self.label("sc_done");
+        const rhs_block = try self.newBlock("sc_rhs");
+        const done = try self.newBlock("sc_done");
         if (op == .and_)
-            try print(&self.code, self.a(), "  br i1 {s}, label %{s}, label %{s}\n", .{ condition, rhs_label, done })
+            try llvm.condBr(self.builder, condition, rhs_block, done)
         else
-            try print(&self.code, self.a(), "  br i1 {s}, label %{s}, label %{s}\n", .{ condition, done, rhs_label });
-        try print(&self.code, self.a(), "{s}:\n", .{rhs_label});
+            try llvm.condBr(self.builder, condition, done, rhs_block);
+        llvm.position(self.builder, rhs_block);
         const rhs = try self.expr(rhs_expr);
-        const rhs_box = try self.box(rhs);
-        try self.copyValue(out, rhs_box);
-        try print(&self.code, self.a(), "  br label %{s}\n{s}:\n", .{ done, done });
+        try self.copyValue(out, try self.box(rhs));
+        try llvm.br(self.builder, done);
+        llvm.position(self.builder, done);
         return .{ .boxed = out };
     }
 
@@ -664,6 +926,7 @@ const FnEmitter = struct {
             try collectConcat(node.binary.rhs, out, allocator);
         } else try out.append(allocator, node);
     }
+
     fn concat(self: *FnEmitter, lhs: *const lua.Expr, rhs: *const lua.Expr) anyerror!ValueRef {
         var parts: std.ArrayList(*const lua.Expr) = .empty;
         defer parts.deinit(self.a());
@@ -672,13 +935,13 @@ const FnEmitter = struct {
         const array = try self.valueArray(parts.items.len);
         for (parts.items, 0..) |part, index| {
             const value = try self.expr(part);
-            const boxed = try self.box(value);
             const dst = try self.arrayElem(array, index);
-            try self.copyValue(dst, boxed);
+            try self.copyValue(dst, try self.box(value));
         }
         const out = try self.valueSlot();
-        const status = try self.temp("st");
-        try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_concat(ptr %ctx, ptr {s}, i64 {d}, ptr {s})\n", .{ status, array, parts.items.len, out });
+        const status = try llvm.call(self.builder, self.rt().concat, &.{
+            self.ctx(), array, try self.cI64(parts.items.len), out,
+        });
         try self.check(status);
         return .{ .boxed = out };
     }
@@ -686,72 +949,42 @@ const FnEmitter = struct {
     fn unary(self: *FnEmitter, op: lua.UnaryOp, operand_expr: *const lua.Expr) anyerror!ValueRef {
         const operand = try self.expr(operand_expr);
         return switch (op) {
-            .not_ => blk: {
-                const truth = try self.truthy(operand);
-                const out = try self.temp("not");
-                try print(&self.code, self.a(), "  {s} = xor i1 {s}, true\n", .{ out, truth });
-                break :blk .{ .boolean = out };
-            },
+            .not_ => .{ .boolean = try llvm.bitNot(self.builder, try self.truthy(operand)) },
             .neg => blk: {
-                if (operand == .number) {
-                    const out = try self.temp("neg");
-                    try print(&self.code, self.a(), "  {s} = fneg double {s}\n", .{ out, operand.number });
-                    break :blk .{ .number = out };
-                }
+                if (operand == .number)
+                    break :blk .{ .number = try llvm.fneg(self.builder, operand.number) };
                 const boxed = try self.box(operand);
                 const out = try self.valueSlot();
-                const status = try self.temp("st");
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_neg(ptr %ctx, ptr {s}, ptr {s})\n", .{ status, boxed, out });
+                const status = try llvm.call(self.builder, self.rt().neg, &.{ self.ctx(), boxed, out });
                 try self.check(status);
                 break :blk .{ .boxed = out };
             },
             .len => blk: {
-                if (operand == .string) {
-                    const bits: u64 = @bitCast(@as(f64, @floatFromInt(operand.string.len)));
-                    break :blk .{ .number = try self.ownFmt("0x{X:0>16}", .{bits}) };
-                }
+                if (operand == .string)
+                    break :blk .{ .number = try self.cDouble(@floatFromInt(operand.string.len)) };
                 const boxed = try self.box(operand);
-                const slot = try self.temp("lenslot");
-                try print(&self.allocas, self.a(), "  {s} = alloca double, align 8\n", .{slot});
-                const status = try self.temp("st");
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_len_number(ptr %ctx, ptr {s}, ptr {s})\n", .{ status, boxed, slot });
+                const slot = try self.doubleSlot();
+                const status = try llvm.call(self.builder, self.rt().len_number, &.{ self.ctx(), boxed, slot });
                 try self.check(status);
-                const out = try self.temp("len");
-                try print(&self.code, self.a(), "  {s} = load double, ptr {s}, align 8\n", .{ out, slot });
-                break :blk .{ .number = out };
+                break :blk .{ .number = try llvm.load(self.builder, self.ty().double, slot, 8) };
             },
         };
     }
-    fn pointerArray(self: *FnEmitter, count: usize) anyerror![]const u8 {
-        const id = self.array_next;
-        self.array_next += 1;
-        const slot = try self.ownFmt("%pa{d}", .{id});
-        try print(&self.allocas, self.a(), "  {s} = alloca [{d} x ptr], align 8\n", .{ slot, @max(count, 1) });
-        return slot;
-    }
-
-    fn pointerArrayElem(self: *FnEmitter, array: []const u8, index: usize) anyerror![]const u8 {
-        const ptr = try self.temp("pe");
-        try print(&self.code, self.a(), "  {s} = getelementptr ptr, ptr {s}, i64 {d}\n", .{ ptr, array, index });
-        return ptr;
-    }
 
     fn staticFunction(self: *FnEmitter, target: *const analysis.FunctionInfo) anyerror!StaticFunctionRef {
-        var captures_ptr: []const u8 = "null";
+        var captures_ptr = try self.nullPtr();
         if (target.upvalues.len != 0) {
-            const captures = try self.pointerArray(target.upvalues.len);
-            captures_ptr = captures;
+            const capture_array = try self.pointerArray(target.upvalues.len);
+            captures_ptr = capture_array;
             for (target.upvalues, 0..) |upvalue, index| {
-                const cell = try self.temp("cap");
-                switch (upvalue.source) {
+                const cell = switch (upvalue.source) {
                     .local => |binding| switch (self.storage[binding]) {
-                        .cell => |slot| try print(&self.code, self.a(), "  {s} = load ptr, ptr {s}, align 8\n", .{ cell, slot }),
+                        .cell => |slot| try llvm.load(self.builder, self.ty().ptr, slot, 8),
                         .uninitialized, .direct, .static_function, .number, .boolean, .value => return error.CaptureAnalysisMismatch,
                     },
-                    .upvalue => |ordinal| try print(&self.code, self.a(), "  {s} = load ptr, ptr {s}, align 8\n", .{ cell, self.upvalue_slots[ordinal] }),
-                }
-                const cell_slot = try self.pointerArrayElem(captures, index);
-                try print(&self.code, self.a(), "  store ptr {s}, ptr {s}, align 8\n", .{ cell, cell_slot });
+                    .upvalue => |ordinal| try llvm.load(self.builder, self.ty().ptr, self.upvalue_slots[ordinal], 8),
+                };
+                try llvm.store(self.builder, cell, try self.pointerArrayElem(capture_array, index), 8);
             }
         }
         return .{ .target = target, .captures_ptr = captures_ptr, .captures_len = target.upvalues.len };
@@ -760,9 +993,14 @@ const FnEmitter = struct {
     fn closure(self: *FnEmitter, target: *const analysis.FunctionInfo) anyerror!ValueRef {
         const direct = try self.staticFunction(target);
         const out = try self.valueSlot();
-        const status = try self.temp("st");
-        const target_name = try self.ownFmt("@lua_f_{d}", .{target.id});
-        try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_make_function(ptr %ctx, i32 {d}, ptr {s}, ptr {s}, i64 {d}, ptr {s})\n", .{ status, target.id, target_name, direct.captures_ptr, direct.captures_len, out });
+        const status = try llvm.call(self.builder, self.rt().make_function, &.{
+            self.ctx(),
+            try self.cI32(target.id),
+            try self.module.functionValue(target.id),
+            direct.captures_ptr,
+            try self.cI64(direct.captures_len),
+            out,
+        });
         try self.check(status);
         return .{ .boxed = out };
     }
@@ -771,74 +1009,95 @@ const FnEmitter = struct {
         if (staticString(key_expr)) |name| return self.getField(object, name);
         const object_box = try self.box(object);
         const out = try self.valueSlot();
-        const status = try self.temp("st");
-        const key = try self.expr(key_expr);
-        const key_box = try self.box(key);
-        try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_get_index(ptr %ctx, ptr {s}, ptr {s}, ptr {s})\n", .{ status, object_box, key_box, out });
+        const key_box = try self.box(try self.expr(key_expr));
+        const status = try llvm.call(self.builder, self.rt().get_index, &.{
+            self.ctx(), object_box, key_box, out,
+        });
         try self.check(status);
         return .{ .boxed = out };
     }
+
     fn table(self: *FnEmitter, table_expr: anytype) anyerror!ValueRef {
         const fields = table_expr.fields;
-        const table_value = try self.valueSlot();
-        const create_status = try self.temp("st");
         const shape = self.module.facts.tableShape(table_expr.span.start);
-        if (shape) |shape_value| {
-            try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_new_shaped_table(ptr %ctx, i32 {d}, ptr {s})\n", .{ create_status, shape_value.id, table_value });
-        } else {
-            var list_capacity: u32 = 0;
-            for (fields) |field| {
-                if (field == .list) list_capacity += 1;
-            }
-            if (list_capacity != 0)
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_new_array_table(ptr %ctx, i32 {d}, ptr {s})\n", .{ create_status, list_capacity, table_value })
-            else
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_new_table(ptr %ctx, ptr {s})\n", .{ create_status, table_value });
+        if (fields.len >= static_literal_blob_threshold and isStaticFields(fields)) {
+            var literal = lua.Expr{ .table = table_expr };
+            const data = try self.module.staticLiteralBlob(&literal);
+            const table_value = try self.valueSlot();
+            const status = try llvm.call(
+                self.builder,
+                self.rt().decode_static_literal,
+                &.{ self.ctx(), data.ptr, try self.cI64(data.len), table_value },
+            );
+            try self.check(status);
+            return .{ .table = .{ .ptr = table_value, .shape = shape } };
         }
+
+        const table_value = try self.valueSlot();
+        const create_status = if (shape) |shape_value|
+            try llvm.call(self.builder, self.rt().new_shaped_table, &.{
+                self.ctx(), try self.cI32(shape_value.id), table_value,
+            })
+        else blk: {
+            var list_capacity: u32 = 0;
+            for (fields) |field| if (field == .list) {
+                list_capacity += 1;
+            };
+            break :blk if (list_capacity != 0)
+                try llvm.call(self.builder, self.rt().new_array_table, &.{
+                    self.ctx(), try self.cI32(list_capacity), table_value,
+                })
+            else
+                try llvm.call(self.builder, self.rt().new_table, &.{ self.ctx(), table_value });
+        };
         try self.check(create_status);
+
         for (fields, 0..) |field, index| switch (field) {
             .named => |item| {
-                const value = try self.expr(item.value);
-                const boxed = try self.box(value);
-                const status = try self.temp("st");
-                if (shape) |shape_value| {
+                const boxed = try self.box(try self.expr(item.value));
+                const status = if (shape) |shape_value| blk: {
                     const slot = shapeSlot(shape_value, item.name) orelse return error.ShapeAnalysisMismatch;
-                    try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_set_shape_slot(ptr %ctx, ptr {s}, i32 {d}, ptr {s})\n", .{ status, table_value, slot, boxed });
-                } else {
+                    break :blk try llvm.call(self.builder, self.rt().set_shape_slot, &.{
+                        self.ctx(), table_value, try self.cI32(slot), boxed,
+                    });
+                } else blk: {
                     const key = try self.stringRef(item.name);
-                    try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_set_field(ptr %ctx, ptr {s}, ptr @lua_s_{d}, i64 {d}, ptr {s})\n", .{ status, table_value, key.id, key.len, boxed });
-                }
+                    break :blk try llvm.call(self.builder, self.rt().set_field, &.{
+                        self.ctx(), table_value, key.ptr, try self.cI64(key.len), boxed,
+                    });
+                };
                 try self.check(status);
             },
             .keyed => |item| {
-                const status = try self.temp("st");
-                if (shape) |shape_value| {
+                const status = if (shape) |shape_value| blk: {
                     const key_name = staticString(item.key) orelse return error.ShapeAnalysisMismatch;
-                    const value = try self.expr(item.value);
-                    const value_box = try self.box(value);
+                    const value_box = try self.box(try self.expr(item.value));
                     const slot = shapeSlot(shape_value, key_name) orelse return error.ShapeAnalysisMismatch;
-                    try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_set_shape_slot(ptr %ctx, ptr {s}, i32 {d}, ptr {s})\n", .{ status, table_value, slot, value_box });
-                } else {
-                    const key = try self.expr(item.key);
-                    const value = try self.expr(item.value);
-                    const key_box = try self.box(key);
-                    const value_box = try self.box(value);
-                    try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_set_index(ptr %ctx, ptr {s}, ptr {s}, ptr {s})\n", .{ status, table_value, key_box, value_box });
-                }
+                    break :blk try llvm.call(self.builder, self.rt().set_shape_slot, &.{
+                        self.ctx(), table_value, try self.cI32(slot), value_box,
+                    });
+                } else blk: {
+                    const key_box = try self.box(try self.expr(item.key));
+                    const value_box = try self.box(try self.expr(item.value));
+                    break :blk try llvm.call(self.builder, self.rt().set_index, &.{
+                        self.ctx(), table_value, key_box, value_box,
+                    });
+                };
                 try self.check(status);
             },
             .list => |item| {
                 if (index + 1 == fields.len and isMultiExpr(item)) {
                     const tail = try self.multi(item);
-                    const status = try self.temp("st");
-                    try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_table_append_many(ptr %ctx, ptr {s}, ptr {s}, i64 {s})\n", .{ status, table_value, tail.ptr, tail.len });
+                    const status = try llvm.call(self.builder, self.rt().table_append_many, &.{
+                        self.ctx(), table_value, tail.ptr, tail.len,
+                    });
                     try self.check(status);
                     try self.freeMulti(tail);
                 } else {
-                    const value = try self.expr(item);
-                    const boxed = try self.box(value);
-                    const status = try self.temp("st");
-                    try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_table_append(ptr %ctx, ptr {s}, ptr {s})\n", .{ status, table_value, boxed });
+                    const boxed = try self.box(try self.expr(item));
+                    const status = try llvm.call(self.builder, self.rt().table_append, &.{
+                        self.ctx(), table_value, boxed,
+                    });
                     try self.check(status);
                 }
             },
@@ -854,64 +1113,65 @@ const FnEmitter = struct {
 
     fn freeMulti(self: *FnEmitter, multi_value: MultiRef) anyerror!void {
         if (multi_value.owned)
-            try print(&self.code, self.a(), "  call void @dict_lua_results_free(ptr {s}, i64 {s})\n", .{ multi_value.ptr, multi_value.len });
+            _ = try llvm.call(self.builder, self.rt().results_free, &.{ multi_value.ptr, multi_value.len });
     }
+
     fn getField(self: *FnEmitter, object: ValueRef, name: []const u8) anyerror!ValueRef {
         const object_box = try self.box(object);
         const key = try self.stringRef(name);
         const out = try self.valueSlot();
-        const status = try self.temp("st");
-        if (object == .table) {
-            if (object.table.shape) |shape| if (shapeSlot(shape, name)) |slot| {
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_get_known_shape_field(ptr %ctx, ptr {s}, i32 {d}, i32 {d}, ptr @lua_s_{d}, i64 {d}, ptr {s})\n", .{ status, object_box, shape.id, slot, key.id, key.len, out });
-                try self.check(status);
-                return .{ .boxed = out };
-            };
-            if (object.table.native_namespace) |namespace| if (static_fields.slotForName(namespace, name)) |slot| {
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_get_native_slot(ptr %ctx, ptr {s}, i32 {d}, ptr @lua_s_{d}, i64 {d}, ptr {s})\n", .{ status, object_box, slot, key.id, key.len, out });
-                try self.check(status);
-                return .{ .boxed = out };
-            };
-        }
-        try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_get_field(ptr %ctx, ptr {s}, ptr @lua_s_{d}, i64 {d}, ptr {s})\n", .{ status, object_box, key.id, key.len, out });
+        const status = if (object == .table) blk: {
+            if (object.table.shape) |shape| if (shapeSlot(shape, name)) |slot|
+                break :blk try llvm.call(self.builder, self.rt().get_known_shape_field, &.{
+                    self.ctx(), object_box,             try self.cI32(shape.id), try self.cI32(slot),
+                    key.ptr,    try self.cI64(key.len), out,
+                });
+            if (object.table.native_namespace) |namespace| if (static_fields.slotForName(namespace, name)) |slot|
+                break :blk try llvm.call(self.builder, self.rt().get_native_slot, &.{
+                    self.ctx(), object_box, try self.cI32(slot), key.ptr, try self.cI64(key.len), out,
+                });
+            break :blk try llvm.call(self.builder, self.rt().get_field, &.{
+                self.ctx(), object_box, key.ptr, try self.cI64(key.len), out,
+            });
+        } else try llvm.call(self.builder, self.rt().get_field, &.{
+            self.ctx(), object_box, key.ptr, try self.cI64(key.len), out,
+        });
         try self.check(status);
         return .{ .boxed = out };
     }
 
     fn varargs(self: *FnEmitter) anyerror!MultiRef {
-        const has = try self.temp("hasva");
-        const raw_len = try self.temp("valenraw");
-        const len = try self.temp("valen");
-        const ptr = try self.temp("vaptr");
         const param_count = self.info.params.len;
-        try print(&self.code, self.a(), "  {s} = icmp ugt i64 %args_len, {d}\n", .{ has, param_count });
-        try print(&self.code, self.a(), "  {s} = sub i64 %args_len, {d}\n", .{ raw_len, param_count });
-        try print(&self.code, self.a(), "  {s} = select i1 {s}, i64 {s}, i64 0\n", .{ len, has, raw_len });
-        try print(&self.code, self.a(), "  {s} = getelementptr %Value, ptr %args, i64 {d}\n", .{ ptr, param_count });
+        const has = try llvm.icmp(self.builder, .ugt, self.argsLen(), try self.cI64(param_count));
+        const raw_len = try llvm.sub(self.builder, self.argsLen(), try self.cI64(param_count));
+        const len = try llvm.select(self.builder, has, raw_len, try self.cI64(0));
+        var indices = [_]V{try self.cI64(param_count)};
+        const ptr = try llvm.gep(self.builder, self.ty().value, self.args(), &indices);
         return .{ .ptr = ptr, .len = len, .owned = false };
     }
+
     const PreparedCall = struct {
         callee: ValueRef,
-        fixed: []const u8,
-        fixed_len: usize,
-        tail: ?MultiRef,
-    };
-    const PreparedArgs = struct {
-        fixed: []const u8,
+        fixed: V,
         fixed_len: usize,
         tail: ?MultiRef,
     };
 
-    fn prepareStaticArgs(self: *FnEmitter, args: []const *lua.Expr) anyerror!PreparedArgs {
-        const has_tail = args.len != 0 and isMultiExpr(args[args.len - 1]);
-        const fixed_args = if (has_tail) args[0 .. args.len - 1] else args;
+    const PreparedArgs = struct {
+        fixed: V,
+        fixed_len: usize,
+        tail: ?MultiRef,
+    };
+
+    fn prepareStaticArgs(self: *FnEmitter, args_in: []const *lua.Expr) anyerror!PreparedArgs {
+        const has_tail = args_in.len != 0 and isMultiExpr(args_in[args_in.len - 1]);
+        const fixed_args = if (has_tail) args_in[0 .. args_in.len - 1] else args_in;
         const fixed = try self.valueArray(fixed_args.len);
         for (fixed_args, 0..) |arg, index| {
-            const value = try self.expr(arg);
             const dst = try self.arrayElem(fixed, index);
-            try self.copyValue(dst, try self.box(value));
+            try self.copyValue(dst, try self.box(try self.expr(arg)));
         }
-        const tail = if (has_tail) try self.multi(args[args.len - 1]) else null;
+        const tail = if (has_tail) try self.multi(args_in[args_in.len - 1]) else null;
         return .{ .fixed = fixed, .fixed_len = fixed_args.len, .tail = tail };
     }
 
@@ -929,7 +1189,7 @@ const FnEmitter = struct {
         };
     }
 
-    fn prepareCall(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args: []const *lua.Expr) anyerror!PreparedCall {
+    fn prepareCall(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr) anyerror!PreparedCall {
         var callee: ValueRef = undefined;
         var self_value: ?ValueRef = null;
         if (method) |name| {
@@ -938,27 +1198,27 @@ const FnEmitter = struct {
             callee = try self.getField(object, name);
         } else callee = try self.expr(callee_expr);
 
-        const has_tail = args.len != 0 and isMultiExpr(args[args.len - 1]);
-        const fixed_args = if (has_tail) args[0 .. args.len - 1] else args;
+        const has_tail = args_in.len != 0 and isMultiExpr(args_in[args_in.len - 1]);
+        const fixed_args = if (has_tail) args_in[0 .. args_in.len - 1] else args_in;
         const fixed_len = fixed_args.len + @intFromBool(self_value != null);
         const fixed = try self.valueArray(fixed_len);
         var at: usize = 0;
         if (self_value) |value| {
-            const dst = try self.arrayElem(fixed, at);
+            try self.copyValue(try self.arrayElem(fixed, at), try self.box(value));
             at += 1;
-            try self.copyValue(dst, try self.box(value));
         }
         for (fixed_args) |arg| {
-            const value = try self.expr(arg);
-            const dst = try self.arrayElem(fixed, at);
+            try self.copyValue(try self.arrayElem(fixed, at), try self.box(try self.expr(arg)));
             at += 1;
-            try self.copyValue(dst, try self.box(value));
         }
-        const tail = if (has_tail) try self.multi(args[args.len - 1]) else null;
+        const tail = if (has_tail) try self.multi(args_in[args_in.len - 1]) else null;
         return .{ .callee = callee, .fixed = fixed, .fixed_len = fixed_len, .tail = tail };
     }
 
-    const StaticRequire = struct { module_id: u32, requested: StringRef };
+    const StaticRequire = struct {
+        module_id: u32,
+        requested: StringRef,
+    };
 
     fn staticString(value: *const lua.Expr) ?[]const u8 {
         return switch (value.*) {
@@ -968,8 +1228,8 @@ const FnEmitter = struct {
         };
     }
 
-    fn staticRequire(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args: []const *lua.Expr) anyerror!?StaticRequire {
-        if (method != null or args.len != 1 or callee_expr.* != .name) return null;
+    fn staticRequire(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr) anyerror!?StaticRequire {
+        if (method != null or args_in.len != 1 or callee_expr.* != .name) return null;
         if (!std.mem.eql(u8, callee_expr.name.value, "require")) return null;
         if (!self.module.globals.stable("require")) return null;
         const require_slot = self.module.globals.get("require") orelse return null;
@@ -977,147 +1237,168 @@ const FnEmitter = struct {
             .global => |slot| if (slot != require_slot) return null,
             else => return null,
         }
-        const requested = staticString(args[0]) orelse return null;
+        const requested = staticString(args_in[0]) orelse return null;
         const module_id = (try self.module.facts.moduleId(self.a(), requested)) orelse return null;
         return .{ .module_id = module_id, .requested = try self.stringRef(requested) };
     }
 
-    fn directRequireValue(self: *FnEmitter, request: StaticRequire) anyerror![]const u8 {
+    fn directRequireValue(self: *FnEmitter, request: StaticRequire) anyerror!V {
         const loaded = try self.valueSlot();
-        const status = try self.temp("st");
-        try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_require_module_id(ptr %ctx, i32 {d}, ptr @lua_s_{d}, i64 {d}, ptr {s})\n", .{ status, request.module_id, request.requested.id, request.requested.len, loaded });
+        const status = try llvm.call(self.builder, self.rt().require_module_id, &.{
+            self.ctx(),                           try self.cI32(request.module_id), request.requested.ptr,
+            try self.cI64(request.requested.len), loaded,
+        });
         try self.check(status);
         return loaded;
     }
 
-    fn directRequireFixed(self: *FnEmitter, request: StaticRequire, count: usize) anyerror!?[]const u8 {
+    fn directRequireFixed(self: *FnEmitter, request: StaticRequire, count: usize) anyerror!?V {
         const loaded = try self.directRequireValue(request);
         if (count == 0) return null;
         const output = try self.valueArray(count);
-        const first = try self.arrayElem(output, 0);
-        try self.copyValue(first, loaded);
-        for (1..count) |index| {
-            const dst = try self.arrayElem(output, index);
-            try print(&self.code, self.a(), "  call void @dict_lua_value_nil(ptr {s})\n", .{dst});
-        }
+        try self.copyValue(try self.arrayElem(output, 0), loaded);
+        for (1..count) |index|
+            _ = try llvm.call(self.builder, self.rt().value_nil, &.{try self.arrayElem(output, index)});
         return output;
     }
 
-    fn directStaticFixed(self: *FnEmitter, function: StaticFunctionRef, args: []const *lua.Expr, count: usize) anyerror!?[]const u8 {
-        const prepared = try self.prepareStaticArgs(args);
+    fn directStaticFixed(self: *FnEmitter, function: StaticFunctionRef, args_in: []const *lua.Expr, count: usize) anyerror!?V {
+        const prepared = try self.prepareStaticArgs(args_in);
         const output = try self.valueArray(count);
-        const entry = try self.ownFmt("@lua_f_{d}", .{function.target.id});
+        const entry_fn = try self.module.functionValue(function.target.id);
         if (function.captures_len == 0 and prepared.tail == null) {
-            for (0..count) |index| {
-                const dst = try self.arrayElem(output, index);
-                try print(&self.code, self.a(), "  call void @dict_lua_value_nil(ptr {s})\n", .{dst});
-            }
-            const enter = try self.temp("enter");
-            try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_enter_static_call(ptr %ctx)\n", .{enter});
+            for (0..count) |index|
+                _ = try llvm.call(self.builder, self.rt().value_nil, &.{try self.arrayElem(output, index)});
+            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{self.ctx()});
             try self.check(enter);
-            const result = try self.temp("directcall");
-            try print(&self.code, self.a(), "  {s} = call %FunctionResult {s}(ptr %ctx, ptr null, ptr {s}, i64 {d}, ptr {s}, i64 {d})\n", .{ result, entry, prepared.fixed, prepared.fixed_len, output, count });
-            try print(&self.code, self.a(), "  call void @dict_lua_leave_static_call(ptr %ctx)\n", .{});
-            const raw_status = try self.temp("directst");
-            const status = try self.temp("st");
-            try print(&self.code, self.a(), "  {s} = extractvalue %FunctionResult {s}, 2\n  {s} = call i32 @dict_lua_function_status(ptr %ctx, i32 {s})\n", .{ raw_status, result, status, raw_status });
+            const result = try llvm.call(self.builder, entry_fn, &.{
+                self.ctx(), try self.nullPtr(),   prepared.fixed, try self.cI64(prepared.fixed_len),
+                output,     try self.cI64(count),
+            });
+            _ = try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
+            const raw_status = try llvm.extractValue(self.builder, result, 2);
+            const status = try llvm.call(self.builder, self.rt().function_status, &.{ self.ctx(), raw_status });
             try self.check(status);
             return if (count == 0) null else output;
         }
-        const status = try self.temp("st");
-        if (prepared.tail) |tail|
-            try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_call_static_fixed_tail(ptr %ctx, ptr {s}, ptr {s}, i64 {d}, ptr {s}, i64 {d}, ptr {s}, i64 {s}, ptr {s}, i64 {d})\n", .{ status, entry, function.captures_ptr, function.captures_len, prepared.fixed, prepared.fixed_len, tail.ptr, tail.len, output, count })
+
+        const status = if (prepared.tail) |tail|
+            try llvm.call(self.builder, self.rt().call_static_fixed_tail, &.{
+                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
+                prepared.fixed, try self.cI64(prepared.fixed_len), tail.ptr,              tail.len,
+                output,         try self.cI64(count),
+            })
         else
-            try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_call_static_fixed(ptr %ctx, ptr {s}, ptr {s}, i64 {d}, ptr {s}, i64 {d}, ptr {s}, i64 {d})\n", .{ status, entry, function.captures_ptr, function.captures_len, prepared.fixed, prepared.fixed_len, output, count });
+            try llvm.call(self.builder, self.rt().call_static_fixed, &.{
+                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
+                prepared.fixed, try self.cI64(prepared.fixed_len), output,                try self.cI64(count),
+            });
         try self.check(status);
         if (prepared.tail) |tail| try self.freeMulti(tail);
         return if (count == 0) null else output;
     }
 
-    fn directStaticMulti(self: *FnEmitter, function: StaticFunctionRef, args: []const *lua.Expr) anyerror!MultiRef {
-        const prepared = try self.prepareStaticArgs(args);
-        const entry = try self.ownFmt("@lua_f_{d}", .{function.target.id});
+    fn directStaticMulti(self: *FnEmitter, function: StaticFunctionRef, args_in: []const *lua.Expr) anyerror!MultiRef {
+        const prepared = try self.prepareStaticArgs(args_in);
+        const entry_fn = try self.module.functionValue(function.target.id);
         if (function.captures_len == 0 and prepared.tail == null) {
-            const enter = try self.temp("enter");
-            try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_enter_static_call(ptr %ctx)\n", .{enter});
+            const enter = try llvm.call(self.builder, self.rt().enter_static_call, &.{self.ctx()});
             try self.check(enter);
-            const result = try self.temp("directcall");
-            try print(&self.code, self.a(), "  {s} = call %FunctionResult {s}(ptr %ctx, ptr null, ptr {s}, i64 {d}, ptr null, i64 0)\n", .{ result, entry, prepared.fixed, prepared.fixed_len });
-            try print(&self.code, self.a(), "  call void @dict_lua_leave_static_call(ptr %ctx)\n", .{});
-            const raw_status = try self.temp("directst");
-            const status = try self.temp("st");
-            try print(&self.code, self.a(), "  {s} = extractvalue %FunctionResult {s}, 2\n  {s} = call i32 @dict_lua_function_status(ptr %ctx, i32 {s})\n", .{ raw_status, result, status, raw_status });
+            const result = try llvm.call(self.builder, entry_fn, &.{
+                self.ctx(),         try self.nullPtr(), prepared.fixed, try self.cI64(prepared.fixed_len),
+                try self.nullPtr(), try self.cI64(0),
+            });
+            _ = try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
+            const raw_status = try llvm.extractValue(self.builder, result, 2);
+            const status = try llvm.call(self.builder, self.rt().function_status, &.{ self.ctx(), raw_status });
             try self.check(status);
-            const ptr = try self.temp("callptr");
-            const len = try self.temp("calllen");
-            try print(&self.code, self.a(), "  {s} = extractvalue %FunctionResult {s}, 0\n  {s} = extractvalue %FunctionResult {s}, 1\n", .{ ptr, result, len, result });
-            return .{ .ptr = ptr, .len = len, .owned = true };
+            return .{
+                .ptr = try llvm.extractValue(self.builder, result, 0),
+                .len = try llvm.extractValue(self.builder, result, 1),
+                .owned = true,
+            };
         }
-        const result = try self.temp("call");
-        if (prepared.tail) |tail|
-            try print(&self.code, self.a(), "  {s} = call %CallResult @dict_lua_call_static_multi_tail(ptr %ctx, ptr {s}, ptr {s}, i64 {d}, ptr {s}, i64 {d}, ptr {s}, i64 {s})\n", .{ result, entry, function.captures_ptr, function.captures_len, prepared.fixed, prepared.fixed_len, tail.ptr, tail.len })
+
+        const result = if (prepared.tail) |tail|
+            try llvm.call(self.builder, self.rt().call_static_multi_tail, &.{
+                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
+                prepared.fixed, try self.cI64(prepared.fixed_len), tail.ptr,              tail.len,
+            })
         else
-            try print(&self.code, self.a(), "  {s} = call %CallResult @dict_lua_call_static_multi(ptr %ctx, ptr {s}, ptr {s}, i64 {d}, ptr {s}, i64 {d})\n", .{ result, entry, function.captures_ptr, function.captures_len, prepared.fixed, prepared.fixed_len });
+            try llvm.call(self.builder, self.rt().call_static_multi, &.{
+                self.ctx(),     entry_fn,                          function.captures_ptr, try self.cI64(function.captures_len),
+                prepared.fixed, try self.cI64(prepared.fixed_len),
+            });
         if (prepared.tail) |tail| try self.freeMulti(tail);
-        const status = try self.temp("callst");
-        try print(&self.code, self.a(), "  {s} = extractvalue %CallResult {s}, 2\n", .{ status, result });
-        try self.check(status);
-        const ptr = try self.temp("callptr");
-        const len = try self.temp("calllen");
-        try print(&self.code, self.a(), "  {s} = extractvalue %CallResult {s}, 0\n", .{ ptr, result });
-        try print(&self.code, self.a(), "  {s} = extractvalue %CallResult {s}, 1\n", .{ len, result });
-        return .{ .ptr = ptr, .len = len, .owned = true };
+        try self.check(try llvm.extractValue(self.builder, result, 2));
+        return .{
+            .ptr = try llvm.extractValue(self.builder, result, 0),
+            .len = try llvm.extractValue(self.builder, result, 1),
+            .owned = true,
+        };
     }
 
-    fn callFixed(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args: []const *lua.Expr, count: usize) anyerror!?[]const u8 {
-        if (try self.staticRequire(callee_expr, method, args)) |request|
+    fn callFixed(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr, count: usize) anyerror!?V {
+        if (try self.staticRequire(callee_expr, method, args_in)) |request|
             return self.directRequireFixed(request, count);
         if (method == null) if (try self.staticCallee(callee_expr)) |function|
-            return self.directStaticFixed(function, args, count);
-        const prepared = try self.prepareCall(callee_expr, method, args);
+            return self.directStaticFixed(function, args_in, count);
+
+        const prepared = try self.prepareCall(callee_expr, method, args_in);
         const callee = try self.box(prepared.callee);
         if (count == 0) {
-            const status = try self.temp("st");
-            if (prepared.tail) |tail|
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_call_discard_tail(ptr %ctx, ptr {s}, ptr {s}, i64 {d}, ptr {s}, i64 {s})\n", .{ status, callee, prepared.fixed, prepared.fixed_len, tail.ptr, tail.len })
+            const status = if (prepared.tail) |tail|
+                try llvm.call(self.builder, self.rt().call_discard_tail, &.{
+                    self.ctx(), callee, prepared.fixed, try self.cI64(prepared.fixed_len), tail.ptr, tail.len,
+                })
             else
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_call_discard(ptr %ctx, ptr {s}, ptr {s}, i64 {d})\n", .{ status, callee, prepared.fixed, prepared.fixed_len });
+                try llvm.call(self.builder, self.rt().call_discard, &.{
+                    self.ctx(), callee, prepared.fixed, try self.cI64(prepared.fixed_len),
+                });
             try self.check(status);
             if (prepared.tail) |tail| try self.freeMulti(tail);
             return null;
         }
+
         const output = try self.valueArray(count);
-        const status = try self.temp("st");
-        if (prepared.tail) |tail|
-            try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_call_fixed_tail(ptr %ctx, ptr {s}, ptr {s}, i64 {d}, ptr {s}, i64 {s}, ptr {s}, i64 {d})\n", .{ status, callee, prepared.fixed, prepared.fixed_len, tail.ptr, tail.len, output, count })
+        const status = if (prepared.tail) |tail|
+            try llvm.call(self.builder, self.rt().call_fixed_tail, &.{
+                self.ctx(), callee,   prepared.fixed, try self.cI64(prepared.fixed_len),
+                tail.ptr,   tail.len, output,         try self.cI64(count),
+            })
         else
-            try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_call_fixed(ptr %ctx, ptr {s}, ptr {s}, i64 {d}, ptr {s}, i64 {d})\n", .{ status, callee, prepared.fixed, prepared.fixed_len, output, count });
+            try llvm.call(self.builder, self.rt().call_fixed, &.{
+                self.ctx(), callee,               prepared.fixed, try self.cI64(prepared.fixed_len),
+                output,     try self.cI64(count),
+            });
         try self.check(status);
         if (prepared.tail) |tail| try self.freeMulti(tail);
         return output;
     }
 
-    fn callMulti(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args: []const *lua.Expr) anyerror!MultiRef {
-        if (try self.staticRequire(callee_expr, method, args)) |request|
-            return .{ .ptr = try self.directRequireValue(request), .len = "1", .owned = false };
+    fn callMulti(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr) anyerror!MultiRef {
+        if (try self.staticRequire(callee_expr, method, args_in)) |request|
+            return .{ .ptr = try self.directRequireValue(request), .len = try self.cI64(1), .owned = false };
         if (method == null) if (try self.staticCallee(callee_expr)) |function|
-            return self.directStaticMulti(function, args);
-        const prepared = try self.prepareCall(callee_expr, method, args);
+            return self.directStaticMulti(function, args_in);
+
+        const prepared = try self.prepareCall(callee_expr, method, args_in);
         const callee = try self.box(prepared.callee);
-        const result = try self.temp("call");
-        if (prepared.tail) |tail|
-            try print(&self.code, self.a(), "  {s} = call %CallResult @dict_lua_call_multi_tail(ptr %ctx, ptr {s}, ptr {s}, i64 {d}, ptr {s}, i64 {s})\n", .{ result, callee, prepared.fixed, prepared.fixed_len, tail.ptr, tail.len })
+        const result = if (prepared.tail) |tail|
+            try llvm.call(self.builder, self.rt().call_multi_tail, &.{
+                self.ctx(), callee, prepared.fixed, try self.cI64(prepared.fixed_len), tail.ptr, tail.len,
+            })
         else
-            try print(&self.code, self.a(), "  {s} = call %CallResult @dict_lua_call_multi(ptr %ctx, ptr {s}, ptr {s}, i64 {d})\n", .{ result, callee, prepared.fixed, prepared.fixed_len });
+            try llvm.call(self.builder, self.rt().call_multi, &.{
+                self.ctx(), callee, prepared.fixed, try self.cI64(prepared.fixed_len),
+            });
         if (prepared.tail) |tail| try self.freeMulti(tail);
-        const status = try self.temp("callst");
-        try print(&self.code, self.a(), "  {s} = extractvalue %CallResult {s}, 2\n", .{ status, result });
-        try self.check(status);
-        const ptr = try self.temp("callptr");
-        const len = try self.temp("calllen");
-        try print(&self.code, self.a(), "  {s} = extractvalue %CallResult {s}, 0\n", .{ ptr, result });
-        try print(&self.code, self.a(), "  {s} = extractvalue %CallResult {s}, 1\n", .{ len, result });
-        return .{ .ptr = ptr, .len = len, .owned = true };
+        try self.check(try llvm.extractValue(self.builder, result, 2));
+        return .{
+            .ptr = try llvm.extractValue(self.builder, result, 0),
+            .len = try llvm.extractValue(self.builder, result, 1),
+            .owned = true,
+        };
     }
 
     fn multi(self: *FnEmitter, value: *const lua.Expr) anyerror!MultiRef {
@@ -1127,22 +1408,24 @@ const FnEmitter = struct {
             .vararg => try self.varargs(),
             else => blk: {
                 const one = try self.expr(value);
-                const boxed = try self.box(one);
-                break :blk .{ .ptr = boxed, .len = "1", .owned = false };
+                break :blk .{ .ptr = try self.box(one), .len = try self.cI64(1), .owned = false };
             },
         };
     }
+
     fn expr(self: *FnEmitter, value: *const lua.Expr) anyerror!ValueRef {
         return switch (value.*) {
             .nil_lit => .nil,
-            .bool_lit => |v| .{ .boolean = if (v.value) "true" else "false" },
+            .bool_lit => |v| .{ .boolean = try self.cI1(v.value) },
             .number => |v| .{ .number = try self.numberOperand(v.raw) },
             .string => |v| .{ .string = try self.stringRef(v.value) },
             .name => |v| try self.loadResolved(try self.resolve(v.value)),
             .paren => |v| try self.expr(v.expr),
             .vararg => blk: {
                 const out = try self.valueSlot();
-                try print(&self.code, self.a(), "  call void @dict_lua_arg_get(ptr %args, i64 %args_len, i64 {d}, ptr {s})\n", .{ self.info.params.len, out });
+                _ = try llvm.call(self.builder, self.rt().arg_get, &.{
+                    self.args(), self.argsLen(), try self.cI64(self.info.params.len), out,
+                });
                 break :blk .{ .boxed = out };
             },
             .index => |v| try self.getIndex(try self.expr(v.object), v.key),
@@ -1160,6 +1443,7 @@ const FnEmitter = struct {
             .binary => |v| try self.binary(v.op, v.lhs, v.rhs),
         };
     }
+
     fn discardExpr(self: *FnEmitter, value: *const lua.Expr) anyerror!void {
         switch (value.*) {
             .call => |v| _ = try self.callFixed(v.callee, null, v.args, 0),
@@ -1169,7 +1453,7 @@ const FnEmitter = struct {
         }
     }
 
-    fn rhsFixed(self: *FnEmitter, values_in: []const *lua.Expr, needed: usize) anyerror![]const u8 {
+    fn rhsFixed(self: *FnEmitter, values_in: []const *lua.Expr, needed: usize) anyerror!V {
         const out = try self.valueArray(needed);
         if (needed == 0) {
             for (values_in) |value| try self.discardExpr(value);
@@ -1187,38 +1471,32 @@ const FnEmitter = struct {
                 switch (value.*) {
                     .call => |v| {
                         const results = (try self.callFixed(v.callee, null, v.args, remain)) orelse unreachable;
-                        for (0..remain) |j| {
-                            const src = try self.arrayElem(results, j);
-                            const dst = try self.arrayElem(out, oi + j);
-                            try self.copyValue(dst, src);
-                        }
+                        for (0..remain) |j|
+                            try self.copyValue(try self.arrayElem(out, oi + j), try self.arrayElem(results, j));
                     },
                     .method_call => |v| {
                         const results = (try self.callFixed(v.object, v.method, v.args, remain)) orelse unreachable;
-                        for (0..remain) |j| {
-                            const src = try self.arrayElem(results, j);
-                            const dst = try self.arrayElem(out, oi + j);
-                            try self.copyValue(dst, src);
-                        }
+                        for (0..remain) |j|
+                            try self.copyValue(try self.arrayElem(out, oi + j), try self.arrayElem(results, j));
                     },
-                    .vararg => for (0..remain) |j| {
-                        const dst = try self.arrayElem(out, oi + j);
-                        try print(&self.code, self.a(), "  call void @dict_lua_arg_get(ptr %args, i64 %args_len, i64 {d}, ptr {s})\n", .{ self.info.params.len + j, dst });
+                    .vararg => {
+                        for (0..remain) |j| {
+                            _ = try llvm.call(self.builder, self.rt().arg_get, &.{
+                                self.args(),                     self.argsLen(), try self.cI64(self.info.params.len + j),
+                                try self.arrayElem(out, oi + j),
+                            });
+                        }
                     },
                     else => unreachable,
                 }
                 oi = needed;
                 continue;
             }
-            const result = try self.expr(value);
-            const dst = try self.arrayElem(out, oi);
-            try self.copyValue(dst, try self.box(result));
+            try self.copyValue(try self.arrayElem(out, oi), try self.box(try self.expr(value)));
             oi += 1;
         }
-        while (oi < needed) : (oi += 1) {
-            const dst = try self.arrayElem(out, oi);
-            try print(&self.code, self.a(), "  call void @dict_lua_value_nil(ptr {s})\n", .{dst});
-        }
+        while (oi < needed) : (oi += 1)
+            _ = try llvm.call(self.builder, self.rt().value_nil, &.{try self.arrayElem(out, oi)});
         return out;
     }
 
@@ -1249,7 +1527,9 @@ const FnEmitter = struct {
                     },
                     .vararg => for (0..remain) |j| {
                         const dst = try self.valueSlot();
-                        try print(&self.code, self.a(), "  call void @dict_lua_arg_get(ptr %args, i64 %args_len, i64 {d}, ptr {s})\n", .{ self.info.params.len + j, dst });
+                        _ = try llvm.call(self.builder, self.rt().arg_get, &.{
+                            self.args(), self.argsLen(), try self.cI64(self.info.params.len + j), dst,
+                        });
                         out[oi + j] = .{ .boxed = dst };
                     },
                     else => unreachable,
@@ -1263,6 +1543,7 @@ const FnEmitter = struct {
         while (oi < needed) : (oi += 1) out[oi] = .nil;
         return out;
     }
+
     fn prepareTarget(self: *FnEmitter, target: lua.LValue) anyerror!PreparedTarget {
         return switch (target) {
             .name => |name| .{ .name = try self.resolve(name) },
@@ -1274,35 +1555,37 @@ const FnEmitter = struct {
             },
         };
     }
+
     fn storeTarget(self: *FnEmitter, target: PreparedTarget, value: ValueRef) anyerror!void {
         switch (target) {
             .name => |resolved| try self.storeResolved(resolved, value),
             .field => |field| {
                 const object = try self.box(field.object);
                 const boxed = try self.box(value);
-                const status = try self.temp("st");
-                if (field.object == .table) {
-                    const key_name = self.module.strings.items.items[field.key.id];
-                    if (field.object.table.shape) |shape| if (shapeSlot(shape, key_name)) |slot| {
-                        try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_set_known_shape_field(ptr %ctx, ptr {s}, i32 {d}, i32 {d}, ptr @lua_s_{d}, i64 {d}, ptr {s})\n", .{ status, object, shape.id, slot, field.key.id, field.key.len, boxed });
-                        try self.check(status);
-                        return;
-                    };
-                    if (field.object.table.native_namespace) |namespace| if (static_fields.slotForName(namespace, key_name)) |slot| {
-                        try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_set_native_slot(ptr %ctx, ptr {s}, i32 {d}, ptr @lua_s_{d}, i64 {d}, ptr {s})\n", .{ status, object, slot, field.key.id, field.key.len, boxed });
-                        try self.check(status);
-                        return;
-                    };
-                }
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_set_field(ptr %ctx, ptr {s}, ptr @lua_s_{d}, i64 {d}, ptr {s})\n", .{ status, object, field.key.id, field.key.len, boxed });
+                const status = if (field.object == .table) blk: {
+                    const key_name = field.key.bytes;
+                    if (field.object.table.shape) |shape| if (shapeSlot(shape, key_name)) |slot|
+                        break :blk try llvm.call(self.builder, self.rt().set_known_shape_field, &.{
+                            self.ctx(),    object,                       try self.cI32(shape.id), try self.cI32(slot),
+                            field.key.ptr, try self.cI64(field.key.len), boxed,
+                        });
+                    if (field.object.table.native_namespace) |namespace| if (static_fields.slotForName(namespace, key_name)) |slot|
+                        break :blk try llvm.call(self.builder, self.rt().set_native_slot, &.{
+                            self.ctx(),                   object, try self.cI32(slot), field.key.ptr,
+                            try self.cI64(field.key.len), boxed,
+                        });
+                    break :blk try llvm.call(self.builder, self.rt().set_field, &.{
+                        self.ctx(), object, field.key.ptr, try self.cI64(field.key.len), boxed,
+                    });
+                } else try llvm.call(self.builder, self.rt().set_field, &.{
+                    self.ctx(), object, field.key.ptr, try self.cI64(field.key.len), boxed,
+                });
                 try self.check(status);
             },
             .index => |index| {
-                const object = try self.box(index.object);
-                const key = try self.box(index.key);
-                const boxed = try self.box(value);
-                const status = try self.temp("st");
-                try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_set_index(ptr %ctx, ptr {s}, ptr {s}, ptr {s})\n", .{ status, object, key, boxed });
+                const status = try llvm.call(self.builder, self.rt().set_index, &.{
+                    self.ctx(), try self.box(index.object), try self.box(index.key), try self.box(value),
+                });
                 try self.check(status);
             },
         }
@@ -1313,38 +1596,40 @@ const FnEmitter = struct {
         defer self.endScope(mark);
         return self.block(body);
     }
+
     fn emitReturn(self: *FnEmitter, values_in: []const *lua.Expr) anyerror!void {
         if (values_in.len == 0) {
-            const result = try self.temp("ret");
-            try print(&self.code, self.a(), "  {s} = call %FunctionResult @dict_lua_return_values(ptr %ctx, ptr %result_ptr, i64 %result_len, ptr %args, i64 0)\n", .{result});
-            try print(&self.code, self.a(), "  ret %FunctionResult {s}\n", .{result});
+            const result = try llvm.call(self.builder, self.rt().return_values, &.{
+                self.ctx(), self.resultPtr(), self.resultLen(), self.args(), try self.cI64(0),
+            });
+            try llvm.ret(self.builder, result);
             return;
         }
+
         const prefix_count = values_in.len - 1;
         const last = values_in[values_in.len - 1];
         if (isMultiExpr(last)) {
             const prefix = try self.valueArray(prefix_count);
-            for (values_in[0..prefix_count], 0..) |value, index| {
-                const evaluated = try self.expr(value);
-                const dst = try self.arrayElem(prefix, index);
-                try self.copyValue(dst, try self.box(evaluated));
-            }
+            for (values_in[0..prefix_count], 0..) |value, index|
+                try self.copyValue(try self.arrayElem(prefix, index), try self.box(try self.expr(value)));
             const tail = try self.multi(last);
-            const result = try self.temp("ret");
-            try print(&self.code, self.a(), "  {s} = call %FunctionResult @dict_lua_return_join(ptr %ctx, ptr %result_ptr, i64 %result_len, ptr {s}, i64 {d}, ptr {s}, i64 {s})\n", .{ result, prefix, prefix_count, tail.ptr, tail.len });
+            const result = try llvm.call(self.builder, self.rt().return_join, &.{
+                self.ctx(), self.resultPtr(),            self.resultLen(),
+                prefix,     try self.cI64(prefix_count), tail.ptr,
+                tail.len,
+            });
             try self.freeMulti(tail);
-            try print(&self.code, self.a(), "  ret %FunctionResult {s}\n", .{result});
+            try llvm.ret(self.builder, result);
             return;
         }
+
         const fixed = try self.valueArray(values_in.len);
-        for (values_in, 0..) |value, index| {
-            const evaluated = try self.expr(value);
-            const dst = try self.arrayElem(fixed, index);
-            try self.copyValue(dst, try self.box(evaluated));
-        }
-        const result = try self.temp("ret");
-        try print(&self.code, self.a(), "  {s} = call %FunctionResult @dict_lua_return_values(ptr %ctx, ptr %result_ptr, i64 %result_len, ptr {s}, i64 {d})\n", .{ result, fixed, values_in.len });
-        try print(&self.code, self.a(), "  ret %FunctionResult {s}\n", .{result});
+        for (values_in, 0..) |value, index|
+            try self.copyValue(try self.arrayElem(fixed, index), try self.box(try self.expr(value)));
+        const result = try llvm.call(self.builder, self.rt().return_values, &.{
+            self.ctx(), self.resultPtr(), self.resultLen(), fixed, try self.cI64(values_in.len),
+        });
+        try llvm.ret(self.builder, result);
     }
 
     fn block(self: *FnEmitter, body: lua.Block) anyerror!bool {
@@ -1357,7 +1642,7 @@ const FnEmitter = struct {
             .empty => return false,
             .break_stmt => {
                 const target = self.breaks.getLastOrNull() orelse return error.InvalidBreak;
-                try print(&self.code, self.a(), "  br label %{s}\n", .{target});
+                try llvm.br(self.builder, target);
                 return true;
             },
             .local_assign => |s| {
@@ -1396,8 +1681,7 @@ const FnEmitter = struct {
             },
             .function_assign => |s| {
                 const target = try self.prepareTarget(s.target);
-                const closure_value = try self.expr(s.function);
-                try self.storeTarget(target, closure_value);
+                try self.storeTarget(target, try self.expr(s.function));
                 return false;
             },
             .local_function => |s| {
@@ -1410,154 +1694,147 @@ const FnEmitter = struct {
                 }
                 const binding = try self.bindName(s.name);
                 try self.initBinding(binding, .nil);
-                const closure_value = try self.expr(s.function);
-                try self.storeResolved(.{ .local = binding }, closure_value);
+                try self.storeResolved(.{ .local = binding }, try self.expr(s.function));
                 return false;
             },
-            .if_stmt => |s| return try self.emitIf(s),
-            .while_loop => |s| return try self.emitWhile(s),
-            .repeat_loop => |s| return try self.emitRepeat(s),
-            .numeric_for => |s| return try self.emitNumericFor(s),
-            .generic_for => |s| return try self.emitGenericFor(s),
+            .if_stmt => |s| return self.emitIf(s),
+            .while_loop => |s| return self.emitWhile(s),
+            .repeat_loop => |s| return self.emitRepeat(s),
+            .numeric_for => |s| return self.emitNumericFor(s),
+            .generic_for => |s| return self.emitGenericFor(s),
         }
     }
-    fn coerceNumber(self: *FnEmitter, value: ValueRef) anyerror![]const u8 {
+
+    fn coerceNumber(self: *FnEmitter, value: ValueRef) anyerror!V {
         if (value == .number) return value.number;
         const boxed = try self.box(value);
-        const slot = try self.temp("numslot");
-        try print(&self.allocas, self.a(), "  {s} = alloca double, align 8\n", .{slot});
-        const status = try self.temp("st");
-        try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_require_number(ptr %ctx, ptr {s}, ptr {s})\n", .{ status, boxed, slot });
+        const slot = try self.doubleSlot();
+        const status = try llvm.call(self.builder, self.rt().require_number, &.{ self.ctx(), boxed, slot });
         try self.check(status);
-        const number = try self.temp("num");
-        try print(&self.code, self.a(), "  {s} = load double, ptr {s}, align 8\n", .{ number, slot });
-        return number;
+        return llvm.load(self.builder, self.ty().double, slot, 8);
     }
 
     fn emitIf(self: *FnEmitter, s: anytype) anyerror!bool {
-        const end = try self.label("if_end");
+        var end_block: ?BB = null;
         var all_terminate = s.else_body != null;
-        var end_pred = false;
         for (s.branches) |branch| {
-            const then_label = try self.label("if_then");
-            const next_label = try self.label("if_next");
+            const then_block = try self.newBlock("if_then");
+            const next_block = try self.newBlock("if_next");
             const condition = try self.truthy(try self.expr(branch.cond));
-            try print(&self.code, self.a(), "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ condition, then_label, next_label, then_label });
+            try llvm.condBr(self.builder, condition, then_block, next_block);
+            llvm.position(self.builder, then_block);
             const term = try self.scopedBlock(branch.body);
             all_terminate = all_terminate and term;
             if (!term) {
-                try print(&self.code, self.a(), "  br label %{s}\n", .{end});
-                end_pred = true;
+                if (end_block == null) end_block = try self.newBlock("if_end");
+                try llvm.br(self.builder, end_block.?);
             }
-            try print(&self.code, self.a(), "{s}:\n", .{next_label});
+            llvm.position(self.builder, next_block);
         }
         if (s.else_body) |body| {
             const term = try self.scopedBlock(body);
             all_terminate = all_terminate and term;
             if (!term) {
-                try print(&self.code, self.a(), "  br label %{s}\n", .{end});
-                end_pred = true;
+                if (end_block == null) end_block = try self.newBlock("if_end");
+                try llvm.br(self.builder, end_block.?);
             }
         } else {
-            try print(&self.code, self.a(), "  br label %{s}\n", .{end});
-            end_pred = true;
+            if (end_block == null) end_block = try self.newBlock("if_end");
+            try llvm.br(self.builder, end_block.?);
             all_terminate = false;
         }
-        if (end_pred) try print(&self.code, self.a(), "{s}:\n", .{end});
+        if (end_block) |end| llvm.position(self.builder, end);
         return all_terminate;
     }
 
     fn emitWhile(self: *FnEmitter, s: anytype) anyerror!bool {
-        const cond_label = try self.label("while_cond");
-        const body_label = try self.label("while_body");
-        const end_label = try self.label("while_end");
-        try print(&self.code, self.a(), "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
-        const condition = try self.truthy(try self.expr(s.cond));
-        try print(&self.code, self.a(), "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ condition, body_label, end_label, body_label });
-        try self.breaks.append(self.a(), end_label);
+        const cond_block = try self.newBlock("while_cond");
+        const body_block = try self.newBlock("while_body");
+        const end_block = try self.newBlock("while_end");
+        try llvm.br(self.builder, cond_block);
+        llvm.position(self.builder, cond_block);
+        try llvm.condBr(self.builder, try self.truthy(try self.expr(s.cond)), body_block, end_block);
+        llvm.position(self.builder, body_block);
+        try self.breaks.append(self.a(), end_block);
         const term = try self.scopedBlock(s.body);
         _ = self.breaks.pop();
-        if (!term) try print(&self.code, self.a(), "  br label %{s}\n", .{cond_label});
-        try print(&self.code, self.a(), "{s}:\n", .{end_label});
-        return false;
-    }
-    fn emitRepeat(self: *FnEmitter, s: anytype) anyerror!bool {
-        const body_label = try self.label("repeat_body");
-        const cond_label = try self.label("repeat_cond");
-        const end_label = try self.label("repeat_end");
-        const mark = self.saves.items.len;
-        defer self.endScope(mark);
-        try print(&self.code, self.a(), "  br label %{s}\n{s}:\n", .{ body_label, body_label });
-        try self.breaks.append(self.a(), end_label);
-        const term = try self.block(s.body);
-        _ = self.breaks.pop();
-        if (!term) try print(&self.code, self.a(), "  br label %{s}\n", .{cond_label});
-        try print(&self.code, self.a(), "{s}:\n", .{cond_label});
-        const condition = try self.truthy(try self.expr(s.cond));
-        try print(&self.code, self.a(), "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ condition, end_label, body_label, end_label });
+        if (!term) try llvm.br(self.builder, cond_block);
+        llvm.position(self.builder, end_block);
         return false;
     }
 
-    fn doubleSlot(self: *FnEmitter) anyerror![]const u8 {
-        const slot = try self.temp("dslot");
-        try print(&self.allocas, self.a(), "  {s} = alloca double, align 8\n", .{slot});
-        return slot;
+    fn emitRepeat(self: *FnEmitter, s: anytype) anyerror!bool {
+        const body_block = try self.newBlock("repeat_body");
+        const cond_block = try self.newBlock("repeat_cond");
+        const end_block = try self.newBlock("repeat_end");
+        const mark = self.saves.items.len;
+        defer self.endScope(mark);
+
+        try llvm.br(self.builder, body_block);
+        llvm.position(self.builder, body_block);
+        try self.breaks.append(self.a(), end_block);
+        const term = try self.block(s.body);
+        _ = self.breaks.pop();
+        if (!term) try llvm.br(self.builder, cond_block);
+        llvm.position(self.builder, cond_block);
+        try llvm.condBr(self.builder, try self.truthy(try self.expr(s.cond)), end_block, body_block);
+        llvm.position(self.builder, end_block);
+        return false;
     }
+
     fn emitNumericFor(self: *FnEmitter, s: anytype) anyerror!bool {
         const start = try self.coerceNumber(try self.expr(s.start));
         const limit = try self.coerceNumber(try self.expr(s.limit));
-        const step = if (s.step) |value| try self.coerceNumber(try self.expr(value)) else "0x3FF0000000000000";
+        const step = if (s.step) |value| try self.coerceNumber(try self.expr(value)) else try self.cDouble(1.0);
         const current_slot = try self.doubleSlot();
         const limit_slot = try self.doubleSlot();
         const step_slot = try self.doubleSlot();
-        try print(&self.code, self.a(), "  store double {s}, ptr {s}, align 8\n", .{ start, current_slot });
-        try print(&self.code, self.a(), "  store double {s}, ptr {s}, align 8\n", .{ limit, limit_slot });
-        try print(&self.code, self.a(), "  store double {s}, ptr {s}, align 8\n", .{ step, step_slot });
+        try llvm.store(self.builder, start, current_slot, 8);
+        try llvm.store(self.builder, limit, limit_slot, 8);
+        try llvm.store(self.builder, step, step_slot, 8);
 
         const mark = self.saves.items.len;
         defer self.endScope(mark);
         const binding = try self.bindName(s.name);
-        try self.initBinding(binding, .{ .number = "0x0000000000000000" });
-        const cond_label = try self.label("nfor_cond");
-        const body_label = try self.label("nfor_body");
-        const end_label = try self.label("nfor_end");
-        try print(&self.code, self.a(), "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
-        const current = try self.temp("current");
-        const lim = try self.temp("limit");
-        const stp = try self.temp("step");
-        try print(&self.code, self.a(), "  {s} = load double, ptr {s}, align 8\n", .{ current, current_slot });
-        try print(&self.code, self.a(), "  {s} = load double, ptr {s}, align 8\n", .{ lim, limit_slot });
-        try print(&self.code, self.a(), "  {s} = load double, ptr {s}, align 8\n", .{ stp, step_slot });
-        const positive = try self.temp("positive");
-        const positive_ok = try self.temp("posok");
-        const negative_ok = try self.temp("negok");
-        const keep_going = try self.temp("keep");
-        try print(&self.code, self.a(), "  {s} = fcmp ogt double {s}, 0x0000000000000000\n", .{ positive, stp });
-        try print(&self.code, self.a(), "  {s} = fcmp ole double {s}, {s}\n", .{ positive_ok, current, lim });
-        try print(&self.code, self.a(), "  {s} = fcmp oge double {s}, {s}\n", .{ negative_ok, current, lim });
-        try print(&self.code, self.a(), "  {s} = select i1 {s}, i1 {s}, i1 {s}\n", .{ keep_going, positive, positive_ok, negative_ok });
-        try print(&self.code, self.a(), "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ keep_going, body_label, end_label, body_label });
+        try self.initBinding(binding, .{ .number = try self.cDouble(0.0) });
+
+        const cond_block = try self.newBlock("nfor_cond");
+        const body_block = try self.newBlock("nfor_body");
+        const end_block = try self.newBlock("nfor_end");
+        try llvm.br(self.builder, cond_block);
+        llvm.position(self.builder, cond_block);
+
+        const current = try llvm.load(self.builder, self.ty().double, current_slot, 8);
+        const lim = try llvm.load(self.builder, self.ty().double, limit_slot, 8);
+        const stp = try llvm.load(self.builder, self.ty().double, step_slot, 8);
+        const zero = try self.cDouble(0.0);
+        const positive = try llvm.fcmp(self.builder, .ogt, stp, zero);
+        const positive_ok = try llvm.fcmp(self.builder, .ole, current, lim);
+        const negative_ok = try llvm.fcmp(self.builder, .oge, current, lim);
+        const keep_going = try llvm.select(self.builder, positive, positive_ok, negative_ok);
+        try llvm.condBr(self.builder, keep_going, body_block, end_block);
+
+        llvm.position(self.builder, body_block);
         try self.storeResolved(.{ .local = binding }, .{ .number = current });
-        try self.breaks.append(self.a(), end_label);
+        try self.breaks.append(self.a(), end_block);
         const term = try self.block(s.body);
         _ = self.breaks.pop();
         if (!term) {
-            const old = try self.temp("oldcurrent");
-            const delta = try self.temp("delta");
-            const next = try self.temp("nextcurrent");
-            try print(&self.code, self.a(), "  {s} = load double, ptr {s}, align 8\n", .{ old, current_slot });
-            try print(&self.code, self.a(), "  {s} = load double, ptr {s}, align 8\n", .{ delta, step_slot });
-            try print(&self.code, self.a(), "  {s} = fadd double {s}, {s}\n", .{ next, old, delta });
-            try print(&self.code, self.a(), "  store double {s}, ptr {s}, align 8\n  br label %{s}\n", .{ next, current_slot, cond_label });
+            const old = try llvm.load(self.builder, self.ty().double, current_slot, 8);
+            const delta = try llvm.load(self.builder, self.ty().double, step_slot, 8);
+            try llvm.store(self.builder, try llvm.fadd(self.builder, old, delta), current_slot, 8);
+            try llvm.br(self.builder, cond_block);
         }
-        try print(&self.code, self.a(), "{s}:\n", .{end_label});
+        llvm.position(self.builder, end_block);
         return false;
     }
+
     fn emitGenericFor(self: *FnEmitter, s: anytype) anyerror!bool {
         const iter_values = try self.rhsFixed(s.values, 3);
         const iter = try self.arrayElem(iter_values, 0);
         const state = try self.arrayElem(iter_values, 1);
         const control = try self.arrayElem(iter_values, 2);
+
         const mark = self.saves.items.len;
         defer self.endScope(mark);
         const bindings = try self.a().alloc(u32, s.names.len);
@@ -1566,47 +1843,52 @@ const FnEmitter = struct {
             bindings[index] = try self.bindName(name);
             try self.initBinding(bindings[index], .nil);
         }
-        const args = try self.valueArray(2);
-        const arg0 = try self.arrayElem(args, 0);
-        const arg1 = try self.arrayElem(args, 1);
+
+        const args_array = try self.valueArray(2);
+        const arg0 = try self.arrayElem(args_array, 0);
+        const arg1 = try self.arrayElem(args_array, 1);
         const results = try self.valueArray(s.names.len);
-        const call_label = try self.label("gfor_call");
-        const body_label = try self.label("gfor_body");
-        const end_label = try self.label("gfor_end");
-        try print(&self.code, self.a(), "  br label %{s}\n{s}:\n", .{ call_label, call_label });
+        const call_block = try self.newBlock("gfor_call");
+        const body_block = try self.newBlock("gfor_body");
+        const end_block = try self.newBlock("gfor_end");
+
+        try llvm.br(self.builder, call_block);
+        llvm.position(self.builder, call_block);
         try self.copyValue(arg0, state);
         try self.copyValue(arg1, control);
-        const status = try self.temp("st");
-        try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_call_fixed(ptr %ctx, ptr {s}, ptr {s}, i64 2, ptr {s}, i64 {d})\n", .{ status, iter, args, results, s.names.len });
+        const status = try llvm.call(self.builder, self.rt().call_fixed, &.{
+            self.ctx(), iter, args_array, try self.cI64(2), results, try self.cI64(s.names.len),
+        });
         try self.check(status);
         const first = try self.arrayElem(results, 0);
-        const nil_raw = try self.temp("isnil8");
-        const is_nil = try self.temp("isnil");
-        try print(&self.code, self.a(), "  {s} = call i8 @dict_lua_value_is_nil(ptr {s})\n", .{ nil_raw, first });
-        try print(&self.code, self.a(), "  {s} = icmp ne i8 {s}, 0\n", .{ is_nil, nil_raw });
-        try print(&self.code, self.a(), "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ is_nil, end_label, body_label, body_label });
+        const nil_raw = try llvm.call(self.builder, self.rt().value_is_nil, &.{first});
+        const is_nil = try llvm.icmp(self.builder, .ne, nil_raw, try self.cI8(0));
+        try llvm.condBr(self.builder, is_nil, end_block, body_block);
+
+        llvm.position(self.builder, body_block);
         try self.copyValue(control, first);
-        for (bindings, 0..) |binding, index| {
-            const src = try self.arrayElem(results, index);
-            try self.storeResolved(.{ .local = binding }, .{ .boxed = src });
-        }
-        try self.breaks.append(self.a(), end_label);
+        for (bindings, 0..) |binding, index|
+            try self.storeResolved(.{ .local = binding }, .{ .boxed = try self.arrayElem(results, index) });
+        try self.breaks.append(self.a(), end_block);
         const term = try self.block(s.body);
         _ = self.breaks.pop();
-        if (!term) try print(&self.code, self.a(), "  br label %{s}\n", .{call_label});
-        try print(&self.code, self.a(), "{s}:\n", .{end_label});
+        if (!term) try llvm.br(self.builder, call_block);
+        llvm.position(self.builder, end_block);
         return false;
     }
+
     fn emitInitialization(self: *FnEmitter) anyerror!void {
         for (self.info.upvalues, 0..) |_, index| {
-            const status = try self.temp("st");
-            try print(&self.code, self.a(), "  {s} = call i32 @dict_lua_capture_cell(ptr %ctx, ptr %captures, i32 {d}, ptr {s})\n", .{ status, index, self.upvalue_slots[index] });
+            const status = try llvm.call(self.builder, self.rt().capture_cell, &.{
+                self.ctx(), self.captures(), try self.cI32(index), self.upvalue_slots[index],
+            });
             try self.check(status);
         }
         for (self.info.params, 0..) |name, index| {
             const binding = try self.bindName(name);
-            const value = try self.temp("arg");
-            try print(&self.code, self.a(), "  {s} = call ptr @dict_lua_arg_ptr(ptr %args, i64 %args_len, i64 {d})\n", .{ value, index });
+            const value = try llvm.call(self.builder, self.rt().arg_ptr, &.{
+                self.args(), self.argsLen(), try self.cI64(index),
+            });
             try self.initBinding(binding, .{ .boxed = value });
         }
     }
@@ -1625,53 +1907,117 @@ fn emitFunction(emitter: *ModuleEmitter, info: *const analysis.FunctionInfo) any
     try function.emitInitialization();
     const terminated = try function.block(info.body);
     if (!terminated) try function.emitReturn(&.{});
-    const name = try functionName(emitter.allocator, info.id);
-    defer emitter.allocator.free(name);
-    const linkage: []const u8 = if (info.direct_only) "internal " else "";
-    try print(&emitter.out, emitter.allocator, "define {s}%FunctionResult {s}(ptr %ctx, ptr %captures, ptr %args, i64 %args_len, ptr %result_ptr, i64 %result_len) {{\nentry:\n", .{ linkage, name });
-    try text(&emitter.out, emitter.allocator, function.allocas.items);
-    try text(&emitter.out, emitter.allocator, "  br label %start\nstart:\n");
-    try text(&emitter.out, emitter.allocator, function.code.items);
-    if (function.error_used) {
-        try text(&emitter.out, emitter.allocator, "error:\n");
-        try text(&emitter.out, emitter.allocator, "  %error_result = call %FunctionResult @dict_lua_function_error()\n");
-        try text(&emitter.out, emitter.allocator, "  ret %FunctionResult %error_result\n");
-    }
-    try text(&emitter.out, emitter.allocator, "}\n\n");
+    try function.finish();
 }
 
-pub fn generate(allocator: A, globals: *const analysis.Globals, module: *const analysis.Module, facts: ProgramFacts) anyerror!Generated {
-    var emitter = ModuleEmitter{ .allocator = allocator, .globals = globals, .module = module, .facts = facts };
-    defer emitter.deinit();
-    try emitPreamble(&emitter.out, allocator);
-    for (module.functions.items) |info| try emitFunction(&emitter, info);
-    try emitStrings(&emitter);
-    const source = try emitter.out.toOwnedSlice(allocator);
+fn generatedFunctionType(m: *const llvm.Module) anyerror!T {
+    return m.functionType(m.types.function_result, &.{
+        m.types.ptr, m.types.ptr, m.types.ptr, m.types.i64, m.types.ptr, m.types.i64,
+    });
+}
+
+pub const AppendResult = struct {
+    root_function: u32,
+    function_count: u32,
+};
+
+pub const Batch = struct {
+    module: llvm.Module,
+    runtime: Runtime,
+
+    pub fn init() anyerror!Batch {
+        var module = try llvm.Module.init("dict_lua_batch");
+        errdefer module.deinit();
+        return .{
+            .runtime = try Runtime.init(&module),
+            .module = module,
+        };
+    }
+
+    pub fn deinit(self: *Batch) void {
+        self.module.deinit();
+        self.* = undefined;
+    }
+
+    pub fn append(
+        self: *Batch,
+        allocator: A,
+        globals: *const analysis.Globals,
+        module: *const analysis.Module,
+        facts: ProgramFacts,
+    ) anyerror!AppendResult {
+        const functions = try allocator.alloc(V, module.functions.items.len);
+        errdefer allocator.free(functions);
+        const function_base = module.functions.items[0].id;
+        const function_ty = try generatedFunctionType(&self.module);
+        for (module.functions.items, 0..) |info, index| {
+            const name = try std.fmt.allocPrint(allocator, "lua_f_{d}", .{info.id});
+            defer allocator.free(name);
+            functions[index] = try self.module.addFunction(name, function_ty);
+            const param_names = [_][]const u8{ "ctx", "captures", "args", "args_len", "result_ptr", "result_len" };
+            for (param_names, 0..) |param_name, param_index|
+                llvm.setName(try llvm.param(functions[index], param_index), param_name);
+            if (info.direct_only) llvm.setLinkage(functions[index], .internal);
+        }
+
+        var emitter = ModuleEmitter{
+            .allocator = allocator,
+            .llvm_module = &self.module,
+            .globals = globals,
+            .module = module,
+            .facts = facts,
+            .runtime = self.runtime,
+            .functions = functions,
+            .function_base = function_base,
+        };
+        defer emitter.deinit();
+
+        for (module.functions.items) |info| try emitFunction(&emitter, info);
+        return .{
+            .root_function = module.root.id,
+            .function_count = @intCast(module.functions.items.len),
+        };
+    }
+
+    pub fn writeBitcode(self: *const Batch, allocator: A, path: []const u8) anyerror!void {
+        if (std.debug.runtime_safety) try self.module.verify(allocator);
+        try self.module.writeBitcode(allocator, path);
+    }
+
+    pub fn toText(self: *const Batch, allocator: A) anyerror![]u8 {
+        return self.module.toText(allocator);
+    }
+};
+
+pub fn generate(
+    allocator: A,
+    globals: *const analysis.Globals,
+    module: *const analysis.Module,
+    facts: ProgramFacts,
+) anyerror!Generated {
+    var batch = try Batch.init();
+    errdefer batch.deinit();
+    const result = try batch.append(allocator, globals, module, facts);
+    if (std.debug.runtime_safety) try batch.module.verify(allocator);
     return .{
-        .source = source,
-        .root_function = module.root.id,
-        .function_count = @intCast(module.functions.items.len),
+        .module = batch.module,
+        .root_function = result.root_function,
+        .function_count = result.function_count,
     };
 }
 
-test "LLVM temporary names cannot alias across numeric prefixes" {
-    const a = std.testing.allocator;
-    const first = try tempNameAlloc(a, "truth1", 996);
-    defer a.free(first);
-    const second = try tempNameAlloc(a, "truth", 1996);
-    defer a.free(second);
-    try std.testing.expect(!std.mem.eql(u8, first, second));
-    try std.testing.expectEqualStrings("%t996_truth1", first);
-    try std.testing.expectEqualStrings("%t1996_truth", second);
-}
-
-test "LLVM block labels cannot alias across numeric prefixes" {
-    const a = std.testing.allocator;
-    const first = try labelNameAlloc(a, "next1", 2);
-    defer a.free(first);
-    const second = try labelNameAlloc(a, "next", 12);
-    defer a.free(second);
-    try std.testing.expect(!std.mem.eql(u8, first, second));
-    try std.testing.expectEqualStrings("bb_2_next1", first);
-    try std.testing.expectEqualStrings("bb_12_next", second);
+test "direct LLVM module smoke" {
+    const source = "local x=1; x=x+2; return x";
+    var chunk = try lua.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const text_ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(text_ir);
+    try std.testing.expect(std.mem.indexOf(u8, text_ir, "define %FunctionResult @lua_f_0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_ir, "fadd double") != null);
 }

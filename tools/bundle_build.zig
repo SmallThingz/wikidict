@@ -43,11 +43,8 @@ fn sourcePath(a: std.mem.Allocator, relative: []const u8) ![]u8 {
     return std.fs.path.join(a, &.{ paths.project_root, relative });
 }
 
-fn fileSize(io: std.Io, path: []const u8) !?u64 {
-    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return null,
-        else => return err,
-    };
+fn fileSize(io: std.Io, path: []const u8) !u64 {
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
     return (try file.stat(io)).size;
 }
@@ -60,91 +57,189 @@ fn installSnapshot(io: std.Io, a: std.mem.Allocator, source: []const u8, root: [
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = destination, .data = bytes });
 }
 
-const modules_per_object: usize = 64;
-const large_ir_threshold: u64 = 4 * 1024 * 1024;
+const CompileMode = enum {
+    o1,
+    o2,
 
-fn irOptimization(size: u64) []const u8 {
-    return if (size >= large_ir_threshold) "-O0" else "-O3";
+    fn parse(raw: []const u8) !CompileMode {
+        if (std.mem.eql(u8, raw, "-O1")) return .o1;
+        if (std.mem.eql(u8, raw, "-O2")) return .o2;
+        return error.InvalidBatchPlan;
+    }
+
+    fn flag(self: CompileMode) []const u8 {
+        return switch (self) {
+            .o1 => "-O1",
+            .o2 => "-O2",
+        };
+    }
+};
+
+const BatchPlan = struct {
+    mode: CompileMode,
+    file: []const u8,
+    count: usize,
+    first_index: usize,
+    last_index: usize,
+    source_bytes: u64,
+};
+
+fn readBatchPlan(
+    io: std.Io,
+    a: std.mem.Allocator,
+    llvm_dir: []const u8,
+) ![]BatchPlan {
+    const path = try std.fs.path.join(a, &.{ llvm_dir, "batch-plan.tsv" });
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .unlimited);
+
+    var plans: std.ArrayList(BatchPlan) = .empty;
+    errdefer plans.deinit(a);
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        var fields = std.mem.splitScalar(u8, line, '\t');
+        const mode = try CompileMode.parse(
+            fields.next() orelse return error.InvalidBatchPlan,
+        );
+        const file = fields.next() orelse return error.InvalidBatchPlan;
+        if (file.len == 0 or
+            std.fs.path.isAbsolute(file) or
+            std.mem.indexOfScalar(u8, file, '/') != null or
+            !std.mem.endsWith(u8, file, ".bc"))
+            return error.InvalidBatchPlan;
+        const count = try std.fmt.parseInt(
+            usize,
+            fields.next() orelse return error.InvalidBatchPlan,
+            10,
+        );
+        const first_index = try std.fmt.parseInt(
+            usize,
+            fields.next() orelse return error.InvalidBatchPlan,
+            10,
+        );
+        const last_index = try std.fmt.parseInt(
+            usize,
+            fields.next() orelse return error.InvalidBatchPlan,
+            10,
+        );
+        const source_bytes = try std.fmt.parseInt(
+            u64,
+            fields.next() orelse return error.InvalidBatchPlan,
+            10,
+        );
+        if (fields.next() != null or count == 0 or last_index < first_index)
+            return error.InvalidBatchPlan;
+        try plans.append(a, .{
+            .mode = mode,
+            .file = file,
+            .count = count,
+            .first_index = first_index,
+            .last_index = last_index,
+            .source_bytes = source_bytes,
+        });
+    }
+    if (plans.items.len == 0) return error.MissingLlvmModules;
+    return plans.toOwnedSlice(a);
 }
 
 const CompileJob = struct {
     child: std.process.Child,
+    mode: CompileMode,
     first_index: usize,
     last_index: usize,
+    count: usize,
 };
 
 fn waitCompile(io: std.Io, job: *?CompileJob) !void {
     if (job.*) |*active| {
         const term = try active.child.wait(io);
+        const mode = active.mode;
         const first_index = active.first_index;
         const last_index = active.last_index;
+        const count = active.count;
         job.* = null;
         if (term != .exited or term.exited != 0) {
             std.debug.print(
-                "dictionary build failed compiling LLVM modules {d}-{d}; incomplete marker retained\n",
-                .{ first_index, last_index },
+                "dictionary build failed compiling {s} LLVM batch count={d} first={d} last={d}; incomplete marker retained\n",
+                .{ mode.flag(), count, first_index, last_index },
             );
             return error.PipelineStageFailed;
         }
     }
 }
 
-fn compileLlModules(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_dir: []const u8) !std.ArrayList([]const u8) {
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "compile Lua LLVM modules" });
+fn compileBitcodeModules(
+    io: std.Io,
+    a: std.mem.Allocator,
+    marker: []const u8,
+    llvm_dir: []const u8,
+) !std.ArrayList([]const u8) {
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = marker,
+        .data = "compile Lua LLVM bitcode batches",
+    });
+
+    const plans = try readBatchPlan(io, a, llvm_dir);
+    defer a.free(plans);
     var objects: std.ArrayList([]const u8) = .empty;
     var jobs: [2]?CompileJob = .{ null, null };
     errdefer for (&jobs) |*job| if (job.*) |*active| active.child.kill(io);
 
-    var index: usize = 0;
-    var batch_index: usize = 0;
-    while (true) : (batch_index += 1) {
-        const first_source = try std.fmt.allocPrint(a, "{s}/module_{d:0>6}.ll", .{ llvm_dir, index });
-        const first_size = (try fileSize(io, first_source)) orelse break;
-        const optimize = irOptimization(first_size);
-
-        const first_index = index;
-        var argv: std.ArrayList([]const u8) = .empty;
-        errdefer argv.deinit(a);
-        try argv.appendSlice(a, &.{ paths.zig, "cc", optimize, "-c" });
-        if (first_size >= large_ir_threshold) {
-            try argv.append(a, first_source);
-            index += 1;
-        } else {
-            var batch_len: usize = 0;
-            while (batch_len < modules_per_object) : (batch_len += 1) {
-                const source = try std.fmt.allocPrint(a, "{s}/module_{d:0>6}.ll", .{ llvm_dir, index });
-                const size = (try fileSize(io, source)) orelse break;
-                if (size >= large_ir_threshold) break;
-                try argv.append(a, source);
-                index += 1;
-            }
-        }
-        const last_index = index - 1;
-        const object = try std.fmt.allocPrint(a, "{s}/module_batch_{d:0>6}.o", .{ llvm_dir, batch_index });
-        try argv.appendSlice(a, &.{ "-o", object });
+    for (plans, 0..) |plan, batch_index| {
+        const source = try std.fs.path.join(a, &.{ llvm_dir, plan.file });
+        const object = try std.fmt.allocPrint(
+            a,
+            "{s}/module_batch_{d:0>6}.o",
+            .{ llvm_dir, batch_index },
+        );
         try objects.append(a, object);
 
         const slot = batch_index % jobs.len;
         try waitCompile(io, &jobs[slot]);
-        std.debug.print("dictionary build: compile LLVM modules {d}-{d} ({s})\n", .{ first_index, last_index, optimize });
-        const child = try std.process.spawn(io, .{ .argv = argv.items, .stdin = .ignore });
-        argv.deinit(a);
+        std.debug.print(
+            "dictionary build: compile {s} LLVM batch count={d} first={d} last={d} source_bytes={d}\n",
+            .{
+                plan.mode.flag(),
+                plan.count,
+                plan.first_index,
+                plan.last_index,
+                plan.source_bytes,
+            },
+        );
+        const child = try std.process.spawn(io, .{
+            .argv = &.{
+                paths.clang,
+                plan.mode.flag(),
+                "-fno-lto",
+                "-Wno-override-module",
+                "-c",
+                source,
+                "-o",
+                object,
+            },
+            .stdin = .ignore,
+        });
         jobs[slot] = .{
             .child = child,
-            .first_index = first_index,
-            .last_index = last_index,
+            .mode = plan.mode,
+            .first_index = plan.first_index,
+            .last_index = plan.last_index,
+            .count = plan.count,
         };
     }
-    if (objects.items.len == 0) return error.MissingLlvmModules;
     for (&jobs) |*job| try waitCompile(io, job);
 
-    const program_source = try std.fs.path.join(a, &.{ llvm_dir, "program.ll" });
-    const program_size = (try fileSize(io, program_source)) orelse return error.MissingLlvmProgram;
+    const program_source = try std.fs.path.join(a, &.{ llvm_dir, "program.bc" });
     const program_object = try std.fs.path.join(a, &.{ llvm_dir, "program.o" });
-    const program_optimize = irOptimization(program_size);
-    const program_stage = try std.fmt.allocPrint(a, "compile LLVM program metadata ({s})", .{program_optimize});
-    try stage(io, marker, program_stage, &.{
-        paths.zig, "cc", program_optimize, "-c", program_source, "-o", program_object,
+    try stage(io, marker, "compile LLVM program metadata (-O1)", &.{
+        paths.clang,
+        "-O1",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        program_source,
+        "-o",
+        program_object,
     });
     try objects.append(a, program_object);
     return objects;
@@ -154,6 +249,7 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     const worker_core = try sourcePath(a, "src/lua/bundle_worker.zig");
     const zig_runtime = try sourcePath(a, "src/lua/runtime/core.zig");
     const lua_program = try sourcePath(a, "src/lua/runtime/llvm_program.zig");
+    const lua_program_metadata = try sourcePath(a, "src/lua/program_metadata.zig");
     const lua_llvm_abi = try sourcePath(a, "src/lua/runtime/llvm_abi.zig");
     const zig_stdlib = try sourcePath(a, "src/lua/runtime/stdlib.zig");
     const zig_scribunto = try sourcePath(a, "src/lua/runtime/scribunto.zig");
@@ -167,6 +263,7 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     const root = try std.fmt.allocPrint(a, "-Mroot={s}", .{worker_core});
     const runtime_mod = try std.fmt.allocPrint(a, "-Mzig_runtime={s}", .{zig_runtime});
     const program_mod = try std.fmt.allocPrint(a, "-Mlua_program={s}", .{lua_program});
+    const program_metadata_mod = try std.fmt.allocPrint(a, "-Mlua_program_metadata={s}", .{lua_program_metadata});
     const llvm_abi_mod = try std.fmt.allocPrint(a, "-Mlua_llvm_abi={s}", .{lua_llvm_abi});
     const stdlib_mod = try std.fmt.allocPrint(a, "-Mzig_stdlib={s}", .{zig_stdlib});
     const scribunto_mod = try std.fmt.allocPrint(a, "-Mzig_scribunto={s}", .{zig_scribunto});
@@ -180,18 +277,19 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-lc", emit });
     try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", "--dep", "shared_xml_decode", "--dep", "lua_wikitext_preprocess", root });
     try argv.appendSlice(a, &.{
-        "--dep",                   "lua_static_fields",       runtime_mod,
-        "--dep",                   "zig_runtime",             "--dep",
-        "zig_stdlib",              "--dep",                   "zig_scribunto",
-        "--dep",                   "lua_globals",             program_mod,
-        "--dep",                   "zig_runtime",             llvm_abi_mod,
-        "--dep",                   "zig_runtime",             "--dep",
-        "lua_globals",             stdlib_mod,                "--dep",
-        "zig_runtime",             "--dep",                   "zig_stdlib",
-        "--dep",                   "lua_wikitext_preprocess", "--dep",
-        "lua_wikitext_expression", "--dep",                   "shared_xml_decode",
-        scribunto_mod,             static_fields_mod,         globals_mod,
-        preprocess_mod,            expression_mod,            xml_decode_mod,
+        "--dep",                   "lua_static_fields", runtime_mod,
+        "--dep",                   "zig_runtime",       "--dep",
+        "zig_stdlib",              "--dep",             "zig_scribunto",
+        "--dep",                   "lua_globals",       "--dep",
+        "lua_program_metadata",    program_mod,         "--dep",
+        "zig_runtime",             llvm_abi_mod,        "--dep",
+        "zig_runtime",             "--dep",             "lua_globals",
+        stdlib_mod,                "--dep",             "zig_runtime",
+        "--dep",                   "zig_stdlib",        "--dep",
+        "lua_wikitext_preprocess", "--dep",             "lua_wikitext_expression",
+        "--dep",                   "shared_xml_decode", scribunto_mod,
+        static_fields_mod,         globals_mod,         program_metadata_mod,
+        preprocess_mod,            expression_mod,      xml_decode_mod,
     });
     try stage(io, marker, "compile optimized build-only Lua worker object", argv.items);
     return output;
@@ -227,16 +325,20 @@ fn linkNativeWorker(
     try writeResponseFile(io, a, response_path, lua_objects);
     const response_arg = try std.fmt.allocPrint(a, "@{s}", .{response_path});
     try stage(io, marker, "link optimized native Lua worker", &.{
-        paths.zig, "cc", "-O3", "-pthread", "-s", main_c, worker, response_arg, "-lm", "-lc", "-o", output,
+        paths.zig, "cc", "-O2", "-pthread", "-s", main_c, worker, response_arg, "-lm", "-lc", "-o", output,
     });
 }
 
 fn compileNativeWorker(io: std.Io, a: std.mem.Allocator, marker: []const u8, publish_root: []const u8, llvm_dir: []const u8) !void {
-    const lua_objects = try compileLlModules(io, a, marker, llvm_dir);
+    const lua_objects = try compileBitcodeModules(io, a, marker, llvm_dir);
     const worker = try compileWorkerObject(io, a, marker, llvm_dir);
     const main_c = try sourcePath(a, "src/lua/bundle_worker_main.c");
     const output = try std.fs.path.join(a, &.{ publish_root, "dict-bundle-expander" });
     try linkNativeWorker(io, a, marker, llvm_dir, main_c, worker, lua_objects.items, output);
+
+    const metadata_source = try std.fs.path.join(a, &.{ llvm_dir, "program.meta" });
+    const metadata_destination = try std.fs.path.join(a, &.{ publish_root, "lua-program.meta" });
+    try std.Io.Dir.cwd().rename(metadata_source, std.Io.Dir.cwd(), metadata_destination, io);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -268,7 +370,7 @@ pub fn main(init: std.process.Init) !void {
     const manifest = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });
     const llvm_dir = try std.fs.path.join(a, &.{ expander_root, "llvm" });
     try std.Io.Dir.cwd().createDirPath(init.io, llvm_dir);
-    try stage(init.io, marker, "compile Lua AST directly to LLVM IR", &.{ paths.llvm, manifest, expander_root, llvm_dir });
+    try stage(init.io, marker, "emit Lua AST directly to LLVM bitcode", &.{ paths.llvm, manifest, expander_root, llvm_dir });
 
     // The native worker is a transient bundle compiler. It never belongs in the
     // shipped dictionary; full builds consume it immediately and delete .bundle-expander/.
