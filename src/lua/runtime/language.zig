@@ -122,6 +122,23 @@ fn parseHyphenDate(raw: []const u8) ?Civil {
     return .{ .year = third, .month = month, .day = day };
 }
 
+fn parseDottedDate(raw: []const u8) ?Civil {
+    var fields: [3][]const u8 = undefined;
+    var it = std.mem.splitScalar(u8, raw, '.');
+    var n: usize = 0;
+    while (it.next()) |field| {
+        if (field.len == 0 or n == fields.len) return null;
+        fields[n] = field;
+        n += 1;
+    }
+    if (n != 3 or fields[2].len != 4) return null;
+    return .{
+        .year = std.fmt.parseInt(i64, fields[2], 10) catch return null,
+        .month = std.fmt.parseInt(u8, fields[1], 10) catch return null,
+        .day = std.fmt.parseInt(u8, fields[0], 10) catch return null,
+    };
+}
+
 fn parseSpaceDate(raw: []const u8) ?Civil {
     var fields: [3][]const u8 = undefined;
     var it = std.mem.tokenizeAny(u8, raw, " \t,");
@@ -157,6 +174,8 @@ fn parseSpaceDate(raw: []const u8) ?Civil {
 fn parseDelimitedDate(raw: []const u8) ?Civil {
     return if (std.mem.indexOfScalar(u8, raw, '-') != null)
         parseHyphenDate(raw)
+    else if (std.mem.indexOfScalar(u8, raw, '.') != null)
+        parseDottedDate(raw)
     else
         parseSpaceDate(raw);
 }
@@ -706,6 +725,8 @@ test "MediaWiki partial and word date grammar" {
         .{ .raw = "Feb 4 84", .expected = "1984-02-04" },
         .{ .raw = "4-Feb-99", .expected = "1999-02-04" },
         .{ .raw = "4 Feb 684", .expected = "0684-02-04" },
+        .{ .raw = "17.10.1836", .expected = "1836-10-17" },
+        .{ .raw = "1.2.0003", .expected = "0003-02-01" },
     };
     for (cases) |case| {
         const ts = try parseTimestamp(&ctx, .{ .string = case.raw });
@@ -715,6 +736,7 @@ test "MediaWiki partial and word date grammar" {
     }
     try std.testing.expectError(error.InvalidDate, parseTimestamp(&ctx, .{ .string = "2022 July 1" }));
     try std.testing.expectError(error.InvalidDate, parseTimestamp(&ctx, .{ .string = "Feb 84" }));
+    try std.testing.expect(parseDottedDate("17.10.09") == null);
     const shifted = try parseTimestampText(&ctx, "2013-3-31 +8 days");
     const shifted_text = try formatDateAlloc(std.testing.allocator, shifted, "Y M d");
     defer std.testing.allocator.free(shifted_text);
