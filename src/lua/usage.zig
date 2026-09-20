@@ -1325,6 +1325,31 @@ test "module load value sets resolve table ranges and string format" {
     try std.testing.expect(saw_generated);
 }
 
+test "module load value sets resolve bounded table and numeric format loops" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a,
+        \\local format = string.format
+        \\local modules = {"Module:A", "Module:B"}
+        \\for i = 1, 4 do
+        \\  local mname = modules[i] or format("Module:C/%c", 64 + i)
+        \\  require(mname)
+        \\  require(mname .. "/extra")
+        \\end
+    );
+    defer chunk.deinit();
+    var refs: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (refs.items) |ref| a.free(ref);
+        refs.deinit(a);
+    }
+    try std.testing.expect(!try collectModuleLoads(a, chunk.body, &refs));
+    try std.testing.expectEqual(@as(usize, 12), refs.items.len);
+    try std.testing.expectEqualStrings("Module:A", refs.items[0]);
+    try std.testing.expectEqualStrings("Module:B", refs.items[1]);
+    try std.testing.expectEqualStrings("Module:C/A", refs.items[2]);
+    try std.testing.expectEqualStrings("Module:C/D/extra", refs.items[11]);
+}
+
 test "module load value sets keep unknown parameters dynamic" {
     const a = std.testing.allocator;
     var chunk = try lua.parse(a, "return function(name) return require(name) end");
