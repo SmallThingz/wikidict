@@ -722,6 +722,38 @@ pub const Expander = struct {
         return self.expandTrimmedParserArgument(chosen, params, host_title, depth + 1);
     }
 
+    fn expandPlural(self: *Expander, number_raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        const expanded_number = std.mem.trim(u8, try self.expandWikitext(number_raw, params, host_title, depth + 1), " \t\r\n");
+        const number = try language_lib.parseFormattedNumberAlloc(self.runtime.allocator, expanded_number);
+
+        var forms: std.ArrayList([]const u8) = .empty;
+        defer forms.deinit(self.runtime.allocator);
+        for (args) |raw_form| {
+            if (preprocess.findTopDelimiter(raw_form, '=')) |eq| {
+                const label_expanded = std.mem.trim(
+                    u8,
+                    try self.expandWikitext(raw_form[0..eq], params, host_title, depth + 1),
+                    " \t\r\n",
+                );
+                const label = try language_lib.parseFormattedNumberAlloc(self.runtime.allocator, label_expanded);
+                if (std.fmt.parseFloat(f64, label)) |_| {
+                    if (numericStringEqual(number, label))
+                        return self.expandTrimmedParserArgument(raw_form[eq + 1 ..], params, host_title, depth + 1);
+                    continue;
+                } else |_| {}
+            }
+            try forms.append(self.runtime.allocator, raw_form);
+        }
+
+        if (forms.items.len == 0) return "";
+        if (forms.items.len == 1)
+            return self.expandTrimmedParserArgument(forms.items[0], params, host_title, depth + 1);
+
+        const parsed = std.fmt.parseFloat(f64, number) catch 0;
+        const singular = std.math.isFinite(parsed) and @abs(parsed) == 1;
+        return self.expandTrimmedParserArgument(forms.items[if (singular) 0 else 1], params, host_title, depth + 1);
+    }
+
     fn expandSwitch(self: *Expander, key_raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const key = std.mem.trim(u8, try self.expandWikitext(key_raw, params, host_title, depth + 1), " \t\r\n");
         var pending = false;
@@ -1160,6 +1192,7 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "ucfirst")) return self.expandCaseParser(first, params, host_title, depth + 1, true, true);
             if (std.ascii.eqlIgnoreCase(name, "lcfirst")) return self.expandCaseParser(first, params, host_title, depth + 1, false, true);
             if (std.ascii.eqlIgnoreCase(name, "formatnum")) return self.expandFormatNum(first, parts.items[1..], params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "plural")) return self.expandPlural(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "anchorencode")) return self.expandAnchorEncode(first, parts.items[1..], params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "fullurl")) return self.expandUrlParser(first, parts.items[1..], params, host_title, depth + 1, .full, false);
             if (std.ascii.eqlIgnoreCase(name, "fullurle")) return self.expandUrlParser(first, parts.items[1..], params, host_title, depth + 1, .full, true);
@@ -1871,6 +1904,12 @@ test "bundle parser functions cover corpus time date sub and iferror forms" {
     const source = "{{#time:Y M d|2013-3-31 +8 days}}|{{#time:/Y/F|2025-9}}|{{#formatdate:2010-01-02|dmy}}|{{#dateformat:January 2|dmy}}|{{#formatdate:2-Jan-2010|dmy}}|{{#len:é猫}}|{{#sub:αβγ|-1}}|{{#sub:αβγ|0|-1}}|{{#iferror:{{#expr:bogus}}|ERR|OK}}|{{#iferror:plain|ERR|OK}}|{{#ifeq:01|1|NUM|BAD}}|{{#ifeq:+1.0|1|FLOAT|BAD}}|{{#ifeq:01x|1|BAD|TEXT}}|{{#ifeq:9007199254740993|9007199254740992|BAD|BIG}}|{{formatnum:11000}}|{{FORMATNUM:-1234567.89}}|{{formatnum:1,234.50|R}}|{{formatnum:1234.50|NOSEP}}|{{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}|{{anchorencode:a%20b}}|{{ucfirst:ßeta}}|{{ucfirst:ǰfoo}}|{{lcfirst:Éclair}}|{{ns:0}}/{{ns:4}}/{{ns:Project}}/{{ns:MOD}}";
     const got = try expander.expandFragment("Page", source, 1_670_803_200);
     try std.testing.expectEqualStrings("2013 Apr 08|/2025/September|<span class=\"mw-formatted-date\" title=\"2010-01-02\">2 January 2010</span>|<span class=\"mw-formatted-date\" title=\"01-02\">2 January</span>|2-Jan-2010|2|γ|αβ|ERR|OK|NUM|FLOAT|TEXT|BIG|11,000|−1,234,567.89|1234.50|1234.50|A_B_x_C|a%2520b|ßeta|J̌foo|éclair|/Wiktionary/Wiktionary/Module", got);
+    const plural = try expander.expandFragment(
+        "Page",
+        "{{PLURAL:0|one|many}}|{{PLURAL:1|one|many}}|{{plural:2|one|many}}|{{PLURAL:-1|one|many}}|{{PLURAL:1.0|one|many}}|{{PLURAL:1,000|one|many}}|{{PLURAL:bogus|one|many}}|{{PLURAL:10|10=ten|one|many}}|{{PLURAL:2|0=zero|1=one|many}}|{{PLURAL:1|only}}|{{PLURAL:1|ok|{{Missing}}}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings("many|one|many|one|one|many|many|ten|many|only|ok", plural);
     const empty_expr = try expander.expandFragment("Page", "{{#expr:}}|{{#expr:   }}|{{#ifexpr:|YES|NO}}|{{#ifexpr:   |YES|NO}}", 1_670_803_200);
     try std.testing.expectEqualStrings("||NO|NO", empty_expr);
     const trimmed = try expander.expandFragment(
