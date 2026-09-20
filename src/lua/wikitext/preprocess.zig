@@ -166,18 +166,19 @@ pub fn findParamEnd(s: []const u8, start: usize) ?usize {
 
 fn isOpaqueParserTag(name: []const u8) bool {
     inline for (&.{
-        "nowiki",  "pre",      "gallery",      "indicator",  "ref",             "references", "templatestyles",
-        "math",    "ce",       "chem",         "score",      "syntaxhighlight", "source",     "timeline",
-        "hiero",   "poem",     "categorytree", "charinsert", "graph",           "mapframe",   "maplink",
-        "section", "inputbox", "imagemap",
+        "nowiki",  "pre",      "gallery",      "indicator",       "ref",             "references", "templatestyles",
+        "math",    "ce",       "chem",         "score",           "syntaxhighlight", "source",     "timeline",
+        "hiero",   "poem",     "categorytree", "charinsert",      "graph",           "mapframe",   "maplink",
+        "section", "inputbox", "imagemap",     "dynamicpagelist",
     }) |tag| if (std.ascii.eqlIgnoreCase(name, tag)) return true;
     return false;
 }
 
 fn isLiteralParserTag(name: []const u8) bool {
     inline for (&.{
-        "nowiki",   "pre",   "math",  "ce",       "chem",    "score",    "syntaxhighlight", "source",
-        "timeline", "hiero", "graph", "mapframe", "maplink", "inputbox", "imagemap",        "templatestyles",
+        "nowiki",          "pre",   "math",  "ce",       "chem",    "score",    "syntaxhighlight", "source",
+        "timeline",        "hiero", "graph", "mapframe", "maplink", "inputbox", "imagemap",        "templatestyles",
+        "dynamicpagelist",
     }) |tag| if (std.ascii.eqlIgnoreCase(name, tag)) return true;
     return false;
 }

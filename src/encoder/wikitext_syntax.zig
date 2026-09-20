@@ -15,10 +15,10 @@ pub fn isMultilineContainerTag(name: []const u8) bool {
 }
 pub fn isOpaqueTag(name: []const u8) bool {
     inline for (&.{
-        "nowiki",  "pre",      "gallery",      "indicator",  "ref",             "references", "templatestyles",
-        "math",    "ce",       "chem",         "score",      "syntaxhighlight", "source",     "timeline",
-        "hiero",   "poem",     "categorytree", "charinsert", "graph",           "mapframe",   "maplink",
-        "section", "inputbox", "imagemap",
+        "nowiki",  "pre",      "gallery",      "indicator",       "ref",             "references", "templatestyles",
+        "math",    "ce",       "chem",         "score",           "syntaxhighlight", "source",     "timeline",
+        "hiero",   "poem",     "categorytree", "charinsert",      "graph",           "mapframe",   "maplink",
+        "section", "inputbox", "imagemap",     "dynamicpagelist",
     }) |tag| if (std.ascii.eqlIgnoreCase(name, tag)) return true;
     return false;
 }

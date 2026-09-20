@@ -22,10 +22,10 @@ fn makeNowikiMarker(a: std.mem.Allocator, id: u32) ![]const u8 {
 
 fn canonicalExtensionTag(raw: []const u8) ?[]const u8 {
     inline for (&.{
-        "nowiki",  "pre",      "gallery",      "indicator",  "ref",             "references", "templatestyles",
-        "math",    "ce",       "chem",         "score",      "syntaxhighlight", "source",     "timeline",
-        "hiero",   "poem",     "categorytree", "charinsert", "graph",           "mapframe",   "maplink",
-        "section", "inputbox", "imagemap",
+        "nowiki",  "pre",      "gallery",      "indicator",       "ref",             "references", "templatestyles",
+        "math",    "ce",       "chem",         "score",           "syntaxhighlight", "source",     "timeline",
+        "hiero",   "poem",     "categorytree", "charinsert",      "graph",           "mapframe",   "maplink",
+        "section", "inputbox", "imagemap",     "dynamicpagelist",
     }) |name| if (std.ascii.eqlIgnoreCase(raw, name)) return name;
     return null;
 }
@@ -1806,6 +1806,15 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "<span class=\"CategoryTreeCount\">(4)</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "style=\"display:none\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "[[alpha]]") == null);
+    const dynamic_page_list = try expander.expandFragment(
+        "Page",
+        "{{#tag:DynamicPageList|category=Tea room\ncount=100\nmode=none\norder=ascending}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings(
+        "<dynamicpagelist>category=Tea room\ncount=100\nmode=none\norder=ascending</dynamicpagelist>",
+        dynamic_page_list,
+    );
     const other_magic = try expander.expandFragment("Page", "{{PAGEID:Other_page}}|{{REVISIONID:Other page}}|{{REVISIONTIMESTAMP:Other page}}|{{REVISIONUSER:Other_page}}|{{PAGEID:Missing page}}", 1_670_803_200);
     try std.testing.expectEqualStrings("99|990|20250607080910|Other editor|", other_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);

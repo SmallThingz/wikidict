@@ -1308,12 +1308,14 @@ test "opaque extensions render safely without leaking parser delimiters" {
     defer arena.deinit();
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
-    const spans = try r.parseSpans("<poem>first [[cat]]\nsecond</poem><gallery>\nFile:Cat.jpg|A [[cat]]\n</gallery><math>a|b=c</math><graph>{\"value\":\"{{x|y}}\"}</graph>", .{});
+    const spans = try r.parseSpans("<poem>first [[cat]]\nsecond</poem><gallery>\nFile:Cat.jpg|A [[cat]]\n</gallery><math>a|b=c</math><graph>{\"value\":\"{{x|y}}\"}</graph><dynamicpagelist>category=Tea room\ncount=100</dynamicpagelist>", .{});
     const text_value = try flattened(a, spans);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "first cat\nsecond") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "[Image: A cat]") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "a|b=c") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "[unsupported extension: graph]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "[unsupported extension: dynamicpagelist]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "category=Tea room") == null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "<gallery") == null);
     try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
     try std.testing.expectEqualStrings("A cat", r.media.items[0].caption);
