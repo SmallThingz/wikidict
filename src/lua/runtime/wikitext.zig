@@ -1140,6 +1140,84 @@ pub const Expander = struct {
         return self.serializeExtension(canonical, content, attrs);
     }
 
+    fn expandParserHead(
+        self: *Expander,
+        head: []const u8,
+        raw_args: []const []const u8,
+        params: *rt.Table,
+        host_title: []const u8,
+        depth: usize,
+    ) anyerror!?[]const u8 {
+        if (try self.magicWord(head)) |value| return value;
+
+        if (preprocess.findTopDelimiter(head, ':')) |colon| {
+            const name = std.mem.trim(u8, head[0..colon], " \t\r\n");
+            const first = head[colon + 1 ..];
+            if (isRevisionMagicName(name)) {
+                const page = try self.expandWikitext(first, params, host_title, depth + 1);
+                return (try self.revisionMagic(name, page)) orelse unreachable;
+            }
+            if (isTitleMagicName(name)) {
+                const page = try self.expandWikitext(first, params, host_title, depth + 1);
+                return (try self.titleMagic(name, page)) orelse unreachable;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) {
+                const value = try self.expandWikitext(first, params, host_title, depth + 1);
+                return try self.recordDisplayTitle(value);
+            }
+            if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT")) return "";
+            if (std.ascii.eqlIgnoreCase(name, "ns")) {
+                const raw_ns = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 1), " \t\r\n");
+                const spec = if (std.fmt.parseInt(i32, raw_ns, 10)) |id|
+                    namespace_lib.byId(id)
+                else |_|
+                    namespace_lib.byName(raw_ns);
+                return (spec orelse return error.InvalidNamespace).name;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "uc")) return try self.expandCaseParser(first, params, host_title, depth + 1, true, false);
+            if (std.ascii.eqlIgnoreCase(name, "lc")) return try self.expandCaseParser(first, params, host_title, depth + 1, false, false);
+            if (std.ascii.eqlIgnoreCase(name, "ucfirst")) return try self.expandCaseParser(first, params, host_title, depth + 1, true, true);
+            if (std.ascii.eqlIgnoreCase(name, "lcfirst")) return try self.expandCaseParser(first, params, host_title, depth + 1, false, true);
+            if (std.ascii.eqlIgnoreCase(name, "formatnum")) return try self.expandFormatNum(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "plural")) return try self.expandPlural(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "anchorencode")) return try self.expandAnchorEncode(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "fullurl")) return try self.expandUrlParser(first, raw_args, params, host_title, depth + 1, .full, false);
+            if (std.ascii.eqlIgnoreCase(name, "fullurle")) return try self.expandUrlParser(first, raw_args, params, host_title, depth + 1, .full, true);
+            if (std.ascii.eqlIgnoreCase(name, "localurl")) return try self.expandUrlParser(first, raw_args, params, host_title, depth + 1, .local, false);
+            if (std.ascii.eqlIgnoreCase(name, "canonicalurl")) return try self.expandUrlParser(first, raw_args, params, host_title, depth + 1, .canonical, false);
+            if (std.ascii.eqlIgnoreCase(name, "urlencode")) return try self.expandUrlencodeParser(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "padleft")) return try self.expandPadParser(first, raw_args, params, host_title, depth + 1, true);
+            if (std.ascii.eqlIgnoreCase(name, "padright")) return try self.expandPadParser(first, raw_args, params, host_title, depth + 1, false);
+            if (std.ascii.eqlIgnoreCase(name, "#formatdate") or std.ascii.eqlIgnoreCase(name, "#dateformat"))
+                return try self.expandFormatDate(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#time")) return try self.expandTimeParser(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#len")) return try self.expandLenParser(first, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#sub")) return try self.expandSubParser(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#titleparts")) return try self.expandTitleParts(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#iferror")) return try self.expandIfError(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#invoke")) return try self.expandInvoke(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#categorytree"))
+                return try self.expandCategoryTreeParser(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#if")) {
+                const condition = try self.expandWikitext(first, params, host_title, depth + 1);
+                const chosen = if (std.mem.trim(u8, condition, " \t\r\n").len != 0)
+                    (if (raw_args.len > 0) raw_args[0] else "")
+                else
+                    (if (raw_args.len > 1) raw_args[1] else "");
+                return try self.expandTrimmedParserArgument(chosen, params, host_title, depth + 1);
+            }
+            if (std.ascii.eqlIgnoreCase(name, "#ifeq")) return try self.expandIfEq(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#ifexist")) return try self.expandIfExist(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#switch")) return try self.expandSwitch(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#expr")) return try self.expandExprParser(first, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#ifexpr")) return try self.expandIfExpr(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#tag")) return try self.expandTagParser(first, raw_args, params, host_title, depth + 1);
+            if (name.len != 0 and name[0] == '#') return error.UnsupportedParserFunction;
+        }
+        if (head[0] == '#') return error.UnsupportedParserFunction;
+        return null;
+    }
+
     fn expandConstruct(self: *Expander, content: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         var parts: std.ArrayList([]const u8) = .empty;
         defer parts.deinit(self.runtime.allocator);
@@ -1151,73 +1229,7 @@ pub const Expander = struct {
         else if (raw_head.len >= 6 and std.ascii.eqlIgnoreCase(raw_head[0..6], "subst:"))
             raw_head = std.mem.trim(u8, raw_head[6..], " \t\r\n");
         if (raw_head.len == 0) return error.MalformedWikitext;
-        if (try self.magicWord(raw_head)) |value| return value;
-
-        if (preprocess.findTopDelimiter(raw_head, ':')) |colon| {
-            const name = std.mem.trim(u8, raw_head[0..colon], " \t\r\n");
-            const first = raw_head[colon + 1 ..];
-            if (isRevisionMagicName(name)) {
-                const page = try self.expandWikitext(first, params, host_title, depth + 1);
-                return (try self.revisionMagic(name, page)) orelse unreachable;
-            }
-            if (isTitleMagicName(name)) {
-                const page = try self.expandWikitext(first, params, host_title, depth + 1);
-                return (try self.titleMagic(name, page)) orelse unreachable;
-            }
-            if (std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) {
-                const value = try self.expandWikitext(first, params, host_title, depth + 1);
-                return self.recordDisplayTitle(value);
-            }
-            if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT")) return "";
-            if (std.ascii.eqlIgnoreCase(name, "ns")) {
-                const raw_ns = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 1), " \t\r\n");
-                const spec = if (std.fmt.parseInt(i32, raw_ns, 10)) |id|
-                    namespace_lib.byId(id)
-                else |_|
-                    namespace_lib.byName(raw_ns);
-                return (spec orelse return error.InvalidNamespace).name;
-            }
-            if (std.ascii.eqlIgnoreCase(name, "uc")) return self.expandCaseParser(first, params, host_title, depth + 1, true, false);
-            if (std.ascii.eqlIgnoreCase(name, "lc")) return self.expandCaseParser(first, params, host_title, depth + 1, false, false);
-            if (std.ascii.eqlIgnoreCase(name, "ucfirst")) return self.expandCaseParser(first, params, host_title, depth + 1, true, true);
-            if (std.ascii.eqlIgnoreCase(name, "lcfirst")) return self.expandCaseParser(first, params, host_title, depth + 1, false, true);
-            if (std.ascii.eqlIgnoreCase(name, "formatnum")) return self.expandFormatNum(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "plural")) return self.expandPlural(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "anchorencode")) return self.expandAnchorEncode(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "fullurl")) return self.expandUrlParser(first, parts.items[1..], params, host_title, depth + 1, .full, false);
-            if (std.ascii.eqlIgnoreCase(name, "fullurle")) return self.expandUrlParser(first, parts.items[1..], params, host_title, depth + 1, .full, true);
-            if (std.ascii.eqlIgnoreCase(name, "localurl")) return self.expandUrlParser(first, parts.items[1..], params, host_title, depth + 1, .local, false);
-            if (std.ascii.eqlIgnoreCase(name, "canonicalurl")) return self.expandUrlParser(first, parts.items[1..], params, host_title, depth + 1, .canonical, false);
-            if (std.ascii.eqlIgnoreCase(name, "urlencode")) return self.expandUrlencodeParser(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "padleft")) return self.expandPadParser(first, parts.items[1..], params, host_title, depth + 1, true);
-            if (std.ascii.eqlIgnoreCase(name, "padright")) return self.expandPadParser(first, parts.items[1..], params, host_title, depth + 1, false);
-            if (std.ascii.eqlIgnoreCase(name, "#formatdate") or std.ascii.eqlIgnoreCase(name, "#dateformat"))
-                return self.expandFormatDate(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#time")) return self.expandTimeParser(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#len")) return self.expandLenParser(first, params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#sub")) return self.expandSubParser(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#titleparts")) return self.expandTitleParts(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#iferror")) return self.expandIfError(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#invoke")) return self.expandInvoke(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#categorytree"))
-                return self.expandCategoryTreeParser(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#if")) {
-                const condition = try self.expandWikitext(first, params, host_title, depth + 1);
-                const chosen = if (std.mem.trim(u8, condition, " \t\r\n").len != 0)
-                    (if (parts.items.len > 1) parts.items[1] else "")
-                else
-                    (if (parts.items.len > 2) parts.items[2] else "");
-                return self.expandTrimmedParserArgument(chosen, params, host_title, depth + 1);
-            }
-            if (std.ascii.eqlIgnoreCase(name, "#ifeq")) return self.expandIfEq(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#ifexist")) return self.expandIfExist(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#switch")) return self.expandSwitch(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#expr")) return self.expandExprParser(first, params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#ifexpr")) return self.expandIfExpr(first, parts.items[1..], params, host_title, depth + 1);
-            if (std.ascii.eqlIgnoreCase(name, "#tag")) return self.expandTagParser(first, parts.items[1..], params, host_title, depth + 1);
-            if (name.len != 0 and name[0] == '#') return error.UnsupportedParserFunction;
-        }
-        if (raw_head[0] == '#') return error.UnsupportedParserFunction;
+        if (try self.expandParserHead(raw_head, parts.items[1..], params, host_title, depth)) |value| return value;
         switch (try self.classifyInterwikiTransclusion(raw_head)) {
             .normal => {},
             .current_wiki => |local_name| raw_head = local_name,
@@ -1232,7 +1244,14 @@ pub const Expander = struct {
             const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
             return self.expandTemplateBySymbol(symbol, args, host_title, depth + 1);
         }
-        const title = try self.expandWikitext(raw_head, params, host_title, depth + 1);
+        const title = std.mem.trim(
+            u8,
+            try self.expandWikitext(raw_head, params, host_title, depth + 1),
+            " \t\r\n",
+        );
+        if (title.len != 0 and !std.mem.eql(u8, title, raw_head)) {
+            if (try self.expandParserHead(title, parts.items[1..], params, host_title, depth)) |value| return value;
+        }
         const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
         return self.expandTemplateByName(title, args, host_title, depth + 1);
     }
@@ -1990,6 +2009,8 @@ test "bundle parser functions cover corpus time date sub and iferror forms" {
     try std.testing.expectEqualStrings("", lazy_dynamic_switch);
     const dynamic_template_name = try expander.expandFragment("Page", "{{{{{name|Hello}}}|Bob}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Hi Bob N", dynamic_template_name);
+    const dynamic_parser_head = try expander.expandFragment("Page", "{{{{{name|ucfirst}}}:man}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Man", dynamic_parser_head);
     try std.testing.expectError(error.InvalidNamespace, expander.expandFragment("Page", "{{ns:not-a-namespace}}", 1_670_803_200));
 
     expander.beginPage("Page", "source", 1_670_803_200);
