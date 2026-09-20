@@ -90,78 +90,92 @@ pub fn transcludeDecodedAlloc(a: std.mem.Allocator, text: []const u8) ![]u8 {
     return out.toOwnedSlice(a);
 }
 
-pub fn findTemplateEnd(s: []const u8, start: usize) ?usize {
-    if (start + 1 >= s.len or !std.mem.eql(u8, s[start .. start + 2], "{{")) return null;
-    var stack: [128]u8 = undefined;
+pub const ConstructKind = enum { template, parameter };
+
+pub const Construct = struct {
+    open: usize,
+    close: usize,
+    kind: ConstructKind,
+};
+
+const BracePiece = struct {
+    count: usize,
+    root: bool,
+};
+
+fn repeatedByteRun(s: []const u8, start: usize, byte: u8) usize {
+    var end = start;
+    while (end < s.len and s[end] == byte) : (end += 1) {}
+    return end - start;
+}
+
+fn matchingBraceWidth(open_count: usize, close_count: usize) u8 {
+    const count = @min(open_count, close_count);
+    if (count >= 3) return 3;
+    if (count >= 2) return 2;
+    return 0;
+}
+
+fn findBraceConstruct(s: []const u8, start: usize) ?Construct {
+    if (start >= s.len or s[start] != '{') return null;
+    const root_count = repeatedByteRun(s, start, '{');
+    if (root_count < 2) return null;
+
+    var stack: [128]BracePiece = undefined;
     var depth: usize = 1;
-    stack[0] = 2;
-    var i = start + 2;
+    stack[0] = .{ .count = root_count, .root = true };
+    var i = start + root_count;
     while (i < s.len) {
-        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "{{{")) {
-            if (depth == stack.len) return null;
-            stack[depth] = 3;
-            depth += 1;
-            i += 3;
+        if (opaqueParserRegionEnd(s, i)) |region_end| {
+            i = region_end;
             continue;
         }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "{{")) {
-            if (depth == stack.len) return null;
-            stack[depth] = 2;
-            depth += 1;
-            i += 2;
-            continue;
+        if (s[i] == '{') {
+            const count = repeatedByteRun(s, i, '{');
+            if (count >= 2) {
+                if (depth == stack.len) return null;
+                stack[depth] = .{ .count = count, .root = false };
+                depth += 1;
+                i += count;
+                continue;
+            }
         }
-        if (stack[depth - 1] == 3 and i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "}}}")) {
-            depth -= 1;
-            i += 3;
-            continue;
-        }
-        if (stack[depth - 1] == 2 and i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "}}")) {
-            depth -= 1;
-            if (depth == 0) return i;
-            i += 2;
-            continue;
+        if (s[i] == '}' and depth != 0) {
+            const close_count = repeatedByteRun(s, i, '}');
+            const piece = stack[depth - 1];
+            const width = matchingBraceWidth(piece.count, close_count);
+            if (width != 0) {
+                depth -= 1;
+                const remainder = piece.count - width;
+                if (remainder >= 2) {
+                    stack[depth] = .{ .count = remainder, .root = piece.root };
+                    depth += 1;
+                } else if (piece.root) {
+                    return .{
+                        .open = start + @intFromBool(remainder == 1),
+                        .close = i,
+                        .kind = if (width == 2) .template else .parameter,
+                    };
+                }
+                i += width;
+                continue;
+            }
         }
         i += 1;
     }
     return null;
 }
 
+pub fn findTemplateEnd(s: []const u8, start: usize) ?usize {
+    const construct = findBraceConstruct(s, start) orelse return null;
+    if (construct.open != start or construct.kind != .template) return null;
+    return construct.close;
+}
+
 pub fn findParamEnd(s: []const u8, start: usize) ?usize {
-    if (start + 2 >= s.len or !std.mem.eql(u8, s[start .. start + 3], "{{{")) return null;
-    var stack: [128]u8 = undefined;
-    var depth: usize = 1;
-    stack[0] = 3;
-    var i = start + 3;
-    while (i < s.len) {
-        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "{{{")) {
-            if (depth == stack.len) return null;
-            stack[depth] = 3;
-            depth += 1;
-            i += 3;
-            continue;
-        }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "{{")) {
-            if (depth == stack.len) return null;
-            stack[depth] = 2;
-            depth += 1;
-            i += 2;
-            continue;
-        }
-        if (stack[depth - 1] == 3 and i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "}}}")) {
-            depth -= 1;
-            if (depth == 0) return i;
-            i += 3;
-            continue;
-        }
-        if (stack[depth - 1] == 2 and i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "}}")) {
-            depth -= 1;
-            i += 2;
-            continue;
-        }
-        i += 1;
-    }
-    return null;
+    const construct = findBraceConstruct(s, start) orelse return null;
+    if (construct.open != start or construct.kind != .parameter) return null;
+    return construct.close;
 }
 
 fn isOpaqueParserTag(name: []const u8) bool {
@@ -206,7 +220,7 @@ fn rawTagEnd(s: []const u8, start: usize) ?usize {
     return null;
 }
 
-pub fn findTemplateOpenOutsideLiteralTags(s: []const u8, start: usize) ?usize {
+pub fn findNextConstructOutsideLiteralTags(s: []const u8, start: usize) ?Construct {
     var i = start;
     while (i + 1 < s.len) {
         if (s[i] == '<') {
@@ -242,10 +256,16 @@ pub fn findTemplateOpenOutsideLiteralTags(s: []const u8, start: usize) ?usize {
                 continue;
             }
         }
-        if (s[i] == '{' and s[i + 1] == '{') return i;
+        if (s[i] == '{' and s[i + 1] == '{') {
+            if (findBraceConstruct(s, i)) |construct| return construct;
+        }
         i += 1;
     }
     return null;
+}
+
+pub fn findTemplateOpenOutsideLiteralTags(s: []const u8, start: usize) ?usize {
+    return if (findNextConstructOutsideLiteralTags(s, start)) |construct| construct.open else null;
 }
 
 fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
@@ -281,38 +301,39 @@ fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
 }
 
 pub fn findTopDelimiter(s: []const u8, needle: u8) ?usize {
-    var braces: [128]u8 = undefined;
+    var braces: [128]usize = undefined;
     var brace_depth: usize = 0;
     var square: usize = 0;
     var i: usize = 0;
     while (i < s.len) {
-        if (opaqueParserRegionEnd(s, i)) |end| {
-            i = end;
+        if (opaqueParserRegionEnd(s, i)) |region_end| {
+            i = region_end;
             continue;
         }
-        if (i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "{{{")) {
-            if (brace_depth == braces.len) return null;
-            braces[brace_depth] = 3;
-            brace_depth += 1;
-            i += 3;
-            continue;
+        if (s[i] == '{') {
+            const count = repeatedByteRun(s, i, '{');
+            if (count >= 2) {
+                if (brace_depth == braces.len) return null;
+                braces[brace_depth] = count;
+                brace_depth += 1;
+                i += count;
+                continue;
+            }
         }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "{{")) {
-            if (brace_depth == braces.len) return null;
-            braces[brace_depth] = 2;
-            brace_depth += 1;
-            i += 2;
-            continue;
-        }
-        if (brace_depth != 0 and braces[brace_depth - 1] == 3 and i + 2 < s.len and std.mem.eql(u8, s[i .. i + 3], "}}}")) {
-            brace_depth -= 1;
-            i += 3;
-            continue;
-        }
-        if (brace_depth != 0 and braces[brace_depth - 1] == 2 and i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "}}")) {
-            brace_depth -= 1;
-            i += 2;
-            continue;
+        if (s[i] == '}' and brace_depth != 0) {
+            const close_count = repeatedByteRun(s, i, '}');
+            const open_count = braces[brace_depth - 1];
+            const width = matchingBraceWidth(open_count, close_count);
+            if (width != 0) {
+                brace_depth -= 1;
+                const remainder = open_count - width;
+                if (remainder >= 2) {
+                    braces[brace_depth] = remainder;
+                    brace_depth += 1;
+                }
+                i += width;
+                continue;
+            }
         }
         if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "[[")) {
             square += 1;
@@ -368,6 +389,22 @@ test "nested template and parameter boundaries match MediaWiki preprocessing" {
     try std.testing.expectEqual(template.len - 2, findTemplateEnd(template, 0).?);
     const parameter = "{{{x|{{y|z}}}}}";
     try std.testing.expectEqual(parameter.len - 3, findParamEnd(parameter, 0).?);
+    const dynamic_template = "{{{{{name|Hello}}}|Bob}}";
+    const dynamic = findNextConstructOutsideLiteralTags(dynamic_template, 0).?;
+    try std.testing.expectEqual(@as(usize, 0), dynamic.open);
+    try std.testing.expectEqual(ConstructKind.template, dynamic.kind);
+    try std.testing.expectEqual(dynamic_template.len - 2, dynamic.close);
+    const dynamic_parameter = "{{{{{safesubst:#if:{{{defparam|}}}|{{{defparam}}}|def}}|d}}}";
+    const parameter_construct = findNextConstructOutsideLiteralTags(dynamic_parameter, 0).?;
+    try std.testing.expectEqual(@as(usize, 0), parameter_construct.open);
+    try std.testing.expectEqual(ConstructKind.parameter, parameter_construct.kind);
+    try std.testing.expectEqual(dynamic_parameter.len - 3, parameter_construct.close);
+    const literal_then_parameter = "{{{{name}}}}";
+    const literal_construct = findNextConstructOutsideLiteralTags(literal_then_parameter, 0).?;
+    try std.testing.expectEqual(@as(usize, 1), literal_construct.open);
+    try std.testing.expectEqual(ConstructKind.parameter, literal_construct.kind);
+    try std.testing.expectEqual(literal_then_parameter.len - 4, literal_construct.close);
+    try std.testing.expectEqual(@as(usize, 2), findTopDelimiter("nm=&nbsp;{{{{{5}}}|x}}", '=').?);
     try std.testing.expect(findTopDelimiter("x=<math>a=b</math>", '=') == 1);
     try std.testing.expect(findTopDelimiter("<math>a=b</math>", '=') == null);
     const pronunciation =

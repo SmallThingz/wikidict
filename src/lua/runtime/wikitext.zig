@@ -280,32 +280,21 @@ pub const Expander = struct {
     fn expandPageWikitext(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8) anyerror![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         var pos: usize = 0;
-        while (preprocess.findTemplateOpenOutsideLiteralTags(text, pos)) |open| {
-            const literal = text[pos..open];
+        while (preprocess.findNextConstructOutsideLiteralTags(text, pos)) |construct| {
+            const literal = text[pos..construct.open];
             try self.observePageOutput(literal);
             try out.appendSlice(self.runtime.allocator, literal);
-            const expanded = if (open + 2 < text.len and text[open + 2] == '{') blk: {
-                const close = preprocess.findParamEnd(text, open) orelse {
-                    const literal_open = "{{{";
-                    try self.observePageOutput(literal_open);
-                    try out.appendSlice(self.runtime.allocator, literal_open);
-                    pos = open + literal_open.len;
-                    continue;
-                };
-                const value = try self.expandParameter(text[open + 3 .. close], params, host_title, 1);
-                pos = close + 3;
-                break :blk value;
-            } else blk: {
-                const close = preprocess.findTemplateEnd(text, open) orelse {
-                    const literal_open = "{{";
-                    try self.observePageOutput(literal_open);
-                    try out.appendSlice(self.runtime.allocator, literal_open);
-                    pos = open + literal_open.len;
-                    continue;
-                };
-                const value = try self.expandConstruct(text[open + 2 .. close], params, host_title, 1);
-                pos = close + 2;
-                break :blk value;
+            const expanded = switch (construct.kind) {
+                .parameter => blk: {
+                    const value = try self.expandParameter(text[construct.open + 3 .. construct.close], params, host_title, 1);
+                    pos = construct.close + 3;
+                    break :blk value;
+                },
+                .template => blk: {
+                    const value = try self.expandConstruct(text[construct.open + 2 .. construct.close], params, host_title, 1);
+                    pos = construct.close + 2;
+                    break :blk value;
+                },
             };
             try self.observePageOutput(expanded);
             try out.appendSlice(self.runtime.allocator, expanded);
@@ -423,26 +412,19 @@ pub const Expander = struct {
         if (depth > self.max_depth) return error.TemplateDepth;
         var out: std.ArrayList(u8) = .empty;
         var pos: usize = 0;
-        while (preprocess.findTemplateOpenOutsideLiteralTags(text, pos)) |open| {
-            try out.appendSlice(self.runtime.allocator, text[pos..open]);
-            if (open + 2 < text.len and text[open + 2] == '{') {
-                const close = preprocess.findParamEnd(text, open) orelse {
-                    try out.appendSlice(self.runtime.allocator, "{{{");
-                    pos = open + 3;
-                    continue;
-                };
-                const expanded = try self.expandParameter(text[open + 3 .. close], params, host_title, depth + 1);
-                try out.appendSlice(self.runtime.allocator, expanded);
-                pos = close + 3;
-            } else {
-                const close = preprocess.findTemplateEnd(text, open) orelse {
-                    try out.appendSlice(self.runtime.allocator, "{{");
-                    pos = open + 2;
-                    continue;
-                };
-                const expanded = try self.expandConstruct(text[open + 2 .. close], params, host_title, depth + 1);
-                try out.appendSlice(self.runtime.allocator, expanded);
-                pos = close + 2;
+        while (preprocess.findNextConstructOutsideLiteralTags(text, pos)) |construct| {
+            try out.appendSlice(self.runtime.allocator, text[pos..construct.open]);
+            switch (construct.kind) {
+                .parameter => {
+                    const expanded = try self.expandParameter(text[construct.open + 3 .. construct.close], params, host_title, depth + 1);
+                    try out.appendSlice(self.runtime.allocator, expanded);
+                    pos = construct.close + 3;
+                },
+                .template => {
+                    const expanded = try self.expandConstruct(text[construct.open + 2 .. construct.close], params, host_title, depth + 1);
+                    try out.appendSlice(self.runtime.allocator, expanded);
+                    pos = construct.close + 2;
+                },
             }
         }
         try out.appendSlice(self.runtime.allocator, text[pos..]);
@@ -1951,6 +1933,14 @@ test "bundle parser functions cover corpus time date sub and iferror forms" {
         1_670_803_200,
     );
     try std.testing.expectEqualStrings("|2014|2014", grouped_switch);
+    const lazy_dynamic_switch = try expander.expandFragment(
+        "Page",
+        "{{#switch:|f|m|n|c|s|p|mf|nm=&nbsp;{{{{{5}}}|x}}}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings("", lazy_dynamic_switch);
+    const dynamic_template_name = try expander.expandFragment("Page", "{{{{{name|Hello}}}|Bob}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Hi Bob N", dynamic_template_name);
     try std.testing.expectError(error.InvalidNamespace, expander.expandFragment("Page", "{{ns:not-a-namespace}}", 1_670_803_200));
 
     expander.beginPage("Page", "source", 1_670_803_200);

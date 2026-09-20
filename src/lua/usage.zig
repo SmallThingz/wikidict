@@ -205,32 +205,20 @@ fn classifyHead(a: std.mem.Allocator, head_raw: []const u8, out: *std.ArrayList(
 fn scanRange(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags, depth: usize) anyerror!void {
     if (depth >= 128) return;
     var pos: usize = 0;
-    while (preprocess.findTemplateOpenOutsideLiteralTags(source, pos)) |open| {
-        if (open != 0 and source[open - 1] == '{') {
-            pos = open + 2;
-            continue;
+    while (preprocess.findNextConstructOutsideLiteralTags(source, pos)) |construct| {
+        switch (construct.kind) {
+            .parameter => {
+                if (construct.close > construct.open + 3)
+                    try scanRange(a, source[construct.open + 3 .. construct.close], out, flags, depth + 1);
+                pos = @min(construct.close + 3, source.len);
+            },
+            .template => {
+                const body = source[construct.open + 2 .. construct.close];
+                try classifyHead(a, firstTopLevelPart(body), out, flags);
+                if (body.len != 0) try scanRange(a, body, out, flags, depth + 1);
+                pos = @min(construct.close + 2, source.len);
+            },
         }
-        const nested_template_name = open + 3 < source.len and
-            std.mem.eql(u8, source[open .. open + 4], "{{{{");
-        if (!nested_template_name and open + 2 < source.len and source[open + 2] == '{') {
-            const end = preprocess.findParamEnd(source, open) orelse {
-                pos = open + 3;
-                continue;
-            };
-            if (end > open + 3)
-                try scanRange(a, source[open + 3 .. end], out, flags, depth + 1);
-            pos = @min(end + 3, source.len);
-            continue;
-        }
-
-        const end = preprocess.findTemplateEnd(source, open) orelse {
-            pos = open + 2;
-            continue;
-        };
-        const body = source[open + 2 .. end];
-        try classifyHead(a, firstTopLevelPart(body), out, flags);
-        if (body.len != 0) try scanRange(a, body, out, flags, depth + 1);
-        pos = @min(end + 2, source.len);
     }
 }
 
