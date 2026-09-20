@@ -1218,6 +1218,14 @@ pub const Expander = struct {
         return null;
     }
 
+    fn invalidTransclusionTitle(raw: []const u8) bool {
+        for (raw) |byte| switch (byte) {
+            0...31, 127, '[', ']', '{', '}', '|', '<', '>' => return true,
+            else => {},
+        };
+        return false;
+    }
+
     fn expandConstruct(self: *Expander, content: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         var parts: std.ArrayList([]const u8) = .empty;
         defer parts.deinit(self.runtime.allocator);
@@ -1252,6 +1260,8 @@ pub const Expander = struct {
         if (title.len != 0 and !std.mem.eql(u8, title, raw_head)) {
             if (try self.expandParserHead(title, parts.items[1..], params, host_title, depth)) |value| return value;
         }
+        if (invalidTransclusionTitle(title))
+            return std.fmt.allocPrint(self.runtime.allocator, "{{{{{s}}}}}", .{content});
         const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
         return self.expandTemplateByName(title, args, host_title, depth + 1);
     }
@@ -2011,6 +2021,10 @@ test "bundle parser functions cover corpus time date sub and iferror forms" {
     try std.testing.expectEqualStrings("Hi Bob N", dynamic_template_name);
     const dynamic_parser_head = try expander.expandFragment("Page", "{{{{{name|ucfirst}}}:man}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Man", dynamic_parser_head);
+    const malformed_parameter_like = try expander.expandFragment("Page", "A{{{1}|}}B", 1_670_803_200);
+    try std.testing.expectEqualStrings("A{{{1}|}}B", malformed_parameter_like);
+    const malformed_switch = try expander.expandFragment("Page", "{{#switch:{{{1}|}}|=|-=|BAD|#default=Y}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Y", malformed_switch);
     try std.testing.expectError(error.InvalidNamespace, expander.expandFragment("Page", "{{ns:not-a-namespace}}", 1_670_803_200));
 
     expander.beginPage("Page", "source", 1_670_803_200);
