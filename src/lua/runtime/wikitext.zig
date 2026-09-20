@@ -1404,6 +1404,23 @@ pub const Expander = struct {
         return if (value == .string) value.string else null;
     }
 
+    fn categoryTreeClass(raw: ?[]const u8) ?[]const u8 {
+        var value = std.mem.trim(u8, raw orelse return null, " \t\r\n");
+        if (value.len >= 2 and ((value[0] == '"' and value[value.len - 1] == '"') or
+            (value[0] == '\'' and value[value.len - 1] == '\'')))
+            value = std.mem.trim(u8, value[1 .. value.len - 1], " \t\r\n");
+        if (value.len == 0) return null;
+        for (value) |byte| if (!(std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-' or byte == ' ')) return null;
+        return value;
+    }
+
+    fn categoryTreeRootCount(mode: []const u8, stats: Provider.CategoryStats) ?u32 {
+        if (std.ascii.eqlIgnoreCase(mode, "all")) return stats.all;
+        if (std.ascii.eqlIgnoreCase(mode, "pages")) return stats.pages();
+        if (std.ascii.eqlIgnoreCase(mode, "categories")) return stats.subcats;
+        return null;
+    }
+
     fn expandCategoryTree(self: *Expander, args: *rt.Table) ![]const u8 {
         const first = args.rawGet(.{ .number = 1 }) orelse return error.StringExpected;
         if (first != .string) return error.StringExpected;
@@ -1415,26 +1432,66 @@ pub const Expander = struct {
             if (byte.* == ' ') byte.* = '_';
         }
 
-        const kind = categoryTreeArg(args, "type") orelse "pages";
+        const mode_arg = categoryTreeArg(args, "mode");
+        const type_arg = categoryTreeArg(args, "type");
+        if (mode_arg != null and type_arg != null and !std.ascii.eqlIgnoreCase(mode_arg.?, type_arg.?))
+            return error.UnsupportedCategoryTreeOptions;
+        const mode = mode_arg orelse type_arg orelse "pages";
         const depth = categoryTreeArg(args, "depth") orelse "1";
-        const namespaces = categoryTreeArg(args, "namespaces") orelse "-";
+        const namespaces = categoryTreeArg(args, "namespaces");
         const hideprefix = categoryTreeArg(args, "hideprefix") orelse "always";
         const hideroot = categoryTreeArg(args, "hideroot") orelse "off";
         const showcount = categoryTreeArg(args, "showcount") orelse "on";
-        if (!std.ascii.eqlIgnoreCase(kind, "pages") or
-            !std.mem.eql(u8, depth, "1") or
-            !std.mem.eql(u8, namespaces, "-") or
-            !std.ascii.eqlIgnoreCase(hideprefix, "always") or
+        const class_name = categoryTreeClass(categoryTreeArg(args, "class"));
+        if (!std.ascii.eqlIgnoreCase(hideprefix, "always") or
             !std.ascii.eqlIgnoreCase(hideroot, "off") or
-            !std.ascii.eqlIgnoreCase(showcount, "on"))
+            (!std.ascii.eqlIgnoreCase(showcount, "on") and !std.ascii.eqlIgnoreCase(showcount, "off")) or
+            (categoryTreeArg(args, "class") != null and class_name == null))
             return error.UnsupportedCategoryTreeOptions;
 
-        const get = self.provider.category_tree orelse return error.NotImplemented;
-        const members = try get(self.provider.ctx, category);
         const display = try self.runtime.allocator.dupe(u8, category);
         for (display) |*byte| {
             if (byte.* == '_') byte.* = ' ';
         }
+
+        if (std.mem.eql(u8, depth, "0")) {
+            if (namespaces != null) return error.UnsupportedCategoryTreeOptions;
+            const stats_get = self.provider.category_stats orelse return error.NotImplemented;
+            const stats = (try stats_get(self.provider.ctx, category)) orelse return error.CategoryTreeSnapshotMissing;
+            const count = categoryTreeRootCount(mode, stats) orelse return error.UnsupportedCategoryTreeOptions;
+            const a = self.runtime.allocator;
+            var out: std.ArrayList(u8) = .empty;
+            try out.appendSlice(a, "<div class=\"");
+            if (class_name) |name| {
+                try out.appendSlice(a, name);
+                try out.append(a, ' ');
+            }
+            try out.appendSlice(a, "CategoryTreeTag\"><div class=\"CategoryTreeSection\"><div class=\"CategoryTreeItem\"><span class=\"");
+            try out.appendSlice(a, if (count == 0) "CategoryTreeEmptyBullet" else "CategoryTreeBullet");
+            try out.appendSlice(a, "\">►</span> [[:Category:");
+            try out.appendSlice(a, display);
+            try out.append(a, '|');
+            try out.appendSlice(a, display);
+            try out.appendSlice(a, "]] ");
+            if (std.ascii.eqlIgnoreCase(showcount, "on")) {
+                try out.appendSlice(a, "<span class=\"CategoryTreeCount\">(");
+                const count_text = try std.fmt.allocPrint(a, "{d}", .{count});
+                defer a.free(count_text);
+                try out.appendSlice(a, count_text);
+                try out.appendSlice(a, ")</span>");
+            }
+            try out.appendSlice(a, "</div><div class=\"CategoryTreeChildren\" style=\"display:none\"></div></div></div>");
+            return out.toOwnedSlice(a);
+        }
+
+        if (!std.ascii.eqlIgnoreCase(mode, "pages") or
+            !std.mem.eql(u8, depth, "1") or
+            namespaces == null or !std.mem.eql(u8, namespaces.?, "-") or
+            class_name != null or !std.ascii.eqlIgnoreCase(showcount, "on"))
+            return error.UnsupportedCategoryTreeOptions;
+
+        const get = self.provider.category_tree orelse return error.NotImplemented;
+        const members = try get(self.provider.ctx, category);
 
         var page_count: usize = members.len;
         if (self.provider.category_stats) |stats_get| {
@@ -1706,6 +1763,16 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expect(std.mem.indexOf(u8, category_tree, "(3)") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree, "[[alpha]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree, "[[beta]]") != null);
+    const category_tree_root = try expander.expandFragment(
+        "Page",
+        "{{#categorytree:English terms prefixed with un-|mode=all|depth=0|class=\"columns-bg\"|hideprefix=always|showcount=on}}",
+        1_670_803_200,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "class=\"columns-bg CategoryTreeTag\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "[[:Category:English terms prefixed with un-|English terms prefixed with un-]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "<span class=\"CategoryTreeCount\">(4)</span>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "style=\"display:none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "[[alpha]]") == null);
     const other_magic = try expander.expandFragment("Page", "{{PAGEID:Other_page}}|{{REVISIONID:Other page}}|{{REVISIONTIMESTAMP:Other page}}|{{REVISIONUSER:Other_page}}|{{PAGEID:Missing page}}", 1_670_803_200);
     try std.testing.expectEqualStrings("99|990|20250607080910|Other editor|", other_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
