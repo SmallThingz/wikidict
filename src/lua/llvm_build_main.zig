@@ -160,9 +160,9 @@ fn planEagerInit(
     records: []ModuleRecord,
     module_ids: *const emitter.ModuleIdMap,
     stable_require: bool,
-    observed_use: []const bool,
+    eager_seed: []const bool,
 ) !usize {
-    if (observed_use.len != records.len) return error.InvalidEagerPlan;
+    if (eager_seed.len != records.len) return error.InvalidEagerPlan;
     const candidate = try a.alloc(bool, records.len);
     defer a.free(candidate);
     const blocked = try a.alloc(bool, records.len);
@@ -172,17 +172,17 @@ fn planEagerInit(
         out.* = record.root_bootstrap_safe and
             (record.root_requires.len == 0 or stable_require);
 
-    // Eager preparation is an optimization for observed executable roots. Static
-    // and synthesized roots already have cheap lazy materializers, while modules
-    // with no observed page/module reach stay available for dynamic lazy require.
-    // Retain the exact bootstrap-safe dependency closure of the observed seeds.
+    // Eager preparation is an optimization for hot executable roots. O2 already
+    // denotes the corpus-usage coverage set; colder O1 modules stay available
+    // through lazy require. Retain the exact bootstrap-safe dependency closure
+    // of the hot seeds.
     const needed = try a.alloc(bool, records.len);
     defer a.free(needed);
     @memset(needed, false);
     var needed_queue: std.ArrayList(u32) = .empty;
     defer needed_queue.deinit(a);
-    for (candidate, observed_use, records, 0..) |can, is_observed, record, index| {
-        if (can and is_observed and !record.static_root and !record.synth_root) {
+    for (candidate, eager_seed, records, 0..) |can, seed, record, index| {
+        if (can and seed and !record.static_root and !record.synth_root) {
             needed[index] = true;
             try needed_queue.append(a, @intCast(index));
         }
@@ -894,20 +894,12 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     defer selected_records.deinit(a);
     var selected_modes: std.ArrayList(usage_profile.CompileMode) = .empty;
     defer selected_modes.deinit(a);
-    var selected_observed_use: std.ArrayList(bool) = .empty;
-    defer selected_observed_use.deinit(a);
-    for (
-        records,
-        modes,
-        reachable,
-        profile.direct_page_reach,
-        profile.page_reach,
-        profile.direct_module_fanin,
-        profile.module_reach,
-    ) |record, mode, keep, direct_pages, page_reach, direct_fanin, module_reach| if (keep) {
+    var selected_eager_seed: std.ArrayList(bool) = .empty;
+    defer selected_eager_seed.deinit(a);
+    for (records, modes, reachable) |record, mode, keep| if (keep) {
         try selected_records.append(a, record);
         try selected_modes.append(a, mode);
-        try selected_observed_use.append(a, direct_pages != 0 or page_reach != 0 or direct_fanin != 0 or module_reach != 0);
+        try selected_eager_seed.append(a, mode == .o2);
     };
     if (selected_records.items.len == 0) return error.NoReachableModules;
 
@@ -920,7 +912,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         selected_records.items,
         &selected_module_ids,
         globals.stable("require"),
-        selected_observed_use.items,
+        selected_eager_seed.items,
     );
     std.debug.print("LLVM_EAGER_INIT modules={d}/{d}\n", .{
         eager_count,
