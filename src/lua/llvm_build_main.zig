@@ -160,7 +160,9 @@ fn planEagerInit(
     records: []ModuleRecord,
     module_ids: *const emitter.ModuleIdMap,
     stable_require: bool,
+    observed_use: []const bool,
 ) !usize {
+    if (observed_use.len != records.len) return error.InvalidEagerPlan;
     const candidate = try a.alloc(bool, records.len);
     defer a.free(candidate);
     const blocked = try a.alloc(bool, records.len);
@@ -170,16 +172,42 @@ fn planEagerInit(
         out.* = record.root_bootstrap_safe and
             (record.root_requires.len == 0 or stable_require);
 
+    // Eager preparation is an optimization for observed executable roots. Static
+    // and synthesized roots already have cheap lazy materializers, while modules
+    // with no observed page/module reach stay available for dynamic lazy require.
+    // Retain the exact bootstrap-safe dependency closure of the observed seeds.
+    const needed = try a.alloc(bool, records.len);
+    defer a.free(needed);
+    @memset(needed, false);
+    var needed_queue: std.ArrayList(u32) = .empty;
+    defer needed_queue.deinit(a);
+    for (candidate, observed_use, records, 0..) |can, is_observed, record, index| {
+        if (can and is_observed and !record.static_root and !record.synth_root) {
+            needed[index] = true;
+            try needed_queue.append(a, @intCast(index));
+        }
+    }
+    var needed_read: usize = 0;
+    while (needed_read < needed_queue.items.len) : (needed_read += 1) {
+        const module_id: usize = @intCast(needed_queue.items[needed_read]);
+        for (records[module_id].root_requires) |raw| {
+            const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse continue;
+            if (dependency >= records.len or !candidate[dependency] or needed[dependency]) continue;
+            needed[dependency] = true;
+            try needed_queue.append(a, dependency);
+        }
+    }
+
     var edges: std.ArrayList(EagerEdge) = .empty;
     defer edges.deinit(a);
     for (records, 0..) |record, module_index| {
-        if (!candidate[module_index]) continue;
+        if (!candidate[module_index] or !needed[module_index]) continue;
         for (record.root_requires) |raw| {
             const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse {
                 blocked[module_index] = true;
                 continue;
             };
-            if (dependency >= records.len or !candidate[dependency]) {
+            if (dependency >= records.len or !candidate[dependency] or !needed[dependency]) {
                 blocked[module_index] = true;
                 continue;
             }
@@ -218,8 +246,8 @@ fn planEagerInit(
 
     var queue: std.ArrayList(u32) = .empty;
     defer queue.deinit(a);
-    for (candidate, blocked, indegree, 0..) |can, is_blocked, degree, index|
-        if (can and !is_blocked and degree == 0)
+    for (candidate, needed, blocked, indegree, 0..) |can, is_needed, is_blocked, degree, index|
+        if (can and is_needed and !is_blocked and degree == 0)
             try queue.append(a, @intCast(index));
 
     var read: usize = 0;
@@ -229,9 +257,10 @@ fn planEagerInit(
         records[module_id].eager_order = @intCast(eager_count);
         eager_count += 1;
         for (edges.items[offsets[module_id]..offsets[module_id + 1]]) |edge| {
+            if (!needed[edge.to]) continue;
             indegree[edge.to] -= 1;
             if (indegree[edge.to] == 0 and
-                candidate[edge.to] and !blocked[edge.to])
+                candidate[edge.to] and needed[edge.to] and !blocked[edge.to])
                 try queue.append(a, edge.to);
         }
     }
@@ -865,9 +894,20 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     defer selected_records.deinit(a);
     var selected_modes: std.ArrayList(usage_profile.CompileMode) = .empty;
     defer selected_modes.deinit(a);
-    for (records, modes, reachable) |record, mode, keep| if (keep) {
+    var selected_observed_use: std.ArrayList(bool) = .empty;
+    defer selected_observed_use.deinit(a);
+    for (
+        records,
+        modes,
+        reachable,
+        profile.direct_page_reach,
+        profile.page_reach,
+        profile.direct_module_fanin,
+        profile.module_reach,
+    ) |record, mode, keep, direct_pages, page_reach, direct_fanin, module_reach| if (keep) {
         try selected_records.append(a, record);
         try selected_modes.append(a, mode);
+        try selected_observed_use.append(a, direct_pages != 0 or page_reach != 0 or direct_fanin != 0 or module_reach != 0);
     };
     if (selected_records.items.len == 0) return error.NoReachableModules;
 
@@ -880,6 +920,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         selected_records.items,
         &selected_module_ids,
         globals.stable("require"),
+        selected_observed_use.items,
     );
     std.debug.print("LLVM_EAGER_INIT modules={d}/{d}\n", .{
         eager_count,
