@@ -239,12 +239,59 @@ fn addDays(timestamp: i64, count: i64) !i64 {
     return std.math.add(i64, timestamp, seconds) catch error.InvalidDate;
 }
 
+fn parseMonthRelative(runtime: *const rt.Context, raw: []const u8) !?i64 {
+    const anchors = [_]struct { text: []const u8, shift: i64, last: bool }{
+        .{ .text = "first day of this month", .shift = 0, .last = false },
+        .{ .text = "first day of last month", .shift = -1, .last = false },
+        .{ .text = "first day of next month", .shift = 1, .last = false },
+        .{ .text = "last day of this month", .shift = 0, .last = true },
+        .{ .text = "last day of last month", .shift = -1, .last = true },
+        .{ .text = "last day of next month", .shift = 1, .last = true },
+    };
+    for (anchors) |anchor| {
+        if (!std.ascii.startsWithIgnoreCase(raw, anchor.text)) continue;
+        if (raw.len > anchor.text.len and !std.ascii.isWhitespace(raw[anchor.text.len])) continue;
+
+        var shift = anchor.shift;
+        const suffix = std.mem.trim(u8, raw[anchor.text.len..], " \t\r\n");
+        if (suffix.len != 0) {
+            if (suffix[0] != '+' and suffix[0] != '-') return error.InvalidDate;
+            const body = std.mem.trim(u8, suffix[1..], " \t\r\n");
+            const space = std.mem.indexOfScalar(u8, body, ' ') orelse return error.InvalidDate;
+            const count = std.fmt.parseInt(i64, body[0..space], 10) catch return error.InvalidDate;
+            const unit = std.mem.trim(u8, body[space + 1 ..], " \t\r\n");
+            if (!std.ascii.eqlIgnoreCase(unit, "month") and !std.ascii.eqlIgnoreCase(unit, "months"))
+                return error.InvalidDate;
+            const signed = std.math.mul(i64, if (suffix[0] == '+') @as(i64, 1) else -1, count) catch return error.InvalidDate;
+            shift = std.math.add(i64, shift, signed) catch return error.InvalidDate;
+        }
+
+        const current = civilFromUnix(try currentUnix(runtime));
+        const year_month = std.math.add(
+            i64,
+            std.math.mul(i64, current.year, 12) catch return error.InvalidDate,
+            @as(i64, current.month) - 1,
+        ) catch return error.InvalidDate;
+        const shifted = std.math.add(i64, year_month, shift) catch return error.InvalidDate;
+        const year = floorDiv(shifted, 12);
+        const month: u8 = @intCast(@mod(shifted, 12) + 1);
+        if (year < 1 or year > std.math.maxInt(std.time.epoch.Year)) return error.InvalidDate;
+        const day: u8 = if (anchor.last)
+            std.time.epoch.getDaysInMonth(@intCast(year), @enumFromInt(month))
+        else
+            1;
+        return try unixFromCivil(.{ .year = year, .month = month, .day = day });
+    }
+    return null;
+}
+
 pub fn parseTimestampText(runtime: *const rt.Context, raw_value: ?[]const u8) !i64 {
     const raw = if (raw_value) |value| std.mem.trim(u8, value, " \t\r\n") else return currentUnix(runtime);
     if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "now")) return currentUnix(runtime);
     if (raw[0] == '@') return std.fmt.parseInt(i64, raw[1..], 10) catch error.InvalidDate;
     if (std.ascii.eqlIgnoreCase(raw, "today"))
         return floorDiv(try currentUnix(runtime), std.time.s_per_day) * std.time.s_per_day;
+    if (try parseMonthRelative(runtime, raw)) |timestamp| return timestamp;
     inline for (.{ .{ "now +", @as(i64, 1) }, .{ "now -", @as(i64, -1) } }) |entry| {
         if (std.ascii.startsWithIgnoreCase(raw, entry[0])) {
             const suffix = std.mem.trim(u8, raw[entry[0].len..], " \t\r\n");
@@ -823,6 +870,20 @@ test "AOT language objects expose MediaWiki helpers" {
     defer runtime.deinit();
     var host = host_api.Host{ .now_unix = 1_670_803_200 };
     host_api.set(&runtime, &host);
+    const month_cases = [_]struct { raw: []const u8, expected: []const u8 }{
+        .{ .raw = "first day of this month", .expected = "2022-12-01" },
+        .{ .raw = "first day of this month - 1 month", .expected = "2022-11-01" },
+        .{ .raw = "first day of this month + 1 month", .expected = "2023-01-01" },
+        .{ .raw = "first day of last month", .expected = "2022-11-01" },
+        .{ .raw = "first day of next month", .expected = "2023-01-01" },
+        .{ .raw = "last day of this month", .expected = "2022-12-31" },
+    };
+    for (month_cases) |case| {
+        const timestamp = try parseTimestampText(&runtime, case.raw);
+        const actual = try formatDateAlloc(std.testing.allocator, timestamp, "Y-m-d");
+        defer std.testing.allocator.free(actual);
+        try std.testing.expectEqualStrings(case.expected, actual);
+    }
     const mw = try runtime.newTable();
     const ustring = try runtime.newNativeNamespace(.ustring);
     const case_mapper = try ustring_lib.install(&runtime, ustring);
