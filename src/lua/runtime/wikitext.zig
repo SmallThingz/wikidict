@@ -326,7 +326,7 @@ pub const Expander = struct {
         };
     }
 
-    fn normalizeTransclusionName(self: *Expander, raw: []const u8) ![]const u8 {
+    fn normalizeTransclusionName(self: *Expander, raw: []const u8, host_title: ?[]const u8) ![]const u8 {
         const name = std.mem.trim(u8, raw, " \t\r\n");
         if (name.len == 0) return error.MalformedWikitext;
 
@@ -335,6 +335,14 @@ pub const Expander = struct {
             if (direct.len == 0) return error.MalformedWikitext;
             return namespace_lib.canonicalizeTitle(self.runtime.allocator, direct);
         }
+
+        if (name[0] == '/') if (host_title) |base_raw| {
+            const base = try namespace_lib.canonicalizeTitle(self.runtime.allocator, base_raw);
+            const ns = namespace_lib.ofTitle(base);
+            const spec = namespace_lib.byId(ns.id) orelse return error.InvalidNamespace;
+            if (spec.has_subpages)
+                return std.fmt.allocPrint(self.runtime.allocator, "{s}{s}", .{ base, name });
+        };
 
         if (std.mem.indexOfScalar(u8, name, ':')) |colon| {
             if (namespace_lib.byName(name[0..colon]) != null)
@@ -379,9 +387,9 @@ pub const Expander = struct {
         return self.expandWikitext(body, args, title, depth + 1);
     }
 
-    fn expandTemplateByName(self: *Expander, raw_name: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
+    fn expandTemplateByName(self: *Expander, raw_name: []const u8, args: *rt.Table, host_title: ?[]const u8, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
-        const title = try self.normalizeTransclusionName(raw_name);
+        const title = try self.normalizeTransclusionName(raw_name, host_title);
         if (self.provider.get_transclusion_body) |get| {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
@@ -394,9 +402,9 @@ pub const Expander = struct {
         return self.expandTemplateSource(title, raw, args, depth);
     }
 
-    fn expandTemplateBySymbol(self: *Expander, symbol: CallSymbol, args: *rt.Table, depth: usize) anyerror![]const u8 {
+    fn expandTemplateBySymbol(self: *Expander, symbol: CallSymbol, args: *rt.Table, host_title: ?[]const u8, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
-        const title = try self.normalizeTransclusionName(symbol.text);
+        const title = try self.normalizeTransclusionName(symbol.text, host_title);
         if (self.provider.get_template_symbol == null) if (self.provider.get_transclusion_body) |get| {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
@@ -1240,11 +1248,11 @@ pub const Expander = struct {
         }
         if (try self.callSymbol(raw_head, .template)) |symbol| {
             const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
-            return self.expandTemplateBySymbol(symbol, args, depth + 1);
+            return self.expandTemplateBySymbol(symbol, args, host_title, depth + 1);
         }
         const title = try self.expandWikitext(raw_head, params, host_title, depth + 1);
         const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
-        return self.expandTemplateByName(title, args, depth + 1);
+        return self.expandTemplateByName(title, args, host_title, depth + 1);
     }
 
     fn scalarText(self: *Expander, value: Value) ![]const u8 {
@@ -1318,7 +1326,7 @@ pub const Expander = struct {
 
     fn hostFrameExpandTemplate(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        return self.expandTemplateByName(title, args, 0);
+        return self.expandTemplateByName(title, args, null, 0);
     }
 
     fn hostFrameExtensionTag(raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, content: ?Value, attrs: ?*rt.Table) anyerror![]const u8 {
@@ -1672,6 +1680,10 @@ const TestProvider = struct {
     fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
         if (std.mem.eql(u8, title, "Template:Hello")) return "Hi {{{1|friend}}} {{#if:{{{2|}}}|Y|N}}";
         if (std.mem.eql(u8, title, "Template:Only")) return "A<noinclude>X</noinclude>B<includeonly>C</includeonly>D";
+        if (std.mem.eql(u8, title, "Wiktionary:Sandbox/Child")) return "relative-project-child";
+        if (std.mem.eql(u8, title, "Template:/Child")) return "literal-template-slash-child";
+        if (std.mem.eql(u8, title, "Template:Parent")) return "{{/Child}}";
+        if (std.mem.eql(u8, title, "Template:Parent/Child")) return "relative-template-child";
         if (std.mem.eql(u8, title, "Main page")) return "main-transclusion";
         if (std.mem.eql(u8, title, "Wiktionary:Sandbox")) return "project-transclusion";
         return null;
@@ -1856,6 +1868,12 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     expander.provider.interwiki_map = TestProvider.interwikiMap;
     const inert_interwiki = try expander.expandFragment("Page", "{{w:Numa Pompilius|King Numa}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{w:Numa Pompilius|King Numa}}</nowiki>", inert_interwiki);
+    const relative_project = try expander.expandFragment("Wiktionary:Sandbox", "{{/Child}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("relative-project-child", relative_project);
+    const relative_main = try expander.expandFragment("Page", "{{/Child}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("literal-template-slash-child", relative_main);
+    const relative_nested = try expander.expandFragment("Page", "{{Parent}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("relative-template-child", relative_nested);
     const local_interwiki = try expander.expandFragment("Page", "{{self:Hello|A|1}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Hi A Y", local_interwiki);
     try std.testing.expectError(
