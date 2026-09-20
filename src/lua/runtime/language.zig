@@ -280,6 +280,44 @@ fn parseClockDateTime(raw: []const u8) ?Civil {
     return civil;
 }
 
+fn parseLeadingClockDateTime(raw: []const u8) ?Civil {
+    var body = std.mem.trim(u8, raw, " \t\r\n");
+    if (body.len == 0) return null;
+
+    const zones = [_][]const u8{ "(UTC)", "(GMT)", "UTC", "GMT" };
+    for (zones) |zone| {
+        if (body.len <= zone.len) continue;
+        const start = body.len - zone.len;
+        if (!std.ascii.isWhitespace(body[start - 1]) or !std.ascii.eqlIgnoreCase(body[start..], zone)) continue;
+        body = std.mem.trimEnd(u8, body[0 .. start - 1], " \t\r\n");
+        break;
+    }
+
+    const comma = std.mem.indexOfScalar(u8, body, ',') orelse return null;
+    const time_raw = std.mem.trim(u8, body[0..comma], " \t\r\n");
+    const date_raw = std.mem.trim(u8, body[comma + 1 ..], " \t\r\n");
+    if (time_raw.len == 0 or date_raw.len == 0) return null;
+
+    var parts = std.mem.splitScalar(u8, time_raw, ':');
+    const hour_raw = parts.next() orelse return null;
+    const minute_raw = parts.next() orelse return null;
+    if (hour_raw.len == 0 or minute_raw.len == 0) return null;
+    const hour = std.fmt.parseInt(u8, hour_raw, 10) catch return null;
+    const minute = std.fmt.parseInt(u8, minute_raw, 10) catch return null;
+    var second: u8 = 0;
+    if (parts.next()) |second_raw| {
+        if (second_raw.len == 0) return null;
+        second = std.fmt.parseInt(u8, second_raw, 10) catch return null;
+    }
+    if (parts.next() != null or hour > 23 or minute > 59 or second > 59) return null;
+
+    var civil = parseCivil(date_raw) orelse return null;
+    civil.hour = hour;
+    civil.minute = minute;
+    civil.second = second;
+    return civil;
+}
+
 fn currentUnix(runtime: *const rt.Context) !i64 {
     const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
     return host.now_unix orelse error.MissingCurrentTime;
@@ -390,7 +428,7 @@ pub fn parseTimestampText(runtime: *const rt.Context, raw_value: ?[]const u8) !i
             }
         }
     }
-    const civil = parseCivil(raw) orelse parseClockDateTime(raw) orelse return error.InvalidDate;
+    const civil = parseCivil(raw) orelse parseClockDateTime(raw) orelse parseLeadingClockDateTime(raw) orelse return error.InvalidDate;
     return unixFromCivil(civil);
 }
 
@@ -914,6 +952,9 @@ test "parse date forms used by Wiktionary modules" {
         .{ .raw = "Jul 18 2003 1 PM", .expected = "2003-07-18 13:00:00" },
         .{ .raw = "18 Jul 2003 11:59:59 PM", .expected = "2003-07-18 23:59:59" },
         .{ .raw = "Jul 18 2003 23:38:20", .expected = "2003-07-18 23:38:20" },
+        .{ .raw = "19:27, 21 March 2023", .expected = "2023-03-21 19:27:00" },
+        .{ .raw = "19:27:30, 21 March 2023 (UTC)", .expected = "2023-03-21 19:27:30" },
+        .{ .raw = "19:27, 21 March 2023 GMT", .expected = "2023-03-21 19:27:00" },
     };
     for (clock_cases) |case| {
         const timestamp = try parseTimestampText(&ctx, case.raw);
@@ -921,6 +962,7 @@ test "parse date forms used by Wiktionary modules" {
         defer a.free(actual);
         try std.testing.expectEqualStrings(case.expected, actual);
     }
+    try std.testing.expectError(error.InvalidDate, parseTimestampText(&ctx, "7:27 PM, 21 March 2023 (UTC)"));
 }
 
 fn callField(runtime: *rt.Context, object: Value, name: []const u8, args: []const Value) ![]const Value {
