@@ -1462,11 +1462,12 @@ pub const Expander = struct {
         const mode = mode_arg orelse type_arg orelse "pages";
         const depth = categoryTreeArg(args, "depth") orelse "1";
         const namespaces = categoryTreeArg(args, "namespaces");
-        const hideprefix = categoryTreeArg(args, "hideprefix") orelse "always";
+        const hideprefix = categoryTreeArg(args, "hideprefix") orelse "categories";
         const hideroot = categoryTreeArg(args, "hideroot") orelse "off";
-        const showcount = categoryTreeArg(args, "showcount") orelse "on";
+        const showcount = categoryTreeArg(args, "showcount") orelse "off";
         const class_name = categoryTreeClass(categoryTreeArg(args, "class"));
-        if (!std.ascii.eqlIgnoreCase(hideprefix, "always") or
+        if ((!std.ascii.eqlIgnoreCase(hideprefix, "always") and
+            !std.ascii.eqlIgnoreCase(hideprefix, "categories")) or
             !std.ascii.eqlIgnoreCase(hideroot, "off") or
             (!std.ascii.eqlIgnoreCase(showcount, "on") and !std.ascii.eqlIgnoreCase(showcount, "off")) or
             (categoryTreeArg(args, "class") != null and class_name == null))
@@ -1509,9 +1510,20 @@ pub const Expander = struct {
 
         if (!std.ascii.eqlIgnoreCase(mode, "pages") or
             !std.mem.eql(u8, depth, "1") or
-            namespaces == null or !std.mem.eql(u8, namespaces.?, "-") or
-            class_name != null or !std.ascii.eqlIgnoreCase(showcount, "on"))
+            namespaces == null or !std.mem.eql(u8, namespaces.?, "-"))
             return error.UnsupportedCategoryTreeOptions;
+
+        const style = categoryTreeArg(args, "style");
+        if (style) |value| {
+            const prefix = "counter-reset: pagesleftover ";
+            if (!std.mem.startsWith(u8, value, prefix) or value.len == prefix.len)
+                return error.UnsupportedCategoryTreeOptions;
+            _ = std.fmt.parseInt(u64, value[prefix.len..], 10) catch return error.UnsupportedCategoryTreeOptions;
+        }
+        const data_pages_in_cat = categoryTreeArg(args, "data-pages-in-cat");
+        const data_pages_left_over = categoryTreeArg(args, "data-pages-left-over");
+        if (data_pages_in_cat) |value| _ = std.fmt.parseInt(u64, value, 10) catch return error.UnsupportedCategoryTreeOptions;
+        if (data_pages_left_over) |value| _ = std.fmt.parseInt(u64, value, 10) catch return error.UnsupportedCategoryTreeOptions;
 
         const get = self.provider.category_tree orelse return error.NotImplemented;
         const members = try get(self.provider.ctx, category);
@@ -1524,21 +1536,46 @@ pub const Expander = struct {
 
         var out: std.ArrayList(u8) = .empty;
         const a = self.runtime.allocator;
-        try out.appendSlice(a, "<div class=\"CategoryTreeTag\"><div class=\"CategoryTreeItem\"><span class=\"CategoryTreeBullet\">►</span> [[:Category:");
+        try out.appendSlice(a, "<div class=\"");
+        if (class_name) |name| {
+            try out.appendSlice(a, name);
+            try out.append(a, ' ');
+        }
+        try out.appendSlice(a, "CategoryTreeTag\"");
+        if (data_pages_in_cat) |value| {
+            try out.appendSlice(a, " data-pages-in-cat=\"");
+            try out.appendSlice(a, value);
+            try out.append(a, '"');
+        }
+        if (data_pages_left_over) |value| {
+            try out.appendSlice(a, " data-pages-left-over=\"");
+            try out.appendSlice(a, value);
+            try out.append(a, '"');
+        }
+        if (style) |value| {
+            try out.appendSlice(a, " style=\"");
+            try out.appendSlice(a, value);
+            try out.append(a, '"');
+        }
+        try out.appendSlice(a, "><div class=\"CategoryTreeSection\"><div class=\"CategoryTreeItem\"><span class=\"CategoryTreeBullet\">►</span> [[:Category:");
         try out.appendSlice(a, display);
         try out.append(a, '|');
         try out.appendSlice(a, display);
-        try out.appendSlice(a, "]] <span class=\"CategoryTreeCount\">(");
-        const count_text = try std.fmt.allocPrint(a, "{d}", .{page_count});
-        defer a.free(count_text);
-        try out.appendSlice(a, count_text);
-        try out.appendSlice(a, ")</span></div><div class=\"CategoryTreeChildren\" style=\"display:block\">");
-        for (members) |title| {
-            try out.appendSlice(a, "<div class=\"CategoryTreeItem\"><span class=\"CategoryTreeEmptyBullet\">►</span> [[");
-            try out.appendSlice(a, title);
-            try out.appendSlice(a, "]]</div>");
+        try out.appendSlice(a, "]]");
+        if (std.ascii.eqlIgnoreCase(showcount, "on")) {
+            try out.appendSlice(a, " <span class=\"CategoryTreeCount\">(");
+            const count_text = try std.fmt.allocPrint(a, "{d}", .{page_count});
+            defer a.free(count_text);
+            try out.appendSlice(a, count_text);
+            try out.appendSlice(a, ")</span>");
         }
-        try out.appendSlice(a, "</div></div>");
+        try out.appendSlice(a, "</div><div class=\"CategoryTreeChildren\" style=\"display:block\">");
+        for (members) |title| {
+            try out.appendSlice(a, "<div class=\"CategoryTreeSection\"><div class=\"CategoryTreeItem\"><span class=\"CategoryTreePageBullet\"></span> [[");
+            try out.appendSlice(a, title);
+            try out.appendSlice(a, "]]</div><div class=\"CategoryTreeChildren\" style=\"display:none\"></div></div>");
+        }
+        try out.appendSlice(a, "</div></div></div>");
         return out.toOwnedSlice(a);
     }
 
@@ -1800,6 +1837,18 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "<span class=\"CategoryTreeCount\">(4)</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "style=\"display:none\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "[[alpha]]") == null);
+    const category_tree_prefixsee = try expander.expandFragment(
+        "Page",
+        "{{#categorytree:English terms prefixed with un-|type=pages|depth=1|class=\"columns-bg term-list Latn\"|style=counter-reset: pagesleftover 0|namespaces=-|data-pages-in-cat=3|data-pages-left-over=0}}",
+        1_670_803_200,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_prefixsee, "class=\"columns-bg term-list Latn CategoryTreeTag\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_prefixsee, "data-pages-in-cat=\"3\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_prefixsee, "data-pages-left-over=\"0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_prefixsee, "style=\"counter-reset: pagesleftover 0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_prefixsee, "CategoryTreeCount") == null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_prefixsee, "[[alpha]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_prefixsee, "[[beta]]") != null);
     const dynamic_page_list = try expander.expandFragment(
         "Page",
         "{{#tag:DynamicPageList|category=Tea room\ncount=100\nmode=none\norder=ascending}}",
