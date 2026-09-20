@@ -229,6 +229,57 @@ fn parseCivil(raw: []const u8) ?Civil {
     return parseIsoDateTime(raw) orelse parseDelimitedDate(raw);
 }
 
+fn parseClockDateTime(raw: []const u8) ?Civil {
+    var body = std.mem.trim(u8, raw, " \t\r\n");
+    if (body.len == 0) return null;
+
+    var meridiem: ?bool = null; // false = AM, true = PM
+    if (body.len >= 3 and body[body.len - 3] == ' ') {
+        const suffix = body[body.len - 2 ..];
+        if (std.ascii.eqlIgnoreCase(suffix, "AM")) {
+            meridiem = false;
+            body = std.mem.trimEnd(u8, body[0 .. body.len - 3], " \t\r\n");
+        } else if (std.ascii.eqlIgnoreCase(suffix, "PM")) {
+            meridiem = true;
+            body = std.mem.trimEnd(u8, body[0 .. body.len - 3], " \t\r\n");
+        }
+    }
+
+    const split = std.mem.lastIndexOfScalar(u8, body, ' ') orelse return null;
+    const date_raw = std.mem.trim(u8, body[0..split], " \t\r\n");
+    const time_raw = std.mem.trim(u8, body[split + 1 ..], " \t\r\n");
+    if (date_raw.len == 0 or time_raw.len == 0) return null;
+    if (meridiem == null and std.mem.indexOfScalar(u8, time_raw, ':') == null) return null;
+
+    var parts = std.mem.splitScalar(u8, time_raw, ':');
+    const hour_raw = parts.next() orelse return null;
+    if (hour_raw.len == 0) return null;
+    var hour = std.fmt.parseInt(u8, hour_raw, 10) catch return null;
+    var minute: u8 = 0;
+    var second: u8 = 0;
+    if (parts.next()) |raw_minute| {
+        if (raw_minute.len == 0) return null;
+        minute = std.fmt.parseInt(u8, raw_minute, 10) catch return null;
+        if (parts.next()) |raw_second| {
+            if (raw_second.len == 0) return null;
+            second = std.fmt.parseInt(u8, raw_second, 10) catch return null;
+        }
+    }
+    if (parts.next() != null or minute > 59 or second > 59) return null;
+
+    if (meridiem) |pm| {
+        if (hour < 1 or hour > 12) return null;
+        if (hour == 12) hour = 0;
+        if (pm) hour += 12;
+    } else if (hour > 23) return null;
+
+    var civil = parseCivil(date_raw) orelse return null;
+    civil.hour = hour;
+    civil.minute = minute;
+    civil.second = second;
+    return civil;
+}
+
 fn currentUnix(runtime: *const rt.Context) !i64 {
     const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
     return host.now_unix orelse error.MissingCurrentTime;
@@ -339,7 +390,7 @@ pub fn parseTimestampText(runtime: *const rt.Context, raw_value: ?[]const u8) !i
             }
         }
     }
-    const civil = parseCivil(raw) orelse return error.InvalidDate;
+    const civil = parseCivil(raw) orelse parseClockDateTime(raw) orelse return error.InvalidDate;
     return unixFromCivil(civil);
 }
 
@@ -856,6 +907,20 @@ test "parse date forms used by Wiktionary modules" {
     try std.testing.expectEqualStrings("2002-12-18 04:19:52", iso_out);
     const iso_z = try parseTimestampText(&ctx, "2002-12-18T04:19:52Z");
     try std.testing.expectEqual(iso, iso_z);
+    const clock_cases = [_]struct { raw: []const u8, expected: []const u8 }{
+        .{ .raw = "Jul 18 2003 12:38:20 PM", .expected = "2003-07-18 12:38:20" },
+        .{ .raw = "Jul 18 2003 12:38:20 AM", .expected = "2003-07-18 00:38:20" },
+        .{ .raw = "Jul 18 2003 1:02 PM", .expected = "2003-07-18 13:02:00" },
+        .{ .raw = "Jul 18 2003 1 PM", .expected = "2003-07-18 13:00:00" },
+        .{ .raw = "18 Jul 2003 11:59:59 PM", .expected = "2003-07-18 23:59:59" },
+        .{ .raw = "Jul 18 2003 23:38:20", .expected = "2003-07-18 23:38:20" },
+    };
+    for (clock_cases) |case| {
+        const timestamp = try parseTimestampText(&ctx, case.raw);
+        const actual = try formatDateAlloc(a, timestamp, "Y-m-d H:i:s");
+        defer a.free(actual);
+        try std.testing.expectEqualStrings(case.expected, actual);
+    }
 }
 
 fn callField(runtime: *rt.Context, object: Value, name: []const u8, args: []const Value) ![]const Value {
