@@ -79,9 +79,13 @@ fn monthNumber(raw: []const u8) ?u8 {
     if (std.fmt.parseInt(u8, raw, 10)) |n| {
         if (n >= 1 and n <= 12) return n;
     } else |_| {}
+    var text = raw;
+    while (text.len != 0 and text[text.len - 1] == '.') text = text[0 .. text.len - 1];
+    if (text.len == 0) return null;
     for (month_names, 1..) |name, i| {
-        if (std.ascii.eqlIgnoreCase(raw, name) or
-            (raw.len == 3 and std.ascii.eqlIgnoreCase(raw, name[0..3])))
+        if (std.ascii.eqlIgnoreCase(text, name) or
+            (text.len >= 3 and text.len <= 4 and std.ascii.eqlIgnoreCase(text[0..3], name[0..3]) and
+                (text.len == 3 or std.ascii.eqlIgnoreCase(text, "Sept"))))
             return @intCast(i);
     }
     return null;
@@ -200,10 +204,8 @@ fn parseDelimitedDate(raw: []const u8) ?Civil {
         parseHyphenDate(raw)
     else if (std.mem.indexOfScalar(u8, raw, '/') != null)
         parseSlashDate(raw)
-    else if (std.mem.indexOfScalar(u8, raw, '.') != null)
-        parseDottedDate(raw)
     else
-        parseSpaceDate(raw);
+        parseDottedDate(raw) orelse parseSpaceDate(raw);
 }
 
 fn parseIsoDateTime(raw: []const u8) ?Civil {
@@ -760,6 +762,10 @@ test "MediaWiki partial and word date grammar" {
         .{ .raw = "2014/07/18", .expected = "2014-07-18" },
         .{ .raw = "0684/07/18", .expected = "0684-07-18" },
         .{ .raw = "0003/07/18", .expected = "0003-07-18" },
+        .{ .raw = "Nov. 2 1999", .expected = "1999-11-02" },
+        .{ .raw = "2 Nov.. 1999", .expected = "1999-11-02" },
+        .{ .raw = "Sept. 2 1999", .expected = "1999-09-02" },
+        .{ .raw = "November. 2 1999", .expected = "1999-11-02" },
     };
     for (cases) |case| {
         const ts = try parseTimestamp(&ctx, .{ .string = case.raw });
@@ -772,6 +778,7 @@ test "MediaWiki partial and word date grammar" {
     try std.testing.expect(parseDottedDate("17.10.09") == null);
     try std.testing.expectError(error.InvalidDate, parseTimestamp(&ctx, .{ .string = "18/07/14" }));
     try std.testing.expectError(error.InvalidDate, parseTimestamp(&ctx, .{ .string = "684/07/18" }));
+    try std.testing.expectError(error.InvalidDate, parseTimestamp(&ctx, .{ .string = "2 11. 1999" }));
     const shifted = try parseTimestampText(&ctx, "2013-3-31 +8 days");
     const shifted_text = try formatDateAlloc(std.testing.allocator, shifted, "Y M d");
     defer std.testing.allocator.free(shifted_text);
