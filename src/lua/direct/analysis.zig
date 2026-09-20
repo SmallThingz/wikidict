@@ -65,6 +65,7 @@ pub const UpvalueSource = union(enum) {
 pub const Upvalue = struct {
     name: []const u8,
     source: UpvalueSource,
+    mutated: bool = false,
 };
 pub const StaticType = enum { unknown, nil, boolean, number, string };
 pub const Binding = struct {
@@ -160,6 +161,23 @@ const Analyzer = struct {
         try self.upvalues.append(self.allocator, .{ .name = name, .source = source });
         try self.upvalue_by_name.put(self.allocator, name, ordinal);
         return ordinal;
+    }
+
+    fn markLocalMutated(self: *Analyzer, binding: u32) void {
+        self.bindings.items[binding].mutated = true;
+        self.bindings.items[binding].static_module = null;
+        self.invalidateStaticType(binding);
+    }
+
+    fn markUpvalueMutated(self: *Analyzer, ordinal: u32) void {
+        if (ordinal >= self.upvalues.items.len) return;
+        const source = self.upvalues.items[ordinal].source;
+        self.upvalues.items[ordinal].mutated = true;
+        const parent = self.parent orelse return;
+        switch (source) {
+            .local => |binding| parent.markLocalMutated(binding),
+            .upvalue => |parent_ordinal| parent.markUpvalueMutated(parent_ordinal),
+        }
     }
 
     fn captureForChild(self: *Analyzer, name: []const u8) !Capture {
@@ -341,7 +359,7 @@ const Analyzer = struct {
                     self.bindings.items[binding].mutated = true;
                     self.bindings.items[binding].static_module = null;
                 },
-                .upvalue => {},
+                .upvalue => |ordinal| self.markUpvalueMutated(ordinal),
                 .global => try self.globals.markMutated(name),
             },
             .index => |idx| {
@@ -727,6 +745,31 @@ test "analysis roots function values through live captured dependencies only" {
     try std.testing.expect(module.functions.items[2].dead);
     try std.testing.expect(!module.functions.items[3].dead);
     try std.testing.expect(!module.functions.items[4].dead);
+}
+
+test "analysis propagates captured upvalue mutation through descendants" {
+    const source =
+        \\local data = "a"
+        \\local function outer()
+        \\  local function inner() data = "b" end
+        \\  return inner
+        \\end
+        \\return outer
+    ;
+    var chunk = try @import("../parser/root.zig").parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), module.functions.items.len);
+    const outer = module.functions.items[1];
+    const inner = module.functions.items[2];
+    try std.testing.expectEqual(@as(usize, 1), outer.upvalues.len);
+    try std.testing.expectEqual(@as(usize, 1), inner.upvalues.len);
+    try std.testing.expect(outer.upvalues[0].mutated);
+    try std.testing.expect(inner.upvalues[0].mutated);
 }
 
 fn isMultiExpr(value: *const lua.Expr) bool {

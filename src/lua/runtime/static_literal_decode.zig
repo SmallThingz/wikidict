@@ -2,9 +2,21 @@ const std = @import("std");
 const rt = @import("zig_runtime");
 const format = @import("lua_static_literal_format");
 
+pub const synth_callable_marker = format.synth_callable_marker;
+
 const Reader = struct {
     bytes: []const u8,
     pos: usize = 0,
+    compact: bool = false,
+
+    fn init(bytes: []const u8) !Reader {
+        if (bytes.len != 0 and bytes[0] == format.compact_marker) {
+            if (bytes.len < 2 or bytes[1] != format.compact_version)
+                return error.InvalidStaticLiteral;
+            return .{ .bytes = bytes, .pos = 2, .compact = true };
+        }
+        return .{ .bytes = bytes };
+    }
 
     fn take(self: *Reader, len: usize) ![]const u8 {
         if (len > self.bytes.len -| self.pos) return error.InvalidStaticLiteral;
@@ -25,8 +37,24 @@ const Reader = struct {
         return std.mem.readInt(u64, (try self.take(8))[0..8], .little);
     }
 
+    fn readVarU32(self: *Reader) !u32 {
+        var decoded: u32 = 0;
+        for (0..5) |index| {
+            const item = try self.byte();
+            const payload: u32 = item & 0x7f;
+            if (index == 4 and payload > 0x0f) return error.InvalidStaticLiteral;
+            decoded |= payload << @intCast(index * 7);
+            if (item & 0x80 == 0) return decoded;
+        }
+        return error.InvalidStaticLiteral;
+    }
+
+    fn readCount(self: *Reader) !u32 {
+        return if (self.compact) self.readVarU32() else self.readU32();
+    }
+
     fn string(self: *Reader) ![]const u8 {
-        const len: usize = @intCast(try self.readU32());
+        const len: usize = @intCast(try self.readCount());
         return self.take(len);
     }
 
@@ -44,9 +72,16 @@ const Reader = struct {
     }
 
     fn table(self: *Reader, ctx: *rt.Context, depth: usize) anyerror!rt.Value {
-        const shape_id = try self.readU32();
-        const field_count = try self.readU32();
-        const list_capacity = try self.readU32();
+        const shape_id = if (self.compact) blk: {
+            const flags = try self.byte();
+            if (flags & ~format.table_flags_mask != 0) return error.InvalidStaticLiteral;
+            break :blk if (flags & format.table_has_shape != 0)
+                try self.readVarU32()
+            else
+                format.no_shape;
+        } else try self.readU32();
+        const field_count = try self.readCount();
+        const list_capacity = try self.readCount();
         const table_value = if (shape_id != format.no_shape)
             try ctx.newProgramShape(shape_id)
         else if (list_capacity != 0)
@@ -72,8 +107,27 @@ const Reader = struct {
 };
 
 pub fn decode(ctx: *rt.Context, bytes: []const u8) !rt.Value {
-    var reader = Reader{ .bytes = bytes };
+    var reader = try Reader.init(bytes);
     const value = try reader.value(ctx, 0);
     if (reader.pos != bytes.len) return error.InvalidStaticLiteral;
     return value;
+}
+
+test "compact static literal framing decodes ULEB128 counts" {
+    const bytes = [_]u8{ format.compact_marker, format.compact_version, 0xac, 0x02, 0x7f };
+    var reader = try Reader.init(&bytes);
+    try std.testing.expect(reader.compact);
+    try std.testing.expectEqual(@as(u32, 300), try reader.readCount());
+    try std.testing.expectEqual(@as(u32, 127), try reader.readCount());
+    try std.testing.expectEqual(bytes.len, reader.pos);
+}
+
+test "static literal reader preserves legacy counts and rejects bad compact version" {
+    const legacy = [_]u8{ 0x2c, 0x01, 0, 0 };
+    var legacy_reader = try Reader.init(&legacy);
+    try std.testing.expect(!legacy_reader.compact);
+    try std.testing.expectEqual(@as(u32, 300), try legacy_reader.readCount());
+
+    const unsupported = [_]u8{ format.compact_marker, format.compact_version + 1 };
+    try std.testing.expectError(error.InvalidStaticLiteral, Reader.init(&unsupported));
 }

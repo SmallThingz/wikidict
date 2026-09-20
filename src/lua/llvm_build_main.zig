@@ -25,6 +25,7 @@ const FunctionAnalysisStats = struct {
     functions: usize = 0,
     dead: usize = 0,
     pure_data_roots: usize = 0,
+    synth_callable_roots: usize = 0,
 };
 
 fn readAll(io: std.Io, a: A, path: []const u8) ![]u8 {
@@ -485,8 +486,75 @@ fn analyzeManifest(
             }
         }.lessThan);
 
-        var synth_root = false;
-        if (model.root_pure and !model.dynamic_top_level) switch (model.return_binding) {
+        var synth_callable_root = false;
+        var synth_callable_blob: []const u8 = &.{};
+        if (model.root_pure and model.root_bootstrap_safe and !model.dynamic_top_level and
+            direct_exports.items.len == 0) switch (model.return_binding) {
+            .function => |span_start| {
+                var target: ?*const analysis.FunctionInfo = null;
+                for (module.functions.items[1..]) |info| if (info.span.start == span_start) {
+                    target = info;
+                    break;
+                };
+                if (target) |info| if (info.parent_id == module.root.id) {
+                    var capture_exprs: std.ArrayList(*const lua.Expr) = .empty;
+                    defer capture_exprs.deinit(sa);
+                    var captures_valid = true;
+                    for (info.upvalues) |upvalue| {
+                        if (upvalue.mutated) {
+                            captures_valid = false;
+                            break;
+                        }
+                        const binding = switch (upvalue.source) {
+                            .local => |id| id,
+                            .upvalue => {
+                                captures_valid = false;
+                                break;
+                            },
+                        };
+                        if (!captures_valid or binding >= module.root.bindings.len) {
+                            captures_valid = false;
+                            break;
+                        }
+                        const name = module.root.bindings[binding].name;
+                        const final_binding = model.env.get(name) orelse {
+                            captures_valid = false;
+                            break;
+                        };
+                        const literal = switch (final_binding) {
+                            .literal => |value| value,
+                            else => {
+                                captures_valid = false;
+                                break;
+                            },
+                        };
+                        if (!static_encode.isScalarLiteral(literal)) {
+                            captures_valid = false;
+                            break;
+                        }
+                        try capture_exprs.append(sa, literal);
+                    }
+                    if (captures_valid and capture_exprs.items.len == info.upvalues.len) {
+                        const captures = try static_encode.encodeScalarLiteralList(sa, capture_exprs.items);
+                        const owned = try a.alloc(u8, captures.len + 1);
+                        owned[0] = static_encode.synth_callable_marker;
+                        @memcpy(owned[1..], captures);
+                        synth_callable_blob = owned;
+                        try direct_exports.append(a, .{
+                            .name = "",
+                            .function_id = info.id,
+                            .capture_count = @intCast(info.upvalues.len),
+                        });
+                        synth_callable_root = true;
+                        function_stats.synth_callable_roots += 1;
+                    }
+                };
+            },
+            else => {},
+        };
+
+        var synth_root = synth_callable_root;
+        if (!synth_callable_root and model.root_pure and !model.dynamic_top_level) switch (model.return_binding) {
             .table => |table| {
                 synth_root = table.shape_eligible and
                     table.fields.count() == direct_exports.items.len + synth_literals.items.len;
@@ -500,8 +568,8 @@ fn analyzeManifest(
             else => {},
         };
 
-        var synth_seed_blob: []const u8 = &.{};
-        if (synth_root and synth_literals.items.len != 0) switch (model.return_binding) {
+        var synth_seed_blob: []const u8 = synth_callable_blob;
+        if (!synth_callable_root and synth_root and synth_literals.items.len != 0) switch (model.return_binding) {
             .table => |table| {
                 var table_shapes = try shape_registry.moduleFacts(sa, module_index);
                 defer table_shapes.deinit(sa);
@@ -536,6 +604,7 @@ fn analyzeManifest(
             .direct_exports = try direct_exports.toOwnedSlice(a),
             .static_root_blob = synth_seed_blob,
             .synth_root = synth_root,
+            .synth_callable_root = synth_callable_root,
         });
         function_base = std.math.add(u32, function_base, count) catch return error.TooManyFunctions;
         module.deinit();
@@ -753,6 +822,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     var synth_root_count: usize = 0;
     for (records) |record| synth_root_count += @intFromBool(record.synth_root);
     std.debug.print("LLVM_SYNTH_ROOTS modules={d}\n", .{synth_root_count});
+    std.debug.print("LLVM_SYNTH_CALLABLE_ROOTS modules={d}\n", .{function_stats.synth_callable_roots});
     std.debug.print("LLVM_SHAPES count={d} fields={d}\n", .{
         shape_registry.count(),
         shape_registry.fieldCount(),
