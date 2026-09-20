@@ -18,6 +18,55 @@ fn two(_: std.mem.Allocator, first: Value, second: Value) ![]const Value {
     return out;
 }
 
+fn flushAnchorSeparator(out: *std.ArrayList(u8), a: std.mem.Allocator, pending_separator: *bool) !void {
+    if (!pending_separator.*) return;
+    if (out.items.len == 0 or out.items[out.items.len - 1] != '_') try out.append(a, '_');
+    pending_separator.* = false;
+}
+
+fn appendAnchorNumericEntity(
+    out: *std.ArrayList(u8),
+    a: std.mem.Allocator,
+    source: []const u8,
+    start: usize,
+    pending_separator: *bool,
+) !?usize {
+    if (start + 3 >= source.len or source[start] != '&' or source[start + 1] != '#') return null;
+    const semi = std.mem.indexOfScalarPos(u8, source, start + 2, ';') orelse return null;
+    const digits = source[start + 2 .. semi];
+    if (digits.len == 0) return null;
+    const codepoint = if (digits[0] == 'x' or digits[0] == 'X') blk: {
+        if (digits.len == 1) return null;
+        break :blk std.fmt.parseInt(u21, digits[1..], 16) catch return null;
+    } else std.fmt.parseInt(u21, digits, 10) catch return null;
+
+    if (codepoint == '_' or codepoint == 0xA0 or
+        (codepoint <= std.math.maxInt(u8) and std.ascii.isWhitespace(@intCast(codepoint))))
+    {
+        pending_separator.* = true;
+        return semi + 1;
+    }
+    try flushAnchorSeparator(out, a, pending_separator);
+
+    switch (codepoint) {
+        '&' => try out.appendSlice(a, "&amp;"),
+        '"' => try out.appendSlice(a, "&quot;"),
+        '\'' => try out.appendSlice(a, "&#039;"),
+        '<' => try out.appendSlice(a, "&lt;"),
+        '>' => try out.appendSlice(a, "&gt;"),
+        '[' => try out.appendSlice(a, "&#91;"),
+        ']' => try out.appendSlice(a, "&#93;"),
+        '{' => try out.appendSlice(a, "&#123;"),
+        '}' => try out.appendSlice(a, "&#125;"),
+        else => {
+            var buf: [4]u8 = undefined;
+            const len = std.unicode.utf8Encode(codepoint, &buf) catch return null;
+            try out.appendSlice(a, buf[0..len]);
+        },
+    }
+    return semi + 1;
+}
+
 fn appendAnchorEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []const u8) !void {
     var i: usize = 0;
     var pending_separator = false;
@@ -38,14 +87,17 @@ fn appendAnchorEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []
             }
         }
         if (source[i] == '&') {
+            if (try appendAnchorNumericEntity(out, a, source, i, &pending_separator)) |next| {
+                i = next;
+                continue;
+            }
             if (std.mem.startsWith(u8, source[i..], "&nbsp;")) {
-                pending_separator = out.items.len != 0;
+                pending_separator = true;
                 i += 6;
                 continue;
             }
             if (std.mem.startsWith(u8, source[i..], "&amp;")) {
-                if (pending_separator and out.items.len != 0 and out.items[out.items.len - 1] != '_') try out.append(a, '_');
-                pending_separator = false;
+                try flushAnchorSeparator(out, a, &pending_separator);
                 try out.appendSlice(a, "&amp;");
                 i += 5;
                 continue;
@@ -53,12 +105,11 @@ fn appendAnchorEncoded(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []
         }
         const c = source[i];
         if (c == '_' or std.ascii.isWhitespace(c)) {
-            pending_separator = out.items.len != 0;
+            pending_separator = true;
             i += 1;
             continue;
         }
-        if (pending_separator and out.items.len != 0 and out.items[out.items.len - 1] != '_') try out.append(a, '_');
-        pending_separator = false;
+        try flushAnchorSeparator(out, a, &pending_separator);
         if (c == '%' and i + 2 < source.len and std.ascii.isHex(source[i + 1]) and std.ascii.isHex(source[i + 2])) {
             try out.appendSlice(a, "%25");
         } else switch (c) {
@@ -612,6 +663,24 @@ test "AOT URI encode decode and anchors match MediaWiki modes" {
     const escaped_anchor = try callField(&runtime, .{ .table = uri }, "anchorEncode", &.{.{ .string = "a%20b {c}" }});
     defer rt.freeResults(escaped_anchor);
     try std.testing.expectEqualStrings("a%2520b_&#123;c&#125;", escaped_anchor[0].string);
+    const numeric_anchor = try callField(&runtime, .{ .table = uri }, "anchorEncode", &.{.{ .string = "&#42;[[togarrman]]" }});
+    defer rt.freeResults(numeric_anchor);
+    try std.testing.expectEqualStrings("*togarrman", numeric_anchor[0].string);
+    const numeric_space = try callField(&runtime, .{ .table = uri }, "anchorEncode", &.{.{ .string = "&#32;A" }});
+    defer rt.freeResults(numeric_space);
+    try std.testing.expectEqualStrings("_A", numeric_space[0].string);
+    const numeric_brace = try callField(&runtime, .{ .table = uri }, "anchorEncode", &.{.{ .string = "&#123;" }});
+    defer rt.freeResults(numeric_brace);
+    try std.testing.expectEqualStrings("&#123;", numeric_brace[0].string);
+    const numeric_amp = try callField(&runtime, .{ .table = uri }, "anchorEncode", &.{.{ .string = "&#38;" }});
+    defer rt.freeResults(numeric_amp);
+    try std.testing.expectEqualStrings("&amp;", numeric_amp[0].string);
+    const numeric_bracket = try callField(&runtime, .{ .table = uri }, "anchorEncode", &.{.{ .string = "&#91;" }});
+    defer rt.freeResults(numeric_bracket);
+    try std.testing.expectEqualStrings("&#91;", numeric_bracket[0].string);
+    const numeric_markup = try callField(&runtime, .{ .table = uri }, "anchorEncode", &.{.{ .string = "&#60;b&#62;x" }});
+    defer rt.freeResults(numeric_markup);
+    try std.testing.expectEqualStrings("&lt;b&gt;x", numeric_markup[0].string);
 }
 
 test "AOT URI builders sort query parameters and expose URI fields" {
