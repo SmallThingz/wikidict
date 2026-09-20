@@ -170,16 +170,43 @@ fn planEagerInit(
         out.* = record.root_bootstrap_safe and
             (record.root_requires.len == 0 or stable_require);
 
+    // Eager preparation is an optimization for executable module roots. Static
+    // and synthesized roots already have cheap lazy materializers, and eagerly
+    // instantiating every corpus data module duplicates gigabytes into each page
+    // context. Seed only executable roots, then retain the exact bootstrap-safe
+    // dependency closure those roots need.
+    const needed = try a.alloc(bool, records.len);
+    defer a.free(needed);
+    @memset(needed, false);
+    var needed_queue: std.ArrayList(u32) = .empty;
+    defer needed_queue.deinit(a);
+    for (candidate, records, 0..) |can, record, index| {
+        if (can and !record.static_root and !record.synth_root) {
+            needed[index] = true;
+            try needed_queue.append(a, @intCast(index));
+        }
+    }
+    var needed_read: usize = 0;
+    while (needed_read < needed_queue.items.len) : (needed_read += 1) {
+        const module_id: usize = @intCast(needed_queue.items[needed_read]);
+        for (records[module_id].root_requires) |raw| {
+            const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse continue;
+            if (dependency >= records.len or !candidate[dependency] or needed[dependency]) continue;
+            needed[dependency] = true;
+            try needed_queue.append(a, dependency);
+        }
+    }
+
     var edges: std.ArrayList(EagerEdge) = .empty;
     defer edges.deinit(a);
     for (records, 0..) |record, module_index| {
-        if (!candidate[module_index]) continue;
+        if (!candidate[module_index] or !needed[module_index]) continue;
         for (record.root_requires) |raw| {
             const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse {
                 blocked[module_index] = true;
                 continue;
             };
-            if (dependency >= records.len or !candidate[dependency]) {
+            if (dependency >= records.len or !candidate[dependency] or !needed[dependency]) {
                 blocked[module_index] = true;
                 continue;
             }
@@ -218,8 +245,8 @@ fn planEagerInit(
 
     var queue: std.ArrayList(u32) = .empty;
     defer queue.deinit(a);
-    for (candidate, blocked, indegree, 0..) |can, is_blocked, degree, index|
-        if (can and !is_blocked and degree == 0)
+    for (candidate, needed, blocked, indegree, 0..) |can, is_needed, is_blocked, degree, index|
+        if (can and is_needed and !is_blocked and degree == 0)
             try queue.append(a, @intCast(index));
 
     var read: usize = 0;
@@ -229,9 +256,10 @@ fn planEagerInit(
         records[module_id].eager_order = @intCast(eager_count);
         eager_count += 1;
         for (edges.items[offsets[module_id]..offsets[module_id + 1]]) |edge| {
+            if (!needed[edge.to]) continue;
             indegree[edge.to] -= 1;
             if (indegree[edge.to] == 0 and
-                candidate[edge.to] and !blocked[edge.to])
+                candidate[edge.to] and needed[edge.to] and !blocked[edge.to])
                 try queue.append(a, edge.to);
         }
     }
