@@ -32,6 +32,7 @@ fn canonicalExtensionTag(raw: []const u8) ?[]const u8 {
 
 pub const InstallScribuntoFn = *const fn (
     *?*anyopaque,
+    ?*anyopaque,
     std.mem.Allocator,
     *rt.Context,
     u32,
@@ -95,6 +96,7 @@ pub const Expander = struct {
     provider: Provider,
     install_scribunto: ?InstallScribuntoFn = null,
     scribunto_state: ?*anyopaque = null,
+    scribunto_shared: ?*anyopaque = null,
     host: host_api.Host = .{},
     current_source: ?[]const u8 = null,
     page_allocator: ?std.mem.Allocator = null,
@@ -149,6 +151,7 @@ pub const Expander = struct {
         const install = self.install_scribunto orelse return error.MissingScribuntoInstaller;
         try install(
             &self.scribunto_state,
+            self.scribunto_shared,
             self.runtime.allocator,
             self.runtime,
             self.env_slot,
@@ -1181,7 +1184,7 @@ pub const Expander = struct {
         const global_shape = if (outer_runtime.global_table) |global| global.shape else null;
         try rt.bindGlobalTable(&child, global_shape, self.env_slot);
         if (!try child.bootstrapProgram()) try stdlib.install(&child);
-        try install(&self.scribunto_state, page_a, &child, self.env_slot, self.string_slot, self.mw_slot);
+        try install(&self.scribunto_state, self.scribunto_shared, page_a, &child, self.env_slot, self.string_slot, self.mw_slot);
 
         const saved_runtime = self.runtime;
         self.runtime = &child;
@@ -1842,6 +1845,7 @@ fn installTestHost(runtime: *rt.Context, string_slot: u32, mw_slot: u32) !void {
 
 fn installTestInvoke(
     _: *?*anyopaque,
+    _: ?*anyopaque,
     _: std.mem.Allocator,
     runtime: *rt.Context,
     _: u32,
@@ -1856,6 +1860,7 @@ const ScribuntoInstallProbe = struct {
 
     fn install(
         _: *?*anyopaque,
+        _: ?*anyopaque,
         _: std.mem.Allocator,
         runtime: *rt.Context,
         _: u32,

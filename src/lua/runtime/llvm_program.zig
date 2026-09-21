@@ -465,6 +465,11 @@ pub const Host = scribunto.Host;
 pub const FrameArg = scribunto.FrameArg;
 pub const WikitextProvider = scribunto.WikitextProvider;
 pub const WikitextExpander = scribunto.WikitextExpander;
+pub const SharedLoadDataCache = scribunto.SharedLoadDataCache;
+
+pub fn loadDataCacheability(program: *const Program) []const bool {
+    return program.module_static_root_load_data;
+}
 
 pub fn initExpander(
     ctx: *rt.Context,
@@ -476,5 +481,20 @@ pub fn initExpander(
         globals_abi.id("string"),
         globals_abi.id("mw"),
         provider,
+    );
+}
+
+pub fn initExpanderShared(
+    ctx: *rt.Context,
+    provider: WikitextProvider,
+    shared: *SharedLoadDataCache,
+) WikitextExpander {
+    return scribunto.makeWikitextExpanderShared(
+        ctx,
+        globals_abi.id("_G"),
+        globals_abi.id("string"),
+        globals_abi.id("mw"),
+        provider,
+        shared,
     );
 }

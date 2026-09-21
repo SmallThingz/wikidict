@@ -25,11 +25,105 @@ pub fn setHost(runtime: *rt.Context, host: ?*Host) void {
 }
 const Value = rt.Value;
 
+const shared_load_data_max_entries: usize = 256;
+const shared_load_data_max_bytes: usize = 64 * 1024 * 1024;
+const shared_load_data_max_entry_bytes: usize = 8 * 1024 * 1024;
+
+pub const SharedLoadDataCache = struct {
+    const Entry = struct {
+        arena: *std.heap.ArenaAllocator,
+        value: Value,
+        bytes: usize,
+    };
+
+    backing: std.mem.Allocator,
+    cacheable: []const bool,
+    entries: std.AutoHashMapUnmanaged(u32, Entry) = .empty,
+    seen: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    metatable_arena: std.heap.ArenaAllocator,
+    metatable: ?*rt.Table = null,
+    bytes: usize = 0,
+
+    pub fn init(backing: std.mem.Allocator, cacheable: []const bool) SharedLoadDataCache {
+        return .{
+            .backing = backing,
+            .cacheable = cacheable,
+            .metatable_arena = std.heap.ArenaAllocator.init(backing),
+        };
+    }
+
+    pub fn deinit(self: *SharedLoadDataCache) void {
+        var values = self.entries.valueIterator();
+        while (values.next()) |entry| {
+            entry.arena.deinit();
+            self.backing.destroy(entry.arena);
+        }
+        self.entries.deinit(self.backing);
+        self.seen.deinit(self.backing);
+        self.metatable_arena.deinit();
+        self.* = undefined;
+    }
+
+    fn isCacheable(self: *const SharedLoadDataCache, module_id: u32) bool {
+        return module_id < self.cacheable.len and self.cacheable[module_id];
+    }
+
+    fn get(self: *const SharedLoadDataCache, module_id: u32) ?Value {
+        if (!self.isCacheable(module_id)) return null;
+        const entry = self.entries.get(module_id) orelse return null;
+        return entry.value;
+    }
+
+    fn loadDataMetatable(self: *SharedLoadDataCache) !*rt.Table {
+        if (self.metatable) |table| return table;
+        const a = self.metatable_arena.allocator();
+        const table = try a.create(rt.Table);
+        table.* = .{};
+        try table.rawSet(a, .{ .string = "mw_loadData" }, .{ .boolean = true });
+        try table.rawSet(a, .{ .string = "__metatable" }, .{ .table = table });
+        table.read_only = true;
+        self.metatable = table;
+        return table;
+    }
+
+    fn tryPromote(self: *SharedLoadDataCache, module_id: u32, source: Value) !?Value {
+        if (!self.isCacheable(module_id)) return null;
+        if (self.get(module_id)) |value| return value;
+        if (!self.seen.contains(module_id)) {
+            try self.seen.put(self.backing, module_id, {});
+            return null;
+        }
+        if (self.entries.count() >= shared_load_data_max_entries or self.bytes >= shared_load_data_max_bytes)
+            return null;
+
+        const arena = try self.backing.create(std.heap.ArenaAllocator);
+        arena.* = std.heap.ArenaAllocator.init(self.backing);
+        errdefer {
+            arena.deinit();
+            self.backing.destroy(arena);
+        }
+        const a = arena.allocator();
+        var seen_tables: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
+        defer seen_tables.deinit(a);
+        const promoted = try promoteLoadData(a, source, &seen_tables, try self.loadDataMetatable());
+        const bytes = arena.queryCapacity();
+        if (bytes > shared_load_data_max_entry_bytes or bytes > shared_load_data_max_bytes - self.bytes) {
+            arena.deinit();
+            self.backing.destroy(arena);
+            return null;
+        }
+        try self.entries.put(self.backing, module_id, .{ .arena = arena, .value = promoted, .bytes = bytes });
+        self.bytes += bytes;
+        return promoted;
+    }
+};
+
 const State = struct {
     allocator: std.mem.Allocator,
     env_slot: u32,
     string_slot: u32,
     mw_slot: u32,
+    shared_load_data: ?*SharedLoadDataCache = null,
     load_data_cache: std.AutoHashMapUnmanaged(u32, Value) = .empty,
     load_data_loading: std.AutoHashMapUnmanaged(u32, void) = .empty,
     load_json_cache: std.StringHashMapUnmanaged(Value) = .empty,
@@ -59,7 +153,7 @@ fn cloneValue(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnmanage
     return .{ .table = copy };
 }
 
-fn loadDataMetatable(state: *State) !*rt.Table {
+fn pageLoadDataMetatable(state: *State) !*rt.Table {
     if (state.load_data_metatable) |table| return table;
     const table = try state.allocator.create(rt.Table);
     table.* = .{};
@@ -94,6 +188,14 @@ fn promoteLoadData(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnm
             break :blk .{ .table = copy };
         },
     };
+}
+
+fn promoteLoadDataForState(state: *State, module_id: u32, source: Value) !Value {
+    if (state.shared_load_data) |shared|
+        if (try shared.tryPromote(module_id, source)) |value| return value;
+    var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
+    defer seen.deinit(state.allocator);
+    return promoteLoadData(state.allocator, source, &seen, try pageLoadDataMetatable(state));
 }
 
 fn cloneCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -145,12 +247,11 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     if (args.len == 0 or args[0] != .string) return error.ModuleNameExpected;
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingScribuntoState));
     const module_id = try runtime.resolveModule(args[0].string);
+    if (state.shared_load_data) |shared| if (shared.get(module_id)) |value| return one(value);
     if (state.load_data_cache.get(module_id)) |value| return one(value);
     if (runtime.loadDataSnapshot(module_id)) |source| {
         if (source != .table) return error.LoadDataTableExpected;
-        var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
-        defer seen.deinit(state.allocator);
-        const promoted = try promoteLoadData(state.allocator, source, &seen, try loadDataMetatable(state));
+        const promoted = try promoteLoadDataForState(state, module_id, source);
         try state.load_data_cache.put(state.allocator, module_id, promoted);
         return one(promoted);
     }
@@ -175,9 +276,7 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     };
     if (source != .table) return error.LoadDataTableExpected;
 
-    var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
-    defer seen.deinit(state.allocator);
-    const promoted = try promoteLoadData(state.allocator, source, &seen, try loadDataMetatable(state));
+    const promoted = try promoteLoadDataForState(state, module_id, source);
     try state.load_data_cache.put(state.allocator, module_id, promoted);
     return one(promoted);
 }
@@ -199,7 +298,7 @@ fn loadJsonDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     if (decoded != .table) return error.LoadJsonDataTableExpected;
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
     defer seen.deinit(state.allocator);
-    const promoted = try promoteLoadData(state.allocator, decoded, &seen, try loadDataMetatable(state));
+    const promoted = try promoteLoadData(state.allocator, decoded, &seen, try pageLoadDataMetatable(state));
     const key = try state.allocator.dupe(u8, title);
     try state.load_json_cache.put(state.allocator, key, promoted);
     return one(promoted);
@@ -217,6 +316,7 @@ pub fn install(runtime: *rt.Context, env_slot: u32, string_slot: u32, mw_slot: u
 }
 fn installForExpander(
     raw_state: *?*anyopaque,
+    shared_raw: ?*anyopaque,
     page_allocator: std.mem.Allocator,
     runtime: *rt.Context,
     env_slot: u32,
@@ -232,6 +332,7 @@ fn installForExpander(
             .env_slot = env_slot,
             .string_slot = string_slot,
             .mw_slot = mw_slot,
+            .shared_load_data = if (shared_raw) |raw| @ptrCast(@alignCast(raw)) else null,
         };
         raw_state.* = created;
         break :blk created;
@@ -283,6 +384,7 @@ test "AOT Scribunto installs mw.ustring, html, loadData, clone, and string alias
 }
 
 const DataProbe = struct {
+    var root_calls = std.atomic.Value(usize).init(0);
     fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
         if (std.mem.eql(u8, raw_name, "Module:Data")) return 0;
         if (std.mem.eql(u8, raw_name, "Module:DataFail")) return 1;
@@ -300,6 +402,7 @@ const DataProbe = struct {
         };
     }
     fn root(runtime: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        _ = root_calls.fetchAdd(1, .monotonic);
         if (runtime.current_frame == null) return error.MissingLoadDataFrame;
         const count = runtime.getGlobal(1);
         try runtime.setGlobal(1, .{ .number = if (count == .number) count.number + 1 else 1 });
@@ -394,7 +497,7 @@ test "AOT expander loadData cache survives fresh invoke contexts" {
         defer child.deinit();
         try rt.bindGlobalTable(&child, null, 0);
         try stdlib.install(&child);
-        try installForExpander(&shared_state, page.allocator(), &child, 0, 18, 23);
+        try installForExpander(&shared_state, null, page.allocator(), &child, 0, 18, 23);
         const mw = child.getGlobal(23);
         const first = try callField(&child, mw, "loadData", &.{.{ .string = "Module:Data" }});
         defer rt.freeResults(first);
@@ -408,7 +511,7 @@ test "AOT expander loadData cache survives fresh invoke contexts" {
         defer child.deinit();
         try rt.bindGlobalTable(&child, null, 0);
         try stdlib.install(&child);
-        try installForExpander(&shared_state, page.allocator(), &child, 0, 18, 23);
+        try installForExpander(&shared_state, null, page.allocator(), &child, 0, 18, 23);
         const mw = child.getGlobal(23);
         const second = try callField(&child, mw, "loadData", &.{.{ .string = "Module:Data" }});
         defer rt.freeResults(second);
@@ -416,6 +519,72 @@ test "AOT expander loadData cache survives fresh invoke contexts" {
         try std.testing.expect(second[0].table == first_table);
         try std.testing.expectEqual(@as(f64, 7), second[0].table.rawGet(.{ .string = "nested" }).?.table.rawGet(.{ .string = "x" }).?.number);
     }
+}
+
+test "shared loadData cache survives separate page allocators" {
+    var runtime_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer runtime_arena.deinit();
+    var runtime = try rt.Context.initProgram(runtime_arena.allocator(), 24, 4);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(DataProbe.root), rt.stabilize(DataProbe.fail), rt.stabilize(DataProbe.scalar), rt.stabilize(DataProbe.tableKey) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, DataProbe.lookup, DataProbe.name);
+
+    var shared = SharedLoadDataCache.init(std.testing.allocator, &.{ true, true, true, true });
+    defer shared.deinit();
+    DataProbe.root_calls.store(0, .monotonic);
+    var cached_table: ?*rt.Table = null;
+
+    for (0..3) |page_index| {
+        var page = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer page.deinit();
+        var child = try runtime.forkProgram(page.allocator());
+        defer child.deinit();
+        try rt.bindGlobalTable(&child, null, 0);
+        try stdlib.install(&child);
+        var page_state: ?*anyopaque = null;
+        try installForExpander(&page_state, &shared, page.allocator(), &child, 0, 18, 23);
+        const mw = child.getGlobal(23);
+        const loaded = try callField(&child, mw, "loadData", &.{.{ .string = "Module:Data" }});
+        defer rt.freeResults(loaded);
+        try std.testing.expect(loaded[0] == .table and loaded[0].table.read_only);
+        if (page_index == 1) cached_table = loaded[0].table;
+        if (page_index == 2) try std.testing.expect(loaded[0].table == cached_table.?);
+    }
+    try std.testing.expectEqual(@as(usize, 2), DataProbe.root_calls.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 1), shared.entries.count());
+    try std.testing.expect(shared.bytes != 0 and shared.bytes <= shared_load_data_max_bytes);
+}
+
+test "shared loadData cache skips page-sensitive modules" {
+    var runtime_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer runtime_arena.deinit();
+    var runtime = try rt.Context.initProgram(runtime_arena.allocator(), 24, 4);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(DataProbe.root), rt.stabilize(DataProbe.fail), rt.stabilize(DataProbe.scalar), rt.stabilize(DataProbe.tableKey) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, DataProbe.lookup, DataProbe.name);
+
+    var shared = SharedLoadDataCache.init(std.testing.allocator, &.{ false, true, true, true });
+    defer shared.deinit();
+    DataProbe.root_calls.store(0, .monotonic);
+
+    for (0..3) |_| {
+        var page = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer page.deinit();
+        var child = try runtime.forkProgram(page.allocator());
+        defer child.deinit();
+        try rt.bindGlobalTable(&child, null, 0);
+        try stdlib.install(&child);
+        var page_state: ?*anyopaque = null;
+        try installForExpander(&page_state, &shared, page.allocator(), &child, 0, 18, 23);
+        const mw = child.getGlobal(23);
+        const loaded = try callField(&child, mw, "loadData", &.{.{ .string = "Module:Data" }});
+        defer rt.freeResults(loaded);
+        try std.testing.expect(loaded[0] == .table and loaded[0].table.read_only);
+    }
+    try std.testing.expectEqual(@as(usize, 3), DataProbe.root_calls.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 0), shared.entries.count());
 }
 
 const JsonDataProbe = struct {
@@ -743,6 +912,17 @@ test "AOT Scribunto compiler-known namespaces use native slots" {
 pub const WikitextProvider = @import("wikitext.zig").Provider;
 pub const WikitextExpander = @import("wikitext.zig").Expander;
 pub fn makeWikitextExpander(runtime: *rt.Context, env_slot: u32, string_slot: u32, mw_slot: u32, provider: WikitextProvider) WikitextExpander {
+    return makeWikitextExpanderShared(runtime, env_slot, string_slot, mw_slot, provider, null);
+}
+
+pub fn makeWikitextExpanderShared(
+    runtime: *rt.Context,
+    env_slot: u32,
+    string_slot: u32,
+    mw_slot: u32,
+    provider: WikitextProvider,
+    shared: ?*SharedLoadDataCache,
+) WikitextExpander {
     return .{
         .runtime = runtime,
         .env_slot = env_slot,
@@ -750,6 +930,7 @@ pub fn makeWikitextExpander(runtime: *rt.Context, env_slot: u32, string_slot: u3
         .mw_slot = mw_slot,
         .provider = provider,
         .install_scribunto = installForExpander,
+        .scribunto_shared = shared,
     };
 }
 

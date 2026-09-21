@@ -57,6 +57,7 @@ const Engine = struct {
     requested_now_unix: i64,
     program: lua_program.Program,
     provider: pages.Provider,
+    load_data_cache: lua_program.SharedLoadDataCache,
 
     fn fileExists(io: std.Io, path: []const u8) !bool {
         var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
@@ -76,6 +77,11 @@ const Engine = struct {
         errdefer program.deinit();
         var provider = try pages.Provider.init(io, a, requested_root, requested_dump);
         errdefer provider.deinit();
+        var load_data_cache = lua_program.SharedLoadDataCache.init(
+            std.heap.smp_allocator,
+            lua_program.loadDataCacheability(&program),
+        );
+        errdefer load_data_cache.deinit();
         return .{
             .io = io,
             .requested_root = try a.dupe(u8, requested_root),
@@ -83,10 +89,12 @@ const Engine = struct {
             .requested_now_unix = requested_now_unix,
             .program = program,
             .provider = provider,
+            .load_data_cache = load_data_cache,
         };
     }
 
     fn deinit(self: *Engine) void {
+        self.load_data_cache.deinit();
         self.provider.deinit();
         self.program.deinit();
     }
@@ -99,7 +107,7 @@ const Engine = struct {
         stage.* = "install";
         var ctx = try self.program.initPageContext(page_a);
         defer ctx.deinit();
-        var expander = lua_program.initExpander(&ctx, self.provider.api());
+        var expander = lua_program.initExpanderShared(&ctx, self.provider.api(), &self.load_data_cache);
         stage.* = "expand";
         const output = expander.expandFragment(request.title, request.source, self.requested_now_unix) catch |err| {
             detail.* = try page_a.dupe(u8, if (ctx.last_error == .string)
