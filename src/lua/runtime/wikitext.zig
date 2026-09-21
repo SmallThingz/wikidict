@@ -1649,6 +1649,43 @@ pub const Expander = struct {
         return null;
     }
 
+    fn missingCategoryTree(
+        self: *Expander,
+        display: []const u8,
+        mode: []const u8,
+        mode_explicit: bool,
+        hideprefix: []const u8,
+        showcount: []const u8,
+        namespaces: ?[]const u8,
+        class_name: ?[]const u8,
+    ) ![]const u8 {
+        const a = self.runtime.allocator;
+        const effective_mode = if (namespaces != null)
+            "pages"
+        else if (mode_explicit)
+            mode
+        else
+            "categories";
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(a, "<div class=\"");
+        if (class_name) |name| {
+            try out.appendSlice(a, name);
+            try out.append(a, ' ');
+        }
+        try out.appendSlice(a, "CategoryTreeTag\" data-ct-options=\"{&quot;mode&quot;:&quot;");
+        try out.appendSlice(a, effective_mode);
+        try out.appendSlice(a, "&quot;,&quot;hideprefix&quot;:&quot;");
+        try out.appendSlice(a, hideprefix);
+        try out.appendSlice(a, "&quot;,&quot;showcount&quot;:");
+        try out.appendSlice(a, if (std.ascii.eqlIgnoreCase(showcount, "on")) "true" else "false");
+        try out.appendSlice(a, ",&quot;namespaces&quot;:");
+        try out.appendSlice(a, if (namespaces != null) "[0]" else "false");
+        try out.appendSlice(a, ",&quot;notranslations&quot;:false}\"><span class=\"CategoryTreeNotice\">Category <i>");
+        try appendAttrEscaped(&out, a, display);
+        try out.appendSlice(a, "</i> not found</span></div>");
+        return out.toOwnedSlice(a);
+    }
+
     fn expandCategoryTree(self: *Expander, args: *rt.Table) ![]const u8 {
         const first = args.rawGet(.{ .number = 1 }) orelse return error.StringExpected;
         if (first != .string) return error.StringExpected;
@@ -1686,7 +1723,16 @@ pub const Expander = struct {
         if (std.mem.eql(u8, depth, "0")) {
             if (namespaces) |value| if (!std.mem.eql(u8, value, "-")) return error.UnsupportedCategoryTreeOptions;
             const stats_get = self.provider.category_stats orelse return error.NotImplemented;
-            const stats = (try stats_get(self.provider.ctx, category)) orelse return error.CategoryTreeSnapshotMissing;
+            const stats = (try stats_get(self.provider.ctx, category)) orelse
+                return self.missingCategoryTree(
+                    display,
+                    mode,
+                    mode_arg != null,
+                    hideprefix,
+                    showcount,
+                    namespaces,
+                    class_name,
+                );
             const count = categoryTreeRootCount(mode, stats) orelse return error.UnsupportedCategoryTreeOptions;
             const a = self.runtime.allocator;
             var out: std.ArrayList(u8) = .empty;
@@ -2106,6 +2152,15 @@ test "native AOT wikitext expands templates parser functions and invoke" {
         "Page",
         "{{#categorytree:English terms prefixed with un-|namespaces=\"-\"|depth=0|class=\"derivedterms\"}}",
         1_670_803_200,
+    );
+    const category_tree_missing = try expander.expandFragment(
+        "Page",
+        "{{#categorytree:Definitely missing category xyzzy 12345|namespaces=\"-\"|depth=0|class=\"derivedterms\"}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings(
+        "<div class=\"derivedterms CategoryTreeTag\" data-ct-options=\"{&quot;mode&quot;:&quot;pages&quot;,&quot;hideprefix&quot;:&quot;categories&quot;,&quot;showcount&quot;:false,&quot;namespaces&quot;:[0],&quot;notranslations&quot;:false}\"><span class=\"CategoryTreeNotice\">Category <i>Definitely missing category xyzzy 12345</i> not found</span></div>",
+        category_tree_missing,
     );
     try std.testing.expect(std.mem.indexOf(u8, category_tree_root_quoted_namespace, "class=\"derivedterms CategoryTreeTag\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "class=\"columns-bg CategoryTreeTag\"") != null);
