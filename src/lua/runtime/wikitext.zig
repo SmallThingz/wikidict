@@ -106,7 +106,9 @@ pub const Expander = struct {
     strip_counter: u32 = 0,
     strip_values: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
     page_line: std.ArrayList(u8) = .empty,
-    max_depth: usize = 128,
+    max_depth: usize = 512,
+    max_template_depth: usize = 128,
+    template_depth: usize = 0,
 
     pub fn attach(self: *Expander) void {
         self.host.ctx = self;
@@ -143,6 +145,7 @@ pub const Expander = struct {
         self.strip_counter = 0;
         self.strip_values = .empty;
         self.page_line = .empty;
+        self.template_depth = 0;
         self.attach();
     }
 
@@ -393,6 +396,9 @@ pub const Expander = struct {
 
     fn expandTemplateByName(self: *Expander, raw_name: []const u8, args: *rt.Table, host_title: ?[]const u8, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
+        if (self.template_depth >= self.max_template_depth) return error.TemplateDepth;
+        self.template_depth += 1;
+        defer self.template_depth -= 1;
         const title = try self.normalizeTransclusionName(raw_name, host_title);
         if (self.provider.get_transclusion_body) |get| {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
@@ -408,6 +414,9 @@ pub const Expander = struct {
 
     fn expandTemplateBySymbol(self: *Expander, symbol: CallSymbol, args: *rt.Table, host_title: ?[]const u8, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
+        if (self.template_depth >= self.max_template_depth) return error.TemplateDepth;
+        self.template_depth += 1;
+        defer self.template_depth -= 1;
         const title = try self.normalizeTransclusionName(symbol.text, host_title);
         if (self.provider.get_template_symbol == null) if (self.provider.get_transclusion_body) |get| {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
@@ -1914,6 +1923,7 @@ const TestProvider = struct {
         if (std.mem.eql(u8, title, "Template:/Child")) return "literal-template-slash-child";
         if (std.mem.eql(u8, title, "Template:Parent")) return "{{/Child}}";
         if (std.mem.eql(u8, title, "Template:RepairParent")) return "{{#invoke:Test|repair_parent}}";
+        if (std.mem.eql(u8, title, "Template:Loop")) return "{{Loop}}";
         if (std.mem.eql(u8, title, "Template:Parent/Child")) return "relative-template-child";
         if (std.mem.eql(u8, title, "Main page")) return "main-transclusion";
         if (std.mem.eql(u8, title, "Wiktionary:Sandbox")) return "project-transclusion";
@@ -2298,6 +2308,32 @@ test "missing bundle interwiki metadata fails explicitly" {
         .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
     };
     try std.testing.expectError(error.NotImplemented, Expander.hostSiteInterwikiMap(&expander));
+}
+
+test "parser nesting budget is independent from template recursion budget" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+        .install_scribunto = installTestInvoke,
+    };
+
+    var nested: std.ArrayList(u8) = .empty;
+    defer nested.deinit(std.testing.allocator);
+    for (0..60) |_| try nested.appendSlice(std.testing.allocator, "{{#if:1|");
+    try nested.appendSlice(std.testing.allocator, "ok");
+    for (0..60) |_| try nested.appendSlice(std.testing.allocator, "}}");
+    try std.testing.expectEqualStrings("ok", try expander.expandFragment("Page", nested.items, 1_670_803_200));
+
+    try std.testing.expectError(error.TemplateDepth, expander.expandFragment("Page", "{{Loop}}", 1_670_803_200));
 }
 
 test "plain pages defer Scribunto installation until mw is required" {
