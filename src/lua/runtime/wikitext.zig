@@ -1352,9 +1352,7 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "#expr")) return try self.expandExprParser(first, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#ifexpr")) return try self.expandIfExpr(first, raw_args, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#tag")) return try self.expandTagParser(first, raw_args, params, host_title, depth + 1);
-            if (name.len != 0 and name[0] == '#') return error.UnsupportedParserFunction;
         }
-        if (head[0] == '#') return error.UnsupportedParserFunction;
         return null;
     }
 
@@ -1386,6 +1384,8 @@ pub const Expander = struct {
             raw_head = std.mem.trim(u8, raw_head[6..], " \t\r\n");
         if (raw_head.len == 0) return error.MalformedWikitext;
         if (try self.expandParserHead(raw_head, parts.items[1..], params, host_title, depth)) |value| return value;
+        if (raw_head[0] == '#')
+            return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
         switch (try self.classifyInterwikiTransclusion(raw_head)) {
             .normal => {},
             .current_wiki => |local_name| raw_head = local_name,
@@ -1408,6 +1408,8 @@ pub const Expander = struct {
         if (title.len != 0 and !std.mem.eql(u8, title, raw_head)) {
             if (try self.expandParserHead(title, parts.items[1..], params, host_title, depth)) |value| return value;
         }
+        if (title.len != 0 and title[0] == '#')
+            return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
         if (invalidTransclusionTitle(title)) {
             if (invalidTransclusionNeedsProtection(title))
                 return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
@@ -2062,6 +2064,8 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("//en.wiktionary.org|en.wiktionary.org", site_magic);
     const urlencode_param = try expander.expandFragment("Page", "{{urlencode:flundra 1°|PARAM}}", 1_670_803_200);
     try std.testing.expectEqualStrings("flundra+1%C2%B0", urlencode_param);
+    const inert_hash_urlencode = try expander.expandFragment("Page", "{{#urlencode:जलाना|PATH}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{#urlencode:जलाना|PATH}}</nowiki>", inert_hash_urlencode);
     const special_page = try expander.expandFragment("Page", "{{#special:MovePage}}|{{#special:AllPages/Foo bar}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Special:MovePage|Special:AllPages/Foo bar", special_page);
     const category_tree = try expander.expandFragment(
