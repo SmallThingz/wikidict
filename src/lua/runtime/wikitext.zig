@@ -1366,6 +1366,14 @@ pub const Expander = struct {
         return false;
     }
 
+    fn invalidTransclusionNeedsProtection(raw: []const u8) bool {
+        for (raw) |byte| switch (byte) {
+            0...31, 127, '[', ']', '<', '>' => return true,
+            else => {},
+        };
+        return false;
+    }
+
     fn expandConstruct(self: *Expander, content: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         var parts: std.ArrayList([]const u8) = .empty;
         defer parts.deinit(self.runtime.allocator);
@@ -1400,8 +1408,11 @@ pub const Expander = struct {
         if (title.len != 0 and !std.mem.eql(u8, title, raw_head)) {
             if (try self.expandParserHead(title, parts.items[1..], params, host_title, depth)) |value| return value;
         }
-        if (invalidTransclusionTitle(title))
+        if (invalidTransclusionTitle(title)) {
+            if (invalidTransclusionNeedsProtection(title))
+                return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
             return std.fmt.allocPrint(self.runtime.allocator, "{{{{{s}}}}}", .{content});
+        }
         const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
         return self.expandTemplateByName(title, args, host_title, depth + 1);
     }
@@ -2242,6 +2253,8 @@ test "bundle parser functions cover corpus time date sub and iferror forms" {
     try std.testing.expectEqualStrings("Man", dynamic_parser_head);
     const malformed_parameter_like = try expander.expandFragment("Page", "A{{{1}|}}B", 1_670_803_200);
     try std.testing.expectEqualStrings("A{{{1}|}}B", malformed_parameter_like);
+    const invalid_template_title = try expander.expandFragment("Page", "{{tetřev<m.an.nompli:ové> hlušec<m.an>}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{tetřev<m.an.nompli:ové> hlušec<m.an>}}</nowiki>", invalid_template_title);
     const malformed_switch = try expander.expandFragment("Page", "{{#switch:{{{1}|}}|=|-=|BAD|#default=Y}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Y", malformed_switch);
     try std.testing.expectError(error.InvalidNamespace, expander.expandFragment("Page", "{{ns:not-a-namespace}}", 1_670_803_200));
