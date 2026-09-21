@@ -109,6 +109,11 @@ pub fn build(b: *std.Build) void {
     });
     module_extract_exe.root_module.link_libc = true;
     module_extract_exe.root_module.linkSystemLibrary("bz2", .{});
+    const page_title_index_exe = addCliExecutable(b, "dict-page-title-index", b.path("tools/page_title_index.zig"), target, optimize, &.{
+        .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod },
+    });
+    page_title_index_exe.root_module.link_libc = true;
+    page_title_index_exe.root_module.linkSystemLibrary("bz2", .{});
     const blob_build_exe = addCliExecutable(b, "dict-blob-build", b.path("tools/blob_build.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
@@ -148,6 +153,7 @@ pub fn build(b: *std.Build) void {
         .use_lld = true,
     });
     addPublicRunStep(b, "extract-lua", "Extract Lua modules or rebuild Lua usage metadata", addRunArtifactCommand(b, module_extract_exe, &.{}, b.args), &.{});
+    addPublicRunStep(b, "index-pages", "Build the mmap page-title index from page-index.tsv", addRunArtifactCommand(b, page_title_index_exe, &.{}, b.args), &.{});
     addPublicRunStep(b, "compile-lua", "Compile extracted Lua AST directly to LLVM bitcode", addRunArtifactCommand(b, llvm_exe, &.{}, b.args), &.{});
     const pipeline_paths = b.addOptions();
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());

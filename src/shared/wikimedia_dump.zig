@@ -19,6 +19,28 @@ extern fn BZ2_bzBuffToBuffDecompress(
 pub const page_index_v2_header = "# dict-page-index-v2\tmultistream-bz2";
 pub const stream_index_header = "# dict-dump-streams-v1";
 
+pub const page_title_index_filename = "page-title-index.bin";
+const page_title_index_magic = "DPTIDX01";
+const page_title_index_header_len: usize = 64;
+const page_title_index_entry_len: usize = 16;
+const page_row_ref_ordinal_bits = 26;
+const page_row_ref_ordinal_mask: u64 = (@as(u64, 1) << page_row_ref_ordinal_bits) - 1;
+
+pub fn packPageRowRef(line_offset: usize, ordinal: usize) !u64 {
+    if (ordinal > page_row_ref_ordinal_mask) return error.TooManyCorpusPages;
+    const offset: u64 = @intCast(line_offset);
+    if (offset > (std.math.maxInt(u64) >> page_row_ref_ordinal_bits)) return error.PageIndexTooLarge;
+    return (offset << page_row_ref_ordinal_bits) | @as(u64, @intCast(ordinal));
+}
+
+pub fn pageRowRefOffset(value: u64) usize {
+    return @intCast(value >> page_row_ref_ordinal_bits);
+}
+
+pub fn pageRowRefOrdinal(value: u64) usize {
+    return @intCast(value & page_row_ref_ordinal_mask);
+}
+
 pub fn relevantNamespace(ns: u32) bool {
     return ns == 0 or ns == 106 or ns == 110 or ns == 114 or ns == 116 or ns == 118;
 }
@@ -596,6 +618,191 @@ pub const SourceReader = struct {
     }
 };
 
+fn pageIndexTitle(kind: PageIndexKind, line: []const u8) ![]const u8 {
+    var fields = std.mem.splitScalar(u8, line, '\t');
+    const skips: usize = if (kind == .multistream_bz2) 3 else 2;
+    for (0..skips) |_| _ = fields.next() orelse return error.InvalidPageIndex;
+    const title = fields.next() orelse return error.InvalidPageIndex;
+    if (title.len == 0) return error.InvalidPageIndex;
+    return title;
+}
+
+fn pageIndexLineAt(bytes: []const u8, ref: u64) ![]const u8 {
+    const start = pageRowRefOffset(ref);
+    if (start >= bytes.len) return error.InvalidPageIndex;
+    const end = std.mem.indexOfScalarPos(u8, bytes, start, '\n') orelse bytes.len;
+    return bytes[start..end];
+}
+
+fn titleIndexCapacity(row_count: usize) !usize {
+    const wanted = std.math.mul(usize, row_count, 3) catch return error.PageTitleIndexTooLarge;
+    const minimum = @max(@as(usize, 8), (wanted + 1) / 2);
+    return std.math.ceilPowerOfTwo(usize, minimum) catch return error.PageTitleIndexTooLarge;
+}
+
+fn titleIndexEntry(table: []u8, slot: usize) []u8 {
+    const start = slot * page_title_index_entry_len;
+    return table[start .. start + page_title_index_entry_len];
+}
+
+fn titleIndexEntryConst(table: []const u8, slot: usize) []const u8 {
+    const start = slot * page_title_index_entry_len;
+    return table[start .. start + page_title_index_entry_len];
+}
+
+const ReadOnlyMap = struct {
+    bytes: []align(std.heap.page_size_min) const u8,
+
+    fn open(io: std.Io, path: []const u8) !ReadOnlyMap {
+        var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+        defer file.close(io);
+        const len = std.math.cast(usize, (try file.stat(io)).size) orelse return error.FileTooBig;
+        if (len == 0) return .{ .bytes = &.{} };
+        return .{ .bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0) };
+    }
+
+    fn deinit(self: *ReadOnlyMap) void {
+        if (self.bytes.len != 0) std.posix.munmap(self.bytes);
+        self.bytes = &.{};
+    }
+};
+
+pub const PageTitleIndex = struct {
+    bytes: []const u8,
+    kind: PageIndexKind,
+    capacity: usize,
+    row_count: usize,
+    unique_count: usize,
+    page_index_size: usize,
+
+    pub fn init(bytes: []const u8) !PageTitleIndex {
+        if (bytes.len < page_title_index_header_len or !std.mem.eql(u8, bytes[0..8], page_title_index_magic))
+            return error.InvalidPageTitleIndex;
+        const kind_raw = std.mem.readInt(u64, bytes[8..16], .little);
+        const kind: PageIndexKind = switch (kind_raw) {
+            0 => .raw_xml,
+            1 => .multistream_bz2,
+            else => return error.InvalidPageTitleIndex,
+        };
+        const capacity64 = std.mem.readInt(u64, bytes[16..24], .little);
+        const row_count64 = std.mem.readInt(u64, bytes[24..32], .little);
+        const unique_count64 = std.mem.readInt(u64, bytes[32..40], .little);
+        const page_index_size64 = std.mem.readInt(u64, bytes[40..48], .little);
+        const capacity = std.math.cast(usize, capacity64) orelse return error.InvalidPageTitleIndex;
+        const row_count = std.math.cast(usize, row_count64) orelse return error.InvalidPageTitleIndex;
+        const unique_count = std.math.cast(usize, unique_count64) orelse return error.InvalidPageTitleIndex;
+        const page_index_size = std.math.cast(usize, page_index_size64) orelse return error.InvalidPageTitleIndex;
+        if (capacity < 8 or !std.math.isPowerOfTwo(capacity) or unique_count > row_count or unique_count > capacity)
+            return error.InvalidPageTitleIndex;
+        const table_bytes = std.math.mul(usize, capacity, page_title_index_entry_len) catch return error.InvalidPageTitleIndex;
+        if (bytes.len != page_title_index_header_len + table_bytes) return error.InvalidPageTitleIndex;
+        return .{
+            .bytes = bytes,
+            .kind = kind,
+            .capacity = capacity,
+            .row_count = row_count,
+            .unique_count = unique_count,
+            .page_index_size = page_index_size,
+        };
+    }
+
+    pub fn lookup(self: PageTitleIndex, page_index: []const u8, title: []const u8) !?u64 {
+        if (page_index.len != self.page_index_size or pageIndexKind(page_index) != self.kind)
+            return error.PageTitleIndexMismatch;
+        const hash = std.hash.Wyhash.hash(0, title);
+        const table = self.bytes[page_title_index_header_len..];
+        var slot: usize = @intCast(hash & @as(u64, @intCast(self.capacity - 1)));
+        for (0..self.capacity) |_| {
+            const entry = titleIndexEntryConst(table, slot);
+            const ref_plus_one = std.mem.readInt(u64, entry[8..16], .little);
+            if (ref_plus_one == 0) return null;
+            if (std.mem.readInt(u64, entry[0..8], .little) == hash) {
+                const ref = ref_plus_one - 1;
+                const indexed_title = try pageIndexTitle(self.kind, try pageIndexLineAt(page_index, ref));
+                if (std.mem.eql(u8, indexed_title, title)) return ref;
+            }
+            slot = (slot + 1) & (self.capacity - 1);
+        }
+        return error.InvalidPageTitleIndex;
+    }
+};
+
+pub fn buildPageTitleIndex(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    page_index_path: []const u8,
+    output_path: []const u8,
+) !void {
+    var mapped = try ReadOnlyMap.open(io, page_index_path);
+    defer mapped.deinit();
+    if (mapped.bytes.len == 0) return error.InvalidPageIndex;
+    const kind = pageIndexKind(mapped.bytes);
+    var row_count: usize = 0;
+    var lines_for_count = std.mem.splitScalar(u8, mapped.bytes, '\n');
+    while (lines_for_count.next()) |line| {
+        if (line.len != 0 and line[0] != '#') row_count += 1;
+    }
+    const capacity = try titleIndexCapacity(row_count);
+    const table_len = std.math.mul(usize, capacity, page_title_index_entry_len) catch return error.PageTitleIndexTooLarge;
+    const table = try allocator.alloc(u8, table_len);
+    defer allocator.free(table);
+    @memset(table, 0);
+
+    var unique_count: usize = 0;
+    var ordinal: usize = 0;
+    var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        const title = try pageIndexTitle(kind, line);
+        const base = @intFromPtr(mapped.bytes.ptr);
+        const ptr = @intFromPtr(line.ptr);
+        if (ptr < base) return error.InvalidPageIndex;
+        const ref = try packPageRowRef(ptr - base, ordinal);
+        ordinal += 1;
+        const hash = std.hash.Wyhash.hash(0, title);
+        var slot: usize = @intCast(hash & @as(u64, @intCast(capacity - 1)));
+        var placed = false;
+        for (0..capacity) |_| {
+            const entry = titleIndexEntry(table, slot);
+            const ref_plus_one = std.mem.readInt(u64, entry[8..16], .little);
+            if (ref_plus_one == 0) {
+                std.mem.writeInt(u64, entry[0..8], hash, .little);
+                std.mem.writeInt(u64, entry[8..16], ref + 1, .little);
+                unique_count += 1;
+                placed = true;
+                break;
+            }
+            if (std.mem.readInt(u64, entry[0..8], .little) == hash) {
+                const old_ref = ref_plus_one - 1;
+                const old_title = try pageIndexTitle(kind, try pageIndexLineAt(mapped.bytes, old_ref));
+                if (std.mem.eql(u8, old_title, title)) {
+                    std.mem.writeInt(u64, entry[8..16], ref + 1, .little);
+                    placed = true;
+                    break;
+                }
+            }
+            slot = (slot + 1) & (capacity - 1);
+        }
+        if (!placed) return error.PageTitleIndexFull;
+    }
+    if (ordinal != row_count) return error.InvalidPageIndex;
+
+    var out_file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .truncate = true });
+    defer out_file.close(io);
+    var buffer: [256 * 1024]u8 = undefined;
+    var out = out_file.writer(io, &buffer);
+    var header = [_]u8{0} ** page_title_index_header_len;
+    @memcpy(header[0..8], page_title_index_magic);
+    std.mem.writeInt(u64, header[8..16], @intFromEnum(kind), .little);
+    std.mem.writeInt(u64, header[16..24], @intCast(capacity), .little);
+    std.mem.writeInt(u64, header[24..32], @intCast(row_count), .little);
+    std.mem.writeInt(u64, header[32..40], @intCast(unique_count), .little);
+    std.mem.writeInt(u64, header[40..48], @intCast(mapped.bytes.len), .little);
+    try out.interface.writeAll(&header);
+    try out.interface.writeAll(table);
+    try out.interface.flush();
+}
+
 test "specialized page parser extracts Wikimedia page fields without a DOM" {
     const xml = "<page><title>A&amp;B</title><ns>0</ns><id>7</id><redirect title=\"C&amp;D\"/><revision><id>70</id><timestamp>2026-09-01T00:00:00Z</timestamp><contributor><username>Alice</username></contributor><model>wikitext</model><format>text/x-wiki</format><text bytes=\"20\" xml:space=\"preserve\">==English==&amp;x</text></revision></page>";
     const page = try parsePage(xml);
@@ -624,6 +831,36 @@ test "page index parser accepts legacy raw and compressed v2 rows" {
     const compressed = try parsePageIndexLine(.multistream_bz2, "4\t120\t3\tcat\t\t7\t70\t2026-09-01T00:00:00Z\tA\twikitext\t0\t1\t0");
     try std.testing.expectEqual(@as(u32, 4), compressed.source.multistream_bz2.stream_id);
     try std.testing.expectEqual(@as(usize, 120), compressed.source.multistream_bz2.offset);
+}
+
+test "page title index keeps latest duplicate row and supports mmap lookup" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try std.Io.Dir.cwd().createDirPath(io, root);
+    const page_index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    defer a.free(page_index_path);
+    const title_index_path = try std.fs.path.join(a, &.{ root, page_title_index_filename });
+    defer a.free(title_index_path);
+    const page_index = page_index_v2_header ++ "\n" ++
+        "0\t0\t1\tcat\t\t1\t11\t2026-09-01T00:00:00Z\tA\twikitext\t0\t1\t0\n" ++
+        "0\t1\t1\tdog\t\t2\t22\t2026-09-01T00:00:01Z\tB\twikitext\t0\t1\t0\n" ++
+        "0\t2\t1\tcat\t\t3\t33\t2026-09-01T00:00:02Z\tC\twikitext\t0\t1\t0\n";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = page_index_path, .data = page_index });
+    try buildPageTitleIndex(io, a, page_index_path, title_index_path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, title_index_path, a, .limited(4096));
+    defer a.free(bytes);
+    const index = try PageTitleIndex.init(bytes);
+    try std.testing.expectEqual(@as(usize, 3), index.row_count);
+    try std.testing.expectEqual(@as(usize, 2), index.unique_count);
+    const cat_ref = (try index.lookup(page_index, "cat")).?;
+    const dog_ref = (try index.lookup(page_index, "dog")).?;
+    try std.testing.expectEqual(@as(usize, 2), pageRowRefOrdinal(cat_ref));
+    try std.testing.expectEqual(@as(usize, 1), pageRowRefOrdinal(dog_ref));
+    try std.testing.expect((try index.lookup(page_index, "fox")) == null);
 }
 
 extern fn BZ2_bzBuffToBuffCompress(

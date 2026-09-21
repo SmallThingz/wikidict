@@ -284,6 +284,7 @@ pub fn main(init: std.process.Init) !void {
     const redirects_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/module-redirects.tsv", .{output_root});
     const page_index_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/page-index.tsv", .{output_root});
     const stream_index_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/dump-streams.tsv", .{output_root});
+    const title_index_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/{s}", .{ output_root, wikimedia_dump.page_title_index_filename });
     const usage_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/lua-usage.tsv", .{output_root});
     try std.Io.Dir.cwd().createDirPath(init.io, modules_dir);
     if (emit_page_index and compressed)
@@ -529,6 +530,8 @@ pub fn main(init: std.process.Init) !void {
     try mw.flush();
     try rw.flush();
     if (pw) |page_writer| try page_writer.flush();
+    if (emit_page_index)
+        try wikimedia_dump.buildPageTitleIndex(init.io, std.heap.smp_allocator, page_index_path, title_index_path);
     std.debug.print(
         "TOTAL pages={d} modules={d} redirects={d} source_bytes={d} root_templates={d} root_modules={d}\n",
         .{ pages, modules, redirects, source_bytes, root_template_usage.count(), root_module_usage.count() },
