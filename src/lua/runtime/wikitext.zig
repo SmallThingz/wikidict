@@ -1365,6 +1365,15 @@ pub const Expander = struct {
         return null;
     }
 
+    fn stripSubstPrefix(raw: []const u8) []const u8 {
+        const head = std.mem.trim(u8, raw, " \t\r\n");
+        if (head.len >= 10 and std.ascii.eqlIgnoreCase(head[0..10], "safesubst:"))
+            return std.mem.trim(u8, head[10..], " \t\r\n");
+        if (head.len >= 6 and std.ascii.eqlIgnoreCase(head[0..6], "subst:"))
+            return std.mem.trim(u8, head[6..], " \t\r\n");
+        return head;
+    }
+
     fn invalidTransclusionTitle(raw: []const u8) bool {
         for (raw) |byte| switch (byte) {
             0...31, 127, '[', ']', '{', '}', '|', '<', '>' => return true,
@@ -1386,11 +1395,7 @@ pub const Expander = struct {
         defer parts.deinit(self.runtime.allocator);
         try preprocess.splitWikitextTop(self.runtime.allocator, content, '|', &parts);
         if (parts.items.len == 0) return error.MalformedWikitext;
-        var raw_head = std.mem.trim(u8, parts.items[0], " \t\r\n");
-        if (raw_head.len >= 10 and std.ascii.eqlIgnoreCase(raw_head[0..10], "safesubst:"))
-            raw_head = std.mem.trim(u8, raw_head[10..], " \t\r\n")
-        else if (raw_head.len >= 6 and std.ascii.eqlIgnoreCase(raw_head[0..6], "subst:"))
-            raw_head = std.mem.trim(u8, raw_head[6..], " \t\r\n");
+        var raw_head = stripSubstPrefix(parts.items[0]);
         if (raw_head.len == 0) return error.MalformedWikitext;
         if (try self.expandParserHead(raw_head, parts.items[1..], params, host_title, depth)) |value| return value;
         if (raw_head[0] == '#')
@@ -1409,11 +1414,7 @@ pub const Expander = struct {
             const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
             return self.expandTemplateBySymbol(symbol, args, host_title, depth + 1);
         }
-        const title = std.mem.trim(
-            u8,
-            try self.expandWikitext(raw_head, params, host_title, depth + 1),
-            " \t\r\n",
-        );
+        const title = stripSubstPrefix(try self.expandWikitext(raw_head, params, host_title, depth + 1));
         if (title.len != 0 and !std.mem.eql(u8, title, raw_head)) {
             if (try self.expandParserHead(title, parts.items[1..], params, host_title, depth)) |value| return value;
         }
@@ -2265,6 +2266,8 @@ test "bundle parser functions cover corpus time date sub and iferror forms" {
     try std.testing.expectEqualStrings("Hi Bob N", dynamic_template_name);
     const dynamic_parser_head = try expander.expandFragment("Page", "{{{{{name|ucfirst}}}:man}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Man", dynamic_parser_head);
+    const dynamic_safesubst_parser = try expander.expandFragment("Page", "{{{{{|safesubst:}}}ucfirst:man}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Man", dynamic_safesubst_parser);
     const malformed_parameter_like = try expander.expandFragment("Page", "A{{{1}|}}B", 1_670_803_200);
     try std.testing.expectEqualStrings("A{{{1}|}}B", malformed_parameter_like);
     const invalid_template_title = try expander.expandFragment("Page", "{{tetřev<m.an.nompli:ové> hlušec<m.an>}}", 1_670_803_200);
