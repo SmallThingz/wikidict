@@ -1320,6 +1320,12 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "localurl")) return try self.expandUrlParser(first, raw_args, params, host_title, depth + 1, .local, false);
             if (std.ascii.eqlIgnoreCase(name, "canonicalurl")) return try self.expandUrlParser(first, raw_args, params, host_title, depth + 1, .canonical, false);
             if (std.ascii.eqlIgnoreCase(name, "urlencode")) return try self.expandUrlencodeParser(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#special")) {
+                if (raw_args.len != 0) return error.UnsupportedParserFunction;
+                const special = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 1), " \t\r\n");
+                if (special.len == 0) return "Special:";
+                return @as(?[]const u8, try std.fmt.allocPrint(self.runtime.allocator, "Special:{s}", .{special}));
+            }
             if (std.ascii.eqlIgnoreCase(name, "padleft")) return try self.expandPadParser(first, raw_args, params, host_title, depth + 1, true);
             if (std.ascii.eqlIgnoreCase(name, "padright")) return try self.expandPadParser(first, raw_args, params, host_title, depth + 1, false);
             if (std.ascii.eqlIgnoreCase(name, "#formatdate") or std.ascii.eqlIgnoreCase(name, "#dateformat"))
@@ -2045,6 +2051,8 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("//en.wiktionary.org|en.wiktionary.org", site_magic);
     const urlencode_param = try expander.expandFragment("Page", "{{urlencode:flundra 1°|PARAM}}", 1_670_803_200);
     try std.testing.expectEqualStrings("flundra+1%C2%B0", urlencode_param);
+    const special_page = try expander.expandFragment("Page", "{{#special:MovePage}}|{{#special:AllPages/Foo bar}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Special:MovePage|Special:AllPages/Foo bar", special_page);
     const category_tree = try expander.expandFragment(
         "Page",
         "{{#categorytree:English terms prefixed with un-|type=pages|depth=1|namespaces=-|hideprefix=always|hideroot=off|showcount=on}}",
