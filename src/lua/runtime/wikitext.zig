@@ -401,6 +401,11 @@ pub const Expander = struct {
         return self.expandWikitext(body, args, title, depth + 1);
     }
 
+    fn missingTemplateMarkup(self: *Expander, title: []const u8) !?[]const u8 {
+        if (namespace_lib.ofTitle(title).id != 10) return null;
+        return @as(?[]const u8, try std.fmt.allocPrint(self.runtime.allocator, "[[:{s}]]", .{title}));
+    }
+
     fn expandTemplateByName(self: *Expander, raw_name: []const u8, args: *rt.Table, host_title: ?[]const u8, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
         if (self.template_depth >= self.max_template_depth) return error.TemplateDepth;
@@ -408,14 +413,17 @@ pub const Expander = struct {
         defer self.template_depth -= 1;
         const title = try self.normalizeTransclusionName(raw_name, host_title);
         if (self.provider.get_transclusion_body) |get| {
-            const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
+            const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse
+                return (try self.missingTemplateMarkup(title)) orelse error.TemplateNotFound;
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
             return self.expandWikitext(body.text, args, body.title, depth + 1);
         }
         const raw = if (self.provider.get_transclusion) |get|
-            (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound
+            (try get(self.provider.ctx, self.runtime.allocator, title)) orelse
+                return (try self.missingTemplateMarkup(title)) orelse error.TemplateNotFound
         else
-            (try hostPageContent(self, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
+            (try hostPageContent(self, self.runtime.allocator, title)) orelse
+                return (try self.missingTemplateMarkup(title)) orelse error.TemplateNotFound;
         return self.expandTemplateSource(title, raw, args, depth);
     }
 
@@ -2212,20 +2220,26 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("<nowiki>{{#urlencode:जलाना|PATH}}</nowiki>", inert_hash_urlencode);
     const inert_empty_template = try expander.expandFragment("Page", "{{|yue|洛陽}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{|yue|洛陽}}</nowiki>", inert_empty_template);
-    const lazy_unused = try expander.expandFragment("Caller page", "{{Lazy|used={{PAGENAME}}|unused={{Missing template}}}}", 1_670_803_200);
+    const lazy_unused = try expander.expandFragment("Caller page", "{{Lazy|used={{PAGENAME}}|unused={{User:Definitely missing page}}}}", 1_670_803_200);
     try std.testing.expectEqualStrings("used=Caller page", lazy_unused);
-    const lazy_forwarded = try expander.expandFragment("Caller page", "{{LazyForward|value|{{Missing template}}}}", 1_670_803_200);
+    const lazy_forwarded = try expander.expandFragment("Caller page", "{{LazyForward|value|{{User:Definitely missing page}}}}", 1_670_803_200);
     try std.testing.expectEqualStrings("used=value", lazy_forwarded);
     const lazy_then_next = try expander.expandFragment(
         "Caller page",
-        "{{Lazy|used=ok|unused={{Missing template}}}}{{Hello|Bob|1}}",
+        "{{Lazy|used=ok|unused={{User:Definitely missing page}}}}{{Hello|Bob|1}}",
         1_670_803_200,
     );
     try std.testing.expectEqualStrings("used=okHi Bob Y", lazy_then_next);
     try std.testing.expectEqual(@as(usize, 0), expander.lazy_template_args.items.len);
     try std.testing.expectError(
         error.TemplateNotFound,
-        expander.expandFragment("Caller page", "{{Lazy|used={{Missing template}}}}", 1_670_803_200),
+        expander.expandFragment("Caller page", "{{Lazy|used={{User:Definitely missing page}}}}", 1_670_803_200),
+    );
+    const missing_template = try expander.expandFragment("Page", "{{Definitely missing template xyzzy 12345|x=y}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("[[:Template:Definitely missing template xyzzy 12345]]", missing_template);
+    try std.testing.expectError(
+        error.TemplateNotFound,
+        expander.expandFragment("Page", "{{User:Definitely missing page}}", 1_670_803_200),
     );
     const special_page = try expander.expandFragment("Page", "{{#special:MovePage}}|{{#special:AllPages/Foo bar}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Special:MovePage|Special:AllPages/Foo bar", special_page);
