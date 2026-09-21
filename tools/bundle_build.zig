@@ -14,6 +14,7 @@ const Options = struct {
     wikibase_entity_text_snapshot: ?[]const u8 = null,
     language_registry_snapshot: ?[]const u8 = null,
     file_metadata_snapshot: ?[]const u8 = null,
+    transclusion_redirects_snapshot: ?[]const u8 = null,
     llvm_workers: ?usize = null,
     page_workers: usize = 1,
 };
@@ -59,6 +60,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.file_metadata_snapshot != null) return error.Usage;
             options.file_metadata_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--transclusion-redirects-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.transclusion_redirects_snapshot != null) return error.Usage;
+            options.transclusion_redirects_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--llvm-workers")) {
             index += 1;
             if (index >= args.len or options.llvm_workers != null) return error.Usage;
@@ -443,6 +448,12 @@ test "LLVM worker override accepts positive integers only" {
     );
 }
 
+test "supplemental transclusion redirect snapshot option is strict" {
+    const options = try parseOptions(&.{ "dump.xml", "out", "--transclusion-redirects-snapshot", "redirects.tsv" });
+    try std.testing.expectEqualStrings("redirects.tsv", options.transclusion_redirects_snapshot.?);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--transclusion-redirects-snapshot" }));
+}
+
 test "page worker override accepts bounded positive integers only" {
     const options = try parseOptions(&.{ "dump.xml", "out", "--page-workers", "2" });
     try std.testing.expectEqual(@as(usize, 2), options.page_workers);
@@ -455,7 +466,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--llvm-workers N] [--page-workers N]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--page-workers N]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -489,6 +500,8 @@ pub fn main(init: std.process.Init) !void {
         try installSnapshot(init.io, a, snapshot, expander_root, "language-registry.tsv");
     if (options.file_metadata_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "file-metadata.tsv");
+    if (options.transclusion_redirects_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "transclusion-redirects.tsv");
 
     try stage(init.io, marker, "extract modules, redirects, and corpus index", &.{ paths.modules, dump, expander_root, "--page-index" });
 

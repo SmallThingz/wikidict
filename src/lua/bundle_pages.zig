@@ -59,6 +59,8 @@ pub const Provider = struct {
     transclusion_body_cache: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
     transclusion_body_cache_bytes: usize = 0,
     transclusion_seen: []usize = &.{},
+    transclusion_redirects: std.StringHashMapUnmanaged([]const u8) = .empty,
+    transclusion_redirects_storage: ?Mapped = null,
     external_data: std.StringHashMapUnmanaged(ExternalData) = .empty,
     external_data_storage: ?Mapped = null,
     external_data_available: bool = false,
@@ -92,6 +94,7 @@ pub const Provider = struct {
         var self: Provider = .{ .io = io, .a = a, .root = owned_root };
         errdefer self.deinit();
         try self.loadCorpusPages(dump_path);
+        try self.loadTransclusionRedirects();
         try self.loadExternalData();
         try self.loadCategoryStats();
         try self.loadInterfaceMessages();
@@ -113,6 +116,8 @@ pub const Provider = struct {
         while (cached.next()) |body| self.a.free(body.*);
         self.transclusion_body_cache.deinit(self.a);
         self.a.free(self.transclusion_seen);
+        self.transclusion_redirects.deinit(self.a);
+        if (self.transclusion_redirects_storage) |*mapped| mapped.deinit();
         self.external_data.deinit(self.a);
         if (self.external_data_storage) |*mapped| mapped.deinit();
         self.category_stats.deinit(self.a);
@@ -195,6 +200,40 @@ pub const Provider = struct {
             });
         }
         return out.toOwnedSlice(a);
+    }
+
+    fn loadTransclusionRedirects(self: *Provider) !void {
+        var mapped = (try self.mapOptional("transclusion-redirects.tsv")) orelse return;
+        errdefer mapped.deinit();
+        var entries: std.StringHashMapUnmanaged([]const u8) = .empty;
+        errdefer entries.deinit(self.a);
+        const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
+            return error.TransclusionRedirectSnapshotTooLarge;
+        try entries.ensureTotalCapacity(self.a, capacity);
+
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            const tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidTransclusionRedirectSnapshot;
+            if (tab == 0 or tab + 1 >= line.len or std.mem.indexOfScalarPos(u8, line, tab + 1, '\t') != null)
+                return error.InvalidTransclusionRedirectSnapshot;
+            const title = line[0..tab];
+            const target = line[tab + 1 ..];
+            const result = try entries.getOrPut(self.a, title);
+            if (result.found_existing) return error.DuplicateTransclusionRedirect;
+            result.value_ptr.* = target;
+        }
+        self.transclusion_redirects = entries;
+        self.transclusion_redirects_storage = mapped;
+    }
+
+    fn transclusionRedirectTarget(self: *const Provider, raw_title: []const u8) ?[]const u8 {
+        if (raw_title.len > 4096) return null;
+        if (std.mem.indexOfScalar(u8, raw_title, '_') == null) return self.transclusion_redirects.get(raw_title);
+        var title_buffer: [4096]u8 = undefined;
+        @memcpy(title_buffer[0..raw_title.len], raw_title);
+        std.mem.replaceScalar(u8, title_buffer[0..raw_title.len], '_', ' ');
+        return self.transclusion_redirects.get(title_buffer[0..raw_title.len]);
     }
 
     fn loadExternalData(self: *Provider) !void {
@@ -604,6 +643,12 @@ pub const Provider = struct {
         var current = raw_title;
         var redirects: usize = 0;
         while (true) {
+            if (self.transclusionRedirectTarget(current)) |target| {
+                redirects += 1;
+                if (redirects > 32) return error.PageRedirectLoop;
+                current = target;
+                continue;
+            }
             const page = (try self.findPage(current)) orelse return null;
             if (page.redirect) |target| {
                 redirects += 1;
@@ -669,6 +714,7 @@ pub const Provider = struct {
 
     fn redirectTarget(ctx: ?*anyopaque, title: []const u8) anyerror!?[]const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        if (self.transclusionRedirectTarget(title)) |target| return target;
         const page = (try self.findPage(title)) orelse return null;
         return page.redirect;
     }
@@ -742,6 +788,7 @@ pub const Provider = struct {
 
     fn exists(ctx: ?*anyopaque, title: []const u8) anyerror!bool {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        if (self.transclusionRedirectTarget(title) != null) return true;
         if (std.ascii.startsWithIgnoreCase(title, "Media:")) {
             if (!self.file_metadata_available) return error.FileMetadataSnapshotMissing;
             var file_title_buffer: [512]u8 = undefined;
@@ -752,6 +799,34 @@ pub const Provider = struct {
         return (try self.lookup(self.a, title, false)) != null;
     }
 };
+
+test "supplemental transclusion redirects resolve omitted namespace pages" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const dump_path = try std.fs.path.join(a, &.{ root, "dump.xml" });
+    defer a.free(dump_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = "target body" });
+    const page_index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    defer a.free(page_index_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = page_index_path, .data = "0\t11\tTemplate:Target\t\t1\t11\t2024-01-01T00:00:00Z\tEditor\twikitext\t10\t1\t0\n" });
+    const redirects_path = try std.fs.path.join(a, &.{ root, "transclusion-redirects.tsv" });
+    defer a.free(redirects_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = redirects_path, .data = "# title\ttarget\nUser:Example/helper\tTemplate:Target\n" });
+
+    var provider = try Provider.init(io, a, root, dump_path);
+    defer provider.deinit();
+    try std.testing.expect(try Provider.exists(&provider, "User:Example/helper"));
+    try std.testing.expectEqualStrings("Template:Target", (try Provider.redirectTarget(&provider, "User:Example/helper")).?);
+    var page_arena = std.heap.ArenaAllocator.init(a);
+    defer page_arena.deinit();
+    const body = (try Provider.getTransclusionBody(&provider, page_arena.allocator(), "User:Example/helper")).?;
+    try std.testing.expectEqualStrings("target body", body.text);
+    try std.testing.expectEqualStrings("Template:Target", body.title);
+}
 
 test "provider keeps the later duplicate page row as canonical" {
     const a = std.testing.allocator;
