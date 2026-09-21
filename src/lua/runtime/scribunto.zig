@@ -103,9 +103,11 @@ pub const SharedLoadDataCache = struct {
             self.backing.destroy(arena);
         }
         const a = arena.allocator();
-        var seen_tables: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
-        defer seen_tables.deinit(a);
-        const promoted = try promoteLoadData(a, source, &seen_tables, try self.loadDataMetatable());
+        const promoted = blk: {
+            var seen_tables: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
+            defer seen_tables.deinit(a);
+            break :blk try promoteLoadData(a, source, &seen_tables, try self.loadDataMetatable());
+        };
         const bytes = arena.queryCapacity();
         if (bytes > shared_load_data_max_entry_bytes or bytes > shared_load_data_max_bytes - self.bytes) {
             arena.deinit();
@@ -554,6 +556,23 @@ test "shared loadData cache survives separate page allocators" {
     try std.testing.expectEqual(@as(usize, 2), DataProbe.root_calls.load(.monotonic));
     try std.testing.expectEqual(@as(usize, 1), shared.entries.count());
     try std.testing.expect(shared.bytes != 0 and shared.bytes <= shared_load_data_max_bytes);
+}
+
+test "shared loadData cache rejects oversized entries before destroying promotion arena" {
+    var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer source_arena.deinit();
+    const a = source_arena.allocator();
+    const source = try a.create(rt.Table);
+    source.* = .{};
+    const oversized = try a.alloc(u8, shared_load_data_max_entry_bytes + 4096);
+    @memset(oversized, 'x');
+    try source.rawSet(a, .{ .string = "payload" }, .{ .string = oversized });
+
+    var shared = SharedLoadDataCache.init(std.testing.allocator, &.{true});
+    defer shared.deinit();
+    try std.testing.expect((try shared.tryPromote(0, .{ .table = source })) == null);
+    try std.testing.expect((try shared.tryPromote(0, .{ .table = source })) == null);
+    try std.testing.expectEqual(@as(usize, 0), shared.entries.count());
 }
 
 test "shared loadData cache skips page-sensitive modules" {
