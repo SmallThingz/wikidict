@@ -15,6 +15,7 @@ const Options = struct {
     language_registry_snapshot: ?[]const u8 = null,
     file_metadata_snapshot: ?[]const u8 = null,
     llvm_workers: ?usize = null,
+    page_workers: usize = 1,
 };
 
 fn parseOptions(args: []const []const u8) !Options {
@@ -64,6 +65,11 @@ fn parseOptions(args: []const []const u8) !Options {
             const workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
             if (workers == 0) return error.Usage;
             options.llvm_workers = workers;
+        } else if (std.mem.eql(u8, args[index], "--page-workers")) {
+            index += 1;
+            if (index >= args.len) return error.Usage;
+            options.page_workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
+            if (options.page_workers == 0 or options.page_workers > 16) return error.Usage;
         } else return error.Usage;
     }
     return options;
@@ -437,11 +443,19 @@ test "LLVM worker override accepts positive integers only" {
     );
 }
 
+test "page worker override accepts bounded positive integers only" {
+    const options = try parseOptions(&.{ "dump.xml", "out", "--page-workers", "2" });
+    try std.testing.expectEqual(@as(usize, 2), options.page_workers);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--page-workers", "0" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--page-workers", "17" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--page-workers", "nope" }));
+}
+
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--llvm-workers N]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--llvm-workers N] [--page-workers N]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -489,8 +503,9 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().deleteTree(init.io, llvm_dir);
 
     try std.Io.Dir.cwd().deleteFile(init.io, expander_marker);
+    const page_workers_text = try std.fmt.allocPrint(a, "{d}", .{options.page_workers});
     try stage(init.io, marker, "expand and encode dictionary blobs", &.{
-        paths.blobs, dump, root, "--expander-root", expander_root,
+        paths.blobs, dump, root, "--expander-root", expander_root, "--workers", page_workers_text,
     });
     try std.Io.Dir.cwd().deleteTree(init.io, expander_root);
     try std.Io.Dir.cwd().deleteFile(init.io, marker);

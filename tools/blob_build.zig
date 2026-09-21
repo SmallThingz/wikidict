@@ -6,8 +6,10 @@ const language_registry = @import("language_registry.zig");
 const bundle_expander = @import("bundle_expander.zig");
 
 const Options = struct {
+    start_page: usize = 0,
     limit_pages: ?usize = null,
     expander_root: []const u8 = "",
+    workers: usize = 1,
 };
 
 const Mapped = struct {
@@ -51,15 +53,160 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     return language_registry.Registry.fromLuaAlloc(a, source);
 }
 
+const ExpansionJob = struct {
+    ordinal: u64,
+    ns: u32,
+    title: []const u8,
+    source: []const u8,
+};
+
+const ExpansionSlot = struct {
+    io: std.Io,
+    arena: std.heap.ArenaAllocator,
+    worker: bundle_expander.Worker,
+    thread: ?std.Thread = null,
+    job_event: std.Io.Event = .unset,
+    done_event: std.Io.Event = .unset,
+    stop: std.atomic.Value(bool) = .init(false),
+    busy: bool = false,
+    job: ExpansionJob = undefined,
+    expansion: ?bundle_expander.Expansion = null,
+    failure: ?anyerror = null,
+
+    fn threadMain(self: *ExpansionSlot) void {
+        defer self.worker.deinit();
+        while (true) {
+            self.job_event.waitUncancelable(self.io);
+            self.job_event.reset();
+            if (self.stop.load(.acquire)) return;
+            self.failure = null;
+            self.expansion = self.worker.expand(
+                self.arena.allocator(),
+                self.job.ordinal,
+                self.job.title,
+                self.job.source,
+            ) catch |err| blk: {
+                self.failure = err;
+                break :blk null;
+            };
+            self.done_event.set(self.io);
+        }
+    }
+
+    fn dispatch(self: *ExpansionSlot, job: ExpansionJob) void {
+        std.debug.assert(!self.busy);
+        self.job = job;
+        self.expansion = null;
+        self.failure = null;
+        self.busy = true;
+        self.job_event.set(self.io);
+    }
+
+    fn consume(self: *ExpansionSlot, writer: *encoder.blob_builder.Writer) !void {
+        if (!self.busy) return;
+        self.done_event.waitUncancelable(self.io);
+        defer {
+            self.done_event.reset();
+            self.busy = false;
+            _ = self.arena.reset(.retain_capacity);
+        }
+        if (self.failure) |err| {
+            std.debug.print(
+                "page expansion failed title={s} ordinal={d} ns={d} source_bytes={d} error={s}\n",
+                .{ self.job.title, self.job.ordinal, self.job.ns, self.job.source.len, @errorName(err) },
+            );
+            return err;
+        }
+        if (self.expansion) |expanded| {
+            writer.addPage(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, expanded.display_title) catch |err| {
+                std.debug.print(
+                    "blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n",
+                    .{ self.job.title, self.job.ordinal, self.job.ns, self.job.source.len, expanded.source.len, @errorName(err) },
+                );
+                return err;
+            };
+        }
+    }
+};
+
+const ExpansionPool = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    slots: []ExpansionSlot,
+
+    fn init(
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        root: []const u8,
+        executable: []const u8,
+        dump: []const u8,
+        count: usize,
+    ) !ExpansionPool {
+        const slots = try allocator.alloc(ExpansionSlot, count);
+        errdefer allocator.free(slots);
+        const pinned_now = std.Io.Clock.real.now(io).toSeconds();
+        for (slots) |*slot| {
+            var worker = bundle_expander.Worker.init(io, root, executable, dump);
+            worker.now_unix = pinned_now;
+            slot.* = .{
+                .io = io,
+                .arena = std.heap.ArenaAllocator.init(allocator),
+                .worker = worker,
+            };
+        }
+        var spawned: usize = 0;
+        errdefer {
+            for (slots[0..spawned]) |*slot| {
+                slot.stop.store(true, .release);
+                slot.job_event.set(io);
+            }
+            for (slots[0..spawned]) |*slot| slot.thread.?.join();
+            for (slots) |*slot| slot.arena.deinit();
+        }
+        for (slots) |*slot| {
+            slot.thread = try std.Thread.spawn(.{}, ExpansionSlot.threadMain, .{slot});
+            spawned += 1;
+        }
+        return .{ .io = io, .allocator = allocator, .slots = slots };
+    }
+
+    fn deinit(self: *ExpansionPool) void {
+        for (self.slots) |*slot| {
+            slot.stop.store(true, .release);
+            slot.job_event.set(self.io);
+        }
+        for (self.slots) |*slot| if (slot.thread) |thread| thread.join();
+        for (self.slots) |*slot| slot.arena.deinit();
+        self.allocator.free(self.slots);
+        self.* = undefined;
+    }
+
+    fn drain(self: *ExpansionPool, writer: *encoder.blob_builder.Writer, next_slot: usize) !void {
+        for (0..self.slots.len) |offset| {
+            const index = (next_slot + offset) % self.slots.len;
+            try self.slots[index].consume(writer);
+        }
+    }
+};
+
 fn parseOptions(args: []const []const u8) !Options {
     var out: Options = .{};
     var index: usize = 3;
     while (index < args.len) {
         const arg = args[index];
-        if (std.mem.eql(u8, arg, "--limit-pages")) {
+        if (std.mem.eql(u8, arg, "--start-page")) {
+            index += 1;
+            if (index >= args.len) return error.Usage;
+            out.start_page = try std.fmt.parseInt(usize, args[index], 10);
+        } else if (std.mem.eql(u8, arg, "--limit-pages")) {
             index += 1;
             if (index >= args.len) return error.Usage;
             out.limit_pages = try std.fmt.parseInt(usize, args[index], 10);
+        } else if (std.mem.eql(u8, arg, "--workers")) {
+            index += 1;
+            if (index >= args.len) return error.Usage;
+            out.workers = try std.fmt.parseInt(usize, args[index], 10);
+            if (out.workers == 0 or out.workers > 16) return error.Usage;
         } else if (std.mem.eql(u8, arg, "--expander-root")) {
             index += 1;
             if (index >= args.len or out.expander_root.len != 0) return error.Usage;
@@ -77,11 +224,11 @@ pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3) {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--limit-pages N]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--limit-pages N] [--workers N]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--limit-pages N]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--limit-pages N] [--workers N]\n", .{});
         return error.Usage;
     };
 
@@ -99,8 +246,8 @@ pub fn main(init: std.process.Init) !void {
 
     const worker_path = try std.fs.path.join(a, &.{ options.expander_root, "dict-bundle-expander" });
     defer a.free(worker_path);
-    var worker = bundle_expander.Worker.init(init.io, options.expander_root, worker_path, args[1]);
-    defer worker.deinit();
+    var pool = try ExpansionPool.init(init.io, a, options.expander_root, worker_path, args[1], options.workers);
+    defer pool.deinit();
 
     var writer = try encoder.blob_builder.Writer.init(init.io, a, args[2]);
     defer writer.deinit();
@@ -121,35 +268,42 @@ pub fn main(init: std.process.Init) !void {
     );
     defer dump.deinit();
 
-    var page_arena = std.heap.ArenaAllocator.init(a);
-    defer page_arena.deinit();
     var lines = std.mem.splitScalar(u8, page_index.bytes, '\n');
-    var pages_seen: usize = 0;
+    var corpus_ordinal: usize = 0;
+    var pages_selected: usize = 0;
+    var next_slot: usize = 0;
     while (lines.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
-        if (options.limit_pages) |limit| if (pages_seen >= limit) break;
-        pages_seen += 1;
-        writer.stats.pages_seen = pages_seen;
-        const page_allocator = page_arena.allocator();
+        const page_ordinal = corpus_ordinal;
+        corpus_ordinal += 1;
+        if (page_ordinal < options.start_page) continue;
+        if (options.limit_pages) |limit| if (pages_selected >= limit) break;
+        pages_selected += 1;
+        writer.stats.pages_seen = pages_selected;
         const page = try dump_source.parsePageIndexLine(page_index_kind, line);
         if (page.has_source and dump_source.relevantNamespace(page.ns)) {
+            const slot = &pool.slots[next_slot];
+            try slot.consume(&writer);
+            const page_allocator = slot.arena.allocator();
             const raw_source = try dump.readAlloc(page_allocator, page.source);
             const source = if (page.source_needs_decode)
                 try xml_decode.decodeSinglePassAlloc(page_allocator, raw_source)
             else
                 raw_source;
-            if (try worker.expand(page_allocator, @intCast(pages_seen - 1), page.title, source)) |expanded| {
-                writer.addPage(page_allocator, page.ns, page.title, expanded.source, expanded.display_title) catch |err| {
-                    std.debug.print(
-                        "blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n",
-                        .{ page.title, pages_seen - 1, page.ns, source.len, expanded.source.len, @errorName(err) },
-                    );
-                    return err;
-                };
-            }
+            slot.dispatch(.{
+                .ordinal = @intCast(page_ordinal),
+                .ns = page.ns,
+                .title = page.title,
+                .source = source,
+            });
+            next_slot = (next_slot + 1) % pool.slots.len;
         }
-        _ = page_arena.reset(.retain_capacity);
+        if (pages_selected % 100_000 == 0) std.debug.print(
+            "page compilation progress selected={d} ordinal={d} main_pages={d} language_records={d} workers={d}\n",
+            .{ pages_selected, page_ordinal, writer.stats.main_pages, writer.stats.language_records, pool.slots.len },
+        );
     }
+    try pool.drain(&writer, next_slot);
     const stats = try writer.finish(codes);
 
     std.debug.print(
