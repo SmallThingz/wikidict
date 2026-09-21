@@ -1036,11 +1036,15 @@ pub const Expander = struct {
         var count: usize = 1;
         if (args.len != 0) {
             const mode = std.mem.trim(u8, try self.expandWikitext(args[0], params, host_title, depth + 1), " \t\r\n");
-            if (mode.len != 0) {
-                const scribunto_mode = if (std.ascii.eqlIgnoreCase(mode, "PARAM")) "QUERY" else mode;
-                call_args[1] = .{ .string = scribunto_mode };
+            if (std.ascii.eqlIgnoreCase(mode, "PATH") or std.ascii.eqlIgnoreCase(mode, "WIKI")) {
+                call_args[1] = .{ .string = mode };
+                count = 2;
+            } else if (std.ascii.eqlIgnoreCase(mode, "QUERY") or std.ascii.eqlIgnoreCase(mode, "PARAM")) {
+                call_args[1] = .{ .string = "QUERY" };
                 count = 2;
             }
+            // MediaWiki's urlencode parser function treats empty and unknown
+            // modes as QUERY; Scribunto mw.uri.encode rejects unknown modes.
         }
         const result = try self.runtime.callValue(encode, call_args[0..count]);
         defer rt.freeResults(result);
@@ -2076,6 +2080,10 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("//en.wiktionary.org|en.wiktionary.org", site_magic);
     const urlencode_param = try expander.expandFragment("Page", "{{urlencode:flundra 1°|PARAM}}", 1_670_803_200);
     try std.testing.expectEqualStrings("flundra+1%C2%B0", urlencode_param);
+    const urlencode_unknown = try expander.expandFragment("Page", "{{urlencode:a b/c*|not-a-mode}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("a+b%2Fc%2A", urlencode_unknown);
+    const urlencode_path = try expander.expandFragment("Page", "{{urlencode:a b/c*|PATH}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("a%20b%2Fc%2A", urlencode_path);
     const inert_hash_urlencode = try expander.expandFragment("Page", "{{#urlencode:जलाना|PATH}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{#urlencode:जलाना|PATH}}</nowiki>", inert_hash_urlencode);
     const inert_empty_template = try expander.expandFragment("Page", "{{|yue|洛陽}}", 1_670_803_200);
