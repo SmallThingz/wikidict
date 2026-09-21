@@ -1593,6 +1593,14 @@ pub const Expander = struct {
         return if (value == .string) value.string else null;
     }
 
+    fn categoryTreeValue(raw: ?[]const u8) ?[]const u8 {
+        var value = std.mem.trim(u8, raw orelse return null, " \t\r\n");
+        if (value.len >= 2 and ((value[0] == '"' and value[value.len - 1] == '"') or
+            (value[0] == '\'' and value[value.len - 1] == '\'')))
+            value = std.mem.trim(u8, value[1 .. value.len - 1], " \t\r\n");
+        return if (value.len == 0) null else value;
+    }
+
     fn categoryTreeClass(raw: ?[]const u8) ?[]const u8 {
         var value = std.mem.trim(u8, raw orelse return null, " \t\r\n");
         if (value.len >= 2 and ((value[0] == '"' and value[value.len - 1] == '"') or
@@ -1627,7 +1635,7 @@ pub const Expander = struct {
             return error.UnsupportedCategoryTreeOptions;
         const mode = mode_arg orelse type_arg orelse "pages";
         const depth = categoryTreeArg(args, "depth") orelse "1";
-        const namespaces = categoryTreeArg(args, "namespaces");
+        const namespaces = categoryTreeValue(categoryTreeArg(args, "namespaces"));
         const hideprefix = categoryTreeArg(args, "hideprefix") orelse "categories";
         const hideroot = categoryTreeArg(args, "hideroot") orelse "off";
         const showcount = categoryTreeArg(args, "showcount") orelse "off";
@@ -1645,7 +1653,7 @@ pub const Expander = struct {
         }
 
         if (std.mem.eql(u8, depth, "0")) {
-            if (namespaces != null) return error.UnsupportedCategoryTreeOptions;
+            if (namespaces) |value| if (!std.mem.eql(u8, value, "-")) return error.UnsupportedCategoryTreeOptions;
             const stats_get = self.provider.category_stats orelse return error.NotImplemented;
             const stats = (try stats_get(self.provider.ctx, category)) orelse return error.CategoryTreeSnapshotMissing;
             const count = categoryTreeRootCount(mode, stats) orelse return error.UnsupportedCategoryTreeOptions;
@@ -2051,6 +2059,12 @@ test "native AOT wikitext expands templates parser functions and invoke" {
         "{{#categorytree:English terms prefixed with un-|mode=all|depth=0|class=\"columns-bg\"|hideprefix=always|showcount=on}}",
         1_670_803_200,
     );
+    const category_tree_root_quoted_namespace = try expander.expandFragment(
+        "Page",
+        "{{#categorytree:English terms prefixed with un-|namespaces=\"-\"|depth=0|class=\"derivedterms\"}}",
+        1_670_803_200,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_root_quoted_namespace, "class=\"derivedterms CategoryTreeTag\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "class=\"columns-bg CategoryTreeTag\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "[[:Category:English terms prefixed with un-|English terms prefixed with un-]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree_root, "<span class=\"CategoryTreeCount\">(4)</span>") != null);
