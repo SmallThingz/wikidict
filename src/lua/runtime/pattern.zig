@@ -142,6 +142,23 @@ const Matcher = struct {
         if (!std.mem.eql(u8, self.source[cap.start..cap.end], self.source[s .. s + len])) return null;
         return s + len;
     }
+    fn matchWithRollback(self: *Matcher, s: usize, p: usize) Error!?usize {
+        const saved_level = self.level;
+        if (saved_level == 0) {
+            const result = try self.matchAt(s, p);
+            if (result == null) self.level = 0;
+            return result;
+        }
+        var saved: [max_captures]Capture = undefined;
+        @memcpy(saved[0..saved_level], self.captures[0..saved_level]);
+        const result = try self.matchAt(s, p);
+        if (result == null) {
+            @memcpy(self.captures[0..saved_level], saved[0..saved_level]);
+            self.level = saved_level;
+        }
+        return result;
+    }
+
     fn matchBalance(self: *Matcher, s: usize, p: usize) Error!?usize {
         if (p + 1 >= self.pattern.len) return error.MalformedPattern;
         if (s >= self.source.len or self.source[s] != self.pattern[p]) return null;
@@ -162,11 +179,7 @@ const Matcher = struct {
         var count: usize = 0;
         while (s + count < self.source.len and self.singleMatch(self.source[s + count], p, ep)) count += 1;
         while (true) {
-            const saved = self.captures;
-            const saved_level = self.level;
-            if (try self.matchAt(s + count, next)) |result| return result;
-            self.captures = saved;
-            self.level = saved_level;
+            if (try self.matchWithRollback(s + count, next)) |result| return result;
             if (count == 0) return null;
             count -= 1;
         }
@@ -174,11 +187,7 @@ const Matcher = struct {
     fn minExpand(self: *Matcher, s: usize, p: usize, ep: usize, next: usize) Error!?usize {
         var i = s;
         while (true) {
-            const saved = self.captures;
-            const saved_level = self.level;
-            if (try self.matchAt(i, next)) |result| return result;
-            self.captures = saved;
-            self.level = saved_level;
+            if (try self.matchWithRollback(i, next)) |result| return result;
             if (i >= self.source.len or !self.singleMatch(self.source[i], p, ep)) return null;
             i += 1;
         }
@@ -225,13 +234,7 @@ const Matcher = struct {
             const matched = s < self.source.len and self.singleMatch(self.source[s], p, ep);
             if (ep < self.pattern.len) switch (self.pattern[ep]) {
                 '?' => {
-                    if (matched) {
-                        const saved = self.captures;
-                        const saved_level = self.level;
-                        if (try self.matchAt(s + 1, ep + 1)) |r| return r;
-                        self.captures = saved;
-                        self.level = saved_level;
-                    }
+                    if (matched) if (try self.matchWithRollback(s + 1, ep + 1)) |r| return r;
                     p = ep + 1;
                     continue;
                 },
@@ -292,10 +295,11 @@ fn findFrom(source: []const u8, pattern: []const u8, initial: usize, honor_ancho
         return .{ .start = found, .end = found + pattern.len, .captures = undefined, .capture_count = 0 };
     }
     const required_start = if (anchored) null else requiredStartByte(pattern, pattern_start);
+    var matcher = Matcher{ .source = source, .pattern = pattern };
     while (start <= source.len) : (start += 1) {
         if (required_start) |literal|
             start = std.mem.indexOfScalarPos(u8, source, start, literal) orelse return null;
-        var matcher = Matcher{ .source = source, .pattern = pattern };
+        matcher.level = 0;
         const end = try matcher.matchAt(start, pattern_start) orelse {
             if (anchored) return null;
             continue;
