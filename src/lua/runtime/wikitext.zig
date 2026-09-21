@@ -88,6 +88,14 @@ pub const Provider = struct {
     get_template_symbol: ?*const fn (?*anyopaque, std.mem.Allocator, usize) anyerror!?[]const u8 = null,
 };
 
+const LazyTemplateArgs = struct {
+    target: *rt.Table,
+    raw_values: *rt.Table,
+    caller_params: *rt.Table,
+    caller_title: []const u8,
+    depth: usize,
+};
+
 pub const Expander = struct {
     runtime: *rt.Context,
     env_slot: u32,
@@ -109,6 +117,7 @@ pub const Expander = struct {
     max_depth: usize = 512,
     max_template_depth: usize = 128,
     template_depth: usize = 0,
+    lazy_template_args: std.ArrayList(LazyTemplateArgs) = .empty,
 
     pub fn attach(self: *Expander) void {
         self.host.ctx = self;
@@ -146,6 +155,7 @@ pub const Expander = struct {
         self.strip_values = .empty;
         self.page_line = .empty;
         self.template_depth = 0;
+        self.lazy_template_args = .empty;
         self.attach();
     }
 
@@ -452,6 +462,34 @@ pub const Expander = struct {
         return out.toOwnedSlice(self.runtime.allocator);
     }
 
+    fn lazyTemplateArgsFor(self: *const Expander, params: *rt.Table) ?LazyTemplateArgs {
+        var i = self.lazy_template_args.items.len;
+        while (i != 0) {
+            i -= 1;
+            const lazy = self.lazy_template_args.items[i];
+            if (lazy.target == params) return lazy;
+        }
+        return null;
+    }
+
+    fn resolveLazyTemplateArg(self: *Expander, params: *rt.Table, key: Value) anyerror!?[]const u8 {
+        const lazy = self.lazyTemplateArgsFor(params) orelse return null;
+        const raw = lazy.raw_values.rawGet(key) orelse return null;
+        if (raw != .string) return error.StringExpected;
+        const expanded = try self.expandWikitext(raw.string, lazy.caller_params, lazy.caller_title, lazy.depth + 1);
+        try params.rawSet(self.runtime.allocator, key, .{ .string = expanded });
+        return expanded;
+    }
+
+    fn materializeLazyTemplateArgs(self: *Expander, params: *rt.Table) anyerror!void {
+        const lazy = self.lazyTemplateArgsFor(params) orelse return;
+        var it = lazy.raw_values.iterator();
+        while (it.next()) |entry| {
+            if (params.rawGet(entry.key_ptr.*) != null) continue;
+            _ = (try self.resolveLazyTemplateArg(params, entry.key_ptr.*)) orelse return error.MissingTemplateArgument;
+        }
+    }
+
     fn expandParameter(self: *Expander, inside: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const split = preprocess.splitParameter(inside);
         const expanded_key = try self.expandWikitext(split.key, params, host_title, depth + 1);
@@ -461,8 +499,44 @@ pub const Expander = struct {
         else |_|
             .{ .string = key_text };
         if (params.rawGet(key)) |value| return self.valueToWikitext(value);
+        if (try self.resolveLazyTemplateArg(params, key)) |value| return value;
         if (split.default) |fallback| return self.expandWikitext(fallback, params, host_title, depth + 1);
         return std.fmt.allocPrint(self.runtime.allocator, "{{{{{{{s}}}}}}}", .{inside});
+    }
+
+    fn buildTemplateArgs(self: *Expander, raw_args: []const []const u8, caller_params: *rt.Table, host_title: []const u8, depth: usize) anyerror!*rt.Table {
+        const out = try self.runtime.newTable();
+        if (raw_args.len == 0) return out;
+        const raw_values = try self.runtime.newTable();
+        var positional: i64 = 1;
+        for (raw_args) |raw| {
+            if (preprocess.findTopDelimiter(raw, '=')) |eq| {
+                const key_expanded = try self.expandWikitext(raw[0..eq], caller_params, host_title, depth + 1);
+                const key_text = std.mem.trim(u8, key_expanded, " \t\r\n");
+                if (key_text.len == 0) continue;
+                const key: Value = if (std.fmt.parseInt(i64, key_text, 10)) |number|
+                    .{ .number = @floatFromInt(number) }
+                else |_|
+                    .{ .string = key_text };
+                const value_raw = std.mem.trim(u8, raw[eq + 1 ..], " \t\r\n");
+                try raw_values.rawSet(self.runtime.allocator, key, .{ .string = value_raw });
+            } else {
+                try raw_values.rawSet(
+                    self.runtime.allocator,
+                    .{ .number = @floatFromInt(positional) },
+                    .{ .string = raw },
+                );
+                positional += 1;
+            }
+        }
+        try self.lazy_template_args.append(self.runtime.allocator, .{
+            .target = out,
+            .raw_values = raw_values,
+            .caller_params = caller_params,
+            .caller_title = host_title,
+            .depth = depth,
+        });
+        return out;
     }
 
     fn buildExpandedArgs(self: *Expander, raw_args: []const []const u8, caller_params: *rt.Table, host_title: []const u8, depth: usize) anyerror!*rt.Table {
@@ -1246,6 +1320,7 @@ pub const Expander = struct {
 
         const runtime = self.runtime;
         const invoke_args = try self.buildExpandedArgs(if (args.len > 0) args[1..] else &.{}, params, host_title, depth + 1);
+        try self.materializeLazyTemplateArgs(params);
         _ = runtime;
         const outcome = try self.invokeWithRecovery(
             if (module_symbol) |symbol| symbol.module_id else null,
@@ -1413,7 +1488,7 @@ pub const Expander = struct {
             .external => return error.ExternalInterwikiTransclusionUnsupported,
         }
         if (try self.callSymbol(raw_head, .template)) |symbol| {
-            const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
+            const args = try self.buildTemplateArgs(parts.items[1..], params, host_title, depth + 1);
             return self.expandTemplateBySymbol(symbol, args, host_title, depth + 1);
         }
         const title = stripSubstPrefix(try self.expandWikitext(raw_head, params, host_title, depth + 1));
@@ -1427,7 +1502,7 @@ pub const Expander = struct {
                 return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
             return std.fmt.allocPrint(self.runtime.allocator, "{{{{{s}}}}}", .{content});
         }
-        const args = try self.buildExpandedArgs(parts.items[1..], params, host_title, depth + 1);
+        const args = try self.buildTemplateArgs(parts.items[1..], params, host_title, depth + 1);
         return self.expandTemplateByName(title, args, host_title, depth + 1);
     }
 
@@ -1968,6 +2043,8 @@ const TestProvider = struct {
     fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
         if (std.mem.eql(u8, title, "Template:Hello")) return "Hi {{{1|friend}}} {{#if:{{{2|}}}|Y|N}}";
         if (std.mem.eql(u8, title, "Template:Only")) return "A<noinclude>X</noinclude>B<includeonly>C</includeonly>D";
+        if (std.mem.eql(u8, title, "Template:Lazy")) return "used={{{used}}}";
+        if (std.mem.eql(u8, title, "Template:LazyForward")) return "{{Lazy|used={{{1}}}|unused={{{2}}}}}";
         if (std.mem.eql(u8, title, "Template:Space Name")) return "space-template";
         if (std.mem.eql(u8, title, "Wiktionary:Sandbox/Child")) return "relative-project-child";
         if (std.mem.eql(u8, title, "Template:/Child")) return "literal-template-slash-child";
@@ -2132,6 +2209,14 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("<nowiki>{{#urlencode:जलाना|PATH}}</nowiki>", inert_hash_urlencode);
     const inert_empty_template = try expander.expandFragment("Page", "{{|yue|洛陽}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{|yue|洛陽}}</nowiki>", inert_empty_template);
+    const lazy_unused = try expander.expandFragment("Caller page", "{{Lazy|used={{PAGENAME}}|unused={{Missing template}}}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("used=Caller page", lazy_unused);
+    const lazy_forwarded = try expander.expandFragment("Caller page", "{{LazyForward|value|{{Missing template}}}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("used=value", lazy_forwarded);
+    try std.testing.expectError(
+        error.TemplateNotFound,
+        expander.expandFragment("Caller page", "{{Lazy|used={{Missing template}}}}", 1_670_803_200),
+    );
     const special_page = try expander.expandFragment("Page", "{{#special:MovePage}}|{{#special:AllPages/Foo bar}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Special:MovePage|Special:AllPages/Foo bar", special_page);
     const category_tree = try expander.expandFragment(
