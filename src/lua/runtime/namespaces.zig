@@ -132,29 +132,50 @@ pub fn ofTitle(title: []const u8) struct { id: i32, name: []const u8, text: []co
     return .{ .id = 0, .name = "", .text = title };
 }
 
-pub fn canonicalizeTitle(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
-    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    const colon = std.mem.indexOfScalar(u8, trimmed, ':');
-    const spec = if (colon) |at| byName(trimmed[0..at]) else null;
-    const canonical_prefix = if (spec) |value| value.name else "";
-    const prefix_changed = if (colon) |at| spec != null and !std.mem.eql(u8, trimmed[0..at], canonical_prefix) else false;
-    const has_underscore = std.mem.indexOfScalar(u8, trimmed, '_') != null;
-    if (!prefix_changed and !has_underscore) return trimmed;
+fn isTitleSpace(cp: u21) bool {
+    return cp == ' ' or cp == '_' or cp == '\t' or cp == '\r' or cp == '\n' or
+        cp == 0x00a0 or cp == 0x1680 or cp == 0x180e or
+        (cp >= 0x2000 and cp <= 0x200a) or cp == 0x2028 or cp == 0x2029 or
+        cp == 0x202f or cp == 0x205f or cp == 0x3000;
+}
 
-    if (prefix_changed) {
-        const at = colon.?;
-        const suffix = trimmed[at + 1 ..];
-        const out = try a.alloc(u8, canonical_prefix.len + 1 + suffix.len);
-        @memcpy(out[0..canonical_prefix.len], canonical_prefix);
-        out[canonical_prefix.len] = ':';
-        @memcpy(out[canonical_prefix.len + 1 ..], suffix);
-        std.mem.replaceScalar(u8, out, '_', ' ');
-        return out;
+fn isBidiOverride(cp: u21) bool {
+    return cp == 0x200e or cp == 0x200f or (cp >= 0x202a and cp <= 0x202e);
+}
+
+fn normalizeTitleSpacingAlloc(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    var pending_space = false;
+    var pos: usize = 0;
+    while (pos < raw.len) {
+        const len = std.unicode.utf8ByteSequenceLength(raw[pos]) catch return error.InvalidPageTitle;
+        if (pos + len > raw.len) return error.InvalidPageTitle;
+        const cp = std.unicode.utf8Decode(raw[pos .. pos + len]) catch return error.InvalidPageTitle;
+        if (isBidiOverride(cp)) {
+            pos += len;
+            continue;
+        }
+        if (isTitleSpace(cp)) {
+            pending_space = out.items.len != 0;
+            pos += len;
+            continue;
+        }
+        if (pending_space) try out.append(a, ' ');
+        pending_space = false;
+        try out.appendSlice(a, raw[pos .. pos + len]);
+        pos += len;
     }
+    return out.toOwnedSlice(a);
+}
 
-    const out = try a.dupe(u8, trimmed);
-    std.mem.replaceScalar(u8, out, '_', ' ');
-    return out;
+pub fn canonicalizeTitle(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    const normalized = try normalizeTitleSpacingAlloc(a, raw);
+    const colon = std.mem.indexOfScalar(u8, normalized, ':') orelse return normalized;
+    const prefix = std.mem.trim(u8, normalized[0..colon], " ");
+    const spec = byName(prefix) orelse return normalized;
+    const body = std.mem.trimStart(u8, normalized[colon + 1 ..], " ");
+    return std.fmt.allocPrint(a, "{s}:{s}", .{ spec.name, body });
 }
 
 fn one(value: rt.Value) ![]const rt.Value {
@@ -260,6 +281,8 @@ test "Wiktionary namespace lookup preserves canonical names and aliases" {
     try std.testing.expectEqualStrings("Wiktionary:foo bar", try canonicalizeTitle(arena.allocator(), "WT:foo_bar"));
     try std.testing.expectEqualStrings("Wiktionary:Foo", try canonicalizeTitle(arena.allocator(), "Project:Foo"));
     try std.testing.expectEqualStrings("NotNs:foo bar", try canonicalizeTitle(arena.allocator(), "NotNs:foo_bar"));
+    try std.testing.expectEqualStrings("Template:RQ:William Burroughs Soft Machine", try canonicalizeTitle(arena.allocator(), "  Template:RQ:William  Burroughs___Soft Machine  "));
+    try std.testing.expectEqualStrings("Template:Foo bar", try canonicalizeTitle(arena.allocator(), "Template :  Foo__bar"));
 }
 
 test "namespace entry shapes remain open and mutable" {

@@ -356,11 +356,8 @@ pub const Expander = struct {
                 return namespace_lib.canonicalizeTitle(self.runtime.allocator, name);
         }
 
-        const out = try self.runtime.allocator.alloc(u8, "Template:".len + name.len);
-        @memcpy(out[0.."Template:".len], "Template:");
-        @memcpy(out["Template:".len..], name);
-        std.mem.replaceScalar(u8, out, '_', ' ');
-        return out;
+        const out = try std.fmt.allocPrint(self.runtime.allocator, "Template:{s}", .{name});
+        return namespace_lib.canonicalizeTitle(self.runtime.allocator, out);
     }
 
     const InterwikiTransclusion = union(enum) {
@@ -1925,6 +1922,7 @@ const TestProvider = struct {
     fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
         if (std.mem.eql(u8, title, "Template:Hello")) return "Hi {{{1|friend}}} {{#if:{{{2|}}}|Y|N}}";
         if (std.mem.eql(u8, title, "Template:Only")) return "A<noinclude>X</noinclude>B<includeonly>C</includeonly>D";
+        if (std.mem.eql(u8, title, "Template:Space Name")) return "space-template";
         if (std.mem.eql(u8, title, "Wiktionary:Sandbox/Child")) return "relative-project-child";
         if (std.mem.eql(u8, title, "Template:/Child")) return "literal-template-slash-child";
         if (std.mem.eql(u8, title, "Template:Parent")) return "{{/Child}}";
@@ -2072,7 +2070,7 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists }, .install_scribunto = installTestInvoke };
     expander.provider.category_tree = TestProvider.categoryTree;
     expander.provider.category_stats = TestProvider.categoryStats;
-    const source = "{{Hello|Bob|1}}|{{Only}}|{{:Main_page}}|{{WT:Sandbox}}|{{T:Hello|Z|1}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{#ifexist:WT:Sandbox|W|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
+    const source = "{{Hello|Bob|1}}|{{Only}}|{{Space  Name}}|{{Space___Name}}|{{:Main_page}}|{{WT:Sandbox}}|{{T:Hello|Z|1}}|{{#ifeq:a|a|yes|no}}|{{#switch:x|y=no|x=yes|#default=d}}|{{#expr:2+3*4}}|{{#ifexist:Exists|E|N}}|{{#ifexist:WT:Sandbox|W|N}}|{{uc:hé}}|{{padleft:é|3|ø}}|{{CURRENTYEAR}}|{{#tag:ref|body|name=n}}|{{#tag:math|x+y}}|{{#tag:poem|one\ntwo}}|{{#invoke:Test|run|x=ok}}";
     expander.provider.page_metadata = TestProvider.pageMetadata;
     const current_magic = try expander.expandFragment("Appendix:Page/Sub", "{{CURRENTDAYNAME}}|{{CURRENTWEEK}}|{{CURRENTMONTHNAMEGEN}}|{{PAGEID}}|{{REVISIONID}}|{{REVISIONTIMESTAMP}}|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}|{{REVISIONUSER}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Monday|50|December|42|420|20240304050607|2024-03-4|Test editor", current_magic);
@@ -2139,7 +2137,7 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     const other_magic = try expander.expandFragment("Page", "{{PAGEID:Other_page}}|{{REVISIONID:Other page}}|{{REVISIONTIMESTAMP:Other page}}|{{REVISIONUSER:Other_page}}|{{PAGEID:Missing page}}", 1_670_803_200);
     try std.testing.expectEqualStrings("99|990|20250607080910|Other editor|", other_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
-    try std.testing.expectEqualStrings("Hi Bob Y|ABCD|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
+    try std.testing.expectEqualStrings("Hi Bob Y|ABCD|space-template|space-template|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
     const random_top_level = try expander.expandFragment("Page", "{{#invoke:Test|random}}|{{#invoke:Test|random}}", 1_670_803_200);
     try std.testing.expectEqualStrings("9|9", random_top_level);
     const isolated_module_state = try expander.expandFragment("Page", "{{#invoke:Test|stateful}}|{{#invoke:Test|stateful}}", 1_670_803_200);
