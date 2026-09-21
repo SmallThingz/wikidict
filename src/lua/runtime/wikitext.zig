@@ -1467,6 +1467,8 @@ pub const Expander = struct {
     }
 
     fn expandConstruct(self: *Expander, content: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        const lazy_base = self.lazy_template_args.items.len;
+        defer self.lazy_template_args.items.len = lazy_base;
         var parts: std.ArrayList([]const u8) = .empty;
         defer parts.deinit(self.runtime.allocator);
         try preprocess.splitWikitextTop(self.runtime.allocator, content, '|', &parts);
@@ -2213,6 +2215,13 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("used=Caller page", lazy_unused);
     const lazy_forwarded = try expander.expandFragment("Caller page", "{{LazyForward|value|{{Missing template}}}}", 1_670_803_200);
     try std.testing.expectEqualStrings("used=value", lazy_forwarded);
+    const lazy_then_next = try expander.expandFragment(
+        "Caller page",
+        "{{Lazy|used=ok|unused={{Missing template}}}}{{Hello|Bob|1}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings("used=okHi Bob Y", lazy_then_next);
+    try std.testing.expectEqual(@as(usize, 0), expander.lazy_template_args.items.len);
     try std.testing.expectError(
         error.TemplateNotFound,
         expander.expandFragment("Caller page", "{{Lazy|used={{Missing template}}}}", 1_670_803_200),
