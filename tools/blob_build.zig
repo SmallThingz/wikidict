@@ -62,12 +62,13 @@ const ExpansionJob = struct {
 
 const ExpansionSlot = struct {
     io: std.Io,
+    completion: *std.Io.Event,
     arena: std.heap.ArenaAllocator,
     worker: bundle_expander.Worker,
     thread: ?std.Thread = null,
     job_event: std.Io.Event = .unset,
-    done_event: std.Io.Event = .unset,
     stop: std.atomic.Value(bool) = .init(false),
+    done: std.atomic.Value(bool) = .init(false),
     busy: bool = false,
     job: ExpansionJob = undefined,
     expansion: ?bundle_expander.Expansion = null,
@@ -89,12 +90,14 @@ const ExpansionSlot = struct {
                 self.failure = err;
                 break :blk null;
             };
-            self.done_event.set(self.io);
+            self.done.store(true, .release);
+            self.completion.set(self.io);
         }
     }
 
     fn dispatch(self: *ExpansionSlot, job: ExpansionJob) void {
         std.debug.assert(!self.busy);
+        std.debug.assert(!self.done.load(.acquire));
         self.job = job;
         self.expansion = null;
         self.failure = null;
@@ -102,11 +105,10 @@ const ExpansionSlot = struct {
         self.job_event.set(self.io);
     }
 
-    fn consume(self: *ExpansionSlot, writer: *encoder.blob_builder.Writer) !void {
-        if (!self.busy) return;
-        self.done_event.waitUncancelable(self.io);
+    fn consumeReady(self: *ExpansionSlot, writer: *encoder.blob_builder.Writer) !bool {
+        if (!self.busy or !self.done.load(.acquire)) return false;
         defer {
-            self.done_event.reset();
+            self.done.store(false, .release);
             self.busy = false;
             _ = self.arena.reset(.retain_capacity);
         }
@@ -126,12 +128,14 @@ const ExpansionSlot = struct {
                 return err;
             };
         }
+        return true;
     }
 };
 
 const ExpansionPool = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
+    completion: *std.Io.Event,
     slots: []ExpansionSlot,
 
     fn init(
@@ -142,6 +146,9 @@ const ExpansionPool = struct {
         dump: []const u8,
         count: usize,
     ) !ExpansionPool {
+        const completion = try allocator.create(std.Io.Event);
+        errdefer allocator.destroy(completion);
+        completion.* = .unset;
         const slots = try allocator.alloc(ExpansionSlot, count);
         errdefer allocator.free(slots);
         const pinned_now = std.Io.Clock.real.now(io).toSeconds();
@@ -150,6 +157,7 @@ const ExpansionPool = struct {
             worker.now_unix = pinned_now;
             slot.* = .{
                 .io = io,
+                .completion = completion,
                 .arena = std.heap.ArenaAllocator.init(allocator),
                 .worker = worker,
             };
@@ -162,12 +170,13 @@ const ExpansionPool = struct {
             }
             for (slots[0..spawned]) |*slot| slot.thread.?.join();
             for (slots) |*slot| slot.arena.deinit();
+            allocator.destroy(completion);
         }
         for (slots) |*slot| {
             slot.thread = try std.Thread.spawn(.{}, ExpansionSlot.threadMain, .{slot});
             spawned += 1;
         }
-        return .{ .io = io, .allocator = allocator, .slots = slots };
+        return .{ .io = io, .allocator = allocator, .completion = completion, .slots = slots };
     }
 
     fn deinit(self: *ExpansionPool) void {
@@ -178,13 +187,35 @@ const ExpansionPool = struct {
         for (self.slots) |*slot| if (slot.thread) |thread| thread.join();
         for (self.slots) |*slot| slot.arena.deinit();
         self.allocator.free(self.slots);
+        self.allocator.destroy(self.completion);
         self.* = undefined;
     }
 
-    fn drain(self: *ExpansionPool, writer: *encoder.blob_builder.Writer, next_slot: usize) !void {
-        for (0..self.slots.len) |offset| {
-            const index = (next_slot + offset) % self.slots.len;
-            try self.slots[index].consume(writer);
+    fn consumeReady(self: *ExpansionPool, writer: *encoder.blob_builder.Writer) !usize {
+        var count: usize = 0;
+        for (self.slots) |*slot| if (try slot.consumeReady(writer)) {
+            count += 1;
+        };
+        return count;
+    }
+
+    fn acquire(self: *ExpansionPool, writer: *encoder.blob_builder.Writer) !*ExpansionSlot {
+        while (true) {
+            for (self.slots) |*slot| if (!slot.busy) return slot;
+            if (try self.consumeReady(writer) != 0) continue;
+            self.completion.waitUncancelable(self.io);
+            self.completion.reset();
+        }
+    }
+
+    fn drain(self: *ExpansionPool, writer: *encoder.blob_builder.Writer) !void {
+        while (true) {
+            var busy = false;
+            for (self.slots) |*slot| busy = busy or slot.busy;
+            if (!busy) return;
+            if (try self.consumeReady(writer) != 0) continue;
+            self.completion.waitUncancelable(self.io);
+            self.completion.reset();
         }
     }
 };
@@ -271,7 +302,6 @@ pub fn main(init: std.process.Init) !void {
     var lines = std.mem.splitScalar(u8, page_index.bytes, '\n');
     var corpus_ordinal: usize = 0;
     var pages_selected: usize = 0;
-    var next_slot: usize = 0;
     while (lines.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
         const page_ordinal = corpus_ordinal;
@@ -282,8 +312,7 @@ pub fn main(init: std.process.Init) !void {
         writer.stats.pages_seen = pages_selected;
         const page = try dump_source.parsePageIndexLine(page_index_kind, line);
         if (page.has_source and dump_source.relevantNamespace(page.ns)) {
-            const slot = &pool.slots[next_slot];
-            try slot.consume(&writer);
+            const slot = try pool.acquire(&writer);
             const page_allocator = slot.arena.allocator();
             const raw_source = try dump.readAlloc(page_allocator, page.source);
             const source = if (page.source_needs_decode)
@@ -296,14 +325,13 @@ pub fn main(init: std.process.Init) !void {
                 .title = page.title,
                 .source = source,
             });
-            next_slot = (next_slot + 1) % pool.slots.len;
         }
         if (pages_selected % 100_000 == 0) std.debug.print(
             "page compilation progress selected={d} ordinal={d} main_pages={d} language_records={d} workers={d}\n",
             .{ pages_selected, page_ordinal, writer.stats.main_pages, writer.stats.language_records, pool.slots.len },
         );
     }
-    try pool.drain(&writer, next_slot);
+    try pool.drain(&writer);
     const stats = try writer.finish(codes);
 
     std.debug.print(
