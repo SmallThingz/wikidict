@@ -19,6 +19,23 @@ const CategoryTreeRange = struct {
 
 const InterfaceMessageEntry = struct { source_raw: ?[]const u8 };
 const CorpusPage = struct { title: []const u8, source: wikimedia_dump.PageSource, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
+const corpus_page_ref_ordinal_bits = 24;
+const corpus_page_ref_ordinal_mask: u64 = (@as(u64, 1) << corpus_page_ref_ordinal_bits) - 1;
+
+fn packCorpusPageRef(line_offset: usize, ordinal: usize) !u64 {
+    if (ordinal > corpus_page_ref_ordinal_mask) return error.TooManyCorpusPages;
+    const offset: u64 = @intCast(line_offset);
+    if (offset > (std.math.maxInt(u64) >> corpus_page_ref_ordinal_bits)) return error.PageIndexTooLarge;
+    return (offset << corpus_page_ref_ordinal_bits) | @as(u64, @intCast(ordinal));
+}
+
+fn corpusPageRefOffset(value: u64) usize {
+    return @intCast(value >> corpus_page_ref_ordinal_bits);
+}
+
+fn corpusPageRefOrdinal(value: u64) usize {
+    return @intCast(value & corpus_page_ref_ordinal_mask);
+}
 
 const max_transclusion_cache_bytes: usize = 64 * 1024 * 1024;
 const max_transclusion_cache_entries: usize = 65_536;
@@ -37,8 +54,11 @@ pub const Provider = struct {
     io: std.Io,
     a: A,
     root: []const u8,
-    corpus_pages: std.StringHashMapUnmanaged(CorpusPage) = .empty,
+    // Keep only title -> page-index row references resident. The TSV mmap owns
+    // all strings and full metadata is parsed lazily on lookup.
+    corpus_pages: std.StringHashMapUnmanaged(u64) = .empty,
     corpus_pages_storage: ?Mapped = null,
+    corpus_page_index_kind: wikimedia_dump.PageIndexKind = .raw_xml,
     dump_reader: ?wikimedia_dump.SourceReader = null,
     transclusion_body_cache: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
     transclusion_body_cache_bytes: usize = 0,
@@ -473,7 +493,7 @@ pub const Provider = struct {
         var reader = try wikimedia_dump.SourceReader.open(self.io, self.a, std.heap.smp_allocator, dump_path, kind, stream_index_path);
         errdefer reader.deinit();
 
-        var pages: std.StringHashMapUnmanaged(CorpusPage) = .empty;
+        var pages: std.StringHashMapUnmanaged(u64) = .empty;
         errdefer pages.deinit(self.a);
         const line_count = std.mem.count(u8, mapped.bytes, "\n") + @intFromBool(mapped.bytes.len != 0 and mapped.bytes[mapped.bytes.len - 1] != '\n');
         const page_count = line_count -| @intFromBool(kind == .multistream_bz2);
@@ -488,34 +508,48 @@ pub const Provider = struct {
         while (lines.next()) |line| {
             if (line.len == 0 or line[0] == '#') continue;
             const indexed = try wikimedia_dump.parsePageIndexLine(kind, line);
+            const base = @intFromPtr(mapped.bytes.ptr);
+            const line_ptr = @intFromPtr(line.ptr);
+            if (line_ptr < base) return error.InvalidPageIndex;
+            const line_offset = line_ptr - base;
             defer ordinal += 1;
             const result = try pages.getOrPut(self.a, indexed.title);
             // Wikimedia dump jobs can observe a title before and after a delete/recreate
             // while walking page IDs. The later row is the state seen later in the dump.
             result.key_ptr.* = indexed.title;
-            result.value_ptr.* = .{
-                .title = indexed.title,
-                .source = indexed.source,
-                .page_id = indexed.page_id,
-                .revision_id = indexed.revision_id,
-                .revision_timestamp = indexed.revision_timestamp,
-                .revision_user = indexed.revision_user,
-                .content_model = indexed.content_model,
-                .ns = indexed.ns,
-                .ordinal = ordinal,
-                .source_needs_decode = indexed.source_needs_decode,
-                .redirect = indexed.redirect,
-            };
+            result.value_ptr.* = try packCorpusPageRef(line_offset, ordinal);
         }
         self.corpus_pages = pages;
         self.corpus_pages_storage = mapped;
+        self.corpus_page_index_kind = kind;
         self.dump_reader = reader;
         self.transclusion_seen = seen_words orelse &.{};
     }
+    fn corpusPageFromRef(self: *const Provider, ref: u64) !CorpusPage {
+        const mapped = self.corpus_pages_storage orelse return error.MissingPageIndex;
+        const start = corpusPageRefOffset(ref);
+        if (start >= mapped.bytes.len) return error.InvalidPageIndex;
+        const end = std.mem.indexOfScalarPos(u8, mapped.bytes, start, '\n') orelse mapped.bytes.len;
+        const indexed = try wikimedia_dump.parsePageIndexLine(self.corpus_page_index_kind, mapped.bytes[start..end]);
+        return .{
+            .title = indexed.title,
+            .source = indexed.source,
+            .page_id = indexed.page_id,
+            .revision_id = indexed.revision_id,
+            .revision_timestamp = indexed.revision_timestamp,
+            .revision_user = indexed.revision_user,
+            .content_model = indexed.content_model,
+            .ns = indexed.ns,
+            .ordinal = corpusPageRefOrdinal(ref),
+            .source_needs_decode = indexed.source_needs_decode,
+            .redirect = indexed.redirect,
+        };
+    }
+
     pub fn isCanonicalPage(self: *const Provider, title: []const u8, ordinal: u64) bool {
-        const page = self.corpus_pages.get(title) orelse return false;
+        const ref = self.corpus_pages.get(title) orelse return false;
         const wanted = std.math.cast(usize, ordinal) orelse return false;
-        return page.ordinal == wanted;
+        return corpusPageRefOrdinal(ref) == wanted;
     }
 
     fn readCorpusSource(self: *Provider, a: A, page: CorpusPage) ![]const u8 {
@@ -535,7 +569,8 @@ pub const Provider = struct {
             std.mem.replaceScalar(u8, title_buffer[0..raw_title.len], '_', ' ');
             break :blk title_buffer[0..raw_title.len];
         } else raw_title;
-        return self.corpus_pages.get(title);
+        const ref = self.corpus_pages.get(title) orelse return null;
+        return try self.corpusPageFromRef(ref);
     }
 
     fn lookup(self: *Provider, a: A, raw_title: []const u8, content: bool) !?[]const u8 {
