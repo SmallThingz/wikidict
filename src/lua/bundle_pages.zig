@@ -742,7 +742,13 @@ pub const Provider = struct {
 
     fn exists(ctx: ?*anyopaque, title: []const u8) anyerror!bool {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
-        if (std.ascii.startsWithIgnoreCase(title, "Media:")) return error.NotImplemented;
+        if (std.ascii.startsWithIgnoreCase(title, "Media:")) {
+            if (!self.file_metadata_available) return error.FileMetadataSnapshotMissing;
+            var file_title_buffer: [512]u8 = undefined;
+            const file_title = std.fmt.bufPrint(&file_title_buffer, "File:{s}", .{title["Media:".len..]}) catch
+                return error.FileMetadataSnapshotMissing;
+            return (self.file_metadata.get(file_title) orelse return error.FileMetadataSnapshotMissing).exists;
+        }
         return (try self.lookup(self.a, title, false)) != null;
     }
 };
@@ -919,6 +925,9 @@ test "provider loads pinned file metadata and fails closed on unknown files" {
     const missing = try get(&provider, "File:Missing.svg");
     try std.testing.expect(!missing.exists);
     try std.testing.expectError(error.FileMetadataSnapshotMissing, get(&provider, "File:Unknown.svg"));
+    try std.testing.expect(try Provider.exists(&provider, "Media:Example.svg"));
+    try std.testing.expect(!try Provider.exists(&provider, "Media:Missing.svg"));
+    try std.testing.expectError(error.FileMetadataSnapshotMissing, Provider.exists(&provider, "Media:Unknown.svg"));
 }
 
 test "provider owns paths and separates raw content from redirect-following transclusion" {
@@ -997,7 +1006,7 @@ test "provider owns paths and separates raw content from redirect-following tran
     try std.testing.expectEqualStrings("Alice", metadata.revision_user);
     try std.testing.expectEqualStrings("wikitext", metadata.content_model);
     try std.testing.expect(try Provider.exists(&provider, "Ordinary_page"));
-    try std.testing.expectError(error.NotImplemented, Provider.exists(&provider, "Media:Remote.svg"));
+    try std.testing.expectError(error.FileMetadataSnapshotMissing, Provider.exists(&provider, "Media:Remote.svg"));
     const main_content = (try provider.lookup(page_a, "Ordinary_page", true)) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("A&B", main_content);
     try std.testing.expect(provider.api().interwiki_map == null);
