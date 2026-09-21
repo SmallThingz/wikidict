@@ -1396,7 +1396,8 @@ pub const Expander = struct {
         try preprocess.splitWikitextTop(self.runtime.allocator, content, '|', &parts);
         if (parts.items.len == 0) return error.MalformedWikitext;
         var raw_head = stripSubstPrefix(parts.items[0]);
-        if (raw_head.len == 0) return error.MalformedWikitext;
+        if (raw_head.len == 0)
+            return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
         if (try self.expandParserHead(raw_head, parts.items[1..], params, host_title, depth)) |value| return value;
         if (raw_head[0] == '#')
             return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
@@ -2077,6 +2078,8 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("flundra+1%C2%B0", urlencode_param);
     const inert_hash_urlencode = try expander.expandFragment("Page", "{{#urlencode:जलाना|PATH}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{#urlencode:जलाना|PATH}}</nowiki>", inert_hash_urlencode);
+    const inert_empty_template = try expander.expandFragment("Page", "{{|yue|洛陽}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{|yue|洛陽}}</nowiki>", inert_empty_template);
     const special_page = try expander.expandFragment("Page", "{{#special:MovePage}}|{{#special:AllPages/Foo bar}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Special:MovePage|Special:AllPages/Foo bar", special_page);
     const category_tree = try expander.expandFragment(
