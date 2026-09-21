@@ -3,12 +3,7 @@
     .version = "0.1.0",
     .fingerprint = 0xcbbec2a66a3b6496,
     .minimum_zig_version = "0.16.0-dev.3013+abd131e33",
-    .dependencies = .{
-        .zxml = .{
-            .url = "git+https://github.com/SmallThingz/zxml#3faa307a7e9424bf72a67e67a0405746d5fec4c5",
-            .hash = "zxml-0.0.0-6lO8rTX-BADAUzQ3izYp2GEAlw_zlB6d4-Nqo_YbrgS5",
-        },
-    },
+    .dependencies = .{},
     .paths = .{
         "README.md",
         "build.zig",

@@ -1,21 +1,13 @@
 const std = @import("std");
 const encoder = @import("encoder");
-const dump_source = @import("wiktionary_dump.zig");
+const xml_decode = @import("xml_decode");
+const dump_source = @import("wikimedia_dump");
 const language_registry = @import("language_registry.zig");
 const bundle_expander = @import("bundle_expander.zig");
 
 const Options = struct {
     limit_pages: ?usize = null,
     expander_root: []const u8 = "",
-};
-
-const IndexedPage = struct {
-    source_offset: u64,
-    source_len: usize,
-    title: []const u8,
-    ns: u32,
-    has_source: bool,
-    source_needs_decode: bool,
 };
 
 const Mapped = struct {
@@ -59,36 +51,6 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     return language_registry.Registry.fromLuaAlloc(a, source);
 }
 
-fn parseIndexedPage(line: []const u8) !IndexedPage {
-    var fields = std.mem.splitScalar(u8, line, '\t');
-    const source_offset = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
-    const source_len = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10);
-    const title = fields.next() orelse return error.InvalidPageIndex;
-    _ = fields.next() orelse return error.InvalidPageIndex; // redirect
-    _ = fields.next() orelse return error.InvalidPageIndex; // page id
-    _ = fields.next() orelse return error.InvalidPageIndex; // revision id
-    _ = fields.next() orelse return error.InvalidPageIndex; // revision timestamp
-    _ = fields.next() orelse return error.InvalidPageIndex; // revision user
-    _ = fields.next() orelse return error.InvalidPageIndex; // content model
-    const ns = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10);
-    const has_source_raw = fields.next() orelse return error.InvalidPageIndex;
-    const needs_decode_raw = fields.next() orelse return error.InvalidPageIndex;
-    if (title.len == 0 or fields.next() != null) return error.InvalidPageIndex;
-    const has_source = if (std.mem.eql(u8, has_source_raw, "1"))
-        true
-    else if (std.mem.eql(u8, has_source_raw, "0"))
-        false
-    else
-        return error.InvalidPageIndex;
-    const source_needs_decode = if (std.mem.eql(u8, needs_decode_raw, "1"))
-        true
-    else if (std.mem.eql(u8, needs_decode_raw, "0"))
-        false
-    else
-        return error.InvalidPageIndex;
-    return .{ .source_offset = source_offset, .source_len = source_len, .title = title, .ns = ns, .has_source = has_source, .source_needs_decode = source_needs_decode };
-}
-
 fn parseOptions(args: []const []const u8) !Options {
     var out: Options = .{};
     var index: usize = 3;
@@ -115,16 +77,14 @@ pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3) {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml> <output-root> --expander-root ROOT [--limit-pages N]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--limit-pages N]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml> <output-root> --expander-root ROOT [--limit-pages N]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--limit-pages N]\n", .{});
         return error.Usage;
     };
 
-    var dump = try dump_source.Dump.open(init.io, a, args[1]);
-    defer dump.deinit();
     var registry = try loadLanguageRegistry(init.io, a, options.expander_root);
     defer registry.deinit();
     const codes: encoder.blob_builder.LanguageCodes = .{
@@ -148,25 +108,34 @@ pub fn main(init: std.process.Init) !void {
     defer a.free(page_index_path);
     var page_index = try mmapPath(init.io, page_index_path);
     defer page_index.deinit();
+    const page_index_kind = dump_source.pageIndexKind(page_index.bytes);
+    const stream_index_path = try std.fs.path.join(a, &.{ options.expander_root, "dump-streams.tsv" });
+    defer a.free(stream_index_path);
+    var dump = try dump_source.SourceReader.open(
+        init.io,
+        a,
+        a,
+        args[1],
+        page_index_kind,
+        if (page_index_kind == .multistream_bz2) stream_index_path else null,
+    );
+    defer dump.deinit();
 
     var page_arena = std.heap.ArenaAllocator.init(a);
     defer page_arena.deinit();
     var lines = std.mem.splitScalar(u8, page_index.bytes, '\n');
     var pages_seen: usize = 0;
     while (lines.next()) |line| {
-        if (line.len == 0) continue;
+        if (line.len == 0 or line[0] == '#') continue;
         if (options.limit_pages) |limit| if (pages_seen >= limit) break;
         pages_seen += 1;
         writer.stats.pages_seen = pages_seen;
         const page_allocator = page_arena.allocator();
-        const page = try parseIndexedPage(line);
+        const page = try dump_source.parsePageIndexLine(page_index_kind, line);
         if (page.has_source and dump_source.relevantNamespace(page.ns)) {
-            const start = std.math.cast(usize, page.source_offset) orelse return error.InvalidPageIndex;
-            const end = std.math.add(usize, start, page.source_len) catch return error.InvalidPageIndex;
-            if (end > dump.bytes.len) return error.InvalidPageIndex;
-            const raw_source = dump.bytes[start..end];
+            const raw_source = try dump.readAlloc(page_allocator, page.source);
             const source = if (page.source_needs_decode)
-                try dump_source.decodeSourceAlloc(page_allocator, raw_source)
+                try xml_decode.decodeSinglePassAlloc(page_allocator, raw_source)
             else
                 raw_source;
             if (try worker.expand(page_allocator, @intCast(pages_seen - 1), page.title, source)) |expanded| {

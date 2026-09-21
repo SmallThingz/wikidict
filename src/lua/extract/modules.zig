@@ -1,50 +1,9 @@
 const std = @import("std");
-const zxml = @import("zxml");
 const xml_decode = @import("xml_decode");
 const lua_usage = @import("lua_usage");
+const wikimedia_dump = @import("wikimedia_dump");
 
-const parse_opts: zxml.ParseOptions = .{
-    .mode = .strict,
-    .validate_closing_tags = true,
-    .drop_whitespace_text_nodes = false,
-};
-const ztypes = zxml.Types(parse_opts);
-const StreamParser = ztypes.StreamParser;
-const StreamNode = ztypes.StreamNode;
-
-const Capture = struct {
-    names_by_depth: [8][]const u8 = [_][]const u8{""} ** 8,
-    title_raw: ?[]const u8 = null,
-    ns_raw: ?[]const u8 = null,
-    redirect_raw: ?[]const u8 = null,
-    page_id_raw: ?[]const u8 = null,
-    revision_id_raw: ?[]const u8 = null,
-    revision_timestamp_raw: ?[]const u8 = null,
-    revision_user_raw: ?[]const u8 = null,
-    model_raw: ?[]const u8 = null,
-    format_raw: ?[]const u8 = null,
-    text_raw: ?[]const u8 = null,
-
-    fn onNode(self: *@This(), node: StreamNode) bool {
-        if (node.kind != .element) return true;
-        if (node.depth < self.names_by_depth.len) self.names_by_depth[node.depth] = node.nameSlice();
-        const name = node.nameSlice();
-        if (node.depth == 1 and std.mem.eql(u8, name, "title")) {
-            self.title_raw = node.leadingTextRaw();
-        } else if (node.depth == 1 and std.mem.eql(u8, name, "ns")) {
-            self.ns_raw = node.leadingTextRaw();
-        } else if (node.depth == 1 and std.mem.eql(u8, name, "redirect")) {
-            self.redirect_raw = node.getAttributeValueRaw("title");
-        } else if (node.depth == 1 and std.mem.eql(u8, name, "id")) {
-            self.page_id_raw = node.leadingTextRaw();
-        } else if (node.depth == 2 and std.mem.eql(u8, self.names_by_depth[1], "revision")) {
-            if (std.mem.eql(u8, name, "id")) self.revision_id_raw = node.leadingTextRaw() else if (std.mem.eql(u8, name, "timestamp")) self.revision_timestamp_raw = node.leadingTextRaw() else if (std.mem.eql(u8, name, "model")) self.model_raw = node.leadingTextRaw() else if (std.mem.eql(u8, name, "format")) self.format_raw = node.leadingTextRaw() else if (std.mem.eql(u8, name, "text")) self.text_raw = node.leadingTextRaw();
-        } else if (node.depth == 3 and std.mem.eql(u8, self.names_by_depth[1], "revision") and std.mem.eql(u8, self.names_by_depth[2], "contributor") and (std.mem.eql(u8, name, "username") or std.mem.eql(u8, name, "ip"))) {
-            self.revision_user_raw = node.leadingTextRaw();
-        }
-        return true;
-    }
-};
+const Capture = wikimedia_dump.PageView;
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
@@ -63,6 +22,97 @@ fn mmapPath(path: []const u8) !Mapped {
     return .{ .bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0) };
 }
 
+const PageItem = struct {
+    capture: Capture,
+    source: wikimedia_dump.PageSource,
+};
+
+fn sliceOffset(container: []const u8, slice: []const u8) !usize {
+    if (slice.len == 0) return 0;
+    const base = @intFromPtr(container.ptr);
+    const ptr = @intFromPtr(slice.ptr);
+    if (ptr < base) return error.InvalidXmlSlice;
+    const offset = ptr - base;
+    if (offset > container.len or slice.len > container.len - offset) return error.InvalidXmlSlice;
+    return offset;
+}
+
+const InputPages = union(enum) {
+    raw: struct {
+        mapped: Mapped,
+        pages: wikimedia_dump.PageIterator,
+    },
+    compressed: struct {
+        walker: wikimedia_dump.MultistreamWalker,
+        pages: wikimedia_dump.PageIterator = .{ .bytes = "" },
+        stream_id: u32 = 0,
+    },
+
+    fn open(io: std.Io, allocator: std.mem.Allocator, path: []const u8, index_path: ?[]const u8) !InputPages {
+        if (std.mem.endsWith(u8, path, ".bz2")) {
+            const index = index_path orelse return error.MultistreamIndexPathRequired;
+            return .{ .compressed = .{ .walker = try wikimedia_dump.MultistreamWalker.open(io, allocator, path, index) } };
+        }
+        var mapped = try mmapPath(path);
+        errdefer mapped.deinit();
+        return .{ .raw = .{ .mapped = mapped, .pages = .{ .bytes = mapped.bytes } } };
+    }
+
+    fn deinit(self: *InputPages) void {
+        switch (self.*) {
+            .raw => |*raw| raw.mapped.deinit(),
+            .compressed => |*compressed| compressed.walker.deinit(),
+        }
+        self.* = undefined;
+    }
+
+    fn next(self: *InputPages) !?PageItem {
+        switch (self.*) {
+            .raw => |*raw| {
+                const capture = try raw.pages.next() orelse return null;
+                const text = capture.text_raw orelse "";
+                return .{
+                    .capture = capture,
+                    .source = .{ .raw_xml = .{
+                        .offset = @intCast(try sliceOffset(raw.mapped.bytes, text)),
+                        .len = text.len,
+                    } },
+                };
+            },
+            .compressed => |*compressed| {
+                while (true) {
+                    if (try compressed.pages.next()) |capture| {
+                        const text = capture.text_raw orelse "";
+                        return .{
+                            .capture = capture,
+                            .source = .{ .multistream_bz2 = .{
+                                .stream_id = compressed.stream_id,
+                                .offset = try sliceOffset(compressed.pages.bytes, text),
+                                .len = text.len,
+                            } },
+                        };
+                    }
+                    const member = try compressed.walker.next() orelse return null;
+                    compressed.stream_id = member.id;
+                    compressed.pages = .{ .bytes = member.bytes };
+                }
+            },
+        }
+    }
+};
+
+fn writeStreamTable(io: std.Io, allocator: std.mem.Allocator, dump_path: []const u8, index_path: []const u8, output_path: []const u8) !void {
+    var file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .truncate = true });
+    defer file.close(io);
+    var buffer: [128 * 1024]u8 = undefined;
+    var writer = file.writer(io, &buffer);
+    try writer.interface.writeAll(wikimedia_dump.stream_index_header ++ "\n");
+    var streams = try wikimedia_dump.StreamIterator.open(io, allocator, dump_path, index_path);
+    defer streams.close();
+    while (try streams.next()) |stream|
+        try writer.interface.print("{d}\t{d}\t{d}\n", .{ stream.id, stream.span.offset, stream.span.len });
+    try writer.interface.flush();
+}
 fn writeAllFile(io: std.Io, path: []const u8, bytes: []const u8) !void {
     var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
     defer file.close(io);
@@ -80,6 +130,38 @@ fn writeTsvField(w: *std.Io.Writer, text: []const u8) !void {
         '\n' => try w.writeAll("\\n"),
         else => try w.writeByte(ch),
     };
+}
+
+fn writePageIndexRow(
+    w: *std.Io.Writer,
+    source: wikimedia_dump.PageSource,
+    title: []const u8,
+    redirect: ?[]const u8,
+    page_id: u64,
+    revision_id: u64,
+    revision_timestamp: []const u8,
+    revision_user: []const u8,
+    content_model: []const u8,
+    ns: u32,
+    has_source: bool,
+    source_needs_decode: bool,
+) !void {
+    switch (source) {
+        .raw_xml => |loc| try w.print("{d}\t{d}\t", .{ loc.offset, loc.len }),
+        .multistream_bz2 => |loc| try w.print("{d}\t{d}\t{d}\t", .{ loc.stream_id, loc.offset, loc.len }),
+    }
+    try w.print("{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{d}\n", .{
+        title,
+        redirect orelse "",
+        page_id,
+        revision_id,
+        revision_timestamp,
+        revision_user,
+        content_model,
+        ns,
+        @intFromBool(has_source),
+        @intFromBool(source_needs_decode),
+    });
 }
 
 const UsageCountMap = std.StringHashMapUnmanaged(u64);
@@ -192,12 +274,20 @@ pub fn main(init: std.process.Init) !void {
     if (args.len == 4 and !emit_page_index and !usage_only) return error.Usage;
     const input_path = args[1];
     const output_root = args[2];
+    const compressed = std.mem.endsWith(u8, input_path, ".bz2");
+    const multistream_index_path: ?[]const u8 = if (compressed)
+        try wikimedia_dump.deriveMultistreamIndexPath(init.arena.allocator(), input_path)
+    else
+        null;
     const modules_dir = try std.fmt.allocPrint(init.arena.allocator(), "{s}/modules", .{output_root});
     const manifest_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/manifest.jsonl", .{output_root});
     const redirects_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/module-redirects.tsv", .{output_root});
     const page_index_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/page-index.tsv", .{output_root});
+    const stream_index_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/dump-streams.tsv", .{output_root});
     const usage_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/lua-usage.tsv", .{output_root});
     try std.Io.Dir.cwd().createDirPath(init.io, modules_dir);
+    if (emit_page_index and compressed)
+        try writeStreamTable(init.io, init.arena.allocator(), input_path, multistream_index_path.?, stream_index_path);
 
     var page_index_file: ?std.Io.File = if (emit_page_index)
         try std.Io.Dir.cwd().createFile(init.io, page_index_path, .{ .truncate = true })
@@ -207,6 +297,7 @@ pub fn main(init: std.process.Init) !void {
     var page_index_buf: [256 * 1024]u8 = undefined;
     var page_index_writer = if (page_index_file) |*file| file.writer(init.io, &page_index_buf) else null;
     const pw: ?*std.Io.Writer = if (page_index_writer) |*writer| &writer.interface else null;
+    if (compressed) if (pw) |writer| try writer.writeAll(wikimedia_dump.page_index_v2_header ++ "\n");
 
     var usage_file: ?std.Io.File = if (emit_page_index or usage_only)
         try std.Io.Dir.cwd().createFile(init.io, usage_path, .{ .truncate = true })
@@ -237,28 +328,21 @@ pub fn main(init: std.process.Init) !void {
     var manifest_writer = manifest_file.writer(init.io, &manifest_buf);
     const mw = &manifest_writer.interface;
 
-    var mapped = try mmapPath(input_path);
-    defer mapped.deinit();
-    var parser = StreamParser.init(std.heap.smp_allocator);
-    defer parser.deinit();
+    var input = try InputPages.open(init.io, std.heap.smp_allocator, input_path, multistream_index_path);
+    defer input.deinit();
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
-    var pos: usize = 0;
     var pages: usize = 0;
     var modules: usize = 0;
     var redirects: usize = 0;
     var source_bytes: u64 = 0;
-    while (std.mem.indexOfPos(u8, mapped.bytes, pos, "<page>")) |start| {
-        const end_start = std.mem.indexOfPos(u8, mapped.bytes, start, "</page>") orelse return error.TruncatedXml;
-        const page_end = end_start + "</page>".len;
-        const page = mapped.bytes[start..page_end];
-        pos = page_end;
+    while (try input.next()) |item| {
+        const capture = item.capture;
+        const page = capture.raw;
         pages += 1;
         const looks_like_module = std.mem.indexOf(u8, page, "<ns>828</ns>") != null;
         if (!emit_page_index and !usage_only and !looks_like_module) continue;
 
-        var capture: Capture = .{};
-        try parser.parse(page, &capture, Capture.onNode);
         var decoded_title: ?[]const u8 = null;
         var decoded_redirect: ?[]const u8 = null;
         var indexed_page_id: ?u64 = null;
@@ -282,14 +366,6 @@ pub fn main(init: std.process.Init) !void {
             const revision_timestamp_raw = capture.revision_timestamp_raw orelse return error.InvalidPageMetadata;
             const model_raw = capture.model_raw orelse return error.InvalidPageMetadata;
             const text_raw = capture.text_raw orelse "";
-            const source_offset: u64 = if (text_raw.len == 0) 0 else blk: {
-                const base = @intFromPtr(mapped.bytes.ptr);
-                const ptr = @intFromPtr(text_raw.ptr);
-                if (ptr < base) return error.InvalidXmlSlice;
-                const offset = ptr - base;
-                if (offset > mapped.bytes.len or text_raw.len > mapped.bytes.len - offset) return error.InvalidXmlSlice;
-                break :blk @intCast(offset);
-            };
             const title = try xml_decode.decodeSinglePassAlloc(arena.allocator(), title_raw);
             const revision_timestamp = try xml_decode.decodeSinglePassAlloc(arena.allocator(), revision_timestamp_raw);
             const revision_user = try xml_decode.decodeSinglePassAlloc(arena.allocator(), capture.revision_user_raw orelse "");
@@ -298,20 +374,20 @@ pub fn main(init: std.process.Init) !void {
             if (std.mem.indexOfAny(u8, title, "\t\r\n") != null) return error.InvalidPageTitle;
             if (redirect) |target| if (std.mem.indexOfAny(u8, target, "\t\r\n") != null) return error.InvalidPageTitle;
             if (content_model.len == 0 or std.mem.indexOfAny(u8, revision_timestamp, "\t\r\n") != null or std.mem.indexOfAny(u8, revision_user, "\t\r\n") != null or std.mem.indexOfAny(u8, content_model, "\t\r\n") != null) return error.InvalidPageMetadata;
-            if (pw) |page_writer| try page_writer.print("{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{d}\n", .{
-                source_offset,
-                text_raw.len,
+            if (pw) |page_writer| try writePageIndexRow(
+                page_writer,
+                item.source,
                 title,
-                redirect orelse "",
+                redirect,
                 page_id,
                 revision_id,
                 revision_timestamp,
                 revision_user,
                 content_model,
                 parsed_ns,
-                @intFromBool(capture.text_raw != null),
-                @intFromBool(std.mem.indexOfScalar(u8, text_raw, '&') != null),
-            });
+                capture.text_raw != null,
+                std.mem.indexOfScalar(u8, text_raw, '&') != null,
+            );
             decoded_title = title;
             decoded_redirect = redirect;
             indexed_page_id = page_id;

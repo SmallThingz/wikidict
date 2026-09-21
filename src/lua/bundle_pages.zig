@@ -4,6 +4,7 @@ const A = std.mem.Allocator;
 const lua_program = @import("lua_program");
 const xml_decode = @import("shared_xml_decode");
 const preprocess = @import("lua_wikitext_preprocess");
+const wikimedia_dump = @import("wikimedia_dump");
 const ExternalData = lua_program.WikitextProvider.ExternalData;
 const CategoryStats = lua_program.WikitextProvider.CategoryStats;
 const InterfaceMessage = lua_program.WikitextProvider.InterfaceMessage;
@@ -17,7 +18,7 @@ const CategoryTreeRange = struct {
 };
 
 const InterfaceMessageEntry = struct { source_raw: ?[]const u8 };
-const CorpusPage = struct { title: []const u8, offset: u64, len: usize, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
+const CorpusPage = struct { title: []const u8, source: wikimedia_dump.PageSource, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
 
 const max_transclusion_cache_bytes: usize = 64 * 1024 * 1024;
 const max_transclusion_cache_entries: usize = 65_536;
@@ -38,7 +39,7 @@ pub const Provider = struct {
     root: []const u8,
     corpus_pages: std.StringHashMapUnmanaged(CorpusPage) = .empty,
     corpus_pages_storage: ?Mapped = null,
-    dump_file: ?std.Io.File = null,
+    dump_reader: ?wikimedia_dump.SourceReader = null,
     transclusion_body_cache: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
     transclusion_body_cache_bytes: usize = 0,
     transclusion_seen: []usize = &.{},
@@ -90,7 +91,7 @@ pub const Provider = struct {
     pub fn deinit(self: *Provider) void {
         self.corpus_pages.deinit(self.a);
         if (self.corpus_pages_storage) |*mapped| mapped.deinit();
-        if (self.dump_file) |*file| file.close(self.io);
+        if (self.dump_reader) |*reader| reader.deinit();
         var cached = self.transclusion_body_cache.valueIterator();
         while (cached.next()) |body| self.a.free(body.*);
         self.transclusion_body_cache.deinit(self.a);
@@ -463,55 +464,54 @@ pub const Provider = struct {
     fn loadCorpusPages(self: *Provider, dump_path: []const u8) !void {
         var mapped = (try self.mapOptional("page-index.tsv")) orelse return;
         errdefer mapped.deinit();
-        var file = try std.Io.Dir.cwd().openFile(self.io, dump_path, .{});
-        errdefer file.close(self.io);
-        const dump_size = (try file.stat(self.io)).size;
+        const kind = wikimedia_dump.pageIndexKind(mapped.bytes);
+        const stream_index_path = if (kind == .multistream_bz2)
+            try std.fs.path.join(self.a, &.{ self.root, "dump-streams.tsv" })
+        else
+            null;
+        defer if (stream_index_path) |path| self.a.free(path);
+        var reader = try wikimedia_dump.SourceReader.open(self.io, self.a, std.heap.smp_allocator, dump_path, kind, stream_index_path);
+        errdefer reader.deinit();
+
         var pages: std.StringHashMapUnmanaged(CorpusPage) = .empty;
         errdefer pages.deinit(self.a);
-        const page_count = std.mem.count(u8, mapped.bytes, "\n") + @intFromBool(mapped.bytes.len != 0 and mapped.bytes[mapped.bytes.len - 1] != '\n');
+        const line_count = std.mem.count(u8, mapped.bytes, "\n") + @intFromBool(mapped.bytes.len != 0 and mapped.bytes[mapped.bytes.len - 1] != '\n');
+        const page_count = line_count -| @intFromBool(kind == .multistream_bz2);
         try pages.ensureTotalCapacity(self.a, @intCast(page_count));
         const bits_per_word = @bitSizeOf(usize);
         const seen_words = self.a.alloc(usize, (page_count + bits_per_word - 1) / bits_per_word) catch null;
         errdefer if (seen_words) |words| self.a.free(words);
         if (seen_words) |words| @memset(words, 0);
+
         var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
         var ordinal: usize = 0;
         while (lines.next()) |line| {
-            if (line.len == 0) continue;
+            if (line.len == 0 or line[0] == '#') continue;
+            const indexed = try wikimedia_dump.parsePageIndexLine(kind, line);
             defer ordinal += 1;
-            var fields = std.mem.splitScalar(u8, line, '\t');
-            const offset = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
-            const len = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10);
-            const title = fields.next() orelse return error.InvalidPageIndex;
-            const redirect_raw = fields.next() orelse return error.InvalidPageIndex;
-            const page_id = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
-            const revision_id = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
-            const revision_timestamp = fields.next() orelse return error.InvalidPageIndex;
-            const revision_user = fields.next() orelse return error.InvalidPageIndex;
-            const content_model = fields.next() orelse return error.InvalidPageIndex;
-            const ns = std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10) catch return error.InvalidPageIndex;
-            const has_source = fields.next() orelse return error.InvalidPageIndex;
-            const needs_decode_raw = fields.next() orelse return error.InvalidPageIndex;
-            if (title.len == 0 or revision_timestamp.len == 0 or content_model.len == 0 or
-                (!std.mem.eql(u8, has_source, "0") and !std.mem.eql(u8, has_source, "1")) or
-                (!std.mem.eql(u8, needs_decode_raw, "0") and !std.mem.eql(u8, needs_decode_raw, "1")) or
-                fields.next() != null) return error.InvalidPageIndex;
-            const source_needs_decode = std.mem.eql(u8, needs_decode_raw, "1");
-            const redirect = if (redirect_raw.len == 0) null else redirect_raw;
-            const end = std.math.add(u64, offset, len) catch return error.InvalidPageIndex;
-            if (end > dump_size) return error.InvalidPageIndex;
-            const result = try pages.getOrPut(self.a, title);
+            const result = try pages.getOrPut(self.a, indexed.title);
             // Wikimedia dump jobs can observe a title before and after a delete/recreate
             // while walking page IDs. The later row is the state seen later in the dump.
-            result.key_ptr.* = title;
-            result.value_ptr.* = .{ .title = title, .offset = offset, .len = len, .page_id = page_id, .revision_id = revision_id, .revision_timestamp = revision_timestamp, .revision_user = revision_user, .content_model = content_model, .ns = ns, .ordinal = ordinal, .source_needs_decode = source_needs_decode, .redirect = redirect };
+            result.key_ptr.* = indexed.title;
+            result.value_ptr.* = .{
+                .title = indexed.title,
+                .source = indexed.source,
+                .page_id = indexed.page_id,
+                .revision_id = indexed.revision_id,
+                .revision_timestamp = indexed.revision_timestamp,
+                .revision_user = indexed.revision_user,
+                .content_model = indexed.content_model,
+                .ns = indexed.ns,
+                .ordinal = ordinal,
+                .source_needs_decode = indexed.source_needs_decode,
+                .redirect = indexed.redirect,
+            };
         }
         self.corpus_pages = pages;
         self.corpus_pages_storage = mapped;
-        self.dump_file = file;
+        self.dump_reader = reader;
         self.transclusion_seen = seen_words orelse &.{};
     }
-
     pub fn isCanonicalPage(self: *const Provider, title: []const u8, ordinal: u64) bool {
         const page = self.corpus_pages.get(title) orelse return false;
         const wanted = std.math.cast(usize, ordinal) orelse return false;
@@ -519,14 +519,11 @@ pub const Provider = struct {
     }
 
     fn readCorpusSource(self: *Provider, a: A, page: CorpusPage) ![]const u8 {
-        if (page.len == 0) return "";
-        const file = if (self.dump_file) |*value| value else return error.MissingDump;
-        const raw = try a.alloc(u8, page.len);
-        errdefer a.free(raw);
-        if (try file.readPositionalAll(self.io, raw, page.offset) != raw.len) return error.TruncatedDump;
+        const reader = if (self.dump_reader) |*value| value else return error.MissingDump;
+        const raw = try reader.readAlloc(a, page.source);
         if (!page.source_needs_decode) return raw;
         const decoded = try xml_decode.decodeSinglePassAlloc(a, raw);
-        a.free(raw);
+        if (raw.len != 0) a.free(raw);
         return decoded;
     }
 
@@ -572,9 +569,9 @@ pub const Provider = struct {
         if (self.transclusion_body_cache.get(page.page_id)) |body| return .{ .text = body, .title = page.title, .borrowed = true };
 
         const raw = try self.readCorpusSource(a, page);
-        defer if (page.len != 0) a.free(raw);
+        defer if (wikimedia_dump.sourceLen(page.source) != 0) a.free(raw);
         const body = try preprocess.transcludeDecodedAlloc(a, raw);
-        if (page.ns != 10 or page.len > max_transclusion_cache_entry_bytes) return .{ .text = body, .title = page.title, .borrowed = false };
+        if (page.ns != 10 or wikimedia_dump.sourceLen(page.source) > max_transclusion_cache_entry_bytes) return .{ .text = body, .title = page.title, .borrowed = false };
 
         const bits_per_word = @bitSizeOf(usize);
         const word_index = page.ordinal / bits_per_word;
@@ -738,8 +735,7 @@ test "provider loads exact Wikibase sitelinks and fails closed on unknown pairs"
     defer a.free(snapshot_path);
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = snapshot_path,
-        .data =
-        "# entity_id\tglobal_site_id\tpage_title\n" ++
+        .data = "# entity_id\tglobal_site_id\tpage_title\n" ++
             "Q42\tenwiki\tDouglas Adams\n" ++
             "Q42\t*\t\n" ++
             "Q1\tenwiktionary\t\n" ++
@@ -768,8 +764,7 @@ test "provider loads pinned Wikibase entity text and fails closed on unknown ent
     defer a.free(snapshot_path);
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = snapshot_path,
-        .data =
-        "# entity_id\tlabel\tdescription\n" ++
+        .data = "# entity_id\tlabel\tdescription\n" ++
             "Q42\tDouglas Adams\tEnglish writer and humorist\n" ++
             "Q1\t\tuniverse\n" ++
             "Q2\tEarth\t\n",
@@ -801,8 +796,7 @@ test "provider loads pinned category tree members and fails closed on unknown ca
     defer a.free(snapshot_path);
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = snapshot_path,
-        .data =
-        "# category_db_key\tpage_title_1...\n" ++
+        .data = "# category_db_key\tpage_title_1...\n" ++
             "English_terms_prefixed_with_un-\tunable\tunclear\n" ++
             "Empty_category\n",
     });
@@ -830,8 +824,7 @@ test "provider loads complete known-language registry" {
     defer a.free(snapshot_path);
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = snapshot_path,
-        .data =
-        "# code\tname\n" ++
+        .data = "# code\tname\n" ++
             "en\tEnglish\n" ++
             "es\tespañol\n",
     });
@@ -855,8 +848,7 @@ test "provider loads pinned file metadata and fails closed on unknown files" {
     defer a.free(snapshot_path);
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = snapshot_path,
-        .data =
-        "# title\texists\twidth\theight\n" ++
+        .data = "# title\texists\twidth\theight\n" ++
             "File:Example.svg\t1\t640\t480\n" ++
             "File:Missing.svg\t0\t0\t0\n",
     });

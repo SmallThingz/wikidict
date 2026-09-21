@@ -10,14 +10,6 @@ pub fn build(b: *std.Build) void {
         "Prioritize performance, safety, or binary size",
     ) orelse .ReleaseSafe;
     const test_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
-    const zxml_dep = b.dependency("zxml", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const zxml_dep_test = b.dependency("zxml", .{
-        .target = target,
-        .optimize = test_optimize,
-    });
     const shared_xml_decode_mod = b.createModule(.{
         .root_source_file = b.path("src/shared/xml_decode.zig"),
         .target = target,
@@ -27,6 +19,18 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/shared/xml_decode.zig"),
         .target = target,
         .optimize = test_optimize,
+    });
+    const wikimedia_dump_mod = b.createModule(.{
+        .root_source_file = b.path("src/shared/wikimedia_dump.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const wikimedia_dump_mod_test = b.createModule(.{
+        .root_source_file = b.path("src/shared/wikimedia_dump.zig"),
+        .target = target,
+        .optimize = test_optimize,
+        .link_libc = true,
     });
     const bundle_protocol_mod = b.createModule(.{
         .root_source_file = b.path("src/lua/bundle_protocol.zig"),
@@ -99,16 +103,20 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const module_extract_exe = addCliExecutable(b, "dict-module-extract", b.path("src/lua/module_extract_main.zig"), target, optimize, &.{
-        .{ .name = "zxml", .module = zxml_dep.module("zxml") },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
         .{ .name = "lua_usage", .module = lua_usage_mod },
+        .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod },
     });
+    module_extract_exe.root_module.link_libc = true;
+    module_extract_exe.root_module.linkSystemLibrary("bz2", .{});
     const blob_build_exe = addCliExecutable(b, "dict-blob-build", b.path("tools/blob_build.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
-        .{ .name = "zxml", .module = zxml_dep.module("zxml") },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
+        .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod },
         .{ .name = "bundle_protocol", .module = bundle_protocol_mod },
     });
+    blob_build_exe.root_module.link_libc = true;
+    blob_build_exe.root_module.linkSystemLibrary("bz2", .{});
     const blob_verify_exe = addCliExecutable(b, "dict-blob-verify", b.path("tools/blob_verify.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
     });
@@ -195,7 +203,7 @@ pub fn build(b: *std.Build) void {
     ffi_step.dependOn(&ffi_header_install.step);
 
     const module_extract_run = addRunArtifactCommand(b, module_extract_exe, &.{}, b.args);
-    addPublicRunStep(b, "extract-modules", "Extract Scribunto modules from a Wiktionary XML dump", module_extract_run, &.{});
+    addPublicRunStep(b, "extract-modules", "Extract Scribunto modules directly from a Wiktionary multistream dump", module_extract_run, &.{});
 
     const blob_verify_run = addRunArtifactCommand(b, blob_verify_exe, &.{}, b.args);
     addPublicRunStep(b, "verify-blobs", "Verify compiled blob framing and presentation records", blob_verify_run, &.{});
@@ -226,6 +234,11 @@ pub fn build(b: *std.Build) void {
         .root_module = blob_decoder_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const wikimedia_dump_tests = b.addTest(.{
+        .root_module = wikimedia_dump_mod_test,
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    wikimedia_dump_tests.root_module.linkSystemLibrary("bz2", .{});
     const blob_query_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/frontend/main.zig"),
@@ -251,13 +264,14 @@ pub fn build(b: *std.Build) void {
             .optimize = test_optimize,
             .link_libc = true,
             .imports = &.{
-                .{ .name = "zxml", .module = zxml_dep_test.module("zxml") },
                 .{ .name = "xml_decode", .module = shared_xml_decode_mod_test },
+                .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod_test },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     lua_tests.root_module.linkSystemLibrary("LLVM", .{ .use_pkg_config = .no });
+    lua_tests.root_module.linkSystemLibrary("bz2", .{});
     const lua_static_fields_test_mod = b.createModule(.{
         .root_source_file = b.path("src/lua/abi/static_fields.zig"),
         .target = target,
@@ -354,6 +368,7 @@ pub fn build(b: *std.Build) void {
     const run_blob_encoder_tests = b.addRunArtifact(blob_encoder_tests);
     const run_blob_decoder_tests = b.addRunArtifact(blob_decoder_tests);
     const run_blob_query_tests = b.addRunArtifact(blob_query_tests);
+    const run_wikimedia_dump_tests = b.addRunArtifact(wikimedia_dump_tests);
     const run_lua_tests = b.addRunArtifact(lua_tests);
     const run_lua_stdlib_tests = b.addRunArtifact(lua_stdlib_tests);
     const run_lua_ustring_tests = b.addRunArtifact(lua_ustring_tests);
@@ -363,7 +378,8 @@ pub fn build(b: *std.Build) void {
     blob_encoder_tests.step.dependOn(&run_encoder_tests.step);
     blob_decoder_tests.step.dependOn(&run_blob_encoder_tests.step);
     blob_query_tests.step.dependOn(&run_blob_decoder_tests.step);
-    lua_tests.step.dependOn(&run_blob_query_tests.step);
+    wikimedia_dump_tests.step.dependOn(&run_blob_query_tests.step);
+    lua_tests.step.dependOn(&run_wikimedia_dump_tests.step);
     lua_stdlib_tests.step.dependOn(&run_lua_tests.step);
     lua_ustring_tests.step.dependOn(&run_lua_stdlib_tests.step);
     lua_scribunto_tests.step.dependOn(&run_lua_ustring_tests.step);

@@ -318,6 +318,7 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     const preprocess = try sourcePath(a, "src/lua/wikitext/preprocess.zig");
     const expression = try sourcePath(a, "src/lua/wikitext/expression.zig");
     const shared_xml_decode = try sourcePath(a, "src/shared/xml_decode.zig");
+    const wikimedia_dump = try sourcePath(a, "src/shared/wikimedia_dump.zig");
     const output = try std.fs.path.join(a, &.{ llvm_dir, "worker.o" });
     const emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{output});
     const root = try std.fmt.allocPrint(a, "-Mroot={s}", .{worker_core});
@@ -334,10 +335,11 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     const preprocess_mod = try std.fmt.allocPrint(a, "-Mlua_wikitext_preprocess={s}", .{preprocess});
     const expression_mod = try std.fmt.allocPrint(a, "-Mlua_wikitext_expression={s}", .{expression});
     const xml_decode_mod = try std.fmt.allocPrint(a, "-Mshared_xml_decode={s}", .{shared_xml_decode});
+    const wikimedia_dump_mod = try std.fmt.allocPrint(a, "-Mwikimedia_dump={s}", .{wikimedia_dump});
 
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-lc", emit });
-    try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", "--dep", "shared_xml_decode", "--dep", "lua_wikitext_preprocess", root });
+    try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", "--dep", "shared_xml_decode", "--dep", "lua_wikitext_preprocess", "--dep", "wikimedia_dump", root });
     try argv.appendSlice(a, &.{
         "--dep",                     "lua_static_fields",         runtime_mod,
         "--dep",                     "zig_runtime",               "--dep",
@@ -356,6 +358,7 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
         "--dep",                     "shared_xml_decode",         scribunto_mod,
         static_fields_mod,           globals_mod,                 program_metadata_mod,
         preprocess_mod,              expression_mod,              xml_decode_mod,
+        wikimedia_dump_mod,
     });
     try stage(io, marker, "compile optimized build-only Lua worker object", argv.items);
     return output;
@@ -391,7 +394,7 @@ fn linkNativeWorker(
     try writeResponseFile(io, a, response_path, lua_objects);
     const response_arg = try std.fmt.allocPrint(a, "@{s}", .{response_path});
     try stage(io, marker, "link optimized native Lua worker", &.{
-        paths.zig, "cc", "-O2", "-pthread", "-s", main_c, worker, response_arg, "-lm", "-lc", "-o", output,
+        paths.zig, "cc", "-O2", "-pthread", "-s", main_c, worker, response_arg, "-lm", "-lbz2", "-lc", "-o", output,
     });
 }
 
