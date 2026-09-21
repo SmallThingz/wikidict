@@ -144,6 +144,19 @@ pub const Expander = struct {
         self.attach();
     }
 
+    fn ensureScribunto(self: *Expander) !void {
+        if (self.runtime.getGlobal(self.mw_slot) == .table) return;
+        const install = self.install_scribunto orelse return error.MissingScribuntoInstaller;
+        try install(
+            &self.scribunto_state,
+            self.runtime.allocator,
+            self.runtime,
+            self.env_slot,
+            self.string_slot,
+            self.mw_slot,
+        );
+    }
+
     fn recordDisplayTitle(self: *Expander, value: []const u8) ![]const u8 {
         const a = self.page_allocator orelse self.runtime.allocator;
         const previous = self.display_title;
@@ -245,7 +258,6 @@ pub const Expander = struct {
 
     pub fn expandFragment(self: *Expander, title: []const u8, source: []const u8, now_unix: ?i64) anyerror![]const u8 {
         self.beginPage(title, source, now_unix);
-        if (self.install_scribunto) |install| try install(&self.scribunto_state, self.runtime.allocator, self.runtime, self.env_slot, self.string_slot, self.mw_slot);
         const stripped = try preprocess.stripDecodedComments(self.runtime.allocator, source);
         defer self.runtime.allocator.free(stripped);
         const params = try self.runtime.newTable();
@@ -653,6 +665,7 @@ pub const Expander = struct {
     }
 
     fn unicodeCase(self: *Expander, text: []const u8, upper: bool) anyerror![]const u8 {
+        try self.ensureScribunto();
         const mw = self.runtime.getGlobal(self.mw_slot);
         if (mw != .table) return error.MissingMw;
         const ustring = try self.runtime.getIndex(mw, .{ .string = "ustring" });
@@ -665,6 +678,7 @@ pub const Expander = struct {
     }
 
     fn contentLanguageFirstCase(self: *Expander, text: []const u8, upper: bool) anyerror![]const u8 {
+        try self.ensureScribunto();
         const mw = self.runtime.getGlobal(self.mw_slot);
         if (mw != .table) return error.MissingMw;
         const get_language = try self.runtime.getIndex(mw, .{ .string = "getContentLanguage" });
@@ -1001,6 +1015,7 @@ pub const Expander = struct {
 
     fn expandUrlencodeParser(self: *Expander, raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const source = try self.expandWikitext(raw, params, host_title, depth + 1);
+        try self.ensureScribunto();
         const mw = self.runtime.getGlobal(self.mw_slot);
         const uri = try self.runtime.getIndex(mw, .{ .string = "uri" });
         const encode = try self.runtime.getIndex(uri, .{ .string = "encode" });
@@ -1010,7 +1025,8 @@ pub const Expander = struct {
         if (args.len != 0) {
             const mode = std.mem.trim(u8, try self.expandWikitext(args[0], params, host_title, depth + 1), " \t\r\n");
             if (mode.len != 0) {
-                call_args[1] = .{ .string = mode };
+                const scribunto_mode = if (std.ascii.eqlIgnoreCase(mode, "PARAM")) "QUERY" else mode;
+                call_args[1] = .{ .string = scribunto_mode };
                 count = 2;
             }
         }
@@ -1835,6 +1851,22 @@ fn installTestInvoke(
     try installTestHost(runtime, string_slot, mw_slot);
 }
 
+const ScribuntoInstallProbe = struct {
+    var calls = std.atomic.Value(usize).init(0);
+
+    fn install(
+        _: *?*anyopaque,
+        _: std.mem.Allocator,
+        runtime: *rt.Context,
+        _: u32,
+        string_slot: u32,
+        mw_slot: u32,
+    ) !void {
+        _ = calls.fetchAdd(1, .monotonic);
+        try installTestHost(runtime, string_slot, mw_slot);
+    }
+};
+
 const TestProvider = struct {
     const category_tree_members = [_][]const u8{ "alpha", "beta" };
     const interwiki_rows = [_]Provider.InterwikiRow{
@@ -1998,6 +2030,8 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("Monday|50|December|42|420|20240304050607|2024-03-4|Test editor", current_magic);
     const site_magic = try expander.expandFragment("Page", "{{SERVER}}|{{SERVERNAME}}", 1_670_803_200);
     try std.testing.expectEqualStrings("//en.wiktionary.org|en.wiktionary.org", site_magic);
+    const urlencode_param = try expander.expandFragment("Page", "{{urlencode:flundra 1°|PARAM}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("flundra+1%C2%B0", urlencode_param);
     const category_tree = try expander.expandFragment(
         "Page",
         "{{#categorytree:English terms prefixed with un-|type=pages|depth=1|namespaces=-|hideprefix=always|hideroot=off|showcount=on}}",
@@ -2220,6 +2254,29 @@ test "missing bundle interwiki metadata fails explicitly" {
         .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
     };
     try std.testing.expectError(error.NotImplemented, Expander.hostSiteInterwikiMap(&expander));
+}
+
+test "plain pages defer Scribunto installation until mw is required" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    ScribuntoInstallProbe.calls.store(0, .monotonic);
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+        .install_scribunto = ScribuntoInstallProbe.install,
+    };
+
+    try std.testing.expectEqualStrings("plain", try expander.expandFragment("Page", "plain", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 0), ScribuntoInstallProbe.calls.load(.monotonic));
+    try std.testing.expectEqualStrings("HÉ", try expander.expandFragment("Page", "{{uc:hé}}", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 1), ScribuntoInstallProbe.calls.load(.monotonic));
 }
 
 test "native AOT page boundary resets shared Scribunto state" {

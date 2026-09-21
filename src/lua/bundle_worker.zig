@@ -97,7 +97,7 @@ const Engine = struct {
         if (request.now_unix != self.requested_now_unix) return error.BundleTimeChanged;
         if (!self.provider.isCanonicalPage(request.title, request.page_ordinal)) return null;
         stage.* = "install";
-        var ctx = try self.program.initContext(page_a);
+        var ctx = try self.program.initPageContext(page_a);
         defer ctx.deinit();
         var expander = lua_program.initExpander(&ctx, self.provider.api());
         stage.* = "expand";

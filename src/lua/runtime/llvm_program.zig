@@ -420,7 +420,7 @@ pub const Program = struct {
         return .{ .table = table };
     }
 
-    pub fn initContext(self: *Program, allocator: std.mem.Allocator) !rt.Context {
+    fn initContextBase(self: *Program, allocator: std.mem.Allocator) !rt.Context {
         var ctx = try rt.Context.initProgram(
             allocator,
             self.global_keys.len,
@@ -443,6 +443,16 @@ pub const Program = struct {
         );
         try rt.bindGlobalTable(&ctx, &self.global_shape, globals_abi.id("_G"));
         _ = try ctx.bootstrapProgram();
+        return ctx;
+    }
+
+    pub fn initPageContext(self: *Program, allocator: std.mem.Allocator) !rt.Context {
+        return self.initContextBase(allocator);
+    }
+
+    pub fn initContext(self: *Program, allocator: std.mem.Allocator) !rt.Context {
+        var ctx = try self.initContextBase(allocator);
+        errdefer ctx.deinit();
         ctx.beginEagerBootstrap();
         const eager_status = dict_lua_program_eager_init(&ctx);
         ctx.endEagerBootstrap();
