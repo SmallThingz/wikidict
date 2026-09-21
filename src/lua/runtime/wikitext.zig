@@ -529,7 +529,8 @@ pub const Expander = struct {
                 positional += 1;
             }
         }
-        try self.lazy_template_args.append(self.runtime.allocator, .{
+        const page_a = self.page_allocator orelse self.runtime.allocator;
+        try self.lazy_template_args.append(page_a, .{
             .target = out,
             .raw_values = raw_values,
             .caller_params = caller_params,
