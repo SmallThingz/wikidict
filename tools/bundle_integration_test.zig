@@ -11,6 +11,8 @@ const source =
     "# Synth fork: {{#invoke:IntegrationSynth|run|forked}}\n" ++
     "# Pure fork: {{#invoke:IntegrationPureDataProbe|run}}\n" ++
     "# Captured fork: {{#invoke:IntegrationCapturedProbe|run}}\n" ++
+    "# Repair recovery: {{repair-parent|x=term&lt;t:gloss&gt;}}\n" ++
+    "# Graceful Lua error: {{#invoke:IntegrationForms|fail_probe}}\n" ++
     "# Formatting magic: {{formatnum:11000}} / {{formatnum:1,234.50|R}} / {{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}\n" ++
     "# Title parts: {{#titleparts:A/B/C|1|2}} / {{#titleparts:A/B/C|-1}}\n" ++
     "# Escaped title: {{PAGENAMEE:Appendix:A B/é?x}} / {{FULLPAGENAMEE:Appendix:A B/é?x}}\n" ++
@@ -95,6 +97,12 @@ const module_source =
     \\assert(require(alias_name).mouse == 'mice')
     \\return {
     \\frame_probe = function(frame) return frame.args.x end,
+    \\repair_parent_probe = function(frame)
+    \\    local x = frame:getParent().args.x
+    \\    if string.find(x, '&lt;', 1, true) then error('Invalid page title "Reconstruction:Probe/' .. x .. '" encountered.') end
+    \\    return 'repaired invoke'
+    \\end,
+    \\fail_probe = function() error('fixture failure') end,
     \\random_probe = function(frame) return math.random(1, 10), math.random(1, 10) end,
     \\render_dictionary_fixture = function(frame)
     \\    local auxiliary_title = mw.title.new('Appendix:IntegrationFixture')
@@ -265,6 +273,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "MediaWiki:Mainpage", .ns = 8, .id = 26, .body = "{{ns:Project}}:Main Page" },
         .{ .title = "Appendix:IntegrationFixture", .ns = 100, .id = 21, .body = "a real auxiliary source page" },
         .{ .title = "Template:show-forms", .ns = 10, .id = 10, .body = template_source },
+        .{ .title = "Template:repair-parent", .ns = 10, .id = 17, .body = "{{#invoke:IntegrationForms|repair_parent_probe}}" },
         .{ .title = "Template:forms-alias", .ns = 10, .id = 11, .body = "#REDIRECT [[Template:show-forms]]", .redirect = "Template:show-forms" },
         .{ .title = "Template:Template:nested", .ns = 10, .id = 12, .body = "nested namespace retained" },
         .{ .title = "Template:nested", .ns = 10, .id = 13, .body = "ordinary namespace distinct" },
@@ -398,6 +407,8 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "Synth fork: synth:forked") != null, "synthesized roots materialize in fresh invoke contexts");
     try h.require(std.mem.indexOf(u8, text, "Pure fork: x") != null, "pure-data roots materialize independently in fresh invoke contexts");
     try h.require(std.mem.indexOf(u8, text, "Captured fork: captured:forked") != null, "synthesized callable roots rebuild scalar capture cells in fresh invoke contexts");
+    try h.require(std.mem.indexOf(u8, text, "Repair recovery: repaired invoke") != null, "invalid-title invoke retries entity-escaped inline modifiers once");
+    try h.require(std.mem.indexOf(u8, text, "Graceful Lua error: Lua error in Module:IntegrationForms: fixture failure") != null, "unrepaired Scribunto failures compile as inert error text");
     try h.require(std.mem.indexOf(u8, text, "Formatting magic: 11,000 / 1234.50 / A_B_x_C") != null, "formatting magic is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Title parts: B / A/B") != null, "titleparts is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Escaped title: A_B/%C3%A9%3Fx / Appendix:A_B/%C3%A9%3Fx") != null, "escaped title magic is baked into data");

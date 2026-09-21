@@ -1032,6 +1032,118 @@ pub const Expander = struct {
         return resolve(self.provider.ctx, self.runtime, raw, kind);
     }
 
+    const InvokeOutcome = union(enum) {
+        generated: []const u8,
+        error_markup: []const u8,
+    };
+
+    fn clearInvokeFailure(runtime: *rt.Context) void {
+        runtime.last_error = .nil;
+        runtime.clearAotErrorName();
+    }
+
+    fn invokeFailureDetail(runtime: *const rt.Context, err: anyerror) []const u8 {
+        if (runtime.last_error == .string) return runtime.last_error.string;
+        return runtime.aotErrorName() orelse @errorName(err);
+    }
+
+    fn isInvalidTitleInvokeFailure(detail: []const u8) bool {
+        return std.mem.indexOf(u8, detail, "Invalid page title") != null;
+    }
+
+    fn repairEscapedAnglesAlloc(a: std.mem.Allocator, raw: []const u8) !?[]const u8 {
+        if (std.mem.indexOf(u8, raw, "&lt;") == null or std.mem.indexOf(u8, raw, "&gt;") == null)
+            return null;
+        var out: std.ArrayList(u8) = .empty;
+        var pos: usize = 0;
+        while (pos < raw.len) {
+            if (std.mem.startsWith(u8, raw[pos..], "&lt;")) {
+                try out.append(a, '<');
+                pos += 4;
+            } else if (std.mem.startsWith(u8, raw[pos..], "&gt;")) {
+                try out.append(a, '>');
+                pos += 4;
+            } else {
+                try out.append(a, raw[pos]);
+                pos += 1;
+            }
+        }
+        return @as(?[]const u8, try out.toOwnedSlice(a));
+    }
+
+    fn repairedInvokeArgs(self: *Expander, args: *rt.Table) !?*rt.Table {
+        var changed = false;
+        const repaired = try self.runtime.newTable();
+        var it = args.iterator();
+        while (it.next()) |entry| {
+            var value = entry.value_ptr.*;
+            if (value == .string) if (try repairEscapedAnglesAlloc(self.runtime.allocator, value.string)) |text| {
+                value = .{ .string = text };
+                changed = true;
+            };
+            try repaired.rawSet(self.runtime.allocator, entry.key_ptr.*, value);
+        }
+        return if (changed) repaired else null;
+    }
+
+    fn appendHtmlTextEscaped(out: *std.ArrayList(u8), a: std.mem.Allocator, text: []const u8) !void {
+        for (text) |byte| switch (byte) {
+            '&' => try out.appendSlice(a, "&amp;"),
+            '<' => try out.appendSlice(a, "&lt;"),
+            '>' => try out.appendSlice(a, "&gt;"),
+            else => try out.append(a, byte),
+        };
+    }
+
+    fn scribuntoErrorMarkup(self: *Expander, module_name: []const u8, detail: []const u8) ![]const u8 {
+        const a = self.runtime.allocator;
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(a, "<strong class=\"error\"><span class=\"scribunto-error\">Lua error in ");
+        try appendHtmlTextEscaped(&out, a, module_name);
+        try out.appendSlice(a, ": ");
+        try appendHtmlTextEscaped(&out, a, detail);
+        try out.appendSlice(a, "</span></strong>");
+        return out.toOwnedSlice(a);
+    }
+
+    fn invokeWithRecovery(
+        self: *Expander,
+        module_id: ?u32,
+        module_name: []const u8,
+        function_name: []const u8,
+        invoke_args: *rt.Table,
+        existing_parent: ?Value,
+        parent_title: ?[]const u8,
+        parent_args: ?*rt.Table,
+    ) anyerror!InvokeOutcome {
+        const generated = self.invokeFresh(module_id, module_name, function_name, invoke_args, existing_parent, parent_title, parent_args) catch |err| {
+            if (err != error.AotCallFailed) return err;
+            const first_detail = try self.runtime.allocator.dupe(u8, invokeFailureDetail(self.runtime, err));
+            clearInvokeFailure(self.runtime);
+            if (isInvalidTitleInvokeFailure(first_detail)) {
+                const repaired_invoke_args = try self.repairedInvokeArgs(invoke_args);
+                const repaired_parent_args: ?*rt.Table = if (parent_args) |source|
+                    try self.repairedInvokeArgs(source)
+                else
+                    null;
+                if (repaired_invoke_args != null or repaired_parent_args != null) {
+                    const retry_invoke_args = repaired_invoke_args orelse invoke_args;
+                    var retry_parent_args = parent_args;
+                    if (repaired_parent_args) |table| retry_parent_args = table;
+                    const retried = self.invokeFresh(module_id, module_name, function_name, retry_invoke_args, existing_parent, parent_title, retry_parent_args) catch |retry_err| {
+                        if (retry_err != error.AotCallFailed) return retry_err;
+                        const retry_detail = try self.runtime.allocator.dupe(u8, invokeFailureDetail(self.runtime, retry_err));
+                        clearInvokeFailure(self.runtime);
+                        return .{ .error_markup = try self.scribuntoErrorMarkup(module_name, retry_detail) };
+                    };
+                    return .{ .generated = retried };
+                }
+            }
+            return .{ .error_markup = try self.scribuntoErrorMarkup(module_name, first_detail) };
+        };
+        return .{ .generated = generated };
+    }
+
     fn invokeFresh(
         self: *Expander,
         module_id: ?u32,
@@ -1106,7 +1218,7 @@ pub const Expander = struct {
         const runtime = self.runtime;
         const invoke_args = try self.buildExpandedArgs(if (args.len > 0) args[1..] else &.{}, params, host_title, depth + 1);
         _ = runtime;
-        const generated = try self.invokeFresh(
+        const outcome = try self.invokeWithRecovery(
             if (module_symbol) |symbol| symbol.module_id else null,
             module_name,
             function_name,
@@ -1115,7 +1227,10 @@ pub const Expander = struct {
             host_title,
             params,
         );
-        return self.expandWikitext(generated, params, host_title, depth + 1);
+        return switch (outcome) {
+            .generated => |generated| self.expandWikitext(generated, params, host_title, depth + 1),
+            .error_markup => |markup| markup,
+        };
     }
 
     fn expandTagParser(self: *Expander, raw_tag: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
@@ -1448,7 +1563,10 @@ pub const Expander = struct {
             else => {},
         };
         const parent: ?Value = if (self.runtime.current_frame) |frame| .{ .table = frame } else null;
-        return self.invokeFresh(null, module_name, function_name, invoke_args, parent, null, null);
+        return switch (try self.invokeWithRecovery(null, module_name, function_name, invoke_args, parent, null, null)) {
+            .generated => |generated| generated,
+            .error_markup => |markup| markup,
+        };
     }
 
     fn categoryTreeArg(args: *rt.Table, key: []const u8) ?[]const u8 {
@@ -1731,6 +1849,7 @@ const TestProvider = struct {
         if (std.mem.eql(u8, title, "Wiktionary:Sandbox/Child")) return "relative-project-child";
         if (std.mem.eql(u8, title, "Template:/Child")) return "literal-template-slash-child";
         if (std.mem.eql(u8, title, "Template:Parent")) return "{{/Child}}";
+        if (std.mem.eql(u8, title, "Template:RepairParent")) return "{{#invoke:Test|repair_parent}}";
         if (std.mem.eql(u8, title, "Template:Parent/Child")) return "relative-template-child";
         if (std.mem.eql(u8, title, "Main page")) return "main-transclusion";
         if (std.mem.eql(u8, title, "Wiktionary:Sandbox")) return "project-transclusion";
@@ -1787,6 +1906,8 @@ const TestModule = struct {
         state.* = .{ .value = .{ .number = 0 } };
         try exports.rawSet(ctx.allocator, .{ .string = "stateful" }, try ctx.makeFunctionKnown(4, stateful, &.{state}));
         try exports.rawSet(ctx.allocator, .{ .string = "nested" }, try ctx.makeFunctionKnown(5, nested, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "repair" }, try ctx.makeFunctionKnown(6, repair, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "repair_parent" }, try ctx.makeFunctionKnown(7, repairParent, &.{}));
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
         return out;
@@ -1824,6 +1945,36 @@ const TestModule = struct {
         out[0] = .{ .string = "<ref>{{Hello|R|1}}</ref>" };
         return out;
     }
+    fn repair(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+        if (args.len == 0 or args[0] != .table) return error.FrameExpected;
+        const frame_args = try ctx.getIndex(args[0], .{ .string = "args" });
+        const value = try ctx.getIndex(frame_args, .{ .string = "x" });
+        if (value != .string) return error.StringExpected;
+        if (std.mem.indexOf(u8, value.string, "&lt;") != null) {
+            ctx.last_error = .{ .string = try ctx.allocator.dupe(u8, "Invalid page title \"Reconstruction:Probe/term&lt;t:gloss&gt;\" encountered.") };
+            return error.LuaRaised;
+        }
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "repaired" };
+        return out;
+    }
+    fn repairParent(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+        if (args.len == 0 or args[0] != .table) return error.FrameExpected;
+        const get_parent = try ctx.getIndex(args[0], .{ .string = "getParent" });
+        const parent_result = try ctx.callValue(get_parent, &.{args[0]});
+        defer rt.freeResults(parent_result);
+        if (parent_result.len == 0 or parent_result[0] != .table) return error.FrameExpected;
+        const parent_args = try ctx.getIndex(parent_result[0], .{ .string = "args" });
+        const value = try ctx.getIndex(parent_args, .{ .string = "x" });
+        if (value != .string) return error.StringExpected;
+        if (std.mem.indexOf(u8, value.string, "&lt;") != null) {
+            ctx.last_error = .{ .string = try ctx.allocator.dupe(u8, "Invalid page title \"Reconstruction:Probe/term&lt;t:gloss&gt;\" encountered.") };
+            return error.LuaRaised;
+        }
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "parent repaired" };
+        return out;
+    }
 };
 
 test "native AOT wikitext expands templates parser functions and invoke" {
@@ -1831,7 +1982,7 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     defer arena.deinit();
     var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
     defer runtime.deinit();
-    const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail), rt.stabilize(TestModule.random), rt.stabilize(TestModule.stateful), rt.stabilize(TestModule.nested) };
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail), rt.stabilize(TestModule.random), rt.stabilize(TestModule.stateful), rt.stabilize(TestModule.nested), rt.stabilize(TestModule.repair), rt.stabilize(TestModule.repairParent) };
     runtime.module_root_entries = &functions;
     runtime.configureModules(null, TestModule.lookup, TestModule.name);
     try rt.bindGlobalTable(&runtime, null, 0);
@@ -1953,8 +2104,15 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     var symbolic_expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .resolve_call_symbol = TestProvider.resolveCallSymbol, .get_template_symbol = TestProvider.getTemplateSymbol }, .install_scribunto = installTestInvoke };
     const symbolic = try symbolic_expander.expandFragment("Page", "{{PAGENAME}}|{{@template|Bob|1}}|{{#invoke:@module|@function|x=symbolic}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Page|Hi Bob Y|symbolic", symbolic);
-    try std.testing.expectError(error.AotCallFailed, expander.expandFragment("Page", "{{#invoke:Test|fail}}", 1_670_803_200));
-    try std.testing.expectEqualStrings("NotCallable", runtime.aotErrorName().?);
+    const repaired_invoke = try expander.expandFragment("Page", "{{#invoke:Test|repair|x=term&lt;t:gloss&gt;}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("repaired", repaired_invoke);
+    const repaired_parent = try expander.expandFragment("Page", "{{RepairParent|x=term&lt;t:gloss&gt;}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("parent repaired", repaired_parent);
+    const failed_invoke = try expander.expandFragment("Page", "{{#invoke:Test|fail}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, failed_invoke, "class=\"scribunto-error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, failed_invoke, "Lua error in Module:Test: NotCallable") != null);
+    try std.testing.expect(runtime.aotErrorName() == null);
+    try std.testing.expect(runtime.last_error == .nil);
 }
 
 test "bundle title magic words resolve subject talk and parameterized namespaces" {
