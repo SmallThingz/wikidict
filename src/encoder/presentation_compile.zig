@@ -817,6 +817,21 @@ pub const Renderer = struct {
             const line = std.mem.trimEnd(u8, input[start..end], "\r");
             pos = if (end < input.len) end + 1 else end;
             const clean = trim(line);
+            // TemplateStyles commonly precedes a NavFrame on the same line.
+            // Consume this non-presentational extension before classifying the
+            // following block, or its nested wiki table becomes inline text.
+            if (syntax.tagAt(clean, 0)) |tag| {
+                if (!tag.closing and tag.is("templatestyles")) {
+                    if (syntax.matchingTag(clean, tag)) |pair| {
+                        if (para) |p| {
+                            try self.paragraph(&blocks, input[p..start]);
+                            para = null;
+                        }
+                        pos = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + pair.end;
+                        continue;
+                    }
+                }
+            }
             const heading = headingLine(clean);
             var multiline_data: ?[]const u8 = null;
             if (starts(clean, "{{multitrans|")) if (syntax.balanced(clean, 0)) |pair| {
@@ -1887,4 +1902,26 @@ test "packed compiler span flags preserve DPR2 bit positions" {
         .{ .flags = .{ .strike = true }, .byte = 1 << 6 },
         .{ .flags = .{ .underline = true }, .byte = 1 << 7 },
     }) |case| try std.testing.expectEqual(case.byte, @as(u8, @bitCast(case.flags)));
+}
+
+test "TemplateStyles before NavFrame preserves semantic conjugation tables" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody(
+        "<templatestyles src=\"Module:verbs/style.css\" /><div class=\"NavFrame\">\n" ++
+            "<div class=\"NavHead\">Conjugation</div>\n<div class=\"NavContent\">\n" ++
+            "{| class=\"inflection-table\"\n! colspan=\"2\" | future\n|-\n" ++
+            "| [[აღმოვაჩენ]] || [[აღმოაჩენ]]\n|}\n</div></div>\nAfter",
+    );
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    try std.testing.expectEqualStrings("Conjugation", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.table, blocks[1].kind);
+    const table = blocks[1].table.?;
+    try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+    try std.testing.expectEqual(@as(u16, 2), table.rows[0].cells[0].colspan);
+    try std.testing.expectEqualStrings("აღმოვაჩენ", try flattened(a, table.rows[1].cells[0].spans));
+    try std.testing.expectEqualStrings("აღმოაჩენ", try flattened(a, table.rows[1].cells[1].spans));
+    try std.testing.expectEqualStrings("After", try flattened(a, blocks[2].spans));
 }
