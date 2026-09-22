@@ -52,7 +52,7 @@ fun LibraryScreen(library: LibraryStore, onImport: ()->Unit) {
         } }
         items(library.sources,key={it}) { source -> Row(verticalAlignment=Alignment.CenterVertically) {
             Text(source,Modifier.weight(1f),style=MaterialTheme.typography.bodySmall,maxLines=3)
-            IconButton(onClick={library.removeSource(source)}){Icon(Icons.Outlined.Close,"Remove source $source")}
+            IconButton(onClick={library.removeSource(source)},enabled=library.busy==null){Icon(Icons.Outlined.Close,"Remove source $source")}
         } }
     }
 }

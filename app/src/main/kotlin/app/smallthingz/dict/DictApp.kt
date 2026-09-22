@@ -33,22 +33,25 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
     var query by rememberSaveable { mutableStateOf("") }
     var searching by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Entry?>(null) }
+    var selectedDictionary by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
     var selectionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
     fun open(hit: WordHit) {
         selectionJob?.cancel()
         selectionJob = scope.launch {
             loading = true
-            try { selected = library.read(hit); library.rememberWord(hit); selected?.let(learning::record); query = ""; searching = false; screen = AppScreen.Dictionary; keyboard?.hide() }
+            try { selected = library.read(hit); selectedDictionary = hit.dictionary; library.rememberWord(hit); selected?.let(learning::record); query = ""; searching = false; screen = AppScreen.Dictionary; keyboard?.hide() }
             catch(e: kotlinx.coroutines.CancellationException) { throw e }
             catch(e: Exception) { snackbar.showSnackbar(e.message ?: "Unable to read this word") }
             finally { loading = false }
         }
     }
     LaunchedEffect(library.revision) {
+        if (library.dictionaries.none { it.id == selectedDictionary }) selected = null
         if (library.dictionaries.isEmpty()) { selected = null; screen = AppScreen.Library }
         else if (selected == null) (library.lastWord() ?: library.search("", 1).firstOrNull())?.let(::open)
     }
@@ -81,7 +84,9 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                             val matches by produceState<List<WordHit>>(emptyList(), library.revision, query) { value = library.search(query) }
                             WordMatches(matches, ::open)
                         } else selected?.let { entry -> EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, settings = learning.data.settings, onLink = { target ->
-                            scope.launch { library.exact(target.substringBefore('#').replace('_',' '),entry.language)?.let(::open) ?: snackbar.showSnackbar("This word is not in your installed dictionaries.") }
+                            if (target.startsWith("File:",true) || target.startsWith("Image:",true)) {
+                                uri.openUri("https://en.wiktionary.org/wiki/" + java.net.URLEncoder.encode(target,"UTF-8").replace("+","%20"))
+                            } else scope.launch { library.exact(target.substringBefore('#').replace('_',' '),entry.language)?.let(::open) ?: snackbar.showSnackbar("This word is not in your installed dictionaries.") }
                         }) } ?: LibraryScreen(library,onImport)
                     }
                     AppScreen.Saved -> SavedScreen(learning, ::openWord)

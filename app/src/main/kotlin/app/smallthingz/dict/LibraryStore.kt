@@ -72,7 +72,7 @@ class LibraryStore private constructor(private val context: Context) {
         val uri = URI(url.trim()); require(uri.scheme == "https" && uri.host != null && uri.userInfo == null) { "Use an HTTPS catalogue URL" }
         sources = (sources + uri.toString()).distinct(); prefs.edit().putStringSet("sources", sources.toSet()).apply()
     }
-    fun removeSource(url: String) { sources = sources - url; prefs.edit().putStringSet("sources", sources.toSet()).apply() }
+    fun removeSource(url: String) { sources = sources - url; prefs.edit().putStringSet("sources", sources.toSet()).apply(); refreshCatalogs() }
     private var currentOperation: Job? = null
     fun cancel() { currentOperation?.cancel() }
     private fun operation(label: String, action: suspend () -> Unit): Job = scope.launch {
@@ -85,9 +85,19 @@ class LibraryStore private constructor(private val context: Context) {
     }.also { currentOperation = it }
     fun refreshCatalogs() = operation("Reading catalogues") {
         val entries = ArrayList<CatalogItem>()
-        for (source in sources.toList()) if (BuildConfig.DEBUG && source == Catalog.DEFAULT) context.assets.open("debug-dictionaries.list").use { entries += Catalog.parse(it.bufferedReader().readText(), true) }
-        else entries += Catalog.parse(Network.read(source, 2*1024*1024).decodeToString(throwOnInvalidSequence = true))
-        withContext(Dispatchers.Main) { catalog = entries.distinctBy { it.url } }
+        val failures = ArrayList<String>()
+        for(source in sources.toList()) {
+            try {
+                entries += if(BuildConfig.DEBUG && source==Catalog.DEFAULT)
+                    context.assets.open("debug-dictionaries.list").use { Catalog.parse(it.bufferedReader().readText(),true) }
+                else Catalog.parse(Network.read(source,2*1024*1024).decodeToString(throwOnInvalidSequence=true))
+            } catch(e:CancellationException) { throw e }
+            catch(e:Exception) { failures += "${URI(source).host}: ${e.message ?: "Unavailable"}" }
+        }
+        withContext(Dispatchers.Main) {
+            catalog=entries.distinctBy{it.url}
+            error=failures.takeIf{it.isNotEmpty()}?.joinToString("\n")
+        }
     }
     fun download(item: CatalogItem) = operation("Downloading ${item.label}") {
         val temp = File(directory, "${UUID.randomUUID()}.part")
