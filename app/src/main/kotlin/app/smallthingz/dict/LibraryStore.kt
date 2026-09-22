@@ -57,7 +57,11 @@ class LibraryStore private constructor(private val context: Context) {
     var catalog by mutableStateOf<List<CatalogItem>>(emptyList()); private set
     private val prefs = context.getSharedPreferences("library", Context.MODE_PRIVATE)
     var sources by mutableStateOf(prefs.getStringSet("sources", setOf(Catalog.DEFAULT))!!.toList()); private set
-    init { scope.launch { refresh() } }
+    init { scope.launch { mutex.withLock {
+        val installed=helper.readableDatabase.rawQuery("SELECT id FROM dictionaries",null).use{c->buildSet{while(c.moveToNext())add(c.getString(0)+".wikblb")}}
+        directory.listFiles()?.filter{it.extension=="part" || (it.extension=="wikblb" && it.name !in installed)}?.forEach{it.delete()}
+        refresh()
+    } } }
     private suspend fun refresh() {
         val values = helper.readableDatabase.rawQuery("SELECT * FROM dictionaries ORDER BY language", null).use { c -> buildList {
             while (c.moveToNext()) add(DictionaryInfo(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getInt(4), c.getLong(5)))

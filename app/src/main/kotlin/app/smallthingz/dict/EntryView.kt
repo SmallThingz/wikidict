@@ -70,7 +70,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         Box {
                             IconButton(onClick = { contents = true }) { Icon(Icons.AutoMirrored.Filled.List, "Sections", Modifier.size(22.dp)) }
                             DropdownMenu(contents, { contents = false }, Modifier.heightIn(max = 340.dp)) {
-                                entry.readingRows.forEachIndexed { index, row -> row.heading?.let { section ->
+                                entry.readingRows.forEach { row -> row.heading?.let { section ->
                                     if (section.title.isNotBlank() && section.title != entry.language) DropdownMenuItem(text = { Text(section.title) }, onClick = {
                                         contents = false
                                         folded[row.key] = false
@@ -202,7 +202,7 @@ private fun StyledText(spans: List<Span>, modifier: Modifier = Modifier, weight:
     val currentLink = rememberUpdatedState(onLink)
     val annotated = remember(spans, weight, linkColor, codeColor, cache) {
         cache?.values?.get(spans)?.get(weight) ?: buildAnnotatedString {
-            val linkStyle = TextLinkStyles(style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
+            val linkStyle = TextLinkStyles(style = SpanStyle(color = linkColor), pressedStyle = SpanStyle(textDecoration = TextDecoration.Underline))
             spans.forEach { span ->
                 val start = length
                 if (span.direction == "rtl") append('\u2067') else if (span.direction == "ltr") append('\u2066')

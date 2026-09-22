@@ -87,7 +87,10 @@ fun MediaView(media:Media,settings:AppSettings) {
     }
     DisposableEffect(media.file){onDispose{if(MediaPlayback.playing==media.file)MediaPlayback.stop();resource?.takeIf{it.ephemeral}?.file?.delete()}}
     Column(Modifier.fillMaxWidth()) {
-        if(media.kind=="image"&&bitmap!=null&&allowed) Image(bitmap!!.asImageBitmap(),media.caption.ifBlank{media.file},Modifier.fillMaxWidth().heightIn(max=280.dp))
+        if(media.kind=="image"&&allowed) Box(Modifier.fillMaxWidth().height(220.dp),contentAlignment=Alignment.Center) {
+            bitmap?.let { Image(it.asImageBitmap(),media.caption.ifBlank{media.file},Modifier.fillMaxSize()) }
+            if(bitmap==null && busy) CircularProgressIndicator(Modifier.size(24.dp),strokeWidth=2.dp)
+        }
         Row(verticalAlignment=Alignment.CenterVertically) {
             IconButton(enabled=allowed&&!busy,onClick={
                 if(media.kind=="audio") { if(MediaPlayback.playing==media.file)MediaPlayback.stop() else scope.launch{busy=true;error=null;try{val loaded=cache.get(media,settings.mediaCacheMb);resource=loaded;MediaPlayback.play(media.file,loaded)}catch(e:CancellationException){throw e}catch(e:Exception){error=e.message}finally{busy=false}} }
