@@ -28,4 +28,31 @@ class ReadingLayoutTest {
         org.junit.Assert.assertFalse(visible.any{it.block?.spans?.any{span->span.text=="Origin"}==true})
         org.junit.Assert.assertTrue(visible.any{it.block?.spans?.any{span->span.text=="Meaning"}==true})
     }
+
+    @Test fun defaultsShowDefinitionsAndFoldSupportingSections() {
+        val meaning = Block("definition", 1, listOf(Span("text", "A meaning")))
+        val note = Block("quotation", 1, listOf(Span("text", "A quotation")))
+        val rows = readingRows(listOf(
+            Section(3, "Alternative forms", listOf(note)),
+            Section(3, "Etymology 1", listOf(note)),
+            Section(4, "Adjective", listOf(note, meaning, note)),
+            Section(5, "Derived terms", listOf(note))
+        ))
+        val folded = rows.filter { initiallyFolded(it, AppSettings()) }.map { it.key }.toSet() + "heading-2-details"
+        val visible = visibleReadingRows(rows, folded)
+        assertEquals(listOf(meaning), visible.mapNotNull { it.block })
+        assertEquals(3, visibleReadingRows(rows, folded - "heading-2-details").count { it.block != null })
+        assertFalse(initiallyFolded(rows.first(), AppSettings(collapseOtherSections = false)))
+    }
+
+    @Test fun semanticSpacingDropsEmptyRowsAndRepeatedBreaksButKeepsLiteralSpacing() {
+        val br = Span("line_break", "\n")
+        val spans = listOf(br, br, Span("text", "one"), br, br, Span("text", " "), br, Span("text", "two"), br, br)
+        val rows = readingRows(listOf(Section(3, "Noun", listOf(
+            Block("definition", 1, spans), Block("paragraph", 0, listOf(br, br)), Block("preformatted", 0, spans)
+        ))))
+        assertEquals(3, rows.size)
+        assertEquals(listOf(Span("text", "one"), br, Span("text", "two")), rows[1].block!!.spans)
+        assertEquals(spans, rows[2].block!!.spans)
+    }
 }

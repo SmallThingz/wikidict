@@ -53,3 +53,41 @@ similar to the earlier run, not a demonstrated speedup or a zero-jank result.
 Final screenshots show the image spacing and removed expanded-image icon.
 Private DNS was restored to `hostname` / `dns.adguard.com`; Wi-Fi is enabled and
 the device was left awake. The installed app is the optimized performance build.
+
+## Meanings-first reading, sliders and speech correction — 2026-09-23
+
+Supporting sections (including alternative forms, derived terms and translations)
+now start folded. Sections containing definitions stay open, while a notes toggle
+on their heading reveals forms, examples, quotations and media in original order.
+Pronunciation and etymology keep their separate preferences. Overview, preamble,
+references and remaining media also start folded. Existing settings files default
+the two new folding preferences to enabled.
+
+Repeated semantic breaks and whitespace-only lazy rows no longer create empty
+vertical space; literal preformatted content keeps its whitespace. Failed image
+loads animate away the reserved image area. Media cache (0–1024 MB) and remembered
+words (0–500, zero disables history) use logarithmic sliders. Questions per round
+uses a linear integer slider (3–50). Dragging only changes local UI state; settings
+writes and cache trimming occur on release. Accessibility adjustments also commit.
+
+The earlier IPA playback claim was incorrect. Distinct/nonempty WAVs were an
+insufficient test: eSpeak Android 1.52.0 sends SSML without enabling phoneme input,
+and its SSML phoneme implementation emits ordinary bracketed phoneme text. Our
+app also incorrectly selected `en-029` (Jamaican English) ahead of the configured
+`en-gb-x-rp` voice by alphabetical order. The broken IPA conversion/play buttons
+were removed. The ordinary word speaker now honors the configured offline voice
+and sends the actual word; IPA transcription remains dictionary text, and
+recorded pronunciations remain available.
+
+Evidence: the old path produced 63,918 WAV bytes for the phonetic request for
+“elephant”, versus 22,072 bytes for the actual word with RP. Code inspection:
+[eSpeak Android bridge](https://github.com/espeak-ng/espeak-ng/blob/1.52.0/android/jni/jni/eSpeakService.c#L313)
+and [SSML handling](https://github.com/espeak-ng/espeak-ng/blob/1.52.0/src/libespeak-ng/ssml.c#L751).
+The replacement tests verify configured-voice selection, local synthesis of
+“elephant”, “cat” and “January”, and rejection of unavailable/network voices.
+They do not claim human-listening assessment or universal phonetic accuracy.
+
+13 JVM tests and six device tests passed; the opt-in live network test was skipped.
+Device tests cover default folds, revealing notes, slider accessibility commits,
+binary decoding and source-leak checks, and offline speech. Screenshots and logs
+are retained locally in `artifacts/validation/meanings-first/`.

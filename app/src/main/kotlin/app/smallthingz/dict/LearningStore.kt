@@ -23,6 +23,8 @@ data class AppSettings(
     val randomPool: String = "all",
     val collapsePronunciation: Boolean = true,
     val collapseEtymology: Boolean = true,
+    val collapseOtherSections: Boolean = true,
+    val collapseDetails: Boolean = true,
     val allowImages: Boolean = false,
     val allowAudio: Boolean = false,
     val mediaCacheMb: Int = 100,
@@ -117,6 +119,8 @@ class LearningStore private constructor(context: Context) {
             .put("randomPool", value.settings.randomPool)
             .put("collapsePronunciation", value.settings.collapsePronunciation)
             .put("collapseEtymology", value.settings.collapseEtymology)
+            .put("collapseOtherSections", value.settings.collapseOtherSections)
+            .put("collapseDetails", value.settings.collapseDetails)
             .put("allowImages", value.settings.allowImages)
             .put("allowAudio", value.settings.allowAudio)
             .put("mediaCacheMb", value.settings.mediaCacheMb))
@@ -135,6 +139,8 @@ class LearningStore private constructor(context: Context) {
                 darkMode = settings.optString("darkMode", "system").takeIf { it in setOf("system", "light", "dark") } ?: "system",
                 collapsePronunciation = settings.optBoolean("collapsePronunciation", true),
                 collapseEtymology = settings.optBoolean("collapseEtymology", true),
+                collapseOtherSections = settings.optBoolean("collapseOtherSections", true),
+                collapseDetails = settings.optBoolean("collapseDetails", true),
                 allowImages = settings.optBoolean("allowImages", false),
                 allowAudio = settings.optBoolean("allowAudio", false),
                 mediaCacheMb = settings.optInt("mediaCacheMb", 100).coerceIn(0,1024),

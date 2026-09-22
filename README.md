@@ -34,6 +34,6 @@ Live Wikimedia tests require a connected device with working internet; opt in wi
 
 This repository preserves the original Android file history from the core project.
 
-Local pronunciation uses installed Android offline voices. Supported English IPA
-transcriptions can use eSpeak NG phoneme input; unsupported transcriptions are not
-fed to a text voice. The app does not bundle a TTS engine.
+Local pronunciation speaks the word using the configured installed Android offline
+voice. IPA remains visible as dictionary data; the app does not feed phonetic codes
+to text voices. The app does not bundle a TTS engine.

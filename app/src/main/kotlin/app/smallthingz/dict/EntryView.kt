@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Notes
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.ui.platform.LocalContext
@@ -58,12 +59,15 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         val scroll = rememberLazyListState()
         val scope = rememberCoroutineScope()
         var contents by remember { mutableStateOf(false) }
-        val folded = remember(entry.key, settings.collapsePronunciation, settings.collapseEtymology) {
+        val folded = remember(entry.key, settings.collapsePronunciation, settings.collapseEtymology, settings.collapseOtherSections, settings.collapseDetails) {
             mutableStateMapOf<String, Boolean>().apply {
                 entry.readingRows.forEach { row -> row.heading?.let {
-                    this[row.key] = (settings.collapsePronunciation && it.title.startsWith("Pronunciation", true)) ||
-                        (settings.collapseEtymology && it.title.startsWith("Etymology", true))
+                    this[row.key] = initiallyFolded(row, settings)
+                    if (row.meaningSection) this[row.key + "-details"] = settings.collapseDetails
                 } }
+                this["preamble"] = settings.collapseOtherSections
+                this["references"] = settings.collapseOtherSections
+                this["media"] = settings.collapseOtherSections
             }
         }
         val visibleRows = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
@@ -99,39 +103,41 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     }
                 }
             }
-            if (entry.preamble.isNotEmpty()) item("preamble", contentType = "paragraph") { StyledText(entry.preamble, Modifier.padding(bottom = 6.dp), onLink = onLink) }
+            if (entry.preamble.isNotEmpty()) item("preamble", contentType = "paragraph") {
+                FoldHeading("About this entry", folded["preamble"] == true) { folded["preamble"] = folded["preamble"] != true }
+                if (folded["preamble"] != true) StyledText(compactSpans(entry.preamble), Modifier.padding(bottom = 4.dp), onLink = onLink)
+            }
             items(visibleRows, key = { it.key }, contentType = { if (it.heading != null) "heading" else it.block?.kind }) { row ->
                 Column(Modifier.animateItem()) {
                 row.heading?.let { section ->
-                    if (section.title.isNotBlank() && section.title != entry.language) {
+                    if (section.title.isNotBlank() && (section.title != entry.language || section.blocks.any { it.kind != "blank" })) {
+                        val label = if (section.title == entry.language) "Overview" else section.title
                         val angle by animateFloatAsState(if (folded[row.key] == true) -90f else 0f, label = "Section fold")
                         Row(Modifier.fillMaxWidth().clickable { folded[row.key] = folded[row.key] != true }.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(section.title, Modifier.weight(1f), style = if (section.level <= 3) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium)
-                            Icon(Icons.Filled.ExpandMore, if (folded[row.key] == true) "Expand ${section.title}" else "Collapse ${section.title}", Modifier.size(20.dp).rotate(angle))
+                            Text(label, Modifier.weight(1f), style = if (row.meaningSection) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium)
+                            if (row.meaningSection && section.blocks.any { it.kind !in setOf("definition", "blank") }) {
+                                IconToggleButton(checked = folded[row.key + "-details"] != true, onCheckedChange = { folded[row.key + "-details"] = !it }) {
+                                    Icon(Icons.Outlined.Notes, if (folded[row.key + "-details"] == true) "Show examples and notes for ${section.title}" else "Hide examples and notes for ${section.title}", Modifier.size(20.dp))
+                                }
+                            }
+                            Icon(Icons.Filled.ExpandMore, if (folded[row.key] == true) "Expand $label" else "Collapse $label", Modifier.size(20.dp).rotate(angle))
                         }
                     }
                 }
                 row.block?.let { block ->
-                    Row(Modifier.padding(bottom = if (row.compact) 2.dp else 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.weight(1f)) { BlockView(block, onLink) }
-                        block.spans.filter { it.role == "pronunciation" && Pronunciation.ssml(it.text, entry.languageCode) != null }.distinctBy { it.text }.forEach { span ->
-                            IconButton(onClick = { SpeechPlayback.play(context, entry.title, entry.languageCode, span.text) }) {
-                                Icon(if (SpeechPlayback.active == span.text) Icons.Outlined.Stop else Icons.Outlined.VolumeUp, "Pronounce ${span.text} offline", Modifier.size(18.dp))
-                            }
-                        }
-                    }
+                    Box(Modifier.padding(bottom = if (row.compact) 2.dp else 6.dp)) { BlockView(block, onLink) }
                 }
                 }
             }
-            if (entry.references.isNotEmpty()) item("references-heading") { Text("References", Modifier.padding(top = 18.dp, bottom = 10.dp), style = MaterialTheme.typography.titleLarge) }
-            items(entry.references, key = { "reference-${it.number}" }, contentType = { "reference" }) { ref ->
+            if (entry.references.isNotEmpty()) item("references-heading") { FoldHeading("References", folded["references"] == true) { folded["references"] = folded["references"] != true } }
+            items(if (folded["references"] == true) emptyList() else entry.references, key = { "reference-${it.number}" }, contentType = { "reference" }) { ref ->
                 val label = if (ref.group.isBlank()) "[${ref.groupNumber}]" else "[${ref.group} ${ref.groupNumber}]"
                 Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Text(label, style = MaterialTheme.typography.labelMedium, color = colors.primary); StyledText(ref.spans, Modifier.weight(1f), onLink = onLink) }
             }
             val linkedFiles = entry.sections.flatMap { it.blocks }.flatMap { block -> block.spans + block.table?.rows.orEmpty().flatten().flatMap { it.spans } }.filter { it.classes == "wikidict-media" }.map { it.target.removePrefix("File:").replace('_',' ') }.toSet()
             val remainingMedia = entry.media.filter { it.file !in linkedFiles }
-            if (remainingMedia.isNotEmpty()) item("media-heading") { Text("Media", Modifier.padding(top = 18.dp, bottom = 10.dp), style = MaterialTheme.typography.titleLarge) }
-            remainingMedia.forEachIndexed { index, media -> item("media-$index", contentType = "media") {
+            if (remainingMedia.isNotEmpty()) item("media-heading") { FoldHeading("Media", folded["media"] == true) { folded["media"] = folded["media"] != true } }
+            (if (folded["media"] == true) emptyList() else remainingMedia).forEachIndexed { index, media -> item("media-$index", contentType = "media") {
                 MediaView(media, settings)
             } }
             item("attribution") {
@@ -145,13 +151,23 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
     }
 }
 
+
+@Composable
+private fun FoldHeading(title: String, folded: Boolean, onClick: () -> Unit) {
+    val angle by animateFloatAsState(if (folded) -90f else 0f, label = "Section fold")
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+        Icon(Icons.Filled.ExpandMore, if (folded) "Expand $title" else "Collapse $title", Modifier.size(20.dp).rotate(angle))
+    }
+}
+
 @Composable
 private fun BlockView(block: Block, onLink: (String) -> Unit) {
     when {
         block.table != null -> TableView(block.table, onLink)
         block.kind == "rule" -> HorizontalDivider()
         block.kind == "preformatted" -> Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).horizontalScroll(rememberScrollState()).padding(12.dp)) {
-            StyledText(block.spans, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), onLink = onLink)
+            StyledText(block.spans, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), onLink = onLink, preserveWhitespace = true)
         }
         else -> {
             val prefix = when (block.kind) {
@@ -204,7 +220,8 @@ private fun TableView(table: Table, onLink: (String) -> Unit) {
 }
 
 @Composable
-private fun StyledText(spans: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (String) -> Unit = {}) {
+private fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (String) -> Unit = {}, preserveWhitespace: Boolean = false) {
+    val spans = remember(source, preserveWhitespace) { if (preserveWhitespace) source else compactSpans(source) }
     val availableMedia = LocalEntryMedia.current
     val embedded = spans.filter { it.classes == "wikidict-media" && it.target.startsWith("File:") }.mapNotNull { span -> availableMedia.firstOrNull { it.file == span.target.removePrefix("File:").replace('_',' ') } }.distinctBy { it.file }
     if (embedded.isNotEmpty()) {

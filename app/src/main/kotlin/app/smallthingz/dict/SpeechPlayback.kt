@@ -20,29 +20,22 @@ object SpeechPlayback {
     var error by mutableStateOf<String?>(null); private set
     fun stop() { utterance++; pending = null; engine?.stop(); active = null }
     fun close() { generation++; stop(); engine?.shutdown(); engine = null; ready = false }
-    fun play(context: Context, word: String, language: String, ipa: String? = null) {
-        val key = ipa ?: word
+    fun play(context: Context, word: String, language: String) {
+        val key = word
         if (active == key) { stop(); return }
         stop(); MediaPlayback.stop(); error = null; active = key
         val requestId = (++utterance).toString()
         val request = request@{
             val tts = engine ?: return@request
             val locale = Locale.forLanguageTag(language)
-            val voice = tts.voices.orEmpty().filter { !it.isNetworkConnectionRequired && it.locale.language == locale.language && "notInstalled" !in it.features.orEmpty() }
-                .sortedWith(compareByDescending<android.speech.tts.Voice> { it.locale == locale }.thenByDescending { it.quality }.thenBy { it.name }).firstOrNull()
+            val voices = tts.voices.orEmpty()
+            val selected = chooseSpeechVoice(voices.map { SpeechVoice(it.name, it.locale, it.quality, it.isNetworkConnectionRequired, "notInstalled" !in it.features.orEmpty()) }, language, tts.defaultVoice?.name, Locale.getDefault())
+            val voice = voices.firstOrNull { it.name == selected?.name }
             if (voice == null || tts.setVoice(voice) == TextToSpeech.ERROR) {
                 error = "Install an offline voice for ${locale.getDisplayLanguage()} in speech settings."; active = null
                 return@request
             }
-            val text = if (ipa == null) word else {
-                val phonemes = Pronunciation.ssml(ipa, language)
-                if (tts.defaultEngine != Pronunciation.espeakEngine || phonemes == null) {
-                    error = "This transcription needs a supported eSpeak voice. The word speaker uses your local voice."; active = null
-                    return@request
-                }
-                phonemes
-            }
-            if (tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, requestId) == TextToSpeech.ERROR) { error = "The local voice could not speak."; active = null }
+            if (tts.speak(word, TextToSpeech.QUEUE_FLUSH, null, requestId) == TextToSpeech.ERROR) { error = "The local voice could not speak."; active = null }
         }
         if (ready) request() else {
             pending = request

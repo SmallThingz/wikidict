@@ -3,6 +3,7 @@ package app.smallthingz.dict
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.media.MediaPlayer
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -86,8 +87,8 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true) {
         }catch(e:CancellationException){throw e}catch(e:Exception){error=e.message}finally{busy=false}}
     }
     DisposableEffect(media.file){onDispose{if(MediaPlayback.playing==media.file)MediaPlayback.stop();resource?.takeIf{it.ephemeral}?.file?.delete()}}
-    Column(Modifier.fillMaxWidth()) {
-        if(media.kind=="image"&&allowed) Box(Modifier.fillMaxWidth().padding(top=12.dp).height(220.dp),contentAlignment=Alignment.Center) {
+    Column(Modifier.fillMaxWidth().animateContentSize()) {
+        if(media.kind=="image"&&allowed&&(error==null||bitmap!=null)) Box(Modifier.fillMaxWidth().padding(top=12.dp).height(220.dp),contentAlignment=Alignment.Center) {
             bitmap?.let { Image(it.asImageBitmap(),media.caption.ifBlank{media.file},Modifier.fillMaxSize()) }
             if(bitmap==null && busy) CircularProgressIndicator(Modifier.size(24.dp),strokeWidth=2.dp)
         }

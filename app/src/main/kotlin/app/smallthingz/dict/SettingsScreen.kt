@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import kotlinx.coroutines.launch
 
 @Composable
@@ -20,7 +21,7 @@ fun SettingsScreen(learning: LearningStore) {
     val media = MediaCache.get(LocalContext.current)
     val scope = rememberCoroutineScope()
     var clear by remember { mutableStateOf<String?>(null) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    LazyColumn(Modifier.fillMaxSize().testTag("settings-scroll"), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item { Text("Settings", style = MaterialTheme.typography.headlineMedium) }
         item {
             PreferenceGroup(Icons.Outlined.Palette, "Atmosphere") {
@@ -30,6 +31,8 @@ fun SettingsScreen(learning: LearningStore) {
         item {
             PreferenceGroup(Icons.Outlined.UnfoldLess, "Start folded") {
                 TogglePreference("Pronunciation", settings.collapsePronunciation) { value -> learning.updateSettings { it.copy(collapsePronunciation=value) } }
+                TogglePreference("Other sections", settings.collapseOtherSections) { value -> learning.updateSettings { it.copy(collapseOtherSections=value) } }
+                TogglePreference("Examples & notes", settings.collapseDetails) { value -> learning.updateSettings { it.copy(collapseDetails=value) } }
                 TogglePreference("Etymology", settings.collapseEtymology) { value -> learning.updateSettings { it.copy(collapseEtymology=value) } }
             }
         }
@@ -37,26 +40,23 @@ fun SettingsScreen(learning: LearningStore) {
             PreferenceGroup(Icons.Outlined.PermMedia, "Images & sound") {
                 TogglePreference("Load images online", settings.allowImages) { value -> learning.updateSettings { it.copy(allowImages=value) } }
                 TogglePreference("Play online audio", settings.allowAudio) { value -> learning.updateSettings { it.copy(allowAudio=value) }; if(!value) MediaPlayback.stop() }
-                Text("Media cache", style=MaterialTheme.typography.bodyMedium)
-                Segments(listOf(0,25,100,500), settings.mediaCacheMb, { if(it==0) "Off" else "$it MB" }, { value -> learning.updateSettings { it.copy(mediaCacheMb=value) }; scope.launch { media.trim(value) } }, Modifier.fillMaxWidth())
+                ReaderSlider("Media cache", settings.mediaCacheMb, SliderScale(0, 1024, logarithmic = true), { if (it == 0) "Off" else "$it MB" }) { value ->
+                    learning.updateSettings { it.copy(mediaCacheMb = value) }; scope.launch { media.trim(value) }
+                }
                 TextButton(onClick={scope.launch{MediaPlayback.stop();media.clear()}}) { Text("Clear cached media") }
             }
         }
         item {
             PreferenceGroup(Icons.Outlined.History, "Your trail") {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Remember words", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                    ReaderSwitch(settings.historyEnabled, "Remember words") { enabled -> learning.updateSettings { it.copy(historyEnabled = enabled) } }
-                }
-                androidx.compose.animation.AnimatedVisibility(settings.historyEnabled) {
-                    Segments(listOf(25, 100, 250, 500), settings.historyLimit, { "$it" }, { value -> learning.updateSettings { it.copy(historyLimit = value) } }, Modifier.fillMaxWidth())
+                ReaderSlider("Remember words", if (settings.historyEnabled) settings.historyLimit else 0,
+                    SliderScale(0, 500, logarithmic = true), { if (it == 0) "Off" else "$it" }) { value ->
+                    learning.updateSettings { it.copy(historyEnabled = value > 0, historyLimit = if (value == 0) it.historyLimit else value) }
                 }
             }
         }
         item {
             PreferenceGroup(Icons.Outlined.AutoAwesome, "A little practice") {
-                Text("Questions per round", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Segments(listOf(5, 10, 20, 50), settings.quizLength, { "$it" }, { value -> learning.updateSettings { it.copy(quizLength = value) } }, Modifier.fillMaxWidth())
+                ReaderSlider("Questions per round", settings.quizLength, SliderScale(3, 50)) { value -> learning.updateSettings { it.copy(quizLength = value) } }
                 Spacer(Modifier.height(6.dp))
                 Text("Pick words from", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Segments(listOf("all", "history", "bookmarks"), settings.randomPool, { when(it) { "all" -> "Everywhere"; "history" -> "History"; else -> "Saved" } }, { value -> learning.updateSettings { it.copy(randomPool = value) } }, Modifier.fillMaxWidth())

@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -51,5 +52,21 @@ fun ReaderSwitch(checked: Boolean, label: String, onChange: (Boolean) -> Unit) {
         Box(Modifier.size(44.dp, 26.dp).background(track, RoundedCornerShape(20.dp)).padding(4.dp)) {
             Box(Modifier.offset(x = offset).size(18.dp).background(if (checked) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, RoundedCornerShape(20.dp)))
         }
+    }
+}
+
+/** Keep dragging local; persist/trim only after release or an accessibility step. */
+@Composable
+fun ReaderSlider(label: String, value: Int, scale: SliderScale, format: (Int) -> String = { "$it" }, onCommit: (Int) -> Unit) {
+    var position by remember(value, scale) { mutableFloatStateOf(scale.position(value)) }
+    val shown = scale.value(position)
+    Column {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            Text(format(shown), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        }
+        Slider(value = position, onValueChange = { position = it }, onValueChangeFinished = { onCommit(scale.value(position)) },
+            steps = if (scale.logarithmic) 0 else scale.max - scale.min - 1,
+            modifier = Modifier.fillMaxWidth().semantics { contentDescription = label; stateDescription = format(shown) })
     }
 }

@@ -94,4 +94,41 @@ class RendererDeviceTest {
         assertFalse(image.file.exists());assertFalse(audio.file.exists())
     }
 
+
+    @Test fun supportingSectionsAndSenseNotesStartFolded() {
+        search("A")
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasContentDescription("Expand Alternative forms"))
+        compose.onAllNodesWithText("Centennial", substring = true).assertCountEquals(0)
+        compose.onNodeWithContentDescription("Expand Alternative forms").performClick()
+        compose.onNodeWithContentDescription("Collapse Alternative forms").assertExists()
+        compose.onAllNodesWithText("Centennial", substring = true).onFirst().assertExists()
+        compose.onNodeWithContentDescription("Collapse Alternative forms").performClick()
+        compose.onAllNodesWithText("Centennial", substring = true).assertCountEquals(0)
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasContentDescription("Show examples and notes for Letter"))
+        compose.onNodeWithContentDescription("Show examples and notes for Letter").performClick()
+        compose.onNodeWithContentDescription("Hide examples and notes for Letter").assertExists()
+        compose.onNodeWithContentDescription("Hide examples and notes for Letter").performClick()
+        compose.onNodeWithContentDescription("Show examples and notes for Letter").assertExists()
+    }
+
+    @Test fun preferenceSlidersCommitAccessibleValues() {
+        val learning = LearningStore.get(compose.activity)
+        compose.onNodeWithContentDescription("Settings").performClick()
+        fun slide(label: String, position: Float) {
+            compose.onNodeWithTag("settings-scroll").performScrollToNode(hasContentDescription(label))
+            compose.onNodeWithContentDescription(label).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) { it(position) }
+            compose.waitForIdle()
+        }
+        slide("Media cache", 0f)
+        assertEquals(0, learning.data.settings.mediaCacheMb)
+        slide("Media cache", 1f)
+        assertEquals(1024, learning.data.settings.mediaCacheMb)
+        slide("Remember words", 1f)
+        assertEquals(500, learning.data.settings.historyLimit)
+        slide("Remember words", 0f)
+        assertFalse(learning.data.settings.historyEnabled)
+        slide("Questions per round", .5f)
+        assertEquals(27, learning.data.settings.quizLength)
+        compose.runOnIdle { learning.updateSettings { it.copy(mediaCacheMb=100, historyEnabled=true, historyLimit=100, quizLength=10) } }
+    }
 }
