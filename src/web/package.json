@@ -1,0 +1,1 @@
+{"name":"dict-web-reader","private":true,"type":"module","scripts":{"build":"node build.mjs","test":"node --test validate.test.mjs","test:browser":"node browser.test.mjs"},"devDependencies":{"playwright":"^1.58.0"}}

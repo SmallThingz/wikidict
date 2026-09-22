@@ -6,7 +6,7 @@ The shipped desktop reader has three native surfaces over the same compiled dict
 - `dict tui`: terminal UI
 - `dict-qt`: Qt 6 / C++ desktop GUI
 
-There is no HTTP/browser frontend and no read-time Lua, template, or wikitext execution. Lua/templates/wikitext are bundle-time compiler inputs only.
+The separate `src/web/` reader imports compiled JSON exports. There is no read-time Lua, template, or wikitext execution. Lua/templates/wikitext are bundle-time compiler inputs only.
 
 ## C ABI
 

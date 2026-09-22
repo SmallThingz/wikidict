@@ -307,7 +307,7 @@ zig build qt
 zig-out/bin/dict-qt --root ROOT cat
 ```
 
-The Qt 6 interface is written in C++ and links directly to `libdictffi`; there is no local HTTP server, browser UI, or web engine. The C ABI owns the mapped dictionary/index and returns versioned `dict.results.v1` JSON buffers to native clients.
+The Qt 6 interface is written in C++ and links directly to `libdictffi`; the Qt application has no local HTTP server or web engine. The separate [web reader](src/web/README.md) imports compiled JSON exports. The C ABI owns the mapped dictionary/index and returns versioned `dict.results.v1` JSON buffers to native clients.
 
 The Qt app includes native history, bookmarks, settings, random words, definition quizzes, flashcards, and an unscramble game. Build/install the reusable C boundary with `zig build ffi`; its public header is installed as `zig-out/include/dict/dict.h`.
 
