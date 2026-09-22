@@ -46,7 +46,9 @@ data class Entry(
     val preamble: List<Span> = emptyList(),
     val media: List<Media> = emptyList(),
 ) {
-    val key: String get() = "$kind\u0000${language.orEmpty()}\u0000$title"
+    val key: String = "$kind\u0000${language.orEmpty()}\u0000$title"
+    // Constructed with the decoded entry on the import dispatcher.
+    val readingRows: List<ReadingRow> = readingRows(sections)
     fun clue(): String {
         val definition = sections.asSequence().flatMap { it.blocks.asSequence() }
             .firstOrNull { it.kind == "definition" && textOf(it.spans).isNotBlank() }
@@ -62,7 +64,10 @@ data class Results(
     val kind: String,
     val language: String?,
     val entries: List<Entry>,
-)
+) {
+    val byKey = entries.associateBy { it.key }
+    val byTitle = entries.associateBy { it.title }
+}
 
 private val forbiddenCompiledFields = setOf(
     "source", "source_base64", "payload_base64", "unexpanded_templates",
