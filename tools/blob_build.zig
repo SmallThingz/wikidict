@@ -302,6 +302,7 @@ pub fn main(init: std.process.Init) !void {
     var lines = std.mem.splitScalar(u8, page_index.bytes, '\n');
     var corpus_ordinal: usize = 0;
     var pages_selected: usize = 0;
+    var next_progress = std.Io.Clock.awake.now(init.io).toNanoseconds() + 10 * std.time.ns_per_s;
     while (lines.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
         const page_ordinal = corpus_ordinal;
@@ -326,10 +327,14 @@ pub fn main(init: std.process.Init) !void {
                 .source = source,
             });
         }
-        if (pages_selected % 100_000 == 0) std.debug.print(
-            "page compilation progress selected={d} ordinal={d} main_pages={d} language_records={d} workers={d}\n",
-            .{ pages_selected, page_ordinal, writer.stats.main_pages, writer.stats.language_records, pool.slots.len },
-        );
+        const progress_now = std.Io.Clock.awake.now(init.io).toNanoseconds();
+        if (pages_selected % 100_000 == 0 or progress_now >= next_progress) {
+            next_progress = progress_now + 10 * std.time.ns_per_s;
+            std.debug.print(
+                "page compilation progress selected={d} ordinal={d} main_pages={d} language_records={d} workers={d}\n",
+                .{ pages_selected, page_ordinal, writer.stats.main_pages, writer.stats.language_records, pool.slots.len },
+            );
+        }
     }
     try pool.drain(&writer);
     const stats = try writer.finish(codes);
