@@ -14,6 +14,8 @@ import androidx.core.content.IntentCompat
 import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -28,6 +30,8 @@ sealed interface DocumentState {
 class MainActivity : ComponentActivity() {
     private lateinit var learning: LearningStore
     private lateinit var picker: ActivityResultLauncher<Array<String>>
+    private var importJob: Job? = null
+    private var importGeneration = 0
     private var document by mutableStateOf<DocumentState>(DocumentState.Empty)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,8 +68,12 @@ class MainActivity : ComponentActivity() {
     private fun open(uri: Uri, persist: Boolean) {
         val name = uri.lastPathSegment?.substringAfterLast('/') ?: "Compiled dictionary"
         document = DocumentState.Loading(name)
-        lifecycleScope.launch {
+        importJob?.cancel()
+        val generation = ++importGeneration
+        importJob = lifecycleScope.launch {
             val loaded = runCatching { withContext(Dispatchers.IO) { ExportDocument.decode(readBounded(uri)) } }
+            loaded.exceptionOrNull()?.let { if (it is CancellationException) throw it }
+            if (generation != importGeneration) return@launch
             document = loaded.fold(
                 onSuccess = { DocumentState.Loaded(it, uri, name) },
                 onFailure = { DocumentState.Failed(it.message ?: "Could not open this compiled dictionary package.") },

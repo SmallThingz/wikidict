@@ -95,7 +95,19 @@ private fun DictionaryScreen(
             SearchBar(query, onQuery)
             val matches = remember(entries, query) { if (query.isBlank()) emptyList() else entries.filter { it.title.contains(query, ignoreCase = true) }.take(80) }
             if (query.isNotBlank()) EntryMatches(matches, onSelect)
-            else if (selected != null) EntryView(selected, learning.isBookmarked(selected)) { learning.toggleBookmark(selected) }
+            else if (selected != null) {
+                val snackbar = remember { SnackbarHostState() }
+                val scope = rememberCoroutineScope()
+                Box(Modifier.weight(1f)) {
+                    EntryView(selected, learning.isBookmarked(selected), { learning.toggleBookmark(selected) }) { target ->
+                        val title = target.substringBefore('#').replace('_', ' ')
+                        val match = entries.firstOrNull { it.title == title }
+                        if (match != null) onSelect(match.key)
+                        else scope.launch { snackbar.showSnackbar("$title is not in this dictionary.") }
+                    }
+                    SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+                }
+            }
             else EmptyDocument(onOpen)
         }
     }
