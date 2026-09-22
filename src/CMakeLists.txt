@@ -13,18 +13,18 @@ add_executable(dict-qt
 
 target_compile_features(dict-qt PRIVATE cxx_std_20)
 target_compile_options(dict-qt PRIVATE -Wall -Wextra -Wpedantic)
-target_include_directories(dict-qt PRIVATE ../ffi)
+target_include_directories(dict-qt PRIVATE "${WIKIDICT_CORE}/src/ffi")
 
 find_library(DICT_FFI_LIBRARY
     NAMES dictffi
-    PATHS "${CMAKE_SOURCE_DIR}/../../zig-out/lib"
+    PATHS "${WIKIDICT_CORE}/zig-out/lib"
     NO_DEFAULT_PATH
     REQUIRED
 )
 
 target_link_libraries(dict-qt PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets "${DICT_FFI_LIBRARY}")
 set_target_properties(dict-qt PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/../../zig-out/bin"
-    BUILD_RPATH "${CMAKE_SOURCE_DIR}/../../zig-out/lib"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    BUILD_RPATH "${WIKIDICT_CORE}/zig-out/lib"
     INSTALL_RPATH "$ORIGIN/../lib"
 )
