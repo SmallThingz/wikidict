@@ -37,3 +37,5 @@ This repository preserves the original Android file history from the core projec
 Local pronunciation speaks the word using the configured installed Android offline
 voice. IPA remains visible as dictionary data; the app does not feed phonetic codes
 to text voices. The app does not bundle a TTS engine.
+
+Compressed dictionaries: imports and catalogue downloads accept raw `.wikblb` and `.wikblb.xz` (detected by magic). Installation scans the logical stream into SQLite without writing an expanded copy. Lookups seek to the recorded logical offset and decode the intersecting XZ blocks. Publish XZ with independent 1 MiB blocks (`xz -1 --block-size=1MiB -k dictionary.wikblb`) for bounded random-access work. Legacy single-block files work but may require decoding much more data for a lookup. The XZ decoder has a 64 MiB memory limit.

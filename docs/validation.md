@@ -99,3 +99,10 @@ are retained locally in `artifacts/validation/meanings-first/`.
 - Logarithmic history limit now reaches 100,000 words; media cache reaches 4096 MB (4 GB), including persisted-setting clamps. Cache byte arithmetic already uses Long.
 - Unit tests passed, including slider round trips across the expanded ranges. Device slider test passed at both endpoints and restored defaults. Manual device checks confirmed dock hiding/reappearance and Settings → Dictionaries navigation. Optimized build installed; screenshot: `artifacts/validation/navigation/cards.png`.
 - This validates the configured limits, not performance with 100,000 populated history records or 4 GB of cached media.
+
+### Compressed dictionary installation — 2026-09-23
+
+- Raw and XZ use the same logical record offsets. Files remain compressed in app storage; no full-language decode in memory or expanded disk copy.
+- JVM tests cover reads crossing block and concatenated-stream boundaries, backwards seeks, truncated XZ and invalid raw ranges.
+- Real-device test compressed the 30-entry binary fixture into 64 KiB independent blocks, imported/indexed it, compared the complete decoded elephant entry with its raw counterpart, and asserted the installed file retained the compressed byte size. Passed.
+- `testDebugUnitTest`, debug/test APK builds, and optimized build passed. This is conformance evidence, not a whole-corpus performance benchmark.

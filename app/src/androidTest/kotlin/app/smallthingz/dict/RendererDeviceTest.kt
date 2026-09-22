@@ -131,4 +131,27 @@ class RendererDeviceTest {
         assertEquals(27, learning.data.settings.quizLength)
         compose.runOnIdle { learning.updateSettings { it.copy(mediaCacheMb=100, historyEnabled=true, historyLimit=100, quizLength=10) } }
     }
+    @Test fun compressedDictionaryIndexesAndReadsWithoutExpandingOnDisk() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val rawHit = library.exact("elephant", "English")!!
+        val expected = library.read(rawHit)
+        val compressed = java.io.File(context.cacheDir, "test.wikblb.xz")
+        try {
+            org.tukaani.xz.XZOutputStream(compressed.outputStream(), org.tukaani.xz.LZMA2Options(1)).use { out ->
+                context.assets.open("English.wikblb").use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) { val n = input.read(buffer); if (n < 0) break; out.write(buffer, 0, n); out.endBlock() }
+                }
+            }
+            library.importFile { compressed.inputStream() }.join()
+            assertNull(library.error)
+            val info = library.dictionaries.first { it.id != rawHit.dictionary }
+            val hit = library.search("elephant").first { it.dictionary == info.id && it.title == "elephant" }
+            val actual = library.read(hit)
+            assertEquals(expected, actual)
+            assertEquals(compressed.length(), java.io.File(context.filesDir, "dictionaries/${info.id}.wikblb").length())
+            library.remove(info.id).join()
+        } finally { compressed.delete() }
+    }
+
 }

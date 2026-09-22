@@ -141,24 +141,27 @@ class LibraryStore private constructor(private val context: Context) {
         val final = File(directory, "$id.wikblb")
         db.beginTransaction()
         try {
-            CountingInput(temp.inputStream().buffered(256*1024)).use { input ->
+            BlobSource(temp).use { source ->
+            CountingInput(source.stream().buffered(256*1024)).use { input ->
                 require(input.bytes(8).contentEquals("WIKBLB08".toByteArray())) { "Choose a WIKBLB08 dictionary" }
                 kind = listOf("language","thesaurus","citations","reconstruction","rhymes","sign_gloss").getOrNull(input.read()-1) ?: error("Invalid blob kind")
                 if (kind == "language") { code = input.nul(); language = input.nul(); require(language.isNotBlank()) } else language = kind.replace('_',' ')
                 var previous: ByteArray? = null
                 val statement = db.compileStatement("INSERT INTO words VALUES(?,?,?,?,?)")
                 statement.use {
-                    while (input.position < temp.length()) {
+                    while (input.position < source.length) {
                         currentCoroutineContext().ensureActive()
                         val title = input.nul(); require(title.isNotEmpty())
                         val raw = title.toByteArray(); previous?.let { require(compareUtf8(it,raw) < 0) { "Dictionary titles are not sorted" } }; previous = raw
-                        val length = input.varuint(); require(length in 4..128L*1024*1024 && length <= temp.length()-input.position) { "Invalid record size" }
+                        val length = input.varuint(); require(length in 4..128L*1024*1024 && length <= source.length-input.position) { "Invalid record size" }
                         val offset = input.position
                         require(input.bytes(4).contentEquals("DPR2".toByteArray())) { "Dictionary is not compiled presentation data" }
                         input.skipFully(length-4)
                         statement.bindString(1,id); statement.bindString(2,title); statement.bindString(3,title.lowercase(Locale.ROOT)); statement.bindLong(4,offset); statement.bindLong(5,length); statement.executeInsert(); count++
                     }
                 }
+                require(input.read() == -1) { "Trailing dictionary data" }
+            }
             }
             require(count > 0) { "Dictionary has no entries" }
             require(temp.renameTo(final)) { "Cannot install dictionary" }
@@ -192,8 +195,8 @@ class LibraryStore private constructor(private val context: Context) {
     suspend fun lastWord(): WordHit? = prefs.getString("lastTitle",null)?.let { exact(it,prefs.getString("lastLanguage",null)) }
     suspend fun read(hit: WordHit): Entry = withContext(Dispatchers.IO) {
         val dictionary = dictionaries.firstOrNull { it.id == hit.dictionary } ?: error("Dictionary was removed")
-        RandomAccessFile(File(directory,"${hit.dictionary}.wikblb"),"r").use { file ->
-            file.seek(hit.offset); val data=ByteArray(hit.length);file.readFully(data)
+        BlobSource(File(directory,"${hit.dictionary}.wikblb")).use { file ->
+            val data = file.read(hit.offset, hit.length)
             BlobDecoder.decode(data,hit.title,hit.kind,if(hit.kind=="language")hit.language else null,dictionary.code)
         }
     }
