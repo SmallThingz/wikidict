@@ -32,7 +32,23 @@ class RendererDeviceTest {
         assertTrue(library.dictionaries.sumOf{it.count}>20)
         val words=library.search("")
         assertTrue(words.size>20)
-        for(hit in words) assertEquals(hit.title,library.read(hit).title)
+        for(hit in words) {
+            val entry = library.read(hit)
+            assertEquals(hit.title, entry.title)
+            val texts = buildList {
+                add(textOf(entry.displayTitle)); add(textOf(entry.preamble))
+                entry.sections.forEach { section ->
+                    add(section.title)
+                    section.blocks.forEach { block ->
+                        add(textOf(block.spans))
+                        block.table?.let { table -> add(textOf(table.caption)); table.rows.flatten().forEach { add(textOf(it.spans)) } }
+                    }
+                }
+                entry.references.forEach { add(textOf(it.spans)) }
+                entry.media.forEach { add(it.caption) }
+            }
+            for (text in texts) assertFalse("Unrendered syntax in ${entry.title}: $text", Regex("\\[\\[|\\]\\]|\\{\\{|\\}\\}|</?[A-Za-z][^>]*>|\\{\\||\\|\\}").containsMatchIn(text))
+        }
         assertNotNull(library.exact("cat"));assertTrue(library.search("not-in-this-corpus").isEmpty())
         assertTrue((1..20).map{library.random()!!.title}.distinct().size>1)
     }

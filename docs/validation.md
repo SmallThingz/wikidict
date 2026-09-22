@@ -22,4 +22,34 @@ The optimized APK was tested without development assets. A custom GitHub-hosted 
 
 ## Release limits
 
-The default catalogue URL points at `SmallThingz/wikidict`'s latest release asset `dictionaries.list`. No complete corpus or production release has been published. The GitHub-hosted development list is explicitly labelled as a 32-word test slice. Release/performance APKs contain no bundled development dictionary. Background downloads are process-bound and do not yet resume across process death; interrupted temporary files are removed on the next launch.
+The default catalogue URL points at `SmallThingz/wikidict`'s latest release asset `dictionaries.list`. No complete corpus or production release has been published. The GitHub-hosted development list is explicitly labelled as a development test slice. Release/performance APKs contain no bundled development dictionary. Background downloads are process-bound and do not yet resume across process death; interrupted temporary files are removed on the next launch.
+
+
+## Syntax and offline speech follow-up
+
+The fixture now has 30 entries. February and pound are explicitly excluded because
+literal source delimiters remain in quotations; no quotation text was silently
+rewritten. The core compiler rejects such records at build time, including markup
+split across spans. The fixture's device test scans all headings, span groups,
+tables, references and media captions for leaked source syntax.
+
+Image display has 12 dp top spacing and no redundant image icon after expansion.
+Word pronunciation uses an installed offline Android voice. The explicit English
+IPA subset in `Pronunciation.kt` uses eSpeak NG SSML phonemes; unsupported IPA is
+not guessed, and other local engines remain available for ordinary word reading.
+The official eSpeak NG 1.52.0 engine was installed on the test phone. Device tests
+verified local WAV synthesis and distinct audio for distinct phoneme sequences.
+This establishes execution, not linguistic accuracy across accents/languages.
+
+Final validation: nine JVM tests passed; four instrumentation tests passed and the
+opt-in live network test was skipped in this run (its earlier live run passed).
+An additional speech instrumentation run passed with Wi-Fi disabled, then Wi-Fi
+was restored. Core `zig build test test-bundle` passed, and a real guarded bundle
+build stopped at `gratis` with `UncompiledPresentation`, as intended.
+
+The final optimized scroll smoke recorded 608 frames, 31 janky frames (5.10%),
+p50 10 ms, p95 15 ms and p99 24 ms for the same 24-swipe `cat` workload. This is
+similar to the earlier run, not a demonstrated speedup or a zero-jank result.
+Final screenshots show the image spacing and removed expanded-image icon.
+Private DNS was restored to `hostname` / `dns.adguard.com`; Wi-Fi is enabled and
+the device was left awake. The installed app is the optimized performance build.

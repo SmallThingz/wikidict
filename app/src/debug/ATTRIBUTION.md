@@ -5,7 +5,9 @@
 The text is redistributed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
 Changes: templates and Lua expanded at build time; entries transformed into binary
 semantic presentation records; only the English sections of the pages below retained.
-This fixture is not a complete English dictionary. It contains no image/audio files.
+This 30-entry fixture is not a complete English dictionary. February and pound are excluded
+because their quotations contain literal source delimiters (the February
+transclusion is also displayed literally by Wikimedia); the production compiler now rejects such source leakage. It contains no image/audio files.
 Media fetched later retain the licences and attribution on their linked source pages.
 
 [Wiktionary copyright information](https://en.wiktionary.org/wiki/Wiktionary:Copyrights).
@@ -14,7 +16,6 @@ Each source page links to its contributor history:
 - [A](https://en.wiktionary.org/wiki/A) · [contributors](https://en.wiktionary.org/w/index.php?title=A&action=history)
 - [April](https://en.wiktionary.org/wiki/April) · [contributors](https://en.wiktionary.org/w/index.php?title=April&action=history)
 - [December](https://en.wiktionary.org/wiki/December) · [contributors](https://en.wiktionary.org/w/index.php?title=December&action=history)
-- [February](https://en.wiktionary.org/wiki/February) · [contributors](https://en.wiktionary.org/w/index.php?title=February&action=history)
 - [GDP](https://en.wiktionary.org/wiki/GDP) · [contributors](https://en.wiktionary.org/w/index.php?title=GDP&action=history)
 - [GNU FDL](https://en.wiktionary.org/wiki/GNU%20FDL) · [contributors](https://en.wiktionary.org/w/index.php?title=GNU%20FDL&action=history)
 - [January](https://en.wiktionary.org/wiki/January) · [contributors](https://en.wiktionary.org/w/index.php?title=January&action=history)
@@ -39,7 +40,6 @@ Each source page links to its contributor history:
 - [pie](https://en.wiktionary.org/wiki/pie) · [contributors](https://en.wiktionary.org/w/index.php?title=pie&action=history)
 - [pies](https://en.wiktionary.org/wiki/pies) · [contributors](https://en.wiktionary.org/w/index.php?title=pies&action=history)
 - [pond](https://en.wiktionary.org/wiki/pond) · [contributors](https://en.wiktionary.org/w/index.php?title=pond&action=history)
-- [pound](https://en.wiktionary.org/wiki/pound) · [contributors](https://en.wiktionary.org/w/index.php?title=pound&action=history)
 - [rain cats and dogs](https://en.wiktionary.org/wiki/rain%20cats%20and%20dogs) · [contributors](https://en.wiktionary.org/w/index.php?title=rain%20cats%20and%20dogs&action=history)
 - [raven](https://en.wiktionary.org/wiki/raven) · [contributors](https://en.wiktionary.org/w/index.php?title=raven&action=history)
 - [word](https://en.wiktionary.org/wiki/word) · [contributors](https://en.wiktionary.org/w/index.php?title=word&action=history)

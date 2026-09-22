@@ -18,6 +18,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.VolumeUp
+import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -45,6 +48,8 @@ private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
 @Composable
 fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings()) {
     val uri = LocalUriHandler.current
+    val context = LocalContext.current
+    DisposableEffect(entry.key) { onDispose { SpeechPlayback.stop() } }
     val currentLink = rememberUpdatedState(onLink)
     val colors = MaterialTheme.colorScheme
     val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
@@ -67,6 +72,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 Column(Modifier.padding(bottom = 6.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text((entry.language ?: entry.kind.replace('_', ' ')).uppercase(), Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        IconButton(onClick = { SpeechPlayback.play(context, entry.title, entry.languageCode) }) { Icon(if (SpeechPlayback.active == entry.title) Icons.Outlined.Stop else Icons.Outlined.VolumeUp, "Pronounce word offline", Modifier.size(22.dp)) }
                         Box {
                             IconButton(onClick = { contents = true }) { Icon(Icons.AutoMirrored.Filled.List, "Sections", Modifier.size(22.dp)) }
                             DropdownMenu(contents, { contents = false }, Modifier.heightIn(max = 340.dp)) {
@@ -87,6 +93,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     }
                     if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, style = MaterialTheme.typography.displayMedium, onLink = onLink)
                     else Text(entry.title, style = MaterialTheme.typography.displayMedium)
+                    SpeechPlayback.error?.let { message ->
+                        Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { runCatching { context.startActivity(android.content.Intent("com.android.settings.TTS_SETTINGS")) } }) { Text("Speech settings") }
+                    }
                 }
             }
             if (entry.preamble.isNotEmpty()) item("preamble", contentType = "paragraph") { StyledText(entry.preamble, Modifier.padding(bottom = 6.dp), onLink = onLink) }
@@ -101,7 +111,16 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         }
                     }
                 }
-                row.block?.let { block -> Box(Modifier.padding(bottom = if (row.compact) 2.dp else 6.dp)) { BlockView(block, onLink) } }
+                row.block?.let { block ->
+                    Row(Modifier.padding(bottom = if (row.compact) 2.dp else 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)) { BlockView(block, onLink) }
+                        block.spans.filter { it.role == "pronunciation" && Pronunciation.ssml(it.text, entry.languageCode) != null }.distinctBy { it.text }.forEach { span ->
+                            IconButton(onClick = { SpeechPlayback.play(context, entry.title, entry.languageCode, span.text) }) {
+                                Icon(if (SpeechPlayback.active == span.text) Icons.Outlined.Stop else Icons.Outlined.VolumeUp, "Pronounce ${span.text} offline", Modifier.size(18.dp))
+                            }
+                        }
+                    }
+                }
                 }
             }
             if (entry.references.isNotEmpty()) item("references-heading") { Text("References", Modifier.padding(top = 18.dp, bottom = 10.dp), style = MaterialTheme.typography.titleLarge) }
@@ -190,9 +209,9 @@ private fun StyledText(spans: List<Span>, modifier: Modifier = Modifier, weight:
     val embedded = spans.filter { it.classes == "wikidict-media" && it.target.startsWith("File:") }.mapNotNull { span -> availableMedia.firstOrNull { it.file == span.target.removePrefix("File:").replace('_',' ') } }.distinctBy { it.file }
     if (embedded.isNotEmpty()) {
         Column(modifier) {
-            val text = spans.filter { it.classes != "wikidict-media" }
+            val text = spans.filter { it.classes != "wikidict-media" }.dropLastWhile { it.text.isBlank() && it.trail.isBlank() }
             if (text.any { it.text.isNotBlank() }) StyledText(text, weight = weight, style = style, onLink = onLink)
-            embedded.forEach { MediaView(it, LocalReaderSettings.current) }
+            embedded.forEach { MediaView(it, LocalReaderSettings.current, showFileName = false) }
         }
         return
     }

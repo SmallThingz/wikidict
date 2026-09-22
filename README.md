@@ -14,7 +14,7 @@ See the [catalogue specification](https://github.com/SmallThingz/wikidict/blob/m
 
 Tap the dictionary dock icon again to search installed languages. Pronunciation and Etymology start folded; change those defaults in Settings. Enable online images and audio separately. Media caches can be disabled or limited to 25, 100 or 500 MiB, and cleared independently of dictionaries. Cached assets remain available without network; audio downloads only after tapping Play.
 
-Debug builds replace the default remote catalogue with a local **32-word English corpus slice**, using the same binary installer and lookup path. Custom sources still use HTTPS. This is explicitly a development fixture, not a complete dictionary or the release application. [Fixture sources and attribution](app/src/debug/ATTRIBUTION.md).
+Debug builds replace the default remote catalogue with a local **30-word English corpus slice**, using the same binary installer and lookup path. Custom sources still use HTTPS. This is explicitly a development fixture, not a complete dictionary or the release application. [Fixture sources and attribution](app/src/debug/ATTRIBUTION.md).
 
 ## Build and test
 
@@ -33,3 +33,7 @@ Live Wikimedia tests require a connected device with working internet; opt in wi
 [Core compiler/encoder/decoder](https://github.com/SmallThingz/wikidict) · [Desktop](https://github.com/SmallThingz/wikidict-desktop)
 
 This repository preserves the original Android file history from the core project.
+
+Local pronunciation uses installed Android offline voices. Supported English IPA
+transcriptions can use eSpeak NG phoneme input; unsupported transcriptions are not
+fed to a text voice. The app does not bundle a TTS engine.

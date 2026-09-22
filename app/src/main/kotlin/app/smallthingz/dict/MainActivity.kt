@@ -23,7 +23,8 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         handle(intent)
     }
-    override fun onStop() { MediaPlayback.stop(); super.onStop() }
+    override fun onStop() { SpeechPlayback.stop(); MediaPlayback.stop(); super.onStop() }
+    override fun onDestroy() { SpeechPlayback.close(); super.onDestroy() }
     private fun handle(intent: Intent) {
         if (intent.action == Intent.ACTION_VIEW) intent.data?.let(::import)
         if (intent.action == Intent.ACTION_SEND) intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let(::import)

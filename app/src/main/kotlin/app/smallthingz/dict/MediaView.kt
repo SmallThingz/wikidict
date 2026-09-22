@@ -66,12 +66,12 @@ object MediaPlayback {
     private var temporary:File?=null
     var playing by mutableStateOf<String?>(null);private set
     fun stop(){player?.release();player=null;temporary?.delete();temporary=null;playing=null}
-    fun play(key:String,file:MediaFile){stop();val next=MediaPlayer();player=next;temporary=if(file.ephemeral)file.file else null;playing=key
+    fun play(key:String,file:MediaFile){SpeechPlayback.stop();stop();val next=MediaPlayer();player=next;temporary=if(file.ephemeral)file.file else null;playing=key
         try{next.setDataSource(file.file.absolutePath);next.setOnPreparedListener{if(player===it)it.start()};next.setOnCompletionListener{stop()};next.setOnErrorListener{_,_,_->stop();true};next.prepareAsync()}catch(e:Exception){stop();throw e}
     }
 }
 @Composable
-fun MediaView(media:Media,settings:AppSettings) {
+fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true) {
     val cache=MediaCache.get(LocalContext.current);val scope=rememberCoroutineScope();val uri=LocalUriHandler.current
     var resource by remember(media.file){mutableStateOf<MediaFile?>(null)}
     var error by remember(media.file){mutableStateOf<String?>(null)}
@@ -87,17 +87,18 @@ fun MediaView(media:Media,settings:AppSettings) {
     }
     DisposableEffect(media.file){onDispose{if(MediaPlayback.playing==media.file)MediaPlayback.stop();resource?.takeIf{it.ephemeral}?.file?.delete()}}
     Column(Modifier.fillMaxWidth()) {
-        if(media.kind=="image"&&allowed) Box(Modifier.fillMaxWidth().height(220.dp),contentAlignment=Alignment.Center) {
+        if(media.kind=="image"&&allowed) Box(Modifier.fillMaxWidth().padding(top=12.dp).height(220.dp),contentAlignment=Alignment.Center) {
             bitmap?.let { Image(it.asImageBitmap(),media.caption.ifBlank{media.file},Modifier.fillMaxSize()) }
             if(bitmap==null && busy) CircularProgressIndicator(Modifier.size(24.dp),strokeWidth=2.dp)
         }
         Row(verticalAlignment=Alignment.CenterVertically) {
-            IconButton(enabled=allowed&&!busy,onClick={
+            if(media.kind!="image" || !allowed || error!=null) IconButton(enabled=allowed&&!busy,onClick={
                 if(media.kind=="audio") { if(MediaPlayback.playing==media.file)MediaPlayback.stop() else scope.launch{busy=true;error=null;try{val loaded=cache.get(media,settings.mediaCacheMb);resource=loaded;MediaPlayback.play(media.file,loaded)}catch(e:CancellationException){throw e}catch(e:Exception){error=e.message}finally{busy=false}} }
                 else if(error!=null || resource==null) retry++ else resource?.source?.let{uri.openUri(it)}
             }) { if(busy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Icon(if(media.kind=="image")Icons.Outlined.Image else if(MediaPlayback.playing==media.file)Icons.Outlined.Stop else Icons.Outlined.PlayArrow,if(media.kind=="image"){if(error!=null) "Retry image" else "Image source"} else if(MediaPlayback.playing==media.file) "Stop pronunciation" else "Play pronunciation") }
             Column(Modifier.weight(1f)) {
-                Text(media.caption.ifBlank{media.file.substringBeforeLast('.').replace('_',' ')},style=MaterialTheme.typography.bodyMedium)
+                val caption=media.caption.takeUnless{it==media.file}.orEmpty()
+                if(caption.isNotBlank() || showFileName) Text(caption.ifBlank{media.file.substringBeforeLast('.').replace('_',' ')},style=MaterialTheme.typography.bodyMedium)
                 error?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)}
                 resource?.credit?.takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall,maxLines=2,color=MaterialTheme.colorScheme.onSurfaceVariant)}
             }
