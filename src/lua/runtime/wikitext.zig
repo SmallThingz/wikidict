@@ -1822,9 +1822,13 @@ pub const Expander = struct {
         const type_arg = categoryTreeArg(args, "type");
         if (mode_arg != null and type_arg != null and !std.ascii.eqlIgnoreCase(mode_arg.?, type_arg.?))
             return error.UnsupportedCategoryTreeOptions;
-        const mode = mode_arg orelse type_arg orelse "pages";
-        const depth = categoryTreeArg(args, "depth") orelse "1";
         const namespaces = categoryTreeValue(categoryTreeArg(args, "namespaces"));
+        // MediaWiki defaults to subcategories. A main-namespace filter forces pages mode.
+        const mode = if (namespaces != null and std.mem.eql(u8, namespaces.?, "-"))
+            "pages"
+        else
+            mode_arg orelse type_arg orelse "categories";
+        const depth = categoryTreeArg(args, "depth") orelse "1";
         const hideprefix = categoryTreeArg(args, "hideprefix") orelse "categories";
         const hideroot = categoryTreeArg(args, "hideroot") orelse "off";
         const showcount = categoryTreeArg(args, "showcount") orelse "off";
@@ -2343,6 +2347,12 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expect(std.mem.indexOf(u8, category_tree_pages, "[[Talk:beta]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree_pages, "[[:Category:Child|Child]] <span class=\"CategoryTreeCount\">(0)</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree_pages, "[[:Category:Child|Child]]").? < std.mem.indexOf(u8, category_tree_pages, "[[alpha]]").?);
+    const category_tree_default = try expander.expandFragment(
+        "Page",
+        "{{#categorytree:English terms prefixed with un-|depth=0|showcount=on}}",
+        1_670_803_200,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_default, "(1)") != null);
     const category_tree_root = try expander.expandFragment(
         "Page",
         "{{#categorytree:English terms prefixed with un-|mode=all|depth=0|class=\"columns-bg\"|hideprefix=always|showcount=on}}",
