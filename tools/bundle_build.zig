@@ -513,8 +513,8 @@ pub fn main(init: std.process.Init) !void {
     // The native worker is a transient bundle compiler. It never belongs in the
     // shipped dictionary; full builds consume it immediately and delete .bundle-expander/.
     try compileNativeWorker(init.io, a, marker, expander_root, llvm_dir, llvm_workers);
-    try std.Io.Dir.cwd().deleteTree(init.io, llvm_dir);
-
+    // Keep native build artifacts available if corpus expansion fails. The
+    // entire transient tree is deleted together only after successful encoding.
     try std.Io.Dir.cwd().deleteFile(init.io, expander_marker);
     const page_workers_text = try std.fmt.allocPrint(a, "{d}", .{options.page_workers});
     try stage(init.io, marker, "expand and encode dictionary blobs", &.{
