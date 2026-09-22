@@ -21,6 +21,11 @@ data class AppSettings(
     val historyLimit: Int = 100,
     val quizLength: Int = 10,
     val randomPool: String = "all",
+    val collapsePronunciation: Boolean = true,
+    val collapseEtymology: Boolean = true,
+    val allowImages: Boolean = false,
+    val allowAudio: Boolean = false,
+    val mediaCacheMb: Int = 100,
 )
 data class LearningData(
     val history: List<SavedWord> = emptyList(),
@@ -109,7 +114,12 @@ class LearningStore private constructor(context: Context) {
             .put("historyEnabled", value.settings.historyEnabled)
             .put("historyLimit", value.settings.historyLimit)
             .put("quizLength", value.settings.quizLength)
-            .put("randomPool", value.settings.randomPool))
+            .put("randomPool", value.settings.randomPool)
+            .put("collapsePronunciation", value.settings.collapsePronunciation)
+            .put("collapseEtymology", value.settings.collapseEtymology)
+            .put("allowImages", value.settings.allowImages)
+            .put("allowAudio", value.settings.allowAudio)
+            .put("mediaCacheMb", value.settings.mediaCacheMb))
         prefs.edit { putString("state", root.toString()) }
     }
 
@@ -123,6 +133,11 @@ class LearningStore private constructor(context: Context) {
             study = study(root.optJSONObject("study")),
             settings = AppSettings(
                 darkMode = settings.optString("darkMode", "system").takeIf { it in setOf("system", "light", "dark") } ?: "system",
+                collapsePronunciation = settings.optBoolean("collapsePronunciation", true),
+                collapseEtymology = settings.optBoolean("collapseEtymology", true),
+                allowImages = settings.optBoolean("allowImages", false),
+                allowAudio = settings.optBoolean("allowAudio", false),
+                mediaCacheMb = settings.optInt("mediaCacheMb", 100).coerceIn(0,1024),
                 historyEnabled = settings.optBoolean("historyEnabled", true),
                 historyLimit = settings.optInt("historyLimit", 100).coerceIn(1, 500),
                 quizLength = settings.optInt("quizLength", 10).coerceIn(3, 50),

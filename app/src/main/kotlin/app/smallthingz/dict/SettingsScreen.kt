@@ -11,16 +11,35 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(learning: LearningStore) {
     val settings = learning.data.settings
+    val media = MediaCache.get(LocalContext.current)
+    val scope = rememberCoroutineScope()
     var clear by remember { mutableStateOf<String?>(null) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item { Text("Settings", style = MaterialTheme.typography.headlineMedium) }
         item {
             PreferenceGroup(Icons.Outlined.Palette, "Atmosphere") {
                 Segments(listOf("system", "light", "dark"), settings.darkMode, { it.replaceFirstChar(Char::uppercase) }, { mode -> learning.updateSettings { it.copy(darkMode = mode) } }, Modifier.fillMaxWidth())
+            }
+        }
+        item {
+            PreferenceGroup(Icons.Outlined.UnfoldLess, "Start folded") {
+                TogglePreference("Pronunciation", settings.collapsePronunciation) { value -> learning.updateSettings { it.copy(collapsePronunciation=value) } }
+                TogglePreference("Etymology", settings.collapseEtymology) { value -> learning.updateSettings { it.copy(collapseEtymology=value) } }
+            }
+        }
+        item {
+            PreferenceGroup(Icons.Outlined.PermMedia, "Images & sound") {
+                TogglePreference("Load images online", settings.allowImages) { value -> learning.updateSettings { it.copy(allowImages=value) } }
+                TogglePreference("Play online audio", settings.allowAudio) { value -> learning.updateSettings { it.copy(allowAudio=value) }; if(!value) MediaPlayback.stop() }
+                Text("Media cache", style=MaterialTheme.typography.bodyMedium)
+                Segments(listOf(0,25,100,500), settings.mediaCacheMb, { if(it==0) "Off" else "$it MB" }, { value -> learning.updateSettings { it.copy(mediaCacheMb=value) }; scope.launch { media.trim(value) } }, Modifier.fillMaxWidth())
+                TextButton(onClick={scope.launch{MediaPlayback.stop();media.clear()}}) { Text("Clear cached media") }
             }
         }
         item {
@@ -67,5 +86,13 @@ private fun PreferenceGroup(icon: ImageVector, title: String, content: @Composab
             Text(title, style = MaterialTheme.typography.titleLarge.copy(fontSize = 24.sp))
         }
         content()
+    }
+}
+
+@Composable
+private fun TogglePreference(label: String, checked: Boolean, onChange: (Boolean)->Unit) {
+    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+        Text(label,Modifier.weight(1f),style=MaterialTheme.typography.bodyMedium)
+        ReaderSwitch(checked,label,onChange)
     }
 }

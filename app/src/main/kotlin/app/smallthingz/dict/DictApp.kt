@@ -25,104 +25,94 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-enum class AppScreen { Dictionary, Saved, Learn, Settings }
+enum class AppScreen { Dictionary, Library, Saved, Learn, Settings }
 
 @Composable
-fun DictApp(document: DocumentState, learning: LearningStore, onOpen: () -> Unit, onReload: () -> Unit) {
+fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit) {
     var screen by rememberSaveable { mutableStateOf(AppScreen.Dictionary) }
     var query by rememberSaveable { mutableStateOf("") }
     var searching by rememberSaveable { mutableStateOf(false) }
-    var selectedKey by rememberSaveable { mutableStateOf<String?>(null) }
-    var menu by remember { mutableStateOf(false) }
-    val loaded = document as? DocumentState.Loaded
-    val entries = loaded?.results?.entries.orEmpty()
-    val selected = loaded?.results?.byKey?.get(selectedKey) ?: entries.firstOrNull()
-    LaunchedEffect(loaded) { if (loaded != null) { screen = AppScreen.Dictionary; query = ""; searching = false } }
-    LaunchedEffect(selected?.key) { selected?.let(learning::record) }
+    var selected by remember { mutableStateOf<Entry?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var selectionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-    fun select(key: String) { selectedKey = key; query = ""; searching = false; screen = AppScreen.Dictionary; keyboard?.hide() }
-    fun openWord(word: SavedWord) {
-        if (loaded?.results?.byKey?.containsKey(word.key) == true) select(word.key)
-        else scope.launch { snackbar.showSnackbar("${word.title} is not in this dictionary.") }
-    }
-    fun randomWord() {
-        val source = when (learning.data.settings.randomPool) {
-            "history" -> learning.data.history.mapNotNull { loaded?.results?.byKey?.get(it.key) }
-            "bookmarks" -> learning.data.bookmarks.mapNotNull { loaded?.results?.byKey?.get(it.key) }
-            else -> entries
+    fun open(hit: WordHit) {
+        selectionJob?.cancel()
+        selectionJob = scope.launch {
+            loading = true
+            try { selected = library.read(hit); library.rememberWord(hit); selected?.let(learning::record); query = ""; searching = false; screen = AppScreen.Dictionary; keyboard?.hide() }
+            catch(e: kotlinx.coroutines.CancellationException) { throw e }
+            catch(e: Exception) { snackbar.showSnackbar(e.message ?: "Unable to read this word") }
+            finally { loading = false }
         }
-        source.randomOrNull()?.let { select(it.key) }
     }
+    LaunchedEffect(library.revision) {
+        if (library.dictionaries.isEmpty()) { selected = null; screen = AppScreen.Library }
+        else if (selected == null) (library.lastWord() ?: library.search("", 1).firstOrNull())?.let(::open)
+    }
+    fun openWord(word: SavedWord) { scope.launch { library.exact(word.title,word.language)?.let(::open) ?: snackbar.showSnackbar("Install the dictionary for ${word.title}.") } }
+    fun randomWord() { scope.launch { library.random()?.let(::open) } }
     androidx.activity.compose.BackHandler(searching || screen != AppScreen.Dictionary) {
         searching = false; query = ""; screen = AppScreen.Dictionary; keyboard?.hide()
     }
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = {
-            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                Box(Modifier.navigationBarsPadding().imePadding()) {
-                    androidx.compose.animation.Crossfade(targetState = searching, label = "dock") { search ->
-                        if (search) SearchDock(query, { query = it }, { searching = false; query = ""; keyboard?.hide() })
-                        else Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                            AppScreen.entries.forEach { target ->
-                                DockButton(screenIcon(target), target.name, screen == target) {
-                                    if (target == AppScreen.Dictionary && screen == target && loaded != null) searching = true
-                                    screen = target
-                                }
-                            }
-                            Box {
-                                DockButton(Icons.Filled.MoreHoriz, "More", false) { menu = true }
-                                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                    DropdownMenuItem(text = { Text("Open dictionary") }, leadingIcon = { Icon(Icons.Filled.FolderOpen, null) }, onClick = { menu = false; onOpen() })
-                                    DropdownMenuItem(text = { Text("Random word") }, leadingIcon = { Icon(Icons.Filled.Casino, null) }, onClick = { menu = false; randomWord() })
-                                }
-                            }
-                        }
+    Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
+        Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
+            Box(Modifier.navigationBarsPadding().imePadding()) {
+                androidx.compose.animation.Crossfade(searching, label = "dock") { search ->
+                    if (search) SearchDock(query, { query = it }, { searching = false; query = ""; keyboard?.hide() })
+                    else Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        AppScreen.entries.forEach { target -> DockButton(screenIcon(target), target.name, screen == target) {
+                            if (target == AppScreen.Dictionary && screen == target && library.dictionaries.isNotEmpty()) searching = true
+                            screen = target
+                        } }
                     }
                 }
             }
-        },
-    ) { padding ->
+        }
+    }) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            androidx.compose.animation.Crossfade(targetState = screen, animationSpec = androidx.compose.animation.core.tween(160), label = "page") { destination ->
-            when (destination) {
-                AppScreen.Dictionary -> when (document) {
-                    DocumentState.Empty -> EmptyDocument(onOpen)
-                    is DocumentState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) }
-                    is DocumentState.Failed -> Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(document.message); OutlinedButton(onClick = onReload) { Text("Retry") }; TextButton(onClick = onOpen) { Text("Open dictionary") }
+            androidx.compose.animation.Crossfade(screen, animationSpec = androidx.compose.animation.core.tween(140), label = "page") { destination ->
+                when(destination) {
+                    AppScreen.Library -> LibraryScreen(library, onImport)
+                    AppScreen.Dictionary -> {
+                        if (searching) {
+                            val matches by produceState<List<WordHit>>(emptyList(), library.revision, query) { value = library.search(query) }
+                            WordMatches(matches, ::open)
+                        } else selected?.let { entry -> EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, settings = learning.data.settings, onLink = { target ->
+                            scope.launch { library.exact(target.substringBefore('#').replace('_',' '),entry.language)?.let(::open) ?: snackbar.showSnackbar("This word is not in your installed dictionaries.") }
+                        }) } ?: LibraryScreen(library,onImport)
                     }
-                    is DocumentState.Loaded -> {
-                        if (searching && query.isNotBlank()) {
-                            val matches by produceState<List<Entry>>(emptyList(), entries, query) {
-                                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                                    entries.asSequence().filter { it.title.contains(query, ignoreCase = true) }.take(80).toList()
-                                }
-                            }
-                            EntryMatches(matches, ::select)
-                        } else if (selected != null) EntryView(selected, learning.isBookmarked(selected), { learning.toggleBookmark(selected) }) { target ->
-                            val title = target.substringBefore('#').replace('_', ' ')
-                            val match = loaded?.results?.byTitle?.get(title)
-                            if (match != null) select(match.key)
-                            else scope.launch { snackbar.showSnackbar("$title is not in this dictionary.") }
+                    AppScreen.Saved -> SavedScreen(learning, ::openWord)
+                    AppScreen.Learn -> {
+                        val study by produceState<List<Entry>>(emptyList(),library.revision) {
+                            val hits=LinkedHashMap<String,WordHit>()
+                            repeat(64){library.random()?.let{hits[it.key]=it}}
+                            value=hits.values.mapNotNull { try{library.read(it)}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(_:Exception){null} }
                         }
+                        LearnScreen(learning, study, ::openWord, ::randomWord)
                     }
+                    AppScreen.Settings -> SettingsScreen(learning)
                 }
-                AppScreen.Saved -> SavedScreen(learning, ::openWord)
-                AppScreen.Learn -> LearnScreen(learning, entries, ::openWord, ::randomWord)
-                AppScreen.Settings -> SettingsScreen(learning)
             }
-            }
+            if(loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
         }
     }
 }
-private fun screenIcon(screen: AppScreen) = when (screen) {
+private fun screenIcon(screen: AppScreen) = when(screen) {
     AppScreen.Dictionary -> Icons.Filled.Search
+    AppScreen.Library -> Icons.Filled.FolderOpen
     AppScreen.Saved -> Icons.Filled.Bookmarks
     AppScreen.Learn -> Icons.Filled.School
     AppScreen.Settings -> Icons.Filled.Settings
+}
+@Composable
+private fun WordMatches(hits: List<WordHit>, open: (WordHit)->Unit) {
+    if(hits.isEmpty()) Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) { Text("No matching words",style=MaterialTheme.typography.bodyMedium) }
+    else LazyColumn(contentPadding=PaddingValues(horizontal=12.dp)) { items(hits,key={it.dictionary+"/"+it.title}) { hit ->
+        ListItem(headlineContent={Text(hit.title,style=MaterialTheme.typography.titleLarge)},supportingContent={Text(hit.language)},modifier=Modifier.clickable {open(hit)})
+    } }
 }
 
 @Composable
@@ -142,29 +132,6 @@ private fun SearchDock(query: String, onQuery: (String) -> Unit, onClose: () -> 
     }
 }
 
-@Composable
-private fun EntryMatches(entries: List<Entry>, onSelect: (String) -> Unit) {
-    if (entries.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No matching words in this dictionary.") }
-    else LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
-        items(entries, key = { it.key }) { entry ->
-            ListItem(
-                headlineContent = { Text(entry.title) },
-                supportingContent = { Text(entry.language ?: entry.kind.replace('_', ' ')) },
-                modifier = Modifier.clickable { onSelect(entry.key) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun EmptyDocument(onOpen: () -> Unit) {
-    Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Your dictionary, offline.", style = MaterialTheme.typography.headlineMedium)
-            Button(onClick = onOpen) { Icon(Icons.Filled.FolderOpen, null); Spacer(Modifier.width(8.dp)); Text("Open dictionary") }
-        }
-    }
-}
 @Composable
 private fun SavedScreen(learning: LearningStore, onOpen: (SavedWord) -> Unit) {
     var history by rememberSaveable { mutableStateOf(false) }

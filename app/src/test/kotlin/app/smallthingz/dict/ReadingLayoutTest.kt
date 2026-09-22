@@ -21,4 +21,11 @@ class ReadingLayoutTest {
         assertSame(pre, rows[1].block)
         assertSame(paragraph, rows[2].block)
     }
+
+    @org.junit.Test fun foldingEtymologyKeepsNestedDefinitionsVisible() {
+        val sections=listOf(Section(3,"Etymology 1",listOf(Block("paragraph",0,listOf(Span("text","Origin"))))),Section(4,"Noun",listOf(Block("definition",1,listOf(Span("text","Meaning"))))))
+        val visible=visibleReadingRows(readingRows(sections),setOf("heading-0"))
+        org.junit.Assert.assertFalse(visible.any{it.block?.spans?.any{span->span.text=="Origin"}==true})
+        org.junit.Assert.assertTrue(visible.any{it.block?.spans?.any{span->span.text=="Meaning"}==true})
+    }
 }

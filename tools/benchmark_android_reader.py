@@ -6,17 +6,17 @@ p = argparse.ArgumentParser()
 p.add_argument('--adb', default='adb')
 p.add_argument('--report', type=Path, required=True)
 p.add_argument('--variant', choices=['debug', 'performance'], default='debug')
-p.add_argument('--uri', default='file:///data/user/0/app.smallthingz.dict/files/corpus-cat.json')
+p.add_argument('--word', default='cat', help='Open this word in the app before running')
 a = p.parse_args()
 a.report.mkdir(parents=True, exist_ok=True)
 def adb(*args):
     return subprocess.check_output([a.adb, *args], timeout=60)
-adb('shell','am','start','-S','-W','-n','app.smallthingz.dict/.MainActivity','-a','android.intent.action.VIEW','-d',a.uri,'--activity-clear-task')
+adb('shell','am','start','-S','-W','-n','app.smallthingz.dict/.MainActivity')
 time.sleep(3)
 (a.report/'start.png').write_bytes(adb('exec-out','screencap','-p'))
 adb('shell','uiautomator','dump','/data/local/tmp/dict-reader-benchmark.xml')
 ui = adb('shell','cat','/data/local/tmp/dict-reader-benchmark.xml').decode()
-if 'package="app.smallthingz.dict"' not in ui or 'text="cat"' not in ui:
+if 'package="app.smallthingz.dict"' not in ui or f'text="{a.word}"' not in ui:
     raise RuntimeError('Reader is not visible at cat; unlock/foreground it before benchmarking')
 size = adb('shell','wm','size').decode()
 w,h = map(int, re.findall(r'(\d+)x(\d+)', size)[-1])
@@ -34,7 +34,7 @@ raw = adb('shell','dumpsys','gfxinfo','app.smallthingz.dict','framestats').decod
 def match(pattern):
     m = re.search(pattern,raw)
     return m.group(1) if m else None
-result = dict(workload='cat export; 12 forward + 12 backward swipes, 400 ms', variant=a.variant, seconds=time.monotonic()-start,
+result = dict(workload=f'{a.word} binary record; 12 forward + 12 backward swipes, 400 ms', variant=a.variant, seconds=time.monotonic()-start,
               frames=match(r'Total frames rendered: (\d+)'), janky=match(r'Janky frames: (\d+)'),
               janky_percent=match(r'Janky frames: \d+ \(([\d.]+)%\)'),
               p50_ms=match(r'50th percentile: (\d+)ms'),p95_ms=match(r'95th percentile: (\d+)ms'),p99_ms=match(r'99th percentile: (\d+)ms'))

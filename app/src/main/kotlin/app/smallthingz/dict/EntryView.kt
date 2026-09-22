@@ -1,6 +1,10 @@
 package app.smallthingz.dict
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,6 +21,7 @@ import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.*
@@ -33,21 +38,33 @@ import androidx.compose.ui.unit.em
 private class TextCache(val link: State<(String) -> Unit>) {
     val values = java.util.IdentityHashMap<List<Span>, MutableMap<FontWeight?, AnnotatedString>>()
 }
+private val LocalEntryMedia = staticCompositionLocalOf<List<Media>> { emptyList() }
+private val LocalReaderSettings = staticCompositionLocalOf { AppSettings() }
 private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
 
 @Composable
-fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}) {
+fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings()) {
+    val uri = LocalUriHandler.current
     val currentLink = rememberUpdatedState(onLink)
     val colors = MaterialTheme.colorScheme
     val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
-    CompositionLocalProvider(LocalTextCache provides cache) {
+    CompositionLocalProvider(LocalTextCache provides cache, LocalEntryMedia provides entry.media, LocalReaderSettings provides settings) {
       key(entry.key) {
         val scroll = rememberLazyListState()
         val scope = rememberCoroutineScope()
         var contents by remember { mutableStateOf(false) }
-        LazyColumn(Modifier.fillMaxSize().testTag("entry-scroll"), state = scroll, contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp)) {
+        val folded = remember(entry.key, settings.collapsePronunciation, settings.collapseEtymology) {
+            mutableStateMapOf<String, Boolean>().apply {
+                entry.readingRows.forEach { row -> row.heading?.let {
+                    this[row.key] = (settings.collapsePronunciation && it.title.startsWith("Pronunciation", true)) ||
+                        (settings.collapseEtymology && it.title.startsWith("Etymology", true))
+                } }
+            }
+        }
+        val visibleRows = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
+        LazyColumn(Modifier.fillMaxSize().testTag("entry-scroll"), state = scroll, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
             item("title", contentType = "title") {
-                Column(Modifier.padding(bottom = 12.dp)) {
+                Column(Modifier.padding(bottom = 6.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text((entry.language ?: entry.kind.replace('_', ' ')).uppercase(), Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                         Box {
@@ -56,7 +73,12 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                                 entry.readingRows.forEachIndexed { index, row -> row.heading?.let { section ->
                                     if (section.title.isNotBlank() && section.title != entry.language) DropdownMenuItem(text = { Text(section.title) }, onClick = {
                                         contents = false
-                                        scope.launch { scroll.animateScrollToItem(index + 1 + if (entry.preamble.isNotEmpty()) 1 else 0) }
+                                        folded[row.key] = false
+                                        val targetIndex = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys).indexOfFirst { it.key == row.key }
+                                        scope.launch {
+                                            androidx.compose.runtime.withFrameNanos { }
+                                            scroll.animateScrollToItem(targetIndex + 1 + if (entry.preamble.isNotEmpty()) 1 else 0)
+                                        }
                                     })
                                 } }
                             }
@@ -67,28 +89,38 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     else Text(entry.title, style = MaterialTheme.typography.displayMedium)
                 }
             }
-            if (entry.preamble.isNotEmpty()) item("preamble", contentType = "paragraph") { StyledText(entry.preamble, Modifier.padding(bottom = 12.dp), onLink = onLink) }
-            items(entry.readingRows, key = { it.key }, contentType = { if (it.heading != null) "heading" else it.block?.kind }) { row ->
+            if (entry.preamble.isNotEmpty()) item("preamble", contentType = "paragraph") { StyledText(entry.preamble, Modifier.padding(bottom = 6.dp), onLink = onLink) }
+            items(visibleRows, key = { it.key }, contentType = { if (it.heading != null) "heading" else it.block?.kind }) { row ->
+                Column(Modifier.animateItem()) {
                 row.heading?.let { section ->
-                    if (section.title.isNotBlank() && section.title != entry.language) Text(section.title,
-                        modifier = Modifier.padding(top = 18.dp, bottom = 9.dp),
-                        style = if (section.level <= 3) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
-                        color = if (section.level <= 3) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (section.title.isNotBlank() && section.title != entry.language) {
+                        val angle by animateFloatAsState(if (folded[row.key] == true) -90f else 0f, label = "Section fold")
+                        Row(Modifier.fillMaxWidth().clickable { folded[row.key] = folded[row.key] != true }.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(section.title, Modifier.weight(1f), style = if (section.level <= 3) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium)
+                            Icon(Icons.Filled.ExpandMore, if (folded[row.key] == true) "Expand ${section.title}" else "Collapse ${section.title}", Modifier.size(20.dp).rotate(angle))
+                        }
+                    }
                 }
-                row.block?.let { block -> Box(Modifier.padding(bottom = if (row.compact) 2.dp else 10.dp)) { BlockView(block, onLink) } }
+                row.block?.let { block -> Box(Modifier.padding(bottom = if (row.compact) 2.dp else 6.dp)) { BlockView(block, onLink) } }
+                }
             }
             if (entry.references.isNotEmpty()) item("references-heading") { Text("References", Modifier.padding(top = 18.dp, bottom = 10.dp), style = MaterialTheme.typography.titleLarge) }
             items(entry.references, key = { "reference-${it.number}" }, contentType = { "reference" }) { ref ->
                 val label = if (ref.group.isBlank()) "[${ref.groupNumber}]" else "[${ref.group} ${ref.groupNumber}]"
                 Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Text(label, style = MaterialTheme.typography.labelMedium, color = colors.primary); StyledText(ref.spans, Modifier.weight(1f), onLink = onLink) }
             }
-            if (entry.media.isNotEmpty()) item("media-heading") { Text("Media", Modifier.padding(top = 18.dp, bottom = 10.dp), style = MaterialTheme.typography.titleLarge) }
-            entry.media.forEachIndexed { index, media -> item("media-$index", contentType = "media") {
-                Column(Modifier.padding(bottom = 12.dp)) {
-                    Text(media.file, style = MaterialTheme.typography.bodyMedium)
-                    Text(listOf(media.kind, media.caption).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
-                }
+            val linkedFiles = entry.sections.flatMap { it.blocks }.flatMap { block -> block.spans + block.table?.rows.orEmpty().flatten().flatMap { it.spans } }.filter { it.classes == "wikidict-media" }.map { it.target.removePrefix("File:").replace('_',' ') }.toSet()
+            val remainingMedia = entry.media.filter { it.file !in linkedFiles }
+            if (remainingMedia.isNotEmpty()) item("media-heading") { Text("Media", Modifier.padding(top = 18.dp, bottom = 10.dp), style = MaterialTheme.typography.titleLarge) }
+            remainingMedia.forEachIndexed { index, media -> item("media-$index", contentType = "media") {
+                MediaView(media, settings)
             } }
+            item("attribution") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(onClick = { uri.openUri("https://en.wiktionary.org/w/index.php?title=" + java.net.URLEncoder.encode(entry.title,"UTF-8") + "&action=history") }) { Text("Wiktionary contributors",style=MaterialTheme.typography.labelSmall) }
+                    TextButton(onClick = { uri.openUri("https://creativecommons.org/licenses/by-sa/4.0/") }) { Text("CC BY-SA 4.0",style=MaterialTheme.typography.labelSmall) }
+                }
+            }
         }
       }
     }
@@ -154,6 +186,16 @@ private fun TableView(table: Table, onLink: (String) -> Unit) {
 
 @Composable
 private fun StyledText(spans: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (String) -> Unit = {}) {
+    val availableMedia = LocalEntryMedia.current
+    val embedded = spans.filter { it.classes == "wikidict-media" && it.target.startsWith("File:") }.mapNotNull { span -> availableMedia.firstOrNull { it.file == span.target.removePrefix("File:").replace('_',' ') } }.distinctBy { it.file }
+    if (embedded.isNotEmpty()) {
+        Column(modifier) {
+            val text = spans.filter { it.classes != "wikidict-media" }
+            if (text.any { it.text.isNotBlank() }) StyledText(text, weight = weight, style = style, onLink = onLink)
+            embedded.forEach { MediaView(it, LocalReaderSettings.current) }
+        }
+        return
+    }
     val linkColor = MaterialTheme.colorScheme.primary
     val codeColor = MaterialTheme.colorScheme.surfaceContainer
     val cache = LocalTextCache.current

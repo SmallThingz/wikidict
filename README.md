@@ -1,38 +1,35 @@
-# Android
+# Wikidict Android
 
-The Android application is pure Kotlin + Jetpack Compose. It has no JNI/NDK/Zig/native library, no WebView, and no JavaScript bridge.
+A native Kotlin/Compose reader for downloadable Wiktionary dictionaries. The reading surface uses Newsreader typography, a compact bottom dock, independently folding sections and themed controls.
 
-It consumes compiled `dict.results.v1` JSON presentation data. Wikitext, templates, Lua modules, and raw source are build-time inputs only and are never interpreted by the Android app.
+Dictionary content comes directly from **WIKBLB08/DPR2** binary files. Downloads stream to disk, verify advertised size and SHA-256, and build a SQLite title/offset index. A lookup reads and decodes one binary record. There is no JSON dictionary import, WebView, Lua engine or wikitext parser.
 
-Product features stay local/offline: dictionary search within the loaded package, persistent history, bookmarks, appearance/learning settings, random words, definition quizzes, flashcards, and an unscramble game.
+## Use
 
-Security boundaries:
+Open **Dictionaries** to download a language or import a local `.wikblb` file. Add your own HTTPS `.list` sources there. The default release catalogue is:
 
-- no `INTERNET` permission;
-- no broad storage permission; files come through Android document/content URI grants;
-- imported packages are capped at 64 MiB and must be UTF-8 compiled Dict JSON;
-- no fallback HTML/wikitext/template renderer exists in the app.
+`https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list`
 
-Build from this directory with `./gradlew :app:assembleDebug`. `lintDebug` and `testDebugUnitTest` are part of the validation gate.
+See the [catalogue specification](https://github.com/SmallThingz/wikidict/blob/main/docs/catalogues.md). The default URL becomes available when a release with `dictionaries.list` is published. This repository does not pretend a complete corpus has been published.
 
-Device renderer tests use the semantic fixture emitted by `zig build test-reader`:
+Tap the dictionary dock icon again to search installed languages. Pronunciation and Etymology start folded; change those defaults in Settings. Enable online images and audio separately. Media caches can be disabled or limited to 25, 100 or 500 MiB, and cleared independently of dictionaries. Cached assets remain available without network; audio downloads only after tapping Play.
 
-```sh
-./gradlew -PrendererFixture=/absolute/path/to/fixture.json :app:connectedDebugAndroidTest
-```
+Debug builds replace the default remote catalogue with a local **32-word English corpus slice**, using the same binary installer and lookup path. Custom sources still use HTTPS. This is explicitly a development fixture, not a complete dictionary or the release application. [Fixture sources and attribution](app/src/debug/ATTRIBUTION.md).
 
-Add `-PcorpusFixture=/absolute/path/to/corpus-cat.json` to exercise an actual `dict export cat` result from a built corpus. Use JDK 21 and the configured Android SDK. Leave the device unlocked and awake while tests run. Tests cover inline styles, Unicode, preformatted whitespace, table spans, references/media descriptors, search, themes, rotation and activity recreation. The app currently imports JSON exports, not entire `.wikblb` collections; media playback is not implemented.
+## Build and test
 
-The reading view uses one 56 dp navigation dock, on-demand search, and a section index beside the word. Settings, Saved and Learn share compact themed controls. Newsreader is bundled under the SIL Open Font License; the original font license is shipped in `assets/licenses/Newsreader-OFL.txt` (source: https://github.com/google/fonts/tree/main/ofl/newsreader).
-
-Dense semantic paragraphs with explicit line breaks become independently lazy reading rows at import time. Their original spans remain intact in the model. Formatted text is cached for the current entry/theme; search and preference serialization run off the UI thread.
-
-For an optimized local install, build `:app:assemblePerformance`. This variant uses release optimization with the local debug signing key; it is not a production-signed release. Keep ordinary debug builds for instrumentation.
-
-A bounded device scrolling check is available as:
+Use JDK 21 and an Android SDK containing API 37/build-tools 37.0.0:
 
 ```sh
-python -B tools/benchmark_android_reader.py --adb /path/to/adb --report data/android-scroll
+./gradlew :app:testDebugUnitTest :app:assembleDebug
+./gradlew :app:connectedDebugAndroidTest
+./gradlew :app:assemblePerformance
 ```
 
-It expects the real `cat` export already imported at the default private-file URI (override with `--uri`), restarts only this app and runs 24 swipes. It does not lock the device or change power settings. Record the build variant beside each result; debug and optimized builds are not equivalent benchmark conditions.
+`performance` enables release optimization with local debug signing for device profiling. It does not contain the development dictionary or local catalogue. Production release signing is configured separately.
+
+Live Wikimedia tests require a connected device with working internet; opt in with `-Pandroid.testInstrumentationRunnerArguments.liveMedia=true`. The remaining tests validate the real binary corpus, corrupt/truncated records, catalogue URLs/checksums, installation, search, collapse controls and recreation. For a scroll smoke benchmark, open `cat` first and run `python3 tools/benchmark_android_reader.py --report artifacts/scroll --variant performance`.
+
+[Core compiler/encoder/decoder](https://github.com/SmallThingz/wikidict) · [Desktop](https://github.com/SmallThingz/wikidict-desktop)
+
+This repository preserves the original Android file history from the core project.

@@ -26,3 +26,11 @@ fun readingRows(sections: List<Section>): List<ReadingRow> = buildList {
         }
     }
 }
+
+/** Fold a section's own prose, keeping child parts of speech and definitions reachable. */
+fun visibleReadingRows(rows: List<ReadingRow>, folded: Set<String>): List<ReadingRow> {
+    var hideBody = false
+    return rows.filter { row ->
+        if (row.heading != null) { hideBody = row.key in folded; true } else !hideBody
+    }
+}
