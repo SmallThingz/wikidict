@@ -33,6 +33,7 @@ data class Block(
     val table: Table? = null,
 )
 data class Section(val level: Int, val title: String, val blocks: List<Block>)
+data class Media(val file: String, val kind: String, val caption: String)
 data class Reference(val number: Int, val groupNumber: Int, val group: String, val spans: List<Span>)
 data class Entry(
     val title: String,
@@ -42,6 +43,8 @@ data class Entry(
     val languageCode: String,
     val sections: List<Section>,
     val references: List<Reference>,
+    val preamble: List<Span> = emptyList(),
+    val media: List<Media> = emptyList(),
 ) {
     val key: String get() = "$kind\u0000${language.orEmpty()}\u0000$title"
     fun clue(): String {
@@ -82,6 +85,7 @@ object ResultParser {
     fun parse(json: String): Results {
         val root = JSONObject(json)
         require(root.optString("schema") == "dict.results.v1") { "Unsupported dictionary export." }
+        rejectLegacyFields(root)
         val entries = root.optJSONArray("entries") ?: JSONArray()
         return Results(
             schema = root.getString("schema"),
@@ -105,6 +109,12 @@ object ResultParser {
             languageCode = value.optString("language_code"),
             sections = (0 until sections.length()).map { section(sections.getJSONObject(it)) },
             references = (0 until references.length()).map { reference(references.getJSONObject(it)) },
+            preamble = value.optJSONArray("preamble_spans")?.let { array -> (0 until array.length()).map { span(array.getJSONObject(it)) } }.orEmpty(),
+            media = value.optJSONArray("media")?.let { array -> (0 until array.length()).map { index ->
+                val item = array.getJSONObject(index)
+                rejectLegacyFields(item)
+                Media(item.getString("file"), item.getString("kind"), item.optString("caption"))
+            } }.orEmpty(),
         )
     }
     private fun section(value: JSONObject): Section {
@@ -145,6 +155,7 @@ object ResultParser {
         )
     }
     private fun table(value: JSONObject): Table {
+        rejectLegacyFields(value)
         val caption = value.optJSONArray("caption") ?: JSONArray()
         val rows = value.optJSONArray("rows") ?: JSONArray()
         return Table(
@@ -153,6 +164,7 @@ object ResultParser {
                 val cells = rows.getJSONObject(rowIndex).optJSONArray("cells") ?: JSONArray()
                 (0 until cells.length()).map { cellIndex ->
                     val cell = cells.getJSONObject(cellIndex)
+                    rejectLegacyFields(cell)
                     val spans = cell.optJSONArray("spans") ?: JSONArray()
                     Cell(
                         spans = (0 until spans.length()).map { span(spans.getJSONObject(it)) },
@@ -166,6 +178,7 @@ object ResultParser {
     }
 
     private fun reference(value: JSONObject): Reference {
+        rejectLegacyFields(value)
         val spans = value.optJSONArray("spans") ?: JSONArray()
         return Reference(
             number = value.optInt("number"),

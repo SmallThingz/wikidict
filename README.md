@@ -14,3 +14,11 @@ Security boundaries:
 - no fallback HTML/wikitext/template renderer exists in the app.
 
 Build from this directory with `./gradlew :app:assembleDebug`. `lintDebug` and `testDebugUnitTest` are part of the validation gate.
+
+Device renderer tests use the semantic fixture emitted by `zig build test-reader`:
+
+```sh
+./gradlew -PrendererFixture=/absolute/path/to/fixture.json :app:connectedDebugAndroidTest
+```
+
+Add `-PcorpusFixture=/absolute/path/to/corpus-cat.json` to exercise an actual `dict export cat` result from a built corpus. Use JDK 21 and the configured Android SDK. Leave the device unlocked and awake while tests run. Tests cover inline styles, Unicode, preformatted whitespace, table spans, references/media descriptors, search, themes, rotation and activity recreation. The app currently imports JSON exports, not entire `.wikblb` collections; media playback is not implemented.
