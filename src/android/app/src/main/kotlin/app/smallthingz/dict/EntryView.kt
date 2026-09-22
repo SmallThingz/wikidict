@@ -4,6 +4,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
@@ -24,42 +30,67 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 
+private class TextCache(val link: State<(String) -> Unit>) {
+    val values = java.util.IdentityHashMap<List<Span>, MutableMap<FontWeight?, AnnotatedString>>()
+}
+private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
+
 @Composable
 fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}) {
-    key(entry.key) {
-        LazyColumn(Modifier.fillMaxSize().testTag("entry-scroll"), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            item("title") {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Column(Modifier.weight(1f)) {
-                        Text(entry.language ?: entry.kind.replace('_', ' '), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, style = MaterialTheme.typography.displayMedium, onLink = onLink)
-                        else Text(entry.title, style = MaterialTheme.typography.displayMedium)
+    val currentLink = rememberUpdatedState(onLink)
+    val colors = MaterialTheme.colorScheme
+    val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
+    CompositionLocalProvider(LocalTextCache provides cache) {
+      key(entry.key) {
+        val scroll = rememberLazyListState()
+        val scope = rememberCoroutineScope()
+        var contents by remember { mutableStateOf(false) }
+        LazyColumn(Modifier.fillMaxSize().testTag("entry-scroll"), state = scroll, contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp)) {
+            item("title", contentType = "title") {
+                Column(Modifier.padding(bottom = 12.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text((entry.language ?: entry.kind.replace('_', ' ')).uppercase(), Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Box {
+                            IconButton(onClick = { contents = true }) { Icon(Icons.AutoMirrored.Filled.List, "Sections", Modifier.size(22.dp)) }
+                            DropdownMenu(contents, { contents = false }, Modifier.heightIn(max = 340.dp)) {
+                                entry.readingRows.forEachIndexed { index, row -> row.heading?.let { section ->
+                                    if (section.title.isNotBlank() && section.title != entry.language) DropdownMenuItem(text = { Text(section.title) }, onClick = {
+                                        contents = false
+                                        scope.launch { scroll.animateScrollToItem(index + 1 + if (entry.preamble.isNotEmpty()) 1 else 0) }
+                                    })
+                                } }
+                            }
+                        }
+                        IconButton(onClick = onBookmark) { Icon(if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, if (bookmarked) "Remove bookmark" else "Bookmark", Modifier.size(22.dp)) }
                     }
-                    IconButton(onClick = onBookmark) { Icon(if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, if (bookmarked) "Remove bookmark" else "Bookmark") }
+                    if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, style = MaterialTheme.typography.displayMedium, onLink = onLink)
+                    else Text(entry.title, style = MaterialTheme.typography.displayMedium)
                 }
             }
-            if (entry.preamble.isNotEmpty()) item("preamble") { StyledText(entry.preamble, onLink = onLink) }
-            entry.sections.forEachIndexed { sectionIndex, section ->
-                if (section.title.isNotBlank() && section.title != entry.language) item("heading-$sectionIndex") {
-                    Text(section.title, style = if (section.level <= 3) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            if (entry.preamble.isNotEmpty()) item("preamble", contentType = "paragraph") { StyledText(entry.preamble, Modifier.padding(bottom = 12.dp), onLink = onLink) }
+            items(entry.readingRows, key = { it.key }, contentType = { if (it.heading != null) "heading" else it.block?.kind }) { row ->
+                row.heading?.let { section ->
+                    if (section.title.isNotBlank() && section.title != entry.language) Text(section.title,
+                        modifier = Modifier.padding(top = 18.dp, bottom = 9.dp),
+                        style = if (section.level <= 3) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
+                        color = if (section.level <= 3) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                section.blocks.forEachIndexed { blockIndex, block ->
-                    if (block.kind != "blank") item("block-$sectionIndex-$blockIndex") { BlockView(block, onLink) }
-                }
+                row.block?.let { block -> Box(Modifier.padding(bottom = if (row.compact) 2.dp else 10.dp)) { BlockView(block, onLink) } }
             }
-            if (entry.references.isNotEmpty()) item("references-heading") { Text("References", style = MaterialTheme.typography.titleMedium) }
-            entry.references.forEachIndexed { index, ref -> item("reference-$index") {
+            if (entry.references.isNotEmpty()) item("references-heading") { Text("References", Modifier.padding(top = 18.dp, bottom = 10.dp), style = MaterialTheme.typography.titleLarge) }
+            items(entry.references, key = { "reference-${it.number}" }, contentType = { "reference" }) { ref ->
                 val label = if (ref.group.isBlank()) "[${ref.groupNumber}]" else "[${ref.group} ${ref.groupNumber}]"
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Text(label, fontWeight = FontWeight.SemiBold); StyledText(ref.spans, Modifier.weight(1f), onLink = onLink) }
-            } }
-            if (entry.media.isNotEmpty()) item("media-heading") { Text("Media", style = MaterialTheme.typography.titleMedium) }
-            entry.media.forEachIndexed { index, media -> item("media-$index") {
-                Column {
+                Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Text(label, style = MaterialTheme.typography.labelMedium, color = colors.primary); StyledText(ref.spans, Modifier.weight(1f), onLink = onLink) }
+            }
+            if (entry.media.isNotEmpty()) item("media-heading") { Text("Media", Modifier.padding(top = 18.dp, bottom = 10.dp), style = MaterialTheme.typography.titleLarge) }
+            entry.media.forEachIndexed { index, media -> item("media-$index", contentType = "media") {
+                Column(Modifier.padding(bottom = 12.dp)) {
                     Text(media.file, style = MaterialTheme.typography.bodyMedium)
-                    Text(listOf(media.kind, media.caption).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(listOf(media.kind, media.caption).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
                 }
             } }
         }
+      }
     }
 }
 
@@ -73,14 +104,14 @@ private fun BlockView(block: Block, onLink: (String) -> Unit) {
         }
         else -> {
             val prefix = when (block.kind) {
-                "definition" -> if (block.number.isNotBlank()) "${block.number}. " else "• "
+                "definition" -> if (block.number.isNotBlank()) "${block.number.padStart(2, '0')}" else "•"
                 "example", "quotation" -> "│ "
                 "list_item" -> "• "
                 "list_detail" -> "↳ "
                 else -> ""
             }
-            Row(Modifier.padding(start = (block.depth.coerceIn(0, 8) * 7).dp)) {
-                if (prefix.isNotEmpty()) Text(prefix, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Medium)
+            Row(Modifier.padding(start = ((block.depth - 1).coerceIn(0, 8) * 7).dp)) {
+                if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 StyledText(block.spans, Modifier.weight(1f), onLink = onLink)
             }
         }
@@ -125,8 +156,11 @@ private fun TableView(table: Table, onLink: (String) -> Unit) {
 private fun StyledText(spans: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (String) -> Unit = {}) {
     val linkColor = MaterialTheme.colorScheme.primary
     val codeColor = MaterialTheme.colorScheme.surfaceContainer
-    val annotated = remember(spans, weight, linkColor, codeColor, onLink) {
-        buildAnnotatedString {
+    val cache = LocalTextCache.current
+    val currentLink = rememberUpdatedState(onLink)
+    val annotated = remember(spans, weight, linkColor, codeColor, cache) {
+        cache?.values?.get(spans)?.get(weight) ?: buildAnnotatedString {
+            val linkStyle = TextLinkStyles(style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
             spans.forEach { span ->
                 val start = length
                 if (span.direction == "rtl") append('\u2067') else if (span.direction == "ltr") append('\u2066')
@@ -135,7 +169,7 @@ private fun StyledText(spans: List<Span>, modifier: Modifier = Modifier, weight:
                 val end = length
                 append(span.trail)
                 if (end > start) {
-                    addStyle(SpanStyle(
+                    if (weight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline) addStyle(SpanStyle(
                         fontWeight = if (span.bold) FontWeight.Bold else weight,
                         fontStyle = if (span.italic) FontStyle.Italic else null,
                         fontFamily = if (span.code) FontFamily.Monospace else null,
@@ -149,13 +183,12 @@ private fun StyledText(spans: List<Span>, modifier: Modifier = Modifier, weight:
                             else -> null
                         },
                     ), start, end)
-                    val linkStyle = TextLinkStyles(style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
-                    if (span.kind == "link" && span.target.isNotBlank()) addLink(LinkAnnotation.Clickable(span.target, linkStyle) { onLink(span.target) }, start, end)
+                    if (span.kind == "link" && span.target.isNotBlank()) addLink(LinkAnnotation.Clickable(span.target, linkStyle) { (cache?.link?.value ?: currentLink.value)(span.target) }, start, end)
                     else if (span.kind == "external_link" && (span.target.startsWith("https://") || span.target.startsWith("http://")))
                         addLink(LinkAnnotation.Url(span.target, linkStyle), start, end)
                 }
             }
-        }
+        }.also { cache?.values?.getOrPut(spans) { mutableMapOf() }?.put(weight, it) }
     }
     Text(annotated, modifier = modifier, style = style.copy(textDirection = TextDirection.Content))
 }

@@ -35,7 +35,7 @@ class MainActivity : ComponentActivity() {
     private var document by mutableStateOf<DocumentState>(DocumentState.Empty)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        learning = LearningStore(this)
+        learning = LearningStore.get(this)
         picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) {
                 runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }

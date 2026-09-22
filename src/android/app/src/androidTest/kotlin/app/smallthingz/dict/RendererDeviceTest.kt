@@ -53,20 +53,24 @@ class RendererDeviceTest {
     }
 
     @Test fun searchThemeNavigationAndRecreationStayUsable() {
+        compose.onNodeWithContentDescription("Dictionary").performClick()
         compose.onNode(hasSetTextAction()).performTextInput("not-in-dictionary")
         compose.onNodeWithText("No matching words in this dictionary.").assertIsDisplayed()
         compose.onNode(hasSetTextAction()).performTextClearance()
-        compose.onNodeWithText("Settings").performClick()
+        compose.onNodeWithContentDescription("Close search").performClick()
+        compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Dark").performClick()
         compose.onNodeWithText("Light").performClick()
-        compose.onNodeWithText("Dictionary").performClick()
+        compose.onNodeWithContentDescription("Dictionary").performClick()
         compose.activityRule.scenario.recreate()
         compose.waitUntil(10000) { compose.onAllNodesWithText("PREAMBLE: compiled presentation.").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("PREAMBLE: compiled presentation.").assertIsDisplayed()
         compose.activityRule.scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
-        compose.waitForIdle()
+        // Wait for configuration, not Espresso idleness across two activity instances.
+        compose.waitUntil(10000) { compose.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE }
+        compose.activityRule.scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
+        compose.waitUntil(10000) { compose.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT }
         compose.onNodeWithTag("entry-scroll").assertExists()
-        compose.activityRule.scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     }
 
     @Test fun realCorpusBlobExportRenders() {
@@ -84,6 +88,16 @@ class RendererDeviceTest {
         compose.waitUntil(10000) { compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes().isNotEmpty() && compose.onAllNodesWithText("PREAMBLE: compiled presentation.").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithTag("entry-scroll").assertExists()
         compose.onAllNodesWithText("cat", useUnmergedTree = true).onFirst().assertExists()
+        val screen = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        val reading = compose.onNodeWithTag("entry-scroll").fetchSemanticsNode().boundsInRoot
+        assertTrue("Reading gets at least 85% of window height", reading.height / screen.height > 0.85f)
+        compose.onNodeWithContentDescription("Sections").performClick()
+        compose.onAllNodesWithText("Derived terms").onFirst().performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("• a cat can look at a king", substring = true))
+        assertTrue("Dense lists must have bounded text layouts", compose.onAllNodes(hasText("a cat can look at a king", substring = true)).fetchSemanticsNodes().all { node ->
+            node.config[SemanticsProperties.Text].sumOf { it.text.length } < 500
+        })
     }
 
     @Test fun parserRejectsDeferredInputsAndKeepsAllSemanticData() {
