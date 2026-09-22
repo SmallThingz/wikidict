@@ -31,9 +31,33 @@ fn writeCompiledFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !voi
     const definition_spans = [_]enc.presentation_types.Span{.{ .text = "A small animal." }};
     const example_spans = [_]enc.presentation_types.Span{.{ .text = "The cat sleeps." }};
     const history_spans = [_]enc.presentation_types.Span{.{ .text = "Historical source." }};
+    const styled = [_]enc.presentation_types.Span{
+        .{ .text = "Bold", .bold = true, .trail = " " },
+        .{ .text = "Italic", .italic = true, .trail = " " },
+        .{ .text = "code sample", .code = true, .trail = " " },
+        .{ .text = "small", .small = true, .trail = " " },
+        .{ .text = "2", .superscript = true, .trail = " " },
+        .{ .text = "2", .subscript = true, .trail = " " },
+        .{ .text = "marked", .strike = true, .underline = true, .trail = " " },
+        .{ .kind = .link, .text = "école", .target = "école", .trail = "s " },
+        .{ .kind = .external_link, .text = "Wiktionary", .target = "https://en.wiktionary.org/wiki/cat" },
+        .{ .kind = .line_break },
+        .{ .text = "After line break: 猫 👩🏽‍💻 é " },
+        .{ .text = "كتاب", .language = "ar", .direction = "rtl" },
+    };
+    const pre = [_]enc.presentation_types.Span{.{ .text = "column A  column B\n  indented\tvalue", .code = true }};
+    const caption = [_]enc.presentation_types.Span{.{ .text = "Inflection table" }};
+    const table_rows = [_]enc.presentation_types.Row{
+        .{ .cells = &.{ .{ .spans = &.{.{ .text = "Case" }}, .header = true, .rowspan = 2 }, .{ .spans = &.{.{ .text = "Number" }}, .header = true, .colspan = 2 } } },
+        .{ .cells = &.{ .{ .spans = &.{.{ .text = "Singular" }}, .header = true }, .{ .spans = &.{.{ .text = "Plural" }}, .header = true } } },
+        .{ .cells = &.{ .{ .spans = &.{.{ .text = "Nominative" }} }, .{ .spans = &.{.{ .text = "cat" }} }, .{ .spans = &.{.{ .text = "cats" }} } } },
+    };
     const noun_blocks = [_]enc.presentation_types.Block{
         .{ .kind = .definition, .depth = 1, .list_path = "#", .number = "1", .spans = &definition_spans },
         .{ .kind = .example, .depth = 1, .list_path = "#:", .spans = &example_spans },
+        .{ .kind = .paragraph, .spans = &styled },
+        .{ .kind = .preformatted, .spans = &pre },
+        .{ .kind = .table, .table = .{ .caption = &caption, .rows = &table_rows } },
     };
     const history_blocks = [_]enc.presentation_types.Block{
         .{ .kind = .paragraph, .spans = &history_spans },
@@ -49,6 +73,9 @@ fn writeCompiledFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !voi
         .language = "English",
         .language_code = "en",
         .sections = &sections,
+        .preamble_spans = &.{.{ .text = "PREAMBLE: compiled presentation." }},
+        .references = &.{.{ .number = 1, .group_number = 1, .group = "note", .spans = &.{.{ .text = "Reference content." }} }},
+        .media = &.{ .{ .file = "Example image.svg", .kind = .image, .caption = "Image caption" }, .{ .file = "Example pronunciation.ogg", .kind = .audio, .caption = "Pronunciation audio" } },
     } };
     const payload = try enc.presentation_codec.encodeAlloc(a, stored);
     defer a.free(payload);
@@ -81,12 +108,18 @@ pub fn main(init: std.process.Init) !void {
     const ffi_output = try h.run(&.{ ffi_test, root, "cat" }, 0);
     try h.require(std.mem.indexOf(u8, ffi_output, "FFI_INTEGRATION_PASS") != null, "data-only C ABI");
 
+    const exported = try h.run(&.{ bin, "export", "cat", "--root", root }, 0);
+    const export_path = try std.fs.path.join(a, &.{ dir, "fixture.json" });
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = export_path, .data = exported });
+
     const complete = try h.entry(try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "json" }, 0));
     try h.require(complete.object.get("sections").?.array.items.len == 3, "complete compiled document");
     const text = try h.run(&.{ bin, "lookup", "cat", "--root", root }, 0);
     try h.require(std.mem.indexOf(u8, text, "small animal") != null, "compiled definition renders");
     const details_text = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--details" }, 0);
     try h.require(std.mem.indexOf(u8, details_text, "Historical source") != null, "compiled supporting material renders");
+    for ([_][]const u8{ "PREAMBLE", "After line break", "column A  column B", "Inflection table", "Reference content.", "Example image.svg", "Example pronunciation.ogg" }) |expected|
+        try h.require(std.mem.indexOf(u8, details_text, expected) != null, expected);
 
     _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--core-only" }, 2);
     _ = try h.run(&.{ bin, "lookup", "cat", "--format", "source" }, 2);

@@ -2,6 +2,7 @@ const std = @import("std");
 const model = @import("model.zig");
 const args = @import("args.zig");
 const store = @import("store.zig");
+const terminal = @import("terminal.zig");
 pub const Match = struct { title: []const u8 };
 pub const Response = struct {
     schema: []const u8 = "dict.results.v1",
@@ -60,6 +61,94 @@ pub fn spansText(w: *std.Io.Writer, spans: []const model.Span, color: bool) !voi
     }
 }
 
+fn tableText(w: *std.Io.Writer, table: model.Table, color: bool) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    terminal.initLocale();
+    const Placed = struct { row: usize, column: usize, colspan: usize, rowspan: usize, lines: []const []const u8 };
+    var cells: std.ArrayList(Placed) = .empty;
+    var occupied: std.ArrayList(usize) = .empty;
+    var widths: std.ArrayList(usize) = .empty;
+    for (table.rows, 0..) |row, r| {
+        var column: usize = 0;
+        for (row.cells) |cell| {
+            const colspan = @max(cell.colspan, 1);
+            const rowspan = @max(cell.rowspan, 1);
+            while (true) {
+                while (occupied.items.len < column + colspan) {
+                    try occupied.append(a, 0);
+                    try widths.append(a, 3);
+                }
+                var free = true;
+                for (occupied.items[column..][0..colspan]) |until| if (until > r) {
+                    free = false;
+                    break;
+                };
+                if (free) break;
+                column += 1;
+            }
+            @memset(occupied.items[column..][0..colspan], r + rowspan);
+            var text: std.Io.Writer.Allocating = .init(a);
+            defer text.deinit();
+            if (color and cell.header) try text.writer.writeAll("\x1b[1m");
+            try spansText(&text.writer, cell.spans, color);
+            if (color) try text.writer.writeAll("\x1b[0m");
+            const owned = try a.dupe(u8, text.written());
+            var lines: std.ArrayList([]const u8) = .empty;
+            var split = std.mem.splitScalar(u8, owned, '\n');
+            var needed: usize = 0;
+            while (split.next()) |line| {
+                try lines.append(a, line);
+                needed = @max(needed, terminal.cellWidth(line));
+            }
+            var available: usize = 3 * (colspan - 1);
+            for (widths.items[column..][0..colspan]) |width| available += width;
+            if (needed > available) widths.items[column + colspan - 1] += needed - available;
+            try cells.append(a, .{ .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .lines = lines.items });
+            column += colspan;
+        }
+    }
+    if (table.caption.len != 0) {
+        try spansText(w, table.caption, color);
+        try w.writeByte('\n');
+    }
+    const active = try a.alloc(?usize, widths.items.len);
+    @memset(active, null);
+    var cursor: usize = 0;
+    for (0..table.rows.len) |r| {
+        for (active) |*owner| if (owner.*) |index| {
+            if (cells.items[index].row + cells.items[index].rowspan <= r) owner.* = null;
+        };
+        var height: usize = 1;
+        while (cursor < cells.items.len and cells.items[cursor].row == r) : (cursor += 1) {
+            const cell = cells.items[cursor];
+            @memset(active[cell.column..][0..cell.colspan], cursor);
+            height = @max(height, cell.lines.len);
+        }
+        for (0..height) |line_index| {
+            try w.writeAll("  │ ");
+            var column: usize = 0;
+            while (column < widths.items.len) {
+                var span: usize = 1;
+                var line: []const u8 = "";
+                if (active[column]) |index| {
+                    const cell = cells.items[index];
+                    span = cell.colspan;
+                    if (cell.row == r and line_index < cell.lines.len) line = cell.lines[line_index];
+                }
+                var width: usize = 3 * (span - 1);
+                for (widths.items[column..][0..span]) |part| width += part;
+                try w.writeAll(line);
+                try w.splatByteAll(' ', width -| terminal.cellWidth(line));
+                column += span;
+                try w.writeAll(if (column == widths.items.len) " │\n" else " │ ");
+            }
+        }
+    }
+    try w.writeByte('\n');
+}
+
 fn blocksText(w: *std.Io.Writer, blocks: []const model.Block, color: bool) !void {
     var ordinal: usize = 0;
     for (blocks) |block| {
@@ -69,21 +158,7 @@ fn blocksText(w: *std.Io.Writer, blocks: []const model.Block, color: bool) !void
             continue;
         }
         if (block.table) |table| {
-            if (table.caption.len != 0) {
-                try spansText(w, table.caption, color);
-                try w.writeByte('\n');
-            }
-            for (table.rows) |row| {
-                try w.writeAll("  │ ");
-                for (row.cells, 0..) |cell, i| {
-                    if (i != 0) try w.writeAll(" │ ");
-                    if (color and cell.header) try w.writeAll("\x1b[1m");
-                    try spansText(w, cell.spans, color);
-                    if (color) try w.writeAll("\x1b[0m");
-                }
-                try w.writeAll(" │\n");
-            }
-            try w.writeByte('\n');
+            try tableText(w, table, color);
             continue;
         }
         try w.splatByteAll(' ', @as(usize, @min(block.depth, 12)) * 2);
@@ -140,7 +215,12 @@ pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, 
     }
     const organization = entry.organization;
     if (organization.lexemes.len == 0) {
-        for (entry.sections) |section| try sectionText(w, section, color);
+        for (entry.sections) |section| {
+            if (std.mem.eql(u8, section.title, entry.language orelse ""))
+                try blocksText(w, section.blocks, color)
+            else
+                try sectionText(w, section, color);
+        }
     } else {
         for (organization.lexemes, 0..) |lexeme, l| {
             var seen = false;
@@ -182,6 +262,18 @@ pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, 
             }
         }
         if (details) for (organization.other_sections) |i| try sectionText(w, entry.sections[i], color);
+    }
+    if (details and entry.media.len != 0) {
+        try w.writeAll("\nMedia\n");
+        for (entry.media) |media| {
+            try w.print("[{s}] ", .{@tagName(media.kind)});
+            try terminalText(w, media.file);
+            if (media.caption.len != 0) {
+                try w.writeAll(" — ");
+                try terminalText(w, media.caption);
+            }
+            try w.writeByte('\n');
+        }
     }
     if (details and entry.references.len != 0) {
         try w.writeAll("\nReferences\n");

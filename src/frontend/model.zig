@@ -10,6 +10,7 @@ const codec = enc.presentation_codec;
 pub const Feature = types.Feature;
 pub const Span = types.Span;
 pub const Block = types.Block;
+pub const Table = types.Table;
 pub const Section = types.Section;
 pub const Reference = types.Reference;
 pub const Media = types.Media;
