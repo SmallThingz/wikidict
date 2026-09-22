@@ -335,3 +335,9 @@ zig build index-blobs -- path/language.wikblb.xz
 ```
 
 Native readers can use `.wikblb.xz` directly. The derived index records XZ block boundaries so record reads decode only intersecting blocks where possible. `zig build test-storage` and `zig build test-reader` exercise raw files, XZ files, cache recovery, and native reader behavior.
+
+### Download every edition
+
+`python3 tools/download_wiktionaries.py --plan` resolves the newest complete dated snapshot for every Wiktionary edition and writes `data/dumps/manifest.json`. Omit `--plan` to download all editions, or use `--wikis enwiktionary simplewiktionary` to select editions. Downloads resume from `.part` files, verify the published SHA-1 and byte size, and publish atomically. At most three connections are permitted (`--connections`, default two), respecting Wikimedia limits. The default includes full-namespace current-page XML and companion category, categorylinks, page_props, redirect, site statistics and linktarget SQL from the same snapshot; `--xml-only` omits SQL. XML inputs are chosen for the existing compiler pipeline; Wikimedia now also publishes Content File Exports.
+
+The September 2026 discovery smoke check resolved 1,411 files across 198 editions (11.54 GB) without downloading the corpus. Native compressed-index and reader integration tests pass, including selective XZ block reads, concatenated streams, corruption and cache invalidation.
