@@ -378,7 +378,7 @@ pub const Renderer = struct {
             try self.inlineText(std.mem.trimEnd(u8, line, "\r"), style, depth + 1);
         }
     }
-    fn gallery(self: *Renderer, input: []const u8, style: Style, depth: usize) Error!void {
+    fn gallery(self: *Renderer, input: []const u8, style: Style, _: usize) Error!void {
         var lines = std.mem.splitScalar(u8, input, '\n');
         var emitted = false;
         while (lines.next()) |raw_line| {
@@ -394,9 +394,11 @@ pub const Renderer = struct {
             try self.mediaFile(file, caption);
             if (emitted) try self.lineBreak(style);
             emitted = true;
-            try self.text(if (media_types.kind(file) == .audio) "[Audio: " else "[Image: ", style);
-            try self.inlineText(if (caption.len == 0) file else caption, style, depth + 1);
-            try self.text("]", style);
+            var media_style = style;
+            media_style.classes = "wikidict-media";
+            media_style.kind = .link;
+            media_style.target = try std.fmt.allocPrint(self.a, "File:{s}", .{file});
+            try self.text(try plainText(self.a, try self.parseSpans(if (caption.len == 0) file else caption, .{})), media_style);
         }
     }
     fn opaqueExtension(self: *Renderer, input: []const u8, tag: syntax.Tag, style: Style, depth: usize) Error!usize {
@@ -682,9 +684,11 @@ pub const Renderer = struct {
                         const file_name = target[(std.mem.indexOfScalar(u8, target, ':').? + 1)..];
                         label_value = mediaCaption(label_value, file_name);
                         try self.mediaFile(file_name, label_value);
-                        try self.text(if (media_types.kind(file_name) == .audio) "[Audio: " else "[Image: ", s);
-                        try self.inlineText(label_value, s, depth + 1);
-                        try self.text("]", s);
+                        var media_style = s;
+                        media_style.classes = "wikidict-media";
+                        media_style.kind = .link;
+                        media_style.target = target;
+                        try self.text(try plainText(self.a, try self.parseSpans(label_value, .{})), media_style);
                     } else {
                         if (label_value.len == 0) label_value = pipeTrickLabel(target);
                         if (safeInternalTarget(target)) {
@@ -1190,7 +1194,7 @@ test "emphasis template boundaries and nested image captions render without raw 
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
     const spans = try r.parseSpans("'''{{m|en|cat}}''' [[File:Cat.jpg|thumb|A [[domestic cat]]]] {{syn|en|kitty<q:rare>}}", .{});
-    try std.testing.expectEqualStrings("cat [Image: A domestic cat] Synonyms: kitty (rare)", try flattened(a, spans));
+    try std.testing.expectEqualStrings("cat A domestic cat Synonyms: kitty (rare)", try flattened(a, spans));
     try std.testing.expect(spans[0].flags.bold);
 }
 test "multitrans produces real blocks and malformed tables retain literal content" {
@@ -1326,7 +1330,7 @@ test "opaque extensions render safely without leaking parser delimiters" {
     const spans = try r.parseSpans("<poem>first [[cat]]\nsecond</poem><gallery>\nFile:Cat.jpg|A [[cat]]\n</gallery><math>a|b=c</math><graph>{\"value\":\"{{x|y}}\"}</graph><dynamicpagelist>category=Tea room\ncount=100</dynamicpagelist>", .{});
     const text_value = try flattened(a, spans);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "first cat\nsecond") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "[Image: A cat]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "A cat") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "a|b=c") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "[unsupported extension: graph]") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "[unsupported extension: dynamicpagelist]") != null);
