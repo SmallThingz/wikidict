@@ -8,10 +8,3 @@ zig-pkg/
 data/
 enwiktionary.xml
 
-src/frontend/web/node_modules/
-src/frontend/web/.vite/
-
-src/web/node_modules/
-src/android/.gradle/
-src/android/build/
-src/android/app/build/

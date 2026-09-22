@@ -218,13 +218,6 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "query-blobs", "Query per-language and feature Wiktionary blobs", blob_query_run, &.{});
     addPublicRunStep(b, "dict", "Run the dictionary frontend CLI", blob_query_run, &.{});
 
-    const qt_configure = b.addSystemCommand(&.{ "cmake", "-S", "src/qt", "-B", ".zig-cache/qt", "-DCMAKE_BUILD_TYPE=Release" });
-    qt_configure.step.dependOn(&ffi_install.step);
-    qt_configure.step.dependOn(&ffi_header_install.step);
-    const qt_build = b.addSystemCommand(&.{ "cmake", "--build", ".zig-cache/qt", "--target", "dict-qt", "--parallel", "2" });
-    qt_build.step.dependOn(&qt_configure.step);
-    b.step("qt", "Build the Qt 6 C++ desktop frontend").dependOn(&qt_build.step);
-    b.step("frontend", "Build the Qt 6 C++ desktop frontend").dependOn(&qt_build.step);
 
     const test_runner = b.path("tools/test_runner.zig");
 

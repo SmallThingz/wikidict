@@ -1,6 +1,6 @@
-# Dict
+# Wikidict
 
-Offline Wiktionary tooling with a Zig core. The repository builds fully compiled per-language dictionary data, CLI/TUI readers, a C ABI, and a native Qt 6/C++ desktop application. Lua/Scribunto and MediaWiki templates execute only while bundling.
+Offline Wiktionary tooling with a Zig core. The repository builds fully compiled per-language dictionary data, CLI/TUI readers, a C ABI, with separate Android and desktop applications. Lua/Scribunto and MediaWiki templates execute only while bundling.
 
 ## Layout
 
@@ -10,7 +10,6 @@ src/
 ├── encoder/        Wiktionary XML -> compact dictionary blobs
 ├── frontend/       CLI, TUI, C ABI, shared presentation
 ├── ffi/            stable public C header
-├── qt/             Qt 6 / C++ desktop application
 ├── lua/            parser, direct LLVM compiler, Scribunto/runtime support
 ├── native/         storage and low-level native helpers
 └── shared/         shared codecs and utilities
@@ -28,7 +27,7 @@ Use the repository Zig toolchain:
 zig build
 ```
 
-This installs the Zig dictionary tools under `zig-out/bin/` and the C ABI library under `zig-out/lib/`. Build the native desktop GUI separately with `zig build qt`.
+This installs the Zig dictionary tools under `zig-out/bin/` and the C ABI library under `zig-out/lib/`. The applications live in [wikidict-android](https://github.com/SmallThingz/wikidict-android) and [wikidict-desktop](https://github.com/SmallThingz/wikidict-desktop), each with its original file history. See [download catalogues](docs/catalogues.md) for publishing language blobs and the default release `.list` file.
 
 Run the main validation gate:
 
@@ -300,16 +299,12 @@ zig-out/bin/dict stats --root data/wiktionary-blobs
 
 `dict tui [PREFIX] --root ROOT` opens the interactive terminal reader.
 
-## Native Qt desktop application
+## Applications
 
-```sh
-zig build qt
-zig-out/bin/dict-qt --root ROOT cat
-```
+- [wikidict-android](https://github.com/SmallThingz/wikidict-android): native Compose reader, direct `.wikblb` installation and on-demand binary decoding, configurable download catalogues, collapsible sections and optional cached media.
+- [wikidict-desktop](https://github.com/SmallThingz/wikidict-desktop): Qt desktop and web presentation work. Build instructions and current platform limitations live there.
 
-The Qt 6 interface is written in C++ and links directly to `libdictffi`; the Qt application has no local HTTP server or web engine. The separate [web reader](src/web/README.md) imports compiled JSON exports. The C ABI owns the mapped dictionary/index and returns versioned `dict.results.v1` JSON buffers to native clients.
-
-The Qt app includes native history, bookmarks, settings, random words, definition quizzes, flashcards, and an unscramble game. Build/install the reusable C boundary with `zig build ffi`; its public header is installed as `zig-out/include/dict/dict.h`.
+Build/install the reusable C boundary with `zig build ffi`; its public header is installed as `zig-out/include/dict/dict.h`.
 
 ## Lua development
 

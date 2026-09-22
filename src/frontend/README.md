@@ -6,7 +6,7 @@ The shipped desktop reader has three native surfaces over the same compiled dict
 - `dict tui`: terminal UI
 - `dict-qt`: Qt 6 / C++ desktop GUI
 
-The separate `src/web/` reader imports compiled JSON exports. There is no read-time Lua, template, or wikitext execution. Lua/templates/wikitext are bundle-time compiler inputs only.
+The separate [desktop repository](https://github.com/SmallThingz/wikidict-desktop) owns the Qt and web interfaces. There is no read-time Lua, template, or wikitext execution. Lua/templates/wikitext are bundle-time compiler inputs only.
 
 ## C ABI
 
@@ -20,7 +20,7 @@ Every record is a self-contained compiled presentation document. Readers deseria
 
 ## Qt application
 
-Build the native GUI with `zig build qt`. Qt uses Widgets and C++20. History, bookmarks, learning scores and UI settings are persisted locally with `QSettings`; quizzes, flashcards, unscramble and random-word navigation consume the same compiled dictionary data.
+Build the native GUI in [wikidict-desktop](https://github.com/SmallThingz/wikidict-desktop). Qt uses Widgets and C++20. History, bookmarks, learning scores and UI settings are persisted locally with `QSettings`; quizzes, flashcards, unscramble and random-word navigation consume the same compiled dictionary data.
 
 ## Validation
 
@@ -28,5 +28,4 @@ Build the native GUI with `zig build qt`. Qt uses Widgets and C++20. History, bo
 zig build test
 zig build test-reader
 zig build ffi
-zig build qt
 ```
