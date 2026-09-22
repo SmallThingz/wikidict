@@ -7,6 +7,8 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 
 data class SavedWord(
     val key: String, val title: String, val language: String?, val kind: String, val clue: String,
@@ -26,7 +28,13 @@ data class LearningData(
     val study: Map<String, StudyStat> = emptyMap(),
     val settings: AppSettings = AppSettings(),
 )
-class LearningStore(context: Context) {
+class LearningStore private constructor(context: Context) {
+    companion object {
+        @Volatile private var instance: LearningStore? = null
+        fun get(context: Context): LearningStore = instance ?: synchronized(this) {
+            instance ?: LearningStore(context.applicationContext).also { instance = it }
+        }
+    }
     private val prefs = context.getSharedPreferences("dict.learning.v1", Context.MODE_PRIVATE)
     var data by mutableStateOf(load())
         private set
@@ -83,7 +91,12 @@ class LearningStore(context: Context) {
         return source.distinctBy { it.key }
     }
 
-    private fun update(value: LearningData) { data = value; persist(value) }
+    // One writer preserves update order; serialization never runs on the UI thread.
+    private val pending = Channel<LearningData>(Channel.CONFLATED)
+    private val writer = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        for (value in pending) persist(value)
+    }
+    private fun update(value: LearningData) { data = value; pending.trySend(value) }
     private fun persist(value: LearningData) {
         val root = JSONObject()
         root.put("history", JSONArray(value.history.map(::wordJson)))

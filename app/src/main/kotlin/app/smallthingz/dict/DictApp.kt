@@ -12,6 +12,10 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -23,53 +27,93 @@ import kotlinx.coroutines.launch
 
 enum class AppScreen { Dictionary, Saved, Learn, Settings }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DictApp(document: DocumentState, learning: LearningStore, onOpen: () -> Unit, onReload: () -> Unit) {
     var screen by rememberSaveable { mutableStateOf(AppScreen.Dictionary) }
     var query by rememberSaveable { mutableStateOf("") }
+    var searching by rememberSaveable { mutableStateOf(false) }
     var selectedKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var menu by remember { mutableStateOf(false) }
     val loaded = document as? DocumentState.Loaded
     val entries = loaded?.results?.entries.orEmpty()
-    LaunchedEffect(entries) {
-        if (selectedKey == null || entries.none { it.key == selectedKey }) selectedKey = entries.firstOrNull()?.key
-    }
-    val selected = entries.firstOrNull { it.key == selectedKey }
+    val selected = loaded?.results?.byKey?.get(selectedKey) ?: entries.firstOrNull()
+    LaunchedEffect(loaded) { if (loaded != null) { screen = AppScreen.Dictionary; query = ""; searching = false } }
     LaunchedEffect(selected?.key) { selected?.let(learning::record) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    fun select(key: String) { selectedKey = key; query = ""; searching = false; screen = AppScreen.Dictionary; keyboard?.hide() }
     fun openWord(word: SavedWord) {
-        val match = entries.firstOrNull { it.key == word.key }
-        if (match != null) { selectedKey = match.key; query = ""; screen = AppScreen.Dictionary }
-        else scope.launch { snackbar.showSnackbar("${word.title} is not in the currently opened dictionary.") }
+        if (loaded?.results?.byKey?.containsKey(word.key) == true) select(word.key)
+        else scope.launch { snackbar.showSnackbar("${word.title} is not in this dictionary.") }
     }
     fun randomWord() {
-        val candidates = learning.pool(entries).filter { word -> entries.any { it.key == word.key } }
-        if (candidates.isEmpty()) scope.launch { snackbar.showSnackbar("Open an export or save some words first.") }
-        else openWord(candidates.random())
+        val source = when (learning.data.settings.randomPool) {
+            "history" -> learning.data.history.mapNotNull { loaded?.results?.byKey?.get(it.key) }
+            "bookmarks" -> learning.data.bookmarks.mapNotNull { loaded?.results?.byKey?.get(it.key) }
+            else -> entries
+        }
+        source.randomOrNull()?.let { select(it.key) }
     }
-
+    androidx.activity.compose.BackHandler(searching || screen != AppScreen.Dictionary) {
+        searching = false; query = ""; screen = AppScreen.Dictionary; keyboard?.hide()
+    }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
-        topBar = { TopAppBar(
-            title = { Column { Text("Dict", fontWeight = FontWeight.Bold); Text(loaded?.name ?: "Offline Wiktionary", style = MaterialTheme.typography.labelSmall) } },
-            actions = {
-                IconButton(onClick = ::randomWord) { Icon(Icons.Filled.Casino, "Random word") }
-                IconButton(onClick = onOpen) { Icon(Icons.Filled.FolderOpen, "Open dictionary") }
-            },
-        ) },
-        bottomBar = { NavigationBar {
-            AppScreen.entries.forEach { target ->
-                NavigationBarItem(selected = screen == target, onClick = { screen = target }, icon = { Icon(screenIcon(target), target.name) }, label = { Text(target.name) })
+        bottomBar = {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                Box(Modifier.navigationBarsPadding().imePadding()) {
+                    androidx.compose.animation.Crossfade(targetState = searching, label = "dock") { search ->
+                        if (search) SearchDock(query, { query = it }, { searching = false; query = ""; keyboard?.hide() })
+                        else Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                            AppScreen.entries.forEach { target ->
+                                DockButton(screenIcon(target), target.name, screen == target) {
+                                    if (target == AppScreen.Dictionary && screen == target && loaded != null) searching = true
+                                    screen = target
+                                }
+                            }
+                            Box {
+                                DockButton(Icons.Filled.MoreHoriz, "More", false) { menu = true }
+                                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                    DropdownMenuItem(text = { Text("Open dictionary") }, leadingIcon = { Icon(Icons.Filled.FolderOpen, null) }, onClick = { menu = false; onOpen() })
+                                    DropdownMenuItem(text = { Text("Random word") }, leadingIcon = { Icon(Icons.Filled.Casino, null) }, onClick = { menu = false; randomWord() })
+                                }
+                            }
+                        }
+                    }
+                }
             }
-        } },
+        },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            when (screen) {
-                AppScreen.Dictionary -> DictionaryScreen(document, entries, selected, query, { query = it }, { selectedKey = it; query = "" }, learning, onOpen, onReload)
+            androidx.compose.animation.Crossfade(targetState = screen, animationSpec = androidx.compose.animation.core.tween(160), label = "page") { destination ->
+            when (destination) {
+                AppScreen.Dictionary -> when (document) {
+                    DocumentState.Empty -> EmptyDocument(onOpen)
+                    is DocumentState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) }
+                    is DocumentState.Failed -> Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(document.message); OutlinedButton(onClick = onReload) { Text("Retry") }; TextButton(onClick = onOpen) { Text("Open dictionary") }
+                    }
+                    is DocumentState.Loaded -> {
+                        if (searching && query.isNotBlank()) {
+                            val matches by produceState<List<Entry>>(emptyList(), entries, query) {
+                                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                                    entries.asSequence().filter { it.title.contains(query, ignoreCase = true) }.take(80).toList()
+                                }
+                            }
+                            EntryMatches(matches, ::select)
+                        } else if (selected != null) EntryView(selected, learning.isBookmarked(selected), { learning.toggleBookmark(selected) }) { target ->
+                            val title = target.substringBefore('#').replace('_', ' ')
+                            val match = loaded?.results?.byTitle?.get(title)
+                            if (match != null) select(match.key)
+                            else scope.launch { snackbar.showSnackbar("$title is not in this dictionary.") }
+                        }
+                    }
+                }
                 AppScreen.Saved -> SavedScreen(learning, ::openWord)
                 AppScreen.Learn -> LearnScreen(learning, entries, ::openWord, ::randomWord)
                 AppScreen.Settings -> SettingsScreen(learning)
+            }
             }
         }
     }
@@ -82,43 +126,20 @@ private fun screenIcon(screen: AppScreen) = when (screen) {
 }
 
 @Composable
-private fun DictionaryScreen(
-    document: DocumentState, entries: List<Entry>, selected: Entry?, query: String,
-    onQuery: (String) -> Unit, onSelect: (String) -> Unit, learning: LearningStore,
-    onOpen: () -> Unit, onReload: () -> Unit,
-) {
-    when (document) {
-        DocumentState.Empty -> EmptyDocument(onOpen)
-        is DocumentState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-        is DocumentState.Failed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) { Text(document.message); Button(onClick = onReload) { Text("Retry") }; OutlinedButton(onClick = onOpen) { Text("Open another export") } } }
-        is DocumentState.Loaded -> Column(Modifier.fillMaxSize()) {
-            SearchBar(query, onQuery)
-            val matches = remember(entries, query) { if (query.isBlank()) emptyList() else entries.filter { it.title.contains(query, ignoreCase = true) }.take(80) }
-            if (query.isNotBlank()) EntryMatches(matches, onSelect)
-            else if (selected != null) {
-                val snackbar = remember { SnackbarHostState() }
-                val scope = rememberCoroutineScope()
-                Box(Modifier.weight(1f)) {
-                    EntryView(selected, learning.isBookmarked(selected), { learning.toggleBookmark(selected) }) { target ->
-                        val title = target.substringBefore('#').replace('_', ' ')
-                        val match = entries.firstOrNull { it.title == title }
-                        if (match != null) onSelect(match.key)
-                        else scope.launch { snackbar.showSnackbar("$title is not in this dictionary.") }
-                    }
-                    SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
-                }
-            }
-            else EmptyDocument(onOpen)
-        }
+private fun SearchDock(query: String, onQuery: (String) -> Unit, onClose: () -> Unit) {
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close search") }
+        androidx.compose.foundation.text.BasicTextField(
+            value = query, onValueChange = onQuery, singleLine = true,
+            textStyle = MaterialTheme.typography.titleMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.weight(1f).focusRequester(focus),
+            decorationBox = { field -> Box { if (query.isEmpty()) Text("Find a word…", color = MaterialTheme.colorScheme.onSurfaceVariant); field() } },
+        )
+        if (query.isNotEmpty()) IconButton(onClick = { onQuery("") }) { Icon(Icons.Filled.Close, "Clear search") }
     }
-}
-@Composable
-private fun SearchBar(query: String, onQuery: (String) -> Unit) {
-    OutlinedTextField(
-        value = query, onValueChange = onQuery, singleLine = true,
-        leadingIcon = { Icon(Icons.Filled.Search, null) }, label = { Text("Find in this dictionary") },
-        modifier = Modifier.fillMaxWidth().padding(16.dp),
-    )
 }
 
 @Composable
@@ -150,57 +171,18 @@ private fun SavedScreen(learning: LearningStore, onOpen: (SavedWord) -> Unit) {
     var history by rememberSaveable { mutableStateOf(false) }
     val words = if (history) learning.data.history else learning.data.bookmarks
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !history, onClick = { history = false }, label = { Text("Bookmarks (${learning.data.bookmarks.size})") }, leadingIcon = { Icon(Icons.Filled.Bookmarks, null) })
-            FilterChip(selected = history, onClick = { history = true }, label = { Text("History (${learning.data.history.size})") }, leadingIcon = { Icon(Icons.Filled.History, null) })
-        }
+        Text("Saved", Modifier.padding(horizontal = 24.dp, vertical = 16.dp), style = MaterialTheme.typography.headlineMedium)
+        Segments(listOf(false, true), history, { if (it) "History" else "Bookmarks" }, { history = it }, Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp))
         if (words.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(if (history) "No viewed words yet." else "Bookmark a word to keep it here.") }
         else LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
             items(words, key = { it.key }) { word ->
                 ListItem(
-                    headlineContent = { Text(word.title) },
+                    headlineContent = { Text(word.title, style = MaterialTheme.typography.titleLarge) },
                     supportingContent = { Column { Text(word.language ?: word.kind.replace('_', ' ')); Text(word.clue, maxLines = 2) } },
-                    trailingContent = { TextButton(onClick = { if (history) learning.removeHistory(word.key) else learning.removeBookmark(word.key) }) { Text("Remove") } },
+                    trailingContent = { IconButton(onClick = { if (history) learning.removeHistory(word.key) else learning.removeBookmark(word.key) }) { Icon(Icons.Filled.Close, "Remove ${word.title}", Modifier.size(18.dp)) } },
                     modifier = Modifier.clickable { onOpen(word) },
                 )
-                HorizontalDivider()
             }
-        }
-    }
-}
-@Composable
-private fun SettingsScreen(learning: LearningStore) {
-    val settings = learning.data.settings
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        item { Text("Settings", style = MaterialTheme.typography.headlineMedium) }
-        item { SettingGroup("Appearance") { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("system", "light", "dark").forEach { mode -> FilterChip(selected = settings.darkMode == mode, onClick = { learning.updateSettings { it.copy(darkMode = mode) } }, label = { Text(mode.replaceFirstChar(Char::uppercase)) }) } } } }
-        item { SettingGroup("History") {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) { Text("Remember viewed words"); Switch(checked = settings.historyEnabled, onCheckedChange = { enabled -> learning.updateSettings { it.copy(historyEnabled = enabled) } }) }
-            ChoiceRow("Keep", settings.historyLimit, listOf(25, 100, 250, 500)) { value -> learning.updateSettings { it.copy(historyLimit = value) } }
-        } }
-        item { SettingGroup("Learning") {
-            ChoiceRow("Quiz questions", settings.quizLength, listOf(5, 10, 20, 50)) { value -> learning.updateSettings { it.copy(quizLength = value) } }
-            Text("Random word source", style = MaterialTheme.typography.labelMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) { listOf("all", "history", "bookmarks").forEach { source -> FilterChip(selected = settings.randomPool == source, onClick = { learning.updateSettings { it.copy(randomPool = source) } }, label = { Text(source.replaceFirstChar(Char::uppercase)) }) } }
-        } }
-        item { SettingGroup("Data") { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick = learning::clearStudy) { Text("Reset scores") }; OutlinedButton(onClick = learning::clearHistory) { Text("Clear history") } } } }
-    }
-}
-@Composable
-private fun SettingGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        content()
-        HorizontalDivider()
-    }
-}
-
-@Composable
-private fun ChoiceRow(label: String, selected: Int, values: List<Int>, onSelect: (Int) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(label, style = MaterialTheme.typography.labelMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            values.forEach { value -> FilterChip(selected = selected == value, onClick = { onSelect(value) }, label = { Text(value.toString()) }) }
         }
     }
 }

@@ -19,11 +19,18 @@ private enum class Game { Quiz, Cards, Scramble }
 
 @Composable
 fun LearnScreen(learning: LearningStore, entries: List<Entry>, onOpen: (SavedWord) -> Unit, onRandom: () -> Unit) {
-    val pool = learning.pool(entries)
+    val data = learning.data
+    val pool = remember(entries, data.settings.randomPool, data.bookmarks, data.history) { learning.pool(entries) }
     var game by rememberSaveable { mutableStateOf(Game.Quiz) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) { Column { Text("Learn", style = MaterialTheme.typography.headlineMedium); Text("${pool.size} words ready · ${learning.data.study.values.sumOf { it.right + it.wrong }} answers saved", color = MaterialTheme.colorScheme.onSurfaceVariant) }; FilledTonalButton(onClick = onRandom) { Icon(Icons.Filled.Casino, null); Spacer(Modifier.width(6.dp)); Text("Random") } } }
-        item { Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) { Game.entries.forEach { value -> FilterChip(selected = game == value, onClick = { game = value }, label = { Text(value.name) }, leadingIcon = { Icon(when(value){ Game.Quiz -> Icons.Filled.Quiz; Game.Cards -> Icons.Filled.Style; Game.Scramble -> Icons.Filled.Extension }, null) }) } } }
+        item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Learn", style = MaterialTheme.typography.headlineMedium)
+                Text("${pool.size} words to explore", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onRandom) { Icon(Icons.Filled.Casino, "Random word") }
+        } }
+        item { Segments(Game.entries, game, { it.name }, { game = it }, Modifier.fillMaxWidth()) }
         item { when (game) { Game.Quiz -> QuizGame(learning, pool); Game.Cards -> Flashcards(learning, pool, onOpen); Game.Scramble -> ScrambleGame(learning, pool) } }
     }
 }
@@ -38,7 +45,7 @@ private fun QuizGame(learning: LearningStore, pool: List<SavedWord>) {
         val q = question ?: return@remember emptyList()
         (listOf(q) + pool.filterNot { it.key == q.key }.shuffled().take(3)).shuffled()
     }
-    Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Definition quiz", fontWeight = FontWeight.SemiBold); Text("$right / $total · $target") }
         if (pool.size < 2) Text("Open or bookmark a few words first.")
         else if (total >= target) {
@@ -65,7 +72,7 @@ private fun QuizGame(learning: LearningStore, pool: List<SavedWord>) {
 private fun Flashcards(learning: LearningStore, pool: List<SavedWord>, onOpen: (SavedWord) -> Unit) {
     var card by remember(pool) { mutableStateOf(pool.randomOrNull()) }
     var revealed by remember { mutableStateOf(false) }
-    Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Flashcards", Modifier.fillMaxWidth(), fontWeight = FontWeight.SemiBold)
         if (card == null) Text("Open or bookmark some words first.") else card?.let { word ->
             FilledTonalButton(onClick = { revealed = !revealed }, modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp)) {
@@ -89,7 +96,7 @@ private fun ScrambleGame(learning: LearningStore, pool: List<SavedWord>) {
     var guess by remember { mutableStateOf("") }
     var status by remember { mutableStateOf<Boolean?>(null) }
     val scrambled = remember(word) { word?.title?.let(::scramble).orEmpty() }
-    Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Unscramble", Modifier.fillMaxWidth(), fontWeight = FontWeight.SemiBold)
         if (word == null) Text("Add a few longer words first.") else word?.let { current ->
             Text(scrambled, style = MaterialTheme.typography.headlineLarge, letterSpacing = MaterialTheme.typography.headlineLarge.letterSpacing)
