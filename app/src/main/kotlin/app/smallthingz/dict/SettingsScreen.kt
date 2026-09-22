@@ -16,13 +16,17 @@ import androidx.compose.ui.platform.testTag
 import kotlinx.coroutines.launch
 
 @Composable
-fun SettingsScreen(learning: LearningStore) {
+fun SettingsScreen(learning: LearningStore, onDictionaries: () -> Unit = {}) {
     val settings = learning.data.settings
     val media = MediaCache.get(LocalContext.current)
     val scope = rememberCoroutineScope()
     var clear by remember { mutableStateOf<String?>(null) }
     LazyColumn(Modifier.fillMaxSize().testTag("settings-scroll"), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item { Text("Settings", style = MaterialTheme.typography.headlineMedium) }
+        item { TextButton(onClick = onDictionaries, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Outlined.FolderOpen, null); Spacer(Modifier.width(12.dp))
+            Text("Dictionaries", Modifier.weight(1f)); Icon(Icons.Outlined.ChevronRight, null)
+        } }
         item {
             PreferenceGroup(Icons.Outlined.Palette, "Atmosphere") {
                 Segments(listOf("system", "light", "dark"), settings.darkMode, { it.replaceFirstChar(Char::uppercase) }, { mode -> learning.updateSettings { it.copy(darkMode = mode) } }, Modifier.fillMaxWidth())
@@ -40,7 +44,7 @@ fun SettingsScreen(learning: LearningStore) {
             PreferenceGroup(Icons.Outlined.PermMedia, "Images & sound") {
                 TogglePreference("Load images online", settings.allowImages) { value -> learning.updateSettings { it.copy(allowImages=value) } }
                 TogglePreference("Play online audio", settings.allowAudio) { value -> learning.updateSettings { it.copy(allowAudio=value) }; if(!value) MediaPlayback.stop() }
-                ReaderSlider("Media cache", settings.mediaCacheMb, SliderScale(0, 1024, logarithmic = true), { if (it == 0) "Off" else "$it MB" }) { value ->
+                ReaderSlider("Media cache", settings.mediaCacheMb, SliderScale(0, 4096, logarithmic = true), { if (it == 0) "Off" else if (it >= 1024) "%.1f GB".format(it / 1024f) else "$it MB" }) { value ->
                     learning.updateSettings { it.copy(mediaCacheMb = value) }; scope.launch { media.trim(value) }
                 }
                 TextButton(onClick={scope.launch{MediaPlayback.stop();media.clear()}}) { Text("Clear cached media") }
@@ -49,7 +53,7 @@ fun SettingsScreen(learning: LearningStore) {
         item {
             PreferenceGroup(Icons.Outlined.History, "Your trail") {
                 ReaderSlider("Remember words", if (settings.historyEnabled) settings.historyLimit else 0,
-                    SliderScale(0, 500, logarithmic = true), { if (it == 0) "Off" else "$it" }) { value ->
+                    SliderScale(0, 100_000, logarithmic = true), { if (it == 0) "Off" else "$it" }) { value ->
                     learning.updateSettings { it.copy(historyEnabled = value > 0, historyLimit = if (value == 0) it.historyLimit else value) }
                 }
             }

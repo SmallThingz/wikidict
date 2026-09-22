@@ -91,3 +91,11 @@ They do not claim human-listening assessment or universal phonetic accuracy.
 Device tests cover default folds, revealing notes, slider accessibility commits,
 binary decoding and source-leak checks, and offline speech. Screenshots and logs
 are retained locally in `artifacts/validation/meanings-first/`.
+
+### Navigation and capacity follow-up — 2026-09-23
+
+- Word scrolling animates the dock away on downward movement and restores it on upward movement; opening another word or screen resets visibility.
+- Search is centered; dictionary management is reached from Settings. Learn flashcards use 16 dp corners.
+- Logarithmic history limit now reaches 100,000 words; media cache reaches 4096 MB (4 GB), including persisted-setting clamps. Cache byte arithmetic already uses Long.
+- Unit tests passed, including slider round trips across the expanded ranges. Device slider test passed at both endpoints and restored defaults. Manual device checks confirmed dock hiding/reappearance and Settings → Dictionaries navigation. Optimized build installed; screenshot: `artifacts/validation/navigation/cards.png`.
+- This validates the configured limits, not performance with 100,000 populated history records or 4 GB of cached media.

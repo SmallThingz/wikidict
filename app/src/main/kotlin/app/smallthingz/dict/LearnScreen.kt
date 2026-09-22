@@ -74,7 +74,7 @@ private fun Flashcards(learning: LearningStore, pool: List<SavedWord>, onOpen: (
     var revealed by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (card == null) Text("Open or bookmark some words first.") else card?.let { word ->
-            FilledTonalButton(onClick = { revealed = !revealed }, modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp)) {
+            FilledTonalButton(onClick = { revealed = !revealed }, modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp), shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(word.title, style = MaterialTheme.typography.headlineMedium)
                     Text(if (revealed) word.clue else "Recall the meaning, then tap to reveal.")

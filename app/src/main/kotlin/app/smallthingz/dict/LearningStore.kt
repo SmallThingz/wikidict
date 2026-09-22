@@ -53,7 +53,7 @@ class LearningStore private constructor(context: Context) {
         val previous = data.history.firstOrNull { it.key == word.key }
         val merged = word.copy(views = (previous?.views ?: 0) + 1, lastViewed = now)
         val history = (listOf(merged) + data.history.filterNot { it.key == word.key })
-            .take(data.settings.historyLimit.coerceIn(1, 500))
+            .take(data.settings.historyLimit.coerceIn(1, 100_000))
         update(data.copy(history = history))
     }
 
@@ -81,8 +81,9 @@ class LearningStore private constructor(context: Context) {
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
         val transformed = transform(data.settings)
         val next = transformed.copy(
-            historyLimit = transformed.historyLimit.coerceIn(1, 500),
+            historyLimit = transformed.historyLimit.coerceIn(1, 100_000),
             quizLength = transformed.quizLength.coerceIn(3, 50),
+            mediaCacheMb = transformed.mediaCacheMb.coerceIn(0, 4096),
         )
         update(data.copy(settings = next, history = data.history.take(next.historyLimit)))
     }
@@ -132,7 +133,7 @@ class LearningStore private constructor(context: Context) {
         val root = JSONObject(raw)
         val settings = root.optJSONObject("settings") ?: JSONObject()
         LearningData(
-            history = words(root.optJSONArray("history")).take(500),
+            history = words(root.optJSONArray("history")).take(100_000),
             bookmarks = words(root.optJSONArray("bookmarks")).take(1000),
             study = study(root.optJSONObject("study")),
             settings = AppSettings(
@@ -143,9 +144,9 @@ class LearningStore private constructor(context: Context) {
                 collapseDetails = settings.optBoolean("collapseDetails", true),
                 allowImages = settings.optBoolean("allowImages", false),
                 allowAudio = settings.optBoolean("allowAudio", false),
-                mediaCacheMb = settings.optInt("mediaCacheMb", 100).coerceIn(0,1024),
+                mediaCacheMb = settings.optInt("mediaCacheMb", 100).coerceIn(0,4096),
                 historyEnabled = settings.optBoolean("historyEnabled", true),
-                historyLimit = settings.optInt("historyLimit", 100).coerceIn(1, 500),
+                historyLimit = settings.optInt("historyLimit", 100).coerceIn(1, 100_000),
                 quizLength = settings.optInt("quizLength", 10).coerceIn(3, 50),
                 randomPool = settings.optString("randomPool", "all").takeIf { it in setOf("all", "history", "bookmarks") } ?: "all",
             ),

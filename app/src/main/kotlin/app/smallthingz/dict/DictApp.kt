@@ -31,6 +31,7 @@ enum class AppScreen { Dictionary, Library, Saved, Learn, Settings }
 fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit) {
     var screen by rememberSaveable { mutableStateOf(AppScreen.Dictionary) }
     var query by rememberSaveable { mutableStateOf("") }
+    var dockHidden by remember { mutableStateOf(false) }
     var searching by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Entry?>(null) }
     var selectedDictionary by remember { mutableStateOf<String?>(null) }
@@ -58,21 +59,35 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
     fun openWord(word: SavedWord) { scope.launch { library.exact(word.title,word.language)?.let(::open) ?: snackbar.showSnackbar("Install the dictionary for ${word.title}.") } }
     fun randomWord() { scope.launch { library.random()?.let(::open) } }
     androidx.activity.compose.BackHandler(searching || screen != AppScreen.Dictionary) {
-        searching = false; query = ""; screen = AppScreen.Dictionary; keyboard?.hide()
+        searching = false; query = ""; screen = if (screen == AppScreen.Library) AppScreen.Settings else AppScreen.Dictionary; keyboard?.hide()
     }
+    LaunchedEffect(screen, selected?.key, searching) { dockHidden = false }
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
+        androidx.compose.animation.AnimatedVisibility(
+            visible = !dockHidden || screen != AppScreen.Dictionary || searching,
+            enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut(),
+        ) {
         Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
             Box(Modifier.navigationBarsPadding().imePadding()) {
                 androidx.compose.animation.Crossfade(searching, label = "dock") { search ->
                     if (search) SearchDock(query, { query = it }, { searching = false; query = ""; keyboard?.hide() })
                     else Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                        AppScreen.entries.forEach { target -> DockButton(screenIcon(target), target.name, screen == target) {
-                            if (target == AppScreen.Dictionary && screen == target && library.dictionaries.isNotEmpty()) searching = true
-                            screen = target
-                        } }
+                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceAround) {
+                            listOf(AppScreen.Saved, AppScreen.Learn).forEach { target ->
+                                DockButton(screenIcon(target), target.name, screen == target) { screen = target }
+                            }
+                        }
+                        DockButton(Icons.Filled.Search, "Dictionary", screen == AppScreen.Dictionary) {
+                            searching = library.dictionaries.isNotEmpty(); screen = AppScreen.Dictionary
+                        }
+                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
+                            DockButton(Icons.Filled.Settings, "Settings", screen == AppScreen.Settings || screen == AppScreen.Library) { screen = AppScreen.Settings }
+                        }
                     }
                 }
             }
+        }
         }
     }) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -83,7 +98,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                         if (searching) {
                             val matches by produceState<List<WordHit>>(emptyList(), library.revision, query) { value = library.search(query) }
                             WordMatches(matches, ::open)
-                        } else selected?.let { entry -> EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, settings = learning.data.settings, onLink = { target ->
+                        } else selected?.let { entry -> EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, settings = learning.data.settings, onScrollDirection = { dockHidden = it }, onLink = { target ->
                             if (target.startsWith("File:",true) || target.startsWith("Image:",true)) {
                                 uri.openUri("https://en.wiktionary.org/wiki/" + java.net.URLEncoder.encode(target,"UTF-8").replace("+","%20"))
                             } else scope.launch { library.exact(target.substringBefore('#').replace('_',' '),entry.language)?.let(::open) ?: snackbar.showSnackbar("This word is not in your installed dictionaries.") }
@@ -98,7 +113,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                         }
                         LearnScreen(learning, study, ::openWord, ::randomWord)
                     }
-                    AppScreen.Settings -> SettingsScreen(learning)
+                    AppScreen.Settings -> SettingsScreen(learning) { screen = AppScreen.Library }
                 }
             }
             if(loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))

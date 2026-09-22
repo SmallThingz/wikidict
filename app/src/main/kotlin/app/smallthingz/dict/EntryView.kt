@@ -47,7 +47,7 @@ private val LocalReaderSettings = staticCompositionLocalOf { AppSettings() }
 private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
 
 @Composable
-fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings()) {
+fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings(), onScrollDirection: (Boolean) -> Unit = {}) {
     val uri = LocalUriHandler.current
     val context = LocalContext.current
     DisposableEffect(entry.key) { onDispose { SpeechPlayback.stop() } }
@@ -57,6 +57,18 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
     CompositionLocalProvider(LocalTextCache provides cache, LocalEntryMedia provides entry.media, LocalReaderSettings provides settings) {
       key(entry.key) {
         val scroll = rememberLazyListState()
+        val reportScroll by rememberUpdatedState(onScrollDirection)
+        LaunchedEffect(scroll) {
+            var previousIndex = 0
+            var previousOffset = 0
+            snapshotFlow { Triple(scroll.firstVisibleItemIndex, scroll.firstVisibleItemScrollOffset, scroll.isScrollInProgress) }.collect { (index, offset, moving) ->
+                if (index == 0 && offset == 0) reportScroll(false)
+                else if (moving && (index != previousIndex || kotlin.math.abs(offset - previousOffset) > 4)) {
+                    reportScroll(index > previousIndex || (index == previousIndex && offset > previousOffset))
+                }
+                previousIndex = index; previousOffset = offset
+            }
+        }
         val scope = rememberCoroutineScope()
         var contents by remember { mutableStateOf(false) }
         val folded = remember(entry.key, settings.collapsePronunciation, settings.collapseEtymology, settings.collapseOtherSections, settings.collapseDetails) {
