@@ -687,7 +687,7 @@ pub const Renderer = struct {
                         var media_style = s;
                         media_style.classes = "wikidict-media";
                         media_style.kind = .link;
-                        media_style.target = target;
+                        media_style.target = try std.fmt.allocPrint(self.a, "File:{s}", .{file_name});
                         try self.text(try plainText(self.a, try self.parseSpans(label_value, .{})), media_style);
                     } else {
                         if (label_value.len == 0) label_value = pipeTrickLabel(target);
