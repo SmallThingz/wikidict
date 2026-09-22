@@ -25,7 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-enum class AppScreen { Dictionary, Library, Saved, Learn, Settings }
+enum class AppScreen { Dictionary, Library, Saved, History, Learn, Settings }
 
 @Composable
 fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit) {
@@ -73,16 +73,13 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                 androidx.compose.animation.Crossfade(searching, label = "dock") { search ->
                     if (search) SearchDock(query, { query = it }, { searching = false; query = ""; keyboard?.hide() })
                     else Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceAround) {
-                            listOf(AppScreen.Saved, AppScreen.Learn).forEach { target ->
-                                DockButton(screenIcon(target), target.name, screen == target) { screen = target }
+                        listOf(AppScreen.Saved, AppScreen.History, AppScreen.Dictionary, AppScreen.Learn, AppScreen.Settings).forEach { target ->
+                            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                                DockButton(screenIcon(target), target.name, screen == target || (target == AppScreen.Settings && screen == AppScreen.Library)) {
+                                    if (target == AppScreen.Dictionary) searching = library.dictionaries.isNotEmpty()
+                                    screen = target
+                                }
                             }
-                        }
-                        DockButton(Icons.Filled.Search, "Dictionary", screen == AppScreen.Dictionary) {
-                            searching = library.dictionaries.isNotEmpty(); screen = AppScreen.Dictionary
-                        }
-                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
-                            DockButton(Icons.Filled.Settings, "Settings", screen == AppScreen.Settings || screen == AppScreen.Library) { screen = AppScreen.Settings }
                         }
                     }
                 }
@@ -104,7 +101,8 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                             } else scope.launch { library.exact(target.substringBefore('#').replace('_',' '),entry.language)?.let(::open) ?: snackbar.showSnackbar("This word is not in your installed dictionaries.") }
                         }) } ?: LibraryScreen(library,onImport)
                     }
-                    AppScreen.Saved -> SavedScreen(learning, ::openWord)
+                    AppScreen.Saved -> SavedScreen(learning, false, ::openWord)
+                    AppScreen.History -> SavedScreen(learning, true, ::openWord)
                     AppScreen.Learn -> {
                         val study by produceState<List<Entry>>(emptyList(),library.revision) {
                             val hits=LinkedHashMap<String,WordHit>()
@@ -124,6 +122,7 @@ private fun screenIcon(screen: AppScreen) = when(screen) {
     AppScreen.Dictionary -> Icons.Filled.Search
     AppScreen.Library -> Icons.Filled.FolderOpen
     AppScreen.Saved -> Icons.Filled.Bookmarks
+    AppScreen.History -> Icons.Filled.History
     AppScreen.Learn -> Icons.Filled.School
     AppScreen.Settings -> Icons.Filled.Settings
 }
@@ -153,12 +152,10 @@ private fun SearchDock(query: String, onQuery: (String) -> Unit, onClose: () -> 
 }
 
 @Composable
-private fun SavedScreen(learning: LearningStore, onOpen: (SavedWord) -> Unit) {
-    var history by rememberSaveable { mutableStateOf(false) }
+private fun SavedScreen(learning: LearningStore, history: Boolean, onOpen: (SavedWord) -> Unit) {
     val words = if (history) learning.data.history else learning.data.bookmarks
     Column(Modifier.fillMaxSize()) {
-        Text("Saved", Modifier.padding(horizontal = 24.dp, vertical = 16.dp), style = MaterialTheme.typography.headlineMedium)
-        Segments(listOf(false, true), history, { if (it) "History" else "Bookmarks" }, { history = it }, Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp))
+        Text(if (history) "History" else "Saved", Modifier.padding(horizontal = 24.dp, vertical = 16.dp), style = MaterialTheme.typography.headlineMedium)
         if (words.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(if (history) "No viewed words yet." else "Bookmark a word to keep it here.") }
         else LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
             items(words, key = { it.key }) { word ->
