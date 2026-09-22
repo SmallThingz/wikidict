@@ -6,6 +6,8 @@ const source =
     "==English==\n===Noun===\n{{forms-alias|mouse}}\n" ++
     "# A small rodent.\n{{Template:Template:nested}}\n{{nested}}\n{{T:nested}}\n" ++
     "{{:SharedAlias}}\n{{WT:Sandbox}}\n" ++
+    "# User template: {{User:Fixture/Forms|word=mouse}}\n" ++
+    "# Missing transclusions: {{User:Absent}} / {{:Absent article}} / {{Category:Absent}}\n" ++
     "# Title magic: {{SUBJECTSPACE:Wiktionary talk:Sandbox}} / {{TALKSPACE:WT:Sandbox}}\n" ++
     "# Parser functions: {{#time:Y M d|2013-3-31 +8 days}} / {{#formatdate:2010-01-02|dmy}} / {{#sub:αβγ|-1}} / {{#iferror:{{#expr:bogus}}|ERR|OK}}\n" ++
     "# Synth fork: {{#invoke:IntegrationSynth|run|forked}}\n" ++
@@ -265,6 +267,8 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
     try large_static.writer.writeByte('}');
 
     const pages = [_]Page{
+        .{ .title = "User:Fixture/Forms", .ns = 2, .id = 27, .body = "<noinclude>private documentation</noinclude><includeonly>{{/Child|{{{word}}}}}</includeonly>" },
+        .{ .title = "User:Fixture/Forms/Child", .ns = 2, .id = 28, .body = "user-space inflection {{{1}}}" },
         .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
         .{ .title = "rat", .ns = 0, .id = 22, .body = "==English==\n===Noun===\n# Another rodent.\n", .user = "Rat editor" },
         .{ .title = "Shared", .ns = 0, .id = 23, .body = "shared main transclusion" },
@@ -399,6 +403,9 @@ pub fn main(init: std.process.Init) !void {
 
     const text = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--details" }, 0);
     try h.require(std.mem.indexOf(u8, text, "plural mice") != null, "Lua result is baked into data");
+    try h.require(std.mem.indexOf(u8, text, "user-space inflection mouse") != null, "User namespace transclusion and relative child expand before publication");
+    try h.require(std.mem.indexOf(u8, text, "User:Absent") != null and std.mem.indexOf(u8, text, "Absent article") != null and std.mem.indexOf(u8, text, "Category:Absent") != null, "missing transclusions in every namespace compile to semantic links");
+    try h.require(std.mem.indexOf(u8, text, "private documentation") == null, "User namespace noinclude remains excluded");
     try h.require(std.mem.indexOf(u8, text, "Forms from native Lua") != null, "template result is baked into data");
     try h.require(std.mem.indexOf(u8, text, "shared main transclusion") != null, "main-page redirect transclusion is baked into data");
     try h.require(std.mem.indexOf(u8, text, "project namespace transclusion") != null, "namespace-alias transclusion is baked into data");

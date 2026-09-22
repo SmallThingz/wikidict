@@ -401,9 +401,10 @@ pub const Expander = struct {
         return self.expandWikitext(body, args, title, depth + 1);
     }
 
-    fn missingTemplateMarkup(self: *Expander, title: []const u8) !?[]const u8 {
-        if (namespace_lib.ofTitle(title).id != 10) return null;
-        return @as(?[]const u8, try std.fmt.allocPrint(self.runtime.allocator, "[[:{s}]]", .{title}));
+    fn missingTemplateMarkup(self: *Expander, title: []const u8) ![]const u8 {
+        // MediaWiki Parser::braceSubstitution renders any valid but unavailable
+        // transclusion as a link, including main, User, and other namespaces.
+        return std.fmt.allocPrint(self.runtime.allocator, "[[:{s}]]", .{title});
     }
 
     fn expandTemplateByName(self: *Expander, raw_name: []const u8, args: *rt.Table, host_title: ?[]const u8, depth: usize) anyerror![]const u8 {
@@ -414,16 +415,16 @@ pub const Expander = struct {
         const title = try self.normalizeTransclusionName(raw_name, host_title);
         if (self.provider.get_transclusion_body) |get| {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse
-                return (try self.missingTemplateMarkup(title)) orelse error.TemplateNotFound;
+                return self.missingTemplateMarkup(title);
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
             return self.expandWikitext(body.text, args, body.title, depth + 1);
         }
         const raw = if (self.provider.get_transclusion) |get|
             (try get(self.provider.ctx, self.runtime.allocator, title)) orelse
-                return (try self.missingTemplateMarkup(title)) orelse error.TemplateNotFound
+                return self.missingTemplateMarkup(title)
         else
             (try hostPageContent(self, self.runtime.allocator, title)) orelse
-                return (try self.missingTemplateMarkup(title)) orelse error.TemplateNotFound;
+                return self.missingTemplateMarkup(title);
         return self.expandTemplateSource(title, raw, args, depth);
     }
 
@@ -434,16 +435,16 @@ pub const Expander = struct {
         defer self.template_depth -= 1;
         const title = try self.normalizeTransclusionName(symbol.text, host_title);
         if (self.provider.get_template_symbol == null) if (self.provider.get_transclusion_body) |get| {
-            const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
+            const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return self.missingTemplateMarkup(title);
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
             return self.expandWikitext(body.text, args, body.title, depth + 1);
         };
         const raw = if (self.provider.get_template_symbol) |get|
-            (try get(self.provider.ctx, self.runtime.allocator, symbol.id)) orelse return error.TemplateNotFound
+            (try get(self.provider.ctx, self.runtime.allocator, symbol.id)) orelse return self.missingTemplateMarkup(title)
         else if (self.provider.get_transclusion) |get|
-            (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return error.TemplateNotFound
+            (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return self.missingTemplateMarkup(title)
         else
-            (try hostPageContent(self, self.runtime.allocator, title)) orelse return error.TemplateNotFound;
+            (try hostPageContent(self, self.runtime.allocator, title)) orelse return self.missingTemplateMarkup(title);
         return self.expandTemplateSource(title, raw, args, depth);
     }
 
@@ -2231,16 +2232,20 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     );
     try std.testing.expectEqualStrings("used=okHi Bob Y", lazy_then_next);
     try std.testing.expectEqual(@as(usize, 0), expander.lazy_template_args.items.len);
-    try std.testing.expectError(
-        error.TemplateNotFound,
-        expander.expandFragment("Caller page", "{{Lazy|used={{User:Definitely missing page}}}}", 1_670_803_200),
+    try std.testing.expectEqualStrings(
+        "used=[[:User:Definitely missing page]]",
+        try expander.expandFragment("Caller page", "{{Lazy|used={{User:Definitely missing page}}}}", 1_670_803_200),
     );
     const missing_template = try expander.expandFragment("Page", "{{Definitely missing template xyzzy 12345|x=y}}", 1_670_803_200);
     try std.testing.expectEqualStrings("[[:Template:Definitely missing template xyzzy 12345]]", missing_template);
-    try std.testing.expectError(
-        error.TemplateNotFound,
-        expander.expandFragment("Page", "{{User:Definitely missing page}}", 1_670_803_200),
-    );
+    for ([_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "{{User:Definitely missing page}}", .expected = "[[:User:Definitely missing page]]" },
+        .{ .source = "{{:Definitely missing article}}", .expected = "[[:Definitely missing article]]" },
+        .{ .source = "{{Category:Definitely missing category}}", .expected = "[[:Category:Definitely missing category]]" },
+        .{ .source = "{{Talk:Definitely_missing_page}}", .expected = "[[:Talk:Definitely missing page]]" },
+    }) |case| {
+        try std.testing.expectEqualStrings(case.expected, try expander.expandFragment("Page", case.source, 1_670_803_200));
+    }
     const special_page = try expander.expandFragment("Page", "{{#special:MovePage}}|{{#special:AllPages/Foo bar}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Special:MovePage|Special:AllPages/Foo bar", special_page);
     const category_tree = try expander.expandFragment(

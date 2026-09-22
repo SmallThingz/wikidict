@@ -44,6 +44,18 @@ zig build test-bundle
 
 ## Build a complete dictionary
 
+Use Wikimedia's **pages-meta-current** XML dump for complete builds. The
+articles-only dump excludes namespaces such as `User:`, but dictionary entries
+can transclude real templates stored there (including Georgian conjugation
+tables). A missing source in an incomplete dump is not evidence that the page
+is missing on Wiktionary. Use a matching dump date for all snapshots below.
+
+Decompress the ordinary `pages-meta-current.xml.bz2` archive to XML before
+passing it to the builder. Direct compressed input currently requires a
+multistream archive and its companion index. The full XML is indexed across
+all namespaces; only dictionary namespaces are published.
+
+
 ```sh
 zig build -Doptimize=ReleaseFast build-dictionary -- \
   data/wiktionary.xml \
