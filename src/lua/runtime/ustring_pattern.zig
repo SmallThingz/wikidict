@@ -396,3 +396,15 @@ test "unicode literal classes ranges captures and frontier" {
     try std.testing.expectEqualStrings(" ", search.captureValue(m.captures[1]).slice);
     try std.testing.expectEqualStrings("12", search.captureValue(m.captures[2]).slice);
 }
+
+test "unicode balanced capture preserves inline modifier" {
+    var search = try Search.init(std.testing.allocator, "*man<t:particle expressing solidarity>", "(%b<>)");
+    defer search.deinit();
+    const found = (try search.find(struct {
+        fn category(_: i32) callconv(.c) c_int {
+            return 0;
+        }
+    }.category, 1, true)).?;
+    try std.testing.expectEqual(@as(u8, 1), found.capture_count);
+    try std.testing.expectEqualStrings("<t:particle expressing solidarity>", search.byteSlice(found.captures[0].slice.start, found.captures[0].slice.end));
+}
