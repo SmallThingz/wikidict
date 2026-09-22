@@ -361,10 +361,50 @@ fn deadlineProbe(io: std.Io, a: std.mem.Allocator, dir: []const u8) !void {
     try std.testing.expectError(error.Timeout, worker.expand(a, 0, "probe", "==English==\n"));
 }
 
+fn compilerPipelineProbe(h: *Harness, compiler: []const u8, dir: []const u8) !void {
+    const root = try std.fs.path.join(h.a, &.{ dir, "compiler-probe" });
+    try std.Io.Dir.cwd().createDirPath(h.io, root);
+    const manifest = try std.fs.path.join(h.a, &.{ root, "manifest.jsonl" });
+    const usage_path = try std.fs.path.join(h.a, &.{ root, "lua-usage.tsv" });
+    const unused = try std.fs.path.join(h.a, &.{ root, "unused.lua" });
+    const root_source = try std.fs.path.join(h.a, &.{ root, "root.lua" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = manifest,
+        .data = "{\"page_id\":1,\"title\":\"Module:Root\",\"path\":\"root.lua\",\"bytes\":100}\n" ++
+            "{\"page_id\":2,\"title\":\"Module:Dependency\",\"path\":\"dependency.lua\",\"bytes\":100}\n" ++
+            "{\"page_id\":3,\"title\":\"Module:Unused\",\"path\":\"unused.lua\",\"bytes\":100}\n",
+    });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = root_source, .data = "local d = require('Module:Alias'); return {run=function() return d end}" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(h.a, &.{ root, "dependency.lua" }), .data = "return {run=function() return require('Module:Root') end}" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(h.a, &.{ root, "module-redirects.tsv" }), .data = "M\tModule:Alias\tModule:Dependency\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = usage_path, .data = "P\tModule:Root\t1\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = unused, .data = "this is deliberately invalid Lua !!!" });
+    const serial = try std.fs.path.join(h.a, &.{ root, "serial" });
+    const parallel = try std.fs.path.join(h.a, &.{ root, "parallel" });
+    _ = try h.run(&.{ compiler, manifest, root, serial, "--parse-workers", "1" }, 0);
+    _ = try h.run(&.{ compiler, manifest, root, parallel, "--parse-workers", "4" }, 0);
+    const plan = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ serial, "compile-plan.tsv" }), h.a, .unlimited);
+    const parallel_plan = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ parallel, "compile-plan.tsv" }), h.a, .unlimited);
+    try h.require(std.mem.eql(u8, plan, parallel_plan), "parallel parsing preserves deterministic plans through redirects and cycles");
+    try h.require(std.mem.count(u8, plan, "\n") == 4, "unreachable invalid Lua is never parsed");
+    const serial_metadata = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ serial, "program.meta" }), h.a, .unlimited);
+    const parallel_metadata = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ parallel, "program.meta" }), h.a, .unlimited);
+    try h.require(std.mem.eql(u8, serial_metadata, parallel_metadata), "parallel parsing preserves emitted program metadata");
+    // A dynamic target must widen conservatively and surface the syntax error;
+    // failure must drain/join parser workers rather than hanging the process.
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = usage_path, .data = "D\tmodule\n" });
+    _ = try h.run(&.{ compiler, manifest, root, parallel, "--analysis-only", "--parse-workers", "4" }, 1);
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = usage_path, .data = "P\tModule:Root\t1\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = root_source, .data = "return {run=function(name) return require(name) end}" });
+    _ = try h.run(&.{ compiler, manifest, root, parallel, "--analysis-only", "--parse-workers", "4" }, 1);
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = unused, .data = "return {ok=true}" });
+    _ = try h.run(&.{ compiler, manifest, root, parallel, "--analysis-only", "--parse-workers", "4" }, 0);
+}
+
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
-    if (argv.len != 5) return error.Usage;
+    if (argv.len != 6) return error.Usage;
     const bin = argv[1];
     const pipeline = argv[2];
     const verifier = argv[3];
@@ -374,6 +414,7 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDirPath(init.io, dir);
     var h: Harness = .{ .a = a, .io = init.io };
 
+    try compilerPipelineProbe(&h, argv[5], dir);
     try deadlineProbe(init.io, a, dir);
     h.checks += 1;
 

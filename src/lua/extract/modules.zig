@@ -530,6 +530,12 @@ pub fn main(init: std.process.Init) !void {
     try mw.flush();
     try rw.flush();
     if (pw) |page_writer| try page_writer.flush();
+    // Publish only after every compiler input is complete. Title-index sorting
+    // is independent of Lua parsing/analysis and may continue concurrently.
+    if (emit_page_index) {
+        const ready_path = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "compiler-inputs.ready" });
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = ready_path, .data = "complete\n" });
+    }
     if (emit_page_index)
         try wikimedia_dump.buildPageTitleIndex(init.io, std.heap.smp_allocator, page_index_path, title_index_path);
     std.debug.print(

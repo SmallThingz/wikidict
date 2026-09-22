@@ -408,6 +408,7 @@ pub fn build(b: *std.Build) void {
     bundle_test_run.addFileArg(pipeline_exe.getEmittedBin());
     bundle_test_run.addFileArg(blob_verify_exe.getEmittedBin());
     bundle_test_run.addArg(b.pathFromRoot(".zig-cache"));
+    bundle_test_run.addFileArg(llvm_exe.getEmittedBin());
     b.step("test-bundle", "Exercise build-time Lua/template expansion into data-only blobs").dependOn(&bundle_test_run.step);
     const reader_test_exe = addCliExecutable(b, "dict-reader-integration-test", b.path("tools/reader_integration_test.zig"), b.graph.host, test_optimize, &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }});
     const reader_test_run = b.addRunArtifact(reader_test_exe);

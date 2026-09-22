@@ -62,6 +62,12 @@ zig build -Doptimize=ReleaseFast build-dictionary -- \
   data/wiktionary-blobs
 ```
 
+Lua parsing defaults to up to four workers (`--parse-workers N`, also available on `compile-lua`). Workers parse bounded batches of available modules and collect dependency edges while ordered analysis assigns shared global and shape IDs. Only modules reachable from corpus use are parsed; unresolved dynamic targets conservatively retain all available modules. Worker completion order does not change compilation plans.
+
+The extractor publishes complete compiler inputs before building the title index, allowing parsing and analysis to overlap that final extraction step. The page scan remains sequential. Final reachability and optimization ranking wait for complete usage/dependency information; parsing does not speculatively run on unused modules during the scan.
+
+A warm `compile-lua --analysis-only` comparison on the 2026-09-01 English corpus (60,606 modules, 378.8 MB Lua source) took 33.9 seconds before this pipeline change and 24.5 seconds with four parser workers on 2026-09-22. Compilation plans were byte-identical. These are single runs with four background corpus-expansion workers active, not an end-to-end dictionary benchmark; extraction, LLVM emission, native compilation, and page encoding are excluded.
+
 LLVM bitcode compilation defaults to `1 + floor(logical CPU threads / 3)` concurrent Clang workers. Override the total worker count explicitly when needed:
 
 ```sh

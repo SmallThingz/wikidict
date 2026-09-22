@@ -9,13 +9,9 @@ const static_encode = @import("direct/static_literal_encode.zig");
 const usage = @import("usage.zig");
 const usage_profile = @import("direct/usage_profile.zig");
 
+const parse_pipeline = @import("parse_pipeline.zig");
 const A = std.mem.Allocator;
-const ManifestRow = struct {
-    page_id: u64,
-    title: []const u8,
-    path: []const u8,
-    bytes: u64,
-};
+const ManifestRow = parse_pipeline.Row;
 const ModuleRecord = program.ModuleRecord;
 const NamedModuleEdge = struct {
     from: u32,
@@ -87,7 +83,7 @@ fn unescapeTsv(a: A, raw: []const u8) ![]u8 {
     return out.toOwnedSlice(a);
 }
 
-fn buildModuleIds(io: std.Io, a: A, source_root: []const u8, records: []const ModuleRecord) !emitter.ModuleIdMap {
+fn buildModuleIds(io: std.Io, a: A, source_root: []const u8, records: anytype) !emitter.ModuleIdMap {
     var ids: emitter.ModuleIdMap = .empty;
     errdefer ids.deinit(a);
     for (records, 0..) |record, index| try ids.put(a, record.title, @intCast(index));
@@ -338,6 +334,11 @@ fn writeCompilePlan(
     );
 }
 
+const ManifestAnalysis = struct {
+    records: []ModuleRecord,
+    page_seed: usage_profile.PageSeeds,
+};
+
 fn analyzeManifest(
     io: std.Io,
     a: A,
@@ -349,22 +350,67 @@ fn analyzeManifest(
     named_load_data_targets: *std.ArrayList([]const u8),
     function_stats: *FunctionAnalysisStats,
     dead_functions_by_module: *std.ArrayList(u32),
-) ![]ModuleRecord {
+    parse_workers: usize,
+) !ManifestAnalysis {
     var records: std.ArrayList(ModuleRecord) = .empty;
     var scratch = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer scratch.deinit();
     var function_base: u32 = 0;
-    var pos: usize = 0;
-    while (pos < manifest.len) {
-        const nl = std.mem.indexOfScalarPos(u8, manifest, pos, '\n') orelse manifest.len;
-        const line = manifest[pos..nl];
-        pos = @min(nl + 1, manifest.len);
+    var rows: std.ArrayList(ManifestRow) = .empty;
+    defer rows.deinit(a);
+    var lines = std.mem.splitScalar(u8, manifest, '\n');
+    while (lines.next()) |line| {
         if (line.len == 0) continue;
+        try rows.append(a, try std.json.parseFromSliceLeaky(ManifestRow, a, line, .{ .ignore_unknown_fields = true }));
+    }
+    var ids = try buildModuleIds(io, a, source_root, rows.items);
+    defer ids.deinit(a);
+    const usage_path = try std.fs.path.join(a, &.{ source_root, "lua-usage.tsv" });
+    defer a.free(usage_path);
+    var seeds = try usage_profile.pageSeeds(io, a, usage_path, &ids, rows.items.len);
+    defer seeds.deinit(a);
+    const queued = try a.alloc(bool, rows.items.len);
+    defer a.free(queued);
+    @memset(queued, false);
+    var pending: std.ArrayList(usize) = .empty;
+    defer pending.deinit(a);
+    for (seeds.values, 0..) |reach, id| {
+        if (reach != 0 or seeds.dynamic_module_target) {
+            try pending.append(a, id);
+            queued[id] = true;
+        }
+    }
+    var all_reachable = seeds.dynamic_module_target;
+    var pool = try parse_pipeline.Pool.init(io, source_root, parse_workers);
+    defer pool.deinit();
+    var scheduled: usize = 0;
+    var index: usize = 0;
+    while (index < pending.items.len) : (index += 1) {
+        while (scheduled < @min(index + pool.slots.len, pending.items.len)) : (scheduled += 1)
+            pool.slots[scheduled % pool.slots.len].dispatch(rows.items[pending.items[scheduled]]);
+        const slot = &pool.slots[index % pool.slots.len];
+        try slot.wait();
+        defer slot.release();
+        const row = slot.row;
+        if (slot.dynamic and !all_reachable) {
+            all_reachable = true;
+            for (queued, 0..) |*seen, id| {
+                if (!seen.*) {
+                    try pending.append(a, id);
+                    seen.* = true;
+                }
+            }
+        } else if (!all_reachable) {
+            for (slot.requires.items) |target| {
+                const id = ids.get(target) orelse continue;
+                if (!queued[id]) {
+                    try pending.append(a, id);
+                    queued[id] = true;
+                }
+            }
+        }
         const sa = scratch.allocator();
-        const row = try std.json.parseFromSliceLeaky(ManifestRow, sa, line, .{ .ignore_unknown_fields = true });
-        const path = try sourcePath(sa, source_root, row.path);
-        const source = try readAll(io, sa, path);
-        var chunk = try lua.parse(sa, source);
+        const chunk = &slot.chunk.?;
         const module_index: u32 = @intCast(records.items.len);
 
         if (static_encode.rootLiteral(chunk.body)) |literal| {
@@ -388,7 +434,6 @@ fn analyzeManifest(
             });
             try dead_functions_by_module.append(a, 0);
             function_base = std.math.add(u32, function_base, 1) catch return error.TooManyFunctions;
-            chunk.deinit();
             _ = scratch.reset(.retain_capacity);
             continue;
         }
@@ -411,21 +456,15 @@ fn analyzeManifest(
             function_stats.pure_data_roots += 1;
             try dead_functions_by_module.append(a, 0);
             function_base = std.math.add(u32, function_base, 1) catch return error.TooManyFunctions;
-            chunk.deinit();
             _ = scratch.reset(.retain_capacity);
             continue;
         }
 
         try shape_registry.collect(module_index, chunk.body);
 
-        var static_requires: std.ArrayList([]const u8) = .empty;
-        var static_load_data: std.ArrayList([]const u8) = .empty;
-        const dynamic_module_load = try usage.collectModuleLoadsDetailed(
-            sa,
-            chunk.body,
-            &static_requires,
-            &static_load_data,
-        );
+        const static_requires = slot.requires;
+        const static_load_data = slot.load_data;
+        const dynamic_module_load = slot.dynamic;
         for (static_load_data.items) |target|
             try named_load_data_targets.append(a, try a.dupe(u8, target));
         var seen_requires: std.StringHashMapUnmanaged(void) = .empty;
@@ -455,7 +494,7 @@ fn analyzeManifest(
             },
             else => {},
         };
-        var module = try analysis.analyze(sa, globals, &chunk, function_base);
+        var module = try analysis.analyze(sa, globals, chunk, function_base);
         const count: u32 = @intCast(module.functions.items.len);
         function_stats.functions += module.functions.items.len;
         var module_dead_functions: u32 = 0;
@@ -638,10 +677,15 @@ fn analyzeManifest(
         function_base = std.math.add(u32, function_base, count) catch return error.TooManyFunctions;
         module.deinit();
         model.deinit();
-        chunk.deinit();
         _ = scratch.reset(.retain_capacity);
     }
-    return records.toOwnedSlice(a);
+    std.debug.print("LLVM_PARSE selected={d}/{d} workers={d}\n", .{ records.items.len, rows.items.len, parse_workers });
+    const selected_seeds = try a.alloc(u64, records.items.len);
+    for (selected_seeds, pending.items) |*value, id| value.* = seeds.values[id];
+    return .{
+        .records = try records.toOwnedSlice(a),
+        .page_seed = .{ .values = selected_seeds, .dynamic_module_target = seeds.dynamic_module_target },
+    };
 }
 const modules_per_batch: usize = 64;
 // Bound batch codegen memory independently of the O1/O2 usage policy.
@@ -803,9 +847,20 @@ fn emitBatches(
 }
 
 fn run(io: std.Io, a: A, args: []const []const u8) !void {
-    if (args.len != 4 and args.len != 5) return error.Usage;
-    const analysis_only = args.len == 5 and std.mem.eql(u8, args[4], "--analysis-only");
-    if (args.len == 5 and !analysis_only) return error.Usage;
+    if (args.len < 4) return error.Usage;
+    var analysis_only = false;
+    var parse_workers: usize = @min(4, std.Thread.getCpuCount() catch 1);
+    var option: usize = 4;
+    while (option < args.len) : (option += 1) {
+        if (std.mem.eql(u8, args[option], "--analysis-only")) {
+            analysis_only = true;
+        } else if (std.mem.eql(u8, args[option], "--parse-workers")) {
+            option += 1;
+            if (option == args.len) return error.Usage;
+            parse_workers = try std.fmt.parseInt(usize, args[option], 10);
+            if (parse_workers == 0 or parse_workers > 64) return error.Usage;
+        } else return error.Usage;
+    }
     const manifest_path = args[1];
     const source_root = args[2];
     const output_root = args[3];
@@ -823,7 +878,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     var function_stats: FunctionAnalysisStats = .{};
     var dead_functions_by_module: std.ArrayList(u32) = .empty;
     defer dead_functions_by_module.deinit(a);
-    const records = try analyzeManifest(
+    const analyzed = try analyzeManifest(
         io,
         a,
         manifest,
@@ -834,8 +889,12 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &named_load_data_targets,
         &function_stats,
         &dead_functions_by_module,
+        parse_workers,
     );
-    if (records.len == 0) return error.EmptyManifest;
+    const records = analyzed.records;
+    var page_seed = analyzed.page_seed;
+    defer page_seed.deinit(a);
+    if (records.len == 0) return error.NoReachableModules;
     if (dead_functions_by_module.items.len != records.len) return error.FunctionAnalysisMismatch;
     if (records.len > std.math.maxInt(u32) - 2) return error.TooManyModules;
     std.debug.print("LLVM_ANALYZE modules={d} globals={d} functions={d}\n", .{
@@ -864,10 +923,6 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
 
     const module_edges = try resolveModuleEdges(a, named_module_edges.items, &module_ids);
     defer a.free(module_edges);
-    const usage_path = try std.fs.path.join(a, &.{ source_root, "lua-usage.tsv" });
-    defer a.free(usage_path);
-    var page_seed = try usage_profile.pageSeeds(io, a, usage_path, &module_ids, records.len);
-    defer page_seed.deinit(a);
     var profile = try usage_profile.buildProfile(a, page_seed.values, module_edges);
     defer usage_profile.deinitProfile(a, &profile);
 
@@ -1018,8 +1073,8 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
 }
 
 pub export fn dict_llvm_build_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
-    if (argc != 4 and argc != 5) {
-        std.debug.print("usage: dict-llvm-build MANIFEST SOURCE_ROOT OUTPUT_DIR [--analysis-only]\n", .{});
+    if (argc < 4 or argc > 7) {
+        std.debug.print("usage: dict-llvm-build MANIFEST SOURCE_ROOT OUTPUT_DIR [--analysis-only] [--parse-workers N]\n", .{});
         return 2;
     }
 
@@ -1028,7 +1083,7 @@ pub export fn dict_llvm_build_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c
     var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();
 
-    var args: [5][]const u8 = undefined;
+    var args: [7][]const u8 = undefined;
     for (args[0..@intCast(argc)], 0..) |*arg, index| arg.* = std.mem.span(argv[index]);
     run(threaded.io(), arena.allocator(), args[0..@intCast(argc)]) catch |err| {
         std.debug.print("dict-llvm-build: {s}\n", .{@errorName(err)});

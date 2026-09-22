@@ -17,11 +17,12 @@ const Options = struct {
     transclusion_redirects_snapshot: ?[]const u8 = null,
     llvm_workers: ?usize = null,
     page_workers: usize = 1,
+    parse_workers: usize = 4,
 };
 
 fn parseOptions(args: []const []const u8) !Options {
     if (args.len < 2) return error.Usage;
-    var options: Options = .{ .dump = args[0], .root = args[1] };
+    var options: Options = .{ .dump = args[0], .root = args[1], .parse_workers = @min(4, std.Thread.getCpuCount() catch 1) };
     var index: usize = 2;
     while (index < args.len) : (index += 1) {
         if (std.mem.eql(u8, args[index], "--commons-data-snapshot")) {
@@ -70,6 +71,11 @@ fn parseOptions(args: []const []const u8) !Options {
             const workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
             if (workers == 0) return error.Usage;
             options.llvm_workers = workers;
+        } else if (std.mem.eql(u8, args[index], "--parse-workers")) {
+            index += 1;
+            if (index >= args.len) return error.Usage;
+            options.parse_workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
+            if (options.parse_workers == 0 or options.parse_workers > 64) return error.Usage;
         } else if (std.mem.eql(u8, args[index], "--page-workers")) {
             index += 1;
             if (index >= args.len) return error.Usage;
@@ -99,6 +105,58 @@ fn stage(io: std.Io, marker: []const u8, name: []const u8, argv: []const []const
         std.debug.print("dictionary build failed at {s}; incomplete marker retained\n", .{name});
         return error.PipelineStageFailed;
     }
+}
+
+// One owner waits/reaps the extractor. The compiler may start after its inputs
+// are flushed while extraction finishes the independent title index. Always
+// join, including compiler errors, so no child outlives a failed pipeline.
+const Extraction = struct {
+    io: std.Io,
+    child: std.process.Child,
+    done: std.atomic.Value(bool) = .init(false),
+    failure: ?anyerror = null,
+
+    fn wait(self: *Extraction) void {
+        defer self.done.store(true, .release);
+        defer self.child.kill(self.io);
+        const term = self.child.wait(self.io) catch |err| {
+            self.failure = err;
+            return;
+        };
+        if (term != .exited or term.exited != 0) self.failure = error.PipelineStageFailed;
+    }
+};
+
+fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump: []const u8, root: []const u8, llvm_dir: []const u8, workers: usize) !void {
+    const ready = try std.fs.path.join(a, &.{ root, "compiler-inputs.ready" });
+    const manifest = try std.fs.path.join(a, &.{ root, "manifest.jsonl" });
+    const worker_text = try std.fmt.allocPrint(a, "{d}", .{workers});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "extract compiler inputs" });
+    var extraction: Extraction = .{
+        .io = io,
+        .child = try std.process.spawn(io, .{ .argv = &.{ paths.modules, dump, root, "--page-index" }, .stdin = .ignore }),
+    };
+    const thread = std.Thread.spawn(.{}, Extraction.wait, .{&extraction}) catch |err| {
+        extraction.child.kill(io);
+        return err;
+    };
+    defer thread.join();
+    while (true) {
+        if (extraction.done.load(.acquire)) {
+            if (extraction.failure) |err| return err;
+            break;
+        }
+        if (std.Io.Dir.cwd().access(io, ready, .{})) |_| break else |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        }
+        try std.Io.sleep(io, .fromMilliseconds(10), .awake);
+    }
+    try stage(io, marker, "parse/analyze Lua while finalizing corpus index", &.{ paths.llvm, manifest, root, llvm_dir, "--parse-workers", worker_text });
+    // The title index is required by expansion, even if LLVM emission finishes
+    // first. The deferred join also covers all error paths.
+    while (!extraction.done.load(.acquire)) try std.Io.sleep(io, .fromMilliseconds(10), .awake);
+    if (extraction.failure) |err| return err;
 }
 
 fn sourcePath(a: std.mem.Allocator, relative: []const u8) ![]u8 {
@@ -503,12 +561,9 @@ pub fn main(init: std.process.Init) !void {
     if (options.transclusion_redirects_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "transclusion-redirects.tsv");
 
-    try stage(init.io, marker, "extract modules, redirects, and corpus index", &.{ paths.modules, dump, expander_root, "--page-index" });
-
-    const manifest = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });
     const llvm_dir = try std.fs.path.join(a, &.{ expander_root, "llvm" });
     try std.Io.Dir.cwd().createDirPath(init.io, llvm_dir);
-    try stage(init.io, marker, "emit Lua AST directly to LLVM bitcode", &.{ paths.llvm, manifest, expander_root, llvm_dir });
+    try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers);
 
     // The native worker is a transient bundle compiler. It never belongs in the
     // shipped dictionary; full builds consume it immediately and delete .bundle-expander/.
