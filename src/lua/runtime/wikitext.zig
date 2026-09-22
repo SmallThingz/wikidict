@@ -407,7 +407,21 @@ pub const Expander = struct {
         return std.fmt.allocPrint(self.runtime.allocator, "[[:{s}]]", .{title});
     }
 
-    fn expandTemplateByName(self: *Expander, raw_name: []const u8, args: *rt.Table, host_title: ?[]const u8, depth: usize) anyerror![]const u8 {
+    const MissingTemplate = enum { link, lua_error };
+
+    fn missingTemplateResult(self: *Expander, raw_name: []const u8, title: []const u8, mode: MissingTemplate) ![]const u8 {
+        if (mode == .link) return self.missingTemplateMarkup(title);
+        // Scribunto expandTemplate differs from wikitext brace substitution:
+        // callers must be able to catch a missing template with Lua pcall.
+        self.runtime.last_error = .{ .string = try std.fmt.allocPrint(
+            self.runtime.allocator,
+            "expandTemplate: template \"{s}\" does not exist",
+            .{raw_name},
+        ) };
+        return error.LuaRaised;
+    }
+
+    fn expandTemplateByName(self: *Expander, raw_name: []const u8, args: *rt.Table, host_title: ?[]const u8, depth: usize, missing: MissingTemplate) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
         if (self.template_depth >= self.max_template_depth) return error.TemplateDepth;
         self.template_depth += 1;
@@ -415,16 +429,16 @@ pub const Expander = struct {
         const title = try self.normalizeTransclusionName(raw_name, host_title);
         if (self.provider.get_transclusion_body) |get| {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse
-                return self.missingTemplateMarkup(title);
+                return self.missingTemplateResult(raw_name, title, missing);
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
             return self.expandWikitext(body.text, args, body.title, depth + 1);
         }
         const raw = if (self.provider.get_transclusion) |get|
             (try get(self.provider.ctx, self.runtime.allocator, title)) orelse
-                return self.missingTemplateMarkup(title)
+                return self.missingTemplateResult(raw_name, title, missing)
         else
             (try hostPageContent(self, self.runtime.allocator, title)) orelse
-                return self.missingTemplateMarkup(title);
+                return self.missingTemplateResult(raw_name, title, missing);
         return self.expandTemplateSource(title, raw, args, depth);
     }
 
@@ -1515,7 +1529,7 @@ pub const Expander = struct {
             return std.fmt.allocPrint(self.runtime.allocator, "{{{{{s}}}}}", .{content});
         }
         const args = try self.buildTemplateArgs(parts.items[1..], params, host_title, depth + 1);
-        return self.expandTemplateByName(title, args, host_title, depth + 1);
+        return self.expandTemplateByName(title, args, host_title, depth + 1, .link);
     }
 
     fn scalarText(self: *Expander, value: Value) ![]const u8 {
@@ -1589,7 +1603,7 @@ pub const Expander = struct {
 
     fn hostFrameExpandTemplate(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        return self.expandTemplateByName(title, args, null, 0);
+        return self.expandTemplateByName(title, args, null, 0, .lua_error);
     }
 
     fn hostFrameExtensionTag(raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, content: ?Value, attrs: ?*rt.Table) anyerror![]const u8 {

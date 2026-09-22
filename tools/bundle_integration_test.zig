@@ -237,6 +237,10 @@ const module_source =
     \\    assert(string.find(mw.title.new('rat'):getContent(), 'Another rodent', 1, true))
     \\    local missing_entry = mw.title.new('definitely-not-a-real-entry')
     \\    assert(not missing_entry.exists and missing_entry.content == false and missing_entry:getContent() == nil)
+    \\    for _, missing_title in ipairs({'Definitely absent template', 'User:Absent'}) do
+    \\        local ok, err = pcall(function() return frame:expandTemplate{title = missing_title} end)
+    \\        assert(not ok and err == 'expandTemplate: template "' .. missing_title .. '" does not exist')
+    \\    end
     \\    local word = frame.args[1]
     \\    local plural = forms[word]
     \\    frame:callParserFunction("DISPLAYTITLE", "''" .. word .. "''")
