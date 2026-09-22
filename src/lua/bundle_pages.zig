@@ -12,10 +12,7 @@ const FileMetadata = lua_program.WikitextProvider.FileMetadata;
 const InterwikiRow = lua_program.WikitextProvider.InterwikiRow;
 const WikibaseEntityText = lua_program.WikitextProvider.WikibaseEntityText;
 const TransclusionBody = lua_program.WikitextProvider.TransclusionBody;
-const CategoryTreeRange = struct {
-    start: u32,
-    len: u16,
-};
+const CategoryTreeScope = lua_program.WikitextProvider.CategoryTreeScope;
 
 const InterfaceMessageEntry = struct { source_raw: ?[]const u8 };
 const CorpusPage = struct { title: []const u8, source: wikimedia_dump.PageSource, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
@@ -70,8 +67,7 @@ pub const Provider = struct {
     interface_messages: std.StringHashMapUnmanaged(InterfaceMessageEntry) = .empty,
     interface_messages_storage: ?Mapped = null,
     interface_messages_available: bool = false,
-    category_tree_ranges: std.StringHashMapUnmanaged(CategoryTreeRange) = .empty,
-    category_tree_members: std.ArrayList([]const u8) = .empty,
+    category_tree_ranges: std.StringHashMapUnmanaged([]const u8) = .empty,
     category_tree_storage: ?Mapped = null,
     category_tree_available: bool = false,
     file_metadata: std.StringHashMapUnmanaged(FileMetadata) = .empty,
@@ -125,7 +121,6 @@ pub const Provider = struct {
         self.interface_messages.deinit(self.a);
         if (self.interface_messages_storage) |*mapped| mapped.deinit();
         self.category_tree_ranges.deinit(self.a);
-        self.category_tree_members.deinit(self.a);
         if (self.category_tree_storage) |*mapped| mapped.deinit();
         self.file_metadata.deinit(self.a);
         if (self.file_metadata_storage) |*mapped| mapped.deinit();
@@ -323,10 +318,8 @@ pub const Provider = struct {
     fn loadCategoryTree(self: *Provider) !void {
         var mapped = (try self.mapOptional("category-tree.tsv")) orelse return;
         errdefer mapped.deinit();
-        var ranges: std.StringHashMapUnmanaged(CategoryTreeRange) = .empty;
+        var ranges: std.StringHashMapUnmanaged([]const u8) = .empty;
         errdefer ranges.deinit(self.a);
-        var members: std.ArrayList([]const u8) = .empty;
-        errdefer members.deinit(self.a);
         const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
             return error.CategoryTreeSnapshotTooLarge;
         try ranges.ensureTotalCapacity(self.a, capacity);
@@ -336,23 +329,20 @@ pub const Provider = struct {
             if (line.len == 0 or line[0] == '#') continue;
             var fields = std.mem.splitScalar(u8, line, '\t');
             const category = fields.next() orelse return error.InvalidCategoryTreeSnapshot;
-            if (category.len == 0) return error.InvalidCategoryTreeSnapshot;
-            const start = std.math.cast(u32, members.items.len) orelse return error.CategoryTreeSnapshotTooLarge;
+            const scope = fields.next() orelse return error.InvalidCategoryTreeSnapshot;
+            if (category.len == 0 or std.meta.stringToEnum(CategoryTreeScope, scope) == null)
+                return error.InvalidCategoryTreeSnapshot;
+            const key_len = category.len + 1 + scope.len;
             var count: usize = 0;
             while (fields.next()) |title| {
                 if (title.len == 0 or count >= 200) return error.InvalidCategoryTreeSnapshot;
-                try members.append(self.a, title);
                 count += 1;
             }
-            const result = try ranges.getOrPut(self.a, category);
+            const result = try ranges.getOrPut(self.a, line[0..key_len]);
             if (result.found_existing) return error.DuplicateCategoryTree;
-            result.value_ptr.* = .{
-                .start = start,
-                .len = std.math.cast(u16, count) orelse return error.CategoryTreeSnapshotTooLarge,
-            };
+            result.value_ptr.* = if (key_len == line.len) "" else line[key_len + 1 ..];
         }
         self.category_tree_ranges = ranges;
-        self.category_tree_members = members;
         self.category_tree_storage = mapped;
         self.category_tree_available = true;
     }
@@ -743,12 +733,16 @@ pub const Provider = struct {
         return .{ .source = if (entry.source_raw) |raw| try unescapeFieldAlloc(a, raw) else null };
     }
 
-    fn categoryTree(ctx: ?*anyopaque, db_key: []const u8) anyerror![]const []const u8 {
+    fn categoryTree(ctx: ?*anyopaque, a: A, db_key: []const u8, scope: CategoryTreeScope) anyerror![]const []const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
-        const range = self.category_tree_ranges.get(db_key) orelse return error.CategoryTreeSnapshotMissing;
-        const start: usize = range.start;
-        const end = start + range.len;
-        return self.category_tree_members.items[start..end];
+        const key = try std.fmt.allocPrint(a, "{s}\t{s}", .{ db_key, @tagName(scope) });
+        defer a.free(key);
+        const raw = self.category_tree_ranges.get(key) orelse return error.CategoryTreeSnapshotMissing;
+        if (raw.len == 0) return &.{};
+        const members = try a.alloc([]const u8, std.mem.count(u8, raw, "\t") + 1);
+        var fields = std.mem.splitScalar(u8, raw, '\t');
+        for (members) |*member| member.* = fields.next().?;
+        return members;
     }
 
     fn fileMetadata(ctx: ?*anyopaque, title: []const u8) anyerror!FileMetadata {
@@ -934,20 +928,28 @@ test "provider loads pinned category tree members and fails closed on unknown ca
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = snapshot_path,
         .data = "# category_db_key\tpage_title_1...\n" ++
-            "English_terms_prefixed_with_un-\tunable\tunclear\n" ++
-            "Empty_category\n",
+            "English_terms_prefixed_with_un-\tmain\tunable\tunclear\n" ++
+            "English_terms_prefixed_with_un-\tpages\tCategory:Child\tTalk:unable\tunable\n" ++
+            "Empty_category\tmain\n",
     });
 
     var provider = try Provider.init(io, a, root, "unused-dump.xml");
     defer provider.deinit();
     const get = provider.api().category_tree orelse return error.TestExpectedEqual;
-    const members = try get(&provider, "English_terms_prefixed_with_un-");
+    const members = try get(&provider, a, "English_terms_prefixed_with_un-", .main);
+    defer a.free(members);
     try std.testing.expectEqual(@as(usize, 2), members.len);
     try std.testing.expectEqualStrings("unable", members[0]);
     try std.testing.expectEqualStrings("unclear", members[1]);
-    const empty = try get(&provider, "Empty_category");
+    const all_pages = try get(&provider, a, "English_terms_prefixed_with_un-", .pages);
+    defer a.free(all_pages);
+    try std.testing.expectEqual(@as(usize, 3), all_pages.len);
+    try std.testing.expectEqualStrings("Category:Child", all_pages[0]);
+    try std.testing.expectEqualStrings("Talk:unable", all_pages[1]);
+    try std.testing.expectError(error.CategoryTreeSnapshotMissing, get(&provider, a, "Empty_category", .pages));
+    const empty = try get(&provider, a, "Empty_category", .main);
     try std.testing.expectEqual(@as(usize, 0), empty.len);
-    try std.testing.expectError(error.CategoryTreeSnapshotMissing, get(&provider, "Missing_category"));
+    try std.testing.expectError(error.CategoryTreeSnapshotMissing, get(&provider, a, "Missing_category", .pages));
 }
 
 test "provider loads complete known-language registry" {

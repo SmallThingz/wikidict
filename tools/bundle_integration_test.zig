@@ -7,6 +7,7 @@ const source =
     "# A small rodent.\n{{Template:Template:nested}}\n{{nested}}\n{{T:nested}}\n" ++
     "{{:SharedAlias}}\n{{WT:Sandbox}}\n" ++
     "{{User:Fixture/Forms|word=mouse}}\n" ++
+    "{{#categorytree:Integration categories|mode=pages}}\n" ++
     "# Missing transclusions: {{User:Absent}} / {{:Absent article}} / {{Category:Absent}}\n" ++
     "# Title magic: {{SUBJECTSPACE:Wiktionary talk:Sandbox}} / {{TALKSPACE:WT:Sandbox}}\n" ++
     "# Parser functions: {{#time:Y M d|2013-3-31 +8 days}} / {{#formatdate:2010-01-02|dmy}} / {{#sub:αβγ|-1}} / {{#iferror:{{#expr:bogus}}|ERR|OK}}\n" ++
@@ -271,6 +272,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
     try large_static.writer.writeByte('}');
 
     const pages = [_]Page{
+        .{ .title = "Category:Integration categories", .ns = 14, .id = 29, .body = "Category root" },
         .{ .title = "User:Fixture/Forms", .ns = 2, .id = 27, .body = "<noinclude>private documentation</noinclude><includeonly>{{/Child|{{{word}}}}}</includeonly>" },
         .{ .title = "User:Fixture/Forms/Child", .ns = 2, .id = 28, .body = "<templatestyles src=\"Template:forms.css\" /><div class=\"NavFrame\">\n{| class=\"wikitable\"\n| user-space inflection {{{1}}}\n|}\n</div>" },
         .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
@@ -389,8 +391,13 @@ pub fn main(init: std.process.Init) !void {
     const failed_marker = try std.fs.path.join(a, &.{ failed_root, ".incomplete" });
     try h.require(exists(init.io, failed_marker), "failed build retains incomplete marker");
 
+    const category_snapshot = try std.fs.path.join(a, &.{ dir, "category-tree.tsv" });
+    try std.Io.Dir.cwd().writeFile(init.io, .{
+        .sub_path = category_snapshot,
+        .data = "Integration_categories\tmain\tmouse\nIntegration_categories\tpages\tmouse\tTalk:Category discussion\tCategory:Nested category\n",
+    });
     const root = try std.fs.path.join(a, &.{ dir, "dictionary" });
-    _ = try h.run(&.{ pipeline, dump, root, "--llvm-workers", "1", "--page-workers", "2" }, 0);
+    _ = try h.run(&.{ pipeline, dump, root, "--category-tree-snapshot", category_snapshot, "--llvm-workers", "1", "--page-workers", "2" }, 0);
     _ = try h.run(&.{ verifier, root }, 0);
 
     const forbidden = [_][]const u8{
@@ -406,6 +413,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(!exists(init.io, incomplete), "completed bundle marker removed");
 
     const text = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, text, "Talk:Category discussion") != null and std.mem.indexOf(u8, text, "Nested category") != null, "default CategoryTree pages mode compiles other namespaces and subcategory links");
     try h.require(std.mem.indexOf(u8, text, "plural mice") != null, "Lua result is baked into data");
     try h.require(std.mem.indexOf(u8, text, "user-space inflection mouse") != null, "User namespace transclusion and relative child expand before publication");
     try h.require(std.mem.indexOf(u8, text, "User:Absent") != null and std.mem.indexOf(u8, text, "Absent article") != null and std.mem.indexOf(u8, text, "Category:Absent") != null, "missing transclusions in every namespace compile to semantic links");

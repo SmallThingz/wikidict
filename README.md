@@ -118,18 +118,36 @@ zig build -Doptimize=ReleaseFast build-dictionary -- \
   --category-tree-snapshot data/category-tree.tsv
 ```
 
-`category-tree.tsv` stores the page members already filtered and sorted for the
-supported production CategoryTree request (`type=pages`, `depth=1`, main
-namespace, maximum 200 children):
+Generate the snapshot from the same dated XML and SQL dumps (verify their
+published checksums first):
 
-```text
-CATEGORY_DB_KEY<TAB>PAGE_TITLE_1<TAB>...<TAB>PAGE_TITLE_200
+```sh
+python3 tools/category_tree_snapshot.py \
+  --xml data/wiktionary.xml \
+  --page data/page.sql.gz \
+  --linktarget data/linktarget.sql.gz \
+  --categorylinks data/categorylinks.sql.gz \
+  --database .tmp/category-import.sqlite \
+  --output data/category-tree.tsv
 ```
 
-An empty category is represented by its category key alone. A category absent
-from a supplied snapshot fails closed, as do unsupported CategoryTree options.
-The root count still comes from `category-stats.tsv`. This snapshot is
-transient build input and is never published.
+The importer uses bounded-memory SQLite scratch storage. Remove its database
+from `.tmp/` when finished. The snapshot stores separate query results for
+`namespaces=-` (`main`) and unrestricted `mode=pages` (`pages`):
+
+```text
+CATEGORY_DB_KEY<TAB>main<TAB>PAGE_TITLE_1<TAB>...<TAB>PAGE_TITLE_200
+CATEGORY_DB_KEY<TAB>pages<TAB>PAGE_TITLE_1<TAB>...<TAB>PAGE_TITLE_200
+```
+
+Filtering occurs before MediaWiki's 200-child limit, in category-link type and
+binary sort-key order. The unrestricted query includes subcategories and
+non-file pages from other namespaces. Rendering places selected subcategories
+first. Empty results contain the category key and scope only. Missing query
+coverage fails explicitly. Old main-only snapshots must be regenerated; they
+cannot answer unrestricted requests. Root counts come from
+`category-stats.tsv`; CategoryTree's pages count includes subcategories and
+excludes files. These snapshots are transient build inputs and never published.
 
 Interwiki-aware Lua such as `mw.site.interwikiMap()` and `mw.title.new("w:...")` requires a pinned site interwiki map:
 

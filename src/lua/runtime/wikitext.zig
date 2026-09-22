@@ -48,6 +48,7 @@ pub const CallSymbol = struct {
 };
 
 pub const Provider = struct {
+    pub const CategoryTreeScope = enum { main, pages };
     pub const ExternalData = host_api.ExternalData;
     pub const CategoryStats = host_api.CategoryStats;
     pub const InterfaceMessage = host_api.InterfaceMessage;
@@ -79,7 +80,7 @@ pub const Provider = struct {
     category_stats: ?*const fn (?*anyopaque, []const u8) anyerror!?CategoryStats = null,
     interface_message: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, []const u8) anyerror!?InterfaceMessage = null,
     file_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!FileMetadata = null,
-    category_tree: ?*const fn (?*anyopaque, []const u8) anyerror![]const []const u8 = null,
+    category_tree: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, CategoryTreeScope) anyerror![]const []const u8 = null,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
     wikibase_sitelink: ?*const fn (?*anyopaque, []const u8, []const u8) anyerror!?[]const u8 = null,
     wikibase_entity_text: ?*const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityText = null,
@@ -1745,7 +1746,8 @@ pub const Expander = struct {
 
     fn categoryTreeRootCount(mode: []const u8, stats: Provider.CategoryStats) ?u32 {
         if (std.ascii.eqlIgnoreCase(mode, "all")) return stats.all;
-        if (std.ascii.eqlIgnoreCase(mode, "pages")) return stats.pages();
+        // CategoryTree pages mode includes subcategories, unlike pagesInCategory.
+        if (std.ascii.eqlIgnoreCase(mode, "pages")) return stats.all -| stats.files;
         if (std.ascii.eqlIgnoreCase(mode, "categories")) return stats.subcats;
         return null;
     }
@@ -1792,6 +1794,24 @@ pub const Expander = struct {
         if (first != .string) return error.StringExpected;
         const raw_category = std.mem.trim(u8, first.string, " \t\r\n");
         if (raw_category.len == 0) return "";
+        errdefer |err| if (err == error.UnsupportedCategoryTreeOptions) {
+            self.runtime.last_error = .{ .string = std.fmt.allocPrint(
+                self.runtime.allocator,
+                "Unsupported CategoryTree options for {s}: mode={s} type={s} depth={s} namespaces={s} hideprefix={s} hideroot={s} showcount={s} class={s} style={s}",
+                .{
+                    raw_category,
+                    categoryTreeArg(args, "mode") orelse "(default)",
+                    categoryTreeArg(args, "type") orelse "(default)",
+                    categoryTreeArg(args, "depth") orelse "(default)",
+                    categoryTreeArg(args, "namespaces") orelse "(default)",
+                    categoryTreeArg(args, "hideprefix") orelse "(default)",
+                    categoryTreeArg(args, "hideroot") orelse "(default)",
+                    categoryTreeArg(args, "showcount") orelse "(default)",
+                    categoryTreeArg(args, "class") orelse "(default)",
+                    categoryTreeArg(args, "style") orelse "(default)",
+                },
+            ) catch "Unsupported CategoryTree options" };
+        };
 
         const category = try self.runtime.allocator.dupe(u8, raw_category);
         for (category) |*byte| {
@@ -1821,19 +1841,17 @@ pub const Expander = struct {
             if (byte.* == '_') byte.* = ' ';
         }
 
+        // CategoryTree tests the category page's existence, not its member count.
+        const category_title = try std.fmt.allocPrint(self.runtime.allocator, "Category:{s}", .{display});
+        defer self.runtime.allocator.free(category_title);
+        if (!try self.provider.exists(self.provider.ctx, category_title))
+            return self.missingCategoryTree(display, mode, mode_arg != null or type_arg != null, hideprefix, showcount, namespaces, class_name);
+
         if (std.mem.eql(u8, depth, "0")) {
             if (namespaces) |value| if (!std.mem.eql(u8, value, "-")) return error.UnsupportedCategoryTreeOptions;
             const stats_get = self.provider.category_stats orelse return error.NotImplemented;
             const stats = (try stats_get(self.provider.ctx, category)) orelse
-                return self.missingCategoryTree(
-                    display,
-                    mode,
-                    mode_arg != null,
-                    hideprefix,
-                    showcount,
-                    namespaces,
-                    class_name,
-                );
+                Provider.CategoryStats{ .all = 0, .subcats = 0, .files = 0 };
             const count = categoryTreeRootCount(mode, stats) orelse return error.UnsupportedCategoryTreeOptions;
             const a = self.runtime.allocator;
             var out: std.ArrayList(u8) = .empty;
@@ -1862,7 +1880,7 @@ pub const Expander = struct {
 
         if (!std.ascii.eqlIgnoreCase(mode, "pages") or
             !std.mem.eql(u8, depth, "1") or
-            namespaces == null or !std.mem.eql(u8, namespaces.?, "-"))
+            (namespaces != null and !std.mem.eql(u8, namespaces.?, "-")))
             return error.UnsupportedCategoryTreeOptions;
 
         const style = categoryTreeArg(args, "style");
@@ -1878,12 +1896,13 @@ pub const Expander = struct {
         if (data_pages_left_over) |value| _ = std.fmt.parseInt(u64, value, 10) catch return error.UnsupportedCategoryTreeOptions;
 
         const get = self.provider.category_tree orelse return error.NotImplemented;
-        const members = try get(self.provider.ctx, category);
+        const members = try get(self.provider.ctx, self.runtime.allocator, category, if (namespaces == null) .pages else .main);
+        defer self.runtime.allocator.free(members);
 
         var page_count: usize = members.len;
         if (self.provider.category_stats) |stats_get| {
             if (try stats_get(self.provider.ctx, category)) |stats|
-                page_count = stats.all -| stats.subcats -| stats.files;
+                page_count = stats.all -| stats.files;
         }
 
         var out: std.ArrayList(u8) = .empty;
@@ -1922,10 +1941,52 @@ pub const Expander = struct {
             try out.appendSlice(a, ")</span>");
         }
         try out.appendSlice(a, "</div><div class=\"CategoryTreeChildren\" style=\"display:block\">");
-        for (members) |title| {
-            try out.appendSlice(a, "<div class=\"CategoryTreeSection\"><div class=\"CategoryTreeItem\"><span class=\"CategoryTreePageBullet\"></span> [[");
-            try out.appendSlice(a, title);
-            try out.appendSlice(a, "]]</div><div class=\"CategoryTreeChildren\" style=\"display:none\"></div></div>");
+        // MediaWiki applies its SQL limit before placing subcategories ahead of pages.
+        for ([_]bool{ true, false }) |categories| {
+            for (members) |title| {
+                const is_category = std.mem.startsWith(u8, title, "Category:");
+                if (is_category != categories) continue;
+                var child_count: ?u32 = null;
+                if (is_category) {
+                    if (self.provider.category_stats) |stats_get| {
+                        const child_key = try a.dupe(u8, title["Category:".len..]);
+                        defer a.free(child_key);
+                        for (child_key) |*byte| if (byte.* == ' ') {
+                            byte.* = '_';
+                        };
+                        const child_stats = (try stats_get(self.provider.ctx, child_key)) orelse
+                            Provider.CategoryStats{ .all = 0, .subcats = 0, .files = 0 };
+                        child_count = categoryTreeRootCount(mode, child_stats);
+                    }
+                }
+                try out.appendSlice(a, "<div class=\"CategoryTreeSection\"><div class=\"CategoryTreeItem\"><span class=\"");
+                try out.appendSlice(a, if (is_category)
+                    (if (child_count == 0) "CategoryTreeEmptyBullet" else "CategoryTreeBullet")
+                else
+                    "CategoryTreePageBullet");
+                try out.appendSlice(a, "\">");
+                if (is_category) try out.appendSlice(a, "►");
+                try out.appendSlice(a, "</span> [[");
+                // Explicit leading colon prevents category/file membership syntax.
+                if (is_category or std.mem.startsWith(u8, title, "File:")) try out.append(a, ':');
+                try out.appendSlice(a, title);
+                if (is_category or std.ascii.eqlIgnoreCase(hideprefix, "always")) {
+                    const member_namespace = namespace_lib.ofTitle(title);
+                    if (member_namespace.id != 0) {
+                        try out.append(a, '|');
+                        try out.appendSlice(a, member_namespace.text);
+                    }
+                }
+                try out.appendSlice(a, "]]");
+                if (std.ascii.eqlIgnoreCase(showcount, "on")) {
+                    if (child_count) |count| {
+                        const count_text = try std.fmt.allocPrint(a, " <span class=\"CategoryTreeCount\">({d})</span>", .{count});
+                        defer a.free(count_text);
+                        try out.appendSlice(a, count_text);
+                    }
+                }
+                try out.appendSlice(a, "</div><div class=\"CategoryTreeChildren\" style=\"display:none\"></div></div>");
+            }
         }
         try out.appendSlice(a, "</div></div></div>");
         return out.toOwnedSlice(a);
@@ -2083,7 +2144,9 @@ const TestProvider = struct {
         return null;
     }
     fn exists(_: ?*anyopaque, title: []const u8) !bool {
-        return std.mem.eql(u8, title, "Exists") or std.mem.eql(u8, title, "Wiktionary:Sandbox");
+        return std.mem.eql(u8, title, "Exists") or std.mem.eql(u8, title, "Wiktionary:Sandbox") or
+            std.mem.eql(u8, title, "Category:English terms prefixed with un-") or
+            std.mem.eql(u8, title, "Category:Empty category");
     }
     fn pageMetadata(_: ?*anyopaque, title: []const u8) !?Provider.PageMetadata {
         if (std.mem.eql(u8, title, "Page") or std.mem.eql(u8, title, "Appendix:Page/Sub"))
@@ -2106,10 +2169,10 @@ const TestProvider = struct {
     fn interwikiMap(_: ?*anyopaque) ![]const Provider.InterwikiRow {
         return &interwiki_rows;
     }
-    fn categoryTree(_: ?*anyopaque, db_key: []const u8) ![]const []const u8 {
+    fn categoryTree(_: ?*anyopaque, a: std.mem.Allocator, db_key: []const u8, scope: Provider.CategoryTreeScope) ![]const []const u8 {
         if (!std.mem.eql(u8, db_key, "English_terms_prefixed_with_un-"))
             return error.CategoryTreeSnapshotMissing;
-        return &category_tree_members;
+        return a.dupe([]const u8, if (scope == .main) &category_tree_members else &.{ "alpha", "Talk:beta", "Category:Child" });
     }
     fn categoryStats(_: ?*anyopaque, db_key: []const u8) !?Provider.CategoryStats {
         if (!std.mem.eql(u8, db_key, "English_terms_prefixed_with_un-")) return null;
@@ -2268,9 +2331,18 @@ test "native AOT wikitext expands templates parser functions and invoke" {
         1_670_803_200,
     );
     try std.testing.expect(std.mem.indexOf(u8, category_tree, "[[:Category:English terms prefixed with un-|English terms prefixed with un-]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, category_tree, "(3)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree, "(4)") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree, "[[alpha]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, category_tree, "[[beta]]") != null);
+    const category_tree_pages = try expander.expandFragment(
+        "Page",
+        "{{#categorytree:English terms prefixed with un-|mode=pages|showcount=on}}",
+        1_670_803_200,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_pages, "(4)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_pages, "[[Talk:beta]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_pages, "[[:Category:Child|Child]] <span class=\"CategoryTreeCount\">(0)</span>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_pages, "[[:Category:Child|Child]]").? < std.mem.indexOf(u8, category_tree_pages, "[[alpha]]").?);
     const category_tree_root = try expander.expandFragment(
         "Page",
         "{{#categorytree:English terms prefixed with un-|mode=all|depth=0|class=\"columns-bg\"|hideprefix=always|showcount=on}}",
@@ -2286,6 +2358,21 @@ test "native AOT wikitext expands templates parser functions and invoke" {
         "{{#categorytree:Definitely missing category xyzzy 12345|namespaces=\"-\"|depth=0|class=\"derivedterms\"}}",
         1_670_803_200,
     );
+    const category_tree_empty = try expander.expandFragment(
+        "Page",
+        "{{#categorytree:Empty category|mode=pages|depth=0|showcount=on}}",
+        1_670_803_200,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_empty, "CategoryTreeEmptyBullet") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_empty, "(0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_empty, "not found") == null);
+    const category_tree_missing_pages = try expander.expandFragment(
+        "Page",
+        "{{#categorytree:Definitely missing category xyzzy 12345|mode=pages}}",
+        1_670_803_200,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_missing_pages, "CategoryTreeNotice") != null);
+    try std.testing.expect(std.mem.indexOf(u8, category_tree_missing_pages, "not found") != null);
     try std.testing.expectEqualStrings(
         "<div class=\"derivedterms CategoryTreeTag\" data-ct-options=\"{&quot;mode&quot;:&quot;pages&quot;,&quot;hideprefix&quot;:&quot;categories&quot;,&quot;showcount&quot;:false,&quot;namespaces&quot;:[0],&quot;notranslations&quot;:false}\"><span class=\"CategoryTreeNotice\">Category <i>Definitely missing category xyzzy 12345</i> not found</span></div>",
         category_tree_missing,
