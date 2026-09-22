@@ -9,6 +9,7 @@ const source =
     "{{User:Fixture/Forms|word=mouse}}\n" ++
     "{{#categorytree:Integration categories|mode=pages}}\n" ++
     "# Missing transclusions: {{User:Absent}} / {{:Absent article}} / {{Category:Absent}}\n" ++
+    "# Styled kanji: '''<span class=\"Jpan\" lang=\"ja\">兇</span>''' / '''<span lang=\"ja\">[[:凶#Japanese|凶]]</span>'''\n" ++
     "# Title magic: {{SUBJECTSPACE:Wiktionary talk:Sandbox}} / {{TALKSPACE:WT:Sandbox}}\n" ++
     "# Parser functions: {{#time:Y M d|2013-3-31 +8 days}} / {{#formatdate:2010-01-02|dmy}} / {{#sub:αβγ|-1}} / {{#iferror:{{#expr:bogus}}|ERR|OK}}\n" ++
     "# Synth fork: {{#invoke:IntegrationSynth|run|forked}}\n" ++
@@ -422,6 +423,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "Forms from native Lua") != null, "template result is baked into data");
     try h.require(std.mem.indexOf(u8, text, "shared main transclusion") != null, "main-page redirect transclusion is baked into data");
     try h.require(std.mem.indexOf(u8, text, "project namespace transclusion") != null, "namespace-alias transclusion is baked into data");
+    try h.require(std.mem.indexOf(u8, text, "Styled kanji: 兇 / 凶") != null, "emphasized HTML compiles to semantic styled text and links");
     try h.require(std.mem.indexOf(u8, text, "Title magic: Wiktionary / Wiktionary talk") != null, "title magic words are resolved before publication");
     try h.require(std.mem.indexOf(u8, text, "Parser functions: 2013 Apr 08 / 2 January 2010 / γ / ERR") != null, "corpus parser functions are baked into data");
     try h.require(std.mem.indexOf(u8, text, "Synth fork: synth:forked") != null, "synthesized roots materialize in fresh invoke contexts");

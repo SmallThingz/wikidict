@@ -1891,6 +1891,34 @@ test "default reference numbering stays independent of named groups" {
     try std.testing.expectEqual(@as(usize, 2), refs[3].group_number);
 }
 
+test "emphasis exposes nested HTML entities and parameters to the compiler" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans(
+        "'''<span class=\"Jpan\" lang=\"ja\">兇</span>''' / " ++
+            "''<span lang=\"ja\">[[:凶#Japanese|凶]]</span>'' / " ++
+            "'''&amp;''' / '''{{{missing|fallback}}}'''",
+        .{},
+    );
+    try std.testing.expectEqualStrings("兇 / 凶 / & / fallback", try flattened(a, spans));
+    try std.testing.expect(spans[0].flags.bold);
+    try std.testing.expectEqualStrings("ja", spans[0].language);
+    try std.testing.expectEqualStrings("Jpan", spans[0].classes);
+    var linked = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "凶")) {
+            linked = true;
+            try std.testing.expect(span.flags.italic);
+            try std.testing.expectEqual(ir.InlineKind.link, span.kind);
+            try std.testing.expectEqualStrings("凶#Japanese", span.target);
+            try std.testing.expectEqualStrings("ja", span.language);
+        }
+    }
+    try std.testing.expect(linked);
+}
+
 test "packed compiler span flags preserve DPR2 bit positions" {
     inline for ([_]struct { flags: SpanFlags, byte: u8 }{
         .{ .flags = .{ .bold = true }, .byte = 1 << 0 },

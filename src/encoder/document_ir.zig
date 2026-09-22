@@ -226,6 +226,14 @@ pub const InlineIterator = struct {
                 if (marker.bold) self.bold = !self.bold;
                 if (marker.italic) self.italic = !self.italic;
                 self.cursor += marker.len;
+                // Emphasis can expose markup owned by the presentation compiler.
+                // Yield after consuming the quotes so its HTML/entity/parameter
+                // handlers see the new cursor and the updated style.
+                if (self.renderer_boundaries and self.cursor < self.input.len) {
+                    const rest = self.input[self.cursor..];
+                    if (rest[0] == '<' or rest[0] == '&' or std.mem.startsWith(u8, rest, "{{{"))
+                        return .{ .kind = .text, .text = "", .bold = self.bold, .italic = self.italic };
+                }
                 continue;
             }
             const quote_run = quoteRunLength(self.input, self.cursor);
