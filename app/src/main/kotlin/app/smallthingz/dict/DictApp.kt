@@ -65,8 +65,8 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
         androidx.compose.animation.AnimatedVisibility(
             visible = !dockHidden || screen != AppScreen.Dictionary || searching,
-            enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
-            exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut(),
+            enter = androidx.compose.animation.slideInVertically { it } + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut(),
         ) {
         Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
             Box(Modifier.navigationBarsPadding().imePadding()) {
@@ -87,7 +87,13 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
         }
         }
     }) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+        val reading = screen == AppScreen.Dictionary && !searching && selected != null
+        // The dock overlays reading content; its animation never changes the viewport.
+        val contentPadding = if (reading) PaddingValues(
+            top = padding.calculateTopPadding(),
+            bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+        ) else padding
+        Box(Modifier.fillMaxSize().padding(contentPadding)) {
             androidx.compose.animation.Crossfade(screen, animationSpec = androidx.compose.animation.core.tween(140), label = "page") { destination ->
                 when(destination) {
                     AppScreen.Library -> LibraryScreen(library, onImport)

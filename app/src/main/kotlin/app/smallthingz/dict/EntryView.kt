@@ -24,6 +24,9 @@ import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.input.nestedscroll.*
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -58,15 +61,23 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
       key(entry.key) {
         val scroll = rememberLazyListState()
         val reportScroll by rememberUpdatedState(onScrollDirection)
-        LaunchedEffect(scroll) {
-            var previousIndex = 0
-            var previousOffset = 0
-            snapshotFlow { Triple(scroll.firstVisibleItemIndex, scroll.firstVisibleItemScrollOffset, scroll.isScrollInProgress) }.collect { (index, offset, moving) ->
-                if (index == 0 && offset == 0) reportScroll(false)
-                else if (moving && (index != previousIndex || kotlin.math.abs(offset - previousOffset) > 4)) {
-                    reportScroll(index > previousIndex || (index == previousIndex && offset > previousOffset))
+        val threshold = with(LocalDensity.current) { 20.dp.toPx() }
+        val dockScroll = remember(scroll, threshold) {
+            object : NestedScrollConnection {
+                var movement = 0f
+                override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                    // Only actual finger-driven content movement counts, never relayout or overscroll.
+                    if (source == NestedScrollSource.UserInput && consumed.y != 0f) {
+                        if (movement * consumed.y < 0) movement = 0f
+                        movement += consumed.y
+                        if (kotlin.math.abs(movement) >= threshold) {
+                            reportScroll(movement < 0)
+                            movement = 0f
+                        }
+                        if (!scroll.canScrollBackward) reportScroll(false)
+                    }
+                    return Offset.Zero
                 }
-                previousIndex = index; previousOffset = offset
             }
         }
         val scope = rememberCoroutineScope()
@@ -83,7 +94,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }
         }
         val visibleRows = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
-        LazyColumn(Modifier.fillMaxSize().testTag("entry-scroll"), state = scroll, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+        LazyColumn(Modifier.fillMaxSize().nestedScroll(dockScroll).testTag("entry-scroll"), state = scroll, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 56.dp)) {
             item("title", contentType = "title") {
                 Column(Modifier.padding(bottom = 6.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
