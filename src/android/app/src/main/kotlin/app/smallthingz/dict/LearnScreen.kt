@@ -26,7 +26,7 @@ fun LearnScreen(learning: LearningStore, entries: List<Entry>, onOpen: (SavedWor
         item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Learn", style = MaterialTheme.typography.headlineMedium)
-                Text("${pool.size} words to explore", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${pool.size} ${if (pool.size == 1) "word" else "words"} to explore", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = onRandom) { Icon(Icons.Filled.Casino, "Random word") }
         } }
@@ -46,7 +46,7 @@ private fun QuizGame(learning: LearningStore, pool: List<SavedWord>) {
         (listOf(q) + pool.filterNot { it.key == q.key }.shuffled().take(3)).shuffled()
     }
     Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Definition quiz", fontWeight = FontWeight.SemiBold); Text("$right / $total · $target") }
+        if (pool.size >= 2) Text("$right correct · $total of $target", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (pool.size < 2) Text("Open or bookmark a few words first.")
         else if (total >= target) {
             Text("Round complete", style = MaterialTheme.typography.headlineSmall)
@@ -73,7 +73,6 @@ private fun Flashcards(learning: LearningStore, pool: List<SavedWord>, onOpen: (
     var card by remember(pool) { mutableStateOf(pool.randomOrNull()) }
     var revealed by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("Flashcards", Modifier.fillMaxWidth(), fontWeight = FontWeight.SemiBold)
         if (card == null) Text("Open or bookmark some words first.") else card?.let { word ->
             FilledTonalButton(onClick = { revealed = !revealed }, modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -97,7 +96,6 @@ private fun ScrambleGame(learning: LearningStore, pool: List<SavedWord>) {
     var status by remember { mutableStateOf<Boolean?>(null) }
     val scrambled = remember(word) { word?.title?.let(::scramble).orEmpty() }
     Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("Unscramble", Modifier.fillMaxWidth(), fontWeight = FontWeight.SemiBold)
         if (word == null) Text("Add a few longer words first.") else word?.let { current ->
             Text(scrambled, style = MaterialTheme.typography.headlineLarge, letterSpacing = MaterialTheme.typography.headlineLarge.letterSpacing)
             Text(current.clue, color = MaterialTheme.colorScheme.onSurfaceVariant)

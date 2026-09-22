@@ -161,7 +161,6 @@ private fun EmptyDocument(onOpen: () -> Unit) {
     Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Your dictionary, offline.", style = MaterialTheme.typography.headlineMedium)
-            Text("Open a compiled Dict JSON package. Reading, bookmarks, history and games stay on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Button(onClick = onOpen) { Icon(Icons.Filled.FolderOpen, null); Spacer(Modifier.width(8.dp)); Text("Open dictionary") }
         }
     }
