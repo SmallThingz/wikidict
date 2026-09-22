@@ -7,6 +7,24 @@ const format = blobs.blob_format;
 const codec = blobs.presentation_codec;
 const A = std.mem.Allocator;
 
+fn requireCompiledText(text: []const u8) !void {
+    for ([_][]const u8{ "[[", "]]", "{{", "}}", "{|", "|}" }) |token| {
+        if (std.mem.indexOf(u8, text, token) != null) return error.UncompiledPresentation;
+    }
+    var at: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, text, at, '<')) |start| {
+        var name = start + 1;
+        if (name < text.len and text[name] == '/') name += 1;
+        if (name < text.len and std.ascii.isAlphabetic(text[name]) and std.mem.indexOfScalarPos(u8, text, name, '>') != null)
+            return error.UncompiledPresentation;
+        at = start + 1;
+    }
+}
+
+fn requireCompiledSpans(a: A, spans: []const compiler.Span) !void {
+    try requireCompiledText(try compiler.plainText(a, spans));
+}
+
 pub const DisplayTitle = struct {
     source: []const u8,
     page_title: []const u8,
@@ -108,7 +126,28 @@ pub fn compileAlloc(
     if (work.rendered_templates != 0 or work.unresolved_templates != 0) return error.UncompiledTemplate;
     const layout = try semantic.build(a, work.sections);
     const display_spans = try displayTitleSpansAlloc(a, display_title, language orelse "");
+    try requireCompiledSpans(a, display_spans);
+    for (work.sections) |section| {
+        try requireCompiledText(section.title);
+        for (section.blocks) |block| {
+            try requireCompiledSpans(a, block.spans);
+            if (block.table) |table| {
+                try requireCompiledSpans(a, table.caption);
+                for (table.rows) |row| for (row.cells) |cell| try requireCompiledSpans(a, cell.spans);
+            }
+        }
+    }
+    for (work.references) |reference| try requireCompiledSpans(a, reference.spans);
+    for (work.media) |media| try requireCompiledText(media.caption);
     return codec.encodeBuildAlloc(a, display_spans, work.sections, layout, work.references, work.media);
+}
+
+test "shipped presentation rejects literal source even when protected by nowiki" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_][]const u8{ "<nowiki>{{w:Missing|label}}</nowiki>", "<pre>[[raw link]]</pre>", "<nowiki><span>raw</span></nowiki>", "&#91;&#91;Episode 4&#93;&#93;" }) |source| {
+        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(arena.allocator(), "entry", .language, "English", "en", source, null));
+    }
 }
 
 test "builder sections borrow contiguous rendered block slices" {

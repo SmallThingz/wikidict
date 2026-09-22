@@ -7,6 +7,28 @@ const entities = @import("shared_xml_decode").html_entities;
 const syntax = @import("blob_encoder").wikitext_syntax;
 const templates = @import("presentation_templates.zig");
 const A = std.mem.Allocator;
+
+fn optionalTableEnd(input: []const u8, opening: syntax.Tag) syntax.Pair {
+    var cursor = opening.end;
+    while (std.mem.indexOfScalarPos(u8, input, cursor, '<')) |at| {
+        const tag = syntax.tagAt(input, at) orelse {
+            cursor = at + 1;
+            continue;
+        };
+        cursor = tag.end;
+        if (!tag.closing and tag.is("table")) {
+            if (syntax.matchingTag(input, tag)) |pair| {
+                cursor = pair.end;
+                continue;
+            }
+        }
+        if (tag.closing and tag.is(opening.name)) return .{ .inner_end = at, .end = tag.end };
+        const sibling = !tag.closing and (if (opening.is("tr")) tag.is("tr") else tag.is("td") or tag.is("th") or tag.is("tr"));
+        const parent = tag.closing and (tag.is("table") or tag.is("tbody") or tag.is("thead") or tag.is("tfoot") or (!opening.is("tr") and tag.is("tr")));
+        if (sibling or parent) return .{ .inner_end = at, .end = at };
+    }
+    return .{ .inner_end = input.len, .end = input.len };
+}
 pub const media_types = @import("presentation_media.zig");
 pub const Error = A.Error || error{RenderLimit};
 pub const Context = struct { title: []const u8 = "Entry", language: []const u8 = "English" };
@@ -523,6 +545,11 @@ pub const Renderer = struct {
         });
         if (!known) return null;
         if (tag.closing or tag.self_closing) return tag.end;
+        // Wiktionary's senseid emits an intentionally unclosed li inside a
+        // wikitext list item. The block parser already owns that item's extent.
+        // Consume the marker, not its contents: those still contain wiki links
+        // and semantic HTML that must pass through the inline compiler.
+        if (tag.is("li") and syntax.matchingTag(input, tag) == null) return tag.end;
         const pair = syntax.matchingTag(input, tag) orelse {
             try self.literal(input[tag.end..], style);
             return input.len;
@@ -582,7 +609,9 @@ pub const Renderer = struct {
             }
         }
         if (tag.is("li")) try self.text("• ", style);
-        try self.inlineText(content, s, depth + 1);
+        if (std.mem.indexOf(u8, content, "{|") != null) {
+            try self.blocksInline(try self.renderBody(content), s);
+        } else try self.inlineText(content, s, depth + 1);
         if (oneOf(tag.name, &.{ "p", "div", "blockquote", "center", "li", "dt", "dd", "tr" })) try self.lineBreak(style);
         return pair.end;
     }
@@ -873,7 +902,24 @@ pub const Renderer = struct {
             if (html_tag) |tag| {
                 const pair = syntax.matchingTag(clean, tag).?;
                 if (tag.is("table")) {
-                    if (try self.htmlTable(clean[tag.end..pair.inner_end])) |table_value| {
+                    if (std.mem.eql(u8, tag.attr("class") orelse "", "translations")) {
+                        // Translation tables are layout wrappers around wiki lists,
+                        // with optional tr/td end tags. Keep their reading blocks.
+                        var body: std.ArrayList(u8) = .empty;
+                        const content = clean[tag.end..pair.inner_end];
+                        var cursor: usize = 0;
+                        while (cursor < content.len) {
+                            if (content[cursor] == '<') if (syntax.tagAt(content, cursor)) |cell| {
+                                if (oneOf(cell.name, &.{ "tr", "td", "th", "tbody" })) {
+                                    cursor = cell.end;
+                                    continue;
+                                }
+                            };
+                            try body.append(self.a, content[cursor]);
+                            cursor += 1;
+                        }
+                        try blocks.appendSlice(self.a, try self.renderBody(body.items));
+                    } else if (try self.htmlTable(clean[tag.end..pair.inner_end])) |table_value| {
                         try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table_value });
                     } else try self.block(&blocks, .preformatted, clean[0..pair.end], "", "", 0);
                 } else try blocks.appendSlice(self.a, try self.renderBody(clean[tag.end..pair.inner_end]));
@@ -913,7 +959,9 @@ pub const Renderer = struct {
                 }
             }
             if (starts(line, " ")) {
-                try self.block(&blocks, .preformatted, line[1..], "", "", 0);
+                // Leading-space preformatting preserves whitespace, but unlike
+                // <pre>/<syntaxhighlight> it still interprets inline markup.
+                try self.appendBlockBudgeted(&blocks, .{ .kind = .preformatted, .spans = try self.parseSpans(line[1..], .{ .code = true }) });
                 continue;
             }
             if (prefix != 0) {
@@ -971,7 +1019,7 @@ pub const Renderer = struct {
             };
             pos = tag.end;
             if (tag.closing or !(tag.is("tr") or tag.is("caption"))) continue;
-            const pair = syntax.matchingTag(input, tag) orelse return null;
+            const pair = if (tag.is("tr")) optionalTableEnd(input, tag) else syntax.matchingTag(input, tag) orelse return null;
             pos = pair.end;
             if (tag.is("caption")) {
                 caption = try self.parseSpans(input[tag.end..pair.inner_end], .{});
@@ -987,10 +1035,10 @@ pub const Renderer = struct {
                 };
                 at = cell_tag.end;
                 if (cell_tag.closing or !(cell_tag.is("td") or cell_tag.is("th"))) continue;
-                const cell_pair = syntax.matchingTag(input[0..pair.inner_end], cell_tag) orelse return null;
+                const cell_pair = optionalTableEnd(input[0..pair.inner_end], cell_tag);
                 at = cell_pair.end;
                 if (!self.spend()) continue;
-                try cells.append(self.a, .{ .spans = try self.parseSpans(input[cell_tag.end..cell_pair.inner_end], .{}), .header = cell_tag.is("th"), .colspan = @max(1, @min(100, std.fmt.parseInt(u16, cell_tag.attr("colspan") orelse "1", 10) catch 1)), .rowspan = @max(1, @min(100, std.fmt.parseInt(u16, cell_tag.attr("rowspan") orelse "1", 10) catch 1)) });
+                try cells.append(self.a, .{ .spans = try self.cellSpans(input[cell_tag.end..cell_pair.inner_end]), .header = cell_tag.is("th"), .colspan = @max(1, @min(100, std.fmt.parseInt(u16, cell_tag.attr("colspan") orelse "1", 10) catch 1)), .rowspan = @max(1, @min(100, std.fmt.parseInt(u16, cell_tag.attr("rowspan") orelse "1", 10) catch 1)) });
             }
             if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
         }
@@ -1045,6 +1093,10 @@ pub const Renderer = struct {
                     if (split_at == line.len) break;
                     offset = split_at + 2;
                 }
+            } else if (starts(line, "<tr")) {
+                try self.finishCell(&cells, &cell_source, &current);
+                if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
+                if (try self.htmlTable(line)) |table| try rows.appendSlice(self.a, table.rows);
             } else if (current != null) {
                 if (cell_source.items.len != 0) try cell_source.append(self.a, '\n');
                 try cell_source.appendSlice(self.a, line);
@@ -1062,10 +1114,38 @@ pub const Renderer = struct {
                 return;
             }
             var cell = value;
-            cell.spans = try self.parseSpans(source.items, .{});
+            cell.spans = try self.cellSpans(source.items);
             try cells.append(self.a, cell);
             source.* = .empty;
             current.* = null;
+        }
+    }
+
+    fn cellSpans(self: *Renderer, source: []const u8) Error![]const Span {
+        if (std.mem.indexOf(u8, source, "{|") == null) return self.parseSpans(source, .{});
+        const parent = self.spans;
+        self.spans = .empty;
+        defer self.spans = parent;
+        try self.blocksInline(try self.renderBody(source), .{});
+        return self.spans.toOwnedSlice(self.a);
+    }
+
+    // DPR2 cells contain spans, not nested grids. Preserve nested table reading
+    // order with explicit row/cell boundaries, never embedded table source.
+    fn blocksInline(self: *Renderer, blocks: []const Block, style: Style) Error!void {
+        for (blocks, 0..) |b, index| {
+            if (index != 0) try self.lineBreak(style);
+            try self.spans.appendSlice(self.a, b.spans);
+            if (b.table) |table| {
+                try self.spans.appendSlice(self.a, table.caption);
+                for (table.rows, 0..) |row, ri| {
+                    if (ri != 0 or table.caption.len != 0) try self.lineBreak(style);
+                    for (row.cells, 0..) |cell, ci| {
+                        if (ci != 0) try self.text(" · ", style);
+                        try self.spans.appendSlice(self.a, cell.spans);
+                    }
+                }
+            }
         }
     }
 };
@@ -1197,6 +1277,27 @@ test "emphasis template boundaries and nested image captions render without raw 
     try std.testing.expectEqualStrings("cat A domestic cat Synonyms: kitty (rare)", try flattened(a, spans));
     try std.testing.expect(spans[0].flags.bold);
 }
+
+test "senseid optional list closure keeps links and nowiki semantic" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("# <li class=\"senseid\" id=\"English:_Q108\">The first [[month]]. <span class=\"defdate\"><nowiki>[</nowiki>from 20th c.<nowiki>]</nowiki></span>\n");
+    try std.testing.expectEqualStrings("The first month. [from 20th c.]", try flattened(a, blocks[0].spans));
+    try std.testing.expect(blocks[0].spans[1].kind == .link);
+}
+
+test "leading space preformatting still compiles links and HTML" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody(" A <b>[[pie]]</b>.\n");
+    try std.testing.expectEqual(Kind.preformatted, blocks[0].kind);
+    try std.testing.expectEqualStrings("A pie.", try flattened(a, blocks[0].spans));
+    try std.testing.expect(blocks[0].spans[1].flags.bold);
+}
 test "multitrans produces real blocks and malformed tables retain literal content" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1242,13 +1343,24 @@ test "compiled template HTML tables retain cells and supplied inflections" {
     try std.testing.expectEqual(Kind.definition, blocks[1].kind);
 }
 
-test "malformed generated tables retain source rather than abort rendering" {
+test "optional table cell closures compile semantic cells" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
     const blocks = try r.renderBody("<table><tr><td>valuable content</tr></table>");
-    try std.testing.expectEqual(Kind.preformatted, blocks[0].kind);
-    try std.testing.expect(std.mem.indexOf(u8, blocks[0].text, "valuable content") != null);
+    try std.testing.expectEqual(Kind.table, blocks[0].kind);
+    try std.testing.expectEqualStrings("valuable content", try flattened(arena.allocator(), blocks[0].table.?.rows[0].cells[0].spans));
+}
+
+test "translation layout tables preserve lists with optional closing tags" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<table class=\"translations\"><tr><td>\n* French: <span lang=\"fr\">[[chat]]</span>\n* German: [[Katze]]\n</table>");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.list_item, blocks[0].kind);
+    try std.testing.expectEqualStrings("French: chat", try flattened(a, blocks[0].spans));
 }
 
 test "anagrams render only supplied terms with language and preserve unsupported options" {
@@ -1387,6 +1499,7 @@ test "nested wiki tables do not close their parent table early" {
     try std.testing.expectEqual(@as(usize, 2), blocks.len);
     try std.testing.expectEqual(Kind.table, blocks[0].kind);
     try std.testing.expectEqual(@as(usize, 2), blocks[0].table.?.rows.len);
+    try std.testing.expectEqualStrings("outer\ninner", try flattened(a, blocks[0].table.?.rows[0].cells[0].spans));
     try std.testing.expectEqualStrings("final", try flattened(a, blocks[0].table.?.rows[1].cells[0].spans));
     try std.testing.expectEqual(Kind.definition, blocks[1].kind);
     try std.testing.expectEqualStrings("after", try flattened(a, blocks[1].spans));
