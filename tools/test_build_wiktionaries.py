@@ -36,6 +36,18 @@ class BuildTest(unittest.TestCase):
             with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(root/'output'),'--threads','2','--jobs','2']),patch.object(b,'build',side_effect=lambda *args:rendezvous.wait(timeout=2)) as build:
                 b.main()
             self.assertEqual(build.call_count,2)
+    def test_running_edition_is_not_removed_by_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);parent=root/'testwiktionary';parent.mkdir()
+            staging=parent/'20260901.building';staging.mkdir()
+            sentinel=staging/'active';sentinel.write_text('keep')
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=1,sha1='a'*40)
+            with (parent/'20260901.lock').open('a') as lock:
+                b.fcntl.flock(lock,b.fcntl.LOCK_EX | b.fcntl.LOCK_NB)
+                with self.assertRaisesRegex(ValueError,'Build already running'):
+                    b.build([item],root,root,'zig',2)
+            self.assertEqual(sentinel.read_text(),'keep')
     def test_extreme_compression_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'test.wikblb';raw=b'WIKBLB08'+b'payload'*20000;path.write_bytes(raw)
