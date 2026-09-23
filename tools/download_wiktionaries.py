@@ -212,6 +212,8 @@ def main():
     parser.add_argument("--plan", action="store_true", help="Resolve and save manifest without downloading dump files")
     parser.add_argument("--resume", action="store_true", help="Use the saved manifest, preserving snapshot dates across restarts")
     args = parser.parse_args()
+    args.output = args.output.expanduser().resolve()
+    args.output.mkdir(parents=True, exist_ok=True)
     if args.resume:
         manifest = json.loads((args.output / "manifest.json").read_text())
         if args.plan:

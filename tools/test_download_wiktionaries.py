@@ -3,11 +3,21 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import sys
 import download_wiktionaries as d
 
 class DownloaderTest(unittest.TestCase):
     def item(self):
         return dict(wiki='testwiktionary',date='20260901',name='test.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/test.bz2',size=4,sha1=hashlib.sha1(b'data').hexdigest())
+    def test_output_exists_before_snapshot_discovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output=Path(tmp)/'new'/'dumps'
+            def snapshot(wiki,jobs):
+                self.assertTrue(output.is_dir())
+                return [self.item()]
+            with patch.object(sys,'argv',['download_wiktionaries.py','--output',str(output),'--wikis','testwiktionary','--plan']),patch.object(d,'snapshot',side_effect=snapshot):
+                d.main()
+            self.assertTrue((output/'manifest.json').is_file())
     def test_progress_includes_destination_and_fraction(self):
         item=self.item()
         with tempfile.TemporaryDirectory() as tmp:
