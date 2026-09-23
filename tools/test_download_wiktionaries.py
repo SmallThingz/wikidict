@@ -1,38 +1,36 @@
 import hashlib
-import io
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 import download_wiktionaries as d
 
-class Response(io.BytesIO):
-    def __init__(self, data, status=200, headers=None):
-        super().__init__(data); self.status=status; self.headers=headers or {}
-
 class DownloaderTest(unittest.TestCase):
-    def test_resume_and_verify_existing_file(self):
-        data=b"dictionary bytes"; item=dict(wiki="testwiktionary",date="20260901",name="test.bz2",url="https://example.test/dump",size=len(data),sha1=hashlib.sha1(data).hexdigest())
+    def item(self):
+        return dict(wiki='testwiktionary',date='20260901',name='test.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/test.bz2',size=4,sha1=hashlib.sha1(b'data').hexdigest())
+    def test_queue_has_checksum_and_partial_destination(self):
+        queue=d.aria2_queue([self.item()],Path('data/dumps'))
+        self.assertIn('out=test.bz2.part',queue)
+        self.assertIn('checksum=sha-1='+self.item()['sha1'],queue)
+    def test_queue_rejects_option_injection(self):
+        item=self.item();item['name']='bad\n  dir=/elsewhere'
+        with self.assertRaises(ValueError):d.aria2_queue([item],Path('data'))
+    def test_verified_publication_and_bounded_connections(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); folder=root/item['wiki']/item['date'];folder.mkdir(parents=True)
-            (folder/'test.bz2.part').write_bytes(data[:5])
-            with patch.object(d,'request',return_value=Response(data[5:],206,{'Content-Range':f'bytes 5-{len(data)-1}/{len(data)}'})) as request:
-                d.download(item,root);request.assert_called_once_with(item['url'],5)
-            self.assertEqual((folder/'test.bz2').read_bytes(),data)
-            with patch.object(d,'request') as request:
-                d.download(item,root);request.assert_not_called()
-    def test_range_ignored_restarts_cleanly(self):
-        data=b'complete';item=dict(wiki='testwiktionary',date='20260901',name='test.bz2',url='https://example.test/dump',size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            root=Path(tmp);item=self.item();folder=root/item['wiki']/item['date'];folder.mkdir(parents=True)
+            def run(command):
+                self.assertIn('--continue=true',command);self.assertIn('--split=1',command);self.assertIn('--max-concurrent-downloads=2',command)
+                (folder/'test.bz2.part').write_bytes(b'data')
+                class Result:returncode=0
+                return Result()
+            with patch.object(d.shutil,'which',return_value='/usr/bin/aria2c'),patch.object(d.subprocess,'run',side_effect=run):d.download_all([item],root,2)
+            self.assertEqual((folder/'test.bz2').read_bytes(),b'data')
+    def test_incomplete_retains_resume_state(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/item['wiki']/item['date'];folder.mkdir(parents=True);(folder/'test.bz2.part').write_bytes(b'bad')
-            with patch.object(d,'request',return_value=Response(data)):d.download(item,root)
-            self.assertEqual((folder/'test.bz2').read_bytes(),data)
-    def test_bad_resume_is_not_published(self):
-        data=b'complete';item=dict(wiki='testwiktionary',date='20260901',name='test.bz2',url='https://example.test/dump',size=8,sha1=hashlib.sha1(data).hexdigest())
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/item['wiki']/item['date'];folder.mkdir(parents=True);(folder/'test.bz2.part').write_bytes(b'com')
-            with patch.object(d,'request',return_value=Response(data,206,{'Content-Range':'bytes 0-7/8'})):
-                with self.assertRaises(ValueError):d.download(item,root)
-            self.assertFalse((folder/'test.bz2').exists())
-
+            root=Path(tmp);item=self.item();folder=root/item['wiki']/item['date'];folder.mkdir(parents=True)
+            (folder/'test.bz2.part').write_bytes(b'da');(folder/'test.bz2.part.aria2').write_bytes(b'state')
+            class Result:returncode=1
+            with patch.object(d.shutil,'which',return_value='/usr/bin/aria2c'),patch.object(d.subprocess,'run',return_value=Result()):
+                with self.assertRaises(SystemExit):d.download_all([item],root,2)
+            self.assertTrue((folder/'test.bz2.part.aria2').exists());self.assertFalse((folder/'test.bz2').exists())
 if __name__=='__main__':unittest.main()

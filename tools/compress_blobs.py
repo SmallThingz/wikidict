@@ -18,7 +18,7 @@ def compress(path, block_size):
             source.seek(0)
             with temp.open('xb') as out:
                 created=True
-                subprocess.run(['xz','-1','--threads=2',f'--block-size={block_size}','--stdout'],stdin=source,stdout=out,check=True)
+                subprocess.run(['xz','-9e','--threads=2',f'--block-size={block_size}','--stdout'],stdin=source,stdout=out,check=True)
                 out.flush();os.fsync(out.fileno())
         with path.open('rb') as source, lzma.open(temp,'rb') as decoded:
             if hashlib.file_digest(source,'sha256').digest()!=hashlib.file_digest(decoded,'sha256').digest():raise ValueError('Compression round trip failed')
