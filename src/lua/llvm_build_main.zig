@@ -894,13 +894,12 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     const records = analyzed.records;
     var page_seed = analyzed.page_seed;
     defer page_seed.deinit(a);
-    if (records.len == 0) return error.NoReachableModules;
     if (dead_functions_by_module.items.len != records.len) return error.FunctionAnalysisMismatch;
     if (records.len > std.math.maxInt(u32) - 2) return error.TooManyModules;
     std.debug.print("LLVM_ANALYZE modules={d} globals={d} functions={d}\n", .{
         records.len,
         globals.names.items.len,
-        records[records.len - 1].function_base + records[records.len - 1].function_count,
+        if (records.len == 0) @as(u32, 0) else records[records.len - 1].function_base + records[records.len - 1].function_count,
     });
     std.debug.print("LLVM_FUNCTION_LIVENESS dead={d}/{d}\n", .{
         function_stats.dead,
@@ -956,7 +955,6 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         try selected_modes.append(a, mode);
         try selected_eager_seed.append(a, mode == .o2);
     };
-    if (selected_records.items.len == 0) return error.NoReachableModules;
 
     var selected_module_ids = try buildModuleIds(io, a, source_root, selected_records.items);
     defer selected_module_ids.deinit(a);

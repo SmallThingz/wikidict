@@ -421,6 +421,17 @@ pub fn main(init: std.process.Init) !void {
     const dump = try std.fs.path.join(a, &.{ dir, "fixture.xml" });
     try writeFixture(init.io, a, dump);
 
+    // Small editions may use no Lua at all; they still need a native bundle worker.
+    const plain_dump = try std.fs.path.join(a, &.{ dir, "plain.xml" });
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = plain_dump, .data =
+        "<mediawiki><page><title>plain</title><ns>0</ns><id>1</id><revision><id>1</id>" ++
+        "<timestamp>2026-09-01T00:00:00Z</timestamp><contributor><username>Test</username></contributor>" ++
+        "<model>wikitext</model><format>text/x-wiki</format><text>==English==\n===Noun===\n# A plain word.\n</text></revision></page></mediawiki>",
+    });
+    const plain_root = try std.fs.path.join(a, &.{ dir, "plain-dictionary" });
+    _ = try h.run(&.{ pipeline, plain_dump, plain_root }, 0);
+    _ = try h.run(&.{ verifier, plain_root }, 0);
+
     const existing_root = try std.fs.path.join(a, &.{ dir, "existing-dictionary" });
     try std.Io.Dir.cwd().createDir(init.io, existing_root, .default_dir);
     _ = try h.run(&.{ pipeline, dump, existing_root }, 1);

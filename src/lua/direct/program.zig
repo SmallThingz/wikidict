@@ -58,7 +58,8 @@ fn validateRecords(a: A, records: []const ModuleRecord) !void {
             return std.mem.order(u8, items[lhs].title, items[rhs].title) == .lt;
         }
     }.lessThan);
-    for (sorted[1..], sorted[0..sorted.len -| 1]) |id, previous| {
+    if (sorted.len == 0) return;
+    for (sorted[1..], sorted[0..sorted.len - 1]) |id, previous| {
         if (std.mem.eql(u8, records[id].title, records[previous].title))
             return error.DuplicateModuleName;
     }
@@ -120,21 +121,25 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
         roots[index] = try m.addFunction(root_name, generated_fn_ty);
     }
 
-    const roots_ty = try llvm.arrayType(m.types.ptr, roots.len);
-    const roots_value = try m.addGlobal(
-        "module_roots",
-        roots_ty,
-        try llvm.constArray(m.types.ptr, roots),
-        .private,
-        8,
-    );
     const accessor_ty = try m.functionType(m.types.ptr, &.{});
     const accessor = try m.addFunction("dict_lua_program_module_roots", accessor_ty);
     const block = try llvm.appendBlock(m.context, accessor, "entry");
     const builder = try llvm.createBuilder(m.context);
     defer llvm.disposeBuilder(builder);
     llvm.position(builder, block);
-    try llvm.ret(builder, roots_value);
+    if (roots.len == 0) {
+        try llvm.ret(builder, try llvm.constNull(m.types.ptr));
+    } else {
+        const roots_ty = try llvm.arrayType(m.types.ptr, roots.len);
+        const roots_value = try m.addGlobal(
+            "module_roots",
+            roots_ty,
+            try llvm.constArray(m.types.ptr, roots),
+            .private,
+            8,
+        );
+        try llvm.ret(builder, roots_value);
+    }
 
     var synth_entries: std.ArrayList(llvm.ValueRef) = .empty;
     defer synth_entries.deinit(a);

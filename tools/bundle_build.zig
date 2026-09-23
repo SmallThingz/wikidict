@@ -258,7 +258,6 @@ fn readBatchPlan(
             .source_bytes = source_bytes,
         });
     }
-    if (plans.items.len == 0) return error.MissingLlvmModules;
     return plans.toOwnedSlice(a);
 }
 
