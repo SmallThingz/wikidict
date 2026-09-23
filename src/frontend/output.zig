@@ -209,13 +209,25 @@ pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, 
     try w.writeAll("  / ");
     try terminalText(w, entry.language orelse @tagName(entry.kind));
     try w.writeByte('\n');
-    if (entry.preamble_spans.len != 0) {
+    if (details and entry.preamble_spans.len != 0) {
         try spansText(w, entry.preamble_spans, color);
         try w.writeByte('\n');
     }
     const organization = entry.organization;
     if (organization.lexemes.len == 0) {
         for (entry.sections) |section| {
+            if (!details) {
+                var heading = false;
+                for (section.blocks) |block| if (block.kind == .definition) {
+                    if (!heading) {
+                        try terminalText(w, section.title);
+                        try w.writeByte('\n');
+                        heading = true;
+                    }
+                    try blocksText(w, &.{block}, color);
+                };
+                continue;
+            }
             if (std.mem.eql(u8, section.title, entry.language orelse ""))
                 try blocksText(w, section.blocks, color)
             else
@@ -241,15 +253,15 @@ pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, 
             for (organization.lexemes) |part| {
                 if (!std.mem.eql(u8, part.kind, lexeme.kind) or !std.mem.eql(u8, part.language, lexeme.language)) continue;
                 const section = entry.sections[part.section];
-                if (part.etymology) |e| {
+                if (details) if (part.etymology) |e| {
                     try w.writeAll("  [");
                     try terminalText(w, entry.sections[e].title);
                     try w.writeAll("]\n");
-                }
-                for (part.introduction) |i| try blocksText(w, section.blocks[i..][0..1], color);
+                };
+                if (details) for (part.introduction) |i| try blocksText(w, section.blocks[i..][0..1], color);
                 for (part.definitions) |sense| {
                     try blocksText(w, section.blocks[sense.block..][0..1], color);
-                    for (sense.examples) |i| try blocksText(w, section.blocks[i..][0..1], color);
+                    if (details) for (sense.examples) |i| try blocksText(w, section.blocks[i..][0..1], color);
                     if (details) {
                         for (sense.notes) |i| try blocksText(w, section.blocks[i..][0..1], color);
                         for (sense.quotations) |i| try blocksText(w, section.blocks[i..][0..1], color);
@@ -323,4 +335,33 @@ test "human renderer consumes compiled spans only" {
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "A small feline.") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "{{") == null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "[[") == null);
+}
+
+/// Terminal folds operate on compiled sections, never by reparsing source.
+pub fn entryTextFolded(w: *std.Io.Writer, entry: model.Entry, color: bool, preferences: @import("reading_state.zig").Data, expanded: []const usize, selected: usize) !void {
+    if (preferences.details) return entryTextWithDetails(w, entry, color, true);
+    try terminalText(w, entry.title);
+    try w.writeAll("  / ");
+    try terminalText(w, entry.language orelse @tagName(entry.kind));
+    try w.writeByte('\n');
+    for (entry.sections, 0..) |section, index| {
+        if (section.blocks.len == 0) continue;
+        var meaning = false;
+        for (section.blocks) |block| if (block.kind == .definition) {
+            meaning = true;
+            break;
+        };
+        const initially_closed = if (std.mem.startsWith(u8, section.title, "Pronunciation")) preferences.collapse_pronunciation else if (std.mem.startsWith(u8, section.title, "Etymology")) preferences.collapse_etymology else if (meaning) preferences.collapse_notes else preferences.collapse_other;
+        const toggled = std.mem.indexOfScalar(usize, expanded, index) != null;
+        const closed = initially_closed != toggled;
+        try w.writeByte('\n');
+        if (color and selected == index) try w.writeAll("\x1b[1;38;2;233;184;138m");
+        try w.writeAll(if (selected == index) "> " else "  ");
+        try terminalText(w, section.title);
+        if (closed) try w.writeAll(if (meaning) "  [+ notes]" else "  [+]");
+        if (color) try w.writeAll("\x1b[0m");
+        try w.writeByte('\n');
+        for (section.blocks) |block| if (!closed or (meaning and block.kind == .definition)) try blocksText(w, &.{block}, color);
+    }
+    if (entry.media.len != 0 or entry.references.len != 0) try w.writeAll("\n  d: media and references\n");
 }

@@ -1,6 +1,6 @@
 const std = @import("std");
 const store = @import("store.zig");
-pub const Command = enum { lookup, search, languages, stats, tui };
+pub const Command = enum { lookup, search, languages, stats, tui, catalog, install };
 pub const Theme = enum { terminal, dark, light };
 pub const Format = enum { text, json };
 pub const Color = enum { auto, always, never };
@@ -16,6 +16,7 @@ pub const Options = struct {
     limit: usize = 20,
     offset: usize = 0,
     details: bool = false,
+    sha256: []const u8 = "",
     help: bool = false,
 };
 pub fn parse(argv: []const []const u8) !Options {
@@ -67,7 +68,7 @@ pub fn parse(argv: []const []const u8) !Options {
             if (pos + 1 >= argv.len) return error.Usage;
             pos += 1;
             const value = argv[pos];
-            if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
+            if (std.mem.eql(u8, arg, "--sha256")) out.sha256 = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
         } else {
             if (has_query) return error.Usage;
             out.query = arg;

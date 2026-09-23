@@ -8,13 +8,15 @@ const enc = @import("blob_encoder");
 const output = @import("output.zig");
 const L = std.os.linux;
 pub const Theme = @import("args.zig").Theme;
+const ReadingState = @import("reading_state.zig").State;
+const Page = enum { saved, history, search, learn, settings };
 const Focus = enum { search, matches, entry };
 const Palette = struct { base: []const u8, accent: []const u8, muted: []const u8, selected: []const u8 };
 fn palette(theme: Theme, color: bool) Palette {
     if (!color) return .{ .base = "\x1b[0m", .accent = "\x1b[1m", .muted = "\x1b[0m", .selected = "\x1b[7m" };
     return switch (theme) {
         .terminal => .{ .base = "\x1b[0m", .accent = "\x1b[1;36m", .muted = "\x1b[2m", .selected = "\x1b[7m" },
-        .dark => .{ .base = "\x1b[0;48;5;234;38;5;252m", .accent = "\x1b[1;38;5;75m", .muted = "\x1b[38;5;245m", .selected = "\x1b[48;5;238;38;5;255m" },
+        .dark => .{ .base = "\x1b[0;48;2;23;37;30;38;2;228;231;218m", .accent = "\x1b[1;38;2;233;184;138m", .muted = "\x1b[38;2;167;180;166m", .selected = "\x1b[48;2;76;56;39;38;2;233;184;138m" },
         .light => .{ .base = "\x1b[0;47;30m", .accent = "\x1b[1;34m", .muted = "\x1b[38;5;240m", .selected = "\x1b[48;5;252;30m" },
     };
 }
@@ -34,6 +36,24 @@ const State = struct {
     color: bool,
     details: bool = false,
     help: bool = false,
+    notice: []const u8 = "",
+    media_index: usize = 0,
+    reading: ?*ReadingState = null,
+    nav: Page = .search,
+    filtered: std.ArrayList(usize) = .empty,
+    setting: usize = 0,
+    revealed: bool = false,
+    section: usize = 0,
+    section_count: usize = 0,
+    fold_word: ?usize = null,
+    game: enum { cards, quiz, scramble } = .cards,
+    choices: [4]usize = @splat(0),
+    correct_choice: usize = 0,
+    answered: bool = false,
+    expanded: std.ArrayList(usize) = .empty,
+    round: usize = 0,
+    correct: usize = 0,
+    random: std.Random.DefaultPrng = .init(31337),
     loaded: ?usize = null,
     text: []const u8 = &.{},
     rows: []term.RenderRow = &.{},
@@ -41,11 +61,86 @@ const State = struct {
     screen: term.Size = .{},
 
     fn deinit(self: *State) void {
+        self.filtered.deinit(self.a);
+        self.expanded.deinit(self.a);
         self.a.free(self.rows);
         self.a.free(self.text);
     }
     fn count(self: State) usize {
-        return self.range.end - self.range.start;
+        return if (self.nav == .saved or self.nav == .history) self.filtered.items.len else self.range.end - self.range.start;
+    }
+    fn recordIndex(self: State, n: usize) usize {
+        return if (self.nav == .saved or self.nav == .history) self.filtered.items[n] else self.range.start + n;
+    }
+    fn navigate(self: *State, page_name: Page) !void {
+        self.nav = page_name;
+        self.selected = 0;
+        self.scroll = 0;
+        self.loaded = null;
+        self.focus = if (page_name == .search) .search else .matches;
+        self.filtered.clearRetainingCapacity();
+        if (self.reading) |r| {
+            const words = if (page_name == .saved) r.data.saved else if (page_name == .history) r.data.history else &.{};
+            for (words) |word| if (try self.db.find(word)) |index| try self.filtered.append(self.a, index);
+        }
+        if (page_name == .learn) {
+            self.range = .{ .start = 0, .end = self.db.count() };
+            self.focus = .entry;
+            self.round = 0;
+            self.correct = 0;
+            self.nextCard();
+        }
+        if (page_name == .search) try self.changed();
+    }
+    fn nextCard(self: *State) void {
+        if (self.count() != 0) self.selected = self.random.random().uintLessThan(usize, self.count());
+        self.revealed = false;
+        self.answered = false;
+        self.loaded = null;
+        self.scroll = 0;
+        self.len = 0;
+        self.cursor = 0;
+        if (self.count() != 0) {
+            for (&self.choices, 0..) |*choice, i| choice.* = (self.selected + i + 1) % self.count();
+            self.correct_choice = self.random.random().uintLessThan(usize, 4);
+            self.choices[self.correct_choice] = self.selected;
+        }
+    }
+    fn answer(self: *State, correct: bool) !void {
+        self.round += 1;
+        if (correct) self.correct += 1;
+        if (self.reading) |r| {
+            if (correct) r.data.right += 1 else r.data.wrong += 1;
+        }
+        self.answered = true;
+        self.revealed = true;
+        self.loaded = null;
+    }
+    fn mediaAction(self: *State, speech: bool) !void {
+        if (self.count() == 0) return;
+        var record = try self.db.recordAlloc(self.a, self.recordIndex(self.selected));
+        defer record.deinit();
+        var doc = try model.fromRecord(self.a, record.record);
+        defer doc.deinit();
+        const media = @import("reader_media.zig");
+        if (speech) {
+            try media.speak(self.io, self.a, doc.entry.title, doc.entry.language_code);
+            self.notice = "";
+            return;
+        }
+        const preferences = if (self.reading) |r| r.data else return;
+        if (doc.entry.media.len == 0) {
+            self.notice = "This word has no media.";
+            return;
+        }
+        const item = doc.entry.media[self.media_index % doc.entry.media.len];
+        self.media_index += 1;
+        if (!(if (item.kind == .image) preferences.allow_images else preferences.allow_audio)) {
+            self.notice = "Enable online images/audio in Settings first.";
+            return;
+        }
+        try media.open(self.io, self.a, self.db.root, item.file, item.kind == .image, preferences.media_cache_mb);
+        self.notice = "Opened in desktop player; m opens the next item. Source: Wikimedia Commons.";
     }
     fn bodyHeight(self: State) usize {
         return self.screen.rows -| 8;
@@ -77,6 +172,111 @@ const State = struct {
     }
     fn key(self: *State, event: term.Event) !bool {
         if (event.key == .quit) return false;
+        if (event.key == .text and !event.pasted and self.focus != .search and event.len == 1 and event.bytes[0] >= '1' and event.bytes[0] <= '5') {
+            try self.navigate(@enumFromInt(event.bytes[0] - '1'));
+            return true;
+        }
+        if (self.nav == .settings and self.reading != null) {
+            const r = self.reading.?;
+            switch (event.key) {
+                .up => self.setting -|= 1,
+                .down => self.setting = @min(12, self.setting + 1),
+                .left, .right, .enter => {
+                    const increase = event.key != .left;
+                    switch (self.setting) {
+                        0 => {
+                            self.theme = switch (self.theme) {
+                                .terminal => .dark,
+                                .dark => .light,
+                                .light => .terminal,
+                            };
+                            r.data.theme = @enumFromInt(@intFromEnum(self.theme));
+                        },
+                        1 => {
+                            self.details = !self.details;
+                            r.data.details = self.details;
+                            self.loaded = null;
+                        },
+                        2 => r.data.history_limit = if (increase) @min(100_000, @max(1, r.data.history_limit * 2)) else r.data.history_limit / 2,
+                        3 => r.data.quiz_length = if (increase) @min(50, r.data.quiz_length + 1) else @max(3, r.data.quiz_length -| 1),
+                        4 => r.data.collapse_pronunciation = !r.data.collapse_pronunciation,
+                        5 => r.data.collapse_etymology = !r.data.collapse_etymology,
+                        6 => r.data.collapse_other = !r.data.collapse_other,
+                        7 => r.data.collapse_notes = !r.data.collapse_notes,
+                        8 => {
+                            self.a.free(r.data.history);
+                            r.data.history = &.{};
+                        },
+                        9 => r.data.allow_images = !r.data.allow_images,
+                        10 => r.data.allow_audio = !r.data.allow_audio,
+                        11 => r.data.media_cache_mb = if (increase) @min(4096, @max(1, r.data.media_cache_mb * 2)) else r.data.media_cache_mb / 2,
+                        12 => self.notice = "dict catalog [LIST]; dict install URL --root PATH",
+                        else => {},
+                    }
+                },
+                .escape => try self.navigate(.search),
+                .text => if (event.len == 1 and event.bytes[0] == 'q') return false,
+                else => {},
+            }
+            return true;
+        }
+        if (self.nav == .learn) {
+            if (event.key == .tab) {
+                self.game = switch (self.game) {
+                    .cards => .quiz,
+                    .quiz => .scramble,
+                    .scramble => .cards,
+                };
+                self.round = 0;
+                self.correct = 0;
+                self.nextCard();
+                return true;
+            }
+            if (self.game == .scramble and !self.answered) {
+                if (event.key == .text) {
+                    if (self.len + event.len < self.query.len) {
+                        @memcpy(self.query[self.len..][0..event.len], event.bytes[0..event.len]);
+                        self.len += event.len;
+                        self.cursor = self.len;
+                        self.loaded = null;
+                    }
+                    return true;
+                }
+                if (event.key == .backspace) {
+                    self.len = self.previous();
+                    self.cursor = self.len;
+                    self.loaded = null;
+                    return true;
+                }
+                if (event.key == .enter and self.count() != 0) {
+                    try self.answer(std.ascii.eqlIgnoreCase(self.query[0..self.len], try self.db.titleAt(self.recordIndex(self.selected))));
+                    return true;
+                }
+            }
+            if (event.key == .text and event.len == 1) {
+                const c = event.bytes[0];
+                if (c == ' ' and self.answered) {
+                    self.nextCard();
+                    return true;
+                }
+                if (self.game == .quiz and !self.answered and c >= '6' and c <= '9') {
+                    try self.answer(self.choices[c - '6'] == self.selected);
+                    return true;
+                }
+                if (self.game == .cards) {
+                    if (c == ' ') {
+                        self.revealed = !self.revealed;
+                        self.loaded = null;
+                        return true;
+                    }
+                    if ((c == 'y' or c == 'n') and self.revealed) {
+                        try self.answer(c == 'y');
+                        self.nextCard();
+                        return true;
+                    }
+                }
+            }
+        }
         if (self.help) {
             self.help = false;
             return true;
@@ -95,6 +295,7 @@ const State = struct {
             },
             .enter => if (self.count() != 0) {
                 self.focus = .entry;
+                if (self.reading) |r| try r.remember(try self.db.titleAt(self.recordIndex(self.selected)));
             },
             .up, .down => {
                 if (self.focus == .search and self.count() != 0) self.focus = .matches;
@@ -147,8 +348,44 @@ const State = struct {
                 if (self.focus == .search) try self.insert(text) else if (event.len == 1) switch (text[0]) {
                     'q' => return false,
                     '/' => {
+                        try self.navigate(.search);
                         self.focus = .search;
                         self.cursor = self.len;
+                    },
+                    'v' => self.mediaAction(true) catch {
+                        self.notice = "Install an offline espeak-ng voice for this language.";
+                    },
+                    'm' => self.mediaAction(false) catch {
+                        self.notice = "Media unavailable; check Settings, network and desktop viewer.";
+                    },
+                    '[' => {
+                        self.section -|= 1;
+                        self.loaded = null;
+                    },
+                    ']' => {
+                        self.section = @min(self.section_count -| 1, self.section + 1);
+                        self.loaded = null;
+                    },
+                    'e' => {
+                        if (std.mem.indexOfScalar(usize, self.expanded.items, self.section)) |i| _ = self.expanded.orderedRemove(i) else try self.expanded.append(self.a, self.section);
+                        self.loaded = null;
+                    },
+                    's' => {
+                        if (self.count() != 0) if (self.reading) |r| {
+                            try r.bookmark(try self.db.titleAt(self.recordIndex(self.selected)));
+                            if (self.nav == .saved) try self.navigate(.saved);
+                        };
+                    },
+                    'r' => {
+                        if (self.db.count() != 0) {
+                            try self.navigate(.search);
+                            self.len = 0;
+                            self.cursor = 0;
+                            try self.changed();
+                            self.selected = self.random.random().uintLessThan(usize, self.count());
+                            self.focus = .entry;
+                            if (self.reading) |r| try r.remember(try self.db.titleAt(self.recordIndex(self.selected)));
+                        }
                     },
                     't' => self.theme = switch (self.theme) {
                         .terminal => .dark,
@@ -157,6 +394,7 @@ const State = struct {
                     },
                     'd' => {
                         self.details = !self.details;
+                        if (self.reading) |r| r.data.details = self.details;
                         self.loaded = null;
                         self.scroll = 0;
                     },
@@ -172,7 +410,12 @@ const State = struct {
         return true;
     }
     fn prepare(self: *State, width: usize) !void {
-        const index: ?usize = if (self.count() == 0) null else self.range.start + self.selected;
+        const index: ?usize = if (self.count() == 0) null else self.recordIndex(self.selected);
+        if (index != self.fold_word) {
+            self.expanded.clearRetainingCapacity();
+            self.section = 0;
+            self.fold_word = index;
+        }
         if (index != self.loaded or self.text.len == 0) {
             var formatted: std.Io.Writer.Allocating = .init(self.a);
             defer formatted.deinit();
@@ -181,7 +424,53 @@ const State = struct {
                 defer source_record.deinit();
                 var doc = try model.fromRecord(self.a, source_record.record);
                 defer doc.deinit();
-                try output.entryTextWithDetails(&formatted.writer, doc.entry, self.color, self.details);
+                if (self.nav == .learn and self.reading != null and self.round >= self.reading.?.data.quiz_length) {
+                    try formatted.writer.print("Round complete\n\n{d} / {d} correct\n\n4 starts another round.", .{ self.correct, self.round });
+                } else if (self.nav == .learn and !self.revealed) {
+                    try formatted.writer.print("{s}  /  {d} correct, {d} answered\n\n", .{ @tagName(self.game), self.correct, self.round });
+                    if (self.game == .cards) {
+                        try output.terminalText(&formatted.writer, doc.entry.title);
+                        try formatted.writer.writeAll("\n\nRecall the meaning.\n\nSpace reveals it; y got it; n again.\nTab changes game.");
+                    } else {
+                        outer: for (doc.entry.sections) |section| for (section.blocks) |block| if (block.kind == .definition) {
+                            for (block.spans) |span| {
+                                try output.terminalText(&formatted.writer, span.text);
+                                try output.terminalText(&formatted.writer, span.trail);
+                            }
+                            break :outer;
+                        };
+                        try formatted.writer.writeAll("\n\n");
+                        if (self.game == .quiz) {
+                            for (self.choices, 0..) |choice, n| {
+                                try formatted.writer.print("{d}  ", .{6 + n});
+                                try output.terminalText(&formatted.writer, try self.db.titleAt(self.recordIndex(choice)));
+                                try formatted.writer.writeByte('\n');
+                            }
+                            try formatted.writer.writeAll("\nTab changes game.");
+                        } else {
+                            var at = doc.entry.title.len;
+                            while (at > 0) {
+                                const prev = term.previousClusterStart(doc.entry.title, at);
+                                try output.terminalText(&formatted.writer, doc.entry.title[prev..at]);
+                                at = prev;
+                            }
+                            try formatted.writer.writeAll("\n\nYour answer: ");
+                            try output.terminalText(&formatted.writer, self.query[0..self.len]);
+                            try formatted.writer.writeAll("\nEnter checks; Tab changes game.");
+                        }
+                    }
+                } else {
+                    self.section_count = doc.entry.sections.len;
+                    if (self.nav == .learn and self.answered) try formatted.writer.writeAll("Space: next word\n\n");
+                    if (self.focus == .entry) if (self.reading) |r| {
+                        if (r.data.history.len == 0 or !std.mem.eql(u8, r.data.history[0], doc.entry.title)) try r.remember(doc.entry.title);
+                    };
+                    if (self.reading) |r| {
+                        var preferences = r.data;
+                        preferences.details = self.details;
+                        try output.entryTextFolded(&formatted.writer, doc.entry, self.color, preferences, self.expanded.items, self.section);
+                    } else try output.entryTextWithDetails(&formatted.writer, doc.entry, self.color, self.details);
+                }
             } else try formatted.writer.writeAll("No matching entries.\n\nPress / to edit the prefix; Ctrl-U clears it.\nMatching is case-sensitive UTF-8, not fuzzy search.");
             const text = try self.a.dupe(u8, formatted.written());
             for (text) |*b| if (b.* == '\t') {
@@ -214,6 +503,11 @@ const State = struct {
         try w.print("\x1b[{d};{d}H{s}{s}", .{ row, col, palette(self.theme, self.color).base, style });
         try w.writeAll(safe.written()[0..term.prefixBytes(safe.written(), cells)]);
     }
+    fn dock(self: State, w: *std.Io.Writer) !void {
+        const labels = if (self.screen.cols < 60) [_][]const u8{ "1 Saved", "2 Hist", "3 Find", "4 Learn", "5 Set" } else [_][]const u8{ "1 Saved", "2 History", "3 Search", "4 Learn", "5 Settings" };
+        const width = self.screen.cols / 5;
+        for (labels, 0..) |label, i| try self.put(w, self.screen.rows, i * width + 1, width, label, if (@intFromEnum(self.nav) == i) palette(self.theme, self.color).selected else palette(self.theme, self.color).muted);
+    }
     fn draw(self: *State) !void {
         const sz = self.screen;
         const p = palette(self.theme, self.color);
@@ -225,15 +519,45 @@ const State = struct {
         if (sz.cols < 40 or sz.rows < 12) {
             if (sz.rows >= 1 and sz.cols >= 1) try self.put(w, 1, 1, sz.cols, "dict: resize to at least 40 x 12", p.accent);
             if (sz.rows >= 3 and sz.cols >= 1) try self.put(w, 3, 1, sz.cols, "Ctrl-C to leave safely.", p.base);
+        } else if (self.nav == .settings and self.reading != null) {
+            const r = self.reading.?;
+            try self.put(w, 2, 3, sz.cols - 4, "Settings", p.accent);
+            var buf: [128]u8 = undefined;
+            const labels = [_][]const u8{ "Atmosphere", "Supporting details", "Remember words", "Questions per round", "Pronunciation folded", "Etymology folded", "Other sections folded", "Examples & notes folded", "Clear history", "Online images", "Online audio", "Media cache (MiB)", "Dictionaries" };
+            const visible = @max(1, (sz.rows -| 8) / 2);
+            const begin = self.setting / visible * visible;
+            for (labels[begin..@min(labels.len, begin + visible)], begin..) |label, i| {
+                const row = 5 + (i - begin) * 2;
+                try self.put(w, row, 3, sz.cols - 4, label, if (i == self.setting) p.selected else p.base);
+                const value = switch (i) {
+                    0 => @tagName(self.theme),
+                    1 => if (self.details) "Expanded" else "Folded",
+                    2 => try std.fmt.bufPrint(&buf, "{d}", .{r.data.history_limit}),
+                    3 => try std.fmt.bufPrint(&buf, "{d}", .{r.data.quiz_length}),
+                    4 => if (r.data.collapse_pronunciation) "On" else "Off",
+                    5 => if (r.data.collapse_etymology) "On" else "Off",
+                    6 => if (r.data.collapse_other) "On" else "Off",
+                    7 => if (r.data.collapse_notes) "On" else "Off",
+                    9 => if (r.data.allow_images) "On" else "Off",
+                    10 => if (r.data.allow_audio) "On" else "Off",
+                    11 => try std.fmt.bufPrint(&buf, "{d}", .{r.data.media_cache_mb}),
+                    else => "Enter",
+                };
+                try self.put(w, row + 1, 5, sz.cols - 6, value, p.muted);
+            }
+            try self.put(w, sz.rows - 1, 3, sz.cols - 4, "↑↓ choose  ←→ adjust  Esc search", p.muted);
+            if (self.notice.len != 0) try self.put(w, 3, 3, sz.cols - 4, self.notice, p.accent);
+            try self.dock(w);
         } else {
-            const split_at = self.split();
+            const split_at = if (self.nav == .learn) 0 else self.split();
             const content_col = if (split_at == 0) 3 else split_at + 3;
             const content_width = sz.cols - content_col - 1;
             try self.prepare(content_width);
             try self.put(w, 1, 3, 9, "dict.", p.accent);
             try self.put(w, 1, 13, sz.cols -| 15, self.label, p.muted);
             var buf: [256]u8 = undefined;
-            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "{s}  /  {d} records  /  {s} theme", .{ enc.blob_format.magic, self.db.count(), @tagName(self.theme) }), p.muted);
+            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "{d} words  /  {s}", .{ self.db.count(), @tagName(self.nav) }), p.muted);
+            if (self.notice.len != 0) try self.put(w, 3, 3, sz.cols - 4, self.notice, p.accent);
             try self.put(w, 4, 3, 10, "Search /", if (self.focus == .search) p.accent else p.muted);
             // Horizontal input viewport follows the caret, at whole-codepoint boundaries.
             var start: usize = 0;
@@ -252,7 +576,7 @@ const State = struct {
                 for (0..self.bodyHeight()) |i| {
                     const n = offset + i;
                     if (n >= self.count()) break;
-                    const title = try self.db.titleAt(self.range.start + n);
+                    const title = try self.db.titleAt(self.recordIndex(n));
                     try self.put(w, 7 + i, 3, cols, title, if (n == self.selected) p.selected else p.base);
                 }
             }
@@ -260,7 +584,7 @@ const State = struct {
             if (split_at != 0 or self.focus == .entry) {
                 try self.put(w, 6, content_col, content_width, "READING", if (self.focus == .entry) p.accent else p.muted);
                 if (self.count() != 0 and content_width > 12) {
-                    const title = try self.db.titleAt(self.range.start + self.selected);
+                    const title = try self.db.titleAt(self.recordIndex(self.selected));
                     try self.put(w, 6, content_col + 10, content_width - 10, title, p.muted);
                 }
                 for (0..self.bodyHeight()) |i| {
@@ -277,11 +601,12 @@ const State = struct {
             const hints: []const u8 = switch (self.focus) {
                 .search => "type to search  ↑↓ results  Enter read  Tab switch  Ctrl-U clear  Ctrl-C quit",
                 .matches => "/ search  ↑↓ select  Enter read  PgUp/PgDn page  ? help  q quit",
-                .entry => "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  d details  ? help  q quit",
+                .entry => "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  [ ] section  e fold  d all  s save  ? help",
             };
-            try self.put(w, sz.rows, 3, sz.cols - 4, hints, p.muted);
+            try self.put(w, sz.rows - 1, 3, sz.cols - 4, hints, p.muted);
+            try self.dock(w);
             if (self.help) {
-                const help = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "d toggles supporting details", "t cycles terminal/dark/light; q quits outside Search", "Any key closes this help" };
+                const help = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "[ ] selects a section; e toggles its fold", "d toggles all details; s saves the word", "r random word; 1 Saved 2 History 3 Search", "4 Learn: Tab game; Space reveal; y/n grade", "Quiz: 6-9 answer; Scramble: type then Enter", "v offline speech; m media in desktop player", "5 Settings: arrows adjust limits and appearance", "t cycles terminal/dark/light; q quits outside Search", "Any key closes this help" };
                 for (help, 0..) |line, i| {
                     if (6 + i >= sz.rows - 1) break;
                     try w.print("\x1b[{d};1H{s}\x1b[2K", .{ 6 + i, p.base });
@@ -298,8 +623,20 @@ pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8
     if (builtin.os.tag != .linux) return error.UnsupportedTerminalPlatform;
     if (!try std.Io.File.stdin().isTty(io) or !try std.Io.File.stdout().isTty(io)) return error.TerminalRequired;
     if (!std.unicode.utf8ValidateSlice(query) or query.len > 4096) return error.InvalidQuery;
-    var state: State = .{ .a = a, .io = io, .db = db, .label = label, .theme = theme, .color = color, .details = initial_details };
+    var reading = ReadingState.init(a);
+    defer reading.deinit();
+    try reading.load(io, db.root, label);
+    defer reading.save(io) catch {};
+    defer {
+        if (std.fs.path.join(a, &.{ db.root, ".dict-media" })) |cache| {
+            defer a.free(cache);
+            @import("reader_media.zig").trim(io, a, cache, reading.data.media_cache_mb) catch {};
+        } else |_| {}
+    }
+    var state: State = .{ .reading = &reading, .a = a, .io = io, .db = db, .label = label, .theme = theme, .color = color, .details = initial_details };
     defer state.deinit();
+    if (theme == .terminal) state.theme = @enumFromInt(@intFromEnum(reading.data.theme));
+    state.details = initial_details or reading.data.details;
     @memcpy(state.query[0..query.len], query);
     state.len = query.len;
     state.cursor = query.len;
