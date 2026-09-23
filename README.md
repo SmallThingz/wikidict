@@ -17,6 +17,6 @@ cmake --build build --parallel 2
 ./build/bin/dict-qt
 ```
 
-The `web/` directory retains the earlier compiled-presentation browser renderer and its tests. Its export-based loading flow has not yet been migrated to direct `.wikblb` downloads; Android is the current product focus. It is not a feature-parity release.
+The `web/` reader now imports raw `.wikblb` and seekable `.wikblb.xz` directly. It keeps binary files and derived indexes in IndexedDB, decodes individual entries in a worker, and provides Saved, History, Search, Learn and Settings. Build with `cd web && pnpm install && pnpm build`; serve `build/web/` over localhost or HTTPS. See [web validation and capabilities](web/README.md).
 
 Android is maintained in [wikidict-android](https://github.com/SmallThingz/wikidict-android).

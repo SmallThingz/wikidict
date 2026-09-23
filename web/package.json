@@ -1,1 +1,18 @@
-{"name":"dict-web-reader","private":true,"type":"module","scripts":{"build":"node build.mjs","test":"node --test validate.test.mjs","test:browser":"node browser.test.mjs"},"devDependencies":{"playwright":"^1.58.0"}}
+{
+  "name": "dict-web-reader",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test blob.test.mjs validate.test.mjs",
+    "test:browser": "node browser.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "playwright": "^1.58.0"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.4.0",
+    "xz-decompress": "0.2.3"
+  }
+}

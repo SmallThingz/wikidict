@@ -1,9 +1,11 @@
-# Web reader
+# Binary web reader
 
-A static, offline reader for compiled `dict.results.v1` JSON exports. Import a file with the folder button; search and links stay local, except explicitly opened HTTPS links. Imports are validated in a worker and capped at 64 MiB. No wikitext, templates, Lua, or corpus executable code is loaded.
+Run `pnpm install && pnpm build`, then serve `../build/web` over localhost or HTTPS. `pnpm test` covers binary/XZ decoding and malformed inputs; `pnpm test:browser` exercises the real browser with the Android binary fixture. Set `WIKBLB_FIXTURE` to override its path.
 
-Run `pnpm install --ignore-scripts`, then `pnpm build` in this directory. Serve `../../zig-out/web` with any static HTTP server (module workers need HTTP). The web and Android clients currently read JSON exports, not whole `.wikblb` collections directly. Media descriptors are displayed; embedded media playback is not implemented.
+The reader stores compressed files in IndexedDB and builds a title/offset index. XZ blocks are located from stream indexes; only intersecting blocks are decoded on lookup, with one decoded block cached. Publish with 1 MiB blocks. Blocks above 128 MiB are rejected in the browser. No JSON dictionary import, Lua, templates, or source parser is used.
 
-`pnpm test` checks input validation. `pnpm test:browser` runs Chromium layout and semantic rendering checks at 360, 768 and 1440 px, tests failed imports and navigation, and saves screenshots under `data/renderer-validation/web/`. Set `CORPUS_FIXTURE` to a real `dict export cat` JSON file for the additional corpus import check. Set `CHROMIUM` to a Chromium executable if Brave is not installed at `/opt/brave-bin/brave`.
+Features: meanings-first folds, per-section expansion, configurable folding defaults, tables and styled semantic spans, five-button navigation, persistent history (100,000 maximum), bookmarks, cards/quiz/scramble, offline system speech when a local browser voice exists, opt-in Wikimedia images/audio, bounded media cache (4 GiB), custom HTTPS catalogues, checksummed downloads, theme settings and import/remove controls.
 
-Generate the shared fixture with `zig build test-reader` from the repository root. Its final output names a cache artifact directory containing `fixture.json` and `blobs/`. Set `RENDERER_FIXTURE` to that JSON path before the browser test; its default is `data/renderer-validation/fixture.json`. The same fixture feeds Android's `-PrendererFixture` tests and terminal checks in `tools/verify_terminal.py`.
+Browser storage quotas and CORS apply. Downloads currently use the browser Blob API, so very large downloads depend on browser resources. Catalogue SHA-256 is verified incrementally in the worker. Terminal-style dictionary media URLs still require network access; offline speech availability depends on browser/OS voices.
+
+Validation: raw and multiblock XZ produce identical decoded entries for the 30-entry fixture; concatenated streams, cross-block reads, truncation and corruption tests pass. Browser flows pass at 360, 768 and 1440 px, including history/bookmark persistence and the maximum settings values. Media playback and offline voice quality are not covered by that automated browser run. This is not a whole-corpus performance claim.
