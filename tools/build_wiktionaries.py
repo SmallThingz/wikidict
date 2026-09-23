@@ -59,9 +59,9 @@ def main():
     p.add_argument('--downloads',type=Path,default=PROJECT/'data/dumps')
     p.add_argument('--output',type=Path,default=PROJECT/'data/dictionaries')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
-    p.add_argument('--compression-workers',type=int,default=default_workers(),help='XZ workers per blob (default: 1 + CPU count // 3)')
+    p.add_argument('--threads',type=int,default=default_workers(),help='XZ workers per blob (default: 1 + CPU count // 3)')
     a=p.parse_args()
-    if a.compression_workers < 1:p.error('Compression workers must be positive')
+    if a.threads < 1:p.error('Compression workers must be positive')
     items=json.loads((a.downloads/'manifest.json').read_text())['files']
     groups={}
     for item in items:
@@ -69,7 +69,7 @@ def main():
         groups.setdefault((item['wiki'],item['date']),[]).append(item)
     failures=[]
     for key, group in sorted(groups.items()):
-        try:build(group,a.downloads.resolve(),a.output.resolve(),a.zig,a.compression_workers)
+        try:build(group,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads)
         except Exception as e:
             failures.append(key);print(f'FAILED {key}: {e}',flush=True)
     if failures:raise SystemExit(f'{len(failures)} editions failed; no incomplete editions were published')
