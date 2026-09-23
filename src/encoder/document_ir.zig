@@ -288,6 +288,7 @@ pub const InlineIterator = struct {
                             break :scan;
                         },
                         .invalid => if (self.renderer_boundaries) {
+                            if (self.cursor != start) break :scan;
                             self.cursor = pair.end;
                             continue :scan;
                         } else {

@@ -9,14 +9,21 @@ const A = std.mem.Allocator;
 
 fn requireCompiledText(text: []const u8) !void {
     for ([_][]const u8{ "[[", "]]", "{{", "}}", "{|", "|}" }) |token| {
-        if (std.mem.indexOf(u8, text, token) != null) return error.UncompiledPresentation;
+        if (std.mem.indexOf(u8, text, token)) |at| {
+            std.debug.print("uncompiled presentation token={s} context={s}\n", .{
+                token, text[at -| 32 .. @min(text.len, at + 96)],
+            });
+            return error.UncompiledPresentation;
+        }
     }
     var at: usize = 0;
     while (std.mem.indexOfScalarPos(u8, text, at, '<')) |start| {
         var name = start + 1;
         if (name < text.len and text[name] == '/') name += 1;
-        if (name < text.len and std.ascii.isAlphabetic(text[name]) and std.mem.indexOfScalarPos(u8, text, name, '>') != null)
+        if (name < text.len and std.ascii.isAlphabetic(text[name]) and std.mem.indexOfScalarPos(u8, text, name, '>') != null) {
+            std.debug.print("uncompiled presentation tag context={s}\n", .{text[start -| 32 .. @min(text.len, start + 96)]});
             return error.UncompiledPresentation;
+        }
         at = start + 1;
     }
 }
@@ -130,7 +137,10 @@ pub fn compileAlloc(
     for (work.sections) |section| {
         try requireCompiledText(section.title);
         for (section.blocks) |block| {
-            try requireCompiledSpans(a, block.spans);
+            requireCompiledSpans(a, block.spans) catch |err| {
+                std.debug.print("uncompiled presentation section={s} block={s}\n", .{ section.title, @tagName(block.kind) });
+                return err;
+            };
             if (block.table) |table| {
                 try requireCompiledSpans(a, table.caption);
                 for (table.rows) |row| for (row.cells) |cell| try requireCompiledSpans(a, cell.spans);

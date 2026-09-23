@@ -501,10 +501,7 @@ pub const Renderer = struct {
         }
         if (tag.name.len == "small".len and tag.attrs.len == 0 and tag.is("small")) {
             if (tag.closing or tag.self_closing) return tag.end;
-            const pair = syntax.matchingTag(input, tag) orelse {
-                try self.literal(input[tag.end..], style);
-                return input.len;
-            };
+            const pair = syntax.matchingTag(input, tag) orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
             var s = style;
             s.small = true;
             try self.inlineText(input[tag.end..pair.inner_end], s, depth + 1);
@@ -550,10 +547,11 @@ pub const Renderer = struct {
         // Consume the marker, not its contents: those still contain wiki links
         // and semantic HTML that must pass through the inline compiler.
         if (tag.is("li") and syntax.matchingTag(input, tag) == null) return tag.end;
-        const pair = syntax.matchingTag(input, tag) orelse {
-            try self.literal(input[tag.end..], style);
-            return input.len;
-        };
+        const matched = syntax.matchingTag(input, tag);
+        // Unclosed layout containers have no inline style to scope. Consume
+        // them iteratively, including long runs of malformed openers.
+        if (matched == null and oneOf(tag.name, &.{ "div", "span", "p", "center", "ul", "ol", "dl" })) return tag.end;
+        const pair = matched orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
         var s = style;
         if (oneOf(tag.name, &.{ "b", "strong" })) s.bold = true;
         if (oneOf(tag.name, &.{ "i", "em", "cite", "var", "dfn" })) s.italic = true;
@@ -683,6 +681,14 @@ pub const Renderer = struct {
                 it.cursor = pair.end;
                 continue;
             }
+            if (starts(input[it.cursor..], "[[")) if (syntax.balanced(input, it.cursor)) |pair| {
+                // A link whose target is only whitespace has no visible label.
+                // MediaWiki input with a removed HTML comment can produce [[ ]].
+                if (std.mem.trim(u8, input[it.cursor + 2 .. pair.inner_end], " \t\r\n").len == 0) {
+                    it.cursor = pair.end;
+                    continue;
+                }
+            };
             const token = it.next() orelse break;
             s.bold = token.bold;
             s.italic = token.italic;
@@ -882,7 +888,7 @@ pub const Renderer = struct {
             const html_tag = if (syntax.tagAt(clean, 0)) |tag| (if (!tag.closing and
                 oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center" }) and
                 syntax.matchingTag(clean, tag) != null) tag else null) else null;
-            const special = html_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or starts(line, " ") or starts(clean, "{|") or starts(clean, "----") or starts(clean, "<pre") or starts(clean, "<syntaxhighlight");
+            const special = html_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or starts(line, " ") or starts(clean, "{|") or std.mem.eql(u8, clean, "|}") or starts(clean, "----") or starts(clean, "<pre") or starts(clean, "<syntaxhighlight");
             if (!special) {
                 if (para == null) {
                     para = start;
@@ -946,11 +952,19 @@ pub const Renderer = struct {
                 continue;
             }
             if (starts(clean, "{|")) {
+                const body_start = pos;
                 const table = try self.parseTable(input, pos);
                 pos = table.end;
-                if (table.closed and table.table.rows.len != 0) try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table.table }) else try self.block(&blocks, .preformatted, input[start..pos], "", "", 0);
+                if (table.table.rows.len != 0) {
+                    try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table.table });
+                } else {
+                    // Rowless layout tables still contain ordinary lists/text.
+                    for (try self.renderBody(input[body_start..table.body_end])) |block_value|
+                        try self.appendBlockBudgeted(&blocks, block_value);
+                }
                 continue;
             }
+            if (std.mem.eql(u8, clean, "|}")) continue;
             if (starts(clean, "<pre") or starts(clean, "<syntaxhighlight")) {
                 if (syntax.tagAt(clean, 0)) |tag| {
                     const pair = syntax.matchingTag(clean, tag) orelse syntax.Pair{ .inner_end = clean.len, .end = clean.len };
@@ -1044,7 +1058,7 @@ pub const Renderer = struct {
         }
         return .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) };
     }
-    const TableResult = struct { table: Table, end: usize, closed: bool };
+    const TableResult = struct { table: Table, end: usize, body_end: usize };
     fn parseTable(self: *Renderer, input: []const u8, start: usize) Error!TableResult {
         var rows: std.ArrayList(Row) = .empty;
         var cells: std.ArrayList(Cell) = .empty;
@@ -1052,14 +1066,15 @@ pub const Renderer = struct {
         var current: ?Cell = null;
         var caption: []const Span = &.{};
         var pos = start;
-        var closed = false;
+        var body_end = input.len;
         var nested_tables: usize = 0;
         while (pos < input.len) {
             if (self.truncated) break;
+            const line_start = pos;
             const end = syntax.logicalEnd(input, pos);
             const line = trim(input[pos..end]);
             pos = if (end < input.len) end + 1 else end;
-            if (current != null and starts(line, "{|")) {
+            if (starts(line, "{|")) {
                 if (cell_source.items.len != 0) try cell_source.append(self.a, '\n');
                 try cell_source.appendSlice(self.a, line);
                 nested_tables += 1;
@@ -1075,7 +1090,7 @@ pub const Renderer = struct {
                 try self.finishCell(&cells, &cell_source, &current);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
                 if (starts(line, "|}")) {
-                    closed = true;
+                    body_end = line_start;
                     break;
                 }
             } else if (starts(line, "|+")) {
@@ -1104,7 +1119,7 @@ pub const Renderer = struct {
         }
         try self.finishCell(&cells, &cell_source, &current);
         if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
-        return .{ .table = .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) }, .end = pos, .closed = closed };
+        return .{ .table = .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) }, .end = pos, .body_end = body_end };
     }
     fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *std.ArrayList(u8), current: *?Cell) Error!void {
         if (current.*) |value| {
@@ -1298,7 +1313,7 @@ test "leading space preformatting still compiles links and HTML" {
     try std.testing.expectEqualStrings("A pie.", try flattened(a, blocks[0].spans));
     try std.testing.expect(blocks[0].spans[1].flags.bold);
 }
-test "multitrans produces real blocks and malformed tables retain literal content" {
+test "multitrans produces real blocks and malformed tables retain readable content" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -1307,8 +1322,8 @@ test "multitrans produces real blocks and malformed tables retain literal conten
     try std.testing.expectEqual(@as(usize, 2), blocks.len);
     try std.testing.expectEqualStrings("French: chat m", try flattened(a, blocks[1].spans));
     const bad = try r.renderBody("{|\nimportant text without a cell or closing marker");
-    try std.testing.expectEqual(Kind.preformatted, bad[0].kind);
-    try std.testing.expect(std.mem.indexOf(u8, bad[0].text, "important text") != null);
+    try std.testing.expectEqual(Kind.paragraph, bad[0].kind);
+    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, bad[0].spans), "important text") != null);
 }
 test "bounded malformed wikitext stress never traps and preserves allocator ownership" {
     const alphabet = "{}[]=|*#\n\r<>/ abcXYZ0123456789_:-'\"&;!";
@@ -1783,13 +1798,15 @@ test "malformed link tail stays literal at the current cursor" {
     try std.testing.expectEqualStrings(source, try flattened(a, spans));
 }
 
-test "balanced invalid link keeps following inline semantics" {
+test "empty link is omitted while following inline content renders" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
     const spans = try r.parseSpans("[[]]<b>bold</b> &amp;", .{});
-    try std.testing.expectEqualStrings("[[]]bold &", try flattened(a, spans));
+    try std.testing.expectEqualStrings("bold &", try flattened(a, spans));
+    const after_prefix = try r.parseSpans("prefix [[]] suffix", .{});
+    try std.testing.expectEqualStrings("prefix  suffix", try flattened(a, after_prefix));
 }
 
 test "malformed template and link opener storms preserve the tail without trapping" {
@@ -2068,5 +2085,20 @@ test "TemplateStyles before NavFrame preserves semantic conjugation tables" {
     try std.testing.expectEqual(@as(u16, 2), table.rows[0].cells[0].colspan);
     try std.testing.expectEqualStrings("აღმოვაჩენ", try flattened(a, table.rows[1].cells[0].spans));
     try std.testing.expectEqualStrings("აღმოაჩენ", try flattened(a, table.rows[1].cells[1].spans));
+    try std.testing.expectEqualStrings("After", try flattened(a, blocks[2].spans));
+}
+
+test "unclosed formatting and rowless nested tables compile their contents" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("<small>[[word]]<small> tail", .{});
+    try std.testing.expectEqualStrings("word tail", try flattened(a, spans));
+    try std.testing.expect(spans[0].flags.small);
+    const blocks = try r.renderBody("{|\n{|\n* [[one]]\n|}\n{|\n* [[two]]\n|}\n|}\n|}\nAfter");
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    try std.testing.expectEqualStrings("one", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("two", try flattened(a, blocks[1].spans));
     try std.testing.expectEqualStrings("After", try flattened(a, blocks[2].spans));
 }

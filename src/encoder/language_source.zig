@@ -66,8 +66,12 @@ const Balance = struct {
     templates: usize = 0,
     links: usize = 0,
     comments: usize = 0,
+    tables: usize = 0,
 
     fn update(self: *Balance, line: []const u8) void {
+        const content = std.mem.trimStart(u8, line, " \t");
+        if (std.mem.startsWith(u8, content, "{|")) self.tables += 1;
+        if (std.mem.startsWith(u8, content, "|}") and self.tables != 0) self.tables -= 1;
         var i: usize = 0;
         while (i < line.len) : (i += 1) {
             if (i + 4 <= line.len and std.mem.eql(u8, line[i .. i + 4], "<!--")) {
@@ -103,7 +107,7 @@ const Balance = struct {
     }
 
     fn isOpen(self: Balance) bool {
-        return self.templates != 0 or self.links != 0 or self.comments != 0;
+        return self.templates != 0 or self.links != 0 or self.comments != 0 or self.tables != 0;
     }
 };
 
@@ -138,6 +142,13 @@ test "repeated language sections remain separate" {
     var it = Iterator.init(source);
     try std.testing.expectEqualStrings("English", it.next().?.heading);
     try std.testing.expectEqualStrings("French", it.next().?.heading);
+    try std.testing.expectEqualStrings("English", it.next().?.heading);
+    try std.testing.expect(it.next() == null);
+}
+
+test "table subheadings do not become language sections" {
+    const source = "{| class=wikitable\n== AC ==\n|-\n| entry\n|}\n==English==\n===Noun===\n# meaning\n";
+    var it = Iterator.init(source);
     try std.testing.expectEqualStrings("English", it.next().?.heading);
     try std.testing.expect(it.next() == null);
 }
