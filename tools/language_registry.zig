@@ -54,6 +54,26 @@ fn skip(source: []const u8, p: *usize) void {
             continue;
         }
         if (std.mem.startsWith(u8, source[p.*..], "--")) {
+            const open = p.* + 2;
+            if (open < source.len and source[open] == '[') {
+                var end = open + 1;
+                while (end < source.len and source[end] == '=') : (end += 1) {}
+                if (end < source.len and source[end] == '[') {
+                    const equals = source[open + 1 .. end];
+                    var scan = end + 1;
+                    while (std.mem.indexOfScalarPos(u8, source, scan, ']')) |close| {
+                        const last = close + 1 + equals.len;
+                        if (last < source.len and source[last] == ']' and
+                            std.mem.eql(u8, source[close + 1 .. last], equals))
+                        {
+                            p.* = last + 1;
+                            break;
+                        }
+                        scan = close + 1;
+                    } else p.* = source.len;
+                    continue;
+                }
+            }
             p.* = std.mem.indexOfScalarPos(u8, source, p.*, '\n') orelse source.len;
             continue;
         }
@@ -83,4 +103,10 @@ test "language metadata uses canonical registry rather than guessed template cod
     try std.testing.expectEqualStrings("en", r.code("English").?);
     try std.testing.expect(r.code("Noun") == null);
     try std.testing.expectError(error.DuplicateLanguageHeading, Registry.fromLuaAlloc(std.testing.allocator, "return { [\"a\"]=\"x\", [\"a\"]=\"y\" }"));
+}
+
+test "canonical registry permits Lua long comments with equals delimiters" {
+    var r = try Registry.fromLuaAlloc(std.testing.allocator, "--[==[ header ]=] still comment ]==]\nreturn { [\"English\"] = \"en\" }\n--[=[\nlocal export = {}\nreturn export\n]=]");
+    defer r.deinit();
+    try std.testing.expectEqualStrings("en", r.code("English").?);
 }
