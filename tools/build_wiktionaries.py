@@ -83,11 +83,11 @@ def main():
     p.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries',metavar='DIR')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
     p.add_argument('--threads',type=int,default=default_workers(),help='Compiler, expansion and XZ workers per edition (default: 1 + CPU count // 3)')
-    p.add_argument('--jobs',type=int,help='Concurrent editions (default: up to four within CPU budget)')
+    p.add_argument('--jobs',type=int,help='Concurrent editions (default: up to four, based on CPU count / threads)')
     p.add_argument('--wikis',nargs='+',help='Build only these edition IDs')
     a=p.parse_args()
     if a.threads < 1:p.error('Threads must be positive')
-    if a.jobs is None:a.jobs=min(4,max(1,(os.cpu_count() or 1)//a.threads))
+    if a.jobs is None:a.jobs=min(4,max(1,((os.cpu_count() or 1)+a.threads-1)//a.threads))
     if not 1 <= a.jobs <= 16:p.error('Jobs must be 1 through 16')
     items=json.loads((a.downloads/'manifest.json').read_text())['files']
     groups={}
