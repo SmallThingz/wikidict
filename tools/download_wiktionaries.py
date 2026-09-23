@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 import re
 import time
@@ -89,6 +90,77 @@ def aria2_queue(files, root):
                       f"  checksum=sha-1={item['sha1']}"])
     return "\n".join(lines) + "\n"
 
+def transfer_progress(files, root, previous=None):
+    """Measure on-disk bytes, including verified files and resumed partials."""
+    previous = previous or {}
+    transferred = 0
+    active = None
+    largest_growth = 0
+    current = {}
+    for item in files:
+        target = root / item["wiki"] / item["date"] / item["name"]
+        partial = target.with_name(target.name + ".part")
+        size = target.stat().st_size if target.exists() else partial.stat().st_size if partial.exists() else 0
+        size = min(size, item["size"])
+        current[item["url"]] = size
+        transferred += size
+        growth = size - previous.get(item["url"], size)
+        if growth > largest_growth:
+            largest_growth = growth
+            active = target
+    return transferred, active, current
+
+def progress_line(done, total, destination, speed=0):
+    width = 30
+    fraction = min(done / total, 1) if total else 1
+    filled = int(fraction * width)
+    bar = "#" * filled + "-" * (width - filled)
+    location = str(destination) if destination else "waiting for transfer"
+    return f"[{bar}] {fraction * 100:5.1f}% {done:,}/{total:,} bytes {speed / 1048576:.1f} MiB/s  {location}"
+
+def discovery_line(done, total, wiki, destination):
+    width = 30
+    filled = int(done * width / total) if total else width
+    return f"[{'#' * filled}{'-' * (width - filled)}] {done}/{total} editions  {wiki}  -> {destination.resolve()}"
+
+def run_aria2(command, files, root):
+    total = sum(item["size"] for item in files)
+    print(f"Destination: {root.resolve()} ({len(files)} files, {total:,} bytes)", flush=True)
+    process = subprocess.Popen(command, stdout=subprocess.DEVNULL)
+    previous = None
+    last_time = time.monotonic()
+    last_done = None
+    printed = False
+    shown_location = None
+    try:
+        while True:
+            done, active, previous = transfer_progress(files, root, previous)
+            now = time.monotonic()
+            speed = max(0, done - last_done) / max(now - last_time, 0.001) if last_done is not None else 0
+            if sys.stdout.isatty():
+                if active is not None and active != shown_location:
+                    if printed: print(flush=True)
+                    print(f"Location: {active.resolve()}", flush=True)
+                    shown_location = active
+                label = active.name[:32] if active else "waiting for transfer"
+                line = progress_line(done, total, label, speed)
+                print("\r\033[2K" + line, end="", flush=True)
+            else:
+                line = progress_line(done, total, active or root, speed)
+                print(line, flush=True)
+            printed = True
+            last_done, last_time = done, now
+            if process.poll() is not None:
+                break
+            time.sleep(0.5 if sys.stdout.isatty() else 5)
+    except KeyboardInterrupt:
+        process.send_signal(2)
+        process.wait()
+        if printed and sys.stdout.isatty(): print(flush=True)
+        raise
+    if printed and sys.stdout.isatty(): print(flush=True)
+    return process.wait()
+
 def download_all(files, root, connections):
     for item in files:
         validate_item(item)
@@ -116,7 +188,7 @@ def download_all(files, root, connections):
                f"--input-file={queue}"]
     print("Downloading with aria2. Ctrl-C stops safely; rerun with --resume to continue.", flush=True)
     try:
-        result = subprocess.run(command)
+        result = run_aria2(command, pending, root)
     except KeyboardInterrupt:
         raise SystemExit("Stopped. Partial files and aria2 resume state are retained; rerun with --resume.")
     failures = []
@@ -128,7 +200,7 @@ def download_all(files, root, connections):
             os.replace(partial, target)
         else:
             failures.append(item["name"])
-    if result.returncode or failures:
+    if result or failures:
         raise SystemExit(f"{len(failures)} downloads incomplete. Resume with the same --output and --resume.")
 
 def main():
@@ -150,11 +222,17 @@ def main():
     files, failures = [], []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.connections) as pool:
         jobs = {pool.submit(snapshot, wiki, JOBS[:1] if args.xml_only else JOBS): wiki for wiki in (args.wikis or editions())}
-        for future in concurrent.futures.as_completed(jobs):
+        for completed, future in enumerate(concurrent.futures.as_completed(jobs), 1):
             try:
                 files.extend(future.result())
             except Exception as error:
                 failures.append(f"{jobs[future]}: {error}")
+            line = discovery_line(completed, len(jobs), jobs[future], args.output)
+            if sys.stdout.isatty():
+                print("\r\033[2K" + line, end="", flush=True)
+            else:
+                print(line, flush=True)
+        if jobs and sys.stdout.isatty(): print(flush=True)
         files.sort(key=lambda x: (x["wiki"], x["name"]))
         args.output.mkdir(parents=True, exist_ok=True)
         manifest = args.output / "manifest.json"

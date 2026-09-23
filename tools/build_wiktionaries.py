@@ -8,12 +8,12 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
-from compress_blobs import compress
+from compress_blobs import compress, default_workers
 from download_wiktionaries import digest, validate_item
 
 PROJECT = Path(__file__).resolve().parent.parent
 
-def build(items, downloads, output, zig):
+def build(items, downloads, output, zig, compression_workers=None):
     for item in items:
         validate_item(item)
         source = downloads / item['wiki'] / item['date'] / item['name']
@@ -46,7 +46,7 @@ def build(items, downloads, output, zig):
         if not blobs:
             raise ValueError('Compiler produced no dictionaries')
         for blob in blobs:
-            compress(blob, 1024*1024)
+            compress(blob, 1024*1024, compression_workers)
             blob.unlink()
         (staging / 'complete.json').write_text(json.dumps({'edition':edition,'date':date,'compression':'xz -9e; 1 MiB blocks','blobs':len(blobs)})+'\n')
         os.rename(staging, target)
@@ -59,7 +59,9 @@ def main():
     p.add_argument('--downloads',type=Path,default=PROJECT/'data/dumps')
     p.add_argument('--output',type=Path,default=PROJECT/'data/dictionaries')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
+    p.add_argument('--compression-workers',type=int,default=default_workers(),help='XZ workers per blob (default: 1 + CPU count // 3)')
     a=p.parse_args()
+    if a.compression_workers < 1:p.error('Compression workers must be positive')
     items=json.loads((a.downloads/'manifest.json').read_text())['files']
     groups={}
     for item in items:
@@ -67,7 +69,7 @@ def main():
         groups.setdefault((item['wiki'],item['date']),[]).append(item)
     failures=[]
     for key, group in sorted(groups.items()):
-        try:build(group,a.downloads.resolve(),a.output.resolve(),a.zig)
+        try:build(group,a.downloads.resolve(),a.output.resolve(),a.zig,a.compression_workers)
         except Exception as e:
             failures.append(key);print(f'FAILED {key}: {e}',flush=True)
     if failures:raise SystemExit(f'{len(failures)} editions failed; no incomplete editions were published')

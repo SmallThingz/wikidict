@@ -7,14 +7,19 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import build_wiktionaries as b
-from compress_blobs import compress
+from compress_blobs import compress, default_workers
 
 class BuildTest(unittest.TestCase):
     def test_extreme_compression_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'test.wikblb';raw=b'WIKBLB08'+b'payload'*20000;path.write_bytes(raw)
-            compress(path,64*1024)
+            compress(path,64*1024,2)
             self.assertEqual(lzma.open(str(path)+'.xz').read(),raw)
+    def test_default_worker_count(self):
+        with patch('compress_blobs.os.cpu_count',return_value=12):
+            self.assertEqual(default_workers(),5)
+        with patch('compress_blobs.os.cpu_count',return_value=None):
+            self.assertEqual(default_workers(),1)
     def test_build_verify_compress_publish(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
@@ -29,7 +34,7 @@ class BuildTest(unittest.TestCase):
                 if 'build-dictionary' in command:
                     dest=Path(command[-1]);dest.mkdir();(dest/'en.wikblb').write_bytes(b'WIKBLB08payload')
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
-                b.build([item],root,root/'output','zig')
+                b.build([item],root,root/'output','zig',2)
             self.assertIn('verify-blobs',calls[1]);self.assertTrue((root/'output/testwiktionary/20260901/complete.json').exists())
             self.assertFalse((root/'output/testwiktionary/20260901/en.wikblb').exists())
             self.assertEqual(lzma.open(root/'output/testwiktionary/20260901/en.wikblb.xz').read(),b'WIKBLB08payload')

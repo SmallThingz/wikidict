@@ -8,7 +8,13 @@ from pathlib import Path
 import subprocess
 import time
 
-def compress(path, block_size):
+def default_workers():
+    return 1 + (os.cpu_count() or 1) // 3
+
+def compress(path, block_size, workers=None):
+    workers = default_workers() if workers is None else workers
+    if workers < 1:
+        raise ValueError("Compression workers must be positive")
     target=Path(str(path)+'.xz');temp=Path(str(target)+'.part')
     started=time.perf_counter()
     created=False
@@ -18,7 +24,7 @@ def compress(path, block_size):
             source.seek(0)
             with temp.open('xb') as out:
                 created=True
-                subprocess.run(['xz','-9e','--threads=2',f'--block-size={block_size}','--stdout'],stdin=source,stdout=out,check=True)
+                subprocess.run(['xz','-9e',f'--threads={workers}',f'--block-size={block_size}','--stdout'],stdin=source,stdout=out,check=True)
                 out.flush();os.fsync(out.fileno())
         with path.open('rb') as source, lzma.open(temp,'rb') as decoded:
             if hashlib.file_digest(source,'sha256').digest()!=hashlib.file_digest(decoded,'sha256').digest():raise ValueError('Compression round trip failed')
@@ -28,7 +34,8 @@ def compress(path, block_size):
         if created:temp.unlink(missing_ok=True)
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('files',nargs='+',type=Path);p.add_argument('--block-size',type=int,default=1024*1024);a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('files',nargs='+',type=Path);p.add_argument('--block-size',type=int,default=1024*1024);p.add_argument('--threads',type=int,default=default_workers(),help='XZ workers (default: 1 + CPU count // 3)');a=p.parse_args()
     if not 64*1024<=a.block_size<=16*1024*1024:p.error('Block size must be 64 KiB through 16 MiB')
-    for file in a.files:compress(file,a.block_size)
+    if a.threads < 1:p.error('Threads must be positive')
+    for file in a.files:compress(file,a.block_size,a.threads)
 if __name__=='__main__':main()
