@@ -19,7 +19,7 @@ class BlobSource(file: File) : Closeable {
             val n = raw.read(magic)
             raw.seek(0)
             compressed = n == 6 && magic.contentEquals(byteArrayOf(0xfd.toByte(), 0x37, 0x7a, 0x58, 0x5a, 0))
-            source = if (compressed) SeekableXZInputStream(raw, 64 * 1024) else raw
+            source = if (compressed) SeekableXZInputStream(raw, 128 * 1024) else raw
             length = source.length()
             require(length in 9..32L * 1024 * 1024 * 1024) { "Dictionary size is unsupported" }
         } catch (error: Throwable) { raw.close(); throw error }

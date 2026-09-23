@@ -1,5 +1,7 @@
 package app.smallthingz.dict
 
+import android.app.DownloadManager
+import android.net.Uri
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
@@ -52,6 +54,7 @@ class LibraryStore private constructor(private val context: Context) {
     var dictionaries by mutableStateOf<List<DictionaryInfo>>(emptyList()); private set
     var busy by mutableStateOf<String?>(null); private set
     var progress by mutableFloatStateOf(0f); private set
+    var transferDetail by mutableStateOf<String?>(null); private set
     var error by mutableStateOf<String?>(null); private set
     var revision by mutableIntStateOf(0); private set
     var catalog by mutableStateOf<List<CatalogItem>>(emptyList()); private set
@@ -61,7 +64,7 @@ class LibraryStore private constructor(private val context: Context) {
         val installed=helper.readableDatabase.rawQuery("SELECT id FROM dictionaries",null).use{c->buildSet{while(c.moveToNext())add(c.getString(0)+".wikblb")}}
         directory.listFiles()?.filter{it.extension=="part" || (it.extension=="wikblb" && it.name !in installed)}?.forEach{it.delete()}
         refresh()
-    } } }
+    }; resumeDownload() } }
     private suspend fun refresh() {
         val values = helper.readableDatabase.rawQuery("SELECT * FROM dictionaries ORDER BY language", null).use { c -> buildList {
             while (c.moveToNext()) add(DictionaryInfo(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getInt(4), c.getLong(5)))
@@ -74,13 +77,75 @@ class LibraryStore private constructor(private val context: Context) {
     }
     fun removeSource(url: String) { sources = sources - url; prefs.edit().putStringSet("sources", sources.toSet()).apply(); refreshCatalogs() }
     private var currentOperation: Job? = null
-    fun cancel() { currentOperation?.cancel() }
+    fun cancel() {
+        val id = prefs.getLong("downloadId", -1)
+        if (id >= 0) { manager.remove(id); clearDownload() }
+        currentOperation?.cancel()
+    }
+    private val manager get() = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+    private fun clearDownload() { prefs.edit().remove("downloadId").remove("downloadUrl").remove("downloadLabel").remove("downloadBytes").remove("downloadHash").commit() }
+    private fun resumeDownload() {
+        if (prefs.getLong("downloadId", -1) >= 0) {
+            val item = CatalogItem(prefs.getString("downloadUrl", "")!!, prefs.getString("downloadLabel", "Dictionary")!!,
+                prefs.getLong("downloadBytes", -1).takeIf { it > 0 }, prefs.getString("downloadHash", null))
+            operation("Downloading ${item.label}") { watchDownload(item) }
+        }
+    }
+    private suspend fun watchDownload(item: CatalogItem) {
+        val id = prefs.getLong("downloadId", -1)
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val state = manager.query(DownloadManager.Query().setFilterById(id)).use { c ->
+                if (!c.moveToFirst()) { clearDownload(); error("Download was removed. Tap download to try again.") }
+                longArrayOf(c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)),
+                    c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)),
+                    c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)),
+                    c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON)))
+            }
+            val total = item.bytes ?: state[2]
+            require(state[1] <= 32L*1024*1024*1024 && (item.bytes == null || state[1] <= item.bytes)) { "Invalid download size" }
+            withContext(Dispatchers.Main) {
+                progress = if (total > 0) (state[1].toFloat()/total).coerceIn(0f,1f) else 0f
+                transferDetail = "${android.text.format.Formatter.formatShortFileSize(context,state[1])}" +
+                    (if(total>0) " / ${android.text.format.Formatter.formatShortFileSize(context,total)} · ${(progress*100).toInt()}%" else "") +
+                    (if(state[0].toInt()==DownloadManager.STATUS_PAUSED) " · Waiting for network / retry" else "")
+            }
+            when (state[0].toInt()) {
+                DownloadManager.STATUS_SUCCESSFUL -> {
+                    val temp = File(directory,"${UUID.randomUUID()}.part")
+                    try {
+                        withContext(Dispatchers.Main) { busy = "Verifying ${item.label}"; transferDetail = null; progress = 0f }
+                        val digest = MessageDigest.getInstance("SHA-256")
+                        var size = 0L
+                        manager.openDownloadedFile(id).use { descriptor ->
+                            android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                                temp.outputStream().buffered(256*1024).use { out ->
+                                    val buffer=ByteArray(256*1024)
+                                    while(true) { currentCoroutineContext().ensureActive(); val n=input.read(buffer); if(n<0)break
+                                        size+=n; require(size<=32L*1024*1024*1024); out.write(buffer,0,n); digest.update(buffer,0,n) }
+                                }
+                            }
+                        }
+                        val hash=digest.digest().joinToString(""){"%02x".format(it)}
+                        require(item.bytes==null || size==item.bytes) { "Incomplete download" }
+                        require(item.sha256==null || hash==item.sha256) { "Dictionary checksum does not match" }
+                        withContext(Dispatchers.Main) { busy="Indexing ${item.label}" }
+                        install(temp,hash)
+                        manager.remove(id); clearDownload()
+                    } finally { temp.delete() }
+                    return
+                }
+                DownloadManager.STATUS_FAILED -> { manager.remove(id); clearDownload(); error("Download failed (${state[3]}). Tap download to retry.") }
+            }
+            delay(400)
+        }
+    }
     private fun operation(label: String, action: suspend () -> Unit): Job = scope.launch {
         mutex.withLock {
-            withContext(Dispatchers.Main) { busy = label; error = null; progress = 0f }
+            withContext(Dispatchers.Main) { busy = label; error = null; progress = 0f; transferDetail = null }
             try { action() } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 withContext(Dispatchers.Main) { error = e.message ?: "Could not complete this operation" }
-            } finally { withContext(NonCancellable + Dispatchers.Main) { busy = null } }
+            } finally { withContext(NonCancellable + Dispatchers.Main) { busy = null; transferDetail = null } }
         }
     }.also { currentOperation = it }
     fun refreshCatalogs() = operation("Reading catalogues") {
@@ -100,6 +165,25 @@ class LibraryStore private constructor(private val context: Context) {
         }
     }
     fun download(item: CatalogItem) = operation("Downloading ${item.label}") {
+        if (!item.url.startsWith("asset://")) {
+            require(URI(item.url).let { it.scheme == "https" && it.host != null && it.userInfo == null })
+            require(item.bytes == null || item.bytes in 1..32L*1024*1024*1024) { "Dictionary is too large" }
+            val existing = prefs.getLong("downloadId", -1)
+            if (existing >= 0 && prefs.getString("downloadUrl", null) != item.url) {
+                error("Finish or cancel the current download first")
+            }
+            if (existing < 0) {
+                val request = DownloadManager.Request(Uri.parse(item.url)).setTitle(item.label)
+                    .setDescription("Wikidict dictionary")
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .setDestinationInExternalFilesDir(context, "downloads", "${UUID.randomUUID()}.wikblb")
+                val id = manager.enqueue(request)
+                prefs.edit().putLong("downloadId",id).putString("downloadUrl",item.url).putString("downloadLabel",item.label)
+                    .putLong("downloadBytes",item.bytes ?: -1).putString("downloadHash",item.sha256).commit()
+            }
+            watchDownload(item)
+            return@operation
+        }
         val temp = File(directory, "${UUID.randomUUID()}.part")
         try {
             val digest = MessageDigest.getInstance("SHA-256")

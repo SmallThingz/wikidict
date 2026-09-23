@@ -24,7 +24,7 @@ fun LibraryScreen(library: LibraryStore, onImport: ()->Unit) {
             IconButton(onClick=onImport,enabled=library.busy==null) { Icon(Icons.Outlined.FolderOpen,"Import wikblb") }
             IconButton(onClick={library.refreshCatalogs()},enabled=library.busy==null) { Icon(Icons.Outlined.Refresh,"Refresh catalogues") }
         } }
-        library.busy?.let { label -> item { Column { Row(verticalAlignment=Alignment.CenterVertically) { Text(label,Modifier.weight(1f),style=MaterialTheme.typography.bodySmall); IconButton(onClick={library.cancel()}){Icon(Icons.Outlined.Close,"Cancel download")} }; if(library.progress>0f) LinearProgressIndicator(progress={library.progress},modifier=Modifier.fillMaxWidth()) else LinearProgressIndicator(Modifier.fillMaxWidth()) } } }
+        library.busy?.let { label -> item { Column { Row(verticalAlignment=Alignment.CenterVertically) { Text(label,Modifier.weight(1f),style=MaterialTheme.typography.bodySmall); IconButton(onClick={library.cancel()}){Icon(Icons.Outlined.Close,"Cancel download")} }; library.transferDetail?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }; if(library.progress>0f) LinearProgressIndicator(progress={library.progress},modifier=Modifier.fillMaxWidth()) else LinearProgressIndicator(Modifier.fillMaxWidth()) } } }
         (library.error ?: message)?.let { error -> item { Text(error,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodyMedium) } }
         if(library.dictionaries.isNotEmpty()) item { Text("On this device",style=MaterialTheme.typography.titleLarge) }
         items(library.dictionaries,key={it.id}) { dictionary ->
