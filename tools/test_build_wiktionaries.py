@@ -4,6 +4,7 @@ import lzma
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 import tempfile
 import unittest
@@ -23,6 +24,18 @@ class BuildTest(unittest.TestCase):
                 b.main()
             self.assertEqual(build.call_args.args[1:4],(source.resolve(),output.resolve(),b.shutil.which('zig') or 'zig'))
             self.assertEqual(build.call_args.args[4],2)
+    def test_editions_build_concurrently(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);source=root/'input';source.mkdir()
+            items=[]
+            for wiki in ('aawiktionary','abwiktionary'):
+                name=f'{wiki}-20260901-pages-meta-current.xml.bz2'
+                items.append(dict(wiki=wiki,date='20260901',name=name,url=f'https://dumps.wikimedia.org/{wiki}/20260901/{name}',size=1,sha1='a'*40))
+            (source/'manifest.json').write_text(json.dumps({'files':items}))
+            rendezvous=threading.Barrier(2)
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(root/'output'),'--threads','2','--jobs','2']),patch.object(b,'build',side_effect=lambda *args:rendezvous.wait(timeout=2)) as build:
+                b.main()
+            self.assertEqual(build.call_count,2)
     def test_extreme_compression_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'test.wikblb';raw=b'WIKBLB08'+b'payload'*20000;path.write_bytes(raw)
@@ -45,11 +58,27 @@ class BuildTest(unittest.TestCase):
                 if command[0]=='xz': return real_run(command,**kwargs)
                 calls.append(command)
                 if 'build-dictionary' in command:
-                    dest=Path(command[-1]);dest.mkdir();(dest/'en.wikblb').write_bytes(b'WIKBLB08payload')
+                    dest=Path(command[command.index('--')+2]);dest.mkdir();(dest/'en.wikblb').write_bytes(b'WIKBLB08payload')
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
                 b.build([item],root,root/'output','zig',2)
             self.assertIn('verify-blobs',calls[1]);self.assertTrue((root/'output/testwiktionary/20260901/complete.json').exists())
+            self.assertIn('--llvm-workers',calls[0])
             self.assertFalse((root/'output/testwiktionary/20260901/en.wikblb').exists())
             self.assertEqual(lzma.open(root/'output/testwiktionary/20260901/en.wikblb.xz').read(),b'WIKBLB08payload')
             self.assertEqual(list((root/'.tmp').iterdir()),[])
+    def test_empty_edition_retries_stale_build_and_is_published(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
+            item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            stale=root/'output/testwiktionary/20260901.building';stale.mkdir(parents=True)
+            (stale/'old').write_text('failed')
+            def run(command,**kwargs):
+                if 'build-dictionary' in command:Path(command[command.index('--')+2]).mkdir()
+            with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
+                b.build([item],root,root/'output','zig',2)
+            final=root/'output/testwiktionary/20260901'
+            self.assertEqual(json.loads((final/'complete.json').read_text())['status'],'empty')
+            self.assertFalse((final/'old').exists())
 if __name__=='__main__':unittest.main()

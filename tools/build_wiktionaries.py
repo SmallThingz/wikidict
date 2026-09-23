@@ -2,6 +2,9 @@
 """Build every fully downloaded snapshot; publish verified extreme-XZ blobs."""
 import argparse
 import bz2
+import concurrent.futures
+import fcntl
+import tempfile
 import json
 import os
 import re
@@ -14,6 +17,21 @@ from download_wiktionaries import digest, validate_item
 PROJECT = Path(__file__).resolve().parent.parent
 
 def build(items, downloads, output, zig, compression_workers=None):
+    for item in items:
+        validate_item(item)
+    edition, date = items[0]['wiki'], items[0]['date']
+    parent = output / edition
+    parent.mkdir(parents=True, exist_ok=True)
+    # Keep the inode: deleting lock files permits two independent locks.
+    with (parent / (date + '.lock')).open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError(f'Build already running: {parent / date}') from None
+        return build_locked(items, downloads, output, zig, compression_workers)
+
+
+def build_locked(items, downloads, output, zig, compression_workers=None):
     for item in items:
         validate_item(item)
         source = downloads / item['wiki'] / item['date'] / item['name']
@@ -30,9 +48,12 @@ def build(items, downloads, output, zig, compression_workers=None):
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = target.with_name(date + '.building')
     if staging.exists():
-        raise ValueError(f'Previous build incomplete: {staging}; inspect/remove it before retrying')
-    scratch = PROJECT / '.tmp' / f'build-{edition}-{date}'
-    scratch.mkdir(parents=True, exist_ok=False)
+        if not staging.is_dir() or staging.is_symlink():
+            raise ValueError(f'Unsafe incomplete build path: {staging}')
+        print(f'Retrying incomplete build: {staging}', flush=True)
+        shutil.rmtree(staging)
+    (PROJECT / '.tmp').mkdir(exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix=f'build-{edition}-{date}-', dir=PROJECT / '.tmp'))
     try:
         dump = scratch / 'pages.xml'
         # Extraction accepts sequential page elements across multipart XML streams.
@@ -40,15 +61,17 @@ def build(items, downloads, output, zig, compression_workers=None):
             for item in sorted(xml, key=lambda x: x['name']):
                 with bz2.open(downloads / edition / date / item['name'], 'rb') as source:
                     shutil.copyfileobj(source, out, 1024*1024)
-        subprocess.run([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging)], cwd=PROJECT, check=True)
+        workers = compression_workers or default_workers()
+        subprocess.run([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
+                        '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
+                        '--page-workers',str(min(workers,16))], cwd=PROJECT, check=True)
         subprocess.run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)], cwd=PROJECT, check=True)
         blobs = sorted(staging.rglob('*.wikblb'))
-        if not blobs:
-            raise ValueError('Compiler produced no dictionaries')
         for blob in blobs:
             compress(blob, 1024*1024, compression_workers)
             blob.unlink()
-        (staging / 'complete.json').write_text(json.dumps({'edition':edition,'date':date,'compression':'xz -9e; 1 MiB blocks','blobs':len(blobs)})+'\n')
+        (staging / 'complete.json').write_text(json.dumps({'edition':edition,'date':date,
+            'status':'built' if blobs else 'empty', 'compression':'xz -9e; 1 MiB blocks','blobs':len(blobs)})+'\n')
         os.rename(staging, target)
         print(f'Published: {target}', flush=True)
     finally:
@@ -59,18 +82,31 @@ def main():
     p.add_argument('--downloads','--in',type=Path,default=PROJECT/'data/dumps',metavar='DIR')
     p.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries',metavar='DIR')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
-    p.add_argument('--threads',type=int,default=default_workers(),help='XZ workers per blob (default: 1 + CPU count // 3)')
+    p.add_argument('--threads',type=int,default=default_workers(),help='Compiler, expansion and XZ workers per edition (default: 1 + CPU count // 3)')
+    p.add_argument('--jobs',type=int,help='Concurrent editions (default: up to four within CPU budget)')
+    p.add_argument('--wikis',nargs='+',help='Build only these edition IDs')
     a=p.parse_args()
-    if a.threads < 1:p.error('Compression workers must be positive')
+    if a.threads < 1:p.error('Threads must be positive')
+    if a.jobs is None:a.jobs=min(4,max(1,(os.cpu_count() or 1)//a.threads))
+    if not 1 <= a.jobs <= 16:p.error('Jobs must be 1 through 16')
     items=json.loads((a.downloads/'manifest.json').read_text())['files']
     groups={}
     for item in items:
         validate_item(item)
         groups.setdefault((item['wiki'],item['date']),[]).append(item)
+    if a.wikis:
+        missing=set(a.wikis)-{key[0] for key in groups}
+        if missing:p.error(f'Unknown editions: {", ".join(sorted(missing))}')
+        groups={key:group for key,group in groups.items() if key[0] in a.wikis}
     failures=[]
-    for key, group in sorted(groups.items()):
-        try:build(group,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads)
-        except Exception as e:
-            failures.append(key);print(f'FAILED {key}: {e}',flush=True)
+    print(f'Building {len(groups)} editions with {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as pool:
+        futures={pool.submit(build,group,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads):key
+                 for key,group in sorted(groups.items())}
+        for future in concurrent.futures.as_completed(futures):
+            key=futures[future]
+            try:future.result()
+            except Exception as e:
+                failures.append(key);print(f'FAILED {key}: {e}',flush=True)
     if failures:raise SystemExit(f'{len(failures)} editions failed; no incomplete editions were published')
 if __name__=='__main__':main()
