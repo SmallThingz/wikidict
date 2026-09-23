@@ -205,7 +205,7 @@ def download_all(files, root, connections):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=Path("data/dumps"))
+    parser.add_argument("--output", "--out", type=Path, default=Path("data/dumps"), metavar="DIR")
     parser.add_argument("--wikis", nargs="+", help="Edition IDs, e.g. enwiktionary simplewiktionary; default: all")
     parser.add_argument("--connections", type=int, choices=range(1, 4), default=2)
     parser.add_argument("--xml-only", action="store_true", help="Omit companion SQL snapshots")

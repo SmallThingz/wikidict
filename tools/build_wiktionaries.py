@@ -56,8 +56,8 @@ def build(items, downloads, output, zig, compression_workers=None):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--downloads',type=Path,default=PROJECT/'data/dumps')
-    p.add_argument('--output',type=Path,default=PROJECT/'data/dictionaries')
+    p.add_argument('--downloads','--in',type=Path,default=PROJECT/'data/dumps',metavar='DIR')
+    p.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries',metavar='DIR')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
     p.add_argument('--threads',type=int,default=default_workers(),help='XZ workers per blob (default: 1 + CPU count // 3)')
     a=p.parse_args()

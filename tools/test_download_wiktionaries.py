@@ -15,7 +15,7 @@ class DownloaderTest(unittest.TestCase):
             def snapshot(wiki,jobs):
                 self.assertTrue(output.is_dir())
                 return [self.item()]
-            with patch.object(sys,'argv',['download_wiktionaries.py','--output',str(output),'--wikis','testwiktionary','--plan']),patch.object(d,'snapshot',side_effect=snapshot):
+            with patch.object(sys,'argv',['download_wiktionaries.py','--out',str(output),'--wikis','testwiktionary','--plan']),patch.object(d,'snapshot',side_effect=snapshot):
                 d.main()
             self.assertTrue((output/'manifest.json').is_file())
     def test_progress_includes_destination_and_fraction(self):

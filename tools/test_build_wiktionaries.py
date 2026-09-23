@@ -1,7 +1,9 @@
 import bz2
 import hashlib
 import lzma
+import json
 import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,6 +12,17 @@ import build_wiktionaries as b
 from compress_blobs import compress, default_workers
 
 class BuildTest(unittest.TestCase):
+    def test_in_and_out_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            source=root/'input';source.mkdir()
+            item=dict(wiki='testwiktionary',date='20260901',name='testwiktionary-20260901-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/testwiktionary-20260901-pages-meta-current.xml.bz2',size=1,sha1='a'*40)
+            (source/'manifest.json').write_text(json.dumps({'files':[item]}))
+            output=root/'output'
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(output),'--threads','2']),patch.object(b,'build') as build:
+                b.main()
+            self.assertEqual(build.call_args.args[1:4],(source.resolve(),output.resolve(),b.shutil.which('zig') or 'zig'))
+            self.assertEqual(build.call_args.args[4],2)
     def test_extreme_compression_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'test.wikblb';raw=b'WIKBLB08'+b'payload'*20000;path.write_bytes(raw)
