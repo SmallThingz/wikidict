@@ -416,7 +416,8 @@ fn analyzeManifest(
         if (static_encode.rootLiteral(chunk.body)) |literal| {
             const export_shape_id = try shape_registry.collectRootExpr(module_index, literal);
             var table_shapes = try shape_registry.moduleFacts(sa, module_index);
-            defer table_shapes.deinit(sa);
+            // scratch.reset below frees the arena-backed map in one step.
+            // Deinitializing it after that reset would access freed storage.
             const blob = try static_encode.encode(sa, literal, &table_shapes);
             try records.append(a, .{
                 .title = try a.dupe(u8, row.title),
