@@ -361,6 +361,57 @@ fn deadlineProbe(io: std.Io, a: std.mem.Allocator, dir: []const u8) !void {
     try std.testing.expectError(error.Timeout, worker.expand(a, 0, "probe", "==English==\n"));
 }
 
+fn writeFailureExpander(h: *Harness, script: []const u8) !void {
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = script,
+        .data = "#!/bin/sh\n" ++
+            "dd bs=4096 count=1 of=/dev/null 2>/dev/null\n" ++
+            "printf '\\020\\000\\000\\000\\001\\001\\000\\000\\000\\001\\000\\000\\000\\001\\000\\000\\000xEd'\n",
+    });
+    _ = try h.run(&.{ "chmod", "755", script }, 0);
+}
+
+fn failureMetadataProbe(h: *Harness, dir: []const u8) !void {
+    const script = try std.fs.path.join(h.a, &.{ dir, "failure-expander.sh" });
+    try writeFailureExpander(h, script);
+    var worker = expander.Worker.init(h.io, dir, script, "missing-dump.xml");
+    defer worker.deinit();
+    try std.testing.expectError(error.ExpansionFailed, worker.expand(h.a, 0, "probe", "==English==\n"));
+    const failure = worker.last_failure orelse return error.MissingFailureMetadata;
+    try h.require(std.mem.eql(u8, failure.stage, "x"), "worker failure stage survives transport");
+    try h.require(std.mem.eql(u8, failure.error_name, "E"), "worker failure error name survives transport");
+    try h.require(std.mem.eql(u8, failure.detail, "d"), "worker failure detail survives transport");
+}
+
+fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    const root = try std.fs.path.join(h.a, &.{ dir, "failure-root" });
+    try std.Io.Dir.cwd().createDirPath(h.io, root);
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(h.a, &.{ root, "manifest.jsonl" }), .data = "" });
+    const script = try std.fs.path.join(h.a, &.{ root, "dict-bundle-expander" });
+    try writeFailureExpander(h, script);
+
+    const dump = try std.fs.path.join(h.a, &.{ dir, "failure-page.txt" });
+    const source_text = "==English==\n# source that must not become synthetic error text\n";
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = dump, .data = source_text });
+    const page_index = try std.fs.path.join(h.a, &.{ root, "page-index.tsv" });
+    const index_line = try std.fmt.allocPrint(h.a, "0\t{d}\tfailure-page\t\t1\t1\t20260901000000\t\twikitext\t0\t1\t0\n", .{source_text.len});
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = page_index, .data = index_line });
+
+    const output = try std.fs.path.join(h.a, &.{ dir, "failure-dictionary" });
+    _ = try h.run(&.{ blob_builder, dump, output, "--expander-root", root, "--workers", "1" }, 0);
+    _ = try h.run(&.{ verifier, output }, 0);
+    const report_path = try std.fs.path.join(h.a, &.{ output, "fallback-pages.jsonl" });
+    const report = try std.Io.Dir.cwd().readFileAlloc(h.io, report_path, h.a, .unlimited);
+    var parsed = try std.json.parseFromSlice(std.json.Value, h.a, std.mem.trim(u8, report, " \t\r\n"), .{});
+    defer parsed.deinit();
+    const reasons = parsed.value.object.get("reasons") orelse return error.InvalidFallbackReport;
+    try h.require(reasons == .array and reasons.array.items.len == 2, "operational fallback report contains generic and precise reasons");
+    try h.require(std.mem.eql(u8, reasons.array.items[0].string, "expansion_error"), "operational fallback report names expansion category");
+    try h.require(std.mem.eql(u8, reasons.array.items[1].string, "expansion_error:x:E"), "operational fallback report preserves worker stage and error name");
+    const text = try h.run(&.{ bin, "lookup", "failure-page", "--root", output, "--language", "Unclassified", "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, text, "Script error") == null and std.mem.indexOf(u8, text, "source that must not become synthetic") == null, "operational fallback publishes no invented or original body text");
+}
+
 fn compilerPipelineProbe(h: *Harness, compiler: []const u8, dir: []const u8) !void {
     const root = try std.fs.path.join(h.a, &.{ dir, "compiler-probe" });
     try std.Io.Dir.cwd().createDirPath(h.io, root);
@@ -404,7 +455,7 @@ fn compilerPipelineProbe(h: *Harness, compiler: []const u8, dir: []const u8) !vo
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
-    if (argv.len != 6) return error.Usage;
+    if (argv.len != 7) return error.Usage;
     const bin = argv[1];
     const pipeline = argv[2];
     const verifier = argv[3];
@@ -416,6 +467,8 @@ pub fn main(init: std.process.Init) !void {
 
     try compilerPipelineProbe(&h, argv[5], dir);
     try deadlineProbe(init.io, a, dir);
+    try failureMetadataProbe(&h, dir);
+    try expansionFallbackProbe(&h, argv[6], verifier, bin, dir);
     h.checks += 1;
 
     const dump = try std.fs.path.join(a, &.{ dir, "fixture.xml" });
@@ -423,10 +476,11 @@ pub fn main(init: std.process.Init) !void {
 
     // Small editions may use no Lua at all; they still need a native bundle worker.
     const plain_dump = try std.fs.path.join(a, &.{ dir, "plain.xml" });
-    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = plain_dump, .data =
-        "<mediawiki><page><title>plain</title><ns>0</ns><id>1</id><revision><id>1</id>" ++
-        "<timestamp>2026-09-01T00:00:00Z</timestamp><contributor><username>Test</username></contributor>" ++
-        "<model>wikitext</model><format>text/x-wiki</format><text>==English==\n===Noun===\n# A plain word.\n</text></revision></page></mediawiki>",
+    try std.Io.Dir.cwd().writeFile(init.io, .{
+        .sub_path = plain_dump,
+        .data = "<mediawiki><page><title>plain</title><ns>0</ns><id>1</id><revision><id>1</id>" ++
+            "<timestamp>2026-09-01T00:00:00Z</timestamp><contributor><username>Test</username></contributor>" ++
+            "<model>wikitext</model><format>text/x-wiki</format><text>==English==\n===Noun===\n# A plain word.\n</text></revision></page></mediawiki>",
     });
     const plain_root = try std.fs.path.join(a, &.{ dir, "plain-dictionary" });
     _ = try h.run(&.{ pipeline, plain_dump, plain_root }, 0);

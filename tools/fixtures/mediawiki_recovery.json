@@ -38,5 +38,10 @@
     "name": "unsupported-graph-omitted",
     "source": "X <graph>{}</graph> Z",
     "text": "X Z"
+  },
+  {
+    "name": "missing-template",
+    "source": "A {{WikidictDefinitelyMissingTemplate987654|secret}} B",
+    "text": "A Template:WikidictDefinitelyMissingTemplate987654 B"
   }
 ]

@@ -60,26 +60,16 @@ const ExpansionJob = struct {
     source: []const u8,
 };
 
-const ExpansionFallback = struct {
-    message: []const u8,
-    reason: []const u8,
-};
-
-fn expansionFallbackAlloc(a: std.mem.Allocator, err: anyerror, failure: ?bundle_expander.Failure) !?ExpansionFallback {
+fn expansionFallbackReasonAlloc(a: std.mem.Allocator, err: anyerror, failure: ?bundle_expander.Failure) !?[]const u8 {
     switch (err) {
         error.ExpansionFailed, error.Timeout, error.RequestTooLarge => {},
         else => return null,
     }
     const precise = if (err == error.ExpansionFailed) failure else null;
-    const error_name = if (precise) |value| value.error_name else @errorName(err);
-    const reason = if (precise) |value|
+    return if (precise) |value|
         try std.fmt.allocPrint(a, "expansion_error:{s}:{s}", .{ value.stage, value.error_name })
     else
-        try std.fmt.allocPrint(a, "expansion_error:{s}", .{error_name});
-    return .{
-        .message = try std.fmt.allocPrint(a, "Script error: {s}", .{error_name}),
-        .reason = reason,
-    };
+        try std.fmt.allocPrint(a, "expansion_error:{s}", .{@errorName(err)});
 }
 
 const ExpansionSlot = struct {
@@ -140,19 +130,11 @@ const ExpansionSlot = struct {
                 "page expansion failed title={s} ordinal={d} ns={d} source_bytes={d} error={s}\n",
                 .{ self.job.title, self.job.ordinal, self.job.ns, self.job.source.len, @errorName(err) },
             );
-            const fallback = (try expansionFallbackAlloc(self.arena.allocator(), err, self.worker.last_failure)) orelse return err;
-            // MediaWiki surfaces script failures as inert error presentation.
-            // Keep the page and report the precise worker stage/error when known;
-            // never invoke an alternate Lua/runtime path.
-            try writer.addPageWithFallbackReasons(
-                self.arena.allocator(),
-                self.job.ns,
-                self.job.title,
-                fallback.message,
-                null,
-                .{ .expansion_error = true },
-                &.{fallback.reason},
-            );
+            const fallback_reason = (try expansionFallbackReasonAlloc(self.arena.allocator(), err, self.worker.last_failure)) orelse return err;
+            // Ordinary Scribunto failures are already rendered inside the page
+            // expander. This outer path is operational failure: retain the page
+            // as empty semantic data and keep the exact cause in the audit report.
+            try writer.addExpansionFailure(self.arena.allocator(), self.job.ns, self.job.title, &.{fallback_reason});
             return true;
         }
         if (self.expansion) |expanded| {

@@ -165,7 +165,7 @@ pub fn run(io: std.Io, persistent: A) !void {
         var stage: []const u8 = "expand";
         var detail: ?[]const u8 = null;
         const expanded = engine.?.expand(page_a, request, &stage, &detail) catch |err| {
-            try protocol.writeError(&output.interface, stage, detail orelse @errorName(err), detail orelse "");
+            try protocol.writeError(&output.interface, stage, @errorName(err), detail orelse "");
             continue;
         };
         if (expanded) |value| {

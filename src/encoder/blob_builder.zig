@@ -532,6 +532,14 @@ pub const Writer = struct {
         return self.addPageWithFallbackReasons(page_allocator, ns, title, source, display_title, initial_fallbacks, &.{});
     }
 
+    pub fn addExpansionFailure(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, reasons: []const []const u8) !void {
+        // Operational expansion failures have no MediaWiki page semantics to
+        // synthesize. Retain an empty data-only record and put the exact cause
+        // in the build report instead of inventing visible reader content.
+        const source = if (ns == ns_main) "==Unclassified==\n" else "";
+        return self.addPageWithFallbackReasons(page_allocator, ns, title, source, null, .{ .expansion_error = true }, reasons);
+    }
+
     pub fn addPageWithFallbackReasons(
         self: *Writer,
         page_allocator: std.mem.Allocator,
@@ -698,7 +706,7 @@ test "fallback report names every recovered page and retains unclassified entrie
     defer writer.deinit();
     try writer.addPage(a, 0, "quoted\"title", "No heading, but readable content.", null);
     try writer.addPage(a, 0, "broken", "==English==\nB ]]word]]", null);
-    try writer.addPageWithFallbackReasons(a, 0, "timeout", "==English==\nScript error: Timeout", null, .{ .expansion_error = true }, &.{"expansion_error:Timeout"});
+    try writer.addExpansionFailure(a, 0, "timeout", &.{"expansion_error:Timeout"});
     try writer.addPage(a, 0, "normal", "==English==\n# Normal definition.", null);
     const stats = try writer.finish(.{ .get_fn = struct {
         fn get(_: ?*const anyopaque, _: []const u8) ?[]const u8 {
@@ -720,4 +728,18 @@ test "fallback report names every recovered page and retains unclassified entrie
     try std.testing.expectEqualStrings("expansion_error", third.value.object.get("reasons").?.array.items[0].string);
     try std.testing.expectEqualStrings("expansion_error:Timeout", third.value.object.get("reasons").?.array.items[1].string);
     try std.testing.expect(lines.next() == null);
+
+    const unclassified_path = try languageBlobPathAlloc(a, root, "Unclassified");
+    var unclassified_map = try mmapPath(std.testing.io, unclassified_path);
+    defer unclassified_map.deinit();
+    const unclassified_blob = try blob_format.inspect(unclassified_map.bytes);
+    const metadata = try unclassified_blob.languageMetadata();
+    var index = try unclassified_blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const timeout = (try index.find("timeout")).?;
+    const parsed = try blobs.presentation_codec.decodeAlloc(a, timeout.payload, "timeout", .language, metadata);
+    try std.testing.expectEqual(@as(usize, 1), parsed.entry.sections.len);
+    try std.testing.expectEqualStrings("Unclassified", parsed.entry.sections[0].title);
+    try std.testing.expectEqual(@as(usize, 0), parsed.entry.sections[0].blocks.len);
+    try std.testing.expect(std.mem.indexOf(u8, timeout.payload, "Script error") == null);
 }
