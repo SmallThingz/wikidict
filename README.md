@@ -1,83 +1,108 @@
-# Wikidict desktop
+# Wikidict Desktop
 
-Qt desktop and web presentation work, split from [wikidict](https://github.com/SmallThingz/wikidict) with the original commits for these files preserved.
+Desktop readers for dictionaries produced by
+[wikidict](https://github.com/SmallThingz/wikidict).
 
-The native desktop reader opens `.wikblb` dictionaries through the core C ABI. Lua compilation and dictionary encoding belong to the core repository.
+This repository contains:
 
-## Build Qt
+- a native Qt 6 reader using the core C ABI;
+- a browser reader under `web/`.
 
-Requires CMake 3.21+, a C++20 compiler, and Qt 6.5+ Core, Gui, Widgets,
-Concurrent, Network and Multimedia. Qt Test is used when `BUILD_TESTING` is on.
-Build the core checkout with its configured Zig toolchain:
+Both consume compiled WIKBLB08/DPR2 presentation data. Lua, templates and wikitext
+remain build-time concerns in the core repository.
+
+## Native Qt reader
+
+### Requirements
+
+- CMake 3.21+
+- C++20 compiler
+- Qt 6.5+ with Core, Gui, Widgets, Concurrent, Network and Multimedia
+- a built [wikidict](https://github.com/SmallThingz/wikidict) checkout
+
+Build the core C ABI first:
 
 ```sh
 cd ../wikidict
 zig build ffi -Doptimize=ReleaseFast
+```
+
+Then build the desktop application:
+
+```sh
 cd ../wikidict-desktop
-cmake -S . -B build -DWIKIDICT_CORE=../wikidict -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel 2
+cmake -S . -B build \
+  -DWIKIDICT_CORE=../wikidict \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ./build/bin/dict-qt
 ```
 
-Set `WIKIDICT_CORE` to the actual core checkout if the repositories are not siblings.
-An optional `--root <folder>` selects a dictionary folder; otherwise the app restores
-the last folder and word. First launch opens a recoverable setup screen.
+Set `WIKIDICT_CORE` to the real core checkout when the repositories are not siblings.
 
-## Native reader
+Pass `--root <folder>` to open a dictionary directory explicitly. Otherwise the app
+restores its previous dictionary folder and word.
 
-- **Library:** import raw `.wikblb` files or `.wikblb.xz` with system `xz`; choose an
-  existing folder; manage HTTPS catalogue sources; stream and verify downloads;
-  confirm replacements and removals. Import, validation and downloads expose
-  progress, cancellation and recovery. The default catalogue depends on published
-  release assets; local import and custom catalogues remain usable if it is unavailable.
-- **Search:** choose a language and collection, use case-insensitive Unicode prefix
-  search, and load every result in pages of 80. Dictionary opening and title-index
-  preparation happen in a worker. Exact title case is preferred when opening a word.
-- **Reading:** warm system/light/dark themes, bundled Newsreader type, adjustable text
-  size, section navigation, pronunciation/etymology folding, tables, styled spans,
-  references and internal section links. Back/Forward restores folds and reading
-  position. Window size and sidebar width are remembered.
-- **Saved and learning:** direct History, Saved, Learn and Settings buttons;
-  removable saved/history rows; persistent preferences; quiz, flashcards and
-  grapheme-preserving scramble. The selected game source updates immediately.
-  The all-words pool includes a sample of up to 64 dictionary entries, so learning
-  works before a history has accumulated.
-- **Media and speech:** opt-in image/audio loading, native playback and seeking,
-  source/licence links, retry and bounded cache controls. Offline word speech uses
-  an installed `espeak-ng` or `espeak` voice matching the entry language. A supported
-  English IPA subset also has playback controls. Missing engines, voices or audio
-  output produce an actionable message. No speech engine is bundled.
+### Reader features
 
-| Keyboard | Action |
+- import raw `.wikblb` and compressed `.wikblb.xz` dictionaries;
+- install from HTTPS catalogues with checksum validation;
+- Unicode case-insensitive title search with exact-title preference;
+- Saved, History and Learn views;
+- section folding, tables, references and internal links;
+- persistent themes, text size and reading state;
+- opt-in image/audio loading with bounded caches;
+- offline word speech through an installed matching-language `espeak-ng` or `espeak` voice.
+
+Dictionary opening, indexing, imports and network work stay off the UI thread.
+
+### Keyboard
+
+| Shortcut | Action |
 | --- | --- |
-| Ctrl+O | Open Library |
-| Ctrl+L | Focus and select search |
-| Up / Down | Move from search into suggestions |
-| Enter | Open the selected suggestion or typed word |
-| Escape, or Up from first suggestion | Return to search |
-| Alt+Left / Alt+Right | Previous / next word |
-| Ctrl+D | Toggle bookmark |
-| Ctrl+H | Open History |
-| Ctrl+, | Open Settings |
-| Ctrl++ / Ctrl+- | Change reading text size |
+| `Ctrl+O` | Open Library |
+| `Ctrl+L` | Focus search |
+| `Up` / `Down` | Move through suggestions |
+| `Enter` | Open the selected or typed word |
+| `Escape` | Return to search |
+| `Alt+Left` / `Alt+Right` | Previous / next word |
+| `Ctrl+D` | Toggle saved word |
+| `Ctrl+H` | Open History |
+| `Ctrl+,` | Open Settings |
+| `Ctrl++` / `Ctrl+-` | Change reading text size |
 
 ## Native validation
 
 ```sh
-cmake --build build --parallel 2
+cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-The reader suite uses real compiled English and thesaurus fixtures through the C ABI
-and Qt mouse/keyboard events. It covers setup and cancellation, case-insensitive
-paging, stale queries, navigation, folding, references, live learning sources,
-single-score scramble rounds, themes and layout. Library tests cover real file
-imports, compressed replacement, malformed files, checksums, cancellation and
-recovery. Media tests use controlled network responses and an isolated speech
-process, covering opt-in behavior, bounded caching, language/IPA matching and
-unavailable output. These tests do not establish whole-corpus performance or
-verify audible sound on hardware. See [fixture provenance](tests/README.md).
+The CTest suite uses compiled dictionary fixtures and isolates application settings
+under the repository's `.tmp/` directory. Fixture provenance is documented in
+[tests/README.md](tests/README.md).
 
-The `web/` reader now imports raw `.wikblb` and seekable `.wikblb.xz` directly. It keeps binary files and derived indexes in IndexedDB, decodes individual entries in a worker, and provides Saved, History, Search, Learn and Settings. Build with `cd web && pnpm install && pnpm build`; serve `build/web/` over localhost or HTTPS. See [web validation and capabilities](web/README.md).
+## Web reader
 
-Android is maintained in [wikidict-android](https://github.com/SmallThingz/wikidict-android).
+The browser reader imports raw and compressed dictionaries directly, keeps dictionary
+data and derived indexes in IndexedDB, and decodes entries in a worker.
+
+```sh
+cd web
+pnpm install
+pnpm build
+```
+
+Run its automated tests with:
+
+```sh
+pnpm test
+pnpm test:browser
+```
+
+See [web/README.md](web/README.md) for browser-specific behavior and validation.
+
+## Related
+
+- [wikidict](https://github.com/SmallThingz/wikidict): compiler, blob format, CLI and C ABI
+- [wikidict-android](https://github.com/SmallThingz/wikidict-android): native Android reader
