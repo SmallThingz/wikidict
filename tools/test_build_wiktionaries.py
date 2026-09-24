@@ -10,9 +10,18 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import build_wiktionaries as b
-from compress_blobs import compress, default_workers
+from compress_blobs import compress, compress_many, default_workers
 
 class BuildTest(unittest.TestCase):
+    def test_large_batch_compression_removes_verified_raw(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw=Path(tmp)/'large.wikblb'
+            payload=b'WIKBLB08'+b'x'*4096
+            raw.write_bytes(payload)
+            compress_many([raw],64*1024,1,small_limit=1)
+            target=Path(str(raw)+'.xz')
+            self.assertFalse(raw.exists())
+            self.assertEqual(lzma.open(target).read(),payload)
     def test_in_and_out_aliases(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)

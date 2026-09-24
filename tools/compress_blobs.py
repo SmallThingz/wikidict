@@ -61,6 +61,7 @@ def compress_many(paths, block_size, workers=None, small_limit=8*1024*1024, batc
             list(pool.map(lambda batch:_compress_batch(batch,block_size),batches))
     for path in large:
         compress(path,block_size,workers)
+        path.unlink()
 
 def compress(path, block_size, workers=None):
     workers = default_workers() if workers is None else workers
