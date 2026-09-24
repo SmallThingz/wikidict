@@ -56,3 +56,5 @@
 - Encoder/decoder changes require round-trip tests plus representative build/read benchmarks.
 - Run full `zig build test` when unrelated shared edits do not block it.
 - Run `git diff --check` before every commit.
+- Reader UX changes should exercise the actual CLI and PTY, including narrow terminals, resize, Unicode input, terminal restoration, and concurrent state saves when relevant. `test-reader` generates marked synthetic fixtures for `tools/verify_reader_ux.py`; never run destructive state checks against user dictionaries.
+- Terminal media work owns and joins its background tasks before releasing arguments or state. Preserve I/O cancellation errors through the media helpers.

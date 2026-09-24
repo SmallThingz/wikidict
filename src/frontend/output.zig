@@ -275,7 +275,11 @@ pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, 
         }
         if (details) for (organization.other_sections) |i| try sectionText(w, entry.sections[i], color);
     }
-    if (details and entry.media.len != 0) {
+    if (details) try entryMetadata(w, entry, color);
+}
+
+fn entryMetadata(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
+    if (entry.media.len != 0) {
         try w.writeAll("\nMedia\n");
         for (entry.media) |media| {
             try w.print("[{s}] ", .{@tagName(media.kind)});
@@ -287,7 +291,7 @@ pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, 
             try w.writeByte('\n');
         }
     }
-    if (details and entry.references.len != 0) {
+    if (entry.references.len != 0) {
         try w.writeAll("\nReferences\n");
         for (entry.references) |ref| {
             if (ref.group.len == 0) try w.print("[{d}] ", .{ref.group_number}) else {
@@ -338,12 +342,17 @@ test "human renderer consumes compiled spans only" {
 }
 
 /// Terminal folds operate on compiled sections, never by reparsing source.
-pub fn entryTextFolded(w: *std.Io.Writer, entry: model.Entry, color: bool, preferences: @import("reading_state.zig").Data, expanded: []const usize, selected: usize) !void {
-    if (preferences.details) return entryTextWithDetails(w, entry, color, true);
-    try terminalText(w, entry.title);
+pub fn entryTextFolded(frame: *std.Io.Writer.Allocating, entry: model.Entry, color: bool, preferences: @import("reading_state.zig").Data, expanded: []const usize, selected: usize) !usize {
+    const w = &frame.writer;
+    var selected_offset: usize = 0;
+    if (entry.display_title.len != 0) try spansText(w, entry.display_title, color) else try terminalText(w, entry.title);
     try w.writeAll("  / ");
     try terminalText(w, entry.language orelse @tagName(entry.kind));
     try w.writeByte('\n');
+    if (entry.preamble_spans.len != 0) {
+        try spansText(w, entry.preamble_spans, color);
+        try w.writeByte('\n');
+    }
     for (entry.sections, 0..) |section, index| {
         if (section.blocks.len == 0) continue;
         var meaning = false;
@@ -351,11 +360,12 @@ pub fn entryTextFolded(w: *std.Io.Writer, entry: model.Entry, color: bool, prefe
             meaning = true;
             break;
         };
-        const initially_closed = if (std.mem.startsWith(u8, section.title, "Pronunciation")) preferences.collapse_pronunciation else if (std.mem.startsWith(u8, section.title, "Etymology")) preferences.collapse_etymology else if (meaning) preferences.collapse_notes else preferences.collapse_other;
+        const initially_closed = if (preferences.details) false else if (std.mem.startsWith(u8, section.title, "Pronunciation")) preferences.collapse_pronunciation else if (std.mem.startsWith(u8, section.title, "Etymology")) preferences.collapse_etymology else if (meaning) preferences.collapse_notes else preferences.collapse_other;
         const toggled = std.mem.indexOfScalar(usize, expanded, index) != null;
         const closed = initially_closed != toggled;
         try w.writeByte('\n');
-        if (color and selected == index) try w.writeAll("\x1b[1;38;2;233;184;138m");
+        if (selected == index) selected_offset = frame.written().len;
+        if (color and selected == index) try w.writeAll("\x1b[1m");
         try w.writeAll(if (selected == index) "> " else "  ");
         try terminalText(w, section.title);
         if (closed) try w.writeAll(if (meaning) "  [+ notes]" else "  [+]");
@@ -363,5 +373,6 @@ pub fn entryTextFolded(w: *std.Io.Writer, entry: model.Entry, color: bool, prefe
         try w.writeByte('\n');
         for (section.blocks) |block| if (!closed or (meaning and block.kind == .definition)) try blocksText(w, &.{block}, color);
     }
-    if (entry.media.len != 0 or entry.references.len != 0) try w.writeAll("\n  d: media and references\n");
+    if (preferences.details) try entryMetadata(w, entry, color) else if (entry.media.len != 0 or entry.references.len != 0) try w.writeAll("\n  d: media and references\n");
+    return selected_offset;
 }

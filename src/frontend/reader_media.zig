@@ -68,7 +68,10 @@ pub fn open(io: std.Io, a: A, root: []const u8, file: []const u8, image: bool, m
     };
     if (!valid) return error.UnsupportedMedia;
     const path = try std.fmt.allocPrint(scratch, "{s}/{s}{s}", .{ directory, std.fmt.bytesToHex(hash, .lower), extension });
-    var cached = std.Io.Dir.cwd().openFile(io, path, .{}) catch null;
+    var cached = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
     if (cached) |*f| f.close(io) else {
         var url: ?[]const u8 = null;
         for ([_][]const u8{ "https://commons.wikimedia.org/w/api.php", "https://en.wiktionary.org/w/api.php" }) |api| {

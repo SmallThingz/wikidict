@@ -289,6 +289,7 @@ The verifier checks WIKBLB08 framing/order/metadata plus every binary `DPR2` pre
 ## Query and read
 
 ```sh
+zig build cli -Doptimize=ReleaseFast
 zig-out/bin/dict lookup cat --root data/wiktionary-blobs
 zig-out/bin/dict search ca --root data/wiktionary-blobs
 zig-out/bin/dict languages --root data/wiktionary-blobs
@@ -297,7 +298,22 @@ zig-out/bin/dict stats --root data/wiktionary-blobs
 
 `dict.results.v1` is the frontend-neutral JSON interface. Reader output is rendered from self-contained compiled presentation data; readers do not parse wikitext or execute Lua/templates.
 
-`dict tui [PREFIX] --root ROOT` opens the interactive terminal reader.
+`dict tui [PREFIX] --root ROOT` opens the interactive terminal reader. Running `dict` without arguments opens it when stdin and stdout are terminals; redirected invocations print help. Set `DICT_ROOT` and `DICT_LANGUAGE` once to reuse your preferred dataset; explicit flags take precedence. An empty initial query restores the last opened word when it is still installed.
+
+Lookup prefers the exact spelling, then compares Unicode lowercase titles. Prefix search uses the same lowercase comparison and orders completed results by lowercase title, then original spelling. `--case-sensitive` selects the original exact lookup and prefix behavior. Lowercasing uses pinned Unicode 16 data, including Greek final sigma and dotted capital I; it does not remove accents, normalize Unicode composition, or perform fuzzy/full-text search. The terminal scans title metadata incrementally and remains editable during search. Results are scoped to the selected dictionary; `L` switches installed languages.
+
+Saved words and history work in scripts as well as in the terminal:
+
+```sh
+export DICT_ROOT=data/wiktionary-blobs
+export DICT_LANGUAGE=English
+zig-out/bin/dict save cat
+zig-out/bin/dict saved --limit 20 --offset 0
+zig-out/bin/dict history --format json
+zig-out/bin/dict unsave cat
+```
+
+Save/unsave are idempotent. Plain search and collection output contains one title per line; paging instructions go to stderr. `--limit` and `--offset` page results. Exit status is 0 for success, 1 for no match, and 2 for invalid input or a failed operation. The terminal and CLI share per-dictionary state, merging each reader's changes under a file lock so an idle terminal cannot overwrite another invocation's saved words.
 
 ## Applications
 
@@ -348,10 +364,12 @@ The September 2026 discovery smoke check resolved 1,411 files across 198 edition
 
 `dict catalog [HTTPS_LIST]` reads the release catalogue or a custom list. `dict install FILE_OR_HTTPS_URL --root DIRECTORY [--sha256 HASH]` validates and installs raw/XZ dictionaries and updates the language manifest. Use a catalogue's SHA-256 when installing remote data.
 
-The terminal has five destinations: `1` Saved, `2` History, `3` Search, `4` Learn, `5` Settings (outside text search). `s` bookmarks; `r` chooses a random word; `[`/`]` selects a section and `e` folds it; `d` expands all supporting details. Learn uses Tab to switch cards/quiz/scramble, Space to reveal/continue, y/n to grade cards, and 6–9 to answer a quiz. Settings use arrows; history reaches 100,000, media cache 4096 MiB, rounds 3–50. User state is stored separately in `.dict-state/` under the chosen data root.
+The terminal has six destinations: `1` Saved, `2` History, `3` Search, `4` Learn, `5` Settings, and `L` Library (outside text search). Tab moves between search, matches and reading; Enter opens a word; Esc steps back. `s` saves/removes a word; Delete removes a history item; `r` chooses a random word. `[`/`]` jumps to a section and `e` folds it; `d` toggles all supporting details. `?` shows contextual help. Library selects installed languages and displays the CLI installation commands.
 
-`v` uses installed espeak-ng/espeak for offline word speech. `m` cycles media through the desktop player after online media is enabled in Settings; this requires curl and xdg-open. The terminal does not claim inline image parity with Android/web. With caching disabled, one active media file is temporary until the next media open or normal reader exit. Terminal media calls are currently synchronous; playback/voice quality and network responsiveness are not covered by the PTY acceptance run.
+Learn uses Tab to switch cards/quiz/scramble, Space to reveal/continue, y/n to grade cards, and 6–9 to answer a quiz. Each answer counts once; small study pools use only distinct available choices. Settings can restrict study to All, History or Saved; an empty pool explains how to add words. Leaving Learn preserves the search query. Settings use arrows; history reaches 100,000, media cache 4096 MiB, rounds 3–50. Setting history to zero stops recording and keeps existing history; clearing requires Enter confirmation. Theme, folding preferences, collections, study totals and the last word are stored in `.dict-state/` under the chosen data root.
 
-Validation: full `zig build test -Doptimize=ReleaseFast` passed; compressed installation and 40/80/120-column navigation, folds, history/bookmark persistence and practice interactions passed. Browser binary/XZ equivalence and navigation/layout tests are maintained in the desktop repo. Full corpus builds and universal platform feature parity remain unverified.
+`v` uses installed espeak-ng/espeak for offline word speech. Press it again to stop. `m` opens media through the desktop player after online media is enabled in Settings; this requires curl and xdg-open. Pressing `m` during a request cancels it; after completion it tries the next item. Both operations run in an owned background job while the terminal continues accepting input. Quitting cancels and joins active work. A desktop player that has already accepted an xdg-open handoff controls its own playback. With caching disabled, one active media file is temporary until the next media open or normal reader exit. Inline images, actual voice quality and representative-corpus search latency remain platform/acceptance limits.
+
+Reader validation uses `zig build test-reader -Doptimize=ReleaseFast` for real compiled CLI/C ABI fixtures and `zig build test -Doptimize=ReleaseFast` for the full suite. The reader integration output identifies the generated fixture directory. Run `uv run --with pyte python tools/verify_reader_ux.py --binary zig-out/bin/dict --root FIXTURE/blobs --report .tmp/reader-ux` for real 40/80/120-column keyboard, resize, persistence and terminal-restoration checks. The script requires the synthetic fixture marker and copies its input before exercising state changes. `tools/verify_terminal.py` covers rich rendering. Desktop Qt acceptance checks are maintained in the desktop repo; full-corpus builds and universal platform parity are not implied by fixture tests.
 
 Build every downloaded snapshot with `python3 tools/build_wiktionaries.py --in DIR --out DIR` (`--downloads` and `--output` remain equivalent; `--threads N` uses the same default). Each edition is isolated, verified, then published as seekable extreme XZ (`-9e`, 1 MiB blocks) under `data/dictionaries/EDITION/DATE`; uncompressed outputs are removed after round-trip verification. Failures remain visibly incomplete; a failed edition does not prevent attempts for other editions. This runs the actual corpus compiler and does not imply all editions currently compile successfully.

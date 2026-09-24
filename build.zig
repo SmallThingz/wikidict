@@ -178,7 +178,9 @@ pub fn build(b: *std.Build) void {
     blob_query_exe.root_module.link_libc = true;
     blob_query_exe.use_llvm = true;
     blob_query_exe.use_lld = true;
-    b.installArtifact(blob_query_exe);
+    const cli_install = b.addInstallArtifact(blob_query_exe, .{});
+    b.getInstallStep().dependOn(&cli_install.step);
+    b.step("cli", "Build and install the CLI and terminal reader").dependOn(&cli_install.step);
 
     const ffi_mod = b.createModule(.{
         .root_source_file = b.path("src/frontend/c_api.zig"),

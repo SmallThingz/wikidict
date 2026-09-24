@@ -81,7 +81,17 @@ fn writeCompiledFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !voi
     defer a.free(payload);
     const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English");
     defer a.free(metadata);
-    const blob = try enc.blob_format.buildAlloc(a, .language, metadata, &.{.{ .title = "cat", .payload = payload }});
+    var records: std.ArrayList(enc.blob_format.RecordInput) = .empty;
+    defer records.deinit(a);
+    try records.append(a, .{ .title = "cat", .payload = payload });
+    for ([_][]const u8{ "catfish", "École", "ΣΊΣΥΦΟΣ", "МОСКВА" }) |title| {
+        var variant = stored;
+        variant.entry.title = title;
+        const encoded = try enc.presentation_codec.encodeAlloc(a, variant);
+        try records.append(a, .{ .title = title, .payload = encoded });
+    }
+    defer for (records.items[1..]) |record| a.free(record.payload);
+    const blob = try enc.blob_format.buildAlloc(a, .language, metadata, records.items);
     defer a.free(blob);
 
     const languages_dir = try std.fs.path.join(a, &.{ root, enc.blob_catalog.language_directory });
@@ -91,6 +101,8 @@ fn writeCompiledFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !voi
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = blob });
     const manifest = try std.fs.path.join(a, &.{ root, enc.blob_catalog.manifest_filename });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = enc.blob_catalog.manifest_header ++ "\nEnglish\n" });
+    const marker = try std.fs.path.join(a, &.{ root, ".reader-fixture" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "Synthetic reader integration fixture.\n" });
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -120,6 +132,30 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, details_text, "Historical source") != null, "compiled supporting material renders");
     for ([_][]const u8{ "PREAMBLE", "After line break", "column A  column B", "Inflection table", "Reference content.", "Example image.svg", "Example pronunciation.ogg" }) |expected|
         try h.require(std.mem.indexOf(u8, details_text, expected) != null, expected);
+
+    _ = try h.run(&.{ bin, "save", "cat", "--root", root }, 0);
+    _ = try h.run(&.{ bin, "save", "cat", "--root", root }, 0);
+    const saved = try h.run(&.{ bin, "saved", "--root", root }, 0);
+    try h.require(std.mem.eql(u8, saved, "cat\n"), "saving is idempotent and plain lists stay pipe-friendly");
+    _ = try h.run(&.{ bin, "save", "missing", "--root", root }, 1);
+    _ = try h.run(&.{ bin, "unsave", "cat", "--root", root }, 0);
+    _ = try h.run(&.{ bin, "unsave", "cat", "--root", root }, 0);
+    const empty = try h.run(&.{ bin, "saved", "--root", root, "--format", "json" }, 1);
+    const empty_json = try std.json.parseFromSlice(std.json.Value, a, empty, .{});
+    try h.require(empty_json.value.object.get("matches").?.array.items.len == 0, "unsave survives another invocation");
+    const empty_saved = try h.run(&.{ bin, "saved", "--root", root }, 1);
+    try h.require(empty_saved.len == 0, "empty collection guidance stays out of stdout");
+    const empty_search = try h.run(&.{ bin, "search", "missing", "--root", root }, 1);
+    try h.require(empty_search.len == 0, "no-match guidance stays out of stdout");
+    const beyond = try h.run(&.{ bin, "search", "cat", "--root", root, "--offset", "100" }, 0);
+    try h.require(beyond.len == 0, "pagination hints do not contaminate stdout");
+    _ = try h.run(&.{ bin, "tui", "--root", root }, 2);
+    for ([_][]const u8{ "CAT", "école", "σίσυφος", "москва" }) |query| {
+        _ = try h.run(&.{ bin, "lookup", query, "--root", root }, 0);
+        _ = try h.run(&.{ bin, "search", query, "--root", root }, 0);
+    }
+    _ = try h.run(&.{ bin, "lookup", "CAT", "--root", root, "--case-sensitive" }, 1);
+    _ = try h.run(&.{ bin, "search", "CAT", "--root", root, "--case-sensitive" }, 1);
 
     _ = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--core-only" }, 2);
     _ = try h.run(&.{ bin, "lookup", "cat", "--format", "source" }, 2);

@@ -1,6 +1,6 @@
 const std = @import("std");
 const store = @import("store.zig");
-pub const Command = enum { lookup, search, languages, stats, tui, catalog, install };
+pub const Command = enum { lookup, search, languages, stats, tui, catalog, install, saved, history, save, unsave };
 pub const Theme = enum { terminal, dark, light };
 pub const Format = enum { text, json };
 pub const Color = enum { auto, always, never };
@@ -16,11 +16,15 @@ pub const Options = struct {
     limit: usize = 20,
     offset: usize = 0,
     details: bool = false,
+    case_sensitive: bool = false,
     sha256: []const u8 = "",
     help: bool = false,
 };
 pub fn parse(argv: []const []const u8) !Options {
-    var out: Options = .{};
+    return parseWithDefaults(argv, .{});
+}
+pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
+    var out = defaults;
     if (argv.len == 0) {
         out.help = true;
         return out;
@@ -65,6 +69,10 @@ pub fn parse(argv: []const []const u8) !Options {
                 out.details = true;
                 continue;
             }
+            if (std.mem.eql(u8, arg, "--case-sensitive")) {
+                out.case_sensitive = true;
+                continue;
+            }
             if (pos + 1 >= argv.len) return error.Usage;
             pos += 1;
             const value = argv[pos];
@@ -77,10 +85,10 @@ pub fn parse(argv: []const []const u8) !Options {
     }
     if (out.help) return out;
     if (out.limit == 0 or out.limit > 1000 or out.root.len == 0 or out.language.len == 0) return error.Usage;
-    if (out.command == .lookup and (!has_query or out.query.len == 0)) return error.Usage;
-    if (out.command == .stats and has_query) return error.Usage;
+    if ((out.command == .lookup or out.command == .save or out.command == .unsave or out.command == .install) and (!has_query or out.query.len == 0)) return error.Usage;
+    if ((out.command == .stats or out.command == .saved or out.command == .history) and has_query) return error.Usage;
     if (out.command == .tui and out.format != .text) return error.Usage;
-    if (out.offset != 0 and out.command != .search) return error.Usage;
+    if (out.offset != 0 and out.command != .search and out.command != .saved and out.command != .history) return error.Usage;
     return out;
 }
 test "CLI options are strict and lookup shorthand is unambiguous" {
@@ -139,4 +147,18 @@ test "export remains a JSON lookup alias" {
     try std.testing.expectEqual(Format.json, json.format);
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--format", "html" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--port", "5" }));
+}
+
+test "reader commands and configured defaults remain explicit" {
+    const defaults: Options = .{ .root = "my dictionaries", .language = "French" };
+    const configured = try parseWithDefaults(&.{"chat"}, defaults);
+    try std.testing.expectEqualStrings(defaults.root, configured.root);
+    const override = try parseWithDefaults(&.{ "chat", "--root", "local", "--language", "English" }, defaults);
+    try std.testing.expectEqualStrings("local", override.root);
+    try std.testing.expectEqualStrings("English", override.language);
+    try std.testing.expectEqual(Command.save, (try parse(&.{ "save", "cat" })).command);
+    try std.testing.expectEqual(@as(usize, 20), (try parse(&.{ "saved", "--offset", "20" })).offset);
+    try std.testing.expectError(error.Usage, parse(&.{"save"}));
+    try std.testing.expectError(error.Usage, parse(&.{"install"}));
+    try std.testing.expectError(error.Usage, parse(&.{ "history", "cat" }));
 }
