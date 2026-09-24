@@ -1,43 +1,106 @@
 # Wikidict Android
 
-A native Kotlin/Compose reader for downloadable Wiktionary dictionaries. The reading surface uses Newsreader typography, a compact bottom dock, independently folding sections and themed controls.
+Native Android reader for Wiktionary dictionaries produced by
+[wikidict](https://github.com/SmallThingz/wikidict).
 
-Dictionary content comes directly from **WIKBLB08/DPR2** binary files. Downloads stream to disk, verify advertised size and SHA-256, and build a SQLite title/offset index. A lookup reads and decodes one binary record. There is no JSON dictionary import, WebView, Lua engine or wikitext parser.
+The app reads compiled WIKBLB08/DPR2 data directly. It does not ship a WebView, Lua
+runtime, wikitext parser or JSON dictionary format.
+
+## Data path
+
+```text
+.wikblb / .wikblb.xz
+        |
+        v
+streaming validation + install
+        |
+        v
+SQLite title / offset index
+        |
+        v
+on-demand DPR2 decode
+```
+
+Only the selected record is decoded. Compressed dictionaries stay compressed on
+disk; lookups decode the XZ blocks that intersect the requested record.
 
 ## Use
 
-Open **Dictionaries** to download a language or import a local `.wikblb` file. Add your own HTTPS `.list` sources there. The default release catalogue is:
+The **Dictionaries** screen can:
 
-`https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list`
+- download from the default catalogue;
+- add custom HTTPS `.list` catalogues;
+- import local `.wikblb` or `.wikblb.xz` files;
+- replace or remove installed dictionaries.
 
-See the [catalogue specification](https://github.com/SmallThingz/wikidict/blob/main/docs/catalogues.md). The default URL becomes available when a release with `dictionaries.list` is published. This repository does not pretend a complete corpus has been published.
+Default catalogue:
 
-Tap the dictionary dock icon again to search installed languages. Pronunciation and Etymology start folded; change those defaults in Settings. Enable online images and audio separately. Media caches can be disabled or limited to 25, 100 or 500 MiB, and cleared independently of dictionaries. Cached assets remain available without network; audio downloads only after tapping Play.
+```text
+https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list
+```
 
-Debug builds replace the default remote catalogue with a local **30-word English corpus slice**, using the same binary installer and lookup path. Custom sources still use HTTPS. This is explicitly a development fixture, not a complete dictionary or the release application. [Fixture sources and attribution](app/src/debug/ATTRIBUTION.md).
+The catalogue format is documented in the
+[core repository](https://github.com/SmallThingz/wikidict/blob/main/docs/catalogues.md).
 
-## Build and test
+The reader provides search, saved words, history and study modes. Pronunciation and
+etymology sections can be folded independently. Online images and audio are opt-in
+and use bounded caches. Word speech uses an installed Android TTS voice; no speech
+engine is bundled.
 
-Use JDK 21 and an Android SDK containing API 37/build-tools 37.0.0:
+HTTPS dictionary downloads use Android DownloadManager and are verified before
+installation.
+
+## Build
+
+Requirements:
+
+- JDK 21
+- Android SDK 37
+- Android build-tools 37.0.0
+
+The application targets Android 37 and supports Android 28+.
 
 ```sh
-./gradlew :app:testDebugUnitTest :app:assembleDebug
+./gradlew :app:assembleDebug
+./gradlew :app:testDebugUnitTest
 ./gradlew :app:connectedDebugAndroidTest
+```
+
+For an optimized, locally installable profiling build:
+
+```sh
 ./gradlew :app:assemblePerformance
 ```
 
-`performance` enables release optimization with local debug signing for device profiling. It does not contain the development dictionary or local catalogue. Production release signing is configured separately.
+The `performance` variant uses release optimization with debug signing. Production
+release signing is configured separately.
 
-Live Wikimedia tests require a connected device with working internet; opt in with `-Pandroid.testInstrumentationRunnerArguments.liveMedia=true`. The remaining tests validate the real binary corpus, corrupt/truncated records, catalogue URLs/checksums, installation, search, collapse controls and recreation. For a scroll smoke benchmark, open `cat` first and run `python3 tools/benchmark_android_reader.py --report artifacts/scroll --variant performance`.
+## Tests and fixtures
 
-[Core compiler/encoder/decoder](https://github.com/SmallThingz/wikidict) · [Desktop](https://github.com/SmallThingz/wikidict-desktop)
+Debug builds use a local 30-word English corpus slice through the same installer and
+decoder path as normal dictionaries. It is a development fixture, not a bundled
+release dictionary.
 
-This repository preserves the original Android file history from the core project.
+Fixture provenance is in
+[app/src/debug/ATTRIBUTION.md](app/src/debug/ATTRIBUTION.md).
 
-Local pronunciation speaks the word using the configured installed Android offline
-voice. IPA remains visible as dictionary data; the app does not feed phonetic codes
-to text voices. The app does not bundle a TTS engine.
+Instrumentation tests cover binary installation, malformed data, search, settings,
+media and UI state. Live Wikimedia media tests are opt-in:
 
-Compressed dictionaries: imports and catalogue downloads accept raw `.wikblb` and `.wikblb.xz` (detected by magic). Installation scans the logical stream into SQLite without writing an expanded copy. Lookups seek to the recorded logical offset and decode the intersecting XZ blocks. Publish XZ with independent 1 MiB blocks (`xz -9e --block-size=1MiB -k dictionary.wikblb`) for bounded random-access work. Legacy single-block files work but may require decoding much more data for a lookup. The XZ decoder has a 128 MiB memory limit.
+```sh
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.liveMedia=true
+```
 
-HTTPS dictionary transfers use Android DownloadManager with system notification progress and automatic network retry/resume. The library shows bytes and percentage and reattaches after app restart, then verifies and indexes the completed file. Cancel deliberately discards the transfer. No separate download app is required. A connected device completed a real HTTPS DownloadManager transfer and read a host-compressed extreme XZ dictionary; interruption and process-restart recovery remain to be exercised.
+For the reader scroll benchmark, open `cat` in the app first, then run:
+
+```sh
+python3 tools/benchmark_android_reader.py \
+  --report artifacts/scroll \
+  --variant performance
+```
+
+## Related
+
+- [wikidict](https://github.com/SmallThingz/wikidict): compiler, blob format, CLI and C ABI
+- [wikidict-desktop](https://github.com/SmallThingz/wikidict-desktop): Qt and web readers
