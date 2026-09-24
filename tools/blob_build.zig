@@ -138,7 +138,7 @@ const ExpansionSlot = struct {
             return true;
         }
         if (self.expansion) |expanded| {
-            writer.addPage(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, expanded.display_title) catch |err| {
+            writer.addExpandedPage(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, self.job.source, expanded.display_title) catch |err| {
                 std.debug.print(
                     "blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n",
                     .{ self.job.title, self.job.ordinal, self.job.ns, self.job.source.len, expanded.source.len, @errorName(err) },

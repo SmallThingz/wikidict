@@ -10,6 +10,31 @@ pub const Section = struct {
     source: []const u8,
 };
 
+/// Some Wiktionaries put the lemma and a language template in the level-2
+/// heading instead of using the language name as the whole heading. Keep this
+/// classification build-only and derived from the unexpanded source so template
+/// expansion cannot erase the language argument.
+pub fn classificationHeading(raw: []const u8) []const u8 {
+    var search: usize = 0;
+    while (std.mem.indexOfPos(u8, raw, search, "{{")) |open| {
+        const close = std.mem.indexOfPos(u8, raw, open + 2, "}}") orelse break;
+        const body = raw[open + 2 .. close];
+        const pipe = std.mem.indexOfScalar(u8, body, '|') orelse {
+            search = close + 2;
+            continue;
+        };
+        const name = std.mem.trim(u8, body[0..pipe], " \t");
+        if (std.ascii.eqlIgnoreCase(name, "Sprache")) {
+            const tail = body[pipe + 1 ..];
+            const next_pipe = std.mem.indexOfScalar(u8, tail, '|') orelse tail.len;
+            const language = std.mem.trim(u8, tail[0..next_pipe], " \t");
+            if (language.len != 0 and std.mem.indexOfAny(u8, language, "{}[]") == null) return language;
+        }
+        search = close + 2;
+    }
+    return raw;
+}
+
 pub const Iterator = struct {
     source: []const u8,
     cursor: usize = 0,
@@ -151,4 +176,11 @@ test "table subheadings do not become language sections" {
     var it = Iterator.init(source);
     try std.testing.expectEqualStrings("English", it.next().?.heading);
     try std.testing.expect(it.next() == null);
+}
+
+test "German-style language headings classify from raw Sprache template" {
+    try std.testing.expectEqualStrings("Deutsch", classificationHeading("Hallo ({{Sprache|Deutsch}})"));
+    try std.testing.expectEqualStrings("Latein", classificationHeading("ordo ({{ Sprache | Latein }})"));
+    try std.testing.expectEqualStrings("English", classificationHeading("English"));
+    try std.testing.expectEqualStrings("x ({{Sprache|{{bad}}}})", classificationHeading("x ({{Sprache|{{bad}}}})"));
 }

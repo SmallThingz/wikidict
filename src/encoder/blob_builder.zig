@@ -359,6 +359,7 @@ fn processMain(
     spools: *Spools,
     title: []const u8,
     source: []const u8,
+    raw_source: ?[]const u8,
     display_title: ?[]const u8,
     stats: *BuildStats,
     fallbacks: *presentation_document.Fallbacks,
@@ -368,6 +369,16 @@ fn processMain(
     defer page_sections.deinit(page_allocator);
     var sections = language_source.Iterator.init(source);
     while (sections.next()) |section| try page_sections.append(page_allocator, section);
+    if (raw_source) |raw| {
+        var raw_sections: std.ArrayList(language_source.Section) = .empty;
+        defer raw_sections.deinit(page_allocator);
+        var raw_it = language_source.Iterator.init(raw);
+        while (raw_it.next()) |section| try raw_sections.append(page_allocator, section);
+        if (raw_sections.items.len == page_sections.items.len) {
+            for (page_sections.items, raw_sections.items) |*expanded, original|
+                expanded.heading = language_source.classificationHeading(original.heading);
+        }
+    }
     if (page_sections.items.len == 0 and std.mem.trim(u8, source, " \t\r\n").len != 0) {
         fallbacks.missing_language_heading = true;
         try page_sections.append(page_allocator, .{ .heading = "Unclassified", .source = source });
@@ -525,11 +536,15 @@ pub const Writer = struct {
     }
 
     pub fn addPage(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, source: []const u8, display_title: ?[]const u8) !void {
-        return self.addPageWithFallbackReasons(page_allocator, ns, title, source, display_title, .{}, &.{});
+        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, .{}, &.{});
+    }
+
+    pub fn addExpandedPage(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8) !void {
+        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, &.{});
     }
 
     pub fn addPageWithFallback(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, source: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks) !void {
-        return self.addPageWithFallbackReasons(page_allocator, ns, title, source, display_title, initial_fallbacks, &.{});
+        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, initial_fallbacks, &.{});
     }
 
     pub fn addExpansionFailure(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, reasons: []const []const u8) !void {
@@ -537,7 +552,7 @@ pub const Writer = struct {
         // synthesize. Retain an empty data-only record and put the exact cause
         // in the build report instead of inventing visible reader content.
         const source = if (ns == ns_main) "==Unclassified==\n" else "";
-        return self.addPageWithFallbackReasons(page_allocator, ns, title, source, null, .{ .expansion_error = true }, reasons);
+        return self.addPageInternal(page_allocator, ns, title, source, null, null, .{ .expansion_error = true }, reasons);
     }
 
     pub fn addPageWithFallbackReasons(
@@ -550,10 +565,24 @@ pub const Writer = struct {
         initial_fallbacks: presentation_document.Fallbacks,
         extra_reasons: []const []const u8,
     ) !void {
+        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, initial_fallbacks, extra_reasons);
+    }
+
+    fn addPageInternal(
+        self: *Writer,
+        page_allocator: std.mem.Allocator,
+        ns: u32,
+        title: []const u8,
+        source: []const u8,
+        raw_source: ?[]const u8,
+        display_title: ?[]const u8,
+        initial_fallbacks: presentation_document.Fallbacks,
+        extra_reasons: []const []const u8,
+    ) !void {
         if (self.finished) return error.WriterFinished;
         var fallbacks = initial_fallbacks;
         if (ns == ns_main) {
-            try processMain(page_allocator, &self.spools, title, source, display_title, &self.stats, &fallbacks);
+            try processMain(page_allocator, &self.spools, title, source, raw_source, display_title, &self.stats, &fallbacks);
         } else if (ns == ns_rhymes or ns == ns_thesaurus or ns == ns_citations or ns == ns_sign_gloss or ns == ns_reconstruction) {
             try processNamespace(page_allocator, &self.spools, ns, title, source, display_title, &self.stats, &fallbacks);
         }
@@ -693,6 +722,39 @@ test "wikitext writer emits only data blobs" {
             return error.RuntimeArtifactLeaked;
         } else |err| try std.testing.expectEqual(error.FileNotFound, err);
     }
+}
+
+test "raw German Sprache headings classify expanded sections by language" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    try writer.addExpandedPage(
+        a,
+        0,
+        "Hallo",
+        "== Hallo ([[:Template:Sprache]]) ==\n===Wortart===\n# greeting\n",
+        "== Hallo ({{Sprache|Deutsch}}) ==\n===Wortart===\n# greeting\n",
+        null,
+    );
+    const stats = try writer.finish(.{ .get_fn = struct {
+        fn get(_: ?*const anyopaque, _: []const u8) ?[]const u8 {
+            return null;
+        }
+    }.get });
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    const german_path = try languageBlobPathAlloc(a, root, "Deutsch");
+    var german = try mmapPath(std.testing.io, german_path);
+    defer german.deinit();
+    const blob = try blob_format.inspect(german.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    try std.testing.expect((try index.find("Hallo")) != null);
 }
 
 test "fallback report names every recovered page and retains unclassified entries" {
