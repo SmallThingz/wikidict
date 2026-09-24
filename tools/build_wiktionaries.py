@@ -31,6 +31,35 @@ def build(items, downloads, output, zig, compression_workers=None):
         return build_locked(items, downloads, output, zig, compression_workers)
 
 
+def validate_fallback_report(path):
+    if not path.is_file():
+        raise ValueError(f'Missing fallback report: {path}')
+    count = 0
+    seen = set()
+    with path.open(encoding='utf-8') as lines:
+        for line_number, line in enumerate(lines, 1):
+            if not line.strip():
+                raise ValueError(f'Blank fallback report record at {path}:{line_number}')
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(f'Invalid fallback report JSON at {path}:{line_number}: {error.msg}') from None
+            namespace = record.get('namespace') if isinstance(record, dict) else None
+            title = record.get('title') if isinstance(record, dict) else None
+            reasons = record.get('reasons') if isinstance(record, dict) else None
+            if type(namespace) is not int or namespace < 0 or not isinstance(title, str):
+                raise ValueError(f'Invalid fallback page identity at {path}:{line_number}')
+            if not isinstance(reasons, list) or not reasons or any(not isinstance(reason, str) or not reason for reason in reasons):
+                raise ValueError(f'Invalid fallback reasons at {path}:{line_number}')
+            if len(set(reasons)) != len(reasons):
+                raise ValueError(f'Duplicate fallback reason at {path}:{line_number}')
+            key = (namespace, title)
+            if key in seen:
+                raise ValueError(f'Duplicate fallback page at {path}:{line_number}: {namespace}:{title}')
+            seen.add(key)
+            count += 1
+    return count
+
 def build_locked(items, downloads, output, zig, compression_workers=None):
     for item in items:
         validate_item(item)
@@ -66,12 +95,15 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
                         '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
                         '--page-workers',str(min(workers,16))], cwd=PROJECT, check=True)
         subprocess.run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)], cwd=PROJECT, check=True)
+        report = staging / 'fallback-pages.jsonl'
+        fallback_pages = validate_fallback_report(report)
         blobs = sorted(staging.rglob('*.wikblb'))
         for blob in blobs:
             compress(blob, 1024*1024, compression_workers)
             blob.unlink()
         (staging / 'complete.json').write_text(json.dumps({'edition':edition,'date':date,
-            'status':'built' if blobs else 'empty', 'compression':'xz -9e; 1 MiB blocks','blobs':len(blobs)})+'\n')
+            'status':'built' if blobs else 'empty', 'fallback_pages':fallback_pages,
+            'fallback_report':'fallback-pages.jsonl', 'compression':'xz -9e; 1 MiB blocks','blobs':len(blobs)})+'\n')
         os.rename(staging, target)
         print(f'Published: {target}', flush=True)
     finally:

@@ -58,6 +58,19 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(default_workers(),5)
         with patch('compress_blobs.os.cpu_count',return_value=None):
             self.assertEqual(default_workers(),1)
+    def test_fallback_report_validation_rejects_malformed_and_duplicate_pages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'fallback-pages.jsonl'
+            path.write_text('{broken\n')
+            with self.assertRaisesRegex(ValueError,'Invalid fallback report JSON'):
+                b.validate_fallback_report(path)
+            page={'namespace':0,'title':'same','reasons':['literal_markup']}
+            path.write_text(json.dumps(page)+'\n'+json.dumps(page)+'\n')
+            with self.assertRaisesRegex(ValueError,'Duplicate fallback page'):
+                b.validate_fallback_report(path)
+            path.write_text(json.dumps({'namespace':0,'title':'x','reasons':['literal_markup','literal_markup']})+'\n')
+            with self.assertRaisesRegex(ValueError,'Duplicate fallback reason'):
+                b.validate_fallback_report(path)
     def test_build_verify_compress_publish(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
@@ -71,12 +84,20 @@ class BuildTest(unittest.TestCase):
                 calls.append(command)
                 if 'build-dictionary' in command:
                     dest=Path(command[command.index('--')+2]);dest.mkdir();(dest/'en.wikblb').write_bytes(b'WIKBLB08payload')
+                    (dest/'fallback-pages.jsonl').write_text(
+                        json.dumps({'namespace':0,'title':'quoted"title','reasons':['literal_markup']})+'\n'+
+                        json.dumps({'namespace':0,'title':'timeout','reasons':['expansion_error','expansion_error:Timeout']})+'\n')
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
                 b.build([item],root,root/'output','zig',2)
             self.assertIn('verify-blobs',calls[1]);self.assertTrue((root/'output/testwiktionary/20260901/complete.json').exists())
             self.assertIn('--llvm-workers',calls[0])
-            self.assertFalse((root/'output/testwiktionary/20260901/en.wikblb').exists())
-            self.assertEqual(lzma.open(root/'output/testwiktionary/20260901/en.wikblb.xz').read(),b'WIKBLB08payload')
+            final=root/'output/testwiktionary/20260901'
+            metadata=json.loads((final/'complete.json').read_text())
+            self.assertEqual(metadata['fallback_pages'],2)
+            self.assertEqual(metadata['fallback_report'],'fallback-pages.jsonl')
+            self.assertEqual(len((final/'fallback-pages.jsonl').read_text().splitlines()),2)
+            self.assertFalse((final/'en.wikblb').exists())
+            self.assertEqual(lzma.open(final/'en.wikblb.xz').read(),b'WIKBLB08payload')
             self.assertEqual(list((root/'.tmp').iterdir()),[])
     def test_empty_edition_retries_stale_build_and_is_published(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,7 +108,8 @@ class BuildTest(unittest.TestCase):
             stale=root/'output/testwiktionary/20260901.building';stale.mkdir(parents=True)
             (stale/'old').write_text('failed')
             def run(command,**kwargs):
-                if 'build-dictionary' in command:Path(command[command.index('--')+2]).mkdir()
+                if 'build-dictionary' in command:
+                    dest=Path(command[command.index('--')+2]);dest.mkdir();(dest/'fallback-pages.jsonl').write_text('')
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
                 b.build([item],root,root/'output','zig',2)
             final=root/'output/testwiktionary/20260901'
