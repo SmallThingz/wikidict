@@ -28,6 +28,8 @@ struct LearningSettings {
     int quizLength = 10;
     QString randomPool = QStringLiteral("all");
     QString theme = QStringLiteral("system");
+    bool collapsePronunciation = true;
+    bool collapseEtymology = true;
 };
 class LearningStore final {
 public:
@@ -51,6 +53,8 @@ public:
     void setQuizLength(int value);
     void setRandomPool(const QString &value);
     void setTheme(const QString &value);
+    void setCollapsePronunciation(bool value);
+    void setCollapseEtymology(bool value);
 
     bool isBookmarked(const QString &key) const;
     QVector<SavedWord> pool(const QVector<SavedWord> &fallback = {}) const;

@@ -23,7 +23,6 @@ DictApi::DictApi(const QString &root) : root_(root) {
     const QByteArray bytes = root.toUtf8();
     dict_status status = dict_open(bytes.constData(), static_cast<size_t>(bytes.size()), &handle_);
     if (status != DICT_OK) throw DictApiError(errorText(handle_, status, "open"));
-    select(language_, kind_);
 }
 
 DictApi::~DictApi() {

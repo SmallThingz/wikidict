@@ -2,17 +2,22 @@
 
 #include <QJsonObject>
 #include <QMainWindow>
+#include <QSet>
 #include <QVector>
 #include <memory>
+#include <atomic>
 
 #include "DictApi.hpp"
 #include "LearningStore.hpp"
 
 class QComboBox;
+class MediaPanel;
+class QEvent;
 class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPushButton;
+class QProgressBar;
 class QTabWidget;
 class QTextBrowser;
 class QTextEdit;
@@ -22,18 +27,41 @@ class QWidget;
 class MainWindow final : public QMainWindow {
 public:
     explicit MainWindow(const QString &root, const QString &initialWord = {});
+    ~MainWindow() override;
+    bool isLoading() const { return loading_; }
 
 private:
+    friend class MainWindowTest;
+    struct Visit {
+        QString title;
+        QString language;
+        QString kind;
+        int scroll = 0;
+        QSet<int> collapsed;
+    };
+
     void setupUi();
-    void loadLanguages();
+    void openRoot(const QString &root, const QString &word = {});
+    void loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word = {}, int restoreVisit = -1);
+    void setLoading(bool loading);
+    void chooseRoot();
     void refreshSearch();
+    void loadMoreResults();
+    void submitSearch();
+    bool eventFilter(QObject *watched, QEvent *event) override;
     void selectDataset();
-    void openWord(const QString &word);
+    bool openWord(const QString &word);
     void openSavedWord(const SavedWord &word);
     void showRandomWord();
-    void showLearningDialog();
+    void showLearningDialog(int tab = 0);
     void applyTheme();
-    void renderResponse(const QByteArray &json);
+    void renderResponse(const QByteArray &json, bool addVisit = true);
+    void refreshReading();
+    void resetFolding();
+    void jumpToSection(int section);
+    void navigate(int direction);
+    void saveVisit();
+    void updateNavigation();
     QString entryHtml(const QJsonObject &entry) const;
     QString blockHtml(const QJsonObject &block) const;
     QString spansHtml(const QJsonArray &spans) const;
@@ -50,6 +78,16 @@ private:
     QComboBox *language_ = nullptr;
     QComboBox *kind_ = nullptr;
     QPushButton *bookmark_ = nullptr;
+    QPushButton *listen_ = nullptr;
+    MediaPanel *media_ = nullptr;
+    QPushButton *random_ = nullptr;
+    QPushButton *back_ = nullptr;
+    QPushButton *forward_ = nullptr;
+    QPushButton *moreResults_ = nullptr;
+    QPushButton *cancelOpening_ = nullptr;
+    QProgressBar *openingProgress_ = nullptr;
+    QLabel *resultStatus_ = nullptr;
+    QComboBox *sections_ = nullptr;
     QLabel *title_ = nullptr;
     QLabel *meta_ = nullptr;
     QTabWidget *entryTabs_ = nullptr;
@@ -58,4 +96,17 @@ private:
     QTimer *searchTimer_ = nullptr;
     QJsonObject currentEntry_;
     QByteArray currentJson_;
+    QString resultsQuery_;
+    QVector<QString> searchTitles_;
+    QVector<SavedWord> sampleWords_;
+    qsizetype searchFirst_ = 0;
+    qsizetype searchLast_ = 0;
+    QSet<int> collapsedSections_;
+    QVector<Visit> visits_;
+    int visitIndex_ = -1;
+    int readingPointSize_ = 12;
+    bool moreAvailable_ = false;
+    bool loading_ = false;
+    unsigned loadSerial_ = 0;
+    std::shared_ptr<std::atomic_bool> cancelLoad_;
 };

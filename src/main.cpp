@@ -17,8 +17,7 @@ int main(int argc, char **argv) {
     parser.addHelpOption();
     parser.addVersionOption();
     QCommandLineOption rootOption({QStringLiteral("r"), QStringLiteral("root")},
-        QStringLiteral("Dictionary dataset root."), QStringLiteral("path"),
-        QStringLiteral("data/wiktionary-blobs"));
+        QStringLiteral("Dictionary folder (otherwise reopen the last folder)."), QStringLiteral("path"));
     parser.addOption(rootOption);
     QCommandLineOption smokeOption(QStringLiteral("smoke"), QStringLiteral("Construct the native UI and exit after startup validation."));
     parser.addOption(smokeOption);
@@ -29,7 +28,12 @@ int main(int argc, char **argv) {
         const QString word = parser.positionalArguments().value(0);
         MainWindow window(parser.value(rootOption), word);
         window.show();
-        if (parser.isSet(smokeOption)) QTimer::singleShot(50, &app, &QCoreApplication::quit);
+        if (parser.isSet(smokeOption)) {
+            auto *ready = new QTimer(&app);
+            QObject::connect(ready, &QTimer::timeout, &app, [&] { if (!window.isLoading()) app.quit(); });
+            ready->start(50);
+            QTimer::singleShot(30000, &app, [&] { app.exit(2); });
+        }
         return app.exec();
     } catch (const std::exception &error) {
         QMessageBox::critical(nullptr, QStringLiteral("Dict could not start"), QString::fromUtf8(error.what()));

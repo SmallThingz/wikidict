@@ -69,6 +69,8 @@ void LearningStore::load() {
     if (settingsValue_.randomPool != QStringLiteral("history") &&
         settingsValue_.randomPool != QStringLiteral("bookmarks")) settingsValue_.randomPool = QStringLiteral("all");
     settingsValue_.theme = settings.value(QStringLiteral("theme")).toString(QStringLiteral("system"));
+    settingsValue_.collapsePronunciation = settings.value(QStringLiteral("collapse_pronunciation")).toBool(true);
+    settingsValue_.collapseEtymology = settings.value(QStringLiteral("collapse_etymology")).toBool(true);
     if (settingsValue_.theme != QStringLiteral("light") && settingsValue_.theme != QStringLiteral("dark"))
         settingsValue_.theme = QStringLiteral("system");
     history_ = parseWords(root.value(QStringLiteral("history")), settingsValue_.historyLimit);
@@ -104,6 +106,8 @@ void LearningStore::save() {
         {QStringLiteral("quiz_length"), settingsValue_.quizLength},
         {QStringLiteral("random_pool"), settingsValue_.randomPool},
         {QStringLiteral("theme"), settingsValue_.theme},
+        {QStringLiteral("collapse_pronunciation"), settingsValue_.collapsePronunciation},
+        {QStringLiteral("collapse_etymology"), settingsValue_.collapseEtymology},
     };
     const QJsonObject root{
         {QStringLiteral("history"), history},
@@ -176,6 +180,8 @@ void LearningStore::setTheme(const QString &value) {
     settingsValue_.theme = value == QStringLiteral("light") || value == QStringLiteral("dark") ? value : QStringLiteral("system");
     save();
 }
+void LearningStore::setCollapsePronunciation(bool value) { settingsValue_.collapsePronunciation = value; save(); }
+void LearningStore::setCollapseEtymology(bool value) { settingsValue_.collapseEtymology = value; save(); }
 
 bool LearningStore::isBookmarked(const QString &key) const {
     return std::any_of(bookmarks_.cbegin(), bookmarks_.cend(), [&](const SavedWord &word) { return word.key == key; });
