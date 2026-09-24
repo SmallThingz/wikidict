@@ -4,6 +4,7 @@ import argparse
 import bz2
 import concurrent.futures
 import fcntl
+import hashlib
 import tempfile
 import json
 import os
@@ -11,10 +12,15 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import time
 from compress_blobs import compress, compress_many, default_workers, verify_round_trip
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry
 
 PROJECT = Path(__file__).resolve().parent.parent
+SHARD_THRESHOLD_PAGES = 2_000_000
+SHARD_PAGES = 100_000
+SHARD_RETRIES = 3
+SHARD_STATE_VERSION = 1
 
 def ensure_language_registry(downloads, output, edition, date):
     source = downloads / edition / date / 'language-registry.tsv'
@@ -29,6 +35,153 @@ def ensure_language_registry(downloads, output, edition, date):
     temp.write_text(text, encoding='utf-8')
     os.replace(temp, cached)
     return cached
+
+
+def sha256_file(path):
+    with path.open('rb') as source:
+        return hashlib.file_digest(source, 'sha256').hexdigest()
+
+
+def source_fingerprint():
+    """Hash build-relevant source so resumed shards never cross code revisions."""
+    checksum=hashlib.sha256()
+    files=[]
+    for name in ('build.zig','build.zig.zon'):
+        path=PROJECT/name
+        if path.is_file(): files.append(path)
+    for folder in ('src','tools'):
+        root=PROJECT/folder
+        if not root.is_dir(): continue
+        files.extend(path for path in root.rglob('*') if path.is_file() and path.suffix in ('.zig','.py','.c','.h','.zon'))
+    for path in sorted(files,key=lambda x:x.relative_to(PROJECT).as_posix()):
+        checksum.update(path.relative_to(PROJECT).as_posix().encode())
+        checksum.update(b'\0')
+        with path.open('rb') as source:
+            while chunk:=source.read(1024*1024): checksum.update(chunk)
+        checksum.update(b'\0')
+    return checksum.hexdigest()
+
+
+def copy_xml_with_page_count(items, downloads, dump):
+    needle=b'<page>'
+    tail=b''
+    pages=0
+    with dump.open('wb') as out:
+        for item in sorted(items, key=lambda x:x['name']):
+            with bz2.open(downloads/item['wiki']/item['date']/item['name'],'rb') as source:
+                while True:
+                    chunk=source.read(1024*1024)
+                    if not chunk: break
+                    combined=tail+chunk
+                    pages+=combined.count(needle)
+                    tail=combined[-(len(needle)-1):]
+                    out.write(chunk)
+    return pages
+
+
+def count_lines(path):
+    count=0
+    with path.open('rb') as source:
+        while chunk:=source.read(8*1024*1024): count+=chunk.count(b'\n')
+    return count
+
+
+def shard_state(items, registry, now_unix=None):
+    state={
+        'version':SHARD_STATE_VERSION,
+        'edition':items[0]['wiki'],
+        'date':items[0]['date'],
+        'files':[[item['name'],item['size'],item['sha1']] for item in sorted(items,key=lambda x:x['name'])],
+        'registry_sha256':sha256_file(registry),
+        'source':source_fingerprint(),
+        'shard_pages':SHARD_PAGES,
+    }
+    if now_unix is not None: state['now_unix']=now_unix
+    return state
+
+
+def prepare_shard_workspace(workspace, expected):
+    state_path=workspace/'state.json'
+    if state_path.is_file():
+        try: existing=json.loads(state_path.read_text())
+        except (OSError,json.JSONDecodeError): existing=None
+        comparable={k:v for k,v in existing.items() if k!='now_unix'} if isinstance(existing,dict) else None
+        if comparable==expected and type(existing.get('now_unix')) is int and existing['now_unix']>0:
+            return existing['now_unix']
+    if workspace.exists():
+        if not workspace.is_dir() or workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
+        shutil.rmtree(workspace)
+    workspace.mkdir(parents=True)
+    now_unix=int(time.time())
+    state=dict(expected,now_unix=now_unix)
+    temp=state_path.with_suffix('.part')
+    temp.write_text(json.dumps(state,sort_keys=True)+'\n')
+    os.replace(temp,state_path)
+    return now_unix
+
+
+def expander_ready(root):
+    marker=root/'.incomplete'
+    expander=root/'.bundle-expander'
+    try: ready=marker.read_text()=='expander ready'
+    except OSError: return False
+    return ready and not (expander/'.incomplete').exists() and (expander/'page-index.tsv').is_file() and (expander/'dict-bundle-expander').is_file()
+
+
+def run_checked(command):
+    subprocess.run(command,cwd=PROJECT,check=True)
+
+
+def build_sharded(dump, staging, workspace, registry, zig, workers, expected_pages, items):
+    expected=shard_state(items,registry)
+    now_unix=prepare_shard_workspace(workspace,expected)
+    expander_build=workspace/'expander'
+    if not expander_ready(expander_build):
+        if expander_build.exists(): shutil.rmtree(expander_build)
+        run_checked([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(expander_build),
+                     '--language-registry-snapshot',str(registry),'--llvm-workers',str(workers),
+                     '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only'])
+    expander=expander_build/'.bundle-expander'
+    indexed_pages=count_lines(expander/'page-index.tsv')
+    if indexed_pages!=expected_pages:
+        raise ValueError(f'Page count mismatch for {items[0]["wiki"]}: XML={expected_pages}, index={indexed_pages}')
+
+    shards_root=workspace/'shards';shards_root.mkdir(exist_ok=True)
+    shard_paths=[]
+    for start in range(0,indexed_pages,SHARD_PAGES):
+        limit=min(SHARD_PAGES,indexed_pages-start)
+        shard=shards_root/f'{start:08d}'
+        marker=shard/'.verified'
+        if marker.is_file():
+            try:
+                run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)])
+            except subprocess.CalledProcessError:
+                print(f'Rebuilding invalid resumed shard {items[0]["wiki"]} start={start}',flush=True)
+                shutil.rmtree(shard)
+            else:
+                shard_paths.append(shard);continue
+        last_error=None
+        for attempt in range(1,SHARD_RETRIES+1):
+            if shard.exists(): shutil.rmtree(shard)
+            try:
+                run_checked([zig,'build','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shard),
+                             '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
+                             '--workers',str(min(workers,16)),'--now-unix',str(now_unix)])
+                run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)])
+            except subprocess.CalledProcessError as error:
+                last_error=error
+                print(f'Retrying shard {items[0]["wiki"]} start={start} attempt={attempt}/{SHARD_RETRIES}',flush=True)
+                continue
+            marker.write_text('verified\n')
+            last_error=None
+            break
+        if last_error is not None: raise last_error
+        shard_paths.append(shard)
+
+    if staging.exists(): shutil.rmtree(staging)
+    run_checked([zig,'build','-Doptimize=ReleaseFast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]])
+    run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)])
+    (staging/VERIFIED_MARKER).write_text('verified\n')
 
 
 def build(items, downloads, output, zig, compression_workers=None):
@@ -122,6 +275,10 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
     edition, date = items[0]['wiki'], items[0]['date']
     target = output / edition / date
     if (target / 'complete.json').exists():
+        workspace=target.with_name(date+'.shards')
+        if workspace.exists():
+            if not workspace.is_dir() or workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
+            shutil.rmtree(workspace)
         print(f'Already built: {target}', flush=True)
         return
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -140,19 +297,23 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
     try:
         registry = ensure_language_registry(downloads, output, edition, date)
         dump = scratch / 'pages.xml'
-        # Extraction accepts sequential page elements across multipart XML streams.
-        with dump.open('wb') as out:
-            for item in sorted(xml, key=lambda x: x['name']):
-                with bz2.open(downloads / edition / date / item['name'], 'rb') as source:
-                    shutil.copyfileobj(source, out, 1024*1024)
+        # XML text cannot contain a raw <page> element token, so the streaming
+        # count is also a cheap corruption/split-boundary check for sharding.
+        page_count=copy_xml_with_page_count(xml,downloads,dump)
         workers = compression_workers or default_workers()
-        subprocess.run([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
-                        '--language-registry-snapshot',str(registry),
-                        '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
-                        '--page-workers',str(min(workers,16))], cwd=PROJECT, check=True)
-        subprocess.run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)], cwd=PROJECT, check=True)
-        (staging / VERIFIED_MARKER).write_text('verified\n')
+        workspace=target.with_name(date+'.shards')
+        if page_count>=SHARD_THRESHOLD_PAGES:
+            print(f'Sharding {edition}: {page_count:,} pages in chunks of {SHARD_PAGES:,}',flush=True)
+            build_sharded(dump,staging,workspace,registry,zig,workers,page_count,items)
+        else:
+            run_checked([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
+                         '--language-registry-snapshot',str(registry),
+                         '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
+                         '--page-workers',str(min(workers,16))])
+            run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)])
+            (staging / VERIFIED_MARKER).write_text('verified\n')
         publish_verified_staging(staging, target, edition, date, compression_workers)
+        if workspace.exists(): shutil.rmtree(workspace)
     finally:
         shutil.rmtree(scratch)
 

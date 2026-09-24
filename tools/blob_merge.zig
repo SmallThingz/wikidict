@@ -142,7 +142,7 @@ fn mergeFallbackReports(io: std.Io, a: std.mem.Allocator, output_root: []const u
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len < 4) {
+    if (args.len < 3) {
         std.debug.print("usage: dict-blob-merge OUTPUT_ROOT SHARD_ROOT SHARD_ROOT...\n", .{});
         return error.Usage;
     }

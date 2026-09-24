@@ -33,6 +33,70 @@ class BuildTest(unittest.TestCase):
             self.assertIn('English',first.read_text())
             self.assertTrue(str(first).endswith('output/testwiktionary/20260901.language-registry.tsv'))
 
+    def test_xml_page_count_handles_chunk_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            payload=b'x'*(1024*1024-3)+b'<pa'+b'ge><title>x</title></page>'
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            (folder/name).write_bytes(bz2.compress(payload))
+            item=dict(wiki='testwiktionary',date='20260901',name=name)
+            dump=root/'pages.xml'
+            self.assertEqual(b.copy_xml_with_page_count([item],root,dump),1)
+            self.assertEqual(dump.read_bytes(),payload)
+
+    def test_shard_workspace_resumes_only_matching_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace=Path(tmp)/'work'
+            expected={'version':1,'edition':'x','date':'20260901','files':[],'registry_sha256':'a','source':'b','shard_pages':100}
+            with patch.object(b.time,'time',return_value=123):
+                self.assertEqual(b.prepare_shard_workspace(workspace,expected),123)
+            sentinel=workspace/'keep';sentinel.write_text('yes')
+            self.assertEqual(b.prepare_shard_workspace(workspace,expected),123)
+            self.assertTrue(sentinel.exists())
+            changed=dict(expected,registry_sha256='different')
+            with patch.object(b.time,'time',return_value=456):
+                self.assertEqual(b.prepare_shard_workspace(workspace,changed),456)
+            self.assertFalse(sentinel.exists())
+
+    def test_large_edition_builds_verified_shards_then_merges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            payload=b'<mediawiki><page></page><page></page></mediawiki>'
+            data=bz2.compress(payload);(folder/name).write_bytes(data)
+            item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            (folder/'language-registry.tsv').write_text('# content-language\ten\nen\tEnglish\n')
+            calls=[]
+            def run(command):
+                calls.append(command)
+                step=next((x for x in ('build-dictionary','build-blobs','verify-blobs','merge-blobs') if x in command),None)
+                if step=='build-dictionary':
+                    dest=Path(command[command.index('--')+2]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
+                    (dest/'.incomplete').write_text('expander ready')
+                    (exp/'page-index.tsv').write_text('0\n1\n')
+                    (exp/'dict-bundle-expander').write_text('worker')
+                elif step=='build-blobs':
+                    dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True)
+                    (dest/'fallback-pages.jsonl').write_text('')
+                    (dest/'languages.tsv').write_text('heading\n')
+                elif step=='merge-blobs':
+                    dest=Path(command[command.index('--')+1]);dest.mkdir(parents=True)
+                    (dest/'fallback-pages.jsonl').write_text('')
+                    (dest/'languages.tsv').write_text('heading\n')
+                    (dest/'merged.wikblb').write_bytes(b'WIKBLB08merged')
+            with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_THRESHOLD_PAGES',1),patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
+                b.build([item],root,root/'output','zig',2)
+            blob_calls=[c for c in calls if 'build-blobs' in c]
+            self.assertEqual(len(blob_calls),2)
+            self.assertEqual([c[c.index('--start-page')+1] for c in blob_calls],['0','1'])
+            self.assertEqual({c[c.index('--now-unix')+1] for c in blob_calls},{'123'})
+            self.assertEqual(sum('merge-blobs' in c for c in calls),1)
+            self.assertGreaterEqual(sum('verify-blobs' in c for c in calls),3)
+            final=root/'output/testwiktionary/20260901'
+            self.assertTrue((final/'complete.json').is_file())
+            self.assertEqual(lzma.open(final/'merged.wikblb.xz').read(),b'WIKBLB08merged')
+            self.assertFalse((root/'output/testwiktionary/20260901.shards').exists())
+
     def test_in_and_out_aliases(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
