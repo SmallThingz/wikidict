@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Publish independently seekable XZ blobs without deleting the raw dictionary."""
 import argparse
+import concurrent.futures
 import hashlib
 import lzma
 import os
@@ -10,6 +11,56 @@ import time
 
 def default_workers():
     return 1 + (os.cpu_count() or 1) // 3
+
+
+
+def verify_round_trip(path, target):
+    with path.open('rb') as source, lzma.open(target,'rb') as decoded:
+        if hashlib.file_digest(source,'sha256').digest()!=hashlib.file_digest(decoded,'sha256').digest():
+            raise ValueError('Compression round trip failed: '+str(path))
+
+def _validate_raw_blob(path):
+    with path.open('rb', buffering=0) as source:
+        if source.read(8)!=b'WIKBLB08':
+            raise ValueError('Expected WIKBLB08: '+str(path))
+
+def _compress_batch(paths, block_size):
+    paths=list(paths)
+    if not paths:return
+    for path in paths:
+        _validate_raw_blob(path)
+        target=Path(str(path)+'.xz')
+        if target.exists():raise FileExistsError(target)
+    started=time.perf_counter()
+    subprocess.run(['xz','-9e','--threads=1',f'--block-size={block_size}','--keep',*[str(path) for path in paths]],check=True)
+    raw_bytes=0;compressed_bytes=0
+    try:
+        for path in paths:
+            target=Path(str(path)+'.xz')
+            verify_round_trip(path,target)
+            raw_bytes+=path.stat().st_size;compressed_bytes+=target.stat().st_size
+        for path in paths:path.unlink()
+    except Exception:
+        for path in paths:
+            Path(str(path)+'.xz').unlink(missing_ok=True)
+        raise
+    print(f'batch: {len(paths)} blobs; {raw_bytes} -> {compressed_bytes} bytes; {time.perf_counter()-started:.3f}s; verified',flush=True)
+
+def compress_many(paths, block_size, workers=None, small_limit=8*1024*1024, batch_size=128):
+    workers = default_workers() if workers is None else workers
+    if workers < 1:raise ValueError('Compression workers must be positive')
+    paths=[Path(path) for path in paths]
+    if not paths:return
+    small=[];large=[]
+    for path in paths:
+        (small if path.stat().st_size <= small_limit else large).append(path)
+    if small:
+        batches=[small[i:i+batch_size] for i in range(0,len(small),batch_size)]
+        concurrency=min(workers,len(batches))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+            list(pool.map(lambda batch:_compress_batch(batch,block_size),batches))
+    for path in large:
+        compress(path,block_size,workers)
 
 def compress(path, block_size, workers=None):
     workers = default_workers() if workers is None else workers
@@ -26,8 +77,7 @@ def compress(path, block_size, workers=None):
                 created=True
                 subprocess.run(['xz','-9e',f'--threads={workers}',f'--block-size={block_size}','--stdout'],stdin=source,stdout=out,check=True)
                 out.flush();os.fsync(out.fileno())
-        with path.open('rb') as source, lzma.open(temp,'rb') as decoded:
-            if hashlib.file_digest(source,'sha256').digest()!=hashlib.file_digest(decoded,'sha256').digest():raise ValueError('Compression round trip failed')
+        verify_round_trip(path,temp)
         os.replace(temp,target)
         print(f'{target}: {path.stat().st_size} -> {target.stat().st_size} bytes; {time.perf_counter()-started:.3f}s; verified',flush=True)
     finally:

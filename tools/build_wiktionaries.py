@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
-from compress_blobs import compress, default_workers
+from compress_blobs import compress, compress_many, default_workers
 from download_wiktionaries import digest, validate_item
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -60,6 +60,40 @@ def validate_fallback_report(path):
             count += 1
     return count
 
+VERIFIED_MARKER = '.verified-blobs'
+
+def publish_verified_staging(staging, target, edition, date, compression_workers=None):
+    marker = staging / VERIFIED_MARKER
+    if not marker.is_file():
+        raise ValueError(f'Unverified staging directory: {staging}')
+    fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl')
+    for part in staging.rglob('*.xz.part'):
+        part.unlink()
+    raw = sorted(staging.rglob('*.wikblb'))
+    compressed = sorted(staging.rglob('*.wikblb.xz'))
+    logical = {str(path) for path in raw}
+    logical.update(str(path)[:-3] for path in compressed)
+    pending = []
+    for blob in raw:
+        compressed_path = Path(str(blob) + '.xz')
+        if compressed_path.exists():
+            blob.unlink()
+        else:
+            pending.append(blob)
+    if pending:
+        workers = compression_workers or default_workers()
+        compress_many(pending, 1024*1024, workers)
+    compressed = sorted(staging.rglob('*.wikblb.xz'))
+    if len(compressed) != len(logical) or list(staging.rglob('*.wikblb')) or list(staging.rglob('*.xz.part')):
+        raise ValueError(f'Incomplete compressed publication: {staging}')
+    marker.unlink()
+    metadata = {'edition':edition,'date':date,
+        'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
+        'fallback_report':'fallback-pages.jsonl', 'compression':'xz -9e; 1 MiB blocks','blobs':len(compressed)}
+    (staging / 'complete.json').write_text(json.dumps(metadata)+'\n')
+    os.rename(staging, target)
+    print(f'Published: {target}', flush=True)
+
 def build_locked(items, downloads, output, zig, compression_workers=None):
     for item in items:
         validate_item(item)
@@ -79,6 +113,10 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
     if staging.exists():
         if not staging.is_dir() or staging.is_symlink():
             raise ValueError(f'Unsafe incomplete build path: {staging}')
+        if (staging / VERIFIED_MARKER).is_file():
+            print(f'Resuming verified publication: {staging}', flush=True)
+            publish_verified_staging(staging, target, edition, date, compression_workers)
+            return
         print(f'Retrying incomplete build: {staging}', flush=True)
         shutil.rmtree(staging)
     (PROJECT / '.tmp').mkdir(exist_ok=True)
@@ -95,17 +133,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
                         '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
                         '--page-workers',str(min(workers,16))], cwd=PROJECT, check=True)
         subprocess.run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)], cwd=PROJECT, check=True)
-        report = staging / 'fallback-pages.jsonl'
-        fallback_pages = validate_fallback_report(report)
-        blobs = sorted(staging.rglob('*.wikblb'))
-        for blob in blobs:
-            compress(blob, 1024*1024, compression_workers)
-            blob.unlink()
-        (staging / 'complete.json').write_text(json.dumps({'edition':edition,'date':date,
-            'status':'built' if blobs else 'empty', 'fallback_pages':fallback_pages,
-            'fallback_report':'fallback-pages.jsonl', 'compression':'xz -9e; 1 MiB blocks','blobs':len(blobs)})+'\n')
-        os.rename(staging, target)
-        print(f'Published: {target}', flush=True)
+        (staging / VERIFIED_MARKER).write_text('verified\n')
+        publish_verified_staging(staging, target, edition, date, compression_workers)
     finally:
         shutil.rmtree(scratch)
 

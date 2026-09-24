@@ -99,6 +99,32 @@ class BuildTest(unittest.TestCase):
             self.assertFalse((final/'en.wikblb').exists())
             self.assertEqual(lzma.open(final/'en.wikblb.xz').read(),b'WIKBLB08payload')
             self.assertEqual(list((root/'.tmp').iterdir()),[])
+    def test_verified_partial_compression_resumes_without_rebuilding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
+            item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            staging=root/'output/testwiktionary/20260901.building';staging.mkdir(parents=True)
+            (staging/'fallback-pages.jsonl').write_text('')
+            (staging/'languages.tsv').write_text('heading\n')
+            (staging/b.VERIFIED_MARKER).write_text('verified\n')
+            first=staging/'first.wikblb';second=staging/'second.wikblb'
+            first.write_bytes(b'WIKBLB08first');second.write_bytes(b'WIKBLB08second')
+            compress(first,64*1024,1);first.unlink()
+            real_run=subprocess.run
+            def run(command,**kwargs):
+                if command[0]=='xz':return real_run(command,**kwargs)
+                raise AssertionError(f'unexpected rebuild command: {command}')
+            with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
+                b.build([item],root,root/'output','zig',1)
+            final=root/'output/testwiktionary/20260901'
+            meta=json.loads((final/'complete.json').read_text())
+            self.assertEqual(meta['blobs'],2)
+            self.assertFalse((final/b.VERIFIED_MARKER).exists())
+            self.assertFalse((final/'first.wikblb').exists());self.assertFalse((final/'second.wikblb').exists())
+            self.assertEqual(lzma.open(final/'first.wikblb.xz').read(),b'WIKBLB08first')
+            self.assertEqual(lzma.open(final/'second.wikblb.xz').read(),b'WIKBLB08second')
     def test_empty_edition_retries_stale_build_and_is_published(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
