@@ -490,6 +490,7 @@ fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?Resol
         if (codes.resolveTrusted(plain)) |resolved| {
             const content = codes.content();
             if (content != null and std.mem.eql(u8, content.?.code, resolved.code)) return resolved;
+            if (codes.resolveStrong(resolved.code) != null) return resolved;
             if (sourceConfirmsLanguage(codes, section.source, resolved.code)) return resolved;
         }
 
@@ -965,6 +966,8 @@ const TestLanguages = struct {
             .{ "hu", "hu", "Magyar" },
             .{ "Aari", "aiw", "Aari" },
             .{ "aiw", "aiw", "Aari" },
+            .{ "Latyn", "la", "Latyn" },
+            .{ "la", "la", "Latyn" },
             .{ "Ak", "akq", "Ak" },
             .{ "akq", "akq", "Ak" },
         }) |entry| {
@@ -983,6 +986,7 @@ const TestLanguages = struct {
             .{ "Hrvatski", "hr", "Hrvatski" },
             .{ "עברית", "he", "עברית" },
             .{ "Magyar", "hu", "Magyar" },
+            .{ "Latyn", "la", "Latyn" },
         }) |entry| if (std.mem.eql(u8, value, entry[0]))
             return .{ .code = entry[1], .heading = entry[2] };
         return null;
@@ -991,6 +995,7 @@ const TestLanguages = struct {
     fn strong(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
         if (std.mem.eql(u8, value, "English")) return .{ .code = "en", .heading = "English" };
         if (std.mem.eql(u8, value, "French")) return .{ .code = "fr", .heading = "French" };
+        if (std.mem.eql(u8, value, "la")) return .{ .code = "la", .heading = "Latyn" };
         return null;
     }
 
@@ -1087,9 +1092,16 @@ test "language resolution rejects fake top-level headings and uses real fallback
         "==Ak==\n* index material without an akq language marker\n",
         null,
     );
+    try writer.addPage(
+        a,
+        0,
+        "fatuus",
+        "==Latyn==\n# foolish\n",
+        null,
+    );
 
     const stats = try writer.finish(codes);
-    try std.testing.expectEqual(@as(usize, 5), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 6), stats.language_blobs);
 
     inline for (.{
         .{ "Nederlands", "nl" },
@@ -1097,6 +1109,7 @@ test "language resolution rejects fake top-level headings and uses real fallback
         .{ "Magyar", "hu" },
         .{ "Middle English", "enm" },
         .{ "Aari", "aiw" },
+        .{ "Latyn", "la" },
     }) |expected| {
         const path = try languageBlobPathAlloc(a, root, expected[0]);
         var mapped = try mmapPath(std.testing.io, path);

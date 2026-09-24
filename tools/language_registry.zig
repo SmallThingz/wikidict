@@ -128,6 +128,67 @@ pub const Registry = struct {
         }
     }
 
+    fn disambiguatedHeading(self: *Registry, heading: []const u8, code_value: []const u8) ![]const u8 {
+        const owned = self.arena.allocator();
+        var suffix: usize = 1;
+        while (true) : (suffix += 1) {
+            const candidate = if (suffix == 1)
+                try std.fmt.allocPrint(owned, "{s} ({s})", .{ heading, code_value })
+            else
+                try std.fmt.allocPrint(owned, "{s} ({s}) {d}", .{ heading, code_value, suffix });
+            if (self.canonical_names.get(candidate)) |existing| {
+                if (std.mem.eql(u8, existing, code_value)) return candidate;
+                continue;
+            }
+            return candidate;
+        }
+    }
+
+    fn rehomeExternalHeading(self: *Registry, heading: []const u8, code_value: []const u8) !void {
+        const current = self.headings.get(code_value) orelse return;
+        if (!std.mem.eql(u8, current, heading)) return;
+        const replacement = try self.disambiguatedHeading(heading, code_value);
+        const owned = self.arena.allocator();
+        _ = self.canonical_names.remove(heading);
+        try self.canonical_names.put(owned, replacement, code_value);
+        try self.headings.put(owned, try owned.dupe(u8, code_value), replacement);
+        try self.addAlias(replacement, code_value);
+    }
+
+    /// Dump-local canonical names outrank siteinfo/ISO aliases. Conflicting
+    /// external labels remain addressable under a disambiguated heading/code.
+    fn addStrongCanonical(self: *Registry, heading: []const u8, code_value: []const u8) !void {
+        if (heading.len == 0 or std.mem.indexOfAny(u8, heading, "\x00\n\r\t") != null)
+            return error.InvalidLanguageRegistry;
+        try self.reserveCode(code_value);
+        if (self.codes.contains(heading) and !std.mem.eql(u8, heading, code_value))
+            return error.ConflictingLanguageHeading;
+
+        if (self.canonical_names.get(heading)) |existing| {
+            if (!std.mem.eql(u8, existing, code_value))
+                try self.rehomeExternalHeading(heading, existing);
+        }
+
+        if (self.headings.get(code_value)) |old_heading| {
+            if (!std.mem.eql(u8, old_heading, heading)) {
+                if (self.canonical_names.get(old_heading)) |owner| {
+                    if (std.mem.eql(u8, owner, code_value)) _ = self.canonical_names.remove(old_heading);
+                }
+            }
+        }
+
+        const owned = self.arena.allocator();
+        _ = self.ambiguous.remove(heading);
+        _ = self.names.remove(heading);
+        _ = self.trusted_names.remove(heading);
+        _ = self.canonical_names.remove(heading);
+        try self.canonical_names.put(owned, try owned.dupe(u8, heading), try owned.dupe(u8, code_value));
+        try self.names.put(owned, try owned.dupe(u8, heading), try owned.dupe(u8, code_value));
+        try self.headings.put(owned, try owned.dupe(u8, code_value), try owned.dupe(u8, heading));
+        try self.trustStrong(heading);
+        try self.trustStrong(code_value);
+    }
+
     /// Merge CODE<TAB>PREFERRED_NAME<TAB>ALIAS... rows.
     /// The optional comment "# content-language<TAB>CODE" selects the edition fallback.
     pub fn addTsv(self: *Registry, source: []const u8) !void {
@@ -194,8 +255,7 @@ pub const Registry = struct {
             const value = try string(owned, source, &p);
             if (name.len == 0 or value.len == 0) return error.InvalidLanguageRegistry;
             const canonical_code = if (self.resolve(value)) |resolved| resolved.code else value;
-            try self.addCanonical(name, canonical_code);
-            try self.trustStrong(name);
+            try self.addStrongCanonical(name, canonical_code);
             skip(source, &p);
             if (p < source.len and (source[p] == ',' or source[p] == ';')) p += 1;
         }
@@ -284,6 +344,30 @@ test "canonical registry permits Lua long comments with equals delimiters" {
     var r = try Registry.fromLuaAlloc(std.testing.allocator, "--[==[ header ]=] still comment ]==]\nreturn { [\"English\"] = \"en\" }\n--[=[\nlocal export = {}\nreturn export\n]=]");
     defer r.deinit();
     try std.testing.expectEqualStrings("en", r.code("English").?);
+}
+
+test "dump canonical names override conflicting external headings" {
+    var r = Registry.empty(std.testing.allocator);
+    defer r.deinit();
+    try r.addTsv(
+        "# wikidict-language-registry-v2\n" ++
+            "# content-language\taf\n" ++
+            "# mediawiki\n" ++
+            "af\tAfrikaans\taf\n" ++
+            "roa-rup\tAromanian\troa-rup\trup\n" ++
+            "yue\tKantonees\tyue\n" ++
+            "zh-yue\tCantonese\tzh-yue\tyue\n" ++
+            "# iso-639-3\n" ++
+            "rup\tAromanies\trup\n",
+    );
+    try r.addLua("return { [\"Aromanian\"] = \"rup\", [\"Cantonese\"] = \"yue\" }");
+    try std.testing.expectEqualStrings("rup", r.resolveStrong("Aromanian").?.code);
+    try std.testing.expectEqualStrings("rup", r.resolveStrong("rup").?.code);
+    try std.testing.expectEqualStrings("Aromanian", r.resolve("rup").?.heading);
+    try std.testing.expectEqualStrings("Aromanian (roa-rup)", r.resolve("roa-rup").?.heading);
+    try std.testing.expectEqualStrings("yue", r.resolveStrong("Cantonese").?.code);
+    try std.testing.expectEqualStrings("Cantonese", r.resolve("yue").?.heading);
+    try std.testing.expectEqualStrings("Cantonese (zh-yue)", r.resolve("zh-yue").?.heading);
 }
 
 test "pinned TSV aliases merge and expose content language" {
