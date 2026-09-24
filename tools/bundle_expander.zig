@@ -8,6 +8,8 @@ pub const Expansion = struct {
     display_title: ?[]const u8 = null,
 };
 
+pub const Failure = protocol.ErrorReply;
+
 pub const Worker = struct {
     io: std.Io,
     root: []const u8,
@@ -16,6 +18,7 @@ pub const Worker = struct {
     now_unix: i64,
     timeout_ms: u32 = 60_000,
     child: ?std.process.Child = null,
+    last_failure: ?Failure = null,
 
     pub fn init(io: std.Io, root: []const u8, executable: []const u8, dump: []const u8) Worker {
         return .{
@@ -82,6 +85,7 @@ pub const Worker = struct {
     }
 
     pub fn expand(self: *Worker, a: A, page_ordinal: u64, title: []const u8, source: []const u8) !?Expansion {
+        self.last_failure = null;
         if (source.len > protocol.max_source_bytes) return error.RequestTooLarge;
         const child = try self.ensure();
         self.writeRequest(child, page_ordinal, title, source) catch |err| {
@@ -120,6 +124,7 @@ pub const Worker = struct {
             },
             .skip => return null,
             .failure => |failure| {
+                self.last_failure = failure;
                 std.debug.print("bundle expansion failed title={s} stage={s} error={s}{s}{s}\n", .{
                     title,
                     failure.stage,

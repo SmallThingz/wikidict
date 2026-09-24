@@ -174,6 +174,7 @@ test "safe internal target ASCII fast path preserves Unicode and control checks"
 
 /// The caller uses an arena for a page; returned arrays/text share its lifetime.
 pub const Renderer = struct {
+    fallbacks: @import("presentation_fallback.zig").Report = .{},
     a: A,
     context: Context,
     rendered_templates: usize = 0,
@@ -195,19 +196,26 @@ pub const Renderer = struct {
     pub fn mediaFile(self: *Renderer, raw: []const u8, caption: []const u8) Error!void {
         // Media is supplemental presentation. Pathological nesting or a page with
         // hundreds of assets must not make the entry itself unreadable.
-        if (self.media_depth >= max_depth) return;
+        if (self.media_depth >= max_depth) {
+            self.fallbacks.render_limit = true;
+            return;
+        }
         self.media_depth += 1;
         defer self.media_depth -= 1;
         const file = try self.a.dupe(u8, std.mem.trim(u8, raw, " \t\r\n"));
         std.mem.replaceScalar(u8, file, '_', ' ');
         const kind = media_types.kind(file) orelse return;
         for (self.media.items) |item| if (std.mem.eql(u8, item.file, file)) return;
-        if (self.media.items.len >= 128) return;
+        if (self.media.items.len >= 128) {
+            self.fallbacks.render_limit = true;
+            return;
+        }
         const description = try plainText(self.a, try self.parseSpans(caption, .{}));
         try self.media.append(self.a, .{ .file = file, .kind = kind, .caption = description });
     }
     fn spend(self: *Renderer) bool {
         if (self.nodes >= max_nodes) {
+            self.fallbacks.render_limit = true;
             self.truncated = true;
             return false;
         }
@@ -425,7 +433,10 @@ pub const Renderer = struct {
     }
     fn opaqueExtension(self: *Renderer, input: []const u8, tag: syntax.Tag, style: Style, depth: usize) Error!usize {
         if (tag.self_closing) return tag.end;
-        const pair = syntax.matchingTag(input, tag) orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
+        const pair = syntax.matchingTag(input, tag) orelse blk: {
+            self.fallbacks.unclosed_formatting = true;
+            break :blk syntax.Pair{ .inner_end = input.len, .end = input.len };
+        };
         const content = input[tag.end..pair.inner_end];
         if (tag.is("gallery")) {
             try self.gallery(content, style, depth + 1);
@@ -436,7 +447,10 @@ pub const Renderer = struct {
             literal_style.code = true;
             try self.literal(content, literal_style);
         } else if (!oneOf(tag.name, &.{ "indicator", "references", "templatestyles", "section", "charinsert" })) {
-            try self.text(try std.fmt.allocPrint(self.a, "[unsupported extension: {s}]", .{tag.name}), style);
+            // Registered extensions can render data-backed UI that this data-only
+            // compiler cannot reproduce. Do not invent substitute prose; report
+            // the omission so the final corpus audit names the affected page.
+            self.fallbacks.unsupported_element = true;
         }
         return pair.end;
     }
@@ -501,7 +515,10 @@ pub const Renderer = struct {
         }
         if (tag.name.len == "small".len and tag.attrs.len == 0 and tag.is("small")) {
             if (tag.closing or tag.self_closing) return tag.end;
-            const pair = syntax.matchingTag(input, tag) orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
+            const pair = syntax.matchingTag(input, tag) orelse blk: {
+                self.fallbacks.unclosed_formatting = true;
+                break :blk syntax.Pair{ .inner_end = input.len, .end = input.len };
+            };
             var s = style;
             s.small = true;
             try self.inlineText(input[tag.end..pair.inner_end], s, depth + 1);
@@ -519,18 +536,33 @@ pub const Renderer = struct {
         const literal_tag = tag.is("nowiki");
         if (literal_tag and !tag.closing) {
             if (tag.self_closing) return tag.end;
-            const pair = syntax.matchingTag(input, tag) orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
+            const pair = syntax.matchingTag(input, tag) orelse blk: {
+                self.fallbacks.unclosed_formatting = true;
+                break :blk syntax.Pair{ .inner_end = input.len, .end = input.len };
+            };
             var s = style;
             s.code = !tag.is("nowiki");
             try self.literal(input[tag.end..pair.inner_end], s);
             return pair.end;
         }
         if (oneOf(tag.name, &.{ "script", "style", "iframe", "object", "embed" })) {
-            if (tag.closing) return tag.end;
-            try self.text(try std.fmt.allocPrint(self.a, "[unsupported HTML: {s}]", .{tag.name}), style);
-            if (tag.self_closing) return tag.end;
-            if (syntax.matchingTag(input, tag)) |pair| return pair.end;
-            try self.literal(input[tag.end..], style);
+            self.fallbacks.unsupported_element = true;
+            if (tag.closing) {
+                try self.literal(input[at..tag.end], style);
+                return tag.end;
+            }
+            // MediaWiki escapes these disallowed HTML elements as literal text.
+            // Preserve the exact visible source instead of fabricating a marker.
+            if (tag.self_closing) {
+                try self.literal(input[at..tag.end], style);
+                return tag.end;
+            }
+            if (syntax.matchingTag(input, tag)) |pair| {
+                try self.literal(input[at..pair.end], style);
+                return pair.end;
+            }
+            self.fallbacks.unclosed_formatting = true;
+            try self.literal(input[at..], style);
             return input.len;
         }
         const known = oneOf(tag.name, &.{
@@ -548,6 +580,7 @@ pub const Renderer = struct {
         // and semantic HTML that must pass through the inline compiler.
         if (tag.is("li") and syntax.matchingTag(input, tag) == null) return tag.end;
         const matched = syntax.matchingTag(input, tag);
+        if (matched == null) self.fallbacks.unclosed_formatting = true;
         // Unclosed layout containers have no inline style to scope. Consume
         // them iteratively, including long runs of malformed openers.
         if (matched == null and oneOf(tag.name, &.{ "div", "span", "p", "center", "ul", "ol", "dl" })) return tag.end;
@@ -649,6 +682,7 @@ pub const Renderer = struct {
     }
     pub fn inlineText(self: *Renderer, input: []const u8, inherited: Style, depth: usize) Error!void {
         if (depth > max_depth) {
+            self.fallbacks.render_limit = true;
             try self.text("[render nesting limit]", inherited);
             return;
         }
@@ -681,14 +715,6 @@ pub const Renderer = struct {
                 it.cursor = pair.end;
                 continue;
             }
-            if (starts(input[it.cursor..], "[[")) if (syntax.balanced(input, it.cursor)) |pair| {
-                // A link whose target is only whitespace has no visible label.
-                // MediaWiki input with a removed HTML comment can produce [[ ]].
-                if (std.mem.trim(u8, input[it.cursor + 2 .. pair.inner_end], " \t\r\n").len == 0) {
-                    it.cursor = pair.end;
-                    continue;
-                }
-            };
             const token = it.next() orelse break;
             s.bold = token.bold;
             s.italic = token.italic;
@@ -837,6 +863,7 @@ pub const Renderer = struct {
     }
     pub fn renderBody(self: *Renderer, input: []const u8) Error![]const Block {
         if (self.body_depth >= max_depth) {
+            self.fallbacks.render_limit = true;
             var fallback: std.ArrayList(Block) = .empty;
             try self.block(&fallback, .preformatted, input, "", "", 0);
             return fallback.toOwnedSlice(self.a);
@@ -888,7 +915,7 @@ pub const Renderer = struct {
             const html_tag = if (syntax.tagAt(clean, 0)) |tag| (if (!tag.closing and
                 oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center" }) and
                 syntax.matchingTag(clean, tag) != null) tag else null) else null;
-            const special = html_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or starts(line, " ") or starts(clean, "{|") or std.mem.eql(u8, clean, "|}") or starts(clean, "----") or starts(clean, "<pre") or starts(clean, "<syntaxhighlight");
+            const special = html_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or starts(line, " ") or starts(clean, "{|") or starts(clean, "----") or starts(clean, "<pre") or starts(clean, "<syntaxhighlight");
             if (!special) {
                 if (para == null) {
                     para = start;
@@ -958,13 +985,13 @@ pub const Renderer = struct {
                 if (table.table.rows.len != 0) {
                     try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table.table });
                 } else {
+                    self.fallbacks.malformed_table = true;
                     // Rowless layout tables still contain ordinary lists/text.
                     for (try self.renderBody(input[body_start..table.body_end])) |block_value|
                         try self.appendBlockBudgeted(&blocks, block_value);
                 }
                 continue;
             }
-            if (std.mem.eql(u8, clean, "|}")) continue;
             if (starts(clean, "<pre") or starts(clean, "<syntaxhighlight")) {
                 if (syntax.tagAt(clean, 0)) |tag| {
                     const pair = syntax.matchingTag(clean, tag) orelse syntax.Pair{ .inner_end = clean.len, .end = clean.len };
@@ -1118,6 +1145,7 @@ pub const Renderer = struct {
             }
         }
         try self.finishCell(&cells, &cell_source, &current);
+        if (body_end == input.len) self.fallbacks.malformed_table = true;
         if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
         return .{ .table = .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) }, .end = pos, .body_end = body_end };
     }
@@ -1459,9 +1487,9 @@ test "opaque extensions render safely without leaking parser delimiters" {
     try std.testing.expect(std.mem.indexOf(u8, text_value, "first cat\nsecond") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "A cat") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "a|b=c") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "[unsupported extension: graph]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "[unsupported extension: dynamicpagelist]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "unsupported extension") == null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "category=Tea room") == null);
+    try std.testing.expect(r.fallbacks.unsupported_element);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "<gallery") == null);
     try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
     try std.testing.expectEqualStrings("A cat", r.media.items[0].caption);
@@ -1798,15 +1826,15 @@ test "malformed link tail stays literal at the current cursor" {
     try std.testing.expectEqualStrings(source, try flattened(a, spans));
 }
 
-test "empty link is omitted while following inline content renders" {
+test "empty link remains literal while following inline content renders" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
     const spans = try r.parseSpans("[[]]<b>bold</b> &amp;", .{});
-    try std.testing.expectEqualStrings("bold &", try flattened(a, spans));
+    try std.testing.expectEqualStrings("[[]]bold &", try flattened(a, spans));
     const after_prefix = try r.parseSpans("prefix [[]] suffix", .{});
-    try std.testing.expectEqualStrings("prefix  suffix", try flattened(a, after_prefix));
+    try std.testing.expectEqualStrings("prefix [[]] suffix", try flattened(a, after_prefix));
 }
 
 test "malformed template and link opener storms preserve the tail without trapping" {
@@ -1832,8 +1860,9 @@ test "benign semantic HTML renders content while dangerous HTML stays inert" {
     const spans = try r.parseSpans("<abbr title='abbreviation'>abbr</abbr> <cite>cite</cite> <ins>inserted</ins> <samp>sample</samp> <ruby>漢<rt>kan</rt></ruby><wbr>ok <script>alert(1)</script>", .{});
     const text_value = try flattened(a, spans);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "abbr cite inserted sample 漢kanok") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "[unsupported HTML: script]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "alert(1)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "alert(1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "unsupported HTML") == null);
+    try std.testing.expect(r.fallbacks.unsupported_element);
     var styled = false;
     for (spans) |span| {
         if (std.mem.eql(u8, span.text, "cite") and span.flags.italic) styled = true;
@@ -1881,8 +1910,10 @@ test "stray and unclosed dangerous HTML cannot swallow following dictionary text
     const text_value = try flattened(a, spans);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "before") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "after") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "[unsupported HTML: script]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "unsupported HTML") == null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "literal tail") != null);
+    try std.testing.expect(r.fallbacks.unsupported_element);
+    try std.testing.expect(r.fallbacks.unclosed_formatting);
 
     const breaks = try r.parseSpans("a<br>b</br>c<hr>d</hr>e", .{});
     const break_text = try flattened(a, breaks);
@@ -2100,5 +2131,5 @@ test "unclosed formatting and rowless nested tables compile their contents" {
     try std.testing.expectEqual(@as(usize, 3), blocks.len);
     try std.testing.expectEqualStrings("one", try flattened(a, blocks[0].spans));
     try std.testing.expectEqualStrings("two", try flattened(a, blocks[1].spans));
-    try std.testing.expectEqualStrings("After", try flattened(a, blocks[2].spans));
+    try std.testing.expectEqualStrings("|} After", try flattened(a, blocks[2].spans));
 }

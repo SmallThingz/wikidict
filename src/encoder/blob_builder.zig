@@ -23,6 +23,7 @@ pub const BuildStats = struct {
     rhymes_records: usize = 0,
     sign_gloss_records: usize = 0,
     language_blobs: usize = 0,
+    fallback_pages: usize = 0,
 };
 
 pub const LanguageCodes = struct {
@@ -360,12 +361,17 @@ fn processMain(
     source: []const u8,
     display_title: ?[]const u8,
     stats: *BuildStats,
+    fallbacks: *presentation_document.Fallbacks,
 ) !void {
     stats.main_pages += 1;
     var page_sections: std.ArrayList(language_source.Section) = .empty;
     defer page_sections.deinit(page_allocator);
     var sections = language_source.Iterator.init(source);
     while (sections.next()) |section| try page_sections.append(page_allocator, section);
+    if (page_sections.items.len == 0 and std.mem.trim(u8, source, " \t\r\n").len != 0) {
+        fallbacks.missing_language_heading = true;
+        try page_sections.append(page_allocator, .{ .heading = "Unclassified", .source = source });
+    }
 
     for (page_sections.items, 0..) |section, index| {
         var seen_before = false;
@@ -391,7 +397,7 @@ fn processMain(
                 try joined.appendSlice(page_allocator, candidate.source);
             break :blk joined.items;
         } else section.source;
-        const payload = try presentation_document.compileAlloc(
+        const payload = try presentation_document.compileReportedAlloc(
             page_allocator,
             title,
             .language,
@@ -399,6 +405,7 @@ fn processMain(
             "",
             expanded,
             if (display_title) |value| .{ .source = value, .page_title = title } else null,
+            fallbacks,
         );
         try spools.appendLanguage(page_allocator, section.heading, title, payload);
         stats.language_records += 1;
@@ -413,6 +420,7 @@ fn processNamespace(
     source: []const u8,
     display_title: ?[]const u8,
     stats: *BuildStats,
+    fallbacks: *presentation_document.Fallbacks,
 ) !void {
     const local_title = localNamespaceTitle(title);
     const kind: blob_format.BlobKind = switch (ns) {
@@ -423,7 +431,7 @@ fn processNamespace(
         ns_sign_gloss => .sign_gloss,
         else => unreachable,
     };
-    const payload = try presentation_document.compileAlloc(
+    const payload = try presentation_document.compileReportedAlloc(
         page_allocator,
         local_title,
         kind,
@@ -431,6 +439,7 @@ fn processNamespace(
         "",
         source,
         if (display_title) |value| .{ .source = value, .page_title = title } else null,
+        fallbacks,
     );
     switch (kind) {
         .thesaurus => {
@@ -469,6 +478,7 @@ pub const Writer = struct {
     allocator: std.mem.Allocator,
     output_root: []const u8,
     spools: Spools,
+    fallback_file: std.Io.File,
     stats: BuildStats = .{},
     closed: bool = false,
     finished: bool = false,
@@ -490,27 +500,81 @@ pub const Writer = struct {
 
         const owned_root = try allocator.dupe(u8, output_root);
         errdefer allocator.free(owned_root);
+        var spools = try Spools.init(io, allocator, output_root);
+        errdefer {
+            spools.close();
+            spools.cleanup();
+        }
+        const report_path = try std.fs.path.join(allocator, &.{ output_root, "fallback-pages.jsonl" });
+        defer allocator.free(report_path);
         return .{
             .io = io,
             .allocator = allocator,
             .output_root = owned_root,
-            .spools = try Spools.init(io, allocator, output_root),
+            .spools = spools,
+            .fallback_file = try std.Io.Dir.cwd().createFile(io, report_path, .{ .truncate = true }),
         };
     }
 
     pub fn deinit(self: *Writer) void {
         if (!self.closed) self.spools.close();
+        self.fallback_file.close(self.io);
         self.spools.cleanup();
         self.allocator.free(self.output_root);
         self.* = undefined;
     }
 
     pub fn addPage(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, source: []const u8, display_title: ?[]const u8) !void {
+        return self.addPageWithFallbackReasons(page_allocator, ns, title, source, display_title, .{}, &.{});
+    }
+
+    pub fn addPageWithFallback(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, source: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks) !void {
+        return self.addPageWithFallbackReasons(page_allocator, ns, title, source, display_title, initial_fallbacks, &.{});
+    }
+
+    pub fn addPageWithFallbackReasons(
+        self: *Writer,
+        page_allocator: std.mem.Allocator,
+        ns: u32,
+        title: []const u8,
+        source: []const u8,
+        display_title: ?[]const u8,
+        initial_fallbacks: presentation_document.Fallbacks,
+        extra_reasons: []const []const u8,
+    ) !void {
         if (self.finished) return error.WriterFinished;
+        var fallbacks = initial_fallbacks;
         if (ns == ns_main) {
-            try processMain(page_allocator, &self.spools, title, source, display_title, &self.stats);
+            try processMain(page_allocator, &self.spools, title, source, display_title, &self.stats, &fallbacks);
         } else if (ns == ns_rhymes or ns == ns_thesaurus or ns == ns_citations or ns == ns_sign_gloss or ns == ns_reconstruction) {
-            try processNamespace(page_allocator, &self.spools, ns, title, source, display_title, &self.stats);
+            try processNamespace(page_allocator, &self.spools, ns, title, source, display_title, &self.stats, &fallbacks);
+        }
+        if (fallbacks.any() or extra_reasons.len != 0) {
+            var reasons: std.ArrayList([]const u8) = .empty;
+            defer reasons.deinit(page_allocator);
+            inline for (@typeInfo(presentation_document.Fallbacks).@"struct".fields) |field|
+                if (@field(fallbacks, field.name)) try reasons.append(page_allocator, field.name);
+            for (extra_reasons) |reason| {
+                if (reason.len == 0) continue;
+                var duplicate = false;
+                for (reasons.items) |existing| if (std.mem.eql(u8, existing, reason)) {
+                    duplicate = true;
+                    break;
+                };
+                if (!duplicate) try reasons.append(page_allocator, reason);
+            }
+            const line = try std.json.Stringify.valueAlloc(page_allocator, .{
+                .namespace = ns,
+                .title = title,
+                .reasons = reasons.items,
+            }, .{});
+            defer page_allocator.free(line);
+            var buffer: [4096]u8 = undefined;
+            var output = self.fallback_file.writerStreaming(self.io, &buffer);
+            try output.interface.writeAll(line);
+            try output.interface.writeByte('\n');
+            try output.interface.flush();
+            self.stats.fallback_pages += 1;
         }
     }
 
@@ -621,4 +685,39 @@ test "wikitext writer emits only data blobs" {
             return error.RuntimeArtifactLeaked;
         } else |err| try std.testing.expectEqual(error.FileNotFound, err);
     }
+}
+
+test "fallback report names every recovered page and retains unclassified entries" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    try writer.addPage(a, 0, "quoted\"title", "No heading, but readable content.", null);
+    try writer.addPage(a, 0, "broken", "==English==\nB ]]word]]", null);
+    try writer.addPageWithFallbackReasons(a, 0, "timeout", "==English==\nScript error: Timeout", null, .{ .expansion_error = true }, &.{"expansion_error:Timeout"});
+    try writer.addPage(a, 0, "normal", "==English==\n# Normal definition.", null);
+    const stats = try writer.finish(.{ .get_fn = struct {
+        fn get(_: ?*const anyopaque, _: []const u8) ?[]const u8 {
+            return null;
+        }
+    }.get });
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 3), stats.fallback_pages);
+    const data = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .unlimited);
+    var lines = std.mem.tokenizeScalar(u8, data, '\n');
+    const first = try std.json.parseFromSlice(std.json.Value, a, lines.next().?, .{});
+    try std.testing.expectEqualStrings("quoted\"title", first.value.object.get("title").?.string);
+    try std.testing.expectEqualStrings("missing_language_heading", first.value.object.get("reasons").?.array.items[0].string);
+    const second = try std.json.parseFromSlice(std.json.Value, a, lines.next().?, .{});
+    try std.testing.expectEqualStrings("broken", second.value.object.get("title").?.string);
+    try std.testing.expectEqualStrings("literal_markup", second.value.object.get("reasons").?.array.items[0].string);
+    const third = try std.json.parseFromSlice(std.json.Value, a, lines.next().?, .{});
+    try std.testing.expectEqualStrings("timeout", third.value.object.get("title").?.string);
+    try std.testing.expectEqualStrings("expansion_error", third.value.object.get("reasons").?.array.items[0].string);
+    try std.testing.expectEqualStrings("expansion_error:Timeout", third.value.object.get("reasons").?.array.items[1].string);
+    try std.testing.expect(lines.next() == null);
 }

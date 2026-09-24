@@ -60,6 +60,28 @@ const ExpansionJob = struct {
     source: []const u8,
 };
 
+const ExpansionFallback = struct {
+    message: []const u8,
+    reason: []const u8,
+};
+
+fn expansionFallbackAlloc(a: std.mem.Allocator, err: anyerror, failure: ?bundle_expander.Failure) !?ExpansionFallback {
+    switch (err) {
+        error.ExpansionFailed, error.Timeout, error.RequestTooLarge => {},
+        else => return null,
+    }
+    const precise = if (err == error.ExpansionFailed) failure else null;
+    const error_name = if (precise) |value| value.error_name else @errorName(err);
+    const reason = if (precise) |value|
+        try std.fmt.allocPrint(a, "expansion_error:{s}:{s}", .{ value.stage, value.error_name })
+    else
+        try std.fmt.allocPrint(a, "expansion_error:{s}", .{error_name});
+    return .{
+        .message = try std.fmt.allocPrint(a, "Script error: {s}", .{error_name}),
+        .reason = reason,
+    };
+}
+
 const ExpansionSlot = struct {
     io: std.Io,
     completion: *std.Io.Event,
@@ -110,6 +132,7 @@ const ExpansionSlot = struct {
         defer {
             self.done.store(false, .release);
             self.busy = false;
+            self.worker.last_failure = null;
             _ = self.arena.reset(.retain_capacity);
         }
         if (self.failure) |err| {
@@ -117,7 +140,20 @@ const ExpansionSlot = struct {
                 "page expansion failed title={s} ordinal={d} ns={d} source_bytes={d} error={s}\n",
                 .{ self.job.title, self.job.ordinal, self.job.ns, self.job.source.len, @errorName(err) },
             );
-            return err;
+            const fallback = (try expansionFallbackAlloc(self.arena.allocator(), err, self.worker.last_failure)) orelse return err;
+            // MediaWiki surfaces script failures as inert error presentation.
+            // Keep the page and report the precise worker stage/error when known;
+            // never invoke an alternate Lua/runtime path.
+            try writer.addPageWithFallbackReasons(
+                self.arena.allocator(),
+                self.job.ns,
+                self.job.title,
+                fallback.message,
+                null,
+                .{ .expansion_error = true },
+                &.{fallback.reason},
+            );
+            return true;
         }
         if (self.expansion) |expanded| {
             writer.addPage(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, expanded.display_title) catch |err| {
@@ -340,7 +376,7 @@ pub fn main(init: std.process.Init) !void {
     const stats = try writer.finish(codes);
 
     std.debug.print(
-        "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d}\n",
+        "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} fallback_pages={d}\n",
         .{
             stats.pages_seen,
             stats.main_pages,
@@ -351,6 +387,7 @@ pub fn main(init: std.process.Init) !void {
             stats.reconstruction_records,
             stats.rhymes_records,
             stats.sign_gloss_records,
+            stats.fallback_pages,
         },
     );
 }

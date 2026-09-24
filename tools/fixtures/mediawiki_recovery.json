@@ -1,0 +1,42 @@
+[
+  {
+    "name": "unclosed-link",
+    "source": "A [[-",
+    "text": "A [[-"
+  },
+  {
+    "name": "orphan-link-closers",
+    "source": "B ]]word]]",
+    "text": "B ]]word]]"
+  },
+  {
+    "name": "unclosed-formatting",
+    "source": "C <small>x<small> y",
+    "text": "C x y"
+  },
+  {
+    "name": "empty-link",
+    "source": "D [[]] E",
+    "text": "D [[]] E"
+  },
+  {
+    "name": "orphan-table-closer",
+    "source": "|}\nAfter",
+    "text": "|} After"
+  },
+  {
+    "name": "rowless-table",
+    "source": "{|\n* [[one]]\n|}",
+    "text": "one"
+  },
+  {
+    "name": "disallowed-html-literal",
+    "source": "X <script>y</script> Z",
+    "text": "X <script>y</script> Z"
+  },
+  {
+    "name": "unsupported-graph-omitted",
+    "source": "X <graph>{}</graph> Z",
+    "text": "X Z"
+  }
+]
