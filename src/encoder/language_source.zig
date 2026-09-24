@@ -35,6 +35,30 @@ pub fn classificationHeading(raw: []const u8) []const u8 {
     return raw;
 }
 
+fn hebrewLanguageCategory(source: []const u8) ?[]const u8 {
+    inline for (&.{ "[[קטגוריה:שפה ", "[[קטגוריה: שפה " }) |marker| {
+        var search: usize = 0;
+        while (std.mem.indexOfPos(u8, source, search, marker)) |at| {
+            const start = at + marker.len;
+            const close = std.mem.indexOfPos(u8, source, start, "]]") orelse return null;
+            const pipe = std.mem.indexOfScalarPos(u8, source, start, '|');
+            const end = if (pipe != null and pipe.? < close) pipe.? else close;
+            const language = std.mem.trim(u8, source[start..end], " \t\r\n");
+            if (language.len != 0 and std.mem.indexOfAny(u8, language, "{}[]") == null) return language;
+            search = close + 2;
+        }
+    }
+    return null;
+}
+
+pub fn classificationSection(section: Section) []const u8 {
+    const heading = classificationHeading(section.heading);
+    if (!std.mem.eql(u8, heading, section.heading)) return heading;
+    if (hebrewLanguageCategory(section.source)) |language| return language;
+    if (std.mem.indexOf(u8, section.source, "{{ניתוח דקדוקי") != null) return "עברית";
+    return section.heading;
+}
+
 pub const Iterator = struct {
     source: []const u8,
     cursor: usize = 0,
@@ -178,9 +202,17 @@ test "table subheadings do not become language sections" {
     try std.testing.expect(it.next() == null);
 }
 
-test "German-style language headings classify from raw Sprache template" {
+test "raw section conventions classify German and Hebrew languages" {
     try std.testing.expectEqualStrings("Deutsch", classificationHeading("Hallo ({{Sprache|Deutsch}})"));
     try std.testing.expectEqualStrings("Latein", classificationHeading("ordo ({{ Sprache | Latein }})"));
     try std.testing.expectEqualStrings("English", classificationHeading("English"));
     try std.testing.expectEqualStrings("x ({{Sprache|{{bad}}}})", classificationHeading("x ({{Sprache|{{bad}}}})"));
+    try std.testing.expectEqualStrings("ספרדית", classificationSection(.{
+        .heading = "HOTEL",
+        .source = "==HOTEL==\n{{ניתוח דקדוקי מקוצר|}}[[קטגוריה:שפה ספרדית]]\n",
+    }));
+    try std.testing.expectEqualStrings("עברית", classificationSection(.{
+        .heading = "מָלוֹן",
+        .source = "==מָלוֹן==\n{{ניתוח דקדוקי|חלק דיבר=שם־עצם}}\n",
+    }));
 }

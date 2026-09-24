@@ -376,7 +376,7 @@ fn processMain(
         while (raw_it.next()) |section| try raw_sections.append(page_allocator, section);
         if (raw_sections.items.len == page_sections.items.len) {
             for (page_sections.items, raw_sections.items) |*expanded, original|
-                expanded.heading = language_source.classificationHeading(original.heading);
+                expanded.heading = language_source.classificationSection(original);
         }
     }
     if (page_sections.items.len == 0 and std.mem.trim(u8, source, " \t\r\n").len != 0) {
