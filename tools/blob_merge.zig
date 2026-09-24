@@ -1,0 +1,202 @@
+const std = @import("std");
+const encoder = @import("encoder");
+const format = encoder.blob_format;
+const catalog = encoder.blob_catalog;
+
+const Mapped = struct {
+    bytes: []align(std.heap.page_size_min) const u8,
+
+    fn deinit(self: *Mapped) void {
+        if (self.bytes.len != 0) std.posix.munmap(self.bytes);
+        self.bytes = &.{};
+    }
+};
+
+fn mmapPath(io: std.Io, path: []const u8) !Mapped {
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+    var file: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
+    defer file.close(io);
+    const stat = try file.stat(io);
+    const len = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
+    if (len == 0) return .{ .bytes = &.{} };
+    return .{ .bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0) };
+}
+
+fn recordLess(_: void, lhs: format.RecordInput, rhs: format.RecordInput) bool {
+    return std.mem.order(u8, lhs.title, rhs.title) == .lt;
+}
+
+fn writeBlob(
+    io: std.Io,
+    path: []const u8,
+    kind: format.BlobKind,
+    metadata: []const u8,
+    records: []format.RecordInput,
+) !void {
+    std.sort.pdq(format.RecordInput, records, {}, recordLess);
+    var previous: ?[]const u8 = null;
+    for (records) |record| {
+        try format.validateRecordInput(record);
+        if (previous) |title| if (std.mem.order(u8, title, record.title) != .lt)
+            return error.DuplicateRecord;
+        previous = record.title;
+    }
+    try format.validateMetadata(kind, metadata);
+    const header = format.encodeHeader(kind);
+    var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
+    defer file.close(io);
+    var buffer: [256 * 1024]u8 = undefined;
+    var writer = file.writer(io, &buffer);
+    const out = &writer.interface;
+    try out.writeAll(&header);
+    try out.writeAll(metadata);
+    for (records) |record| {
+        try out.writeAll(record.title);
+        try out.writeByte(0);
+        var encoded_len: [format.max_varuint_len]u8 = undefined;
+        try out.writeAll(format.encodePayloadLength(record.payload.len, &encoded_len));
+        try out.writeAll(record.payload);
+    }
+    try out.flush();
+}
+
+fn mergeOne(
+    io: std.Io,
+    a: std.mem.Allocator,
+    output_path: []const u8,
+    kind: format.BlobKind,
+    input_paths: []const []const u8,
+) !usize {
+    var maps: std.ArrayList(Mapped) = .empty;
+    defer {
+        for (maps.items) |*mapped| mapped.deinit();
+        maps.deinit(a);
+    }
+    var records: std.ArrayList(format.RecordInput) = .empty;
+    defer records.deinit(a);
+    var metadata: ?[]const u8 = null;
+    for (input_paths) |path| {
+        var mapped = mmapPath(io, path) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        errdefer mapped.deinit();
+        const blob = try format.inspect(mapped.bytes);
+        if (blob.kind != kind) return error.KindMismatch;
+        if (metadata) |expected| {
+            if (!std.mem.eql(u8, expected, blob.metadata)) return error.MetadataMismatch;
+        } else metadata = blob.metadata;
+        var it = blob.iterator();
+        while (try it.next()) |record|
+            try records.append(a, .{ .title = record.title, .payload = record.payload });
+        try maps.append(a, mapped);
+    }
+    if (maps.items.len == 0) return 0;
+    try writeBlob(io, output_path, kind, metadata.?, records.items);
+    return records.items.len;
+}
+
+fn loadHeadings(io: std.Io, a: std.mem.Allocator, roots: []const []const u8) ![][]const u8 {
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    defer seen.deinit(a);
+    var headings: std.ArrayList([]const u8) = .empty;
+    errdefer headings.deinit(a);
+    for (roots) |root| {
+        const path = try std.fs.path.join(a, &.{ root, catalog.manifest_filename });
+        defer a.free(path);
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .unlimited);
+        defer a.free(bytes);
+        var it = try catalog.Iterator.init(bytes);
+        while (try it.next()) |entry| {
+            if (seen.contains(entry.heading)) continue;
+            const heading = try a.dupe(u8, entry.heading);
+            try seen.put(a, heading, {});
+            try headings.append(a, heading);
+        }
+    }
+    const less = struct {
+        fn f(_: void, lhs: []const u8, rhs: []const u8) bool {
+            return std.mem.order(u8, lhs, rhs) == .lt;
+        }
+    }.f;
+    std.sort.pdq([]const u8, headings.items, {}, less);
+    return headings.toOwnedSlice(a);
+}
+
+fn mergeFallbackReports(io: std.Io, a: std.mem.Allocator, output_root: []const u8, roots: []const []const u8) !void {
+    const output_path = try std.fs.path.join(a, &.{ output_root, "fallback-pages.jsonl" });
+    defer a.free(output_path);
+    var file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .truncate = true });
+    defer file.close(io);
+    var buffer: [64 * 1024]u8 = undefined;
+    var writer = file.writer(io, &buffer);
+    for (roots) |root| {
+        const path = try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" });
+        defer a.free(path);
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .unlimited);
+        defer a.free(bytes);
+        try writer.interface.writeAll(bytes);
+    }
+    try writer.interface.flush();
+}
+
+pub fn main(init: std.process.Init) !void {
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    if (args.len < 4) {
+        std.debug.print("usage: dict-blob-merge OUTPUT_ROOT SHARD_ROOT SHARD_ROOT...\n", .{});
+        return error.Usage;
+    }
+    const a = std.heap.smp_allocator;
+    const output_root = args[1];
+    var output_exists = true;
+    std.Io.Dir.cwd().access(init.io, output_root, .{}) catch |err| switch (err) {
+        error.FileNotFound => output_exists = false,
+        else => return err,
+    };
+    if (output_exists) return error.OutputExists;
+    try std.Io.Dir.cwd().createDirPath(init.io, output_root);
+    const language_root = try std.fs.path.join(a, &.{ output_root, catalog.language_directory });
+    defer a.free(language_root);
+    try std.Io.Dir.cwd().createDirPath(init.io, language_root);
+
+    const roots = args[2..];
+    const headings = try loadHeadings(init.io, a, roots);
+    defer {
+        for (headings) |heading| a.free(heading);
+        a.free(headings);
+    }
+    const manifest_path = try std.fs.path.join(a, &.{ output_root, catalog.manifest_filename });
+    defer a.free(manifest_path);
+    var manifest_file = try std.Io.Dir.cwd().createFile(init.io, manifest_path, .{ .truncate = true });
+    defer manifest_file.close(init.io);
+    var manifest_buffer: [64 * 1024]u8 = undefined;
+    var manifest = manifest_file.writer(init.io, &manifest_buffer);
+    try manifest.interface.writeAll(catalog.manifest_header ++ "\n");
+
+    var input_paths = try a.alloc([]const u8, roots.len);
+    defer a.free(input_paths);
+    var language_records: usize = 0;
+    for (headings) |heading| {
+        var filename_buffer: [catalog.language_blob_filename_len]u8 = undefined;
+        const filename = catalog.languageBlobFilename(heading, &filename_buffer);
+        for (roots, 0..) |root, i| input_paths[i] = try std.fs.path.join(a, &.{ root, catalog.language_directory, filename });
+        defer for (input_paths) |path| a.free(path);
+        const output_path = try std.fs.path.join(a, &.{ output_root, catalog.language_directory, filename });
+        defer a.free(output_path);
+        language_records += try mergeOne(init.io, a, output_path, .language, input_paths);
+        try catalog.writeEntry(&manifest.interface, heading);
+    }
+    try manifest.interface.flush();
+
+    var fixed_records: usize = 0;
+    inline for (.{ format.BlobKind.thesaurus, .citations, .reconstruction, .rhymes, .sign_gloss }) |kind| {
+        const filename = catalog.featureBlobFilename(kind).?;
+        for (roots, 0..) |root, i| input_paths[i] = try std.fs.path.join(a, &.{ root, filename });
+        defer for (input_paths) |path| a.free(path);
+        const output_path = try std.fs.path.join(a, &.{ output_root, filename });
+        defer a.free(output_path);
+        fixed_records += try mergeOne(init.io, a, output_path, kind, input_paths);
+    }
+    try mergeFallbackReports(init.io, a, output_root, roots);
+    std.debug.print("merged shards={d} language_blobs={d} language_records={d} fixed_records={d}\n", .{ roots.len, headings.len, language_records, fixed_records });
+}

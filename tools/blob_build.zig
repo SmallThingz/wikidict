@@ -10,6 +10,7 @@ const Options = struct {
     limit_pages: ?usize = null,
     expander_root: []const u8 = "",
     workers: usize = 1,
+    now_unix: ?i64 = null,
 };
 
 const Mapped = struct {
@@ -163,13 +164,14 @@ const ExpansionPool = struct {
         executable: []const u8,
         dump: []const u8,
         count: usize,
+        now_unix: ?i64,
     ) !ExpansionPool {
         const completion = try allocator.create(std.Io.Event);
         errdefer allocator.destroy(completion);
         completion.* = .unset;
         const slots = try allocator.alloc(ExpansionSlot, count);
         errdefer allocator.free(slots);
-        const pinned_now = std.Io.Clock.real.now(io).toSeconds();
+        const pinned_now = now_unix orelse std.Io.Clock.real.now(io).toSeconds();
         for (slots) |*slot| {
             var worker = bundle_expander.Worker.init(io, root, executable, dump);
             worker.now_unix = pinned_now;
@@ -256,6 +258,10 @@ fn parseOptions(args: []const []const u8) !Options {
             if (index >= args.len) return error.Usage;
             out.workers = try std.fmt.parseInt(usize, args[index], 10);
             if (out.workers == 0 or out.workers > 16) return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--now-unix")) {
+            index += 1;
+            if (index >= args.len or out.now_unix != null) return error.Usage;
+            out.now_unix = try std.fmt.parseInt(i64, args[index], 10);
         } else if (std.mem.eql(u8, arg, "--expander-root")) {
             index += 1;
             if (index >= args.len or out.expander_root.len != 0) return error.Usage;
@@ -273,11 +279,11 @@ pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3) {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--limit-pages N] [--workers N]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--limit-pages N] [--workers N]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
         return error.Usage;
     };
 
@@ -295,7 +301,7 @@ pub fn main(init: std.process.Init) !void {
 
     const worker_path = try std.fs.path.join(a, &.{ options.expander_root, "dict-bundle-expander" });
     defer a.free(worker_path);
-    var pool = try ExpansionPool.init(init.io, a, options.expander_root, worker_path, args[1], options.workers);
+    var pool = try ExpansionPool.init(init.io, a, options.expander_root, worker_path, args[1], options.workers, options.now_unix);
     defer pool.deinit();
 
     var writer = try encoder.blob_builder.Writer.init(init.io, a, args[2]);
