@@ -74,6 +74,7 @@ fn verifyBlob(
     if (blob.kind != expected_kind) return error.UnexpectedBlobKind;
 
     const metadata = if (expected_kind == .language) try blob.languageMetadata() else null;
+    if (metadata) |language| if (language.code.len == 0) return error.UnverifiedLanguage;
     if (expected_language) |heading| {
         if (metadata == null or !std.mem.eql(u8, metadata.?.heading, heading)) return error.UnexpectedLanguageBlob;
     } else if (metadata != null) return error.InvalidBlob;

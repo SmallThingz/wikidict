@@ -190,6 +190,12 @@ Build downloaded snapshots:
 python3 tools/build_wiktionaries.py --in data/dumps --out data/dictionaries
 ```
 
+Whole-edition discovery also snapshots authoritative language names. It needs the
+ISO 639-3 JSON table from the `iso-codes` package (normally
+`/usr/share/iso-codes/json/iso_639-3.json`), or set `ISO_639_3_JSON` to an
+equivalent file. The resulting per-edition registry is pinned alongside the dump
+snapshot and reused on resume.
+
 Catalogue format and publishing details are documented in
 [docs/catalogues.md](docs/catalogues.md).
 

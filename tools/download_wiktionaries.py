@@ -7,6 +7,7 @@ publication and at most three connections keep reruns safe and predictable.
 import argparse
 import concurrent.futures
 import hashlib
+import functools
 import json
 import os
 import shutil
@@ -22,6 +23,10 @@ import urllib.request
 BASE = "https://dumps.wikimedia.org"
 AGENT = "Wikidict/1.0 (https://github.com/SmallThingz/wikidict)"
 JOBS = ("metacurrentdump", "categorytable", "categorylinkstable", "pagepropstable", "redirecttable", "sitestatstable", "linktargettable")
+ISO_639_3_PATHS = (
+    Path("/usr/share/iso-codes/json/iso_639-3.json"),
+    Path("/usr/local/share/iso-codes/json/iso_639-3.json"),
+)
 
 def request(url, offset=0):
     headers = {"User-Agent": AGENT}
@@ -63,6 +68,205 @@ def snapshot(wiki, jobs):
                 files.append(dict(wiki=wiki, date=date, name=name, url=url, size=info["size"], sha1=info["sha1"]))
         return files
     raise ValueError(f"No complete snapshot for {wiki}")
+
+def wiktionary_api(wiki):
+    if not re.fullmatch(r"[a-z0-9_]+wiktionary", wiki):
+        raise ValueError(f"Invalid edition: {wiki}")
+    prefix = wiki[:-len("wiktionary")].replace("_", "-")
+    return f"https://{prefix}.wiktionary.org/w/api.php"
+
+def siteinfo(wiki, props, language=None):
+    query = {
+        "action": "query",
+        "meta": "siteinfo",
+        "siprop": props,
+        "format": "json",
+        "formatversion": "2",
+    }
+    if language is not None:
+        query["siinlanguagecode"] = language
+    data = json.loads(fetch(wiktionary_api(wiki) + "?" + urllib.parse.urlencode(query)))
+    result = data.get("query")
+    if not isinstance(result, dict):
+        raise ValueError(f"Invalid siteinfo response for {wiki}")
+    return result
+
+@functools.lru_cache(maxsize=4)
+def _load_iso_639_3(path):
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    rows = data.get("639-3")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(f"Invalid ISO 639-3 data: {path}")
+    return tuple(rows)
+
+def iso_639_3(path=None):
+    if path is None:
+        configured = os.environ.get("ISO_639_3_JSON")
+        candidates = ([Path(configured)] if configured else []) + list(ISO_639_3_PATHS)
+        path = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if path is None:
+        raise ValueError("ISO 639-3 data not found; install the iso-codes package or set ISO_639_3_JSON")
+    return _load_iso_639_3(str(Path(path).resolve()))
+
+def _capitalized_alias(name):
+    return name[:1].upper() + name[1:] if name else name
+
+def language_registry_snapshot(wiki, iso_path=None):
+    base = siteinfo(wiki, "general|languages")
+    general = base.get("general")
+    site_languages = base.get("languages")
+    if not isinstance(general, dict) or not isinstance(site_languages, list):
+        raise ValueError(f"Missing site language metadata for {wiki}")
+    content_language = general.get("lang")
+    if not isinstance(content_language, str) or not re.fullmatch(r"[A-Za-z0-9-]+", content_language):
+        raise ValueError(f"Invalid content language for {wiki}")
+
+    localized = siteinfo(wiki, "languages", content_language).get("languages")
+    if not isinstance(localized, list):
+        raise ValueError(f"Missing localized language names for {wiki}")
+    localized_by_code = {}
+    for row in localized:
+        if not isinstance(row, dict) or not isinstance(row.get("code"), str) or not isinstance(row.get("name"), str):
+            raise ValueError(f"Invalid localized language row for {wiki}")
+        if row["code"] in localized_by_code:
+            raise ValueError(f"Duplicate localized language code for {wiki}: {row['code']}")
+        localized_by_code[row["code"]] = row["name"]
+
+    iso_by_code = {}
+    for row in iso_639_3(iso_path):
+        if not isinstance(row, dict):
+            raise ValueError("Invalid ISO 639-3 row")
+        alpha3 = row.get("alpha_3")
+        name = row.get("name")
+        if not isinstance(alpha3, str) or not re.fullmatch(r"[a-z]{3}", alpha3) or not isinstance(name, str) or not name:
+            raise ValueError("Invalid ISO 639-3 row")
+        canonical = row.get("alpha_2") or alpha3
+        if not isinstance(canonical, str) or not re.fullmatch(r"[a-z]{2,3}", canonical):
+            raise ValueError("Invalid ISO 639-3 code")
+        if canonical in iso_by_code:
+            raise ValueError(f"Duplicate ISO 639-3 canonical code: {canonical}")
+        aliases = []
+        for alias in (name, _capitalized_alias(name), canonical, alpha3, row.get("bibliographic"), row.get("common_name")):
+            if isinstance(alias, str) and alias and alias not in aliases:
+                aliases.append(alias)
+        iso_by_code[canonical] = aliases
+
+    site_entries = []
+    site_codes = set()
+    for row in site_languages:
+        if not isinstance(row, dict):
+            raise ValueError(f"Invalid site language row for {wiki}")
+        code, default_name, bcp47 = row.get("code"), row.get("name"), row.get("bcp47")
+        if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9-]+", code):
+            raise ValueError(f"Invalid site language code for {wiki}")
+        if not isinstance(default_name, str) or not default_name:
+            raise ValueError(f"Invalid site language name for {wiki}")
+        if bcp47 is not None and (not isinstance(bcp47, str) or not re.fullmatch(r"[A-Za-z0-9-]+", bcp47)):
+            raise ValueError(f"Invalid site BCP47 code for {wiki}")
+        if code in site_codes:
+            raise ValueError(f"Duplicate site language code for {wiki}: {code}")
+        site_codes.add(code)
+
+        preferred = localized_by_code.get(code, default_name)
+        aliases = [preferred, _capitalized_alias(preferred)]
+        for alias in (
+            _capitalized_alias(default_name), default_name,
+            code, bcp47,
+        ):
+            if isinstance(alias, str) and alias and alias not in aliases:
+                aliases.append(alias)
+
+        # Add ISO aliases when the site code itself is canonical ISO 639, or when
+        # its BCP47 code names the same base language. Script/region variants keep
+        # their own canonical label while still retaining the raw site code.
+        iso_key = code.lower() if code.lower() in iso_by_code else None
+        if iso_key is None and isinstance(bcp47, str) and re.fullmatch(r"[A-Za-z]{2,3}", bcp47):
+            candidate = bcp47.lower()
+            if candidate in iso_by_code:
+                iso_key = candidate
+        if iso_key is not None:
+            for alias in iso_by_code[iso_key]:
+                if alias not in aliases:
+                    aliases.append(alias)
+        site_entries.append([code, aliases])
+
+    if set(localized_by_code) != site_codes:
+        raise ValueError(f"Inconsistent localized language registry for {wiki}")
+
+    # ISO rows already represented by an exact MediaWiki code are folded into
+    # those rows. Remaining ISO languages provide explicit-code resolution for
+    # Wiktionary markers such as aiw even if MediaWiki itself has no UI locale.
+    iso_entries = [
+        [code, aliases.copy()]
+        for code, aliases in sorted(iso_by_code.items())
+        if code not in site_codes
+    ]
+
+    entries = site_entries + iso_entries
+    label_counts = {}
+    for _, aliases in entries:
+        label = aliases[0]
+        label_counts[label] = label_counts.get(label, 0) + 1
+
+    used_labels = set()
+    for code, aliases in entries:
+        label = aliases[0]
+        if label_counts[label] != 1 or label in used_labels:
+            label = f"{label} ({code})"
+        suffix = 2
+        base_label = label
+        while label in used_labels:
+            label = f"{base_label} {suffix}"
+            suffix += 1
+        used_labels.add(label)
+        aliases[:] = [label, *[alias for alias in aliases if alias != label]]
+
+    rows = [
+        "# wikidict-language-registry-v2",
+        f"# content-language\t{content_language}",
+        "# mediawiki",
+    ]
+    rows.extend("\t".join([code, *aliases]) for code, aliases in sorted(site_entries))
+    rows.append("# iso-639-3")
+    rows.extend("\t".join([code, *aliases]) for code, aliases in iso_entries)
+    return content_language, "\n".join(rows) + "\n"
+
+def sha256_digest(path):
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+def write_language_registry(root, wiki, date, text, content_language):
+    folder = root / wiki / date
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "language-registry.tsv"
+    temp = path.with_suffix(".part")
+    temp.write_text(text, encoding="utf-8")
+    os.replace(temp, path)
+    return dict(
+        wiki=wiki,
+        date=date,
+        name=path.name,
+        content_language=content_language,
+        size=path.stat().st_size,
+        sha256=sha256_digest(path),
+    )
+
+def validate_registry_item(item):
+    if not re.fullmatch(r"[a-z0-9_]+wiktionary", item.get("wiki", "")) or not re.fullmatch(r"[0-9]{8}", item.get("date", "")):
+        raise ValueError("Invalid language registry identity")
+    if item.get("name") != "language-registry.tsv":
+        raise ValueError("Invalid language registry filename")
+    if not re.fullmatch(r"[A-Za-z0-9-]+", item.get("content_language", "")):
+        raise ValueError("Invalid content language")
+    if not re.fullmatch(r"[a-f0-9]{64}", item.get("sha256", "")) or not isinstance(item.get("size"), int) or item["size"] <= 0:
+        raise ValueError("Invalid language registry checksum or size")
+
+def validate_registry_file(root, item):
+    validate_registry_item(item)
+    path = root / item["wiki"] / item["date"] / item["name"]
+    if not path.is_file() or path.stat().st_size != item["size"] or sha256_digest(path) != item["sha256"]:
+        raise ValueError(f"Missing or unverified language registry: {path}")
+    return path
 
 def digest(path):
     with path.open("rb") as source:
@@ -214,34 +418,58 @@ def main():
     args = parser.parse_args()
     args.output = args.output.expanduser().resolve()
     args.output.mkdir(parents=True, exist_ok=True)
+
     if args.resume:
         manifest = json.loads((args.output / "manifest.json").read_text())
+        for item in manifest.get("language_registries", []):
+            validate_registry_file(args.output, item)
         if args.plan:
             print(f"{len(manifest['files'])} files in saved manifest")
         else:
             download_all(manifest["files"], args.output, args.connections)
         return
-    files, failures = [], []
+
+    requested = args.wikis or editions()
+    files, registries, failures = [], [], []
+
+    def discover(wiki):
+        selected = snapshot(wiki, JOBS[:1] if args.xml_only else JOBS)
+        if not selected:
+            raise ValueError(f"No dump files for {wiki}")
+        dates = {item["date"] for item in selected}
+        if len(dates) != 1:
+            raise ValueError(f"Mixed snapshot dates for {wiki}")
+        content_language, registry_text = language_registry_snapshot(wiki)
+        return selected, content_language, registry_text
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.connections) as pool:
-        jobs = {pool.submit(snapshot, wiki, JOBS[:1] if args.xml_only else JOBS): wiki for wiki in (args.wikis or editions())}
+        jobs = {pool.submit(discover, wiki): wiki for wiki in requested}
         for completed, future in enumerate(concurrent.futures.as_completed(jobs), 1):
+            wiki = jobs[future]
             try:
-                files.extend(future.result())
+                selected, content_language, registry_text = future.result()
+                files.extend(selected)
+                registries.append(write_language_registry(
+                    args.output, wiki, selected[0]["date"], registry_text, content_language,
+                ))
             except Exception as error:
-                failures.append(f"{jobs[future]}: {error}")
-            line = discovery_line(completed, len(jobs), jobs[future], args.output)
+                failures.append(f"{wiki}: {error}")
+            line = discovery_line(completed, len(jobs), wiki, args.output)
             if sys.stdout.isatty():
                 print("\r\033[2K" + line, end="", flush=True)
             else:
                 print(line, flush=True)
-        if jobs and sys.stdout.isatty(): print(flush=True)
-        files.sort(key=lambda x: (x["wiki"], x["name"]))
-        args.output.mkdir(parents=True, exist_ok=True)
-        manifest = args.output / "manifest.json"
-        tmp = manifest.with_suffix(".part")
-        tmp.write_text(json.dumps(dict(files=files, failures=failures), indent=2) + "\n")
-        os.replace(tmp, manifest)
-        print(f"{len(files)} files, {sum(x['size'] for x in files):,} bytes; manifest: {manifest}", flush=True)
+        if jobs and sys.stdout.isatty():
+            print(flush=True)
+
+    files.sort(key=lambda x: (x["wiki"], x["name"]))
+    registries.sort(key=lambda x: x["wiki"])
+    manifest = args.output / "manifest.json"
+    temp = manifest.with_suffix(".part")
+    temp.write_text(json.dumps(dict(files=files, language_registries=registries, failures=failures), indent=2) + "\n")
+    os.replace(temp, manifest)
+    print(f"{len(files)} files, {sum(x['size'] for x in files):,} bytes; manifest: {manifest}", flush=True)
+
     if not args.plan:
         download_all(files, args.output, args.connections)
     for error in failures:

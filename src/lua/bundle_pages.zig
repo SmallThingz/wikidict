@@ -490,14 +490,21 @@ pub const Provider = struct {
         try entries.ensureTotalCapacity(self.a, capacity);
 
         var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        var mediawiki_rows = true;
         while (lines.next()) |line| {
-            if (line.len == 0 or line[0] == '#') continue;
+            if (std.mem.eql(u8, line, "# iso-639-3")) {
+                mediawiki_rows = false;
+                continue;
+            }
+            if (line.len == 0 or line[0] == '#' or !mediawiki_rows) continue;
             const tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidLanguageRegistrySnapshot;
-            if (std.mem.indexOfScalarPos(u8, line, tab + 1, '\t') != null)
-                return error.InvalidLanguageRegistrySnapshot;
             const code = line[0..tab];
-            const name = line[tab + 1 ..];
+            const aliases = line[tab + 1 ..];
+            const next_tab = std.mem.indexOfScalar(u8, aliases, '\t') orelse aliases.len;
+            const name = aliases[0..next_tab];
             if (code.len == 0 or name.len == 0) return error.InvalidLanguageRegistrySnapshot;
+            var alias_it = std.mem.splitScalar(u8, aliases, '\t');
+            while (alias_it.next()) |alias| if (alias.len == 0) return error.InvalidLanguageRegistrySnapshot;
             const result = try entries.getOrPut(self.a, code);
             if (result.found_existing) return error.DuplicateLanguageRegistryCode;
             result.value_ptr.* = name;
@@ -963,9 +970,13 @@ test "provider loads complete known-language registry" {
     defer a.free(snapshot_path);
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = snapshot_path,
-        .data = "# code\tname\n" ++
-            "en\tEnglish\n" ++
-            "es\tespañol\n",
+        .data = "# wikidict-language-registry-v2\n" ++
+            "# content-language\tes\n" ++
+            "# mediawiki\n" ++
+            "en\tEnglish\ten\teng\n" ++
+            "es\tespañol\tEspañol\tes\tspa\n" ++
+            "# iso-639-3\n" ++
+            "aiw\tAari\taiw\n",
     });
 
     var provider = try Provider.init(io, a, root, "unused-dump.xml");
@@ -974,6 +985,7 @@ test "provider loads complete known-language registry" {
     try std.testing.expect(try known(&provider, "en"));
     try std.testing.expect(try known(&provider, "es"));
     try std.testing.expect(!try known(&provider, "zz-invalid"));
+    try std.testing.expect(!try known(&provider, "aiw"));
 }
 
 test "provider loads pinned file metadata and fails closed on unknown files" {

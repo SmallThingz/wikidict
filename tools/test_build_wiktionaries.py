@@ -22,6 +22,17 @@ class BuildTest(unittest.TestCase):
             target=Path(str(raw)+'.xz')
             self.assertFalse(raw.exists())
             self.assertEqual(lzma.open(target).read(),payload)
+    def test_language_registry_is_generated_once_and_cached(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'language_registry_snapshot',return_value=('en','# content-language\ten\nen\tEnglish\n')) as generate:
+                first=b.ensure_language_registry(root,root/'output','testwiktionary','20260901')
+                second=b.ensure_language_registry(root,root/'output','testwiktionary','20260901')
+            self.assertEqual(first,second)
+            self.assertEqual(generate.call_count,1)
+            self.assertIn('English',first.read_text())
+            self.assertTrue(str(first).endswith('output/testwiktionary/20260901.language-registry.tsv'))
+
     def test_in_and_out_aliases(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -86,6 +97,7 @@ class BuildTest(unittest.TestCase):
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            registry=folder/'language-registry.tsv';registry.write_text('# content-language\ten\nen\tEnglish\n')
             calls=[]
             real_run=subprocess.run
             def run(command,**kwargs):
@@ -100,6 +112,7 @@ class BuildTest(unittest.TestCase):
                 b.build([item],root,root/'output','zig',2)
             self.assertIn('verify-blobs',calls[1]);self.assertTrue((root/'output/testwiktionary/20260901/complete.json').exists())
             self.assertIn('--llvm-workers',calls[0])
+            self.assertIn('--language-registry-snapshot',calls[0])
             final=root/'output/testwiktionary/20260901'
             metadata=json.loads((final/'complete.json').read_text())
             self.assertEqual(metadata['fallback_pages'],2)
@@ -114,6 +127,7 @@ class BuildTest(unittest.TestCase):
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            (folder/'language-registry.tsv').write_text('# content-language\ten\nen\tEnglish\n')
             staging=root/'output/testwiktionary/20260901.building';staging.mkdir(parents=True)
             (staging/'fallback-pages.jsonl').write_text('')
             (staging/'languages.tsv').write_text('heading\n')
@@ -140,6 +154,7 @@ class BuildTest(unittest.TestCase):
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            (folder/'language-registry.tsv').write_text('# content-language\ten\nen\tEnglish\n')
             stale=root/'output/testwiktionary/20260901.building';stale.mkdir(parents=True)
             (stale/'old').write_text('failed')
             def run(command,**kwargs):

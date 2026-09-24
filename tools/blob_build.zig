@@ -34,12 +34,26 @@ fn mmapPath(io: std.Io, path: []const u8) !Mapped {
 }
 
 fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const u8) !language_registry.Registry {
+    var out = language_registry.Registry.empty(a);
+    errdefer out.deinit();
+
+    const snapshot_path = try std.fs.path.join(a, &.{ expander_root, "language-registry.tsv" });
+    defer a.free(snapshot_path);
+    const snapshot = std.Io.Dir.cwd().readFileAlloc(io, snapshot_path, a, .unlimited) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    if (snapshot) |bytes| {
+        defer a.free(bytes);
+        try out.addTsv(bytes);
+    }
+
     const manifest_path = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });
     defer a.free(manifest_path);
     var manifest = try mmapPath(io, manifest_path);
     defer manifest.deinit();
     const title_marker = "\"title\":\"Module:languages/canonical names\"";
-    const marker = std.mem.indexOf(u8, manifest.bytes, title_marker) orelse return language_registry.Registry.empty(a);
+    const marker = std.mem.indexOf(u8, manifest.bytes, title_marker) orelse return out;
     const line_start = if (std.mem.lastIndexOfScalar(u8, manifest.bytes[0..marker], '\n')) |newline| newline + 1 else 0;
     const line_end = std.mem.indexOfScalarPos(u8, manifest.bytes, marker, '\n') orelse manifest.bytes.len;
     const line = manifest.bytes[line_start..line_end];
@@ -51,7 +65,8 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     defer a.free(module_path);
     const source = try std.Io.Dir.cwd().readFileAlloc(io, module_path, a, .unlimited);
     defer a.free(source);
-    return language_registry.Registry.fromLuaAlloc(a, source);
+    try out.addLua(source);
+    return out;
 }
 
 const ExpansionJob = struct {
@@ -297,6 +312,34 @@ pub fn main(init: std.process.Init) !void {
                 return value.code(heading);
             }
         }.get,
+        .resolve_fn = struct {
+            fn resolve(raw: ?*const anyopaque, value_text: []const u8) ?encoder.blob_builder.ResolvedLanguage {
+                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
+                const resolved = value.resolve(value_text) orelse return null;
+                return .{ .code = resolved.code, .heading = resolved.heading };
+            }
+        }.resolve,
+        .trusted_fn = struct {
+            fn trusted(raw: ?*const anyopaque, value_text: []const u8) ?encoder.blob_builder.ResolvedLanguage {
+                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
+                const resolved = value.resolveTrusted(value_text) orelse return null;
+                return .{ .code = resolved.code, .heading = resolved.heading };
+            }
+        }.trusted,
+        .strong_fn = struct {
+            fn strong(raw: ?*const anyopaque, value_text: []const u8) ?encoder.blob_builder.ResolvedLanguage {
+                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
+                const resolved = value.resolveStrong(value_text) orelse return null;
+                return .{ .code = resolved.code, .heading = resolved.heading };
+            }
+        }.strong,
+        .content_fn = struct {
+            fn content(raw: ?*const anyopaque) ?encoder.blob_builder.ResolvedLanguage {
+                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
+                const resolved = value.content() orelse return null;
+                return .{ .code = resolved.code, .heading = resolved.heading };
+            }
+        }.content,
     };
 
     const worker_path = try std.fs.path.join(a, &.{ options.expander_root, "dict-bundle-expander" });
@@ -306,6 +349,7 @@ pub fn main(init: std.process.Init) !void {
 
     var writer = try encoder.blob_builder.Writer.init(init.io, a, args[2]);
     defer writer.deinit();
+    writer.language_codes = codes;
     const page_index_path = try std.fs.path.join(a, &.{ options.expander_root, "page-index.tsv" });
     defer a.free(page_index_path);
     var page_index = try mmapPath(init.io, page_index_path);

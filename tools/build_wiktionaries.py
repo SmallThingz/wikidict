@@ -12,9 +12,24 @@ from pathlib import Path
 import shutil
 import subprocess
 from compress_blobs import compress, compress_many, default_workers, verify_round_trip
-from download_wiktionaries import digest, validate_item
+from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry
 
 PROJECT = Path(__file__).resolve().parent.parent
+
+def ensure_language_registry(downloads, output, edition, date):
+    source = downloads / edition / date / 'language-registry.tsv'
+    if source.is_file():
+        return source
+    cached = output / edition / (date + '.language-registry.tsv')
+    if cached.is_file():
+        return cached
+    content_language, text = language_registry_snapshot(edition)
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    temp = cached.with_suffix(cached.suffix + '.part')
+    temp.write_text(text, encoding='utf-8')
+    os.replace(temp, cached)
+    return cached
+
 
 def build(items, downloads, output, zig, compression_workers=None):
     for item in items:
@@ -123,6 +138,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
     (PROJECT / '.tmp').mkdir(exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix=f'build-{edition}-{date}-', dir=PROJECT / '.tmp'))
     try:
+        registry = ensure_language_registry(downloads, output, edition, date)
         dump = scratch / 'pages.xml'
         # Extraction accepts sequential page elements across multipart XML streams.
         with dump.open('wb') as out:
@@ -131,6 +147,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
                     shutil.copyfileobj(source, out, 1024*1024)
         workers = compression_workers or default_workers()
         subprocess.run([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
+                        '--language-registry-snapshot',str(registry),
                         '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
                         '--page-workers',str(min(workers,16))], cwd=PROJECT, check=True)
         subprocess.run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)], cwd=PROJECT, check=True)

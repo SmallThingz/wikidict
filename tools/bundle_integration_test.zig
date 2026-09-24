@@ -387,6 +387,14 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
     const root = try std.fs.path.join(h.a, &.{ dir, "failure-root" });
     try std.Io.Dir.cwd().createDirPath(h.io, root);
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(h.a, &.{ root, "manifest.jsonl" }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = try std.fs.path.join(h.a, &.{ root, "language-registry.tsv" }),
+        .data = "# wikidict-language-registry-v2\n" ++
+            "# content-language\ten\n" ++
+            "# mediawiki\n" ++
+            "en\tEnglish\ten\teng\n" ++
+            "# iso-639-3\n",
+    });
     const script = try std.fs.path.join(h.a, &.{ root, "dict-bundle-expander" });
     try writeFailureExpander(h, script);
 
@@ -408,7 +416,7 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
     try h.require(reasons == .array and reasons.array.items.len == 2, "operational fallback report contains generic and precise reasons");
     try h.require(std.mem.eql(u8, reasons.array.items[0].string, "expansion_error"), "operational fallback report names expansion category");
     try h.require(std.mem.eql(u8, reasons.array.items[1].string, "expansion_error:x:E"), "operational fallback report preserves worker stage and error name");
-    const text = try h.run(&.{ bin, "lookup", "failure-page", "--root", output, "--language", "Unclassified", "--details" }, 0);
+    const text = try h.run(&.{ bin, "lookup", "failure-page", "--root", output, "--language", "English", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, text, "Script error") == null and std.mem.indexOf(u8, text, "source that must not become synthetic") == null, "operational fallback publishes no invented or original body text");
 }
 

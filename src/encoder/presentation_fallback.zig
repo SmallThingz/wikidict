@@ -9,6 +9,7 @@ pub const Report = struct {
     missing_template: bool = false,
     display_title_rejected: bool = false,
     missing_language_heading: bool = false,
+    unresolved_language_heading: bool = false,
     expansion_error: bool = false,
 
     pub fn merge(self: *Report, other: Report) void {

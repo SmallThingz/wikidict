@@ -64,6 +64,7 @@ pub const Iterator = struct {
     cursor: usize = 0,
     active_start: ?usize = null,
     active_heading: []const u8 = "",
+    active_level: ?u8 = null,
     balance: Balance = .{},
     done: bool = false,
 
@@ -82,19 +83,26 @@ pub const Iterator = struct {
             self.cursor = if (newline == self.source.len) self.source.len else newline + 1;
 
             if (!self.balance.isOpen()) {
-                if (parseHeading(line)) |heading| {
-                    if (heading.level == 2) {
+                const heading = parseHeading(line);
+                const marker = if (heading == null) parseStandaloneLanguageMarker(line) else null;
+                const candidate_level: ?u8 = if (heading) |value|
+                    if (value.level == 1 or value.level == 2) value.level else null
+                else if (marker != null) 2 else null;
+                if (candidate_level) |level| {
+                    if (self.active_level == null) self.active_level = level;
+                    if (level == self.active_level.?) {
+                        const title = if (heading) |value| value.title else marker.?;
                         if (self.active_start) |start| {
                             const result: Section = .{
                                 .heading = self.active_heading,
                                 .source = self.source[start..line_start],
                             };
                             self.active_start = line_start;
-                            self.active_heading = heading.title;
+                            self.active_heading = title;
                             return result;
                         }
                         self.active_start = line_start;
-                        self.active_heading = heading.title;
+                        self.active_heading = title;
                         continue;
                     }
                 }
@@ -160,11 +168,32 @@ const Balance = struct {
     }
 };
 
+fn parseStandaloneLanguageMarker(line: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, line, " \t\r");
+    if (trimmed.len < 7 or !std.mem.startsWith(u8, trimmed, "{{") or !std.mem.endsWith(u8, trimmed, "}}")) return null;
+    const body = std.mem.trim(u8, trimmed[2 .. trimmed.len - 2], " \t");
+    if (body.len >= 3 and body[0] == '=' and body[body.len - 1] == '=') {
+        const code = std.mem.trim(u8, body[1 .. body.len - 1], " \t");
+        if (validMarkerCode(code)) return code;
+    }
+    if (body.len >= 3 and body[0] == '-' and body[body.len - 1] == '-') {
+        const code = std.mem.trim(u8, body[1 .. body.len - 1], " \t");
+        if (validMarkerCode(code)) return code;
+    }
+    return null;
+}
+
+fn validMarkerCode(code: []const u8) bool {
+    if (code.len < 2 or code.len > 16) return false;
+    for (code) |ch| if (!(std.ascii.isAlphanumeric(ch) or ch == '-')) return false;
+    return true;
+}
+
 fn parseHeading(line: []const u8) ?ParsedHeading {
-    if (line.len < 5 or line[0] != '=') return null;
+    if (line.len < 3 or line[0] != '=') return null;
     var left: usize = 0;
     while (left < line.len and line[left] == '=') : (left += 1) {}
-    if (left < 2 or left > 6) return null;
+    if (left < 1 or left > 6) return null;
     var right = line.len;
     while (right != 0 and line[right - 1] == '=') : (right -= 1) {}
     if (line.len - right != left or right <= left) return null;
@@ -193,6 +222,18 @@ test "repeated language sections remain separate" {
     try std.testing.expectEqualStrings("French", it.next().?.heading);
     try std.testing.expectEqualStrings("English", it.next().?.heading);
     try std.testing.expect(it.next() == null);
+}
+
+test "language iterator accepts level-one boundaries and standalone code markers" {
+    var level_one = Iterator.init("= {{-be-}} =\n===Noun===\n# one\n= {{-bg-}} =\n===Noun===\n# two\n");
+    try std.testing.expectEqualStrings("{{-be-}}", level_one.next().?.heading);
+    try std.testing.expectEqualStrings("{{-bg-}}", level_one.next().?.heading);
+    try std.testing.expect(level_one.next() == null);
+
+    var markers = Iterator.init("{{=nld=}}\n{{-noun-|nld}}\n# huis\n{{=enm=}}\n{{-noun-|enm}}\n# hous\n");
+    try std.testing.expectEqualStrings("nld", markers.next().?.heading);
+    try std.testing.expectEqualStrings("enm", markers.next().?.heading);
+    try std.testing.expect(markers.next() == null);
 }
 
 test "table subheadings do not become language sections" {
