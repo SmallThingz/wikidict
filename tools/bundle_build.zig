@@ -18,6 +18,7 @@ const Options = struct {
     llvm_workers: ?usize = null,
     page_workers: usize = 1,
     parse_workers: usize = 4,
+    expander_only: bool = false,
 };
 
 fn parseOptions(args: []const []const u8) !Options {
@@ -76,6 +77,9 @@ fn parseOptions(args: []const []const u8) !Options {
             if (index >= args.len) return error.Usage;
             options.parse_workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
             if (options.parse_workers == 0 or options.parse_workers > 64) return error.Usage;
+        } else if (std.mem.eql(u8, args[index], "--expander-only")) {
+            if (options.expander_only) return error.Usage;
+            options.expander_only = true;
         } else if (std.mem.eql(u8, args[index], "--page-workers")) {
             index += 1;
             if (index >= args.len) return error.Usage;
@@ -511,6 +515,12 @@ test "supplemental transclusion redirect snapshot option is strict" {
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--transclusion-redirects-snapshot" }));
 }
 
+test "expander-only option is strict" {
+    const options = try parseOptions(&.{ "dump.xml", "out", "--expander-only" });
+    try std.testing.expect(options.expander_only);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expander-only", "--expander-only" }));
+}
+
 test "page worker override accepts bounded positive integers only" {
     const options = try parseOptions(&.{ "dump.xml", "out", "--page-workers", "2" });
     try std.testing.expectEqual(@as(usize, 2), options.page_workers);
@@ -523,7 +533,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--page-workers N]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expander-only]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -570,6 +580,11 @@ pub fn main(init: std.process.Init) !void {
     // Keep native build artifacts available if corpus expansion fails. The
     // entire transient tree is deleted together only after successful encoding.
     try std.Io.Dir.cwd().deleteFile(init.io, expander_marker);
+    if (options.expander_only) {
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = marker, .data = "expander ready" });
+        std.debug.print("bundle expander build complete: {s}\n", .{expander_root});
+        return;
+    }
     const page_workers_text = try std.fmt.allocPrint(a, "{d}", .{options.page_workers});
     try stage(init.io, marker, "expand and encode dictionary blobs", &.{
         paths.blobs, dump, root, "--expander-root", expander_root, "--workers", page_workers_text,
