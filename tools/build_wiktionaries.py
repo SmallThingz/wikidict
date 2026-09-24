@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
-from compress_blobs import compress, compress_many, default_workers
+from compress_blobs import compress, compress_many, default_workers, verify_round_trip
 from download_wiktionaries import digest, validate_item
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -77,6 +77,7 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
     for blob in raw:
         compressed_path = Path(str(blob) + '.xz')
         if compressed_path.exists():
+            verify_round_trip(blob, compressed_path)
             blob.unlink()
         else:
             pending.append(blob)

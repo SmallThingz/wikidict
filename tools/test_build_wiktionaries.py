@@ -111,7 +111,7 @@ class BuildTest(unittest.TestCase):
             (staging/b.VERIFIED_MARKER).write_text('verified\n')
             first=staging/'first.wikblb';second=staging/'second.wikblb'
             first.write_bytes(b'WIKBLB08first');second.write_bytes(b'WIKBLB08second')
-            compress(first,64*1024,1);first.unlink()
+            compress(first,64*1024,1)
             real_run=subprocess.run
             def run(command,**kwargs):
                 if command[0]=='xz':return real_run(command,**kwargs)
