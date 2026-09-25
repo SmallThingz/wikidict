@@ -9,8 +9,13 @@ They do **not** establish a faster complete English dictionary build.
 The requested **10,000 pages/s** and **under one hour for whole English** remain
 unmeasured on the current changes. No end-to-end speed is inferred from these
 microbenchmarks, existing artifact timestamps, or compiler-only observations.
+The retained incomplete English page index records 11,132,552 rows. At that
+historical count, a complete build would need more than 3,092.38 pages/s,
+including compilation, to finish in under one hour. The index is not a
+verified final corpus count.
 
-The corpus admission budget is currently zero and the host has no delegated
+The latest resource snapshot still has a zero corpus admission budget,
+1,856,500 kB available memory (below the 2 GiB reserve), and no delegated
 writable cgroup subtree. Corpus and heavy native-worker builds remain blocked.
 Earlier guarded measurements do not qualify pending source or waive containment.
 
@@ -24,9 +29,12 @@ All artifact paths below are relative to the repository.
 |---|---|
 | Repacked-input cache scope | Landed: `3b0037c perf(build): retain repacked input across source changes` |
 | ABI test ownership cleanup | Landed: `648f694 test(lua): free the decoded table in ABI coverage` |
-| Module-chain registry indexing | Live, uncommitted candidate |
-| Sorted global-name index | Live, uncommitted candidate |
-| Build-graph coverage changes | Live, uncommitted candidate |
+| Module-chain registry indexing | Landed: `8be7bc9` |
+| Sorted global-name index | Landed: `6d0c1c9` |
+| Build-graph coverage changes | Landed: `6d0c1c9` |
+| Seek and coverage changes; snapshot and scratch cleanup | Landed: `32a7d77` |
+| Rendering and oracle changes | Landed: `c464cc1` |
+| Protocol escaping | Landed: `4dbc57b` |
 | Sparse globals v1 | Scratch only; rejected for dense-tail regression |
 | Adaptive sparse globals v2 | Scratch only; accepted focused tests and guarded synthetic comparisons; production patch unapplied |
 | Large shape-field v1 and v2 | Scratch only; rejected for small-field regression |
@@ -34,7 +42,8 @@ All artifact paths below are relative to the repository.
 | Rare-module O0 policy | Landed: `6e0cc5d perf(build): compile zero-static-reach modules at O0` |
 | Python phase telemetry | Landed: `f67dc9b perf(build): record bounded pipeline phase timings` |
 
-“Landed” records an existing commit; candidates retain their separate status.
+“Landed” records an existing commit; scratch candidates retain their separate
+status. These commits were integrated during the dirty-work review.
 ABI cleanup is test ownership repair, not a performance result.
 The user permits O0 for very rarely used modules, but permission is not evidence
 that a particular classification policy preserves English expansion throughput.
@@ -46,11 +55,18 @@ that a particular classification policy preserves English expansion throughput.
 | Cache-scope Python tests at `3b0037c` | 30 passed |
 | Phase telemetry and controller regression checks | 29 passed under a 128 MiB address-space cap; external child processes forbidden |
 | Earlier Python tooling checkpoint | 28 passed |
-| Original module-registry focused tests | 7 passed |
+| Current registry and shapes focused tests | 6 and 7 passed, respectively |
+| Current document IR and encoder focused tests | 23 and 97 passed, respectively |
+| Current blob helpers | 3 passed |
 | Global-name index helper | 5 passed, including allocation failure |
 | Added `test-global-index` build target | 5 passed separately |
 | Original Lua core target | 31 passed after correcting a stale layout assertion |
-| Full Zig graph | Passed at `a11aa5b` plus then-owned candidates, with unchanged source-set fingerprint |
+| New indexed Lua core, no-libc target | 1 passed with stable source fingerprints under 512 MiB address-space and 128 MiB data caps; does not replace the full core or native-worker gates |
+| Earlier full Zig graph | Passed at `a11aa5b` plus then-owned candidates, with unchanged source-set fingerprint; current integrated graph pending |
+| Current full blob main | Semantic compilation passed with binary emission disabled; no linked execution |
+| Current consumer | 7 focused tests passed |
+| Current controller and downloader | 44 and 13 passed, respectively |
+| Current protocol helper and live MediaWiki | 1 and 12 passed, respectively |
 | Adaptive sparse candidate | Root-verified 38 core tests and 3 ABI tests passed |
 | Sparse functional matrix | 16 cases passed, covering 40 paired segment checks |
 | Large shape-field candidate | 9 focused tests passed |
@@ -61,7 +77,8 @@ that a particular classification policy preserves English expansion throughput.
 The full-graph before/after source-set SHA-256 was:
 `57e18be24ec629b5286329fd27bb52355eab62f999eae752911f1c49d9305764`.
 That graph lacked the subsequently added helper target and does not certify
-later sparse, field, O0, or production integration changes.
+later sparse, field, O0, or production integration changes. The current
+integrated full graph and a fresh linked native-worker startup have not passed.
 A focused test pass is not a full-graph or full-English pass.
 
 The telemetry check selected the 29 controller tests that do not require external
@@ -208,6 +225,17 @@ regress all three pairs of the eight-field case; neither is accepted.
 V2 eight-field median paired slowdown is about 5.9%, range 1.8–12.6%.
 V3 is untested. No corpus-weighted whole-compiler gain is established.
 
+## Retained historical English index
+
+The incomplete `data/dictionaries/enwiktionary/20260901.building` workspace
+contains a 1,073,455,299-byte `.bundle-expander/page-index.tsv` and a title
+index header recording 11,132,552 rows. Its plan has 112 shards. Summing the
+page-index byte offsets gives 59,517,635,910 **logical repeated-prefix bytes**
+for a prefix-scan model. This is neither measured SSD traffic nor elapsed
+pipeline time: filesystem caching and the actual access path can change
+physical reads. The workspace is incomplete, and the input dump is missing,
+so these artifacts cannot qualify a complete English build.
+
 ## Compiler policy, overlap, and resource limits
 
 Python orchestration now emits `BUILD_PHASE` JSON start/end records for download
@@ -234,17 +262,20 @@ known uses at O1/O2, and preserves data-only roots. It also records native stage
 LLVM emission, and Clang batch times. Dynamic targets mean zero static reach is
 a heuristic; total compilation-plus-expansion performance is still unmeasured.
 
-Only the approved consumer hunks were committed. Existing snapshot and scratch
-cleanup edits remain uncommitted. The completed-job source capture fix remains
-with those cleanup edits because its source field is absent from committed HEAD.
+The consumer, snapshot and scratch cleanup (`32a7d77`), and sorted
+global-index/build-graph work (`6d0c1c9`) were integrated during the
+dirty-work review. Focused passes cover their listed units, not a complete
+linked worker.
 
 Integration diagnostics ran serially at one CPU with 256 MiB address-space caps
 and 25–30 second deadlines, using Zig's non-LLVM backend. The committed consumer
 was tested from an exact snapshot that excludes foreign edits. Evidence lives in
 `.tmp/o0-integration-20260925/`: `usage-live`, `consumer-tests`, `consumer-build`,
 and `producer-check` logs/exits all report success. These are focused diagnostic
-results, not a linked corpus-worker run. A separate runtime-Program semantic
-check exceeded the 256 MiB limit; the global-index candidate remains uncommitted.
+results, not a linked corpus-worker run. A separate earlier runtime-Program
+semantic check exceeded the 256 MiB limit. The later focused indexed-core
+no-libc test passed under a larger bounded cap; it does not establish native
+linking or full-graph success.
 
 Compilation/execution overlap has no accepted performance measurement here.
 Retained English artifact timestamps are stage-boundary clues only: they do
@@ -289,15 +320,16 @@ whole-English memory bound. Full timing ranges are in the working evidence draft
 
 ## Remaining acceptance gates
 
-1. Preserve unrelated dirty work and qualify the remaining owned indexing and
-   adaptive candidates independently. The O0 policy is already integrated.
-2. Validate the exact integrated source, including the full graph and relevant
-   native ABI/emitter paths. Older graph success is not transferable.
+1. Validate the exact integrated source beyond the focused indexed-core test.
+2. Pass the current full test graph and fresh linked native-worker startup.
+   Earlier graph success and semantic-only compilation are not transferable.
 3. Keep small-field v1/v2 rejected; measure v3 only after resource admission,
    with small and large cases and unchanged workload checks.
 4. Preserve corpus and heavy-build refusal while budget is zero or delegated
    cgroups are unavailable; bound any smaller diagnostic separately.
-5. Once admitted, measure actual English worker requests, startup, compilation,
-   expansion, I/O, and resource envelopes with functional equivalence.
+5. Qualify adaptive sparse v2 independently before production integration.
+   Once corpus work is admitted, measure actual English worker requests,
+   startup, compilation, expansion, I/O, and resource envelopes with
+   functional equivalence.
 6. Claim 10,000 pages/s or under-one-hour English only after a complete,
    reproducible end-to-end result demonstrates that target.
