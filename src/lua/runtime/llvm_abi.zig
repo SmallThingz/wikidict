@@ -605,6 +605,10 @@ test "static literal decoder materializes list named and keyed fields" {
         dict_lua_decode_static_literal(&ctx, bytes.items.ptr, bytes.items.len, &decoded),
     );
     try std.testing.expect(decoded == .table);
+    defer {
+        decoded.table.deinit(ctx.allocator);
+        ctx.allocator.destroy(decoded.table);
+    }
     try std.testing.expectEqualStrings(
         "one",
         decoded.table.rawGet(.{ .number = 1 }).?.string,
