@@ -6,6 +6,7 @@
 - Do not push unless the user explicitly asks.
 - Make regular, small commits after coherent validated steps. Stage only files owned by the current task; preserve unrelated shared dirty work.
 - Keep temporary files under `.tmp/` and remove them before finishing.
+- `.tmp/` is shared by long-running qualification jobs. Never delete it wholesale; remove only task-owned paths after checking that no live process owns them and that any required acceptance audit has completed.
 - Keep product code under `src/` and build/integration utilities under `tools/`.
 - Delete dead experiments and compatibility layers instead of parking alternate architectures in the repository.
 
