@@ -1,5 +1,6 @@
 import bz2
 import hashlib
+import io
 import lzma
 import json
 import subprocess
@@ -13,6 +14,56 @@ import build_wiktionaries as b
 from compress_blobs import compress, compress_many, default_workers
 
 class BuildTest(unittest.TestCase):
+    def test_timed_native_command_logs_success_and_preserves_command(self):
+        command=['zig','build','build-blobs','--','dump','shard']
+        output=io.StringIO()
+        with patch.object(b,'run_checked') as run, patch('sys.stdout',output), \
+             patch.object(b.time,'monotonic',side_effect=[10.0,12.5]):
+            b.timed_run(command,'enwiktionary','20260901','shard_build',
+                        start_page=100000,pages=100000,attempt=2)
+        run.assert_called_once_with(command)
+        events=[json.loads(line.removeprefix('BUILD_PHASE ')) for line in output.getvalue().splitlines()]
+        self.assertEqual([record['event'] for record in events],['start','end'])
+        self.assertEqual(events[0]['edition'],'enwiktionary')
+        self.assertEqual(events[0]['date'],'20260901')
+        self.assertEqual(events[0]['start_page'],100000)
+        self.assertEqual(events[0]['attempt'],2)
+        self.assertEqual(events[1]['status'],'success')
+        self.assertEqual(events[1]['seconds'],2.5)
+
+    def test_timed_native_command_preserves_failure_even_if_logging_breaks(self):
+        command=['zig','build','build-blobs','--','dump','shard']
+        failure=subprocess.CalledProcessError(3,command)
+        output=io.StringIO()
+        with patch.object(b,'run_checked',side_effect=failure) as run, patch('sys.stdout',output):
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                b.timed_run(command,'enwiktionary','20260901','shard_build',attempt=1)
+        self.assertIs(raised.exception,failure)
+        run.assert_called_once_with(command)
+        events=[json.loads(line.removeprefix('BUILD_PHASE ')) for line in output.getvalue().splitlines()]
+        self.assertEqual(events[1]['status'],'failure')
+        with patch.object(b,'run_checked',side_effect=failure) as run, \
+             patch('builtins.print',side_effect=BrokenPipeError('closed log')):
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                b.timed_run(command,'enwiktionary','20260901','shard_build',attempt=1)
+        self.assertIs(raised.exception,failure)
+        run.assert_called_once_with(command)
+
+    def test_phase_logging_preserves_manifest_validation_errors(self):
+        for build in (b.build,b.build_locked):
+            failure=ValueError('invalid manifest item')
+            with self.subTest(build=build.__name__), \
+                 patch.object(b,'validate_item',side_effect=failure), \
+                 patch('sys.stdout',io.StringIO()):
+                with self.assertRaises(ValueError) as raised:
+                    build([{}],Path('unused'),Path('unused'),'zig',1)
+            self.assertIs(raised.exception,failure)
+
+    def test_phase_logging_preserves_empty_cached_input_error(self):
+        with tempfile.TemporaryDirectory() as tmp, patch('sys.stdout',io.StringIO()):
+            with self.assertRaisesRegex(ValueError,'No dump parts'):
+                b.cached_shard_dump([],Path(tmp),Path(tmp))
+
     def test_large_batch_compression_removes_verified_raw(self):
         with tempfile.TemporaryDirectory() as tmp:
             raw=Path(tmp)/'large.wikblb'

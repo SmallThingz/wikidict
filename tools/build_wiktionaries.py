@@ -3,6 +3,7 @@
 import argparse
 import bz2
 import concurrent.futures
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import tempfile
@@ -125,7 +126,7 @@ def source_fingerprint():
     return checksum.hexdigest()
 
 
-def stage_seekable_dump(items, downloads, scratch, metadata=None):
+def _stage_seekable_dump(items, downloads, scratch, metadata=None):
     """Repack full-namespace dumps into bounded, page-aligned bzip2 members.
 
     The downloaded meta-current parts are not indexed by page. A whole part can
@@ -204,6 +205,19 @@ def stage_seekable_dump(items, downloads, scratch, metadata=None):
     return dump
 
 
+def phase_identity(items):
+    first=items[0] if items else None
+    if isinstance(first,dict):
+        return first.get('wiki','unknown'),first.get('date','unknown')
+    return 'unknown','unknown'
+
+
+def stage_seekable_dump(items, downloads, scratch, metadata=None):
+    edition,date=phase_identity(items)
+    with build_phase(edition,date,'repack',parts=len(items)):
+        return _stage_seekable_dump(items,downloads,scratch,metadata)
+
+
 def count_page_index_rows(path):
     count=0
     with path.open('rb') as source:
@@ -267,25 +281,30 @@ def prepare_shard_workspace(workspace, expected):
 
 def cached_shard_dump(items, downloads, workspace):
     """Reuse only a completed, content-verified repack for these XML inputs."""
+    edition,date=phase_identity(items)
     cache=workspace/'input'
-    if cache.is_symlink(): raise ValueError(f'Unsafe cached dump path: {cache}')
     dump=cache/'pages.xml.bz2'
     index=cache/'pages-index.txt.bz2'
     marker=cache/'.complete.json'
-    input_hash=dump_input_fingerprint(items)
-    if cache.is_dir() and not any(path.is_symlink() for path in (dump,index,marker)):
-        try:
-            record=json.loads(marker.read_text())
-            valid=isinstance(record,dict) and record.get('version')==DUMP_STAGING_VERSION and record.get('input_sha256')==input_hash
-            for label,path in (('dump',dump),('index',index)):
-                valid=valid and path.is_file() and type(record.get(label+'_size')) is int and record[label+'_size']>0
-                valid=valid and path.stat().st_size==record[label+'_size']
-                valid=valid and sha256_file(path)==record.get(label+'_sha256')
-            if valid:
-                print(f'Reusing verified staged dump: {dump}',flush=True)
-                return dump
-        except (OSError,ValueError,json.JSONDecodeError):
-            pass
+    with build_phase(edition,date,'cache_verification') as result:
+        if cache.is_symlink(): raise ValueError(f'Unsafe cached dump path: {cache}')
+        input_hash=dump_input_fingerprint(items)
+        if cache.is_dir() and not any(path.is_symlink() for path in (dump,index,marker)):
+            try:
+                record=json.loads(marker.read_text())
+                valid=isinstance(record,dict) and record.get('version')==DUMP_STAGING_VERSION and record.get('input_sha256')==input_hash
+                for label,path in (('dump',dump),('index',index)):
+                    valid=valid and path.is_file() and type(record.get(label+'_size')) is int and record[label+'_size']>0
+                    valid=valid and path.stat().st_size==record[label+'_size']
+                    valid=valid and sha256_file(path)==record.get(label+'_sha256')
+                if valid:
+                    result['cache_hit']=True
+                    result['compressed_bytes']=record['dump_size']
+                    print(f'Reusing verified staged dump: {dump}',flush=True)
+                    return dump
+            except (OSError,ValueError,json.JSONDecodeError):
+                pass
+        result['cache_hit']=False
     if cache.exists():
         if not cache.is_dir(): raise ValueError(f'Unsafe cached dump path: {cache}')
         shutil.rmtree(cache)
@@ -311,15 +330,46 @@ def run_checked(command):
     subprocess.run(command,cwd=PROJECT,check=True)
 
 
+def phase_event(edition, date, name, event, **fields):
+    try:
+        record=dict(edition=edition,date=date,phase=name,event=event,**fields)
+        print('BUILD_PHASE '+json.dumps(record,sort_keys=True,separators=(',',':')),flush=True)
+    except Exception:
+        # Observability must never change the result of a build stage.
+        pass
+
+
+@contextmanager
+def build_phase(edition, date, name, **fields):
+    started=time.monotonic()
+    phase_event(edition,date,name,'start',**fields)
+    result=dict(fields)
+    status='failure'
+    try:
+        yield result
+        status='success'
+    finally:
+        phase_event(edition,date,name,'end',status=status,seconds=round(time.monotonic()-started,3),**result)
+
+
+def timed_run(command, edition, date, phase, **fields):
+    with build_phase(edition,date,phase,**fields):
+        run_checked(command)
+
+
 def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix):
+    edition,date=items[0]['wiki'],items[0]['date']
     expander_build=workspace/'expander'
     if not expander_ready(expander_build):
         if expander_build.exists(): shutil.rmtree(expander_build)
-        run_checked([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(expander_build),
+        timed_run([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(expander_build),
                      '--language-registry-snapshot',str(registry),'--llvm-workers',str(workers),
-                     '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only'])
+                     '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only'],
+                  edition,date,'expander_build')
     expander=expander_build/'.bundle-expander'
-    indexed_pages=count_page_index_rows(expander/'page-index.tsv')
+    with build_phase(edition,date,'page_index_count') as result:
+        indexed_pages=count_page_index_rows(expander/'page-index.tsv')
+        result['pages']=indexed_pages
 
     shards_root=workspace/'shards';shards_root.mkdir(exist_ok=True)
     shard_paths=[]
@@ -329,7 +379,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         marker=shard/'.verified'
         if marker.is_file():
             try:
-                run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)])
+                timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
+                          edition,date,'resume_shard_verify',start_page=start,pages=limit)
             except subprocess.CalledProcessError:
                 print(f'Rebuilding invalid resumed shard {items[0]["wiki"]} start={start}',flush=True)
                 shutil.rmtree(shard)
@@ -339,10 +390,12 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         for attempt in range(1,SHARD_RETRIES+1):
             if shard.exists(): shutil.rmtree(shard)
             try:
-                run_checked([zig,'build','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shard),
+                timed_run([zig,'build','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shard),
                              '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
-                             '--workers',str(min(workers,16)),'--now-unix',str(now_unix)])
-                run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)])
+                             '--workers',str(min(workers,16)),'--now-unix',str(now_unix)],
+                          edition,date,'shard_build',start_page=start,pages=limit,attempt=attempt)
+                timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
+                          edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
             except subprocess.CalledProcessError as error:
                 last_error=error
                 print(f'Retrying shard {items[0]["wiki"]} start={start} attempt={attempt}/{SHARD_RETRIES}',flush=True)
@@ -354,8 +407,10 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         shard_paths.append(shard)
 
     if staging.exists(): shutil.rmtree(staging)
-    run_checked([zig,'build','-Doptimize=ReleaseFast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]])
-    run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)])
+    timed_run([zig,'build','-Doptimize=ReleaseFast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]],
+              edition,date,'merge',shards=len(shard_paths))
+    timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)],
+              edition,date,'merged_verify',shards=len(shard_paths))
     (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
     # The merged staging tree is now the sole verified publication source.
     # Drop raw shards and the transient expander before XZ publication so peak
@@ -367,15 +422,16 @@ def build(items, downloads, output, zig, compression_workers=None):
     for item in items:
         validate_item(item)
     edition, date = items[0]['wiki'], items[0]['date']
-    parent = output / edition
-    parent.mkdir(parents=True, exist_ok=True)
-    # Keep the inode: deleting lock files permits two independent locks.
-    with (parent / (date + '.lock')).open('a') as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise ValueError(f'Build already running: {parent / date}') from None
-        return build_locked(items, downloads, output, zig, compression_workers)
+    with build_phase(edition,date,'edition_build'):
+        parent = output / edition
+        parent.mkdir(parents=True, exist_ok=True)
+        # Keep the inode: deleting lock files permits two independent locks.
+        with (parent / (date + '.lock')).open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError(f'Build already running: {parent / date}') from None
+            return build_locked(items, downloads, output, zig, compression_workers)
 
 
 def validate_fallback_report(path):
@@ -417,7 +473,7 @@ def require_current_staging_version(path, version):
     if version != DUMP_STAGING_VERSION:
         raise ValueError(f'Outdated dump staging at {path}; rebuild in a new output directory (existing output preserved)')
 
-def publish_verified_staging(staging, target, edition, date, compression_workers=None):
+def _publish_verified_staging(staging, target, edition, date, compression_workers=None):
     marker = staging / VERIFIED_MARKER
     if not marker.is_file():
         raise ValueError(f'Unverified staging directory: {staging}')
@@ -451,17 +507,29 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
     (staging / 'complete.json').write_text(json.dumps(metadata)+'\n')
     os.rename(staging, target)
     print(f'Published: {target}', flush=True)
+    return len(compressed),fallback_pages
+
+
+def publish_verified_staging(staging, target, edition, date, compression_workers=None):
+    with build_phase(edition,date,'publish') as result:
+        blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers)
+        result.update(blobs=blobs,fallback_pages=fallback_pages)
 
 def build_locked(items, downloads, output, zig, compression_workers=None):
-    for item in items:
-        validate_item(item)
-        source = downloads / item['wiki'] / item['date'] / item['name']
-        if not source.is_file() or source.stat().st_size != item['size'] or digest(source) != item['sha1']:
-            raise ValueError(f'Missing or unverified download: {source}')
+    phase_edition,phase_date=phase_identity(items)
+    with build_phase(phase_edition,phase_date,'verify_downloads',files=len(items)) as result:
+        verified_bytes=0
+        for item in items:
+            validate_item(item)
+            source = downloads / item['wiki'] / item['date'] / item['name']
+            if not source.is_file() or source.stat().st_size != item['size'] or digest(source) != item['sha1']:
+                raise ValueError(f'Missing or unverified download: {source}')
+            verified_bytes+=item['size']
+        result['verified_bytes']=verified_bytes
     xml = [x for x in items if '-pages-meta-current' in x['name'] and re.search(r'\.xml(?:-p[0-9]+p[0-9]+)?\.bz2$', x['name'])]
     if not xml:
         raise ValueError('No full-namespace current XML in snapshot')
-    edition, date = items[0]['wiki'], items[0]['date']
+    edition,date=items[0]['wiki'],items[0]['date']
     target = output / edition / date
     if (target / 'complete.json').exists():
         try:
@@ -501,11 +569,12 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
         scratch = Path(tempfile.mkdtemp(prefix=f'build-{edition}-{date}-', dir=PROJECT / '.tmp'))
         try:
             dump = stage_seekable_dump(xml,downloads,scratch)
-            run_checked([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
+            timed_run([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
                          '--language-registry-snapshot',str(registry),
                          '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
-                         '--page-workers',str(min(workers,16))])
-            run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)])
+                         '--page-workers',str(min(workers,16))],edition,date,'dictionary_build')
+            timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)],
+                      edition,date,'dictionary_verify')
             (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
         finally:
             shutil.rmtree(scratch)
