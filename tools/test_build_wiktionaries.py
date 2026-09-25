@@ -152,7 +152,7 @@ class BuildTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'Build already running'):
                     b.build([item],root,root,'zig',2)
             self.assertEqual(sentinel.read_text(),'keep')
-    def test_extreme_compression_roundtrip(self):
+    def test_release_compression_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'test.wikblb';raw=b'WIKBLB08'+b'payload'*20000;path.write_bytes(raw)
             compress(path,64*1024,2)

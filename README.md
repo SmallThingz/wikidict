@@ -163,7 +163,7 @@ python3 tools/compress_blobs.py path/language.wikblb
 Or create compatible XZ manually:
 
 ```sh
-xz -9e -T1 --block-size=1MiB -k path/language.wikblb
+xz -6 -T1 --block-size=1MiB -k path/language.wikblb
 zig build index-blobs -- path/language.wikblb.xz
 ```
 

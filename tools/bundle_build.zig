@@ -176,10 +176,12 @@ fn fileSize(io: std.Io, path: []const u8) !u64 {
 
 fn installSnapshot(io: std.Io, a: std.mem.Allocator, source: []const u8, root: []const u8, name: []const u8) !void {
     const destination = try std.fs.path.join(a, &.{ root, name });
-    const allocator = std.heap.smp_allocator;
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, source, allocator, .unlimited);
-    defer allocator.free(bytes);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = destination, .data = bytes });
+    const target = if (std.fs.path.isAbsolute(source)) source else try std.fs.path.resolve(a, &.{source});
+    // Snapshot inputs are immutable for the lifetime of a build. A symlink keeps
+    // the transient expander tree zero-copy; copyFile is a bounded kernel/stream
+    // fallback for platforms or filesystems where symlinks are unavailable.
+    if (std.Io.Dir.cwd().symLink(io, target, destination, .{})) |_| return else |_| {}
+    try std.Io.Dir.cwd().copyFile(source, .cwd(), destination, io, .{});
 }
 
 const CompileMode = enum {

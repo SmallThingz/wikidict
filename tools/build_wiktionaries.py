@@ -300,7 +300,7 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
     marker.unlink()
     metadata = {'edition':edition,'date':date,
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
-        'fallback_report':'fallback-pages.jsonl', 'compression':'xz -9e; 1 MiB blocks','blobs':len(compressed)}
+        'fallback_report':'fallback-pages.jsonl', 'compression':'xz -6; 1 MiB blocks','blobs':len(compressed)}
     (staging / 'complete.json').write_text(json.dumps(metadata)+'\n')
     os.rename(staging, target)
     print(f'Published: {target}', flush=True)

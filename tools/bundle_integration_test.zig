@@ -206,8 +206,8 @@ const module_source =
     \\    assert(mw.getContentLanguage():ucfirst('ßeta') == 'ßeta')
     \\    assert(mw.getLanguage('it'):ucfirst('istanza') == 'Istanza')
     \\    assert(mw.getLanguage('it'):ucfirst('ǰfoo') == 'J̌foo')
-    \\    local locale_registry_ok = pcall(mw.language.isKnownLanguageTag, 'fr')
-    \\    assert(not locale_registry_ok)
+    \\    local locale_registry_ok, locale_registry_known = pcall(mw.language.isKnownLanguageTag, 'fr')
+    \\    assert(locale_registry_ok and locale_registry_known == false and mw.language.isKnownLanguageTag('en'))
     \\    local batch = mw.title.newBatch({'rat', 'definitely-not-a-real-entry'}):lookupExistence():getTitles()
     \\    assert(batch[1].exists and not batch[2].exists)
     \\    local media = mw.title.new('Media:Remote.svg')
@@ -490,8 +490,17 @@ pub fn main(init: std.process.Init) !void {
             "<timestamp>2026-09-01T00:00:00Z</timestamp><contributor><username>Test</username></contributor>" ++
             "<model>wikitext</model><format>text/x-wiki</format><text>==English==\n===Noun===\n# A plain word.\n</text></revision></page></mediawiki>",
     });
+    const language_registry = try std.fs.path.join(a, &.{ dir, "language-registry.tsv" });
+    try std.Io.Dir.cwd().writeFile(init.io, .{
+        .sub_path = language_registry,
+        .data = "# wikidict-language-registry-v2\n" ++
+            "# content-language\ten\n" ++
+            "# mediawiki\n" ++
+            "en\tEnglish\ten\teng\n" ++
+            "# iso-639-3\n",
+    });
     const plain_root = try std.fs.path.join(a, &.{ dir, "plain-dictionary" });
-    _ = try h.run(&.{ pipeline, plain_dump, plain_root }, 0);
+    _ = try h.run(&.{ pipeline, plain_dump, plain_root, "--language-registry-snapshot", language_registry }, 0);
     _ = try h.run(&.{ verifier, plain_root }, 0);
 
     const existing_root = try std.fs.path.join(a, &.{ dir, "existing-dictionary" });
@@ -512,8 +521,11 @@ pub fn main(init: std.process.Init) !void {
         .data = "Integration_categories\tmain\tmouse\nIntegration_categories\tpages\tmouse\tTalk:Category discussion\tCategory:Nested category\n",
     });
     const root = try std.fs.path.join(a, &.{ dir, "dictionary" });
-    _ = try h.run(&.{ pipeline, dump, root, "--category-tree-snapshot", category_snapshot, "--llvm-workers", "1", "--page-workers", "2" }, 0);
+    _ = try h.run(&.{ pipeline, dump, root, "--category-tree-snapshot", category_snapshot, "--language-registry-snapshot", language_registry, "--llvm-workers", "1", "--page-workers", "2" }, 0);
     _ = try h.run(&.{ verifier, root }, 0);
+    const language_manifest_path = try std.fs.path.join(a, &.{ root, "languages.tsv" });
+    const language_manifest = try std.Io.Dir.cwd().readFileAlloc(init.io, language_manifest_path, a, .limited(4096));
+    try h.require(std.mem.indexOf(u8, language_manifest, "Unclassified") == null, "content-language fallback never publishes Unclassified");
 
     const forbidden = [_][]const u8{
         ".bundle-expander", "runtime",          "dict-bundle-expander",

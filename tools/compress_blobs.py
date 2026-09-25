@@ -37,7 +37,7 @@ def _compress_batch(paths, block_size):
         target=Path(str(path)+'.xz')
         if target.exists():raise FileExistsError(target)
     started=time.perf_counter()
-    subprocess.run(['xz','-9e','--threads=1',f'--block-size={block_size}','--keep',*[str(path) for path in paths]],check=True)
+    subprocess.run(['xz','-6','--threads=1',f'--block-size={block_size}','--keep',*[str(path) for path in paths]],check=True)
     raw_bytes=0;compressed_bytes=0
     try:
         for path in paths:
@@ -81,7 +81,7 @@ def compress(path, block_size, workers=None):
             source.seek(0)
             with temp.open('xb') as out:
                 created=True
-                subprocess.run(['xz','-9e',f'--threads={workers}',f'--block-size={block_size}','--stdout'],stdin=source,stdout=out,check=True)
+                subprocess.run(['xz','-6',f'--threads={workers}',f'--block-size={block_size}','--stdout'],stdin=source,stdout=out,check=True)
                 out.flush();os.fsync(out.fileno())
         verify_round_trip(path,temp)
         os.replace(temp,target)

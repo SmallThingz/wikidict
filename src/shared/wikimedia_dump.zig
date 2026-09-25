@@ -744,9 +744,18 @@ pub fn buildPageTitleIndex(
     }
     const capacity = try titleIndexCapacity(row_count);
     const table_len = std.math.mul(usize, capacity, page_title_index_entry_len) catch return error.PageTitleIndexTooLarge;
-    const table = try allocator.alloc(u8, table_len);
-    defer allocator.free(table);
-    @memset(table, 0);
+    const total_len = std.math.add(usize, page_title_index_header_len, table_len) catch return error.PageTitleIndexTooLarge;
+    _ = allocator; // The potentially huge hash table is file-backed, not heap-backed.
+
+    var out_file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .read = true, .truncate = true });
+    defer out_file.close(io);
+    errdefer std.Io.Dir.cwd().deleteFile(io, output_path) catch {};
+    try out_file.setLength(io, total_len);
+    var mapped_out = try std.posix.mmap(null, total_len, .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, out_file.handle, 0);
+    var mapped_active = true;
+    defer if (mapped_active) std.posix.munmap(mapped_out);
+    // A newly extended file is zero-filled, so untouched hash slots are already empty.
+    const table = mapped_out[page_title_index_header_len..];
 
     var unique_count: usize = 0;
     var ordinal: usize = 0;
@@ -787,20 +796,16 @@ pub fn buildPageTitleIndex(
     }
     if (ordinal != row_count) return error.InvalidPageIndex;
 
-    var out_file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .truncate = true });
-    defer out_file.close(io);
-    var buffer: [256 * 1024]u8 = undefined;
-    var out = out_file.writer(io, &buffer);
-    var header = [_]u8{0} ** page_title_index_header_len;
+    const header = mapped_out[0..page_title_index_header_len];
     @memcpy(header[0..8], page_title_index_magic);
     std.mem.writeInt(u64, header[8..16], @intFromEnum(kind), .little);
     std.mem.writeInt(u64, header[16..24], @intCast(capacity), .little);
     std.mem.writeInt(u64, header[24..32], @intCast(row_count), .little);
     std.mem.writeInt(u64, header[32..40], @intCast(unique_count), .little);
     std.mem.writeInt(u64, header[40..48], @intCast(mapped.bytes.len), .little);
-    try out.interface.writeAll(&header);
-    try out.interface.writeAll(table);
-    try out.interface.flush();
+    std.posix.munmap(mapped_out);
+    mapped_active = false;
+    try out_file.sync(io);
 }
 
 test "specialized page parser extracts Wikimedia page fields without a DOM" {
@@ -881,6 +886,31 @@ fn testCompressAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     if (BZ2_bzBuffToBuffCompress(out.ptr, &len, input.ptr, @intCast(input.len), 9, 0, 30) != BZ_OK)
         return error.TestBzip2CompressFailed;
     return allocator.realloc(out, @intCast(len));
+}
+
+test "page title index construction does not allocate the hash table on heap" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try std.Io.Dir.cwd().createDirPath(io, root);
+    const page_index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    defer a.free(page_index_path);
+    const output_path = try std.fs.path.join(a, &.{ root, page_title_index_filename });
+    defer a.free(output_path);
+    const page_index = page_index_v2_header ++ "\n" ++
+        "0\t0\t1\tcat\t\t1\t11\t2026-09-01T00:00:00Z\tA\twikitext\t0\t1\t0\n" ++
+        "0\t1\t1\tdog\t\t2\t22\t2026-09-01T00:00:01Z\tB\twikitext\t0\t1\t0\n";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = page_index_path, .data = page_index });
+    var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    try buildPageTitleIndex(io, failing.allocator(), page_index_path, output_path);
+    try std.testing.expect(!failing.has_induced_failure);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, output_path, a, .limited(4096));
+    defer a.free(bytes);
+    const index = try PageTitleIndex.init(bytes);
+    try std.testing.expectEqual(@as(usize, 2), index.row_count);
 }
 
 test "multistream offsets and source reads stay compressed" {
