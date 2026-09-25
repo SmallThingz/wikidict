@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -228,6 +229,86 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertEqual((group / 'cgroup.kill').read_text(), '1')
             pause.assert_called_once()
             remove.assert_called_once_with()
+
+    def test_watchdog_rejects_partial_proof_and_unsafe_caps_before_launch(self):
+        with patch.dict(os.environ, {limits.WATCHDOG_TOKEN: 'token'}, clear=False):
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'Incomplete'):
+                limits.inside_watchdog()
+        with patch.object(limits.subprocess, 'Popen') as launch:
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'resource limit'):
+                limits.supervise_watchdog(memory_limit_bytes=limits.MAX_BUILD_MEMORY + 1)
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'resource limit'):
+                limits.supervise_watchdog(max_tasks=limits.MAX_BUILD_PIDS + 1)
+        launch.assert_not_called()
+
+    def test_watchdog_samples_only_owned_pss_and_tasks(self):
+        supervisor = os.getpid()
+        table = {
+            100: {'state':'S','ppid':1,'pgrp':100,'session':100,'threads':1,'start':10,'rss':4096},
+            101: {'state':'S','ppid':100,'pgrp':101,'session':101,'threads':3,'start':11,'rss':8192},
+            102: {'state':'S','ppid':supervisor,'pgrp':102,'session':102,'threads':2,'start':12,'rss':4096},
+            998: {'state':'S','ppid':supervisor,'pgrp':998,'session':998,'threads':9,'start':9,'rss':16384},
+            999: {'state':'S','ppid':1,'pgrp':999,'session':999,'threads':9,'start':12,'rss':16384},
+        }
+        def proc_text(path):
+            if path.name == 'smaps_rollup':
+                return 'Pss: 100 kB\n'
+            if path.name == 'status':
+                return 'Threads: ' + {'100':'1','101':'3','102':'2'}[path.parent.name] + '\n'
+            raise AssertionError(path)
+        known = {}
+        with patch.object(limits, '_process_table', return_value=table), \
+             patch.object(Path, 'read_text', autospec=True, side_effect=proc_text):
+            sample = limits._owned_sample(100, 10, known, supervisor, {(998, 9)})
+        self.assertEqual(set(known), {100, 101, 102})
+        self.assertEqual(sample['pss_bytes'], 300 * 1024)
+        self.assertEqual(sample['rss_bytes'], 16384)
+        self.assertEqual(sample['tasks'], 6)
+
+    def test_watchdog_treats_exiting_zombie_as_gone(self):
+        running = {100: {'state':'S','ppid':1,'pgrp':100,'session':100,
+                         'threads':1,'start':10,'rss':4096}}
+        zombie = {100: dict(running[100], state='Z')}
+        with patch.object(limits, '_process_table', side_effect=[running, zombie]), \
+             patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            sample = limits._owned_sample(100, 10, {}, os.getpid())
+        self.assertEqual(sample['live'], {})
+
+    def test_watchdog_wall_limit_reaps_own_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / 'watchdog.json'
+            native_pid_path = Path(tmp) / 'native.pid'
+            child_code = (
+                'import build_resource_limits as l, subprocess, time; '
+                'assert l.inside_watchdog(); '
+                'native=subprocess.Popen(["/bin/sleep", "5"]); '
+                f'open({str(native_pid_path)!r}, "w").write(str(native.pid)); '
+                'time.sleep(5)'
+            )
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'wall_limit'):
+                limits.supervise_watchdog(
+                    argv=['-c', child_code],
+                    report_path=report_path, wall_seconds=0.4,
+                    memory_limit_bytes=64 * 1024**2, max_tasks=4)
+            report = json.loads(report_path.read_text())
+            self.assertEqual(report['termination_reason'], 'wall_limit')
+            self.assertLessEqual(report['peak_pss_bytes'], 64 * 1024**2)
+            self.assertLessEqual(report['peak_tasks'], 4)
+            self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
+            self.assertFalse(Path('/proc', native_pid_path.read_text()).exists())
+
+    def test_watchdog_normal_exit_with_native_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / 'watchdog.json'
+            status = limits.supervise_watchdog(
+                argv=['-c', 'import build_resource_limits as l, subprocess; assert l.inside_watchdog(); subprocess.run(["/bin/true"], check=True)'],
+                report_path=report_path, wall_seconds=2,
+                memory_limit_bytes=64 * 1024**2, max_tasks=4)
+            report = json.loads(report_path.read_text())
+            self.assertEqual(status, 0)
+            self.assertEqual(report['termination_reason'], 'child_exit')
+            self.assertEqual(report['child_exit_status'], 0)
+            self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
 
 
 if __name__ == '__main__':

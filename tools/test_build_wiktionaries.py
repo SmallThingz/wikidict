@@ -30,6 +30,34 @@ def write_coverage(root, command=None):
     (root/'page-coverage.json').write_text(json.dumps(record))
 
 class BuildTest(unittest.TestCase):
+    def test_watchdog_mode_is_explicit_locked_and_deadline_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            def supervised(**kwargs):
+                self.assertEqual(kwargs,{'wall_seconds':7200})
+                with self.assertRaises(limits.ContainmentUnavailable):
+                    b.acquire_build_resource_lock(root/'.tmp/build-resources.lock')
+                return 0
+            with patch.object(b,'PROJECT',root),patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog']),patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',side_effect=supervised) as watchdog,patch.object(limits,'supervise') as strict,patch.object(b,'main') as main:
+                with self.assertRaises(SystemExit) as result:b.cli()
+                self.assertEqual(result.exception.code,0)
+            watchdog.assert_called_once_with(wall_seconds=7200)
+            strict.assert_not_called();main.assert_not_called()
+
+    def test_only_verified_watchdog_child_enters_main(self):
+        with patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode','watchdog']),patch.object(limits,'inside_watchdog',return_value=True),patch.object(limits,'inside_envelope') as envelope,patch.object(limits,'supervise_watchdog') as watchdog,patch.object(b,'main') as main:
+            b.cli()
+            main.assert_called_once();watchdog.assert_not_called();envelope.assert_not_called()
+        with patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog']),patch.object(limits,'inside_watchdog',side_effect=limits.ContainmentUnavailable('invalid watchdog marker')),patch.object(limits,'supervise_watchdog') as watchdog,patch.object(b,'main') as main:
+            with self.assertRaisesRegex(SystemExit,'invalid watchdog marker'):b.cli()
+            main.assert_not_called();watchdog.assert_not_called()
+
+    def test_default_mode_never_falls_back_to_watchdog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(b,'PROJECT',Path(tmp)),patch.object(sys,'argv',['build_wiktionaries.py']),patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'inside_envelope',return_value=False),patch.object(limits,'supervise',side_effect=limits.ContainmentUnavailable('cgroup required')),patch.object(limits,'supervise_watchdog') as watchdog,patch.object(b,'main') as main:
+                with self.assertRaisesRegex(SystemExit,'cgroup required'):b.cli()
+                watchdog.assert_not_called();main.assert_not_called()
+
     def test_page_index_offsets_hash_and_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'index';data=b'# header\n\na\nb\n# skip\nc\n';path.write_bytes(data)
@@ -488,6 +516,8 @@ class BuildTest(unittest.TestCase):
             with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_THRESHOLD_COMPRESSED_BYTES',1),patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
                 b.build([item],root,root/'output','zig',2)
             blob_calls=[c for c in calls if 'build-blobs' in c]
+            self.assertTrue(calls)
+            self.assertTrue(all(command[1:3]==['build','-j1'] for command in calls))
             self.assertEqual(len(blob_calls),2)
             self.assertEqual([c[c.index('--start-page')+1] for c in blob_calls],['0','1'])
             self.assertEqual([c[c.index('--index-byte-offset')+1] for c in blob_calls],['0','2'])
@@ -649,6 +679,7 @@ class BuildTest(unittest.TestCase):
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
                 b.build([item],root,root/'output','zig',2)
             self.assertIn('verify-blobs',calls[1]);self.assertTrue((root/'output/testwiktionary/20260901/complete.json').exists())
+            self.assertTrue(all(command[1:3]==['build','-j1'] for command in calls))
             self.assertIn('--llvm-workers',calls[0])
             self.assertIn('--language-registry-snapshot',calls[0])
             final=root/'output/testwiktionary/20260901'

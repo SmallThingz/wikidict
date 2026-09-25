@@ -421,7 +421,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     expander_build=workspace/'expander'
     if not expander_ready(expander_build):
         if expander_build.exists(): shutil.rmtree(expander_build)
-        timed_run([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(expander_build),
+        timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(expander_build),
                      '--language-registry-snapshot',str(registry),'--llvm-workers',str(workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only'],
                   edition,date,'expander_build')
@@ -449,7 +449,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         if marker.is_file():
             try:
                 validate_page_coverage(shard,start,limit,index,offset)
-                timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
+                timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
                           edition,date,'resume_shard_verify',start_page=start,pages=limit)
             except (subprocess.CalledProcessError,ValueError):
                 print(f'Rebuilding invalid resumed shard {items[0]["wiki"]} start={start}',flush=True)
@@ -461,14 +461,14 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         for attempt in range(1,SHARD_RETRIES+1):
             if shard.exists(): shutil.rmtree(shard)
             try:
-                timed_run([zig,'build','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shard),
+                timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shard),
                              '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
                              '--index-byte-offset',str(offset),
                              '--workers',str(min(workers,16)),'--now-unix',str(now_unix)],
                           edition,date,'shard_build',start_page=start,pages=limit,attempt=attempt)
                 require_index_identity(index_path,index)
                 validate_page_coverage(shard,start,limit,index,offset)
-                timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
+                timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
                           edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
             except (subprocess.CalledProcessError,ValueError) as error:
                 last_error=error
@@ -485,9 +485,9 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                      for path,start in zip(shard_paths,range(0,indexed_pages,SHARD_PAGES)))
     if actual_pages!=indexed_pages: raise ValueError('Incomplete total shard page coverage')
     if staging.exists(): shutil.rmtree(staging)
-    timed_run([zig,'build','-Doptimize=ReleaseFast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]],
+    timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]],
               edition,date,'merge',shards=len(shard_paths))
-    timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)],
+    timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)],
               edition,date,'merged_verify',shards=len(shard_paths))
     coverage=dict(version=1,start_page=0,requested_limit=None,index_byte_offset=0,pages_seen=actual_pages,
                   expected_input_pages=indexed_pages,page_index_identity=index['identity'],page_index_sha256=index['sha256'],page_index_rows=indexed_pages)
@@ -657,14 +657,14 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
         try:
             source_metadata={}
             dump = stage_seekable_dump(xml,downloads,scratch,source_metadata)
-            timed_run([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
+            timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
                          '--language-registry-snapshot',str(registry),
                          '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
                          '--page-workers',str(min(workers,16))],edition,date,'dictionary_build')
             coverage=validate_page_coverage(staging,source_pages=source_metadata['source_pages'])
             coverage['expected_input_pages']=source_metadata['source_pages']
             (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
-            timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)],
+            timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)],
                       edition,date,'dictionary_verify')
             (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
         finally:
@@ -708,6 +708,8 @@ def main():
     p.add_argument('--downloads','--in',type=Path,default=PROJECT/'data/dumps',metavar='DIR')
     p.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries',metavar='DIR')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
+    p.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup',
+                   help='Resource supervisor: strict cgroup (default), or explicit best-effort 8 GiB process-tree watchdog with a two-hour deadline')
     p.add_argument('--threads',type=int,default=default_build_threads(),help='Workers per edition (up to 4 within CPU load and fixed 8 GiB aggregate cap)')
     p.add_argument('--jobs',type=int,help='Concurrent editions (up to two within CPU load and capped aggregate worker budget)')
     p.add_argument('--wikis',nargs='+',help='Build only these edition IDs')
@@ -732,15 +734,28 @@ def main():
     failures=build_groups(groups,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads,a.jobs)
     if failures:raise SystemExit(f'{len(failures)} editions failed or were not started; no incomplete editions were published')
 def cli():
-    from build_resource_limits import ContainmentUnavailable, inside_envelope, supervise
+    from build_resource_limits import ContainmentUnavailable, inside_envelope, inside_watchdog, supervise, supervise_watchdog
     try:
+        route=argparse.ArgumentParser(add_help=False)
+        route.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup')
+        mode=route.parse_known_args()[0].resource_mode
         if '-h' in sys.argv[1:] or '--help' in sys.argv[1:]:
             main()
-        elif inside_envelope():
-            main()
         else:
-            with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
-                raise SystemExit(supervise())
+            watchdog_child=inside_watchdog()
+            if watchdog_child and mode!='watchdog':
+                raise ContainmentUnavailable('Watchdog child requires explicit --resource-mode=watchdog')
+            if mode=='watchdog':
+                if watchdog_child:
+                    main()
+                else:
+                    with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
+                        raise SystemExit(supervise_watchdog(wall_seconds=7200))
+            elif inside_envelope():
+                main()
+            else:
+                with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
+                    raise SystemExit(supervise())
     except ContainmentUnavailable as error:
         raise SystemExit(str(error)) from error
     except KeyboardInterrupt:

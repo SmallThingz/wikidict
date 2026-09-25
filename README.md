@@ -114,7 +114,7 @@ The corpus builder is intentionally conservative on developer machines:
 - a private Linux cgroup v2 bounds the complete builder/compiler/compressor
   process tree, including memory, CPU time per scheduling period and task count;
   build swap is disabled and the supervisor reaps its own descendants on exit;
-- corpus builds require an already delegated, writable cgroup with the CPU,
+- the default resource mode requires an already delegated, writable cgroup with the CPU,
   memory and PIDs controllers enabled. Without it the launcher refuses before
   reading the input manifest. It does not change shared system limits;
 - the whole build tree has a fixed 8 GiB aggregate RAM cap, with no build swap.
@@ -125,6 +125,8 @@ The corpus builder is intentionally conservative on developer machines:
   admission limit;
 - individual compiler/expansion stages are capped at four workers and XZ
   publication is capped at four threads;
+- controller-generated `zig build` commands use `-j1`, serializing compilation
+  of the build tools before those runtime worker limits take effect;
 - LLVM bitcode/object scratch is removed before page expansion, snapshot inputs
   are linked instead of copied when possible, and verified shard trees are
   removed immediately after merge;
@@ -136,6 +138,14 @@ buffer. It rejects trailing streams, truncated input and decoded members over
 128 MiB rather than allocating an entire compressed part or accepting a partial
 decode. Direct `zig build` fixture commands do not pass through the corpus
 supervisor and must be launched with appropriate external limits.
+
+When a user explicitly accepts sampled limits instead of a kernel aggregate cap,
+`--resource-mode=watchdog` runs without cgroup delegation. It samples owned-process
+PSS and task counts, stops the build above 8 GiB or 256 tasks, restricts it to four
+CPUs at low priority, and imposes a two-hour deadline. PSS excludes unmapped file
+cache, and sampling can overshoot between checks. This mode cannot disable build
+swap. It retains per-process address-space limits and records peaks and the stop
+reason in `.tmp/build-watchdog-report.json`. The cgroup mode remains the default.
 
 One substantial scratch write remains by design: compiled records are first
 written to spool files. Wikimedia dump order is not the final per-language title
