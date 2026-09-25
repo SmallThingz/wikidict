@@ -37,6 +37,14 @@ fn sourcePath(a: A, root: []const u8, relative: []const u8) ![]u8 {
     return std.fs.path.join(a, &.{ root, relative });
 }
 
+fn batchSuffix(mode: usage_profile.CompileMode) []const u8 {
+    return switch (mode) {
+        .o0 => "o0",
+        .o1 => "o1",
+        .o2 => "o2",
+    };
+}
+
 fn outputBatchPath(
     a: A,
     root: []const u8,
@@ -46,7 +54,7 @@ fn outputBatchPath(
     return std.fmt.allocPrint(
         a,
         "{s}/module_batch_{s}_{d:0>6}.bc",
-        .{ root, if (mode == .o2) "o2" else "o1", batch_index },
+        .{ root, batchSuffix(mode), batch_index },
     );
 }
 
@@ -58,8 +66,14 @@ fn outputBatchName(
     return std.fmt.allocPrint(
         a,
         "module_batch_{s}_{d:0>6}.bc",
-        .{ if (mode == .o2) "o2" else "o1", batch_index },
+        .{ batchSuffix(mode), batch_index },
     );
+}
+
+test "O0 batch names are distinct" {
+    const name = try outputBatchName(std.testing.allocator, .o0, 3);
+    defer std.testing.allocator.free(name);
+    try std.testing.expectEqualStrings("module_batch_o0_000003.bc", name);
 }
 
 fn unescapeTsv(a: A, raw: []const u8) ![]u8 {
@@ -281,6 +295,18 @@ fn planEagerInit(
     return eager_count;
 }
 
+fn compilePlanLabel(keep: bool, static_root: bool, mode: usage_profile.CompileMode) []const u8 {
+    if (!keep) return "drop";
+    if (static_root) return "data";
+    return mode.flag();
+}
+
+test "compile plan keeps data-only roots out of O0 batches" {
+    try std.testing.expectEqualStrings("data", compilePlanLabel(true, true, .o0));
+    try std.testing.expectEqualStrings("-O0", compilePlanLabel(true, false, .o0));
+    try std.testing.expectEqualStrings("drop", compilePlanLabel(false, false, .o0));
+}
+
 fn writeCompilePlan(
     io: std.Io,
     a: A,
@@ -304,6 +330,7 @@ fn writeCompilePlan(
     try w.writeAll("# dict-llvm-compile-plan-v3\n");
     try w.writeAll("# index\topt\tdirect_pages\tpage_reach\tdirect_module_fanin\tmodule_reach\tsource_bytes\n");
 
+    var o0_count: usize = 0;
     var o1_count: usize = 0;
     var o2_count: usize = 0;
     var data_count: usize = 0;
@@ -314,12 +341,13 @@ fn writeCompilePlan(
         } else if (record.static_root) {
             data_count += 1;
         } else switch (mode) {
+            .o0 => o0_count += 1,
             .o1 => o1_count += 1,
             .o2 => o2_count += 1,
         }
         try w.print("{d}\t{s}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
             index,
-            if (!keep) "drop" else if (record.static_root) "data" else mode.flag(),
+            compilePlanLabel(keep, record.static_root, mode),
             profile.direct_page_reach[index],
             profile.page_reach[index],
             profile.direct_module_fanin[index],
@@ -329,8 +357,8 @@ fn writeCompilePlan(
     }
     try w.flush();
     std.debug.print(
-        "LLVM_OPT_PLAN o1={d} o2={d} data={d} pruned={d}\n",
-        .{ o1_count, o2_count, data_count, pruned_count },
+        "LLVM_OPT_PLAN o0={d} o1={d} o2={d} data={d} pruned={d}\n",
+        .{ o0_count, o1_count, o2_count, data_count, pruned_count },
     );
 }
 
@@ -767,7 +795,7 @@ fn emitBatches(
     const frozen_global_count = globals.names.items.len;
     var emitted: usize = 0;
 
-    inline for (&.{ usage_profile.CompileMode.o2, usage_profile.CompileMode.o1 }) |mode| {
+    inline for (&.{ usage_profile.CompileMode.o2, usage_profile.CompileMode.o1, usage_profile.CompileMode.o0 }) |mode| {
         var selected: std.ArrayList(usize) = .empty;
         defer selected.deinit(a);
         for (modes, records, 0..) |candidate, record, index|
@@ -776,6 +804,7 @@ fn emitBatches(
         var position: usize = 0;
         var batch_index: usize = 0;
         while (position < selected.items.len) : (batch_index += 1) {
+            const batch_started_ns = std.Io.Clock.awake.now(io).toNanoseconds();
             var batch = try emitter.Batch.init();
             errdefer batch.deinit();
 
@@ -832,6 +861,10 @@ fn emitBatches(
                 batch_source_bytes,
             });
             try plan.flush();
+            const batch_elapsed_ms = @divTrunc(std.Io.Clock.awake.now(io).toNanoseconds() - batch_started_ns, std.time.ns_per_ms);
+            std.debug.print("LLVM_EMIT_BATCH mode={s} count={d} source_bytes={d} elapsed_ms={d}\n", .{
+                mode.flag(), batch_count, batch_source_bytes, batch_elapsed_ms,
+            });
         }
     }
     try plan.flush();
@@ -986,6 +1019,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     var reachable_static: usize = 0;
     var reachable_synth: usize = 0;
     var reachable_llvm: usize = 0;
+    var executable_o0: usize = 0;
     var executable_o1: usize = 0;
     var executable_o2: usize = 0;
     var reachable_analysis_functions: usize = 0;
@@ -1002,6 +1036,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         if (program.needsLlvmBatch(record)) {
             reachable_llvm += 1;
             switch (mode) {
+                .o0 => executable_o0 += 1,
                 .o1 => executable_o1 += 1,
                 .o2 => executable_o2 += 1,
             }
@@ -1017,8 +1052,8 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         .{ reachable_static, reachable_synth, reachable_llvm },
     );
     std.debug.print(
-        "LLVM_EXEC_OPT o1={d} o2={d}\n",
-        .{ executable_o1, executable_o2 },
+        "LLVM_EXEC_OPT o0={d} o1={d} o2={d}\n",
+        .{ executable_o0, executable_o1, executable_o2 },
     );
     std.debug.print(
         "LLVM_REACHABLE_FUNCTION_LIVENESS dead={d}/{d}\n",

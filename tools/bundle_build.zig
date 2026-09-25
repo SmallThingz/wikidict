@@ -103,13 +103,16 @@ fn defaultLlvmWorkers() usize {
 fn stage(io: std.Io, marker: []const u8, name: []const u8, argv: []const []const u8) !void {
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = name });
     std.debug.print("dictionary build: {s}\n", .{name});
+    const started_ns = std.Io.Clock.awake.now(io).toNanoseconds();
     var child = try std.process.spawn(io, .{ .argv = argv, .stdin = .ignore });
     defer child.kill(io);
     const term = try child.wait(io);
+    const elapsed_ms = @divTrunc(std.Io.Clock.awake.now(io).toNanoseconds() - started_ns, std.time.ns_per_ms);
     if (term != .exited or term.exited != 0) {
-        std.debug.print("dictionary build failed at {s}; incomplete marker retained\n", .{name});
+        std.debug.print("dictionary build failed at {s} elapsed_ms={d}; incomplete marker retained\n", .{ name, elapsed_ms });
         return error.PipelineStageFailed;
     }
+    std.debug.print("dictionary build completed: {s} elapsed_ms={d}\n", .{ name, elapsed_ms });
 }
 
 // One owner waits/reaps the extractor. The compiler may start after its inputs
@@ -185,10 +188,12 @@ fn installSnapshot(io: std.Io, a: std.mem.Allocator, source: []const u8, root: [
 }
 
 const CompileMode = enum {
+    o0,
     o1,
     o2,
 
     fn parse(raw: []const u8) !CompileMode {
+        if (std.mem.eql(u8, raw, "-O0")) return .o0;
         if (std.mem.eql(u8, raw, "-O1")) return .o1;
         if (std.mem.eql(u8, raw, "-O2")) return .o2;
         return error.InvalidBatchPlan;
@@ -196,11 +201,23 @@ const CompileMode = enum {
 
     fn flag(self: CompileMode) []const u8 {
         return switch (self) {
+            .o0 => "-O0",
             .o1 => "-O1",
             .o2 => "-O2",
         };
     }
 };
+
+test "batch compile modes preserve explicit flags" {
+    const modes = [_]CompileMode{ .o0, .o1, .o2 };
+    const flags = [_][]const u8{ "-O0", "-O1", "-O2" };
+    for (modes, flags) |mode, flag| {
+        try std.testing.expectEqual(mode, try CompileMode.parse(flag));
+        try std.testing.expectEqualStrings(flag, mode.flag());
+    }
+    try std.testing.expectError(error.InvalidBatchPlan, CompileMode.parse("-Ofast"));
+    try std.testing.expectError(error.InvalidBatchPlan, CompileMode.parse(""));
+}
 
 const BatchPlan = struct {
     mode: CompileMode,
@@ -270,6 +287,7 @@ fn readBatchPlan(
 
 const CompileJob = struct {
     child: std.process.Child,
+    started_ns: i128,
     mode: CompileMode,
     first_index: usize,
     last_index: usize,
@@ -279,6 +297,7 @@ const CompileJob = struct {
 fn waitCompile(io: std.Io, job: *?CompileJob) !void {
     if (job.*) |*active| {
         const term = try active.child.wait(io);
+        const elapsed_ms = @divTrunc(std.Io.Clock.awake.now(io).toNanoseconds() - active.started_ns, std.time.ns_per_ms);
         const mode = active.mode;
         const first_index = active.first_index;
         const last_index = active.last_index;
@@ -286,11 +305,12 @@ fn waitCompile(io: std.Io, job: *?CompileJob) !void {
         job.* = null;
         if (term != .exited or term.exited != 0) {
             std.debug.print(
-                "dictionary build failed compiling {s} LLVM batch count={d} first={d} last={d}; incomplete marker retained\n",
-                .{ mode.flag(), count, first_index, last_index },
+                "dictionary build failed compiling {s} LLVM batch count={d} first={d} last={d} elapsed_ms={d}; incomplete marker retained\n",
+                .{ mode.flag(), count, first_index, last_index, elapsed_ms },
             );
             return error.PipelineStageFailed;
         }
+        std.debug.print("dictionary build completed: {s} LLVM batch count={d} first={d} last={d} elapsed_ms={d}\n", .{ mode.flag(), count, first_index, last_index, elapsed_ms });
     }
 }
 
@@ -354,6 +374,7 @@ fn compileBitcodeModules(
         });
         jobs[slot] = .{
             .child = child,
+            .started_ns = std.Io.Clock.awake.now(io).toNanoseconds(),
             .mode = plan.mode,
             .first_index = plan.first_index,
             .last_index = plan.last_index,

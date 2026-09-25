@@ -25,11 +25,13 @@ pub const PageSeeds = struct {
 };
 
 pub const CompileMode = enum {
+    o0,
     o1,
     o2,
 
     pub fn flag(self: CompileMode) []const u8 {
         return switch (self) {
+            .o0 => "-O0",
             .o1 => "-O1",
             .o2 => "-O2",
         };
@@ -557,7 +559,12 @@ pub fn chooseModes(
     try markCoverage(a, selected, profile.module_reach, source_sizes, 980, 1000);
 
     const modes = try a.alloc(CompileMode, source_sizes.len);
-    for (modes, selected) |*mode, hot| mode.* = if (hot) .o2 else .o1;
+    for (modes, selected, profile.page_reach, profile.module_reach) |*mode, hot, page_reach, module_reach| {
+        // Zero static reach is an O0 build-time heuristic, not proof that a
+        // dynamic module name never invokes this module. Preserve O1 for every
+        // known use; full-page timing must qualify the dynamic-call tradeoff.
+        mode.* = if (hot) .o2 else if (page_reach == 0 and module_reach == 0) .o0 else .o1;
+    }
     return modes;
 }
 
@@ -590,18 +597,37 @@ test "usage propagation collapses cycles before accumulating reach" {
 test "mode selection is usage first with a modest size penalty" {
     const a = std.testing.allocator;
     var profile = Profile{
-        .page_reach = try a.dupe(u64, &.{ 10_000, 100, 1 }),
-        .module_reach = try a.dupe(u64, &.{ 1, 1_000, 1 }),
-        .direct_page_reach = try a.dupe(u64, &.{ 10_000, 100, 1 }),
-        .direct_module_fanin = try a.dupe(u32, &.{ 0, 10, 0 }),
+        .page_reach = try a.dupe(u64, &.{ 10_000, 100, 1, 0 }),
+        .module_reach = try a.dupe(u64, &.{ 1, 1_000, 1, 0 }),
+        .direct_page_reach = try a.dupe(u64, &.{ 10_000, 100, 1, 0 }),
+        .direct_module_fanin = try a.dupe(u32, &.{ 0, 10, 0, 0 }),
     };
     defer deinitProfile(a, &profile);
-    const sizes = [_]u64{ 64 * 1024 * 1024, 1 * 1024 * 1024, 64 * 1024 };
+    const sizes = [_]u64{ 64 * 1024 * 1024, 1 * 1024 * 1024, 64 * 1024, 64 * 1024 };
     const modes = try chooseModes(a, profile, &sizes);
     defer a.free(modes);
     try std.testing.expectEqual(CompileMode.o2, modes[0]);
     try std.testing.expectEqual(CompileMode.o2, modes[1]);
     try std.testing.expectEqual(CompileMode.o1, modes[2]);
+    try std.testing.expectEqual(CompileMode.o0, modes[3]);
+}
+
+test "any statically observed page or module reach stays above O0" {
+    const a = std.testing.allocator;
+    var profile = Profile{
+        .page_reach = try a.dupe(u64, &.{ 10_000, 1, 0, 0 }),
+        .module_reach = try a.dupe(u64, &.{ 10_000, 0, 1, 0 }),
+        .direct_page_reach = try a.dupe(u64, &.{ 10_000, 1, 0, 0 }),
+        .direct_module_fanin = try a.dupe(u32, &.{ 0, 0, 1, 0 }),
+    };
+    defer deinitProfile(a, &profile);
+    const sizes = [_]u64{ 1024, 1024, 1024, 1024 };
+    const modes = try chooseModes(a, profile, &sizes);
+    defer a.free(modes);
+    try std.testing.expectEqual(CompileMode.o2, modes[0]);
+    try std.testing.expectEqual(CompileMode.o1, modes[1]);
+    try std.testing.expectEqual(CompileMode.o1, modes[2]);
+    try std.testing.expectEqual(CompileMode.o0, modes[3]);
 }
 
 test "reachability prunes zero-reach modules without dynamic targets" {
