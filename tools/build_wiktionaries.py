@@ -226,6 +226,16 @@ def shard_state(items, registry, now_unix=None):
     return state
 
 
+def dump_input_fingerprint(items):
+    """The repack depends on XML input bytes and its staging format only."""
+    if not items: raise ValueError('No dump parts')
+    files=[]
+    for item in sorted(items,key=lambda x:x['name']):
+        files.append([item['wiki'],item['date'],item['name'],item['size'],item['sha1']])
+    state={'version':DUMP_STAGING_VERSION,'files':files}
+    return hashlib.sha256(json.dumps(state,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+
 def prepare_shard_workspace(workspace, expected):
     if workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
     state_path=workspace/'state.json'
@@ -237,8 +247,16 @@ def prepare_shard_workspace(workspace, expected):
             return existing['now_unix']
     if workspace.exists():
         if not workspace.is_dir() or workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
-        shutil.rmtree(workspace)
-    workspace.mkdir(parents=True)
+        cache=workspace/'input'
+        if cache.is_symlink(): raise ValueError(f'Unsafe cached dump path: {cache}')
+        # Compiler/registry changes invalidate the expander and shards, but
+        # the verified compressed XML repack has independent inputs.
+        for child in workspace.iterdir():
+            if child.name=='input' and child.is_dir(): continue
+            if child.is_dir() and not child.is_symlink(): shutil.rmtree(child)
+            else: child.unlink()
+    else:
+        workspace.mkdir(parents=True)
     now_unix=int(time.time())
     state=dict(expected,now_unix=now_unix)
     temp=state_path.with_suffix('.part')
@@ -247,18 +265,18 @@ def prepare_shard_workspace(workspace, expected):
     return now_unix
 
 
-def cached_shard_dump(items, downloads, workspace, expected):
-    """Reuse only a completed, content-verified repack for this shard state."""
+def cached_shard_dump(items, downloads, workspace):
+    """Reuse only a completed, content-verified repack for these XML inputs."""
     cache=workspace/'input'
     if cache.is_symlink(): raise ValueError(f'Unsafe cached dump path: {cache}')
     dump=cache/'pages.xml.bz2'
     index=cache/'pages-index.txt.bz2'
     marker=cache/'.complete.json'
-    state_hash=hashlib.sha256(json.dumps(expected,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    input_hash=dump_input_fingerprint(items)
     if cache.is_dir() and not any(path.is_symlink() for path in (dump,index,marker)):
         try:
             record=json.loads(marker.read_text())
-            valid=isinstance(record,dict) and record.get('version')==DUMP_STAGING_VERSION and record.get('state_sha256')==state_hash
+            valid=isinstance(record,dict) and record.get('version')==DUMP_STAGING_VERSION and record.get('input_sha256')==input_hash
             for label,path in (('dump',dump),('index',index)):
                 valid=valid and path.is_file() and type(record.get(label+'_size')) is int and record[label+'_size']>0
                 valid=valid and path.stat().st_size==record[label+'_size']
@@ -274,7 +292,7 @@ def cached_shard_dump(items, downloads, workspace, expected):
     cache.mkdir()
     metadata={}
     stage_seekable_dump(items,downloads,cache,metadata)
-    record=dict(metadata,version=DUMP_STAGING_VERSION,state_sha256=state_hash)
+    record=dict(metadata,version=DUMP_STAGING_VERSION,input_sha256=input_hash)
     temp=marker.with_suffix('.part')
     temp.write_text(json.dumps(record,sort_keys=True)+'\n')
     os.replace(temp,marker)
@@ -390,6 +408,8 @@ def validate_fallback_report(path):
     return count
 
 VERIFIED_MARKER = '.verified-blobs'
+# Bump this when page framing, member encoding or index semantics change; the
+# input cache identity and published artifacts both include this contract.
 DUMP_STAGING_VERSION = 'page-aligned-bz2-v1'
 VERIFIED_CONTENT = f'dump-staging-version={DUMP_STAGING_VERSION}\n'
 
@@ -474,7 +494,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
         print(f'Sharding {edition}: {compressed_bytes:,} compressed bytes in {SHARD_PAGES:,}-page chunks',flush=True)
         expected=shard_state(items,registry)
         now_unix=prepare_shard_workspace(workspace,expected)
-        dump=cached_shard_dump(xml,downloads,workspace,expected)
+        dump=cached_shard_dump(xml,downloads,workspace)
         build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix)
     else:
         (PROJECT / '.tmp').mkdir(exist_ok=True)

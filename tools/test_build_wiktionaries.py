@@ -113,51 +113,102 @@ class BuildTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Unsafe shard workspace'):
                 b.prepare_shard_workspace(alias,changed)
 
+    def test_source_and_registry_changes_keep_verified_dump_but_reset_native_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            data=bz2.compress(b'<mediawiki><page>word</page></mediawiki>')
+            (folder/name).write_bytes(data)
+            items=[dict(wiki='testwiktionary',date='20260901',name=name,
+                        size=len(data),sha1=hashlib.sha1(data).hexdigest())]
+            workspace=root/'output/20260901.shards'
+            initial=dict(version=b.SHARD_STATE_VERSION,source='compiler-a',registry_sha256='registry-a')
+            with patch.object(b.time,'time',return_value=111):
+                self.assertEqual(b.prepare_shard_workspace(workspace,initial),111)
+            with patch.object(b,'stage_seekable_dump',wraps=b.stage_seekable_dump) as stage:
+                dump=b.cached_shard_dump(items,root,workspace)
+                self.assertEqual(stage.call_count,1)
+                original_inode=dump.stat().st_ino
+                (workspace/'expander').mkdir()
+                (workspace/'shards').mkdir()
+                (workspace/'shards/old').write_text('stale')
+                changed=dict(initial,source='compiler-b',registry_sha256='registry-b')
+                with patch.object(b.time,'time',return_value=222):
+                    self.assertEqual(b.prepare_shard_workspace(workspace,changed),222)
+                self.assertFalse((workspace/'expander').exists())
+                self.assertFalse((workspace/'shards').exists())
+                self.assertEqual(dump.stat().st_ino,original_inode)
+                self.assertEqual(json.loads((workspace/'state.json').read_text())['now_unix'],222)
+                self.assertEqual(b.cached_shard_dump(items,root,workspace),dump)
+                self.assertEqual(stage.call_count,1)
+
+    def test_shard_workspace_rejects_symlinked_input_before_reset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace=root/'work';workspace.mkdir()
+            external=root/'external';external.mkdir()
+            (external/'keep').write_text('safe')
+            (workspace/'input').symlink_to(external,target_is_directory=True)
+            (workspace/'shards').mkdir()
+            with self.assertRaisesRegex(ValueError,'Unsafe cached dump path'):
+                b.prepare_shard_workspace(workspace,{'source':'new'})
+            self.assertTrue((workspace/'shards').is_dir())
+            self.assertEqual((external/'keep').read_text(),'safe')
+
     def test_cached_shard_dump_reuses_only_exact_verified_state_and_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
-            (folder/name).write_bytes(bz2.compress(b'<mediawiki><page>word</page></mediawiki>'))
-            items=[dict(wiki='testwiktionary',date='20260901',name=name)]
+            data=bz2.compress(b'<mediawiki><page>word</page></mediawiki>')
+            (folder/name).write_bytes(data)
+            items=[dict(wiki='testwiktionary',date='20260901',name=name,
+                        size=len(data),sha1=hashlib.sha1(data).hexdigest())]
             workspace=root/'output/20260901.shards'
             expected=dict(version=b.SHARD_STATE_VERSION,source='source-a',files=[name])
             b.prepare_shard_workspace(workspace,expected)
             real_stage=b.stage_seekable_dump
             with patch.object(b,'stage_seekable_dump',wraps=real_stage) as stage:
-                dump=b.cached_shard_dump(items,root,workspace,expected)
+                dump=b.cached_shard_dump(items,root,workspace)
                 self.assertEqual(stage.call_count,1)
-                self.assertEqual(b.cached_shard_dump(items,root,workspace,expected),dump)
+                self.assertEqual(b.cached_shard_dump(items,root,workspace),dump)
                 self.assertEqual(stage.call_count,1)
                 damaged=bytearray(dump.read_bytes());damaged[len(damaged)//2]^=1
                 dump.write_bytes(damaged)
-                b.cached_shard_dump(items,root,workspace,expected)
+                b.cached_shard_dump(items,root,workspace)
                 self.assertEqual(stage.call_count,2)
                 index=workspace/'input/pages-index.txt.bz2'
                 damaged=bytearray(index.read_bytes());damaged[len(damaged)//2]^=1
                 index.write_bytes(damaged)
-                b.cached_shard_dump(items,root,workspace,expected)
+                b.cached_shard_dump(items,root,workspace)
                 self.assertEqual(stage.call_count,3)
                 marker=workspace/'input/.complete.json'
                 marker.write_text('{partial')
-                b.cached_shard_dump(items,root,workspace,expected)
+                b.cached_shard_dump(items,root,workspace)
                 self.assertEqual(stage.call_count,4)
                 record=json.loads(marker.read_text())
-                record['state_sha256']='0'*64
+                record['input_sha256']='0'*64
                 marker.write_text(json.dumps(record)+'\n')
-                b.cached_shard_dump(items,root,workspace,expected)
+                b.cached_shard_dump(items,root,workspace)
                 self.assertEqual(stage.call_count,5)
                 changed=dict(expected,source='source-b')
                 b.prepare_shard_workspace(workspace,changed)
-                self.assertFalse((workspace/'input').exists())
-                b.cached_shard_dump(items,root,workspace,changed)
+                self.assertTrue((workspace/'input').is_dir())
+                b.cached_shard_dump(items,root,workspace)
+                self.assertEqual(stage.call_count,5)
+                changed_items=[dict(items[0],sha1='0'*40)]
+                b.cached_shard_dump(changed_items,root,workspace)
                 self.assertEqual(stage.call_count,6)
+                with patch.object(b,'DUMP_STAGING_VERSION','page-aligned-bz2-v2'):
+                    b.cached_shard_dump(changed_items,root,workspace)
+                self.assertEqual(stage.call_count,7)
 
     def test_partial_cached_repack_cannot_be_reused(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
-            (folder/name).write_bytes(bz2.compress(b'<mediawiki/>'))
-            items=[dict(wiki='testwiktionary',date='20260901',name=name)]
+            data=bz2.compress(b'<mediawiki/>')
+            (folder/name).write_bytes(data)
+            items=[dict(wiki='testwiktionary',date='20260901',name=name,
+                        size=len(data),sha1=hashlib.sha1(data).hexdigest())]
             workspace=root/'output/20260901.shards'
             expected={'version':b.SHARD_STATE_VERSION,'source':'source-a'}
             b.prepare_shard_workspace(workspace,expected)
@@ -166,10 +217,10 @@ class BuildTest(unittest.TestCase):
                 raise OSError('interrupted')
             with patch.object(b,'stage_seekable_dump',side_effect=fail_stage):
                 with self.assertRaisesRegex(OSError,'interrupted'):
-                    b.cached_shard_dump(items,root,workspace,expected)
+                    b.cached_shard_dump(items,root,workspace)
             self.assertFalse((workspace/'input/.complete.json').exists())
             with patch.object(b,'stage_seekable_dump',wraps=b.stage_seekable_dump) as stage:
-                dump=b.cached_shard_dump(items,root,workspace,expected)
+                dump=b.cached_shard_dump(items,root,workspace)
                 self.assertEqual(stage.call_count,1)
             self.assertEqual(bz2.decompress(dump.read_bytes()),b'<mediawiki/>')
 
