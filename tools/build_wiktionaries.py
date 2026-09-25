@@ -23,21 +23,28 @@ SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 1
 MAX_TOTAL_BUILD_WORKERS = 8
 MEMORY_PER_BUILD_WORKER = 1536 * 1024 * 1024
+MEMORY_RESERVE_BYTES = 2 * 1024 * 1024 * 1024
 
-def total_memory_bytes():
+def available_memory_bytes():
     try:
+        values={}
         for line in Path('/proc/meminfo').read_text().splitlines():
-            if line.startswith('MemTotal:'):
-                return int(line.split()[1]) * 1024
-    except (OSError, ValueError, IndexError):
-        pass
-    return None
+            if ':' not in line:continue
+            key,value=line.split(':',1);fields=value.split()
+            if fields:values[key]=int(fields[0])*1024
+        return values.get('MemAvailable',values.get('MemTotal'))
+    except (OSError,ValueError,IndexError):
+        return None
 
 def safe_worker_budget():
-    cpu = max(1, os.cpu_count() or 1)
-    memory = total_memory_bytes()
-    memory_workers = MAX_TOTAL_BUILD_WORKERS if memory is None else max(1, memory // MEMORY_PER_BUILD_WORKER)
-    return max(1, min(MAX_TOTAL_BUILD_WORKERS, cpu, memory_workers))
+    cpu=max(1,os.cpu_count() or 1)
+    memory=available_memory_bytes()
+    if memory is None:
+        memory_workers=MAX_TOTAL_BUILD_WORKERS
+    else:
+        usable=max(0,memory-MEMORY_RESERVE_BYTES)
+        memory_workers=max(1,usable//MEMORY_PER_BUILD_WORKER)
+    return max(1,min(MAX_TOTAL_BUILD_WORKERS,cpu,memory_workers))
 
 def default_build_threads():
     return min(4, safe_worker_budget())

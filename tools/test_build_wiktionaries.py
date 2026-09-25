@@ -124,7 +124,7 @@ class BuildTest(unittest.TestCase):
             item=dict(wiki='testwiktionary',date='20260901',name='testwiktionary-20260901-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/testwiktionary-20260901-pages-meta-current.xml.bz2',size=1,sha1='a'*40)
             (source/'manifest.json').write_text(json.dumps({'files':[item]}))
             output=root/'output'
-            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(output),'--threads','2']),patch.object(b,'build') as build:
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(output),'--threads','2']),patch.object(b,'available_memory_bytes',return_value=16*1024*1024*1024),patch.object(b,'build') as build:
                 b.main()
             self.assertEqual(build.call_args.args[1:4],(source.resolve(),output.resolve(),b.shutil.which('zig') or 'zig'))
             self.assertEqual(build.call_args.args[4],2)
@@ -137,7 +137,7 @@ class BuildTest(unittest.TestCase):
                 items.append(dict(wiki=wiki,date='20260901',name=name,url=f'https://dumps.wikimedia.org/{wiki}/20260901/{name}',size=1,sha1='a'*40))
             (source/'manifest.json').write_text(json.dumps({'files':items}))
             rendezvous=threading.Barrier(2)
-            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(root/'output'),'--threads','2','--jobs','2']),patch.object(b,'build',side_effect=lambda *args:rendezvous.wait(timeout=2)) as build:
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(root/'output'),'--threads','2','--jobs','2']),patch.object(b,'available_memory_bytes',return_value=16*1024*1024*1024),patch.object(b,'build',side_effect=lambda *args:rendezvous.wait(timeout=2)) as build:
                 b.main()
             self.assertEqual(build.call_count,2)
     def test_running_edition_is_not_removed_by_retry(self):
@@ -164,10 +164,10 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(default_workers(),1)
 
     def test_safe_worker_budget_caps_cpu_and_memory(self):
-        with patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'total_memory_bytes',return_value=6*1024*1024*1024):
+        with patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'available_memory_bytes',return_value=8*1024*1024*1024):
             self.assertEqual(b.safe_worker_budget(),4)
             self.assertEqual(b.default_build_threads(),4)
-        with patch.object(b.os,'cpu_count',return_value=2),patch.object(b,'total_memory_bytes',return_value=64*1024*1024*1024):
+        with patch.object(b.os,'cpu_count',return_value=2),patch.object(b,'available_memory_bytes',return_value=64*1024*1024*1024):
             self.assertEqual(b.safe_worker_budget(),2)
             self.assertEqual(b.default_build_threads(),2)
 

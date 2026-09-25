@@ -147,7 +147,7 @@ fn loadHeadings(io: std.Io, a: std.mem.Allocator, roots: []const []const u8) ![]
     for (roots) |root| {
         const path = try std.fs.path.join(a, &.{ root, catalog.manifest_filename });
         defer a.free(path);
-        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .unlimited);
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(16 * 1024 * 1024));
         defer a.free(bytes);
         var it = try catalog.Iterator.init(bytes);
         while (try it.next()) |entry| {

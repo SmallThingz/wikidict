@@ -4,7 +4,7 @@ const xml_decode = @import("xml_decode");
 const dump_source = @import("wikimedia_dump");
 const language_registry = @import("language_registry.zig");
 const bundle_expander = @import("bundle_expander.zig");
-const max_worker_count: usize = 8;
+const max_worker_count: usize = 4;
 
 const Options = struct {
     start_page: usize = 0,
@@ -40,7 +40,7 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
 
     const snapshot_path = try std.fs.path.join(a, &.{ expander_root, "language-registry.tsv" });
     defer a.free(snapshot_path);
-    const snapshot = std.Io.Dir.cwd().readFileAlloc(io, snapshot_path, a, .unlimited) catch |err| switch (err) {
+    const snapshot = std.Io.Dir.cwd().readFileAlloc(io, snapshot_path, a, .limited(32 * 1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => null,
         else => return err,
     };
@@ -64,7 +64,7 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     const page_id = std.fmt.parseInt(u64, line[page_prefix.len..comma], 10) catch return error.InvalidModuleManifest;
     const module_path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ expander_root, page_id });
     defer a.free(module_path);
-    const source = try std.Io.Dir.cwd().readFileAlloc(io, module_path, a, .unlimited);
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, module_path, a, .limited(64 * 1024 * 1024));
     defer a.free(source);
     try out.addLua(source);
     return out;

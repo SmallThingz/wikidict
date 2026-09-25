@@ -1,7 +1,7 @@
 //! Coordinated build-time Lua/template expansion and data-only blob bundling.
 const std = @import("std");
 const paths = @import("pipeline_paths");
-const max_parallel_workers: usize = 8;
+const max_parallel_workers: usize = 4;
 
 const Options = struct {
     dump: []const u8,
@@ -93,7 +93,7 @@ fn parseOptions(args: []const []const u8) !Options {
 
 fn defaultLlvmWorkersForCpuCount(logical_cpu_threads: usize) usize {
     const threads = @max(logical_cpu_threads, 1);
-    return 1 + threads / 3;
+    return @min(max_parallel_workers, 1 + threads / 3);
 }
 
 fn defaultLlvmWorkers() usize {
@@ -217,7 +217,7 @@ fn readBatchPlan(
     llvm_dir: []const u8,
 ) ![]BatchPlan {
     const path = try std.fs.path.join(a, &.{ llvm_dir, "batch-plan.tsv" });
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .unlimited);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(64 * 1024 * 1024));
 
     var plans: std.ArrayList(BatchPlan) = .empty;
     errdefer plans.deinit(a);
@@ -496,15 +496,19 @@ test "default LLVM worker count is one plus one third logical CPUs" {
     try std.testing.expectEqual(@as(usize, 1), defaultLlvmWorkersForCpuCount(1));
     try std.testing.expectEqual(@as(usize, 1), defaultLlvmWorkersForCpuCount(2));
     try std.testing.expectEqual(@as(usize, 2), defaultLlvmWorkersForCpuCount(3));
-    try std.testing.expectEqual(@as(usize, 5), defaultLlvmWorkersForCpuCount(12));
+    try std.testing.expectEqual(@as(usize, 4), defaultLlvmWorkersForCpuCount(12));
 }
 
 test "LLVM worker override accepts positive integers only" {
-    const options = try parseOptions(&.{ "dump.xml", "out", "--llvm-workers", "7" });
-    try std.testing.expectEqual(@as(?usize, 7), options.llvm_workers);
+    const options = try parseOptions(&.{ "dump.xml", "out", "--llvm-workers", "4" });
+    try std.testing.expectEqual(@as(?usize, 4), options.llvm_workers);
     try std.testing.expectError(
         error.Usage,
         parseOptions(&.{ "dump.xml", "out", "--llvm-workers", "0" }),
+    );
+    try std.testing.expectError(
+        error.Usage,
+        parseOptions(&.{ "dump.xml", "out", "--llvm-workers", "5" }),
     );
     try std.testing.expectError(
         error.Usage,
@@ -528,7 +532,7 @@ test "page worker override accepts bounded positive integers only" {
     const options = try parseOptions(&.{ "dump.xml", "out", "--page-workers", "2" });
     try std.testing.expectEqual(@as(usize, 2), options.page_workers);
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--page-workers", "0" }));
-    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--page-workers", "17" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--page-workers", "5" }));
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--page-workers", "nope" }));
 }
 
