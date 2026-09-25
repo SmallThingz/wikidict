@@ -171,6 +171,14 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(b.safe_worker_budget(),2)
             self.assertEqual(b.default_build_threads(),2)
 
+    def test_main_refuses_to_start_below_memory_reserve(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);source=root/'input';source.mkdir()
+            item=dict(wiki='testwiktionary',date='20260901',name='testwiktionary-20260901-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/testwiktionary-20260901-pages-meta-current.xml.bz2',size=1,sha1='a'*40)
+            (source/'manifest.json').write_text(json.dumps({'files':[item]}))
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source)]),patch.object(b,'available_memory_bytes',return_value=b.MEMORY_RESERVE_BYTES+b.MEMORY_PER_BUILD_WORKER-1):
+                with self.assertRaises(SystemExit): b.main()
+
     def test_main_rejects_aggregate_worker_oversubscription(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); source=root/'input'; source.mkdir()

@@ -43,11 +43,11 @@ def safe_worker_budget():
         memory_workers=MAX_TOTAL_BUILD_WORKERS
     else:
         usable=max(0,memory-MEMORY_RESERVE_BYTES)
-        memory_workers=max(1,usable//MEMORY_PER_BUILD_WORKER)
-    return max(1,min(MAX_TOTAL_BUILD_WORKERS,cpu,memory_workers))
+        memory_workers=usable//MEMORY_PER_BUILD_WORKER
+    return min(MAX_TOTAL_BUILD_WORKERS,cpu,memory_workers)
 
 def default_build_threads():
-    return min(4, safe_worker_budget())
+    return max(1,min(4,safe_worker_budget()))
 
 def ensure_language_registry(downloads, output, edition, date):
     source = downloads / edition / date / 'language-registry.tsv'
@@ -374,6 +374,7 @@ def main():
     p.add_argument('--wikis',nargs='+',help='Build only these edition IDs')
     a=p.parse_args()
     budget=safe_worker_budget()
+    if budget < 1:p.error('Not enough available memory to start a build safely')
     if not 1 <= a.threads <= budget:p.error(f'Threads must be 1 through {budget} on this host')
     if a.jobs is None:a.jobs=min(2,max(1,budget//a.threads))
     if not 1 <= a.jobs <= 16:p.error('Jobs must be 1 through 16')
