@@ -140,6 +140,19 @@ class BuildTest(unittest.TestCase):
             with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(root/'output'),'--threads','2','--jobs','2']),patch.object(b,'available_memory_bytes',return_value=16*1024*1024*1024),patch.object(b,'build',side_effect=lambda *args:rendezvous.wait(timeout=2)) as build:
                 b.main()
             self.assertEqual(build.call_count,2)
+    def test_scheduler_rechecks_memory_before_starting_next_edition(self):
+        groups={
+            ('aawiktionary','20260901'):[dict(wiki='aawiktionary')],
+            ('abwiktionary','20260901'):[dict(wiki='abwiktionary')],
+        }
+        started=[]
+        budgets=iter((2,0,0))
+        def fake_build(group,*args):started.append(group[0]['wiki'])
+        with patch.object(b,'safe_worker_budget',side_effect=lambda:next(budgets,0)),patch.object(b,'build',side_effect=fake_build):
+            failures=b.build_groups(groups,Path('.'),Path('.'),'zig',2,1)
+        self.assertEqual(started,['aawiktionary'])
+        self.assertEqual(failures,[('abwiktionary','20260901')])
+
     def test_running_edition_is_not_removed_by_retry(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);parent=root/'testwiktionary';parent.mkdir()

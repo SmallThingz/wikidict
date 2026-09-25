@@ -364,6 +364,36 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
     finally:
         shutil.rmtree(scratch)
 
+def build_groups(groups, downloads, output, zig, threads, jobs):
+    pending=list(sorted(groups.items()))
+    failures=[]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        active={}
+        while pending or active:
+            while pending and len(active)<jobs:
+                live_budget=safe_worker_budget()
+                active_workers=len(active)*threads
+                if live_budget < active_workers+threads:
+                    break
+                key,group=pending.pop(0)
+                future=pool.submit(build,group,downloads,output,zig,threads)
+                active[future]=key
+            if not active:
+                if pending:
+                    live_budget=safe_worker_budget()
+                    print(f'STOPPED before {pending[0][0][0]}: resource pressure allows {live_budget} workers, need {threads}',flush=True)
+                    failures.extend(key for key,_ in pending)
+                break
+            done,_=concurrent.futures.wait(active,timeout=1,return_when=concurrent.futures.FIRST_COMPLETED)
+            if not done:continue
+            for future in done:
+                key=active.pop(future)
+                try:future.result()
+                except Exception as e:
+                    failures.append(key);print(f'FAILED {key}: {e}',flush=True)
+    return failures
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--downloads','--in',type=Path,default=PROJECT/'data/dumps',metavar='DIR')
@@ -388,15 +418,7 @@ def main():
         missing=set(a.wikis)-{key[0] for key in groups}
         if missing:p.error(f'Unknown editions: {", ".join(sorted(missing))}')
         groups={key:group for key,group in groups.items() if key[0] in a.wikis}
-    failures=[]
-    print(f'Building {len(groups)} editions with {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as pool:
-        futures={pool.submit(build,group,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads):key
-                 for key,group in sorted(groups.items())}
-        for future in concurrent.futures.as_completed(futures):
-            key=futures[future]
-            try:future.result()
-            except Exception as e:
-                failures.append(key);print(f'FAILED {key}: {e}',flush=True)
-    if failures:raise SystemExit(f'{len(failures)} editions failed; no incomplete editions were published')
+    print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
+    failures=build_groups(groups,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads,a.jobs)
+    if failures:raise SystemExit(f'{len(failures)} editions failed or were not started; no incomplete editions were published')
 if __name__=='__main__':main()
