@@ -1,5 +1,6 @@
 const std = @import("std");
 const store = @import("store.zig");
+const search = @import("search.zig");
 pub const Command = enum { lookup, search, languages, stats, tui, catalog, install, saved, history, save, unsave };
 pub const Theme = enum { terminal, dark, light };
 pub const Format = enum { text, json };
@@ -89,6 +90,7 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
     if ((out.command == .stats or out.command == .saved or out.command == .history) and has_query) return error.Usage;
     if (out.command == .tui and out.format != .text) return error.Usage;
     if (out.offset != 0 and out.command != .search and out.command != .saved and out.command != .history) return error.Usage;
+    if (out.command == .search and (out.offset > search.max_retained_matches or out.limit > search.max_retained_matches - out.offset)) return error.Usage;
     return out;
 }
 test "CLI options are strict and lookup shorthand is unambiguous" {
@@ -101,6 +103,7 @@ test "CLI options are strict and lookup shorthand is unambiguous" {
     try std.testing.expectError(error.Usage, parse(&.{ "--", "-dash", "extra" }));
     try std.testing.expectError(error.Usage, parse(&.{"lookup"}));
     try std.testing.expectError(error.Usage, parse(&.{ "search", "--limit", "0" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "search", "cat", "--offset", "131000", "--limit", "1000" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "unexpected" }));
     try std.testing.expectError(error.Usage, parse(&.{ "lookup", "cat", "--wat", "yes" }));
 

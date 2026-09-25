@@ -11,7 +11,7 @@ const cache_row_alignment = 8;
 comptime {
     std.debug.assert(@sizeOf(Row) == 16);
 }
-const max_index_bytes = 512 * 1024 * 1024;
+const max_index_bytes = 128 * 1024 * 1024;
 const max_record_bytes = 64 * 1024 * 1024;
 const Directory = struct {
     header: []const u8,

@@ -5,6 +5,7 @@ const c = @cImport({
     @cInclude("lzma.h");
 });
 const A = std.mem.Allocator;
+const decoder_memory_limit: u64 = 128 * 1024 * 1024;
 const Api = struct {
     lib: std.DynLib,
     code: *const @TypeOf(c.lzma_code),
@@ -99,7 +100,7 @@ pub const Source = struct {
     pub fn scan(self: *Source, visitor: anytype) !void {
         var stream: c.lzma_stream = std.mem.zeroes(c.lzma_stream);
         defer self.api.end(&stream);
-        try check(self.api.stream(&stream, 256 * 1024 * 1024, c.LZMA_CONCATENATED));
+        try check(self.api.stream(&stream, decoder_memory_limit, c.LZMA_CONCATENATED));
         stream.next_in = self.bytes.ptr;
         stream.avail_in = self.bytes.len;
         var buffer: [65536]u8 = undefined;
@@ -166,7 +167,7 @@ pub const Source = struct {
         defer self.api.filters_free(&filters, null);
         try check(self.api.compressed(&block, it.block.unpadded_size));
         block.uncompressed_size = it.block.uncompressed_size;
-        if (self.api.memusage(&filters) > 256 * 1024 * 1024) return error.XzMemoryLimit;
+        if (self.api.memusage(&filters) > decoder_memory_limit) return error.XzMemoryLimit;
         var stream: c.lzma_stream = std.mem.zeroes(c.lzma_stream);
         defer self.api.end(&stream);
         try check(self.api.block(&stream, &block));

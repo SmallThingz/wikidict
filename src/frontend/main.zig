@@ -144,17 +144,20 @@ fn run(init: std.process.Init) !u8 {
             defer task.deinit(init.gpa);
             const insensitive = !opts.case_sensitive and std.mem.trim(u8, opts.query, " \t\r\n").len != 0;
             const range = if (insensitive) blk: {
-                try task.begin(init.gpa, opts.query);
+                const wanted = std.math.add(usize, opts.offset, opts.limit) catch return error.SearchWindowTooLarge;
+                try task.beginLimited(init.gpa, opts.query, wanted);
                 while (!task.complete) try task.step(init.gpa, &db, 4096);
                 break :blk store.Range{ .start = 0, .end = task.matches.items.len };
             } else try db.prefix(if (opts.case_sensitive) opts.query else "");
             response.match_mode = if (insensitive) "unicode-lowercase-prefix" else "exact-utf8-prefix";
-            response.total_matches = range.end - range.start;
+            response.total_matches = if (insensitive) task.total_matches else range.end - range.start;
             response.offset = opts.offset;
-            const start = range.start + @min(opts.offset, response.total_matches);
+            const retained_total = range.end - range.start;
+            const start = range.start + @min(opts.offset, retained_total);
             const end = start + @min(opts.limit, range.end - start);
-            response.has_more = end < range.end;
-            const matches = try a.alloc(output.Match, end - start);
+            const returned = end - start;
+            response.has_more = opts.offset +| returned < response.total_matches;
+            const matches = try a.alloc(output.Match, returned);
             for (matches, start..) |*match, index| match.* = .{ .title = try model.utf8Text(a, try db.titleAt(if (insensitive) task.matches.items[index].index else index)) };
             response.matches = matches;
             if (opts.format == .json) try output.json(w, response) else {
