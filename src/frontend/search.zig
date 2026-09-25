@@ -82,6 +82,7 @@ const FoldedBuilder = struct {
         const temp_path = try std.fmt.allocPrint(a, "{s}.{d}.{d}.tmp", .{ final_path, std.os.linux.getpid(), std.Io.Clock.awake.now(io).toNanoseconds() });
         errdefer a.free(temp_path);
         var file = try std.Io.Dir.cwd().createFile(io, temp_path, .{ .read = true, .truncate = true, .exclusive = true });
+        errdefer std.Io.Dir.cwd().deleteFile(io, temp_path) catch {};
         errdefer file.close(io);
         try file.setLength(io, total);
         const mapped = try std.posix.mmap(null, total, .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, file.handle, 0);
@@ -140,6 +141,7 @@ pub const Task = struct {
     folded_disabled: bool = false,
     folded_cache: ?FoldedCache = null,
     folded_builder: ?FoldedBuilder = null,
+    exact_match: ?usize = null,
 
     fn clearMatches(self: *Task, a: std.mem.Allocator) void {
         for (self.matches.items) |match| a.free(match.key);
@@ -171,6 +173,7 @@ pub const Task = struct {
         self.total_matches = 0;
         self.max_matches = max_matches;
         self.complete = false;
+        self.exact_match = null;
     }
     fn ensureFolded(self: *Task, a: std.mem.Allocator, db: *store.Store) void {
         const fingerprint = db.file.fingerprint;
@@ -280,6 +283,12 @@ pub const Task = struct {
         }
     }
     pub fn step(self: *Task, a: std.mem.Allocator, db: *store.Store, budget: usize) !void {
+        return self.stepMode(a, db, budget, false);
+    }
+    fn stepExact(self: *Task, a: std.mem.Allocator, db: *store.Store, budget: usize) !void {
+        return self.stepMode(a, db, budget, true);
+    }
+    fn stepMode(self: *Task, a: std.mem.Allocator, db: *store.Store, budget: usize, comptime exact_lookup: bool) !void {
         self.ensureFolded(a, db);
         var text: std.Io.Writer.Allocating = .init(a);
         defer text.deinit();
@@ -289,6 +298,13 @@ pub const Task = struct {
             text.clearRetainingCapacity();
             try unicode.writeLower(&text.writer, try db.titleAt(self.cursor));
             if (self.folded_builder) |*builder| if (self.cursor == builder.next) builder.append(self.cursor, text.written());
+            if (exact_lookup) {
+                if (std.mem.eql(u8, text.written(), self.query)) {
+                    self.exact_match = self.cursor;
+                    return;
+                }
+                continue;
+            }
             if (std.mem.startsWith(u8, text.written(), self.query)) try self.retain(a, text.written(), self.cursor);
         }
         self.maybeFinishFolded(a);
@@ -306,10 +322,8 @@ pub fn find(a: std.mem.Allocator, db: *store.Store, query: []const u8) !?usize {
     var task: Task = .{};
     defer task.deinit(a);
     try task.beginLimited(a, query, 1);
-    while (!task.complete) try task.step(a, db, 4096);
-    if (task.matches.items.len == 0) return null;
-    const match = task.matches.items[0];
-    return if (std.mem.eql(u8, match.key, task.query)) match.index else null;
+    while (!task.complete and task.exact_match == null) try task.stepExact(a, db, 4096);
+    return task.exact_match;
 }
 
 fn testStore(a: std.mem.Allocator, titles: []const []const u8) !struct { path: []u8, db: store.Store } {
@@ -344,6 +358,43 @@ test "case-insensitive search retains only the best bounded window" {
     try std.testing.expectEqual(@as(usize, 2), task.matches.items[0].index);
     try std.testing.expectEqual(@as(usize, 3), task.matches.items[1].index);
     try std.testing.expectError(error.SearchWindowTooLarge, task.beginLimited(a, "a", max_retained_matches + 1));
+}
+
+test "exact lookup prefers byte exact and returns first folded collision" {
+    const a = std.testing.allocator;
+    var fixture = try testStore(a, &.{ "APPLE", "Apple", "Banana", "apple", "applet" });
+    defer {
+        fixture.db.file.deinit();
+        std.Io.Dir.cwd().deleteFile(std.testing.io, fixture.path) catch {};
+        a.free(fixture.path);
+    }
+    try std.testing.expectEqualStrings("Apple", try fixture.db.titleAt((try find(a, &fixture.db, "Apple")).?));
+    try std.testing.expectEqualStrings("APPLE", try fixture.db.titleAt((try find(a, &fixture.db, "aPpLe")).?));
+    try std.testing.expectEqualStrings("Banana", try fixture.db.titleAt((try find(a, &fixture.db, "BANANA")).?));
+    try std.testing.expectEqual(@as(?usize, null), try find(a, &fixture.db, "missing"));
+}
+
+test "early exact lookup removes unfinished folded cache temporary file" {
+    const a = std.testing.allocator;
+    var fixture = try testStore(a, &.{ "APPLE", "Banana", "Cedar" });
+    defer {
+        fixture.db.file.deinit();
+        std.Io.Dir.cwd().deleteFile(std.testing.io, fixture.path) catch {};
+        a.free(fixture.path);
+    }
+    var temp_path: ?[]u8 = null;
+    defer if (temp_path) |path| a.free(path);
+    {
+        var task: Task = .{ .folded_cache_min_records = 0 };
+        defer task.deinit(a);
+        try task.beginLimited(a, "apple", 1);
+        try task.stepExact(a, &fixture.db, fixture.db.count());
+        try std.testing.expectEqual(@as(?usize, 0), task.exact_match);
+        try std.testing.expect(!task.complete);
+        try std.testing.expect(task.folded_builder != null);
+        temp_path = try a.dupe(u8, task.folded_builder.?.temp_path);
+    }
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().openFile(std.testing.io, temp_path.?, .{}));
 }
 
 test "folded prefix cache persists two bytes per record and filters later queries" {
