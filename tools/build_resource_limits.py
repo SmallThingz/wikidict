@@ -413,16 +413,42 @@ def _write_watchdog_report(path, report):
     temporary.replace(path)
 
 
+def _watchdog_cpu_set(max_cpus, available):
+    if type(max_cpus) is not int or not 1 <= max_cpus <= 8:
+        raise ContainmentUnavailable('Invalid watchdog CPU limit')
+    available = sorted(available)
+    if not available:
+        raise ContainmentUnavailable('No available CPUs for watchdog child')
+    # Use separate physical cores first. CPU numbers often interleave SMT
+    # siblings, so taking the lowest IDs can halve effective core capacity.
+    first, siblings, seen = [], [], set()
+    try:
+        for cpu in available:
+            topology = Path(f'/sys/devices/system/cpu/cpu{cpu}/topology')
+            package = int((topology / 'physical_package_id').read_text().strip())
+            core = int((topology / 'core_id').read_text().strip())
+            if package < 0 or core < 0:
+                raise ValueError('Invalid CPU topology')
+            identity = (package, core)
+            (siblings if identity in seen else first).append(cpu)
+            seen.add(identity)
+        available = first + siblings
+    except (OSError, ValueError):
+        # Missing/partial topology data must not expand the affinity mask.
+        pass
+    # Reserve four logical CPUs when available.
+    slots = min(max_cpus, len(available)) if max_cpus <= 4 else min(max_cpus, max(1, len(available) - 4))
+    return available[:slots]
+
+
 def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WALL_SECONDS,
-                       memory_limit_bytes=MAX_BUILD_MEMORY, max_tasks=MAX_BUILD_PIDS):
+                       memory_limit_bytes=MAX_BUILD_MEMORY, max_tasks=MAX_BUILD_PIDS, max_cpus=4):
     """Opt-in sampled fallback. Its aggregate cap is best effort, not a cgroup."""
     if not 0 < wall_seconds <= WATCHDOG_WALL_SECONDS:
         raise ContainmentUnavailable('Invalid watchdog wall limit')
     if not 0 < memory_limit_bytes <= MAX_BUILD_MEMORY or not 0 < max_tasks <= MAX_BUILD_PIDS:
         raise ContainmentUnavailable('Invalid watchdog resource limit')
-    cpus = sorted(os.sched_getaffinity(0))[:4]
-    if not cpus:
-        raise ContainmentUnavailable('No available CPUs for watchdog child')
+    cpus = _watchdog_cpu_set(max_cpus, os.sched_getaffinity(0))
     report_path = Path('.tmp/build-watchdog-report.json') if report_path is None else Path(report_path)
     token = uuid.uuid4().hex
     proof_read, proof_write = os.pipe()
@@ -438,6 +464,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
     started = time.monotonic()
     report = {'mode': 'watchdog', 'aggregate_limit': 'sampled best effort, not kernel hard cap',
               'memory_limit_bytes': memory_limit_bytes, 'max_tasks': max_tasks,
+              'cpus': cpus, 'max_cpus': max_cpus,
               'wall_seconds': wall_seconds, 'peak_pss_bytes': 0,
               'peak_rss_bytes': 0, 'peak_tasks': 0, 'termination_reason': 'starting'}
     reason = None

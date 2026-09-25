@@ -4,7 +4,7 @@ const xml_decode = @import("xml_decode");
 const dump_source = @import("wikimedia_dump");
 const language_registry = @import("language_registry.zig");
 const bundle_expander = @import("bundle_expander.zig");
-const max_worker_count: usize = 4;
+const max_worker_count: usize = 8;
 
 const Options = struct {
     start_page: usize = 0,

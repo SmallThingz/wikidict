@@ -19,6 +19,8 @@ pub fn logLine(comptime format: []const u8, args: anytype) void {
 }
 
 pub const Page = struct {
+    native_failures: ?*NativeFailures = null,
+    missing_data_requests: ?*MissingDataRequests = null,
     invokes: u64 = 0,
     cache_hits_before: u64 = 0,
     invoke_attempts: u64 = 0,
@@ -41,6 +43,136 @@ pub const Page = struct {
     root_frame: ?*RootFrame = null,
     root_exclusive_ns: u64 = 0,
 };
+
+/// Bounded request keys for diagnosing absent external snapshots. Only printable
+/// prefixes reach stderr; length and hash distinguish truncated or escaped keys.
+const RequestKey = struct {
+    len: usize = 0,
+    hash: u64 = 0,
+    prefix: [64]u8 = [_]u8{0} ** 64,
+
+    fn init(value: []const u8) RequestKey {
+        var key: RequestKey = .{ .len = value.len, .hash = std.hash.Wyhash.hash(0, value) };
+        for (value[0..@min(value.len, key.prefix.len)], 0..) |byte, i|
+            key.prefix[i] = if (byte >= 0x21 and byte <= 0x7e) byte else '?';
+        return key;
+    }
+
+    fn eql(a: RequestKey, b: RequestKey) bool {
+        return a.len == b.len and a.hash == b.hash and
+            std.mem.eql(u8, &a.prefix, &b.prefix);
+    }
+
+    fn visible(self: *const RequestKey) []const u8 {
+        return self.prefix[0..@min(self.len, self.prefix.len)];
+    }
+};
+
+fn RequestBag(comptime capacity: usize) type {
+    return struct {
+        const Self = @This();
+        const Entry = struct {
+            first: RequestKey = .{},
+            second: RequestKey = .{},
+            count: u64 = 0,
+        };
+        entries: [capacity]Entry = [_]Entry{.{}} ** capacity,
+        len: usize = 0,
+        overflow: u64 = 0,
+
+        fn record(self: *Self, first: []const u8, second: []const u8) void {
+            const a = RequestKey.init(first);
+            const b = RequestKey.init(second);
+            for (self.entries[0..self.len]) |*entry| {
+                if (entry.first.eql(a) and entry.second.eql(b)) {
+                    entry.count +|= 1;
+                    return;
+                }
+            }
+            if (self.len == capacity) {
+                self.overflow +|= 1;
+                return;
+            }
+            self.entries[self.len] = .{ .first = a, .second = b, .count = 1 };
+            self.len += 1;
+        }
+
+        fn log(self: *const Self, comptime kind: []const u8) void {
+            logLine("external request {s}: distinct={d} overflow={d}\n", .{ kind, self.len, self.overflow });
+            for (self.entries[0..self.len]) |*entry| {
+                logLine("external request {s}: first={s} first_len={d} first_hash={x} second={s} second_len={d} second_hash={x} count={d}\n", .{
+                    kind,                   entry.first.visible(), entry.first.len,   entry.first.hash,
+                    entry.second.visible(), entry.second.len,      entry.second.hash, entry.count,
+                });
+            }
+        }
+    };
+}
+
+pub const MissingDataRequests = struct {
+    sitelinks: RequestBag(32) = .{},
+    commons: RequestBag(8) = .{},
+    categories: RequestBag(8) = .{},
+
+    pub fn log(self: *const MissingDataRequests) void {
+        self.sitelinks.log("sitelink");
+        self.commons.log("commons");
+        self.categories.log("category");
+    }
+};
+
+pub fn noteSitelink(entity: []const u8, site: []const u8) void {
+    const page = active orelse return;
+    if (page.missing_data_requests) |requests| requests.sitelinks.record(entity, site);
+}
+
+pub fn noteCommons(title: []const u8, language: []const u8) void {
+    const page = active orelse return;
+    if (page.missing_data_requests) |requests| requests.commons.record(title, language);
+}
+
+pub fn noteCategory(key: []const u8, which: []const u8) void {
+    const page = active orelse return;
+    if (page.missing_data_requests) |requests| requests.categories.record(key, which);
+}
+
+/// Diagnostic only: bounded distinct native entry addresses, no per-call output.
+pub const NativeFailures = struct {
+    const Entry = struct {
+        address: usize = 0,
+        count: u64 = 0,
+    };
+    entries: [64]Entry = [_]Entry{.{}} ** 64,
+    len: usize = 0,
+    overflow: u64 = 0,
+
+    pub fn record(self: *NativeFailures, address: usize) void {
+        for (self.entries[0..self.len]) |*entry| {
+            if (entry.address == address) {
+                entry.count +|= 1;
+                return;
+            }
+        }
+        if (self.len == self.entries.len) {
+            self.overflow +|= 1;
+            return;
+        }
+        self.entries[self.len] = .{ .address = address, .count = 1 };
+        self.len += 1;
+    }
+
+    pub fn log(self: *const NativeFailures) void {
+        logLine("native NotImplemented failures: distinct={d} overflow={d}\n", .{ self.len, self.overflow });
+        for (self.entries[0..self.len]) |entry|
+            logLine("native NotImplemented entry: address=0x{x} count={d}\n", .{ entry.address, entry.count });
+    }
+};
+
+pub fn noteNativeFailure(address: usize, name: []const u8) void {
+    if (!std.mem.eql(u8, name, "NotImplemented")) return;
+    const page = active orelse return;
+    if (page.native_failures) |failures| failures.record(address);
+}
 
 /// Module-root calls are counted on every page; CPU time is sampled on 1/32 pages.
 pub const RootProfile = struct {
@@ -114,7 +246,7 @@ pub fn beginRoot(frame: *RootFrame, module_id: u32) void {
     profile.hits[module_id] +|= 1;
     frame.* = .{ .page = page, .module_id = module_id };
     if (!page.root_sampled) return;
-    frame.start_ns = rawCpuNow() orelse return;
+    frame.start_ns = processCpuNow() orelse return;
     frame.parent = page.root_frame;
     page.root_frame = frame;
 }
@@ -123,7 +255,7 @@ pub fn endRoot(frame: *RootFrame) void {
     const page = frame.page orelse return;
     const start = frame.start_ns orelse return;
     page.root_frame = frame.parent;
-    const now = rawCpuNow() orelse return;
+    const now = processCpuNow() orelse return;
     const elapsed_ns = now -| start;
     const exclusive_ns = elapsed_ns -| frame.child_ns;
     page.root_profile.?.exclusive_ns[frame.module_id] +|= exclusive_ns;
@@ -150,10 +282,11 @@ pub fn current() ?*Page {
 pub fn cpuNow() ?u64 {
     const page = active orelse return null;
     if (!page.sampled) return null;
-    return rawCpuNow();
+    return processCpuNow();
 }
 
-fn rawCpuNow() ?u64 {
+/// Full worker process CPU clock, independent of page timing cohorts.
+pub fn processCpuNow() ?u64 {
     var ts: std.posix.timespec = undefined;
     if (std.posix.errno(std.posix.system.clock_gettime(.PROCESS_CPUTIME_ID, &ts)) != .SUCCESS) return null;
     const seconds = std.math.cast(u64, ts.sec) orelse return null;

@@ -991,6 +991,10 @@ pub const Context = struct {
         );
         if (result.reserved != 0 or result.status > 1) return error.BadAotFunctionResult;
         if (result.status == 1) {
+            switch (captures) {
+                .native => work_stats.noteNativeFailure(@intFromPtr(entry), self.aotErrorName() orelse "AotCallFailed"),
+                .direct => {},
+            }
             if (self.aotErrorName() == null) self.setAotErrorName("AotCallFailed");
             return error.AotCallFailed;
         }
@@ -2585,6 +2589,32 @@ test "native calls invoke the callable entrypoint directly" {
     try std.testing.expectEqual(native_function_id, callable.callable.id);
     try std.testing.expectError(error.AotCallFailed, ctx.callValue(callable, &.{}));
     try std.testing.expectEqualStrings("NativeDispatchProbe", ctx.aotErrorName().?);
+}
+
+fn nativeNotImplementedProbe(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+    return error.NotImplemented;
+}
+
+test "native failure diagnostics cover ordinary and fixed calls without changing errors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const callable = try ctx.newNative(null, nativeNotImplementedProbe);
+    var failures: work_stats.NativeFailures = .{};
+    var page: work_stats.Page = .{ .native_failures = &failures };
+    const previous = work_stats.begin(&page);
+    defer work_stats.end(previous);
+
+    try std.testing.expectError(error.AotCallFailed, ctx.callValue(callable, &.{}));
+    try std.testing.expectEqualStrings("NotImplemented", ctx.aotErrorName().?);
+    ctx.clearAotErrorName();
+    var result_buffer: [1]Value = undefined;
+    try std.testing.expectError(error.AotCallFailed, ctx.callValueFixed(callable, &.{}, &result_buffer));
+    try std.testing.expectEqualStrings("NotImplemented", ctx.aotErrorName().?);
+    try std.testing.expectEqual(@as(usize, 1), failures.len);
+    try std.testing.expectEqual(@as(u64, 2), failures.entries[0].count);
+    try std.testing.expectEqual(@intFromPtr(callable.callable.entry), failures.entries[0].address);
 }
 
 test "AOT context startup stays independent of corpus module count" {

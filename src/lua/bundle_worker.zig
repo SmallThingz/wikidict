@@ -61,6 +61,8 @@ const Engine = struct {
     provider: pages.Provider,
     load_data_cache: lua_program.SharedLoadDataCache,
     root_profile: work_stats.RootProfile,
+    native_failures: work_stats.NativeFailures = .{},
+    missing_data_requests: work_stats.MissingDataRequests = .{},
     measured_pages: u64 = 0,
     sampled_pages: u64 = 0,
     invoke_histogram: [5]u64 = .{ 0, 0, 0, 0, 0 },
@@ -131,6 +133,8 @@ const Engine = struct {
             self.totals.context_ns, self.totals.expand_ns, self.totals.comments_ns, self.totals.template_preprocess_ns, self.totals.invoke_ns,
         });
         self.root_profile.logTop(self.program.module_names, self.totals.root_exclusive_ns);
+        self.native_failures.log();
+        self.missing_data_requests.log();
         self.load_data_cache.logDiagnostics(self.program.module_names);
         self.root_profile.deinit();
         self.load_data_cache.deinit();
@@ -147,6 +151,8 @@ const Engine = struct {
             .sampled = (self.measured_pages & 31) == 0,
             .root_sampled = (self.measured_pages & 31) == 0,
             .root_profile = &self.root_profile,
+            .native_failures = &self.native_failures,
+            .missing_data_requests = &self.missing_data_requests,
             .cache_hits_before = self.load_data_cache.hits,
         };
         self.measured_pages +|= 1;
@@ -175,6 +181,14 @@ const Engine = struct {
 };
 
 pub fn run(io: std.Io, persistent: A) !void {
+    const worker_cpu_start = work_stats.processCpuNow();
+    defer {
+        if (worker_cpu_start) |start| {
+            if (work_stats.processCpuNow()) |stop| {
+                work_stats.logLine("worker process cpu ns: total={d}\n", .{stop -| start});
+            }
+        }
+    }
     try limit(.CORE, 0);
     if (L.errno(L.prctl(@intFromEnum(L.PR.SET_PDEATHSIG), @intFromEnum(L.SIG.KILL), 0, 0, 0)) != .SUCCESS) return error.ParentDeathSignalFailed;
     if (L.getppid() == 1) return error.ParentExited;

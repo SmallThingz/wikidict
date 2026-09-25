@@ -30,6 +30,28 @@ def write_coverage(root, command=None):
     (root/'page-coverage.json').write_text(json.dumps(record))
 
 class BuildTest(unittest.TestCase):
+    def test_main_routes_interwiki_and_dated_auxiliary_snapshot_flags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            name='enwiktionary-20260901-pages-meta-current.xml.bz2'
+            item=dict(wiki='enwiktionary',date='20260901',name=name,
+                      url='https://dumps.wikimedia.org/enwiktionary/20260901/'+name,
+                      size=1,sha1='a'*40)
+            (root/'manifest.json').write_text(json.dumps({'files':[item]}))
+            interwiki=root/'interwiki-map.tsv';interwiki.write_text('en\t1\t1\t0\t0\tx\n')
+            category=root/'category-stats.tsv';category.write_text('x\t1\t0\t0\n')
+            argv=['build_wiktionaries.py','--downloads',str(root),'--output',str(root/'out'),
+                  '--wikis','enwiktionary','--threads','1','--jobs','1',
+                  '--interwiki-map-snapshot',str(interwiki),
+                  '--category-stats-snapshot',str(category)]
+            with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=4), \
+                 patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.kwargs,{
+                'interwiki_snapshot':interwiki.resolve(),
+                'auxiliary_snapshots':{'category-stats':category.resolve()},
+            })
+
     def test_watchdog_mode_is_explicit_locked_and_deadline_bounded(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -43,6 +65,92 @@ class BuildTest(unittest.TestCase):
                 self.assertEqual(result.exception.code,0)
             watchdog.assert_called_once_with(wall_seconds=7200)
             strict.assert_not_called();main.assert_not_called()
+
+    def test_eight_expansion_workers_request_eight_cpu_watchdog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(b,'PROJECT',Path(tmp)),patch.object(sys,'argv',[
+                'build_wiktionaries.py','--resource-mode=watchdog','--expansion-workers=8']), \
+                 patch.object(limits,'inside_watchdog',return_value=False), \
+                 patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
+                with self.assertRaises(SystemExit) as result:b.cli()
+                self.assertEqual(result.exception.code,0)
+            watchdog.assert_called_once_with(wall_seconds=7200,max_cpus=8)
+
+    def test_high_expansion_count_keeps_single_job_and_four_build_workers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'manifest.json').write_text('{"files":[]}')
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--downloads',str(root),
+                  '--output',str(root),'--threads','4','--expansion-workers','8']
+            with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=5), \
+                 patch.object(b.os,'sched_getaffinity',return_value=set(range(8))), \
+                 patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.args[4:],(4,1,8))
+            with patch.object(sys,'argv',argv+['--jobs','2']),patch.object(b,'safe_worker_budget',return_value=5), \
+                 patch.object(b.os,'sched_getaffinity',return_value=set(range(8))):
+                with self.assertRaises(SystemExit):b.main()
+            with patch.object(sys,'argv',[x for x in argv if x!='--resource-mode=watchdog']), \
+                 patch.object(b,'safe_worker_budget',return_value=5):
+                with self.assertRaises(SystemExit):b.main()
+
+    def test_expansion_workers_within_four_charge_the_actual_job_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'manifest.json').write_text('{"files":[]}')
+            argv=['build_wiktionaries.py','--downloads',str(root),'--output',str(root),
+                  '--threads','1','--expansion-workers','4']
+            with patch.object(sys,'argv',argv+['--jobs','2']), \
+                 patch.object(b,'safe_worker_budget',return_value=5):
+                with self.assertRaises(SystemExit):b.main()
+            with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=5), \
+                 patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.args[4:],(1,1,4))
+
+    def test_dynamic_queue_charges_expansion_workers_within_four(self):
+        groups={(f'wiki{n}','20260901'):[{'wiki':f'wiki{n}'}] for n in range(2)}
+        started=[]
+        gate=threading.Event()
+        def fake_build(group,*args,**kwargs):
+            started.append(group[0]['wiki']);gate.wait(0.2)
+        release=threading.Timer(0.05,gate.set)
+        release.start()
+        try:
+            with patch.object(b,'safe_worker_budget',return_value=5) as budget, \
+                 patch.object(b,'build',side_effect=fake_build):
+                failures=b.build_groups(groups,Path('.'),Path('.'),'zig',1,2,4)
+        finally:
+            gate.set();release.join()
+        self.assertEqual(failures,[])
+        self.assertEqual(len(started),2)
+        self.assertIn(4,[call.args[0] for call in budget.call_args_list])
+
+    def test_sharded_expansion_workers_do_not_widen_compiler_workers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander';exp.mkdir(parents=True)
+            (exp/'page-index.tsv').write_text('# index\n\np0\n')
+            (exp/'dict-bundle-expander').write_text('worker')
+            cache=workspace/'input';cache.mkdir();(cache/'.complete.json').write_text(json.dumps({
+                'source_pages':1,'dump_sha256':'a'*64,'index_sha256':'b'*64}))
+            calls=[]
+            def run(command):
+                calls.append(command)
+                if 'build-dictionary' in command:
+                    exp.mkdir(parents=True,exist_ok=True)
+                    (exp/'page-index.tsv').write_text('# index\n\np0\n')
+                    (exp/'dict-bundle-expander').write_text('worker')
+                if 'build-blobs' in command:
+                    dest=Path(command[command.index('--')+2]);dest.mkdir();write_coverage(dest,command)
+                if 'merge-blobs' in command:
+                    Path(command[command.index('--')+1]).mkdir()
+            with patch.object(b,'run_checked',side_effect=run):
+                b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',4,
+                                [{'wiki':'test','date':'20260901'}],123,8)
+            compiler=next(c for c in calls if 'build-dictionary' in c)
+            blob=next(c for c in calls if 'build-blobs' in c)
+            self.assertEqual(compiler[compiler.index('--llvm-workers')+1],'4')
+            self.assertEqual(compiler[compiler.index('--parse-workers')+1],'4')
+            self.assertEqual(compiler[compiler.index('--page-workers')+1],'4')
+            self.assertEqual(blob[blob.index('--workers')+1],'8')
 
     def test_only_verified_watchdog_child_enters_main(self):
         with patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode','watchdog']),patch.object(limits,'inside_watchdog',return_value=True),patch.object(limits,'inside_envelope') as envelope,patch.object(limits,'supervise_watchdog') as watchdog,patch.object(b,'main') as main:
@@ -275,6 +383,102 @@ class BuildTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Truncated XML page'):
                 b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch)
 
+    def test_seekable_repack_limits_four_jobs_and_writes_submission_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            pages=[b'<page>'+bytes([65+i])*1024+b'</page>' for i in range(5)]
+            xml=b'<mediawiki>'+b''.join(pages)+b'</mediawiki>'
+            (folder/name).write_bytes(bz2.compress(xml))
+            scratch=root/'scratch';scratch.mkdir()
+            item=dict(wiki='testwiktionary',date='20260901',name=name)
+            original_compress=bz2.compress
+            lock=threading.Lock();barrier=threading.Barrier(4);others_done=threading.Event()
+            calls=active=peak=completed_others=0
+            completion=[]
+            def controlled_compress(raw,compresslevel=9):
+                nonlocal calls,active,peak,completed_others
+                with lock:
+                    ordinal=calls;calls+=1;active+=1;peak=max(peak,active)
+                try:
+                    if ordinal<4: barrier.wait(timeout=10)
+                    if ordinal==0:
+                        if not others_done.wait(timeout=10): raise AssertionError('Other compression jobs did not finish')
+                    member=original_compress(raw,compresslevel=compresslevel)
+                    with lock:
+                        completion.append(ordinal)
+                        if 0<ordinal<4:
+                            completed_others+=1
+                            if completed_others==3: others_done.set()
+                    return member
+                finally:
+                    with lock: active-=1
+            metadata={}
+            with patch.object(b,'STAGE_TARGET_BYTES',1024), patch.object(b,'STAGE_PARALLEL_MAX_BYTES',2048), \
+                 patch.object(b,'STAGE_MAX_MEMBER_BYTES',65536), patch.object(b.bz2,'compress',side_effect=controlled_compress):
+                dump=b.stage_seekable_dump([item],root,scratch,metadata)
+            self.assertEqual(calls,6)
+            self.assertEqual(peak,4)
+            self.assertLess(completion.index(1),completion.index(0))
+            compressed=dump.read_bytes()
+            index_bytes=dump.with_name('pages-index.txt.bz2').read_bytes()
+            rows=bz2.decompress(index_bytes).decode().splitlines()
+            self.assertEqual(len(rows),6)
+            self.assertEqual([row.split(':',1)[1] for row in rows],[f'{i+1}:member{i}' for i in range(6)])
+            offsets=[int(row.split(':',1)[0]) for row in rows]+[len(compressed)]
+            self.assertEqual(offsets,sorted(offsets))
+            self.assertEqual(b''.join(bz2.decompress(compressed[a:z]) for a,z in zip(offsets,offsets[1:])),xml)
+            self.assertEqual(metadata['dump_size'],len(compressed))
+            self.assertEqual(metadata['dump_sha256'],hashlib.sha256(compressed).hexdigest())
+            self.assertEqual(metadata['index_size'],len(index_bytes))
+            self.assertEqual(metadata['index_sha256'],hashlib.sha256(index_bytes).hexdigest())
+
+    def test_seekable_repack_drains_before_oversized_member(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            sizes=[1024,1024,9*1024,1024]
+            pages=[b'<page>'+bytes([65+i])*size+b'</page>' for i,size in enumerate(sizes)]
+            xml=b'<mediawiki>'+b''.join(pages)+b'</mediawiki>'
+            (folder/name).write_bytes(bz2.compress(xml))
+            scratch=root/'scratch';scratch.mkdir()
+            original_compress=bz2.compress;main_thread=threading.current_thread();oversized_on_main=[]
+            def controlled_compress(raw,compresslevel=9):
+                if len(raw)>2048: oversized_on_main.append(threading.current_thread() is main_thread)
+                return original_compress(raw,compresslevel=compresslevel)
+            with patch.object(b,'STAGE_TARGET_BYTES',1024), patch.object(b,'STAGE_PARALLEL_MAX_BYTES',2048), \
+                 patch.object(b,'STAGE_MAX_MEMBER_BYTES',65536), patch.object(b.bz2,'compress',side_effect=controlled_compress):
+                dump=b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch)
+            self.assertEqual(oversized_on_main,[True])
+            compressed=dump.read_bytes()
+            rows=bz2.decompress(dump.with_name('pages-index.txt.bz2').read_bytes()).decode().splitlines()
+            self.assertEqual(len(rows),5)
+            offsets=[int(row.split(':',1)[0]) for row in rows]+[len(compressed)]
+            self.assertEqual(b''.join(bz2.decompress(compressed[a:z]) for a,z in zip(offsets,offsets[1:])),xml)
+
+    def test_seekable_repack_deferred_compression_error_removes_partial_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            xml=b'<mediawiki>'+b''.join(b'<page>'+bytes([65+i])*1024+b'</page>' for i in range(3))+b'</mediawiki>'
+            (folder/name).write_bytes(bz2.compress(xml))
+            scratch=root/'scratch';scratch.mkdir()
+            original_compress=bz2.compress;lock=threading.Lock();calls=0
+            def fail_second(raw,compresslevel=9):
+                nonlocal calls
+                with lock: ordinal=calls;calls+=1
+                if ordinal==1: raise OSError('deferred compression failure')
+                return original_compress(raw,compresslevel=compresslevel)
+            metadata={}
+            with patch.object(b,'STAGE_TARGET_BYTES',1024), patch.object(b,'STAGE_PARALLEL_MAX_BYTES',2048), \
+                 patch.object(b,'STAGE_MAX_MEMBER_BYTES',65536), patch.object(b.bz2,'compress',side_effect=fail_second):
+                with self.assertRaisesRegex(OSError,'deferred compression failure'):
+                    b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch,metadata)
+            self.assertGreaterEqual(calls,2)
+            self.assertEqual(metadata,{})
+            self.assertFalse((scratch/'pages.xml.bz2').exists())
+            self.assertFalse((scratch/'pages-index.txt.bz2').exists())
+
     def test_page_index_row_count_ignores_multistream_header_and_blanks(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'page-index.tsv'
@@ -297,6 +501,43 @@ class BuildTest(unittest.TestCase):
             alias=Path(tmp)/'alias';alias.symlink_to(workspace,target_is_directory=True)
             with self.assertRaisesRegex(ValueError,'Unsafe shard workspace'):
                 b.prepare_shard_workspace(alias,changed)
+
+    def test_interwiki_snapshot_bytes_invalidate_shards_and_are_pinned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            registry=root/'language-registry.tsv';registry.write_text('en\tEnglish\n')
+            source=root/'interwiki-map.tsv';source.write_text('en\t1\t1\t0\t0\thttps://en.example/$1\n')
+            items=[dict(wiki='enwiktionary',date='20260901',name='dump.bz2',size=1,sha1='a'*40)]
+            with patch.object(b,'source_fingerprint',return_value='compiler'):
+                initial=b.shard_state(items,registry,interwiki_snapshot=source)
+                pinned=b.copy_verified_snapshot(source,root/'work/interwiki-map.tsv',initial['interwiki_map_sha256'])
+                self.assertEqual(pinned.read_bytes(),source.read_bytes())
+                with patch.object(b.time,'time',return_value=111):
+                    self.assertEqual(b.prepare_shard_workspace(root/'state',initial),111)
+                (root/'state/expander').mkdir()
+                source.write_text('w\t1\t0\t0\t0\thttps://en.example/$1\n')
+                changed=b.shard_state(items,registry,interwiki_snapshot=source)
+                self.assertNotEqual(changed['interwiki_map_sha256'],initial['interwiki_map_sha256'])
+                with patch.object(b.time,'time',return_value=222):
+                    self.assertEqual(b.prepare_shard_workspace(root/'state',changed),222)
+                self.assertFalse((root/'state/expander').exists())
+                with self.assertRaisesRegex(ValueError,'changed while copying'):
+                    b.copy_verified_snapshot(source,root/'bad.tsv',initial['interwiki_map_sha256'])
+
+    def test_dated_auxiliary_manifest_binds_bytes_edition_and_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            snapshot=root/'category-stats.tsv';snapshot.write_text('English nouns\t42\t0\t0\n')
+            record=dict(wiki='enwiktionary',date='20260901',
+                        output_sha256=hashlib.sha256(snapshot.read_bytes()).hexdigest())
+            manifest=root/'category-stats.manifest.json';manifest.write_text(json.dumps(record))
+            self.assertEqual(b.verified_auxiliary_hashes({'category-stats':snapshot},'enwiktionary','20260901'),
+                             {'category-stats':record['output_sha256']})
+            with self.assertRaisesRegex(ValueError,'differs from provenance'):
+                b.verified_auxiliary_hashes({'category-stats':snapshot},'enwiktionary','20261001')
+            manifest.write_bytes(b' '*(64*1024+1))
+            with self.assertRaisesRegex(ValueError,'Oversized'):
+                b.verified_auxiliary_hashes({'category-stats':snapshot},'enwiktionary','20260901')
 
     def test_source_and_registry_changes_keep_verified_dump_but_reset_native_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -494,6 +735,8 @@ class BuildTest(unittest.TestCase):
             data=bz2.compress(payload);(folder/name).write_bytes(data)
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
             (folder/'language-registry.tsv').write_text('# content-language\ten\nen\tEnglish\n')
+            interwiki=root/'interwiki-map.tsv';interwiki.write_text('en\t1\t1\t0\t0\thttps://en.example/$1\n')
+            category=root/'category-stats.tsv';category.write_text('Category:English nouns\t42\t0\t0\n')
             calls=[]
             def run(command):
                 calls.append(command)
@@ -514,7 +757,8 @@ class BuildTest(unittest.TestCase):
                     (dest/'languages.tsv').write_text('heading\n')
                     (dest/'merged.wikblb').write_bytes(b'WIKBLB08merged')
             with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_THRESHOLD_COMPRESSED_BYTES',1),patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
-                b.build([item],root,root/'output','zig',2)
+                b.build([item],root,root/'output','zig',2,interwiki_snapshot=interwiki,
+                        auxiliary_snapshots={'category-stats':category})
             blob_calls=[c for c in calls if 'build-blobs' in c]
             expander_call=next(c for c in calls if 'build-dictionary' in c)
             self.assertTrue(calls)
@@ -522,6 +766,11 @@ class BuildTest(unittest.TestCase):
             self.assertIn('--extraction-cache-root',expander_call)
             self.assertIn('--verified-dump-sha256',expander_call)
             self.assertIn('--verified-index-sha256',expander_call)
+            self.assertIn('--interwiki-map-snapshot',expander_call)
+            self.assertIn('--category-stats-snapshot',expander_call)
+            self.assertEqual((root/'output/testwiktionary/20260901/.interwiki-map.sha256').read_text().strip(),hashlib.sha256(interwiki.read_bytes()).hexdigest())
+            self.assertEqual(json.loads((root/'output/testwiktionary/20260901/.auxiliary-snapshots.sha256.json').read_text()),
+                             {'category-stats':hashlib.sha256(category.read_bytes()).hexdigest()})
             for flag in ('--verified-dump-sha256','--verified-index-sha256'):
                 self.assertRegex(expander_call[expander_call.index(flag)+1],r'^[0-9a-f]{64}$')
             self.assertEqual(len(blob_calls),2)
@@ -671,6 +920,7 @@ class BuildTest(unittest.TestCase):
             data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
             registry=folder/'language-registry.tsv';registry.write_text('# content-language\ten\nen\tEnglish\n')
+            interwiki=root/'interwiki-map.tsv';interwiki.write_text('en\t1\t1\t0\t0\thttps://en.example/$1\n')
             calls=[]
             real_run=subprocess.run
             def run(command,**kwargs):
@@ -683,13 +933,19 @@ class BuildTest(unittest.TestCase):
                         json.dumps({'namespace':0,'title':'quoted"title','reasons':['literal_markup']})+'\n'+
                         json.dumps({'namespace':0,'title':'timeout','reasons':['expansion_error','expansion_error:Timeout']})+'\n')
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
-                b.build([item],root,root/'output','zig',2)
+                b.build([item],root,root/'output','zig',2,interwiki_snapshot=interwiki)
             self.assertIn('verify-blobs',calls[1]);self.assertTrue((root/'output/testwiktionary/20260901/complete.json').exists())
             self.assertTrue(all(command[1:3]==['build','-j1'] for command in calls))
             self.assertIn('--llvm-workers',calls[0])
             self.assertIn('--language-registry-snapshot',calls[0])
+            self.assertIn('--interwiki-map-snapshot',calls[0])
             final=root/'output/testwiktionary/20260901'
             metadata=json.loads((final/'complete.json').read_text())
+            self.assertEqual(metadata['interwiki_map_sha256'],hashlib.sha256(interwiki.read_bytes()).hexdigest())
+            interwiki.write_text('w\t0\t0\t0\t0\thttps://en.example/$1\n')
+            with patch.object(b,'PROJECT',root):
+                with self.assertRaisesRegex(ValueError,'different interwiki map'):
+                    b.build([item],root,root/'output','zig',2,interwiki_snapshot=interwiki)
             self.assertEqual(metadata['fallback_pages'],2)
             self.assertEqual(metadata['fallback_report'],'fallback-pages.jsonl')
             self.assertEqual(len((final/'fallback-pages.jsonl').read_text().splitlines()),2)

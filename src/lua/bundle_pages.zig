@@ -31,6 +31,16 @@ fn corpusPageRefOrdinal(value: u64) usize {
 const max_transclusion_cache_bytes: usize = 64 * 1024 * 1024;
 const max_transclusion_cache_entries: usize = 65_536;
 const max_transclusion_cache_entry_bytes: usize = 1024 * 1024;
+const max_source_cache_bytes: usize = 64 * 1024 * 1024;
+const max_source_cache_entries: usize = 4096;
+const max_source_cache_entry_bytes: usize = 1024 * 1024;
+
+const SourceCacheEntry = struct {
+    page_id: u64,
+    revision_id: u64,
+    bytes: []u8,
+    stamp: u64,
+};
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
@@ -54,6 +64,18 @@ pub const Provider = struct {
     corpus_page_index_kind: wikimedia_dump.PageIndexKind = .raw_xml,
     dump_reader: ?wikimedia_dump.SourceReader = null,
     template_source: ?wikimedia_dump.TemplateSource = null,
+    // The ordinal identifies an immutable index row for this Provider lifetime.
+    source_cache: std.AutoHashMapUnmanaged(u64, SourceCacheEntry) = .empty,
+    source_cache_limit_bytes: usize = max_source_cache_bytes,
+    source_cache_bytes: usize = 0,
+    source_cache_clock: u64 = 0,
+    source_cache_hits: u64 = 0,
+    source_cache_misses: u64 = 0,
+    source_cache_admits: u64 = 0,
+    source_cache_evicts: u64 = 0,
+    member_cache_hits: u64 = 0,
+    member_cache_misses: u64 = 0,
+    member_decoded_bytes: u64 = 0,
     transclusion_body_cache: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
     transclusion_body_cache_bytes: usize = 0,
     transclusion_seen: []usize = &.{},
@@ -105,6 +127,13 @@ pub const Provider = struct {
     }
 
     pub fn deinit(self: *Provider) void {
+        lua_program.work_stats.logLine("provider source cache: hits={d} misses={d} admits={d} evicts={d} bytes={d} member_hits={d} member_misses={d} decompressed_bytes={d}\n", .{
+            self.source_cache_hits,  self.source_cache_misses, self.source_cache_admits, self.source_cache_evicts,
+            self.source_cache_bytes, self.member_cache_hits,   self.member_cache_misses, self.member_decoded_bytes,
+        });
+        var cached_sources = self.source_cache.valueIterator();
+        while (cached_sources.next()) |entry| std.heap.smp_allocator.free(entry.bytes);
+        self.source_cache.deinit(std.heap.smp_allocator);
         self.corpus_pages.deinit(self.a);
         if (self.corpus_pages_storage) |*mapped| mapped.deinit();
         if (self.corpus_title_index_storage) |*mapped| mapped.deinit();
@@ -614,7 +643,70 @@ pub const Provider = struct {
         return corpusPageRefOrdinal(ref) == wanted;
     }
 
+    fn nextSourceCacheStamp(self: *Provider) u64 {
+        self.source_cache_clock +%= 1;
+        if (self.source_cache_clock == 0) {
+            var entries = self.source_cache.valueIterator();
+            while (entries.next()) |entry| entry.stamp = 0;
+            self.source_cache_clock = 1;
+        }
+        return self.source_cache_clock;
+    }
+
+    fn evictSource(self: *Provider, ordinal: u64) void {
+        const old = self.source_cache.fetchRemove(ordinal) orelse return;
+        self.source_cache_bytes -= old.value.bytes.len;
+        std.heap.smp_allocator.free(old.value.bytes);
+        self.source_cache_evicts +|= 1;
+    }
+
+    fn cachedSource(self: *Provider, a: A, page: CorpusPage) !?[]const u8 {
+        const ordinal: u64 = @intCast(page.ordinal);
+        if (self.source_cache.getPtr(ordinal)) |entry| {
+            if (entry.page_id == page.page_id and entry.revision_id == page.revision_id) {
+                entry.stamp = self.nextSourceCacheStamp();
+                self.source_cache_hits +|= 1;
+                return try a.dupe(u8, entry.bytes);
+            }
+            self.evictSource(ordinal);
+        }
+        self.source_cache_misses +|= 1;
+        return null;
+    }
+
+    fn admitSource(self: *Provider, page: CorpusPage, source: []const u8) void {
+        if (source.len == 0 or source.len > max_source_cache_entry_bytes or source.len > self.source_cache_limit_bytes) return;
+        const ordinal: u64 = @intCast(page.ordinal);
+        if (self.source_cache.contains(ordinal)) self.evictSource(ordinal);
+        const owned = std.heap.smp_allocator.dupe(u8, source) catch return;
+        while (self.source_cache.count() >= max_source_cache_entries or
+            self.source_cache_bytes > self.source_cache_limit_bytes - owned.len)
+        {
+            var it = self.source_cache.iterator();
+            const first = it.next() orelse break;
+            var oldest_ordinal = first.key_ptr.*;
+            var oldest_stamp = first.value_ptr.stamp;
+            while (it.next()) |entry| if (entry.value_ptr.stamp < oldest_stamp) {
+                oldest_ordinal = entry.key_ptr.*;
+                oldest_stamp = entry.value_ptr.stamp;
+            };
+            self.evictSource(oldest_ordinal);
+        }
+        self.source_cache.put(std.heap.smp_allocator, ordinal, .{
+            .page_id = page.page_id,
+            .revision_id = page.revision_id,
+            .bytes = owned,
+            .stamp = self.nextSourceCacheStamp(),
+        }) catch {
+            std.heap.smp_allocator.free(owned);
+            return;
+        };
+        self.source_cache_bytes += owned.len;
+        self.source_cache_admits +|= 1;
+    }
+
     fn readCorpusSource(self: *Provider, a: A, page: CorpusPage) ![]const u8 {
+        if (page.ns != 10) if (try self.cachedSource(a, page)) |cached| return cached;
         const reader = if (self.dump_reader) |*value| value else return error.MissingDump;
         var sidecar_raw: ?[]const u8 = null;
         if (page.ns == 10) {
@@ -625,11 +717,31 @@ pub const Provider = struct {
         const raw: []const u8 = if (sidecar_raw) |stored| blk: {
             if (stored.len != wikimedia_dump.sourceLen(page.source)) return error.TemplateSourceLengthMismatch;
             break :blk if (stored.len == 0) "" else try a.dupe(u8, stored);
-        } else try reader.readAlloc(a, page.source);
-        if (!page.source_needs_decode) return raw;
+        } else blk: {
+            const stream_id: ?u32 = switch (page.source) {
+                .raw_xml => null,
+                .multistream_bz2 => |loc| if (loc.len == 0) null else loc.stream_id,
+            };
+            const was_cached = if (stream_id) |id| reader.cache.contains(id) else false;
+            const bytes = try reader.readAlloc(a, page.source);
+            if (stream_id) |id| {
+                if (was_cached) {
+                    self.member_cache_hits +|= 1;
+                } else {
+                    self.member_cache_misses +|= 1;
+                    if (reader.cache.get(id)) |entry| self.member_decoded_bytes +|= entry.bytes.len;
+                }
+            }
+            break :blk bytes;
+        };
+        if (!page.source_needs_decode) {
+            if (page.ns != 10) self.admitSource(page, raw);
+            return raw;
+        }
         errdefer if (raw.len != 0) a.free(raw);
         const decoded = try xml_decode.decodeSinglePassAlloc(a, raw);
         if (raw.len != 0) a.free(raw);
+        if (page.ns != 10) self.admitSource(page, decoded);
         return decoded;
     }
 
@@ -1114,6 +1226,8 @@ test "provider owns paths and separates raw content from redirect-following tran
     const borrowed_template = (try provider.lookup(borrowed_a, "Template:Lazy", true)) orelse return error.TestExpectedEqual;
     defer borrowed_a.free(borrowed_template);
     try std.testing.expectEqualStrings(template_raw, borrowed_template);
+    const template_page = (try provider.findPage("Template:Lazy")) orelse return error.TestExpectedEqual;
+    try std.testing.expect(!provider.source_cache.contains(@intCast(template_page.ordinal)));
     var decoded_alloc = std.testing.FailingAllocator.init(a, .{ .fail_index = 1 });
     try std.testing.expectError(error.OutOfMemory, provider.lookup(decoded_alloc.allocator(), "Ordinary page", true));
     try std.testing.expectEqualStrings("Template:Lazy", (try Provider.redirectTarget(&provider, "Template:Alias")).?);
@@ -1128,5 +1242,105 @@ test "provider owns paths and separates raw content from redirect-following tran
     try std.testing.expectError(error.FileMetadataSnapshotMissing, Provider.exists(&provider, "Media:Remote.svg"));
     const main_content = (try provider.lookup(page_a, "Ordinary_page", true)) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("A&B", main_content);
+    // A decoded source hit still belongs to the caller and needs no dump read.
+    const first_copy = (try provider.lookup(a, "Ordinary page", true)) orelse return error.TestExpectedEqual;
+    defer a.free(first_copy);
+    const saved_reader = provider.dump_reader;
+    provider.dump_reader = null;
+    const second_copy = blk: {
+        defer provider.dump_reader = saved_reader;
+        break :blk (try provider.lookup(a, "Ordinary page", true)) orelse return error.TestExpectedEqual;
+    };
+    defer a.free(second_copy);
+    try std.testing.expectEqualStrings("A&B", second_copy);
+    try std.testing.expect(first_copy.ptr != second_copy.ptr);
+    try std.testing.expect(provider.source_cache_hits >= 2);
+    try std.testing.expect(provider.source_cache_bytes <= max_source_cache_bytes);
+
+    // The ordinal is unique only within the index; a changed revision must
+    // never borrow bytes from an earlier index row.
+    var changed_revision = (try provider.findPage("Ordinary page")) orelse return error.TestExpectedEqual;
+    changed_revision.revision_id += 1;
+    try std.testing.expect((try provider.cachedSource(a, changed_revision)) == null);
     try std.testing.expect(provider.api().interwiki_map == null);
+}
+
+test "decoded source cache evicts least recent entry at its entry bound" {
+    var provider: Provider = .{ .io = std.testing.io, .a = std.testing.allocator, .root = "" };
+    defer {
+        var entries = provider.source_cache.valueIterator();
+        while (entries.next()) |entry| std.heap.smp_allocator.free(entry.bytes);
+        provider.source_cache.deinit(std.heap.smp_allocator);
+    }
+    const page: CorpusPage = .{
+        .title = "cached",
+        .source = .{ .raw_xml = .{ .offset = 0, .len = 1 } },
+        .page_id = 1,
+        .revision_id = 1,
+        .revision_timestamp = "",
+        .revision_user = "",
+        .content_model = "wikitext",
+        .ns = 0,
+        .ordinal = 0,
+        .source_needs_decode = false,
+    };
+    for (0..max_source_cache_entries) |index| {
+        var entry = page;
+        entry.ordinal = index;
+        entry.page_id = index + 1;
+        provider.admitSource(entry, "x");
+    }
+    var hot = page;
+    hot.ordinal = 0;
+    const value = (try provider.cachedSource(std.testing.allocator, hot)) orelse return error.TestExpectedEqual;
+    defer std.testing.allocator.free(value);
+    var next = page;
+    next.ordinal = max_source_cache_entries;
+    next.page_id = max_source_cache_entries + 1;
+    provider.admitSource(next, "y");
+    try std.testing.expectEqual(@as(usize, max_source_cache_entries), provider.source_cache.count());
+    try std.testing.expectEqual(@as(u64, 1), provider.source_cache_evicts);
+    try std.testing.expect(provider.source_cache.contains(0));
+    try std.testing.expect(!provider.source_cache.contains(1));
+    try std.testing.expect(provider.source_cache_bytes <= max_source_cache_bytes);
+}
+
+test "decoded source cache respects byte budget and maximum entry size" {
+    var provider: Provider = .{ .io = std.testing.io, .a = std.testing.allocator, .root = "", .source_cache_limit_bytes = 2 };
+    defer {
+        var entries = provider.source_cache.valueIterator();
+        while (entries.next()) |entry| std.heap.smp_allocator.free(entry.bytes);
+        provider.source_cache.deinit(std.heap.smp_allocator);
+    }
+    const page: CorpusPage = .{
+        .title = "cached",
+        .source = .{ .raw_xml = .{ .offset = 0, .len = 1 } },
+        .page_id = 1,
+        .revision_id = 1,
+        .revision_timestamp = "",
+        .revision_user = "",
+        .content_model = "wikitext",
+        .ns = 0,
+        .ordinal = 0,
+        .source_needs_decode = false,
+    };
+    provider.admitSource(page, "a");
+    var second = page;
+    second.ordinal = 1;
+    provider.admitSource(second, "b");
+    var third = page;
+    third.ordinal = 2;
+    provider.admitSource(third, "c");
+    try std.testing.expectEqual(@as(usize, 2), provider.source_cache_bytes);
+    try std.testing.expectEqual(@as(usize, 2), provider.source_cache.count());
+    try std.testing.expect(!provider.source_cache.contains(0));
+    try std.testing.expectEqual(@as(u64, 1), provider.source_cache_evicts);
+    provider.admitSource(page, "abc");
+    try std.testing.expectEqual(@as(usize, 2), provider.source_cache_bytes);
+    provider.source_cache_limit_bytes = max_source_cache_bytes;
+    const too_large = try std.testing.allocator.alloc(u8, max_source_cache_entry_bytes + 1);
+    defer std.testing.allocator.free(too_large);
+    provider.admitSource(page, too_large);
+    try std.testing.expect(!provider.source_cache.contains(0));
+    try std.testing.expectEqual(@as(usize, 2), provider.source_cache_bytes);
 }

@@ -87,7 +87,10 @@ the corpus builder does **not** materialize a decompressed `pages.xml` scratch
 file. Compressed staging targets 4 MiB per member, with a 64 MiB hard cap for
 large pages. All XML bytes and page order are preserved across multipart and
 concatenated-stream inputs. This requires recompression and compressed scratch
-writes; staging reports page counts, byte counts and elapsed time.
+writes; staging reports page counts, byte counts and elapsed time. Up to four
+ordinary members compress concurrently, with at most 32 MiB of input queued.
+Larger members drain the queue and compress synchronously. Staging removes both
+partial outputs if any queued compression or output write fails.
 
 The build pipeline:
 
@@ -123,8 +126,8 @@ The corpus builder is intentionally conservative on developer machines:
   not used to calculate this cap; smaller inherited hard limits still reduce it;
 - at least 25% of logical CPU capacity is reserved, and CPU load remains an
   admission limit;
-- individual compiler/expansion stages are capped at four workers and XZ
-  publication is capped at four threads;
+- compiler stages are capped at four workers, page expansion defaults to at most
+  four workers, and XZ publication is capped at four threads;
 - controller-generated `zig build` commands use `-j1`, serializing compilation
   of the build tools before those runtime worker limits take effect;
 - LLVM bitcode/object scratch is removed before page expansion, snapshot inputs
@@ -133,7 +136,7 @@ The corpus builder is intentionally conservative on developer machines:
 - release compression uses 1 MiB XZ blocks at preset `-6`; higher presets did
   not improve block utilization enough to justify their CPU cost.
 
-The native dump reader consumes each indexed member once using a 64 KiB input
+The native dump reader decodes an indexed bzip2 member in one pass using a 64 KiB input
 buffer. It rejects trailing streams, truncated input and decoded members over
 128 MiB rather than allocating an entire compressed part or accepting a partial
 decode. Direct `zig build` fixture commands do not pass through the corpus
@@ -146,6 +149,17 @@ CPUs at low priority, and imposes a two-hour deadline. PSS excludes unmapped fil
 cache, and sampling can overshoot between checks. This mode cannot disable build
 swap. It retains per-process address-space limits and records peaks and the stop
 reason in `.tmp/build-watchdog-report.json`. The cgroup mode remains the default.
+
+With watchdog mode and one edition job, `--expansion-workers` can explicitly
+request up to eight page workers while `--threads` keeps compiler and other
+pipeline stages at four or fewer. This uses at most eight CPUs and leaves four
+available CPUs outside the build where possible; a request exceeding the selected
+affinity is rejected. CPU selection takes one thread per physical core before
+adding sibling threads, using Linux topology when it is available. The watchdog
+records the actual CPU set and still enforces
+the sampled 8 GiB and 256-task limits. The higher count requires workload memory
+measurements: the workers share mapped input files, but also allocate private
+runtime state. It is not admitted using the ordinary 1.5 GiB worker estimate.
 
 One substantial scratch write remains by design: compiled records are first
 written to spool files. Wikimedia dump order is not the final per-language title
@@ -168,6 +182,12 @@ evaluations that have no observed varying inputs or effects. Ordinary module
 exports and mutable closure state remain local to each invocation. The data cache
 holds at most 256 entries and 64 MiB, with an 8 MiB limit for one entry.
 
+The provider also caches decoded non-template page sources, bounded to 64 MiB,
+4,096 entries and 1 MiB per entry. It identifies entries by their immutable index
+row, page ID and revision, returns a private copy to each caller, and preserves
+the current page's in-memory source override. Shutdown diagnostics report page
+and compressed-member cache activity, including decompressed byte counts.
+
 Performance reports must distinguish extraction, compilation, page expansion and
 publication, and identify which caches were reused. Page coverage and whole-page
 fallback counts do not count embedded per-template Lua errors; inspect those
@@ -184,18 +204,33 @@ matching, pinned snapshots when the corpus uses them:
 | --- | --- |
 | `--commons-data-snapshot` | Commons JsonConfig |
 | `--category-stats-snapshot` | category counts |
+| `--interface-messages-snapshot` | localized interface messages |
 | `--category-tree-snapshot` | category membership |
 | `--interwiki-map-snapshot` | interwiki configuration |
 | `--wikibase-sitelinks-snapshot` | Wikibase sitelinks |
 | `--wikibase-entity-text-snapshot` | labels and descriptions |
 | `--language-registry-snapshot` | known language tags |
 | `--file-metadata-snapshot` | shared file metadata |
+| `--transclusion-redirects-snapshot` | external transclusion redirects |
 
 These are build inputs only. Missing required state fails closed rather than being
 guessed or deferred to the reader.
 
 CategoryTree snapshots can be generated from matching Wikimedia SQL/XML dumps with
 `tools/category_tree_snapshot.py`.
+
+`tools/category_stats_snapshot.py` streams category counts from a dated
+`category.sql.gz` file. It verifies the compressed source against the download
+manifest and records the output hash, row count and source identity alongside the
+TSV. Category counts and CategoryTree membership use separate snapshots.
+
+The Python build controller accepts the same auxiliary snapshot options and
+includes each TSV's SHA-256 in its shard and publication identity. For a current
+interwiki map, run `python3 tools/download_wiktionaries.py --output DIR --wikis
+enwiktionary --interwiki-map-only`. This saves the exact API response, the
+six-column `interwiki-map.tsv`, and a provenance file with the retrieval time
+and both hashes. Siteinfo is current at retrieval time; this snapshot is not a
+component of the dated XML/SQL dump.
 
 ## Verify and read
 

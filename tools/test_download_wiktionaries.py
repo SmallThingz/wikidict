@@ -1,4 +1,6 @@
 import hashlib
+import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -7,6 +9,38 @@ import sys
 import download_wiktionaries as d
 
 class DownloaderTest(unittest.TestCase):
+    def test_current_interwiki_capture_preserves_raw_response_and_flags(self):
+        response={'query':{'interwikimap':[
+            {'prefix':'en','local':True,'localinterwiki':True,'url':'https://en.wiktionary.org/wiki/$1','protorel':False},
+            {'prefix':'w','url':'//en.wikipedia.org/wiki/$1','protorel':True},
+        ]}}
+        raw=json.dumps(response,separators=(',',':')).encode()
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(d.urllib.request,'urlopen',return_value=io.BytesIO(raw)) as fetch:
+                path,provenance=d.interwiki_map_snapshot('enwiktionary',root)
+            self.assertEqual(fetch.call_args.kwargs['timeout'],30)
+            self.assertEqual(path.read_text().splitlines(),[
+                'en\t1\t1\t0\t0\thttps://en.wiktionary.org/wiki/$1',
+                'w\t0\t0\t1\t0\t//en.wikipedia.org/wiki/$1',
+            ])
+            self.assertEqual((path.parent/'interwiki-map.raw.json').read_bytes(),raw)
+            self.assertEqual(provenance['raw_sha256'],hashlib.sha256(raw).hexdigest())
+            self.assertEqual(provenance['tsv_sha256'],hashlib.sha256(path.read_bytes()).hexdigest())
+            self.assertIsNone(provenance['dump_date'])
+            with patch.object(d.urllib.request,'urlopen',return_value=io.BytesIO(raw)):
+                with self.assertRaisesRegex(ValueError,'already exists'):
+                    d.interwiki_map_snapshot('enwiktionary',root)
+
+    def test_current_interwiki_capture_rejects_invalid_and_oversized_response(self):
+        for raw in (b'{"query":{"interwikimap":[]}}',
+                    b'{"query":{"interwikimap":[{"prefix":"en","url":"x","local":"yes"}]}}',
+                    b'x'*(2*1024*1024+1)):
+            with self.subTest(raw_size=len(raw)),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                with patch.object(d.urllib.request,'urlopen',return_value=io.BytesIO(raw)):
+                    with self.assertRaises(ValueError): d.interwiki_map_snapshot('enwiktionary',root)
+                self.assertFalse((root/'enwiktionary').exists())
     def item(self):
         return dict(wiki='testwiktionary',date='20260901',name='test.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/test.bz2',size=4,sha1=hashlib.sha1(b'data').hexdigest())
     def test_output_exists_before_snapshot_discovery(self):

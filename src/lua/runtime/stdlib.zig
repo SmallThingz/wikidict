@@ -48,8 +48,14 @@ fn str(a: std.mem.Allocator, v: Value) ![]const u8 {
 fn setNative(runtime: *rt.Context, t: *rt.Table, name: []const u8, comptime call: anytype) !void {
     try t.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(null, call));
 }
+fn setNativeBuffered(runtime: *rt.Context, t: *rt.Table, name: []const u8, comptime call: anytype) !void {
+    try t.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNativeBuffered(null, call));
+}
 fn setGlobalNative(runtime: *rt.Context, comptime name: []const u8, comptime call: anytype) !void {
     try runtime.setGlobal(global_abi.id(name), try runtime.newNative(null, call));
+}
+fn setGlobalNativeBuffered(runtime: *rt.Context, comptime name: []const u8, comptime call: anytype) !void {
+    try runtime.setGlobal(global_abi.id(name), try runtime.newNativeBuffered(null, call));
 }
 
 fn strictGlobalName(ctx: *rt.Context, value: Value) ![]const u8 {
@@ -98,14 +104,14 @@ fn installStrict(ctx: *rt.Context) !Value {
     return result;
 }
 
-fn baseRequire(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn baseRequire(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     if (std.mem.eql(u8, args[0].string, "strict")) {
         if (ctx.package_loaded) |loaded| if (loaded.rawGet(.{ .string = "strict" })) |value|
-            return one(ctx.allocator, value);
-        return one(ctx.allocator, try installStrict(ctx));
+            return bufferedOne(result_buffer, value);
+        return bufferedOne(result_buffer, try installStrict(ctx));
     }
-    return one(ctx.allocator, try ctx.requireByName(args[0].string));
+    return bufferedOne(result_buffer, try ctx.requireByName(args[0].string));
 }
 
 const ModuleLoaderCtx = struct { module_id: u32 };
@@ -646,7 +652,7 @@ fn stringChar(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
     }
     return one(a, .{ .string = out });
 }
-fn stringByte(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringByte(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     const s = try str(a, args[0]);
     const n: i64 = @intCast(s.len);
@@ -655,7 +661,7 @@ fn stringByte(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
     i = @max(@as(i64, 1), i);
     j = @min(n, j);
     if (i > j) return &.{};
-    const out = try std.heap.smp_allocator.alloc(Value, @intCast(j - i + 1));
+    const out = try rt.returnBuffer(result_buffer, @intCast(j - i + 1));
     for (out, 0..) |*v, k| v.* = .{ .number = @floatFromInt(s[@intCast(i + @as(i64, @intCast(k)) - 1)]) };
     return out;
 }
@@ -675,6 +681,13 @@ fn captureResults(a: std.mem.Allocator, source: []const u8, m: pattern.Match) ![
     return out;
 }
 
+fn captureResultsBuffered(source: []const u8, m: pattern.Match, result_buffer: ?[]Value) ![]const Value {
+    if (m.capture_count == 0) return bufferedOne(result_buffer, .{ .string = source[m.start..m.end] });
+    const out = try rt.returnBuffer(result_buffer, m.capture_count);
+    for (out, 0..) |*value, i| value.* = try captureValue(source, m.captures[i]);
+    return out;
+}
+
 fn findStart(len: usize, raw: i64) ?usize {
     const n: i64 = @intCast(len);
     var i = if (raw < 0) n + raw + 1 else raw;
@@ -683,39 +696,36 @@ fn findStart(len: usize, raw: i64) ?usize {
     return @intCast(i - 1);
 }
 
-fn stringFind(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringFind(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     if (args.len < 2) return error.MissingArgument;
     const source = try str(a, args[0]);
     const needle = try str(a, args[1]);
     const init = if (args.len > 2 and args[2] != .nil) try integer(args[2]) else 1;
-    const start = findStart(source.len, init) orelse return one(a, .nil);
+    const start = findStart(source.len, init) orelse return bufferedOne(result_buffer, .nil);
     if (args.len > 3 and args[3].truthy()) {
-        const rel = std.mem.indexOf(u8, source[start..], needle) orelse return one(a, .nil);
+        const rel = std.mem.indexOf(u8, source[start..], needle) orelse return bufferedOne(result_buffer, .nil);
         const first = start + rel;
-        const out = try std.heap.smp_allocator.alloc(Value, 2);
-        out[0] = .{ .number = @floatFromInt(first + 1) };
-        out[1] = .{ .number = @floatFromInt(first + needle.len) };
-        return out;
+        return bufferedTwo(result_buffer, .{ .number = @floatFromInt(first + 1) }, .{ .number = @floatFromInt(first + needle.len) });
     }
     var m: pattern.Match = undefined;
-    if (!(try pattern.findIntoStart(source, needle, init, &m))) return one(a, .nil);
-    const out = try std.heap.smp_allocator.alloc(Value, 2 + m.capture_count);
-    out[0] = .{ .number = @floatFromInt(m.start + 1) };
-    out[1] = .{ .number = @floatFromInt(m.end) };
-    for (0..m.capture_count) |i| out[2 + i] = try captureValue(source, m.captures[i]);
+    if (!(try pattern.findIntoStart(source, needle, init, &m))) return bufferedOne(result_buffer, .nil);
+    const out = try rt.returnBuffer(result_buffer, 2 + m.capture_count);
+    rt.storeReturn(out, 0, .{ .number = @floatFromInt(m.start + 1) });
+    rt.storeReturn(out, 1, .{ .number = @floatFromInt(m.end) });
+    for (out[@min(out.len, 2)..], 0..) |*value, i| value.* = try captureValue(source, m.captures[i]);
     return out;
 }
 
-fn stringMatch(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringMatch(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     if (args.len < 2) return error.MissingArgument;
     const source = try str(a, args[0]);
     const pat = try str(a, args[1]);
     const init = if (args.len > 2 and args[2] != .nil) try integer(args[2]) else 1;
     var m: pattern.Match = undefined;
-    if (!(try pattern.findIntoStart(source, pat, init, &m))) return one(a, .nil);
-    return captureResults(a, source, m);
+    if (!(try pattern.findIntoStart(source, pat, init, &m))) return bufferedOne(result_buffer, .nil);
+    return captureResultsBuffered(source, m, result_buffer);
 }
 const GmatchCtx = struct { iterator: pattern.Iterator };
 fn gmatchNext(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
@@ -808,7 +818,7 @@ fn stringFormat(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const 
     return one(a, .{ .string = try lua_format.format(a, args) });
 }
 
-fn stringGsub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringGsub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     if (args.len < 3) return error.MissingArgument;
     const runtime = ctx;
@@ -846,10 +856,8 @@ fn stringGsub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
         if (m.end > m.start) search = m.end else if (m.end < source.len) search = m.end + 1 else search = source.len + 1;
     }
     try out.appendSlice(a, source[cursor..]);
-    const result = try std.heap.smp_allocator.alloc(Value, 2);
-    result[0] = .{ .string = try out.toOwnedSlice(a) };
-    result[1] = .{ .number = @floatFromInt(count) };
-    return result;
+    const rendered = try out.toOwnedSlice(a);
+    return bufferedTwo(result_buffer, .{ .string = rendered }, .{ .number = @floatFromInt(count) });
 }
 
 const MathOp = enum { abs, ceil, floor, sqrt, exp, log, log10, sin, cos, tan, asin, acos, atan, deg, rad };
@@ -1147,7 +1155,7 @@ pub fn install(runtime: *rt.Context) !void {
     try installDynamicBase(runtime);
 
     try installPackage(runtime);
-    try setGlobalNative(runtime, "require", baseRequire);
+    try setGlobalNativeBuffered(runtime, "require", baseRequire);
 
     const table = try runtime.newNativeNamespace(.table);
     try setNative(runtime, table, "insert", tableInsert);
@@ -1171,11 +1179,11 @@ pub fn install(runtime: *rt.Context) !void {
     try setNative(runtime, string, "reverse", stringReverse);
     try setNative(runtime, string, "rep", stringRep);
     try setNative(runtime, string, "char", stringChar);
-    try setNative(runtime, string, "byte", stringByte);
-    try setNative(runtime, string, "find", stringFind);
-    try setNative(runtime, string, "match", stringMatch);
+    try setNativeBuffered(runtime, string, "byte", stringByte);
+    try setNativeBuffered(runtime, string, "find", stringFind);
+    try setNativeBuffered(runtime, string, "match", stringMatch);
     try setNative(runtime, string, "gmatch", stringGmatch);
-    try setNative(runtime, string, "gsub", stringGsub);
+    try setNativeBuffered(runtime, string, "gsub", stringGsub);
     try setNative(runtime, string, "format", stringFormat);
     try runtime.setGlobal(global_abi.id("string"), .{ .table = string });
     const smt = try runtime.newTable();
@@ -1782,4 +1790,75 @@ test "stdlib template keeps page mutation isolated" {
     try std.testing.expect(second_table.rawGet(.{ .string = "insert" }).? == .callable);
     try std.testing.expect(first.getGlobal(global_abi.id("package")).table != second.getGlobal(global_abi.id("package")).table);
     try std.testing.expect(first.getGlobal(global_abi.count) == .nil);
+}
+
+test "buffered stdlib returns clip fixed calls and preserve full dynamic results" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try install(&ctx);
+    const string = ctx.getGlobal(global_abi.id("string")).table;
+    const find = string.rawGet(.{ .string = "find" }).?;
+    const match = string.rawGet(.{ .string = "match" }).?;
+    const byte = string.rawGet(.{ .string = "byte" }).?;
+    const gsub = string.rawGet(.{ .string = "gsub" }).?;
+    var slots = [_]Value{ .{ .string = "stale" }, .{ .string = "stale" } };
+
+    const find_args = [_]Value{ .{ .string = "abc123" }, .{ .string = "(%a+)(%d+)" } };
+    const clipped_find = try ctx.callValueFixed(find, &find_args, &slots);
+    defer clipped_find.deinit();
+    try std.testing.expectEqual(@as(usize, 2), clipped_find.values.len);
+    try std.testing.expect(clipped_find.values.ptr == slots[0..].ptr);
+    try std.testing.expectEqual(@as(f64, 1), slots[0].number);
+    try std.testing.expectEqual(@as(f64, 6), slots[1].number);
+    const full_find = try ctx.callValue(find, &find_args);
+    defer rt.freeResults(full_find);
+    try std.testing.expectEqual(@as(usize, 4), full_find.len);
+    try std.testing.expectEqualStrings("abc", full_find[2].string);
+    try std.testing.expectEqualStrings("123", full_find[3].string);
+
+    const match_args = [_]Value{ .{ .string = "abc123" }, .{ .string = "(%a+)(%d+)" } };
+    const clipped_match = try ctx.callValueFixed(match, &match_args, slots[0..1]);
+    defer clipped_match.deinit();
+    try std.testing.expectEqual(@as(usize, 1), clipped_match.values.len);
+    try std.testing.expectEqualStrings("abc", slots[0].string);
+    const full_match = try ctx.callValue(match, &match_args);
+    defer rt.freeResults(full_match);
+    try std.testing.expectEqual(@as(usize, 2), full_match.len);
+    try std.testing.expectEqualStrings("123", full_match[1].string);
+
+    const byte_args = [_]Value{ .{ .string = "ABC" }, .{ .number = 1 }, .{ .number = 3 } };
+    const clipped_byte = try ctx.callValueFixed(byte, &byte_args, &slots);
+    defer clipped_byte.deinit();
+    try std.testing.expectEqual(@as(usize, 2), clipped_byte.values.len);
+    try std.testing.expectEqual(@as(f64, 65), slots[0].number);
+    try std.testing.expectEqual(@as(f64, 66), slots[1].number);
+    const full_byte = try ctx.callValue(byte, &byte_args);
+    defer rt.freeResults(full_byte);
+    try std.testing.expectEqual(@as(usize, 3), full_byte.len);
+    try std.testing.expectEqual(@as(f64, 67), full_byte[2].number);
+
+    const gsub_args = [_]Value{ .{ .string = "aba" }, .{ .string = "a" }, .{ .string = "x" } };
+    const clipped_gsub = try ctx.callValueFixed(gsub, &gsub_args, &slots);
+    defer clipped_gsub.deinit();
+    try std.testing.expectEqual(@as(usize, 2), clipped_gsub.values.len);
+    try std.testing.expectEqualStrings("xbx", slots[0].string);
+    try std.testing.expectEqual(@as(f64, 2), slots[1].number);
+    const full_gsub = try ctx.callValue(gsub, &gsub_args);
+    defer rt.freeResults(full_gsub);
+    try std.testing.expectEqual(@as(usize, 2), full_gsub.len);
+
+    const missing = try ctx.callValueFixed(find, &.{ .{ .string = "abc" }, .{ .string = "z" } }, &slots);
+    defer missing.deinit();
+    try std.testing.expectEqual(@as(usize, 1), missing.values.len);
+    try std.testing.expect(slots[0] == .nil);
+
+    const require = ctx.getGlobal(global_abi.id("require"));
+    try ctx.package_loaded.?.rawSet(ctx.allocator, .{ .string = "strict" }, .{ .boolean = true });
+    const cached = try ctx.callValueFixed(require, &.{.{ .string = "strict" }}, slots[0..1]);
+    defer cached.deinit();
+    try std.testing.expectEqual(@as(usize, 1), cached.values.len);
+    try std.testing.expect(slots[0].boolean);
+    try std.testing.expectError(error.AotCallFailed, ctx.callValueFixed(require, &.{.{ .number = 1 }}, &slots));
 }

@@ -13,6 +13,32 @@ import build_wiktionaries as builder
 
 
 class ResourceLimitsTest(unittest.TestCase):
+    def test_watchdog_cpu_set_reserves_four_logical_cpus_and_prefers_cores(self):
+        topology = {**{cpu: (0, cpu // 2) for cpu in range(8)},
+                    **{cpu: (0, cpu + 12) for cpu in range(8, 12)}}
+        original = Path.read_text
+
+        def read_topology(path, *args, **kwargs):
+            parts = path.parts
+            if len(parts) >= 2 and parts[-2] == 'topology':
+                cpu = int(parts[-3][3:])
+                return str(topology[cpu][0 if parts[-1] == 'physical_package_id' else 1])
+            return original(path, *args, **kwargs)
+
+        with patch.object(Path, 'read_text', read_topology):
+            self.assertEqual(limits._watchdog_cpu_set(8, set(range(12))),
+                             [0, 2, 4, 6, 8, 9, 10, 11])
+            self.assertEqual(limits._watchdog_cpu_set(4, set(range(12))), [0, 2, 4, 6])
+            self.assertEqual(limits._watchdog_cpu_set(8, set(range(8))), [0, 2, 4, 6])
+            self.assertEqual(limits._watchdog_cpu_set(4, set(range(8))), [0, 2, 4, 6])
+        with self.assertRaises(limits.ContainmentUnavailable):
+            limits._watchdog_cpu_set(9, set(range(12)))
+
+    def test_watchdog_cpu_set_falls_back_on_missing_topology(self):
+        with patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            self.assertEqual(limits._watchdog_cpu_set(4, {0, 1, 2, 3}), [0, 1, 2, 3])
+            self.assertEqual(limits._watchdog_cpu_set(8, set(range(12))), list(range(8)))
+
     def test_cli_ignores_host_free_ram_but_requires_containment(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(builder, 'PROJECT', Path(tmp)), \

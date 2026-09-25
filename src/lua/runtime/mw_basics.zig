@@ -62,6 +62,7 @@ fn pagesInCategoryCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value
     else
         args[1].string;
 
+    rt.work_stats.noteCategory(args[0].string, which);
     const host = host_api.get(runtime) orelse return error.NotImplemented;
     const get = host.category_stats orelse return error.NotImplemented;
     const key = try categoryDbKey(runtime, args[0].string);
@@ -587,6 +588,7 @@ fn localizedTabular(runtime: *rt.Context, raw: *rt.Table) !Value {
 
 fn externalDataGetCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    rt.work_stats.noteCommons(args[0].string, if (args.len >= 2 and args[1] == .string) args[1].string else "en");
     const raw = if (args.len < 2 or args[1] == .nil)
         false
     else if (args[1] != .string)
@@ -703,6 +705,7 @@ fn wikibaseGetSitelinkCall(_: ?*anyopaque, runtime: *rt.Context, args: []const V
         args[1].string
     else
         return error.StringExpected;
+    rt.work_stats.noteSitelink(args[0].string, global_site_id);
     const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
     const get = host.wikibase_sitelink orelse return error.NotImplemented;
     const title = get(host.ctx, args[0].string, global_site_id) catch |err| {

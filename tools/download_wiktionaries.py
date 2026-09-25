@@ -6,6 +6,7 @@ publication and at most three connections keep reruns safe and predictable.
 """
 import argparse
 import concurrent.futures
+import datetime
 import hashlib
 import functools
 import json
@@ -91,6 +92,78 @@ def siteinfo(wiki, props, language=None):
     if not isinstance(result, dict):
         raise ValueError(f"Invalid siteinfo response for {wiki}")
     return result
+
+
+def interwiki_map_snapshot(wiki, output):
+    """Capture the current MediaWiki interwiki map with its retrieval provenance.
+
+    This API response is current at retrieval time, not part of a dated dump.
+    """
+    query = {"action": "query", "meta": "siteinfo", "siprop": "interwikimap",
+             "format": "json", "formatversion": "2"}
+    url = wiktionary_api(wiki) + "?" + urllib.parse.urlencode(query)
+    root = output / wiki
+    if root.exists() or root.is_symlink():
+        raise ValueError(f"Interwiki snapshot already exists: {root}")
+    temporary = output / ("." + wiki + ".interwiki-map.part")
+    if temporary.exists() or temporary.is_symlink():
+        raise ValueError(f"Incomplete interwiki snapshot already exists: {temporary}")
+    request = urllib.request.Request(url, headers={"User-Agent": AGENT})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        raw = response.read(2 * 1024 * 1024 + 1)
+    retrieved = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if len(raw) > 2 * 1024 * 1024:
+        raise ValueError("Interwiki API response exceeds 2 MiB")
+    data = json.loads(raw)
+    rows = data.get("query", {}).get("interwikimap") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or not rows or len(rows) > 10_000:
+        raise ValueError("Missing or invalid interwiki map")
+
+    def field(value):
+        return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+    lines = []
+    prefixes = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("Invalid interwiki row")
+        prefix, target = row.get("prefix"), row.get("url")
+        if not isinstance(prefix, str) or not prefix or not isinstance(target, str) or not target:
+            raise ValueError("Invalid interwiki prefix or URL")
+        if prefix.casefold() in prefixes:
+            raise ValueError(f"Duplicate interwiki prefix: {prefix}")
+        prefixes.add(prefix.casefold())
+        for flag in ("local", "localinterwiki", "protorel", "trans"):
+            if flag in row and type(row[flag]) is not bool:
+                raise ValueError(f"Invalid interwiki flag: {flag}")
+        # siteinfo exposes localinterwiki for prefixes targeting this wiki.
+        # Its current response does not expose transcludability; absent flags
+        # remain false rather than inventing external transclusion behavior.
+        lines.append("\t".join((field(prefix),
+                                 "1" if row.get("local", False) else "0",
+                                 "1" if row.get("localinterwiki", False) else "0",
+                                 "1" if row.get("protorel", False) else "0",
+                                 "1" if row.get("trans", False) else "0",
+                                 field(target))))
+    tsv = ("\n".join(lines) + "\n").encode("utf-8")
+    provenance = {"wiki": wiki, "kind": "current-siteinfo-interwikimap",
+                  "retrieved_utc": retrieved, "source_url": url, "rows": len(rows),
+                  "raw_bytes": len(raw), "raw_sha256": hashlib.sha256(raw).hexdigest(),
+                  "tsv_bytes": len(tsv), "tsv_sha256": hashlib.sha256(tsv).hexdigest(),
+                  "dump_date": None,
+                  "transcludability_note": "Missing API trans flags are represented as false"}
+    output.mkdir(parents=True, exist_ok=True)
+    temporary.mkdir(exist_ok=False)
+    try:
+        (temporary / "interwiki-map.raw.json").write_bytes(raw)
+        (temporary / "interwiki-map.tsv").write_bytes(tsv)
+        (temporary / "interwiki-map.provenance.json").write_text(
+            json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.rename(temporary, root)
+    except BaseException:
+        shutil.rmtree(temporary)
+        raise
+    return root / "interwiki-map.tsv", provenance
 
 @functools.lru_cache(maxsize=4)
 def _load_iso_639_3(path):
@@ -591,9 +664,18 @@ def main():
     parser.add_argument("--xml-only", action="store_true", help="Omit companion SQL snapshots")
     parser.add_argument("--plan", action="store_true", help="Resolve and save manifest without downloading dump files")
     parser.add_argument("--resume", action="store_true", help="Use the saved manifest, preserving snapshot dates across restarts")
+    parser.add_argument("--interwiki-map-only", action="store_true",
+                        help="Capture the current siteinfo interwiki map for exactly one --wikis edition")
     args = parser.parse_args()
     args.output = args.output.expanduser().resolve()
     args.output.mkdir(parents=True, exist_ok=True)
+
+    if args.interwiki_map_only:
+        if args.resume or args.plan or args.xml_only or not args.wikis or len(args.wikis) != 1:
+            parser.error("--interwiki-map-only requires exactly one --wikis edition and no other mode")
+        path, provenance = interwiki_map_snapshot(args.wikis[0], args.output)
+        print(f"Current interwiki map: {path} rows={provenance['rows']} sha256={provenance['tsv_sha256']}", flush=True)
+        return
 
     if args.resume:
         manifest = json.loads((args.output / "manifest.json").read_text())
