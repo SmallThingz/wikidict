@@ -250,13 +250,36 @@ def _process_table():
             table[int(entry.name)] = {
                 'state': fields[0], 'ppid': int(fields[1]), 'pgrp': int(fields[2]),
                 'session': int(fields[3]), 'threads': int(fields[17]),
-                'start': int(fields[19]), 'rss': int(fields[21]) * page_bytes,
+                'start': int(fields[19]), 'vsize': int(fields[20]),
+                'rss': int(fields[21]) * page_bytes,
             }
         except (FileNotFoundError, ProcessLookupError):
             continue
         except (OSError, ValueError, IndexError) as error:
             raise ContainmentUnavailable(f'Cannot inspect process {entry.name}: {error}') from error
     return table
+
+
+def _thread_accounting(pid):
+    """A leader may lose its mm while live threads still have the group mm."""
+    try:
+        tasks = Path('/proc', str(pid), 'task').iterdir()
+        for task in tasks:
+            if task.name == str(pid):
+                continue
+            try:
+                lines = (task / 'smaps_rollup').read_text().splitlines()
+                pss_kib = next(int(line.split()[1]) for line in lines if line.startswith('Pss:'))
+                status = (task / 'status').read_text().splitlines()
+                threads = next(int(line.split()[1]) for line in status if line.startswith('Threads:'))
+                return pss_kib, threads
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except (OSError, ValueError, StopIteration) as error:
+        raise ContainmentUnavailable(f'Cannot inspect threads of owned process {pid}: {error}') from error
+    return None
 
 
 def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=frozenset()):
@@ -286,7 +309,7 @@ def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=fro
     live = {}
     for pid in owned:
         info = table[pid]
-        if info['state'] == 'Z':
+        if info['state'] == 'Z' and info['threads'] <= 1:
             continue
         try:
             lines = Path('/proc', str(pid), 'smaps_rollup').read_text().splitlines()
@@ -294,12 +317,24 @@ def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=fro
             status = Path('/proc', str(pid), 'status').read_text().splitlines()
             threads = next(int(line.split()[1]) for line in status if line.startswith('Threads:'))
         except (FileNotFoundError, ProcessLookupError):
-            # A vanished process no longer consumes resources. A reused PID
-            # must never be charged or signalled as our child.
-            fresh = _process_table().get(pid)
-            if fresh is not None and fresh['start'] == info['start'] and fresh['state'] != 'Z':
-                raise ContainmentUnavailable(f'Owned process {pid} became unreadable')
-            continue
+            # A leader's mm can vanish before the whole thread group exits.
+            alternate = _thread_accounting(pid)
+            if alternate is not None:
+                pss_kib, threads = alternate
+            else:
+                fresh = _process_table().get(pid)
+                if fresh is None or fresh['start'] != info['start']:
+                    continue
+                if fresh['state'] == 'Z' and fresh['threads'] <= 1:
+                    continue
+                if fresh['vsize'] == 0:
+                    if fresh['threads'] <= 1:
+                        continue
+                    raise ContainmentUnavailable(f'Cannot measure live threads of process {pid}')
+                # ENOENT during exit/exec may persist beyond one sample. RSS
+                # is an upper bound for PSS, so charge it until smaps returns.
+                pss_kib = (fresh['rss'] + 1023) // 1024
+                threads = fresh['threads']
         except (OSError, ValueError, StopIteration) as error:
             raise ContainmentUnavailable(f'Cannot measure owned process {pid}: {error}') from error
         pss += pss_kib * 1024

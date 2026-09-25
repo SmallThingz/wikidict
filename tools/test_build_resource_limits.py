@@ -274,6 +274,35 @@ class ResourceLimitsTest(unittest.TestCase):
             sample = limits._owned_sample(100, 10, {}, os.getpid())
         self.assertEqual(sample['live'], {})
 
+    def test_watchdog_handles_mm_teardown_and_charges_live_rss(self):
+        running = {100: {'state':'S','ppid':1,'pgrp':100,'session':100,
+                         'threads':1,'start':10,'vsize':8192,'rss':4096}}
+        no_mm = {100: dict(running[100], vsize=0, rss=0)}
+        with patch.object(limits, '_process_table', side_effect=[running, no_mm]), \
+             patch.object(limits, '_thread_accounting', return_value=None), \
+             patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            self.assertEqual(limits._owned_sample(100, 10, {}, os.getpid())['live'], {})
+        with patch.object(limits, '_process_table', side_effect=[running, running]), \
+             patch.object(limits, '_thread_accounting', return_value=None), \
+             patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            sample = limits._owned_sample(100, 10, {}, os.getpid())
+        self.assertEqual(sample['pss_bytes'], 4096)
+        self.assertEqual(sample['tasks'], 1)
+
+    def test_watchdog_counts_surviving_threads_and_rejects_permission_errors(self):
+        leader = {100: {'state':'Z','ppid':1,'pgrp':100,'session':100,
+                        'threads':3,'start':10,'vsize':0,'rss':0}}
+        with patch.object(limits, '_process_table', return_value=leader), \
+             patch.object(limits, '_thread_accounting', return_value=(5, 3)), \
+             patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            sample = limits._owned_sample(100, 10, {}, os.getpid())
+        self.assertEqual(sample['pss_bytes'], 5 * 1024)
+        self.assertEqual(sample['tasks'], 3)
+        with patch.object(limits, '_process_table', return_value=leader), \
+             patch.object(Path, 'read_text', side_effect=PermissionError):
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'Cannot measure owned process'):
+                limits._owned_sample(100, 10, {}, os.getpid())
+
     def test_watchdog_wall_limit_reaps_own_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path = Path(tmp) / 'watchdog.json'
@@ -309,6 +338,18 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertEqual(report['termination_reason'], 'child_exit')
             self.assertEqual(report['child_exit_status'], 0)
             self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
+
+    def test_watchdog_rapid_native_child_exit_churn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / 'watchdog.json'
+            status = limits.supervise_watchdog(
+                argv=['-c', 'import build_resource_limits as l, subprocess; assert l.inside_watchdog(); [subprocess.run(["/bin/true"], check=True) for _ in range(100)]'],
+                report_path=report_path, wall_seconds=3,
+                memory_limit_bytes=64 * 1024**2, max_tasks=4)
+            report = json.loads(report_path.read_text())
+            self.assertEqual(status, 0)
+            self.assertEqual(report['termination_reason'], 'child_exit')
+            self.assertLessEqual(report['peak_tasks'], 4)
 
 
 if __name__ == '__main__':
