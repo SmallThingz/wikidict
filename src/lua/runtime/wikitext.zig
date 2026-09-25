@@ -1,4 +1,5 @@
 const std = @import("std");
+const work_stats = rt.work_stats;
 const rt = @import("zig_runtime");
 const host_api = @import("host.zig");
 const frame_lib = @import("frame.zig");
@@ -275,7 +276,10 @@ pub const Expander = struct {
 
     pub fn expandFragment(self: *Expander, title: []const u8, source: []const u8, now_unix: ?i64) anyerror![]const u8 {
         self.beginPage(title, source, now_unix);
+        if (work_stats.current()) |work| work.comment_bytes +|= source.len;
+        const comments_start = work_stats.cpuNow();
         const stripped = try preprocess.stripDecodedComments(self.runtime.allocator, source);
+        if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(comments_start);
         defer self.runtime.allocator.free(stripped);
         const params = try self.runtime.newTable();
         return self.expandPageWikitext(stripped, params, title);
@@ -307,9 +311,14 @@ pub const Expander = struct {
     }
 
     fn expandPageWikitext(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8) anyerror![]const u8 {
+        if (work_stats.current()) |work| {
+            work.scan_calls +|= 1;
+            work.scan_bytes +|= text.len;
+        }
         var out: std.ArrayList(u8) = .empty;
         var pos: usize = 0;
         while (preprocess.findNextConstructOutsideLiteralTags(text, pos)) |construct| {
+            if (work_stats.current()) |work| work.constructs +|= 1;
             const literal = text[pos..construct.open];
             try self.observePageOutput(literal);
             try out.appendSlice(self.runtime.allocator, literal);
@@ -397,7 +406,13 @@ pub const Expander = struct {
     }
 
     fn expandTemplateSource(self: *Expander, title: []const u8, raw: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
+        if (work_stats.current()) |work| {
+            work.template_preprocess_calls +|= 1;
+            work.template_preprocess_bytes +|= raw.len;
+        }
+        const preprocess_start = work_stats.cpuNow();
         const body = try preprocess.transcludeDecodedAlloc(self.runtime.allocator, raw);
+        if (work_stats.current()) |work| work.template_preprocess_ns +|= work_stats.elapsed(preprocess_start);
         defer self.runtime.allocator.free(body);
         return self.expandWikitext(body, args, title, depth + 1);
     }
@@ -465,9 +480,14 @@ pub const Expander = struct {
 
     fn expandWikitext(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
+        if (work_stats.current()) |work| {
+            work.scan_calls +|= 1;
+            work.scan_bytes +|= text.len;
+        }
         var out: std.ArrayList(u8) = .empty;
         var pos: usize = 0;
         while (preprocess.findNextConstructOutsideLiteralTags(text, pos)) |construct| {
+            if (work_stats.current()) |work| work.constructs +|= 1;
             try out.appendSlice(self.runtime.allocator, text[pos..construct.open]);
             switch (construct.kind) {
                 .parameter => {
@@ -1282,6 +1302,11 @@ pub const Expander = struct {
         parent_title: ?[]const u8,
         parent_args: ?*rt.Table,
     ) anyerror![]const u8 {
+        if (work_stats.current()) |work| work.invoke_attempts +|= 1;
+        const invoke_start = work_stats.cpuNow();
+        defer {
+            if (work_stats.current()) |work| work.invoke_ns +|= work_stats.elapsed(invoke_start);
+        }
         const install = self.install_scribunto orelse return error.MissingScribuntoInstaller;
         const page_a = self.page_allocator orelse self.runtime.allocator;
         const outer_runtime = self.runtime;
@@ -1324,6 +1349,7 @@ pub const Expander = struct {
     }
 
     fn expandInvoke(self: *Expander, module_expr: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        if (work_stats.current()) |work| work.invokes +|= 1;
         const module_symbol = try self.callSymbol(module_expr, .module);
         const module_raw = if (module_symbol) |symbol|
             symbol.text

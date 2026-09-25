@@ -8,6 +8,7 @@ comptime {
 const pages = @import("bundle_pages.zig");
 const protocol = @import("bundle_protocol.zig");
 const RequestAllocator = @import("runtime/request_allocator.zig").RequestAllocator;
+const work_stats = lua_program.work_stats;
 const A = std.mem.Allocator;
 const L = std.os.linux;
 const expansion_memory_headroom_bytes: u64 = 512 * 1024 * 1024;
@@ -59,6 +60,25 @@ const Engine = struct {
     program: lua_program.Program,
     provider: pages.Provider,
     load_data_cache: lua_program.SharedLoadDataCache,
+    root_profile: work_stats.RootProfile,
+    measured_pages: u64 = 0,
+    sampled_pages: u64 = 0,
+    invoke_histogram: [5]u64 = .{ 0, 0, 0, 0, 0 },
+    cache_hit_histogram: [4]u64 = .{ 0, 0, 0, 0 },
+    totals: work_stats.Page = .{},
+
+    fn record(self: *Engine, page: *const work_stats.Page) void {
+        const bucket: usize = if (page.invokes == 0) 0 else if (page.invokes == 1) 1 else if (page.invokes < 4) 2 else if (page.invokes < 8) 3 else 4;
+        self.invoke_histogram[bucket] +|= 1;
+        const hits = self.load_data_cache.hits -| page.cache_hits_before;
+        const hit_bucket: usize = if (hits == 0) 0 else if (hits == 1) 1 else if (hits < 4) 2 else 3;
+        self.cache_hit_histogram[hit_bucket] +|= 1;
+        if (page.sampled) self.sampled_pages +|= 1;
+        if (page.root_sampled) self.root_profile.sampled_pages +|= 1;
+        inline for (.{ "invokes", "invoke_attempts", "module_roots", "static_roots", "scan_calls", "scan_bytes", "constructs", "comment_bytes", "template_preprocess_calls", "template_preprocess_bytes", "context_ns", "expand_ns", "comments_ns", "template_preprocess_ns", "invoke_ns", "root_exclusive_ns" }) |field| {
+            @field(self.totals, field) +|= @field(page.*, field);
+        }
+    }
 
     fn fileExists(io: std.Io, path: []const u8) !bool {
         var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
@@ -83,6 +103,8 @@ const Engine = struct {
             lua_program.loadDataCacheability(&program),
         );
         errdefer load_data_cache.deinit();
+        var root_profile = try work_stats.RootProfile.init(std.heap.smp_allocator, program.module_count);
+        errdefer root_profile.deinit();
         return .{
             .io = io,
             .requested_root = try a.dupe(u8, requested_root),
@@ -91,10 +113,26 @@ const Engine = struct {
             .program = program,
             .provider = provider,
             .load_data_cache = load_data_cache,
+            .root_profile = root_profile,
         };
     }
 
     fn deinit(self: *Engine) void {
+        work_stats.logLine("worker work: pages={d} samples={d} invokes={d} attempts={d} roots={d} static_roots={d} scan_calls={d} scan_bytes={d} constructs={d} comments_bytes={d} template_preprocess_calls={d} template_preprocess_bytes={d}\n", .{
+            self.measured_pages, self.sampled_pages, self.totals.invokes, self.totals.invoke_attempts, self.totals.module_roots, self.totals.static_roots, self.totals.scan_calls, self.totals.scan_bytes, self.totals.constructs, self.totals.comment_bytes, self.totals.template_preprocess_calls, self.totals.template_preprocess_bytes,
+        });
+        work_stats.logLine("worker invoke histogram: zero={d} one={d} two_three={d} four_seven={d} eight_plus={d}\n", .{
+            self.invoke_histogram[0], self.invoke_histogram[1], self.invoke_histogram[2], self.invoke_histogram[3], self.invoke_histogram[4],
+        });
+        work_stats.logLine("worker cache hit histogram: zero={d} one={d} two_three={d} four_plus={d}\n", .{
+            self.cache_hit_histogram[0], self.cache_hit_histogram[1], self.cache_hit_histogram[2], self.cache_hit_histogram[3],
+        });
+        work_stats.logLine("worker sampled cpu ns: interval=32 context={d} expand={d} comments={d} template_preprocess={d} invoke_inclusive={d}\n", .{
+            self.totals.context_ns, self.totals.expand_ns, self.totals.comments_ns, self.totals.template_preprocess_ns, self.totals.invoke_ns,
+        });
+        self.root_profile.logTop(self.program.module_names, self.totals.root_exclusive_ns);
+        self.load_data_cache.logDiagnostics(self.program.module_names);
+        self.root_profile.deinit();
         self.load_data_cache.deinit();
         self.provider.deinit();
         self.program.deinit();
@@ -105,18 +143,33 @@ const Engine = struct {
         if (!std.mem.eql(u8, request.dump, self.requested_dump)) return error.BundleDumpChanged;
         if (request.now_unix != self.requested_now_unix) return error.BundleTimeChanged;
         if (!self.provider.isCanonicalPage(request.title, request.page_ordinal)) return null;
+        var page_work = work_stats.Page{
+            .sampled = (self.measured_pages & 31) == 0,
+            .root_sampled = (self.measured_pages & 31) == 0,
+            .root_profile = &self.root_profile,
+            .cache_hits_before = self.load_data_cache.hits,
+        };
+        self.measured_pages +|= 1;
+        const previous_work = work_stats.begin(&page_work);
+        defer work_stats.end(previous_work);
+        defer self.record(&page_work);
         stage.* = "install";
+        const context_start = work_stats.cpuNow();
         var ctx = try self.program.initPageContext(page_a);
+        page_work.context_ns +|= work_stats.elapsed(context_start);
         defer ctx.deinit();
         var expander = lua_program.initExpanderShared(&ctx, self.provider.api(), &self.load_data_cache);
         stage.* = "expand";
+        const expand_start = work_stats.cpuNow();
         const output = expander.expandFragment(request.title, request.source, self.requested_now_unix) catch |err| {
+            page_work.expand_ns +|= work_stats.elapsed(expand_start);
             detail.* = try page_a.dupe(u8, if (ctx.last_error == .string)
                 ctx.last_error.string
             else
                 ctx.aotErrorName() orelse @errorName(err));
             return err;
         };
+        page_work.expand_ns +|= work_stats.elapsed(expand_start);
         return .{ .output = output, .display_title = expander.display_title orelse "" };
     }
 };

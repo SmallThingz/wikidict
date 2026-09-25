@@ -1,4 +1,5 @@
 const std = @import("std");
+pub const work_stats = @import("work_stats.zig");
 const static_fields = @import("lua_static_fields");
 
 extern fn snprintf(buffer: [*]u8, size: usize, format: [*:0]const u8, ...) c_int;
@@ -307,10 +308,67 @@ const ValueContext = struct {
 
 const Map = std.HashMapUnmanaged(Value, Value, ValueContext, 80);
 
+// Native global pointers refer only to this fixed prefix; tail pages never move it.
+pub const module_global_prefix_len = static_fields.global_dense_prefix_len;
+const global_page_len = 64;
+const GlobalPage = [global_page_len]Value;
+const GlobalTail = struct {
+    allocator: std.mem.Allocator,
+    len: usize,
+    pages: []?*GlobalPage,
+
+    fn snapshot(allocator: std.mem.Allocator, values: []const Value) !*GlobalTail {
+        const self = try allocator.create(GlobalTail);
+        errdefer allocator.destroy(self);
+        const pages = try allocator.alloc(?*GlobalPage, values.len / global_page_len + @intFromBool(values.len % global_page_len != 0));
+        @memset(pages, null);
+        self.* = .{ .allocator = allocator, .len = values.len, .pages = pages };
+        errdefer self.deinit();
+        for (pages, 0..) |*page, page_index| {
+            const start = page_index * global_page_len;
+            const source = values[start..@min(start + global_page_len, values.len)];
+            for (source) |value| {
+                if (value != .nil) {
+                    const owned = try allocator.create(GlobalPage);
+                    owned.* = [_]Value{.nil} ** global_page_len;
+                    @memcpy(owned[0..source.len], source);
+                    page.* = owned;
+                    break;
+                }
+            }
+        }
+        return self;
+    }
+
+    fn deinit(self: *GlobalTail) void {
+        for (self.pages) |page| if (page) |owned| self.allocator.destroy(owned);
+        self.allocator.free(self.pages);
+    }
+
+    fn ptr(self: *const GlobalTail, slot: usize) ?*Value {
+        if (slot >= self.len) return null;
+        const page = self.pages[slot / global_page_len] orelse return null;
+        return &page[slot % global_page_len];
+    }
+
+    fn set(self: *GlobalTail, slot: usize, value: Value) !void {
+        if (slot >= self.len) return error.BadGlobalSlot;
+        const page_index = slot / global_page_len;
+        if (self.pages[page_index] == null) {
+            if (value == .nil) return;
+            const page = try self.allocator.create(GlobalPage);
+            page.* = [_]Value{.nil} ** global_page_len;
+            self.pages[page_index] = page;
+        }
+        self.pages[page_index].?[slot % global_page_len] = value;
+    }
+};
+
 pub const Table = struct {
     shape: ?*const Shape = null,
     native_namespace: ?static_fields.Namespace = null,
     slots: []Value = &.{},
+    global_tail: ?*GlobalTail = null,
     owns_slots: bool = true,
     choices: []ChoiceCell = &.{},
     map: Map = .empty,
@@ -318,9 +376,23 @@ pub const Table = struct {
     append_index: u32 = 1,
     read_only: bool = false,
     mutation_sentinel: ?*bool = null,
+    // Monotonic: only tables that have ever hashed a numeric key need numeric map probes.
+    has_hashed_number: bool = false,
+    // Identity-key iteration may depend on arena addresses or function allocation order.
+    has_identity_key: bool = false,
 
     fn markMutated(self: *Table) void {
         if (self.mutation_sentinel) |sentinel| sentinel.* = false;
+    }
+
+    fn identityKey(key: Value) bool {
+        return key == .table or key == .callable;
+    }
+
+    fn markIdentityKeyWrite(self: *Table, key: Value, value: Value) void {
+        if (!identityKey(key)) return;
+        markLoadDataEffect();
+        if (value != .nil) self.has_identity_key = true;
     }
 
     pub fn deinit(self: *Table, allocator: std.mem.Allocator) void {
@@ -395,14 +467,30 @@ pub const Table = struct {
 
     pub fn rawGetSlot(self: *const Table, slot: u32) ?Value {
         if (self.shape == null and self.native_namespace == null) return null;
-        if (slot >= self.slots.len) return null;
-        return if (self.slots[slot] == .nil) null else self.slots[slot];
+        const value = self.slotPtr(slot) orelse return null;
+        return if (value.* == .nil) null else value.*;
+    }
+
+    fn slotCount(self: *const Table) usize {
+        return self.slots.len + if (self.global_tail) |tail| tail.len else @as(usize, 0);
+    }
+
+    fn slotPtr(self: *const Table, slot: u32) ?*Value {
+        if (slot < self.slots.len) return &self.slots[slot];
+        const tail = self.global_tail orelse return null;
+        return tail.ptr(slot - self.slots.len);
     }
 
     pub fn rawSetSlot(self: *Table, slot: u32, value: Value) !void {
         if (self.read_only) return error.ReadOnlyTable;
         if (self.shape == null and self.native_namespace == null) return error.BadShapeSlot;
-        if (slot >= self.slots.len) return error.BadShapeSlot;
+        if (slot >= self.slotCount()) return error.BadShapeSlot;
+        if (self.fieldKey(slot)) |key| self.markIdentityKeyWrite(key, value);
+        if (slot >= self.slots.len) {
+            try self.global_tail.?.set(slot - self.slots.len, value);
+            self.markMutated();
+            return;
+        }
         self.markMutated();
         self.slots[slot] = value;
     }
@@ -424,6 +512,7 @@ pub const Table = struct {
         if (self.read_only) return error.ReadOnlyTable;
         if (choice >= self.choices.len) return error.BadChoiceSlot;
         try validateTableKey(key);
+        self.markIdentityKeyWrite(key, value);
         self.markMutated();
         if (value == .nil) {
             if (rawEqual(self.choices[choice].key, key)) self.choices[choice] = .{};
@@ -432,7 +521,7 @@ pub const Table = struct {
         self.choices[choice] = .{ .key = key, .value = value };
     }
     pub fn rawGet(self: *const Table, key: Value) ?Value {
-        if (key == .number) if (self.arraySlotForNumber(key.number)) |slot| if (self.rawGetArraySlot(slot)) |value| return value;
+        if (key == .number) return self.rawGetNumber(key.number);
         if (self.slotForKey(key)) |slot| if (self.rawGetSlot(slot)) |value| return value;
         for (self.choices) |cell| {
             if (cell.value != .nil and rawEqual(cell.key, key)) return cell.value;
@@ -443,18 +532,19 @@ pub const Table = struct {
     pub fn rawGetNumber(self: *const Table, number: f64) ?Value {
         if (self.arraySlotForNumber(number)) |slot| if (self.rawGetArraySlot(slot)) |value| return value;
         if (self.shape == null and self.choices.len == 0)
-            return self.map.getAdapted(number, NumberLookupContext{});
+            return if (self.has_hashed_number) self.map.getAdapted(number, NumberLookupContext{}) else null;
         const key = Value{ .number = number };
         if (self.slotForKey(key)) |slot| if (self.rawGetSlot(slot)) |value| return value;
         for (self.choices) |cell| {
             if (cell.value != .nil and cell.key == .number and cell.key.number == number) return cell.value;
         }
-        return self.map.getAdapted(number, NumberLookupContext{});
+        return if (self.has_hashed_number) self.map.getAdapted(number, NumberLookupContext{}) else null;
     }
 
     pub fn rawSet(self: *Table, allocator: std.mem.Allocator, key: Value, value: Value) !void {
         if (self.read_only) return error.ReadOnlyTable;
         try validateTableKey(key);
+        self.markIdentityKeyWrite(key, value);
         self.markMutated();
         if (key == .number) if (self.genericArrayIndex(key.number)) |index| {
             if (self.arraySlotForNumber(key.number)) |slot| {
@@ -478,6 +568,7 @@ pub const Table = struct {
             return;
         }
         try self.map.putContext(allocator, key, value, .{});
+        if (key == .number) self.has_hashed_number = true;
     }
 
     pub fn append(self: *Table, allocator: std.mem.Allocator, value: Value) !void {
@@ -499,7 +590,7 @@ pub const Table = struct {
         }
 
         pub fn restorePosition(self: *Iterator, position_value: Position) bool {
-            if (position_value.slot > self.table.slots.len or position_value.choice > self.table.choices.len or position_value.hash_index > self.table.map.capacity()) return false;
+            if (position_value.slot > self.table.slotCount() or position_value.choice > self.table.choices.len or position_value.hash_index > self.table.map.capacity()) return false;
             self.slot = position_value.slot;
             self.choice = position_value.choice;
             self.hash.index = position_value.hash_index;
@@ -507,15 +598,16 @@ pub const Table = struct {
         }
 
         pub fn next(self: *Iterator) ?Entry {
-            while (self.slot < self.table.slots.len) {
+            while (self.slot < self.table.slotCount()) {
                 const index = self.slot;
                 self.slot += 1;
-                if (self.table.slots[index] == .nil) continue;
+                const value = self.table.slotPtr(index) orelse continue;
+                if (value.* == .nil) continue;
                 self.key = if (self.table.shape == null and self.table.native_namespace == null)
                     .{ .number = @floatFromInt(index + 1) }
                 else
                     self.table.fieldKey(index) orelse continue;
-                return .{ .key_ptr = &self.key, .value_ptr = &self.table.slots[index] };
+                return .{ .key_ptr = &self.key, .value_ptr = value };
             }
             while (self.choice < self.table.choices.len) {
                 const index = self.choice;
@@ -530,6 +622,7 @@ pub const Table = struct {
     };
 
     pub fn iterator(self: *Table) Iterator {
+        if (self.has_identity_key) markLoadDataEffect();
         return .{ .table = self, .hash = self.map.iterator() };
     }
 
@@ -649,6 +742,22 @@ pub const NextIterationHint = struct {
     position: Table.Iterator.Position,
 };
 
+threadlocal var load_data_effect_probe: ?*bool = null;
+
+pub fn beginLoadDataEffectProbe(flag: *bool) ?*bool {
+    const previous = load_data_effect_probe;
+    load_data_effect_probe = flag;
+    return previous;
+}
+
+pub fn endLoadDataEffectProbe(previous: ?*bool) void {
+    load_data_effect_probe = previous;
+}
+
+pub fn markLoadDataEffect() void {
+    if (load_data_effect_probe) |flag| flag.* = true;
+}
+
 const module_state_page_shift = 8;
 const module_state_page_len = 1 << module_state_page_shift;
 const module_state_page_mask = module_state_page_len - 1;
@@ -660,12 +769,32 @@ const ModuleState = struct {
     deferred_require_visibility: bool = false,
     export_pristine: bool = false,
     globals: ?[]Value = null,
+    global_tail: ?*GlobalTail = null,
     global_table: ?*Table = null,
 };
-const ModuleStatePage = [module_state_page_len]ModuleState;
+const ModuleStatePage = struct {
+    initialized: [module_state_page_len / 64]u64 = [_]u64{0} ** (module_state_page_len / 64),
+    states: [module_state_page_len]ModuleState = undefined,
+
+    fn get(self: *ModuleStatePage, index: usize) ?*ModuleState {
+        if (self.initialized[index / 64] & (@as(u64, 1) << @intCast(index % 64)) == 0) return null;
+        return &self.states[index];
+    }
+
+    fn ensure(self: *ModuleStatePage, index: usize) *ModuleState {
+        const mask = @as(u64, 1) << @intCast(index % 64);
+        const word = &self.initialized[index / 64];
+        if (word.* & mask == 0) {
+            self.states[index] = .{};
+            word.* |= mask;
+        }
+        return &self.states[index];
+    }
+};
 const GlobalScope = struct {
     globals: []Value,
     global_table: ?*Table,
+    global_tail: ?*GlobalTail,
 };
 
 pub const Context = struct {
@@ -674,6 +803,7 @@ pub const Context = struct {
     string_arena: std.heap.ArenaAllocator,
     globals: []Value,
     root_globals: []Value,
+    global_tail: ?*GlobalTail = null,
     program_shapes: []const Shape = &.{},
     module_export_shape_ids: []const u32 = &.{},
     module_root_entries: []const FunctionFn = &.{},
@@ -755,12 +885,22 @@ pub const Context = struct {
         self.string_arena.deinit();
         self.static_global_scopes.deinit(self.allocator);
         for (self.module_state_pages) |page| if (page) |owned| {
-            for (owned) |*state| {
-                if (state.global_table) |table| {
-                    table.deinit(self.allocator);
-                    self.allocator.destroy(table);
+            for (owned.initialized, 0..) |word, word_index| {
+                var remaining = word;
+                while (remaining != 0) {
+                    const slot = word_index * 64 + @as(usize, @intCast(@ctz(remaining)));
+                    remaining &= remaining - 1;
+                    const state = &owned.states[slot];
+                    if (state.global_table) |table| {
+                        table.deinit(self.allocator);
+                        self.allocator.destroy(table);
+                    }
+                    if (state.globals) |globals| self.allocator.free(globals);
+                    if (state.global_tail) |tail| {
+                        tail.deinit();
+                        self.allocator.destroy(tail);
+                    }
                 }
-                if (state.globals) |globals| self.allocator.free(globals);
             }
             self.allocator.destroy(owned);
         };
@@ -802,12 +942,19 @@ pub const Context = struct {
     }
 
     pub fn getGlobal(self: *const Context, slot: u32) Value {
-        return if (slot < self.globals.len) self.globals[slot] else .nil;
+        if (slot < self.globals.len) return self.globals[slot];
+        const tail = self.global_tail orelse return .nil;
+        const value = tail.ptr(slot - self.globals.len) orelse return .nil;
+        return value.*;
     }
 
     pub fn setGlobal(self: *Context, slot: u32, value: Value) !void {
-        if (slot >= self.globals.len) return error.BadGlobalSlot;
-        self.globals[slot] = value;
+        if (slot < self.globals.len) {
+            self.globals[slot] = value;
+            return;
+        }
+        const tail = self.global_tail orelse return error.BadGlobalSlot;
+        try tail.set(slot - self.globals.len, value);
     }
     fn takeFunctionIdentity(self: *Context) !u32 {
         const identity = self.next_identity;
@@ -953,16 +1100,22 @@ pub const Context = struct {
     pub fn observePackage(self: *Context) !void {
         if (self.package_observable) return;
         for (self.module_state_pages, 0..) |page, page_index| if (page) |states| {
-            for (states, 0..) |*state, slot| {
-                if (!state.deferred_require_visibility) continue;
-                const module_id_usize = (page_index << module_state_page_shift) | slot;
-                if (module_id_usize >= self.module_count) break;
-                const loaded = self.package_loaded orelse continue;
-                const module_id: u32 = @intCast(module_id_usize);
-                const value = state.value orelse state.preinitialized orelse continue;
-                const name = self.canonicalModuleName(module_id, null) orelse continue;
-                try loaded.rawSet(self.allocator, .{ .string = name }, value);
-                state.deferred_require_visibility = false;
+            for (states.initialized, 0..) |word, word_index| {
+                var remaining = word;
+                while (remaining != 0) {
+                    const slot = word_index * 64 + @as(usize, @intCast(@ctz(remaining)));
+                    remaining &= remaining - 1;
+                    const state = &states.states[slot];
+                    if (!state.deferred_require_visibility) continue;
+                    const module_id_usize = (page_index << module_state_page_shift) | slot;
+                    if (module_id_usize >= self.module_count) continue;
+                    const loaded = self.package_loaded orelse continue;
+                    const module_id: u32 = @intCast(module_id_usize);
+                    const value = state.value orelse state.preinitialized orelse continue;
+                    const name = self.canonicalModuleName(module_id, null) orelse continue;
+                    try loaded.rawSet(self.allocator, .{ .string = name }, value);
+                    state.deferred_require_visibility = false;
+                }
             }
         };
         self.package_observable = true;
@@ -1002,14 +1155,14 @@ pub const Context = struct {
         if (module_id >= self.module_count) return null;
         const page_index: usize = @as(usize, module_id) >> module_state_page_shift;
         const page = self.module_state_pages[page_index] orelse return null;
-        return &page[@as(usize, module_id) & module_state_page_mask];
+        return page.get(@as(usize, module_id) & module_state_page_mask);
     }
 
     fn moduleStateConst(self: *const Context, module_id: u32) ?*const ModuleState {
         if (module_id >= self.module_count) return null;
         const page_index: usize = @as(usize, module_id) >> module_state_page_shift;
         const page = self.module_state_pages[page_index] orelse return null;
-        return &page[@as(usize, module_id) & module_state_page_mask];
+        return page.get(@as(usize, module_id) & module_state_page_mask);
     }
 
     fn ensureModuleState(self: *Context, module_id: u32) !*ModuleState {
@@ -1017,17 +1170,47 @@ pub const Context = struct {
         const page_index: usize = @as(usize, module_id) >> module_state_page_shift;
         if (self.module_state_pages[page_index] == null) {
             const page = try self.allocator.create(ModuleStatePage);
-            page.* = [_]ModuleState{.{}} ** module_state_page_len;
+            page.initialized = [_]u64{0} ** (module_state_page_len / 64);
             self.module_state_pages[page_index] = page;
         }
-        return &self.module_state_pages[page_index].?[@as(usize, module_id) & module_state_page_mask];
+        return self.module_state_pages[page_index].?.ensure(@as(usize, module_id) & module_state_page_mask);
+    }
+
+    fn moduleGlobalsAreDense(self: *const Context) bool {
+        // A shapeless bound environment exposes numeric array slots directly.
+        if (self.root_global_table) |table| if (table.shape == null) return true;
+        if (self.root_globals.len <= module_global_prefix_len) return true;
+        const values = self.root_globals[module_global_prefix_len..];
+        const page_count = values.len / global_page_len + @intFromBool(values.len % global_page_len != 0);
+        var occupied: usize = 0;
+        var start: usize = 0;
+        while (start < values.len) : (start += global_page_len) {
+            for (values[start..@min(start + global_page_len, values.len)]) |value| {
+                if (value != .nil) {
+                    occupied += 1;
+                    if (occupied > page_count / 2) return true;
+                    break;
+                }
+            }
+        }
+        return false;
     }
 
     fn ensureModuleGlobals(self: *Context, module_id: u32) !GlobalScope {
         const state = try self.ensureModuleState(module_id);
         if (state.globals == null) {
-            const globals = try self.allocator.dupe(Value, self.root_globals);
+            const dense = self.moduleGlobalsAreDense();
+            const prefix_len = if (dense) self.root_globals.len else @min(self.root_globals.len, module_global_prefix_len);
+            const globals = try self.allocator.dupe(Value, self.root_globals[0..prefix_len]);
             errdefer self.allocator.free(globals);
+            const tail = if (prefix_len < self.root_globals.len)
+                try GlobalTail.snapshot(self.allocator, self.root_globals[prefix_len..])
+            else
+                null;
+            errdefer if (tail) |owned| {
+                owned.deinit();
+                self.allocator.destroy(owned);
+            };
             var table: ?*Table = null;
             if (self.root_global_table) |root_table| {
                 const owned = try self.allocator.create(Table);
@@ -1035,20 +1218,26 @@ pub const Context = struct {
                 owned.* = .{
                     .shape = root_table.shape,
                     .slots = globals,
+                    .global_tail = tail,
                     .owns_slots = false,
                 };
                 if (self.global_env_slot) |slot| {
-                    if (slot >= globals.len) return error.BadGlobalSlot;
-                    globals[slot] = .{ .table = owned };
+                    if (slot < globals.len) {
+                        globals[slot] = .{ .table = owned };
+                    } else if (tail) |extra| {
+                        try extra.set(slot - globals.len, .{ .table = owned });
+                    } else return error.BadGlobalSlot;
                 }
                 table = owned;
             }
             state.globals = globals;
+            state.global_tail = tail;
             state.global_table = table;
         }
         return .{
             .globals = state.globals.?,
             .global_table = state.global_table,
+            .global_tail = state.global_tail,
         };
     }
 
@@ -1062,10 +1251,12 @@ pub const Context = struct {
         const previous = GlobalScope{
             .globals = self.globals,
             .global_table = self.global_table,
+            .global_tail = self.global_tail,
         };
         const target = try self.ensureModuleGlobals(module_id);
         self.globals = target.globals;
         self.global_table = target.global_table;
+        self.global_tail = target.global_tail;
         return previous;
     }
 
@@ -1077,6 +1268,7 @@ pub const Context = struct {
     fn restoreGlobals(self: *Context, previous: GlobalScope) void {
         self.globals = previous.globals;
         self.global_table = previous.global_table;
+        self.global_tail = previous.global_tail;
     }
 
     pub fn enterLocalStaticFunction(self: *Context) !void {
@@ -1221,6 +1413,10 @@ pub const Context = struct {
                 const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
                 const previous_globals = try self.enterModule(module_id);
                 defer self.restoreGlobals(previous_globals);
+                if (work_stats.current()) |work| work.module_roots +|= 1;
+                var root_frame: work_stats.RootFrame = .{};
+                work_stats.beginRoot(&root_frame, module_id);
+                defer work_stats.endRoot(&root_frame);
                 const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
                 owned_values = values;
                 break :blk if (values.len == 0) .nil else values[0];
@@ -1229,6 +1425,10 @@ pub const Context = struct {
             const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
             const previous_globals = try self.enterModule(module_id);
             defer self.restoreGlobals(previous_globals);
+            if (work_stats.current()) |work| work.module_roots +|= 1;
+            var root_frame: work_stats.RootFrame = .{};
+            work_stats.beginRoot(&root_frame, module_id);
+            defer work_stats.endRoot(&root_frame);
             const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
             owned_values = values;
             break :blk if (values.len == 0) .nil else values[0];
@@ -2398,6 +2598,177 @@ test "AOT context startup stays independent of corpus module count" {
     for (ctx.module_state_pages) |page| try std.testing.expect(page == null);
 }
 
+test "module state pages initialize only touched modules and preserve pointers" {
+    var ctx = try Context.initProgram(std.testing.allocator, 0, 600);
+    defer ctx.deinit();
+    try std.testing.expect(ctx.moduleState(0) == null);
+    const first = try ctx.ensureModuleState(0);
+    first.value = .{ .number = 12 };
+    try std.testing.expect(ctx.moduleState(255) == null);
+    try std.testing.expect(ctx.moduleState(256) == null);
+    const last = try ctx.ensureModuleState(255);
+    last.deferred_require_visibility = true;
+    try std.testing.expect(ctx.moduleState(0).? == first);
+    try std.testing.expectEqual(@as(f64, 12), ctx.moduleStateConst(0).?.value.?.number);
+    try std.testing.expect(ctx.moduleStateConst(254) == null);
+    try std.testing.expect(ctx.moduleState(255).? == last);
+    _ = try ctx.ensureModuleState(256);
+    try std.testing.expect(ctx.moduleState(257) == null);
+    try ctx.observePackage();
+    try std.testing.expectError(error.BadModuleId, ctx.ensureModuleState(600));
+}
+
+test "package observation visits initialized module states across bitmap words and pages" {
+    const Names = struct {
+        fn lookup(_: ?*const anyopaque, _: []const u8) ?u32 {
+            return null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return switch (id) {
+                0 => "Module:Zero",
+                63 => "Module:SixtyThree",
+                64 => "Module:SixtyFour",
+                255 => "Module:TwoFiftyFive",
+                256 => "Module:TwoFiftySix",
+                else => null,
+            };
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 257);
+    defer ctx.deinit();
+    ctx.package_loaded = try ctx.newTable();
+    ctx.configureModules(null, Names.lookup, Names.name);
+    for ([_]u32{ 256, 0, 64, 255, 63 }) |id| {
+        const state = try ctx.ensureModuleState(id);
+        state.value = .{ .number = @floatFromInt(id) };
+        state.deferred_require_visibility = true;
+    }
+    try std.testing.expectEqual(@as(u64, 0x8000_0000_0000_0001), ctx.module_state_pages[0].?.initialized[0]);
+    try std.testing.expectEqual(@as(u64, 1), ctx.module_state_pages[0].?.initialized[1]);
+    try std.testing.expectEqual(@as(u64, 0x8000_0000_0000_0000), ctx.module_state_pages[0].?.initialized[3]);
+    try std.testing.expectEqual(@as(u64, 1), ctx.module_state_pages[1].?.initialized[0]);
+    try ctx.observePackage();
+    for ([_]u32{ 0, 63, 64, 255, 256 }) |id| {
+        const name = Names.name(null, id).?;
+        try std.testing.expectEqual(
+            @as(f64, @floatFromInt(id)),
+            ctx.package_loaded.?.rawGet(.{ .string = name }).?.number,
+        );
+        try std.testing.expect(!ctx.moduleState(id).?.deferred_require_visibility);
+    }
+    try std.testing.expect(ctx.moduleState(62) == null);
+    try std.testing.expect(ctx.moduleState(257) == null);
+}
+
+test "sparse module globals preserve root snapshots aliases and iteration" {
+    const count = 193;
+    var keys: [count]Value = undefined;
+    for (&keys, 0..) |*key, slot| key.* = .{ .number = @floatFromInt(slot + 1) };
+    keys[0] = .{ .string = "_G" };
+    keys[1] = .{ .string = "native" };
+    keys[64] = .{ .string = "early" };
+    keys[128] = .{ .string = "late" };
+    const shape: Shape = .{ .field_keys = &keys, .field_count = count, .open = true };
+    var ctx = try Context.initProgram(std.testing.allocator, count, 2);
+    defer ctx.deinit();
+    try bindGlobalTable(&ctx, &shape, 0);
+    const root = ctx.global_table.?;
+    try ctx.setGlobal(1, .{ .number = 1 });
+    try ctx.setGlobal(128, .{ .number = 8 });
+
+    const root_scope = try ctx.enterModule(0);
+    const first = ctx.global_table.?;
+    try std.testing.expect(ctx.global_tail != null);
+    try std.testing.expectEqual(@as(usize, module_global_prefix_len), ctx.globals.len);
+    try std.testing.expect(ctx.getGlobal(0).table == first);
+    const native_ptr = &ctx.globals[1];
+    const late_ptr = first.slotPtr(128).?;
+    try ctx.setGlobal(1, .{ .number = 2 });
+    try first.rawSet(ctx.allocator, keys[128], .{ .number = 9 });
+    try ctx.setGlobal(64, .{ .boolean = false });
+    try std.testing.expectEqual(@as(f64, 2), native_ptr.number);
+    try std.testing.expectEqual(@as(f64, 9), late_ptr.number);
+    try std.testing.expect(!first.rawGet(keys[64]).?.boolean);
+    var it = first.iterator();
+    for ([_]usize{ 0, 1, 64, 128 }) |slot| {
+        const entry = it.next().?;
+        try std.testing.expect(rawEqual(keys[slot], entry.key_ptr.*));
+    }
+    try std.testing.expect(it.next() == null);
+    ctx.restoreGlobals(root_scope);
+
+    try ctx.setGlobal(128, .nil);
+    const second_scope = try ctx.enterModule(1);
+    try std.testing.expect(ctx.global_table.? != first);
+    try std.testing.expect(ctx.getGlobal(64) == .nil);
+    try std.testing.expect(ctx.getGlobal(128) == .nil);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(1).number);
+    try std.testing.expect(ctx.getGlobal(0).table == ctx.global_table.?);
+    try std.testing.expectError(error.BadGlobalSlot, ctx.setGlobal(count, .nil));
+    ctx.restoreGlobals(second_scope);
+    try std.testing.expect(ctx.global_table.? == root and ctx.global_tail == null);
+    try std.testing.expect(ctx.getGlobal(128) == .nil);
+}
+
+fn moduleGlobalAllocationCase(allocator: std.mem.Allocator, dense: bool) !void {
+    var keys = [_]Value{.nil} ** 257;
+    keys[256] = .{ .string = "_G" };
+    const shape: Shape = .{ .field_keys = &keys, .field_count = keys.len, .open = true };
+    var ctx = try Context.initProgram(allocator, keys.len, 1);
+    defer ctx.deinit();
+    try bindGlobalTable(&ctx, &shape, 256);
+    try ctx.setGlobal(64, .{ .number = 1 });
+    if (dense) try ctx.setGlobal(128, .{ .boolean = false });
+    const previous = try ctx.enterModule(0);
+    defer ctx.restoreGlobals(previous);
+    try std.testing.expectEqual(dense, ctx.global_tail == null);
+    try std.testing.expect(ctx.getGlobal(256).table == ctx.global_table.?);
+    try ctx.setGlobal(128, .{ .number = 2 });
+    try std.testing.expectEqual(@as(f64, 2), ctx.getGlobal(128).number);
+}
+
+test "sparse and dense module globals clean up allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, moduleGlobalAllocationCase, .{false});
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, moduleGlobalAllocationCase, .{true});
+}
+
+test "module global density counts false and partial tail pages" {
+    var ctx = try Context.init(std.testing.allocator, 257);
+    defer ctx.deinit();
+    try ctx.setGlobal(1, .{ .number = 1 });
+    try std.testing.expect(!ctx.moduleGlobalsAreDense());
+    try ctx.setGlobal(64, .{ .number = 1 });
+    try ctx.setGlobal(192, .{ .number = 1 });
+    try std.testing.expect(!ctx.moduleGlobalsAreDense());
+    try ctx.setGlobal(256, .{ .boolean = false });
+    try std.testing.expect(ctx.moduleGlobalsAreDense());
+    try ctx.setGlobal(256, .nil);
+    try std.testing.expect(!ctx.moduleGlobalsAreDense());
+}
+
+test "shapeless module globals keep numeric array aliases" {
+    var ctx = try Context.initProgram(std.testing.allocator, 193, 1);
+    defer ctx.deinit();
+    try bindGlobalTable(&ctx, null, 0);
+    try ctx.setGlobal(64, .{ .number = 11 });
+    const previous = try ctx.enterModule(0);
+    const table = ctx.global_table.?;
+    try std.testing.expect(ctx.global_tail == null);
+    try std.testing.expectEqual(@as(f64, 11), table.rawGetNumber(65).?.number);
+    try table.rawSet(ctx.allocator, .{ .number = 65 }, .{ .number = 22 });
+    try std.testing.expectEqual(@as(f64, 22), ctx.getGlobal(64).number);
+    var iterator = table.iterator();
+    try std.testing.expectEqual(@as(f64, 1), iterator.next().?.key_ptr.number);
+    const high = iterator.next().?;
+    try std.testing.expectEqual(@as(f64, 65), high.key_ptr.number);
+    try std.testing.expectEqual(@as(f64, 22), high.value_ptr.number);
+    try std.testing.expect(iterator.next() == null);
+    ctx.restoreGlobals(previous);
+    try std.testing.expectEqual(@as(f64, 11), ctx.getGlobal(64).number);
+}
+
 test "forked AOT context shares native module entries but resets runtime state" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -2524,6 +2895,36 @@ test "generic tables use dense numeric slots and keep sparse keys hashed" {
     try std.testing.expect(table.rawGetNumber(9) == null);
     try std.testing.expect(table.map.getContext(nine, .{}) == null);
     try std.testing.expectEqual(@as(usize, 8), table.rawLen());
+}
+
+test "numeric lookups skip string-only maps and retain sparse numeric fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+
+    try table.rawSet(ctx.allocator, .{ .string = "named" }, .{ .number = 10 });
+    try table.rawSet(ctx.allocator, .{ .number = 1 }, .{ .string = "first" });
+    try std.testing.expect(!table.has_hashed_number);
+    try std.testing.expect(table.rawGetNumber(2) == null);
+    try std.testing.expect(table.rawGet(.{ .number = 2 }) == null);
+    try std.testing.expectEqualStrings("first", table.rawGetNumber(1).?.string);
+    try std.testing.expectEqualStrings("first", table.rawGet(.{ .number = 1 }).?.string);
+    try std.testing.expectEqual(@as(usize, 1), table.rawLen());
+
+    try table.rawSet(ctx.allocator, .{ .number = 1000 }, .{ .string = "sparse" });
+    try std.testing.expect(table.has_hashed_number);
+    try std.testing.expectEqualStrings("sparse", table.rawGetNumber(1000).?.string);
+    try std.testing.expectEqualStrings("sparse", table.rawGet(.{ .number = 1000 }).?.string);
+    try table.rawSet(ctx.allocator, .{ .number = 1000 }, .nil);
+    try std.testing.expect(table.has_hashed_number);
+    try std.testing.expect(table.rawGetNumber(1000) == null);
+    try std.testing.expect(table.rawGet(.{ .number = 1000 }) == null);
+
+    try table.rawSet(ctx.allocator, .{ .number = -0.0 }, .{ .string = "zero" });
+    try std.testing.expectEqualStrings("zero", table.rawGetNumber(0.0).?.string);
+    try std.testing.expect(table.rawGetNumber(std.math.nan(f64)) == null);
 }
 
 test "program string shapes use sorted slots with open fallback" {

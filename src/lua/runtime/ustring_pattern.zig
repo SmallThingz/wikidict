@@ -181,6 +181,23 @@ const Matcher = struct {
         return s + len;
     }
 
+    fn matchWithRollback(self: *Matcher, s: usize, p: usize) Error!?usize {
+        const saved_level = self.level;
+        if (saved_level == 0) {
+            const result = try self.matchAt(s, p);
+            if (result == null) self.level = 0;
+            return result;
+        }
+        var saved: [max_captures]Capture = undefined;
+        @memcpy(saved[0..saved_level], self.captures[0..saved_level]);
+        const result = try self.matchAt(s, p);
+        if (result == null) {
+            @memcpy(self.captures[0..saved_level], saved[0..saved_level]);
+            self.level = saved_level;
+        }
+        return result;
+    }
+
     fn matchBalance(self: *Matcher, s: usize, p: usize) Error!?usize {
         if (p + 1 >= self.pattern.len) return error.MalformedPattern;
         if (s >= self.source.len or self.source[s] != self.pattern[p]) return null;
@@ -201,11 +218,7 @@ const Matcher = struct {
         var count: usize = 0;
         while (s + count < self.source.len and self.singleMatch(self.source[s + count], p, ep)) count += 1;
         while (true) {
-            const saved = self.captures;
-            const saved_level = self.level;
-            if (try self.matchAt(s + count, next)) |result| return result;
-            self.captures = saved;
-            self.level = saved_level;
+            if (try self.matchWithRollback(s + count, next)) |result| return result;
             if (count == 0) return null;
             count -= 1;
         }
@@ -214,11 +227,7 @@ const Matcher = struct {
     fn minExpand(self: *Matcher, s: usize, p: usize, ep: usize, next: usize) Error!?usize {
         var i = s;
         while (true) {
-            const saved = self.captures;
-            const saved_level = self.level;
-            if (try self.matchAt(i, next)) |result| return result;
-            self.captures = saved;
-            self.level = saved_level;
+            if (try self.matchWithRollback(i, next)) |result| return result;
             if (i >= self.source.len or !self.singleMatch(self.source[i], p, ep)) return null;
             i += 1;
         }
@@ -265,13 +274,7 @@ const Matcher = struct {
             const matched = s < self.source.len and self.singleMatch(self.source[s], p, ep);
             if (ep < self.pattern.len) switch (self.pattern[ep]) {
                 '?' => {
-                    if (matched) {
-                        const saved = self.captures;
-                        const saved_level = self.level;
-                        if (try self.matchAt(s + 1, ep + 1)) |r| return r;
-                        self.captures = saved;
-                        self.level = saved_level;
-                    }
+                    if (matched) if (try self.matchWithRollback(s + 1, ep + 1)) |r| return r;
                     p = ep + 1;
                     continue;
                 },
@@ -298,22 +301,36 @@ fn normalizeStart(len: usize, init: i64) usize {
     return @intCast(raw - 1);
 }
 
-fn findDecoded(source: []const u21, pat: []const u21, category: CategoryFn, initial: usize, honor_anchor: bool) Error!?Match {
+fn findDecodedInto(source: []const u21, pat: []const u21, category: CategoryFn, initial: usize, honor_anchor: bool, out: *Match) Error!bool {
     var start = @min(initial, source.len);
     var pattern_start: usize = 0;
     const anchored = honor_anchor and pat.len != 0 and pat[0] == '^';
     if (anchored) pattern_start = 1;
     while (start <= source.len) : (start += 1) {
-        var matcher = Matcher{ .source = source, .pattern = pat, .category = category };
+        var matcher: Matcher = undefined;
+        matcher.source = source;
+        matcher.pattern = pat;
+        matcher.category = category;
+        matcher.level = 0;
         const end = try matcher.matchAt(start, pattern_start) orelse {
-            if (anchored) return null;
+            if (anchored) return false;
             continue;
         };
         for (matcher.captures[0..matcher.level]) |capture|
             if (capture == .unfinished) return error.UnfinishedCapture;
-        return .{ .start = start, .end = end, .captures = matcher.captures, .capture_count = matcher.level };
+        out.start = start;
+        out.end = end;
+        out.capture_count = matcher.level;
+        @memcpy(out.captures[0..matcher.level], matcher.captures[0..matcher.level]);
+        return true;
     }
-    return null;
+    return false;
+}
+
+fn findDecoded(source: []const u21, pat: []const u21, category: CategoryFn, initial: usize, honor_anchor: bool) Error!?Match {
+    var match: Match = undefined;
+    if (!(try findDecodedInto(source, pat, category, initial, honor_anchor, &match))) return null;
+    return match;
 }
 
 pub const Search = struct {
@@ -339,8 +356,16 @@ pub const Search = struct {
         return findDecoded(self.source.codepoints, self.pattern.codepoints, category, normalizeStart(self.source.codepoints.len, init_index), honor_anchor);
     }
 
+    pub fn findInto(self: *const Search, category: CategoryFn, init_index: i64, honor_anchor: bool, out: *Match) Error!bool {
+        return findDecodedInto(self.source.codepoints, self.pattern.codepoints, category, normalizeStart(self.source.codepoints.len, init_index), honor_anchor, out);
+    }
+
     pub fn findFrom(self: *const Search, category: CategoryFn, start: usize, honor_anchor: bool) Error!?Match {
         return findDecoded(self.source.codepoints, self.pattern.codepoints, category, start, honor_anchor);
+    }
+
+    pub fn findFromInto(self: *const Search, category: CategoryFn, start: usize, honor_anchor: bool, out: *Match) Error!bool {
+        return findDecodedInto(self.source.codepoints, self.pattern.codepoints, category, start, honor_anchor, out);
     }
 
     pub fn findPlain(self: *const Search, init_index: i64) ?Match {
@@ -381,6 +406,26 @@ test "unicode dot consumes one codepoint" {
     try std.testing.expectEqual(@as(usize, 0), m.start);
     try std.testing.expectEqual(@as(usize, 1), m.end);
     try std.testing.expectEqualStrings("ʃ", search.byteSlice(m.start, m.end));
+}
+
+test "unicode findInto preserves output on misses and copies live captures" {
+    const category = struct {
+        fn call(_: i32) callconv(.c) c_int {
+            return 0;
+        }
+    }.call;
+    var search = try Search.init(std.testing.allocator, "ʃə foo", "(ʃ.)");
+    defer search.deinit();
+    var match: Match = undefined;
+    match.start = 999;
+    try std.testing.expect(try search.findInto(category, 1, true, &match));
+    try std.testing.expectEqual(@as(u8, 1), match.capture_count);
+    try std.testing.expectEqualStrings("ʃə", search.captureValue(match.captures[0]).slice);
+    var missing = try Search.init(std.testing.allocator, "ʃə foo", "ζ");
+    defer missing.deinit();
+    match.start = 999;
+    try std.testing.expect(!(try missing.findInto(category, 1, true, &match)));
+    try std.testing.expectEqual(@as(usize, 999), match.start);
 }
 
 test "unicode literal classes ranges captures and frontier" {

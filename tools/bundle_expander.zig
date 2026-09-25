@@ -31,7 +31,34 @@ pub const Worker = struct {
     }
 
     pub fn deinit(self: *Worker) void {
-        self.reset();
+        if (self.child) |*child| {
+            // Normal EOF lets the worker print its bounded shutdown counters.
+            // A stuck child is still reaped after the deadline below.
+            if (child.stdin) |stdin| {
+                stdin.close(self.io);
+                child.stdin = null;
+            }
+            if (child.id) |pid| {
+                const raw_fd = L.pidfd_open(pid, 0);
+                if (L.errno(raw_fd) == .SUCCESS) {
+                    const pidfd: std.posix.fd_t = @intCast(raw_fd);
+                    defer _ = L.close(pidfd);
+                    var fds = [_]std.posix.pollfd{.{ .fd = pidfd, .events = std.posix.POLL.IN, .revents = 0 }};
+                    const ready = std.posix.poll(&fds, 5_000) catch 0;
+                    if (ready != 0 and (fds[0].revents & std.posix.POLL.IN) != 0) {
+                        _ = child.wait(self.io) catch {
+                            child.kill(self.io);
+                            self.child = null;
+                            return;
+                        };
+                        self.child = null;
+                        return;
+                    }
+                }
+            }
+            child.kill(self.io);
+        }
+        self.child = null;
     }
 
     fn reset(self: *Worker) void {

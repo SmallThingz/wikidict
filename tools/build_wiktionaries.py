@@ -421,9 +421,14 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     expander_build=workspace/'expander'
     if not expander_ready(expander_build):
         if expander_build.exists(): shutil.rmtree(expander_build)
+        staged=json.loads((workspace/'input/.complete.json').read_text())
+        extraction_cache=workspace/'input'/'extraction-cache'
         timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(expander_build),
                      '--language-registry-snapshot',str(registry),'--llvm-workers',str(workers),
-                     '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only'],
+                     '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only',
+                     '--extraction-cache-root',str(extraction_cache),
+                     '--verified-dump-sha256',staged['dump_sha256'],
+                     '--verified-index-sha256',staged['index_sha256']],
                   edition,date,'expander_build')
     expander=expander_build/'.bundle-expander'
     with build_phase(edition,date,'page_index_count') as result:

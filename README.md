@@ -152,6 +152,29 @@ written to spool files. Wikimedia dump order is not the final per-language title
 order required by WIKBLB08, so the builder needs one reorder pass before it can
 write canonical blobs. The spool is transient and is removed after finalization.
 
+### Reusing build work
+
+An interrupted corpus build retains verified extraction assets and native Lua
+objects in its staging workspace. Extraction reuse requires the same compressed
+input and index hashes, extractor and extraction arguments. Native object reuse
+requires identical emitted bitcode, compiler identity, target and flags; changing
+the Zig runtime still compiles and links a fresh worker. Every cached asset is
+hashed before reuse, incomplete generations are rejected, and successful corpus
+publication removes the staging workspace and these transient caches.
+
+The worker keeps module globals sparse and initializes module-state pages on
+first use. A bounded read-only `mw.loadData` cache can reuse results from isolated
+evaluations that have no observed varying inputs or effects. Ordinary module
+exports and mutable closure state remain local to each invocation. The data cache
+holds at most 256 entries and 64 MiB, with an 8 MiB limit for one entry.
+
+Performance reports must distinguish extraction, compilation, page expansion and
+publication, and identify which caches were reused. Page coverage and whole-page
+fallback counts do not count embedded per-template Lua errors; inspect those
+errors as well when qualifying successful conversion. An under-one-hour full-dump
+claim requires a completed, timed build against the independently verified page
+count, including final blob publication.
+
 ### External Wikimedia state
 
 Some MediaWiki APIs depend on state that is not present in the XML dump. Supply

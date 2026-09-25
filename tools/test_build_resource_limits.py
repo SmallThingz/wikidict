@@ -303,6 +303,45 @@ class ResourceLimitsTest(unittest.TestCase):
             with self.assertRaisesRegex(limits.ContainmentUnavailable, 'Cannot measure owned process'):
                 limits._owned_sample(100, 10, {}, os.getpid())
 
+    def test_watchdog_accounts_vanishing_thread_group_without_losing_limits(self):
+        running = {100: {'state':'S','ppid':1,'pgrp':100,'session':100,
+                         'threads':3,'start':10,'vsize':8192,'rss':8192}}
+        no_mm = {100: dict(running[100], vsize=0, rss=0)}
+        with patch.object(limits, '_process_table', side_effect=[running, no_mm]), \
+             patch.object(limits, '_thread_accounting', return_value=None), \
+             patch.object(limits, '_live_mm_siblings', return_value=False), \
+             patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            sample = limits._owned_sample(100, 10, {}, os.getpid())
+        self.assertEqual(sample['pss_bytes'], 8192)
+        self.assertEqual(sample['tasks'], 3)
+        self.assertIn(100, sample['live'])
+
+        with patch.object(limits, '_process_table', side_effect=[running, no_mm]), \
+             patch.object(limits, '_thread_accounting', return_value=None), \
+             patch.object(limits, '_live_mm_siblings', return_value=True), \
+             patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'Cannot measure live threads'):
+                limits._owned_sample(100, 10, {}, os.getpid())
+
+    def test_watchdog_unreadable_task_directory_requires_exit_identity(self):
+        running = {100: {'state':'S','ppid':1,'pgrp':100,'session':100,
+                         'threads':3,'start':10,'vsize':8192,'rss':8192}}
+        no_mm = {100: dict(running[100], vsize=0, rss=0)}
+        with patch.object(limits, '_process_table', side_effect=[running, no_mm, no_mm]), \
+             patch.object(limits, '_thread_accounting', return_value=None), \
+             patch.object(limits, '_live_mm_siblings', return_value=None), \
+             patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'Cannot measure live threads'):
+                limits._owned_sample(100, 10, {}, os.getpid())
+        with patch.object(limits, '_process_table', side_effect=[running, no_mm, {}]), \
+             patch.object(limits, '_thread_accounting', return_value=None), \
+             patch.object(limits, '_live_mm_siblings', return_value=None), \
+             patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            self.assertEqual(limits._owned_sample(100, 10, {}, os.getpid())['live'], {})
+        with patch.object(os, 'scandir', side_effect=PermissionError('denied')):
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'Cannot inspect live threads'):
+                limits._live_mm_siblings(100)
+
     def test_watchdog_wall_limit_reaps_own_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path = Path(tmp) / 'watchdog.json'

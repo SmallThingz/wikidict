@@ -2,6 +2,8 @@
 const std = @import("std");
 const paths = @import("pipeline_paths");
 const max_parallel_workers: usize = 4;
+const clang_common_flags = [_][]const u8{ "-fno-lto", "-Wno-override-module" };
+const clang_program_mode = "-O1";
 
 const Options = struct {
     dump: []const u8,
@@ -20,6 +22,9 @@ const Options = struct {
     page_workers: usize = 1,
     parse_workers: usize = 4,
     expander_only: bool = false,
+    extraction_cache_root: ?[]const u8 = null,
+    verified_dump_sha256: ?[]const u8 = null,
+    verified_index_sha256: ?[]const u8 = null,
 };
 
 fn parseOptions(args: []const []const u8) !Options {
@@ -81,12 +86,34 @@ fn parseOptions(args: []const []const u8) !Options {
         } else if (std.mem.eql(u8, args[index], "--expander-only")) {
             if (options.expander_only) return error.Usage;
             options.expander_only = true;
+        } else if (std.mem.eql(u8, args[index], "--extraction-cache-root")) {
+            index += 1;
+            if (index >= args.len or options.extraction_cache_root != null) return error.Usage;
+            options.extraction_cache_root = args[index];
+        } else if (std.mem.eql(u8, args[index], "--verified-dump-sha256")) {
+            index += 1;
+            if (index >= args.len or options.verified_dump_sha256 != null) return error.Usage;
+            options.verified_dump_sha256 = args[index];
+        } else if (std.mem.eql(u8, args[index], "--verified-index-sha256")) {
+            index += 1;
+            if (index >= args.len or options.verified_index_sha256 != null) return error.Usage;
+            options.verified_index_sha256 = args[index];
         } else if (std.mem.eql(u8, args[index], "--page-workers")) {
             index += 1;
             if (index >= args.len) return error.Usage;
             options.page_workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
             if (options.page_workers == 0 or options.page_workers > max_parallel_workers) return error.Usage;
         } else return error.Usage;
+    }
+    if ((options.extraction_cache_root == null) != (options.verified_dump_sha256 == null) or
+        (options.extraction_cache_root == null) != (options.verified_index_sha256 == null)) return error.Usage;
+    for ([_]?[]const u8{ options.verified_dump_sha256, options.verified_index_sha256 }) |maybe_digest| {
+        if (maybe_digest) |digest| {
+            if (digest.len != 64) return error.Usage;
+            for (digest) |ch| {
+                _ = std.fmt.charToDigit(ch, 16) catch return error.Usage;
+            }
+        }
     }
     return options;
 }
@@ -165,6 +192,49 @@ fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump:
     // first. The deferred join also covers all error paths.
     while (!extraction.done.load(.acquire)) try std.Io.sleep(io, .fromMilliseconds(10), .awake);
     if (extraction.failure) |err| return err;
+}
+
+// Exit code 3 means the immutable cache is absent or its identity differs.
+// Every other failure is fatal; a broken helper must not silently fall back.
+fn extractionCacheCommand(
+    io: std.Io,
+    a: std.mem.Allocator,
+    action: []const u8,
+    cache_root: []const u8,
+    dump_sha256: []const u8,
+    index_sha256: []const u8,
+    expander_root: []const u8,
+) !bool {
+    const helper = try std.fs.path.join(a, &.{ paths.project_root, "tools", "extraction_cache.py" });
+    var child = try std.process.spawn(io, .{ .argv = &.{
+        "python3", helper, action, cache_root, paths.modules, dump_sha256, index_sha256, expander_root,
+    }, .stdin = .ignore });
+    defer child.kill(io);
+    const term = try child.wait(io);
+    if (term == .exited and term.exited == 0) return true;
+    if (std.mem.eql(u8, action, "probe") and term == .exited and term.exited == 3) return false;
+    return error.PipelineStageFailed;
+}
+
+fn objectCacheCommand(
+    io: std.Io,
+    a: std.mem.Allocator,
+    action: []const u8,
+    cache_root: []const u8,
+    llvm_dir: []const u8,
+) !bool {
+    const helper = try std.fs.path.join(a, &.{ paths.project_root, "tools", "extraction_cache.py" });
+    // The program object has its own optimization mode, separate from the
+    // per-batch modes recorded in batch-plan.tsv.
+    const flags = try std.mem.join(a, ",", &.{ clang_common_flags[0], clang_common_flags[1], clang_program_mode });
+    var child = try std.process.spawn(io, .{ .argv = &.{
+        "python3", helper, action, cache_root, paths.clang, paths.project_root, llvm_dir, flags,
+    }, .stdin = .ignore });
+    defer child.kill(io);
+    const term = try child.wait(io);
+    if (term == .exited and term.exited == 0) return true;
+    if (std.mem.eql(u8, action, "probe-objects") and term == .exited and term.exited == 3) return false;
+    return error.PipelineStageFailed;
 }
 
 fn sourcePath(a: std.mem.Allocator, relative: []const u8) ![]u8 {
@@ -392,8 +462,8 @@ fn compileBitcodeModules(
             .argv = &.{
                 paths.clang,
                 plan.mode.flag(),
-                "-fno-lto",
-                "-Wno-override-module",
+                clang_common_flags[0],
+                clang_common_flags[1],
                 "-c",
                 source,
                 "-o",
@@ -417,9 +487,9 @@ fn compileBitcodeModules(
     const program_object = try std.fs.path.join(a, &.{ llvm_dir, "program.o" });
     try stage(io, marker, "compile LLVM program metadata (-O1)", &.{
         paths.clang,
-        "-O1",
-        "-fno-lto",
-        "-Wno-override-module",
+        clang_program_mode,
+        clang_common_flags[0],
+        clang_common_flags[1],
         "-c",
         program_source,
         "-o",
@@ -430,6 +500,18 @@ fn compileBitcodeModules(
         error.FileNotFound => {},
         else => return err,
     };
+    return objects;
+}
+
+fn cachedObjectPaths(io: std.Io, a: std.mem.Allocator, llvm_dir: []const u8) !std.ArrayList([]const u8) {
+    const plans = try readBatchPlan(io, a, llvm_dir);
+    defer a.free(plans);
+    if (plans.len == 0) return error.InvalidBatchPlan;
+    var objects: std.ArrayList([]const u8) = .empty;
+    for (plans, 0..) |_, index| {
+        try objects.append(a, try std.fmt.allocPrint(a, "{s}/module_batch_{d:0>6}.o", .{ llvm_dir, index }));
+    }
+    try objects.append(a, try std.fs.path.join(a, &.{ llvm_dir, "program.o" }));
     return objects;
 }
 
@@ -535,8 +617,20 @@ fn compileNativeWorker(
     publish_root: []const u8,
     llvm_dir: []const u8,
     llvm_workers: usize,
+    object_cache_root: ?[]const u8,
 ) !void {
-    const lua_objects = try compileBitcodeModules(io, a, marker, llvm_dir, llvm_workers);
+    const cache_hit = if (object_cache_root) |cache|
+        try objectCacheCommand(io, a, "probe-objects", cache, llvm_dir)
+    else
+        false;
+    const lua_objects = if (cache_hit)
+        try cachedObjectPaths(io, a, llvm_dir)
+    else blk: {
+        const compiled = try compileBitcodeModules(io, a, marker, llvm_dir, llvm_workers);
+        if (object_cache_root) |cache|
+            _ = try objectCacheCommand(io, a, "publish-objects", cache, llvm_dir);
+        break :blk compiled;
+    };
     const worker = try compileWorkerObject(io, a, marker, llvm_dir);
     const main_c = try sourcePath(a, "src/lua/bundle_worker_main.c");
     const output = try std.fs.path.join(a, &.{ publish_root, "dict-bundle-expander" });
@@ -579,6 +673,23 @@ test "LLVM worker override accepts positive integers only" {
     );
 }
 
+test "extraction cache requires both verified staged input digests" {
+    const digest = "0000000000000000000000000000000000000000000000000000000000000000";
+    const options = try parseOptions(&.{
+        "dump.xml",               "out",  "--extraction-cache-root", "cache",
+        "--verified-dump-sha256", digest, "--verified-index-sha256", digest,
+    });
+    try std.testing.expectEqualStrings("cache", options.extraction_cache_root.?);
+    try std.testing.expectError(error.Usage, parseOptions(&.{
+        "dump.xml",               "out",  "--extraction-cache-root", "cache",
+        "--verified-dump-sha256", digest,
+    }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{
+        "dump.xml",               "out",     "--extraction-cache-root", "cache",
+        "--verified-dump-sha256", "invalid", "--verified-index-sha256", digest,
+    }));
+}
+
 test "supplemental transclusion redirect snapshot option is strict" {
     const options = try parseOptions(&.{ "dump.xml", "out", "--transclusion-redirects-snapshot", "redirects.tsv" });
     try std.testing.expectEqualStrings("redirects.tsv", options.transclusion_redirects_snapshot.?);
@@ -603,7 +714,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expander-only]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -647,11 +758,25 @@ pub fn main(init: std.process.Init) !void {
 
     const llvm_dir = try std.fs.path.join(a, &.{ expander_root, "llvm" });
     try std.Io.Dir.cwd().createDirPath(init.io, llvm_dir);
-    try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers);
+    const cache_hit = if (options.extraction_cache_root) |cache|
+        try extractionCacheCommand(init.io, a, "probe", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root)
+    else
+        false;
+    if (cache_hit) {
+        const manifest = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });
+        const worker_text = try std.fmt.allocPrint(a, "{d}", .{options.parse_workers});
+        try stage(init.io, marker, "parse/analyze Lua from verified extraction cache", &.{ paths.llvm, manifest, expander_root, llvm_dir, "--parse-workers", worker_text });
+    } else {
+        try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers);
+        // compiler-inputs.ready precedes title-index finalization. Publish
+        // only after the extractor has exited successfully.
+        if (options.extraction_cache_root) |cache|
+            _ = try extractionCacheCommand(init.io, a, "publish", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root);
+    }
 
     // The native worker is a transient bundle compiler. It never belongs in the
     // shipped dictionary; full builds consume it immediately and delete .bundle-expander/.
-    try compileNativeWorker(init.io, a, marker, expander_root, llvm_dir, llvm_workers);
+    try compileNativeWorker(init.io, a, marker, expander_root, llvm_dir, llvm_workers, options.extraction_cache_root);
     // Keep native build artifacts available if corpus expansion fails. The
     // entire transient tree is deleted together only after successful encoding.
     try std.Io.Dir.cwd().deleteFile(init.io, expander_marker);

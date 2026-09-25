@@ -299,7 +299,8 @@ fn uMatch(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]co
     const init_index = if (args.len > 2 and args[2] != .nil) try integer(args[2]) else 1;
     var search = try upat.Search.init(std.heap.smp_allocator, source, pat);
     defer search.deinit();
-    const m = try search.find(normalizer.category, init_index, true) orelse return one(a, .nil);
+    var m: upat.Match = undefined;
+    if (!(try search.findInto(normalizer.category, init_index, true, &m))) return one(a, .nil);
     return unicodeCaptureResults(&search, m, true);
 }
 
@@ -313,10 +314,11 @@ const GmatchCtx = struct {
 fn uGmatchNext(ctx_raw: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
     const ctx: *GmatchCtx = @ptrCast(@alignCast(ctx_raw.?));
     if (ctx.done) return &.{};
-    const m = try ctx.search.findFrom(ctx.category, ctx.next_start, false) orelse {
+    var m: upat.Match = undefined;
+    if (!(try ctx.search.findFromInto(ctx.category, ctx.next_start, false, &m))) {
         ctx.done = true;
         return &.{};
-    };
+    }
     if (m.end == m.start) {
         if (m.end >= ctx.search.source.codepoints.len) ctx.done = true else ctx.next_start = m.end + 1;
     } else ctx.next_start = m.end;
@@ -435,7 +437,8 @@ fn uGsub(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     var count: usize = 0;
     const anchored = pat.len != 0 and pat[0] == '^';
     while (count < max_count and next_start <= search.source.codepoints.len) {
-        const m = try search.findFrom(normalizer.category, next_start, true) orelse break;
+        var m: upat.Match = undefined;
+        if (!(try search.findFromInto(normalizer.category, next_start, true, &m))) break;
         if (m.start < cursor) return error.BadPatternProgress;
         try out.appendSlice(std.heap.smp_allocator, search.byteSlice(cursor, m.start));
         switch (replacement) {

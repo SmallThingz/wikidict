@@ -289,6 +289,9 @@ const DumpState = struct {
 };
 
 fn dumpObjectCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    // Labels and iteration of object graphs can depend on identity and
+    // allocation order, which differ between isolated page evaluations.
+    if (args.len != 0 and (args[0] == .table or args[0] == .callable)) rt.markLoadDataEffect();
     var state = DumpState{ .runtime = runtime };
     defer state.deinit();
     var out: std.ArrayList(u8) = .empty;
@@ -1161,7 +1164,6 @@ test "AOT mw message reads dump-backed interface messages" {
     const parameterized_plain = try callField(&runtime, parameterized[0], "plain", &.{parameterized[0]});
     defer rt.freeResults(parameterized_plain);
     try std.testing.expectEqualStrings("{{ns:Project}}:Main Page", parameterized_plain[0].string);
-
 }
 
 const InterwikiProbe = struct {

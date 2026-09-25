@@ -392,6 +392,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "zig_runtime", .module = zig_runtime_test_mod },
                 .{ .name = "zig_stdlib", .module = lua_stdlib_tests.root_module },
+                .{ .name = "lua_globals", .module = lua_globals_test_mod },
                 .{ .name = "lua_wikitext_preprocess", .module = lua_wikitext_preprocess_test_mod },
                 .{ .name = "lua_wikitext_expression", .module = lua_wikitext_expression_test_mod },
                 .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod_test },

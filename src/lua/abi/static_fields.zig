@@ -1,5 +1,8 @@
 const std = @import("std");
 
+// Native global pointers must remain in this permanently dense slot prefix.
+pub const global_dense_prefix_len: u32 = 64;
+
 pub const Namespace = enum(u8) {
     table,
     string,

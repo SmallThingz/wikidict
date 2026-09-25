@@ -237,6 +237,7 @@ fn difftimeCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Va
 }
 
 fn clockCall(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+    rt.markLoadDataEffect();
     if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return error.NotImplemented;
     var ts: std.posix.timespec = undefined;
     if (std.posix.errno(std.posix.system.clock_gettime(.PROCESS_CPUTIME_ID, &ts)) != .SUCCESS)

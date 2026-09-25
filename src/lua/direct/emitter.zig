@@ -8,6 +8,11 @@ const global_abi = @import("../abi/globals.zig");
 const llvm = @import("llvm.zig");
 const static_encode = @import("static_literal_encode.zig");
 
+comptime {
+    if (global_abi.count > static_fields.global_dense_prefix_len)
+        @compileError("native global ABI exceeds the runtime dense prefix");
+}
+
 const A = std.mem.Allocator;
 const V = llvm.ValueRef;
 const T = llvm.TypeRef;
@@ -179,7 +184,7 @@ const Runtime = struct {
     module_value_sentinel: V,
     arg_ptr: V,
     arg_get: V,
-    global_ptr: V,
+    native_global_ptr: V,
     global_get: V,
     global_set: V,
     require_module_id: V,
@@ -250,7 +255,7 @@ const Runtime = struct {
             .module_value_sentinel = try declare(m, "dict_lua_module_value_sentinel", ty.ptr, &.{ ty.ptr, ty.i32, ty.ptr }),
             .arg_ptr = try declare(m, "dict_lua_arg_ptr", ty.ptr, &.{ ty.ptr, ty.i64, ty.i64 }),
             .arg_get = try declare(m, "dict_lua_arg_get", ty.void, &.{ ty.ptr, ty.i64, ty.i64, ty.ptr }),
-            .global_ptr = try declare(m, "dict_lua_global_ptr", ty.ptr, &.{ ty.ptr, ty.i32 }),
+            .native_global_ptr = try declare(m, "dict_lua_native_global_ptr", ty.ptr, &.{ ty.ptr, ty.i32 }),
             .global_get = try declare(m, "dict_lua_global_get", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr }),
             .global_set = try declare(m, "dict_lua_global_set", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr }),
             .require_module_id = try declare(m, "dict_lua_require_module_id", ty.i32, &.{ ty.ptr, ty.i32, ty.ptr, ty.i64, ty.ptr }),
@@ -775,7 +780,7 @@ const FnEmitter = struct {
                     try self.check(status);
                 }
                 if (self.module.globals.stableSlot(slot) and slot < global_abi.count) {
-                    const ptr = try llvm.call(self.builder, self.rt().global_ptr, &.{ self.ctx(), try self.cI32(slot) });
+                    const ptr = try llvm.call(self.builder, self.rt().native_global_ptr, &.{ self.ctx(), try self.cI32(slot) });
                     const name = self.module.globals.names.items[slot];
                     if (nativeGlobalNamespace(name)) |namespace|
                         break :blk .{ .table = .{ .ptr = ptr, .native_namespace = namespace } };

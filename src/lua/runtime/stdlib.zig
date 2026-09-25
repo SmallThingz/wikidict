@@ -202,6 +202,10 @@ fn baseToString(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const 
     const a = ctx.allocator;
     const runtime = ctx;
     const v = if (args.len == 0) Value.nil else args[0];
+    // Default object strings expose an allocation address or function
+    // identity. A metamethod may do so too, so conservatively reject either
+    // object type from cross-page loadData snapshots.
+    if (v == .table or v == .callable) rt.markLoadDataEffect();
     if (runtime.metamethod(v, "__tostring")) |mm| {
         const out = try runtime.callValue(mm, &.{v});
         defer rt.freeResults(out);
@@ -392,12 +396,18 @@ fn protectedErrorValue(ctx: *rt.Context, err: anyerror) !Value {
 }
 
 fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    // A later evaluation could catch allocation failure even if this one did
+    // not. Protected calls therefore exclude dynamic cross-page admission.
+    rt.markLoadDataEffect();
     if (args.len == 0) return error.MissingArgument;
     const saved_error = ctx.last_error;
     const saved_aot_error_name = ctx.aot_error_name;
     ctx.last_error = .nil;
     ctx.clearAotErrorName();
     const result = ctx.callValue(args[0], args[1..]) catch |err| {
+        // A protected error can expose allocator pressure (including OOM) as
+        // Lua data. Such a result cannot be shared between page evaluations.
+        rt.markLoadDataEffect();
         const out = try std.heap.smp_allocator.alloc(Value, 2);
         out[0] = .{ .boolean = false };
         out[1] = try protectedErrorValue(ctx, err);
@@ -415,16 +425,19 @@ fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Val
 }
 
 fn baseXpcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    rt.markLoadDataEffect();
     if (args.len < 2) return error.MissingArgument;
     const saved_error = ctx.last_error;
     const saved_aot_error_name = ctx.aot_error_name;
     ctx.last_error = .nil;
     ctx.clearAotErrorName();
     const result = ctx.callValue(args[0], &.{}) catch |err| {
+        rt.markLoadDataEffect();
         const original_error = try protectedErrorValue(ctx, err);
         ctx.last_error = .nil;
         ctx.clearAotErrorName();
         const handled = ctx.callValue(args[1], &.{original_error}) catch {
+            rt.markLoadDataEffect();
             const out = try std.heap.smp_allocator.alloc(Value, 2);
             out[0] = .{ .boolean = false };
             out[1] = .{ .string = "error in error handling" };
@@ -685,7 +698,8 @@ fn stringFind(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
         out[1] = .{ .number = @floatFromInt(first + needle.len) };
         return out;
     }
-    const m = try pattern.find(source, needle, init) orelse return one(a, .nil);
+    var m: pattern.Match = undefined;
+    if (!(try pattern.findIntoStart(source, needle, init, &m))) return one(a, .nil);
     const out = try std.heap.smp_allocator.alloc(Value, 2 + m.capture_count);
     out[0] = .{ .number = @floatFromInt(m.start + 1) };
     out[1] = .{ .number = @floatFromInt(m.end) };
@@ -699,7 +713,8 @@ fn stringMatch(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const V
     const source = try str(a, args[0]);
     const pat = try str(a, args[1]);
     const init = if (args.len > 2 and args[2] != .nil) try integer(args[2]) else 1;
-    const m = try pattern.find(source, pat, init) orelse return one(a, .nil);
+    var m: pattern.Match = undefined;
+    if (!(try pattern.findIntoStart(source, pat, init, &m))) return one(a, .nil);
     return captureResults(a, source, m);
 }
 const GmatchCtx = struct { iterator: pattern.Iterator };
@@ -816,7 +831,8 @@ fn stringGsub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
     var count: usize = 0;
     const anchored = pat.len != 0 and pat[0] == '^';
     while (count < max_count and search <= source.len) {
-        const m = try pattern.find(source, pat, @intCast(search + 1)) orelse break;
+        var m: pattern.Match = undefined;
+        if (!(try pattern.findIntoStart(source, pat, @intCast(search + 1), &m))) break;
         if (m.start < cursor) return error.BadPatternProgress;
         try out.appendSlice(a, source[cursor..m.start]);
         const replacement_text = try replacementValue(runtime, replacement, source, m, a);

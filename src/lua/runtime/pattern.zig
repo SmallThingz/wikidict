@@ -284,36 +284,50 @@ fn requiredStartByte(pattern: []const u8, start: usize) ?u8 {
     return pattern[start];
 }
 
-fn findFrom(source: []const u8, pattern: []const u8, initial: usize, honor_anchor: bool) Error!?Match {
+fn findInto(source: []const u8, pattern: []const u8, initial: usize, honor_anchor: bool, out: *Match) Error!bool {
     var start = initial;
-    if (start > source.len) return null;
+    if (start > source.len) return false;
     var pattern_start: usize = 0;
     const anchored = honor_anchor and pattern.len != 0 and pattern[0] == '^';
     if (anchored) pattern_start = 1;
     if (!anchored and isLiteralPattern(pattern)) {
-        const found = std.mem.indexOfPos(u8, source, start, pattern) orelse return null;
-        return .{ .start = found, .end = found + pattern.len, .captures = undefined, .capture_count = 0 };
+        const found = std.mem.indexOfPos(u8, source, start, pattern) orelse return false;
+        out.start = found;
+        out.end = found + pattern.len;
+        out.capture_count = 0;
+        return true;
     }
     const required_start = if (anchored) null else requiredStartByte(pattern, pattern_start);
-    var matcher = Matcher{ .source = source, .pattern = pattern };
+    var matcher: Matcher = undefined;
+    matcher.source = source;
+    matcher.pattern = pattern;
     while (start <= source.len) : (start += 1) {
         if (required_start) |literal|
-            start = std.mem.indexOfScalarPos(u8, source, start, literal) orelse return null;
+            start = std.mem.indexOfScalarPos(u8, source, start, literal) orelse return false;
         matcher.level = 0;
         const end = try matcher.matchAt(start, pattern_start) orelse {
-            if (anchored) return null;
+            if (anchored) return false;
             continue;
         };
         for (matcher.captures[0..matcher.level]) |capture|
             if (capture == .unfinished) return error.UnfinishedCapture;
-        return .{
-            .start = start,
-            .end = end,
-            .captures = matcher.captures,
-            .capture_count = matcher.level,
-        };
+        out.start = start;
+        out.end = end;
+        out.capture_count = matcher.level;
+        @memcpy(out.captures[0..matcher.level], matcher.captures[0..matcher.level]);
+        return true;
     }
-    return null;
+    return false;
+}
+
+pub fn findIntoStart(source: []const u8, pattern: []const u8, init: i64, out: *Match) Error!bool {
+    return findInto(source, pattern, normalizeStart(source.len, init), true, out);
+}
+
+fn findFrom(source: []const u8, pattern: []const u8, initial: usize, honor_anchor: bool) Error!?Match {
+    var match: Match = undefined;
+    if (!(try findInto(source, pattern, initial, honor_anchor, &match))) return null;
+    return match;
 }
 
 pub fn find(source: []const u8, pattern: []const u8, init: i64) Error!?Match {
@@ -337,10 +351,11 @@ pub const Iterator = struct {
 
     pub fn next(self: *Iterator) Error!?Match {
         if (self.done) return null;
-        const found = try findFrom(self.source, self.pattern, self.next_start, false) orelse {
+        var found: Match = undefined;
+        if (!(try findInto(self.source, self.pattern, self.next_start, false, &found))) {
             self.done = true;
             return null;
-        };
+        }
         if (found.end == found.start) {
             if (found.end >= self.source.len) self.done = true else self.next_start = found.end + 1;
         } else self.next_start = found.end;
@@ -356,6 +371,24 @@ test "literal classes captures and anchors" {
     try std.testing.expectEqualStrings("123", try captureText("abc 123 xyz", m.captures[1]));
     try std.testing.expect((try find("zabc", "^abc", 1)) == null);
     try std.testing.expect((try find("zabc", "abc", 1)) != null);
+}
+
+test "findInto preserves output on misses and errors and copies live captures" {
+    var match: Match = undefined;
+    match.start = 999;
+    match.end = 999;
+    match.capture_count = 0;
+    try std.testing.expect(!(try findIntoStart("abc", "z", 1, &match)));
+    try std.testing.expectEqual(@as(usize, 999), match.start);
+    try std.testing.expectError(error.MalformedPattern, findIntoStart("abc", "[", 1, &match));
+    try std.testing.expectEqual(@as(usize, 999), match.start);
+    try std.testing.expect(try findIntoStart("abc 123", "(%a+)%s+(%d+)", 1, &match));
+    try std.testing.expectEqual(@as(u8, 2), match.capture_count);
+    try std.testing.expectEqualStrings("abc", try captureText("abc 123", match.captures[0]));
+    try std.testing.expectEqualStrings("123", try captureText("abc 123", match.captures[1]));
+    try std.testing.expect(try findIntoStart("abc 123", "abc", 1, &match));
+    try std.testing.expectEqual(@as(u8, 0), match.capture_count);
+    try std.testing.expectEqual(@as(usize, 3), match.end);
 }
 
 test "language-code class accepts literal trailing hyphen" {

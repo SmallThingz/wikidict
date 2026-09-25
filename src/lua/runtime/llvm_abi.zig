@@ -54,9 +54,26 @@ export fn dict_lua_arg_ptr(args: [*]const rt.Value, len: usize, index: usize) ca
     return if (index < len) &args[index] else &nil_value;
 }
 
-export fn dict_lua_global_ptr(ctx: *const rt.Context, slot: u32) callconv(.c) *const rt.Value {
-    if (slot >= ctx.globals.len) return &nil_value;
+// The emitter borrows pointers only for stable native ABI globals.
+export fn dict_lua_native_global_ptr(ctx: *const rt.Context, slot: u32) callconv(.c) *const rt.Value {
+    if (slot >= rt.module_global_prefix_len or slot >= ctx.globals.len) return &nil_value;
     return &ctx.globals[slot];
+}
+
+test "native global pointer remains stable across sparse writes" {
+    var ctx = try rt.Context.initProgram(std.testing.allocator, 193, 1);
+    defer ctx.deinit();
+    try ctx.setGlobal(64, .{ .number = 99 });
+    try std.testing.expect(dict_lua_native_global_ptr(&ctx, 64).* == .nil);
+    try ctx.enterStaticModule(0);
+    defer ctx.leaveStaticFunction();
+    const native = dict_lua_native_global_ptr(&ctx, 1);
+    try ctx.setGlobal(1, .{ .number = 7 });
+    try ctx.setGlobal(128, .{ .number = 8 });
+    try std.testing.expectEqual(@as(f64, 7), native.number);
+    try std.testing.expect(native == dict_lua_native_global_ptr(&ctx, 1));
+    try std.testing.expectEqual(@as(f64, 99), ctx.getGlobal(64).number);
+    try std.testing.expect(dict_lua_native_global_ptr(&ctx, 64).* == .nil);
 }
 export fn dict_lua_observe_package(ctx: *rt.Context) callconv(.c) u32 {
     ctx.observePackage() catch |err| return fail(ctx, err);
@@ -358,13 +375,16 @@ export fn dict_lua_make_function(ctx: *rt.Context, id: u32, entry_raw: *const an
 }
 
 fn fixedCall(ctx: *rt.Context, callable: rt.Value, args: []const rt.Value, out: []rt.Value) u32 {
-    @memset(out, .nil);
-    const result = ctx.callValueFixed(callable, args, out) catch |err| return fail(ctx, err);
+    const result = ctx.callValueFixed(callable, args, out) catch |err| {
+        @memset(out, .nil);
+        return fail(ctx, err);
+    };
     defer result.deinit();
+    const n = @min(out.len, result.values.len);
     if (result.values.ptr != out.ptr) {
-        const n = @min(out.len, result.values.len);
-        @memcpy(out[0..n], result.values[0..n]);
+        if (n != 0) @memcpy(out[0..n], result.values[0..n]);
     }
+    @memset(out[n..], .nil);
     return 0;
 }
 export fn dict_lua_enter_local_static_call(ctx: *rt.Context) callconv(.c) u32 {
@@ -399,14 +419,17 @@ fn captureSlice(ptr: ?[*]const *rt.Cell, len: usize) ?[]const *rt.Cell {
 fn staticFixedCall(ctx: *rt.Context, module_id: u32, entry_raw: *const anyopaque, captures_ptr: ?[*]const *rt.Cell, captures_len: usize, args: []const rt.Value, out: []rt.Value) u32 {
     const captures = captureSlice(captures_ptr, captures_len) orelse return fail(ctx, error.BadUpvalue);
     const entry: rt.FunctionFn = @ptrCast(entry_raw);
-    @memset(out, .nil);
-    const result = ctx.callStaticFunctionBuffered(module_id, entry, captures, args, out) catch |err| return fail(ctx, err);
+    const result = ctx.callStaticFunctionBuffered(module_id, entry, captures, args, out) catch |err| {
+        @memset(out, .nil);
+        return fail(ctx, err);
+    };
     const owned = result.len != 0 and result.ptr != out.ptr;
     defer if (owned) rt.freeResults(result);
+    const n = @min(out.len, result.len);
     if (result.ptr != out.ptr) {
-        const n = @min(out.len, result.len);
         if (n != 0) @memcpy(out[0..n], result[0..n]);
     }
+    @memset(out[n..], .nil);
     return 0;
 }
 
@@ -556,6 +579,68 @@ test "LLVM ABI layouts and primitive helpers" {
     dict_lua_value_number(&value, 7);
     try std.testing.expectEqual(@as(f64, 7), value.number);
     try std.testing.expectEqual(@as(u8, 1), dict_lua_value_truthy(&value));
+}
+
+fn fixedCallTestCount(args: []const rt.Value) !usize {
+    if (args.len == 0 or args[0] != .number) return error.TestCallFailed;
+    return @intFromFloat(args[0].number);
+}
+
+fn fixedCallBufferedTest(_: ?*anyopaque, _: *rt.Context, args: []const rt.Value, buffer: ?[]rt.Value) ![]const rt.Value {
+    const count = try fixedCallTestCount(args);
+    if (count == 9) return error.TestCallFailed;
+    const out = try rt.returnBuffer(buffer, count);
+    for (out, 0..) |*value, index| value.* = .{ .number = @floatFromInt(index + 1) };
+    return out;
+}
+
+fn fixedCallDirectTest(_: *rt.Context, _: rt.Captures, args: []const rt.Value, buffer: ?[]rt.Value) ![]const rt.Value {
+    const count = try fixedCallTestCount(args);
+    if (count == 9) return error.TestCallFailed;
+    const out = try rt.returnBuffer(buffer, count);
+    for (out, 0..) |*value, index| value.* = .{ .number = @floatFromInt(index + 1) };
+    return out;
+}
+
+fn fixedCallOwnedTest(_: ?*anyopaque, _: *rt.Context, _: []const rt.Value) ![]const rt.Value {
+    const out = try std.heap.smp_allocator.alloc(rt.Value, 3);
+    for (out, 0..) |*value, index| value.* = .{ .number = @floatFromInt(index + 1) };
+    return out;
+}
+
+test "fixed call results fill only missing slots for buffered owned and static calls" {
+    var ctx = try rt.Context.init(std.testing.allocator, 0);
+    defer ctx.deinit();
+    const buffered = try ctx.newNativeBuffered(null, fixedCallBufferedTest);
+    const owned = try ctx.newNative(null, fixedCallOwnedTest);
+    const entry: rt.FunctionFn = rt.stabilizeBuffered(fixedCallDirectTest);
+    const entry_raw: *const anyopaque = @ptrCast(entry);
+    for ([_]usize{ 0, 1, 2, 3, 9 }) |count| {
+        const args = [_]rt.Value{.{ .number = @floatFromInt(count) }};
+        const old = rt.Value{ .string = "stale" };
+        var out = [_]rt.Value{ old, old };
+        const dynamic_status = fixedCall(&ctx, buffered, &args, &out);
+        try std.testing.expectEqual(@as(u32, if (count == 9) 1 else 0), dynamic_status);
+        for (out, 0..) |value, index| {
+            if (count != 9 and index < count)
+                try std.testing.expectEqual(@as(f64, @floatFromInt(index + 1)), value.number)
+            else
+                try std.testing.expect(value == .nil);
+        }
+        out = .{ old, old };
+        const static_status = staticFixedCall(&ctx, std.math.maxInt(u32), entry_raw, null, 0, &args, &out);
+        try std.testing.expectEqual(dynamic_status, static_status);
+        for (out, 0..) |value, index| {
+            if (count != 9 and index < count)
+                try std.testing.expectEqual(@as(f64, @floatFromInt(index + 1)), value.number)
+            else
+                try std.testing.expect(value == .nil);
+        }
+    }
+    var owned_out = [_]rt.Value{ .nil, .nil };
+    try std.testing.expectEqual(@as(u32, 0), fixedCall(&ctx, owned, &.{}, &owned_out));
+    try std.testing.expectEqual(@as(f64, 1), owned_out[0].number);
+    try std.testing.expectEqual(@as(f64, 2), owned_out[1].number);
 }
 test "static literal decoder materializes list named and keyed fields" {
     const static_literal = @import("lua_static_literal_format");

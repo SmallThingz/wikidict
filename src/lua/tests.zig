@@ -292,7 +292,7 @@ test "undeclared stable globals use checked access for global metatable semantic
     defer std.testing.allocator.free(generated_source);
 
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, generated_source, " = call i32 @dict_lua_global_get("));
-    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, " = call ptr @dict_lua_global_ptr("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, " = call ptr @dict_lua_native_global_ptr("));
 }
 
 test "mutable proven scalar locals stay native LLVM storage" {
@@ -656,7 +656,7 @@ test "stable ABI globals borrow their Context slot while mutable globals stay ch
     }.run;
     const stable = try compile("return math");
     defer std.testing.allocator.free(stable);
-    try std.testing.expect(std.mem.indexOf(u8, stable, "call ptr @dict_lua_global_ptr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stable, "call ptr @dict_lua_native_global_ptr") != null);
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, stable, " = call i32 @dict_lua_global_get("));
 
     const mutated = try compile("math = 1; return math");

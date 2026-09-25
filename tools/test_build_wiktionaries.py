@@ -516,8 +516,14 @@ class BuildTest(unittest.TestCase):
             with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_THRESHOLD_COMPRESSED_BYTES',1),patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
                 b.build([item],root,root/'output','zig',2)
             blob_calls=[c for c in calls if 'build-blobs' in c]
+            expander_call=next(c for c in calls if 'build-dictionary' in c)
             self.assertTrue(calls)
             self.assertTrue(all(command[1:3]==['build','-j1'] for command in calls))
+            self.assertIn('--extraction-cache-root',expander_call)
+            self.assertIn('--verified-dump-sha256',expander_call)
+            self.assertIn('--verified-index-sha256',expander_call)
+            for flag in ('--verified-dump-sha256','--verified-index-sha256'):
+                self.assertRegex(expander_call[expander_call.index(flag)+1],r'^[0-9a-f]{64}$')
             self.assertEqual(len(blob_calls),2)
             self.assertEqual([c[c.index('--start-page')+1] for c in blob_calls],['0','1'])
             self.assertEqual([c[c.index('--index-byte-offset')+1] for c in blob_calls],['0','2'])

@@ -87,5 +87,8 @@ pub fn set(runtime: *rt.Context, host: ?*Host) void {
 }
 
 pub fn get(runtime: *const rt.Context) ?*Host {
+    // A loadData result may be shared across pages only if its evaluation did
+    // not observe the page host (including title, time, and provider data).
+    rt.markLoadDataEffect();
     return @ptrCast(@alignCast(runtime.host orelse return null));
 }

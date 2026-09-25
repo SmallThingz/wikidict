@@ -8,6 +8,7 @@ const static_decode = @import("lua_static_literal_decode");
 const global_shape_index = @import("global_shape_index.zig");
 
 pub const Context = rt.Context;
+pub const work_stats = rt.work_stats;
 
 extern fn dict_lua_program_module_roots() callconv(.c) *const anyopaque;
 extern fn dict_lua_program_synth_export_entries() callconv(.c) ?*const anyopaque;
@@ -373,9 +374,14 @@ pub const Program = struct {
         if (id >= self.module_count) return null;
         const blob = self.module_static_root_blobs[id];
         if (!self.module_synth_roots[id]) {
-            if (blob.len != 0) return try static_decode.decode(ctx, blob);
+            if (blob.len != 0) {
+                if (work_stats.current()) |work| work.static_roots +|= 1;
+                return try static_decode.decode(ctx, blob);
+            }
             return null;
         }
+
+        if (work_stats.current()) |work| work.static_roots +|= 1;
 
         const start: usize = self.module_synth_offsets[id];
         const end: usize = self.module_synth_offsets[id + 1];

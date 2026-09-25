@@ -282,6 +282,27 @@ def _thread_accounting(pid):
     return None
 
 
+def _live_mm_siblings(pid):
+    """After task smaps vanish, distinguish exit from a live unmeasured mm."""
+    try:
+        with os.scandir(Path('/proc', str(pid), 'task')) as tasks:
+            for task in tasks:
+                if not task.name.isdigit() or task.name == str(pid):
+                    continue
+                try:
+                    raw = Path(task.path, 'stat').read_text()
+                    fields = raw[raw.rfind(')') + 2:].split()
+                    if fields[0] not in ('Z', 'X', 'x') and int(fields[20]) > 0:
+                        return True
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except (OSError, ValueError, IndexError) as error:
+        raise ContainmentUnavailable(f'Cannot inspect live threads of process {pid}: {error}') from error
+    return False
+
+
 def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=frozenset()):
     table = _process_table()
     root = table.get(child_pid)
@@ -330,7 +351,24 @@ def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=fro
                 if fresh['vsize'] == 0:
                     if fresh['threads'] <= 1:
                         continue
-                    raise ContainmentUnavailable(f'Cannot measure live threads of process {pid}')
+                    live_mm = _live_mm_siblings(pid)
+                    if live_mm is None:
+                        latest = _process_table().get(pid)
+                        if latest is None or latest['start'] != info['start'] or (
+                                latest['state'] == 'Z' and latest['threads'] <= 1):
+                            continue
+                    if live_mm is not False:
+                        raise ContainmentUnavailable(f'Cannot measure live threads of process {pid}')
+                    # All visible sibling tasks have released their mm. Keep
+                    # charging the earlier RSS and thread count while stat
+                    # catches up with their exit.
+                    pss_kib = (max(info['rss'], fresh['rss']) + 1023) // 1024
+                    threads = fresh['threads']
+                    pss += pss_kib * 1024
+                    rss += info['rss']
+                    tasks += threads
+                    live[pid] = info
+                    continue
                 # ENOENT during exit/exec may persist beyond one sample. RSS
                 # is an upper bound for PSS, so charge it until smaps returns.
                 pss_kib = (fresh['rss'] + 1023) // 1024

@@ -166,6 +166,9 @@ fn parserFunctionCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value)
 }
 
 fn valueToString(runtime: *rt.Context, value: Value) ![]const u8 {
+    // Frame titles/arguments may embed the default address-bearing object
+    // representation. Such a result cannot be reused between page contexts.
+    if (value == .table or value == .callable) rt.markLoadDataEffect();
     if (runtime.metamethod(value, "__tostring")) |mm| {
         const out = try runtime.callValue(mm, &.{value});
         defer rt.freeResults(out);
