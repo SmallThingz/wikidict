@@ -31,7 +31,7 @@ All artifact paths below are relative to the repository.
 | Adaptive sparse globals v2 | Scratch only; accepted focused tests and guarded synthetic comparisons; production patch unapplied |
 | Large shape-field v1 and v2 | Scratch only; rejected for small-field regression |
 | Large shape-field v3 | Untested |
-| Rare-module O0 policy | Patch ready; protected consumer requires coordinated ownership before editing |
+| Rare-module O0 policy | Landed: `6e0cc5d perf(build): compile zero-static-reach modules at O0` |
 | Python phase telemetry | Landed: `f67dc9b perf(build): record bounded pipeline phase timings` |
 
 “Landed” records an existing commit; candidates retain their separate status.
@@ -54,7 +54,9 @@ that a particular classification policy preserves English expansion throughput.
 | Adaptive sparse candidate | Root-verified 38 core tests and 3 ABI tests passed |
 | Sparse functional matrix | 16 cases passed, covering 40 paired segment checks |
 | Large shape-field candidate | 9 focused tests passed |
-| O0 usage selector | 5 focused scratch tests passed; protected consumer unapplied |
+| O0 usage selector | 5 live-source tests passed after integration |
+| O0 consumer intended for commit | 6 tests passed; full standalone consumer compiled without executing the pipeline |
+| O0 producer | Semantic compilation passed with binary emission disabled; native linking/execution remains unqualified |
 
 The full-graph before/after source-set SHA-256 was:
 `57e18be24ec629b5286329fd27bb52355eab62f999eae752911f1c49d9305764`.
@@ -226,9 +228,23 @@ as independent costs. No new corpus measurements are claimed from adding logs.
 
 The small exploratory Clang O0/O1 observations are not a balanced English
 qualification. Large-case attempts supplied no accepted end-to-end comparison.
-A ready O0 usage-selector patch is not an integrated production policy.
-Its protected consumer needs coordinated ownership, correctness validation,
-and compilation-plus-expansion measurements before adoption.
+The user subsequently authorized integrating the prepared O0 policy and pushing
+main. Commit `6e0cc5d` adds O0 only for zero recorded page and module reach, keeps
+known uses at O1/O2, and preserves data-only roots. It also records native stage,
+LLVM emission, and Clang batch times. Dynamic targets mean zero static reach is
+a heuristic; total compilation-plus-expansion performance is still unmeasured.
+
+Only the approved consumer hunks were committed. Existing snapshot and scratch
+cleanup edits remain uncommitted. The completed-job source capture fix remains
+with those cleanup edits because its source field is absent from committed HEAD.
+
+Integration diagnostics ran serially at one CPU with 256 MiB address-space caps
+and 25–30 second deadlines, using Zig's non-LLVM backend. The committed consumer
+was tested from an exact snapshot that excludes foreign edits. Evidence lives in
+`.tmp/o0-integration-20260925/`: `usage-live`, `consumer-tests`, `consumer-build`,
+and `producer-check` logs/exits all report success. These are focused diagnostic
+results, not a linked corpus-worker run. A separate runtime-Program semantic
+check exceeded the 256 MiB limit; the global-index candidate remains uncommitted.
 
 Compilation/execution overlap has no accepted performance measurement here.
 Retained English artifact timestamps are stage-boundary clues only: they do
@@ -273,8 +289,8 @@ whole-English memory bound. Full timing ranges are in the working evidence draft
 
 ## Remaining acceptance gates
 
-1. Preserve unrelated dirty work, integrate only owned adaptive changes, and
-   coordinate ownership of the protected O0 consumer. Record each source identity.
+1. Preserve unrelated dirty work and qualify the remaining owned indexing and
+   adaptive candidates independently. The O0 policy is already integrated.
 2. Validate the exact integrated source, including the full graph and relevant
    native ABI/emitter paths. Older graph success is not transferable.
 3. Keep small-field v1/v2 rejected; measure v3 only after resource admission,
