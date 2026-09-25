@@ -33,16 +33,36 @@ class BuildTest(unittest.TestCase):
             self.assertIn('English',first.read_text())
             self.assertTrue(str(first).endswith('output/testwiktionary/20260901.language-registry.tsv'))
 
-    def test_xml_page_count_handles_chunk_boundary(self):
+    def test_seekable_dump_stages_compressed_members_without_decompressed_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
-            payload=b'x'*(1024*1024-3)+b'<pa'+b'ge><title>x</title></page>'
-            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
-            (folder/name).write_bytes(bz2.compress(payload))
-            item=dict(wiki='testwiktionary',date='20260901',name=name)
-            dump=root/'pages.xml'
-            self.assertEqual(b.copy_xml_with_page_count([item],root,dump),1)
-            self.assertEqual(dump.read_bytes(),payload)
+            items=[]; members=[]
+            for i,payload in enumerate((b'<mediawiki><page>a</page></mediawiki>',b'<mediawiki><page>b</page></mediawiki>')):
+                name=f'testwiktionary-20260901-pages-meta-current{i}.xml-p{i}p{i}.bz2'
+                data=bz2.compress(payload);members.append(data);(folder/name).write_bytes(data)
+                items.append(dict(wiki='testwiktionary',date='20260901',name=name))
+            scratch=root/'scratch';scratch.mkdir()
+            dump=b.stage_seekable_dump(items,root,scratch)
+            self.assertEqual(dump.read_bytes(),b''.join(members))
+            self.assertEqual(dump.stat().st_size,sum(map(len,members)))
+            index=dump.with_name('pages-index.txt.bz2')
+            rows=bz2.decompress(index.read_bytes()).decode().splitlines()
+            self.assertEqual(rows,[f'0:1:part0',f'{len(members[0])}:2:part1'])
+
+    def test_single_part_seekable_dump_reuses_compressed_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2';data=bz2.compress(b'<mediawiki/>');source=folder/name;source.write_bytes(data)
+            scratch=root/'scratch';scratch.mkdir()
+            dump=b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch)
+            self.assertEqual(dump.read_bytes(),data)
+            self.assertEqual(bz2.decompress(dump.with_name('pages-index.txt.bz2').read_bytes()),b'0:1:part0\n')
+
+    def test_page_index_row_count_ignores_multistream_header_and_blanks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'page-index.tsv'
+            path.write_bytes(b'# dict-page-index-v2\tmultistream-bz2\n0\t0\t1\ta\n\n1\t0\t1\tb\n')
+            self.assertEqual(b.count_page_index_rows(path),2)
 
     def test_shard_workspace_resumes_only_matching_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -84,7 +104,7 @@ class BuildTest(unittest.TestCase):
                     (dest/'fallback-pages.jsonl').write_text('')
                     (dest/'languages.tsv').write_text('heading\n')
                     (dest/'merged.wikblb').write_bytes(b'WIKBLB08merged')
-            with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_THRESHOLD_PAGES',1),patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
+            with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_THRESHOLD_COMPRESSED_BYTES',1),patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
                 b.build([item],root,root/'output','zig',2)
             blob_calls=[c for c in calls if 'build-blobs' in c]
             self.assertEqual(len(blob_calls),2)
@@ -139,9 +159,25 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(lzma.open(str(path)+'.xz').read(),raw)
     def test_default_worker_count(self):
         with patch('compress_blobs.os.cpu_count',return_value=12):
-            self.assertEqual(default_workers(),5)
+            self.assertEqual(default_workers(),4)
         with patch('compress_blobs.os.cpu_count',return_value=None):
             self.assertEqual(default_workers(),1)
+
+    def test_safe_worker_budget_caps_cpu_and_memory(self):
+        with patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'total_memory_bytes',return_value=6*1024*1024*1024):
+            self.assertEqual(b.safe_worker_budget(),4)
+            self.assertEqual(b.default_build_threads(),4)
+        with patch.object(b.os,'cpu_count',return_value=2),patch.object(b,'total_memory_bytes',return_value=64*1024*1024*1024):
+            self.assertEqual(b.safe_worker_budget(),2)
+            self.assertEqual(b.default_build_threads(),2)
+
+    def test_main_rejects_aggregate_worker_oversubscription(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); source=root/'input'; source.mkdir()
+            item=dict(wiki='testwiktionary',date='20260901',name='testwiktionary-20260901-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/testwiktionary-20260901-pages-meta-current.xml.bz2',size=1,sha1='a'*40)
+            (source/'manifest.json').write_text(json.dumps({'files':[item]}))
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--threads','4','--jobs','2']),patch.object(b,'safe_worker_budget',return_value=6):
+                with self.assertRaises(SystemExit): b.main()
     def test_fallback_report_validation_rejects_malformed_and_duplicate_pages(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'fallback-pages.jsonl'

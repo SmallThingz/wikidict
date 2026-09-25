@@ -10,6 +10,7 @@ const protocol = @import("bundle_protocol.zig");
 const RequestAllocator = @import("runtime/request_allocator.zig").RequestAllocator;
 const A = std.mem.Allocator;
 const L = std.os.linux;
+const expansion_memory_headroom_bytes: u64 = 512 * 1024 * 1024;
 
 pub const Request = protocol.Request;
 
@@ -155,7 +156,7 @@ pub fn run(io: std.Io, persistent: A) !void {
             // Generated code and the corpus index are trusted build assets and can
             // legitimately occupy several GiB of virtual address space. Cap only
             // additional expansion growth after those assets are resident.
-            limitAddressSpaceAfterAssets(io, 4 * 1024 * 1024 * 1024) catch |err| {
+            limitAddressSpaceAfterAssets(io, expansion_memory_headroom_bytes) catch |err| {
                 engine.?.deinit();
                 engine = null;
                 try protocol.writeError(&output.interface, "assets", @errorName(err), "");

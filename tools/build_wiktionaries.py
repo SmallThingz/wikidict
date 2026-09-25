@@ -17,10 +17,30 @@ from compress_blobs import compress, compress_many, default_workers, verify_roun
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry
 
 PROJECT = Path(__file__).resolve().parent.parent
-SHARD_THRESHOLD_PAGES = 2_000_000
+SHARD_THRESHOLD_COMPRESSED_BYTES = 512 * 1024 * 1024
 SHARD_PAGES = 100_000
 SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 1
+MAX_TOTAL_BUILD_WORKERS = 8
+MEMORY_PER_BUILD_WORKER = 1536 * 1024 * 1024
+
+def total_memory_bytes():
+    try:
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            if line.startswith('MemTotal:'):
+                return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+def safe_worker_budget():
+    cpu = max(1, os.cpu_count() or 1)
+    memory = total_memory_bytes()
+    memory_workers = MAX_TOTAL_BUILD_WORKERS if memory is None else max(1, memory // MEMORY_PER_BUILD_WORKER)
+    return max(1, min(MAX_TOTAL_BUILD_WORKERS, cpu, memory_workers))
+
+def default_build_threads():
+    return min(4, safe_worker_budget())
 
 def ensure_language_registry(downloads, output, edition, date):
     source = downloads / edition / date / 'language-registry.tsv'
@@ -62,27 +82,47 @@ def source_fingerprint():
     return checksum.hexdigest()
 
 
-def copy_xml_with_page_count(items, downloads, dump):
-    needle=b'<page>'
-    tail=b''
-    pages=0
-    with dump.open('wb') as out:
-        for item in sorted(items, key=lambda x:x['name']):
-            with bz2.open(downloads/item['wiki']/item['date']/item['name'],'rb') as source:
-                while True:
-                    chunk=source.read(1024*1024)
-                    if not chunk: break
-                    combined=tail+chunk
-                    pages+=combined.count(needle)
-                    tail=combined[-(len(needle)-1):]
-                    out.write(chunk)
-    return pages
+def stage_seekable_dump(items, downloads, scratch):
+    """Stage Wikimedia bz2 parts without ever materializing decompressed XML.
+
+    Each downloaded part is already an independent bzip2 stream. Concatenating
+    those streams and writing a tiny offset index gives the Zig multistream
+    reader random access while keeping scratch I/O near the compressed size.
+    """
+    parts=[]
+    for item in sorted(items,key=lambda x:x['name']):
+        source=downloads/item['wiki']/item['date']/item['name']
+        with source.open('rb',buffering=0) as f:
+            if f.read(3)!=b'BZh': raise ValueError(f'Expected bzip2 dump part: {source}')
+        parts.append(source)
+    if not parts: raise ValueError('No dump parts')
+    dump=scratch/'pages.xml.bz2'
+    offsets=[]
+    if len(parts)==1:
+        offsets.append(0)
+        try:
+            os.link(parts[0],dump)
+        except OSError:
+            shutil.copyfile(parts[0],dump)
+    else:
+        offset=0
+        with dump.open('wb',buffering=0) as out:
+            for source in parts:
+                offsets.append(offset)
+                with source.open('rb',buffering=0) as inp:
+                    shutil.copyfileobj(inp,out,8*1024*1024)
+                offset+=source.stat().st_size
+    index=dump.with_name(dump.name[:-len('.xml.bz2')]+'-index.txt.bz2')
+    rows=''.join(f'{offset}:{i+1}:part{i}\n' for i,offset in enumerate(offsets)).encode()
+    index.write_bytes(bz2.compress(rows,compresslevel=1))
+    return dump
 
 
-def count_lines(path):
+def count_page_index_rows(path):
     count=0
     with path.open('rb') as source:
-        while chunk:=source.read(8*1024*1024): count+=chunk.count(b'\n')
+        for line in source:
+            if line.strip() and not line.startswith(b'#'): count+=1
     return count
 
 
@@ -132,7 +172,7 @@ def run_checked(command):
     subprocess.run(command,cwd=PROJECT,check=True)
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, expected_pages, items):
+def build_sharded(dump, staging, workspace, registry, zig, workers, items):
     expected=shard_state(items,registry)
     now_unix=prepare_shard_workspace(workspace,expected)
     expander_build=workspace/'expander'
@@ -142,9 +182,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, expected_pag
                      '--language-registry-snapshot',str(registry),'--llvm-workers',str(workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only'])
     expander=expander_build/'.bundle-expander'
-    indexed_pages=count_lines(expander/'page-index.tsv')
-    if indexed_pages!=expected_pages:
-        raise ValueError(f'Page count mismatch for {items[0]["wiki"]}: XML={expected_pages}, index={indexed_pages}')
+    indexed_pages=count_page_index_rows(expander/'page-index.tsv')
 
     shards_root=workspace/'shards';shards_root.mkdir(exist_ok=True)
     shard_paths=[]
@@ -182,6 +220,10 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, expected_pag
     run_checked([zig,'build','-Doptimize=ReleaseFast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]])
     run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)])
     (staging/VERIFIED_MARKER).write_text('verified\n')
+    # The merged staging tree is now the sole verified publication source.
+    # Drop raw shards and the transient expander before XZ publication so peak
+    # disk usage is not shards + merged raw + compressed output simultaneously.
+    if workspace.exists(): shutil.rmtree(workspace)
 
 
 def build(items, downloads, output, zig, compression_workers=None):
@@ -250,7 +292,7 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         else:
             pending.append(blob)
     if pending:
-        workers = compression_workers or default_workers()
+        workers = compression_workers or default_build_threads()
         compress_many(pending, 1024*1024, workers)
     compressed = sorted(staging.rglob('*.wikblb.xz'))
     if len(compressed) != len(logical) or list(staging.rglob('*.wikblb')) or list(staging.rglob('*.xz.part')):
@@ -296,15 +338,13 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
     scratch = Path(tempfile.mkdtemp(prefix=f'build-{edition}-{date}-', dir=PROJECT / '.tmp'))
     try:
         registry = ensure_language_registry(downloads, output, edition, date)
-        dump = scratch / 'pages.xml'
-        # XML text cannot contain a raw <page> element token, so the streaming
-        # count is also a cheap corruption/split-boundary check for sharding.
-        page_count=copy_xml_with_page_count(xml,downloads,dump)
-        workers = compression_workers or default_workers()
+        dump = stage_seekable_dump(xml,downloads,scratch)
+        workers = compression_workers or default_build_threads()
         workspace=target.with_name(date+'.shards')
-        if page_count>=SHARD_THRESHOLD_PAGES:
-            print(f'Sharding {edition}: {page_count:,} pages in chunks of {SHARD_PAGES:,}',flush=True)
-            build_sharded(dump,staging,workspace,registry,zig,workers,page_count,items)
+        compressed_bytes=sum(item['size'] for item in xml)
+        if compressed_bytes>=SHARD_THRESHOLD_COMPRESSED_BYTES:
+            print(f'Sharding {edition}: {compressed_bytes:,} compressed bytes in {SHARD_PAGES:,}-page chunks',flush=True)
+            build_sharded(dump,staging,workspace,registry,zig,workers,items)
         else:
             run_checked([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
                          '--language-registry-snapshot',str(registry),
@@ -322,13 +362,15 @@ def main():
     p.add_argument('--downloads','--in',type=Path,default=PROJECT/'data/dumps',metavar='DIR')
     p.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries',metavar='DIR')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
-    p.add_argument('--threads',type=int,default=default_workers(),help='Compiler, expansion and XZ workers per edition (default: 1 + CPU count // 3)')
-    p.add_argument('--jobs',type=int,help='Concurrent editions (default: up to four, based on CPU count / threads)')
+    p.add_argument('--threads',type=int,default=default_build_threads(),help='Compiler/expansion workers per edition (default: up to 4 within CPU/RAM budget)')
+    p.add_argument('--jobs',type=int,help='Concurrent editions (default: up to two within aggregate CPU/RAM budget)')
     p.add_argument('--wikis',nargs='+',help='Build only these edition IDs')
     a=p.parse_args()
-    if a.threads < 1:p.error('Threads must be positive')
-    if a.jobs is None:a.jobs=min(4,max(1,((os.cpu_count() or 1)+a.threads-1)//a.threads))
+    budget=safe_worker_budget()
+    if not 1 <= a.threads <= budget:p.error(f'Threads must be 1 through {budget} on this host')
+    if a.jobs is None:a.jobs=min(2,max(1,budget//a.threads))
     if not 1 <= a.jobs <= 16:p.error('Jobs must be 1 through 16')
+    if a.jobs*a.threads > budget:p.error(f'jobs × threads must not exceed safe host budget {budget}')
     items=json.loads((a.downloads/'manifest.json').read_text())['files']
     groups={}
     for item in items:

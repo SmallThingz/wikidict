@@ -22,42 +22,59 @@ fn mmapPath(io: std.Io, path: []const u8) !Mapped {
     return .{ .bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0) };
 }
 
-fn recordLess(_: void, lhs: format.RecordInput, rhs: format.RecordInput) bool {
-    return std.mem.order(u8, lhs.title, rhs.title) == .lt;
+const MergeSource = struct {
+    mapped: Mapped,
+    iterator: format.RecordIterator,
+    current: ?format.RecordView,
+};
+
+fn sourceLess(sources: []const MergeSource, lhs: usize, rhs: usize) bool {
+    const a = sources[lhs].current.?.title;
+    const b = sources[rhs].current.?.title;
+    return switch (std.mem.order(u8, a, b)) {
+        .lt => true,
+        .gt => false,
+        .eq => lhs < rhs,
+    };
 }
 
-fn writeBlob(
-    io: std.Io,
-    path: []const u8,
-    kind: format.BlobKind,
-    metadata: []const u8,
-    records: []format.RecordInput,
-) !void {
-    std.sort.pdq(format.RecordInput, records, {}, recordLess);
-    var previous: ?[]const u8 = null;
-    for (records) |record| {
-        try format.validateRecordInput(record);
-        if (previous) |title| if (std.mem.order(u8, title, record.title) != .lt)
-            return error.DuplicateRecord;
-        previous = record.title;
+fn heapPush(heap: *std.ArrayList(usize), a: std.mem.Allocator, sources: []const MergeSource, value: usize) !void {
+    try heap.append(a, value);
+    var child = heap.items.len - 1;
+    while (child != 0) {
+        const parent = (child - 1) / 2;
+        if (!sourceLess(sources, heap.items[child], heap.items[parent])) break;
+        std.mem.swap(usize, &heap.items[child], &heap.items[parent]);
+        child = parent;
     }
-    try format.validateMetadata(kind, metadata);
-    const header = format.encodeHeader(kind);
-    var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
-    defer file.close(io);
-    var buffer: [256 * 1024]u8 = undefined;
-    var writer = file.writer(io, &buffer);
-    const out = &writer.interface;
-    try out.writeAll(&header);
-    try out.writeAll(metadata);
-    for (records) |record| {
-        try out.writeAll(record.title);
-        try out.writeByte(0);
-        var encoded_len: [format.max_varuint_len]u8 = undefined;
-        try out.writeAll(format.encodePayloadLength(record.payload.len, &encoded_len));
-        try out.writeAll(record.payload);
+}
+
+fn heapPop(heap: *std.ArrayList(usize), sources: []const MergeSource) usize {
+    const result = heap.items[0];
+    const last = heap.pop().?;
+    if (heap.items.len == 0) return result;
+    heap.items[0] = last;
+    var parent: usize = 0;
+    while (true) {
+        const left = parent * 2 + 1;
+        if (left >= heap.items.len) break;
+        const right = left + 1;
+        var child = left;
+        if (right < heap.items.len and sourceLess(sources, heap.items[right], heap.items[left])) child = right;
+        if (!sourceLess(sources, heap.items[child], heap.items[parent])) break;
+        std.mem.swap(usize, &heap.items[child], &heap.items[parent]);
+        parent = child;
     }
-    try out.flush();
+    return result;
+}
+
+fn writeRecord(out: *std.Io.Writer, record: format.RecordView) !void {
+    try format.validateRecordInput(.{ .title = record.title, .payload = record.payload });
+    try out.writeAll(record.title);
+    try out.writeByte(0);
+    var encoded_len: [format.max_varuint_len]u8 = undefined;
+    try out.writeAll(format.encodePayloadLength(record.payload.len, &encoded_len));
+    try out.writeAll(record.payload);
 }
 
 fn mergeOne(
@@ -67,13 +84,11 @@ fn mergeOne(
     kind: format.BlobKind,
     input_paths: []const []const u8,
 ) !usize {
-    var maps: std.ArrayList(Mapped) = .empty;
+    var sources: std.ArrayList(MergeSource) = .empty;
     defer {
-        for (maps.items) |*mapped| mapped.deinit();
-        maps.deinit(a);
+        for (sources.items) |*source| source.mapped.deinit();
+        sources.deinit(a);
     }
-    var records: std.ArrayList(format.RecordInput) = .empty;
-    defer records.deinit(a);
     var metadata: ?[]const u8 = null;
     for (input_paths) |path| {
         var mapped = mmapPath(io, path) catch |err| switch (err) {
@@ -86,14 +101,42 @@ fn mergeOne(
         if (metadata) |expected| {
             if (!std.mem.eql(u8, expected, blob.metadata)) return error.MetadataMismatch;
         } else metadata = blob.metadata;
-        var it = blob.iterator();
-        while (try it.next()) |record|
-            try records.append(a, .{ .title = record.title, .payload = record.payload });
-        try maps.append(a, mapped);
+        var iterator = blob.iterator();
+        const current = try iterator.next();
+        try sources.append(a, .{ .mapped = mapped, .iterator = iterator, .current = current });
     }
-    if (maps.items.len == 0) return 0;
-    try writeBlob(io, output_path, kind, metadata.?, records.items);
-    return records.items.len;
+    if (sources.items.len == 0) return 0;
+    try format.validateMetadata(kind, metadata.?);
+
+    var file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .truncate = true });
+    defer file.close(io);
+    var buffer: [256 * 1024]u8 = undefined;
+    var writer = file.writer(io, &buffer);
+    const out = &writer.interface;
+    const header = format.encodeHeader(kind);
+    try out.writeAll(&header);
+    try out.writeAll(metadata.?);
+
+    var heap: std.ArrayList(usize) = .empty;
+    defer heap.deinit(a);
+    for (sources.items, 0..) |source, index| if (source.current != null)
+        try heapPush(&heap, a, sources.items, index);
+
+    var previous_title: ?[]const u8 = null;
+    var count: usize = 0;
+    while (heap.items.len != 0) {
+        const index = heapPop(&heap, sources.items);
+        const record = sources.items[index].current.?;
+        if (previous_title) |previous| if (std.mem.order(u8, previous, record.title) != .lt)
+            return error.DuplicateRecord;
+        try writeRecord(out, record);
+        previous_title = record.title;
+        count += 1;
+        sources.items[index].current = try sources.items[index].iterator.next();
+        if (sources.items[index].current != null) try heapPush(&heap, a, sources.items, index);
+    }
+    try out.flush();
+    return count;
 }
 
 fn loadHeadings(io: std.Io, a: std.mem.Allocator, roots: []const []const u8) ![][]const u8 {
@@ -133,9 +176,9 @@ fn mergeFallbackReports(io: std.Io, a: std.mem.Allocator, output_root: []const u
     for (roots) |root| {
         const path = try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" });
         defer a.free(path);
-        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .unlimited);
-        defer a.free(bytes);
-        try writer.interface.writeAll(bytes);
+        var mapped = try mmapPath(io, path);
+        defer mapped.deinit();
+        try writer.interface.writeAll(mapped.bytes);
     }
     try writer.interface.flush();
 }

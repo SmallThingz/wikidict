@@ -1,6 +1,7 @@
 //! Coordinated build-time Lua/template expansion and data-only blob bundling.
 const std = @import("std");
 const paths = @import("pipeline_paths");
+const max_parallel_workers: usize = 8;
 
 const Options = struct {
     dump: []const u8,
@@ -70,13 +71,13 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.llvm_workers != null) return error.Usage;
             const workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
-            if (workers == 0) return error.Usage;
+            if (workers == 0 or workers > max_parallel_workers) return error.Usage;
             options.llvm_workers = workers;
         } else if (std.mem.eql(u8, args[index], "--parse-workers")) {
             index += 1;
             if (index >= args.len) return error.Usage;
             options.parse_workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
-            if (options.parse_workers == 0 or options.parse_workers > 64) return error.Usage;
+            if (options.parse_workers == 0 or options.parse_workers > max_parallel_workers) return error.Usage;
         } else if (std.mem.eql(u8, args[index], "--expander-only")) {
             if (options.expander_only) return error.Usage;
             options.expander_only = true;
@@ -84,7 +85,7 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len) return error.Usage;
             options.page_workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
-            if (options.page_workers == 0 or options.page_workers > 16) return error.Usage;
+            if (options.page_workers == 0 or options.page_workers > max_parallel_workers) return error.Usage;
         } else return error.Usage;
     }
     return options;
@@ -540,6 +541,11 @@ pub fn main(init: std.process.Init) !void {
     const root = options.root;
     if (root.len == 0 or dump.len == 0) return error.Usage;
     const llvm_workers = options.llvm_workers orelse defaultLlvmWorkers();
+    const cpu_limit = @max(@as(usize, 1), @min(max_parallel_workers, std.Thread.getCpuCount() catch 1));
+    if (llvm_workers > cpu_limit or options.parse_workers > cpu_limit or options.page_workers > cpu_limit) {
+        std.debug.print("worker request exceeds safe host limit of {d}\n", .{cpu_limit});
+        return error.ResourceLimit;
+    }
     if (std.fs.path.dirname(root)) |parent| if (parent.len != 0)
         try std.Io.Dir.cwd().createDirPath(init.io, parent);
     try std.Io.Dir.cwd().createDir(init.io, root, .default_dir);

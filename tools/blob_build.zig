@@ -4,6 +4,7 @@ const xml_decode = @import("xml_decode");
 const dump_source = @import("wikimedia_dump");
 const language_registry = @import("language_registry.zig");
 const bundle_expander = @import("bundle_expander.zig");
+const max_worker_count: usize = 8;
 
 const Options = struct {
     start_page: usize = 0,
@@ -272,7 +273,7 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len) return error.Usage;
             out.workers = try std.fmt.parseInt(usize, args[index], 10);
-            if (out.workers == 0 or out.workers > 16) return error.Usage;
+            if (out.workers == 0 or out.workers > max_worker_count) return error.Usage;
         } else if (std.mem.eql(u8, arg, "--now-unix")) {
             index += 1;
             if (index >= args.len or out.now_unix != null) return error.Usage;
@@ -301,6 +302,11 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
         return error.Usage;
     };
+    const cpu_limit = @min(max_worker_count, std.Thread.getCpuCount() catch 1);
+    if (options.workers > @max(@as(usize, 1), cpu_limit)) {
+        std.debug.print("refusing {d} expansion workers; safe limit on this host is {d}\n", .{ options.workers, @max(@as(usize, 1), cpu_limit) });
+        return error.ResourceLimit;
+    }
 
     var registry = try loadLanguageRegistry(init.io, a, options.expander_root);
     defer registry.deinit();

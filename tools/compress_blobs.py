@@ -9,8 +9,13 @@ from pathlib import Path
 import subprocess
 import time
 
+MAX_XZ_WORKERS = 4
+
+def max_workers():
+    return max(1, min(MAX_XZ_WORKERS, os.cpu_count() or 1))
+
 def default_workers():
-    return 1 + (os.cpu_count() or 1) // 3
+    return max_workers()
 
 
 
@@ -48,7 +53,7 @@ def _compress_batch(paths, block_size):
 
 def compress_many(paths, block_size, workers=None, small_limit=8*1024*1024, batch_size=128):
     workers = default_workers() if workers is None else workers
-    if workers < 1:raise ValueError('Compression workers must be positive')
+    if workers < 1 or workers > max_workers():raise ValueError(f'Compression workers must be 1 through {max_workers()}')
     paths=[Path(path) for path in paths]
     if not paths:return
     small=[];large=[]
@@ -65,8 +70,8 @@ def compress_many(paths, block_size, workers=None, small_limit=8*1024*1024, batc
 
 def compress(path, block_size, workers=None):
     workers = default_workers() if workers is None else workers
-    if workers < 1:
-        raise ValueError("Compression workers must be positive")
+    if workers < 1 or workers > max_workers():
+        raise ValueError(f"Compression workers must be 1 through {max_workers()}")
     target=Path(str(path)+'.xz');temp=Path(str(target)+'.part')
     started=time.perf_counter()
     created=False
@@ -87,6 +92,6 @@ def compress(path, block_size, workers=None):
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('files',nargs='+',type=Path);p.add_argument('--block-size',type=int,default=1024*1024);p.add_argument('--threads',type=int,default=default_workers(),help='XZ workers (default: 1 + CPU count // 3)');a=p.parse_args()
     if not 64*1024<=a.block_size<=16*1024*1024:p.error('Block size must be 64 KiB through 16 MiB')
-    if a.threads < 1:p.error('Threads must be positive')
+    if not 1 <= a.threads <= max_workers():p.error(f'Threads must be 1 through {max_workers()}')
     for file in a.files:compress(file,a.block_size,a.threads)
 if __name__=='__main__':main()
