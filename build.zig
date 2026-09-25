@@ -313,6 +313,53 @@ pub fn build(b: *std.Build) void {
         .root_module = zig_runtime_test_mod,
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const global_index_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/lua/runtime/global_shape_index.zig"),
+        .target = target,
+        .optimize = test_optimize,
+        .imports = &.{.{ .name = "lua_globals", .module = lua_globals_test_mod }},
+    });
+    const global_index_tests = b.addTest(.{
+        .root_module = global_index_test_mod,
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const global_index_tests_standalone = b.addTest(.{
+        .root_module = global_index_test_mod,
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const static_literal_format_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/lua/runtime/static_literal_format.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    const static_literal_decode_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/lua/runtime/static_literal_decode.zig"),
+        .target = target,
+        .optimize = test_optimize,
+        .imports = &.{
+            .{ .name = "zig_runtime", .module = zig_runtime_test_mod },
+            .{ .name = "lua_static_literal_format", .module = static_literal_format_test_mod },
+        },
+    });
+    const lua_abi_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/lua/runtime/llvm_abi.zig"),
+        .target = target,
+        .optimize = test_optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "zig_runtime", .module = zig_runtime_test_mod },
+            .{ .name = "lua_static_literal_decode", .module = static_literal_decode_test_mod },
+            .{ .name = "lua_static_literal_format", .module = static_literal_format_test_mod },
+        },
+    });
+    const lua_abi_tests = b.addTest(.{
+        .root_module = lua_abi_test_mod,
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const lua_abi_tests_standalone = b.addTest(.{
+        .root_module = lua_abi_test_mod,
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
     const lua_stdlib_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/lua/runtime/stdlib.zig"),
@@ -387,6 +434,10 @@ pub fn build(b: *std.Build) void {
     const run_lua_tests = b.addRunArtifact(lua_tests);
     const run_lua_core_tests = b.addRunArtifact(lua_core_tests);
     const run_lua_core_tests_only = b.addRunArtifact(lua_core_tests_standalone);
+    const run_global_index_tests = b.addRunArtifact(global_index_tests);
+    const run_global_index_tests_only = b.addRunArtifact(global_index_tests_standalone);
+    const run_lua_abi_tests = b.addRunArtifact(lua_abi_tests);
+    const run_lua_abi_tests_only = b.addRunArtifact(lua_abi_tests_standalone);
     const run_lua_stdlib_tests = b.addRunArtifact(lua_stdlib_tests);
     const run_lua_ustring_tests = b.addRunArtifact(lua_ustring_tests);
     const run_lua_scribunto_tests = b.addRunArtifact(lua_scribunto_tests);
@@ -398,7 +449,9 @@ pub fn build(b: *std.Build) void {
     wikimedia_dump_tests.step.dependOn(&run_blob_query_tests.step);
     lua_tests.step.dependOn(&run_wikimedia_dump_tests.step);
     lua_core_tests.step.dependOn(&run_lua_tests.step);
-    lua_stdlib_tests.step.dependOn(&run_lua_core_tests.step);
+    global_index_tests.step.dependOn(&run_lua_core_tests.step);
+    lua_abi_tests.step.dependOn(&run_global_index_tests.step);
+    lua_stdlib_tests.step.dependOn(&run_lua_abi_tests.step);
     lua_ustring_tests.step.dependOn(&run_lua_stdlib_tests.step);
     lua_scribunto_tests.step.dependOn(&run_lua_ustring_tests.step);
     lua_wikitext_tests.step.dependOn(&run_lua_scribunto_tests.step);
@@ -411,6 +464,8 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run bundle encoder, data reader, Lua, and tooling tests");
     b.step("test-lua-core", "Run Lua runtime core tests serially").dependOn(&run_lua_core_tests_only.step);
+    b.step("test-global-index", "Run Lua global-name index tests serially").dependOn(&run_global_index_tests_only.step);
+    b.step("test-lua-abi", "Run Lua LLVM ABI tests serially").dependOn(&run_lua_abi_tests_only.step);
     blob_wasm_smoke.step.dependOn(&run_bundle_protocol_tests.step);
     test_step.dependOn(&blob_wasm_smoke.step);
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod } });

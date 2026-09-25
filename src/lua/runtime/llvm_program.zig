@@ -5,6 +5,7 @@ const scribunto = @import("zig_scribunto");
 const globals_abi = @import("lua_globals");
 const metadata = @import("lua_program_metadata");
 const static_decode = @import("lua_static_literal_decode");
+const global_shape_index = @import("global_shape_index.zig");
 
 pub const Context = rt.Context;
 
@@ -71,6 +72,7 @@ pub const Program = struct {
     synth_exports: []SynthExport,
     synth_export_entries: []const rt.FunctionFn,
     global_keys: []rt.Value,
+    global_sorted_slots: []u32,
     global_shape: rt.Shape,
     shapes: []rt.Shape,
     shape_keys: []rt.Value,
@@ -224,6 +226,8 @@ pub const Program = struct {
         errdefer allocator.free(global_keys);
         for (global_keys) |*key|
             key.* = .{ .string = try reader.readString() };
+        const global_sorted_slots = try global_shape_index.build(allocator, global_keys);
+        errdefer allocator.free(global_sorted_slots);
 
         const program_shapes = try allocator.alloc(rt.Shape, shape_count);
         errdefer allocator.free(program_shapes);
@@ -280,8 +284,10 @@ pub const Program = struct {
             .synth_exports = synth_exports,
             .synth_export_entries = synth_export_entries,
             .global_keys = global_keys,
+            .global_sorted_slots = global_sorted_slots,
             .global_shape = .{
                 .field_keys = global_keys,
+                .sorted_string_slots = global_sorted_slots,
                 .field_count = global_count,
                 .open = true,
             },
@@ -297,6 +303,7 @@ pub const Program = struct {
         self.allocator.free(self.shape_sorted_slots);
         self.allocator.free(self.shape_keys);
         self.allocator.free(self.shapes);
+        self.allocator.free(self.global_sorted_slots);
         self.allocator.free(self.global_keys);
         self.allocator.free(self.synth_exports);
         self.allocator.free(self.module_synth_offsets);
