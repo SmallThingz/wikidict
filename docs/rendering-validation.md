@@ -1,4 +1,4 @@
-# Presentation validation - 2026-09-24
+# Presentation validation - 2026-09-25
 
 The shipped reader format remains data-only. Lua modules, template source, wikitext,
 LLVM bitcode, native expander code, and deferred executable presentation are build
@@ -44,7 +44,9 @@ Wiktionary `action=parse` endpoint:
 python3 tools/check_mediawiki_recovery.py --out .tmp/mediawiki-recovery-report.json
 ```
 
-The current fixture has nine passing cases:
+The twelve current cases passed a fresh live check on 2026-09-25. The checker
+disables edit-section controls and checks heading levels as well as semantic
+visible text:
 
 - an unclosed `[[` opener remains literal;
 - orphan `]]` closers remain literal;
@@ -56,6 +58,10 @@ The current fixture has nine passing cases:
 - `<graph>...</graph>` contributes no visible text in the checked case;
 - a nonexistent template renders as a red `Template:name` link and its arguments
   are not displayed or shipped as executable/custom template data.
+- asymmetric heading delimiters use the smaller delimiter count as their level
+  and retain extra equals signs in the visible title; 7+ balanced delimiters
+  clamp to heading level 6;
+- valid `itemprop` metadata contributes no visible text.
 
 The compiler follows those observed results instead of inserting cleanup prose.
 For example, it no longer emits invented `[unsupported HTML: ...]` or
@@ -74,8 +80,10 @@ in `fallback-pages.jsonl`.
 
 ## Whole-dump evidence
 
-Current code was exercised against complete indexed 2026-09-01 dumps using the
-retained compiled expanders, then `verify-blobs`:
+The earlier recovery checkpoint was exercised against complete indexed
+2026-09-01 dumps using retained compiled expanders, then `verify-blobs`.
+These historical results do not qualify the later link-trail, heading, URL-scan,
+or shard-coverage changes:
 
 | edition | pages | main pages | language records | language blobs | fallback pages |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -114,6 +122,6 @@ reported omissions. The fallback report is the audit surface for those cases;
 build success must not be used to hide them.
 
 The full `zig build test -Doptimize=ReleaseFast` suite and bundle integration were
-run after the recovery changes. Bundle integration still reports
+run at that earlier recovery checkpoint. Its bundle integration reported
 `BUNDLE_INTEGRATION_PASS checks=19` and verifies the final tree contains compiled
 data only.

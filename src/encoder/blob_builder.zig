@@ -42,6 +42,7 @@ pub const LanguageCodes = struct {
     trusted_fn: ?*const fn (?*const anyopaque, []const u8) ?ResolvedLanguage = null,
     strong_fn: ?*const fn (?*const anyopaque, []const u8) ?ResolvedLanguage = null,
     content_fn: ?*const fn (?*const anyopaque) ?ResolvedLanguage = null,
+    link_trail: blobs.document_ir.LinkTrail = .{},
 
     pub fn code(self: LanguageCodes, heading: []const u8) ?[]const u8 {
         return self.get_fn(self.ctx, heading);
@@ -528,7 +529,7 @@ fn processMain(
 
     if (fallbacks.expansion_error and source.len == 0) {
         const language = codes.content() orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
-        const payload = try presentation_document.compileReportedAlloc(
+        const payload = try presentation_document.compileReportedWithLinkTrailAlloc(
             page_allocator,
             title,
             .language,
@@ -536,6 +537,7 @@ fn processMain(
             language.code,
             "",
             null,
+            codes.link_trail,
             fallbacks,
         );
         try spools.appendLanguage(page_allocator, language.heading, title, payload);
@@ -593,7 +595,7 @@ fn processMain(
     if (groups.items.len == 0) {
         fallbacks.missing_language_heading = true;
         const language = codes.content() orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
-        const payload = try presentation_document.compileReportedAlloc(
+        const payload = try presentation_document.compileReportedWithLinkTrailAlloc(
             page_allocator,
             title,
             .language,
@@ -601,6 +603,7 @@ fn processMain(
             language.code,
             source,
             if (display_title) |value| .{ .source = value, .page_title = title } else null,
+            codes.link_trail,
             fallbacks,
         );
         try spools.appendLanguage(page_allocator, language.heading, title, payload);
@@ -616,7 +619,7 @@ fn processMain(
     }
 
     for (groups.items) |group| {
-        const payload = try presentation_document.compileReportedAlloc(
+        const payload = try presentation_document.compileReportedWithLinkTrailAlloc(
             page_allocator,
             title,
             .language,
@@ -624,6 +627,7 @@ fn processMain(
             group.language.code,
             group.source.items,
             if (display_title) |value| .{ .source = value, .page_title = title } else null,
+            codes.link_trail,
             fallbacks,
         );
         try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
@@ -634,6 +638,7 @@ fn processMain(
 fn processNamespace(
     page_allocator: std.mem.Allocator,
     spools: *Spools,
+    link_trail: blobs.document_ir.LinkTrail,
     ns: u32,
     title: []const u8,
     source: []const u8,
@@ -650,7 +655,7 @@ fn processNamespace(
         ns_sign_gloss => .sign_gloss,
         else => unreachable,
     };
-    const payload = try presentation_document.compileReportedAlloc(
+    const payload = try presentation_document.compileReportedWithLinkTrailAlloc(
         page_allocator,
         local_title,
         kind,
@@ -658,6 +663,7 @@ fn processNamespace(
         "",
         source,
         if (display_title) |value| .{ .source = value, .page_title = title } else null,
+        link_trail,
         fallbacks,
     );
     switch (kind) {
@@ -793,7 +799,7 @@ pub const Writer = struct {
         if (ns == ns_main) {
             try processMain(page_allocator, &self.spools, self.language_codes, title, source, raw_source, display_title, &self.stats, &fallbacks);
         } else if (ns == ns_rhymes or ns == ns_thesaurus or ns == ns_citations or ns == ns_sign_gloss or ns == ns_reconstruction) {
-            try processNamespace(page_allocator, &self.spools, ns, title, source, display_title, &self.stats, &fallbacks);
+            try processNamespace(page_allocator, &self.spools, self.language_codes.link_trail, ns, title, source, display_title, &self.stats, &fallbacks);
         }
         if (fallbacks.any() or extra_reasons.len != 0) {
             var reasons: std.ArrayList([]const u8) = .empty;

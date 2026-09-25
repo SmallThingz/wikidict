@@ -12,9 +12,12 @@ class VisibleText(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.parts = []
+        self.heading_levels = []
     def handle_data(self, data):
         self.parts.append(data)
     def handle_starttag(self, tag, attrs):
+        if len(tag) == 2 and tag[0] == 'h' and tag[1] in '123456':
+            self.heading_levels.append(int(tag[1]))
         if tag in {'p', 'div', 'li', 'br', 'tr'}:
             self.parts.append(' ')
     def handle_endtag(self, tag):
@@ -31,8 +34,9 @@ def main():
     args = p.parse_args()
     results = []
     for case in json.loads(args.fixtures.read_text()):
+        expected_heading_levels = case.get('heading_levels', [])
         query = urllib.parse.urlencode(dict(action='parse', format='json', text=case['source'],
-            contentmodel='wikitext', prop='text', disablelimitreport=1))
+            contentmodel='wikitext', prop='text', disablelimitreport=1, disableeditsection=1))
         request = urllib.request.Request(args.endpoint+'?'+query, headers={
             'User-Agent':'WikidictBuildTests/0.1 (https://github.com/SmallThingz/wikidict)'})
         try:
@@ -41,9 +45,14 @@ def main():
             html = payload['parse']['text']['*']
             parser = VisibleText(); parser.feed(html)
             actual = parser.text()
-            result = dict(name=case['name'], passed=actual == case['text'], expected=case['text'], actual=actual, html=html)
+            result = dict(name=case['name'],
+                passed=actual == case['text'] and parser.heading_levels == expected_heading_levels,
+                expected=case['text'], actual=actual,
+                expected_heading_levels=expected_heading_levels, actual_heading_levels=parser.heading_levels,
+                html=html)
         except Exception as error:
-            result = dict(name=case['name'], passed=False, error=str(error))
+            result = dict(name=case['name'], passed=False,
+                expected=case['text'], expected_heading_levels=expected_heading_levels, error=str(error))
         results.append(result)
         print(('PASS' if result['passed'] else 'FAIL')+' '+case['name'], flush=True)
         time.sleep(0.2)

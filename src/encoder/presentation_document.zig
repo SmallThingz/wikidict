@@ -2,6 +2,7 @@ const std = @import("std");
 const compiler = @import("presentation_compile.zig");
 const semantic = @import("presentation_layout.zig");
 const blobs = @import("blob_encoder");
+const ir = blobs.document_ir;
 const types = blobs.presentation_types;
 const format = blobs.blob_format;
 const codec = blobs.presentation_codec;
@@ -21,6 +22,12 @@ fn requireCompiledText(text: []const u8) !void {
         if (name < text.len and std.ascii.isAlphabetic(text[name]) and std.mem.indexOfScalarPos(u8, text, name, '>') != null) {
             return error.UncompiledPresentation;
         }
+        at = start + 1;
+    }
+    at = 0;
+    while (std.mem.indexOfScalarPos(u8, text, at, '[')) |start| {
+        if (start + 1 < text.len and text[start + 1] != '[' and ir.hasExternalProtocol(text[start + 1 ..]))
+            return error.UncompiledPresentation;
         at = start + 1;
     }
 }
@@ -103,10 +110,14 @@ const Builder = struct {
         try self.flush(rendered[section_start..]);
     }
 };
-fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8) !Work {
+fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, link_trail: ir.LinkTrail) !Work {
     var renderer: compiler.Renderer = .{
         .a = a,
-        .context = .{ .title = title, .language = if (language.len == 0) "English" else language },
+        .context = .{
+            .title = title,
+            .language = if (language.len == 0) "English" else language,
+            .link_trail = link_trail,
+        },
     };
     var builder: Builder = .{
         .a = a,
@@ -124,12 +135,16 @@ fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8) 
     };
 }
 
-fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, fallbacks: ?*Fallbacks) ![]const compiler.Span {
+fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, fallbacks: ?*Fallbacks) ![]const compiler.Span {
     const value = display orelse return &.{};
     if (value.source.len == 0) return &.{};
     var renderer: compiler.Renderer = .{
         .a = a,
-        .context = .{ .title = value.page_title, .language = if (language.len == 0) "English" else language },
+        .context = .{
+            .title = value.page_title,
+            .language = if (language.len == 0) "English" else language,
+            .link_trail = link_trail,
+        },
     };
     const spans = renderer.parseSpans(value.source, .{ .role = .headword }) catch |err| {
         if (fallbacks) |report| switch (err) {
@@ -188,15 +203,39 @@ pub fn compileReportedAlloc(
     display_title: ?DisplayTitle,
     fallbacks: ?*Fallbacks,
 ) ![]u8 {
+    return compileReportedWithLinkTrailAlloc(
+        a,
+        title,
+        kind,
+        language,
+        language_code,
+        source,
+        display_title,
+        .{},
+        fallbacks,
+    );
+}
+
+pub fn compileReportedWithLinkTrailAlloc(
+    a: A,
+    title: []const u8,
+    kind: format.BlobKind,
+    language: ?[]const u8,
+    language_code: []const u8,
+    source: []const u8,
+    display_title: ?DisplayTitle,
+    link_trail: ir.LinkTrail,
+    fallbacks: ?*Fallbacks,
+) ![]u8 {
     _ = kind;
     _ = language_code;
-    const work = try workAlloc(a, title, language orelse "", source);
+    const work = try workAlloc(a, title, language orelse "", source, link_trail);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;
         report.missing_template = report.missing_template or work.unresolved_templates != 0;
     } else if (work.rendered_templates != 0 or work.unresolved_templates != 0) return error.UncompiledTemplate;
-    const display_spans = try displayTitleSpansAlloc(a, display_title, language orelse "", fallbacks);
+    const display_spans = try displayTitleSpansAlloc(a, display_title, language orelse "", link_trail, fallbacks);
     try validateSpans(a, display_spans, fallbacks);
     for (work.sections) |section| {
         try validateText(section.title, fallbacks);
@@ -224,11 +263,23 @@ test "shipped presentation rejects literal source even when protected by nowiki"
     }
 }
 
+test "reported publication audits malformed external link syntax" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==English==\n===Noun===\n# A [https://example.test broken link.\n";
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", source, null));
+
+    var report: Fallbacks = .{};
+    _ = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    try std.testing.expect(report.literal_markup);
+}
+
 test "builder sections borrow contiguous rendered block slices" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const work = try workAlloc(a, "page", "English", "preamble\n===First===\n# one\n===Second===\n===Third===\n# three\n");
+    const work = try workAlloc(a, "page", "English", "preamble\n===First===\n# one\n===Second===\n===Third===\n# three\n", .{});
     try std.testing.expectEqual(@as(usize, 4), work.sections.len);
     try std.testing.expectEqualStrings("English", work.sections[0].title);
     try std.testing.expectEqual(@as(usize, 1), work.sections[0].blocks.len);
@@ -251,6 +302,40 @@ test "compiled presentation contains no executable template syntax" {
     try std.testing.expectEqualStrings(types.schema, parsed.schema);
     try std.testing.expectEqualStrings("cat", parsed.entry.title);
     try std.testing.expectEqual(types.BlockKind.definition, parsed.entry.sections[1].blocks[0].kind);
+}
+
+test "edition link trail survives compiled presentation encoding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const trail: ir.LinkTrail = .{
+        .contains_fn = struct {
+            fn contains(_: ?*const anyopaque, cp: u21) bool {
+                return cp == 'ы';
+            }
+        }.contains,
+    };
+    const source = "==English==\n===Noun===\n# [[кот]]ыZ\n";
+    const bytes = try compileReportedWithLinkTrailAlloc(
+        a,
+        "entry",
+        .language,
+        "English",
+        "en",
+        source,
+        null,
+        trail,
+        null,
+    );
+    const parsed = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    const spans = parsed.entry.sections[1].blocks[0].spans;
+    var linked_trail = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "ы")) {
+            linked_trail = span.kind == .link and std.mem.eql(u8, span.target, "кот");
+        }
+    }
+    try std.testing.expect(linked_trail);
 }
 
 test "display titles compile to semantic spans after page-title validation" {

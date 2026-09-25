@@ -43,5 +43,22 @@
     "name": "missing-template",
     "source": "A {{WikidictDefinitelyMissingTemplate987654|secret}} B",
     "text": "A Template:WikidictDefinitelyMissingTemplate987654 B"
+  },
+  {
+    "name": "asymmetric-heading-parsed",
+    "source": "=== Head ====",
+    "text": "Head =",
+    "heading_levels": [3]
+  },
+  {
+    "name": "level-seven-heading-clamps",
+    "source": "======= Head =======",
+    "text": "= Head =",
+    "heading_levels": [6]
+  },
+  {
+    "name": "itemprop-metadata-invisible",
+    "source": "A<meta itemprop='x' content='y'>Z",
+    "text": "AZ"
   }
 ]
