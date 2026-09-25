@@ -6,6 +6,13 @@ pub const Resolved = struct {
     heading: []const u8,
 };
 
+pub const LinkTrailRange = struct {
+    first: u21,
+    last: u21,
+};
+
+const default_link_trail_ranges = [_]LinkTrailRange{.{ .first = 'a', .last = 'z' }};
+
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -16,6 +23,12 @@ pub const Registry = struct {
     canonical_names: std.StringHashMapUnmanaged([]const u8) = .empty,
     headings: std.StringHashMapUnmanaged([]const u8) = .empty,
     content_code: ?[]const u8 = null,
+    link_trail_ranges: []const LinkTrailRange = &default_link_trail_ranges,
+    link_trail_configured: bool = false,
+    link_trail_sequences: []const []const u8 = &.{},
+    link_trail_sequences_configured: bool = false,
+    link_trail_not_double: []const u21 = &.{},
+    link_trail_not_double_configured: bool = false,
 
     pub fn empty(a: std.mem.Allocator) Registry {
         return .{ .arena = .init(a) };
@@ -55,6 +68,132 @@ pub const Registry = struct {
 
     pub fn content(self: *const Registry) ?Resolved {
         return self.resolve(self.content_code orelse return null);
+    }
+
+    pub fn linkTrailContains(self: *const Registry, cp: u21) bool {
+        for (self.link_trail_ranges) |range| {
+            if (cp < range.first) return false;
+            if (cp <= range.last) return true;
+        }
+        return false;
+    }
+
+    fn decodeScalarAt(input: []const u8, start: usize) ?struct { cp: u21, end: usize } {
+        if (start >= input.len) return null;
+        const sequence_len = std.unicode.utf8ByteSequenceLength(input[start]) catch return null;
+        if (start + sequence_len > input.len) return null;
+        const cp = std.unicode.utf8Decode(input[start .. start + sequence_len]) catch return null;
+        return .{ .cp = cp, .end = start + sequence_len };
+    }
+
+    pub fn linkTrailEnd(self: *const Registry, input: []const u8, start: usize) usize {
+        var cursor = start;
+        while (cursor < input.len) {
+            var sequence_end: usize = cursor;
+            for (self.link_trail_sequences) |sequence| {
+                if (std.mem.startsWith(u8, input[cursor..], sequence))
+                    sequence_end = @max(sequence_end, cursor + sequence.len);
+            }
+            if (sequence_end != cursor) {
+                cursor = sequence_end;
+                continue;
+            }
+
+            const decoded = decodeScalarAt(input, cursor) orelse break;
+            if (self.linkTrailContains(decoded.cp)) {
+                cursor = decoded.end;
+                continue;
+            }
+
+            var guarded = false;
+            for (self.link_trail_not_double) |cp| if (cp == decoded.cp) {
+                guarded = true;
+                break;
+            };
+            if (!guarded) break;
+            if (decodeScalarAt(input, decoded.end)) |next| {
+                if (next.cp == decoded.cp) break;
+            }
+            cursor = decoded.end;
+        }
+        return cursor;
+    }
+
+    fn parseUnicodeScalar(raw: []const u8) !u21 {
+        if (raw.len == 0 or raw.len > 6) return error.InvalidLanguageRegistry;
+        const value = std.fmt.parseInt(u32, raw, 16) catch return error.InvalidLanguageRegistry;
+        if (value > 0x10ffff or (value >= 0xd800 and value <= 0xdfff))
+            return error.InvalidLanguageRegistry;
+        return @intCast(value);
+    }
+
+    fn setLinkTrailRanges(self: *Registry, source: []const u8) !void {
+        if (self.link_trail_configured) return error.InvalidLanguageRegistry;
+        self.link_trail_configured = true;
+        if (source.len == 0) {
+            self.link_trail_ranges = &.{};
+            return;
+        }
+
+        const owned = self.arena.allocator();
+        var ranges: std.ArrayList(LinkTrailRange) = .empty;
+        var fields = std.mem.splitScalar(u8, source, ',');
+        var previous_last: ?u21 = null;
+        while (fields.next()) |field| {
+            if (field.len == 0) return error.InvalidLanguageRegistry;
+            const dash = std.mem.indexOfScalar(u8, field, '-');
+            const first = try parseUnicodeScalar(if (dash) |at| field[0..at] else field);
+            const last = if (dash) |at| blk: {
+                if (std.mem.indexOfScalarPos(u8, field, at + 1, '-') != null)
+                    return error.InvalidLanguageRegistry;
+                break :blk try parseUnicodeScalar(field[at + 1 ..]);
+            } else first;
+            if (last < first or (first <= 0xdfff and last >= 0xd800))
+                return error.InvalidLanguageRegistry;
+            if (previous_last) |previous| if (first <= previous)
+                return error.InvalidLanguageRegistry;
+            try ranges.append(owned, .{ .first = first, .last = last });
+            previous_last = last;
+        }
+        self.link_trail_ranges = try ranges.toOwnedSlice(owned);
+    }
+
+    fn setLinkTrailSequences(self: *Registry, source: []const u8) !void {
+        if (self.link_trail_sequences_configured or source.len == 0) return error.InvalidLanguageRegistry;
+        self.link_trail_sequences_configured = true;
+        const owned = self.arena.allocator();
+        var sequences: std.ArrayList([]const u8) = .empty;
+        var fields = std.mem.splitScalar(u8, source, ',');
+        while (fields.next()) |field| {
+            if (field.len == 0) return error.InvalidLanguageRegistry;
+            var bytes: std.ArrayList(u8) = .empty;
+            var scalars = std.mem.splitScalar(u8, field, '+');
+            var count: usize = 0;
+            while (scalars.next()) |raw| {
+                const cp = try parseUnicodeScalar(raw);
+                var encoded: [4]u8 = undefined;
+                const len = std.unicode.utf8Encode(cp, &encoded) catch return error.InvalidLanguageRegistry;
+                try bytes.appendSlice(owned, encoded[0..len]);
+                count += 1;
+            }
+            if (count < 2) return error.InvalidLanguageRegistry;
+            try sequences.append(owned, try bytes.toOwnedSlice(owned));
+        }
+        self.link_trail_sequences = try sequences.toOwnedSlice(owned);
+    }
+
+    fn setLinkTrailNotDouble(self: *Registry, source: []const u8) !void {
+        if (self.link_trail_not_double_configured or source.len == 0) return error.InvalidLanguageRegistry;
+        self.link_trail_not_double_configured = true;
+        const owned = self.arena.allocator();
+        var values: std.ArrayList(u21) = .empty;
+        var fields = std.mem.splitScalar(u8, source, ',');
+        while (fields.next()) |raw| {
+            const cp = try parseUnicodeScalar(raw);
+            for (values.items) |existing| if (existing == cp) return error.InvalidLanguageRegistry;
+            try values.append(owned, cp);
+        }
+        self.link_trail_not_double = try values.toOwnedSlice(owned);
     }
 
     fn reserveCode(self: *Registry, code_value: []const u8) !void {
@@ -215,11 +354,26 @@ pub const Registry = struct {
             }
             if (line.len == 0) continue;
             if (line[0] == '#') {
-                const marker = "# content-language\t";
-                if (std.mem.startsWith(u8, line, marker)) {
-                    const code_value = line[marker.len..];
+                const content_marker = "# content-language\t";
+                if (std.mem.startsWith(u8, line, content_marker)) {
+                    const code_value = line[content_marker.len..];
                     if (!validCode(code_value) or self.content_code != null) return error.InvalidLanguageRegistry;
                     self.content_code = try self.arena.allocator().dupe(u8, code_value);
+                    continue;
+                }
+                const trail_marker = "# link-trail-ranges\t";
+                if (std.mem.startsWith(u8, line, trail_marker)) {
+                    try self.setLinkTrailRanges(line[trail_marker.len..]);
+                    continue;
+                }
+                const sequence_marker = "# link-trail-sequences\t";
+                if (std.mem.startsWith(u8, line, sequence_marker)) {
+                    try self.setLinkTrailSequences(line[sequence_marker.len..]);
+                    continue;
+                }
+                const guarded_marker = "# link-trail-not-double\t";
+                if (std.mem.startsWith(u8, line, guarded_marker)) {
+                    try self.setLinkTrailNotDouble(line[guarded_marker.len..]);
                 }
                 continue;
             }
@@ -376,6 +530,7 @@ test "pinned TSV aliases merge and expose content language" {
     try r.addTsv(
         "# wikidict-language-registry-v2\n" ++
             "# content-language\tfi\n" ++
+            "# link-trail-ranges\t0061-007A,00E4,00F6\n" ++
             "fi\tSuomi\tfi\tfin\tFinnish\tsuomi\n" ++
             "en\tEnglanti\ten\teng\tEnglish\n",
     );
@@ -383,6 +538,10 @@ test "pinned TSV aliases merge and expose content language" {
     try std.testing.expectEqualStrings("Suomi", r.resolve("Finnish").?.heading);
     try std.testing.expectEqualStrings("English", r.resolve("Englanti").?.heading);
     try std.testing.expectEqualStrings("Suomi", r.content().?.heading);
+    try std.testing.expect(r.linkTrailContains('a'));
+    try std.testing.expect(r.linkTrailContains('ä'));
+    try std.testing.expect(r.linkTrailContains('ö'));
+    try std.testing.expect(!r.linkTrailContains('å'));
     try std.testing.expect(r.resolveTrusted("Suomi") != null);
     try std.testing.expect(r.resolveTrusted("Finnish") == null);
     try r.addTsv("roa-rup\tAromanian\trup\nrup\tArmãneashti\trup\n");
@@ -396,4 +555,52 @@ test "pinned TSV aliases merge and expose content language" {
     try std.testing.expectEqualStrings("fr", r.resolve("French").?.code);
     try std.testing.expectError(error.InvalidLanguageRegistry, r.addTsv("bad code\tBad\n"));
     try std.testing.expectError(error.InvalidLanguageRegistry, r.addTsv("fr\t\n"));
+}
+
+test "link trail ranges reject malformed or overlapping registry metadata" {
+    var default = Registry.empty(std.testing.allocator);
+    defer default.deinit();
+    try default.addTsv("en\tEnglish\ten\n");
+    try std.testing.expect(default.linkTrailContains('a'));
+    try std.testing.expect(!default.linkTrailContains('ä'));
+
+    var empty = Registry.empty(std.testing.allocator);
+    defer empty.deinit();
+    try empty.addTsv("# link-trail-ranges\t\nen\tEnglish\ten\n");
+    try std.testing.expect(!empty.linkTrailContains('a'));
+
+    for ([_][]const u8{
+        "# link-trail-ranges\t0061-007A,0070-0080\nen\tEnglish\ten\n",
+        "# link-trail-ranges\tD800\nen\tEnglish\ten\n",
+        "# link-trail-ranges\tD7FF-E000\nen\tEnglish\ten\n",
+        "# link-trail-ranges\t110000\nen\tEnglish\ten\n",
+        "# link-trail-ranges\t007A-0061\nen\tEnglish\ten\n",
+    }) |source| {
+        var invalid = Registry.empty(std.testing.allocator);
+        defer invalid.deinit();
+        try std.testing.expectError(error.InvalidLanguageRegistry, invalid.addTsv(source));
+    }
+}
+
+test "link trail sequences and guarded apostrophes match MediaWiki rules" {
+    var breton = Registry.empty(std.testing.allocator);
+    defer breton.deinit();
+    try breton.addTsv(
+        "# link-trail-ranges\t0041-005A,0061-007A\n" ++
+            "# link-trail-sequences\t0063+0027+0068,0043+0027+0048,0063+2019+0068\n" ++
+            "br\tBrezhoneg\tbr\n",
+    );
+    try std.testing.expectEqual("c'h".len, breton.linkTrailEnd("c'h!", 0));
+    try std.testing.expectEqual("c’h".len, breton.linkTrailEnd("c’h!", 0));
+    try std.testing.expectEqual(@as(usize, 1), breton.linkTrailEnd("c'Z", 0));
+
+    var catalan = Registry.empty(std.testing.allocator);
+    defer catalan.deinit();
+    try catalan.addTsv(
+        "# link-trail-ranges\t0061-007A\n" ++
+            "# link-trail-not-double\t0027\n" ++
+            "ca\tCatalà\tca\n",
+    );
+    try std.testing.expectEqual(@as(usize, 2), catalan.linkTrailEnd("a'Z", 0));
+    try std.testing.expectEqual(@as(usize, 1), catalan.linkTrailEnd("a''Z", 0));
 }

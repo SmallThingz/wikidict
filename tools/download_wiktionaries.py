@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 import re
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -111,6 +112,175 @@ def iso_639_3(path=None):
 def _capitalized_alias(name):
     return name[:1].upper() + name[1:] if name else name
 
+def _linktrail_class_atom(source, index):
+    if index >= len(source):
+        raise ValueError("Invalid linktrail character class")
+    if source[index] != "\\":
+        value = ord(source[index])
+        if 0xD800 <= value <= 0xDFFF:
+            raise ValueError("Invalid linktrail Unicode scalar")
+        return value, index + 1
+    if source.startswith("\\x{", index):
+        close = source.find("}", index + 3)
+        if close < 0:
+            raise ValueError("Invalid linktrail hex escape")
+        raw = source[index + 3:close]
+        if not re.fullmatch(r"[0-9A-Fa-f]{1,6}", raw):
+            raise ValueError("Invalid linktrail hex escape")
+        value = int(raw, 16)
+        if value > 0x10FFFF or 0xD800 <= value <= 0xDFFF:
+            raise ValueError("Invalid linktrail Unicode scalar")
+        return value, close + 1
+    if source.startswith("\\x", index):
+        raw = source[index + 2:index + 4]
+        if len(raw) != 2 or not re.fullmatch(r"[0-9A-Fa-f]{2}", raw):
+            raise ValueError("Invalid linktrail byte escape")
+        return int(raw, 16), index + 4
+    if index + 1 < len(source) and source[index + 1] in "\\-[]/'":
+        return ord(source[index + 1]), index + 2
+    raise ValueError(f"Unsupported linktrail escape: {source[index:index+8]}")
+
+def _merge_linktrail_ranges(ranges):
+    ranges.sort()
+    merged = []
+    for first, last in ranges:
+        if merged and first <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], last))
+        else:
+            merged.append((first, last))
+    return merged
+
+def _parse_linktrail_class(source):
+    if source.startswith("^"):
+        raise ValueError("Unsupported negated linktrail character class")
+    ranges = []
+    index = 0
+    while index < len(source):
+        first, index = _linktrail_class_atom(source, index)
+        last = first
+        if index < len(source) and source[index] == "-" and index + 1 < len(source):
+            last, index = _linktrail_class_atom(source, index + 1)
+            if last < first:
+                raise ValueError("Invalid descending linktrail range")
+        if first <= 0xDFFF and last >= 0xD800:
+            raise ValueError("Linktrail range crosses Unicode surrogates")
+        ranges.append((first, last))
+    return ranges
+
+def _format_linktrail_ranges(ranges):
+    merged = _merge_linktrail_ranges(ranges)
+    return ",".join(
+        f"{first:04X}" if first == last else f"{first:04X}-{last:04X}"
+        for first, last in merged
+    )
+
+@functools.lru_cache(maxsize=1)
+def _unicode_letter_ranges():
+    ranges = []
+    start = None
+    previous = None
+    for value in range(0x110000):
+        if 0xD800 <= value <= 0xDFFF:
+            is_letter = False
+        else:
+            is_letter = unicodedata.category(chr(value)).startswith("L")
+        if is_letter:
+            if start is None:
+                start = value
+            previous = value
+        elif start is not None:
+            ranges.append((start, previous))
+            start = previous = None
+    if start is not None:
+        ranges.append((start, previous))
+    return tuple(ranges)
+
+def _split_linktrail_alternatives(source):
+    parts = []
+    start = 0
+    depth = 0
+    in_class = False
+    escaped = False
+    for index, ch in enumerate(source):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if in_class:
+            if ch == "]":
+                in_class = False
+            continue
+        if ch == "[":
+            in_class = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("Invalid MediaWiki linktrail alternation")
+        elif ch == "|" and depth == 0:
+            parts.append(source[start:index])
+            start = index + 1
+    if escaped or in_class or depth != 0:
+        raise ValueError("Invalid MediaWiki linktrail alternation")
+    parts.append(source[start:])
+    return parts
+
+def _parse_linktrail_literal(source):
+    values = []
+    index = 0
+    while index < len(source):
+        if source[index] in "[]()|+*?{}.^$":
+            raise ValueError(f"Unsupported MediaWiki linktrail token: {source}")
+        value, index = _linktrail_class_atom(source, index)
+        values.append(value)
+    if not values:
+        raise ValueError("Empty MediaWiki linktrail token")
+    return tuple(values)
+
+def canonical_linktrail_metadata(pattern):
+    if not isinstance(pattern, str):
+        raise ValueError("Missing MediaWiki linktrail")
+    flags = pattern.rsplit("/", 1)[-1]
+    if any(flag not in "sDu" for flag in flags) or len(set(flags)) != len(flags):
+        raise ValueError(f"Unsupported MediaWiki linktrail flags: {pattern}")
+    if re.fullmatch(r"/\^\(\)\(\.\*\)\$/[A-Za-z]*", pattern):
+        return "", "", ""
+
+    simple = re.fullmatch(r"/\^\(\[([^]]*)\]\+\)\(\.\*\)\$/[A-Za-z]*", pattern)
+    if simple:
+        return _format_linktrail_ranges(_parse_linktrail_class(simple.group(1))), "", ""
+
+    if re.fullmatch(r"/\^\(\\p\{L\}\+\)\(\.\*\)\$/[A-Za-z]*", pattern):
+        return _format_linktrail_ranges(list(_unicode_letter_ranges())), "", ""
+
+    complex_match = re.fullmatch(r"/\^\(\(\?:([\s\S]+)\)\+\)\(\.\*\)\$/[A-Za-z]*", pattern)
+    if not complex_match:
+        raise ValueError(f"Unsupported MediaWiki linktrail: {pattern}")
+    ranges = []
+    sequences = []
+    guarded = []
+    for alternative in _split_linktrail_alternatives(complex_match.group(1)):
+        if alternative.startswith("[") and alternative.endswith("]"):
+            ranges.extend(_parse_linktrail_class(alternative[1:-1]))
+        elif alternative in ("'(?!')", "\\'(?!\\')"):
+            guarded.append(ord("'"))
+        else:
+            literal = _parse_linktrail_literal(alternative)
+            if len(literal) == 1:
+                ranges.append((literal[0], literal[0]))
+            else:
+                sequences.append(literal)
+
+    sequence_text = ",".join("+".join(f"{cp:04X}" for cp in sequence) for sequence in sequences)
+    guarded_text = ",".join(f"{cp:04X}" for cp in sorted(set(guarded)))
+    return _format_linktrail_ranges(ranges), sequence_text, guarded_text
+
+def canonical_linktrail_ranges(pattern):
+    return canonical_linktrail_metadata(pattern)[0]
+
 def language_registry_snapshot(wiki, iso_path=None):
     base = siteinfo(wiki, "general|languages")
     general = base.get("general")
@@ -120,6 +290,7 @@ def language_registry_snapshot(wiki, iso_path=None):
     content_language = general.get("lang")
     if not isinstance(content_language, str) or not re.fullmatch(r"[A-Za-z0-9-]+", content_language):
         raise ValueError(f"Invalid content language for {wiki}")
+    linktrail_ranges, linktrail_sequences, linktrail_not_double = canonical_linktrail_metadata(general.get("linktrail"))
 
     localized = siteinfo(wiki, "languages", content_language).get("languages")
     if not isinstance(localized, list):
@@ -224,8 +395,13 @@ def language_registry_snapshot(wiki, iso_path=None):
     rows = [
         "# wikidict-language-registry-v2",
         f"# content-language\t{content_language}",
-        "# mediawiki",
+        f"# link-trail-ranges\t{linktrail_ranges}",
     ]
+    if linktrail_sequences:
+        rows.append(f"# link-trail-sequences\t{linktrail_sequences}")
+    if linktrail_not_double:
+        rows.append(f"# link-trail-not-double\t{linktrail_not_double}")
+    rows.append("# mediawiki")
     rows.extend("\t".join([code, *aliases]) for code, aliases in sorted(site_entries))
     rows.append("# iso-639-3")
     rows.extend("\t".join([code, *aliases]) for code, aliases in iso_entries)
