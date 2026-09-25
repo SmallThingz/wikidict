@@ -302,8 +302,17 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/lua/runtime/core.zig"),
         .target = target,
         .optimize = test_optimize,
+        .link_libc = true,
     });
     zig_runtime_test_mod.addImport("lua_static_fields", lua_static_fields_test_mod);
+    const lua_core_tests = b.addTest(.{
+        .root_module = zig_runtime_test_mod,
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const lua_core_tests_standalone = b.addTest(.{
+        .root_module = zig_runtime_test_mod,
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
     const lua_stdlib_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/lua/runtime/stdlib.zig"),
@@ -376,6 +385,8 @@ pub fn build(b: *std.Build) void {
     const run_blob_query_tests = b.addRunArtifact(blob_query_tests);
     const run_wikimedia_dump_tests = b.addRunArtifact(wikimedia_dump_tests);
     const run_lua_tests = b.addRunArtifact(lua_tests);
+    const run_lua_core_tests = b.addRunArtifact(lua_core_tests);
+    const run_lua_core_tests_only = b.addRunArtifact(lua_core_tests_standalone);
     const run_lua_stdlib_tests = b.addRunArtifact(lua_stdlib_tests);
     const run_lua_ustring_tests = b.addRunArtifact(lua_ustring_tests);
     const run_lua_scribunto_tests = b.addRunArtifact(lua_scribunto_tests);
@@ -386,7 +397,8 @@ pub fn build(b: *std.Build) void {
     blob_query_tests.step.dependOn(&run_blob_decoder_tests.step);
     wikimedia_dump_tests.step.dependOn(&run_blob_query_tests.step);
     lua_tests.step.dependOn(&run_wikimedia_dump_tests.step);
-    lua_stdlib_tests.step.dependOn(&run_lua_tests.step);
+    lua_core_tests.step.dependOn(&run_lua_tests.step);
+    lua_stdlib_tests.step.dependOn(&run_lua_core_tests.step);
     lua_ustring_tests.step.dependOn(&run_lua_stdlib_tests.step);
     lua_scribunto_tests.step.dependOn(&run_lua_ustring_tests.step);
     lua_wikitext_tests.step.dependOn(&run_lua_scribunto_tests.step);
@@ -398,6 +410,7 @@ pub fn build(b: *std.Build) void {
     run_bundle_protocol_tests.step.dependOn(&run_lua_wikitext_tests.step);
 
     const test_step = b.step("test", "Run bundle encoder, data reader, Lua, and tooling tests");
+    b.step("test-lua-core", "Run Lua runtime core tests serially").dependOn(&run_lua_core_tests_only.step);
     blob_wasm_smoke.step.dependOn(&run_bundle_protocol_tests.step);
     test_step.dependOn(&blob_wasm_smoke.step);
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod } });

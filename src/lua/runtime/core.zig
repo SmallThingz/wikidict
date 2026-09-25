@@ -1685,15 +1685,17 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     try ctx.package_loaded.?.rawSet(ctx.allocator, .{ .string = "builtin" }, .{ .string = "preloaded" });
     try std.testing.expectEqualStrings("preloaded", (try ctx.requireByName("builtin")).string);
     try ctx.ensureModule(0);
-    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
+    try std.testing.expect(ctx.getGlobal(0) == .nil);
+    try std.testing.expectEqual(@as(f64, 1), ctx.moduleState(0).?.globals.?[0].number);
     try std.testing.expectEqualStrings("Module:A", ctx.package_loaded.?.rawGet(.{ .string = "Module:A" }).?.string);
 
     const alias = try ctx.requireByName("Alias:A");
     try std.testing.expectEqualStrings("Module:A", alias.string);
-    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
+    try std.testing.expectEqual(@as(f64, 1), ctx.moduleState(0).?.globals.?[0].number);
     const canonical = try ctx.requireByName("Module:A");
     try std.testing.expectEqualStrings("Module:A", canonical.string);
-    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
+    try std.testing.expectEqual(@as(f64, 1), ctx.moduleState(0).?.globals.?[0].number);
+    try std.testing.expect(ctx.getGlobal(0) == .nil);
     try std.testing.expectEqualStrings("Module:A", ctx.package_loaded.?.rawGet(.{ .string = "Alias:A" }).?.string);
     try std.testing.expectEqualStrings("Module:A", ctx.package_loaded.?.rawGet(.{ .string = "Module:A" }).?.string);
 
@@ -1969,7 +1971,7 @@ test "module globals are isolated for dynamic and static calls" {
     );
     defer freeResults(same_module);
     try std.testing.expectEqualStrings("current", same_module[0].string);
-    try std.testing.expectEqualStrings("root", ctx.getGlobal(0).string);
+    try std.testing.expectEqualStrings("current", ctx.getGlobal(0).string);
 }
 
 const NativeHostProbe = struct {
@@ -2438,6 +2440,47 @@ test "native namespace fields use fixed slots with generic fallback" {
     try generic.rawSet(ctx.allocator, .{ .string = "insert" }, .{ .number = 7 });
     try std.testing.expectEqual(@as(f64, 7), generic.rawGet(.{ .string = "insert" }).?.number);
     try std.testing.expectEqual(@as(usize, 1), generic.map.count());
+}
+
+test "indexed global shape preserves slot aliases iteration and context isolation" {
+    const keys = [_]Value{
+        .{ .string = "_G" }, .{ .string = "zebra" }, .{ .string = "alpha" }, .{ .string = "middle" },
+    };
+    const sorted_slots = [_]u32{ 0, 2, 3, 1 };
+    const shape: Shape = .{
+        .field_keys = &keys,
+        .sorted_string_slots = &sorted_slots,
+        .field_count = keys.len,
+        .open = true,
+    };
+    var first = try Context.init(std.testing.allocator, keys.len);
+    defer first.deinit();
+    var second = try Context.init(std.testing.allocator, keys.len);
+    defer second.deinit();
+    try bindGlobalTable(&first, &shape, 0);
+    try bindGlobalTable(&second, &shape, 0);
+    const table = first.global_table.?;
+    for (keys[1..], 1..) |key, slot| {
+        try first.setGlobal(@intCast(slot), .{ .number = @floatFromInt(slot) });
+        try std.testing.expectEqual(@as(f64, @floatFromInt(slot)), table.rawGet(key).?.number);
+        try std.testing.expect(second.global_table.?.rawGet(key) == null);
+    }
+    const saved_slot_pointer = &first.globals[1];
+    try table.rawSet(first.allocator, keys[1], .{ .number = 19 });
+    try std.testing.expectEqual(@as(f64, 19), first.getGlobal(1).number);
+    try std.testing.expectEqual(@as(f64, 19), saved_slot_pointer.number);
+    try std.testing.expect(second.getGlobal(1) == .nil);
+    try std.testing.expect(table.rawGet(.{ .string = "unknown" }) == null);
+    try table.rawSet(first.allocator, .{ .string = "unknown" }, .{ .number = 23 });
+    try std.testing.expectEqual(@as(f64, 23), table.rawGet(.{ .string = "unknown" }).?.number);
+    var it = table.iterator();
+    for (keys) |key| {
+        const entry = it.next().?;
+        try std.testing.expect(rawEqual(key, entry.key_ptr.*));
+    }
+    const extra = it.next().?;
+    try std.testing.expectEqualStrings("unknown", extra.key_ptr.string);
+    try std.testing.expect(it.next() == null);
 }
 
 test "generic tables use dense numeric slots and keep sparse keys hashed" {
