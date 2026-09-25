@@ -90,7 +90,7 @@ language heading are now retained under `Unclassified` and reported instead of
 being silently dropped.
 
 A fresh end-to-end Old English build from the downloaded dump also passed native
-Lua compilation/linking, page expansion, blob verification, extreme XZ
+Lua compilation/linking, page expansion, blob verification, XZ
 compression and round-trip verification. It published 68 `.wikblb.xz` files,
 kept all 480 fallback records, removed the raw `.wikblb` files, and wrote matching
 `complete.json` metadata.
@@ -99,7 +99,9 @@ A separate real two-edition run built `aawiktionary` and `abwiktionary` with two
 concurrent edition jobs and two workers per edition. Their compile/link/expand
 pipelines overlapped and both published verified compressed output with fallback
 reports. `--threads` controls per-edition Lua parsing, LLVM compilation, page
-expansion, and XZ work; `--jobs` overlaps edition pipelines. The individual native
+expansion, and XZ work; `--jobs` overlaps edition pipelines. Current orchestration
+also gates new jobs against live CPU load and available memory, so those are
+upper bounds rather than a promise to saturate the machine. The individual native
 link command is still one link operation and is not claimed to be internally
 multithreaded.
 

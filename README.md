@@ -71,13 +71,20 @@ Use Wikimedia's `pages-meta-current` dump for complete builds. Wiktionary entrie
 can depend on pages outside the main and Template namespaces, so an articles-only
 dump is not sufficient.
 
-A decompressed XML dump is the simplest input:
+For corpus builds, keep the Wikimedia dumps compressed. The download/build
+tools stage the existing `.bz2` members directly and generate only the tiny
+multistream offset sidecar needed for random access:
 
 ```sh
-zig build -Doptimize=ReleaseFast build-dictionary -- \
-  data/wiktionary.xml \
-  data/wiktionary-blobs
+python tools/download_wiktionaries.py --out data/dumps --wikis enwiktionary
+python tools/build_wiktionaries.py --in data/dumps --out data/dictionaries \
+  --wikis enwiktionary
 ```
+
+`build-dictionary` still accepts decompressed XML for small one-off fixtures, but
+the corpus builder does **not** materialize a decompressed `pages.xml` scratch
+file. A single dump part is hard-linked when possible; multipart dumps are
+concatenated while still compressed.
 
 The build pipeline:
 
@@ -90,6 +97,27 @@ The build pipeline:
 
 Existing output directories are not modified in place. Failed builds retain an
 `.incomplete` marker.
+
+### Resource and scratch behavior
+
+The corpus builder is intentionally conservative on developer machines:
+
+- no build starts unless at least 2 GiB remains reserved for the rest of the
+  system, with roughly 1.5 GiB budgeted per admitted build worker;
+- at least 25% of logical CPU capacity is reserved, and new editions are not
+  admitted while live load or memory pressure consumes that headroom;
+- individual compiler/expansion stages are capped at four workers and XZ
+  publication is capped at four threads;
+- LLVM bitcode/object scratch is removed before page expansion, snapshot inputs
+  are linked instead of copied when possible, and verified shard trees are
+  removed immediately after merge;
+- release compression uses 1 MiB XZ blocks at preset `-6`; higher presets did
+  not improve block utilization enough to justify their CPU cost.
+
+One substantial scratch write remains by design: compiled records are first
+written to spool files. Wikimedia dump order is not the final per-language title
+order required by WIKBLB08, so the builder needs one reorder pass before it can
+write canonical blobs. The spool is transient and is removed after finalization.
 
 ### External Wikimedia state
 
