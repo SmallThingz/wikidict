@@ -13,6 +13,11 @@ completely and verified as 317 lines, SHA-256
 `cabcd59ad6f522ba8fda94a50b3011192b08b2ff9debf21b4252be6c566c32fc`.
 Unrelated dirty source and assets were preserved.
 
+This document records the initial decoder and reader qualification. The later
+[compilation and runtime checkpoint](compilation-performance-2026-09-25.md)
+records subsequent cache changes, the full Zig graph result, runtime candidates,
+and their remaining native integration gates.
+
 ## Changes
 
 ### Whole-tree resource limits
@@ -181,9 +186,9 @@ no writable delegation for a new private build group. The raw `data/dumps`
 cache is absent. Available RAM and load varied during the pass; an earlier
 snapshot had about 3.5 GiB available and substantial existing swap use.
 
-Cgroup control-file behavior is unit tested with temporary mocks. A real
-delegated-host integration run, the full Zig test graph, an end-to-end corpus
-build and Android/Desktop qualification were not performed in this pass.
+Cgroup control-file behavior is unit tested with temporary mocks. At this initial
+checkpoint, a real delegated-host integration run, the full Zig test graph, an
+end-to-end corpus build and Android/Desktop qualification had not been performed.
 The bounded affected tests do not substitute for those qualifications.
 
 ## Next step toward 10,000 pages/s
