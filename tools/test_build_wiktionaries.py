@@ -124,7 +124,7 @@ class BuildTest(unittest.TestCase):
             item=dict(wiki='testwiktionary',date='20260901',name='testwiktionary-20260901-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/testwiktionary-20260901-pages-meta-current.xml.bz2',size=1,sha1='a'*40)
             (source/'manifest.json').write_text(json.dumps({'files':[item]}))
             output=root/'output'
-            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(output),'--threads','2']),patch.object(b,'available_memory_bytes',return_value=16*1024*1024*1024),patch.object(b,'build') as build:
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(output),'--threads','2']),patch.object(b,'available_memory_bytes',return_value=16*1024*1024*1024),patch.object(b,'load_average',return_value=0),patch.object(b,'build') as build:
                 b.main()
             self.assertEqual(build.call_args.args[1:4],(source.resolve(),output.resolve(),b.shutil.which('zig') or 'zig'))
             self.assertEqual(build.call_args.args[4],2)
@@ -137,7 +137,7 @@ class BuildTest(unittest.TestCase):
                 items.append(dict(wiki=wiki,date='20260901',name=name,url=f'https://dumps.wikimedia.org/{wiki}/20260901/{name}',size=1,sha1='a'*40))
             (source/'manifest.json').write_text(json.dumps({'files':items}))
             rendezvous=threading.Barrier(2)
-            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(root/'output'),'--threads','2','--jobs','2']),patch.object(b,'available_memory_bytes',return_value=16*1024*1024*1024),patch.object(b,'build',side_effect=lambda *args:rendezvous.wait(timeout=2)) as build:
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(root/'output'),'--threads','2','--jobs','2']),patch.object(b,'available_memory_bytes',return_value=16*1024*1024*1024),patch.object(b,'load_average',return_value=0),patch.object(b,'build',side_effect=lambda *args:rendezvous.wait(timeout=2)) as build:
                 b.main()
             self.assertEqual(build.call_count,2)
     def test_scheduler_rechecks_memory_before_starting_next_edition(self):
@@ -148,7 +148,7 @@ class BuildTest(unittest.TestCase):
         started=[]
         budgets=iter((2,0,0))
         def fake_build(group,*args):started.append(group[0]['wiki'])
-        with patch.object(b,'safe_worker_budget',side_effect=lambda:next(budgets,0)),patch.object(b,'build',side_effect=fake_build):
+        with patch.object(b,'safe_worker_budget',side_effect=lambda _owned=0:next(budgets,0)),patch.object(b,'build',side_effect=fake_build):
             failures=b.build_groups(groups,Path('.'),Path('.'),'zig',2,1)
         self.assertEqual(started,['aawiktionary'])
         self.assertEqual(failures,[('abwiktionary','20260901')])
@@ -177,19 +177,26 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(default_workers(),1)
 
     def test_safe_worker_budget_caps_cpu_and_memory(self):
-        with patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'available_memory_bytes',return_value=8*1024*1024*1024):
+        with patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'load_average',return_value=0),patch.object(b,'available_memory_bytes',return_value=8*1024*1024*1024):
             self.assertEqual(b.safe_worker_budget(),4)
             self.assertEqual(b.default_build_threads(),4)
-        with patch.object(b.os,'cpu_count',return_value=2),patch.object(b,'available_memory_bytes',return_value=64*1024*1024*1024):
-            self.assertEqual(b.safe_worker_budget(),2)
-            self.assertEqual(b.default_build_threads(),2)
+        with patch.object(b.os,'cpu_count',return_value=2),patch.object(b,'load_average',return_value=0),patch.object(b,'available_memory_bytes',return_value=64*1024*1024*1024):
+            self.assertEqual(b.safe_worker_budget(),1)
+            self.assertEqual(b.default_build_threads(),1)
+
+    def test_safe_worker_budget_reserves_cpu_for_other_work(self):
+        with patch.object(b.os,'cpu_count',return_value=12),patch.object(b,'available_memory_bytes',return_value=64*1024*1024*1024),patch.object(b,'load_average',return_value=7.2):
+            self.assertEqual(b.safe_worker_budget(),1)
+            self.assertEqual(b.safe_worker_budget(4),5)
+        with patch.object(b.os,'cpu_count',return_value=12),patch.object(b,'available_memory_bytes',return_value=64*1024*1024*1024),patch.object(b,'load_average',return_value=12.0):
+            self.assertEqual(b.safe_worker_budget(),0)
 
     def test_main_refuses_to_start_below_memory_reserve(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'input';source.mkdir()
             item=dict(wiki='testwiktionary',date='20260901',name='testwiktionary-20260901-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/testwiktionary-20260901-pages-meta-current.xml.bz2',size=1,sha1='a'*40)
             (source/'manifest.json').write_text(json.dumps({'files':[item]}))
-            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source)]),patch.object(b,'available_memory_bytes',return_value=b.MEMORY_RESERVE_BYTES+b.MEMORY_PER_BUILD_WORKER-1):
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source)]),patch.object(b,'available_memory_bytes',return_value=b.MEMORY_RESERVE_BYTES+b.MEMORY_PER_BUILD_WORKER-1),patch.object(b,'load_average',return_value=0):
                 with self.assertRaises(SystemExit): b.main()
 
     def test_main_rejects_aggregate_worker_oversubscription(self):

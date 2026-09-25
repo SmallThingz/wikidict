@@ -24,6 +24,11 @@ SHARD_STATE_VERSION = 1
 MAX_TOTAL_BUILD_WORKERS = 8
 MEMORY_PER_BUILD_WORKER = 1536 * 1024 * 1024
 MEMORY_RESERVE_BYTES = 2 * 1024 * 1024 * 1024
+CPU_UTILIZATION_TARGET = 0.75
+
+def load_average():
+    try:return max(0.0,os.getloadavg()[0])
+    except OSError:return None
 
 def available_memory_bytes():
     try:
@@ -36,15 +41,21 @@ def available_memory_bytes():
     except (OSError,ValueError,IndexError):
         return None
 
-def safe_worker_budget():
+def safe_worker_budget(owned_workers=0):
     cpu=max(1,os.cpu_count() or 1)
+    load=load_average()
+    if load is None:
+        cpu_workers=cpu
+    else:
+        external_load=max(0.0,load-owned_workers)
+        cpu_workers=max(0,int(cpu*CPU_UTILIZATION_TARGET-external_load))
     memory=available_memory_bytes()
     if memory is None:
         memory_workers=MAX_TOTAL_BUILD_WORKERS
     else:
         usable=max(0,memory-MEMORY_RESERVE_BYTES)
         memory_workers=usable//MEMORY_PER_BUILD_WORKER
-    return min(MAX_TOTAL_BUILD_WORKERS,cpu,memory_workers)
+    return min(MAX_TOTAL_BUILD_WORKERS,cpu_workers,memory_workers)
 
 def default_build_threads():
     return max(1,min(4,safe_worker_budget()))
@@ -371,8 +382,8 @@ def build_groups(groups, downloads, output, zig, threads, jobs):
         active={}
         while pending or active:
             while pending and len(active)<jobs:
-                live_budget=safe_worker_budget()
                 active_workers=len(active)*threads
+                live_budget=safe_worker_budget(active_workers)
                 if live_budget < active_workers+threads:
                     break
                 key,group=pending.pop(0)
@@ -380,7 +391,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs):
                 active[future]=key
             if not active:
                 if pending:
-                    live_budget=safe_worker_budget()
+                    live_budget=safe_worker_budget(0)
                     print(f'STOPPED before {pending[0][0][0]}: resource pressure allows {live_budget} workers, need {threads}',flush=True)
                     failures.extend(key for key,_ in pending)
                 break
