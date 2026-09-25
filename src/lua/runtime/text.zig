@@ -243,9 +243,9 @@ fn protectMagicLinkWhitespace(a: std.mem.Allocator, source: []const u8) ![]const
 
 fn protectNowikiProtocols(a: std.mem.Allocator, source: []const u8) ![]const u8 {
     const protocols = [_][]const u8{
-        "bitcoin", "ftp",    "ftps", "geo",    "git",  "gopher",    "http", "https", "irc",  "ircs",
-        "magnet",  "mailto", "mms",  "news",   "nntp", "redis",     "sftp", "sip",   "sips", "sms",
-        "ssh",     "svn",    "tel",  "telnet", "urn",  "worldwind", "xmpp",
+        "bitcoin", "ftp",    "ftps",   "geo", "git",    "gopher", "http",      "https",     "irc",  "ircs",
+        "magnet",  "mailto", "matrix", "mms", "news",   "nntp",   "redis",     "sftp",      "sip",  "sips",
+        "sms",     "ssh",    "svn",    "tel", "telnet", "urn",    "wikipedia", "worldwind", "xmpp",
     };
     var out: std.ArrayList(u8) = .empty;
     var i: usize = 0;
@@ -1051,6 +1051,23 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try text.rawSetNativeField(.text, "JSON_TRY_FIXING", .{ .number = json_try_fixing });
     try text.rawSetNativeField(.text, "JSON_PRETTY", .{ .number = json_pretty });
     try mw.rawSetNativeField(.mw, "text", .{ .table = text });
+}
+
+test "nowiki protocol helper escapes matrix and wikipedia without URL slashes" {
+    const a = std.testing.allocator;
+    for ([_][2][]const u8{
+        .{ "matrix:room wikipedia:Foo", "matrix&#58;room wikipedia&#58;Foo" },
+        .{ "MATRIX:room WiKiPeDiA:Bar", "MATRIX&#58;room WiKiPeDiA&#58;Bar" },
+        .{ "matrix: wikipedia:", "matrix&#58; wikipedia&#58;" },
+        .{ "matrix://room wikipedia://Foo", "matrix&#58;//room wikipedia&#58;//Foo" },
+        .{ "matrix wikipedia matrixx: wikipediax:", "matrix wikipedia matrixx: wikipediax:" },
+        .{ "matrix&#58;room wikipedia&#58;Foo", "matrix&#58;room wikipedia&#58;Foo" },
+        .{ "http:x mailto:y", "http&#58;x mailto&#58;y" },
+    }) |case| {
+        const escaped = try protectNowikiProtocols(a, case[0]);
+        defer a.free(escaped);
+        try std.testing.expectEqualStrings(case[1], escaped);
+    }
 }
 
 test "mw.text encode honors selective Unicode charset" {

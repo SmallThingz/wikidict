@@ -810,6 +810,8 @@ test "AOT mw.text trim listToText truncate encode tag killMarkers and nowiki mat
         .{ "----\n__TOC__", "&#45;---\n_&#95;TOC_&#95;" },
         .{ "http://x ISBN 1", "http&#58;//x ISBN&#32;1" },
         .{ "mailto:x@y", "mailto&#58;x@y" },
+        .{ "matrix:room wikipedia://Foo", "matrix&#58;room wikipedia&#58;//Foo" },
+        .{ "wikipedia:Foo MATRIX:room WiKiPeDiA:Bar", "wikipedia&#58;Foo MATRIX&#58;room WiKiPeDiA&#58;Bar" },
         .{ "~abc_", "&#126;abc&#95;" },
     }) |case| {
         const escaped = try callField(&runtime, text, "nowiki", &.{.{ .string = case[0] }});
