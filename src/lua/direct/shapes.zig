@@ -9,14 +9,18 @@ pub const Fact = struct {
 pub const ModuleFacts = std.AutoHashMapUnmanaged(u32, Fact);
 
 const Record = struct {
-    module_index: u32,
     span_start: u32,
+    next_for_module: u32 = no_record,
     fields: []const []const u8,
 };
+
+const no_record = std.math.maxInt(u32);
+const ModuleChain = struct { first: u32, last: u32 };
 
 pub const Registry = struct {
     allocator: std.mem.Allocator,
     records: std.ArrayList(Record) = .empty,
+    module_chains: std.AutoHashMapUnmanaged(u32, ModuleChain) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Registry {
         return .{ .allocator = allocator };
@@ -27,6 +31,7 @@ pub const Registry = struct {
             self.allocator.free(entry.fields);
         }
         self.records.deinit(self.allocator);
+        self.module_chains.deinit(self.allocator);
     }
 
     pub fn count(self: *const Registry) usize {
@@ -59,11 +64,31 @@ pub const Registry = struct {
     pub fn moduleFacts(self: *const Registry, allocator: std.mem.Allocator, module_index: u32) !ModuleFacts {
         var out: ModuleFacts = .empty;
         errdefer out.deinit(allocator);
-        for (self.records.items, 0..) |record_value, id| {
-            if (record_value.module_index != module_index) continue;
-            try out.put(allocator, record_value.span_start, .{ .id = @intCast(id), .fields = record_value.fields });
+        const chain = self.module_chains.get(module_index) orelse return out;
+        var id = chain.first;
+        while (id != no_record) {
+            const record_value = self.records.items[id];
+            try out.put(allocator, record_value.span_start, .{ .id = id, .fields = record_value.fields });
+            id = record_value.next_for_module;
         }
         return out;
+    }
+    fn appendRecord(self: *Registry, module_index: u32, span_start: u32, fields: []const []const u8) !u32 {
+        if (self.records.items.len >= no_record) return error.TooManyShapes;
+        const id: u32 = @intCast(self.records.items.len);
+        try self.records.append(self.allocator, .{
+            .span_start = span_start,
+            .fields = fields,
+        });
+        errdefer _ = self.records.pop();
+        const entry = try self.module_chains.getOrPut(self.allocator, module_index);
+        if (entry.found_existing) {
+            self.records.items[entry.value_ptr.last].next_for_module = id;
+            entry.value_ptr.last = id;
+        } else {
+            entry.value_ptr.* = .{ .first = id, .last = id };
+        }
+        return id;
     }
     fn copyFields(self: *Registry, field_names: []const []const u8) ![]const []const u8 {
         const owned = try self.allocator.alloc([]const u8, field_names.len);
@@ -86,16 +111,19 @@ pub const Registry = struct {
         if (field_names.len == 0) return null;
         const replacement = try self.copyFields(field_names);
         errdefer self.freeFields(replacement);
-        for (self.records.items, 0..) |*record_value, id| {
-            if (record_value.module_index != module_index or record_value.span_start != span_start) continue;
-            self.freeFields(record_value.fields);
-            record_value.fields = replacement;
-            return @intCast(id);
+        if (self.module_chains.get(module_index)) |chain| {
+            var id = chain.first;
+            while (id != no_record) {
+                const record_value = &self.records.items[id];
+                if (record_value.span_start == span_start) {
+                    self.freeFields(record_value.fields);
+                    record_value.fields = replacement;
+                    return id;
+                }
+                id = record_value.next_for_module;
+            }
         }
-        if (self.records.items.len >= std.math.maxInt(u32)) return error.TooManyShapes;
-        const id: u32 = @intCast(self.records.items.len);
-        try self.records.append(self.allocator, .{ .module_index = module_index, .span_start = span_start, .fields = replacement });
-        return id;
+        return try self.appendRecord(module_index, span_start, replacement);
     }
 
     pub fn collect(self: *Registry, module_index: u32, body: lua.Block) !void {
@@ -194,11 +222,10 @@ pub const Registry = struct {
         }
         if (names.items.len == 0) return;
         if (names.items.len > std.math.maxInt(u32)) return error.TooManyShapeFields;
-        if (self.records.items.len >= std.math.maxInt(u32)) return error.TooManyShapes;
 
         const owned = try self.copyFields(names.items);
         errdefer self.freeFields(owned);
-        try self.records.append(self.allocator, .{ .module_index = module_index, .span_start = span.start, .fields = owned });
+        _ = try self.appendRecord(module_index, span.start, owned);
     }
 };
 
@@ -226,4 +253,52 @@ test "static root shape collection keeps only top-level table" {
     const nested = root.table.fields[1].named.value;
     try std.testing.expect(nested.* == .table);
     try std.testing.expect(facts.get(nested.table.span.start) == null);
+}
+
+test "module shape index preserves ids and replacements across out-of-order modules" {
+    const a = std.testing.allocator;
+    var registry = Registry.init(a);
+    defer registry.deinit();
+
+    try std.testing.expectEqual(@as(?u32, 0), try registry.promote(9, 10, &.{"first"}));
+    try std.testing.expectEqual(@as(?u32, 1), try registry.promote(2, 10, &.{"other"}));
+    try std.testing.expectEqual(@as(?u32, 2), try registry.promote(9, 20, &.{"second"}));
+    try std.testing.expectEqual(@as(?u32, 0), try registry.promote(9, 10, &.{"replaced"}));
+    try std.testing.expectEqual(@as(usize, 3), registry.count());
+
+    var nine = try registry.moduleFacts(a, 9);
+    defer nine.deinit(a);
+    try std.testing.expectEqual(@as(usize, 2), nine.count());
+    try std.testing.expectEqual(@as(u32, 0), nine.get(10).?.id);
+    try std.testing.expectEqualStrings("replaced", nine.get(10).?.fields[0]);
+    try std.testing.expectEqual(@as(u32, 2), nine.get(20).?.id);
+
+    var two = try registry.moduleFacts(a, 2);
+    defer two.deinit(a);
+    try std.testing.expectEqual(@as(usize, 1), two.count());
+    try std.testing.expectEqual(@as(u32, 1), two.get(10).?.id);
+
+    var absent = try registry.moduleFacts(a, 7);
+    defer absent.deinit(a);
+    try std.testing.expectEqual(@as(usize, 0), absent.count());
+}
+
+fn appendAllocationCase(allocator: std.mem.Allocator) !void {
+    var registry = Registry.init(allocator);
+    defer registry.deinit();
+    const id = registry.promote(7, 42, &.{"owned"}) catch |err| {
+        try std.testing.expectEqual(error.OutOfMemory, err);
+        // This also checks the failure after records.append but before the
+        // module chain insertion: the appended record must be rolled back.
+        try std.testing.expectEqual(@as(usize, 0), registry.count());
+        return err;
+    };
+    try std.testing.expectEqual(@as(?u32, 0), id);
+    var facts = try registry.moduleFacts(allocator, 7);
+    defer facts.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), facts.count());
+}
+
+test "shape append rolls back on every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, appendAllocationCase, .{});
 }
