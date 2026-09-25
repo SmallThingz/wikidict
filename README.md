@@ -20,25 +20,22 @@ remain build-time concerns in the core repository.
 - Qt 6.5+ with Core, Gui, Widgets, Concurrent, Network and Multimedia
 - a built [wikidict](https://github.com/SmallThingz/wikidict) checkout
 
-Build the core C ABI first:
+Point `CORE` at a wikidict checkout and build its C ABI first:
 
 ```sh
-cd ../wikidict
-zig build ffi -Doptimize=ReleaseFast
+CORE=/path/to/wikidict
+(cd "$CORE" && zig build ffi -Doptimize=ReleaseFast)
 ```
 
-Then build the desktop application:
+Then, from this repository, build the desktop application against that checkout:
 
 ```sh
-cd ../wikidict-desktop
 cmake -S . -B build \
-  -DWIKIDICT_CORE=../wikidict \
+  -DWIKIDICT_CORE="$CORE" \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ./build/bin/dict-qt
 ```
-
-Set `WIKIDICT_CORE` to the real core checkout when the repositories are not siblings.
 
 Pass `--root <folder>` to open a dictionary directory explicitly. Otherwise the app
 restores its previous dictionary folder and word.

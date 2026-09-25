@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {buildIndex,decode,RawSource} from './blob.js';
 import {openSource} from './xz.js';
-const fixture=process.env.WIKBLB_FIXTURE || '../../wikidict-android/app/src/debug/assets/English.wikblb';
+const fixture=process.env.WIKBLB_FIXTURE || '../tests/fixtures/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb';
 const raw=new Uint8Array(await readFile(fixture));
 test('binary and seekable multiblock XZ produce identical records',async()=>{
  const encoded=execFileSync('xz',['-1','--block-size=64KiB','-c'],{input:raw});
@@ -16,7 +16,7 @@ test('binary and seekable multiblock XZ produce identical records',async()=>{
   const right=decode(await b.read(row.offset,row.length),{...index.metadata,title:row.title});
   assert.deepEqual(right,left);
  }
- assert.ok(index.rows.some(x=>x.title==='elephant'));
+ assert.ok(index.rows.some(x=>x.title==='cat'));
  for(const offset of [0,65530,131068,raw.length-12])assert.deepEqual(await b.read(offset,12),raw.slice(offset,offset+12));
 });
 test('concatenated streams and damaged framing',async()=>{
