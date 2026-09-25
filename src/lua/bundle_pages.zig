@@ -53,6 +53,7 @@ pub const Provider = struct {
     corpus_title_index: ?wikimedia_dump.PageTitleIndex = null,
     corpus_page_index_kind: wikimedia_dump.PageIndexKind = .raw_xml,
     dump_reader: ?wikimedia_dump.SourceReader = null,
+    template_source: ?wikimedia_dump.TemplateSource = null,
     transclusion_body_cache: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
     transclusion_body_cache_bytes: usize = 0,
     transclusion_seen: []usize = &.{},
@@ -108,6 +109,7 @@ pub const Provider = struct {
         if (self.corpus_pages_storage) |*mapped| mapped.deinit();
         if (self.corpus_title_index_storage) |*mapped| mapped.deinit();
         if (self.dump_reader) |*reader| reader.deinit();
+        if (self.template_source) |*source| source.deinit();
         var cached = self.transclusion_body_cache.valueIterator();
         while (cached.next()) |body| self.a.free(body.*);
         self.transclusion_body_cache.deinit(self.a);
@@ -565,6 +567,8 @@ pub const Provider = struct {
         const seen_words = self.a.alloc(usize, (page_count + bits_per_word - 1) / bits_per_word) catch null;
         errdefer if (seen_words) |words| self.a.free(words);
         if (seen_words) |words| @memset(words, 0);
+        var template_source = try wikimedia_dump.TemplateSource.open(self.io, self.a, self.root, mapped.bytes);
+        errdefer if (template_source) |*source| source.deinit();
 
         self.corpus_pages = pages;
         self.corpus_pages_storage = mapped;
@@ -572,6 +576,7 @@ pub const Provider = struct {
         self.corpus_title_index = title_index;
         self.corpus_page_index_kind = kind;
         self.dump_reader = reader;
+        self.template_source = template_source;
         self.transclusion_seen = seen_words orelse &.{};
     }
     fn corpusPageRef(self: *const Provider, title: []const u8) !?u64 {
@@ -611,8 +616,18 @@ pub const Provider = struct {
 
     fn readCorpusSource(self: *Provider, a: A, page: CorpusPage) ![]const u8 {
         const reader = if (self.dump_reader) |*value| value else return error.MissingDump;
-        const raw = try reader.readAlloc(a, page.source);
+        var sidecar_raw: ?[]const u8 = null;
+        if (page.ns == 10) {
+            if (self.template_source) |*source| {
+                sidecar_raw = try source.lookup(@intCast(page.ordinal), page.page_id, page.revision_id);
+            }
+        }
+        const raw: []const u8 = if (sidecar_raw) |stored| blk: {
+            if (stored.len != wikimedia_dump.sourceLen(page.source)) return error.TemplateSourceLengthMismatch;
+            break :blk if (stored.len == 0) "" else try a.dupe(u8, stored);
+        } else try reader.readAlloc(a, page.source);
         if (!page.source_needs_decode) return raw;
+        errdefer if (raw.len != 0) a.free(raw);
         const decoded = try xml_decode.decodeSinglePassAlloc(a, raw);
         if (raw.len != 0) a.free(raw);
         return decoded;
@@ -668,7 +683,10 @@ pub const Provider = struct {
 
         const raw = try self.readCorpusSource(a, page);
         defer if (wikimedia_dump.sourceLen(page.source) != 0) a.free(raw);
-        const body = try preprocess.transcludeDecodedAlloc(a, raw);
+        const body = preprocess.transcludeDecodedAlloc(a, raw) catch |err| {
+            std.log.warn("transclusion body failed: title={s} page_id={d} error={s}", .{ page.title, page.page_id, @errorName(err) });
+            return err;
+        };
         if (page.ns != 10 or wikimedia_dump.sourceLen(page.source) > max_transclusion_cache_entry_bytes) return .{ .text = body, .title = page.title, .borrowed = false };
 
         const bits_per_word = @bitSizeOf(usize);
@@ -754,7 +772,10 @@ pub const Provider = struct {
 
     fn fileMetadata(ctx: ?*anyopaque, title: []const u8) anyerror!FileMetadata {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
-        return self.file_metadata.get(title) orelse error.FileMetadataSnapshotMissing;
+        return self.file_metadata.get(title) orelse {
+            std.log.warn("file metadata missing: title={s}", .{title});
+            return error.FileMetadataSnapshotMissing;
+        };
     }
 
     fn interwikiMap(ctx: ?*anyopaque) anyerror![]const InterwikiRow {
@@ -791,11 +812,20 @@ pub const Provider = struct {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         if (self.transclusionRedirectTarget(title) != null) return true;
         if (std.ascii.startsWithIgnoreCase(title, "Media:")) {
-            if (!self.file_metadata_available) return error.FileMetadataSnapshotMissing;
-            var file_title_buffer: [512]u8 = undefined;
-            const file_title = std.fmt.bufPrint(&file_title_buffer, "File:{s}", .{title["Media:".len..]}) catch
+            if (!self.file_metadata_available) {
+                std.log.warn("file metadata snapshot unavailable: title=File:{s}", .{title["Media:".len..]});
                 return error.FileMetadataSnapshotMissing;
-            return (self.file_metadata.get(file_title) orelse return error.FileMetadataSnapshotMissing).exists;
+            }
+            var file_title_buffer: [512]u8 = undefined;
+            const file_title = std.fmt.bufPrint(&file_title_buffer, "File:{s}", .{title["Media:".len..]}) catch {
+                std.log.warn("file metadata title exceeds limit: title=File:{s}", .{title["Media:".len..]});
+                return error.FileMetadataSnapshotMissing;
+            };
+            const metadata = self.file_metadata.get(file_title) orelse {
+                std.log.warn("file metadata missing: title={s}", .{file_title});
+                return error.FileMetadataSnapshotMissing;
+            };
+            return metadata.exists;
         }
         return (try self.lookup(self.a, title, false)) != null;
     }

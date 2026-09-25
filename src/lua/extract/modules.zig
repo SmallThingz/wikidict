@@ -290,6 +290,12 @@ pub fn main(init: std.process.Init) !void {
     if (emit_page_index and compressed)
         try writeStreamTable(init.io, init.arena.allocator(), input_path, multistream_index_path.?, stream_index_path);
 
+    var template_source_writer: ?wikimedia_dump.TemplateSourceWriter = if (emit_page_index)
+        try wikimedia_dump.TemplateSourceWriter.init(init.io, init.arena.allocator(), output_root)
+    else
+        null;
+    defer if (template_source_writer) |*writer| writer.deinit();
+
     var page_index_file: ?std.Io.File = if (emit_page_index)
         try std.Io.Dir.cwd().createFile(init.io, page_index_path, .{ .truncate = true })
     else
@@ -389,6 +395,10 @@ pub fn main(init: std.process.Init) !void {
                 capture.text_raw != null,
                 std.mem.indexOfScalar(u8, text_raw, '&') != null,
             );
+            if (parsed_ns == 10 and capture.text_raw != null) {
+                if (template_source_writer) |*template_writer|
+                    try template_writer.append(@intCast(pages - 1), page_id, revision_id, text_raw);
+            }
             decoded_title = title;
             decoded_redirect = redirect;
             indexed_page_id = page_id;
@@ -530,6 +540,7 @@ pub fn main(init: std.process.Init) !void {
     try mw.flush();
     try rw.flush();
     if (pw) |page_writer| try page_writer.flush();
+    if (template_source_writer) |*template_writer| try template_writer.finish(page_index_path);
     // Publish only after every compiler input is complete. Title-index sorting
     // is independent of Lua parsing/analysis and may continue concurrently.
     if (emit_page_index) {

@@ -29,6 +29,9 @@ extern fn BZ2_bzDecompressInit(stream: *BzStream, verbosity: c_int, small: c_int
 extern fn BZ2_bzDecompress(stream: *BzStream) c_int;
 extern fn BZ2_bzDecompressEnd(stream: *BzStream) c_int;
 
+pub const TemplateSource = @import("template_source.zig").TemplateSource;
+pub const TemplateSourceWriter = @import("template_source.zig").Writer;
+
 pub const page_index_v2_header = "# dict-page-index-v2\tmultistream-bz2";
 pub const stream_index_header = "# dict-dump-streams-v1";
 

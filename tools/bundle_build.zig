@@ -524,7 +524,7 @@ fn linkNativeWorker(
     try writeResponseFile(io, a, response_path, lua_objects);
     const response_arg = try std.fmt.allocPrint(a, "@{s}", .{response_path});
     try stage(io, marker, "link optimized native Lua worker", &.{
-        paths.zig, "cc", "-O2", "-pthread", "-s", main_c, worker, response_arg, "-lm", "-lbz2", "-lc", "-o", output,
+        paths.zig, "cc", "-O2", "-pthread", main_c, worker, response_arg, "-lm", "-lbz2", "-lc", "-o", output,
     });
 }
 
