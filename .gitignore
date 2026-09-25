@@ -4,6 +4,8 @@ zig-pkg/
 .tmp/
 .worktree/
 .worktrees/
+__pycache__/
+*.py[cod]
 
 data/
 enwiktionary.xml
