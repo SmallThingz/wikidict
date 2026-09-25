@@ -8,14 +8,47 @@ const max_worker_count: usize = 4;
 
 const Options = struct {
     start_page: usize = 0,
+    index_byte_offset: ?usize = null,
     limit_pages: ?usize = null,
     expander_root: []const u8 = "",
     workers: usize = 1,
     now_unix: ?i64 = null,
 };
 
+const PageIndexIdentity = struct {
+    device_major: u32,
+    device_minor: u32,
+    inode: u64,
+    size: u64,
+    mtime_ns: i128,
+};
+
+fn fileIdentity(file: std.Io.File) !PageIndexIdentity {
+    const linux = std.os.linux;
+    var stat: linux.Statx = undefined;
+    if (linux.statx(file.handle, "", linux.AT.EMPTY_PATH, linux.STATX.BASIC_STATS, &stat) != 0 or
+        !stat.mask.INO or !stat.mask.SIZE or !stat.mask.MTIME)
+    {
+        return error.PageIndexStatFailed;
+    }
+    return .{
+        .device_major = stat.dev_major,
+        .device_minor = stat.dev_minor,
+        .inode = stat.ino,
+        .size = stat.size,
+        .mtime_ns = @as(i128, stat.mtime.sec) * std.time.ns_per_s + stat.mtime.nsec,
+    };
+}
+
+fn pathIdentity(io: std.Io, path: []const u8) !PageIndexIdentity {
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    return fileIdentity(file);
+}
+
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
+    identity: PageIndexIdentity,
 
     fn deinit(self: *Mapped) void {
         if (self.bytes.len != 0) std.posix.munmap(self.bytes);
@@ -26,12 +59,74 @@ const Mapped = struct {
 fn mmapPath(io: std.Io, path: []const u8) !Mapped {
     var file = try std.Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
-    const len = std.math.cast(usize, (try file.stat(io)).size) orelse return error.FileTooBig;
+    const identity = try fileIdentity(file);
+    const len = std.math.cast(usize, identity.size) orelse return error.FileTooBig;
     const bytes = if (len == 0)
         @as([]align(std.heap.page_size_min) const u8, &.{})
     else
         try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0);
-    return .{ .bytes = bytes };
+    return .{ .bytes = bytes, .identity = identity };
+}
+
+const PageCoverage = struct {
+    version: u8 = 1,
+    start_page: usize,
+    requested_limit: ?usize,
+    pages_seen: usize,
+    index_byte_offset: usize,
+    page_index_identity: PageIndexIdentity,
+};
+
+fn pageCoverage(options: Options, selected: usize, identity: PageIndexIdentity) !PageCoverage {
+    if (options.limit_pages) |limit| {
+        if (selected != limit) return error.ShortPageIndex;
+    }
+    return .{
+        .start_page = options.start_page,
+        .requested_limit = options.limit_pages,
+        .pages_seen = selected,
+        .index_byte_offset = options.index_byte_offset orelse 0,
+        .page_index_identity = identity,
+    };
+}
+
+fn writePageCoverage(
+    io: std.Io,
+    a: std.mem.Allocator,
+    output_root: []const u8,
+    coverage: PageCoverage,
+) !void {
+    const content = try std.json.Stringify.valueAlloc(a, coverage, .{});
+    defer a.free(content);
+    const path = try std.fs.path.join(a, &.{ output_root, "page-coverage.json" });
+    defer a.free(path);
+    const temporary = try std.fmt.allocPrint(a, "{s}.part-{d}", .{ path, std.os.linux.getpid() });
+    defer a.free(temporary);
+    defer std.Io.Dir.cwd().deleteFile(io, temporary) catch {};
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = temporary, .data = content });
+    try std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, io);
+}
+
+const PageIndexStart = struct {
+    bytes: []const u8,
+    ordinal: usize,
+};
+
+fn pageIndexStart(bytes: []const u8, options: Options) !PageIndexStart {
+    const offset = options.index_byte_offset orelse 0;
+    if (offset > bytes.len or
+        (offset != 0 and bytes[offset - 1] != '\n') or
+        (options.index_byte_offset != null and (options.start_page == 0) != (offset == 0)))
+    {
+        return error.InvalidIndexByteOffset;
+    }
+    if (offset != 0 and offset < bytes.len and (bytes[offset] == '\n' or bytes[offset] == '#')) {
+        return error.InvalidIndexByteOffset;
+    }
+    return .{
+        .bytes = bytes[offset..],
+        .ordinal = if (options.index_byte_offset != null) options.start_page else 0,
+    };
 }
 
 fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const u8) !language_registry.Registry {
@@ -265,6 +360,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len) return error.Usage;
             out.start_page = try std.fmt.parseInt(usize, args[index], 10);
+        } else if (std.mem.eql(u8, arg, "--index-byte-offset")) {
+            index += 1;
+            if (index >= args.len or out.index_byte_offset != null) return error.Usage;
+            out.index_byte_offset = try std.fmt.parseInt(usize, args[index], 10);
         } else if (std.mem.eql(u8, arg, "--limit-pages")) {
             index += 1;
             if (index >= args.len) return error.Usage;
@@ -291,15 +390,79 @@ fn parseOptions(args: []const []const u8) !Options {
     return out;
 }
 
+test "blob shard options preserve explicit byte offset and page limit" {
+    const options = try parseOptions(&.{
+        "dict-blob-build", "dump.bz2", "out",                 "--expander-root", "bundle",
+        "--start-page",    "100",      "--index-byte-offset", "2048",            "--limit-pages",
+        "100",
+    });
+    try std.testing.expectEqual(@as(usize, 100), options.start_page);
+    try std.testing.expectEqual(@as(?usize, 2048), options.index_byte_offset);
+    try std.testing.expectEqual(@as(?usize, 100), options.limit_pages);
+    try std.testing.expectError(error.Usage, parseOptions(&.{
+        "dict-blob-build",     "dump.bz2", "out",                 "--expander-root", "bundle",
+        "--index-byte-offset", "0",        "--index-byte-offset", "1",
+    }));
+}
+
+test "blob shard offset begins exactly at a data row" {
+    const index = "# meta\nfirst\nsecond\n";
+    const first = try pageIndexStart(index, .{ .start_page = 0, .index_byte_offset = 0 });
+    try std.testing.expectEqualStrings(index, first.bytes);
+    try std.testing.expectEqual(@as(usize, 0), first.ordinal);
+    const second = try pageIndexStart(index, .{ .start_page = 1, .index_byte_offset = 13 });
+    try std.testing.expectEqualStrings("second\n", second.bytes);
+    try std.testing.expectEqual(@as(usize, 1), second.ordinal);
+    const legacy = try pageIndexStart(index, .{ .start_page = 1 });
+    try std.testing.expectEqualStrings(index, legacy.bytes);
+    try std.testing.expectEqual(@as(usize, 0), legacy.ordinal);
+
+    try std.testing.expectError(error.InvalidIndexByteOffset, pageIndexStart(index, .{ .start_page = 1, .index_byte_offset = 12 }));
+    try std.testing.expectError(error.InvalidIndexByteOffset, pageIndexStart(index, .{ .start_page = 0, .index_byte_offset = 13 }));
+    try std.testing.expectError(error.InvalidIndexByteOffset, pageIndexStart(index, .{ .start_page = 1, .index_byte_offset = 0 }));
+    try std.testing.expectError(error.InvalidIndexByteOffset, pageIndexStart(index, .{ .start_page = 1, .index_byte_offset = index.len + 1 }));
+    try std.testing.expectError(error.InvalidIndexByteOffset, pageIndexStart("# meta\n# note\nfirst\n", .{ .start_page = 1, .index_byte_offset = 7 }));
+    try std.testing.expectError(error.InvalidIndexByteOffset, pageIndexStart("# meta\n\nfirst\n", .{ .start_page = 1, .index_byte_offset = 7 }));
+}
+
+test "page coverage rejects short explicit shards and records actual selection" {
+    const identity: PageIndexIdentity = .{
+        .device_major = 1,
+        .device_minor = 2,
+        .inode = 3,
+        .size = 4,
+        .mtime_ns = 5,
+    };
+    try std.testing.expectError(error.ShortPageIndex, pageCoverage(.{
+        .start_page = 100,
+        .index_byte_offset = 13,
+        .limit_pages = 2,
+    }, 1, identity));
+    const coverage = try pageCoverage(.{
+        .start_page = 100,
+        .index_byte_offset = 13,
+        .limit_pages = 2,
+    }, 2, identity);
+    try std.testing.expectEqual(@as(u8, 1), coverage.version);
+    try std.testing.expectEqual(@as(usize, 100), coverage.start_page);
+    try std.testing.expectEqual(@as(?usize, 2), coverage.requested_limit);
+    try std.testing.expectEqual(@as(usize, 2), coverage.pages_seen);
+    try std.testing.expectEqual(@as(usize, 13), coverage.index_byte_offset);
+    try std.testing.expect(std.meta.eql(identity, coverage.page_index_identity));
+    const full = try pageCoverage(.{}, 3, identity);
+    try std.testing.expectEqual(@as(?usize, null), full.requested_limit);
+    try std.testing.expectEqual(@as(usize, 3), full.pages_seen);
+}
+
 pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3) {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
         return error.Usage;
     };
     const cpu_limit = @min(max_worker_count, std.Thread.getCpuCount() catch 1);
@@ -346,6 +509,15 @@ pub fn main(init: std.process.Init) !void {
                 return .{ .code = resolved.code, .heading = resolved.heading };
             }
         }.content,
+        .link_trail = .{
+            .ctx = &registry,
+            .end_fn = struct {
+                fn end(raw: ?*const anyopaque, input: []const u8, start: usize) usize {
+                    const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return start));
+                    return value.linkTrailEnd(input, start);
+                }
+            }.end,
+        },
     };
 
     const worker_path = try std.fs.path.join(a, &.{ options.expander_root, "dict-bundle-expander" });
@@ -373,8 +545,9 @@ pub fn main(init: std.process.Init) !void {
     );
     defer dump.deinit();
 
-    var lines = std.mem.splitScalar(u8, page_index.bytes, '\n');
-    var corpus_ordinal: usize = 0;
+    const index_start = try pageIndexStart(page_index.bytes, options);
+    var lines = std.mem.splitScalar(u8, index_start.bytes, '\n');
+    var corpus_ordinal: usize = index_start.ordinal;
     var pages_selected: usize = 0;
     var next_progress = std.Io.Clock.awake.now(init.io).toNanoseconds() + 10 * std.time.ns_per_s;
     while (lines.next()) |line| {
@@ -411,7 +584,13 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     try pool.drain(&writer);
+    const coverage = try pageCoverage(options, pages_selected, page_index.identity);
     const stats = try writer.finish(codes);
+    if (stats.pages_seen != coverage.pages_seen) return error.PageCoverageMismatch;
+    if (!std.meta.eql(page_index.identity, try pathIdentity(init.io, page_index_path))) {
+        return error.PageIndexChanged;
+    }
+    try writePageCoverage(init.io, a, args[2], coverage);
 
     std.debug.print(
         "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} fallback_pages={d}\n",

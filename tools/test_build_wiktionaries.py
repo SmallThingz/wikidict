@@ -13,7 +13,112 @@ from unittest.mock import patch
 import build_wiktionaries as b
 from compress_blobs import compress, compress_many, default_workers
 
+def write_coverage(root, command=None):
+    start=limit=offset=0
+    identity=dict(device_major=0,device_minor=0,inode=0,size=0,mtime_ns=0)
+    if command and '--expander-root' in command:
+        index=Path(command[command.index('--expander-root')+1])/'page-index.tsv'
+        identity=b.index_identity(index.stat())
+        start=int(command[command.index('--start-page')+1])
+        limit=int(command[command.index('--limit-pages')+1])
+        offset=int(command[command.index('--index-byte-offset')+1])
+    else: limit=None
+    record=dict(version=1,start_page=start,requested_limit=limit,pages_seen=limit or 0,
+                index_byte_offset=offset,page_index_identity=identity)
+    if limit is None: record['expected_input_pages']=0
+    (root/'page-coverage.json').write_text(json.dumps(record))
+
 class BuildTest(unittest.TestCase):
+    def test_page_index_offsets_hash_and_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'index';data=b'# header\n\na\nb\n# skip\nc\n';path.write_bytes(data)
+            with patch.object(b,'SHARD_PAGES',2): result=b.inspect_page_index(path)
+            self.assertEqual(result['rows'],3)
+            self.assertEqual(result['offsets'],{0:0,2:data.index(b'c\n')})
+            self.assertEqual(result['sha256'],hashlib.sha256(data).hexdigest())
+            b.require_index_identity(path,result)
+            path.write_bytes(data+b'd\n')
+            with self.assertRaisesRegex(ValueError,'changed'): b.require_index_identity(path,result)
+
+    def test_index_and_coverage_read_sizes_are_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);path=root/'index';path.write_bytes(b'x'*65)
+            with patch.object(b,'MAX_PAGE_INDEX_LINE_BYTES',64):
+                with self.assertRaisesRegex(ValueError,'line exceeds'): b.inspect_page_index(path)
+            (root/'page-coverage.json').write_bytes(b' '*65)
+            with patch.object(b,'MAX_PAGE_COVERAGE_BYTES',64):
+                with self.assertRaisesRegex(ValueError,'Missing or invalid'): b.validate_page_coverage(root)
+
+    def test_full_receipt_requires_explicit_limit_and_verified_total(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);write_coverage(root);path=root/'page-coverage.json'
+            valid=json.loads(path.read_text())
+            for field in ('requested_limit','expected_input_pages'):
+                broken=dict(valid);del broken[field];path.write_text(json.dumps(broken))
+                with self.assertRaises(ValueError): b.validate_page_coverage(root,require_total=True)
+            for extra in ({'pages_seen':1},{'expected_input_pages':True},{'page_index_rows':1}):
+                path.write_text(json.dumps(dict(valid,**extra)))
+                with self.assertRaises(ValueError): b.validate_page_coverage(root,require_total=True)
+
+    def test_default_threads_respects_pipeline_cap_when_budget_is_eight(self):
+        with patch.object(b,'safe_worker_budget',return_value=8):
+            self.assertEqual(b.default_build_threads(),4)
+
+    def test_page_coverage_rejects_missing_truncated_wrong_selection_and_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with self.assertRaisesRegex(ValueError,'Missing'): b.validate_page_coverage(root)
+            write_coverage(root)
+            path=root/'page-coverage.json';record=json.loads(path.read_text())
+            record.update(start_page=2,requested_limit=3,pages_seen=3,index_byte_offset=8)
+            expected=dict(rows=5,identity=record['page_index_identity'])
+            path.write_text(json.dumps(record))
+            b.validate_page_coverage(root,2,3,expected,8)
+            for field,value,message in [('pages_seen',2,'Incomplete'),('start_page',1,'selection'),('index_byte_offset',7,'selection'),('pages_seen',True,'Invalid')]:
+                broken=dict(record);broken[field]=value;path.write_text(json.dumps(broken))
+                with self.assertRaisesRegex(ValueError,message): b.validate_page_coverage(root,2,3,expected,8)
+            broken=dict(record,page_index_identity=dict(record['page_index_identity'],inode=99))
+            path.write_text(json.dumps(broken))
+            with self.assertRaisesRegex(ValueError,'identity mismatch'): b.validate_page_coverage(root,2,3,expected,8)
+
+    def test_full_coverage_must_match_source_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);write_coverage(root)
+            b.validate_page_coverage(root,source_pages=0)
+            with self.assertRaisesRegex(ValueError,'Incomplete'): b.validate_page_coverage(root,source_pages=1)
+
+    def test_missing_resumed_receipt_rebuilds_shard_with_bounded_workers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander';exp.mkdir(parents=True)
+            (workspace/'expander/.incomplete').write_text('expander ready')
+            (exp/'page-index.tsv').write_text('# index\n\np0\n')
+            (exp/'dict-bundle-expander').write_text('worker')
+            cache=workspace/'input';cache.mkdir();(cache/'.complete.json').write_text(json.dumps({'source_pages':1}))
+            shard=workspace/'shards/00000000';shard.mkdir(parents=True);(shard/'.verified').write_text('verified')
+            calls=[]
+            def run(command):
+                calls.append(command)
+                if 'build-blobs' in command:
+                    dest=Path(command[command.index('--')+2]);dest.mkdir();write_coverage(dest,command)
+                if 'merge-blobs' in command:
+                    Path(command[command.index('--')+1]).mkdir()
+            with patch.object(b,'run_checked',side_effect=run):
+                b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',8,[{'wiki':'test','date':'20260901'}],123)
+            builds=[c for c in calls if 'build-blobs' in c]
+            self.assertEqual(len(builds),1)
+            self.assertEqual(builds[0][builds[0].index('--workers')+1],'4')
+            self.assertEqual(builds[0][builds[0].index('--index-byte-offset')+1],'0')
+            self.assertEqual(json.loads((root/'staging/page-coverage.json').read_text())['pages_seen'],1)
+
+    def test_verified_publication_missing_coverage_preserves_staging(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);staging=root/'staging';staging.mkdir()
+            (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+            with self.assertRaisesRegex(ValueError,'Missing or invalid page coverage'):
+                b._publish_verified_staging(staging,root/'final','test','20260901',1)
+            self.assertTrue((staging/b.VERIFIED_MARKER).exists())
+            self.assertFalse((root/'final').exists())
+
     def test_timed_native_command_logs_success_and_preserves_command(self):
         command=['zig','build','build-blobs','--','dump','shard']
         output=io.StringIO()
@@ -205,6 +310,42 @@ class BuildTest(unittest.TestCase):
             self.assertTrue((workspace/'shards').is_dir())
             self.assertEqual((external/'keep').read_text(),'safe')
 
+    def test_cached_dump_requires_independent_nonnegative_integer_page_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            data=bz2.compress(b'<mediawiki><page>word</page></mediawiki>');(folder/name).write_bytes(data)
+            items=[dict(wiki='testwiktionary',date='20260901',name=name,size=len(data),sha1=hashlib.sha1(data).hexdigest())]
+            workspace=root/'work';workspace.mkdir()
+            with patch.object(b,'stage_seekable_dump',wraps=b.stage_seekable_dump) as stage:
+                b.cached_shard_dump(items,root,workspace)
+                marker=workspace/'input/.complete.json'
+                for count,value in enumerate((None,True,'1',-1,1.0),2):
+                    with self.subTest(value=value):
+                        record=json.loads(marker.read_text())
+                        if value is None: del record['source_pages']
+                        else: record['source_pages']=value
+                        marker.write_text(json.dumps(record))
+                        b.cached_shard_dump(items,root,workspace)
+                        self.assertEqual(stage.call_count,count)
+                        self.assertEqual(json.loads(marker.read_text())['source_pages'],1)
+                b.cached_shard_dump(items,root,workspace)
+                self.assertEqual(stage.call_count,6)
+
+    def test_sharded_count_cannot_self_certify_truncated_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander';exp.mkdir(parents=True)
+            (workspace/'expander/.incomplete').write_text('expander ready')
+            (exp/'dict-bundle-expander').write_text('worker')
+            (exp/'page-index.tsv').write_text('only-one-page\n')
+            cache=workspace/'input';cache.mkdir();marker=cache/'.complete.json'
+            for record in ({},{'source_pages':True},{'source_pages':-1},{'source_pages':2}):
+                with self.subTest(record=record),patch.object(b,'run_checked') as run:
+                    marker.write_text(json.dumps(record))
+                    with self.assertRaisesRegex(ValueError,'source page|source pages'):
+                        b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',1,[{'wiki':'test','date':'20260901'}],123)
+                    run.assert_not_called()
+
     def test_cached_shard_dump_reuses_only_exact_verified_state_and_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
@@ -294,6 +435,7 @@ class BuildTest(unittest.TestCase):
                     (exp/'dict-bundle-expander').write_text('worker')
                 elif 'build-blobs' in command:
                     dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True)
+                    write_coverage(dest,command)
                 elif 'merge-blobs' in command:
                     merges.append(command)
                     if len(merges)==1:raise subprocess.CalledProcessError(1,command)
@@ -334,6 +476,7 @@ class BuildTest(unittest.TestCase):
                     (exp/'dict-bundle-expander').write_text('worker')
                 elif step=='build-blobs':
                     dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True)
+                    write_coverage(dest,command)
                     (dest/'fallback-pages.jsonl').write_text('')
                     (dest/'languages.tsv').write_text('heading\n')
                 elif step=='merge-blobs':
@@ -346,11 +489,13 @@ class BuildTest(unittest.TestCase):
             blob_calls=[c for c in calls if 'build-blobs' in c]
             self.assertEqual(len(blob_calls),2)
             self.assertEqual([c[c.index('--start-page')+1] for c in blob_calls],['0','1'])
+            self.assertEqual([c[c.index('--index-byte-offset')+1] for c in blob_calls],['0','2'])
             self.assertEqual({c[c.index('--now-unix')+1] for c in blob_calls},{'123'})
             self.assertEqual(sum('merge-blobs' in c for c in calls),1)
             self.assertGreaterEqual(sum('verify-blobs' in c for c in calls),3)
             final=root/'output/testwiktionary/20260901'
             self.assertTrue((final/'complete.json').is_file())
+            self.assertEqual(json.loads((final/'complete.json').read_text())['input_pages'],2)
             self.assertEqual(lzma.open(final/'merged.wikblb.xz').read(),b'WIKBLB08merged')
             self.assertFalse((root/'output/testwiktionary/20260901.shards').exists())
 
@@ -470,6 +615,7 @@ class BuildTest(unittest.TestCase):
                 calls.append(command)
                 if 'build-dictionary' in command:
                     dest=Path(command[command.index('--')+2]);dest.mkdir();(dest/'en.wikblb').write_bytes(b'WIKBLB08payload')
+                    write_coverage(dest)
                     (dest/'fallback-pages.jsonl').write_text(
                         json.dumps({'namespace':0,'title':'quoted"title','reasons':['literal_markup']})+'\n'+
                         json.dumps({'namespace':0,'title':'timeout','reasons':['expansion_error','expansion_error:Timeout']})+'\n')
@@ -497,6 +643,7 @@ class BuildTest(unittest.TestCase):
             (staging/'fallback-pages.jsonl').write_text('')
             (staging/'languages.tsv').write_text('heading\n')
             (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+            write_coverage(staging)
             first=staging/'first.wikblb';second=staging/'second.wikblb'
             first.write_bytes(b'WIKBLB08first');second.write_bytes(b'WIKBLB08second')
             compress(first,64*1024,1)
@@ -554,6 +701,7 @@ class BuildTest(unittest.TestCase):
             def run(command,**kwargs):
                 if 'build-dictionary' in command:
                     dest=Path(command[command.index('--')+2]);dest.mkdir();(dest/'fallback-pages.jsonl').write_text('')
+                    write_coverage(dest)
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
                 b.build([item],root,root/'output','zig',2)
             final=root/'output/testwiktionary/20260901'

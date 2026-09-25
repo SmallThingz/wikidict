@@ -24,6 +24,9 @@ SHARD_PAGES = 100_000
 SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 2
 MAX_TOTAL_BUILD_WORKERS = 8
+MAX_PIPELINE_WORKERS = 4
+MAX_PAGE_INDEX_LINE_BYTES = 1024 * 1024
+MAX_PAGE_COVERAGE_BYTES = 64 * 1024
 MEMORY_PER_BUILD_WORKER = 1536 * 1024 * 1024
 MEMORY_RESERVE_BYTES = 2 * 1024 * 1024 * 1024
 CPU_UTILIZATION_TARGET = 0.75
@@ -84,7 +87,7 @@ def safe_worker_budget(owned_workers=0):
     return min(MAX_TOTAL_BUILD_WORKERS,cpu_workers,memory_workers)
 
 def default_build_threads():
-    return max(1,min(4,safe_worker_budget()))
+    return max(1,min(MAX_PIPELINE_WORKERS,safe_worker_budget()))
 
 def ensure_language_registry(downloads, output, edition, date):
     source = downloads / edition / date / 'language-registry.tsv'
@@ -199,7 +202,7 @@ def _stage_seekable_dump(items, downloads, scratch, metadata=None):
             dump_hash.update(member)
             members=1
     if metadata is not None:
-        metadata.update({'dump_size':dump.stat().st_size,'dump_sha256':dump_hash.hexdigest(),
+        metadata.update({'source_pages':pages,'dump_size':dump.stat().st_size,'dump_sha256':dump_hash.hexdigest(),
                          'index_size':index.stat().st_size,'index_sha256':sha256_file(index)})
     print(f'Staged compressed dump: pages={pages} members={members} xml_bytes={xml_bytes} compressed_bytes={dump.stat().st_size} seconds={time.monotonic()-started:.1f}',flush=True)
     return dump
@@ -219,11 +222,78 @@ def stage_seekable_dump(items, downloads, scratch, metadata=None):
 
 
 def count_page_index_rows(path):
-    count=0
+    return inspect_page_index(path)['rows']
+
+
+def index_identity(stat):
+    return dict(device_major=os.major(stat.st_dev),device_minor=os.minor(stat.st_dev),inode=stat.st_ino,size=stat.st_size,mtime_ns=stat.st_mtime_ns)
+
+
+def inspect_page_index(path):
+    count=offset=0
+    offsets={}
+    digest=hashlib.sha256()
     with path.open('rb') as source:
-        for line in source:
-            if line.strip() and not line.startswith(b'#'): count+=1
-    return count
+        identity=index_identity(os.fstat(source.fileno()))
+        while True:
+            line=source.readline(MAX_PAGE_INDEX_LINE_BYTES+1)
+            if not line: break
+            if len(line)>MAX_PAGE_INDEX_LINE_BYTES:
+                raise ValueError('Page index line exceeds size limit')
+            digest.update(line)
+            if line.rstrip(b'\n') and not line.startswith(b'#'):
+                if count % SHARD_PAGES == 0: offsets[count]=0 if count==0 else offset
+                count+=1
+            offset+=len(line)
+        if index_identity(os.fstat(source.fileno()))!=identity:
+            raise ValueError('Page index changed during inspection')
+    if index_identity(path.stat())!=identity:
+        raise ValueError('Page index replaced during inspection')
+    return dict(rows=count,sha256=digest.hexdigest(),identity=identity,offsets=offsets)
+
+
+def validate_page_coverage(root, start=0, limit=None, expected=None, offset=0, source_pages=None, require_total=False):
+    try:
+        with (root/'page-coverage.json').open('rb') as source:
+            data=source.read(MAX_PAGE_COVERAGE_BYTES+1)
+        if len(data)>MAX_PAGE_COVERAGE_BYTES:
+            raise ValueError('Page coverage exceeds size limit')
+        record=json.loads(data)
+    except (OSError,ValueError) as error:
+        raise ValueError(f'Missing or invalid page coverage: {root}') from error
+    if not isinstance(record,dict) or type(record.get('version')) is not int or record['version']!=1:
+        raise ValueError(f'Invalid page coverage version: {root}')
+    required={'version','start_page','requested_limit','pages_seen','index_byte_offset','page_index_identity'}
+    if not required.issubset(record):
+        raise ValueError(f'Missing required page coverage fields: {root}')
+    for key in ('start_page','pages_seen','index_byte_offset'):
+        if type(record.get(key)) is not int or record[key]<0:
+            raise ValueError(f'Invalid page coverage {key}: {root}')
+    identity=record.get('page_index_identity')
+    if not isinstance(identity,dict) or any(type(identity.get(k)) is not int for k in ('device_major','device_minor','inode','size','mtime_ns')):
+        raise ValueError(f'Invalid page index identity: {root}')
+    requested=record.get('requested_limit')
+    if requested is not None and (type(requested) is not int or requested<0):
+        raise ValueError(f'Invalid requested page limit: {root}')
+    if record['start_page']!=start or requested!=limit or record['index_byte_offset']!=offset:
+        raise ValueError(f'Page selection mismatch: {root}')
+    count=limit if limit is not None else (expected['rows'] if expected is not None else source_pages)
+    if count is not None and record['pages_seen']!=count:
+        raise ValueError(f'Incomplete page coverage: {root}')
+    if expected is not None and identity!=expected['identity']:
+        raise ValueError(f'Page index identity mismatch: {root}')
+    if require_total:
+        total=record.get('expected_input_pages')
+        if type(total) is not int or total<0 or record['pages_seen']!=total:
+            raise ValueError(f'Unverified total page coverage: {root}')
+        if 'page_index_rows' in record and (type(record['page_index_rows']) is not int or record['page_index_rows']!=total):
+            raise ValueError(f'Inconsistent index page total: {root}')
+    return record
+
+
+def require_index_identity(path, expected):
+    if index_identity(path.stat())!=expected['identity']:
+        raise ValueError('Page index changed between shards')
 
 
 def shard_state(items, registry, now_unix=None):
@@ -293,6 +363,7 @@ def cached_shard_dump(items, downloads, workspace):
             try:
                 record=json.loads(marker.read_text())
                 valid=isinstance(record,dict) and record.get('version')==DUMP_STAGING_VERSION and record.get('input_sha256')==input_hash
+                valid=valid and type(record.get('source_pages')) is int and record['source_pages']>=0
                 for label,path in (('dump',dump),('index',index)):
                     valid=valid and path.is_file() and type(record.get(label+'_size')) is int and record[label+'_size']>0
                     valid=valid and path.stat().st_size==record[label+'_size']
@@ -359,6 +430,7 @@ def timed_run(command, edition, date, phase, **fields):
 
 def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix):
     edition,date=items[0]['wiki'],items[0]['date']
+    workers=min(workers,MAX_PIPELINE_WORKERS)
     expander_build=workspace/'expander'
     if not expander_ready(expander_build):
         if expander_build.exists(): shutil.rmtree(expander_build)
@@ -368,23 +440,35 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                   edition,date,'expander_build')
     expander=expander_build/'.bundle-expander'
     with build_phase(edition,date,'page_index_count') as result:
-        indexed_pages=count_page_index_rows(expander/'page-index.tsv')
+        index_path=expander/'page-index.tsv'
+        index=inspect_page_index(index_path)
+        indexed_pages=index['rows']
         result['pages']=indexed_pages
+        result['sha256']=index['sha256']
+    cache_record=json.loads((workspace/'input/.complete.json').read_text())
+    if type(cache_record.get('source_pages')) is not int or cache_record['source_pages']<0:
+        raise ValueError('Staged dump lacks a verified source page count')
+    if indexed_pages!=cache_record['source_pages']:
+        raise ValueError('Page index count differs from staged source pages')
 
     shards_root=workspace/'shards';shards_root.mkdir(exist_ok=True)
     shard_paths=[]
     for start in range(0,indexed_pages,SHARD_PAGES):
         limit=min(SHARD_PAGES,indexed_pages-start)
+        offset=index['offsets'][start]
+        require_index_identity(index_path,index)
         shard=shards_root/f'{start:08d}'
         marker=shard/'.verified'
         if marker.is_file():
             try:
+                validate_page_coverage(shard,start,limit,index,offset)
                 timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
                           edition,date,'resume_shard_verify',start_page=start,pages=limit)
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError,ValueError):
                 print(f'Rebuilding invalid resumed shard {items[0]["wiki"]} start={start}',flush=True)
                 shutil.rmtree(shard)
             else:
+                require_index_identity(index_path,index)
                 shard_paths.append(shard);continue
         last_error=None
         for attempt in range(1,SHARD_RETRIES+1):
@@ -392,11 +476,14 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             try:
                 timed_run([zig,'build','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shard),
                              '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
+                             '--index-byte-offset',str(offset),
                              '--workers',str(min(workers,16)),'--now-unix',str(now_unix)],
                           edition,date,'shard_build',start_page=start,pages=limit,attempt=attempt)
+                require_index_identity(index_path,index)
+                validate_page_coverage(shard,start,limit,index,offset)
                 timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
                           edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
-            except subprocess.CalledProcessError as error:
+            except (subprocess.CalledProcessError,ValueError) as error:
                 last_error=error
                 print(f'Retrying shard {items[0]["wiki"]} start={start} attempt={attempt}/{SHARD_RETRIES}',flush=True)
                 continue
@@ -406,11 +493,20 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         if last_error is not None: raise last_error
         shard_paths.append(shard)
 
+    require_index_identity(index_path,index)
+    actual_pages=sum(validate_page_coverage(path,start,min(SHARD_PAGES,indexed_pages-start),index,index['offsets'][start])['pages_seen']
+                     for path,start in zip(shard_paths,range(0,indexed_pages,SHARD_PAGES)))
+    if actual_pages!=indexed_pages: raise ValueError('Incomplete total shard page coverage')
     if staging.exists(): shutil.rmtree(staging)
     timed_run([zig,'build','-Doptimize=ReleaseFast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]],
               edition,date,'merge',shards=len(shard_paths))
     timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)],
               edition,date,'merged_verify',shards=len(shard_paths))
+    coverage=dict(version=1,start_page=0,requested_limit=None,index_byte_offset=0,pages_seen=actual_pages,
+                  expected_input_pages=indexed_pages,page_index_identity=index['identity'],page_index_sha256=index['sha256'],page_index_rows=indexed_pages)
+    (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
+    plan=expander_build/'compile-plan.tsv'
+    if plan.is_file(): shutil.copyfile(plan,staging/'compile-plan.tsv')
     (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
     # The merged staging tree is now the sole verified publication source.
     # Drop raw shards and the transient expander before XZ publication so peak
@@ -422,7 +518,7 @@ def build(items, downloads, output, zig, compression_workers=None):
     for item in items:
         validate_item(item)
     edition, date = items[0]['wiki'], items[0]['date']
-    with build_phase(edition,date,'edition_build'):
+    with build_phase(edition,date,'edition_build') as result:
         parent = output / edition
         parent.mkdir(parents=True, exist_ok=True)
         # Keep the inode: deleting lock files permits two independent locks.
@@ -431,7 +527,9 @@ def build(items, downloads, output, zig, compression_workers=None):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise ValueError(f'Build already running: {parent / date}') from None
-            return build_locked(items, downloads, output, zig, compression_workers)
+            mode=build_locked(items, downloads, output, zig, compression_workers)
+            result['execution_mode']=mode
+            return mode
 
 
 def validate_fallback_report(path):
@@ -479,6 +577,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
         raise ValueError(f'Unverified staging directory: {staging}')
     if marker.read_text() != VERIFIED_CONTENT:
         require_current_staging_version(staging, None)
+    coverage=validate_page_coverage(staging,require_total=True)
     fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl')
     for part in staging.rglob('*.xz.part'):
         part.unlink()
@@ -503,7 +602,8 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     marker.unlink()
     metadata = {'edition':edition,'date':date,'dump_staging_version':DUMP_STAGING_VERSION,
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
-        'fallback_report':'fallback-pages.jsonl', 'compression':'xz -6; 1 MiB blocks','blobs':len(compressed)}
+        'fallback_report':'fallback-pages.jsonl', 'compression':'xz -6; 1 MiB blocks','blobs':len(compressed),
+        'input_pages':coverage['pages_seen'],'page_coverage_report':'page-coverage.json'}
     (staging / 'complete.json').write_text(json.dumps(metadata)+'\n')
     os.rename(staging, target)
     print(f'Published: {target}', flush=True)
@@ -542,7 +642,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
             if not workspace.is_dir() or workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
             shutil.rmtree(workspace)
         print(f'Already built: {target}', flush=True)
-        return
+        return 'existing_output'
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = target.with_name(date + '.building')
     if staging.exists():
@@ -551,11 +651,11 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
         if (staging / VERIFIED_MARKER).is_file():
             print(f'Resuming verified publication: {staging}', flush=True)
             publish_verified_staging(staging, target, edition, date, compression_workers)
-            return
+            return 'resumed_publication'
         print(f'Retrying incomplete build: {staging}', flush=True)
         shutil.rmtree(staging)
     registry = ensure_language_registry(downloads, output, edition, date)
-    workers = compression_workers or default_build_threads()
+    workers = min(compression_workers or default_build_threads(),MAX_PIPELINE_WORKERS)
     workspace=target.with_name(date+'.shards')
     compressed_bytes=sum(item['size'] for item in xml)
     if compressed_bytes>=SHARD_THRESHOLD_COMPRESSED_BYTES:
@@ -568,11 +668,15 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
         (PROJECT / '.tmp').mkdir(exist_ok=True)
         scratch = Path(tempfile.mkdtemp(prefix=f'build-{edition}-{date}-', dir=PROJECT / '.tmp'))
         try:
-            dump = stage_seekable_dump(xml,downloads,scratch)
+            source_metadata={}
+            dump = stage_seekable_dump(xml,downloads,scratch,source_metadata)
             timed_run([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
                          '--language-registry-snapshot',str(registry),
                          '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
                          '--page-workers',str(min(workers,16))],edition,date,'dictionary_build')
+            coverage=validate_page_coverage(staging,source_pages=source_metadata['source_pages'])
+            coverage['expected_input_pages']=source_metadata['source_pages']
+            (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
             timed_run([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)],
                       edition,date,'dictionary_verify')
             (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
@@ -580,6 +684,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
             shutil.rmtree(scratch)
     publish_verified_staging(staging, target, edition, date, compression_workers)
     if workspace.exists(): shutil.rmtree(workspace)
+    return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
 def build_groups(groups, downloads, output, zig, threads, jobs):
     pending=list(sorted(groups.items()))
@@ -622,7 +727,8 @@ def main():
     a=p.parse_args()
     budget=safe_worker_budget()
     if budget < 1:p.error('Not enough available memory to start a build safely')
-    if not 1 <= a.threads <= budget:p.error(f'Threads must be 1 through {budget} on this host')
+    worker_limit=min(budget,MAX_PIPELINE_WORKERS)
+    if not 1 <= a.threads <= worker_limit:p.error(f'Threads must be 1 through {worker_limit} on this host')
     if a.jobs is None:a.jobs=min(2,max(1,budget//a.threads))
     if not 1 <= a.jobs <= 16:p.error('Jobs must be 1 through 16')
     if a.jobs*a.threads > budget:p.error(f'jobs × threads must not exceed safe host budget {budget}')

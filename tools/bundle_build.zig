@@ -179,12 +179,35 @@ fn fileSize(io: std.Io, path: []const u8) !u64 {
 
 fn installSnapshot(io: std.Io, a: std.mem.Allocator, source: []const u8, root: []const u8, name: []const u8) !void {
     const destination = try std.fs.path.join(a, &.{ root, name });
-    const target = if (std.fs.path.isAbsolute(source)) source else try std.fs.path.resolve(a, &.{source});
+    defer a.free(destination);
+    const target = try std.Io.Dir.cwd().realPathFileAlloc(io, source, a);
+    defer a.free(target);
     // Snapshot inputs are immutable for the lifetime of a build. A symlink keeps
     // the transient expander tree zero-copy; copyFile is a bounded kernel/stream
     // fallback for platforms or filesystems where symlinks are unavailable.
     if (std.Io.Dir.cwd().symLink(io, target, destination, .{})) |_| return else |_| {}
     try std.Io.Dir.cwd().copyFile(source, .cwd(), destination, io, .{});
+}
+
+test "snapshot install resolves relative sources before linking" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(base);
+    const source = try std.fs.path.join(a, &.{ base, "snapshot.tsv" });
+    defer a.free(source);
+    const root = try std.fs.path.join(a, &.{ base, "nested", "expander" });
+    defer a.free(root);
+    try std.Io.Dir.cwd().createDirPath(io, root);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = "ok\n" });
+    try installSnapshot(io, a, source, root, "snapshot.tsv");
+    const installed = try std.fs.path.join(a, &.{ root, "snapshot.tsv" });
+    defer a.free(installed);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, installed, a, .limited(16));
+    defer a.free(bytes);
+    try std.testing.expectEqualStrings("ok\n", bytes);
 }
 
 const CompileMode = enum {
@@ -287,6 +310,7 @@ fn readBatchPlan(
 
 const CompileJob = struct {
     child: std.process.Child,
+    source: []const u8,
     started_ns: i128,
     mode: CompileMode,
     first_index: usize,
@@ -302,6 +326,7 @@ fn waitCompile(io: std.Io, job: *?CompileJob) !void {
         const first_index = active.first_index;
         const last_index = active.last_index;
         const count = active.count;
+        const source = active.source;
         job.* = null;
         if (term != .exited or term.exited != 0) {
             std.debug.print(
@@ -311,6 +336,10 @@ fn waitCompile(io: std.Io, job: *?CompileJob) !void {
             return error.PipelineStageFailed;
         }
         std.debug.print("dictionary build completed: {s} LLVM batch count={d} first={d} last={d} elapsed_ms={d}\n", .{ mode.flag(), count, first_index, last_index, elapsed_ms });
+        std.Io.Dir.cwd().deleteFile(io, source) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
     }
 }
 
@@ -374,6 +403,7 @@ fn compileBitcodeModules(
         });
         jobs[slot] = .{
             .child = child,
+            .source = source,
             .started_ns = std.Io.Clock.awake.now(io).toNanoseconds(),
             .mode = plan.mode,
             .first_index = plan.first_index,
@@ -396,6 +426,10 @@ fn compileBitcodeModules(
         program_object,
     });
     try objects.append(a, program_object);
+    std.Io.Dir.cwd().deleteFile(io, program_source) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
     return objects;
 }
 
@@ -511,6 +545,14 @@ fn compileNativeWorker(
     const metadata_source = try std.fs.path.join(a, &.{ llvm_dir, "program.meta" });
     const metadata_destination = try std.fs.path.join(a, &.{ publish_root, "lua-program.meta" });
     try std.Io.Dir.cwd().rename(metadata_source, std.Io.Dir.cwd(), metadata_destination, io);
+    // Preserve the small compile plan after deleting bulky compiler scratch.
+    const plan_source = try std.fs.path.join(a, &.{ llvm_dir, "batch-plan.tsv" });
+    const plan_destination = try std.fs.path.join(a, &.{ std.fs.path.dirname(publish_root) orelse ".", "compile-plan.tsv" });
+    try std.Io.Dir.cwd().copyFile(plan_source, .cwd(), plan_destination, io, .{});
+    // The linked expander and moved program metadata are the only runtime inputs.
+    // LLVM plans, bitcode and object files are build-only scratch; remove them
+    // before page expansion so they do not inflate peak SSD use for large dumps.
+    try std.Io.Dir.cwd().deleteTree(io, llvm_dir);
 }
 
 test "default LLVM worker count is one plus one third logical CPUs" {
