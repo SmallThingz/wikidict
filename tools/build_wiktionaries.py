@@ -21,7 +21,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 SHARD_THRESHOLD_COMPRESSED_BYTES = 512 * 1024 * 1024
 SHARD_PAGES = 100_000
 SHARD_RETRIES = 3
-SHARD_STATE_VERSION = 1
+SHARD_STATE_VERSION = 2
 MAX_TOTAL_BUILD_WORKERS = 8
 MEMORY_PER_BUILD_WORKER = 1536 * 1024 * 1024
 MEMORY_RESERVE_BYTES = 2 * 1024 * 1024 * 1024
@@ -125,7 +125,7 @@ def source_fingerprint():
     return checksum.hexdigest()
 
 
-def stage_seekable_dump(items, downloads, scratch):
+def stage_seekable_dump(items, downloads, scratch, metadata=None):
     """Repack full-namespace dumps into bounded, page-aligned bzip2 members.
 
     The downloaded meta-current parts are not indexed by page. A whole part can
@@ -148,6 +148,7 @@ def stage_seekable_dump(items, downloads, scratch):
     close_tag=b'</page>'
     started=time.monotonic()
     pages=members=xml_bytes=0
+    dump_hash=hashlib.sha256()
     pending=bytearray()
     batch=bytearray()
     with dump.open('wb',buffering=0) as out, bz2.open(index,'wb',compresslevel=1) as offsets:
@@ -155,7 +156,9 @@ def stage_seekable_dump(items, downloads, scratch):
             nonlocal members
             if not batch: return
             offsets.write(f'{out.tell()}:{members+1}:member{members}\n'.encode())
-            out.write(bz2.compress(batch,compresslevel=1))
+            member=bz2.compress(batch,compresslevel=1)
+            if out.write(member)!=len(member): raise OSError('Short staged dump write')
+            dump_hash.update(member)
             members+=1
             batch.clear()
 
@@ -190,8 +193,13 @@ def stage_seekable_dump(items, downloads, scratch):
         flush()
         if members==0:
             offsets.write(b'0:1:member0\n')
-            out.write(bz2.compress(b'',compresslevel=1))
+            member=bz2.compress(b'',compresslevel=1)
+            if out.write(member)!=len(member): raise OSError('Short staged dump write')
+            dump_hash.update(member)
             members=1
+    if metadata is not None:
+        metadata.update({'dump_size':dump.stat().st_size,'dump_sha256':dump_hash.hexdigest(),
+                         'index_size':index.stat().st_size,'index_sha256':sha256_file(index)})
     print(f'Staged compressed dump: pages={pages} members={members} xml_bytes={xml_bytes} compressed_bytes={dump.stat().st_size} seconds={time.monotonic()-started:.1f}',flush=True)
     return dump
 
@@ -219,6 +227,7 @@ def shard_state(items, registry, now_unix=None):
 
 
 def prepare_shard_workspace(workspace, expected):
+    if workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
     state_path=workspace/'state.json'
     if state_path.is_file():
         try: existing=json.loads(state_path.read_text())
@@ -238,6 +247,40 @@ def prepare_shard_workspace(workspace, expected):
     return now_unix
 
 
+def cached_shard_dump(items, downloads, workspace, expected):
+    """Reuse only a completed, content-verified repack for this shard state."""
+    cache=workspace/'input'
+    if cache.is_symlink(): raise ValueError(f'Unsafe cached dump path: {cache}')
+    dump=cache/'pages.xml.bz2'
+    index=cache/'pages-index.txt.bz2'
+    marker=cache/'.complete.json'
+    state_hash=hashlib.sha256(json.dumps(expected,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    if cache.is_dir() and not any(path.is_symlink() for path in (dump,index,marker)):
+        try:
+            record=json.loads(marker.read_text())
+            valid=isinstance(record,dict) and record.get('version')==DUMP_STAGING_VERSION and record.get('state_sha256')==state_hash
+            for label,path in (('dump',dump),('index',index)):
+                valid=valid and path.is_file() and type(record.get(label+'_size')) is int and record[label+'_size']>0
+                valid=valid and path.stat().st_size==record[label+'_size']
+                valid=valid and sha256_file(path)==record.get(label+'_sha256')
+            if valid:
+                print(f'Reusing verified staged dump: {dump}',flush=True)
+                return dump
+        except (OSError,ValueError,json.JSONDecodeError):
+            pass
+    if cache.exists():
+        if not cache.is_dir(): raise ValueError(f'Unsafe cached dump path: {cache}')
+        shutil.rmtree(cache)
+    cache.mkdir()
+    metadata={}
+    stage_seekable_dump(items,downloads,cache,metadata)
+    record=dict(metadata,version=DUMP_STAGING_VERSION,state_sha256=state_hash)
+    temp=marker.with_suffix('.part')
+    temp.write_text(json.dumps(record,sort_keys=True)+'\n')
+    os.replace(temp,marker)
+    return dump
+
+
 def expander_ready(root):
     marker=root/'.incomplete'
     expander=root/'.bundle-expander'
@@ -250,9 +293,7 @@ def run_checked(command):
     subprocess.run(command,cwd=PROJECT,check=True)
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items):
-    expected=shard_state(items,registry)
-    now_unix=prepare_shard_workspace(workspace,expected)
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix):
     expander_build=workspace/'expander'
     if not expander_ready(expander_build):
         if expander_build.exists(): shutil.rmtree(expander_build)
@@ -425,28 +466,31 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
             return
         print(f'Retrying incomplete build: {staging}', flush=True)
         shutil.rmtree(staging)
-    (PROJECT / '.tmp').mkdir(exist_ok=True)
-    scratch = Path(tempfile.mkdtemp(prefix=f'build-{edition}-{date}-', dir=PROJECT / '.tmp'))
-    try:
-        registry = ensure_language_registry(downloads, output, edition, date)
-        dump = stage_seekable_dump(xml,downloads,scratch)
-        workers = compression_workers or default_build_threads()
-        workspace=target.with_name(date+'.shards')
-        compressed_bytes=sum(item['size'] for item in xml)
-        if compressed_bytes>=SHARD_THRESHOLD_COMPRESSED_BYTES:
-            print(f'Sharding {edition}: {compressed_bytes:,} compressed bytes in {SHARD_PAGES:,}-page chunks',flush=True)
-            build_sharded(dump,staging,workspace,registry,zig,workers,items)
-        else:
+    registry = ensure_language_registry(downloads, output, edition, date)
+    workers = compression_workers or default_build_threads()
+    workspace=target.with_name(date+'.shards')
+    compressed_bytes=sum(item['size'] for item in xml)
+    if compressed_bytes>=SHARD_THRESHOLD_COMPRESSED_BYTES:
+        print(f'Sharding {edition}: {compressed_bytes:,} compressed bytes in {SHARD_PAGES:,}-page chunks',flush=True)
+        expected=shard_state(items,registry)
+        now_unix=prepare_shard_workspace(workspace,expected)
+        dump=cached_shard_dump(xml,downloads,workspace,expected)
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix)
+    else:
+        (PROJECT / '.tmp').mkdir(exist_ok=True)
+        scratch = Path(tempfile.mkdtemp(prefix=f'build-{edition}-{date}-', dir=PROJECT / '.tmp'))
+        try:
+            dump = stage_seekable_dump(xml,downloads,scratch)
             run_checked([zig,'build','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
                          '--language-registry-snapshot',str(registry),
                          '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
                          '--page-workers',str(min(workers,16))])
             run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)])
             (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
-        publish_verified_staging(staging, target, edition, date, compression_workers)
-        if workspace.exists(): shutil.rmtree(workspace)
-    finally:
-        shutil.rmtree(scratch)
+        finally:
+            shutil.rmtree(scratch)
+    publish_verified_staging(staging, target, edition, date, compression_workers)
+    if workspace.exists(): shutil.rmtree(workspace)
 
 def build_groups(groups, downloads, output, zig, threads, jobs):
     pending=list(sorted(groups.items()))

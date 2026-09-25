@@ -109,6 +109,109 @@ class BuildTest(unittest.TestCase):
             with patch.object(b.time,'time',return_value=456):
                 self.assertEqual(b.prepare_shard_workspace(workspace,changed),456)
             self.assertFalse(sentinel.exists())
+            alias=Path(tmp)/'alias';alias.symlink_to(workspace,target_is_directory=True)
+            with self.assertRaisesRegex(ValueError,'Unsafe shard workspace'):
+                b.prepare_shard_workspace(alias,changed)
+
+    def test_cached_shard_dump_reuses_only_exact_verified_state_and_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            (folder/name).write_bytes(bz2.compress(b'<mediawiki><page>word</page></mediawiki>'))
+            items=[dict(wiki='testwiktionary',date='20260901',name=name)]
+            workspace=root/'output/20260901.shards'
+            expected=dict(version=b.SHARD_STATE_VERSION,source='source-a',files=[name])
+            b.prepare_shard_workspace(workspace,expected)
+            real_stage=b.stage_seekable_dump
+            with patch.object(b,'stage_seekable_dump',wraps=real_stage) as stage:
+                dump=b.cached_shard_dump(items,root,workspace,expected)
+                self.assertEqual(stage.call_count,1)
+                self.assertEqual(b.cached_shard_dump(items,root,workspace,expected),dump)
+                self.assertEqual(stage.call_count,1)
+                damaged=bytearray(dump.read_bytes());damaged[len(damaged)//2]^=1
+                dump.write_bytes(damaged)
+                b.cached_shard_dump(items,root,workspace,expected)
+                self.assertEqual(stage.call_count,2)
+                index=workspace/'input/pages-index.txt.bz2'
+                damaged=bytearray(index.read_bytes());damaged[len(damaged)//2]^=1
+                index.write_bytes(damaged)
+                b.cached_shard_dump(items,root,workspace,expected)
+                self.assertEqual(stage.call_count,3)
+                marker=workspace/'input/.complete.json'
+                marker.write_text('{partial')
+                b.cached_shard_dump(items,root,workspace,expected)
+                self.assertEqual(stage.call_count,4)
+                record=json.loads(marker.read_text())
+                record['state_sha256']='0'*64
+                marker.write_text(json.dumps(record)+'\n')
+                b.cached_shard_dump(items,root,workspace,expected)
+                self.assertEqual(stage.call_count,5)
+                changed=dict(expected,source='source-b')
+                b.prepare_shard_workspace(workspace,changed)
+                self.assertFalse((workspace/'input').exists())
+                b.cached_shard_dump(items,root,workspace,changed)
+                self.assertEqual(stage.call_count,6)
+
+    def test_partial_cached_repack_cannot_be_reused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            (folder/name).write_bytes(bz2.compress(b'<mediawiki/>'))
+            items=[dict(wiki='testwiktionary',date='20260901',name=name)]
+            workspace=root/'output/20260901.shards'
+            expected={'version':b.SHARD_STATE_VERSION,'source':'source-a'}
+            b.prepare_shard_workspace(workspace,expected)
+            def fail_stage(_items,_downloads,cache,_metadata):
+                (cache/'pages.xml.bz2').write_bytes(b'partial')
+                raise OSError('interrupted')
+            with patch.object(b,'stage_seekable_dump',side_effect=fail_stage):
+                with self.assertRaisesRegex(OSError,'interrupted'):
+                    b.cached_shard_dump(items,root,workspace,expected)
+            self.assertFalse((workspace/'input/.complete.json').exists())
+            with patch.object(b,'stage_seekable_dump',wraps=b.stage_seekable_dump) as stage:
+                dump=b.cached_shard_dump(items,root,workspace,expected)
+                self.assertEqual(stage.call_count,1)
+            self.assertEqual(bz2.decompress(dump.read_bytes()),b'<mediawiki/>')
+
+    def test_failed_shard_merge_reuses_verified_repack_on_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            data=bz2.compress(b'<mediawiki><page>word</page></mediawiki>')
+            (folder/name).write_bytes(data)
+            item=dict(wiki='testwiktionary',date='20260901',name=name,
+                      url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                      size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            (folder/'language-registry.tsv').write_text('# content-language\ten\nen\tEnglish\n')
+            merges=[]
+            def run(command):
+                if 'build-dictionary' in command:
+                    dest=Path(command[command.index('--')+2]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
+                    (dest/'.incomplete').write_text('expander ready')
+                    (exp/'page-index.tsv').write_text('0\n')
+                    (exp/'dict-bundle-expander').write_text('worker')
+                elif 'build-blobs' in command:
+                    dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True)
+                elif 'merge-blobs' in command:
+                    merges.append(command)
+                    if len(merges)==1:raise subprocess.CalledProcessError(1,command)
+                    dest=Path(command[command.index('--')+1]);dest.mkdir()
+                    (dest/'fallback-pages.jsonl').write_text('')
+            real_stage=b.stage_seekable_dump
+            with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_THRESHOLD_COMPRESSED_BYTES',1), \
+                 patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'), \
+                 patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run), \
+                 patch.object(b,'stage_seekable_dump',wraps=real_stage) as stage:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    b.build([item],root,root/'output','zig',1)
+                workspace=root/'output/testwiktionary/20260901.shards'
+                self.assertTrue((workspace/'input/.complete.json').is_file())
+                self.assertEqual(stage.call_count,1)
+                b.build([item],root,root/'output','zig',1)
+                self.assertEqual(stage.call_count,1)
+                self.assertEqual(len(merges),2)
+                self.assertFalse(workspace.exists())
+                self.assertTrue((root/'output/testwiktionary/20260901/complete.json').is_file())
 
     def test_large_edition_builds_verified_shards_then_merges(self):
         with tempfile.TemporaryDirectory() as tmp:
