@@ -109,19 +109,20 @@ run: rebuild into a new output directory to requalify them against the full dump
 
 The corpus builder is intentionally conservative on developer machines:
 
-- a project lock allows one corpus supervisor at a time, preventing separate
-  invocations from reserving the same free resources;
+- a project lock allows one corpus supervisor at a time, preventing concurrent
+  corpus invocations from claiming the same build allocation;
 - a private Linux cgroup v2 bounds the complete builder/compiler/compressor
   process tree, including memory, CPU time per scheduling period and task count;
   build swap is disabled and the supervisor reaps its own descendants on exit;
 - corpus builds require an already delegated, writable cgroup with the CPU,
   memory and PIDs controllers enabled. Without it the launcher refuses before
   reading the input manifest. It does not change shared system limits;
-- no build starts unless at least 2 GiB remains reserved for the rest of the
-  system, with roughly 1.5 GiB budgeted per admitted build worker and additional
-  space for the builder itself;
-- at least 25% of logical CPU capacity is reserved, and new editions are not
-  admitted while live load or memory pressure consumes that headroom;
+- the whole build tree has a fixed 8 GiB aggregate RAM cap, with no build swap.
+  Admission budgets 1.5 GiB per worker plus 256 MiB for the controller, allowing
+  at most five workers globally and four within one edition. Live free RAM is
+  not used to calculate this cap; smaller inherited hard limits still reduce it;
+- at least 25% of logical CPU capacity is reserved, and CPU load remains an
+  admission limit;
 - individual compiler/expansion stages are capped at four workers and XZ
   publication is capped at four threads;
 - LLVM bitcode/object scratch is removed before page expansion, snapshot inputs

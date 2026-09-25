@@ -4,6 +4,7 @@
 
 - `main` is the only local branch. Work directly on it; do not create branches/worktrees unless the user explicitly asks.
 - Do not push unless the user explicitly asks.
+- Corpus builds use a fixed 8 GiB aggregate memory cap, independent of host free RAM. Retain private cgroup CPU/PID limits and any smaller inherited memory cap.
 - Make regular, small commits after coherent validated steps. Stage only files owned by the current task; preserve unrelated shared dirty work.
 - Keep temporary files under `.tmp/` and remove them before finishing.
 - `.tmp/` is shared by long-running qualification jobs. Never delete it wholesale; remove only task-owned paths after checking that no live process owns them and that any required acceptance audit has completed.

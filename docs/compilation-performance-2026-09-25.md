@@ -14,10 +14,14 @@ historical count, a complete build would need more than 3,092.38 pages/s,
 including compilation, to finish in under one hour. The index is not a
 verified final corpus count.
 
-The latest resource snapshot still has a zero corpus admission budget,
-1,856,500 kB available memory (below the 2 GiB reserve), and no delegated
-writable cgroup subtree. Corpus and heavy native-worker builds remain blocked.
-Earlier guarded measurements do not qualify pending source or waive containment.
+The earlier resource snapshot had a zero corpus admission budget and
+1,856,500 kB available memory under the former 2 GiB host-reserve policy.
+The user subsequently replaced that policy with a fixed 8 GiB aggregate build
+cap, independent of host free RAM. The controller derives up to five workers
+from this cap, with at most four per edition; CPU/load limits still apply.
+A fresh check still found no delegated writable cgroup subtree, so the hard
+aggregate cap cannot be installed on this RD host. Earlier guarded measurements
+do not qualify pending source or waive containment.
 
 This report preserves accepted results and their limits. The fuller working
 record remains at [.tmp/compile-perf-20260925/EVIDENCE-DRAFT.md](../.tmp/compile-perf-20260925/EVIDENCE-DRAFT.md).
@@ -65,7 +69,8 @@ that a particular classification policy preserves English expansion throughput.
 | Earlier full Zig graph | Passed at `a11aa5b` plus then-owned candidates, with unchanged source-set fingerprint; current integrated graph pending |
 | Current full blob main | Semantic compilation passed with binary emission disabled; no linked execution |
 | Current consumer | 7 focused tests passed |
-| Current controller and downloader | 44 and 13 passed, respectively |
+| Current controller and downloader | 46 and 13 passed, respectively |
+| Fixed memory-cap resource supervisor | 13 passed; filesystem fixtures verify policy and refusal, not kernel enforcement on this host |
 | Current protocol helper and live MediaWiki | 1 and 12 passed, respectively |
 | Adaptive sparse candidate | Root-verified 38 core tests and 3 ABI tests passed |
 | Sparse functional matrix | 16 cases passed, covering 40 paired segment checks |

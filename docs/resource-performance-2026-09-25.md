@@ -20,11 +20,12 @@ and their remaining native integration gates.
 
 ## Changes
 
-### Whole-tree resource limits
+### Whole-tree resource limits at the initial checkpoint
 
-The corpus CLI now requires a private cgroup v2 beneath an already delegated,
-writable ancestor. The supervisor does not enable shared controllers or alter
-existing limits. Before any builder child executes, it configures:
+At this initial checkpoint, the corpus CLI required a private cgroup v2 beneath
+an already delegated, writable ancestor. The supervisor did not enable shared
+controllers or alter existing limits. Before any builder child executed, it
+configured:
 
 - Aggregate memory from live available headroom after a 2 GiB system reserve,
   capped at eight 1.5 GiB worker budgets plus 256 MiB for the builder.
@@ -34,12 +35,19 @@ existing limits. Before any builder child executes, it configures:
 - A project lock held by the supervisor so two corpus invocations cannot both
   allocate the same resource snapshot.
 
-The supervisor considers its own leaf limits even when the delegated parent
-requires creating a sibling cgroup. Exit and handled interruption reap only the
-private build group. Unknown available memory refuses admission. A zero-budget
-CLI check terminates directly, so a later resource recovery cannot accidentally
-start an uncontained build. Existing worker/concurrency caps and live admission
-checks remain in place.
+These bullets describe the original policy measured and tested in this
+checkpoint. The current operational policy uses a fixed 8 GiB aggregate RAM
+cap instead of live free RAM for memory admission. It budgets 1.5 GiB per
+worker and 256 MiB for the controller, so at most five workers can run
+globally and four in one edition. Child swap remains disabled. CPU limits and
+load admission still apply, and a private writable delegated cgroup remains
+mandatory. The original test counts below do not validate this later policy.
+
+Under the original policy, the supervisor considered its own leaf limits even
+when the delegated parent required creating a sibling cgroup. Exit and handled
+interruption reaped only the private build group. Unknown available memory
+refused admission. A zero-budget CLI check terminated directly, so later
+resource recovery could not accidentally start an uncontained build.
 
 These are limits on this build tree, not a guarantee that unrelated programs
 will leave their own memory/CPU usage unchanged. Direct Zig fixture commands do
@@ -180,11 +188,12 @@ Reader checksum totals: early `525`; late `1634805`; absent `1637475`.
   and created no output directory. This validates the observed zero-budget
   refusal, not kernel enforcement of a newly created cgroup.
 
-The current host exposes a read-only cgroup v2 mount at `/sys/fs/cgroup`,
-with `cpu memory pids` available but no enabled subtree controllers. There is
-no writable delegation for a new private build group. The raw `data/dumps`
-cache is absent. Available RAM and load varied during the pass; an earlier
-snapshot had about 3.5 GiB available and substantial existing swap use.
+At the initial checkpoint, the host exposed a read-only cgroup v2 mount at
+`/sys/fs/cgroup`, with `cpu memory pids` available but no enabled subtree
+controllers. There was no writable delegation for a new private build group.
+The raw `data/dumps` cache was absent. Available RAM and load varied during
+the pass; an earlier snapshot had about 3.5 GiB available and substantial
+existing swap use.
 
 Cgroup control-file behavior is unit tested with temporary mocks. At this initial
 checkpoint, a real delegated-host integration run, the full Zig test graph, an
@@ -193,8 +202,8 @@ The bounded affected tests do not substitute for those qualifications.
 
 ## Next step toward 10,000 pages/s
 
-On a host with writable delegated cgroups, nonzero live admission budget and
-the complete raw dump cache, first establish a full-input baseline with phase
+On a host with writable delegated cgroups, sufficient fixed-capacity admission,
+and the complete raw dump cache, first establish a full-input baseline with phase
 timing and verified page counts. Include staging, expansion, encoding, merging
 and publication rather than extrapolating this decoder microbenchmark.
 

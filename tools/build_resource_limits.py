@@ -12,9 +12,8 @@ import time
 import uuid
 
 CGROUP_ROOT = Path('/sys/fs/cgroup')
-MEMORY_RESERVE = 2 * 1024**3
 SUPERVISOR_CHILD_RESERVE = 256 * 1024**2
-MAX_BUILD_MEMORY = 8 * 1536 * 1024**2 + SUPERVISOR_CHILD_RESERVE
+MAX_BUILD_MEMORY = 8 * 1024**3
 MAX_BUILD_PIDS = 256
 CHILD_CGROUP = 'WIKIDICT_BUILD_CHILD_CGROUP'
 PIDS_PARENT_RESERVE = 16
@@ -49,7 +48,7 @@ def _self_cgroup(root=CGROUP_ROOT):
     raise ContainmentUnavailable('Current cgroup is not visible in the cgroup v2 mount')
 
 
-def _limits(parent, available_bytes, affinity_cpus, root=None, current=None):
+def _limits(parent, affinity_cpus, root=None, current=None):
     if root is None:
         root = parent
     if parent != root and root not in parent.parents:
@@ -62,7 +61,7 @@ def _limits(parent, available_bytes, affinity_cpus, root=None, current=None):
     enabled = set((parent / 'cgroup.subtree_control').read_text().split())
     if not required <= enabled:
         raise ContainmentUnavailable('A delegated cgroup with cpu, memory and pids controllers is required')
-    memory_headroom = available_bytes - MEMORY_RESERVE
+    memory_limit = MAX_BUILD_MEMORY
     effective_cpus = affinity_cpus
     pids_headroom = MAX_BUILD_PIDS
     # A sibling build group will not inherit limits on the supervisor's leaf.
@@ -70,9 +69,8 @@ def _limits(parent, available_bytes, affinity_cpus, root=None, current=None):
     ancestor = current
     while True:
         memory_parent = _number(ancestor / 'memory.max')
-        memory_used = int((ancestor / 'memory.current').read_text())
         if memory_parent is not None:
-            memory_headroom = min(memory_headroom, memory_parent - memory_used - MEMORY_RESERVE)
+            memory_limit = min(memory_limit, memory_parent)
         cpu_tokens = (ancestor / 'cpu.max').read_text().split()
         if len(cpu_tokens) != 2:
             raise ContainmentUnavailable('Cannot determine ancestor cgroup CPU quota')
@@ -89,9 +87,8 @@ def _limits(parent, available_bytes, affinity_cpus, root=None, current=None):
         if ancestor == root:
             break
         ancestor = ancestor.parent
-    memory_limit = min(MAX_BUILD_MEMORY, memory_headroom)
     if memory_limit < 1536 * 1024**2 + SUPERVISOR_CHILD_RESERVE:
-        raise ContainmentUnavailable('Insufficient memory headroom for a contained build')
+        raise ContainmentUnavailable('Insufficient inherited memory cap for a contained build')
     if affinity_cpus < 1:
         raise ContainmentUnavailable('Cannot determine effective CPU capacity')
     cpu_quota = int(effective_cpus * 0.75 * 100000)
@@ -147,14 +144,14 @@ def child_memory_limit_bytes():
     return _number(Path(marker) / 'memory.max')
 
 
-def supervise(available_bytes, *, root=CGROUP_ROOT, argv=None, affinity_cpus=None):
+def supervise(*, root=CGROUP_ROOT, argv=None, affinity_cpus=None):
     """Return child status, or raise before spawning if a hard limit is unavailable."""
     try:
         current = _self_cgroup(root)
         parent = _delegated_parent(current, root)
         if affinity_cpus is None:
             affinity_cpus = len(os.sched_getaffinity(0))
-        limits = _limits(parent, available_bytes, affinity_cpus, root, current)
+        limits = _limits(parent, affinity_cpus, root, current)
         group = parent / ('wikidict-build-' + uuid.uuid4().hex)
         group.mkdir(mode=0o700)
         status = None

@@ -12,17 +12,22 @@ import build_wiktionaries as builder
 
 
 class ResourceLimitsTest(unittest.TestCase):
-    def test_zero_budget_cannot_race_into_an_uncontained_build(self):
+    def test_cli_ignores_host_free_ram_but_requires_containment(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(builder, 'PROJECT', Path(tmp)), \
                  patch.object(sys, 'argv', ['build_wiktionaries.py']), \
                  patch.object(limits, 'inside_envelope', return_value=False), \
-                 patch.object(builder, 'safe_worker_budget', side_effect=[0, 4]) as budget, \
+                 patch.object(Path, 'read_text', side_effect=AssertionError('host free RAM was read')) as memory, \
+                 patch.object(builder, 'safe_worker_budget', side_effect=AssertionError('budget was read')) as budget, \
+                 patch.object(limits, 'supervise',
+                              side_effect=limits.ContainmentUnavailable('A delegated cgroup is required')) as launch, \
                  patch.object(builder, 'main') as main:
-                with self.assertRaisesRegex(SystemExit, 'resources'):
+                with self.assertRaisesRegex(SystemExit, 'delegated cgroup'):
                     builder.cli()
             main.assert_not_called()
-            self.assertEqual(budget.call_count, 1)
+            memory.assert_not_called()
+            budget.assert_not_called()
+            launch.assert_called_once_with()
 
     def parent(self, root, *, controllers='cpu memory pids', memory_max='max',
                memory_current='0', cpu_max='max 100000', pids_max='max', pids_current='10'):
@@ -43,8 +48,8 @@ class ResourceLimitsTest(unittest.TestCase):
             self.parent(parent, memory_max=str(8 * 1024**3),
                         memory_current=str(2 * 1024**3), cpu_max='200000 100000',
                         pids_max='300', pids_current='200')
-            result = limits._limits(parent, 10 * 1024**3, 12)
-            self.assertEqual(result['memory.max'], str(4 * 1024**3))
+            result = limits._limits(parent, 12)
+            self.assertEqual(result['memory.max'], str(8 * 1024**3))
             self.assertEqual(result['memory.swap.max'], '0')
             self.assertEqual(result['cpu.max'], '150000 100000')
             self.assertEqual(result['pids.max'], '84')
@@ -57,20 +62,20 @@ class ResourceLimitsTest(unittest.TestCase):
             with patch.object(limits, '_self_cgroup', return_value=parent), \
                  patch.object(limits.subprocess, 'Popen') as launch:
                 with self.assertRaisesRegex(limits.ContainmentUnavailable, 'delegated cgroup'):
-                    limits.supervise(16 * 1024**3, root=parent, affinity_cpus=12)
+                    limits.supervise(root=parent, affinity_cpus=12)
             launch.assert_not_called()
             self.assertEqual(list(parent.glob('wikidict-build-*')), [])
 
-    def test_parent_capacity_and_pressure_are_fail_closed(self):
+    def test_inherited_hard_memory_and_pid_caps_are_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
-            self.parent(parent, memory_max=str(4 * 1024**3),
+            self.parent(parent, memory_max=str(1 * 1024**3),
                         memory_current=str(3 * 1024**3))
-            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'memory headroom'):
-                limits._limits(parent, 20 * 1024**3, 12)
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'inherited memory cap'):
+                limits._limits(parent, 12)
             self.parent(parent, pids_max='20')
             with self.assertRaisesRegex(limits.ContainmentUnavailable, 'process slots'):
-                limits._limits(parent, 20 * 1024**3, 12)
+                limits._limits(parent, 12)
 
     def test_child_enters_bounded_group_before_exec(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -105,11 +110,12 @@ class ResourceLimitsTest(unittest.TestCase):
                  patch.object(Path, 'mkdir', fake_mkdir), \
                  patch.object(limits.subprocess, 'Popen', side_effect=fake_popen), \
                  patch.object(limits, '_cleanup') as cleanup:
-                self.assertEqual(limits.supervise(10 * 1024**3, root=parent,
+                self.assertEqual(limits.supervise(root=parent,
                                                  argv=['tools/build_wiktionaries.py'],
                                                  affinity_cpus=12), 7)
             self.assertEqual(observed['command'][1:], ['tools/build_wiktionaries.py'])
             self.assertEqual(observed['joined_pid'], str(os.getpid()))
+            self.assertEqual(observed['memory'], str(8 * 1024**3))
             self.assertEqual(observed['swap'], '0')
             self.assertEqual(observed['cpu'], '900000 100000')
             self.assertEqual(observed['pids'], '256')
@@ -129,6 +135,10 @@ class ResourceLimitsTest(unittest.TestCase):
                 with self.assertRaisesRegex(limits.ContainmentUnavailable, 'pids.max'):
                     limits.inside_envelope()
                 (group / 'pids.max').write_text('64')
+                (group / 'memory.max').write_text(str(8 * 1024**3 + 1))
+                with self.assertRaisesRegex(limits.ContainmentUnavailable, 'memory cap exceeds'):
+                    limits.inside_envelope()
+                (group / 'memory.max').write_text('1073741824')
                 with patch.dict(os.environ, {limits.CHILD_CGROUP: str(Path(tmp))}):
                     with self.assertRaisesRegex(limits.ContainmentUnavailable, 'did not enter'):
                         limits.inside_envelope()
@@ -137,9 +147,7 @@ class ResourceLimitsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
             self.parent(parent, controllers='')
-            with patch.object(builder, 'safe_worker_budget', return_value=2), \
-                 patch.object(builder, 'available_memory_bytes', return_value=8 * 1024**3), \
-                 patch.object(builder, 'PROJECT', parent), \
+            with patch.object(builder, 'PROJECT', parent), \
                  patch.object(limits, '_delegated_parent',
                               side_effect=limits.ContainmentUnavailable('A writable delegated cgroup is required')), \
                  patch.object(sys, 'argv', ['build_wiktionaries.py', '--downloads',
@@ -181,11 +189,13 @@ class ResourceLimitsTest(unittest.TestCase):
         inside.assert_not_called()
         launch.assert_not_called()
 
-    def test_missing_memavailable_does_not_fall_back_to_installed_ram(self):
-        with patch.object(Path, 'read_text', return_value='MemTotal: 64000000 kB\n'), \
-             patch.object(builder, 'load_average', return_value=0):
-            self.assertIsNone(builder.available_memory_bytes())
-            self.assertEqual(builder.safe_worker_budget(), 0)
+    def test_worker_budget_does_not_read_host_free_ram(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch.object(Path, 'read_text', side_effect=AssertionError('host free RAM was read')) as memory, \
+             patch.object(builder, 'load_average', return_value=0), \
+             patch.object(builder.os, 'cpu_count', return_value=12):
+            self.assertEqual(builder.safe_worker_budget(), 5)
+            memory.assert_not_called()
 
     def test_sibling_envelope_respects_supervisor_leaf_caps(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -196,10 +206,13 @@ class ResourceLimitsTest(unittest.TestCase):
             self.parent(leaf, controllers='', memory_max=str(7 * 1024**3),
                         memory_current=str(1 * 1024**3), cpu_max='100000 100000',
                         pids_max='100', pids_current='20')
-            result = limits._limits(parent, 20 * 1024**3, 12, parent, leaf)
-            self.assertEqual(result['memory.max'], str(4 * 1024**3))
+            result = limits._limits(parent, 12, parent, leaf)
+            self.assertEqual(result['memory.max'], str(7 * 1024**3))
             self.assertEqual(result['cpu.max'], '75000 100000')
             self.assertEqual(result['pids.max'], '64')
+            self.parent(parent, memory_max=str(4 * 1024**3))
+            result = limits._limits(parent, 12, parent, leaf)
+            self.assertEqual(result['memory.max'], str(4 * 1024**3))
 
     def test_cleanup_kills_only_populated_private_group_and_waits_for_empty(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -28,7 +28,6 @@ MAX_PIPELINE_WORKERS = 4
 MAX_PAGE_INDEX_LINE_BYTES = 1024 * 1024
 MAX_PAGE_COVERAGE_BYTES = 64 * 1024
 MEMORY_PER_BUILD_WORKER = 1536 * 1024 * 1024
-MEMORY_RESERVE_BYTES = 2 * 1024 * 1024 * 1024
 CPU_UTILIZATION_TARGET = 0.75
 
 def acquire_build_resource_lock(path):
@@ -51,17 +50,6 @@ def load_average():
     try:return max(0.0,os.getloadavg()[0])
     except OSError:return None
 
-def available_memory_bytes():
-    try:
-        values={}
-        for line in Path('/proc/meminfo').read_text().splitlines():
-            if ':' not in line:continue
-            key,value=line.split(':',1);fields=value.split()
-            if fields:values[key]=int(fields[0])*1024
-        return values.get('MemAvailable')
-    except (OSError,ValueError,IndexError):
-        return None
-
 def safe_worker_budget(owned_workers=0):
     cpu=max(1,os.cpu_count() or 1)
     load=load_average()
@@ -70,12 +58,8 @@ def safe_worker_budget(owned_workers=0):
     else:
         external_load=max(0.0,load-owned_workers)
         cpu_workers=max(0,int(cpu*CPU_UTILIZATION_TARGET-external_load))
-    memory=available_memory_bytes()
-    if memory is None:
-        return 0
-    usable=max(0,memory-MEMORY_RESERVE_BYTES)
-    memory_workers=usable//MEMORY_PER_BUILD_WORKER
-    from build_resource_limits import CHILD_CGROUP, SUPERVISOR_CHILD_RESERVE, child_memory_limit_bytes
+    from build_resource_limits import CHILD_CGROUP, MAX_BUILD_MEMORY, SUPERVISOR_CHILD_RESERVE, child_memory_limit_bytes
+    memory_limit=MAX_BUILD_MEMORY
     if CHILD_CGROUP in os.environ:
         try:
             group_limit = child_memory_limit_bytes()
@@ -83,7 +67,10 @@ def safe_worker_budget(owned_workers=0):
             return 0
         if group_limit is None:
             return 0
-        memory_workers=min(memory_workers,max(0,group_limit-SUPERVISOR_CHILD_RESERVE)//MEMORY_PER_BUILD_WORKER)
+        if type(group_limit) is not int or group_limit<=0:
+            return 0
+        memory_limit=min(memory_limit,group_limit)
+    memory_workers=max(0,memory_limit-SUPERVISOR_CHILD_RESERVE)//MEMORY_PER_BUILD_WORKER
     return min(MAX_TOTAL_BUILD_WORKERS,cpu_workers,memory_workers)
 
 def default_build_threads():
@@ -721,12 +708,12 @@ def main():
     p.add_argument('--downloads','--in',type=Path,default=PROJECT/'data/dumps',metavar='DIR')
     p.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries',metavar='DIR')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
-    p.add_argument('--threads',type=int,default=default_build_threads(),help='Compiler/expansion workers per edition (default: up to 4 within CPU/RAM budget)')
-    p.add_argument('--jobs',type=int,help='Concurrent editions (default: up to two within aggregate CPU/RAM budget)')
+    p.add_argument('--threads',type=int,default=default_build_threads(),help='Workers per edition (up to 4 within CPU load and fixed 8 GiB aggregate cap)')
+    p.add_argument('--jobs',type=int,help='Concurrent editions (up to two within CPU load and capped aggregate worker budget)')
     p.add_argument('--wikis',nargs='+',help='Build only these edition IDs')
     a=p.parse_args()
     budget=safe_worker_budget()
-    if budget < 1:p.error('Not enough available memory to start a build safely')
+    if budget < 1:p.error('No worker budget within CPU load and the verified build memory cap (at most 8 GiB)')
     worker_limit=min(budget,MAX_PIPELINE_WORKERS)
     if not 1 <= a.threads <= worker_limit:p.error(f'Threads must be 1 through {worker_limit} on this host')
     if a.jobs is None:a.jobs=min(2,max(1,budget//a.threads))
@@ -753,13 +740,7 @@ def cli():
             main()
         else:
             with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
-                if safe_worker_budget() < 1:
-                    raise SystemExit('Not enough available resources to start a build safely')
-                else:
-                    memory = available_memory_bytes()
-                    if memory is None:
-                        raise ContainmentUnavailable('Cannot determine available memory for a contained build')
-                    raise SystemExit(supervise(memory))
+                raise SystemExit(supervise())
     except ContainmentUnavailable as error:
         raise SystemExit(str(error)) from error
     except KeyboardInterrupt:

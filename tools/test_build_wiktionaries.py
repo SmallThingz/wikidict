@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import build_wiktionaries as b
+import build_resource_limits as limits
 from compress_blobs import compress, compress_many, default_workers
 
 def write_coverage(root, command=None):
@@ -506,7 +507,7 @@ class BuildTest(unittest.TestCase):
             item=dict(wiki='testwiktionary',date='20260901',name='testwiktionary-20260901-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/testwiktionary-20260901-pages-meta-current.xml.bz2',size=1,sha1='a'*40)
             (source/'manifest.json').write_text(json.dumps({'files':[item]}))
             output=root/'output'
-            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(output),'--threads','2']),patch.object(b,'available_memory_bytes',return_value=16*1024*1024*1024),patch.object(b,'load_average',return_value=0),patch.object(b,'build') as build:
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(output),'--threads','2']),patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'load_average',return_value=0),patch.object(b,'build') as build:
                 b.main()
             self.assertEqual(build.call_args.args[1:4],(source.resolve(),output.resolve(),b.shutil.which('zig') or 'zig'))
             self.assertEqual(build.call_args.args[4],2)
@@ -519,10 +520,10 @@ class BuildTest(unittest.TestCase):
                 items.append(dict(wiki=wiki,date='20260901',name=name,url=f'https://dumps.wikimedia.org/{wiki}/20260901/{name}',size=1,sha1='a'*40))
             (source/'manifest.json').write_text(json.dumps({'files':items}))
             rendezvous=threading.Barrier(2)
-            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(root/'output'),'--threads','2','--jobs','2']),patch.object(b,'available_memory_bytes',return_value=16*1024*1024*1024),patch.object(b,'load_average',return_value=0),patch.object(b,'build',side_effect=lambda *args:rendezvous.wait(timeout=2)) as build:
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(root/'output'),'--threads','2','--jobs','2']),patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'load_average',return_value=0),patch.object(b,'build',side_effect=lambda *args:rendezvous.wait(timeout=2)) as build:
                 b.main()
             self.assertEqual(build.call_count,2)
-    def test_scheduler_rechecks_memory_before_starting_next_edition(self):
+    def test_scheduler_rechecks_worker_budget_before_starting_next_edition(self):
         groups={
             ('aawiktionary','20260901'):[dict(wiki='aawiktionary')],
             ('abwiktionary','20260901'):[dict(wiki='abwiktionary')],
@@ -558,28 +559,54 @@ class BuildTest(unittest.TestCase):
         with patch('compress_blobs.os.cpu_count',return_value=None):
             self.assertEqual(default_workers(),1)
 
-    def test_safe_worker_budget_caps_cpu_and_memory(self):
-        with patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'load_average',return_value=0),patch.object(b,'available_memory_bytes',return_value=8*1024*1024*1024):
-            self.assertEqual(b.safe_worker_budget(),4)
+    def test_safe_worker_budget_caps_cpu_and_fixed_memory_without_meminfo(self):
+        with patch.dict(b.os.environ,{},clear=True),patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'load_average',return_value=0),patch.object(Path,'read_text',side_effect=AssertionError('must not read MemAvailable')):
+            self.assertEqual(b.safe_worker_budget(),5)
             self.assertEqual(b.default_build_threads(),4)
-        with patch.object(b.os,'cpu_count',return_value=2),patch.object(b,'load_average',return_value=0),patch.object(b,'available_memory_bytes',return_value=64*1024*1024*1024):
+        with patch.dict(b.os.environ,{},clear=True),patch.object(b.os,'cpu_count',return_value=2),patch.object(b,'load_average',return_value=0):
             self.assertEqual(b.safe_worker_budget(),1)
             self.assertEqual(b.default_build_threads(),1)
 
+    def test_worker_budget_respects_verified_child_cap_and_fails_closed(self):
+        with patch.dict(b.os.environ,{limits.CHILD_CGROUP:'/private/build'}),patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'load_average',return_value=0):
+            for cap,expected in ((8*1024**3,5),(4*1024**3,2),(256*1024**2,0),(None,0),(0,0),(True,0)):
+                with self.subTest(cap=cap),patch.object(limits,'child_memory_limit_bytes',return_value=cap):
+                    self.assertEqual(b.safe_worker_budget(),expected)
+            for error in (OSError('unreadable'),ValueError('unbounded')):
+                with patch.object(limits,'child_memory_limit_bytes',side_effect=error):
+                    self.assertEqual(b.safe_worker_budget(),0)
+
     def test_safe_worker_budget_reserves_cpu_for_other_work(self):
-        with patch.object(b.os,'cpu_count',return_value=12),patch.object(b,'available_memory_bytes',return_value=64*1024*1024*1024),patch.object(b,'load_average',return_value=7.2):
+        with patch.dict(b.os.environ,{},clear=True),patch.object(b.os,'cpu_count',return_value=12),patch.object(b,'load_average',return_value=7.2):
             self.assertEqual(b.safe_worker_budget(),1)
             self.assertEqual(b.safe_worker_budget(4),5)
-        with patch.object(b.os,'cpu_count',return_value=12),patch.object(b,'available_memory_bytes',return_value=64*1024*1024*1024),patch.object(b,'load_average',return_value=12.0):
+        with patch.dict(b.os.environ,{},clear=True),patch.object(b.os,'cpu_count',return_value=12),patch.object(b,'load_average',return_value=12.0):
             self.assertEqual(b.safe_worker_budget(),0)
 
-    def test_main_refuses_to_start_below_memory_reserve(self):
+    def test_main_admits_fixed_budget_even_if_memavailable_is_zero(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'input';source.mkdir()
             item=dict(wiki='testwiktionary',date='20260901',name='testwiktionary-20260901-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/testwiktionary-20260901-pages-meta-current.xml.bz2',size=1,sha1='a'*40)
             (source/'manifest.json').write_text(json.dumps({'files':[item]}))
-            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source)]),patch.object(b,'available_memory_bytes',return_value=b.MEMORY_RESERVE_BYTES+b.MEMORY_PER_BUILD_WORKER-1),patch.object(b,'load_average',return_value=0):
-                with self.assertRaises(SystemExit): b.main()
+            original=Path.read_text
+            def read(path,*args,**kwargs):
+                if str(path)=='/proc/meminfo': return 'MemAvailable: 0 kB\n'
+                return original(path,*args,**kwargs)
+            with patch.dict(b.os.environ,{},clear=True),patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source)]),patch.object(Path,'read_text',read),patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'load_average',return_value=0),patch.object(b,'build') as build:
+                b.main()
+            build.assert_called_once()
+
+    def test_cli_reaches_supervisor_under_lock_without_host_memory_admission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            def supervised():
+                with self.assertRaises(limits.ContainmentUnavailable):
+                    b.acquire_build_resource_lock(root/'.tmp/build-resources.lock')
+                raise limits.ContainmentUnavailable('delegation required')
+            with patch.object(b,'PROJECT',root),patch.object(sys,'argv',['build_wiktionaries.py']),patch.object(limits,'inside_envelope',return_value=False),patch.object(limits,'supervise',side_effect=supervised) as supervise,patch.object(b,'safe_worker_budget',return_value=0),patch.object(b,'main') as main:
+                with self.assertRaisesRegex(SystemExit,'delegation required'): b.cli()
+            supervise.assert_called_once_with()
+            main.assert_not_called()
 
     def test_main_rejects_aggregate_worker_oversubscription(self):
         with tempfile.TemporaryDirectory() as tmp:

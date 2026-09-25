@@ -108,8 +108,8 @@ concurrent edition jobs and two workers per edition. Their compile/link/expand
 pipelines overlapped and both published verified compressed output with fallback
 reports. `--threads` controls per-edition Lua parsing, LLVM compilation, page
 expansion, and XZ work; `--jobs` overlaps edition pipelines. Current orchestration
-also gates new jobs against live CPU load and available memory, so those are
-upper bounds rather than a promise to saturate the machine. The individual native
+also gates new jobs against live CPU load and a fixed 8 GiB aggregate memory cap.
+Those are upper bounds on concurrency. The individual native
 link command is still one link operation and is not claimed to be internally
 multithreaded.
 

@@ -73,7 +73,8 @@ single disjoint suite. Document IR tests also appear in the encoder suite.
 
 | Scope | Result |
 |---|---|
-| Python build controller | 44 passed, including independent input counts, receipts, cache invalidation, publication, and small compression cases. |
+| Python build controller | 46 passed, including fixed-cap admission, independent input counts, receipts, cache invalidation, publication, and small compression cases. |
+| Resource supervisor | 13 passed, including fixed and inherited caps, private-group entry, and refusal before launch without delegation. |
 | Python downloader | 13 passed. |
 | Native language registry | 6 passed. |
 | Module shape registry | 7 passed. |
@@ -101,10 +102,17 @@ linker constraints. Earlier full-graph success is historical evidence only.
 
 ## Resource and input blockers
 
-At the final recorded resource check, `safe_worker_budget()` returned **0**.
-Available memory was **1,856,500 kB**, below the builder's 2 GiB reserve. Twelve
-CPUs were in the affinity set, but additional CPU availability does not override
-the memory gate.
+At the earlier recorded resource check, `safe_worker_budget()` returned **0**
+under the former host-free-memory policy. Available memory was **1,856,500 kB**.
+The user subsequently replaced that policy with a fixed **8 GiB aggregate build
+cap**, independent of host free RAM. Workers now derive from the hard cap minus
+the controller allowance: up to five overall, with at most four per edition.
+CPU/load limits and any smaller inherited hard memory limit still apply.
+
+The fixed-cap controller and resource suites passed together: 59 tests, with
+unchanged source fingerprints. The live preflight calculated five workers but
+refused before creating output because the delegated cgroup is unavailable.
+Logs and source identities are retained in `.tmp/fixed-8g-20260925/`.
 
 The enclosing cgroup exposes CPU, memory, and PID controllers but has no writable
 delegated subtree. The private aggregate build envelope therefore cannot be
@@ -113,8 +121,9 @@ bounded process scan. No new corpus build was launched.
 
 The verified raw English dump directory and completed English output are absent.
 The retained `.building` workspace is not treated as a current completed build.
-Both safe resource admission and verified inputs are prerequisites for a full
-measurement; waiting for memory alone would not resolve the cgroup requirement.
+Both enforced resource limits and verified inputs are prerequisites for a full
+measurement. Host free RAM is no longer a launch gate; the missing writable
+cgroup remains a separate blocker.
 
 A fresh, bounded metadata-only plan is ready in `data/dumps-en-20260901/`.
 Its 15 unique files (nine XML parts and six SQL companions) total 3,362,510,164
