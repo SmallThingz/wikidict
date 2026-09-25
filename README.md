@@ -71,9 +71,10 @@ Use Wikimedia's `pages-meta-current` dump for complete builds. Wiktionary entrie
 can depend on pages outside the main and Template namespaces, so an articles-only
 dump is not sufficient.
 
-For corpus builds, keep the Wikimedia dumps compressed. The download/build
-tools stage the existing `.bz2` members directly and generate only the tiny
-multistream offset sidecar needed for random access:
+For corpus builds, keep the Wikimedia dumps compressed. The builder streams
+their XML through bounded memory and writes page-aligned bzip2 members with
+an offset index for random access. Downloaded file boundaries are not usable
+as page-stream boundaries: a single meta-current part can expand to gigabytes.
 
 ```sh
 python tools/download_wiktionaries.py --out data/dumps --wikis enwiktionary
@@ -83,8 +84,10 @@ python tools/build_wiktionaries.py --in data/dumps --out data/dictionaries \
 
 `build-dictionary` still accepts decompressed XML for small one-off fixtures, but
 the corpus builder does **not** materialize a decompressed `pages.xml` scratch
-file. A single dump part is hard-linked when possible; multipart dumps are
-concatenated while still compressed.
+file. Compressed staging targets 4 MiB per member, with a 64 MiB hard cap for
+large pages. All XML bytes and page order are preserved across multipart and
+concatenated-stream inputs. This requires recompression and compressed scratch
+writes; staging reports page counts, byte counts and elapsed time.
 
 The build pipeline:
 
@@ -98,12 +101,25 @@ The build pipeline:
 Existing output directories are not modified in place. Failed builds retain an
 `.incomplete` marker.
 
+Completed output and verified staging must record the current page-aligned dump
+version. Older builds are preserved but cannot be accepted as complete by a new
+run: rebuild into a new output directory to requalify them against the full dump.
+
 ### Resource and scratch behavior
 
 The corpus builder is intentionally conservative on developer machines:
 
+- a project lock allows one corpus supervisor at a time, preventing separate
+  invocations from reserving the same free resources;
+- a private Linux cgroup v2 bounds the complete builder/compiler/compressor
+  process tree, including memory, CPU time per scheduling period and task count;
+  build swap is disabled and the supervisor reaps its own descendants on exit;
+- corpus builds require an already delegated, writable cgroup with the CPU,
+  memory and PIDs controllers enabled. Without it the launcher refuses before
+  reading the input manifest. It does not change shared system limits;
 - no build starts unless at least 2 GiB remains reserved for the rest of the
-  system, with roughly 1.5 GiB budgeted per admitted build worker;
+  system, with roughly 1.5 GiB budgeted per admitted build worker and additional
+  space for the builder itself;
 - at least 25% of logical CPU capacity is reserved, and new editions are not
   admitted while live load or memory pressure consumes that headroom;
 - individual compiler/expansion stages are capped at four workers and XZ
@@ -113,6 +129,12 @@ The corpus builder is intentionally conservative on developer machines:
   removed immediately after merge;
 - release compression uses 1 MiB XZ blocks at preset `-6`; higher presets did
   not improve block utilization enough to justify their CPU cost.
+
+The native dump reader consumes each indexed member once using a 64 KiB input
+buffer. It rejects trailing streams, truncated input and decoded members over
+128 MiB rather than allocating an entire compressed part or accepting a partial
+decode. Direct `zig build` fixture commands do not pass through the corpus
+supervisor and must be launched with appropriate external limits.
 
 One substantial scratch write remains by design: compiled records are first
 written to spool files. Wikimedia dump order is not the final per-language title

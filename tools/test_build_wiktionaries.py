@@ -43,20 +43,52 @@ class BuildTest(unittest.TestCase):
                 items.append(dict(wiki='testwiktionary',date='20260901',name=name))
             scratch=root/'scratch';scratch.mkdir()
             dump=b.stage_seekable_dump(items,root,scratch)
-            self.assertEqual(dump.read_bytes(),b''.join(members))
-            self.assertEqual(dump.stat().st_size,sum(map(len,members)))
+            self.assertEqual(bz2.decompress(dump.read_bytes()),b''.join(bz2.decompress(member) for member in members))
             index=dump.with_name('pages-index.txt.bz2')
             rows=bz2.decompress(index.read_bytes()).decode().splitlines()
-            self.assertEqual(rows,[f'0:1:part0',f'{len(members[0])}:2:part1'])
+            self.assertEqual(rows,['0:1:member0'])
 
-    def test_single_part_seekable_dump_reuses_compressed_bytes(self):
+    def test_single_part_seekable_dump_preserves_xml(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2';data=bz2.compress(b'<mediawiki/>');source=folder/name;source.write_bytes(data)
             scratch=root/'scratch';scratch.mkdir()
             dump=b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch)
-            self.assertEqual(dump.read_bytes(),data)
-            self.assertEqual(bz2.decompress(dump.with_name('pages-index.txt.bz2').read_bytes()),b'0:1:part0\n')
+            self.assertEqual(bz2.decompress(dump.read_bytes()),b'<mediawiki/>')
+            self.assertEqual(bz2.decompress(dump.with_name('pages-index.txt.bz2').read_bytes()),b'0:1:member0\n')
+
+    def test_seekable_dump_bounds_members_and_preserves_all_xml_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            page=b'<page>'+bytes(range(256))*16384+b'</page>'
+            xml=b'<mediawiki>'+page+page+b'</mediawiki>'
+            # The source itself contains two bzip2 members inside one downloaded part.
+            (folder/name).write_bytes(bz2.compress(xml[:len(xml)//2])+bz2.compress(xml[len(xml)//2:]))
+            scratch=root/'scratch';scratch.mkdir()
+            dump=b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch)
+            rows=bz2.decompress(dump.with_name('pages-index.txt.bz2').read_bytes()).decode().splitlines()
+            self.assertEqual(len(rows),3)
+            self.assertEqual(rows[0],'0:1:member0')
+            compressed=dump.read_bytes()
+            self.assertEqual(bz2.decompress(compressed),xml)
+            offsets=[int(row.split(':',1)[0]) for row in rows]+[len(compressed)]
+            for start,end in zip(offsets,offsets[1:]):
+                decoder=bz2.BZ2Decompressor()
+                member=decoder.decompress(compressed[start:end])
+                self.assertTrue(decoder.eof)
+                self.assertEqual(decoder.unused_data,b'')
+                self.assertLessEqual(len(member),64*1024*1024)
+                self.assertEqual(member.count(b'<page>'),member.count(b'</page>'))
+
+    def test_seekable_dump_rejects_truncated_xml_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            (folder/name).write_bytes(bz2.compress(b'<mediawiki><page>unfinished'))
+            scratch=root/'scratch';scratch.mkdir()
+            with self.assertRaisesRegex(ValueError,'Truncated XML page'):
+                b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch)
 
     def test_page_index_row_count_ignores_multistream_header_and_blanks(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -259,7 +291,7 @@ class BuildTest(unittest.TestCase):
             staging=root/'output/testwiktionary/20260901.building';staging.mkdir(parents=True)
             (staging/'fallback-pages.jsonl').write_text('')
             (staging/'languages.tsv').write_text('heading\n')
-            (staging/b.VERIFIED_MARKER).write_text('verified\n')
+            (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
             first=staging/'first.wikblb';second=staging/'second.wikblb'
             first.write_bytes(b'WIKBLB08first');second.write_bytes(b'WIKBLB08second')
             compress(first,64*1024,1)
@@ -272,10 +304,39 @@ class BuildTest(unittest.TestCase):
             final=root/'output/testwiktionary/20260901'
             meta=json.loads((final/'complete.json').read_text())
             self.assertEqual(meta['blobs'],2)
+            self.assertEqual(meta['dump_staging_version'],b.DUMP_STAGING_VERSION)
             self.assertFalse((final/b.VERIFIED_MARKER).exists())
             self.assertFalse((final/'first.wikblb').exists());self.assertFalse((final/'second.wikblb').exists())
             self.assertEqual(lzma.open(final/'first.wikblb.xz').read(),b'WIKBLB08first')
             self.assertEqual(lzma.open(final/'second.wikblb.xz').read(),b'WIKBLB08second')
+
+    def test_old_complete_output_is_preserved_and_requires_new_output_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
+            item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            target=root/'output/testwiktionary/20260901';target.mkdir(parents=True)
+            complete=target/'complete.json';complete.write_text(json.dumps({'edition':'testwiktionary','status':'built'})+'\n')
+            with patch.object(b,'run_checked') as run:
+                with self.assertRaisesRegex(ValueError,'rebuild in a new output directory'):
+                    b.build([item],root,root/'output','zig',1)
+            run.assert_not_called()
+            self.assertTrue(complete.is_file())
+
+    def test_old_verified_staging_is_preserved_and_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
+            item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            staging=root/'output/testwiktionary/20260901.building';staging.mkdir(parents=True)
+            marker=staging/b.VERIFIED_MARKER;marker.write_text('verified\n')
+            with patch.object(b,'run_checked') as run:
+                with self.assertRaisesRegex(ValueError,'rebuild in a new output directory'):
+                    b.build([item],root,root/'output','zig',1)
+            run.assert_not_called()
+            self.assertEqual(marker.read_text(),'verified\n')
     def test_empty_edition_retries_stale_build_and_is_published(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)

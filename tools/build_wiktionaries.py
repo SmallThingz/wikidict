@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 from compress_blobs import compress, compress_many, default_workers, verify_round_trip
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry
@@ -26,6 +27,22 @@ MEMORY_PER_BUILD_WORKER = 1536 * 1024 * 1024
 MEMORY_RESERVE_BYTES = 2 * 1024 * 1024 * 1024
 CPU_UTILIZATION_TARGET = 0.75
 
+def acquire_build_resource_lock(path):
+    """Serialize corpus envelopes so two snapshots cannot spend the same RAM."""
+    from build_resource_limits import ContainmentUnavailable
+    path.parent.mkdir(parents=True,exist_ok=True)
+    fd=os.open(path,os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,0o600)
+    lock=os.fdopen(fd,'r+')
+    try:
+        fcntl.flock(lock,fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        raise ContainmentUnavailable('Another Wikidict corpus build holds the resource lock') from None
+    except BaseException:
+        lock.close()
+        raise
+    return lock
+
 def load_average():
     try:return max(0.0,os.getloadavg()[0])
     except OSError:return None
@@ -37,7 +54,7 @@ def available_memory_bytes():
             if ':' not in line:continue
             key,value=line.split(':',1);fields=value.split()
             if fields:values[key]=int(fields[0])*1024
-        return values.get('MemAvailable',values.get('MemTotal'))
+        return values.get('MemAvailable')
     except (OSError,ValueError,IndexError):
         return None
 
@@ -51,10 +68,18 @@ def safe_worker_budget(owned_workers=0):
         cpu_workers=max(0,int(cpu*CPU_UTILIZATION_TARGET-external_load))
     memory=available_memory_bytes()
     if memory is None:
-        memory_workers=MAX_TOTAL_BUILD_WORKERS
-    else:
-        usable=max(0,memory-MEMORY_RESERVE_BYTES)
-        memory_workers=usable//MEMORY_PER_BUILD_WORKER
+        return 0
+    usable=max(0,memory-MEMORY_RESERVE_BYTES)
+    memory_workers=usable//MEMORY_PER_BUILD_WORKER
+    from build_resource_limits import CHILD_CGROUP, SUPERVISOR_CHILD_RESERVE, child_memory_limit_bytes
+    if CHILD_CGROUP in os.environ:
+        try:
+            group_limit = child_memory_limit_bytes()
+        except (OSError, ValueError):
+            return 0
+        if group_limit is None:
+            return 0
+        memory_workers=min(memory_workers,max(0,group_limit-SUPERVISOR_CHILD_RESERVE)//MEMORY_PER_BUILD_WORKER)
     return min(MAX_TOTAL_BUILD_WORKERS,cpu_workers,memory_workers)
 
 def default_build_threads():
@@ -101,11 +126,12 @@ def source_fingerprint():
 
 
 def stage_seekable_dump(items, downloads, scratch):
-    """Stage Wikimedia bz2 parts without ever materializing decompressed XML.
+    """Repack full-namespace dumps into bounded, page-aligned bzip2 members.
 
-    Each downloaded part is already an independent bzip2 stream. Concatenating
-    those streams and writing a tiny offset index gives the Zig multistream
-    reader random access while keeping scratch I/O near the compressed size.
+    The downloaded meta-current parts are not indexed by page. A whole part can
+    expand past the native reader's 128 MiB member limit, so a part boundary is
+    not a safe stream boundary. Keep XML only in bounded memory while writing
+    compressed members and their real offsets to scratch.
     """
     parts=[]
     for item in sorted(items,key=lambda x:x['name']):
@@ -115,24 +141,58 @@ def stage_seekable_dump(items, downloads, scratch):
         parts.append(source)
     if not parts: raise ValueError('No dump parts')
     dump=scratch/'pages.xml.bz2'
-    offsets=[]
-    if len(parts)==1:
-        offsets.append(0)
-        try:
-            os.link(parts[0],dump)
-        except OSError:
-            shutil.copyfile(parts[0],dump)
-    else:
-        offset=0
-        with dump.open('wb',buffering=0) as out:
-            for source in parts:
-                offsets.append(offset)
-                with source.open('rb',buffering=0) as inp:
-                    shutil.copyfileobj(inp,out,8*1024*1024)
-                offset+=source.stat().st_size
     index=dump.with_name(dump.name[:-len('.xml.bz2')]+'-index.txt.bz2')
-    rows=''.join(f'{offset}:{i+1}:part{i}\n' for i,offset in enumerate(offsets)).encode()
-    index.write_bytes(bz2.compress(rows,compresslevel=1))
+    target_bytes=4*1024*1024
+    max_member_bytes=64*1024*1024  # Strictly below the native reader's 128 MiB cap.
+    open_tag=b'<page>'
+    close_tag=b'</page>'
+    started=time.monotonic()
+    pages=members=xml_bytes=0
+    pending=bytearray()
+    batch=bytearray()
+    with dump.open('wb',buffering=0) as out, bz2.open(index,'wb',compresslevel=1) as offsets:
+        def flush():
+            nonlocal members
+            if not batch: return
+            offsets.write(f'{out.tell()}:{members+1}:member{members}\n'.encode())
+            out.write(bz2.compress(batch,compresslevel=1))
+            members+=1
+            batch.clear()
+
+        for source in parts:
+            with bz2.open(source,'rb') as inp:
+                while chunk:=inp.read(1024*1024):
+                    xml_bytes+=len(chunk)
+                    pending.extend(chunk)
+                    consumed=0
+                    while (end:=pending.find(close_tag,consumed))>=0:
+                        start=pending.find(open_tag,consumed)
+                        if start<0 or start>end:
+                            raise ValueError(f'Unexpected XML page close: {source}')
+                        cut=end+len(close_tag)
+                        page_bytes=cut-consumed
+                        if page_bytes>max_member_bytes:
+                            raise ValueError(f'XML page exceeds bounded bzip2 member: {source}')
+                        if len(batch)+page_bytes>max_member_bytes: flush()
+                        batch.extend(memoryview(pending)[consumed:cut])
+                        consumed=cut
+                        pages+=1
+                        if len(batch)>=target_bytes: flush()
+                    # Move the unfinished suffix once per read, rather than once per page.
+                    del pending[:consumed]
+                    if len(pending)>max_member_bytes:
+                        raise ValueError(f'Unterminated or oversized XML page: {source}')
+            # A split archive part may continue an XML page in the next part.
+        if b'<page>' in pending:
+            raise ValueError('Truncated XML page at end of dump')
+        if len(batch)+len(pending)>max_member_bytes: flush()
+        batch.extend(pending)
+        flush()
+        if members==0:
+            offsets.write(b'0:1:member0\n')
+            out.write(bz2.compress(b'',compresslevel=1))
+            members=1
+    print(f'Staged compressed dump: pages={pages} members={members} xml_bytes={xml_bytes} compressed_bytes={dump.stat().st_size} seconds={time.monotonic()-started:.1f}',flush=True)
     return dump
 
 
@@ -237,7 +297,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items):
     if staging.exists(): shutil.rmtree(staging)
     run_checked([zig,'build','-Doptimize=ReleaseFast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]])
     run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)])
-    (staging/VERIFIED_MARKER).write_text('verified\n')
+    (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
     # The merged staging tree is now the sole verified publication source.
     # Drop raw shards and the transient expander before XZ publication so peak
     # disk usage is not shards + merged raw + compressed output simultaneously.
@@ -289,11 +349,19 @@ def validate_fallback_report(path):
     return count
 
 VERIFIED_MARKER = '.verified-blobs'
+DUMP_STAGING_VERSION = 'page-aligned-bz2-v1'
+VERIFIED_CONTENT = f'dump-staging-version={DUMP_STAGING_VERSION}\n'
+
+def require_current_staging_version(path, version):
+    if version != DUMP_STAGING_VERSION:
+        raise ValueError(f'Outdated dump staging at {path}; rebuild in a new output directory (existing output preserved)')
 
 def publish_verified_staging(staging, target, edition, date, compression_workers=None):
     marker = staging / VERIFIED_MARKER
     if not marker.is_file():
         raise ValueError(f'Unverified staging directory: {staging}')
+    if marker.read_text() != VERIFIED_CONTENT:
+        require_current_staging_version(staging, None)
     fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl')
     for part in staging.rglob('*.xz.part'):
         part.unlink()
@@ -316,7 +384,7 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
     if len(compressed) != len(logical) or list(staging.rglob('*.wikblb')) or list(staging.rglob('*.xz.part')):
         raise ValueError(f'Incomplete compressed publication: {staging}')
     marker.unlink()
-    metadata = {'edition':edition,'date':date,
+    metadata = {'edition':edition,'date':date,'dump_staging_version':DUMP_STAGING_VERSION,
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
         'fallback_report':'fallback-pages.jsonl', 'compression':'xz -6; 1 MiB blocks','blobs':len(compressed)}
     (staging / 'complete.json').write_text(json.dumps(metadata)+'\n')
@@ -335,6 +403,11 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
     edition, date = items[0]['wiki'], items[0]['date']
     target = output / edition / date
     if (target / 'complete.json').exists():
+        try:
+            metadata=json.loads((target/'complete.json').read_text())
+        except (OSError,json.JSONDecodeError):
+            metadata={}
+        require_current_staging_version(target,metadata.get('dump_staging_version') if isinstance(metadata,dict) else None)
         workspace=target.with_name(date+'.shards')
         if workspace.exists():
             if not workspace.is_dir() or workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
@@ -369,7 +442,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None):
                          '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
                          '--page-workers',str(min(workers,16))])
             run_checked([zig,'build','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)])
-            (staging / VERIFIED_MARKER).write_text('verified\n')
+            (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
         publish_verified_staging(staging, target, edition, date, compression_workers)
         if workspace.exists(): shutil.rmtree(workspace)
     finally:
@@ -432,4 +505,25 @@ def main():
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
     failures=build_groups(groups,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads,a.jobs)
     if failures:raise SystemExit(f'{len(failures)} editions failed or were not started; no incomplete editions were published')
-if __name__=='__main__':main()
+def cli():
+    from build_resource_limits import ContainmentUnavailable, inside_envelope, supervise
+    try:
+        if '-h' in sys.argv[1:] or '--help' in sys.argv[1:]:
+            main()
+        elif inside_envelope():
+            main()
+        else:
+            with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
+                if safe_worker_budget() < 1:
+                    raise SystemExit('Not enough available resources to start a build safely')
+                else:
+                    memory = available_memory_bytes()
+                    if memory is None:
+                        raise ContainmentUnavailable('Cannot determine available memory for a contained build')
+                    raise SystemExit(supervise(memory))
+    except ContainmentUnavailable as error:
+        raise SystemExit(str(error)) from error
+    except KeyboardInterrupt:
+        raise SystemExit('Build interrupted; private build process tree stopped') from None
+
+if __name__=='__main__':cli()

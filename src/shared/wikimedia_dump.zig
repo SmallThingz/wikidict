@@ -1,20 +1,33 @@
 const std = @import("std");
 
 const BZ_OK: c_int = 0;
-const BZ_OUTBUFF_FULL: c_int = -8;
+const BZ_STREAM_END: c_int = 4;
+const BZ_MEM_ERROR: c_int = -3;
 const max_member_uncompressed_bytes: usize = 128 * 1024 * 1024;
+const member_input_buffer_bytes = 64 * 1024;
 
 extern fn BZ2_bzopen(path: [*:0]const u8, mode: [*:0]const u8) ?*anyopaque;
 extern fn BZ2_bzread(file: ?*anyopaque, buf: [*]u8, len: c_int) c_int;
 extern fn BZ2_bzclose(file: ?*anyopaque) void;
-extern fn BZ2_bzBuffToBuffDecompress(
-    dest: [*]u8,
-    dest_len: *c_uint,
-    source: [*]const u8,
-    source_len: c_uint,
-    small: c_int,
-    verbosity: c_int,
-) c_int;
+// Keep the native bz_stream layout without requiring C headers at build time.
+const BzStream = extern struct {
+    next_in: ?[*]u8 = null,
+    avail_in: c_uint = 0,
+    total_in_lo32: c_uint = 0,
+    total_in_hi32: c_uint = 0,
+    next_out: ?[*]u8 = null,
+    avail_out: c_uint = 0,
+    total_out_lo32: c_uint = 0,
+    total_out_hi32: c_uint = 0,
+    state: ?*anyopaque = null,
+    bzalloc: ?*const fn (?*anyopaque, c_int, c_int) callconv(.c) ?*anyopaque = null,
+    bzfree: ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) void = null,
+    @"opaque": ?*anyopaque = null,
+};
+
+extern fn BZ2_bzDecompressInit(stream: *BzStream, verbosity: c_int, small: c_int) c_int;
+extern fn BZ2_bzDecompress(stream: *BzStream) c_int;
+extern fn BZ2_bzDecompressEnd(stream: *BzStream) c_int;
 
 pub const page_index_v2_header = "# dict-page-index-v2\tmultistream-bz2";
 pub const stream_index_header = "# dict-dump-streams-v1";
@@ -329,28 +342,61 @@ pub fn deriveMultistreamIndexPath(allocator: std.mem.Allocator, dump_path: []con
 }
 
 pub fn decompressMemberAlloc(io: std.Io, allocator: std.mem.Allocator, file: *std.Io.File, span: StreamSpan) ![]u8 {
-    const compressed_len = std.math.cast(usize, span.len) orelse return error.CompressedMemberTooLarge;
-    if (compressed_len == 0 or compressed_len > std.math.maxInt(c_uint)) return error.CompressedMemberTooLarge;
-    const compressed = try allocator.alloc(u8, compressed_len);
-    defer allocator.free(compressed);
-    if (try file.readPositionalAll(io, compressed, span.offset) != compressed.len) return error.TruncatedDump;
-    if (compressed.len < 4 or !std.mem.startsWith(u8, compressed, "BZh")) return error.InvalidBzip2Member;
+    return decompressMemberLimitedAlloc(io, allocator, file, span, max_member_uncompressed_bytes);
+}
 
-    var capacity = @max(@as(usize, 64 * 1024), compressed.len *| 6);
-    capacity = @min(capacity, max_member_uncompressed_bytes);
+fn decompressMemberLimitedAlloc(io: std.Io, allocator: std.mem.Allocator, file: *std.Io.File, span: StreamSpan, output_limit: usize) ![]u8 {
+    if (span.len == 0 or span.len > std.math.maxInt(c_uint)) return error.CompressedMemberTooLarge;
+    _ = std.math.add(u64, span.offset, span.len) catch return error.InvalidBzip2Member;
+    if (span.len < 4) return error.InvalidBzip2Member;
+    const limit = @min(output_limit, max_member_uncompressed_bytes);
+    var input: [member_input_buffer_bytes]u8 = undefined;
+    var read_len: u64 = 0;
+    var stream: BzStream = .{};
+    const init_rc = BZ2_bzDecompressInit(&stream, 0, 0);
+    if (init_rc == BZ_MEM_ERROR) return error.OutOfMemory;
+    if (init_rc != BZ_OK) return error.Bzip2DecompressFailed;
+    defer _ = BZ2_bzDecompressEnd(&stream);
+
+    var out = try allocator.alloc(u8, @min(@as(usize, 64 * 1024), limit));
+    errdefer allocator.free(out);
+    var written: usize = 0;
     while (true) {
-        const out = try allocator.alloc(u8, capacity);
-        var out_len: c_uint = @intCast(capacity);
-        const rc = BZ2_bzBuffToBuffDecompress(out.ptr, &out_len, compressed.ptr, @intCast(compressed.len), 0, 0);
-        if (rc == BZ_OK) {
-            const actual: usize = @intCast(out_len);
-            if (actual == out.len) return out;
-            return try allocator.realloc(out, actual);
+        if (stream.avail_in == 0 and read_len < span.len) {
+            const count: usize = @intCast(@min(input.len, span.len - read_len));
+            if (try file.readPositionalAll(io, input[0..count], span.offset + read_len) != count)
+                return error.TruncatedDump;
+            if (read_len == 0 and (!std.mem.startsWith(u8, input[0..count], "BZh") or input[3] < '1' or input[3] > '9'))
+                return error.InvalidBzip2Member;
+            read_len += count;
+            stream.next_in = &input;
+            stream.avail_in = @intCast(count);
         }
-        allocator.free(out);
-        if (rc != BZ_OUTBUFF_FULL) return error.Bzip2DecompressFailed;
-        if (capacity >= max_member_uncompressed_bytes) return error.Bzip2MemberTooLarge;
-        capacity = @min(max_member_uncompressed_bytes, capacity * 2);
+        if (written == out.len and out.len < limit)
+            out = try allocator.realloc(out, @min(limit, out.len * 2));
+
+        // At the exact cap the decoder may still need to consume its trailer.
+        // A one-byte probe distinguishes that case from additional output.
+        var overflow_byte: [1]u8 = undefined;
+        const probing = written == limit;
+        const available = if (probing) overflow_byte[0..] else out[written..];
+        stream.next_out = available.ptr;
+        stream.avail_out = @intCast(available.len);
+        const before_in = stream.avail_in;
+        const rc = BZ2_bzDecompress(&stream);
+        const produced = available.len - stream.avail_out;
+        if (probing and produced != 0) return error.Bzip2MemberTooLarge;
+        written += produced;
+        if (rc == BZ_STREAM_END) {
+            if (stream.avail_in != 0 or read_len != span.len) return error.InvalidBzip2Member;
+            return allocator.realloc(out, written);
+        }
+        if (rc == BZ_MEM_ERROR) return error.OutOfMemory;
+        if (rc != BZ_OK) return error.Bzip2DecompressFailed;
+        if (produced == 0 and stream.avail_in == before_in) {
+            if (stream.avail_in == 0 and read_len == span.len) return error.TruncatedDump;
+            return error.Bzip2DecompressFailed;
+        }
     }
 }
 
@@ -886,6 +932,103 @@ fn testCompressAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     if (BZ2_bzBuffToBuffCompress(out.ptr, &len, input.ptr, @intCast(input.len), 9, 0, 30) != BZ_OK)
         return error.TestBzip2CompressFailed;
     return allocator.realloc(out, @intCast(len));
+}
+
+fn testDecompressBytes(allocator: std.mem.Allocator, compressed: []const u8, span: StreamSpan, limit: usize) ![]u8 {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try std.Io.Dir.cwd().createDirPath(io, root);
+    const path = try std.fs.path.join(a, &.{ root, "member.bz2" });
+    defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = compressed });
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    return decompressMemberLimitedAlloc(io, allocator, &file, span, limit);
+}
+
+fn testMemberAllocationFailures(allocator: std.mem.Allocator, compressed: []const u8, expected: []const u8) !void {
+    const decoded = try testDecompressBytes(allocator, compressed, .{ .offset = 0, .len = compressed.len }, max_member_uncompressed_bytes);
+    defer allocator.free(decoded);
+    try std.testing.expectEqualSlices(u8, expected, decoded);
+}
+
+test "bzip2 member grows high ratio output and cleans up allocation failures" {
+    const a = std.testing.allocator;
+    const input = try a.alloc(u8, 256 * 1024 + 17);
+    defer a.free(input);
+    @memset(input, 'x');
+    input[input.len - 1] = 'y';
+    const compressed = try testCompressAlloc(a, input);
+    defer a.free(compressed);
+    try std.testing.expect(compressed.len * 6 < 64 * 1024);
+    try std.testing.checkAllAllocationFailures(a, testMemberAllocationFailures, .{ compressed, input });
+}
+
+test "bzip2 member reads multiple bounded input chunks at an exact offset" {
+    const a = std.testing.allocator;
+    const input = try a.alloc(u8, 192 * 1024);
+    defer a.free(input);
+    var random = std.Random.DefaultPrng.init(42);
+    random.random().bytes(input);
+    const compressed = try testCompressAlloc(a, input);
+    defer a.free(compressed);
+    try std.testing.expect(compressed.len > member_input_buffer_bytes * 2);
+    const padded = try std.mem.concat(a, u8, &.{ "prefix", compressed, "suffix" });
+    defer a.free(padded);
+    const decoded = try testDecompressBytes(a, padded, .{ .offset = "prefix".len, .len = compressed.len }, input.len);
+    defer a.free(decoded);
+    try std.testing.expectEqualSlices(u8, input, decoded);
+}
+
+test "bzip2 member accepts exact output cap and empty output but rejects overflow" {
+    const a = std.testing.allocator;
+    const input = try a.alloc(u8, 64 * 1024);
+    defer a.free(input);
+    @memset(input, 'a');
+    const compressed = try testCompressAlloc(a, input);
+    defer a.free(compressed);
+    const span: StreamSpan = .{ .offset = 0, .len = compressed.len };
+    const decoded = try testDecompressBytes(a, compressed, span, input.len);
+    defer a.free(decoded);
+    try std.testing.expectEqualSlices(u8, input, decoded);
+    try std.testing.expectError(error.Bzip2MemberTooLarge, testDecompressBytes(a, compressed, span, input.len - 1));
+    try std.testing.expectError(error.Bzip2MemberTooLarge, testDecompressBytes(a, compressed, span, 0));
+    const empty_compressed = try testCompressAlloc(a, "");
+    defer a.free(empty_compressed);
+    const empty = try testDecompressBytes(a, empty_compressed, .{ .offset = 0, .len = empty_compressed.len }, 0);
+    defer a.free(empty);
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
+}
+
+test "bzip2 member rejects truncated corrupt and trailing input" {
+    const a = std.testing.allocator;
+    const compressed = try testCompressAlloc(a, "member payload");
+    defer a.free(compressed);
+    const span: StreamSpan = .{ .offset = 0, .len = compressed.len };
+    try std.testing.expectError(error.TruncatedDump, testDecompressBytes(a, compressed[0 .. compressed.len - 1], span, 1024));
+    try std.testing.expectError(error.TruncatedDump, testDecompressBytes(a, compressed, .{ .offset = 0, .len = compressed.len - 1 }, 1024));
+    const trailing = try std.mem.concat(a, u8, &.{ compressed, compressed });
+    defer a.free(trailing);
+    try std.testing.expectError(error.InvalidBzip2Member, testDecompressBytes(a, trailing, .{ .offset = 0, .len = trailing.len }, 1024));
+    try std.testing.expectError(error.InvalidBzip2Member, testDecompressBytes(a, trailing, .{ .offset = 0, .len = compressed.len + 1 }, 1024));
+    // The block CRC follows the four-byte header and six-byte block marker.
+    compressed[10] ^= 1;
+    try std.testing.expectError(error.Bzip2DecompressFailed, testDecompressBytes(a, compressed, span, 1024));
+}
+
+test "bzip2 member rejects invalid headers and span bounds before reading" {
+    const a = std.testing.allocator;
+    try std.testing.expectError(error.CompressedMemberTooLarge, testDecompressBytes(a, "", .{ .offset = 0, .len = 0 }, 1024));
+    try std.testing.expectError(error.CompressedMemberTooLarge, testDecompressBytes(a, "", .{ .offset = 0, .len = @as(u64, std.math.maxInt(c_uint)) + 1 }, 1024));
+    try std.testing.expectError(error.InvalidBzip2Member, testDecompressBytes(a, "", .{ .offset = std.math.maxInt(u64) - 2, .len = 4 }, 1024));
+    try std.testing.expectError(error.InvalidBzip2Member, testDecompressBytes(a, "BZh", .{ .offset = 0, .len = 3 }, 1024));
+    for ([_][]const u8{ "BZh0", "BZh:", "junk" }) |invalid| {
+        try std.testing.expectError(error.InvalidBzip2Member, testDecompressBytes(a, invalid, .{ .offset = 0, .len = invalid.len }, 1024));
+    }
 }
 
 test "page title index construction does not allocate the hash table on heap" {
