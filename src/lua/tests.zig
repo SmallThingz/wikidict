@@ -822,6 +822,98 @@ test "nil equality emits both operand calls in source order" {
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_compare_bool"));
 }
 
+test "fixed returns expose clipped caller buffers and retain owned fallback" {
+    var chunk = try llvm_parser.parse(std.testing.allocator, "return nil, false, 7");
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+
+    try std.testing.expect(std.mem.indexOf(u8, ir, "icmp ne ptr %result_ptr, null") != null);
+    for (0..3) |index| {
+        const guard = try std.fmt.allocPrint(std.testing.allocator, "icmp ugt i64 %result_len, {d}", .{index});
+        defer std.testing.allocator.free(guard);
+        try std.testing.expect(std.mem.indexOf(u8, ir, guard) != null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, ir, "icmp ult i64 %result_len, 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "insertvalue %FunctionResult zeroinitializer") != null);
+    const owned_start = std.mem.indexOf(u8, ir, "return_owned:") orelse return error.MissingOwnedReturn;
+    const owned_rest = ir[owned_start..];
+    const owned_end = std.mem.indexOf(u8, owned_rest, "\n\n") orelse return error.MissingOwnedReturnEnd;
+    try std.testing.expect(std.mem.indexOf(u8, owned_rest[0..owned_end], "call %FunctionResult @dict_lua_return_values") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call %FunctionResult @dict_lua_return_values"));
+}
+
+test "empty returns construct a constant result without allocation" {
+    var chunk = try llvm_parser.parse(std.testing.allocator, "return");
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "ret %FunctionResult zeroinitializer") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @dict_lua_return_values") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "return_buffered") == null);
+}
+
+test "fixed return evaluates all operands before testing caller capacity" {
+    const source =
+        \\local order = ""
+        \\local function left() order = order .. "L"; return nil end
+        \\local function right() order = order .. "R"; return false end
+        \\return left(), right(), order
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    const left = std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_1(") orelse return error.MissingLeftCall;
+    const right = std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_2(") orelse return error.MissingRightCall;
+    const capacity = std.mem.indexOf(u8, ir, "icmp ne ptr %result_ptr, null") orelse return error.MissingReturnBufferGuard;
+    try std.testing.expect(left < right and right < capacity);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call %FunctionResult @lua_f_1("));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call %FunctionResult @lua_f_2("));
+}
+
+test "direct call success bypasses error-name helper" {
+    const source = "local function f(a) return a end; local x = f(3); return x";
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    const failed_start = std.mem.indexOf(u8, ir, "function_status_error:") orelse return error.MissingFunctionFailure;
+    const failed_rest = ir[failed_start..];
+    const failed_end = std.mem.indexOf(u8, failed_rest, "\n\n") orelse return error.MissingFunctionFailureEnd;
+    const failed = failed_rest[0..failed_end];
+    try std.testing.expect(std.mem.indexOf(u8, failed, "call i32 @dict_lua_function_status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, failed, "br label %error") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call i32 @dict_lua_function_status"));
+    const leave = std.mem.indexOf(u8, ir, "call void @dict_lua_leave_local_static_call") orelse return error.MissingStaticCallLeave;
+    const status_branch = std.mem.indexOf(u8, ir, "label %function_status_ok, label %function_status_error") orelse return error.MissingStatusBranch;
+    try std.testing.expect(leave < status_branch);
+}
+
 test "nonrecursive local function syntax uses direct static call" {
     const source = "local function f(a) return a end; return f(3)";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);

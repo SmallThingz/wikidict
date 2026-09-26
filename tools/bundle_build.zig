@@ -756,10 +756,14 @@ fn compileNativeWorker(
     const metadata_source = try std.fs.path.join(a, &.{ llvm_dir, "program.meta" });
     const metadata_destination = try std.fs.path.join(a, &.{ publish_root, "lua-program.meta" });
     try std.Io.Dir.cwd().rename(metadata_source, std.Io.Dir.cwd(), metadata_destination, io);
-    // Preserve the small compile plan after deleting bulky compiler scratch.
+    // Preserve batch and per-module plans so runtime profiles can audit the
+    // static O0/O1/O2 heuristic after bulky compiler scratch is removed.
     const plan_source = try std.fs.path.join(a, &.{ llvm_dir, "batch-plan.tsv" });
     const plan_destination = try std.fs.path.join(a, &.{ std.fs.path.dirname(publish_root) orelse ".", "compile-plan.tsv" });
     try std.Io.Dir.cwd().copyFile(plan_source, .cwd(), plan_destination, io, .{});
+    const module_plan_source = try std.fs.path.join(a, &.{ llvm_dir, "compile-plan.tsv" });
+    const module_plan_destination = try std.fs.path.join(a, &.{ std.fs.path.dirname(publish_root) orelse ".", "module-compile-plan.tsv" });
+    try std.Io.Dir.cwd().copyFile(module_plan_source, .cwd(), module_plan_destination, io, .{});
     // The linked expander and moved program metadata are the only runtime inputs.
     // LLVM plans, bitcode and object files are build-only scratch; remove them
     // before page expansion so they do not inflate peak SSD use for large dumps.

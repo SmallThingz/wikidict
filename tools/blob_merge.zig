@@ -139,6 +139,96 @@ fn mergeOne(
     return count;
 }
 
+// Each heading maps to a distinct hashed output file. Keep one worker on the
+// caller and allow at most one additional worker to bound simultaneous mmap IO.
+const LanguageMergePool = struct {
+    io: std.Io,
+    language_root: []const u8,
+    roots: []const []const u8,
+    headings: []const []const u8,
+    counts: []usize,
+    next: std.atomic.Value(usize) = .init(0),
+    stop: std.atomic.Value(bool) = .init(false),
+
+    const Worker = struct {
+        pool: *LanguageMergePool,
+        failure: ?anyerror = null,
+
+        fn run(self: *Worker) void {
+            var arena: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+            defer arena.deinit();
+            const a = arena.allocator();
+            while (!self.pool.stop.load(.acquire)) {
+                const index = self.pool.next.fetchAdd(1, .monotonic);
+                if (index >= self.pool.headings.len) break;
+                self.pool.counts[index] = self.mergeHeading(a, self.pool.headings[index]) catch |err| {
+                    self.failure = err;
+                    self.pool.stop.store(true, .release);
+                    break;
+                };
+                _ = arena.reset(.retain_capacity);
+            }
+        }
+
+        fn mergeHeading(self: *Worker, a: std.mem.Allocator, heading: []const u8) !usize {
+            var filename_buffer: [catalog.language_blob_filename_len]u8 = undefined;
+            const filename = catalog.languageBlobFilename(heading, &filename_buffer);
+            const paths = try a.alloc([]const u8, self.pool.roots.len);
+            for (self.pool.roots, 0..) |root, i| {
+                paths[i] = try std.fs.path.join(a, &.{ root, catalog.language_directory, filename });
+            }
+            const output_path = try std.fs.path.join(a, &.{ self.pool.language_root, filename });
+            const partial_path = try std.fmt.allocPrint(a, "{s}.part", .{output_path});
+            errdefer std.Io.Dir.cwd().deleteFile(self.pool.io, partial_path) catch {};
+            const count = try mergeOne(self.pool.io, a, partial_path, .language, paths);
+            // A manifest may list a heading absent from every shard blob. A
+            // present zero-record blob still needs its header published.
+            var partial_exists = true;
+            std.Io.Dir.cwd().access(self.pool.io, partial_path, .{}) catch |err| switch (err) {
+                error.FileNotFound => partial_exists = false,
+                else => return err,
+            };
+            if (partial_exists) try std.Io.Dir.cwd().rename(partial_path, std.Io.Dir.cwd(), output_path, self.pool.io);
+            return count;
+        }
+    };
+};
+
+fn mergeLanguagesParallel(
+    io: std.Io,
+    a: std.mem.Allocator,
+    language_root: []const u8,
+    roots: []const []const u8,
+    headings: []const []const u8,
+) !usize {
+    if (headings.len == 0) return 0;
+    const counts = try a.alloc(usize, headings.len);
+    defer a.free(counts);
+    var pool: LanguageMergePool = .{
+        .io = io,
+        .language_root = language_root,
+        .roots = roots,
+        .headings = headings,
+        .counts = counts,
+    };
+    var workers: [2]LanguageMergePool.Worker = .{
+        .{ .pool = &pool },
+        .{ .pool = &pool },
+    };
+    if (@import("builtin").single_threaded or headings.len == 1) {
+        workers[0].run();
+    } else {
+        const thread = try std.Thread.spawn(.{}, LanguageMergePool.Worker.run, .{&workers[1]});
+        workers[0].run();
+        thread.join();
+    }
+    if (workers[0].failure) |err| return err;
+    if (workers[1].failure) |err| return err;
+    var total: usize = 0;
+    for (counts) |count| total = try std.math.add(usize, total, count);
+    return total;
+}
+
 fn loadHeadings(io: std.Io, a: std.mem.Allocator, roots: []const []const u8) ![][]const u8 {
     var seen: std.StringHashMapUnmanaged(void) = .empty;
     defer seen.deinit(a);
@@ -218,17 +308,8 @@ pub fn main(init: std.process.Init) !void {
 
     var input_paths = try a.alloc([]const u8, roots.len);
     defer a.free(input_paths);
-    var language_records: usize = 0;
-    for (headings) |heading| {
-        var filename_buffer: [catalog.language_blob_filename_len]u8 = undefined;
-        const filename = catalog.languageBlobFilename(heading, &filename_buffer);
-        for (roots, 0..) |root, i| input_paths[i] = try std.fs.path.join(a, &.{ root, catalog.language_directory, filename });
-        defer for (input_paths) |path| a.free(path);
-        const output_path = try std.fs.path.join(a, &.{ output_root, catalog.language_directory, filename });
-        defer a.free(output_path);
-        language_records += try mergeOne(init.io, a, output_path, .language, input_paths);
-        try catalog.writeEntry(&manifest.interface, heading);
-    }
+    const language_records = try mergeLanguagesParallel(init.io, a, language_root, roots, headings);
+    for (headings) |heading| try catalog.writeEntry(&manifest.interface, heading);
     try manifest.interface.flush();
 
     var fixed_records: usize = 0;

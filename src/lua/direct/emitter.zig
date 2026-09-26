@@ -655,6 +655,18 @@ const FnEmitter = struct {
         llvm.position(self.builder, cont);
     }
 
+    fn checkFunctionStatus(self: *FnEmitter, status: V) anyerror!void {
+        const ok = try llvm.icmp(self.builder, .eq, status, try self.cI32(0));
+        const cont = try self.newBlock("function_status_ok");
+        const failed = try self.newBlock("function_status_error");
+        try llvm.condBr(self.builder, ok, cont, failed);
+        llvm.position(self.builder, failed);
+        // Only failed calls need the runtime to preserve or install an error name.
+        _ = try llvm.call(self.builder, self.rt().function_status, &.{ self.ctx(), status });
+        try llvm.br(self.builder, try self.errorBlock());
+        llvm.position(self.builder, cont);
+    }
+
     fn copyValue(self: *FnEmitter, dst: V, src: V) anyerror!void {
         _ = try llvm.call(self.builder, self.rt().value_copy, &.{ dst, src });
     }
@@ -1574,8 +1586,7 @@ const FnEmitter = struct {
             else
                 try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
             const raw_status = try llvm.extractValue(self.builder, result, 2);
-            const status = try llvm.call(self.builder, self.rt().function_status, &.{ self.ctx(), raw_status });
-            try self.check(status);
+            try self.checkFunctionStatus(raw_status);
             return;
         }
 
@@ -1706,8 +1717,7 @@ const FnEmitter = struct {
             else
                 try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
             const raw_status = try llvm.extractValue(self.builder, result, 2);
-            const status = try llvm.call(self.builder, self.rt().function_status, &.{ self.ctx(), raw_status });
-            try self.check(status);
+            try self.checkFunctionStatus(raw_status);
             return .{
                 .ptr = try llvm.extractValue(self.builder, result, 0),
                 .len = try llvm.extractValue(self.builder, result, 1),
@@ -2199,10 +2209,7 @@ const FnEmitter = struct {
     fn emitCallReturn(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr) anyerror!void {
         if (try self.staticRequire(callee_expr, method, args_in)) |request| {
             const loaded = try self.directRequireValue(request);
-            const result = try llvm.call(self.builder, self.rt().return_values, &.{
-                self.ctx(), self.resultPtr(), self.resultLen(), loaded, try self.cI64(1),
-            });
-            try llvm.ret(self.builder, result);
+            try self.emitFixedReturn(loaded, 1);
             return;
         }
         if (method == null) if (try self.staticCallee(callee_expr)) |function| {
@@ -2224,12 +2231,50 @@ const FnEmitter = struct {
         try llvm.ret(self.builder, result);
     }
 
+    fn emitFixedReturn(self: *FnEmitter, input: V, count: usize) anyerror!void {
+        if (count == 0) {
+            try llvm.ret(self.builder, try llvm.constNull(self.ty().function_result));
+            return;
+        }
+
+        const buffered = try self.newBlock("return_buffered");
+        const owned = try self.newBlock("return_owned");
+        const done = try self.newBlock("return_buffered_done");
+        const has_buffer = try llvm.icmp(self.builder, .ne, self.resultPtr(), try self.nullPtr());
+        try llvm.condBr(self.builder, has_buffer, buffered, owned);
+
+        llvm.position(self.builder, buffered);
+        // Every expression has already been evaluated into input. Even a clipped
+        // result must retain those effects, and caller slots past the arity stay intact.
+        for (0..count) |index| {
+            const write = try self.newBlock("return_write");
+            const has_slot = try llvm.icmp(self.builder, .ugt, self.resultLen(), try self.cI64(index));
+            try llvm.condBr(self.builder, has_slot, write, done);
+            llvm.position(self.builder, write);
+            try self.copyValue(try self.arrayElem(self.resultPtr(), index), try self.arrayElem(input, index));
+        }
+        try llvm.br(self.builder, done);
+
+        llvm.position(self.builder, done);
+        const clipped = try llvm.icmp(self.builder, .ult, self.resultLen(), try self.cI64(count));
+        const len = try llvm.select(self.builder, clipped, self.resultLen(), try self.cI64(count));
+        const nonempty = try llvm.icmp(self.builder, .ne, len, try self.cI64(0));
+        const ptr = try llvm.select(self.builder, nonempty, self.resultPtr(), try self.nullPtr());
+        var result = try llvm.constNull(self.ty().function_result);
+        result = try llvm.insertValue(self.builder, result, ptr, 0);
+        result = try llvm.insertValue(self.builder, result, len, 1);
+        try llvm.ret(self.builder, result);
+
+        llvm.position(self.builder, owned);
+        const allocated = try llvm.call(self.builder, self.rt().return_values, &.{
+            self.ctx(), self.resultPtr(), self.resultLen(), input, try self.cI64(count),
+        });
+        try llvm.ret(self.builder, allocated);
+    }
+
     fn emitReturn(self: *FnEmitter, values_in: []const *lua.Expr) anyerror!void {
         if (values_in.len == 0) {
-            const result = try llvm.call(self.builder, self.rt().return_values, &.{
-                self.ctx(), self.resultPtr(), self.resultLen(), self.args(), try self.cI64(0),
-            });
-            try llvm.ret(self.builder, result);
+            try self.emitFixedReturn(self.args(), 0);
             return;
         }
 
@@ -2264,10 +2309,7 @@ const FnEmitter = struct {
         const fixed = try self.valueArray(values_in.len);
         for (values_in, 0..) |value, index|
             try self.copyValue(try self.arrayElem(fixed, index), try self.box(try self.expr(value)));
-        const result = try llvm.call(self.builder, self.rt().return_values, &.{
-            self.ctx(), self.resultPtr(), self.resultLen(), fixed, try self.cI64(values_in.len),
-        });
-        try llvm.ret(self.builder, result);
+        try self.emitFixedReturn(fixed, values_in.len);
     }
 
     fn block(self: *FnEmitter, body: lua.Block) anyerror!bool {

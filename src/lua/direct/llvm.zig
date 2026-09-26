@@ -141,6 +141,7 @@ extern fn LLVMBuildAdd(B: BuilderRef, LHS: ValueRef, RHS: ValueRef, Name: [*:0]c
 extern fn LLVMBuildSub(B: BuilderRef, LHS: ValueRef, RHS: ValueRef, Name: [*:0]const u8) ?ValueRef;
 extern fn LLVMBuildSelect(B: BuilderRef, If: ValueRef, Then: ValueRef, Else: ValueRef, Name: [*:0]const u8) ?ValueRef;
 extern fn LLVMBuildExtractValue(B: BuilderRef, AggVal: ValueRef, Index: c_uint, Name: [*:0]const u8) ?ValueRef;
+extern fn LLVMBuildInsertValue(B: BuilderRef, AggVal: ValueRef, EltVal: ValueRef, Index: c_uint, Name: [*:0]const u8) ?ValueRef;
 
 extern fn LLVMWriteBitcodeToFile(M: ModuleRef, Path: [*:0]const u8) c_int;
 
@@ -244,6 +245,8 @@ pub const Module = struct {
             .{ .suffix = "string", .public_name = "dict_lua_value_string" },
             .{ .suffix = "copy", .public_name = "dict_lua_value_copy" },
             .{ .suffix = "truthy", .public_name = "dict_lua_value_truthy" },
+            .{ .suffix = "is_function_id", .public_name = "dict_lua_value_is_function_id" },
+            .{ .suffix = "function_captures", .public_name = "dict_lua_value_function_captures" },
             .{ .suffix = "is_nil", .public_name = "dict_lua_value_is_nil" },
             .{ .suffix = "is_number", .public_name = "dict_lua_value_is_number", .required = false },
             .{ .suffix = "number_unchecked", .public_name = "dict_lua_value_number_unchecked", .required = false },
@@ -489,6 +492,9 @@ pub fn select(builder: BuilderRef, condition: ValueRef, then_value: ValueRef, el
 }
 pub fn extractValue(builder: BuilderRef, aggregate: ValueRef, index: u32) !ValueRef {
     return req(ValueRef, LLVMBuildExtractValue(builder, aggregate, index, ""));
+}
+pub fn insertValue(builder: BuilderRef, aggregate: ValueRef, value: ValueRef, index: u32) !ValueRef {
+    return req(ValueRef, LLVMBuildInsertValue(builder, aggregate, value, index, ""));
 }
 
 pub fn setLinkage(value: ValueRef, linkage: Linkage) void {

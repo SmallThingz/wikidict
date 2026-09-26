@@ -27,6 +27,15 @@ pub fn copy(out: *rt.Value, input: *const rt.Value) void {
 pub fn truthy(input: *const rt.Value) u8 {
     return @intFromBool(input.*.truthy());
 }
+pub fn isFunctionId(input: *const rt.Value, function_id: u32) u8 {
+    return @intFromBool(input.* == .callable and input.callable.id == function_id);
+}
+
+pub fn functionCaptures(input: *const rt.Value, function_id: u32) ?*const rt.Captures {
+    if (input.* != .callable or input.callable.id != function_id) return null;
+    return input.callable.capturesPtr();
+}
+
 pub fn isNil(input: *const rt.Value) u8 {
     return @intFromBool(input.* == .nil);
 }

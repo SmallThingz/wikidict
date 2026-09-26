@@ -142,6 +142,13 @@ The corpus builder is intentionally conservative on developer machines:
 - release compression uses 1 MiB XZ blocks at preset `-6`; higher presets did
   not improve block utilization enough to justify their CPU cost.
 
+Language blobs merge with two workers, each streaming an independent heading
+into a private file before renaming it. With four compression threads available,
+large blobs use two concurrent XZ encoders with two threads and a 2 GiB encoder
+memory limit each. Compression works in waves of at most three files; outputs
+are verified one at a time, and the raw files remain until the whole wave passes.
+Failures join the workers and remove partial outputs before returning.
+
 The native dump reader accepts the Zstandard v3 page index and retains support
 for the bzip2 v2 index. It validates each Zstandard frame's magic, exact compressed
 span and known decoded length before allocating its output, with a 128 MiB decoded
@@ -199,12 +206,15 @@ resolved CPU or feature set causes a cache miss. Published WIKBLB08/XZ blobs con
 worker, and remain portable to readers built for their own target.
 
 The runtime worker object and a small value-helper bitcode module compile beside
-extraction. Lua emission imports thirteen shared Zig primitives for values,
-arguments and captured variables into optimized batches, so LLVM can inline their
+extraction. Lua emission imports fifteen shared Zig primitives for values,
+arguments, captured variables and callable identity into optimized batches, so LLVM can inline their
 actual representation and eliminate intermediate copies. O0 batches retain the ordinary runtime calls.
 These helper definitions do not provide another public ABI or enable corpus LTO.
 The compiler forwards results directly into the caller's result buffer for
-eligible return calls, avoiding an intermediate result array. It also emits
+eligible return calls, avoiding an intermediate result array. Fixed returns
+expose their stores and clipped result count directly to LLVM, and successful
+static calls bypass error-name handling. Return expressions still execute in
+order even when the caller discards their values. It also emits
 source-derived guarded calls for `Language:getCode` and
 `Language:getCanonicalName`, and for known captured callables. Each direct
 method or captured-call path checks the live function identity; reassigned or

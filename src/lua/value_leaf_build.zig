@@ -21,6 +21,12 @@ export fn dict_lua_leaf_value_copy(out: *rt.Value, input: *const rt.Value) callc
 export fn dict_lua_leaf_value_truthy(input: *const rt.Value) callconv(.c) u8 {
     return leaf.truthy(input);
 }
+export fn dict_lua_leaf_value_is_function_id(input: *const rt.Value, function_id: u32) callconv(.c) u8 {
+    return leaf.isFunctionId(input, function_id);
+}
+export fn dict_lua_leaf_value_function_captures(input: *const rt.Value, function_id: u32) callconv(.c) ?*const rt.Captures {
+    return leaf.functionCaptures(input, function_id);
+}
 export fn dict_lua_leaf_value_is_nil(input: *const rt.Value) callconv(.c) u8 {
     return leaf.isNil(input);
 }

@@ -137,11 +137,10 @@ export fn dict_lua_value_truthy(input: *const rt.Value) callconv(.c) u8 {
     return value_leaf.truthy(input);
 }
 export fn dict_lua_value_is_function_id(input: *const rt.Value, function_id: u32) callconv(.c) u8 {
-    return @intFromBool(input.* == .callable and input.callable.id == function_id);
+    return value_leaf.isFunctionId(input, function_id);
 }
 export fn dict_lua_value_function_captures(input: *const rt.Value, function_id: u32) callconv(.c) ?*const rt.Captures {
-    if (input.* != .callable or input.callable.id != function_id) return null;
-    return input.callable.capturesPtr();
+    return value_leaf.functionCaptures(input, function_id);
 }
 export fn dict_lua_value_to_number(input: *const rt.Value, out: *f64) callconv(.c) u8 {
     const n = rt.toNumber(input.*) orelse return 0;
@@ -665,6 +664,87 @@ test "LLVM ABI layouts and primitive helpers" {
     try std.testing.expect(std.math.isNan(dict_lua_value_number_unchecked(&value)));
     dict_lua_value_nil(&value);
     try std.testing.expect(std.math.isNan(dict_lua_value_number_unchecked(&value)));
+}
+
+test "function status normalization leaves success inert and preserves errors" {
+    var ctx = try rt.Context.init(std.testing.allocator, 0);
+    defer ctx.deinit();
+    ctx.depth = 7;
+    ctx.last_error = .{ .string = "original Lua error" };
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_function_status(&ctx, 0));
+    try std.testing.expect(ctx.aotErrorName() == null);
+    try std.testing.expectEqual(@as(usize, 7), ctx.depth);
+    try std.testing.expectEqualStrings("original Lua error", ctx.last_error.string);
+
+    for ([_]u32{ 1, 2, std.math.maxInt(u32) }) |status| {
+        ctx.clearAotErrorName();
+        try std.testing.expectEqual(@as(u32, 1), dict_lua_function_status(&ctx, status));
+        try std.testing.expectEqualStrings("AotCallFailed", ctx.aotErrorName().?);
+        ctx.setAotErrorName("OriginalAotFailure");
+        try std.testing.expectEqual(@as(u32, 1), dict_lua_function_status(&ctx, status));
+        try std.testing.expectEqualStrings("OriginalAotFailure", ctx.aotErrorName().?);
+        try std.testing.expectEqual(@as(u32, 0), dict_lua_function_status(&ctx, 0));
+        try std.testing.expectEqualStrings("OriginalAotFailure", ctx.aotErrorName().?);
+        try std.testing.expectEqual(@as(usize, 7), ctx.depth);
+        try std.testing.expectEqualStrings("original Lua error", ctx.last_error.string);
+    }
+}
+
+test "local static call depth remains balanced across normalized errors" {
+    var ctx = try rt.Context.init(std.testing.allocator, 0);
+    defer ctx.deinit();
+    ctx.max_depth = 1;
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_enter_local_static_call(&ctx));
+    try std.testing.expectEqual(@as(usize, 1), ctx.depth);
+    try std.testing.expectEqual(@as(u32, 1), dict_lua_enter_local_static_call(&ctx));
+    try std.testing.expectEqual(@as(usize, 1), ctx.depth);
+    try std.testing.expectEqualStrings("CallDepth", ctx.aotErrorName().?);
+    dict_lua_leave_local_static_call(&ctx);
+    try std.testing.expectEqual(@as(usize, 0), ctx.depth);
+    try std.testing.expectEqual(@as(u32, 1), dict_lua_function_status(&ctx, std.math.maxInt(u32)));
+    try std.testing.expectEqualStrings("CallDepth", ctx.aotErrorName().?);
+    try std.testing.expectEqual(@as(usize, 0), ctx.depth);
+
+    ctx.clearAotErrorName();
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_enter_local_static_call(&ctx));
+    dict_lua_leave_local_static_call(&ctx);
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_function_status(&ctx, 0));
+    try std.testing.expect(ctx.aotErrorName() == null);
+    try std.testing.expectEqual(@as(usize, 0), ctx.depth);
+}
+
+test "callable leaf ABI preserves exact ID and live capture pointer" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), 1);
+    defer ctx.deinit();
+
+    var first_cell = rt.Cell{ .value = .{ .number = 11 } };
+    var second_cell = rt.Cell{ .value = .{ .number = 22 } };
+    const first = try ctx.makeFunction(7, dict_lua_static_module_root_unreachable, &.{&first_cell});
+    const second = try ctx.makeFunction(7, dict_lua_static_module_root_unreachable, &.{&second_cell});
+    const no_capture = try ctx.makeFunction(7, dict_lua_static_module_root_unreachable, &.{});
+    const missing: rt.Value = .nil;
+    const native: rt.Value = .{ .callable = .{
+        .env = rt.FunctionEnv.native(&first_cell),
+        .entry = dict_lua_static_module_root_unreachable,
+        .id = rt.native_function_id,
+        .identity = 0,
+    } };
+
+    try std.testing.expectEqual(@as(u8, 1), dict_lua_value_is_function_id(&first, 7));
+    try std.testing.expectEqual(@as(u8, 0), dict_lua_value_is_function_id(&first, 8));
+    try std.testing.expectEqual(@as(u8, 0), dict_lua_value_is_function_id(&missing, 7));
+    const first_captures = dict_lua_value_function_captures(&first, 7) orelse return error.MissingFirstCaptures;
+    const second_captures = dict_lua_value_function_captures(&second, 7) orelse return error.MissingSecondCaptures;
+    try std.testing.expect(first_captures != second_captures);
+    try std.testing.expect(first_captures.* == .direct and first_captures.direct.len == 1 and first_captures.direct[0] == &first_cell);
+    try std.testing.expect(second_captures.* == .direct and second_captures.direct.len == 1 and second_captures.direct[0] == &second_cell);
+    try std.testing.expect(dict_lua_value_function_captures(&first, 8) == null);
+    try std.testing.expect(dict_lua_value_function_captures(&missing, 7) == null);
+    try std.testing.expect(dict_lua_value_function_captures(&no_capture, 7) == null);
+    try std.testing.expectEqual(@as(u8, 1), dict_lua_value_is_function_id(&native, rt.native_function_id));
+    try std.testing.expect(dict_lua_value_function_captures(&native, rt.native_function_id) == null);
 }
 
 fn fixedCallTestCount(args: []const rt.Value) !usize {
