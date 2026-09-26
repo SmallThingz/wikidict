@@ -2,7 +2,7 @@
 const std = @import("std");
 const paths = @import("pipeline_paths");
 const max_parallel_workers: usize = 4;
-const clang_common_flags = [_][]const u8{ "-fno-lto", "-Wno-override-module" };
+const clang_common_flags = [_][]const u8{ "-march=native", "-fno-lto", "-Wno-override-module" };
 const clang_program_mode = "-O1";
 
 const Options = struct {
@@ -235,7 +235,7 @@ fn objectCacheCommand(
     const helper = try std.fs.path.join(a, &.{ paths.project_root, "tools", "extraction_cache.py" });
     // The program object has its own optimization mode, separate from the
     // per-batch modes recorded in batch-plan.tsv.
-    const flags = try std.mem.join(a, ",", &.{ clang_common_flags[0], clang_common_flags[1], clang_program_mode });
+    const flags = try std.mem.join(a, ",", &.{ clang_common_flags[0], clang_common_flags[1], clang_common_flags[2], clang_program_mode });
     var child = try std.process.spawn(io, .{ .argv = &.{
         "python3", helper, action, cache_root, paths.clang, paths.project_root, llvm_dir, flags, paths.zig,
     }, .stdin = .ignore });
@@ -480,6 +480,7 @@ fn compileBitcodeModules(
                 plan.mode.flag(),
                 clang_common_flags[0],
                 clang_common_flags[1],
+                clang_common_flags[2],
                 "-c",
                 source,
                 "-o",
@@ -506,6 +507,7 @@ fn compileBitcodeModules(
         clang_program_mode,
         clang_common_flags[0],
         clang_common_flags[1],
+        clang_common_flags[2],
         "-c",
         program_source,
         "-o",

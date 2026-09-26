@@ -776,6 +776,52 @@ test "length and dynamic comparison stay native scalar values" {
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "store i1") != null);
 }
 
+test "nil and known boolean equality avoid dynamic comparison" {
+    const source =
+        \\local function unknown() return nil end
+        \\local t = {}
+        \\local a = unknown()
+        \\return nil == nil, nil ~= false, nil == t, a == nil, nil ~= a,
+        \\       true == false, true ~= false, (0/0) == (0/0), t == t
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, ir, "call i8 @dict_lua_value_is_nil"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call i32 @dict_lua_compare_bool"));
+}
+
+test "nil equality emits both operand calls in source order" {
+    const source =
+        \\local order = ""
+        \\local function left() order = order .. "L"; return nil end
+        \\local function right() order = order .. "R"; return nil end
+        \\return left() == nil, nil ~= right(), order
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    const left = std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_1(") orelse return error.MissingLeftCall;
+    const right = std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_2(") orelse return error.MissingRightCall;
+    try std.testing.expect(left < right);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, ir, "call i8 @dict_lua_value_is_nil"));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_compare_bool"));
+}
+
 test "nonrecursive local function syntax uses direct static call" {
     const source = "local function f(a) return a end; return f(3)";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);
@@ -808,6 +854,47 @@ test "recursive local function keeps callable self cell" {
     defer std.testing.allocator.free(generated_source);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, " = call i32 @dict_lua_make_function") != null);
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_cell_new") != null);
+}
+
+test "captured local calls guard analyzed function and use live closure captures" {
+    const source =
+        \\local function factory(x)
+        \\  local function target(y) return x + y end
+        \\  local function replace(other) target = other end
+        \\  local function middle()
+        \\    local function invoke(y)
+        \\      local result = target(y)
+        \\      return result
+        \\    end
+        \\    return invoke
+        \\  end
+        \\  return middle(), replace
+        \\end
+        \\return factory
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+
+    // `target` is declared in factory and read through middle/invoke upvalues.
+    // The analyzed ID chooses the direct entry, while the loaded callable's
+    // current captures and ID guard preserve factory instances and rebinding.
+    const target_id = module.functions.items[2].id;
+    const direct_call = try std.fmt.allocPrint(std.testing.allocator, "call %FunctionResult @lua_f_{d}(", .{target_id});
+    defer std.testing.allocator.free(direct_call);
+    try std.testing.expect(std.mem.indexOf(u8, ir, direct_call) != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call ptr @dict_lua_value_function_captures") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i8 @dict_lua_value_is_function_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "direct_export:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "dynamic_export:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_call_fixed(") != null);
 }
 
 test "known module export emits guarded direct LLVM call" {
@@ -845,8 +932,9 @@ test "known module export emits guarded direct LLVM call" {
     try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_99") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_enter_static_call(ptr %ctx, i32 0)") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_enter_static_call(ptr %ctx, i32 99)") == null);
-    try std.testing.expect(std.mem.indexOf(u8, ir, "direct_export") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ir, "dynamic_export") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "return_export_direct:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "return_export_fallback:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @dict_lua_return_call(") != null);
 }
 
 test "eager pristine module export bypasses field lookup on direct branch" {
@@ -882,9 +970,9 @@ test "eager pristine module export bypasses field lookup on direct branch" {
 
     try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_defer_require_module_ref") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_module_export_pristine") == null);
-    const start = std.mem.indexOf(u8, ir, "pristine_export_multi:") orelse return error.MissingPristineExportBlock;
+    const start = std.mem.indexOf(u8, ir, "return_pristine_direct:") orelse return error.MissingPristineExportBlock;
     const rest = ir[start..];
-    const end = std.mem.indexOf(u8, rest, "pristine_export_multi_fallback:") orelse rest.len;
+    const end = std.mem.indexOf(u8, rest, "return_pristine_fallback:") orelse return error.MissingPristineFallbackBlock;
     const block = rest[0..end];
     try std.testing.expect(std.mem.indexOf(u8, block, "@dict_lua_get_field") == null);
     try std.testing.expect(std.mem.indexOf(u8, block, "@dict_lua_value_is_function_id") == null);

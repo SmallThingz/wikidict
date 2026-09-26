@@ -191,13 +191,28 @@ linking a fresh worker. Every cached asset is
 hashed before reuse, incomplete generations are rejected, and successful corpus
 publication removes the staging workspace and these transient caches.
 
+Generated Lua batches use Clang's `-march=native` for the build host. The
+transient expansion worker is therefore host-specific; the native-object cache
+records Clang's resolved CPU and feature set as well as the compiler and flags,
+and checks that target again before publishing a generation. A different
+resolved CPU or feature set causes a cache miss. Published WIKBLB08/XZ blobs contain data, not the expansion
+worker, and remain portable to readers built for their own target.
+
 The runtime worker object and a small value-helper bitcode module compile beside
 extraction. Lua emission imports thirteen shared Zig primitives for values,
 arguments and captured variables into optimized batches, so LLVM can inline their
 actual representation and eliminate intermediate copies. O0 batches retain the ordinary runtime calls.
 These helper definitions do not provide another public ABI or enable corpus LTO.
-Linking waits for the runtime worker and generated module objects. The parser
-reserves execution slots while the worker compiler and extractor are active.
+The compiler forwards results directly into the caller's result buffer for
+eligible return calls, avoiding an intermediate result array. It also emits
+source-derived guarded calls for `Language:getCode` and
+`Language:getCanonicalName`, and for known captured callables. Each direct
+method or captured-call path checks the live function identity; reassigned or
+unrelated callables take the ordinary dynamic path. Simple nil and boolean
+equality uses direct comparisons while cases that can invoke Lua metamethods
+retain dynamic comparison. Linking waits for the runtime worker and generated
+module objects. The parser reserves execution slots while the worker compiler
+and extractor are active.
 
 The worker keeps module globals sparse and initializes module-state pages on
 first use. A bounded read-only `mw.loadData` cache can reuse results from isolated

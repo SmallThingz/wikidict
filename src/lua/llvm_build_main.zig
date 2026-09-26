@@ -731,6 +731,7 @@ fn appendModuleToBatch(
     module_ids: *const emitter.ModuleIdMap,
     shape_registry: *const shapes.Registry,
     module_facts: []const emitter.ModuleFact,
+    method_candidates: []const emitter.MethodCandidate,
     batch: *emitter.Batch,
     frozen_global_count: usize,
 ) !void {
@@ -752,6 +753,7 @@ fn appendModuleToBatch(
     const facts = emitter.ProgramFacts{
         .module_ids = module_ids,
         .module_facts = module_facts,
+        .method_candidates = method_candidates,
         .table_shapes = &table_shapes,
         .synth_root = record.synth_root,
         .current_module_id = @intCast(index),
@@ -773,6 +775,7 @@ fn emitBatches(
     module_ids: *const emitter.ModuleIdMap,
     shape_registry: *const shapes.Registry,
     module_facts: []const emitter.ModuleFact,
+    method_candidates: []const emitter.MethodCandidate,
     value_leaf_bc: []const u8,
 ) !void {
     if (records.len != modes.len) return error.InvalidCompilePlan;
@@ -833,6 +836,7 @@ fn emitBatches(
                     module_ids,
                     shape_registry,
                     module_facts,
+                    method_candidates,
                     &batch,
                     frozen_global_count,
                 );
@@ -880,6 +884,54 @@ fn emitBatches(
     std.debug.print("LLVM_BODYLESS_SYNTH_ROOTS modules={d}\n", .{bodyless_synth_roots});
     if (emitted + static_roots + bodyless_synth_roots != records.len)
         return error.IncompleteLlvmEmission;
+}
+
+/// Pilot source-derived class method targets. A call site still tests the
+/// exact live callable ID, so an override or unrelated receiver is safe.
+fn languageMethodCandidates(io: std.Io, a: A, source_root: []const u8, records: []const ModuleRecord) ![]const emitter.MethodCandidate {
+    for (records, 0..) |record, module_id| {
+        if (!std.mem.eql(u8, record.title, "Module:languages")) continue;
+        const path = try sourcePath(a, source_root, record.path);
+        defer a.free(path);
+        const source = try readAll(io, a, path);
+        defer a.free(source);
+        var chunk = try lua.parse(a, source);
+        defer chunk.deinit();
+        var globals = try analysis.Globals.init(a);
+        defer globals.deinit();
+        var module = try analysis.analyze(a, &globals, &chunk, record.function_base);
+        defer module.deinit();
+        var candidates: std.ArrayList(emitter.MethodCandidate) = .empty;
+        errdefer candidates.deinit(a);
+        for (chunk.body) |statement| {
+            if (statement.* != .function_assign) continue;
+            const assignment = statement.function_assign;
+            if (assignment.target != .index or assignment.function.* != .function) continue;
+            const target = assignment.target.index;
+            if (target.object.* != .name or target.key.* != .string) continue;
+            if (!std.mem.eql(u8, target.object.name.value, "Language")) continue;
+            const method_name = target.key.string.value;
+            const name: []const u8 = if (std.mem.eql(u8, method_name, "getCode"))
+                "getCode"
+            else if (std.mem.eql(u8, method_name, "getCanonicalName"))
+                "getCanonicalName"
+            else
+                continue;
+            const span = assignment.function.function.span;
+            for (module.functions.items[1..]) |info| {
+                if (info.span.start != span.start or info.span.end != span.end) continue;
+                try candidates.append(a, .{
+                    .name = name,
+                    .function_id = info.id,
+                    .module_id = @intCast(module_id),
+                    .capture_count = @intCast(info.upvalues.len),
+                });
+                break;
+            }
+        }
+        return candidates.toOwnedSlice(a);
+    }
+    return &.{};
 }
 
 fn run(io: std.Io, a: A, args: []const []const u8) !void {
@@ -1091,6 +1143,14 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         };
     }
 
+    const method_candidates = try languageMethodCandidates(io, a, source_root, selected_records.items);
+    defer if (method_candidates.len != 0) a.free(method_candidates);
+    std.debug.print("LLVM_METHOD_CANDIDATES count={d}\n", .{method_candidates.len});
+    for (method_candidates) |candidate| std.debug.print(
+        "LLVM_METHOD_CANDIDATE name={s} id={d} module={d} captures={d}\n",
+        .{ candidate.name, candidate.function_id, candidate.module_id, candidate.capture_count },
+    );
+
     try emitBatches(
         io,
         a,
@@ -1102,6 +1162,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &selected_module_ids,
         &shape_registry,
         selected_module_facts,
+        method_candidates,
         leaf_bc,
     );
 

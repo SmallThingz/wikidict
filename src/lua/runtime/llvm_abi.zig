@@ -568,6 +568,41 @@ fn returnSlice(result_ptr: ?[*]rt.Value, result_len: usize, wanted: usize) ![]rt
     return std.heap.smp_allocator.alloc(rt.Value, wanted);
 }
 
+fn returnCall(ctx: *rt.Context, callable: rt.Value, args: []const rt.Value, result_ptr: ?[*]rt.Value, result_len: usize) rt.FunctionResult {
+    if (result_ptr) |ptr| {
+        const out = ptr[0..result_len];
+        const result = ctx.callValueFixed(callable, args, out) catch |err| {
+            _ = fail(ctx, err);
+            return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
+        };
+        defer result.deinit();
+        const n = @min(result.values.len, out.len);
+        if (n != 0 and result.values.ptr != out.ptr)
+            @memcpy(out[0..n], result.values[0..n]);
+        return .{ .values_ptr = if (n == 0) null else out.ptr, .values_len = n, .status = 0, .reserved = 0 };
+    }
+    const result = ctx.callValue(callable, args) catch |err| {
+        _ = fail(ctx, err);
+        return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
+    };
+    return .{ .values_ptr = if (result.len == 0) null else result.ptr, .values_len = result.len, .status = 0, .reserved = 0 };
+}
+
+/// Forward a lone tail call directly into the current function's result buffer.
+export fn dict_lua_return_call(ctx: *rt.Context, callable: *const rt.Value, args_ptr: [*]const rt.Value, args_len: usize, result_ptr: ?[*]rt.Value, result_len: usize) callconv(.c) rt.FunctionResult {
+    return returnCall(ctx, callable.*, values(args_ptr, args_len), result_ptr, result_len);
+}
+
+export fn dict_lua_return_call_tail(ctx: *rt.Context, callable: *const rt.Value, fixed_ptr: [*]const rt.Value, fixed_len: usize, tail_ptr: [*]const rt.Value, tail_len: usize, result_ptr: ?[*]rt.Value, result_len: usize) callconv(.c) rt.FunctionResult {
+    var storage: [8]rt.Value = undefined;
+    const args = mergeCallArgs(values(fixed_ptr, fixed_len), values(tail_ptr, tail_len), &storage) catch |err| {
+        _ = fail(ctx, err);
+        return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
+    };
+    defer if (args.ptr != storage[0..].ptr) std.heap.smp_allocator.free(args);
+    return returnCall(ctx, callable.*, args, result_ptr, result_len);
+}
+
 export fn dict_lua_return_values(ctx: *rt.Context, result_ptr: ?[*]rt.Value, result_len: usize, input_ptr: [*]const rt.Value, input_len: usize) callconv(.c) rt.FunctionResult {
     const out = returnSlice(result_ptr, result_len, input_len) catch |err| {
         _ = fail(ctx, err);
@@ -693,6 +728,67 @@ test "fixed call results fill only missing slots for buffered owned and static c
     try std.testing.expectEqual(@as(f64, 1), owned_out[0].number);
     try std.testing.expectEqual(@as(f64, 2), owned_out[1].number);
 }
+fn tailReturnTableCall(_: ?*anyopaque, _: *rt.Context, args: []const rt.Value, buffer: ?[]rt.Value) ![]const rt.Value {
+    if (args.len != 2 or args[0] != .table or args[1] != .number) return error.TestCallFailed;
+    const out = try rt.returnBuffer(buffer, 1);
+    rt.storeReturn(out, 0, args[1]);
+    return out;
+}
+
+test "tail return forwards actual arity and caller buffer" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const buffered = try ctx.newNativeBuffered(null, fixedCallBufferedTest);
+    const owned = try ctx.newNative(null, fixedCallOwnedTest);
+    const stale = rt.Value{ .string = "stale" };
+    var out = [_]rt.Value{ stale, stale };
+    for ([_]usize{ 0, 1, 2, 3, 9 }) |count| {
+        out = .{ stale, stale };
+        const args = [_]rt.Value{.{ .number = @floatFromInt(count) }};
+        const result = dict_lua_return_call(&ctx, &buffered, &args, args.len, &out, out.len);
+        try std.testing.expectEqual(@as(u32, if (count == 9) 1 else 0), result.status);
+        if (count == 9) continue;
+        try std.testing.expectEqual(@min(count, out.len), result.values_len);
+        for (out, 0..) |value, index| {
+            if (index < result.values_len)
+                try std.testing.expectEqual(@as(f64, @floatFromInt(index + 1)), value.number)
+            else
+                try std.testing.expectEqualStrings("stale", value.string);
+        }
+    }
+    out = .{ stale, stale };
+    const clipped = dict_lua_return_call(&ctx, &owned, &.{}, 0, &out, out.len);
+    try std.testing.expectEqual(@as(usize, 2), clipped.values_len);
+    try std.testing.expectEqual(@as(f64, 2), out[1].number);
+    const unbounded = dict_lua_return_call(&ctx, &owned, &.{}, 0, null, 0);
+    try std.testing.expectEqual(@as(usize, 3), unbounded.values_len);
+    rt.freeResults(unbounded.values_ptr.?[0..unbounded.values_len]);
+    const zero = dict_lua_return_call(&ctx, &owned, &.{}, 0, &out, 0);
+    try std.testing.expectEqual(@as(usize, 0), zero.values_len);
+    try std.testing.expect(zero.values_ptr == null);
+
+    const many_fixed = [_]rt.Value{.{ .number = 3 }} ** 8;
+    const tail = [_]rt.Value{.{ .number = 4 }} ** 2;
+    out = .{ stale, stale };
+    const merged = dict_lua_return_call_tail(&ctx, &buffered, &many_fixed, many_fixed.len, &tail, tail.len, &out, out.len);
+    try std.testing.expectEqual(@as(u32, 0), merged.status);
+    try std.testing.expectEqual(@as(usize, 2), merged.values_len);
+    try std.testing.expectEqual(@as(f64, 1), out[0].number);
+
+    const mt = try ctx.newTable();
+    const object = try ctx.newTable();
+    object.metatable = mt;
+    const table_method = try ctx.newNativeBuffered(null, tailReturnTableCall);
+    try mt.rawSet(ctx.allocator, .{ .string = "__call" }, table_method);
+    const callable = rt.Value{ .table = object };
+    const table_args = [_]rt.Value{.{ .number = 1 }};
+    const table_result = dict_lua_return_call(&ctx, &callable, &table_args, table_args.len, &out, out.len);
+    try std.testing.expectEqual(@as(u32, 0), table_result.status);
+    try std.testing.expectEqual(@as(usize, 1), table_result.values_len);
+}
+
 test "static literal decoder materializes list named and keyed fields" {
     const static_literal = @import("lua_static_literal_format");
     const W = struct {

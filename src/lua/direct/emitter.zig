@@ -28,6 +28,12 @@ pub const DirectExport = struct {
     function_id: u32,
     capture_count: u32 = 0,
 };
+pub const MethodCandidate = struct {
+    name: []const u8,
+    function_id: u32,
+    module_id: u32,
+    capture_count: u32,
+};
 pub const ModuleFact = struct {
     root_pure: bool = false,
     eager_prepared: bool = false,
@@ -37,6 +43,7 @@ pub const ModuleFact = struct {
 pub const ProgramFacts = struct {
     module_ids: ?*const ModuleIdMap = null,
     module_facts: ?[]const ModuleFact = null,
+    method_candidates: []const MethodCandidate = &.{},
     table_shapes: ?*const shapes.ModuleFacts = null,
     synth_root: bool = false,
     current_module_id: u32 = 0,
@@ -63,6 +70,12 @@ pub const ProgramFacts = struct {
         if (module_id >= facts.len) return null;
         for (facts[module_id].exports) |entry|
             if (std.mem.eql(u8, entry.name, name)) return entry;
+        return null;
+    }
+
+    pub fn methodCandidate(self: ProgramFacts, name: []const u8) ?MethodCandidate {
+        for (self.method_candidates) |candidate|
+            if (std.mem.eql(u8, candidate.name, name)) return candidate;
         return null;
     }
 
@@ -232,6 +245,8 @@ const Runtime = struct {
     results_free: V,
     return_values: V,
     return_join: V,
+    return_call: V,
+    return_call_tail: V,
     function_error: V,
     floor: V,
     pow: V,
@@ -303,6 +318,8 @@ const Runtime = struct {
             .results_free = try declare(m, "dict_lua_results_free", ty.void, &.{ ty.ptr, ty.i64 }),
             .return_values = try declare(m, "dict_lua_return_values", ty.function_result, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .return_join = try declare(m, "dict_lua_return_join", ty.function_result, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .return_call = try declare(m, "dict_lua_return_call", ty.function_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
+            .return_call_tail = try declare(m, "dict_lua_return_call_tail", ty.function_result, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr, ty.i64, ty.ptr, ty.i64 }),
             .function_error = try declare(m, "dict_lua_function_error", ty.function_result, &.{}),
             .floor = try declare(m, "floor", ty.double, &.{ty.double}),
             .pow = try declare(m, "pow", ty.double, &.{ ty.double, ty.double }),
@@ -914,6 +931,24 @@ const FnEmitter = struct {
             },
             .eq, .ne, .lt, .le, .gt, .ge => {
                 if (lhs == .number and rhs == .number) return self.nativeCompare(op, lhs.number, rhs.number);
+                if (op == .eq or op == .ne) {
+                    // Both expressions have already been emitted in Lua order.
+                    // Nil can never participate in a table/table __eq dispatch.
+                    if (lhs == .nil or rhs == .nil) {
+                        const other = if (lhs == .nil) rhs else lhs;
+                        const is_nil = switch (other) {
+                            .nil => try self.cI1(true),
+                            .boxed => |ptr| blk: {
+                                const raw = try llvm.call(self.builder, self.rt().value_is_nil, &.{ptr});
+                                break :blk try llvm.icmp(self.builder, .ne, raw, try self.cI8(0));
+                            },
+                            else => try self.cI1(false),
+                        };
+                        return .{ .boolean = if (op == .eq) is_nil else try llvm.bitNot(self.builder, is_nil) };
+                    }
+                    if (lhs == .boolean and rhs == .boolean)
+                        return .{ .boolean = try llvm.icmp(self.builder, if (op == .eq) .eq else .ne, lhs.boolean, rhs.boolean) };
+                }
                 return self.dynamicCompare(op, lhs, rhs);
             },
             else => unreachable,
@@ -1229,14 +1264,73 @@ const FnEmitter = struct {
         };
     }
 
+    fn analyzedFunction(self: *const FnEmitter, id: u32) ?*const analysis.FunctionInfo {
+        const module = self.module.module;
+        if (id < module.base_id) return null;
+        const index: usize = @intCast(id - module.base_id);
+        if (index >= module.functions.items.len) return null;
+        const info = module.functions.items[index];
+        return if (info.id == id) info else null;
+    }
+
+    fn localFunctionTarget(self: *const FnEmitter, owner: *const analysis.FunctionInfo, binding: u32) ?*const analysis.FunctionInfo {
+        if (binding >= owner.bindings.len) return null;
+        const span = owner.bindings[binding].function_span orelse return null;
+        const target = self.module.functionForSpan(span) catch return null;
+        if (target.dead or target.parent_id != owner.id) return null;
+        return target;
+    }
+
+    fn capturedFunctionTarget(self: *const FnEmitter, ordinal: u32) ?*const analysis.FunctionInfo {
+        var current = self.info;
+        var current_ordinal = ordinal;
+        while (true) {
+            if (current_ordinal >= current.upvalues.len) return null;
+            const parent = self.analyzedFunction(current.parent_id orelse return null) orelse return null;
+            switch (current.upvalues[current_ordinal].source) {
+                .local => |binding| return self.localFunctionTarget(parent, binding),
+                .upvalue => |parent_ordinal| {
+                    current = parent;
+                    current_ordinal = parent_ordinal;
+                },
+            }
+        }
+    }
+
+    fn guardedLocalFunction(self: *FnEmitter, resolved: Resolved, target: *const analysis.FunctionInfo) anyerror!StaticFunctionRef {
+        // Capture the callable before evaluating arguments. A later argument may
+        // rebind its cell, but this call must still use the earlier value.
+        const callable = try self.box(try self.loadResolved(resolved));
+        const direct_captures = if (target.upvalues.len == 0)
+            try self.nullPtr()
+        else
+            try llvm.call(self.builder, self.rt().value_function_captures, &.{
+                callable, try self.cI32(target.id),
+            });
+        return .{
+            .function_id = target.id,
+            .module_id = self.module.facts.current_module_id,
+            .captures_ptr = try self.nullPtr(),
+            .captures_len = 0,
+            .direct_captures = direct_captures,
+            .guard_callable = callable,
+        };
+    }
+
     fn staticCallee(self: *FnEmitter, value: *const lua.Expr) anyerror!?StaticFunctionRef {
         return switch (value.*) {
-            .name => |name| switch (try self.resolve(name.value)) {
-                .local => |binding| switch (self.storage[binding]) {
-                    .static_function => |function| function,
-                    else => null,
-                },
-                else => null,
+            .name => |name| blk: {
+                const resolved = try self.resolve(name.value);
+                const target = switch (resolved) {
+                    .local => |binding| target: {
+                        if (self.storage[binding] == .static_function)
+                            break :blk self.storage[binding].static_function;
+                        break :target self.localFunctionTarget(self.info, binding);
+                    },
+                    .upvalue => |ordinal| self.capturedFunctionTarget(ordinal),
+                    .global => null,
+                } orelse break :blk null;
+                break :blk try self.guardedLocalFunction(resolved, target);
             },
             .index => |index| blk: {
                 const field = staticString(index.key) orelse break :blk null;
@@ -1734,6 +1828,46 @@ const FnEmitter = struct {
         return result;
     }
 
+    /// The field and all arguments have already been evaluated by prepareCall.
+    /// The exact live callable ID decides whether we can enter the known Lua
+    /// body; reassignment, inherited overrides, and foreign objects fall back.
+    fn guardedMethodFixed(self: *FnEmitter, candidate: MethodCandidate, callable: V, prepared: PreparedCall, count: usize) anyerror!?V {
+        const output = try self.valueArray(count);
+        const is_expected = try llvm.call(self.builder, self.rt().value_is_function_id, &.{
+            callable, try self.cI32(candidate.function_id),
+        });
+        const direct_block = try self.newBlock("method_known_direct");
+        const fallback_block = try self.newBlock("method_known_fallback");
+        const join = try self.newBlock("method_known_join");
+        const matches = try llvm.icmp(self.builder, .ne, is_expected, try self.cI8(0));
+        try llvm.condBr(self.builder, matches, direct_block, fallback_block);
+
+        const method_args = PreparedArgs{ .fixed = prepared.fixed, .fixed_len = prepared.fixed_len, .tail = null };
+        llvm.position(self.builder, direct_block);
+        const capture_context = if (candidate.capture_count == 0)
+            try self.nullPtr()
+        else
+            try llvm.call(self.builder, self.rt().value_function_captures, &.{
+                callable, try self.cI32(candidate.function_id),
+            });
+        const function = StaticFunctionRef{
+            .function_id = candidate.function_id,
+            .module_id = candidate.module_id,
+            .captures_ptr = try self.nullPtr(),
+            .captures_len = 0,
+            .direct_captures = capture_context,
+        };
+        const entry = try self.module.functionValue(candidate.function_id);
+        try self.emitStaticFixedPrepared(function, entry, method_args, output, count);
+        try llvm.br(self.builder, join);
+
+        llvm.position(self.builder, fallback_block);
+        try self.emitFallbackFixedPrepared(callable, method_args, output, count);
+        try llvm.br(self.builder, join);
+        llvm.position(self.builder, join);
+        return if (count == 0) null else output;
+    }
+
     fn callFixed(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr, count: usize) anyerror!?V {
         if (try self.staticRequire(callee_expr, method, args_in)) |request|
             return self.directRequireFixed(request, count);
@@ -1742,6 +1876,10 @@ const FnEmitter = struct {
 
         const prepared = try self.prepareCall(callee_expr, method, args_in);
         const callee = try self.box(prepared.callee);
+        if (method) |field| if (prepared.tail == null) {
+            if (self.module.facts.methodCandidate(field)) |candidate|
+                return self.guardedMethodFixed(candidate, callee, prepared, count);
+        };
         if (count == 0) {
             const status = if (prepared.tail) |tail|
                 try llvm.call(self.builder, self.rt().call_discard_tail, &.{
@@ -1993,6 +2131,99 @@ const FnEmitter = struct {
         return self.block(body);
     }
 
+    fn emitDirectStaticReturnPrepared(self: *FnEmitter, function: StaticFunctionRef, entry: V, prepared: PreparedArgs) anyerror!void {
+        const same_module = self.sameModuleStaticCall(function);
+        const enter = if (same_module)
+            try llvm.call(self.builder, self.rt().enter_local_static_call, &.{self.ctx()})
+        else
+            try llvm.call(self.builder, self.rt().enter_static_call, &.{ self.ctx(), try self.cI32(function.module_id) });
+        try self.check(enter);
+        const capture_context = try self.staticCaptureContext(function);
+        const result = try llvm.call(self.builder, entry, &.{
+            self.ctx(), capture_context, prepared.fixed, try self.cI64(prepared.fixed_len), self.resultPtr(), self.resultLen(),
+        });
+        _ = if (same_module)
+            try llvm.call(self.builder, self.rt().leave_local_static_call, &.{self.ctx()})
+        else
+            try llvm.call(self.builder, self.rt().leave_static_call, &.{self.ctx()});
+        try llvm.ret(self.builder, result);
+    }
+
+    fn emitStaticCallReturn(self: *FnEmitter, function: StaticFunctionRef, args_in: []const *lua.Expr) anyerror!void {
+        // Keep the existing guard/fallback and ownership path for tail arguments.
+        if (args_in.len != 0 and isMultiExpr(args_in[args_in.len - 1])) {
+            const multi_value = try self.directStaticMulti(function, args_in);
+            const result = try llvm.call(self.builder, self.rt().return_join, &.{
+                self.ctx(), self.resultPtr(), self.resultLen(), self.args(), try self.cI64(0), multi_value.ptr, multi_value.len,
+            });
+            try self.freeMulti(multi_value);
+            try llvm.ret(self.builder, result);
+            return;
+        }
+        const prepared = try self.prepareStaticArgs(args_in);
+
+        const entry = try self.module.functionValue(function.function_id);
+        if (function.pristine_guard) |pristine| {
+            const callable = function.guard_callable orelse return error.MissingPristineFallback;
+            const direct_block = try self.newBlock("return_pristine_direct");
+            const fallback_block = try self.newBlock("return_pristine_fallback");
+            try llvm.condBr(self.builder, pristine, direct_block, fallback_block);
+            llvm.position(self.builder, direct_block);
+            try self.emitDirectStaticReturnPrepared(function, entry, prepared);
+            llvm.position(self.builder, fallback_block);
+            const fallback = try llvm.call(self.builder, self.rt().return_call, &.{
+                self.ctx(), callable, prepared.fixed, try self.cI64(prepared.fixed_len), self.resultPtr(), self.resultLen(),
+            });
+            try llvm.ret(self.builder, fallback);
+            return;
+        }
+        if (function.guard_callable) |callable| {
+            const is_expected = try llvm.call(self.builder, self.rt().value_is_function_id, &.{
+                callable, try self.cI32(function.function_id),
+            });
+            const direct_block = try self.newBlock("return_export_direct");
+            const fallback_block = try self.newBlock("return_export_fallback");
+            try llvm.condBr(self.builder, try llvm.icmp(self.builder, .ne, is_expected, try self.cI8(0)), direct_block, fallback_block);
+            llvm.position(self.builder, direct_block);
+            try self.emitDirectStaticReturnPrepared(function, entry, prepared);
+            llvm.position(self.builder, fallback_block);
+            const fallback = try llvm.call(self.builder, self.rt().return_call, &.{
+                self.ctx(), callable, prepared.fixed, try self.cI64(prepared.fixed_len), self.resultPtr(), self.resultLen(),
+            });
+            try llvm.ret(self.builder, fallback);
+            return;
+        }
+        try self.emitDirectStaticReturnPrepared(function, entry, prepared);
+    }
+
+    fn emitCallReturn(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr) anyerror!void {
+        if (try self.staticRequire(callee_expr, method, args_in)) |request| {
+            const loaded = try self.directRequireValue(request);
+            const result = try llvm.call(self.builder, self.rt().return_values, &.{
+                self.ctx(), self.resultPtr(), self.resultLen(), loaded, try self.cI64(1),
+            });
+            try llvm.ret(self.builder, result);
+            return;
+        }
+        if (method == null) if (try self.staticCallee(callee_expr)) |function| {
+            try self.emitStaticCallReturn(function, args_in);
+            return;
+        };
+        const prepared = try self.prepareCall(callee_expr, method, args_in);
+        const callee = try self.box(prepared.callee);
+        const result = if (prepared.tail) |tail|
+            try llvm.call(self.builder, self.rt().return_call_tail, &.{
+                self.ctx(), callee,   prepared.fixed,   try self.cI64(prepared.fixed_len),
+                tail.ptr,   tail.len, self.resultPtr(), self.resultLen(),
+            })
+        else
+            try llvm.call(self.builder, self.rt().return_call, &.{
+                self.ctx(), callee, prepared.fixed, try self.cI64(prepared.fixed_len), self.resultPtr(), self.resultLen(),
+            });
+        if (prepared.tail) |tail| try self.freeMulti(tail);
+        try llvm.ret(self.builder, result);
+    }
+
     fn emitReturn(self: *FnEmitter, values_in: []const *lua.Expr) anyerror!void {
         if (values_in.len == 0) {
             const result = try llvm.call(self.builder, self.rt().return_values, &.{
@@ -2004,6 +2235,17 @@ const FnEmitter = struct {
 
         const prefix_count = values_in.len - 1;
         const last = values_in[values_in.len - 1];
+        if (prefix_count == 0) switch (last.*) {
+            .call => |call| {
+                try self.emitCallReturn(call.callee, null, call.args);
+                return;
+            },
+            .method_call => |call| {
+                try self.emitCallReturn(call.object, call.method, call.args);
+                return;
+            },
+            else => {},
+        };
         if (isMultiExpr(last)) {
             const prefix = try self.valueArray(prefix_count);
             for (values_in[0..prefix_count], 0..) |value, index|

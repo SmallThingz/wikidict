@@ -100,7 +100,7 @@ class ObjectCacheTest(unittest.TestCase):
             path = self.project / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(name)
-        self.flags = ["-fno-lto", "-Wno-override-module", "-O1"]
+        self.flags = ["-march=native", "-fno-lto", "-Wno-override-module", "-O1"]
         self.tool = {"tool": {"extractor_sha256": "c" * 64, "libraries": []},
                      "target": "x86_64-linux-gnu", "version": "clang fixture"}
         self.patched = mock.patch.object(cache, "clang_identity", return_value=self.tool)
@@ -132,7 +132,7 @@ class ObjectCacheTest(unittest.TestCase):
             self.root, "clang", self.project, first, self.flags))
         for name in ("module_batch_000000.o", "module_batch_000001.o", "program.o"):
             (first / name).write_bytes(name.encode())
-        self.assertEqual(0, cache.publish_objects(self.root, first))
+        self.assertEqual(0, cache.publish_objects(self.root, first, "clang", self.flags))
         second = self.llvm("second")
         self.assertEqual(0, cache.probe_objects(
             self.root, "clang", self.project, second, self.flags))
@@ -144,12 +144,28 @@ class ObjectCacheTest(unittest.TestCase):
             self.root, "clang", self.project, third, self.flags))
         self.assertFalse((third / "program.o").exists())
 
+    def test_native_cpu_identity_misses_and_publish_rechecks(self):
+        first = self.llvm("first")
+        cache.probe_objects(self.root, "clang", self.project, first, self.flags)
+        for name in ("module_batch_000000.o", "module_batch_000001.o", "program.o"):
+            (first / name).write_bytes(name.encode())
+        original = dict(self.tool, resolved_native={"cpu": "alderlake", "features": ["+avx2"]})
+        with mock.patch.object(cache, "clang_identity", return_value=original):
+            with self.assertRaisesRegex(ValueError, "native target"):
+                cache.publish_objects(self.root, first, "clang", self.flags)
+        cache.publish_objects(self.root, first, "clang", self.flags)
+        other = self.llvm("other")
+        with mock.patch.object(cache, "clang_identity", return_value=original):
+            self.assertEqual(cache.MISS, cache.probe_objects(
+                self.root, "clang", self.project, other, self.flags))
+        self.assertFalse((other / "program.o").exists())
+
     def test_bitcode_metadata_leaf_compiler_and_flags_invalidate_but_abi_only_change_hits(self):
         first = self.llvm("first")
         cache.probe_objects(self.root, "clang", self.project, first, self.flags)
         for name in ("module_batch_000000.o", "module_batch_000001.o", "program.o"):
             (first / name).write_bytes(name.encode())
-        cache.publish_objects(self.root, first)
+        cache.publish_objects(self.root, first, "clang", self.flags)
         for label, filename, content in (
             ("bitcode", "module_batch_o2_000000.bc", b"new bitcode"),
             ("metadata", "program.meta", b"new metadata"),
@@ -212,7 +228,7 @@ class ObjectCacheTest(unittest.TestCase):
         cache.probe_objects(self.root, "clang", self.project, first, self.flags)
         for name in ("module_batch_000000.o", "module_batch_000001.o", "program.o"):
             (first / name).write_bytes(name.encode())
-        cache.publish_objects(self.root, first)
+        cache.publish_objects(self.root, first, "clang", self.flags)
         expected = cache.object_identity(first, "clang", self.project, self.flags)
         marker = cache.object_cache_path(self.root, expected) / ".complete.json"
         second = self.llvm("second")
@@ -233,18 +249,18 @@ class ObjectCacheTest(unittest.TestCase):
         with mock.patch.object(cache, "MAX_MARKER_BYTES", 64):
             (first / ".object-identity.json").write_bytes(b" " * 65)
             with self.assertRaisesRegex(ValueError, "Oversized"):
-                cache.publish_objects(self.root, first)
+                cache.publish_objects(self.root, first, "clang", self.flags)
 
     def test_valid_generation_prunes_older_object_cache(self):
         first = self.llvm("first")
         cache.probe_objects(self.root, "clang", self.project, first, self.flags)
         for name in ("module_batch_000000.o", "module_batch_000001.o", "program.o"):
             (first / name).write_bytes(name.encode())
-        cache.publish_objects(self.root, first)
+        cache.publish_objects(self.root, first, "clang", self.flags)
         older = self.root / "objects" / ("f" * 64)
         older.mkdir()
         (older / ".complete.json").write_text("old")
-        self.assertEqual(0, cache.publish_objects(self.root, first))
+        self.assertEqual(0, cache.publish_objects(self.root, first, "clang", self.flags))
         self.assertFalse(older.exists())
 
     def test_old_generation_cannot_redeem_leaf_enabled_objects(self):

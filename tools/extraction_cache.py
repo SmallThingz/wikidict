@@ -214,7 +214,7 @@ def publish(root, expected, source):
     return 0
 
 
-def clang_identity(command):
+def clang_identity(command, flags=()):
     resolved = shutil.which(command)
     if resolved is None:
         raise ValueError(f"Clang executable unavailable: {command}")
@@ -225,7 +225,20 @@ def clang_identity(command):
                              text=True, check=True, timeout=15).stdout.splitlines()[0]
     if not target or not version:
         raise ValueError("Clang target/version unavailable")
-    return {"tool": tool_identity(executable), "target": target, "version": version}
+    result = {"tool": tool_identity(executable), "target": target, "version": version}
+    if "-march=native" in flags:
+        # -### resolves native CPUID without compiling a source file. A literal
+        # '-march=native' cache key is unsafe when the cache moves hosts.
+        command_line = [str(executable), "-###", "-march=native", "-x", "c",
+                        "-c", "/dev/null", "-o", "/dev/null"]
+        driver = subprocess.run(command_line, capture_output=True, text=True,
+                                check=True, timeout=15).stderr
+        cpus = re.findall(r'"-target-cpu" "([^"]+)"', driver)
+        features = re.findall(r'"-target-feature" "([+-][A-Za-z0-9_.-]+)"', driver)
+        if len(cpus) != 1 or not re.fullmatch(r"[A-Za-z0-9_.-]+", cpus[0]) or not features:
+            raise ValueError("Clang native CPU/features unavailable")
+        result["resolved_native"] = {"cpu": cpus[0], "features": features}
+    return result
 
 
 def zig_leaf_identity(command):
@@ -305,7 +318,7 @@ def object_identity(llvm_dir, clang, project_root, flags, zig="zig"):
         "program_meta_sha256": sha256(program_meta),
         "bitcode": bitcode,
         "program_bc": [program_bc.stat().st_size, sha256(program_bc)],
-        "clang": clang_identity(clang),
+        "clang": clang_identity(clang, flags),
         "flags": flags,
         "value_leaf": value_leaf_identity(llvm_dir, project_root, zig),
     }
@@ -423,7 +436,7 @@ def probe_objects(root, clang, project_root, llvm_dir, flags, zig="zig"):
     return 0
 
 
-def publish_objects(root, llvm_dir):
+def publish_objects(root, llvm_dir, clang, flags):
     # The LLVM directory is private to one locked build. Clang deletes input
     # bitcode after compilation, so probe records its digests before any Clang
     # child starts; no producer may mutate inputs until publication finishes.
@@ -437,6 +450,8 @@ def publish_objects(root, llvm_dir):
         raise ValueError("Invalid object cache identity marker")
     if not isinstance(provenance, dict) or not valid_abi_provenance(provenance.get("abi")):
         raise ValueError("Invalid object cache ABI provenance")
+    if expected.get("clang") != clang_identity(clang, flags) or expected.get("flags") != flags:
+        raise ValueError("Clang native target or compile flags changed during compilation")
     if sha256(llvm_dir / "batch-plan.tsv") != expected.get("batch_plan_sha256"):
         raise ValueError("LLVM batch plan changed during compilation")
     if sha256(llvm_dir / "program.meta") != expected.get("program_meta_sha256"):
@@ -494,13 +509,13 @@ def main(argv):
     if len(argv) == 8 and argv[1] in ("probe-objects", "publish-objects"):
         _, action, root, clang, project_root, llvm_dir, flags_raw, zig = argv
         flags = flags_raw.split(",")
-        if not flags or any(not re.fullmatch(r"-[A-Za-z0-9-]+", flag)
+        if not flags or any(not re.fullmatch(r"-[A-Za-z0-9-]+(?:=[A-Za-z0-9_.-]+)?", flag)
                             for flag in flags):
             raise ValueError("Invalid Clang compile flags")
         if action == "probe-objects":
             return probe_objects(Path(root), clang, Path(project_root),
                                  Path(llvm_dir), flags, zig)
-        return publish_objects(Path(root), Path(llvm_dir))
+        return publish_objects(Path(root), Path(llvm_dir), clang, flags)
     if len(argv) != 7 or argv[1] not in ("probe", "publish"):
         raise SystemExit("usage: extraction_cache.py probe|publish CACHE_ROOT EXTRACTOR DUMP_SHA256 INDEX_SHA256 EXPANDER_ROOT")
     _, action, root, executable, dump_sha256, index_sha256, output = argv
