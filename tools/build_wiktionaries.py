@@ -588,6 +588,31 @@ def require_index_identity(path, expected):
         raise ValueError('Page index changed between shards')
 
 
+def cleanup_dead_private_shards(shards_root):
+    """Remove only a private shard whose exact native writer PID is gone.
+
+    The edition lock excludes another controller, but subprocesses do not hold
+    it. A detached native builder can survive its controller, so lock ownership
+    alone is never evidence that its private output is inactive.
+    """
+    for partial in shards_root.iterdir():
+        matched=re.fullmatch(r'\.[0-9]{8}\.part-([0-9]+)',partial.name)
+        if not matched: continue
+        if partial.is_symlink() or not partial.is_dir():
+            raise ValueError(f'Unsafe partial shard: {partial}')
+        pid=int(matched.group(1))
+        try:
+            with open(f'/proc/{pid}/stat','rb') as process:
+                process.read(1)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise ValueError(f'Cannot establish private shard owner death: {partial}') from error
+        else:
+            raise ValueError(f'Native builder PID still exists; preserve partial shard: {partial}')
+        shutil.rmtree(partial)
+
+
 def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxiliary_snapshots=None):
     state={
         'version':SHARD_STATE_VERSION,
@@ -760,46 +785,108 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         raise ValueError('Page index count differs from staged source pages')
 
     shards_root=workspace/'shards';shards_root.mkdir(exist_ok=True)
+    cleanup_dead_private_shards(shards_root)
     shard_paths=[]
-    for start in range(0,indexed_pages,SHARD_PAGES):
-        limit=min(SHARD_PAGES,indexed_pages-start)
-        offset=index['offsets'][start]
-        require_index_identity(index_path,index)
+    # A verified or complete-but-unmarked contiguous prefix is reusable after
+    # a crash. The native continuous builder owns only an absent suffix, so it
+    # cannot replace an existing shard directory.
+    shard_starts=list(range(0,indexed_pages,SHARD_PAGES))
+    prefix=[]
+    for start in shard_starts:
         shard=shards_root/f'{start:08d}'
+        if not shard.exists(): break
+        limit=min(SHARD_PAGES,indexed_pages-start)
+        require_index_identity(index_path,index)
+        try:
+            validate_page_coverage(shard,start,limit,index,index['offsets'][start])
+        except ValueError:
+            print(f'Rebuilding shard with invalid coverage {items[0]["wiki"]} start={start}',flush=True)
+            shutil.rmtree(shard)
+            break
+        # A verifier failure can be a transient resource/tool failure. Preserve
+        # the existing shard and stop; only invalid coverage permits deletion.
+        timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
+                  edition,date,'resume_shard_verify',start_page=start,pages=limit)
+        require_index_identity(index_path,index)
         marker=shard/'.verified'
-        if marker.is_file():
-            try:
-                validate_page_coverage(shard,start,limit,index,offset)
-                timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
-                          edition,date,'resume_shard_verify',start_page=start,pages=limit)
-            except (subprocess.CalledProcessError,ValueError):
-                print(f'Rebuilding invalid resumed shard {items[0]["wiki"]} start={start}',flush=True)
-                shutil.rmtree(shard)
-            else:
+        if not marker.is_file(): marker.write_text('verified\n')
+        prefix.append(shard)
+    missing_starts=shard_starts[len(prefix):]
+    shard_paths=list(prefix)
+    continuous_handled=not missing_starts
+    # A noncontiguous set of completed shards can arise from older builds.
+    # Preserve those outputs and use the existing single-shard fallback.
+    if missing_starts and all(not (shards_root/f'{start:08d}').exists() for start in missing_starts):
+        first=missing_starts[0]
+        require_index_identity(index_path,index)
+        timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shards_root),
+                   '--expander-root',str(expander),'--start-page',str(first),
+                   '--limit-pages',str(indexed_pages-first),
+                   '--index-byte-offset',str(index['offsets'][first]),
+                   '--shard-pages',str(SHARD_PAGES),
+                   '--workers',str(expansion_workers),'--now-unix',str(now_unix)],
+                  edition,date,'continuous_shard_build',start_page=first,pages=indexed_pages-first)
+        require_index_identity(index_path,index)
+        for start in missing_starts:
+            shard=shards_root/f'{start:08d}'
+            limit=min(SHARD_PAGES,indexed_pages-start)
+            validate_page_coverage(shard,start,limit,index,index['offsets'][start])
+            timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
+                      edition,date,'shard_verify',start_page=start,pages=limit)
+            (shard/'.verified').write_text('verified\n')
+            require_index_identity(index_path,index)
+        shard_paths=prefix+[shards_root/f'{start:08d}' for start in missing_starts]
+        continuous_handled=True
+    if not continuous_handled:
+        shard_paths=[]
+        for start in range(0,indexed_pages,SHARD_PAGES):
+            limit=min(SHARD_PAGES,indexed_pages-start)
+            offset=index['offsets'][start]
+            require_index_identity(index_path,index)
+            shard=shards_root/f'{start:08d}'
+            marker=shard/'.verified'
+            if shard.exists():
+                try:
+                    validate_page_coverage(shard,start,limit,index,offset)
+                except ValueError:
+                    print(f'Rebuilding shard with invalid coverage {items[0]["wiki"]} start={start}',flush=True)
+                    shutil.rmtree(shard)
+                else:
+                    timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
+                              edition,date,'resume_shard_verify',start_page=start,pages=limit)
+                    require_index_identity(index_path,index)
+                    if not marker.is_file(): marker.write_text('verified\n')
+                    shard_paths.append(shard);continue
+            last_error=None
+            for attempt in range(1,SHARD_RETRIES+1):
+                if shard.exists(): shutil.rmtree(shard)
+                try:
+                    timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shard),
+                                 '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
+                                 '--index-byte-offset',str(offset),
+                                 '--workers',str(expansion_workers),'--now-unix',str(now_unix)],
+                              edition,date,'shard_build',start_page=start,pages=limit,attempt=attempt)
+                except subprocess.CalledProcessError as error:
+                    last_error=error
+                    print(f'Retrying failed shard builder {items[0]["wiki"]} start={start} attempt={attempt}/{SHARD_RETRIES}',flush=True)
+                    continue
                 require_index_identity(index_path,index)
-                shard_paths.append(shard);continue
-        last_error=None
-        for attempt in range(1,SHARD_RETRIES+1):
-            if shard.exists(): shutil.rmtree(shard)
-            try:
-                timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shard),
-                             '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
-                             '--index-byte-offset',str(offset),
-                             '--workers',str(expansion_workers),'--now-unix',str(now_unix)],
-                          edition,date,'shard_build',start_page=start,pages=limit,attempt=attempt)
-                require_index_identity(index_path,index)
-                validate_page_coverage(shard,start,limit,index,offset)
+                try:
+                    validate_page_coverage(shard,start,limit,index,offset)
+                except ValueError as error:
+                    last_error=error
+                    print(f'Retrying shard with invalid coverage {items[0]["wiki"]} start={start} attempt={attempt}/{SHARD_RETRIES}',flush=True)
+                    continue
+                # Preserve a completed shard if verification fails because of
+                # a transient tool/resource error. The next run revalidates it.
                 timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
                           edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
-            except (subprocess.CalledProcessError,ValueError) as error:
-                last_error=error
-                print(f'Retrying shard {items[0]["wiki"]} start={start} attempt={attempt}/{SHARD_RETRIES}',flush=True)
-                continue
-            marker.write_text('verified\n')
-            last_error=None
-            break
-        if last_error is not None: raise last_error
-        shard_paths.append(shard)
+                require_index_identity(index_path,index)
+                marker.write_text('verified\n')
+                last_error=None
+                break
+            if last_error is not None: raise last_error
+            shard_paths.append(shard)
 
     require_index_identity(index_path,index)
     actual_pages=sum(validate_page_coverage(path,start,min(SHARD_PAGES,indexed_pages-start),index,index['offsets'][start])['pages_seen']

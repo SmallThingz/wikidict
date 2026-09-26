@@ -13,6 +13,7 @@ const Options = struct {
     expander_root: []const u8 = "",
     workers: usize = 1,
     now_unix: ?i64 = null,
+    shard_pages: ?usize = null,
 };
 
 const PageIndexIdentity = struct {
@@ -368,6 +369,11 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len) return error.Usage;
             out.limit_pages = try std.fmt.parseInt(usize, args[index], 10);
+        } else if (std.mem.eql(u8, arg, "--shard-pages")) {
+            index += 1;
+            if (index >= args.len or out.shard_pages != null) return error.Usage;
+            out.shard_pages = try std.fmt.parseInt(usize, args[index], 10);
+            if (out.shard_pages.? == 0) return error.Usage;
         } else if (std.mem.eql(u8, arg, "--workers")) {
             index += 1;
             if (index >= args.len) return error.Usage;
@@ -387,6 +393,10 @@ fn parseOptions(args: []const []const u8) !Options {
         index += 1;
     }
     if (out.expander_root.len == 0) return error.Usage;
+    if (out.shard_pages) |shard_pages| {
+        if (out.index_byte_offset == null or out.limit_pages == null or out.limit_pages.? == 0 or
+            out.start_page % shard_pages != 0) return error.Usage;
+    }
     return out;
 }
 
@@ -399,6 +409,17 @@ test "blob shard options preserve explicit byte offset and page limit" {
     try std.testing.expectEqual(@as(usize, 100), options.start_page);
     try std.testing.expectEqual(@as(?usize, 2048), options.index_byte_offset);
     try std.testing.expectEqual(@as(?usize, 100), options.limit_pages);
+    const continuous = try parseOptions(&.{
+        "dict-blob-build", "dump.zst", "shards", "--expander-root", "bundle",
+        "--start-page", "100", "--index-byte-offset", "2048", "--limit-pages", "7",
+        "--shard-pages", "100",
+    });
+    try std.testing.expectEqual(@as(?usize, 100), continuous.shard_pages);
+    try std.testing.expectError(error.Usage, parseOptions(&.{
+        "dict-blob-build", "dump.zst", "shards", "--expander-root", "bundle",
+        "--start-page", "101", "--index-byte-offset", "2048", "--limit-pages", "7",
+        "--shard-pages", "100",
+    }));
     try std.testing.expectError(error.Usage, parseOptions(&.{
         "dict-blob-build",     "dump.bz2", "out",                 "--expander-root", "bundle",
         "--index-byte-offset", "0",        "--index-byte-offset", "1",
@@ -454,15 +475,173 @@ test "page coverage rejects short explicit shards and records actual selection" 
     try std.testing.expectEqual(@as(usize, 3), full.pages_seen);
 }
 
+fn dispatchIndexedPage(
+    pool: *ExpansionPool,
+    writer: *encoder.blob_builder.Writer,
+    dump: *dump_source.SourceReader,
+    kind: dump_source.PageIndexKind,
+    line: []const u8,
+    ordinal: usize,
+) !void {
+    const page = try dump_source.parsePageIndexLine(kind, line);
+    if (!page.has_source or !dump_source.relevantNamespace(page.ns)) return;
+    const slot = try pool.acquire(writer);
+    const page_allocator = slot.arena.allocator();
+    const raw_source = try dump.readAlloc(page_allocator, page.source);
+    const source = if (page.source_needs_decode)
+        try xml_decode.decodeSinglePassAlloc(page_allocator, raw_source)
+    else
+        raw_source;
+    slot.dispatch(.{
+        .ordinal = @intCast(ordinal),
+        .ns = page.ns,
+        .title = page.title,
+        .source = source,
+    });
+}
+
+const PendingShard = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    temporary: []const u8,
+    final: []const u8,
+    writer: ?encoder.blob_builder.Writer,
+    start: usize,
+    requested: usize,
+    offset: usize,
+    selected: usize = 0,
+    published: bool = false,
+
+    fn init(io: std.Io, a: std.mem.Allocator, root: []const u8, start: usize, requested: usize, offset: usize, codes: encoder.blob_builder.LanguageCodes) !PendingShard {
+        const final = try std.fmt.allocPrint(a, "{s}/{d:0>8}", .{ root, start });
+        errdefer a.free(final);
+        // The controller holds the edition lock. Refuse an existing final path
+        // instead of letting rename replace an unverified or verified shard.
+        if (std.Io.Dir.cwd().access(io, final, .{})) |_| return error.ShardAlreadyExists else |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        }
+        const temporary = try std.fmt.allocPrint(a, "{s}/.{d:0>8}.part-{d}", .{ root, start, std.os.linux.getpid() });
+        errdefer a.free(temporary);
+        try std.Io.Dir.cwd().createDir(io, temporary, .default_dir);
+        errdefer std.Io.Dir.cwd().deleteTree(io, temporary) catch {};
+        var writer = try encoder.blob_builder.Writer.init(io, a, temporary);
+        writer.language_codes = codes;
+        return .{ .io = io, .allocator = a, .temporary = temporary, .final = final,
+            .writer = writer, .start = start, .requested = requested, .offset = offset };
+    }
+
+    fn deinit(self: *PendingShard) void {
+        if (self.writer) |*writer| writer.deinit();
+        if (!self.published) std.Io.Dir.cwd().deleteTree(self.io, self.temporary) catch {};
+        self.allocator.free(self.temporary);
+        self.allocator.free(self.final);
+        self.* = undefined;
+    }
+
+    fn publish(self: *PendingShard, pool: *ExpansionPool, codes: encoder.blob_builder.LanguageCodes, index_path: []const u8, identity: PageIndexIdentity) !void {
+        if (self.selected != self.requested) return error.ShortPageIndex;
+        const writer = if (self.writer) |*value| value else return error.WriterFinished;
+        try pool.drain(writer);
+        const stats = try writer.finish(codes);
+        if (stats.pages_seen != self.selected) return error.PageCoverageMismatch;
+        try writePageCoverage(self.io, self.allocator, self.temporary, .{
+            .start_page = self.start,
+            .requested_limit = self.requested,
+            .pages_seen = self.selected,
+            .index_byte_offset = self.offset,
+            .page_index_identity = identity,
+        });
+        if (!std.meta.eql(identity, try pathIdentity(self.io, index_path))) return error.PageIndexChanged;
+        writer.deinit();
+        self.writer = null;
+        if (std.Io.Dir.cwd().access(self.io, self.final, .{})) |_| return error.ShardAlreadyExists else |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        }
+        try std.Io.Dir.cwd().rename(self.temporary, std.Io.Dir.cwd(), self.final, self.io);
+        self.published = true;
+        std.debug.print("continuous shard published start={d} pages={d} main_pages={d} language_records={d} fallback_pages={d}\n", .{
+            self.start, stats.pages_seen, stats.main_pages, stats.language_records, stats.fallback_pages,
+        });
+    }
+};
+
+fn runContinuous(
+    io: std.Io,
+    a: std.mem.Allocator,
+    output_root: []const u8,
+    options: Options,
+    codes: encoder.blob_builder.LanguageCodes,
+    pool: *ExpansionPool,
+    dump: *dump_source.SourceReader,
+    page_index: *const Mapped,
+    kind: dump_source.PageIndexKind,
+    index_path: []const u8,
+) !void {
+    const shard_pages = options.shard_pages.?;
+    const total = options.limit_pages.?;
+    try std.Io.Dir.cwd().createDirPath(io, output_root);
+    const index_start = try pageIndexStart(page_index.bytes, options);
+    var lines = std.mem.splitScalar(u8, index_start.bytes, '\n');
+    var next_byte_offset = options.index_byte_offset.?;
+    var ordinal = index_start.ordinal;
+    var selected: usize = 0;
+    var next_progress = std.Io.Clock.awake.now(io).toNanoseconds() + 10 * std.time.ns_per_s;
+    var pending: ?PendingShard = null;
+    defer if (pending) |*shard| shard.deinit();
+    while (lines.next()) |line| {
+        const line_offset = next_byte_offset;
+        next_byte_offset += line.len;
+        if (next_byte_offset < page_index.bytes.len) next_byte_offset += 1;
+        if (line.len == 0 or line[0] == '#') continue;
+        const page_ordinal = ordinal;
+        ordinal += 1;
+        if (page_ordinal < options.start_page) continue;
+        if (selected == total) break;
+        if (pending != null and pending.?.selected == pending.?.requested) {
+            try pending.?.publish(pool, codes, index_path, page_index.identity);
+            pending.?.deinit();
+            pending = null;
+        }
+        if (pending == null) {
+            const start = options.start_page + selected;
+            const requested = @min(shard_pages, total - selected);
+            const offset = if (start == 0) 0 else line_offset;
+            pending = try PendingShard.init(io, a, output_root, start, requested, offset, codes);
+        }
+        const shard = &pending.?;
+        shard.selected += 1;
+        shard.writer.?.stats.pages_seen = shard.selected;
+        selected += 1;
+        try dispatchIndexedPage(pool, &shard.writer.?, dump, kind, line, page_ordinal);
+        const progress_now = std.Io.Clock.awake.now(io).toNanoseconds();
+        if (selected % 100_000 == 0 or progress_now >= next_progress) {
+            next_progress = progress_now + 10 * std.time.ns_per_s;
+            std.debug.print("page compilation progress selected={d} ordinal={d} shard_start={d} main_pages={d} language_records={d} workers={d}\n", .{
+                selected, page_ordinal, shard.start, shard.writer.?.stats.main_pages,
+                shard.writer.?.stats.language_records, pool.slots.len,
+            });
+        }
+    }
+    if (selected != total) return error.ShortPageIndex;
+    if (pending != null) {
+        try pending.?.publish(pool, codes, index_path, page_index.identity);
+        pending.?.deinit();
+        pending = null;
+    }
+    if (!std.meta.eql(page_index.identity, try pathIdentity(io, index_path))) return error.PageIndexChanged;
+}
+
 pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3) {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX] [--shard-pages N]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX] [--shard-pages N]\n", .{});
         return error.Usage;
     };
     const cpu_limit = @min(max_worker_count, std.Thread.getCpuCount() catch 1);
@@ -525,9 +704,6 @@ pub fn main(init: std.process.Init) !void {
     var pool = try ExpansionPool.init(init.io, a, options.expander_root, worker_path, args[1], options.workers, options.now_unix);
     defer pool.deinit();
 
-    var writer = try encoder.blob_builder.Writer.init(init.io, a, args[2]);
-    defer writer.deinit();
-    writer.language_codes = codes;
     const page_index_path = try std.fs.path.join(a, &.{ options.expander_root, "page-index.tsv" });
     defer a.free(page_index_path);
     var page_index = try mmapPath(init.io, page_index_path);
@@ -544,7 +720,14 @@ pub fn main(init: std.process.Init) !void {
         if (dump_source.isMultistream(page_index_kind)) stream_index_path else null,
     );
     defer dump.deinit();
+    if (options.shard_pages != null) {
+        try runContinuous(init.io, a, args[2], options, codes, &pool, &dump, &page_index, page_index_kind, page_index_path);
+        return;
+    }
 
+    var writer = try encoder.blob_builder.Writer.init(init.io, a, args[2]);
+    defer writer.deinit();
+    writer.language_codes = codes;
     const index_start = try pageIndexStart(page_index.bytes, options);
     var lines = std.mem.splitScalar(u8, index_start.bytes, '\n');
     var corpus_ordinal: usize = index_start.ordinal;
@@ -558,22 +741,7 @@ pub fn main(init: std.process.Init) !void {
         if (options.limit_pages) |limit| if (pages_selected >= limit) break;
         pages_selected += 1;
         writer.stats.pages_seen = pages_selected;
-        const page = try dump_source.parsePageIndexLine(page_index_kind, line);
-        if (page.has_source and dump_source.relevantNamespace(page.ns)) {
-            const slot = try pool.acquire(&writer);
-            const page_allocator = slot.arena.allocator();
-            const raw_source = try dump.readAlloc(page_allocator, page.source);
-            const source = if (page.source_needs_decode)
-                try xml_decode.decodeSinglePassAlloc(page_allocator, raw_source)
-            else
-                raw_source;
-            slot.dispatch(.{
-                .ordinal = @intCast(page_ordinal),
-                .ns = page.ns,
-                .title = page.title,
-                .source = source,
-            });
-        }
+        try dispatchIndexedPage(&pool, &writer, &dump, page_index_kind, line, page_ordinal);
         const progress_now = std.Io.Clock.awake.now(init.io).toNanoseconds();
         if (pages_selected % 100_000 == 0 or progress_now >= next_progress) {
             next_progress = progress_now + 10 * std.time.ns_per_s;

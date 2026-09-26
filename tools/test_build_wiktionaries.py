@@ -5,6 +5,7 @@ import hashlib
 import io
 import lzma
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -29,6 +30,22 @@ def decode_staged_dump(dump):
 
 
 def write_coverage(root, command=None):
+    if command and '--shard-pages' in command:
+        index=Path(command[command.index('--expander-root')+1])/'page-index.tsv'
+        inspected=b.inspect_page_index(index)
+        start=int(command[command.index('--start-page')+1])
+        total=int(command[command.index('--limit-pages')+1])
+        step=int(command[command.index('--shard-pages')+1])
+        for shard_start in range(start,start+total,step):
+            shard=root/f'{shard_start:08d}'
+            shard.mkdir(parents=True,exist_ok=True)
+            record=dict(version=1,start_page=shard_start,
+                        requested_limit=min(step,start+total-shard_start),
+                        pages_seen=min(step,start+total-shard_start),
+                        index_byte_offset=inspected['offsets'][shard_start],
+                        page_index_identity=inspected['identity'])
+            (shard/'page-coverage.json').write_text(json.dumps(record))
+        return
     start=limit=offset=0
     identity=dict(device_major=0,device_minor=0,inode=0,size=0,mtime_ns=0)
     if command and '--expander-root' in command:
@@ -153,7 +170,7 @@ class BuildTest(unittest.TestCase):
                     (exp/'page-index.tsv').write_text('# index\n\np0\n')
                     (exp/'dict-bundle-expander').write_text('worker')
                 if 'build-blobs' in command:
-                    dest=Path(command[command.index('--')+2]);dest.mkdir();write_coverage(dest,command)
+                    dest=Path(command[command.index('--')+2]);dest.mkdir(exist_ok=True);write_coverage(dest,command)
                 if 'merge-blobs' in command:
                     Path(command[command.index('--')+1]).mkdir()
             with patch.object(b,'run_checked',side_effect=run):
@@ -250,7 +267,7 @@ class BuildTest(unittest.TestCase):
             def run(command):
                 calls.append(command)
                 if 'build-blobs' in command:
-                    dest=Path(command[command.index('--')+2]);dest.mkdir();write_coverage(dest,command)
+                    dest=Path(command[command.index('--')+2]);dest.mkdir(exist_ok=True);write_coverage(dest,command)
                 if 'merge-blobs' in command:
                     Path(command[command.index('--')+1]).mkdir()
             with patch.object(b,'run_checked',side_effect=run):
@@ -260,6 +277,93 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(builds[0][builds[0].index('--workers')+1],'4')
             self.assertEqual(builds[0][builds[0].index('--index-byte-offset')+1],'0')
             self.assertEqual(json.loads((root/'staging/page-coverage.json').read_text())['pages_seen'],1)
+
+    def test_partial_shard_with_live_writer_pid_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shards=Path(tmp)
+            active=shards/f'.00000000.part-{os.getpid()}'
+            active.mkdir();(active/'sentinel').write_text('active')
+            with self.assertRaisesRegex(ValueError,'PID still exists'):
+                b.cleanup_dead_private_shards(shards)
+            self.assertEqual((active/'sentinel').read_text(),'active')
+
+    def test_partial_shard_with_absent_writer_pid_is_cleaned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shards=Path(tmp)
+            stale=shards/'.00000000.part-999999999'
+            stale.mkdir();(stale/'sentinel').write_text('stale')
+            b.cleanup_dead_private_shards(shards)
+            self.assertFalse(stale.exists())
+
+    def test_resumed_prefix_verifier_failure_preserves_valid_shard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander'
+            exp.mkdir(parents=True)
+            (workspace/'expander/.incomplete').write_text('expander ready')
+            (exp/'page-index.tsv').write_text('p0\n')
+            (exp/'dict-bundle-expander').write_text('worker')
+            cache=workspace/'input';cache.mkdir()
+            (cache/'.complete.json').write_text(json.dumps({'source_pages':1}))
+            shard=workspace/'shards/00000000';shard.mkdir(parents=True)
+            command=['--expander-root',str(exp),'--start-page','0',
+                     '--limit-pages','1','--index-byte-offset','0']
+            write_coverage(shard,command)
+            (shard/'.verified').write_text('verified\n')
+            (shard/'sentinel').write_text('retain')
+            calls=[]
+            def run(command):
+                calls.append(command)
+                if 'verify-blobs' in command:
+                    raise subprocess.CalledProcessError(137,command)
+                self.fail('No rebuild or merge should follow a verifier tool failure')
+            with patch.object(b,'run_checked',side_effect=run):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',4,
+                                    [{'wiki':'test','date':'20260901'}],123)
+            self.assertEqual((shard/'sentinel').read_text(),'retain')
+            self.assertTrue((shard/'page-coverage.json').is_file())
+            self.assertFalse(any('build-blobs' in c or 'merge-blobs' in c for c in calls))
+            with patch.object(b,'require_index_identity',side_effect=ValueError('index changed')):
+                with self.assertRaisesRegex(ValueError,'index changed'):
+                    b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',4,
+                                    [{'wiki':'test','date':'20260901'}],123)
+            self.assertEqual((shard/'sentinel').read_text(),'retain')
+
+    def test_noncontiguous_resumed_verifier_failure_preserves_later_shard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander'
+            exp.mkdir(parents=True)
+            (workspace/'expander/.incomplete').write_text('expander ready')
+            (exp/'page-index.tsv').write_text('p0\np1\np2\n')
+            (exp/'dict-bundle-expander').write_text('worker')
+            cache=workspace/'input';cache.mkdir()
+            (cache/'.complete.json').write_text(json.dumps({'source_pages':3}))
+            shards=workspace/'shards';shards.mkdir()
+            with patch.object(b,'SHARD_PAGES',1):
+                offsets=b.inspect_page_index(exp/'page-index.tsv')['offsets']
+            for start in (0,2):
+                shard=shards/f'{start:08d}';shard.mkdir()
+                command=['--expander-root',str(exp),'--start-page',str(start),
+                         '--limit-pages','1','--index-byte-offset',str(offsets[start])]
+                write_coverage(shard,command)
+                (shard/'.verified').write_text('verified\n')
+            (shards/'00000002/sentinel').write_text('retain')
+            calls=[]
+            def run(command):
+                calls.append(command)
+                if 'build-blobs' in command:
+                    dest=Path(command[command.index('--')+2]);dest.mkdir()
+                    write_coverage(dest,command)
+                elif 'verify-blobs' in command and str(shards/'00000002') in command:
+                    raise subprocess.CalledProcessError(137,command)
+                elif 'merge-blobs' in command:
+                    self.fail('Merge must not run after a verifier failure')
+            with patch.object(b,'SHARD_PAGES',1),patch.object(b,'run_checked',side_effect=run):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',4,
+                                    [{'wiki':'test','date':'20260901'}],123)
+            self.assertEqual((shards/'00000002/sentinel').read_text(),'retain')
+            self.assertFalse(any('merge-blobs' in c for c in calls))
 
     def test_verified_publication_missing_coverage_preserves_staging(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -853,7 +957,7 @@ class BuildTest(unittest.TestCase):
                     (exp/'page-index.tsv').write_text('0\n')
                     (exp/'dict-bundle-expander').write_text('worker')
                 elif 'build-blobs' in command:
-                    dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True)
+                    dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True,exist_ok=True)
                     write_coverage(dest,command)
                 elif 'merge-blobs' in command:
                     merges.append(command)
@@ -896,7 +1000,7 @@ class BuildTest(unittest.TestCase):
                     (exp/'page-index.tsv').write_text('0\n1\n')
                     (exp/'dict-bundle-expander').write_text('worker')
                 elif step=='build-blobs':
-                    dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True)
+                    dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True,exist_ok=True)
                     write_coverage(dest,command)
                     (dest/'fallback-pages.jsonl').write_text('')
                     (dest/'languages.tsv').write_text('heading\n')
@@ -922,9 +1026,10 @@ class BuildTest(unittest.TestCase):
                              {'category-stats':hashlib.sha256(category.read_bytes()).hexdigest()})
             for flag in ('--verified-dump-sha256','--verified-index-sha256'):
                 self.assertRegex(expander_call[expander_call.index(flag)+1],r'^[0-9a-f]{64}$')
-            self.assertEqual(len(blob_calls),2)
-            self.assertEqual([c[c.index('--start-page')+1] for c in blob_calls],['0','1'])
-            self.assertEqual([c[c.index('--index-byte-offset')+1] for c in blob_calls],['0','2'])
+            self.assertEqual(len(blob_calls),1)
+            self.assertEqual(blob_calls[0][blob_calls[0].index('--start-page')+1],'0')
+            self.assertEqual(blob_calls[0][blob_calls[0].index('--index-byte-offset')+1],'0')
+            self.assertEqual(blob_calls[0][blob_calls[0].index('--shard-pages')+1],'1')
             self.assertEqual({c[c.index('--now-unix')+1] for c in blob_calls},{'123'})
             self.assertEqual(sum('merge-blobs' in c for c in calls),1)
             self.assertGreaterEqual(sum('verify-blobs' in c for c in calls),3)
