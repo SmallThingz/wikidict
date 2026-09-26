@@ -109,11 +109,13 @@ pub fn build(b: *std.Build) void {
     });
     module_extract_exe.root_module.link_libc = true;
     module_extract_exe.root_module.linkSystemLibrary("bz2", .{});
+    module_extract_exe.root_module.linkSystemLibrary("zstd", .{});
     const page_title_index_exe = addCliExecutable(b, "dict-page-title-index", b.path("tools/page_title_index.zig"), target, optimize, &.{
         .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod },
     });
     page_title_index_exe.root_module.link_libc = true;
     page_title_index_exe.root_module.linkSystemLibrary("bz2", .{});
+    page_title_index_exe.root_module.linkSystemLibrary("zstd", .{});
     const blob_build_exe = addCliExecutable(b, "dict-blob-build", b.path("tools/blob_build.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
@@ -122,6 +124,7 @@ pub fn build(b: *std.Build) void {
     });
     blob_build_exe.root_module.link_libc = true;
     blob_build_exe.root_module.linkSystemLibrary("bz2", .{});
+    blob_build_exe.root_module.linkSystemLibrary("zstd", .{});
     addPublicRunStep(b, "build-blobs", "Encode blobs with an already compiled bundle expander", addRunArtifactCommand(b, blob_build_exe, &.{}, b.args), &.{});
     const blob_merge_exe = addCliExecutable(b, "dict-blob-merge", b.path("tools/blob_merge.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
@@ -245,6 +248,7 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     wikimedia_dump_tests.root_module.linkSystemLibrary("bz2", .{});
+    wikimedia_dump_tests.root_module.linkSystemLibrary("zstd", .{});
     const blob_query_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/frontend/main.zig"),
@@ -278,6 +282,7 @@ pub fn build(b: *std.Build) void {
     });
     lua_tests.root_module.linkSystemLibrary("LLVM", .{ .use_pkg_config = .no });
     lua_tests.root_module.linkSystemLibrary("bz2", .{});
+    lua_tests.root_module.linkSystemLibrary("zstd", .{});
     const lua_static_fields_test_mod = b.createModule(.{
         .root_source_file = b.path("src/lua/abi/static_fields.zig"),
         .target = target,

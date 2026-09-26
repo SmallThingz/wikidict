@@ -72,9 +72,11 @@ can depend on pages outside the main and Template namespaces, so an articles-onl
 dump is not sufficient.
 
 For corpus builds, keep the Wikimedia dumps compressed. The builder streams
-their XML through bounded memory and writes page-aligned bzip2 members with
+their XML through bounded memory and writes page-aligned Zstandard frames with
 an offset index for random access. Downloaded file boundaries are not usable
 as page-stream boundaries: a single meta-current part can expand to gigabytes.
+Corpus staging requires Python 3.14's `compression.zstd`; the native build tools
+link against libbz2 and libzstd.
 
 ```sh
 python tools/download_wiktionaries.py --out data/dumps --wikis enwiktionary
@@ -84,10 +86,11 @@ python tools/build_wiktionaries.py --in data/dumps --out data/dictionaries \
 
 `build-dictionary` still accepts decompressed XML for small one-off fixtures, but
 the corpus builder does **not** materialize a decompressed `pages.xml` scratch
-file. Compressed staging targets 4 MiB per member, with a 64 MiB hard cap for
+file. Compressed staging targets 256 KiB per frame, with a 64 MiB hard cap for
 large pages. All XML bytes and page order are preserved across multipart and
 concatenated-stream inputs. This requires recompression and compressed scratch
-writes; staging reports page counts, byte counts and elapsed time. Up to four
+writes; staging uses Zstandard level 1 and reports page counts, byte counts and
+elapsed time. Small frames reduce decompression work for random page reads. Up to four
 ordinary members compress concurrently, with at most 32 MiB of input queued.
 Larger members drain the queue and compress synchronously. Staging removes both
 partial outputs if any queued compression or output write fails.
@@ -136,10 +139,12 @@ The corpus builder is intentionally conservative on developer machines:
 - release compression uses 1 MiB XZ blocks at preset `-6`; higher presets did
   not improve block utilization enough to justify their CPU cost.
 
-The native dump reader decodes an indexed bzip2 member in one pass using a 64 KiB input
-buffer. It rejects trailing streams, truncated input and decoded members over
-128 MiB rather than allocating an entire compressed part or accepting a partial
-decode. Direct `zig build` fixture commands do not pass through the corpus
+The native dump reader accepts the Zstandard v3 page index and retains support
+for the bzip2 v2 index. It validates each Zstandard frame's magic, exact compressed
+span and known decoded length before allocating its output, with a 128 MiB decoded
+limit. It rejects skippable frames, trailing streams and truncated input. The
+bzip2 reader uses a 64 KiB input buffer and the same decoded-size limit.
+Direct `zig build` fixture commands do not pass through the corpus
 supervisor and must be launched with appropriate external limits.
 
 When a user explicitly accepts sampled limits instead of a kernel aggregate cap,

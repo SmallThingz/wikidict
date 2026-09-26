@@ -33,6 +33,7 @@ pub const TemplateSource = @import("template_source.zig").TemplateSource;
 pub const TemplateSourceWriter = @import("template_source.zig").Writer;
 
 pub const page_index_v2_header = "# dict-page-index-v2\tmultistream-bz2";
+pub const page_index_v3_header = "# dict-page-index-v3\tmultistream-zstd";
 pub const stream_index_header = "# dict-dump-streams-v1";
 
 pub const page_title_index_filename = "page-title-index.bin";
@@ -339,8 +340,7 @@ pub const StreamIterator = struct {
 };
 
 pub fn deriveMultistreamIndexPath(allocator: std.mem.Allocator, dump_path: []const u8) ![]u8 {
-    const suffix = ".xml.bz2";
-    if (!std.mem.endsWith(u8, dump_path, suffix)) return error.MultistreamIndexPathRequired;
+    const suffix = if (std.mem.endsWith(u8, dump_path, ".xml.bz2")) ".xml.bz2" else if (std.mem.endsWith(u8, dump_path, ".xml.zst")) ".xml.zst" else return error.MultistreamIndexPathRequired;
     return std.fmt.allocPrint(allocator, "{s}-index.txt.bz2", .{dump_path[0 .. dump_path.len - suffix.len]});
 }
 
@@ -403,19 +403,46 @@ fn decompressMemberLimitedAlloc(io: std.Io, allocator: std.mem.Allocator, file: 
     }
 }
 
+extern fn ZSTD_getFrameContentSize(src: [*]const u8, src_size: usize) u64;
+extern fn ZSTD_findFrameCompressedSize(src: [*]const u8, src_size: usize) usize;
+extern fn ZSTD_decompress(dst: [*]u8, dst_capacity: usize, src: [*]const u8, src_size: usize) usize;
+extern fn ZSTD_isError(code: usize) c_uint;
+
+pub fn decompressZstdMemberAlloc(io: std.Io, allocator: std.mem.Allocator, file: *std.Io.File, span: StreamSpan) ![]u8 {
+    if (span.len < 6 or span.len > max_member_uncompressed_bytes + 1024 * 1024) return error.CompressedMemberTooLarge;
+    _ = std.math.add(u64, span.offset, span.len) catch return error.InvalidZstdMember;
+    const input = try allocator.alloc(u8, @intCast(span.len));
+    defer allocator.free(input);
+    if (try file.readPositionalAll(io, input, span.offset) != input.len) return error.TruncatedDump;
+    // The staged format contains ordinary Zstd frames, never skippable frames.
+    if (!std.mem.eql(u8, input[0..4], "\x28\xb5\x2f\xfd")) return error.InvalidZstdMember;
+    const frame_len = ZSTD_findFrameCompressedSize(input.ptr, input.len);
+    if (ZSTD_isError(frame_len) != 0 or frame_len != input.len) return error.InvalidZstdMember;
+    const output_len64 = ZSTD_getFrameContentSize(input.ptr, input.len);
+    if (output_len64 == std.math.maxInt(u64) or output_len64 == std.math.maxInt(u64) - 1) return error.InvalidZstdMember;
+    if (output_len64 > max_member_uncompressed_bytes) return error.ZstdMemberTooLarge;
+    const output_len: usize = @intCast(output_len64);
+    const output = try allocator.alloc(u8, output_len);
+    errdefer allocator.free(output);
+    const decoded = ZSTD_decompress(output.ptr, output.len, input.ptr, input.len);
+    if (ZSTD_isError(decoded) != 0 or decoded != output.len) return error.InvalidZstdMember;
+    return output;
+}
+
 pub const MultistreamWalker = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     file: std.Io.File,
     streams: StreamIterator,
     member: []u8 = &.{},
+    kind: PageIndexKind,
 
-    pub fn open(io: std.Io, allocator: std.mem.Allocator, dump_path: []const u8, index_path: []const u8) !MultistreamWalker {
+    pub fn open(io: std.Io, allocator: std.mem.Allocator, dump_path: []const u8, index_path: []const u8, kind: PageIndexKind) !MultistreamWalker {
         var file = try std.Io.Dir.cwd().openFile(io, dump_path, .{});
         errdefer file.close(io);
         var streams = try StreamIterator.open(io, allocator, dump_path, index_path);
         errdefer streams.close();
-        return .{ .io = io, .allocator = allocator, .file = file, .streams = streams };
+        return .{ .io = io, .allocator = allocator, .file = file, .streams = streams, .kind = kind };
     }
 
     pub fn deinit(self: *MultistreamWalker) void {
@@ -431,22 +458,32 @@ pub const MultistreamWalker = struct {
             self.member = &.{};
         }
         const stream = try self.streams.next() orelse return null;
-        self.member = try decompressMemberAlloc(self.io, self.allocator, &self.file, stream.span);
+        self.member = if (self.kind == .multistream_zstd)
+            try decompressZstdMemberAlloc(self.io, self.allocator, &self.file, stream.span)
+        else
+            try decompressMemberAlloc(self.io, self.allocator, &self.file, stream.span);
         return .{ .id = stream.id, .span = stream.span, .bytes = self.member };
     }
 };
 
-pub const PageIndexKind = enum { raw_xml, multistream_bz2 };
+pub const PageIndexKind = enum { raw_xml, multistream_bz2, multistream_zstd };
+
+pub fn isMultistream(kind: PageIndexKind) bool {
+    return kind != .raw_xml;
+}
+
+pub const CompressedLocation = struct { stream_id: u32, offset: usize, len: usize };
 
 pub const PageSource = union(PageIndexKind) {
     raw_xml: struct { offset: u64, len: usize },
-    multistream_bz2: struct { stream_id: u32, offset: usize, len: usize },
+    multistream_bz2: CompressedLocation,
+    multistream_zstd: CompressedLocation,
 };
 
 pub fn sourceLen(source: PageSource) usize {
     return switch (source) {
         .raw_xml => |loc| loc.len,
-        .multistream_bz2 => |loc| loc.len,
+        .multistream_bz2, .multistream_zstd => |loc| loc.len,
     };
 }
 
@@ -477,11 +514,14 @@ pub fn parsePageIndexLine(kind: PageIndexKind, line: []const u8) !IndexedPage {
             .offset = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10),
             .len = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10),
         } },
-        .multistream_bz2 => .{ .multistream_bz2 = .{
-            .stream_id = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10),
-            .offset = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10),
-            .len = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10),
-        } },
+        .multistream_bz2, .multistream_zstd => blk: {
+            const loc: CompressedLocation = .{
+                .stream_id = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10),
+                .offset = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10),
+                .len = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10),
+            };
+            break :blk if (kind == .multistream_bz2) .{ .multistream_bz2 = loc } else .{ .multistream_zstd = loc };
+        },
     };
     const title = fields.next() orelse return error.InvalidPageIndex;
     const redirect_raw = fields.next() orelse return error.InvalidPageIndex;
@@ -511,7 +551,9 @@ pub fn parsePageIndexLine(kind: PageIndexKind, line: []const u8) !IndexedPage {
 
 pub fn pageIndexKind(bytes: []const u8) PageIndexKind {
     const first_end = std.mem.indexOfScalar(u8, bytes, '\n') orelse bytes.len;
-    return if (std.mem.eql(u8, bytes[0..first_end], page_index_v2_header)) .multistream_bz2 else .raw_xml;
+    if (std.mem.eql(u8, bytes[0..first_end], page_index_v2_header)) return .multistream_bz2;
+    if (std.mem.eql(u8, bytes[0..first_end], page_index_v3_header)) return .multistream_zstd;
+    return .raw_xml;
 }
 
 pub fn loadStreamTable(io: std.Io, allocator: std.mem.Allocator, path: []const u8, dump_size: u64) ![]StreamSpan {
@@ -569,7 +611,7 @@ pub const SourceReader = struct {
         errdefer file.close(io);
         const size = (try file.stat(io)).size;
         var streams: []StreamSpan = &.{};
-        if (kind == .multistream_bz2) {
+        if (isMultistream(kind)) {
             const path = stream_table_path orelse return error.MissingStreamIndex;
             streams = try loadStreamTable(io, allocator, path, size);
         }
@@ -640,7 +682,10 @@ pub const SourceReader = struct {
         if (try self.copyCached(allocator, loc)) |cached| return cached;
         const index: usize = @intCast(loc.stream_id);
         if (index >= self.streams.len) return error.InvalidPageIndex;
-        const member = try decompressMemberAlloc(self.io, self.cache_allocator, &self.file, self.streams[index]);
+        const member = if (self.kind == .multistream_zstd)
+            try decompressZstdMemberAlloc(self.io, self.cache_allocator, &self.file, self.streams[index])
+        else
+            try decompressMemberAlloc(self.io, self.cache_allocator, &self.file, self.streams[index]);
         errdefer self.cache_allocator.free(member);
         if (loc.offset > member.len or loc.len > member.len - loc.offset) return error.InvalidPageIndex;
         const out = try allocator.dupe(u8, member[loc.offset .. loc.offset + loc.len]);
@@ -662,14 +707,14 @@ pub const SourceReader = struct {
                 if (try self.file.readPositionalAll(self.io, out, loc.offset) != out.len) return error.TruncatedDump;
                 break :blk out;
             },
-            .multistream_bz2 => |loc| if (loc.len == 0) "" else try self.readCompressedAlloc(allocator, loc),
+            .multistream_bz2, .multistream_zstd => |loc| if (loc.len == 0) "" else try self.readCompressedAlloc(allocator, loc),
         };
     }
 };
 
 fn pageIndexTitle(kind: PageIndexKind, line: []const u8) ![]const u8 {
     var fields = std.mem.splitScalar(u8, line, '\t');
-    const skips: usize = if (kind == .multistream_bz2) 3 else 2;
+    const skips: usize = if (isMultistream(kind)) 3 else 2;
     for (0..skips) |_| _ = fields.next() orelse return error.InvalidPageIndex;
     const title = fields.next() orelse return error.InvalidPageIndex;
     if (title.len == 0) return error.InvalidPageIndex;
@@ -731,6 +776,7 @@ pub const PageTitleIndex = struct {
         const kind: PageIndexKind = switch (kind_raw) {
             0 => .raw_xml,
             1 => .multistream_bz2,
+            2 => .multistream_zstd,
             else => return error.InvalidPageTitleIndex,
         };
         const capacity64 = std.mem.readInt(u64, bytes[16..24], .little);
@@ -915,6 +961,98 @@ test "page title index keeps latest duplicate row and supports mmap lookup" {
     try std.testing.expectEqual(@as(usize, 2), pageRowRefOrdinal(cat_ref));
     try std.testing.expectEqual(@as(usize, 1), pageRowRefOrdinal(dog_ref));
     try std.testing.expect((try index.lookup(page_index, "fox")) == null);
+}
+
+extern fn ZSTD_compressBound(src_size: usize) usize;
+extern fn ZSTD_compress(dst: [*]u8, dst_capacity: usize, src: [*]const u8, src_size: usize, compression_level: c_int) usize;
+
+fn testCompressZstdAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    const out = try allocator.alloc(u8, ZSTD_compressBound(input.len));
+    errdefer allocator.free(out);
+    const len = ZSTD_compress(out.ptr, out.len, input.ptr, input.len, 1);
+    if (ZSTD_isError(len) != 0) return error.TestZstdCompressFailed;
+    return allocator.realloc(out, len);
+}
+
+fn testDecompressZstdBytes(allocator: std.mem.Allocator, compressed: []const u8, span: StreamSpan) ![]u8 {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try std.Io.Dir.cwd().createDirPath(io, root);
+    const path = try std.fs.path.join(a, &.{ root, "member.zst" });
+    defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = compressed });
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    return decompressZstdMemberAlloc(io, allocator, &file, span);
+}
+
+test "zstd member reads exact offset and rejects trailing, truncated and corrupt frames" {
+    const a = std.testing.allocator;
+    const compressed = try testCompressZstdAlloc(a, "<page>hello</page>");
+    defer a.free(compressed);
+    const padded = try std.mem.concat(a, u8, &.{ "prefix", compressed, "suffix" });
+    defer a.free(padded);
+    const decoded = try testDecompressZstdBytes(a, padded, .{ .offset = "prefix".len, .len = compressed.len });
+    defer a.free(decoded);
+    try std.testing.expectEqualStrings("<page>hello</page>", decoded);
+    const trailing = try std.mem.concat(a, u8, &.{ compressed, compressed });
+    defer a.free(trailing);
+    try std.testing.expectError(error.InvalidZstdMember, testDecompressZstdBytes(a, trailing, .{ .offset = 0, .len = trailing.len }));
+    try std.testing.expectError(error.TruncatedDump, testDecompressZstdBytes(a, compressed[0 .. compressed.len - 1], .{ .offset = 0, .len = compressed.len }));
+    try std.testing.expectError(error.InvalidZstdMember, testDecompressZstdBytes(a, compressed, .{ .offset = 0, .len = compressed.len - 1 }));
+    const corrupted = try a.dupe(u8, compressed);
+    defer a.free(corrupted);
+    corrupted[0] = 0;
+    try std.testing.expectError(error.InvalidZstdMember, testDecompressZstdBytes(a, corrupted, .{ .offset = 0, .len = corrupted.len }));
+    const skippable = "\x50\x2a\x4d\x18\x00\x00\x00\x00";
+    try std.testing.expectError(error.InvalidZstdMember, testDecompressZstdBytes(a, skippable, .{ .offset = 0, .len = skippable.len }));
+}
+
+test "zstd stream ids preserve independent member offsets for source reads" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const first = try testCompressZstdAlloc(a, "<page>alpha</page>");
+    defer a.free(first);
+    const second = try testCompressZstdAlloc(a, "<page>beta</page>");
+    defer a.free(second);
+    const frames = try std.mem.concat(a, u8, &.{ first, second });
+    defer a.free(frames);
+    const table = try std.fmt.allocPrint(a, "{s}\n0\t0\t{d}\n1\t{d}\t{d}\n", .{ stream_index_header, first.len, first.len, second.len });
+    defer a.free(table);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try std.Io.Dir.cwd().createDirPath(io, root);
+    const dump_path = try std.fs.path.join(a, &.{ root, "pages.xml.zst" });
+    defer a.free(dump_path);
+    const table_path = try std.fs.path.join(a, &.{ root, "dump-streams.tsv" });
+    defer a.free(table_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = frames });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = table_path, .data = table });
+    var reader = try SourceReader.open(io, a, a, dump_path, .multistream_zstd, table_path);
+    defer reader.deinit();
+    const beta = try reader.readAlloc(a, .{ .multistream_zstd = .{ .stream_id = 1, .offset = "<page>".len, .len = 4 } });
+    defer a.free(beta);
+    try std.testing.expectEqualStrings("beta", beta);
+    const alpha = try reader.readAlloc(a, .{ .multistream_zstd = .{ .stream_id = 0, .offset = "<page>".len, .len = 5 } });
+    defer a.free(alpha);
+    try std.testing.expectEqualStrings("alpha", alpha);
+    try std.testing.expectEqual(@as(usize, 2), reader.cache.count());
+}
+
+test "zstd page index keeps compressed location and old bzip2 kind" {
+    const line = "4\t120\t3\tcat\t\t7\t70\t2026-09-01T00:00:00Z\tA\twikitext\t0\t1\t0";
+    try std.testing.expectEqual(PageIndexKind.multistream_bz2, pageIndexKind(page_index_v2_header ++ "\n"));
+    try std.testing.expectEqual(PageIndexKind.multistream_zstd, pageIndexKind(page_index_v3_header ++ "\n"));
+    const indexed = try parsePageIndexLine(.multistream_zstd, line);
+    try std.testing.expectEqual(@as(u32, 4), indexed.source.multistream_zstd.stream_id);
+    try std.testing.expectEqual(@as(usize, 120), indexed.source.multistream_zstd.offset);
+    try std.testing.expectEqual(@as(usize, 3), sourceLen(indexed.source));
 }
 
 extern fn BZ2_bzBuffToBuffCompress(

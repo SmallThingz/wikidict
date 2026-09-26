@@ -2,6 +2,10 @@
 """Build every fully downloaded snapshot; publish verified extreme-XZ blobs."""
 import argparse
 import bz2
+try:
+    from compression import zstd
+except ImportError:
+    zstd = None
 import concurrent.futures
 from collections import deque
 from contextlib import contextmanager
@@ -211,19 +215,21 @@ def _remove_partial_stage_on_error(*paths):
         raise
 
 
-STAGE_TARGET_BYTES=4*1024*1024
+STAGE_TARGET_BYTES=256*1024
 STAGE_MAX_MEMBER_BYTES=64*1024*1024
 STAGE_PARALLEL_MAX_BYTES=8*1024*1024
 
 
 def _stage_seekable_dump(items, downloads, scratch, metadata=None):
-    """Repack full-namespace dumps into bounded, page-aligned bzip2 members.
+    """Repack full-namespace dumps into bounded, page-aligned Zstandard frames.
 
     The downloaded meta-current parts are not indexed by page. A whole part can
     expand past the native reader's 128 MiB member limit, so a part boundary is
     not a safe stream boundary. Keep XML only in bounded memory while writing
     compressed members and their real offsets to scratch.
     """
+    if zstd is None:
+        raise RuntimeError('Python 3.14 compression.zstd is required for staged Zstandard dumps')
     parts=[]
     for item in sorted(items,key=lambda x:x['name']):
         source=downloads/item['wiki']/item['date']/item['name']
@@ -231,8 +237,8 @@ def _stage_seekable_dump(items, downloads, scratch, metadata=None):
             if f.read(3)!=b'BZh': raise ValueError(f'Expected bzip2 dump part: {source}')
         parts.append(source)
     if not parts: raise ValueError('No dump parts')
-    dump=scratch/'pages.xml.bz2'
-    index=dump.with_name(dump.name[:-len('.xml.bz2')]+'-index.txt.bz2')
+    dump=scratch/'pages.xml.zst'
+    index=scratch/'pages-index.txt.bz2'
     target_bytes=STAGE_TARGET_BYTES
     max_member_bytes=STAGE_MAX_MEMBER_BYTES  # Strictly below the native reader's 128 MiB cap.
     open_tag=b'<page>'
@@ -251,27 +257,32 @@ def _stage_seekable_dump(items, downloads, scratch, metadata=None):
          concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         queued=deque()
 
-        def write_member(member):
+        def write_member(member, raw_len):
             nonlocal members
+            info=zstd.get_frame_info(member)
+            if info.decompressed_size!=raw_len or zstd.get_frame_size(member)!=len(member):
+                raise ValueError('Staged Zstandard member is not one known-size frame')
             offsets.write(f'{out.tell()}:{members+1}:member{members}\n'.encode())
             if out.write(member)!=len(member): raise OSError('Short staged dump write')
             dump_hash.update(member)
             members+=1
 
         def finish_oldest():
-            write_member(queued.popleft().result())
+            future,raw_len=queued.popleft()
+            write_member(future.result(),raw_len)
 
         def flush():
             if not batch: return
             if len(batch)>max_parallel_bytes:
                 while queued: finish_oldest()
-                write_member(bz2.compress(batch,compresslevel=1))
+                raw=bytes(batch)
+                write_member(zstd.compress(raw,level=1),len(raw))
                 batch.clear()
                 return
             if len(queued)==max_queued_batches: finish_oldest()
             raw=bytes(batch)
             batch.clear()
-            queued.append(pool.submit(bz2.compress,raw,compresslevel=1))
+            queued.append((pool.submit(zstd.compress,raw,level=1),len(raw)))
 
         for source in parts:
             with bz2.open(source,'rb') as inp:
@@ -286,7 +297,7 @@ def _stage_seekable_dump(items, downloads, scratch, metadata=None):
                         cut=end+len(close_tag)
                         page_bytes=cut-consumed
                         if page_bytes>max_member_bytes:
-                            raise ValueError(f'XML page exceeds bounded bzip2 member: {source}')
+                            raise ValueError(f'XML page exceeds bounded Zstandard member: {source}')
                         if len(batch)+page_bytes>max_member_bytes: flush()
                         batch.extend(memoryview(pending)[consumed:cut])
                         consumed=cut
@@ -304,11 +315,11 @@ def _stage_seekable_dump(items, downloads, scratch, metadata=None):
         flush()
         while queued: finish_oldest()
         if members==0:
-            write_member(bz2.compress(b'',compresslevel=1))
+            write_member(zstd.compress(b'',level=1),0)
     if metadata is not None:
-        metadata.update({'source_pages':pages,'dump_size':dump.stat().st_size,'dump_sha256':dump_hash.hexdigest(),
+        metadata.update({'source_pages':pages,'dump_codec':'zstd','dump_stream_kind':'multistream-zstd','dump_size':dump.stat().st_size,'dump_sha256':dump_hash.hexdigest(),
                          'index_size':index.stat().st_size,'index_sha256':sha256_file(index)})
-    print(f'Staged compressed dump: pages={pages} members={members} xml_bytes={xml_bytes} compressed_bytes={dump.stat().st_size} seconds={time.monotonic()-started:.1f}',flush=True)
+    print(f'Staged Zstandard dump: pages={pages} members={members} xml_bytes={xml_bytes} compressed_bytes={dump.stat().st_size} seconds={time.monotonic()-started:.1f}',flush=True)
     return dump
 
 
@@ -461,7 +472,7 @@ def cached_shard_dump(items, downloads, workspace):
     """Reuse only a completed, content-verified repack for these XML inputs."""
     edition,date=phase_identity(items)
     cache=workspace/'input'
-    dump=cache/'pages.xml.bz2'
+    dump=cache/'pages.xml.zst'
     index=cache/'pages-index.txt.bz2'
     marker=cache/'.complete.json'
     with build_phase(edition,date,'cache_verification') as result:
@@ -471,6 +482,7 @@ def cached_shard_dump(items, downloads, workspace):
             try:
                 record=json.loads(marker.read_text())
                 valid=isinstance(record,dict) and record.get('version')==DUMP_STAGING_VERSION and record.get('input_sha256')==input_hash
+                valid=valid and record.get('dump_codec')=='zstd' and record.get('dump_stream_kind')=='multistream-zstd'
                 valid=valid and type(record.get('source_pages')) is int and record['source_pages']>=0
                 for label,path in (('dump',dump),('index',index)):
                     valid=valid and path.is_file() and type(record.get(label+'_size')) is int and record[label+'_size']>0
@@ -693,7 +705,7 @@ INTERWIKI_SHA_NAME = '.interwiki-map.sha256'
 AUXILIARY_SHA_NAME = '.auxiliary-snapshots.sha256.json'
 # Bump this when page framing, member encoding or index semantics change; the
 # input cache identity and published artifacts both include this contract.
-DUMP_STAGING_VERSION = 'page-aligned-bz2-v1'
+DUMP_STAGING_VERSION = 'page-aligned-zstd-v1'
 VERIFIED_CONTENT = f'dump-staging-version={DUMP_STAGING_VERSION}\n'
 
 def require_current_staging_version(path, version):
@@ -736,6 +748,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
         raise ValueError(f'Incomplete compressed publication: {staging}')
     marker.unlink()
     metadata = {'edition':edition,'date':date,'dump_staging_version':DUMP_STAGING_VERSION,
+        'dump_codec':'zstd','dump_stream_kind':'multistream-zstd',
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
         'fallback_report':'fallback-pages.jsonl', 'compression':'xz -6; 1 MiB blocks','blobs':len(compressed),
         'input_pages':coverage['pages_seen'],'page_coverage_report':'page-coverage.json'}

@@ -1,4 +1,5 @@
 import bz2
+from compression import zstd
 import hashlib
 import io
 import lzma
@@ -13,6 +14,17 @@ from unittest.mock import patch
 import build_wiktionaries as b
 import build_resource_limits as limits
 from compress_blobs import compress, compress_many, default_workers
+
+def decode_staged_dump(dump):
+    compressed=dump.read_bytes()
+    offsets=[int(line.split(':',1)[0]) for line in bz2.decompress(
+        dump.with_name('pages-index.txt.bz2').read_bytes()).decode().splitlines()]
+    frames=[compressed[start:end] for start,end in zip(offsets,offsets[1:]+[len(compressed)])]
+    for frame in frames:
+        assert zstd.get_frame_size(frame)==len(frame)
+        assert zstd.get_frame_info(frame).decompressed_size<=64*1024*1024
+    return b''.join(zstd.decompress(frame) for frame in frames)
+
 
 def write_coverage(root, command=None):
     start=limit=offset=0
@@ -336,7 +348,7 @@ class BuildTest(unittest.TestCase):
                 items.append(dict(wiki='testwiktionary',date='20260901',name=name))
             scratch=root/'scratch';scratch.mkdir()
             dump=b.stage_seekable_dump(items,root,scratch)
-            self.assertEqual(bz2.decompress(dump.read_bytes()),b''.join(bz2.decompress(member) for member in members))
+            self.assertEqual(decode_staged_dump(dump),b''.join(bz2.decompress(member) for member in members))
             index=dump.with_name('pages-index.txt.bz2')
             rows=bz2.decompress(index.read_bytes()).decode().splitlines()
             self.assertEqual(rows,['0:1:member0'])
@@ -347,7 +359,7 @@ class BuildTest(unittest.TestCase):
             name='testwiktionary-20260901-pages-meta-current.xml.bz2';data=bz2.compress(b'<mediawiki/>');source=folder/name;source.write_bytes(data)
             scratch=root/'scratch';scratch.mkdir()
             dump=b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch)
-            self.assertEqual(bz2.decompress(dump.read_bytes()),b'<mediawiki/>')
+            self.assertEqual(decode_staged_dump(dump),b'<mediawiki/>')
             self.assertEqual(bz2.decompress(dump.with_name('pages-index.txt.bz2').read_bytes()),b'0:1:member0\n')
 
     def test_seekable_dump_bounds_members_and_preserves_all_xml_bytes(self):
@@ -364,13 +376,13 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(len(rows),3)
             self.assertEqual(rows[0],'0:1:member0')
             compressed=dump.read_bytes()
-            self.assertEqual(bz2.decompress(compressed),xml)
+            self.assertEqual(decode_staged_dump(dump),xml)
             offsets=[int(row.split(':',1)[0]) for row in rows]+[len(compressed)]
             for start,end in zip(offsets,offsets[1:]):
-                decoder=bz2.BZ2Decompressor()
-                member=decoder.decompress(compressed[start:end])
-                self.assertTrue(decoder.eof)
-                self.assertEqual(decoder.unused_data,b'')
+                frame=compressed[start:end]
+                self.assertEqual(zstd.get_frame_size(frame),len(frame))
+                self.assertLessEqual(zstd.get_frame_info(frame).decompressed_size,64*1024*1024)
+                member=zstd.decompress(frame)
                 self.assertLessEqual(len(member),64*1024*1024)
                 self.assertEqual(member.count(b'<page>'),member.count(b'</page>'))
 
@@ -392,11 +404,11 @@ class BuildTest(unittest.TestCase):
             (folder/name).write_bytes(bz2.compress(xml))
             scratch=root/'scratch';scratch.mkdir()
             item=dict(wiki='testwiktionary',date='20260901',name=name)
-            original_compress=bz2.compress
+            original_compress=zstd.compress
             lock=threading.Lock();barrier=threading.Barrier(4);others_done=threading.Event()
             calls=active=peak=completed_others=0
             completion=[]
-            def controlled_compress(raw,compresslevel=9):
+            def controlled_compress(raw,level=1):
                 nonlocal calls,active,peak,completed_others
                 with lock:
                     ordinal=calls;calls+=1;active+=1;peak=max(peak,active)
@@ -404,7 +416,7 @@ class BuildTest(unittest.TestCase):
                     if ordinal<4: barrier.wait(timeout=10)
                     if ordinal==0:
                         if not others_done.wait(timeout=10): raise AssertionError('Other compression jobs did not finish')
-                    member=original_compress(raw,compresslevel=compresslevel)
+                    member=original_compress(raw,level=level)
                     with lock:
                         completion.append(ordinal)
                         if 0<ordinal<4:
@@ -415,7 +427,7 @@ class BuildTest(unittest.TestCase):
                     with lock: active-=1
             metadata={}
             with patch.object(b,'STAGE_TARGET_BYTES',1024), patch.object(b,'STAGE_PARALLEL_MAX_BYTES',2048), \
-                 patch.object(b,'STAGE_MAX_MEMBER_BYTES',65536), patch.object(b.bz2,'compress',side_effect=controlled_compress):
+                 patch.object(b,'STAGE_MAX_MEMBER_BYTES',65536), patch.object(b.zstd,'compress',side_effect=controlled_compress):
                 dump=b.stage_seekable_dump([item],root,scratch,metadata)
             self.assertEqual(calls,6)
             self.assertEqual(peak,4)
@@ -427,7 +439,7 @@ class BuildTest(unittest.TestCase):
             self.assertEqual([row.split(':',1)[1] for row in rows],[f'{i+1}:member{i}' for i in range(6)])
             offsets=[int(row.split(':',1)[0]) for row in rows]+[len(compressed)]
             self.assertEqual(offsets,sorted(offsets))
-            self.assertEqual(b''.join(bz2.decompress(compressed[a:z]) for a,z in zip(offsets,offsets[1:])),xml)
+            self.assertEqual(b''.join(zstd.decompress(compressed[a:z]) for a,z in zip(offsets,offsets[1:])),xml)
             self.assertEqual(metadata['dump_size'],len(compressed))
             self.assertEqual(metadata['dump_sha256'],hashlib.sha256(compressed).hexdigest())
             self.assertEqual(metadata['index_size'],len(index_bytes))
@@ -442,19 +454,19 @@ class BuildTest(unittest.TestCase):
             xml=b'<mediawiki>'+b''.join(pages)+b'</mediawiki>'
             (folder/name).write_bytes(bz2.compress(xml))
             scratch=root/'scratch';scratch.mkdir()
-            original_compress=bz2.compress;main_thread=threading.current_thread();oversized_on_main=[]
-            def controlled_compress(raw,compresslevel=9):
+            original_compress=zstd.compress;main_thread=threading.current_thread();oversized_on_main=[]
+            def controlled_compress(raw,level=1):
                 if len(raw)>2048: oversized_on_main.append(threading.current_thread() is main_thread)
-                return original_compress(raw,compresslevel=compresslevel)
+                return original_compress(raw,level=level)
             with patch.object(b,'STAGE_TARGET_BYTES',1024), patch.object(b,'STAGE_PARALLEL_MAX_BYTES',2048), \
-                 patch.object(b,'STAGE_MAX_MEMBER_BYTES',65536), patch.object(b.bz2,'compress',side_effect=controlled_compress):
+                 patch.object(b,'STAGE_MAX_MEMBER_BYTES',65536), patch.object(b.zstd,'compress',side_effect=controlled_compress):
                 dump=b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch)
             self.assertEqual(oversized_on_main,[True])
             compressed=dump.read_bytes()
             rows=bz2.decompress(dump.with_name('pages-index.txt.bz2').read_bytes()).decode().splitlines()
             self.assertEqual(len(rows),5)
             offsets=[int(row.split(':',1)[0]) for row in rows]+[len(compressed)]
-            self.assertEqual(b''.join(bz2.decompress(compressed[a:z]) for a,z in zip(offsets,offsets[1:])),xml)
+            self.assertEqual(b''.join(zstd.decompress(compressed[a:z]) for a,z in zip(offsets,offsets[1:])),xml)
 
     def test_seekable_repack_deferred_compression_error_removes_partial_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -463,20 +475,20 @@ class BuildTest(unittest.TestCase):
             xml=b'<mediawiki>'+b''.join(b'<page>'+bytes([65+i])*1024+b'</page>' for i in range(3))+b'</mediawiki>'
             (folder/name).write_bytes(bz2.compress(xml))
             scratch=root/'scratch';scratch.mkdir()
-            original_compress=bz2.compress;lock=threading.Lock();calls=0
-            def fail_second(raw,compresslevel=9):
+            original_compress=zstd.compress;lock=threading.Lock();calls=0
+            def fail_second(raw,level=1):
                 nonlocal calls
                 with lock: ordinal=calls;calls+=1
                 if ordinal==1: raise OSError('deferred compression failure')
-                return original_compress(raw,compresslevel=compresslevel)
+                return original_compress(raw,level=level)
             metadata={}
             with patch.object(b,'STAGE_TARGET_BYTES',1024), patch.object(b,'STAGE_PARALLEL_MAX_BYTES',2048), \
-                 patch.object(b,'STAGE_MAX_MEMBER_BYTES',65536), patch.object(b.bz2,'compress',side_effect=fail_second):
+                 patch.object(b,'STAGE_MAX_MEMBER_BYTES',65536), patch.object(b.zstd,'compress',side_effect=fail_second):
                 with self.assertRaisesRegex(OSError,'deferred compression failure'):
                     b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch,metadata)
             self.assertGreaterEqual(calls,2)
             self.assertEqual(metadata,{})
-            self.assertFalse((scratch/'pages.xml.bz2').exists())
+            self.assertFalse((scratch/'pages.xml.zst').exists())
             self.assertFalse((scratch/'pages-index.txt.bz2').exists())
 
     def test_page_index_row_count_ignores_multistream_header_and_blanks(self):
@@ -651,17 +663,24 @@ class BuildTest(unittest.TestCase):
                 marker.write_text(json.dumps(record)+'\n')
                 b.cached_shard_dump(items,root,workspace)
                 self.assertEqual(stage.call_count,5)
+                old_record=json.loads(marker.read_text())
+                old_record['version']='page-aligned-bz2-v1'
+                old_record['dump_codec']='bz2'
+                old_record['dump_stream_kind']='multistream-bz2'
+                marker.write_text(json.dumps(old_record)+'\n')
+                b.cached_shard_dump(items,root,workspace)
+                self.assertEqual(stage.call_count,6)
                 changed=dict(expected,source='source-b')
                 b.prepare_shard_workspace(workspace,changed)
                 self.assertTrue((workspace/'input').is_dir())
                 b.cached_shard_dump(items,root,workspace)
-                self.assertEqual(stage.call_count,5)
+                self.assertEqual(stage.call_count,6)
                 changed_items=[dict(items[0],sha1='0'*40)]
                 b.cached_shard_dump(changed_items,root,workspace)
-                self.assertEqual(stage.call_count,6)
-                with patch.object(b,'DUMP_STAGING_VERSION','page-aligned-bz2-v2'):
-                    b.cached_shard_dump(changed_items,root,workspace)
                 self.assertEqual(stage.call_count,7)
+                with patch.object(b,'DUMP_STAGING_VERSION','page-aligned-zstd-v2'):
+                    b.cached_shard_dump(changed_items,root,workspace)
+                self.assertEqual(stage.call_count,8)
 
     def test_partial_cached_repack_cannot_be_reused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -675,7 +694,7 @@ class BuildTest(unittest.TestCase):
             expected={'version':b.SHARD_STATE_VERSION,'source':'source-a'}
             b.prepare_shard_workspace(workspace,expected)
             def fail_stage(_items,_downloads,cache,_metadata):
-                (cache/'pages.xml.bz2').write_bytes(b'partial')
+                (cache/'pages.xml.zst').write_bytes(b'partial')
                 raise OSError('interrupted')
             with patch.object(b,'stage_seekable_dump',side_effect=fail_stage):
                 with self.assertRaisesRegex(OSError,'interrupted'):
@@ -684,7 +703,7 @@ class BuildTest(unittest.TestCase):
             with patch.object(b,'stage_seekable_dump',wraps=b.stage_seekable_dump) as stage:
                 dump=b.cached_shard_dump(items,root,workspace)
                 self.assertEqual(stage.call_count,1)
-            self.assertEqual(bz2.decompress(dump.read_bytes()),b'<mediawiki/>')
+            self.assertEqual(decode_staged_dump(dump),b'<mediawiki/>')
 
     def test_failed_shard_merge_reuses_verified_repack_on_retry(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -977,6 +996,8 @@ class BuildTest(unittest.TestCase):
             meta=json.loads((final/'complete.json').read_text())
             self.assertEqual(meta['blobs'],2)
             self.assertEqual(meta['dump_staging_version'],b.DUMP_STAGING_VERSION)
+            self.assertEqual(meta['dump_codec'],'zstd')
+            self.assertEqual(meta['dump_stream_kind'],'multistream-zstd')
             self.assertFalse((final/b.VERIFIED_MARKER).exists())
             self.assertFalse((final/'first.wikblb').exists());self.assertFalse((final/'second.wikblb').exists())
             self.assertEqual(lzma.open(final/'first.wikblb.xz').read(),b'WIKBLB08first')

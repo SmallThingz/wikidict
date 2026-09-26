@@ -458,11 +458,11 @@ pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3) {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX]\n", .{});
         return error.Usage;
     };
     const cpu_limit = @min(max_worker_count, std.Thread.getCpuCount() catch 1);
@@ -541,7 +541,7 @@ pub fn main(init: std.process.Init) !void {
         a,
         args[1],
         page_index_kind,
-        if (page_index_kind == .multistream_bz2) stream_index_path else null,
+        if (dump_source.isMultistream(page_index_kind)) stream_index_path else null,
     );
     defer dump.deinit();
 

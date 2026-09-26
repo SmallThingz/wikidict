@@ -549,7 +549,7 @@ pub const Provider = struct {
         var mapped = (try self.mapOptional("page-index.tsv")) orelse return;
         errdefer mapped.deinit();
         const kind = wikimedia_dump.pageIndexKind(mapped.bytes);
-        const stream_index_path = if (kind == .multistream_bz2)
+        const stream_index_path = if (wikimedia_dump.isMultistream(kind))
             try std.fs.path.join(self.a, &.{ self.root, "dump-streams.tsv" })
         else
             null;
@@ -571,7 +571,7 @@ pub const Provider = struct {
             index.row_count
         else blk: {
             const line_count = std.mem.count(u8, mapped.bytes, "\n") + @intFromBool(mapped.bytes.len != 0 and mapped.bytes[mapped.bytes.len - 1] != '\n');
-            break :blk line_count -| @intFromBool(kind == .multistream_bz2);
+            break :blk line_count -| @intFromBool(wikimedia_dump.isMultistream(kind));
         };
         if (title_index == null) {
             try pages.ensureTotalCapacity(self.a, @intCast(page_count));
@@ -720,7 +720,7 @@ pub const Provider = struct {
         } else blk: {
             const stream_id: ?u32 = switch (page.source) {
                 .raw_xml => null,
-                .multistream_bz2 => |loc| if (loc.len == 0) null else loc.stream_id,
+                .multistream_bz2, .multistream_zstd => |loc| if (loc.len == 0) null else loc.stream_id,
             };
             const was_cached = if (stream_id) |id| reader.cache.contains(id) else false;
             const bytes = try reader.readAlloc(a, page.source);

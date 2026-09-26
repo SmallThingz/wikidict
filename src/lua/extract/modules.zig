@@ -43,15 +43,17 @@ const InputPages = union(enum) {
         pages: wikimedia_dump.PageIterator,
     },
     compressed: struct {
+        kind: wikimedia_dump.PageIndexKind,
         walker: wikimedia_dump.MultistreamWalker,
         pages: wikimedia_dump.PageIterator = .{ .bytes = "" },
         stream_id: u32 = 0,
     },
 
     fn open(io: std.Io, allocator: std.mem.Allocator, path: []const u8, index_path: ?[]const u8) !InputPages {
-        if (std.mem.endsWith(u8, path, ".bz2")) {
+        if (std.mem.endsWith(u8, path, ".bz2") or std.mem.endsWith(u8, path, ".xml.zst")) {
             const index = index_path orelse return error.MultistreamIndexPathRequired;
-            return .{ .compressed = .{ .walker = try wikimedia_dump.MultistreamWalker.open(io, allocator, path, index) } };
+            const kind: wikimedia_dump.PageIndexKind = if (std.mem.endsWith(u8, path, ".xml.zst")) .multistream_zstd else .multistream_bz2;
+            return .{ .compressed = .{ .kind = kind, .walker = try wikimedia_dump.MultistreamWalker.open(io, allocator, path, index, kind) } };
         }
         var mapped = try mmapPath(path);
         errdefer mapped.deinit();
@@ -85,7 +87,11 @@ const InputPages = union(enum) {
                         const text = capture.text_raw orelse "";
                         return .{
                             .capture = capture,
-                            .source = .{ .multistream_bz2 = .{
+                            .source = if (compressed.kind == .multistream_zstd) .{ .multistream_zstd = .{
+                                .stream_id = compressed.stream_id,
+                                .offset = try sliceOffset(compressed.pages.bytes, text),
+                                .len = text.len,
+                            } } else .{ .multistream_bz2 = .{
                                 .stream_id = compressed.stream_id,
                                 .offset = try sliceOffset(compressed.pages.bytes, text),
                                 .len = text.len,
@@ -148,7 +154,7 @@ fn writePageIndexRow(
 ) !void {
     switch (source) {
         .raw_xml => |loc| try w.print("{d}\t{d}\t", .{ loc.offset, loc.len }),
-        .multistream_bz2 => |loc| try w.print("{d}\t{d}\t{d}\t", .{ loc.stream_id, loc.offset, loc.len }),
+        .multistream_bz2, .multistream_zstd => |loc| try w.print("{d}\t{d}\t{d}\t", .{ loc.stream_id, loc.offset, loc.len }),
     }
     try w.print("{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{d}\n", .{
         title,
@@ -274,7 +280,8 @@ pub fn main(init: std.process.Init) !void {
     if (args.len == 4 and !emit_page_index and !usage_only) return error.Usage;
     const input_path = args[1];
     const output_root = args[2];
-    const compressed = std.mem.endsWith(u8, input_path, ".bz2");
+    const compressed = std.mem.endsWith(u8, input_path, ".bz2") or std.mem.endsWith(u8, input_path, ".xml.zst");
+    const zstd = std.mem.endsWith(u8, input_path, ".xml.zst");
     const multistream_index_path: ?[]const u8 = if (compressed)
         try wikimedia_dump.deriveMultistreamIndexPath(init.arena.allocator(), input_path)
     else
@@ -304,7 +311,9 @@ pub fn main(init: std.process.Init) !void {
     var page_index_buf: [256 * 1024]u8 = undefined;
     var page_index_writer = if (page_index_file) |*file| file.writer(init.io, &page_index_buf) else null;
     const pw: ?*std.Io.Writer = if (page_index_writer) |*writer| &writer.interface else null;
-    if (compressed) if (pw) |writer| try writer.writeAll(wikimedia_dump.page_index_v2_header ++ "\n");
+    if (compressed) if (pw) |writer| {
+        if (zstd) try writer.writeAll(wikimedia_dump.page_index_v3_header ++ "\n") else try writer.writeAll(wikimedia_dump.page_index_v2_header ++ "\n");
+    };
 
     var usage_file: ?std.Io.File = if (emit_page_index or usage_only)
         try std.Io.Dir.cwd().createFile(init.io, usage_path, .{ .truncate = true })
