@@ -86,9 +86,54 @@ pub fn set(runtime: *rt.Context, host: ?*Host) void {
     runtime.setHost(if (host) |value| value else null);
 }
 
+pub const InvokeHostProbe = struct {
+    observed: bool = false,
+    previous: ?*@This() = null,
+};
+
+threadlocal var invoke_host_probe: ?*InvokeHostProbe = null;
+
+pub fn beginInvokeHostProbe(probe: *InvokeHostProbe) void {
+    probe.previous = invoke_host_probe;
+    invoke_host_probe = probe;
+}
+
+pub fn endInvokeHostProbe(probe: *InvokeHostProbe) void {
+    std.debug.assert(invoke_host_probe == probe);
+    invoke_host_probe = probe.previous;
+}
+
+// enterInvoke needs the host to maintain invoke_depth and random state. This
+// bookkeeping access is not evidence that Lua observed page-specific host data.
+pub fn getForInvokeBookkeeping(runtime: *const rt.Context) ?*Host {
+    rt.markLoadDataEffect();
+    return @ptrCast(@alignCast(runtime.host orelse return null));
+}
+
 pub fn get(runtime: *const rt.Context) ?*Host {
     // A loadData result may be shared across pages only if its evaluation did
     // not observe the page host (including title, time, and provider data).
-    rt.markLoadDataEffect();
-    return @ptrCast(@alignCast(runtime.host orelse return null));
+    var probe = invoke_host_probe;
+    while (probe) |active| : (probe = active.previous) active.observed = true;
+    return getForInvokeBookkeeping(runtime);
+}
+
+test "invoke host probe excludes bookkeeping and propagates nested observations" {
+    var runtime = try rt.Context.init(std.testing.allocator, 0);
+    defer runtime.deinit();
+    var host: Host = .{};
+    set(&runtime, &host);
+
+    var parent: InvokeHostProbe = .{};
+    beginInvokeHostProbe(&parent);
+    defer endInvokeHostProbe(&parent);
+    try std.testing.expect(getForInvokeBookkeeping(&runtime) == &host);
+    try std.testing.expect(!parent.observed);
+
+    var child: InvokeHostProbe = .{};
+    beginInvokeHostProbe(&child);
+    try std.testing.expect(get(&runtime) == &host);
+    endInvokeHostProbe(&child);
+    try std.testing.expect(child.observed);
+    try std.testing.expect(parent.observed);
 }

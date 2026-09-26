@@ -1310,6 +1310,7 @@ pub const Expander = struct {
             if (work_stats.current()) |work| work.invoke_ns +|= work_stats.elapsed(invoke_start);
         }
         var completed = false;
+        var host_probe: host_api.InvokeHostProbe = .{};
         const ticket = if (self.invoke_reuse) |stats| stats.observe(
             module_id,
             module_name,
@@ -1320,7 +1321,7 @@ pub const Expander = struct {
             parent_args,
             if (work_stats.current()) |work| work.sampled else false,
         ) else null;
-        defer if (self.invoke_reuse) |stats| stats.finish(ticket, completed);
+        defer if (self.invoke_reuse) |stats| stats.finish(ticket, completed, host_probe.observed);
         const install = self.install_scribunto orelse return error.MissingScribuntoInstaller;
         const page_a = self.page_allocator orelse self.runtime.allocator;
         const outer_runtime = self.runtime;
@@ -1347,6 +1348,8 @@ pub const Expander = struct {
             break :blk try frame_lib.makeFrameFromTable(&child, title, copied_parent_args, null);
         } else null;
         const frame = try frame_lib.makeFrameFromTable(&child, module_name, copied_invoke_args, parent);
+        host_api.beginInvokeHostProbe(&host_probe);
+        defer host_api.endInvokeHostProbe(&host_probe);
         const result = if (module_id) |id|
             frame_lib.invokeModuleId(&child, id, module_name, function_name, frame) catch |err| {
                 try outer_runtime.adoptFailure(&child);

@@ -3,7 +3,7 @@ const std = @import("std");
 const rt = @import("zig_runtime");
 
 const max_key_bytes = 8 * 1024;
-const max_entries = 4096;
+const max_entries = 32768;
 const max_owned_bytes = 8 * 1024 * 1024;
 
 const Key = struct {
@@ -66,7 +66,10 @@ const Entry = struct {
     success_seen: bool = false,
     repeated_after_success: u64 = 0,
     repeated_failed: u64 = 0,
+    host_observed_repeats: u64 = 0,
     sampled_cpu_ns: u64 = 0,
+    sampled_host_observed_cpu_ns: u64 = 0,
+    sampled_host_unobserved_cpu_ns: u64 = 0,
 };
 
 pub const Ticket = struct {
@@ -87,7 +90,10 @@ pub const Stats = struct {
     exact_repeats: u64 = 0,
     repeated_after_success: u64 = 0,
     repeated_failed: u64 = 0,
+    host_observed_repeats: u64 = 0,
     sampled_cpu_ns: u64 = 0,
+    sampled_host_observed_cpu_ns: u64 = 0,
+    sampled_host_unobserved_cpu_ns: u64 = 0,
 
     pub fn init(a: std.mem.Allocator) Stats {
         return .{ .a = a };
@@ -180,11 +186,15 @@ pub const Stats = struct {
         return null;
     }
 
-    pub fn finish(self: *Stats, ticket: ?Ticket, success: bool) void {
+    pub fn finish(self: *Stats, ticket: ?Ticket, success: bool, host_observed: bool) void {
         const held = ticket orelse return;
         const entry = self.entries.getPtr(held.key) orelse return;
         if (success) entry.success_seen = true;
         if (!held.repeated_after_success) return;
+        if (host_observed) {
+            self.host_observed_repeats +|= 1;
+            entry.host_observed_repeats +|= 1;
+        }
         if (!success) {
             self.repeated_failed +|= 1;
             entry.repeated_failed +|= 1;
@@ -194,21 +204,31 @@ pub const Stats = struct {
             const elapsed = stop -| start;
             self.sampled_cpu_ns +|= elapsed;
             entry.sampled_cpu_ns +|= elapsed;
+            if (host_observed) {
+                self.sampled_host_observed_cpu_ns +|= elapsed;
+                entry.sampled_host_observed_cpu_ns +|= elapsed;
+            } else {
+                self.sampled_host_unobserved_cpu_ns +|= elapsed;
+                entry.sampled_host_unobserved_cpu_ns +|= elapsed;
+            }
         }
     }
 
     pub fn log(self: *Stats) void {
-        rt.work_stats.logLine("invoke exact-key diagnostic: attempts={d} entries={d} bytes={d} repeats={d} repeats_after_success={d} repeat_failures={d} sampled_repeat_cpu_ns={d} sampled_interval=32 unsupported_parent={d} unsupported_args={d} oversized={d} capacity_drops={d}\n", .{
-            self.attempts,        self.entries.count(), self.owned_bytes,        self.exact_repeats,    self.repeated_after_success,
-            self.repeated_failed, self.sampled_cpu_ns,  self.unsupported_parent, self.unsupported_args, self.oversized,
-            self.capacity_drops,
+        rt.work_stats.logLine("invoke exact-key diagnostic: attempts={d} entries={d} bytes={d} repeats={d} repeats_after_success={d} repeat_failures={d} sampled_repeat_cpu_ns={d} host_observed_repeats={d} sampled_host_observed_cpu_ns={d} sampled_host_unobserved_cpu_ns={d} sampled_interval=32 unsupported_parent={d} unsupported_args={d} oversized={d} capacity_drops={d}\n", .{
+            self.attempts,           self.entries.count(),  self.owned_bytes,           self.exact_repeats,                self.repeated_after_success,
+            self.repeated_failed,    self.sampled_cpu_ns,   self.host_observed_repeats, self.sampled_host_observed_cpu_ns, self.sampled_host_unobserved_cpu_ns,
+            self.unsupported_parent, self.unsupported_args, self.oversized,             self.capacity_drops,
         });
         // Aggregate by module/function only at shutdown, off the invoke hot path.
         const Group = struct {
             module_name: []const u8,
             function_name: []const u8,
             repeats: u64 = 0,
+            host_observed_repeats: u64 = 0,
             cpu_ns: u64 = 0,
+            host_observed_cpu_ns: u64 = 0,
+            host_unobserved_cpu_ns: u64 = 0,
         };
         var groups: std.StringHashMapUnmanaged(Group) = .empty;
         defer {
@@ -232,7 +252,10 @@ pub const Stats = struct {
                 .function_name = entry.function_name,
             };
             result.value_ptr.repeats +|= entry.repeated_after_success;
+            result.value_ptr.host_observed_repeats +|= entry.host_observed_repeats;
             result.value_ptr.cpu_ns +|= entry.sampled_cpu_ns;
+            result.value_ptr.host_observed_cpu_ns +|= entry.sampled_host_observed_cpu_ns;
+            result.value_ptr.host_unobserved_cpu_ns +|= entry.sampled_host_unobserved_cpu_ns;
         }
         var prior: [16][]const u8 = undefined;
         var selected: usize = 0;
@@ -256,8 +279,8 @@ pub const Stats = struct {
             const key = best orelse break;
             prior[selected] = key;
             const group = groups.get(key).?;
-            rt.work_stats.logLine("invoke exact-key top: rank={d} repeats={d} sampled_cpu_ns={d} module={s} function={s}\n", .{
-                selected + 1,                                           group.repeats,                                              group.cpu_ns,
+            rt.work_stats.logLine("invoke exact-key top: rank={d} repeats={d} sampled_cpu_ns={d} host_observed_repeats={d} sampled_host_observed_cpu_ns={d} sampled_host_unobserved_cpu_ns={d} module={s} function={s}\n", .{
+                selected + 1,                                           group.repeats,                                              group.cpu_ns, group.host_observed_repeats, group.host_observed_cpu_ns, group.host_unobserved_cpu_ns,
                 group.module_name[0..@min(group.module_name.len, 256)], group.function_name[0..@min(group.function_name.len, 256)],
             });
         }
@@ -277,19 +300,20 @@ test "exact invocation diagnostic counts only identical successful prior keys" {
 
     const first = stats.observe(3, "Module:labels", "show", &args, null, "Template:lb", &parent, false);
     try std.testing.expect(first != null and !first.?.repeated_after_success);
-    stats.finish(first, true);
+    stats.finish(first, true, false);
     const repeat = stats.observe(3, "Module:labels", "show", &args, null, "Template:lb", &parent, false);
     try std.testing.expect(repeat != null and repeat.?.repeated_after_success);
-    stats.finish(repeat, true);
+    stats.finish(repeat, true, true);
     try std.testing.expectEqual(@as(u64, 1), stats.exact_repeats);
     try std.testing.expectEqual(@as(u64, 1), stats.repeated_after_success);
+    try std.testing.expectEqual(@as(u64, 1), stats.host_observed_repeats);
 
     const other_parent = stats.observe(3, "Module:labels", "show", &args, null, "Template:qualifier", &parent, false);
     try std.testing.expect(other_parent != null and !other_parent.?.repeated_after_success);
-    stats.finish(other_parent, false);
+    stats.finish(other_parent, false, true);
     const failed_before = stats.observe(3, "Module:labels", "show", &args, null, "Template:qualifier", &parent, false);
     try std.testing.expect(failed_before != null and !failed_before.?.repeated_after_success);
-    stats.finish(failed_before, true);
+    stats.finish(failed_before, true, false);
     try std.testing.expect(stats.observe(3, "Module:labels", "show", &args, .nil, null, null, false) == null);
     try std.testing.expectEqual(@as(u64, 1), stats.unsupported_parent);
 }

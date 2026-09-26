@@ -245,7 +245,7 @@ fn invokeValue(runtime: *rt.Context, module: Value, function_name: []const u8, f
 }
 
 fn enterInvoke(runtime: *rt.Context) !?*host_api.Host {
-    const host = host_api.get(runtime) orelse return null;
+    const host = host_api.getForInvokeBookkeeping(runtime) orelse return null;
     if (host.invoke_depth == 0) try stdlib.resetMathRandom(runtime);
     host.invoke_depth +%= 1;
     return host;
