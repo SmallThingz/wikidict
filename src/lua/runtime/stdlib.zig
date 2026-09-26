@@ -755,8 +755,7 @@ fn captureReplacementText(a: std.mem.Allocator, source: []const u8, m: pattern.M
     };
 }
 
-fn expandReplacement(a: std.mem.Allocator, repl: []const u8, source: []const u8, m: pattern.Match) ![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
+fn appendReplacement(out: *std.ArrayList(u8), a: std.mem.Allocator, repl: []const u8, source: []const u8, m: pattern.Match) !void {
     var i: usize = 0;
     while (i < repl.len) {
         if (repl[i] != '%') {
@@ -778,7 +777,6 @@ fn expandReplacement(a: std.mem.Allocator, repl: []const u8, source: []const u8,
             try out.append(a, code);
         i += 2;
     }
-    return out.toOwnedSlice(a);
 }
 
 fn replacementArgs(a: std.mem.Allocator, source: []const u8, m: pattern.Match) ![]const Value {
@@ -788,7 +786,6 @@ fn replacementArgs(a: std.mem.Allocator, source: []const u8, m: pattern.Match) !
 fn replacementValue(runtime: *rt.Context, replacement: Value, source: []const u8, m: pattern.Match, a: std.mem.Allocator) !?[]const u8 {
     const original = source[m.start..m.end];
     const value: Value = switch (replacement) {
-        .string => return try expandReplacement(a, replacement.string, source, m),
         .table => |table| blk: {
             const captures = try replacementArgs(a, source, m);
             defer rt.freeResults(captures);
@@ -845,11 +842,15 @@ fn stringGsub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buff
         if (!(try pattern.findIntoStart(source, pat, @intCast(search + 1), &m))) break;
         if (m.start < cursor) return error.BadPatternProgress;
         try out.appendSlice(a, source[cursor..m.start]);
-        const replacement_text = try replacementValue(runtime, replacement, source, m, a);
-        if (replacement_text) |text|
-            try out.appendSlice(a, text)
-        else
-            try out.appendSlice(a, source[m.start..m.end]);
+        if (replacement == .string) {
+            try appendReplacement(&out, a, replacement.string, source, m);
+        } else {
+            const replacement_text = try replacementValue(runtime, replacement, source, m, a);
+            if (replacement_text) |text|
+                try out.appendSlice(a, text)
+            else
+                try out.appendSlice(a, source[m.start..m.end]);
+        }
         count += 1;
         cursor = m.end;
         if (anchored) break;
@@ -1255,6 +1256,8 @@ pub const Template = struct {
         if (runtime.global_table == null) return error.GlobalTableNotBound;
         if (runtime.globals.len < self.base.globals.len) return error.TemplateGlobalLayoutMismatch;
         const page_global = runtime.global_table.?;
+        // Instantiation writes the slot array directly, outside Context.setGlobal.
+        if (runtime.globals.ptr == runtime.root_globals.ptr) runtime.root_tail_cache_valid.* = false;
         @memcpy(runtime.globals[0..self.base.globals.len], self.base.globals);
         runtime.next_identity = self.base.next_identity;
         runtime.builtin_next = self.base.builtin_next;
@@ -1790,6 +1793,45 @@ test "stdlib template keeps page mutation isolated" {
     try std.testing.expect(second_table.rawGet(.{ .string = "insert" }).? == .callable);
     try std.testing.expect(first.getGlobal(global_abi.id("package")).table != second.getGlobal(global_abi.id("package")).table);
     try std.testing.expect(first.getGlobal(global_abi.count) == .nil);
+}
+
+test "string.gsub appends string replacements and preserves callback captures" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try install(&ctx);
+    const gsub = ctx.getGlobal(global_abi.id("string")).table.rawGet(.{ .string = "gsub" }).?;
+
+    const captures = try ctx.callValue(gsub, &.{
+        .{ .string = "ab cd" }, .{ .string = "(%a+)" }, .{ .string = "<%0|%1>" },
+    });
+    defer rt.freeResults(captures);
+    try std.testing.expectEqualStrings("<ab|ab> <cd|cd>", captures[0].string);
+    try std.testing.expectEqual(@as(f64, 2), captures[1].number);
+
+    const trailing_percent = try ctx.callValue(gsub, &.{
+        .{ .string = "aa" }, .{ .string = "a" }, .{ .string = "x%" },
+    });
+    defer rt.freeResults(trailing_percent);
+    try std.testing.expectEqualSlices(u8, &.{ 'x', 0, 'x', 0 }, trailing_percent[0].string);
+    try std.testing.expectEqual(@as(f64, 2), trailing_percent[1].number);
+
+    var callback_count: usize = 0;
+    const callback = try ctx.newNative(&callback_count, struct {
+        fn call(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+            const count: *usize = @ptrCast(@alignCast(raw.?));
+            count.* += 1;
+            return one(runtime.allocator, args[0]);
+        }
+    }.call);
+    const via_callback = try ctx.callValue(gsub, &.{
+        .{ .string = "ab cd" }, .{ .string = "(%a+)" }, callback,
+    });
+    defer rt.freeResults(via_callback);
+    try std.testing.expectEqualStrings("ab cd", via_callback[0].string);
+    try std.testing.expectEqual(@as(f64, 2), via_callback[1].number);
+    try std.testing.expectEqual(@as(usize, 2), callback_count);
 }
 
 test "buffered stdlib returns clip fixed calls and preserve full dynamic results" {

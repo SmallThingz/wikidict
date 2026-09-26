@@ -317,7 +317,7 @@ const GlobalTail = struct {
     len: usize,
     pages: []?*GlobalPage,
 
-    fn snapshot(allocator: std.mem.Allocator, values: []const Value) !*GlobalTail {
+    fn snapshot(allocator: std.mem.Allocator, values: []const Value, occupied_pages: ?[]const u64) !*GlobalTail {
         const self = try allocator.create(GlobalTail);
         errdefer allocator.destroy(self);
         const pages = try allocator.alloc(?*GlobalPage, values.len / global_page_len + @intFromBool(values.len % global_page_len != 0));
@@ -327,15 +327,17 @@ const GlobalTail = struct {
         for (pages, 0..) |*page, page_index| {
             const start = page_index * global_page_len;
             const source = values[start..@min(start + global_page_len, values.len)];
-            for (source) |value| {
-                if (value != .nil) {
-                    const owned = try allocator.create(GlobalPage);
-                    owned.* = [_]Value{.nil} ** global_page_len;
-                    @memcpy(owned[0..source.len], source);
-                    page.* = owned;
-                    break;
-                }
-            }
+            const occupied = if (occupied_pages) |bits|
+                bits[page_index / 64] & (@as(u64, 1) << @intCast(page_index % 64)) != 0
+            else blk: {
+                for (source) |value| if (value != .nil) break :blk true;
+                break :blk false;
+            };
+            if (!occupied) continue;
+            const owned = try allocator.create(GlobalPage);
+            owned.* = [_]Value{.nil} ** global_page_len;
+            @memcpy(owned[0..source.len], source);
+            page.* = owned;
         }
         return self;
     }
@@ -376,6 +378,7 @@ pub const Table = struct {
     append_index: u32 = 1,
     read_only: bool = false,
     mutation_sentinel: ?*bool = null,
+    root_tail_cache_valid: ?*bool = null,
     // Monotonic: only tables that have ever hashed a numeric key need numeric map probes.
     has_hashed_number: bool = false,
     // Identity-key iteration may depend on arena addresses or function allocation order.
@@ -383,6 +386,7 @@ pub const Table = struct {
 
     fn markMutated(self: *Table) void {
         if (self.mutation_sentinel) |sentinel| sentinel.* = false;
+        if (self.root_tail_cache_valid) |valid| valid.* = false;
     }
 
     fn identityKey(key: Value) bool {
@@ -803,6 +807,10 @@ pub const Context = struct {
     string_arena: std.heap.ArenaAllocator,
     globals: []Value,
     root_globals: []Value,
+    // Stable heap address because Context is returned and forked by value.
+    root_tail_cache_valid: *bool,
+    root_tail_occupied: [2]u64 = .{ 0, 0 },
+    root_tail_dense: bool = false,
     global_tail: ?*GlobalTail = null,
     program_shapes: []const Shape = &.{},
     module_export_shape_ids: []const u32 = &.{},
@@ -851,11 +859,15 @@ pub const Context = struct {
         const module_state_pages = try allocator.alloc(?*ModuleStatePage, page_count);
         errdefer allocator.free(module_state_pages);
         @memset(module_state_pages, null);
+        const root_tail_cache_valid = try allocator.create(bool);
+        errdefer allocator.destroy(root_tail_cache_valid);
+        root_tail_cache_valid.* = false;
         return .{
             .allocator = allocator,
             .string_arena = .init(allocator),
             .globals = globals,
             .root_globals = globals,
+            .root_tail_cache_valid = root_tail_cache_valid,
             .module_count = module_count,
             .module_state_pages = module_state_pages,
         };
@@ -910,6 +922,7 @@ pub const Context = struct {
             self.allocator.destroy(table);
         }
         self.allocator.free(self.root_globals);
+        self.allocator.destroy(self.root_tail_cache_valid);
     }
 
     pub fn setHost(self: *Context, host: ?*anyopaque) void {
@@ -951,6 +964,7 @@ pub const Context = struct {
     pub fn setGlobal(self: *Context, slot: u32, value: Value) !void {
         if (slot < self.globals.len) {
             self.globals[slot] = value;
+            if (self.globals.ptr == self.root_globals.ptr) self.root_tail_cache_valid.* = false;
             return;
         }
         const tail = self.global_tail orelse return error.BadGlobalSlot;
@@ -1180,24 +1194,35 @@ pub const Context = struct {
         return self.module_state_pages[page_index].?.ensure(@as(usize, module_id) & module_state_page_mask);
     }
 
-    fn moduleGlobalsAreDense(self: *const Context) bool {
+    fn moduleGlobalsAreDense(self: *Context) bool {
         // A shapeless bound environment exposes numeric array slots directly.
         if (self.root_global_table) |table| if (table.shape == null) return true;
         if (self.root_globals.len <= module_global_prefix_len) return true;
         const values = self.root_globals[module_global_prefix_len..];
         const page_count = values.len / global_page_len + @intFromBool(values.len % global_page_len != 0);
+        const cacheable = page_count <= self.root_tail_occupied.len * 64;
+        if (cacheable and self.root_tail_cache_valid.*) return self.root_tail_dense;
+        self.root_tail_occupied = .{ 0, 0 };
         var occupied: usize = 0;
         var start: usize = 0;
         while (start < values.len) : (start += global_page_len) {
             for (values[start..@min(start + global_page_len, values.len)]) |value| {
                 if (value != .nil) {
                     occupied += 1;
-                    if (occupied > page_count / 2) return true;
+                    if (cacheable) {
+                        const page_index = start / global_page_len;
+                        self.root_tail_occupied[page_index / 64] |= @as(u64, 1) << @intCast(page_index % 64);
+                    }
                     break;
                 }
             }
         }
-        return false;
+        const dense = occupied > page_count / 2;
+        if (cacheable) {
+            self.root_tail_dense = dense;
+            self.root_tail_cache_valid.* = true;
+        }
+        return dense;
     }
 
     fn ensureModuleGlobals(self: *Context, module_id: u32) !GlobalScope {
@@ -1208,7 +1233,7 @@ pub const Context = struct {
             const globals = try self.allocator.dupe(Value, self.root_globals[0..prefix_len]);
             errdefer self.allocator.free(globals);
             const tail = if (prefix_len < self.root_globals.len)
-                try GlobalTail.snapshot(self.allocator, self.root_globals[prefix_len..])
+                try GlobalTail.snapshot(self.allocator, self.root_globals[prefix_len..], if (self.root_tail_cache_valid.*) &self.root_tail_occupied else null)
             else
                 null;
             errdefer if (tail) |owned| {
@@ -2263,6 +2288,7 @@ pub fn bindGlobalTable(ctx: *Context, shape: ?*const Shape, env_slot: u32) !void
     table.* = .{ .shape = shape, .slots = ctx.globals, .owns_slots = false };
     ctx.global_table = table;
     ctx.root_global_table = table;
+    table.root_tail_cache_valid = ctx.root_tail_cache_valid;
     ctx.root_globals = ctx.globals;
     ctx.global_env_slot = env_slot;
     try ctx.setGlobal(env_slot, .{ .table = table });
@@ -2776,6 +2802,66 @@ test "module global density counts false and partial tail pages" {
     try std.testing.expect(ctx.moduleGlobalsAreDense());
     try ctx.setGlobal(256, .nil);
     try std.testing.expect(!ctx.moduleGlobalsAreDense());
+}
+
+test "cached root tail occupancy preserves first touch across root writes and deletion" {
+    var keys = [_]Value{.nil} ** 257;
+    keys[0] = .{ .string = "_G" };
+    keys[64] = .{ .string = "early" };
+    keys[128] = .{ .string = "later" };
+    keys[192] = .{ .string = "last" };
+    keys[256] = .{ .string = "dense" };
+    const shape: Shape = .{ .field_keys = &keys, .field_count = keys.len, .open = true };
+    var ctx = try Context.initProgram(std.testing.allocator, keys.len, 3);
+    defer ctx.deinit();
+    try bindGlobalTable(&ctx, &shape, 0);
+    try ctx.setGlobal(64, .{ .number = 1 });
+    const first = try ctx.enterModule(0);
+    try std.testing.expect(ctx.root_tail_cache_valid.*);
+    try std.testing.expectEqual(@as(u64, 1), ctx.root_tail_occupied[0]);
+    ctx.restoreGlobals(first);
+
+    const root_table = ctx.root_global_table.?;
+    // Preinitializing an export may claim the normal mutation sentinel, even
+    // when the export aliases _G. Root occupancy invalidation remains separate.
+    try ctx.preinitializeModule(0, .{ .table = root_table }, false);
+    try root_table.rawSetSlot(64, .nil);
+    try std.testing.expect(!ctx.root_tail_cache_valid.*);
+    try root_table.rawSetSlot(128, .{ .boolean = false });
+    try root_table.rawSetSlot(192, .{ .number = 3 });
+    const second = try ctx.enterModule(1);
+    try std.testing.expect(ctx.root_tail_cache_valid.*);
+    try std.testing.expectEqual(@as(u64, 0b110), ctx.root_tail_occupied[0]);
+    try std.testing.expect(ctx.getGlobal(64) == .nil);
+    try std.testing.expect(!ctx.getGlobal(128).boolean);
+    try std.testing.expectEqual(@as(f64, 3), ctx.getGlobal(192).number);
+    ctx.restoreGlobals(second);
+
+    try ctx.setGlobal(256, .{ .number = 9 });
+    try std.testing.expect(!ctx.root_tail_cache_valid.*);
+    const third = try ctx.enterModule(2);
+    try std.testing.expect(ctx.root_tail_dense);
+    try std.testing.expect(ctx.global_tail == null);
+    try std.testing.expectEqual(@as(f64, 9), ctx.getGlobal(256).number);
+    ctx.restoreGlobals(third);
+
+    const first_again = try ctx.enterModule(0);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(64).number);
+    try std.testing.expect(ctx.getGlobal(128) == .nil);
+    ctx.restoreGlobals(first_again);
+    try root_table.rawSet(ctx.allocator, .{ .string = "dynamic" }, .{ .number = 5 });
+    try std.testing.expect(!ctx.root_tail_cache_valid.*);
+}
+
+test "large root tail falls back without caching occupancy" {
+    const count = module_global_prefix_len + 129 * global_page_len;
+    var ctx = try Context.initProgram(std.testing.allocator, count, 1);
+    defer ctx.deinit();
+    try ctx.setGlobal(count - 1, .{ .number = 7 });
+    const previous = try ctx.enterModule(0);
+    defer ctx.restoreGlobals(previous);
+    try std.testing.expect(!ctx.root_tail_cache_valid.*);
+    try std.testing.expectEqual(@as(f64, 7), ctx.getGlobal(count - 1).number);
 }
 
 test "shapeless module globals keep numeric array aliases" {
