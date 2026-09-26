@@ -27,8 +27,9 @@ FILES = (
 TREE = "modules"
 MISS = 3
 MAX_MARKER_BYTES = 64 * 1024 * 1024
-OBJECT_VERSION = 2
-LEGACY_OBJECT_VERSION = 1
+OBJECT_VERSION = 3
+LEAF_PRODUCER_FLAGS = ("build-obj", "-OReleaseFast", "-mcpu=baseline", "-fllvm", "-fstrip", "-lc")
+LEAF_PRODUCER_SOURCES = ("src/lua/value_leaf_build.zig", "src/lua/runtime/value_leaf.zig")
 ABI_FILES = (
     "src/lua/abi/globals.zig",
     "src/lua/abi/static_fields.zig",
@@ -227,6 +228,35 @@ def clang_identity(command):
     return {"tool": tool_identity(executable), "target": target, "version": version}
 
 
+def zig_leaf_identity(command):
+    resolved = shutil.which(command)
+    if resolved is None:
+        raise ValueError(f"Zig executable unavailable: {command}")
+    executable = Path(resolved).resolve(strict=True)
+    regular(executable)
+    version = subprocess.run([str(executable), "version"], capture_output=True,
+                             text=True, check=True, timeout=15).stdout.strip()
+    environment = subprocess.run([str(executable), "env"], capture_output=True,
+                                 text=True, check=True, timeout=15).stdout
+    target = re.search(r'\.target = "([^"]+)"', environment)
+    if not version or target is None:
+        raise ValueError("Zig version/target unavailable")
+    return {"tool_sha256": sha256(executable), "version": version,
+            "target": target.group(1), "flags": list(LEAF_PRODUCER_FLAGS)}
+
+
+def value_leaf_identity(llvm_dir, project_root, zig):
+    bitcode = llvm_dir / "value_leaf.bc"
+    regular(bitcode)
+    sources = []
+    for name in LEAF_PRODUCER_SOURCES:
+        path = project_root / name
+        regular(path)
+        sources.append([name, sha256(path)])
+    return {"bitcode": [bitcode.stat().st_size, sha256(bitcode)],
+            "producer_sources": sources, "zig": zig_leaf_identity(zig)}
+
+
 def read_object_plan(llvm_dir):
     plan_path = llvm_dir / "batch-plan.tsv"
     regular(plan_path)
@@ -258,7 +288,7 @@ def read_object_plan(llvm_dir):
     return plans
 
 
-def object_identity(llvm_dir, clang, project_root, flags):
+def object_identity(llvm_dir, clang, project_root, flags, zig="zig"):
     plans = read_object_plan(llvm_dir)
     bitcode = []
     for mode, name, *_ in plans:
@@ -277,6 +307,7 @@ def object_identity(llvm_dir, clang, project_root, flags):
         "program_bc": [program_bc.stat().st_size, sha256(program_bc)],
         "clang": clang_identity(clang),
         "flags": flags,
+        "value_leaf": value_leaf_identity(llvm_dir, project_root, zig),
     }
 
 
@@ -344,41 +375,6 @@ def object_cache_path(root, expected):
     return cache_path(parent, key)
 
 
-def compatible_legacy_objects(root, expected):
-    """Find a fully verified v1 generation differing only in ABI provenance.
-
-    Its old key still includes ABI hashes. Never rename or trust that key as a
-    v2 key: compare every other identity field and rehash every object first.
-    """
-    parent = root / "objects"
-    if parent.is_symlink() or not parent.is_dir():
-        return None
-    keys = set(expected) | {"abi"}
-    for candidate in parent.iterdir():
-        if not re.fullmatch(r"[0-9a-f]{64}", candidate.name) or candidate.is_symlink():
-            continue
-        try:
-            marker = candidate / ".complete.json"
-            record = read_marker(marker)
-            if not isinstance(record, dict):
-                continue
-            legacy = record.get("identity")
-            if not isinstance(legacy, dict) or set(legacy) != keys or \
-                    legacy.get("version") != LEGACY_OBJECT_VERSION or \
-                    not valid_abi_provenance(legacy.get("abi")):
-                continue
-            if any(legacy[key] != value for key, value in expected.items()
-                   if key != "version"):
-                continue
-            if object_cache_path(root, legacy) != candidate:
-                continue
-            if validate_objects(candidate, legacy):
-                return candidate
-        except (OSError, ValueError, json.JSONDecodeError, TypeError):
-            continue
-    return None
-
-
 def prune_abandoned_partials(parent):
     """The controller holds the corpus lock; a day-old temp is not publishing."""
     now = time.time()
@@ -401,8 +397,8 @@ def prune_old_generations(parent, current):
             shutil.rmtree(older)
 
 
-def probe_objects(root, clang, project_root, llvm_dir, flags):
-    expected = object_identity(llvm_dir, clang, project_root, flags)
+def probe_objects(root, clang, project_root, llvm_dir, flags, zig="zig"):
+    expected = object_identity(llvm_dir, clang, project_root, flags, zig)
     provenance = {"abi": abi_provenance(project_root)}
     identity_path = llvm_dir / ".object-identity.json"
     temporary = identity_path.with_suffix(".part")
@@ -417,9 +413,7 @@ def probe_objects(root, clang, project_root, llvm_dir, flags):
         except (OSError, ValueError, json.JSONDecodeError, TypeError):
             pass
     if not valid_current:
-        source = compatible_legacy_objects(root, expected)
-        if source is None:
-            return MISS
+        return MISS
     for name in object_names(expected):
         destination = llvm_dir / name
         if destination.exists() or destination.is_symlink():
@@ -447,6 +441,10 @@ def publish_objects(root, llvm_dir):
         raise ValueError("LLVM batch plan changed during compilation")
     if sha256(llvm_dir / "program.meta") != expected.get("program_meta_sha256"):
         raise ValueError("LLVM program metadata changed during compilation")
+    leaf = llvm_dir / "value_leaf.bc"
+    regular(leaf)
+    if [leaf.stat().st_size, sha256(leaf)] != expected.get("value_leaf", {}).get("bitcode"):
+        raise ValueError("Build-only value helper bitcode changed during compilation")
     names = object_names(expected)
     parent = root / "objects"
     destination = object_cache_path(root, expected)
@@ -493,15 +491,15 @@ def publish_objects(root, llvm_dir):
 
 
 def main(argv):
-    if len(argv) == 7 and argv[1] in ("probe-objects", "publish-objects"):
-        _, action, root, clang, project_root, llvm_dir, flags_raw = argv
+    if len(argv) == 8 and argv[1] in ("probe-objects", "publish-objects"):
+        _, action, root, clang, project_root, llvm_dir, flags_raw, zig = argv
         flags = flags_raw.split(",")
         if not flags or any(not re.fullmatch(r"-[A-Za-z0-9-]+", flag)
                             for flag in flags):
             raise ValueError("Invalid Clang compile flags")
         if action == "probe-objects":
             return probe_objects(Path(root), clang, Path(project_root),
-                                 Path(llvm_dir), flags)
+                                 Path(llvm_dir), flags, zig)
         return publish_objects(Path(root), Path(llvm_dir))
     if len(argv) != 7 or argv[1] not in ("probe", "publish"):
         raise SystemExit("usage: extraction_cache.py probe|publish CACHE_ROOT EXTRACTOR DUMP_SHA256 INDEX_SHA256 EXPANDER_ROOT")

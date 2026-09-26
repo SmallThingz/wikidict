@@ -67,6 +67,18 @@ extern fn LLVMContextCreate() ?ContextRef;
 extern fn LLVMContextDispose(C: ContextRef) void;
 extern fn LLVMModuleCreateWithNameInContext(ModuleID: [*:0]const u8, C: ContextRef) ?ModuleRef;
 extern fn LLVMDisposeModule(M: ModuleRef) void;
+extern fn LLVMCreateMemoryBufferWithMemoryRangeCopy([*]const u8, usize, [*:0]const u8) ?*anyopaque;
+extern fn LLVMDisposeMemoryBuffer(*anyopaque) void;
+extern fn LLVMParseBitcodeInContext2(ContextRef, *anyopaque, *?ModuleRef) c_int;
+extern fn LLVMLinkModules2(ModuleRef, ModuleRef) c_int;
+extern fn LLVMGetNamedGlobalAlias(ModuleRef, [*]const u8, usize) ?ValueRef;
+extern fn LLVMAliasGetAliasee(ValueRef) ?ValueRef;
+extern fn LLVMIsAFunction(ValueRef) ?ValueRef;
+extern fn LLVMCountBasicBlocks(ValueRef) c_uint;
+extern fn LLVMCountParams(ValueRef) c_uint;
+extern fn LLVMGetFunctionCallConv(ValueRef) c_uint;
+extern fn LLVMGetReturnType(TypeRef) ?TypeRef;
+extern fn LLVMBuildRetVoid(BuilderRef) ?ValueRef;
 extern fn LLVMPrintModuleToString(M: ModuleRef) ?[*:0]u8;
 extern fn LLVMDisposeMessage(Message: [*:0]u8) void;
 extern fn LLVMVerifyModule(M: ModuleRef, Action: c_int, OutMessage: *?[*:0]u8) c_int;
@@ -210,6 +222,91 @@ pub const Module = struct {
         const z = std.heap.smp_allocator.dupeZ(u8, name) catch return null;
         defer std.heap.smp_allocator.free(z);
         return LLVMGetNamedFunction(self.ref, z.ptr);
+    }
+
+    /// Import compiler-built Value primitives without emitting another public
+    /// ABI provider. Zig exports aliases; the wrapper calls each aliasee's
+    /// internal Function, and the aliases remain private with valid targets.
+    pub fn importValueLeafBitcode(self: *const Module, allocator: std.mem.Allocator, bytes: []const u8) !void {
+        const buffer = LLVMCreateMemoryBufferWithMemoryRangeCopy(bytes.ptr, bytes.len, "value-leaf") orelse return error.LlvmApiFailure;
+        defer LLVMDisposeMemoryBuffer(buffer);
+        var parsed: ?ModuleRef = null;
+        if (LLVMParseBitcodeInContext2(self.context, buffer, &parsed) != 0) return error.InvalidLeafBitcode;
+        const leaf = parsed orelse return error.InvalidLeafBitcode;
+        var owned = true;
+        defer if (owned) LLVMDisposeModule(leaf);
+
+        const Leaf = struct { suffix: []const u8, public_name: []const u8, required: bool = true };
+        const leaves = [_]Leaf{
+            .{ .suffix = "nil", .public_name = "dict_lua_value_nil" },
+            .{ .suffix = "bool", .public_name = "dict_lua_value_bool" },
+            .{ .suffix = "number", .public_name = "dict_lua_value_number" },
+            .{ .suffix = "string", .public_name = "dict_lua_value_string" },
+            .{ .suffix = "copy", .public_name = "dict_lua_value_copy" },
+            .{ .suffix = "truthy", .public_name = "dict_lua_value_truthy" },
+            .{ .suffix = "is_nil", .public_name = "dict_lua_value_is_nil" },
+            .{ .suffix = "is_number", .public_name = "dict_lua_value_is_number", .required = false },
+            .{ .suffix = "number_unchecked", .public_name = "dict_lua_value_number_unchecked", .required = false },
+            .{ .suffix = "arg_ptr", .public_name = "dict_lua_arg_ptr" },
+            .{ .suffix = "arg_get", .public_name = "dict_lua_arg_get" },
+            .{ .suffix = "cell_get", .public_name = "dict_lua_cell_get" },
+            .{ .suffix = "cell_set", .public_name = "dict_lua_cell_set" },
+        };
+        var target_names: [leaves.len][:0]u8 = undefined;
+        var target_count: usize = 0;
+        defer for (target_names[0..target_count]) |name| allocator.free(name);
+        for (leaves) |entry| {
+            const suffix = entry.suffix;
+            const alias_name = try std.fmt.allocPrint(allocator, "dict_lua_leaf_value_{s}", .{suffix});
+            defer allocator.free(alias_name);
+            const alias = LLVMGetNamedGlobalAlias(leaf, alias_name.ptr, alias_name.len) orelse return error.MissingLeafAlias;
+            const aliasee = LLVMAliasGetAliasee(alias) orelse return error.InvalidLeafAlias;
+            const target = LLVMIsAFunction(aliasee) orelse return error.InvalidLeafAlias;
+            if (LLVMGetFunctionCallConv(target) != 0) return error.InvalidLeafCallConv;
+            // Internal names may be renamed by the linker. Give the target a
+            // distinct public name during linking, then make it private again.
+            const target_name = try std.fmt.allocPrint(allocator, "dict_lua_leaf_import_target_{s}", .{suffix});
+            defer allocator.free(target_name);
+            target_names[target_count] = try allocator.dupeZ(u8, target_name);
+            target_count += 1;
+            LLVMSetValueName2(target, target_names[target_count - 1].ptr, target_names[target_count - 1].len);
+            LLVMSetLinkage(target, .external);
+            LLVMSetLinkage(alias, .private);
+        }
+        // LinkModules2 consumes the source module on both success and failure.
+        owned = false;
+        if (LLVMLinkModules2(self.ref, leaf) != 0) return error.LlvmLinkFailure;
+
+        for (leaves, target_names) |entry, target_name| {
+            const target = self.getFunction(target_name) orelse return error.MissingLeafFunction;
+            LLVMSetLinkage(target, .private);
+            try addFunctionEnumAttribute(self.context, target, "alwaysinline");
+            const wrapper = self.getFunction(entry.public_name) orelse {
+                if (entry.required) return error.MissingLeafWrapper;
+                continue;
+            };
+            if (LLVMCountBasicBlocks(wrapper) != 0) return error.LeafWrapperAlreadyDefined;
+            const wrapper_ty = try req(TypeRef, LLVMGlobalGetValueType(wrapper));
+            const target_ty = try req(TypeRef, LLVMGlobalGetValueType(target));
+            if (wrapper_ty != target_ty) return error.LeafSignatureMismatch;
+            if (LLVMGetFunctionCallConv(wrapper) != 0) return error.LeafSignatureMismatch;
+            const block = try appendBlock(self.context, wrapper, "value_leaf_inline");
+            const builder = try createBuilder(self.context);
+            defer disposeBuilder(builder);
+            position(builder, block);
+            const count: usize = LLVMCountParams(wrapper);
+            const args = try allocator.alloc(ValueRef, count);
+            defer allocator.free(args);
+            for (args, 0..) |*arg, parameter_index| arg.* = try param(wrapper, parameter_index);
+            const result = try call(builder, target, args);
+            const return_ty = try req(TypeRef, LLVMGetReturnType(wrapper_ty));
+            if (return_ty == self.types.void)
+                _ = try req(ValueRef, LLVMBuildRetVoid(builder))
+            else
+                try ret(builder, result);
+            LLVMSetLinkage(wrapper, .available_externally);
+            try addFunctionEnumAttribute(self.context, wrapper, "alwaysinline");
+        }
     }
 
     pub fn addGlobal(self: *const Module, name: []const u8, ty: TypeRef, initializer: ValueRef, linkage: Linkage, alignment: u32) !ValueRef {

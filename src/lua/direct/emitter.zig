@@ -2386,6 +2386,10 @@ pub const Batch = struct {
         self.* = undefined;
     }
 
+    pub fn importValueLeafBitcode(self: *Batch, allocator: A, bytes: []const u8) !void {
+        try self.module.importValueLeafBitcode(allocator, bytes);
+    }
+
     fn deadFunctionStub(self: *Batch, function_ty: T) anyerror!V {
         const name = "dict_lua_dead_function_unreachable";
         if (self.module.getFunction(name)) |existing| return existing;

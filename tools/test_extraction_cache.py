@@ -96,12 +96,21 @@ class ObjectCacheTest(unittest.TestCase):
             path = self.project / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(name)
+        for name in cache.LEAF_PRODUCER_SOURCES:
+            path = self.project / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name)
         self.flags = ["-fno-lto", "-Wno-override-module", "-O1"]
         self.tool = {"tool": {"extractor_sha256": "c" * 64, "libraries": []},
                      "target": "x86_64-linux-gnu", "version": "clang fixture"}
         self.patched = mock.patch.object(cache, "clang_identity", return_value=self.tool)
         self.patched.start()
         self.addCleanup(self.patched.stop)
+        self.zig_tool = {"tool_sha256": "e" * 64, "version": "zig fixture",
+                         "target": "x86_64-linux-gnu", "flags": list(cache.LEAF_PRODUCER_FLAGS)}
+        self.patched_zig = mock.patch.object(cache, "zig_leaf_identity", return_value=self.zig_tool)
+        self.patched_zig.start()
+        self.addCleanup(self.patched_zig.stop)
 
     def llvm(self, name):
         root = self.base / name
@@ -114,6 +123,7 @@ class ObjectCacheTest(unittest.TestCase):
         (root / "module_batch_o0_000000.bc").write_bytes(b"batch-low")
         (root / "program.bc").write_bytes(b"program bitcode")
         (root / "program.meta").write_bytes(b"program metadata")
+        (root / "value_leaf.bc").write_bytes(b"verified build-only helper bitcode")
         return root
 
     def test_round_trip_and_corrupt_object(self):
@@ -134,7 +144,7 @@ class ObjectCacheTest(unittest.TestCase):
             self.root, "clang", self.project, third, self.flags))
         self.assertFalse((third / "program.o").exists())
 
-    def test_bitcode_metadata_and_flags_invalidate_but_abi_only_change_hits(self):
+    def test_bitcode_metadata_leaf_compiler_and_flags_invalidate_but_abi_only_change_hits(self):
         first = self.llvm("first")
         cache.probe_objects(self.root, "clang", self.project, first, self.flags)
         for name in ("module_batch_000000.o", "module_batch_000001.o", "program.o"):
@@ -143,9 +153,31 @@ class ObjectCacheTest(unittest.TestCase):
         for label, filename, content in (
             ("bitcode", "module_batch_o2_000000.bc", b"new bitcode"),
             ("metadata", "program.meta", b"new metadata"),
+            ("leaf-bitcode", "value_leaf.bc", b"changed helper bitcode"),
         ):
             changed = self.llvm(label)
             (changed / filename).write_bytes(content)
+            self.assertEqual(cache.MISS, cache.probe_objects(
+                self.root, "clang", self.project, changed, self.flags))
+        leaf_source = self.project / cache.LEAF_PRODUCER_SOURCES[1]
+        leaf_source.write_text("changed helper body")
+        changed = self.llvm("leaf-source")
+        self.assertEqual(cache.MISS, cache.probe_objects(
+            self.root, "clang", self.project, changed, self.flags))
+        leaf_source.write_text(cache.LEAF_PRODUCER_SOURCES[1])
+        with mock.patch.object(cache, "zig_leaf_identity",
+                               return_value=dict(self.zig_tool, version="new Zig")):
+            changed = self.llvm("zig")
+            self.assertEqual(cache.MISS, cache.probe_objects(
+                self.root, "clang", self.project, changed, self.flags))
+        with mock.patch.object(cache, "zig_leaf_identity",
+                               return_value=dict(self.zig_tool, target="aarch64-linux-gnu")):
+            changed = self.llvm("target")
+            self.assertEqual(cache.MISS, cache.probe_objects(
+                self.root, "clang", self.project, changed, self.flags))
+        with mock.patch.object(cache, "zig_leaf_identity",
+                               return_value=dict(self.zig_tool, flags=["-O2"])):
+            changed = self.llvm("leaf-flags")
             self.assertEqual(cache.MISS, cache.probe_objects(
                 self.root, "clang", self.project, changed, self.flags))
         abi = self.project / cache.ABI_FILES[0]
@@ -215,40 +247,25 @@ class ObjectCacheTest(unittest.TestCase):
         self.assertEqual(0, cache.publish_objects(self.root, first))
         self.assertFalse(older.exists())
 
-    def test_verified_legacy_generation_survives_abi_only_change(self):
+    def test_old_generation_cannot_redeem_leaf_enabled_objects(self):
         first = self.llvm("first")
         current = cache.object_identity(first, "clang", self.project, self.flags)
-        legacy = dict(current, version=cache.LEGACY_OBJECT_VERSION,
-                      abi=cache.abi_provenance(self.project))
-        old_root = cache.object_cache_path(self.root, legacy)
-        old_root.mkdir(parents=True)
-        names = cache.object_names(legacy)
-        for name in names:
-            (old_root / name).write_bytes(name.encode())
-        (old_root / ".complete.json").write_text(cache.json.dumps({
-            "identity": legacy,
-            "assets": cache.record_named_assets(old_root, names),
-        }))
-        (self.project / cache.ABI_FILES[0]).write_text("new runtime implementation")
+        names = cache.object_names(current)
+        for old_version in (1, 2):
+            old = dict(current, version=old_version)
+            old_root = cache.object_cache_path(self.root, old)
+            old_root.mkdir(parents=True)
+            for name in names:
+                (old_root / name).write_bytes(name.encode())
+            (old_root / ".complete.json").write_text(cache.json.dumps({
+                "identity": old,
+                "assets": cache.record_named_assets(old_root, names),
+            }))
         second = self.llvm("second")
-        self.assertEqual(0, cache.probe_objects(
+        self.assertEqual(cache.MISS, cache.probe_objects(
             self.root, "clang", self.project, second, self.flags))
-        self.assertEqual(b"program.o", (second / "program.o").read_bytes())
+        self.assertFalse((second / "program.o").exists())
         self.assertFalse(cache.object_cache_path(self.root, current).exists())
-        self.assertTrue(old_root.is_dir())
-
-        # A legacy marker with a mismatched non-ABI field is not compatible.
-        changed = self.llvm("changed")
-        (changed / "program.meta").write_bytes(b"different metadata")
-        self.assertEqual(cache.MISS, cache.probe_objects(
-            self.root, "clang", self.project, changed, self.flags))
-
-        # The legacy key cannot redeem an object whose content changed.
-        (old_root / "program.o").write_bytes(b"corrupt")
-        third = self.llvm("third")
-        self.assertEqual(cache.MISS, cache.probe_objects(
-            self.root, "clang", self.project, third, self.flags))
-        self.assertFalse((third / "program.o").exists())
 
 
 if __name__ == "__main__":

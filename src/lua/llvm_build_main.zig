@@ -773,6 +773,7 @@ fn emitBatches(
     module_ids: *const emitter.ModuleIdMap,
     shape_registry: *const shapes.Registry,
     module_facts: []const emitter.ModuleFact,
+    value_leaf_bc: []const u8,
 ) !void {
     if (records.len != modes.len) return error.InvalidCompilePlan;
 
@@ -807,6 +808,7 @@ fn emitBatches(
             const batch_started_ns = std.Io.Clock.awake.now(io).toNanoseconds();
             var batch = try emitter.Batch.init();
             errdefer batch.deinit();
+            if (mode != .o0) try batch.importValueLeafBitcode(a, value_leaf_bc);
 
             const first_index = selected.items[position];
             var last_index = first_index;
@@ -884,6 +886,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     if (args.len < 4) return error.Usage;
     var analysis_only = false;
     var parse_workers: usize = @min(4, std.Thread.getCpuCount() catch 1);
+    var value_leaf_path: ?[]const u8 = null;
     var option: usize = 4;
     while (option < args.len) : (option += 1) {
         if (std.mem.eql(u8, args[option], "--analysis-only")) {
@@ -893,6 +896,10 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
             if (option == args.len) return error.Usage;
             parse_workers = try std.fmt.parseInt(usize, args[option], 10);
             if (parse_workers == 0 or parse_workers > 64) return error.Usage;
+        } else if (std.mem.eql(u8, args[option], "--value-leaf-bc")) {
+            option += 1;
+            if (option == args.len or value_leaf_path != null) return error.Usage;
+            value_leaf_path = args[option];
         } else return error.Usage;
     }
     const manifest_path = args[1];
@@ -1064,6 +1071,15 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         return;
     }
 
+    const leaf_path = value_leaf_path orelse return error.MissingValueLeafBitcode;
+    var leaf_file = try std.Io.Dir.cwd().openFile(io, leaf_path, .{});
+    defer leaf_file.close(io);
+    const leaf_stat = try leaf_file.stat(io);
+    if (leaf_stat.size == 0 or leaf_stat.size > 1024 * 1024) return error.InvalidLeafBitcodeSize;
+    const leaf_bc = try a.alloc(u8, @intCast(leaf_stat.size));
+    if (try leaf_file.readPositionalAll(io, leaf_bc, 0) != leaf_bc.len)
+        return error.TruncatedLeafBitcode;
+
     const selected_module_facts = try a.alloc(emitter.ModuleFact, selected_records.items.len);
     defer a.free(selected_module_facts);
     for (selected_module_facts, selected_records.items) |*fact, record| {
@@ -1086,6 +1102,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &selected_module_ids,
         &shape_registry,
         selected_module_facts,
+        leaf_bc,
     );
 
     var program_module = try program.generate(a, selected_records.items);
@@ -1107,8 +1124,8 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
 }
 
 pub export fn dict_llvm_build_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
-    if (argc < 4 or argc > 7) {
-        std.debug.print("usage: dict-llvm-build MANIFEST SOURCE_ROOT OUTPUT_DIR [--analysis-only] [--parse-workers N]\n", .{});
+    if (argc < 4 or argc > 9) {
+        std.debug.print("usage: dict-llvm-build MANIFEST SOURCE_ROOT OUTPUT_DIR [--analysis-only] [--parse-workers N] [--value-leaf-bc PATH]\n", .{});
         return 2;
     }
 
@@ -1117,7 +1134,7 @@ pub export fn dict_llvm_build_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c
     var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();
 
-    var args: [7][]const u8 = undefined;
+    var args: [9][]const u8 = undefined;
     for (args[0..@intCast(argc)], 0..) |*arg, index| arg.* = std.mem.span(argv[index]);
     run(threaded.io(), arena.allocator(), args[0..@intCast(argc)]) catch |err| {
         std.debug.print("dict-llvm-build: {s}\n", .{@errorName(err)});

@@ -1,5 +1,6 @@
 const std = @import("std");
 const rt = @import("zig_runtime");
+const value_leaf = @import("value_leaf.zig");
 const static_decode = @import("lua_static_literal_decode");
 
 comptime {
@@ -51,7 +52,30 @@ fn values(ptr: [*]const rt.Value, len: usize) []const rt.Value {
 const nil_value: rt.Value = .nil;
 
 export fn dict_lua_arg_ptr(args: [*]const rt.Value, len: usize, index: usize) callconv(.c) *const rt.Value {
-    return if (index < len) &args[index] else &nil_value;
+    return value_leaf.argPtr(args, len, index);
+}
+
+test "argument and cell ABI leaf operations preserve borrowed pointers and boxed values" {
+    const args = [_]rt.Value{ .{ .number = 3.5 }, .{ .string = "boxed" } };
+    try std.testing.expect(dict_lua_arg_ptr(&args, args.len, 0) == &args[0]);
+    try std.testing.expect(dict_lua_arg_ptr(&args, args.len, 1) == &args[1]);
+    try std.testing.expect(dict_lua_arg_ptr(&args, args.len, 2).* == .nil);
+    try std.testing.expect(dict_lua_arg_ptr(&args, args.len, 20).* == .nil);
+
+    var value: rt.Value = .{ .boolean = true };
+    dict_lua_arg_get(&args, args.len, 1, &value);
+    try std.testing.expectEqualStrings("boxed", value.string);
+    dict_lua_arg_get(&args, args.len, 2, &value);
+    try std.testing.expect(value == .nil);
+
+    var cell = rt.Cell{ .value = args[0] };
+    dict_lua_cell_get(&cell, &value);
+    try std.testing.expectEqual(@as(f64, 3.5), value.number);
+    dict_lua_cell_set(&cell, &args[1]);
+    dict_lua_cell_get(&cell, &value);
+    try std.testing.expectEqualStrings("boxed", value.string);
+    dict_lua_cell_set(&cell, &cell.value);
+    try std.testing.expectEqualStrings("boxed", cell.value.string);
 }
 
 // The emitter borrows pointers only for stable native ABI globals.
@@ -95,22 +119,22 @@ export fn dict_lua_module_value_sentinel(ctx: *const rt.Context, module_id: u32,
 }
 
 export fn dict_lua_value_nil(out: *rt.Value) callconv(.c) void {
-    out.* = .nil;
+    value_leaf.nil(out);
 }
 export fn dict_lua_value_bool(out: *rt.Value, raw: u8) callconv(.c) void {
-    out.* = .{ .boolean = raw != 0 };
+    value_leaf.boolean(out, raw);
 }
 export fn dict_lua_value_number(out: *rt.Value, raw: f64) callconv(.c) void {
-    out.* = .{ .number = raw };
+    value_leaf.number(out, raw);
 }
 export fn dict_lua_value_string(out: *rt.Value, ptr: [*]const u8, len: usize) callconv(.c) void {
-    out.* = .{ .string = ptr[0..len] };
+    value_leaf.string(out, ptr, len);
 }
 export fn dict_lua_value_copy(out: *rt.Value, input: *const rt.Value) callconv(.c) void {
-    out.* = input.*;
+    value_leaf.copy(out, input);
 }
 export fn dict_lua_value_truthy(input: *const rt.Value) callconv(.c) u8 {
-    return @intFromBool(input.*.truthy());
+    return value_leaf.truthy(input);
 }
 export fn dict_lua_value_is_function_id(input: *const rt.Value, function_id: u32) callconv(.c) u8 {
     return @intFromBool(input.* == .callable and input.callable.id == function_id);
@@ -334,10 +358,10 @@ export fn dict_lua_cell_new(ctx: *rt.Context, initial: *const rt.Value, out: **r
     return 0;
 }
 export fn dict_lua_cell_get(cell: *const rt.Cell, out: *rt.Value) callconv(.c) void {
-    out.* = cell.value;
+    value_leaf.cellGet(cell, out);
 }
 export fn dict_lua_cell_set(cell: *rt.Cell, input: *const rt.Value) callconv(.c) void {
-    cell.value = input.*;
+    value_leaf.cellSet(cell, input);
 }
 export fn dict_lua_direct_capture_cells(
     ctx: *rt.Context,
@@ -579,6 +603,33 @@ test "LLVM ABI layouts and primitive helpers" {
     dict_lua_value_number(&value, 7);
     try std.testing.expectEqual(@as(f64, 7), value.number);
     try std.testing.expectEqual(@as(u8, 1), dict_lua_value_truthy(&value));
+
+    dict_lua_value_nil(&value);
+    try std.testing.expect(value == .nil);
+    try std.testing.expectEqual(@as(u8, 1), dict_lua_value_is_nil(&value));
+    try std.testing.expectEqual(@as(u8, 0), dict_lua_value_truthy(&value));
+
+    dict_lua_value_bool(&value, 0);
+    try std.testing.expect(value == .boolean and !value.boolean);
+    try std.testing.expectEqual(@as(u8, 0), dict_lua_value_truthy(&value));
+    dict_lua_value_bool(&value, 42);
+    try std.testing.expect(value == .boolean and value.boolean);
+    try std.testing.expectEqual(@as(u8, 1), dict_lua_value_truthy(&value));
+
+    const text = "leaf-value";
+    dict_lua_value_string(&value, text.ptr, text.len);
+    try std.testing.expect(value == .string);
+    try std.testing.expectEqualStrings(text, value.string);
+    try std.testing.expectEqual(@intFromPtr(text.ptr), @intFromPtr(value.string.ptr));
+    dict_lua_value_copy(&value, &value);
+    try std.testing.expectEqualStrings(text, value.string);
+
+    const nan = std.math.nan(f64);
+    dict_lua_value_number(&value, nan);
+    try std.testing.expectEqual(@as(u8, 1), dict_lua_value_is_number(&value));
+    try std.testing.expect(std.math.isNan(dict_lua_value_number_unchecked(&value)));
+    dict_lua_value_nil(&value);
+    try std.testing.expect(std.math.isNan(dict_lua_value_number_unchecked(&value)));
 }
 
 fn fixedCallTestCount(args: []const rt.Value) !usize {
@@ -710,14 +761,14 @@ export fn dict_lua_require_number(ctx: *rt.Context, input: *const rt.Value, out:
     return 0;
 }
 export fn dict_lua_value_is_nil(input: *const rt.Value) callconv(.c) u8 {
-    return @intFromBool(input.* == .nil);
+    return value_leaf.isNil(input);
 }
 export fn dict_lua_value_is_number(input: *const rt.Value) callconv(.c) u8 {
-    return @intFromBool(input.* == .number);
+    return value_leaf.isNumber(input);
 }
 export fn dict_lua_value_number_unchecked(input: *const rt.Value) callconv(.c) f64 {
-    return if (input.* == .number) input.number else std.math.nan(f64);
+    return value_leaf.numberUnchecked(input);
 }
 export fn dict_lua_arg_get(args_ptr: [*]const rt.Value, args_len: usize, index: usize, out: *rt.Value) callconv(.c) void {
-    out.* = if (index < args_len) args_ptr[index] else .nil;
+    value_leaf.argGet(args_ptr, args_len, index, out);
 }

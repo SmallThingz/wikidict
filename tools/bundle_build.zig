@@ -167,7 +167,7 @@ fn boundedParseWorkers(requested: usize, cpu_limit: usize, worker_running: bool,
     return @min(requested, @max(@as(usize, 1), cpu_limit -| reserved));
 }
 
-fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump: []const u8, root: []const u8, llvm_dir: []const u8, workers: usize, cpu_limit: usize, worker_job: *const WorkerObjectJob) !void {
+fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump: []const u8, root: []const u8, llvm_dir: []const u8, workers: usize, cpu_limit: usize, worker_job: *const WorkerObjectJob, leaf_job: *LeafBitcodeJob) !void {
     const ready = try std.fs.path.join(a, &.{ root, "compiler-inputs.ready" });
     const manifest = try std.fs.path.join(a, &.{ root, "manifest.jsonl" });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "extract compiler inputs" });
@@ -191,9 +191,12 @@ fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump:
         }
         try std.Io.sleep(io, .fromMilliseconds(10), .awake);
     }
+    // The producer ran beside extraction and the runtime worker. Join before
+    // the compiler opens its bitcode; the final path is atomically published.
+    const leaf_bc = try leaf_job.finish();
     const parse_workers = boundedParseWorkers(workers, cpu_limit, !worker_job.done.load(.acquire), !extraction.done.load(.acquire));
     const worker_text = try std.fmt.allocPrint(a, "{d}", .{parse_workers});
-    try stage(io, marker, "parse/analyze Lua while finalizing corpus index", &.{ paths.llvm, manifest, root, llvm_dir, "--parse-workers", worker_text });
+    try stage(io, marker, "parse/analyze Lua while finalizing corpus index", &.{ paths.llvm, manifest, root, llvm_dir, "--parse-workers", worker_text, "--value-leaf-bc", leaf_bc });
     // The title index is required by expansion, even if LLVM emission finishes
     // first. The deferred join also covers all error paths.
     while (!extraction.done.load(.acquire)) try std.Io.sleep(io, .fromMilliseconds(10), .awake);
@@ -234,7 +237,7 @@ fn objectCacheCommand(
     // per-batch modes recorded in batch-plan.tsv.
     const flags = try std.mem.join(a, ",", &.{ clang_common_flags[0], clang_common_flags[1], clang_program_mode });
     var child = try std.process.spawn(io, .{ .argv = &.{
-        "python3", helper, action, cache_root, paths.clang, paths.project_root, llvm_dir, flags,
+        "python3", helper, action, cache_root, paths.clang, paths.project_root, llvm_dir, flags, paths.zig,
     }, .stdin = .ignore });
     defer child.kill(io);
     const term = try child.wait(io);
@@ -528,6 +531,66 @@ fn cachedObjectPaths(io: std.Io, a: std.mem.Allocator, llvm_dir: []const u8) !st
     return objects;
 }
 
+fn compileLeafBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_dir: []const u8) ![]const u8 {
+    const leaf_root = try sourcePath(a, "src/lua/value_leaf_build.zig");
+    const runtime_core = try sourcePath(a, "src/lua/runtime/core.zig");
+    const static_fields = try sourcePath(a, "src/lua/abi/static_fields.zig");
+    const output = try std.fs.path.join(a, &.{ llvm_dir, "value_leaf.bc" });
+    const partial = try std.fs.path.join(a, &.{ llvm_dir, "value_leaf.bc.part" });
+    const object = try std.fs.path.join(a, &.{ llvm_dir, "value_leaf.o" });
+    const emit_obj = try std.fmt.allocPrint(a, "-femit-bin={s}", .{object});
+    const emit_bc = try std.fmt.allocPrint(a, "-femit-llvm-bc={s}", .{partial});
+    const root_mod = try std.fmt.allocPrint(a, "-Mroot={s}", .{leaf_root});
+    const runtime_mod = try std.fmt.allocPrint(a, "-Mzig_runtime={s}", .{runtime_core});
+    const fields_mod = try std.fmt.allocPrint(a, "-Mlua_static_fields={s}", .{static_fields});
+    try stage(io, marker, "compile build-only Lua value helper bitcode", &.{
+        paths.zig,   "build-obj", "-OReleaseFast", "-mcpu=baseline", "-fllvm", "-fstrip", "-lc",
+        emit_obj,    emit_bc,     "--dep",         "zig_runtime",    root_mod, "--dep",   "lua_static_fields",
+        runtime_mod, fields_mod,
+    });
+    try std.Io.Dir.cwd().rename(partial, .cwd(), output, io);
+    return output;
+}
+
+// This private build-only object can overlap the runtime worker and extraction.
+// Lua emission starts only after the completed bitcode is atomically published.
+const LeafBitcodeJob = struct {
+    io: std.Io,
+    marker: []const u8,
+    llvm_dir: []const u8,
+    arena: std.heap.ArenaAllocator,
+    thread: ?std.Thread = null,
+    done: std.atomic.Value(bool) = .init(false),
+    result: ?[]const u8 = null,
+    failure: ?anyerror = null,
+
+    fn run(self: *LeafBitcodeJob) void {
+        defer self.done.store(true, .release);
+        self.result = compileLeafBitcode(self.io, self.arena.allocator(), self.marker, self.llvm_dir) catch |err| {
+            self.failure = err;
+            return;
+        };
+    }
+
+    fn start(self: *LeafBitcodeJob) !void {
+        self.thread = try std.Thread.spawn(.{}, run, .{self});
+    }
+
+    fn finish(self: *LeafBitcodeJob) ![]const u8 {
+        if (self.thread) |thread| {
+            thread.join();
+            self.thread = null;
+        }
+        if (self.failure) |err| return err;
+        return self.result orelse error.LeafBitcodeMissing;
+    }
+
+    fn deinit(self: *LeafBitcodeJob) void {
+        if (self.thread) |thread| thread.join();
+        self.arena.deinit();
+    }
+};
+
 fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_dir: []const u8) ![]const u8 {
     const worker_core = try sourcePath(a, "src/lua/bundle_worker.zig");
     const zig_runtime = try sourcePath(a, "src/lua/runtime/core.zig");
@@ -819,17 +882,27 @@ pub fn main(init: std.process.Init) !void {
     };
     defer worker_job.deinit();
     try worker_job.start();
+    const leaf_marker = try std.fs.path.join(a, &.{ llvm_dir, "value-leaf.stage" });
+    var leaf_job: LeafBitcodeJob = .{
+        .io = init.io,
+        .marker = leaf_marker,
+        .llvm_dir = llvm_dir,
+        .arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator),
+    };
+    defer leaf_job.deinit();
+    try leaf_job.start();
     const cache_hit = if (options.extraction_cache_root) |cache|
         try extractionCacheCommand(init.io, a, "probe", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root)
     else
         false;
     if (cache_hit) {
         const manifest = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });
+        const leaf_bc = try leaf_job.finish();
         const parse_workers = boundedParseWorkers(options.parse_workers, cpu_limit, !worker_job.done.load(.acquire), false);
         const worker_text = try std.fmt.allocPrint(a, "{d}", .{parse_workers});
-        try stage(init.io, marker, "parse/analyze Lua from verified extraction cache", &.{ paths.llvm, manifest, expander_root, llvm_dir, "--parse-workers", worker_text });
+        try stage(init.io, marker, "parse/analyze Lua from verified extraction cache", &.{ paths.llvm, manifest, expander_root, llvm_dir, "--parse-workers", worker_text, "--value-leaf-bc", leaf_bc });
     } else {
-        try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers, cpu_limit, &worker_job);
+        try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers, cpu_limit, &worker_job, &leaf_job);
         // compiler-inputs.ready precedes title-index finalization. Publish
         // only after the extractor has exited successfully.
         if (options.extraction_cache_root) |cache|

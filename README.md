@@ -184,15 +184,20 @@ write canonical blobs. The spool is transient and is removed after finalization.
 An interrupted corpus build retains verified extraction assets and native Lua
 objects in its staging workspace. Extraction reuse requires the same compressed
 input and index hashes, extractor and extraction arguments. Native object reuse
-requires identical emitted bitcode, compiler identity, target and flags; changing
-the Zig runtime still compiles and links a fresh worker. Every cached asset is
+requires identical emitted bitcode, compiler identity, target and flags, including
+the build-only value helper bitcode and its Zig producer. Runtime changes that
+leave those inputs unchanged can reuse native Lua objects while compiling and
+linking a fresh worker. Every cached asset is
 hashed before reuse, incomplete generations are rejected, and successful corpus
 publication removes the staging workspace and these transient caches.
 
-The runtime worker object compiles concurrently with extraction and Lua emission.
-It depends only on repository sources; linking waits for that object and the
-generated module objects. The parser reserves execution slots while the worker
-compiler and extractor are active.
+The runtime worker object and a small value-helper bitcode module compile beside
+extraction. Lua emission imports thirteen shared Zig primitives for values,
+arguments and captured variables into optimized batches, so LLVM can inline their
+actual representation and eliminate intermediate copies. O0 batches retain the ordinary runtime calls.
+These helper definitions do not provide another public ABI or enable corpus LTO.
+Linking waits for the runtime worker and generated module objects. The parser
+reserves execution slots while the worker compiler and extractor are active.
 
 The worker keeps module globals sparse and initializes module-state pages on
 first use. A bounded read-only `mw.loadData` cache can reuse results from isolated
