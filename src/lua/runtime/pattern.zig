@@ -185,6 +185,18 @@ const Matcher = struct {
         }
     }
     fn minExpand(self: *Matcher, s: usize, p: usize, ep: usize, next: usize) Error!?usize {
+        // A non-greedy dot accepts every byte. If the following item starts
+        // with a mandatory literal, only those source positions can succeed.
+        // Keep matchWithRollback at each candidate so captures and later
+        // failures retain the normal Lua pattern behavior.
+        if (self.pattern[p] == '.') if (requiredStartByte(self.pattern, next)) |literal| {
+            var candidate = s;
+            while (std.mem.indexOfScalarPos(u8, self.source, candidate, literal)) |found| {
+                if (try self.matchWithRollback(found, next)) |result| return result;
+                candidate = found + 1;
+            }
+            return null;
+        };
         var i = s;
         while (true) {
             if (try self.matchWithRollback(i, next)) |result| return result;
@@ -284,6 +296,43 @@ fn requiredStartByte(pattern: []const u8, start: usize) ?u8 {
     return pattern[start];
 }
 
+fn requiredFindStartByte(pattern: []const u8, start: usize) ?u8 {
+    var p = start;
+    var captures: usize = 0;
+    // Opening and position captures consume no source bytes. Preserve the
+    // TooManyCaptures error before skipping any candidate source position.
+    while (p < pattern.len and pattern[p] == '(') {
+        captures += 1;
+        if (captures > max_captures) return null;
+        p += if (p + 1 < pattern.len and pattern[p + 1] == ')') @as(usize, 2) else 1;
+    }
+    if (p >= pattern.len) return null;
+    var next = p + 1;
+    const literal: u8 = if (pattern[p] == '%') blk: {
+        if (next >= pattern.len) return null;
+        const escaped = pattern[next];
+        // %b and %f have special behavior, %1..%9 are backreferences, and
+        // letter classes can match more than one byte. Other escapes are
+        // literal under matchClass, including %[, %-, and %0.
+        if (escaped == 'b' or escaped == 'f' or
+            (escaped >= '1' and escaped <= '9')) return null;
+        switch (std.ascii.toLower(escaped)) {
+            'a', 'c', 'd', 'g', 'l', 'p', 's', 'u', 'w', 'x', 'z' => return null,
+            else => {},
+        }
+        next += 1;
+        break :blk escaped;
+    } else blk: {
+        if (isPatternMagic(pattern[p])) return null;
+        break :blk pattern[p];
+    };
+    if (next < pattern.len) switch (pattern[next]) {
+        '?', '*', '-' => return null,
+        else => {},
+    };
+    return literal;
+}
+
 fn findInto(source: []const u8, pattern: []const u8, initial: usize, honor_anchor: bool, out: *Match) Error!bool {
     var start = initial;
     if (start > source.len) return false;
@@ -297,7 +346,7 @@ fn findInto(source: []const u8, pattern: []const u8, initial: usize, honor_ancho
         out.capture_count = 0;
         return true;
     }
-    const required_start = if (anchored) null else requiredStartByte(pattern, pattern_start);
+    const required_start = if (anchored) null else requiredFindStartByte(pattern, pattern_start);
     var matcher: Matcher = undefined;
     matcher.source = source;
     matcher.pattern = pattern;
@@ -414,6 +463,17 @@ test "literal and required-prefix searches skip impossible starts without changi
     try std.testing.expectError(error.MalformedPattern, find("xxa", "a[", 1));
 }
 
+test "lazy dot skips impossible suffix starts without changing captures or errors" {
+    const source = "abqabx";
+    const selected = (try find(source, "a.-bx", 1)).?;
+    try std.testing.expectEqualStrings("abqabx", source[selected.start..selected.end]);
+    const captured = (try find("title#fragment", "^(.-)#(.+)$", 1)).?;
+    try std.testing.expectEqualStrings("title", try captureText("title#fragment", captured.captures[0]));
+    try std.testing.expectEqualStrings("fragment", try captureText("title#fragment", captured.captures[1]));
+    try std.testing.expect((try find("aaaa", "a.-b[", 1)) == null);
+    try std.testing.expectError(error.MalformedPattern, find("ab", "a.-b[", 1));
+}
+
 test "balanced frontier backref and nongreedy" {
     const b = (try find("x(a(b)c)y", "%b()", 1)).?;
     try std.testing.expectEqualStrings("(a(b)c)", "x(a(b)c)y"[b.start..b.end]);
@@ -423,4 +483,48 @@ test "balanced frontier backref and nongreedy" {
     try std.testing.expectEqualStrings("abcabc", "abcabc"[r.start..r.end]);
     const ng = (try find("a123b456b", "a.-b", 1)).?;
     try std.testing.expectEqualStrings("a123b", "a123b456b"[ng.start..ng.end]);
+}
+
+test "required start skips leading captures and literal escapes without hiding errors" {
+    const source = "xxxx<abc>";
+    const tag = (try find(source, "((<[^>]+>))", 1)).?;
+    try std.testing.expectEqual(@as(usize, 4), tag.start);
+    try std.testing.expectEqualStrings("<abc>", try captureText(source, tag.captures[0]));
+    try std.testing.expectEqualStrings("<abc>", try captureText(source, tag.captures[1]));
+    const escaped = (try find("abc[", "((%[))", 1)).?;
+    try std.testing.expectEqual(@as(usize, 3), escaped.start);
+    try std.testing.expectEqualStrings("[", try captureText("abc[", escaped.captures[0]));
+    try std.testing.expect((try find("bbb", "((a?b))", 1)) != null);
+    try std.testing.expect((try find("zzz", "((a[", 1)) == null);
+    try std.testing.expectError(error.MalformedPattern, find("a", "((a[", 1));
+    var too_many: [34]u8 = undefined;
+    @memset(too_many[0..33], '(');
+    too_many[33] = 'x';
+    try std.testing.expectError(error.TooManyCaptures, find("zz", &too_many, 1));
+    var exactly: [33]u8 = undefined;
+    @memset(exactly[0..32], '(');
+    exactly[32] = 'x';
+    try std.testing.expect((try find("zz", &exactly, 1)) == null);
+    try std.testing.expectError(error.UnfinishedCapture, find("x", &exactly, 1));
+}
+
+test "lazy suffix respects total captures already open" {
+    var too_many: [37]u8 = undefined;
+    too_many[0] = '(';
+    too_many[1] = 'a';
+    too_many[2] = '.';
+    too_many[3] = '-';
+    @memset(too_many[4..36], '(');
+    too_many[36] = 'z';
+    try std.testing.expectError(error.TooManyCaptures, find("abc", &too_many, 1));
+
+    var exactly: [36]u8 = undefined;
+    exactly[0] = '(';
+    exactly[1] = 'a';
+    exactly[2] = '.';
+    exactly[3] = '-';
+    @memset(exactly[4..35], '(');
+    exactly[35] = 'z';
+    try std.testing.expect((try find("abc", &exactly, 1)) == null);
+    try std.testing.expectError(error.UnfinishedCapture, find("az", &exactly, 1));
 }
