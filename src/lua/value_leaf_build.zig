@@ -1,5 +1,7 @@
 //! Build-only root for leaf Value helper bitcode. Do not link its object into
 //! the worker; runtime/llvm_abi.zig supplies the external C symbols.
+// The imported leaf declares the worker-owned caches; it must not define them.
+pub const build_value_leaf = true;
 const rt = @import("zig_runtime");
 const leaf = @import("runtime/value_leaf.zig");
 
@@ -14,6 +16,9 @@ export fn dict_lua_leaf_value_number(out: *rt.Value, raw: f64) callconv(.c) void
 }
 export fn dict_lua_leaf_value_string(out: *rt.Value, ptr: [*]const u8, len: usize) callconv(.c) void {
     leaf.string(out, ptr, len);
+}
+export fn dict_lua_leaf_value_field_hit(ctx: *const rt.Context, object: *const rt.Value, site_id: u64) callconv(.c) ?*const rt.Value {
+    return leaf.fieldHit(ctx, object, site_id);
 }
 export fn dict_lua_leaf_value_copy(out: *rt.Value, input: *const rt.Value) callconv(.c) void {
     leaf.copy(out, input);

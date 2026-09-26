@@ -72,6 +72,10 @@ extern fn LLVMDisposeMemoryBuffer(*anyopaque) void;
 extern fn LLVMParseBitcodeInContext2(ContextRef, *anyopaque, *?ModuleRef) c_int;
 extern fn LLVMLinkModules2(ModuleRef, ModuleRef) c_int;
 extern fn LLVMGetNamedGlobalAlias(ModuleRef, [*]const u8, usize) ?ValueRef;
+extern fn LLVMGetNamedGlobal(ModuleRef, [*:0]const u8) ?ValueRef;
+extern fn LLVMGetInitializer(ValueRef) ?ValueRef;
+extern fn LLVMIsThreadLocal(ValueRef) c_int;
+extern fn LLVMIsGlobalConstant(ValueRef) c_int;
 extern fn LLVMAliasGetAliasee(ValueRef) ?ValueRef;
 extern fn LLVMIsAFunction(ValueRef) ?ValueRef;
 extern fn LLVMCountBasicBlocks(ValueRef) c_uint;
@@ -237,6 +241,16 @@ pub const Module = struct {
         var owned = true;
         defer if (owned) LLVMDisposeModule(leaf);
 
+        // The inline leaf references only runtime-owned shape metadata. Keep
+        // mutable map-cache pointers behind the runtime ABI, and never import
+        // another TLS provider or mark its current entries as constant.
+        if (LLVMGetNamedGlobal(leaf, "dict_lua_field_cache") != null)
+            return error.UnexpectedMutableFieldLeafTls;
+        const shape_cache = LLVMGetNamedGlobal(leaf, "dict_lua_shape_site_cache") orelse
+            return error.MissingFieldLeafTls;
+        if (LLVMGetInitializer(shape_cache) != null or LLVMIsThreadLocal(shape_cache) == 0 or
+            LLVMIsGlobalConstant(shape_cache) != 0) return error.InvalidFieldLeafTls;
+
         const Leaf = struct { suffix: []const u8, public_name: []const u8, required: bool = true };
         const leaves = [_]Leaf{
             .{ .suffix = "nil", .public_name = "dict_lua_value_nil" },
@@ -244,6 +258,7 @@ pub const Module = struct {
             .{ .suffix = "number", .public_name = "dict_lua_value_number" },
             .{ .suffix = "string", .public_name = "dict_lua_value_string" },
             .{ .suffix = "copy", .public_name = "dict_lua_value_copy" },
+            .{ .suffix = "field_hit", .public_name = "dict_lua_value_field_hit", .required = false },
             .{ .suffix = "truthy", .public_name = "dict_lua_value_truthy" },
             .{ .suffix = "is_function_id", .public_name = "dict_lua_value_is_function_id" },
             .{ .suffix = "function_captures", .public_name = "dict_lua_value_function_captures" },

@@ -3,6 +3,7 @@
 //! functions so the optimizer sees the exact compiled union representation.
 const std = @import("std");
 const rt = @import("zig_runtime");
+extern threadlocal var dict_lua_shape_site_cache: [rt.field_cache_entries]rt.ShapeSiteCache;
 
 comptime {
     if (@sizeOf(rt.Value) != 24 or @alignOf(rt.Value) != 8)
@@ -21,6 +22,10 @@ pub fn number(out: *rt.Value, raw: f64) void {
 pub fn string(out: *rt.Value, ptr: [*]const u8, len: usize) void {
     out.* = .{ .string = ptr[0..len] };
 }
+pub inline fn fieldHit(ctx: *const rt.Context, object: *const rt.Value, site_id: u64) ?*const rt.Value {
+    return rt.positiveProgramShapeHit(ctx, object, site_id, &dict_lua_shape_site_cache);
+}
+
 pub fn copy(out: *rt.Value, input: *const rt.Value) void {
     out.* = input.*;
 }

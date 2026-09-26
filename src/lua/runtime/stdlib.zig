@@ -712,6 +712,54 @@ fn stringFind(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buff
     return out;
 }
 
+// A guarded three-argument, three-result string.find entry. Status 2 means
+// the already evaluated callable/arguments must take ordinary Lua dispatch.
+// Positions stay scalar; the first capture retains its exact Lua Value kind.
+export fn dict_lua_string_find_three(
+    ctx: *rt.Context,
+    callable: *const Value,
+    source_value: *const Value,
+    pattern_value: *const Value,
+    init_value: *const Value,
+    matched: *u8,
+    first: *f64,
+    last: *f64,
+    capture: *Value,
+) callconv(.c) u32 {
+    const entry = rt.stabilizeNativeBuffered(stringFind);
+    if (callable.* != .callable or callable.callable.id != rt.native_function_id or
+        callable.callable.entry != entry or callable.callable.env.raw != 0 or
+        source_value.* != .string or pattern_value.* != .string or init_value.* != .number)
+        return 2;
+    // Preserve generic coercion/error behavior for non-finite or out-of-range
+    // starts rather than introducing an unchecked integer conversion here.
+    const raw_init = init_value.number;
+    if (!std.math.isFinite(raw_init) or raw_init < -9223372036854775808.0 or
+        raw_init >= 9223372036854775808.0) return 2;
+    matched.* = 0;
+    first.* = 0;
+    last.* = 0;
+    capture.* = .nil;
+    stringFindThree(source_value.string, pattern_value.string, @intFromFloat(@trunc(raw_init)), matched, first, last, capture) catch |err| {
+        // Mirror stabilizeNativeBuffered + callEntryBuffered failure handling.
+        if (ctx.aotErrorName() == null) ctx.setAotErrorName(@errorName(err));
+        rt.work_stats.noteNativeFailure(@intFromPtr(entry), ctx.aotErrorName() orelse "AotCallFailed");
+        return 1;
+    };
+    return 0;
+}
+
+fn stringFindThree(source: []const u8, needle: []const u8, init: i64, matched: *u8, first: *f64, last: *f64, capture: *Value) !void {
+    // stringFind returns before parsing the pattern when init is beyond end+1.
+    _ = findStart(source.len, init) orelse return;
+    var m: pattern.Match = undefined;
+    if (!(try pattern.findIntoStart(source, needle, init, &m))) return;
+    if (m.capture_count != 0) capture.* = try captureValue(source, m.captures[0]);
+    first.* = @floatFromInt(m.start + 1);
+    last.* = @floatFromInt(m.end);
+    matched.* = 1;
+}
+
 fn stringMatch(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     if (args.len < 2) return error.MissingArgument;
@@ -2201,4 +2249,139 @@ test "metamethod nil payload and xpcall nil handler result survive protected cal
     try std.testing.expectEqual(@as(usize, 2), handled.len);
     try std.testing.expect(handled[0] == .boolean and !handled[0].boolean and handled[1] == .nil);
     try std.testing.expect(!ctx.last_error_present);
+}
+
+test "guarded string find three matches fixed builtin results and errors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    const builtin = try ctx.newNativeBuffered(null, stringFind);
+    const cases = [_]struct { source: []const u8, needle: []const u8, init: f64 }{
+        .{ .source = "abc def", .needle = "(%a+)", .init = 1 },
+        .{ .source = "abc", .needle = "b", .init = 1 },
+        .{ .source = "abc", .needle = "()b", .init = 1 },
+        .{ .source = "abc", .needle = "(a)(b)(c)", .init = 1 },
+        .{ .source = "abc", .needle = "z", .init = 1 },
+        .{ .source = "abc", .needle = "$", .init = 1 },
+        .{ .source = "", .needle = "()", .init = 1 },
+        .{ .source = "abc", .needle = "b", .init = -2 },
+        .{ .source = "abc", .needle = "b", .init = 2.9 },
+        .{ .source = "abc", .needle = "a", .init = -0.9 },
+        .{ .source = "abc", .needle = "a", .init = -9223372036854775808.0 },
+        .{ .source = "abc", .needle = "a", .init = 9223372036854774784.0 },
+        .{ .source = "abc", .needle = "a", .init = 0 },
+        .{ .source = "abc", .needle = "[", .init = 99 },
+        .{ .source = "abc", .needle = "[", .init = 1 },
+        .{ .source = "abc", .needle = "(", .init = 1 },
+    };
+    for (cases) |case| {
+        const args = [_]Value{ .{ .string = case.source }, .{ .string = case.needle }, .{ .number = case.init } };
+        var fixed = [_]Value{ .nil, .nil, .nil };
+        ctx.clearAotErrorName();
+        const normal = ctx.callValueFixed(builtin, &args, &fixed);
+        var error_name: [128]u8 = undefined;
+        var error_len: usize = 0;
+        var failed = false;
+        if (normal) |result| {
+            defer result.deinit();
+            const count = @min(result.values.len, fixed.len);
+            if (result.values.ptr != fixed[0..].ptr) @memcpy(fixed[0..count], result.values[0..count]);
+        } else |_| {
+            failed = true;
+            const name = ctx.aotErrorName().?;
+            @memcpy(error_name[0..name.len], name);
+            error_len = name.len;
+        }
+        ctx.clearAotErrorName();
+        var matched: u8 = 255;
+        var first: f64 = undefined;
+        var last: f64 = undefined;
+        var capture: Value = undefined;
+        const status = dict_lua_string_find_three(&ctx, &builtin, &args[0], &args[1], &args[2], &matched, &first, &last, &capture);
+        if (failed) {
+            try std.testing.expectEqual(@as(u32, 1), status);
+            try std.testing.expectEqualStrings(error_name[0..error_len], ctx.aotErrorName().?);
+        } else {
+            try std.testing.expectEqual(@as(u32, 0), status);
+            try std.testing.expectEqual(fixed[0] == .number, matched == 1);
+            if (matched != 0) {
+                try std.testing.expectEqual(fixed[0].number, first);
+                try std.testing.expectEqual(fixed[1].number, last);
+            }
+            try std.testing.expect(rt.rawEqual(fixed[2], capture));
+            try std.testing.expect(ctx.aotErrorName() == null);
+        }
+    }
+}
+
+test "guarded string find refuses replaced callable environment and coercion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    const builtin = try ctx.newNativeBuffered(null, stringFind);
+    var host: u8 = 0;
+    const other_env = try ctx.newNativeBuffered(&host, stringFind);
+    const other_entry = try ctx.newNativeBuffered(null, stringMatch);
+    const table = try ctx.newTable();
+    const source = Value{ .string = "abc" };
+    const needle = Value{ .string = "b" };
+    const init = Value{ .number = 1 };
+    var matched: u8 = 73;
+    var first: f64 = 11;
+    var last: f64 = 12;
+    var capture = Value{ .boolean = true };
+    for ([_]Value{ other_env, other_entry, .{ .table = table }, .nil }) |callable| {
+        try std.testing.expectEqual(@as(u32, 2), dict_lua_string_find_three(&ctx, &callable, &source, &needle, &init, &matched, &first, &last, &capture));
+    }
+    for ([_]Value{ .nil, .{ .string = "1" }, .{ .number = std.math.nan(f64) }, .{ .number = std.math.inf(f64) }, .{ .number = 9223372036854775808.0 } }) |start| {
+        try std.testing.expectEqual(@as(u32, 2), dict_lua_string_find_three(&ctx, &builtin, &source, &needle, &start, &matched, &first, &last, &capture));
+    }
+    const numeric_source = Value{ .number = 123 };
+    try std.testing.expectEqual(@as(u32, 2), dict_lua_string_find_three(&ctx, &builtin, &numeric_source, &needle, &init, &matched, &first, &last, &capture));
+    try std.testing.expectEqual(@as(u8, 73), matched);
+    try std.testing.expectEqual(@as(f64, 11), first);
+    try std.testing.expectEqual(@as(f64, 12), last);
+    try std.testing.expect(capture.boolean);
+    try std.testing.expect(ctx.aotErrorName() == null);
+}
+
+test "guarded native find preserves native depth error payload and profiling" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    const builtin = try ctx.newNativeBuffered(null, stringFind);
+    const args = [_]Value{ .{ .string = "abc" }, .{ .string = "[" }, .{ .number = 1 } };
+    ctx.depth = ctx.max_depth;
+    ctx.last_error = .{ .string = "existing error payload" };
+    ctx.last_error_present = true;
+    // Native diagnostics preserve a previously established AOT name too.
+    ctx.setAotErrorName("NotImplemented");
+    var failures: rt.work_stats.NativeFailures = .{};
+    var page = rt.work_stats.Page{ .native_failures = &failures };
+    const previous = rt.work_stats.begin(&page);
+    defer rt.work_stats.end(previous);
+    var fixed: [3]Value = undefined;
+    try std.testing.expectError(error.AotCallFailed, ctx.callValueFixed(builtin, &args, &fixed));
+    try std.testing.expectEqual(@as(usize, 1), failures.len);
+    try std.testing.expectEqual(@as(u64, 1), failures.entries[0].count);
+    var matched: u8 = undefined;
+    var first: f64 = undefined;
+    var last: f64 = undefined;
+    var capture: Value = undefined;
+    try std.testing.expectEqual(@as(u32, 1), dict_lua_string_find_three(&ctx, &builtin, &args[0], &args[1], &args[2], &matched, &first, &last, &capture));
+    try std.testing.expectEqual(@as(usize, 1), failures.len);
+    try std.testing.expectEqual(@as(u64, 2), failures.entries[0].count);
+    try std.testing.expectEqual(@intFromPtr(rt.stabilizeNativeBuffered(stringFind)), failures.entries[0].address);
+    try std.testing.expectEqual(ctx.max_depth, ctx.depth);
+    try std.testing.expectEqualStrings("NotImplemented", ctx.aotErrorName().?);
+    try std.testing.expectEqualStrings("existing error payload", ctx.last_error.string);
+    try std.testing.expect(ctx.last_error_present);
+    const good_pattern = Value{ .string = "b" };
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_string_find_three(&ctx, &builtin, &args[0], &good_pattern, &args[2], &matched, &first, &last, &capture));
+    try std.testing.expectEqual(@as(f64, 2), first);
+    try std.testing.expectEqual(ctx.max_depth, ctx.depth);
+    try std.testing.expectEqual(@as(u64, 2), failures.entries[0].count);
 }

@@ -47,6 +47,12 @@ pub const ProgramFacts = struct {
     table_shapes: ?*const shapes.ModuleFacts = null,
     synth_root: bool = false,
     current_module_id: u32 = 0,
+    closed_numeric_loops: bool = false,
+    inline_field_hits: bool = false,
+    deferred_numeric_ssa: bool = false,
+    demanded_entries: bool = false,
+    native_find_three: bool = false,
+    fixed_callable_entries: bool = false,
 
     pub fn moduleId(self: ProgramFacts, a: A, raw: []const u8) anyerror!?u32 {
         const ids = self.module_ids orelse return null;
@@ -125,10 +131,16 @@ const StaticModuleRef = struct {
     pristine_ptr: ?V = null,
 };
 
+// A computed arithmetic result remains scalar whenever its actual result is a
+// number. The boxed alternative is live only when is_number is false. Every
+// path initializes number, including arbitrary metamethod results.
+const DeferredNumber = struct { is_number: V, number: V, fallback: V };
+
 const ValueRef = union(enum) {
     nil,
     boolean: V,
     number: V,
+    deferred_number: DeferredNumber,
     string: StringRef,
     table: TableRef,
     boxed: V,
@@ -186,8 +198,11 @@ const Runtime = struct {
     value_number: V,
     value_string: V,
     value_copy: V,
+    value_field_hit: V,
+    string_find_three: V,
     value_truthy: V,
     value_is_function_id: V,
+    guard_table_call: V,
     value_function_captures: V,
     value_is_nil: V,
     value_is_number: V,
@@ -262,8 +277,11 @@ const Runtime = struct {
             .value_number = try declare(m, "dict_lua_value_number", ty.void, &.{ ty.ptr, ty.double }),
             .value_string = try declare(m, "dict_lua_value_string", ty.void, &.{ ty.ptr, ty.ptr, ty.i64 }),
             .value_copy = try declare(m, "dict_lua_value_copy", ty.void, &.{ ty.ptr, ty.ptr }),
+            .value_field_hit = try declare(m, "dict_lua_value_field_hit", ty.ptr, &.{ ty.ptr, ty.ptr, ty.i64 }),
+            .string_find_three = try declare(m, "dict_lua_string_find_three", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr, ty.ptr, ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .value_truthy = try declare(m, "dict_lua_value_truthy", ty.i8, &.{ty.ptr}),
             .value_is_function_id = try declare(m, "dict_lua_value_is_function_id", ty.i8, &.{ ty.ptr, ty.i32 }),
+            .guard_table_call = try declare(m, "dict_lua_guard_table_call", ty.i8, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr }),
             .value_function_captures = try declare(m, "dict_lua_value_function_captures", ty.ptr, &.{ ty.ptr, ty.i32 }),
             .value_is_nil = try declare(m, "dict_lua_value_is_nil", ty.i8, &.{ty.ptr}),
             .value_is_number = try declare(m, "dict_lua_value_is_number", ty.i8, &.{ty.ptr}),
@@ -289,7 +307,7 @@ const Runtime = struct {
             .set_index = try declare(m, "dict_lua_set_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .get_field = try declare(m, "dict_lua_get_field_hashed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.ptr }),
             .get_field_cached = try declare(m, "dict_lua_get_field_cached", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.i64, ty.ptr }),
-            .set_field = try declare(m, "dict_lua_set_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr }),
+            .set_field = try declare(m, "dict_lua_store_field_hashed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.ptr }),
             .set_shape_slot = try declare(m, "dict_lua_set_shape_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr }),
             .get_known_shape_field = try declare(m, "dict_lua_get_known_shape_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.i64, ty.ptr }),
             .set_known_shape_field = try declare(m, "dict_lua_set_known_shape_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.i64, ty.ptr }),
@@ -349,6 +367,10 @@ const ModuleEmitter = struct {
     static_literal_blobs: u32 = 0,
     functions: []V,
     function_base: u32,
+    fixed_callable_edges: usize = 0,
+    demanded_entry_count: usize = 0,
+    demanded_edge_count: usize = 0,
+    demanded_edge_source_bytes: usize = 0,
 
     fn deinit(self: *ModuleEmitter) void {
         self.strings.deinit(self.allocator);
@@ -475,6 +497,15 @@ const FnEmitter = struct {
     upvalue_slots: []V,
     binding_next: u32 = 0,
     field_site_next: u32 = 0,
+    field_site_limit: u32 = 1 << 30,
+    typed_continuation_emitted: bool = false,
+    scalar_region_emitted: bool = false,
+    deferred_numeric_ops: u32 = 0,
+    native_find_ops: u32 = 0,
+    demanded_result_count: ?u32 = null,
+    fixed_pointer_entry: bool = false,
+    closed_numeric_loop_attempted: bool = false,
+    closed_numeric_loop_emitted: bool = false,
     breaks: std.ArrayList(BB) = .empty,
 
     fn a(self: *FnEmitter) A {
@@ -502,6 +533,7 @@ const FnEmitter = struct {
     }
 
     fn argsLen(self: *FnEmitter) V {
+        if (self.demanded_result_count != null) return self.cI64(1) catch unreachable;
         return llvm.param(self.function, 3) catch unreachable;
     }
 
@@ -510,6 +542,7 @@ const FnEmitter = struct {
     }
 
     fn resultLen(self: *FnEmitter) V {
+        if (self.demanded_result_count) |count| return self.cI64(count) catch unreachable;
         return llvm.param(self.function, 5) catch unreachable;
     }
 
@@ -547,8 +580,8 @@ const FnEmitter = struct {
         self.breaks.deinit(self.a());
     }
 
-    fn init(module: *ModuleEmitter, info: *const analysis.FunctionInfo) anyerror!FnEmitter {
-        const function = try module.functionValue(info.id);
+    fn init(module: *ModuleEmitter, info: *const analysis.FunctionInfo, entry_override: ?V, demanded_count: ?u32) anyerror!FnEmitter {
+        const function = entry_override orelse try module.functionValue(info.id);
         const entry = try llvm.appendBlock(module.llvm_module.context, function, "entry");
         const start = try llvm.appendBlock(module.llvm_module.context, function, "start");
         const alloca_builder = try llvm.createBuilder(module.llvm_module.context);
@@ -571,6 +604,9 @@ const FnEmitter = struct {
             .start = start,
             .storage = storage,
             .upvalue_slots = upvalue_slots,
+            .demanded_result_count = demanded_count,
+            .field_site_next = if (demanded_count) |count| (count + 1) << 30 else 0,
+            .field_site_limit = if (demanded_count) |count| (count + 2) << 30 else 1 << 30,
         };
         errdefer self.deinit();
         for (info.bindings, 0..) |binding, index| {
@@ -595,7 +631,7 @@ const FnEmitter = struct {
         try llvm.br(self.alloca_builder, self.start);
         if (self.error_block) |error_block| {
             llvm.position(self.builder, error_block);
-            const result = try llvm.call(self.builder, self.rt().function_error, &.{});
+            const result = if (self.fixed_pointer_entry) try self.cI32(1) else try llvm.call(self.builder, self.rt().function_error, &.{});
             try llvm.ret(self.builder, result);
         }
     }
@@ -686,6 +722,21 @@ const FnEmitter = struct {
         switch (value) {
             .boxed => |ptr| return ptr,
             .table => |table_value| return table_value.ptr,
+            .deferred_number => |number| {
+                const out = try self.valueSlot();
+                const numeric = try self.newBlock("deferred_box_number");
+                const generic = try self.newBlock("deferred_box_generic");
+                const done = try self.newBlock("deferred_box_done");
+                try llvm.condBr(self.builder, number.is_number, numeric, generic);
+                llvm.position(self.builder, numeric);
+                _ = try llvm.call(self.builder, self.rt().value_number, &.{ out, number.number });
+                try llvm.br(self.builder, done);
+                llvm.position(self.builder, generic);
+                try self.copyValue(out, number.fallback);
+                try llvm.br(self.builder, done);
+                llvm.position(self.builder, done);
+                return out;
+            },
             else => {},
         }
         const out = try self.valueSlot();
@@ -697,7 +748,7 @@ const FnEmitter = struct {
                 _ = try llvm.call(self.builder, self.rt().value_bool, &.{ out, wide });
             },
             .string => |s| _ = try llvm.call(self.builder, self.rt().value_string, &.{ out, s.ptr, try self.cI64(s.len) }),
-            .table, .boxed => unreachable,
+            .table, .boxed, .deferred_number => unreachable,
         }
         return out;
     }
@@ -714,7 +765,8 @@ const FnEmitter = struct {
             .nil => try self.cI1(false),
             .boolean => |v| v,
             .number, .string, .table => try self.cI1(true),
-            .boxed => |ptr| blk: {
+            .boxed, .deferred_number => blk: {
+                const ptr = try self.box(value);
                 const raw = try llvm.call(self.builder, self.rt().value_truthy, &.{ptr});
                 break :blk try llvm.icmp(self.builder, .ne, raw, try self.cI8(0));
             },
@@ -897,12 +949,13 @@ const FnEmitter = struct {
         return .{ .boolean = try llvm.fcmp(self.builder, predicate, lhs, rhs) };
     }
 
-    const NumericCandidate = union(enum) { native: V, boxed: V };
+    const NumericCandidate = union(enum) { native: V, boxed: V, deferred: DeferredNumber };
 
     fn numericCandidate(value: ValueRef) ?NumericCandidate {
         return switch (value) {
             .number => |number| .{ .native = number },
             .boxed => |boxed| .{ .boxed = boxed },
+            .deferred_number => |number| .{ .deferred = number },
             else => null,
         };
     }
@@ -910,6 +963,7 @@ const FnEmitter = struct {
     fn numberGuard(self: *FnEmitter, candidate: NumericCandidate) anyerror!V {
         return switch (candidate) {
             .native => self.cI1(true),
+            .deferred => |number| number.is_number,
             .boxed => |ptr| blk: {
                 const tag = try llvm.call(self.builder, self.rt().value_is_number, &.{ptr});
                 break :blk try llvm.icmp(self.builder, .ne, tag, try self.cI8(0));
@@ -920,6 +974,7 @@ const FnEmitter = struct {
     fn candidateNumber(self: *FnEmitter, candidate: NumericCandidate) anyerror!V {
         return switch (candidate) {
             .native => |number| number,
+            .deferred => |number| number.number,
             .boxed => |ptr| try llvm.call(self.builder, self.rt().value_number_unchecked, &.{ptr}),
         };
     }
@@ -934,6 +989,8 @@ const FnEmitter = struct {
         const left_ok = try self.numberGuard(left);
         const right_ok = try self.numberGuard(right);
         const both = try llvm.select(self.builder, left_ok, right_ok, try self.cI1(false));
+        if (!compare and self.module.facts.deferred_numeric_ssa)
+            return try self.deferredNumericBinary(op, lhs, rhs, left, right, both);
         const fast = try self.newBlock("number_fast");
         const fallback = try self.newBlock("number_fallback");
         const done = try self.newBlock("number_done");
@@ -968,6 +1025,51 @@ const FnEmitter = struct {
         llvm.position(self.builder, done);
         if (compare) return ValueRef{ .boolean = try llvm.load(self.builder, self.ty().i1, bool_output.?, 1) };
         return ValueRef{ .boxed = value_output.? };
+    }
+
+    // Keep arithmetic joins in native scalar slots, which LLVM promotes to SSA.
+    // Generic operations still happen now in Lua order; only Value boxing is
+    // delayed. A numeric fallback result is promoted before the next operation.
+    fn deferredNumericBinary(self: *FnEmitter, op: lua.BinaryOp, lhs: ValueRef, rhs: ValueRef, left: NumericCandidate, right: NumericCandidate, both: V) anyerror!ValueRef {
+        self.deferred_numeric_ops += 1;
+        const numeric_flag = try self.nativeBoolSlot();
+        const numeric_value = try self.nativeNumberSlot();
+        const fast = try self.newBlock("deferred_number_fast");
+        const fallback = try self.newBlock("deferred_number_fallback");
+        const promote = try self.newBlock("deferred_number_promote");
+        const done = try self.newBlock("deferred_number_done");
+        try llvm.condBr(self.builder, both, fast, fallback);
+
+        llvm.position(self.builder, fast);
+        const number = try self.nativeArith(op, try self.candidateNumber(left), try self.candidateNumber(right));
+        try llvm.store(self.builder, try self.cI1(true), numeric_flag, 1);
+        try llvm.store(self.builder, number.number, numeric_value, 8);
+        try llvm.br(self.builder, done);
+
+        llvm.position(self.builder, fallback);
+        const generic = try self.dynamicBinary(op, lhs, rhs);
+        // dynamicBinary owns one function-frame output slot per expression.
+        // Preserve that immediate result, not a pointer into mutable Lua storage.
+        const fallback_value = generic.boxed;
+        const tag = try llvm.call(self.builder, self.rt().value_is_number, &.{fallback_value});
+        const is_number = try llvm.icmp(self.builder, .ne, tag, try self.cI8(0));
+        try llvm.store(self.builder, is_number, numeric_flag, 1);
+        // This zero is representation state only; the false path continues to
+        // carry the exact boxed value, including nil, false, strings and tables.
+        try llvm.store(self.builder, try self.cDouble(0), numeric_value, 8);
+        try llvm.condBr(self.builder, is_number, promote, done);
+
+        llvm.position(self.builder, promote);
+        const promoted = try llvm.call(self.builder, self.rt().value_number_unchecked, &.{fallback_value});
+        try llvm.store(self.builder, promoted, numeric_value, 8);
+        try llvm.br(self.builder, done);
+
+        llvm.position(self.builder, done);
+        return .{ .deferred_number = .{
+            .is_number = try llvm.load(self.builder, self.ty().i1, numeric_flag, 1),
+            .number = try llvm.load(self.builder, self.ty().double, numeric_value, 8),
+            .fallback = fallback_value,
+        } };
     }
 
     fn dynamicBinary(self: *FnEmitter, op: lua.BinaryOp, lhs: ValueRef, rhs: ValueRef) anyerror!ValueRef {
@@ -1032,7 +1134,8 @@ const FnEmitter = struct {
                         const other = if (lhs == .nil) rhs else lhs;
                         const is_nil = switch (other) {
                             .nil => try self.cI1(true),
-                            .boxed => |ptr| blk: {
+                            .boxed, .deferred_number => blk: {
+                                const ptr = try self.box(other);
                                 const raw = try llvm.call(self.builder, self.rt().value_is_nil, &.{ptr});
                                 break :blk try llvm.icmp(self.builder, .ne, raw, try self.cI8(0));
                             },
@@ -1218,7 +1321,7 @@ const FnEmitter = struct {
                 } else blk: {
                     const key = try self.stringRef(item.name);
                     break :blk try llvm.call(self.builder, self.rt().set_field, &.{
-                        self.ctx(), table_value, key.ptr, try self.cI64(key.len), boxed,
+                        self.ctx(), table_value, key.ptr, try self.cI64(key.len), try self.cI64(static_fields.hashStringKey(item.name)), boxed,
                     });
                 };
                 try self.check(status);
@@ -1276,35 +1379,67 @@ const FnEmitter = struct {
         return (@as(u64, function_id) << 32) | ordinal;
     }
 
+    fn emitCachedField(self: *FnEmitter, object_box: V, key: StringRef, out: V, site_id: u64, key_hash: u64) anyerror!void {
+        if (!self.module.facts.inline_field_hits) {
+            const status = try llvm.call(self.builder, self.rt().get_field_cached, &.{
+                self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(key_hash), try self.cI64(site_id), out,
+            });
+            try self.check(status);
+            return;
+        }
+        const hit = try llvm.call(self.builder, self.rt().value_field_hit, &.{ self.ctx(), object_box, try self.cI64(site_id) });
+        const found = try llvm.icmp(self.builder, .ne, hit, try self.nullPtr());
+        const hit_block = try self.newBlock("field_cache_inline_hit");
+        const miss_block = try self.newBlock("field_cache_inline_miss");
+        const join = try self.newBlock("field_cache_inline_join");
+        try llvm.condBr(self.builder, found, hit_block, miss_block);
+
+        llvm.position(self.builder, hit_block);
+        try self.copyValue(out, hit);
+        try llvm.br(self.builder, join);
+
+        llvm.position(self.builder, miss_block);
+        const status = try llvm.call(self.builder, self.rt().get_field_cached, &.{
+            self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(key_hash), try self.cI64(site_id), out,
+        });
+        try self.check(status);
+        try llvm.br(self.builder, join);
+
+        llvm.position(self.builder, join);
+    }
+
     fn getField(self: *FnEmitter, object: ValueRef, name: []const u8) anyerror!ValueRef {
         const object_box = try self.box(object);
         const field_ordinal = self.field_site_next;
-        if (field_ordinal != std.math.maxInt(u32)) self.field_site_next += 1;
-        const site_id = fieldSiteId(self.info.id, field_ordinal);
-        const use_cache = site_id != null;
+        const site_id = if (field_ordinal < self.field_site_limit) fieldSiteId(self.info.id, field_ordinal) else null;
+        if (site_id != null) self.field_site_next += 1;
         const key = try self.stringRef(name);
+        const key_hash = static_fields.hashStringKey(name);
         const out = try self.valueSlot();
-        const status = if (object == .table) blk: {
-            if (object.table.shape) |shape| if (shapeSlot(shape, name)) |slot|
-                break :blk try llvm.call(self.builder, self.rt().get_known_shape_field, &.{
-                    self.ctx(), object_box,             try self.cI32(shape.id), try self.cI32(slot),
-                    key.ptr,    try self.cI64(key.len), out,
+        if (object == .table) {
+            if (object.table.shape) |shape| if (shapeSlot(shape, name)) |slot| {
+                const status = try llvm.call(self.builder, self.rt().get_known_shape_field, &.{
+                    self.ctx(), object_box, try self.cI32(shape.id), try self.cI32(slot), key.ptr, try self.cI64(key.len), out,
                 });
-            if (object.table.native_namespace) |namespace| if (static_fields.slotForName(namespace, name)) |slot|
-                break :blk try llvm.call(self.builder, self.rt().get_native_slot, &.{
+                try self.check(status);
+                return .{ .boxed = out };
+            };
+            if (object.table.native_namespace) |namespace| if (static_fields.slotForName(namespace, name)) |slot| {
+                const status = try llvm.call(self.builder, self.rt().get_native_slot, &.{
                     self.ctx(), object_box, try self.cI32(slot), key.ptr, try self.cI64(key.len), out,
                 });
-            break :blk if (use_cache) try llvm.call(self.builder, self.rt().get_field_cached, &.{
-                self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(static_fields.hashStringKey(name)), try self.cI64(site_id.?), out,
-            }) else try llvm.call(self.builder, self.rt().get_field, &.{
-                self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(static_fields.hashStringKey(name)), out,
+                try self.check(status);
+                return .{ .boxed = out };
+            };
+        }
+        if (site_id) |id| {
+            try self.emitCachedField(object_box, key, out, id, key_hash);
+        } else {
+            const status = try llvm.call(self.builder, self.rt().get_field, &.{
+                self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(key_hash), out,
             });
-        } else if (use_cache) try llvm.call(self.builder, self.rt().get_field_cached, &.{
-            self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(static_fields.hashStringKey(name)), try self.cI64(site_id.?), out,
-        }) else try llvm.call(self.builder, self.rt().get_field, &.{
-            self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(static_fields.hashStringKey(name)), out,
-        });
-        try self.check(status);
+            try self.check(status);
+        }
         return .{ .boxed = out };
     }
 
@@ -1678,6 +1813,52 @@ const FnEmitter = struct {
         return if (self.sameModuleStaticCall(function)) std.math.maxInt(u32) else function.module_id;
     }
 
+    fn demandedEntry(self: *FnEmitter, function: StaticFunctionRef, argument_count: usize, result_count: usize) anyerror!?V {
+        if (!self.module.facts.demanded_entries or self.demanded_result_count != null or
+            self.breaks.items.len == 0 or !self.sameModuleStaticCall(function) or
+            argument_count != 1 or result_count > 1)
+            return null;
+        var reviewed = false;
+        for (self.module.facts.method_candidates) |candidate| {
+            if (candidate.function_id == function.function_id and candidate.module_id == function.module_id) {
+                reviewed = true;
+                break;
+            }
+        }
+        if (!reviewed or function.function_id < self.module.function_base) return null;
+        const ordinal = function.function_id - self.module.function_base;
+        if (ordinal >= self.module.module.functions.items.len) return null;
+        const target = self.module.module.functions.items[ordinal];
+        if (target.dead or target.is_vararg or target.params.len == 0 or target.params.len > 2 or
+            target.span.end - target.span.start > 2048) return null;
+        const name = try std.fmt.allocPrint(self.a(), "lua_demand_{d}_a1_r{d}", .{ target.id, result_count });
+        defer self.a().free(name);
+        const existing = self.module.llvm_module.getFunction(name);
+        if (existing == null and self.module.demanded_entry_count >= 2) return null;
+        const source_bytes = target.span.end - target.span.start;
+        if (self.module.demanded_edge_count >= 8 or
+            source_bytes > 16 * 1024 - self.module.demanded_edge_source_bytes) return null;
+        self.module.demanded_edge_count += 1;
+        self.module.demanded_edge_source_bytes += source_bytes;
+        std.debug.print("LLVM_DEMANDED_EDGE caller_id={d} function_id={d} args=1 results={d} source_bytes={d}\n", .{
+            self.info.id, target.id, result_count, source_bytes,
+        });
+        if (existing) |entry| return entry;
+        self.module.demanded_entry_count += 1;
+        const entry = try self.module.llvm_module.addFunction(name, try generatedFunctionType(self.module.llvm_module));
+        llvm.setLinkage(entry, .internal);
+        try llvm.addFunctionEnumAttribute(self.module.llvm_module.context, entry, "alwaysinline");
+        var clone = try FnEmitter.init(self.module, target, entry, @intCast(result_count));
+        defer clone.deinit();
+        try clone.emitInitialization();
+        if (!try clone.block(target.body)) try clone.emitReturn(&.{});
+        try clone.finish();
+        std.debug.print("LLVM_DEMANDED_ENTRY function_id={d} args=1 results={d} span_bytes={d}\n", .{
+            target.id, result_count, target.span.end - target.span.start,
+        });
+        return entry;
+    }
+
     fn emitStaticFixedPrepared(
         self: *FnEmitter,
         function: StaticFunctionRef,
@@ -1698,7 +1879,8 @@ const FnEmitter = struct {
                 });
             try self.check(enter);
             const capture_context = try self.staticCaptureContext(function);
-            const result = try llvm.call(self.builder, entry_fn, &.{
+            const selected_entry = (try self.demandedEntry(function, prepared.fixed_len, count)) orelse entry_fn;
+            const result = try llvm.call(self.builder, selected_entry, &.{
                 self.ctx(), capture_context,      prepared.fixed, try self.cI64(prepared.fixed_len),
                 output,     try self.cI64(count),
             });
@@ -1999,7 +2181,72 @@ const FnEmitter = struct {
         return if (count == 0) null else output;
     }
 
+    // Specialize a bounded, structurally selected callable-table trampoline.
+    // Function names and module names are not evidence. The live __call entry is.
+    fn fixedCallableCall(self: *FnEmitter, callee_expr: *const lua.Expr, args_in: []const *lua.Expr) anyerror!?V {
+        if (!self.module.facts.fixed_callable_entries or self.fixed_pointer_entry or
+            args_in.len != 2 or isMultiExpr(args_in[1]) or callee_expr.* != .index or
+            staticString(callee_expr.index.key) == null or self.module.fixed_callable_edges >= 8)
+            return null;
+        var target: ?*const analysis.FunctionInfo = null;
+        for (self.module.module.functions.items) |info| {
+            if (!fixedCallableShape(info)) continue;
+            if (target != null) return null;
+            target = info;
+        }
+        const info = target orelse return null;
+        // Eight edges times at most 256 source bytes caps this pilot at 2 KiB.
+        self.module.fixed_callable_edges += 1;
+        const name = try std.fmt.allocPrint(self.a(), "lua_fixed_callable_{d}_a3_r1", .{info.id});
+        defer self.a().free(name);
+        const entry = self.module.llvm_module.getFunction(name) orelse blk: {
+            const types = self.ty();
+            const function = try self.module.llvm_module.addFunction(name, try self.module.llvm_module.functionType(types.i32, &.{ types.ptr, types.ptr, types.ptr, types.ptr, types.ptr }));
+            llvm.setLinkage(function, .internal);
+            var clone = try FnEmitter.init(self.module, info, function, null);
+            defer clone.deinit();
+            clone.fixed_pointer_entry = true;
+            // This entry has no field access, but reserve disjoint sites if extended.
+            clone.field_site_next = 1 << 30;
+            clone.field_site_limit = 2 << 30;
+            try clone.emitInitialization();
+            _ = try clone.block(info.body);
+            try clone.finish();
+            break :blk function;
+        };
+        const callee = try self.valueSlot();
+        try self.copyValue(callee, try self.box(try self.expr(callee_expr)));
+        var saved: [2]V = undefined;
+        for (args_in, 0..) |arg, index| {
+            saved[index] = try self.valueSlot();
+            try self.copyValue(saved[index], try self.box(try self.expr(arg)));
+        }
+        // __call resolution occurs after all argument effects, as in callValueFixed.
+        const accepted = try llvm.call(self.builder, self.rt().guard_table_call, &.{ self.ctx(), callee, try self.cI32(info.id), try self.module.functionValue(info.id) });
+        const direct = try self.newBlock("fixed_callable_direct");
+        const generic = try self.newBlock("fixed_callable_generic");
+        const done = try self.newBlock("fixed_callable_done");
+        const output = try self.valueArray(1);
+        try llvm.condBr(self.builder, try llvm.icmp(self.builder, .ne, accepted, try self.cI8(0)), direct, generic);
+        llvm.position(self.builder, direct);
+        try self.check(try llvm.call(self.builder, self.rt().enter_local_static_call, &.{self.ctx()}));
+        const status = try llvm.call(self.builder, entry, &.{ self.ctx(), callee, saved[0], saved[1], output });
+        _ = try llvm.call(self.builder, self.rt().leave_local_static_call, &.{self.ctx()});
+        try self.checkFunctionStatus(status);
+        try llvm.br(self.builder, done);
+        llvm.position(self.builder, generic);
+        const args_array = try self.valueArray(2);
+        for (saved, 0..) |arg, index| try self.copyValue(try self.arrayElem(args_array, index), arg);
+        try self.check(try llvm.call(self.builder, self.rt().call_fixed, &.{ self.ctx(), callee, args_array, try self.cI64(2), output, try self.cI64(1) }));
+        try llvm.br(self.builder, done);
+        llvm.position(self.builder, done);
+        std.debug.print("LLVM_FIXED_CALLABLE caller_id={d} target_id={d} args=3 results=1\n", .{ self.info.id, info.id });
+        return output;
+    }
+
     fn callFixed(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr, count: usize) anyerror!?V {
+        if (method == null and count == 1)
+            if (try self.fixedCallableCall(callee_expr, args_in)) |output| return output;
         if (try self.staticRequire(callee_expr, method, args_in)) |request|
             return self.directRequireFixed(request, count);
         if (method == null) if (try self.staticCallee(callee_expr)) |function|
@@ -2165,6 +2412,115 @@ const FnEmitter = struct {
         return out;
     }
 
+    fn capturedFieldHint(self: *const FnEmitter, ordinal: u32) ?[]const u8 {
+        var current = self.info;
+        var current_ordinal = ordinal;
+        while (true) {
+            if (current_ordinal >= current.upvalues.len) return null;
+            const parent = self.analyzedFunction(current.parent_id orelse return null) orelse return null;
+            switch (current.upvalues[current_ordinal].source) {
+                .local => |binding| {
+                    if (binding >= parent.bindings.len) return null;
+                    return parent.bindings[binding].callable_field_hint;
+                },
+                .upvalue => |parent_ordinal| {
+                    current = parent;
+                    current_ordinal = parent_ordinal;
+                },
+            }
+        }
+    }
+
+    fn nativeFindHint(self: *FnEmitter, callee: *const lua.Expr) anyerror!bool {
+        const hint = switch (callee.*) {
+            .name => |name| switch (try self.resolve(name.value)) {
+                .local => |binding| self.info.bindings[binding].callable_field_hint,
+                .upvalue => |ordinal| self.capturedFieldHint(ordinal),
+                .global => null,
+            },
+            .index => |index| staticString(index.key),
+            .paren => |paren| return self.nativeFindHint(paren.expr),
+            else => null,
+        } orelse return false;
+        // A hint limits speculation only. The primitive verifies the exact
+        // saved native entry and environment; arbitrary find fields stay legal.
+        return std.mem.eql(u8, hint, "find");
+    }
+
+    fn nativeFindThree(self: *FnEmitter, callee: *const lua.Expr, args_in: []const *lua.Expr) anyerror!?[3]ValueRef {
+        if (!self.module.facts.native_find_three or args_in.len != 3 or
+            isMultiExpr(args_in[2]) or !try self.nativeFindHint(callee)) return null;
+        self.native_find_ops += 1;
+        // Snapshot callable before all arguments, and each argument before
+        // evaluating its successor. Both paths consume these exact values.
+        const saved_callable = try self.valueSlot();
+        try self.copyValue(saved_callable, try self.box(try self.expr(callee)));
+        var saved_args: [3]V = undefined;
+        for (args_in, 0..) |arg, index| {
+            saved_args[index] = try self.valueSlot();
+            try self.copyValue(saved_args[index], try self.box(try self.expr(arg)));
+        }
+        const matched_slot = try llvm.alloca(self.alloca_builder, self.ty().i8, 1);
+        const first_slot = try self.nativeNumberSlot();
+        const last_slot = try self.nativeNumberSlot();
+        const capture = try self.valueSlot();
+        const first_numeric = try self.nativeBoolSlot();
+        const last_numeric = try self.nativeBoolSlot();
+        const fallback_results = try self.valueArray(3);
+        const status = try llvm.call(self.builder, self.rt().string_find_three, &.{
+            self.ctx(),   saved_callable, saved_args[0], saved_args[1], saved_args[2],
+            matched_slot, first_slot,     last_slot,     capture,
+        });
+        const rejected = try llvm.icmp(self.builder, .eq, status, try self.cI32(2));
+        const native = try self.newBlock("native_find_three_accepted");
+        const fallback = try self.newBlock("native_find_three_fallback");
+        const done = try self.newBlock("native_find_three_done");
+        try llvm.condBr(self.builder, rejected, fallback, native);
+
+        llvm.position(self.builder, native);
+        try self.check(status);
+        const matched = try llvm.icmp(self.builder, .ne, try llvm.load(self.builder, self.ty().i8, matched_slot, 1), try self.cI8(0));
+        try llvm.store(self.builder, matched, first_numeric, 1);
+        try llvm.store(self.builder, matched, last_numeric, 1);
+        for (0..2) |index|
+            _ = try llvm.call(self.builder, self.rt().value_nil, &.{try self.arrayElem(fallback_results, index)});
+        try llvm.br(self.builder, done);
+
+        llvm.position(self.builder, fallback);
+        const arguments = try self.valueArray(3);
+        for (saved_args, 0..) |arg, index|
+            try self.copyValue(try self.arrayElem(arguments, index), arg);
+        const generic_status = try llvm.call(self.builder, self.rt().call_fixed, &.{
+            self.ctx(), saved_callable, arguments, try self.cI64(3), fallback_results, try self.cI64(3),
+        });
+        try self.check(generic_status);
+        for ([_]V{ first_slot, last_slot }, [_]V{ first_numeric, last_numeric }, 0..) |number_slot, flag_slot, index| {
+            const value = try self.arrayElem(fallback_results, index);
+            const tag = try llvm.call(self.builder, self.rt().value_is_number, &.{value});
+            const is_number = try llvm.icmp(self.builder, .ne, tag, try self.cI8(0));
+            try llvm.store(self.builder, is_number, flag_slot, 1);
+            const raw = try llvm.call(self.builder, self.rt().value_number_unchecked, &.{value});
+            try llvm.store(self.builder, try llvm.select(self.builder, is_number, raw, try self.cDouble(0)), number_slot, 8);
+        }
+        try self.copyValue(capture, try self.arrayElem(fallback_results, 2));
+        try llvm.br(self.builder, done);
+
+        llvm.position(self.builder, done);
+        return .{
+            .{ .deferred_number = .{
+                .is_number = try llvm.load(self.builder, self.ty().i1, first_numeric, 1),
+                .number = try llvm.load(self.builder, self.ty().double, first_slot, 8),
+                .fallback = try self.arrayElem(fallback_results, 0),
+            } },
+            .{ .deferred_number = .{
+                .is_number = try llvm.load(self.builder, self.ty().i1, last_numeric, 1),
+                .number = try llvm.load(self.builder, self.ty().double, last_slot, 8),
+                .fallback = try self.arrayElem(fallback_results, 1),
+            } },
+            .{ .boxed = capture },
+        };
+    }
+
     fn rhsFixedRefs(self: *FnEmitter, values_in: []const *lua.Expr, needed: usize) anyerror![]ValueRef {
         const out = try self.a().alloc(ValueRef, needed);
         errdefer self.a().free(out);
@@ -2183,6 +2539,11 @@ const FnEmitter = struct {
                 const remain = needed - oi;
                 switch (value.*) {
                     .call => |v| {
+                        if (remain == 3) if (try self.nativeFindThree(v.callee, v.args)) |results| {
+                            for (results, 0..) |result, j| out[oi + j] = result;
+                            oi = needed;
+                            continue;
+                        };
                         const results = (try self.callFixed(v.callee, null, v.args, remain)) orelse unreachable;
                         for (0..remain) |j| out[oi + j] = .{ .boxed = try self.arrayElem(results, j) };
                     },
@@ -2240,10 +2601,10 @@ const FnEmitter = struct {
                             try self.cI64(field.key.len), boxed,
                         });
                     break :blk try llvm.call(self.builder, self.rt().set_field, &.{
-                        self.ctx(), object, field.key.ptr, try self.cI64(field.key.len), boxed,
+                        self.ctx(), object, field.key.ptr, try self.cI64(field.key.len), try self.cI64(static_fields.hashStringKey(key_name)), boxed,
                     });
                 } else try llvm.call(self.builder, self.rt().set_field, &.{
-                    self.ctx(), object, field.key.ptr, try self.cI64(field.key.len), boxed,
+                    self.ctx(), object, field.key.ptr, try self.cI64(field.key.len), try self.cI64(static_fields.hashStringKey(field.key.bytes)), boxed,
                 });
                 try self.check(status);
             },
@@ -2328,6 +2689,11 @@ const FnEmitter = struct {
     }
 
     fn emitCallReturn(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr) anyerror!void {
+        if (method == null and self.demanded_result_count == 1)
+            if (try self.fixedCallableCall(callee_expr, args_in)) |output| {
+                try self.emitFixedReturn(output, 1);
+                return;
+            };
         if (try self.staticRequire(callee_expr, method, args_in)) |request| {
             const loaded = try self.directRequireValue(request);
             try self.emitFixedReturn(loaded, 1);
@@ -2394,6 +2760,13 @@ const FnEmitter = struct {
     }
 
     fn emitReturn(self: *FnEmitter, values_in: []const *lua.Expr) anyerror!void {
+        if (self.fixed_pointer_entry) {
+            const values = try self.rhsFixedRefs(values_in, 1);
+            defer self.a().free(values);
+            try self.copyValue(self.resultPtr(), try self.box(values[0]));
+            try llvm.ret(self.builder, try self.cI32(0));
+            return;
+        }
         if (values_in.len == 0) {
             try self.emitFixedReturn(self.args(), 0);
             return;
@@ -2433,8 +2806,610 @@ const FnEmitter = struct {
         try self.emitFixedReturn(fixed, values_in.len);
     }
 
+    // A bounded continuation after optional numeric call results can retain
+    // native scalar locals without assuming anything about the callee. The
+    // ordinary call and all argument effects happen before the result guards.
+    fn continuationNumberExpr(self: *FnEmitter, expr_in: *const lua.Expr, selected: []const u32) bool {
+        return switch (expr_in.*) {
+            .number => true,
+            .paren => |v| self.continuationNumberExpr(v.expr, selected),
+            .name => |v| blk: {
+                const binding = self.locals.get(v.value) orelse break :blk false;
+                if (std.mem.indexOfScalar(u32, selected, binding) != null) break :blk true;
+                break :blk switch (self.storage[binding]) {
+                    .number => true,
+                    .direct => |value| value == .number,
+                    else => false,
+                };
+            },
+            .unary => |v| switch (v.op) {
+                .len => true, // len_number either returns a double or raises.
+                .neg => self.continuationNumberExpr(v.expr, selected),
+                .not_ => false,
+            },
+            .binary => |v| switch (v.op) {
+                .add, .sub, .mul, .div, .mod, .pow => self.continuationNumberExpr(v.lhs, selected) and
+                    self.continuationNumberExpr(v.rhs, selected),
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    fn continuationNumericWrites(self: *FnEmitter, body: lua.Block, selected: []const u32, budget: *usize) bool {
+        for (body) |stmt| {
+            if (budget.* == 0) return false;
+            budget.* -= 1;
+            switch (stmt.*) {
+                .empty, .call, .return_stmt => {},
+                .assign => |s| for (s.targets, 0..) |target, index| {
+                    if (target != .name) continue;
+                    const binding = self.locals.get(target.name) orelse continue;
+                    if (std.mem.indexOfScalar(u32, selected, binding) == null) continue;
+                    if (s.values.len != s.targets.len or !self.continuationNumberExpr(s.values[index], selected))
+                        return false;
+                },
+                .if_stmt => |s| {
+                    for (s.branches) |branch|
+                        if (!self.continuationNumericWrites(branch.body, selected, budget)) return false;
+                    if (s.else_body) |otherwise|
+                        if (!self.continuationNumericWrites(otherwise, selected, budget)) return false;
+                },
+                // No declarations, loops, breaks or closure definitions: lexical
+                // bindings and control targets are identical in both continuations.
+                else => return false,
+            }
+        }
+        return true;
+    }
+
+    fn numericContinuation(self: *FnEmitter, stmt: *const lua.Stmt, tail: lua.Block) anyerror!bool {
+        if (self.typed_continuation_emitted or self.info.span.end - self.info.span.start > 8192 or
+            stmt.* != .assign or tail.len < 2 or
+            tail[tail.len - 1].* != .return_stmt) return false;
+        const assignment = stmt.assign;
+        if (assignment.targets.len != 3 or assignment.values.len != 1 or assignment.values[0].* != .call)
+            return false;
+        const call = assignment.values[0].call;
+        if (call.args.len != 3 or call.args[2].* != .name) return false;
+
+        var targets: [3]u32 = undefined;
+        for (assignment.targets, 0..) |target, index| {
+            if (target != .name) return false;
+            targets[index] = self.locals.get(target.name) orelse return false;
+            for (targets[0..index]) |earlier| if (targets[index] == earlier) return false;
+        }
+        const head_binding = self.locals.get(call.args[2].name.value) orelse return false;
+        for (targets) |binding| if (binding == head_binding) return false;
+        const head_info = self.info.bindings[head_binding];
+        if (head_info.captured or head_info.mutated) return false;
+        const head_value = switch (self.storage[head_binding]) {
+            .direct => |value| numericCandidate(value) orelse return false,
+            else => return false,
+        };
+        for (targets[0..2]) |binding| {
+            if (self.info.bindings[binding].captured or self.storage[binding] != .value)
+                return false;
+        }
+
+        // Bound this first pilot to an optional-pair continuation, which is the
+        // actual find-result shape in StringParser:consume. Names are irrelevant.
+        var first_statement: usize = 0;
+        while (first_statement < tail.len and tail[first_statement].* == .empty) : (first_statement += 1) {}
+        if (first_statement == tail.len or tail[first_statement].* != .if_stmt) return false;
+        const first_if = tail[first_statement].if_stmt;
+        if (first_if.branches.len != 1 or first_if.else_body != null) return false;
+        const condition = first_if.branches[0].cond;
+        if (condition.* != .unary or condition.unary.op != .not_ or condition.unary.expr.* != .name)
+            return false;
+        if ((self.locals.get(condition.unary.expr.name.value) orelse return false) != targets[0]) return false;
+        const selected = [_]u32{ targets[0], targets[1], head_binding };
+        var budget: usize = 48;
+        if (!self.continuationNumericWrites(tail, &selected, &budget)) return false;
+
+        self.typed_continuation_emitted = true;
+        const prior = try self.a().dupe(LocalStorage, self.storage);
+        defer self.a().free(prior);
+        const binding_cursor = self.binding_next;
+        const scope_mark = self.saves.items.len;
+
+        // This is the same normal fixed call as the generic assignment. Its
+        // callable snapshot, argument order, errors and result clipping stay intact.
+        const values_out = try self.rhsFixedRefs(assignment.values, 3);
+        defer self.a().free(values_out);
+        const first = numericCandidate(values_out[0]) orelse return error.NumericContinuationResultMismatch;
+        const second = numericCandidate(values_out[1]) orelse return error.NumericContinuationResultMismatch;
+        const first_ok = try self.numberGuard(first);
+        const second_ok = try self.numberGuard(second);
+        const head_ok = try self.numberGuard(head_value);
+        const pair_ok = try llvm.select(self.builder, first_ok, second_ok, try self.cI1(false));
+        const all_ok = try llvm.select(self.builder, pair_ok, head_ok, try self.cI1(false));
+        const fast = try self.newBlock("numeric_continuation_fast");
+        const generic = try self.newBlock("numeric_continuation_generic");
+        try llvm.condBr(self.builder, all_ok, fast, generic);
+
+        llvm.position(self.builder, fast);
+        for (targets[0..2], [_]NumericCandidate{ first, second }) |binding, numeric| {
+            const slot = try self.nativeNumberSlot();
+            self.storage[binding] = .{ .number = slot };
+            try llvm.store(self.builder, try self.candidateNumber(numeric), slot, 8);
+        }
+        self.storage[head_binding] = .{ .direct = .{ .number = try self.candidateNumber(head_value) } };
+        try self.storeResolved(.{ .local = targets[2] }, values_out[2]);
+        if (!try self.block(tail)) return error.NumericContinuationMustTerminate;
+        if (self.binding_next != binding_cursor or self.saves.items.len != scope_mark)
+            return error.NumericContinuationScopeChanged;
+
+        @memcpy(self.storage, prior);
+        llvm.position(self.builder, generic);
+        for (targets, values_out) |binding, value|
+            try self.storeResolved(.{ .local = binding }, value);
+        if (!try self.block(tail)) return error.NumericContinuationMustTerminate;
+        return true;
+    }
+
+    // A region may keep an immutable, uncaptured local's numeric snapshot in SSA
+    // across calls. The table or closure that produced it remains fully mutable.
+    const ScalarUseScan = struct {
+        name: []const u8,
+        uses: usize = 0,
+        remaining: usize = 384,
+        valid: bool = true,
+
+        fn expr(self: *ScalarUseScan, node: *const lua.Expr, numeric: bool) void {
+            if (!self.valid) return;
+            if (self.remaining == 0) {
+                self.valid = false;
+                return;
+            }
+            self.remaining -= 1;
+            switch (node.*) {
+                .name => |v| {
+                    if (numeric and std.mem.eql(u8, self.name, v.value)) self.uses += 1;
+                },
+                .paren => |v| self.expr(v.expr, numeric),
+                .unary => |v| self.expr(v.expr, v.op == .neg),
+                .binary => |v| {
+                    const operands_numeric = switch (v.op) {
+                        .add, .sub, .mul, .div, .mod, .pow, .lt, .le, .gt, .ge => true,
+                        else => false,
+                    };
+                    self.expr(v.lhs, operands_numeric);
+                    self.expr(v.rhs, operands_numeric);
+                },
+                .index => |v| {
+                    self.expr(v.object, false);
+                    self.expr(v.key, false);
+                },
+                .call => |v| {
+                    self.expr(v.callee, false);
+                    for (v.args) |arg| self.expr(arg, false);
+                },
+                .method_call => |v| {
+                    self.expr(v.object, false);
+                    for (v.args) |arg| self.expr(arg, false);
+                },
+                .table => |v| for (v.fields) |field| switch (field) {
+                    .list => |value| self.expr(value, false),
+                    .named => |value| self.expr(value.value, false),
+                    .keyed => |value| {
+                        self.expr(value.key, false);
+                        self.expr(value.value, false);
+                    },
+                },
+                // Capturing the selected binding is rejected by analysis before
+                // this scan. Nested functions have their own specialization budget.
+                .function, .nil_lit, .bool_lit, .number, .string, .vararg => {},
+            }
+        }
+
+        fn declaration(self: *ScalarUseScan, name: []const u8) void {
+            // Deliberately reject even harmless shadowing in a nested scope.
+            if (std.mem.eql(u8, self.name, name)) self.valid = false;
+        }
+
+        fn target(self: *ScalarUseScan, value: lua.LValue) void {
+            switch (value) {
+                .name => |name| if (std.mem.eql(u8, self.name, name)) {
+                    self.valid = false;
+                },
+                .index => |v| {
+                    self.expr(v.object, false);
+                    self.expr(v.key, false);
+                },
+            }
+        }
+
+        fn block(self: *ScalarUseScan, body: lua.Block) void {
+            for (body) |stmt| {
+                if (!self.valid) return;
+                if (self.remaining == 0) {
+                    self.valid = false;
+                    return;
+                }
+                self.remaining -= 1;
+                switch (stmt.*) {
+                    .empty, .break_stmt => {},
+                    .local_assign => |s| {
+                        for (s.names) |name| self.declaration(name);
+                        for (s.values) |value| self.expr(value, false);
+                    },
+                    .assign => |s| {
+                        for (s.targets) |value| self.target(value);
+                        for (s.values) |value| self.expr(value, false);
+                    },
+                    .call => |s| self.expr(s.expr, false),
+                    .return_stmt => |s| for (s.values) |value| self.expr(value, false),
+                    .do_block => |s| self.block(s.body),
+                    .if_stmt => |s| {
+                        for (s.branches) |branch| {
+                            self.expr(branch.cond, false);
+                            self.block(branch.body);
+                        }
+                        if (s.else_body) |body_else| self.block(body_else);
+                    },
+                    .while_loop => |s| {
+                        self.expr(s.cond, false);
+                        self.block(s.body);
+                    },
+                    .repeat_loop => |s| {
+                        self.block(s.body);
+                        self.expr(s.cond, false);
+                    },
+                    .numeric_for => |s| {
+                        self.declaration(s.name);
+                        self.expr(s.start, false);
+                        self.expr(s.limit, false);
+                        if (s.step) |step| self.expr(step, false);
+                        self.block(s.body);
+                    },
+                    .generic_for => |s| {
+                        for (s.names) |name| self.declaration(name);
+                        for (s.values) |value| self.expr(value, false);
+                        self.block(s.body);
+                    },
+                    .local_function => |s| self.declaration(s.name),
+                    .function_assign => |s| self.target(s.target),
+                }
+            }
+        }
+    };
+
+    // This proof maintains only facts that remain numeric on every path.
+    // Numeric facts may be written only from proven numeric RHS expressions.
+    // Unknown facts are never promoted by an assignment or a branch.
+    const ClosedNumericProof = struct {
+        const Fact = struct { name: []const u8, numeric: bool };
+        selected: []const u8,
+        facts: [128]Fact = undefined,
+        count: usize = 0,
+        remaining: usize = 512,
+        uses: usize = 0,
+        writes: usize = 0,
+        valid: bool = true,
+
+        fn charge(self: *ClosedNumericProof) bool {
+            if (!self.valid or self.remaining == 0) {
+                self.valid = false;
+                return false;
+            }
+            self.remaining -= 1;
+            return true;
+        }
+
+        fn lookup(self: *const ClosedNumericProof, name: []const u8) ?bool {
+            var index = self.count;
+            while (index != 0) {
+                index -= 1;
+                if (std.mem.eql(u8, self.facts[index].name, name))
+                    return self.facts[index].numeric;
+            }
+            return null;
+        }
+
+        fn add(self: *ClosedNumericProof, name: []const u8, numeric: bool, declaration: bool) void {
+            if (self.count == self.facts.len or (declaration and std.mem.eql(u8, name, self.selected))) {
+                self.valid = false;
+                return;
+            }
+            self.facts[self.count] = .{ .name = name, .numeric = numeric };
+            self.count += 1;
+        }
+
+        // Returns a proof that this expression's single result is numeric.
+        // Calls and indexes remain unknown; all subexpressions are still scanned
+        // so closure creation cannot hide inside a table or an argument.
+        fn expr(self: *ClosedNumericProof, node: *const lua.Expr, numeric_use: bool) bool {
+            if (!self.charge()) return false;
+            return switch (node.*) {
+                .number => true,
+                .name => |v| blk: {
+                    if (numeric_use and std.mem.eql(u8, v.value, self.selected)) self.uses += 1;
+                    break :blk self.lookup(v.value) orelse false;
+                },
+                .paren => |v| self.expr(v.expr, numeric_use),
+                .unary => |v| blk: {
+                    const number = self.expr(v.expr, v.op == .neg);
+                    break :blk switch (v.op) {
+                        .neg => number,
+                        .len => true, // Existing len_number returns f64 or raises.
+                        .not_ => false,
+                    };
+                },
+                .binary => |v| blk: {
+                    const arithmetic = switch (v.op) {
+                        .add, .sub, .mul, .div, .mod, .pow => true,
+                        else => false,
+                    };
+                    const use_numbers = arithmetic or switch (v.op) {
+                        .lt, .le, .gt, .ge => true,
+                        else => false,
+                    };
+                    const lhs = self.expr(v.lhs, use_numbers);
+                    const rhs = self.expr(v.rhs, use_numbers);
+                    break :blk arithmetic and lhs and rhs;
+                },
+                .index => |v| blk: {
+                    _ = self.expr(v.object, false);
+                    _ = self.expr(v.key, true);
+                    break :blk false;
+                },
+                .call => |v| blk: {
+                    _ = self.expr(v.callee, false);
+                    for (v.args) |arg| _ = self.expr(arg, false);
+                    break :blk false;
+                },
+                .method_call => |v| blk: {
+                    _ = self.expr(v.object, false);
+                    for (v.args) |arg| _ = self.expr(arg, false);
+                    break :blk false;
+                },
+                .table => |v| blk: {
+                    for (v.fields) |field| switch (field) {
+                        .list => |value| _ = self.expr(value, false),
+                        .named => |value| _ = self.expr(value.value, false),
+                        .keyed => |value| {
+                            _ = self.expr(value.key, false);
+                            _ = self.expr(value.value, false);
+                        },
+                    };
+                    break :blk false;
+                },
+                .function => blk: {
+                    // Selected bindings are already uncaptured. Reject nested
+                    // closures too, so new numeric facts cannot escape into cells.
+                    self.valid = false;
+                    break :blk false;
+                },
+                .nil_lit, .bool_lit, .string, .vararg => false,
+            };
+        }
+
+        fn scoped(self: *ClosedNumericProof, body: lua.Block) void {
+            const mark = self.count;
+            defer self.count = mark;
+            self.block(body);
+        }
+
+        fn block(self: *ClosedNumericProof, body: lua.Block) void {
+            for (body) |stmt| {
+                if (!self.charge()) return;
+                switch (stmt.*) {
+                    .empty, .break_stmt => {},
+                    .local_assign => |s| {
+                        if (s.names.len > self.facts.len) {
+                            self.valid = false;
+                            return;
+                        }
+                        var rhs_numbers = [_]bool{false} ** 128;
+                        // All RHS expressions see the old lexical environment.
+                        for (s.values, 0..) |value, index| {
+                            const number = self.expr(value, false);
+                            if (index < s.names.len) rhs_numbers[index] = number;
+                        }
+                        for (s.names, 0..) |name, index| self.add(name, rhs_numbers[index], true);
+                    },
+                    .assign => |s| {
+                        if (s.targets.len > self.facts.len) {
+                            self.valid = false;
+                            return;
+                        }
+                        var rhs_numbers = [_]bool{false} ** 128;
+                        for (s.values, 0..) |value, index| {
+                            const number = self.expr(value, false);
+                            if (index < s.targets.len) rhs_numbers[index] = number;
+                        }
+                        for (s.targets, 0..) |target, index| switch (target) {
+                            .name => |name| {
+                                if (std.mem.eql(u8, name, self.selected)) self.writes += 1;
+                                if ((self.lookup(name) orelse false) and !rhs_numbers[index])
+                                    self.valid = false;
+                            },
+                            .index => |v| {
+                                _ = self.expr(v.object, false);
+                                _ = self.expr(v.key, true);
+                            },
+                        };
+                    },
+                    .call => |s| _ = self.expr(s.expr, false),
+                    .return_stmt => |s| for (s.values) |value| {
+                        _ = self.expr(value, false);
+                    },
+                    .do_block => |s| self.scoped(s.body),
+                    .if_stmt => |s| {
+                        for (s.branches) |branch| {
+                            _ = self.expr(branch.cond, false);
+                            self.scoped(branch.body);
+                        }
+                        if (s.else_body) |otherwise| self.scoped(otherwise);
+                    },
+                    .while_loop => |s| {
+                        _ = self.expr(s.cond, false);
+                        self.scoped(s.body);
+                    },
+                    .repeat_loop => |s| {
+                        const mark = self.count;
+                        self.block(s.body);
+                        _ = self.expr(s.cond, false);
+                        self.count = mark;
+                    },
+                    .numeric_for => |s| {
+                        _ = self.expr(s.start, true);
+                        _ = self.expr(s.limit, true);
+                        if (s.step) |step| _ = self.expr(step, true);
+                        const mark = self.count;
+                        self.add(s.name, true, true);
+                        self.block(s.body);
+                        self.count = mark;
+                    },
+                    .generic_for => |s| {
+                        for (s.values) |value| _ = self.expr(value, false);
+                        const mark = self.count;
+                        for (s.names) |name| self.add(name, false, true);
+                        self.block(s.body);
+                        self.count = mark;
+                    },
+                    .local_function, .function_assign => self.valid = false,
+                }
+            }
+        }
+    };
+
+    fn closedNumericLoop(self: *FnEmitter, tail: lua.Block) anyerror!bool {
+        if (!self.module.facts.closed_numeric_loops or self.typed_continuation_emitted or
+            self.closed_numeric_loop_attempted or tail.len == 0 or
+            self.info.span.end - self.info.span.start > 8192) return false;
+        switch (tail[0].*) {
+            .while_loop, .repeat_loop, .numeric_for, .generic_for => {},
+            else => return false,
+        }
+        // Only the first root-level loop is considered, with at most four
+        // candidate bindings and 512 AST visits each. One clone per function
+        // remains shared with the other scalar-region lowerings.
+        self.closed_numeric_loop_attempted = true;
+        var attempted: usize = 0;
+        var selected: ?u32 = null;
+        var input: NumericCandidate = undefined;
+        for (self.info.bindings, 0..) |binding, index| {
+            if (binding.captured or !binding.mutated or self.storage[index] != .value) continue;
+            if ((self.locals.get(binding.name) orelse continue) != index) continue;
+            if (attempted == 4) break;
+            attempted += 1;
+            var proof = ClosedNumericProof{ .selected = binding.name };
+            for (self.info.bindings, 0..) |live, live_index| {
+                if ((self.locals.get(live.name) orelse continue) != live_index) continue;
+                const numeric = live_index == index or switch (self.storage[live_index]) {
+                    .number => true,
+                    .direct => |value| value == .number,
+                    else => false,
+                };
+                proof.add(live.name, numeric, false);
+            }
+            proof.block(tail);
+            if (!proof.valid or proof.writes == 0 or proof.uses < 3) continue;
+            selected = @intCast(index);
+            input = .{ .boxed = self.storage[index].value };
+            break;
+        }
+        const binding = selected orelse return false;
+        self.typed_continuation_emitted = true;
+        self.closed_numeric_loop_emitted = true;
+        const prior = try self.a().dupe(LocalStorage, self.storage);
+        defer self.a().free(prior);
+        const binding_cursor = self.binding_next;
+        const scope_mark = self.saves.items.len;
+        const break_depth = self.breaks.items.len;
+        const fast = try self.newBlock("closed_numeric_loop_fast");
+        const generic = try self.newBlock("closed_numeric_loop_generic");
+        try llvm.condBr(self.builder, try self.numberGuard(input), fast, generic);
+
+        llvm.position(self.builder, fast);
+        const slot = try self.nativeNumberSlot();
+        self.storage[binding] = .{ .number = slot };
+        try llvm.store(self.builder, try self.candidateNumber(input), slot, 8);
+        if (!try self.block(tail)) try self.emitReturn(&.{});
+        const fast_binding_end = self.binding_next;
+        if (self.breaks.items.len != break_depth) return error.ClosedNumericLoopBreakScopeChanged;
+
+        self.endScope(scope_mark);
+        self.binding_next = binding_cursor;
+        @memcpy(self.storage, prior);
+        llvm.position(self.builder, generic);
+        if (!try self.block(tail)) try self.emitReturn(&.{});
+        if (self.binding_next != fast_binding_end or self.breaks.items.len != break_depth)
+            return error.ClosedNumericLoopScopeChanged;
+        return true;
+    }
+
+    fn scalarRegion(self: *FnEmitter, tail: lua.Block) anyerror!bool {
+        if (self.typed_continuation_emitted or tail.len == 0 or
+            self.info.span.end - self.info.span.start > 8192) return false;
+        // At most two boxed snapshots and one duplicated continuation per
+        // function. Require repeated numeric use to repay the entry guards.
+        var bindings: [2]u32 = undefined;
+        var candidates: [2]NumericCandidate = undefined;
+        var count: usize = 0;
+        for (self.info.bindings, 0..) |binding, index| {
+            if (count == bindings.len) break;
+            if (binding.captured or binding.mutated) continue;
+            const live_binding = self.locals.get(binding.name) orelse continue;
+            if (live_binding != index) continue;
+            const value = switch (self.storage[index]) {
+                .direct => |v| v,
+                else => continue,
+            };
+            if (value != .boxed) continue;
+            var scan = ScalarUseScan{ .name = binding.name };
+            scan.block(tail);
+            if (!scan.valid or scan.uses < 3) continue;
+            bindings[count] = @intCast(index);
+            candidates[count] = .{ .boxed = value.boxed };
+            count += 1;
+        }
+        if (count == 0) return false;
+
+        self.typed_continuation_emitted = true;
+        self.scalar_region_emitted = true;
+        const prior = try self.a().dupe(LocalStorage, self.storage);
+        defer self.a().free(prior);
+        const binding_cursor = self.binding_next;
+        const scope_mark = self.saves.items.len;
+        const break_depth = self.breaks.items.len;
+        var all_ok = try self.cI1(true);
+        for (candidates[0..count]) |candidate|
+            all_ok = try llvm.select(self.builder, all_ok, try self.numberGuard(candidate), try self.cI1(false));
+        const fast = try self.newBlock("scalar_region_fast");
+        const generic = try self.newBlock("scalar_region_generic");
+        try llvm.condBr(self.builder, all_ok, fast, generic);
+
+        llvm.position(self.builder, fast);
+        for (bindings[0..count], candidates[0..count]) |binding, candidate|
+            self.storage[binding] = .{ .direct = .{ .number = try self.candidateNumber(candidate) } };
+        if (!try self.block(tail)) try self.emitReturn(&.{});
+        const fast_binding_end = self.binding_next;
+        if (self.breaks.items.len != break_depth) return error.ScalarRegionBreakScopeChanged;
+
+        // Both branches emit the same AST with the same lexical binding IDs.
+        // Restore all compile-time storage and name scopes before the fallback;
+        // field-site ordinals intentionally remain unique across both copies.
+        self.endScope(scope_mark);
+        self.binding_next = binding_cursor;
+        @memcpy(self.storage, prior);
+        llvm.position(self.builder, generic);
+        if (!try self.block(tail)) try self.emitReturn(&.{});
+        if (self.binding_next != fast_binding_end or self.breaks.items.len != break_depth)
+            return error.ScalarRegionScopeChanged;
+        return true;
+    }
+
     fn block(self: *FnEmitter, body: lua.Block) anyerror!bool {
-        for (body) |stmt| if (try self.statement(stmt)) return true;
+        const function_body = body.ptr == self.info.body.ptr and body.len == self.info.body.len;
+        for (body, 0..) |stmt, index| {
+            if (function_body and try self.numericContinuation(stmt, body[index + 1 ..])) return true;
+            if (function_body and try self.closedNumericLoop(body[index..])) return true;
+            if (function_body and try self.scalarRegion(body[index..])) return true;
+            if (try self.statement(stmt)) return true;
+        }
         return false;
     }
 
@@ -2738,13 +3713,43 @@ const FnEmitter = struct {
         }
         for (self.info.params, 0..) |name, index| {
             const binding = try self.bindName(name);
-            const value = try llvm.call(self.builder, self.rt().arg_ptr, &.{
+            const value = if (self.fixed_pointer_entry)
+                try llvm.param(self.function, @intCast(index + 1))
+            else try llvm.call(self.builder, self.rt().arg_ptr, &.{
                 self.args(), self.argsLen(), try self.cI64(index),
             });
             try self.initBinding(binding, .{ .boxed = value });
         }
     }
 };
+
+fn bareExpr(value: *const lua.Expr) *const lua.Expr {
+    return if (value.* == .paren) bareExpr(value.paren.expr) else value;
+}
+
+fn isParam(value: *const lua.Expr, name: []const u8) bool {
+    const expr = bareExpr(value);
+    return expr.* == .name and std.mem.eql(u8, expr.name.value, name);
+}
+
+fn fixedCallableShape(info: *const analysis.FunctionInfo) bool {
+    if (info.dead or info.is_vararg or info.upvalues.len != 0 or info.params.len != 3 or
+        info.body.len != 1 or info.span.end - info.span.start > 256) return false;
+    const stmt = info.body[0];
+    if (stmt.* != .return_stmt or stmt.return_stmt.values.len != 1) return false;
+    const expr = bareExpr(stmt.return_stmt.values[0]);
+    if (expr.* != .call or expr.call.args.len != 2 or
+        !isParam(expr.call.args[0], info.params[1]) or !isParam(expr.call.args[1], info.params[2])) return false;
+    const callee = bareExpr(expr.call.callee);
+    if (callee.* != .binary or callee.binary.op != .or_) return false;
+    const first = bareExpr(callee.binary.lhs);
+    const second = bareExpr(callee.binary.rhs);
+    if (first.* != .index or second.* != .index or
+        !isParam(first.index.object, info.params[0]) or !isParam(second.index.object, info.params[0]) or
+        !isParam(first.index.key, info.params[2])) return false;
+    const default = bareExpr(second.index.key);
+    return default.* == .bool_lit and !default.bool_lit.value;
+}
 
 fn isMultiExpr(expr: *const lua.Expr) bool {
     return switch (expr.*) {
@@ -2754,12 +3759,22 @@ fn isMultiExpr(expr: *const lua.Expr) bool {
 }
 
 fn emitFunction(emitter: *ModuleEmitter, info: *const analysis.FunctionInfo) anyerror!void {
-    var function = try FnEmitter.init(emitter, info);
+    var function = try FnEmitter.init(emitter, info, null, null);
     defer function.deinit();
     try function.emitInitialization();
     const terminated = try function.block(info.body);
     if (!terminated) try function.emitReturn(&.{});
     try function.finish();
+    if (function.typed_continuation_emitted and !function.scalar_region_emitted and !function.closed_numeric_loop_emitted)
+        std.debug.print("LLVM_NUMERIC_CONTINUATION function_id={d} span_start={d} span_end={d}\n", .{ info.id, info.span.start, info.span.end });
+    if (function.closed_numeric_loop_emitted)
+        std.debug.print("LLVM_CLOSED_NUMERIC_LOOP function_id={d} span_start={d} span_end={d}\n", .{ info.id, info.span.start, info.span.end });
+    if (function.scalar_region_emitted)
+        std.debug.print("LLVM_SCALAR_REGION function_id={d} span_start={d} span_end={d}\n", .{ info.id, info.span.start, info.span.end });
+    if (function.native_find_ops != 0)
+        std.debug.print("LLVM_NATIVE_FIND_THREE function_id={d} operations={d}\n", .{ info.id, function.native_find_ops });
+    if (function.deferred_numeric_ops != 0)
+        std.debug.print("LLVM_DEFERRED_NUMERIC function_id={d} operations={d}\n", .{ info.id, function.deferred_numeric_ops });
 }
 
 fn generatedFunctionType(m: *const llvm.Module) anyerror!T {

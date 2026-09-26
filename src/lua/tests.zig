@@ -1365,3 +1365,396 @@ test "reassigned saved method local retains ordinary dynamic call" {
     try std.testing.expect(std.mem.indexOf(u8, ir, "call i8 @dict_lua_value_is_function_id") == null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @dict_lua_return_call(") != null);
 }
+
+test "guarded numeric continuations keep proven local results native after one normal call" {
+    const compile = struct {
+        fn run(source: []const u8) ![]u8 {
+            var chunk = try llvm_parser.parse(std.testing.allocator, source);
+            defer chunk.deinit();
+            var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+            defer globals.deinit();
+            var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+            defer module.deinit();
+            var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+            defer generated.deinit();
+            return generated.toText(std.testing.allocator);
+        }
+    }.run;
+    const eligible = try compile(
+        "return function(find, text, head) " ++
+            "local a, b, capture; a, b, capture = find(text, '(.)', head); " ++
+            "if not a then capture, a = '', #text + 1; b = a - 1 end; " ++
+            "return b - a + head, capture end",
+    );
+    defer std.testing.allocator.free(eligible);
+    try std.testing.expect(std.mem.indexOf(u8, eligible, "numeric_continuation_fast") != null);
+    try std.testing.expect(std.mem.indexOf(u8, eligible, "numeric_continuation_generic") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, eligible, "call i32 @dict_lua_call_fixed("));
+    const fast = std.mem.indexOf(u8, eligible, "\nnumeric_continuation_fast:").?;
+    const end = std.mem.indexOfPos(u8, eligible, fast + 1, "\nnumeric_continuation_generic:").?;
+    // Only the checked branch extracts doubles; the generic branch retains
+    // arbitrary values, coercion, metamethods and the no-match nil case.
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, eligible[fast..end], "call double @dict_lua_value_number_unchecked("));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, eligible[fast..end], "store double"));
+
+    const unsafe_sources = [_][]const u8{
+        // The second assignment can change the numeric representation.
+        "return function(find, text, head) local a,b,c; a,b,c=find(text,'',head); if not a then a,b=1,0 end; a='changed'; return a,b,c end",
+        // A closure must continue observing the same mutable boxed cell.
+        "return function(find,text,head) local a,b,c; local observe=function() return a end; a,b,c=find(text,'',head); if not a then a,b=1,0 end; return observe(),b,c end",
+        // A callback may mutate a captured head during the original call.
+        "return function(find,text,head) local mutate=function() head=2 end; local a,b,c; a,b,c=find(text,mutate(),head); if not a then a,b=1,0 end; return a,b,c end",
+        // A later shadowing declaration would require a separate lexical proof.
+        "return function(find,text,head) local a,b,c; a,b,c=find(text,'',head); if not a then a,b=1,0 end; local a='shadow'; return a,b,c end",
+    };
+    for (unsafe_sources) |source| {
+        const generic = try compile(source);
+        defer std.testing.allocator.free(generic);
+        try std.testing.expect(std.mem.indexOf(u8, generic, "numeric_continuation_fast") == null);
+    }
+}
+
+test "bounded scalar regions retain immutable snapshots across callbacks and loops" {
+    const compile = struct {
+        fn run(source: []const u8) ![]u8 {
+            var chunk = try llvm_parser.parse(std.testing.allocator, source);
+            defer chunk.deinit();
+            var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+            defer globals.deinit();
+            var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+            defer module.deinit();
+            var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+            defer generated.deinit();
+            return generated.toText(std.testing.allocator);
+        }
+    }.run;
+    const eligible_sources = [_][]const u8{
+        "return function(x) return (x + 1) * (x - 1) + x end",
+        // Snapshot is taken once before the callback; later table writes do not
+        // change it. Duplicated local and loop binding IDs must remain valid.
+        "return function(t, callback) local x=t.x; callback(t); local sum=0; " ++
+            "for i=1,2 do local part=x+i; sum=sum+part end; return sum+x*2+x end",
+        // Independent nested scopes and control-flow joins share the snapshot.
+        "return function(x, flag) if flag then local y=x+1; use(y) " ++
+            "else local y=x-1; use(y) end; return x*2 end",
+    };
+    for (eligible_sources) |source| {
+        const ir = try compile(source);
+        defer std.testing.allocator.free(ir);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "scalar_region_fast") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "scalar_region_generic") != null);
+        const fast = std.mem.indexOf(u8, ir, "\nscalar_region_fast:").?;
+        const generic = std.mem.indexOfPos(u8, ir, fast + 1, "\nscalar_region_generic:").?;
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(
+            u8,
+            ir[fast..generic],
+            "call double @dict_lua_value_number_unchecked(",
+        ));
+    }
+    const ineligible_sources = [_][]const u8{
+        "return function(x) x=other(); return x+x+x end",
+        "return function(x) local change=function() x=other() end; change(); return x+x+x end",
+        "return function(x) do local x=other(); use(x+x+x) end; return x end",
+        "return function(x) return x+x end",
+    };
+    for (ineligible_sources) |source| {
+        const ir = try compile(source);
+        defer std.testing.allocator.free(ir);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "scalar_region_fast") == null);
+    }
+}
+
+test "closed numeric loop preserves guarded recurrence and rejects unknown writes" {
+    const compile = struct {
+        fn run(source: []const u8) ![]u8 {
+            var chunk = try llvm_parser.parse(std.testing.allocator, source);
+            defer chunk.deinit();
+            var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+            defer globals.deinit();
+            var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+            defer module.deinit();
+            var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{ .closed_numeric_loops = true });
+            defer generated.deinit();
+            return generated.toText(std.testing.allocator);
+        }
+    }.run;
+    const eligible = [_][]const u8{
+        "return function(sum, pieces, cb) local i=1; while i<=#pieces do " ++
+            "local width=#pieces[i]; sum=sum+width; cb(i); i=i+1 end; return sum+sum+sum end",
+        "return function(sum,n) for i=1,n do sum=sum+i end; return sum+sum+sum end",
+        "return function(i,n,t) while i<n do i=i+1; use(t[i],t[i+1]) end; return i end",
+        "return function(x) repeat x=x+1 until x>10; return x+x end",
+    };
+    for (eligible) |source| {
+        const ir = try compile(source);
+        defer std.testing.allocator.free(ir);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "closed_numeric_loop_fast") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "closed_numeric_loop_generic") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ir, " fadd ") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_binary(") != null);
+    }
+    const rejected = [_][]const u8{
+        "return function(x,n) while n>0 do x=other(); n=n-1 end; return x+x+x end",
+        "return function(x,n) while n>0 do if flag then x='bad' else x=x+1 end; n=n-1 end; return x+x+x end",
+        "return function(x,n) local f=function() x=other() end; while n>0 do x=x+1; f(); n=n-1 end; return x+x+x end",
+        "return function(x,n) while n>0 do local x=3; use(x+x+x); n=n-1 end; return x end",
+        "return function(x,n,t) while n>0 do local width=#t; width=other(); x=x+width; n=n-1 end; return x+x+x end",
+        "return function(x,n) while n>0 do local f=function() return 1 end; x=x+f(); n=n-1 end; return x+x+x end",
+    };
+    for (rejected) |source| {
+        const ir = try compile(source);
+        defer std.testing.allocator.free(ir);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "closed_numeric_loop_fast") == null);
+    }
+}
+
+test "optimized field reads snapshot imported positive hits before later effects" {
+    const source = "return function(t, callback) local value=t.x; callback(t); return value,t.x end";
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    for ([_]bool{ false, true }) |enabled| {
+        var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{ .inline_field_hits = enabled });
+        defer generated.deinit();
+        const ir = try generated.toText(std.testing.allocator);
+        defer std.testing.allocator.free(ir);
+        try std.testing.expectEqual(enabled, std.mem.indexOf(u8, ir, "call ptr @dict_lua_value_field_hit(") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_field_cached(") != null);
+        if (enabled) {
+            const hit_start = std.mem.indexOf(u8, ir, "\nfield_cache_inline_hit:") orelse return error.MissingHitBlock;
+            const hit_end = std.mem.indexOfPos(u8, ir, hit_start + 1, "\nfield_cache_inline_miss:") orelse return error.MissingMissBlock;
+            const body = ir[hit_start..hit_end];
+            try std.testing.expect(std.mem.indexOf(u8, body, "call void @dict_lua_value_copy(") != null);
+            try std.testing.expect(std.mem.indexOf(u8, body, "@dict_lua_get_field_cached(") == null);
+        }
+    }
+}
+
+test "deferred numeric joins keep chained arithmetic unboxed and promote numeric fallbacks" {
+    const compile = struct {
+        fn run(source: []const u8, enabled: bool) ![]u8 {
+            var chunk = try llvm_parser.parse(std.testing.allocator, source);
+            defer chunk.deinit();
+            var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+            defer globals.deinit();
+            var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+            defer module.deinit();
+            var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{ .deferred_numeric_ssa = enabled });
+            defer generated.deinit();
+            try generated.module.verify(std.testing.allocator);
+            return generated.toText(std.testing.allocator);
+        }
+    }.run;
+    const source = "return function(a,b) return (a+b)*(a-b) end";
+    const baseline = try compile(source, false);
+    defer std.testing.allocator.free(baseline);
+    try std.testing.expect(std.mem.indexOf(u8, baseline, "deferred_number_fast") == null);
+    const ir = try compile(source, true);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, ir, "call i32 @dict_lua_binary("));
+    const fast = std.mem.lastIndexOf(u8, ir, "\ndeferred_number_fast") orelse return error.MissingDeferredFast;
+    const end = std.mem.indexOfPos(u8, ir, fast + 1, "\ndeferred_number_fallback") orelse return error.MissingDeferredFallback;
+    const body = ir[fast..end];
+    // The final multiplication consumes scalar results of both earlier sums;
+    // no Value materialization, tag reload or generic operation occurs here.
+    try std.testing.expect(std.mem.indexOf(u8, body, "fmul double") != null);
+    for ([_][]const u8{ "@dict_lua_value_number(", "@dict_lua_value_copy(", "@dict_lua_value_is_number(", "@dict_lua_value_number_unchecked(", "@dict_lua_binary(" }) |helper|
+        try std.testing.expect(std.mem.indexOf(u8, body, helper) == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "deferred_number_promote") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "store double 0.000000e+00") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "deferred_box_number") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "deferred_box_generic") != null);
+
+    const escaping_sources = [_][]const u8{
+        "return function(a,b) local v=a+b; return v==nil,v~=nil,not v,v and 5,v or 6 end",
+        "return function(a,b,t,f) local v=a+b; t.x=v; t[v]=v; return f(v),v end",
+        "return function(a,b) local v=a+b; local capture=function() return v end; v=v*2; return capture() end",
+        "return function(a,b) local v; v=a+b; v=v*2; return v end",
+        "return function(a,b) return (a+b).x,-(a+b),#(a+b) end",
+        "return function(a,b) return (a+b)<(a-b),(a+b)==false end",
+        "return function(a,b) return tostring(a+b)..'x' end",
+        "return function(a,b) local v=a+b; return function() return v end end",
+    };
+    for (escaping_sources) |text| {
+        const checked = try compile(text, true);
+        defer std.testing.allocator.free(checked);
+        try std.testing.expect(std.mem.indexOf(u8, checked, "deferred_number_fast") != null);
+        try std.testing.expect(std.mem.indexOf(u8, checked, "deferred_box_generic") != null);
+    }
+}
+
+test "reviewed guarded methods admit bounded one-argument demanded-result entries" {
+    const source =
+        \\local offset = 2
+        \\local object = {}
+        \\function object.consume(x, missing)
+        \\  if missing ~= nil then error("missing argument changed") end
+        \\  return x.value + offset, x.value + offset + 1
+        \\end
+        \\function object.early(self)
+        \\  local consume = self.consume
+        \\  local one = consume(self)
+        \\  return one
+        \\end
+        \\function object.walk(self)
+        \\  local consume = self.consume
+        \\  local one
+        \\  for i = 1, 1 do
+        \\    one = consume(self)
+        \\    consume(self)
+        \\  end
+        \\  return one
+        \\end
+        \\return object
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    const target = module.functions.items[1];
+    const candidates = [_]llvm_emitter.MethodCandidate{.{
+        .name = "consume",
+        .function_id = target.id,
+        .module_id = 0,
+        .capture_count = @intCast(target.upvalues.len),
+    }};
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{
+        .method_candidates = &candidates,
+        .current_module_id = 0,
+        .demanded_entries = true,
+    });
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    for (0..2) |count| {
+        const definition = try std.fmt.allocPrint(std.testing.allocator, "define internal %FunctionResult @lua_demand_{d}_a1_r{d}(", .{ target.id, count });
+        defer std.testing.allocator.free(definition);
+        const start = std.mem.indexOf(u8, ir, definition) orelse return error.MissingDemandedEntry;
+        const end = std.mem.indexOfPos(u8, ir, start, "\n}") orelse return error.UnterminatedDemandedEntry;
+        const first_site = (@as(u64, target.id) << 32) | (@as(u64, count + 1) << 30);
+        const site_argument = try std.fmt.allocPrint(std.testing.allocator, "i64 {d}, ptr", .{first_site});
+        defer std.testing.allocator.free(site_argument);
+        try std.testing.expect(std.mem.indexOf(u8, ir[start..end], site_argument) != null);
+    }
+    const public_definition = try std.fmt.allocPrint(std.testing.allocator, "define %FunctionResult @lua_f_{d}(", .{target.id});
+    defer std.testing.allocator.free(public_definition);
+    const public_start = std.mem.indexOf(u8, ir, public_definition) orelse return error.MissingPublicEntry;
+    const public_end = std.mem.indexOfPos(u8, ir, public_start, "\n}") orelse return error.UnterminatedPublicEntry;
+    const public_site = try std.fmt.allocPrint(std.testing.allocator, "i64 {d}, ptr", .{@as(u64, target.id) << 32});
+    defer std.testing.allocator.free(public_site);
+    try std.testing.expect(std.mem.indexOf(u8, ir[public_start..public_end], public_site) != null);
+    const early_definition = "define %FunctionResult @lua_f_2(";
+    const early_start = std.mem.indexOf(u8, ir, early_definition) orelse return error.MissingEarlyCaller;
+    const early_end = std.mem.indexOfPos(u8, ir, early_start, "\n}") orelse return error.UnterminatedEarlyCaller;
+    try std.testing.expect(std.mem.indexOf(u8, ir[early_start..early_end], "@lua_demand_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "alwaysinline") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i8 @dict_lua_value_is_function_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call ptr @dict_lua_value_function_captures") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_call_fixed(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_call_discard(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_enter_local_static_call(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call void @dict_lua_leave_local_static_call(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "i64 1, i64 1)") != null);
+}
+
+test "guarded native find retains scalar positions through captured aliases" {
+    const compile = struct {
+        fn run(source: []const u8, enabled: bool) ![]u8 {
+            var chunk = try llvm_parser.parse(std.testing.allocator, source);
+            defer chunk.deinit();
+            var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+            defer globals.deinit();
+            var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+            defer module.deinit();
+            var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{ .native_find_three = enabled });
+            defer generated.deinit();
+            return generated.toText(std.testing.allocator);
+        }
+    }.run;
+    const sources = [_][]const u8{
+        "local find=string.find; return function(text, head) local a,b,c; " ++
+            "a,b,c=find(text,'(.)',head); if not a then c,a='',#text+1; b=a-1 end; return b-a+head,c end",
+        "local find=string.find; return function() return function(text,head) " ++
+            "local a,b,c=find(text,'(.)',head); return a,b,c end end",
+        "return function(text,head) local a,b,c=string.find(text,'(.)',head); return a,b,c end",
+        "local find=string.find; return function(text,head) find=other; " ++
+            "local a,b,c=find(text,'(.)',head); return a,b,c end",
+    };
+    for (sources) |source| {
+        const ir = try compile(source, true);
+        defer std.testing.allocator.free(ir);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_string_find_three(") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "native_find_three_fallback") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_call_fixed(") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "load double") != null);
+    }
+    const continuation = try compile(sources[0], true);
+    defer std.testing.allocator.free(continuation);
+    try std.testing.expect(std.mem.indexOf(u8, continuation, "numeric_continuation_fast") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, continuation, "call i32 @dict_lua_string_find_three("));
+    const disabled = try compile(sources[0], false);
+    defer std.testing.allocator.free(disabled);
+    try std.testing.expect(std.mem.indexOf(u8, disabled, "call i32 @dict_lua_string_find_three(") == null);
+    for ([_][]const u8{
+        "return function(find,text,head) local a,b,c=find(text,'(.)',head); return a,b,c end",
+        "local find=string.find; local a,b,c=find('abc','(.)',tail()); return a,b,c",
+        "local find=string.find; local a,b=find('abc','(.)',1); return a,b",
+        "local find=string.find; local a,b,c=find('abc','(.)',1,true); return a,b,c",
+    }) |source| {
+        const ir = try compile(source, true);
+        defer std.testing.allocator.free(ir);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_string_find_three(") == null);
+    }
+}
+
+test "structural callable table entries use bounded fixed pointer ABI" {
+    const source =
+        \\local meta = {}
+        \\do
+        \\  function meta.__call(receiver, arg, key)
+        \\    return (receiver[key] or receiver[false])(arg, key)
+        \\  end
+        \\end
+        \\local export = {}
+        \\function export.apply(holder, arg, key)
+        \\  local result = holder.handler(arg, key)
+        \\  local second = holder.handler(arg, key)
+        \\  return result, second
+        \\end
+        \\return export
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{
+        .fixed_callable_entries = true,
+    });
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "dict_lua_guard_table_call.") == null);
+    const start = std.mem.indexOf(u8, ir, "define internal i32 @lua_fixed_callable_") orelse return error.MissingFixedCallableEntry;
+    const end = std.mem.indexOfPos(u8, ir, start, "\n}") orelse return error.UnterminatedFixedCallableEntry;
+    const body = ir[start..end];
+    try std.testing.expect(std.mem.indexOf(u8, body, "@dict_lua_arg_ptr") == null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "@dict_lua_return_call") == null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "@dict_lua_call_fixed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "@dict_lua_get_index") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i8 @dict_lua_guard_table_call") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_enter_local_static_call") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_leave_local_static_call") != null);
+
+    var disabled = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer disabled.deinit();
+    const off_ir = try disabled.toText(std.testing.allocator);
+    defer std.testing.allocator.free(off_ir);
+    try std.testing.expect(std.mem.indexOf(u8, off_ir, "lua_fixed_callable_") == null);
+}

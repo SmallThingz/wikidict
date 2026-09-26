@@ -4,6 +4,9 @@ const value_leaf = @import("value_leaf.zig");
 const static_decode = @import("lua_static_literal_decode");
 
 comptime {
+    if (@sizeOf(rt.FieldCache) != 56 or @alignOf(rt.FieldCache) != 8 or
+        @sizeOf(rt.ShapeSiteCache) != 24 or @alignOf(rt.ShapeSiteCache) != 8)
+        @compileError("field-hit TLS cache layout changed");
     if (@sizeOf(rt.Value) != 24 or @alignOf(rt.Value) != 8)
         @compileError("LLVM ABI requires the audited 24-byte, 8-byte-aligned runtime Value");
     if (@sizeOf(rt.Captures) != 24 or @alignOf(rt.Captures) != 8)
@@ -130,12 +133,25 @@ export fn dict_lua_value_number(out: *rt.Value, raw: f64) callconv(.c) void {
 export fn dict_lua_value_string(out: *rt.Value, ptr: [*]const u8, len: usize) callconv(.c) void {
     value_leaf.string(out, ptr, len);
 }
+export fn dict_lua_value_field_hit(ctx: *const rt.Context, object: *const rt.Value, site_id: u64) callconv(.c) ?*const rt.Value {
+    return value_leaf.fieldHit(ctx, object, site_id);
+}
 export fn dict_lua_value_copy(out: *rt.Value, input: *const rt.Value) callconv(.c) void {
     value_leaf.copy(out, input);
 }
 export fn dict_lua_value_truthy(input: *const rt.Value) callconv(.c) u8 {
     return value_leaf.truthy(input);
 }
+// Pure guard: resolve the live table and raw metatable field on every call.
+// No user code runs between acceptance and entry; general __call chains fall back.
+export fn dict_lua_guard_table_call(ctx: *rt.Context, input: *const rt.Value, function_id: u32, expected: rt.FunctionFn) callconv(.c) u8 {
+    if (input.* != .table or function_id == rt.native_function_id) return 0;
+    const method = ctx.metamethod(input.*, "__call") orelse return 0;
+    if (method != .callable) return 0;
+    const function = method.callable;
+    return @intFromBool(function.id == function_id and function.entry == expected and function.env.raw == 0);
+}
+
 export fn dict_lua_value_is_function_id(input: *const rt.Value, function_id: u32) callconv(.c) u8 {
     return value_leaf.isFunctionId(input, function_id);
 }
@@ -252,6 +268,10 @@ export fn dict_lua_get_field_hashed(ctx: *rt.Context, object: *const rt.Value, n
 }
 export fn dict_lua_set_field(ctx: *rt.Context, object: *const rt.Value, name: [*]const u8, len: usize, input: *const rt.Value) callconv(.c) u32 {
     ctx.setIndex(object.*, .{ .string = name[0..len] }, input.*) catch |err| return fail(ctx, err);
+    return 0;
+}
+export fn dict_lua_store_field_hashed(ctx: *rt.Context, object: *const rt.Value, name: [*]const u8, len: usize, key_hash: u64, input: *const rt.Value) callconv(.c) u32 {
+    ctx.setHashedField(object.*, name[0..len], key_hash, input.*) catch |err| return fail(ctx, err);
     return 0;
 }
 export fn dict_lua_set_shape_slot(ctx: *rt.Context, object: *const rt.Value, slot: u32, input: *const rt.Value) callconv(.c) u32 {
@@ -951,4 +971,144 @@ export fn dict_lua_value_number_unchecked(input: *const rt.Value) callconv(.c) f
 }
 export fn dict_lua_arg_get(args_ptr: [*]const rt.Value, args_len: usize, index: usize, out: *rt.Value) callconv(.c) void {
     value_leaf.argGet(args_ptr, args_len, index, out);
+}
+
+test "shape-only leaf defers mutable map hits to the full runtime cache" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    const object: rt.Value = .{ .table = table };
+    const key: rt.Value = .{ .string = "x" };
+    const hash = rt.stringValueHash(key.string);
+    const site: u64 = (@as(u64, 110111) << 32) | 1;
+    try table.rawSet(ctx.allocator, key, .{ .number = 7 });
+    try std.testing.expect(dict_lua_value_field_hit(&ctx, &object, site) == null);
+    _ = try ctx.getFieldAtSite(object, "x", hash, site);
+    try std.testing.expect(dict_lua_value_field_hit(&ctx, &object, site) == null);
+    const first = try ctx.getFieldAtSite(object, "x", hash, site);
+    try std.testing.expectEqual(@as(f64, 7), first.number);
+    var snapshot: rt.Value = undefined;
+    dict_lua_value_copy(&snapshot, &first);
+    try table.rawSet(ctx.allocator, key, .{ .boolean = false });
+    try std.testing.expect(dict_lua_value_field_hit(&ctx, &object, site) == null);
+    const replaced = try ctx.getFieldAtSite(object, "x", hash, site);
+    try std.testing.expect(replaced == .boolean and !replaced.boolean);
+    try std.testing.expectEqual(@as(f64, 7), snapshot.number);
+
+    const old_epoch = table.field_cache_epoch;
+    for (0..80) |index| {
+        const name = try std.fmt.allocPrint(ctx.allocator, "grow_{d}", .{index});
+        try table.rawSet(ctx.allocator, .{ .string = name }, .{ .number = @floatFromInt(index) });
+    }
+    try std.testing.expect(table.field_cache_epoch != old_epoch);
+    try std.testing.expect(dict_lua_value_field_hit(&ctx, &object, site) == null);
+    _ = try ctx.getFieldAtSite(object, "x", hash, site);
+    try std.testing.expect(dict_lua_value_field_hit(&ctx, &object, site) == null);
+    try std.testing.expect(!(try ctx.getFieldAtSite(object, "x", hash, site)).boolean);
+    try table.rawSet(ctx.allocator, key, .nil);
+    try std.testing.expect(dict_lua_value_field_hit(&ctx, &object, site) == null);
+
+    var other = try rt.Context.init(arena.allocator(), 0);
+    defer other.deinit();
+    try table.rawSet(ctx.allocator, key, .{ .number = 9 });
+    _ = try ctx.getFieldAtSite(object, "x", hash, site);
+    try std.testing.expect(dict_lua_value_field_hit(&other, &object, site) == null);
+    const wrong: rt.Value = .{ .number = 1 };
+    try std.testing.expect(dict_lua_value_field_hit(&ctx, &wrong, site) == null);
+    // These collided under the superseded XOR/low-bit index.
+    const peer_site: u64 = (@as(u64, 110110) << 32);
+    try std.testing.expect(rt.fieldCacheIndex(site) != rt.fieldCacheIndex(peer_site));
+}
+
+test "field-hit leaf reuses program shape metadata across fresh table instances" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]rt.Value{.{ .string = "x" }};
+    const sorted = [_]u32{0};
+    const shapes = [_]rt.Shape{.{
+        .field_keys = &keys,
+        .sorted_string_slots = &sorted,
+        .field_count = 1,
+        .open = true,
+        .all_string_keys = true,
+    }};
+    ctx.program_shapes = &shapes;
+    ctx.program_shape_generation = 83;
+    const site: u64 = (@as(u64, 110111) << 32) | 71;
+    const hash = rt.stringValueHash(keys[0].string);
+    const first = try ctx.newProgramShape(0);
+    const second = try ctx.newProgramShape(0);
+    try first.rawSetSlot(0, .{ .number = 1 });
+    try second.rawSetSlot(0, .{ .number = 2 });
+    _ = try ctx.getFieldAtSite(.{ .table = first }, "x", hash, site);
+    const object: rt.Value = .{ .table = second };
+    const hit = dict_lua_value_field_hit(&ctx, &object, site) orelse return error.MissingFreshShapeHit;
+    try std.testing.expectEqual(@as(f64, 2), hit.number);
+    // A valid program-shape cache stores no object pointer. Exhausting mutable
+    // table/context identities must not disable its current-table slot read.
+    const context_nonce = ctx.field_cache_nonce;
+    const table_nonce = second.field_cache_nonce;
+    ctx.field_cache_nonce = 0;
+    second.field_cache_nonce = 0;
+    try std.testing.expectEqual(@as(f64, 2), (dict_lua_value_field_hit(&ctx, &object, site) orelse return error.MissingExhaustedNonceShapeHit).number);
+    ctx.field_cache_nonce = context_nonce;
+    second.field_cache_nonce = table_nonce;
+    try second.rawSetSlot(0, .{ .number = 3 });
+    try std.testing.expectEqual(@as(f64, 3), (dict_lua_value_field_hit(&ctx, &object, site) orelse return error.MissingLiveShapeHit).number);
+    try second.rawSetSlot(0, .nil);
+    try std.testing.expect(dict_lua_value_field_hit(&ctx, &object, site) == null);
+    const mt = try ctx.newTable();
+    const inherited = try ctx.newTable();
+    try inherited.rawSet(ctx.allocator, keys[0], .{ .number = 11 });
+    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = inherited });
+    second.metatable = mt;
+    try std.testing.expectEqual(@as(f64, 11), (try ctx.getFieldAtSite(object, "x", hash, site)).number);
+    try second.rawSetSlot(0, .{ .number = 4 });
+    ctx.program_shape_generation = 84;
+    try std.testing.expect(dict_lua_value_field_hit(&ctx, &object, site) == null);
+}
+
+test "fixed callable guard observes live metatable entry and environment" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    const first_mt = try ctx.newTable();
+    const second_mt = try ctx.newTable();
+    const value = rt.Value{ .table = table };
+    const entry = dict_lua_static_module_root_unreachable;
+    const function = try ctx.makeFunction(7, entry, &.{});
+    var cell = rt.Cell{ .value = .nil };
+    const captured = try ctx.makeFunction(7, entry, &.{&cell});
+    try std.testing.expectEqual(@as(u8, 0), dict_lua_guard_table_call(&ctx, &value, 7, entry));
+    table.metatable = first_mt;
+    try first_mt.rawSet(ctx.allocator, .{ .string = "__call" }, function);
+    ctx.depth = ctx.max_depth;
+    try std.testing.expectEqual(@as(u8, 1), dict_lua_guard_table_call(&ctx, &value, 7, entry));
+    try std.testing.expectEqual(ctx.max_depth, ctx.depth);
+    ctx.depth = 0;
+    try std.testing.expectEqual(@as(u8, 0), dict_lua_guard_table_call(&ctx, &value, 8, entry));
+    try first_mt.rawSet(ctx.allocator, .{ .string = "__call" }, captured);
+    try std.testing.expectEqual(@as(u8, 0), dict_lua_guard_table_call(&ctx, &value, 7, entry));
+    try first_mt.rawSet(ctx.allocator, .{ .string = "__call" }, .{ .table = second_mt });
+    try std.testing.expectEqual(@as(u8, 0), dict_lua_guard_table_call(&ctx, &value, 7, entry));
+    table.metatable = second_mt;
+    try second_mt.rawSet(ctx.allocator, .{ .string = "__call" }, function);
+    try std.testing.expectEqual(@as(u8, 1), dict_lua_guard_table_call(&ctx, &value, 7, entry));
+    try std.testing.expectEqual(@as(u8, 0), dict_lua_guard_table_call(&ctx, &function, 7, entry));
+    const wrong_entry: rt.Value = .{ .callable = &.{ .id = 7, .identity = 0, .entry = fixedCallableWrongEntry } };
+    try second_mt.rawSet(ctx.allocator, .{ .string = "__call" }, wrong_entry);
+    try std.testing.expectEqual(@as(u8, 0), dict_lua_guard_table_call(&ctx, &value, 7, entry));
+    const native: rt.Value = .{ .callable = &.{ .id = rt.native_function_id, .identity = 0, .entry = entry } };
+    try second_mt.rawSet(ctx.allocator, .{ .string = "__call" }, native);
+    try std.testing.expectEqual(@as(u8, 0), dict_lua_guard_table_call(&ctx, &value, rt.native_function_id, entry));
+}
+
+fn fixedCallableWrongEntry(_: *rt.Context, _: *const rt.Captures, _: [*]const rt.Value, _: usize, _: ?[*]rt.Value, _: usize) callconv(.c) rt.FunctionResult {
+    return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
 }

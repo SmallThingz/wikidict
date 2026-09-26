@@ -734,6 +734,11 @@ fn appendModuleToBatch(
     method_candidates: []const emitter.MethodCandidate,
     batch: *emitter.Batch,
     frozen_global_count: usize,
+    closed_numeric_loops: bool,
+    inline_field_hits: bool,
+    deferred_numeric_ssa: bool,
+    demanded_entries: bool,
+    native_find_three: bool,
 ) !void {
     const path = try sourcePath(scratch, source_root, record.path);
     const source = try readAll(io, scratch, path);
@@ -757,6 +762,12 @@ fn appendModuleToBatch(
         .table_shapes = &table_shapes,
         .synth_root = record.synth_root,
         .current_module_id = @intCast(index),
+        .closed_numeric_loops = closed_numeric_loops,
+        .inline_field_hits = inline_field_hits,
+        .deferred_numeric_ssa = deferred_numeric_ssa,
+        .demanded_entries = demanded_entries,
+        .native_find_three = native_find_three,
+        .fixed_callable_entries = demanded_entries,
     };
     const result = try batch.append(scratch, globals, &module, facts);
     if (result.root_function != record.root_function or
@@ -839,6 +850,11 @@ fn emitBatches(
                     method_candidates,
                     &batch,
                     frozen_global_count,
+                    mode != .o0,
+                    mode != .o0,
+                    mode != .o0,
+                    mode != .o0,
+                    mode != .o0,
                 );
                 _ = scratch_arena.reset(.retain_capacity);
 

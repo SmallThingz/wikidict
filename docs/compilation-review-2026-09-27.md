@@ -148,3 +148,35 @@ Receipts:
 - `allocator-counted-r2/result.json` SHA-256 `075a780a9525461e26ded81c1ecf5615bb516c0f14a7c8e46f0bb5274f73a0a6`.
 
 The allocator-only patch also passed the full test graph on a plain snapshot of clean `bc3dc03` plus only its five owned files (224.20 s). This establishes independent test coverage for the allocator commit; the native parity and timing measurements above used C25 plus the allocator. The staged allocator core was verified against this snapshot, and the remaining live core changes were verified to be the original C25 work. Receipt: `.tmp/allocator-isolated-head-20260927/gate-r1/allocator-isolated-qualified.json`, SHA-256 `135b473f7f6599287f3abd0dd5b3cd9e2ad17ffae6525a097c4afc137c145e93`.
+
+## Rejected pattern token prototype
+
+The scratch pattern-byte-program E candidate is rejected. Its first timing controller compared a one-iteration preflight checksum with 3,000 timed iterations and exited unsuccessfully. The separate G offline audit recovered four successful guarded samples: 48 rows and 12 exact same-iteration semantic pairs. Independent raw-log review confirmed that every candidate/control CPU ratio exceeded one, ranging from 1.047602 to 1.272888 (4.76–27.29% slower). This synthetic pattern evidence does not establish corpus performance. No retry was launched and no pattern changes were retained.
+
+Receipt: `.tmp/runtime-optimization-20260926/pattern-byte-program-g-offline/qualified.json`, SHA-256 `0ff841a011f28ee78b68f5171f2751aa6ff4fc692c59bbece1154e5d94f4ea60`. The unchanged runtime pattern source SHA-256 is `ca105d341a1187e1c6f594daadc291507d81b7a2013b6c93263653f07ee85c13`.
+
+## Combined compiler stack qualification
+
+The current stack combines guarded numeric continuations/loops and deferred numeric SSA, prehashed stores, structural fixed-call specialization, guarded scalar `string.find` results, and an imported positive shape-slot lookup. Dynamic operations retain their existing fallback, including arbitrary metamethod results. The leaf importer now requires the shape-cache TLS declaration and rejects an unexpected mutable field-cache declaration; mutable map-cache lookup stays in the runtime.
+
+The repaired full graph passed, as did linked find/fixed-call fixtures and parser IR checks. The final shape checker initially rejected a valid LLVM exported alias. A separate, pinned recovery resolved aliases, reran fixture comparisons and mechanism checks, and authenticated all preceding successful phases without rebuilding or weakening product semantics. The full-graph receipt is `.tmp/combined-stack-native-20260927/recovery-r1/full-graph-qualified.json`, SHA-256 `b2b6043795e7e09efdaa56ae79d89fa1865e7f2554a8a2fb71e2519b6c218e06`.
+
+Real English native compilation took 518.25 seconds and 1,811.46 child CPU seconds, reusing 1/118 objects and publishing all 118. Exact ordinary and hard 1,000-page parity passed. The complete gate took 555.01 seconds, with peak PSS 2,820,161,536 bytes and 20 tasks. Receipt: `.tmp/combined-stack-native-20260927/native-r1/build-qualified.json`, SHA-256 `89705705c8263533343b4fabfc80d731dd11ddd6701f936d74a02277fdc5ca7d`.
+
+Three separate ABBA comparisons used frozen binaries and exact output checks for every warmup and timed sample. Ratios below are candidate/control worker CPU; values below one favor the combined stack.
+
+| Control | Ordinary mean ratio (matched pairs) | Hard mean ratio (matched pairs) |
+| --- | --- | --- |
+| C25 plus allocator | 0.996894 (1.012968 / 0.981111) | 0.964070 (0.977374 / 0.951078) |
+| Authenticated C23 | 0.997841 (1.024570 / 0.971021) | 0.964096 (0.962673 / 0.965507) |
+| Clean committed C23 plus allocator | 0.982032 (0.988660 / 0.975751) | 0.995067 (0.995309 / 0.994824) |
+
+The last control was freshly built from clean committed `233dba6`, excluding the shared uncommitted compiler work, and passed both exact windows independently. These measurements observed host memory reclaim and other activity; none qualifies an isolated gain. The first two ordinary comparisons were mixed. The final comparison favored the candidate in both pairs/windows but only slightly, especially on hard pages. This supports provisional retention and a broader counted follow-up, not a large compiler speedup claim.
+
+Comparison receipts are respectively `allocator-abba-r1/qualification.json` (SHA-256 `8f75da79a34056891c23d1335c34faf55e4d540d86f153fa0ca98223be38248a`) and `c23-abba-r1/qualification.json` (`3136549f98f445ef00471e3b53e1a6f47dfcc73a84b11a71c300111befabae31`) under `.tmp/combined-stack-native-20260927/`, and `.tmp/committed-control-comparison-20260927/abba-r1/qualification.json` (`fc172275648932ce1435d9367ac9dd4ab73c7b31d8237d808de5ee555427aa10`).
+
+## Combined stack counted follow-up
+
+The eight-worker 100,000-page run passed all 524 nonfallback file comparisons, the 1,620-record fallback multiset, and final blob verification. It produced 73,386 main pages and 74,848 language records. Native wall time was **180.300 seconds / 554.631 selected pages/s**, worker CPU 1,292.18424 seconds, and joined process CPU 1,313.924 seconds. The full wrapper took 188.285 seconds, including 0.754 seconds for blob verification; peak aggregate PSS was 3,529,057,280 bytes with 20 tasks. Memory limits used sampled watchdog enforcement, not a kernel hard cap.
+
+This observed rate exceeds the earlier unpaired 520.397 pages/s allocator count, but differing host pressure prevents attributing the difference entirely to source changes. The 2,000 pages/s target and full-English end-to-end goal remain unmet. Receipt: `.tmp/combined-stack-native-20260927/counted-r1/qualification.json`, SHA-256 `37c9236d0fb735700bbd855ec71b4c16d98bc44c4a3ce3b741f04070ee389e92`.

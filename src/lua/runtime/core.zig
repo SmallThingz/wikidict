@@ -269,7 +269,7 @@ fn numberValueHash(number: f64) u64 {
     return wyhashMix64(low ^ secret0 ^ 9, high ^ secret1);
 }
 
-fn stringValueHash(text: []const u8) u64 {
+pub fn stringValueHash(text: []const u8) u64 {
     return static_fields.hashStringKey(text);
 }
 
@@ -643,12 +643,17 @@ pub const Table = struct {
     fn ownHashedStringValuePtr(self: *Table, name: []const u8, key_hash: u64, witness: ?*OwnMissWitness) ?*Value {
         if (self.native_namespace != null or !self.owns_slots or
             self.global_tail != null or self.choices.len != 0) return null;
-        if (self.shape != null) {
-            if (self.slotForKey(.{ .string = name })) |slot| {
-                const value = self.slotPtr(slot) orelse return null;
-                if (witness) |miss| miss.slot = value;
-                if (value.* != .nil) return value;
-            }
+        const slot = if (self.shape != null) self.slotForKey(.{ .string = name }) else null;
+        return self.ownHashedStringValuePtrAtSlot(name, key_hash, slot, witness);
+    }
+
+    // The caller proves the immutable shape lookup result. A missing/nil slot
+    // still probes the live map and records witnesses for inherited lookups.
+    fn ownHashedStringValuePtrAtSlot(self: *Table, name: []const u8, key_hash: u64, slot: ?u32, witness: ?*OwnMissWitness) ?*Value {
+        if (slot) |known| {
+            const value = self.slotPtr(known) orelse return null;
+            if (witness) |miss| miss.slot = value;
+            if (value.* != .nil) return value;
         }
         const value = self.map.getPtrAdapted(name, StringLookupContext{ .key_hash = key_hash });
         if (witness) |miss| miss.map_value = value;
@@ -707,6 +712,32 @@ pub const Table = struct {
         self.maybeBuildNumericMirror(allocator, key, value);
         self.noteNumericMapWrite(key, value);
         if (key == .number) self.has_hashed_number = true;
+    }
+
+    // Constant string writes use the caller's compiled hash. This follows the
+    // same shape, choice, and map order as rawSet, including growth before an
+    // existing map key is overwritten when the map is at its load limit.
+    pub fn rawSetHashedString(self: *Table, allocator: std.mem.Allocator, name: []const u8, key_hash: u64, value: Value) !void {
+        if (self.read_only) return error.ReadOnlyTable;
+        const key = Value{ .string = name };
+        self.markMutated();
+        if (self.slotForKey(key)) |slot| return self.rawSetSlot(slot, value);
+        for (self.choices, 0..) |cell, choice| {
+            if (cell.value != .nil and rawEqual(cell.key, key))
+                return self.rawSetChoice(@intCast(choice), key, value);
+        }
+        const lookup = StringLookupContext{ .key_hash = key_hash };
+        if (value == .nil) {
+            if (self.map.removeAdapted(name, lookup)) self.markMapStructuralMutation();
+            return;
+        }
+        const old_count = self.map.count();
+        const old_capacity = self.map.capacity();
+        const result = try self.map.getOrPutContextAdapted(allocator, name, lookup, ValueContext{});
+        if (!result.found_existing) result.key_ptr.* = key;
+        result.value_ptr.* = value;
+        if (self.map.count() != old_count or self.map.capacity() != old_capacity)
+            self.markMapStructuralMutation();
     }
 
     pub fn append(self: *Table, allocator: std.mem.Allocator, value: Value) !void {
@@ -970,7 +1001,7 @@ fn takeFieldCacheContextNonce() u64 {
     }
 }
 
-const FieldCache = struct {
+pub const FieldCache = extern struct {
     site_id: u64 = 0,
     context_nonce: u64 = 0,
     owner_context_nonce: u64 = 0,
@@ -979,23 +1010,84 @@ const FieldCache = struct {
     table: ?*Table = null,
     value: ?*Value = null,
 };
-const field_cache_entries = 4096;
+pub const field_cache_entries = 4096;
 // Spread nearby function IDs and field ordinals across the direct-mapped cache.
-fn fieldCacheIndex(site_id: u64) usize {
+pub fn fieldCacheIndex(site_id: u64) usize {
     comptime std.debug.assert(field_cache_entries == 4096);
     return @intCast((site_id *% 0x9e3779b97f4a7c15) >> 52);
 }
-threadlocal var field_cache: [field_cache_entries]FieldCache = [_]FieldCache{.{}} ** field_cache_entries;
 // A positive named slot is stable across fresh instances of one program shape.
 // This cache holds only metadata, never a Value pointer from another table.
-const ShapeSiteCache = struct {
+pub const ShapeSiteCache = extern struct {
     site_id: u64 = 0,
     program_generation: u64 = 0,
     shape_id: u32 = 0,
     slot: u32 = 0,
 };
-threadlocal var shape_site_cache: [field_cache_entries]ShapeSiteCache =
-    [_]ShapeSiteCache{.{}} ** field_cache_entries;
+// The build-only bitcode imports storage supplied by the native worker. Other
+// roots, including standalone core tests, own one initialized TLS provider.
+// Direct declarations avoid taking a thread-local address at comptime.
+const FieldCacheStorage = if (@hasDecl(@import("root"), "build_value_leaf") and
+    @import("root").build_value_leaf) struct {
+    extern threadlocal var dict_lua_field_cache: [field_cache_entries]FieldCache;
+    extern threadlocal var dict_lua_shape_site_cache: [field_cache_entries]ShapeSiteCache;
+} else struct {
+    export threadlocal var dict_lua_field_cache: [field_cache_entries]FieldCache =
+        [_]FieldCache{.{}} ** field_cache_entries;
+    export threadlocal var dict_lua_shape_site_cache: [field_cache_entries]ShapeSiteCache =
+        [_]ShapeSiteCache{.{}} ** field_cache_entries;
+};
+
+// Metadata-only cache: it holds no table or Value pointer. A matching immutable
+// program shape maps this exact site to a slot; load that slot from the CURRENT
+// table. Context/table identity nonces guard mutable map pointers, not this path.
+pub inline fn positiveProgramShapeHit(
+    ctx: *const Context,
+    object: *const Value,
+    site_id: u64,
+    shapes: *const [field_cache_entries]ShapeSiteCache,
+) ?*const Value {
+    if (object.* != .table) return null;
+    const table = object.table;
+    if (table.native_namespace != null or !table.owns_slots or
+        table.global_tail != null or table.choices.len != 0) return null;
+    const shape_entry = &shapes[fieldCacheIndex(site_id)];
+    if (table.shape != null and ctx.program_shape_generation != 0 and
+        shape_entry.site_id == site_id and
+        shape_entry.program_generation == ctx.program_shape_generation and
+        shape_entry.shape_id < ctx.program_shapes.len and
+        table.shape == &ctx.program_shapes[shape_entry.shape_id])
+    {
+        if (shape_entry.slot < table.slots.len) {
+            const value = &table.slots[shape_entry.slot];
+            if (value.* != .nil) return value;
+        }
+    }
+    return null;
+}
+
+// Runtime fallback retains the full mutable-map cache and all identity guards.
+// The imported read-only leaf above deliberately inlines only the shape tier.
+pub inline fn positiveFieldCacheHit(
+    ctx: *const Context,
+    object: *const Value,
+    site_id: u64,
+    fields: *const [field_cache_entries]FieldCache,
+    shapes: *const [field_cache_entries]ShapeSiteCache,
+) ?*const Value {
+    if (positiveProgramShapeHit(ctx, object, site_id, shapes)) |value| return value;
+    if (object.* != .table or ctx.field_cache_nonce == 0) return null;
+    const table = object.table;
+    if (table.field_cache_nonce == 0 or table.native_namespace != null or
+        !table.owns_slots or table.global_tail != null or table.choices.len != 0) return null;
+    const entry = &fields[fieldCacheIndex(site_id)];
+    if (entry.site_id != site_id or entry.context_nonce != ctx.field_cache_nonce or
+        entry.owner_context_nonce != table.field_cache_owner_nonce or
+        entry.table_nonce != table.field_cache_nonce or entry.table_epoch != table.field_cache_epoch or
+        entry.table != table) return null;
+    const value = entry.value orelse return null;
+    return if (value.* == .nil) null else value;
+}
 
 // A bounded path of table-valued __index links. The path holds live locations,
 // never a copied Value, and is useful across reads of one mutable receiver.
@@ -2100,46 +2192,31 @@ pub const Context = struct {
             return self.getHashedField(object, name, key_hash);
         const table = object.table;
         const cache_index: usize = fieldCacheIndex(site_id);
-        const shape_entry = &shape_site_cache[cache_index];
-        if (table.shape != null and self.program_shape_generation != 0 and
-            shape_entry.site_id == site_id and
-            shape_entry.program_generation == self.program_shape_generation and
-            shape_entry.shape_id < self.program_shapes.len and
-            table.shape == &self.program_shapes[shape_entry.shape_id])
-        {
-            if (table.rawGetSlot(shape_entry.slot)) |value| return value;
-        }
-        const entry = &field_cache[cache_index];
-        if (entry.site_id == site_id and entry.context_nonce == self.field_cache_nonce and
-            entry.owner_context_nonce == table.field_cache_owner_nonce and
-            entry.table_nonce == table.field_cache_nonce and entry.table_epoch == table.field_cache_epoch and
-            entry.table == table)
-        {
-            if (entry.value) |value| if (value.* != .nil) return value.*;
-        }
+        const shape_entry = &FieldCacheStorage.dict_lua_shape_site_cache[cache_index];
+        const entry = &FieldCacheStorage.dict_lua_field_cache[cache_index];
+        if (positiveFieldCacheHit(self, &object, site_id, &FieldCacheStorage.dict_lua_field_cache, &FieldCacheStorage.dict_lua_shape_site_cache)) |value|
+            return value.*;
         if (table.metatable != null) if (self.inheritedCacheHit(table, site_id)) |value| return value;
         var own_witness: Table.OwnMissWitness = .{};
-        if (table.ownHashedStringValuePtr(name, key_hash, &own_witness)) |value| {
-            // The own lookup already found this key. A Value pointer inside the
-            // slot allocation identifies its stable shape slot without another
-            // binary search or string hash.
-            if (table.shape) |shape| if (self.programShapeId(shape)) |shape_id| {
-                if (table.slots.len != 0) {
-                    const first = @intFromPtr(table.slots.ptr);
-                    const address = @intFromPtr(value);
-                    if (address >= first) {
-                        const delta = address - first;
-                        if (delta % @sizeOf(Value) == 0 and delta / @sizeOf(Value) < table.slots.len) {
-                            shape_entry.* = .{
-                                .site_id = site_id,
-                                .program_generation = self.program_shape_generation,
-                                .shape_id = shape_id,
-                                .slot = @intCast(delta / @sizeOf(Value)),
-                            };
-                        }
-                    }
-                }
+        const known_shape = if (table.shape) |shape| self.programShapeId(shape) else null;
+        const own_value = if (known_shape) |shape_id| blk: {
+            const slot: ?u32 = if (shape_entry.site_id == site_id and
+                shape_entry.program_generation == self.program_shape_generation and
+                shape_entry.shape_id == shape_id)
+                (if (shape_entry.slot == std.math.maxInt(u32)) null else shape_entry.slot)
+            else resolve: {
+                const resolved = table.slotForKey(.{ .string = name });
+                shape_entry.* = .{
+                    .site_id = site_id,
+                    .program_generation = self.program_shape_generation,
+                    .shape_id = shape_id,
+                    .slot = resolved orelse std.math.maxInt(u32),
+                };
+                break :resolve resolved;
             };
+            break :blk table.ownHashedStringValuePtrAtSlot(name, key_hash, slot, &own_witness);
+        } else table.ownHashedStringValuePtr(name, key_hash, &own_witness);
+        if (own_value) |value| {
             entry.* = .{ .site_id = site_id, .context_nonce = self.field_cache_nonce, .owner_context_nonce = table.field_cache_owner_nonce, .table_nonce = table.field_cache_nonce, .table_epoch = table.field_cache_epoch, .table = table, .value = value };
             return value.*;
         }
@@ -2180,6 +2257,52 @@ pub const Context = struct {
             },
         };
         try table.rawSet(self.allocator, key, value);
+    }
+
+    // Compiled field names carry their hash. With no metatable, a write can
+    // enter rawSetHashedString immediately. For a metatable, an existing own
+    // field still wins over __newindex; a map overwrite uses its first probe
+    // only when putContext would not grow and change iteration/cache epochs.
+    pub fn setHashedField(self: *Context, object: Value, name: []const u8, key_hash: u64, value: Value) anyerror!void {
+        if (object != .table) return error.IndexType;
+        const table = object.table;
+        if (table.metatable == null)
+            return table.rawSetHashedString(self.allocator, name, key_hash, value);
+        const key = Value{ .string = name };
+        const shaped_slot = table.slotForKey(key);
+        if (shaped_slot) |slot| if (table.rawGetSlot(slot) != null) {
+            // A global tail write can allocate; retain rawSet's failure effects.
+            if (slot >= table.slots.len) return table.rawSetHashedString(self.allocator, name, key_hash, value);
+            return table.rawSetSlot(slot, value);
+        };
+        for (table.choices, 0..) |cell, choice| {
+            if (cell.value != .nil and rawEqual(cell.key, key)) {
+                // rawSet writes a matching shape slot first even when that
+                // slot is nil and a choice exposes the own value.
+                if (shaped_slot != null) return table.rawSetHashedString(self.allocator, name, key_hash, value);
+                return table.rawSetChoice(@intCast(choice), key, value);
+            }
+        }
+        const existing = table.map.getPtrAdapted(name, StringLookupContext{ .key_hash = key_hash });
+        if (existing != null) {
+            if (shaped_slot != null) return table.rawSetHashedString(self.allocator, name, key_hash, value);
+            if (value != .nil and table.map.available > 0) {
+                if (table.read_only) return error.ReadOnlyTable;
+                table.markMutated();
+                existing.?.* = value;
+                return;
+            }
+            return table.rawSetHashedString(self.allocator, name, key_hash, value);
+        }
+        if (table.metatable.?.rawGet(.{ .string = "__newindex" })) |handler| switch (handler) {
+            .table => |other| return self.setHashedField(.{ .table = other }, name, key_hash, value),
+            else => {
+                const out = try self.callValue(handler, &.{ object, key, value });
+                defer freeResults(out);
+                return;
+            },
+        };
+        try table.rawSetHashedString(self.allocator, name, key_hash, value);
     }
 
     pub fn binaryArith(self: *Context, op: ArithOp, a: Value, b: Value) anyerror!Value {
@@ -3754,6 +3877,142 @@ test "captured function stores copied pointer tails in its owning context" {
     try std.testing.expectEqual(@as(f64, 42), result.values[0].number);
 }
 
+test "prehashed field writes retain growth nil and newindex behavior" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const original = try ctx.newTable();
+    const hashed = try ctx.newTable();
+    const Compare = struct {
+        fn tables(a: *Table, b: *Table) !void {
+            try std.testing.expectEqual(a.map.count(), b.map.count());
+            try std.testing.expectEqual(a.map.capacity(), b.map.capacity());
+            try std.testing.expectEqual(a.field_cache_epoch, b.field_cache_epoch);
+            var left = a.iterator();
+            var right = b.iterator();
+            while (left.next()) |entry| {
+                const other = right.next() orelse return error.MissingField;
+                try std.testing.expect(rawEqual(entry.key_ptr.*, other.key_ptr.*));
+                try std.testing.expect(rawEqual(entry.value_ptr.*, other.value_ptr.*));
+            }
+            try std.testing.expect(right.next() == null);
+        }
+    };
+    var long_name: [257]u8 = [_]u8{'x'} ** 257;
+    long_name[256] = 'a';
+    try ctx.setIndex(.{ .table = original }, .{ .string = &long_name }, .{ .number = 1 });
+    try ctx.setHashedField(.{ .table = hashed }, &long_name, stringValueHash(&long_name), .{ .number = 1 });
+    var keys: [64][]const u8 = undefined;
+    var count: usize = 0;
+    while (original.map.available != 0 and count < keys.len) : (count += 1) {
+        keys[count] = try std.fmt.allocPrint(ctx.allocator, "field-{d}", .{count});
+        try ctx.setIndex(.{ .table = original }, .{ .string = keys[count] }, .{ .number = @floatFromInt(count) });
+        try ctx.setHashedField(.{ .table = hashed }, keys[count], stringValueHash(keys[count]), .{ .number = @floatFromInt(count) });
+    }
+    try std.testing.expect(count != keys.len);
+    try Compare.tables(original, hashed);
+    // An overwrite at the map load limit still follows putContext's growth.
+    try ctx.setIndex(.{ .table = original }, .{ .string = &long_name }, .{ .number = 7 });
+    try ctx.setHashedField(.{ .table = hashed }, &long_name, stringValueHash(&long_name), .{ .number = 7 });
+    try Compare.tables(original, hashed);
+    try ctx.setIndex(.{ .table = original }, .{ .string = &long_name }, .nil);
+    try ctx.setHashedField(.{ .table = hashed }, &long_name, stringValueHash(&long_name), .nil);
+    try Compare.tables(original, hashed);
+    try ctx.setIndex(.{ .table = original }, .{ .string = &long_name }, .{ .number = 9 });
+    try ctx.setHashedField(.{ .table = hashed }, &long_name, stringValueHash(&long_name), .{ .number = 9 });
+    try Compare.tables(original, hashed);
+
+    // An iterator can expose a nil-valued map cell; it still counts as an
+    // existing own key for __newindex dispatch.
+    var left = original.iterator();
+    while (left.next()) |entry| if (entry.key_ptr.* == .string and std.mem.eql(u8, entry.key_ptr.string, long_name[0..])) {
+        entry.value_ptr.* = .nil;
+        break;
+    };
+    var right = hashed.iterator();
+    while (right.next()) |entry| if (entry.key_ptr.* == .string and std.mem.eql(u8, entry.key_ptr.string, long_name[0..])) {
+        entry.value_ptr.* = .nil;
+        break;
+    };
+    const Handler = struct {
+        fn call(_: ?*anyopaque, runtime: *Context, args: []const Value) ![]const Value {
+            if (args.len != 3 or args[0] != .table) return error.BadNewIndexArgs;
+            args[0].table.metatable = null;
+            try runtime.setIndex(args[0], args[1], args[2]);
+            return &.{};
+        }
+    };
+    const mt = try ctx.newTable();
+    try mt.rawSet(ctx.allocator, .{ .string = "__newindex" }, try ctx.newNative(null, Handler.call));
+    original.metatable = mt;
+    hashed.metatable = mt;
+    try ctx.setIndex(.{ .table = original }, .{ .string = &long_name }, .{ .number = 13 });
+    try ctx.setHashedField(.{ .table = hashed }, &long_name, stringValueHash(&long_name), .{ .number = 13 });
+    try std.testing.expect(original.metatable == mt and hashed.metatable == mt);
+    try Compare.tables(original, hashed);
+    const absent = "another-very-long-absent-field-name";
+    try ctx.setIndex(.{ .table = original }, .{ .string = absent }, .{ .number = 20 });
+    try ctx.setHashedField(.{ .table = hashed }, absent, stringValueHash(absent), .{ .number = 20 });
+    try std.testing.expect(original.metatable == null and hashed.metatable == null);
+    try Compare.tables(original, hashed);
+}
+
+test "prehashed field writes preserve shaped choices redirects and readonly errors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{.{ .string = "slot" }};
+    const shape = Shape{ .field_keys = &keys, .field_count = 1, .choice_count = 1 };
+    const original = try ctx.newShapedTable(&shape);
+    const hashed = try ctx.newShapedTable(&shape);
+    for ([_]*Table{ original, hashed }) |table| {
+        try table.rawSetSlot(0, .{ .number = 1 });
+        try table.rawSetChoice(0, .{ .string = "choice" }, .{ .number = 2 });
+        try table.rawSet(ctx.allocator, .{ .string = "overflow" }, .{ .number = 3 });
+    }
+    for ([_][]const u8{ "slot", "choice", "overflow" }) |name| {
+        try ctx.setIndex(.{ .table = original }, .{ .string = name }, .{ .number = 4 });
+        try ctx.setHashedField(.{ .table = hashed }, name, stringValueHash(name), .{ .number = 4 });
+        try std.testing.expectEqual(@as(f64, 4), hashed.rawGet(.{ .string = name }).?.number);
+        try std.testing.expectEqual(original.field_cache_epoch, hashed.field_cache_epoch);
+    }
+    // A matching shape slot takes the write even if the visible own value
+    // currently comes from a choice with the same key.
+    const overlap_original = try ctx.newShapedTable(&shape);
+    const overlap_hashed = try ctx.newShapedTable(&shape);
+    const overlap_mt = try ctx.newTable();
+    for ([_]*Table{ overlap_original, overlap_hashed }) |table| {
+        try table.rawSetChoice(0, .{ .string = "slot" }, .{ .number = 12 });
+        table.metatable = overlap_mt;
+    }
+    try ctx.setIndex(.{ .table = overlap_original }, .{ .string = "slot" }, .{ .number = 15 });
+    try ctx.setHashedField(.{ .table = overlap_hashed }, "slot", stringValueHash("slot"), .{ .number = 15 });
+    try std.testing.expectEqual(@as(f64, 15), overlap_hashed.rawGetSlot(0).?.number);
+    try std.testing.expectEqual(@as(f64, 12), overlap_hashed.choices[0].value.number);
+    try std.testing.expectEqual(overlap_original.field_cache_epoch, overlap_hashed.field_cache_epoch);
+    const target_original = try ctx.newTable();
+    const target_hashed = try ctx.newTable();
+    const mt_original = try ctx.newTable();
+    const mt_hashed = try ctx.newTable();
+    try mt_original.rawSet(ctx.allocator, .{ .string = "__newindex" }, .{ .table = target_original });
+    try mt_hashed.rawSet(ctx.allocator, .{ .string = "__newindex" }, .{ .table = target_hashed });
+    original.metatable = mt_original;
+    hashed.metatable = mt_hashed;
+    const absent = "redirected-field";
+    try ctx.setIndex(.{ .table = original }, .{ .string = absent }, .{ .number = 9 });
+    try ctx.setHashedField(.{ .table = hashed }, absent, stringValueHash(absent), .{ .number = 9 });
+    try std.testing.expect(original.rawGet(.{ .string = absent }) == null);
+    try std.testing.expect(hashed.rawGet(.{ .string = absent }) == null);
+    try std.testing.expectEqual(@as(f64, 9), target_original.rawGet(.{ .string = absent }).?.number);
+    try std.testing.expectEqual(@as(f64, 9), target_hashed.rawGet(.{ .string = absent }).?.number);
+    original.read_only = true;
+    hashed.read_only = true;
+    try std.testing.expectError(error.ReadOnlyTable, ctx.setIndex(.{ .table = original }, .{ .string = "slot" }, .{ .number = 5 }));
+    try std.testing.expectError(error.ReadOnlyTable, ctx.setHashedField(.{ .table = hashed }, "slot", stringValueHash("slot"), .{ .number = 5 }));
+}
+
 test "compact native descriptors preserve host pointers through arena growth" {
     var ctx = try Context.init(std.testing.allocator, 0);
     defer ctx.deinit();
@@ -4098,8 +4357,8 @@ test "field site shares a positive program shape slot across fresh tables" {
     try second.rawSetSlot(0, .{ .number = 2 });
     try std.testing.expectEqual(@as(f64, 1), (try ctx.getFieldAtSite(.{ .table = first }, "x", key_hash, site_id)).number);
     const cache_index: usize = fieldCacheIndex(site_id);
-    try std.testing.expectEqual(site_id, shape_site_cache[cache_index].site_id);
-    try std.testing.expectEqual(@as(u32, 0), shape_site_cache[cache_index].shape_id);
+    try std.testing.expectEqual(site_id, FieldCacheStorage.dict_lua_shape_site_cache[cache_index].site_id);
+    try std.testing.expectEqual(@as(u32, 0), FieldCacheStorage.dict_lua_shape_site_cache[cache_index].shape_id);
     try std.testing.expectEqual(@as(f64, 2), (try ctx.getFieldAtSite(.{ .table = second }, "x", key_hash, site_id)).number);
     try second.rawSetSlot(0, .{ .number = 3 });
     try std.testing.expectEqual(@as(f64, 3), (try ctx.getFieldAtSite(.{ .table = second }, "x", key_hash, site_id)).number);
@@ -4316,4 +4575,131 @@ test "invoke-local owned strings and errors survive explicit parent copies" {
     try std.testing.expectEqualStrings("owned-failure", parent.last_error.string);
     try std.testing.expect(parent.last_error_present);
     try std.testing.expectEqualStrings("LuaRaised", parent.aotErrorName().?);
+}
+
+test "program shape leaf ignores identity exhaustion but preserves semantic guards" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{.{ .string = "x" }};
+    const sorted = [_]u32{0};
+    const shapes = [_]Shape{.{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .all_string_keys = true }};
+    ctx.program_shapes = &shapes;
+    ctx.program_shape_generation = 991;
+    const cache = try arena.allocator().create([field_cache_entries]ShapeSiteCache);
+    cache.* = [_]ShapeSiteCache{.{}} ** field_cache_entries;
+    const site: u64 = 0x81234567;
+    const entry = &cache[fieldCacheIndex(site)];
+    entry.* = .{ .site_id = site, .program_generation = 991, .shape_id = 0, .slot = 0 };
+    const table = try ctx.newProgramShape(0);
+    try table.rawSetSlot(0, .{ .number = 7 });
+    const object = Value{ .table = table };
+    const saved_entry = entry.*;
+    const original_slots = table.slots;
+    ctx.field_cache_nonce = 0;
+    table.field_cache_nonce = 0;
+    table.field_cache_owner_nonce = 0;
+    table.field_cache_epoch = std.math.maxInt(u64);
+    try std.testing.expectEqual(@as(f64, 7), (positiveProgramShapeHit(&ctx, &object, site, cache) orelse return error.MissingNonceFreeShapeHit).number);
+    // Always read the current allocation; no stale cached Value pointer exists.
+    table.slots = try ctx.allocator.alloc(Value, 1);
+    table.slots[0] = .{ .number = 8 };
+    try std.testing.expectEqual(@as(f64, 8), (positiveProgramShapeHit(&ctx, &object, site, cache) orelse return error.MissingRelocatedSlotHit).number);
+    table.slots = original_slots;
+    var child = try ctx.forkProgram(arena.allocator());
+    defer child.deinit();
+    const other = try child.newProgramShape(0);
+    try other.rawSetSlot(0, .{ .number = 9 });
+    try std.testing.expectEqual(@as(f64, 9), (positiveProgramShapeHit(&child, &.{ .table = other }, site, cache) orelse return error.MissingChildShapeHit).number);
+
+    entry.site_id +%= 1;
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
+    entry.* = saved_entry;
+    entry.program_generation += 1;
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
+    entry.* = saved_entry;
+    entry.shape_id = 1;
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
+    entry.* = saved_entry;
+    entry.slot = 1;
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
+    entry.* = saved_entry;
+    ctx.program_shape_generation = 0;
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
+    ctx.program_shape_generation = 991;
+
+    table.native_namespace = @enumFromInt(0);
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
+    table.native_namespace = null;
+    table.owns_slots = false;
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
+    table.owns_slots = true;
+    var tail: GlobalTail = undefined; // Guard must reject without dereferencing it.
+    table.global_tail = &tail;
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
+    table.global_tail = null;
+    var choice = [_]ChoiceCell{.{}};
+    table.choices = &choice;
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
+    table.choices = &.{};
+    table.slots[0] = .nil;
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &.{ .number = 1 }, site, cache) == null);
+}
+
+test "shape site caches nil and absent slots but reads live map and inherited values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{.{ .string = "optional" }};
+    const sorted = [_]u32{0};
+    const shapes = [_]Shape{.{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true }};
+    ctx.program_shapes = &shapes;
+    ctx.program_shape_generation = 1707;
+    const first = try ctx.newProgramShape(0);
+    const second = try ctx.newProgramShape(0);
+    const slot_site: u64 = (@as(u64, 1707) << 32) | 44;
+    const absent_site: u64 = (@as(u64, 1707) << 32) | 45;
+    const optional_hash = stringValueHash("optional");
+    const absent_hash = stringValueHash("extra");
+    try std.testing.expect((try ctx.getFieldAtSite(.{ .table = first }, "optional", optional_hash, slot_site)) == .nil);
+    try std.testing.expectEqual(@as(u32, 0), FieldCacheStorage.dict_lua_shape_site_cache[fieldCacheIndex(slot_site)].slot);
+    try second.rawSetSlot(0, .{ .number = 7 });
+    try std.testing.expectEqual(@as(f64, 7), (try ctx.getFieldAtSite(.{ .table = second }, "optional", optional_hash, slot_site)).number);
+    try std.testing.expectEqual(@as(f64, 7), (positiveProgramShapeHit(&ctx, &.{ .table = second }, slot_site, &FieldCacheStorage.dict_lua_shape_site_cache) orelse return error.MissingComposedShapeHit).number);
+    try second.rawSetSlot(0, .nil);
+    const inherited = try ctx.newTable();
+    try inherited.rawSet(ctx.allocator, .{ .string = "optional" }, .{ .number = 9 });
+    const mt = try ctx.newTable();
+    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = inherited });
+    second.metatable = mt;
+    try std.testing.expectEqual(@as(f64, 9), (try ctx.getFieldAtSite(.{ .table = second }, "optional", optional_hash, slot_site)).number);
+    try inherited.rawSet(ctx.allocator, .{ .string = "optional" }, .{ .number = 11 });
+    try std.testing.expectEqual(@as(f64, 11), (try ctx.getFieldAtSite(.{ .table = second }, "optional", optional_hash, slot_site)).number);
+    try std.testing.expect((try ctx.getFieldAtSite(.{ .table = first }, "extra", absent_hash, absent_site)) == .nil);
+    try std.testing.expectEqual(std.math.maxInt(u32), FieldCacheStorage.dict_lua_shape_site_cache[fieldCacheIndex(absent_site)].slot);
+    try std.testing.expect(positiveProgramShapeHit(&ctx, &.{ .table = first }, absent_site, &FieldCacheStorage.dict_lua_shape_site_cache) == null);
+    try second.rawSet(ctx.allocator, .{ .string = "extra" }, .{ .boolean = false });
+    try std.testing.expect((try ctx.getFieldAtSite(.{ .table = second }, "extra", absent_hash, absent_site)) == .boolean);
+    try std.testing.expect(!(try ctx.getFieldAtSite(.{ .table = second }, "extra", absent_hash, absent_site)).boolean);
+    try second.rawSet(ctx.allocator, .{ .string = "extra" }, .nil);
+    try std.testing.expect((try ctx.getFieldAtSite(.{ .table = second }, "extra", absent_hash, absent_site)) == .nil);
+    try inherited.rawSet(ctx.allocator, .{ .string = "extra" }, .{ .number = 99 });
+    try second.rawSet(ctx.allocator, .{ .string = "extra" }, .{ .number = 5 });
+    try std.testing.expectEqual(@as(f64, 5), (try ctx.getFieldAtSite(.{ .table = second }, "extra", absent_hash, absent_site)).number);
+    second.metatable = null;
+    var iterator = second.iterator();
+    while (iterator.next()) |entry| {
+        if (entry.key_ptr.* == .string and std.mem.eql(u8, entry.key_ptr.string, "extra")) {
+            entry.value_ptr.* = .nil;
+            break;
+        }
+    }
+    // Preserve live nil-map observation without changing inherited dispatch.
+    try std.testing.expect((try ctx.getFieldAtSite(.{ .table = second }, "extra", absent_hash, absent_site)) == .nil);
+    ctx.program_shape_generation += 1;
+    try std.testing.expect((try ctx.getFieldAtSite(.{ .table = first }, "optional", optional_hash, slot_site)) == .nil);
+    try std.testing.expectEqual(ctx.program_shape_generation, FieldCacheStorage.dict_lua_shape_site_cache[fieldCacheIndex(slot_site)].program_generation);
 }
