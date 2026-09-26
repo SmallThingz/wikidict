@@ -3,6 +3,7 @@ const work_stats = rt.work_stats;
 const rt = @import("zig_runtime");
 const host_api = @import("host.zig");
 const frame_lib = @import("frame.zig");
+const InvokeReuseStats = @import("invoke_reuse_stats.zig").Stats;
 const namespace_lib = @import("namespaces.zig");
 const preprocess = @import("lua_wikitext_preprocess");
 const parser_expr = @import("lua_wikitext_expression");
@@ -107,6 +108,7 @@ pub const Expander = struct {
     install_scribunto: ?InstallScribuntoFn = null,
     scribunto_state: ?*anyopaque = null,
     scribunto_shared: ?*anyopaque = null,
+    invoke_reuse: ?*InvokeReuseStats = null,
     host: host_api.Host = .{},
     current_source: ?[]const u8 = null,
     page_allocator: ?std.mem.Allocator = null,
@@ -1307,6 +1309,18 @@ pub const Expander = struct {
         defer {
             if (work_stats.current()) |work| work.invoke_ns +|= work_stats.elapsed(invoke_start);
         }
+        var completed = false;
+        const ticket = if (self.invoke_reuse) |stats| stats.observe(
+            module_id,
+            module_name,
+            function_name,
+            invoke_args,
+            existing_parent,
+            parent_title,
+            parent_args,
+            if (work_stats.current()) |work| work.sampled else false,
+        ) else null;
+        defer if (self.invoke_reuse) |stats| stats.finish(ticket, completed);
         const install = self.install_scribunto orelse return error.MissingScribuntoInstaller;
         const page_a = self.page_allocator orelse self.runtime.allocator;
         const outer_runtime = self.runtime;
@@ -1345,7 +1359,9 @@ pub const Expander = struct {
             };
         defer rt.freeResults(result);
         const text = if (result.len == 0) "" else try self.valueToWikitext(result[0]);
-        return page_a.dupe(u8, text);
+        const owned = try page_a.dupe(u8, text);
+        completed = true;
+        return owned;
     }
 
     fn expandInvoke(self: *Expander, module_expr: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {

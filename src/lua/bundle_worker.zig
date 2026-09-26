@@ -8,6 +8,7 @@ comptime {
 const pages = @import("bundle_pages.zig");
 const protocol = @import("bundle_protocol.zig");
 const RequestAllocator = @import("runtime/request_allocator.zig").RequestAllocator;
+const InvokeReuseStats = lua_program.InvokeReuseStats;
 const work_stats = lua_program.work_stats;
 const A = std.mem.Allocator;
 const L = std.os.linux;
@@ -61,6 +62,7 @@ const Engine = struct {
     provider: pages.Provider,
     load_data_cache: lua_program.SharedLoadDataCache,
     root_profile: work_stats.RootProfile,
+    invoke_reuse: InvokeReuseStats = InvokeReuseStats.init(std.heap.smp_allocator),
     native_failures: work_stats.NativeFailures = .{},
     missing_data_requests: work_stats.MissingDataRequests = .{},
     measured_pages: u64 = 0,
@@ -133,6 +135,8 @@ const Engine = struct {
             self.totals.context_ns, self.totals.expand_ns, self.totals.comments_ns, self.totals.template_preprocess_ns, self.totals.invoke_ns,
         });
         self.root_profile.logTop(self.program.module_names, self.totals.root_exclusive_ns);
+        self.invoke_reuse.log();
+        self.invoke_reuse.deinit();
         self.native_failures.log();
         self.missing_data_requests.log();
         self.load_data_cache.logDiagnostics(self.program.module_names);
@@ -165,6 +169,7 @@ const Engine = struct {
         page_work.context_ns +|= work_stats.elapsed(context_start);
         defer ctx.deinit();
         var expander = lua_program.initExpanderShared(&ctx, self.provider.api(), &self.load_data_cache);
+        expander.invoke_reuse = &self.invoke_reuse;
         stage.* = "expand";
         const expand_start = work_stats.cpuNow();
         const output = expander.expandFragment(request.title, request.source, self.requested_now_unix) catch |err| {

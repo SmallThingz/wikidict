@@ -1256,6 +1256,7 @@ test "AOT Scribunto compiler-known namespaces use native slots" {
 
 pub const WikitextProvider = @import("wikitext.zig").Provider;
 pub const WikitextExpander = @import("wikitext.zig").Expander;
+pub const InvokeReuseStats = @import("invoke_reuse_stats.zig").Stats;
 pub fn makeWikitextExpander(runtime: *rt.Context, env_slot: u32, string_slot: u32, mw_slot: u32, provider: WikitextProvider) WikitextExpander {
     return makeWikitextExpanderShared(runtime, env_slot, string_slot, mw_slot, provider, null);
 }

@@ -479,6 +479,7 @@ pub const FrameArg = scribunto.FrameArg;
 pub const WikitextProvider = scribunto.WikitextProvider;
 pub const WikitextExpander = scribunto.WikitextExpander;
 pub const SharedLoadDataCache = scribunto.SharedLoadDataCache;
+pub const InvokeReuseStats = scribunto.InvokeReuseStats;
 
 pub fn loadDataCacheability(program: *const Program) []const bool {
     return program.module_static_root_load_data;
